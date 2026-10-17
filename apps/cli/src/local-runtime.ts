@@ -24384,7 +24384,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           paths: body.paths ?? [],
           title: body.title ?? '',
           body: body.body ?? '',
-          base: body.base ?? 'main',
+          base: typeof body.base === 'string' ? body.base : '',
         });
         res.writeHead(result.ok ? 201 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
@@ -24400,7 +24400,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const result = await gitOpenReview(projectRoot, {
           title: body.title ?? '',
           body: body.body ?? '',
-          base: body.base ?? 'main',
+          base: typeof body.base === 'string' ? body.base : '',
         });
         res.writeHead(result.ok ? 201 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
@@ -46581,6 +46581,8 @@ export interface GitStatusResult {
    * here, and the prefix is reported so the UI can say what it is showing.
    */
   projectPrefix?: string;
+  /** The branch reviews merge into (the remote's default branch). */
+  baseBranch?: string;
   error?: string;
 }
 
@@ -46628,6 +46630,37 @@ async function resolveGitRemoteName(gitRoot: string): Promise<string | null> {
   if (preferred && remotes.includes(preferred)) return preferred;
   if (remotes.includes('origin')) return 'origin';
   return remotes[0] ?? null;
+}
+
+/**
+ * The branch reviews merge into: the remote's default branch, not a guess.
+ * Order: the remote's HEAD as last fetched (`refs/remotes/<remote>/HEAD`, set by
+ * clone), then — when `network` is set — the remote itself (`ls-remote --symref`,
+ * for a remote added after clone or never fetched), then whichever of `main` /
+ * `master` exists on the remote or locally, then `main`. Repositories whose
+ * default is `master`, `develop` or `trunk` used to get reviews against `main`.
+ */
+export async function resolveGitBaseBranch(gitRoot: string, options: { network?: boolean } = {}): Promise<string> {
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (remote) {
+    const head = await execGit(gitRoot, ['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`]);
+    const fetched = head.code === 0 ? head.stdout.trim() : '';
+    if (fetched.startsWith(`${remote}/`) && fetched.length > remote.length + 1) return fetched.slice(remote.length + 1);
+    if (options.network) {
+      const symref = await execGit(gitRoot, ['ls-remote', '--symref', remote, 'HEAD'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+      const match = symref.code === 0 ? symref.stdout.match(/^ref: refs\/heads\/(\S+)\s+HEAD$/m) : null;
+      if (match?.[1]) return match[1];
+    }
+    for (const candidate of ['main', 'master']) {
+      const exists = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${candidate}`]);
+      if (exists.code === 0) return candidate;
+    }
+  }
+  for (const candidate of ['main', 'master']) {
+    const exists = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${candidate}`]);
+    if (exists.code === 0) return candidate;
+  }
+  return 'main';
 }
 
 /**
@@ -46870,7 +46903,8 @@ async function readGitStatus(cwd: string): Promise<GitStatusResult> {
       changes.push({ path: p, status: code });
     }
   }
-  return { inRepo: true, branch, ahead, behind, changes, projectPrefix };
+  const baseBranch = await resolveGitBaseBranch(gitRoot);
+  return { inRepo: true, branch, ahead, behind, changes, projectPrefix, baseBranch };
 }
 
 /**
@@ -47313,6 +47347,82 @@ async function gitCommit(
   return { ok: true, hash: hashRes.code === 0 ? hashRes.stdout.trim() : undefined };
 }
 
+/** Files a Git host can put in a brand-new repository ("Add a README", a licence, a .gitignore template). */
+const GIT_HOST_STARTER_FILE = /^(?:README|LICENSE|LICENCE|COPYING)(?:\.[A-Za-z0-9]+)?$|^\.git(?:ignore|attributes)$/i;
+
+export type GitRemoteBranchLink = 'absent' | 'linked' | 'merged_starter' | 'behind_or_diverged' | 'merge_failed';
+
+/**
+ * A local branch with no upstream whose name already exists on the remote: the
+ * usual first send after creating a repository on GitHub with a README. Plain
+ * `push -u` was rejected ("get updates first") and `pull` had no upstream ("send
+ * first"), so neither button could ever succeed. This fetches the remote branch
+ * and links the local branch to it. When the remote branch holds only the host's
+ * starter files and shares no history with the project, those files are merged
+ * in (the project's own copy wins a clash; a remote .gitignore adds its missing
+ * lines) so the next push goes through. Anything with real content is left for
+ * Get updates.
+ */
+export async function linkGitBranchToRemote(gitRoot: string, remote: string, branch: string): Promise<{ link: GitRemoteBranchLink; detail?: string }> {
+  const fetched = await execGit(gitRoot, ['fetch', remote, branch], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (fetched.code !== 0) {
+    const detail = gitErrorOutput(fetched);
+    // A remote without this branch is the normal first send.
+    if (/couldn't find remote ref|could not find remote ref/i.test(detail)) return { link: 'absent' };
+    return { link: 'merge_failed', detail };
+  }
+  const remoteRef = `refs/remotes/${remote}/${branch}`;
+  const tracked = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', remoteRef]);
+  if (tracked.code !== 0) return { link: 'absent' };
+  await execGit(gitRoot, ['branch', `--set-upstream-to=${remote}/${branch}`, branch]);
+  const contained = await execGit(gitRoot, ['merge-base', '--is-ancestor', remoteRef, 'HEAD']);
+  if (contained.code === 0) return { link: 'linked' };
+  const mergeBase = await execGit(gitRoot, ['merge-base', remoteRef, 'HEAD']);
+  const files = await execGit(gitRoot, ['ls-tree', '-r', '--name-only', remoteRef]);
+  const remoteFiles = files.code === 0 ? files.stdout.split('\n').map((f) => f.trim()).filter(Boolean) : [];
+  const starterOnly = mergeBase.code !== 0 && remoteFiles.length > 0 && remoteFiles.every((f) => GIT_HOST_STARTER_FILE.test(f));
+  if (!starterOnly) return { link: 'behind_or_diverged' };
+  const merged = await execGit(gitRoot, ['merge', '--allow-unrelated-histories', '--no-edit', '-X', 'ours', '-m', `Merge the repository's starter files from ${remote}/${branch}`, remoteRef]);
+  if (merged.code !== 0) {
+    await execGit(gitRoot, ['merge', '--abort']);
+    return { link: 'merge_failed', detail: gitErrorOutput(merged) };
+  }
+  if (remoteFiles.includes('.gitignore')) {
+    const theirs = await execGit(gitRoot, ['show', `${remoteRef}:.gitignore`]);
+    const oursPath = join(gitRoot, '.gitignore');
+    const ours = existsSync(oursPath) ? readFileSync(oursPath, 'utf-8') : '';
+    const have = new Set(ours.split(/\r?\n/).map((line) => line.trim()));
+    const missing = theirs.code === 0 ? theirs.stdout.split(/\r?\n/).filter((line) => line.trim() && !have.has(line.trim())) : [];
+    if (missing.length) {
+      writeFileSync(oursPath, `${ours.replace(/\n*$/, '\n')}\n# From the repository's .gitignore\n${missing.join('\n')}\n`);
+      await execGit(gitRoot, ['add', '--', '.gitignore']);
+      await execGit(gitRoot, ['commit', '--amend', '--no-edit']);
+    }
+  }
+  return { link: 'merged_starter' };
+}
+
+/**
+ * Record the remote's default branch (`refs/remotes/<remote>/HEAD`) when it is
+ * not known yet — a remote added in the app rather than cloned — so the status
+ * reports the right review base without asking the remote every time. Runs
+ * only after a send or get-updates already reached the remote; best effort.
+ */
+async function rememberGitRemoteHead(gitRoot: string): Promise<void> {
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return;
+  const known = await execGit(gitRoot, ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`]);
+  if (known.code === 0) return;
+  // `set-head --auto` needs a local copy of that branch, which a project that
+  // only ever sent its own branch does not have: ask, fetch it, then record it.
+  const symref = await execGit(gitRoot, ['ls-remote', '--symref', remote, 'HEAD'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  const name = symref.code === 0 ? symref.stdout.match(/^ref: refs\/heads\/(\S+)\s+HEAD$/m)?.[1] : undefined;
+  if (!name) return;
+  const fetched = await execGit(gitRoot, ['fetch', remote, name], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (fetched.code !== 0) return;
+  await execGit(gitRoot, ['remote', 'set-head', remote, name]);
+}
+
 async function gitPush(cwd: string): Promise<{ ok: boolean; error?: string; output?: string; code?: string; detail?: string }> {
   const gitRoot = await resolveGitRoot(cwd);
   if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
@@ -47323,11 +47433,27 @@ async function gitPush(cwd: string): Promise<{ ok: boolean; error?: string; outp
   const branch = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const upstream = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const branchName = branch.code === 0 ? branch.stdout.trim() : '';
+  if (upstream.code !== 0 && branchName && branchName !== 'HEAD') {
+    const { link, detail } = await linkGitBranchToRemote(gitRoot, remote, branchName);
+    if (link === 'behind_or_diverged') {
+      return {
+        ok: false,
+        code: 'push_failed',
+        error: `${remote}/${branchName} already has changes you do not have yet. Your branch is now linked to it: get updates first, then send again.`,
+      };
+    }
+    if (link === 'merge_failed') {
+      return { ok: false, code: 'push_failed', error: friendlyGitRemoteError(detail ?? ''), ...(detail ? { detail } : {}) };
+    }
+  }
   const args = upstream.code === 0 || !branchName || branchName === 'HEAD'
     ? ['push']
     : ['push', '-u', remote, branchName];
   const res = await execGit(gitRoot, args, { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
-  if (res.code === 0) return { ok: true, output: gitErrorOutput(res) };
+  if (res.code === 0) {
+    await rememberGitRemoteHead(gitRoot);
+    return { ok: true, output: gitErrorOutput(res) };
+  }
   const detail = gitErrorOutput(res);
   return { ok: false, code: 'push_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
 }
@@ -47388,7 +47514,7 @@ export async function openHostPullRequest(input: { gitRoot: string; branch: stri
 }
 
 async function gitCreateReview(cwd: string, input: { paths: string[]; title: string; body: string; base: string }): Promise<{
-  ok: boolean; error?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
+  ok: boolean; error?: string; base?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
 }> {
   const gitRoot = await resolveGitRoot(cwd);
   if (!gitRoot) return { ok: false, error: 'Not a git repository' };
@@ -47396,7 +47522,7 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
   if (!title) return { ok: false, error: 'Review title required' };
   const validPaths = validatePaths(gitRoot, input.paths);
   if (!validPaths.ok) return { ok: false, error: validPaths.error };
-  const base = input.base.trim() || 'main';
+  const base = input.base.trim() || await resolveGitBaseBranch(gitRoot, { network: true });
   const status = await readGitStatus(gitRoot);
   const stagedOutsideReview = status.changes
     .filter((change) => change.status[0] !== ' ' && change.status[0] !== '?' && !validPaths.paths.includes(change.path))
@@ -47409,7 +47535,7 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
     return { ok: false, error: 'Add a Git remote before requesting review. No branch or commit was created.' };
   }
   let branch = status.branch;
-  if (!branch || branch === 'HEAD' || branch === base || branch === 'master') {
+  if (!branch || branch === 'HEAD' || branch === base || branch === 'main' || branch === 'master') {
     branch = gitReviewBranchName(title);
     const created = await gitCreateBranch(gitRoot, branch, true);
     if (!created.ok) return created;
@@ -47425,14 +47551,15 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
   const remote = await readGitRemote(gitRoot);
   const compareUrl = gitHubCompareUrl(remote.url, branch, base);
   const hostPr = await openHostPullRequest({ gitRoot, branch, base, title, body: input.body.trim() || `Review governed analytics changes: ${title}` });
-  if (hostPr) return hostPr.ok ? { ok: true, branch, hash: commit.hash, prUrl: hostPr.url } : { ok: true, branch, hash: commit.hash, prUrl: compareUrl, warning: `Branch pushed. The review request could not be opened: ${hostPr.error}` };
+  if (hostPr) return hostPr.ok ? { ok: true, base, branch, hash: commit.hash, prUrl: hostPr.url } : { ok: true, base, branch, hash: commit.hash, prUrl: compareUrl, warning: `Branch pushed. The review request could not be opened: ${hostPr.error}` };
   const pr = await execGh(gitRoot, ['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', input.body.trim() || `Review governed analytics changes: ${title}`]);
   if (pr.code === 0) {
     const prUrl = (pr.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0]) ?? compareUrl;
-    return { ok: true, branch, hash: commit.hash, prUrl };
+    return { ok: true, base, branch, hash: commit.hash, prUrl };
   }
   return {
     ok: true,
+    base,
     branch,
     hash: commit.hash,
     prUrl: compareUrl,
@@ -47442,33 +47569,34 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
 
 /** UI-001, SEC-001, E2E-001: open a PR for a branch already committed and pushed by the guided share flow. */
 async function gitOpenReview(cwd: string, input: { title: string; body: string; base: string }): Promise<{
-  ok: boolean; error?: string; branch?: string; prUrl?: string; warning?: string;
+  ok: boolean; error?: string; base?: string; branch?: string; prUrl?: string; warning?: string;
 }> {
   const gitRoot = await resolveGitRoot(cwd);
   if (!gitRoot) return { ok: false, error: 'Not a git repository' };
   const title = input.title.trim();
   if (!title) return { ok: false, error: 'Review title required' };
-  const base = input.base.trim() || 'main';
+  const base = input.base.trim() || await resolveGitBaseBranch(gitRoot, { network: true });
   const status = await readGitStatus(gitRoot);
   const branch = status.branch;
-  if (!branch || branch === 'HEAD' || branch === base || branch === 'master') {
+  if (!branch || branch === 'HEAD' || branch === base || branch === 'main' || branch === 'master') {
     return { ok: false, error: 'Share the changes to a review branch before opening a review request.' };
   }
   const remote = await readGitRemote(gitRoot);
   if (!remote.url) return { ok: false, error: 'Add a Git remote before requesting review.' };
   const compareUrl = gitHubCompareUrl(remote.url, branch, base);
   const hostPr = await openHostPullRequest({ gitRoot, branch, base, title, body: input.body.trim() || `Review governed analytics changes: ${title}` });
-  if (hostPr) return hostPr.ok ? { ok: true, branch, prUrl: hostPr.url } : { ok: true, branch, prUrl: compareUrl, warning: `The review request could not be opened: ${hostPr.error}` };
+  if (hostPr) return hostPr.ok ? { ok: true, base, branch, prUrl: hostPr.url } : { ok: true, base, branch, prUrl: compareUrl, warning: `The review request could not be opened: ${hostPr.error}` };
   const pr = await execGh(gitRoot, [
     'pr', 'create', '--base', base, '--head', branch, '--title', title,
     '--body', input.body.trim() || `Review governed analytics changes: ${title}`,
   ]);
   if (pr.code === 0) {
     const prUrl = pr.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0] ?? compareUrl;
-    return { ok: true, branch, prUrl };
+    return { ok: true, base, branch, prUrl };
   }
   return {
     ok: true,
+    base,
     branch,
     prUrl: compareUrl,
     warning: `Branch is ready. Open the compare page to create the PR: ${gitErrorOutput(pr) || 'GitHub CLI is not available or authenticated.'}`,
@@ -47481,11 +47609,30 @@ async function gitPull(cwd: string): Promise<{ ok: boolean; error?: string; outp
   if (!(await resolveGitRemoteName(gitRoot))) {
     return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before getting updates.' };
   }
+  // A branch with no upstream whose name exists on the remote (a repository
+  // created on the host with a README): link it instead of answering "send first".
+  const upstream = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (upstream.code !== 0) {
+    const remote = await resolveGitRemoteName(gitRoot);
+    const branch = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const branchName = branch.code === 0 ? branch.stdout.trim() : '';
+    if (remote && branchName && branchName !== 'HEAD') {
+      const { link, detail } = await linkGitBranchToRemote(gitRoot, remote, branchName);
+      if (link === 'linked') return { ok: true, output: `Linked ${branchName} to ${remote}/${branchName}. Already up to date.` };
+      if (link === 'merged_starter') return { ok: true, output: `Linked ${branchName} to ${remote}/${branchName} and added the repository's starter files.` };
+      if (link === 'merge_failed') return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail ?? ''), ...(detail ? { detail } : {}) };
+      // 'absent' falls through to git's own answer ("send the branch first");
+      // 'behind_or_diverged' is now linked, so the pull below can proceed.
+    }
+  }
   // `--ff-only` keeps the operation non-destructive: if the local branch has
   // diverged from upstream, we surface the error rather than auto-merging.
   // The user can resolve via the terminal or a future merge UI.
   const res = await execGit(gitRoot, ['pull', '--ff-only'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
-  if (res.code === 0) return { ok: true, output: gitErrorOutput(res) };
+  if (res.code === 0) {
+    await rememberGitRemoteHead(gitRoot);
+    return { ok: true, output: gitErrorOutput(res) };
+  }
   const detail = gitErrorOutput(res);
   return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
 }

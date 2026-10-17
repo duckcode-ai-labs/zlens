@@ -368,3 +368,127 @@ describe('source-control connection API (git history, init, remote)', () => {
     });
   });
 });
+
+/** A bare repository standing in for the Git host, created with `defaultBranch` and the given files. */
+function hostRepo(prefix: string, defaultBranch: string, files: Record<string, string>): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(root);
+  const bare = join(root, 'host.git');
+  git(root, ['init', '--bare', '-b', defaultBranch, bare]);
+  if (Object.keys(files).length > 0) {
+    const seed = join(root, 'seed');
+    git(root, ['clone', bare, seed]);
+    git(seed, ['checkout', '-B', defaultBranch]);
+    for (const [name, content] of Object.entries(files)) {
+      mkdirSync(join(seed, name, '..'), { recursive: true });
+      writeFileSync(join(seed, name), content);
+    }
+    git(seed, ['add', '-A']);
+    git(seed, ['commit', '-m', 'Initial commit']);
+    git(seed, ['push', 'origin', defaultBranch]);
+  }
+  return bare;
+}
+
+function projectOnMain(prefix: string): string {
+  const dir = tempProject(prefix);
+  writeFileSync(join(dir, 'README.md'), '# project\n');
+  writeFileSync(join(dir, '.gitignore'), 'node_modules/\n');
+  initRepo(dir);
+  git(dir, ['checkout', '-B', 'main']);
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-m', 'first']);
+  return dir;
+}
+
+describe('connecting a project to a repository the host already created', () => {
+  it('sends on top of the host\'s README, LICENSE and .gitignore instead of looping between send and get updates', async () => {
+    const bare = hostRepo('dql-git-host-readme-', 'main', { 'README.md': '# from host\n', LICENSE: 'MIT\n', '.gitignore': '.DS_Store\nnode_modules/\n' });
+    const project = projectOnMain('dql-git-readme-');
+    await withServer(project, async (base) => {
+      expect((await postJson(`${base}/api/git/remote`, { url: bare })).status).toBe(200);
+      const sent = await (await postJson(`${base}/api/git/push`, {})).json() as { ok: boolean; error?: string };
+      expect(sent).toMatchObject({ ok: true });
+    });
+    const hostFiles = git(project, ['--git-dir', bare, 'ls-tree', '-r', '--name-only', 'main']).split('\n').filter(Boolean);
+    expect(hostFiles).toEqual(expect.arrayContaining(['LICENSE', 'README.md', 'dql.config.json', '.gitignore']));
+    expect(git(project, ['--git-dir', bare, 'show', 'main:README.md'])).toBe('# project\n');
+    expect(git(project, ['--git-dir', bare, 'show', 'main:.gitignore'])).toContain('.DS_Store');
+    expect(git(project, ['rev-parse', '--abbrev-ref', '@{u}']).trim()).toBe('origin/main');
+  });
+
+  it('links the branch on get updates first, then sends', async () => {
+    const bare = hostRepo('dql-git-host-pullfirst-', 'main', { 'README.md': '# from host\n' });
+    const project = projectOnMain('dql-git-pullfirst-');
+    await withServer(project, async (base) => {
+      await postJson(`${base}/api/git/remote`, { url: bare });
+      const updated = await (await postJson(`${base}/api/git/pull`, {})).json() as { ok: boolean; output?: string };
+      expect(updated.ok).toBe(true);
+      expect(updated.output).toContain('Linked main to origin/main');
+      expect(await (await postJson(`${base}/api/git/push`, {})).json()).toMatchObject({ ok: true });
+    });
+  });
+
+  it('never merges a host branch that holds real work: it links and asks for get updates', async () => {
+    const bare = hostRepo('dql-git-host-work-', 'main', { 'README.md': '# shop\n', 'models/orders.sql': 'select 1\n' });
+    const project = projectOnMain('dql-git-work-');
+    await withServer(project, async (base) => {
+      await postJson(`${base}/api/git/remote`, { url: bare });
+      const sent = await (await postJson(`${base}/api/git/push`, {})).json() as { ok: boolean; error?: string };
+      expect(sent.ok).toBe(false);
+      expect(sent.error).toContain('get updates first');
+    });
+    expect(git(project, ['--git-dir', bare, 'ls-tree', '-r', '--name-only', 'main']).split('\n').filter(Boolean)).toEqual(['README.md', 'models/orders.sql']);
+    expect(git(project, ['log', '--format=%s']).trim()).toBe('first');
+    expect(git(project, ['rev-parse', '--abbrev-ref', '@{u}']).trim()).toBe('origin/main');
+  });
+
+  it('still makes a normal first send to an empty repository', async () => {
+    const bare = hostRepo('dql-git-host-empty-', 'main', {});
+    const project = projectOnMain('dql-git-empty-');
+    await withServer(project, async (base) => {
+      await postJson(`${base}/api/git/remote`, { url: bare });
+      expect(await (await postJson(`${base}/api/git/push`, {})).json()).toMatchObject({ ok: true });
+    });
+    expect(git(project, ['--git-dir', bare, 'branch', '--format=%(refname:short)']).trim()).toBe('main');
+  });
+});
+
+describe('reviews merge into the repository\'s default branch', () => {
+  it('uses the default of a cloned repository (master) from a feature branch', async () => {
+    const bare = hostRepo('dql-git-host-master-', 'master', { 'README.md': '# m\n' });
+    const root = mkdtempSync(join(tmpdir(), 'dql-git-master-clone-'));
+    tempDirs.push(root);
+    const clone = join(root, 'clone');
+    git(root, ['clone', bare, clone]);
+    initRepoIdentity(clone);
+    writeFileSync(join(clone, 'dql.config.json'), '{}\n');
+    git(clone, ['checkout', '-b', 'feature/x']);
+    await withServer(clone, async (base) => {
+      const status = await (await fetch(`${base}/api/git/status`)).json() as { baseBranch?: string };
+      expect(status.baseBranch).toBe('master');
+      const review = await (await postJson(`${base}/api/git/review`, { paths: ['dql.config.json'], title: 'Feature work' })).json() as { ok: boolean; base?: string };
+      expect(review).toMatchObject({ ok: true, base: 'master' });
+    });
+  });
+
+  it('asks the remote when it was added after the project was created (develop), and remembers it after a send', async () => {
+    const bare = hostRepo('dql-git-host-develop-', 'develop', { 'README.md': '# d\n' });
+    const project = projectOnMain('dql-git-develop-');
+    git(project, ['checkout', '-b', 'feature/y']);
+    await withServer(project, async (base) => {
+      await postJson(`${base}/api/git/remote`, { url: bare });
+      writeFileSync(join(project, 'block.dql'), 'block "x" {}\n');
+      const review = await (await postJson(`${base}/api/git/review`, { paths: ['block.dql'], title: 'Develop work' })).json() as { ok: boolean; base?: string };
+      expect(review).toMatchObject({ ok: true, base: 'develop' });
+      const status = await (await fetch(`${base}/api/git/status`)).json() as { baseBranch?: string };
+      expect(status.baseBranch).toBe('develop');
+    });
+  });
+});
+
+function initRepoIdentity(dir: string): void {
+  git(dir, ['config', 'user.name', 'DQL Test']);
+  git(dir, ['config', 'user.email', 'dql-test@example.invalid']);
+  git(dir, ['config', 'commit.gpgsign', 'false']);
+}

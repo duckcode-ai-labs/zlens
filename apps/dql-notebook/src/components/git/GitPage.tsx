@@ -361,7 +361,7 @@ export function GitPage() {
       const review = await runOp('request review', () => api.gitOpenReview({
         title,
         body: 'Created from ZLens Source Control. Review the governed analytics changes before merging.',
-        base: sharedInfo.base,
+        // No base: the server asks the remote for its default branch.
       }));
       if (!review.ok) return;
       setReviewUrl(review.prUrl ?? null);
@@ -374,7 +374,7 @@ export function GitPage() {
       paths,
       title,
       body: 'Created from ZLens Source Control. Review the governed analytics changes before merging.',
-      base: reviewBaseBranch(branchInfo.current),
+      // No base: the server asks the remote for its default branch.
     }));
     if (!review.ok) return;
     setCommitMsg('');
@@ -416,8 +416,8 @@ export function GitPage() {
     if (stagedFiles.length === 0) return flash('err', 'Include at least one change first');
     if (!remote.url) return requestRemote('Add a Git remote before sharing changes.');
     const count = stagedFiles.length;
-    const base = reviewBaseBranch(branchInfo.current);
-    if (!branchInfo.current || branchInfo.current === 'HEAD' || branchInfo.current === 'main' || branchInfo.current === 'master') {
+    const base = reviewBaseBranch(status);
+    if (!branchInfo.current || branchInfo.current === 'HEAD' || branchInfo.current === base || branchInfo.current === 'main' || branchInfo.current === 'master') {
       const branch = guidedReviewBranchName(msg);
       const created = await runOp('branch', () => api.gitCreateBranch(branch, true));
       if (!created.ok) return;
@@ -879,8 +879,9 @@ function guidedReviewBranchName(message: string): string {
   return `dql/review/${slug}-${Date.now().toString(36)}`;
 }
 
-function reviewBaseBranch(branch: string | null): string {
-  return branch === 'master' ? 'master' : 'main';
+/** The branch reviews merge into: the remote's default branch, as the server reports it. */
+function reviewBaseBranch(status: Status | null): string {
+  return status?.baseBranch || 'main';
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
@@ -893,6 +894,7 @@ function sameGitStatus(left: Status | null, right: Status): boolean {
     && left!.branch === right.branch
     && left!.ahead === right.ahead
     && left!.behind === right.behind
+    && left!.baseBranch === right.baseBranch
     && left!.changes.length === right.changes.length
     && left!.changes.every((change, index) => change.path === right.changes[index]?.path && change.status === right.changes[index]?.status);
 }
