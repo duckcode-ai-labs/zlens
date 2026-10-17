@@ -7,6 +7,7 @@ import type { Server } from 'node:http';
 import type { QueryExecutor } from '@zlens/connectors';
 import {
   friendlyGitRemoteError,
+  isZLensSampleRemote,
   resolveBlockHistoryPath,
   startLocalServer,
   validateGitRemoteName,
@@ -492,3 +493,139 @@ function initRepoIdentity(dir: string): void {
   git(dir, ['config', 'user.email', 'dql-test@example.invalid']);
   git(dir, ['config', 'commit.gpgsign', 'false']);
 }
+
+/** A teammate's clone of `bare` that commits `file` to `branch` and pushes it. */
+function teammatePushes(bare: string, branch: string, file: string): void {
+  const root = mkdtempSync(join(tmpdir(), 'dql-git-mate-'));
+  tempDirs.push(root);
+  const clone = join(root, 'mate');
+  git(root, ['clone', bare, clone]);
+  git(clone, ['checkout', branch]);
+  writeFileSync(join(clone, file), `${file}\n`);
+  git(clone, ['add', '-A']);
+  git(clone, ['commit', '-m', `teammate: ${file}`]);
+  git(clone, ['push', 'origin', branch]);
+}
+
+function clonedProject(bare: string, prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  tempDirs.push(root);
+  const clone = join(root, 'clone');
+  git(root, ['clone', bare, clone]);
+  initRepoIdentity(clone);
+  return clone;
+}
+
+async function status(base: string): Promise<{ ahead: number; behind: number; baseBranch?: string; baseOnRemote?: boolean; upstream?: string | null; sampleRemote?: boolean; branch: string | null }> {
+  return await (await fetch(`${base}/api/git/status`)).json() as never;
+}
+
+describe('the Git page knows what is on the remote before you send (D3)', () => {
+  it('a background fetch reports new remote changes without touching your branch', async () => {
+    const bare = hostRepo('dql-git-host-fetch-', 'main', { 'dql.config.json': '{}\n' });
+    const project = clonedProject(bare, 'dql-git-fetch-');
+    const before = git(project, ['rev-parse', 'HEAD']).trim();
+    teammatePushes(bare, 'main', 'orders.dql');
+    await withServer(project, async (base) => {
+      expect((await status(base)).behind).toBe(0);
+      expect(await (await postJson(`${base}/api/git/fetch`, {})).json()).toEqual({ ok: true });
+      expect(await status(base)).toMatchObject({ behind: 1, ahead: 0, upstream: 'origin/main', baseOnRemote: true });
+    });
+    expect(git(project, ['rev-parse', 'HEAD']).trim()).toBe(before);
+    expect(existsSync(join(project, 'orders.dql'))).toBe(false);
+  });
+
+  it('says plainly when the remote cannot be reached', async () => {
+    const project = projectOnMain('dql-git-fetch-unreachable-');
+    await withServer(project, async (base) => {
+      await postJson(`${base}/api/git/remote`, { url: join(project, 'no-such-remote.git') });
+      const res = await (await postJson(`${base}/api/git/fetch`, {})).json() as { ok: boolean; code?: string; error?: string };
+      expect(res).toMatchObject({ ok: false, code: 'unreachable' });
+      expect(res.error).toBeTruthy();
+      expect(await (await postJson(`${base}/api/git/fetch`, {})).json()).toMatchObject({ ok: false, code: 'unreachable' });
+    });
+  });
+
+  it('counts commits on a branch the remote has never seen as not sent yet', async () => {
+    const bare = hostRepo('dql-git-host-unsent-', 'main', { 'dql.config.json': '{}\n' });
+    const project = clonedProject(bare, 'dql-git-unsent-');
+    git(project, ['checkout', '-b', 'feature/new']);
+    writeFileSync(join(project, 'a.dql'), 'a\n');
+    git(project, ['add', '-A']);
+    git(project, ['commit', '-m', 'a']);
+    await withServer(project, async (base) => {
+      expect(await status(base)).toMatchObject({ ahead: 1, behind: 0, upstream: null });
+    });
+  });
+});
+
+describe('send from the base branch goes to a new branch (D4)', () => {
+  it('moves your unsent commits to a new branch, sends it, and leaves main as the remote has it', async () => {
+    const bare = hostRepo('dql-git-host-sab-', 'main', { 'dql.config.json': '{}\n' });
+    const project = clonedProject(bare, 'dql-git-sab-');
+    const remoteMain = git(project, ['rev-parse', 'origin/main']).trim();
+    writeFileSync(join(project, 'revenue.dql'), 'block "Revenue" {}\n');
+    git(project, ['add', '-A']);
+    git(project, ['commit', '-m', 'Add revenue block']);
+    writeFileSync(join(project, 'draft.dql'), 'unsaved\n');
+    await withServer(project, async (base) => {
+      const res = await (await postJson(`${base}/api/git/send-as-branch`, {})).json() as { ok: boolean; branch?: string; base?: string; sent?: number; subject?: string };
+      expect(res).toMatchObject({ ok: true, branch: 'zlens/add-revenue-block', base: 'main', sent: 1, subject: 'Add revenue block' });
+    });
+    expect(git(project, ['rev-parse', '--abbrev-ref', 'HEAD']).trim()).toBe('zlens/add-revenue-block');
+    expect(git(project, ['rev-parse', 'main']).trim()).toBe(remoteMain);
+    expect(git(project, ['--git-dir', bare, 'rev-parse', 'main']).trim()).toBe(remoteMain);
+    expect(git(project, ['--git-dir', bare, 'log', '-1', '--format=%s', 'zlens/add-revenue-block']).trim()).toBe('Add revenue block');
+    expect(readFileSync(join(project, 'draft.dql'), 'utf-8')).toBe('unsaved\n');
+  });
+
+  it('picks a free name when the branch exists, and refuses when there is nothing to send', async () => {
+    const bare = hostRepo('dql-git-host-sab2-', 'main', { 'dql.config.json': '{}\n' });
+    const project = clonedProject(bare, 'dql-git-sab2-');
+    git(project, ['branch', 'zlens/tweak']);
+    await withServer(project, async (base) => {
+      expect(await (await postJson(`${base}/api/git/send-as-branch`, {})).json()).toMatchObject({ ok: false, code: 'nothing_to_send' });
+      writeFileSync(join(project, 't.dql'), 't\n');
+      git(project, ['add', '-A']);
+      git(project, ['commit', '-m', 'Tweak']);
+      expect(await (await postJson(`${base}/api/git/send-as-branch`, {})).json()).toMatchObject({ ok: true, branch: 'zlens/tweak-2' });
+    });
+  });
+});
+
+describe('the ZLens sample is never a place to send (D5)', () => {
+  it('recognises the sample repositories in every address form', () => {
+    for (const url of [
+      'https://github.com/duckcode-ai/jaffle-shop-duckdb.git',
+      'https://github.com/duckcode-ai/jaffle-shop-duckdb',
+      'git@github.com:duckcode-ai/jaffle-shop-warehouse.git',
+      'ssh://git@github.com/zlens-app/jaffle-shop-duckdb.git',
+    ]) expect(isZLensSampleRemote(url), url).toBe(true);
+    for (const url of [
+      'https://github.com/acme/jaffle-shop-duckdb.git',
+      'https://github.com/duckcode-ai/jaffle-shop-duckdb-fork.git',
+      '/srv/git/jaffle-shop-duckdb.git',
+    ]) expect(isZLensSampleRemote(url), url).toBe(false);
+  });
+
+  it('refuses to send to the sample, then connects your repository and sends there', async () => {
+    const own = hostRepo('dql-git-host-own-', 'main', {});
+    const project = projectOnMain('dql-git-sample-');
+    git(project, ['remote', 'add', 'origin', 'https://github.com/duckcode-ai/jaffle-shop-duckdb.git']);
+    git(project, ['config', 'branch.main.remote', 'origin']);
+    git(project, ['config', 'branch.main.merge', 'refs/heads/main']);
+    await withServer(project, async (base) => {
+      expect((await status(base)).sampleRemote).toBe(true);
+      expect(await (await postJson(`${base}/api/git/push`, {})).json()).toMatchObject({ ok: false, code: 'sample_remote' });
+      expect(await (await postJson(`${base}/api/git/send-as-branch`, {})).json()).toMatchObject({ ok: false, code: 'sample_remote' });
+      expect(await (await postJson(`${base}/api/git/remote/connect-own`, { url: 'git@github.com:duckcode-ai/jaffle-shop-duckdb.git' })).json())
+        .toMatchObject({ ok: false, code: 'sample_remote' });
+      expect(await (await postJson(`${base}/api/git/remote/connect-own`, { url: own })).json()).toMatchObject({ ok: true, previous: 'upstream' });
+      expect((await status(base)).sampleRemote).toBe(false);
+      expect(await (await postJson(`${base}/api/git/push`, {})).json()).toMatchObject({ ok: true });
+    });
+    expect(git(project, ['remote', 'get-url', 'upstream']).trim()).toBe('https://github.com/duckcode-ai/jaffle-shop-duckdb.git');
+    expect(git(project, ['rev-parse', '--abbrev-ref', '@{u}']).trim()).toBe('origin/main');
+    expect(git(project, ['--git-dir', own, 'log', '-1', '--format=%s', 'main']).trim()).toBe('first');
+  });
+});

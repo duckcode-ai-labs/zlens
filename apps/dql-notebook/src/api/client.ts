@@ -7425,6 +7425,12 @@ export const api = {
     projectPrefix?: string;
     /** The branch reviews merge into: the remote's default branch. */
     baseBranch?: string;
+    /** Whether the remote already has the base branch (an empty repository has none). */
+    baseOnRemote?: boolean;
+    /** The remote branch ahead/behind are counted against. */
+    upstream?: string | null;
+    /** origin is a ZLens sample repository. */
+    sampleRemote?: boolean;
   }> {
     return request<any>('/api/git/status');
   },
@@ -7588,6 +7594,33 @@ export const api = {
   async gitPush(): Promise<GitWriteResult & { output?: string }> {
     try {
       return await request<any>('/api/git/push', { method: 'POST', body: '{}' });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  /** Background check: fetch only. Never touches branches or files. */
+  async gitFetch(): Promise<GitWriteResult> {
+    try {
+      return await request<any>('/api/git/fetch', { method: 'POST', body: '{}' });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  /** Send unsent commits from the base branch to a new branch, leaving the base branch as the remote has it. */
+  async gitSendAsBranch(name?: string): Promise<GitWriteResult & { branch?: string; base?: string; sent?: number; subject?: string; prUrl?: string }> {
+    try {
+      return await request<any>('/api/git/send-as-branch', { method: 'POST', body: JSON.stringify(name ? { name } : {}) });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  /** Keep the current origin (the ZLens sample) as upstream and make your repository origin. */
+  async gitConnectOwnRemote(url: string): Promise<GitWriteResult & { url?: string; previous?: string }> {
+    try {
+      return await request<any>('/api/git/remote/connect-own', { method: 'POST', body: JSON.stringify({ url }) });
     } catch (e) {
       return gitWriteFailure(e);
     }
