@@ -7422,6 +7422,9 @@ export const api = {
     ahead: number;
     behind: number;
     changes: Array<{ path: string; status: string }>;
+    projectPrefix?: string;
+    /** The branch reviews merge into: the remote's default branch. */
+    baseBranch?: string;
   }> {
     return request<any>('/api/git/status');
   },
@@ -7611,7 +7614,7 @@ export const api = {
 
   /** Create a review branch, commit only the selected files, push it, and open a PR. Never merges. */
   async gitCreateReview(payload: { paths: string[]; title: string; body?: string; base?: string }): Promise<{
-    ok: boolean; error?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
+    ok: boolean; error?: string; base?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
   }> {
     try {
       return await request<any>('/api/git/review', { method: 'POST', body: JSON.stringify(payload) });
@@ -7622,7 +7625,7 @@ export const api = {
 
   /** Open a PR after the guided flow has already committed and pushed its review branch. */
   async gitOpenReview(payload: { title: string; body?: string; base?: string }): Promise<{
-    ok: boolean; error?: string; branch?: string; prUrl?: string; warning?: string;
+    ok: boolean; error?: string; base?: string; branch?: string; prUrl?: string; warning?: string;
   }> {
     try {
       return await request<any>('/api/git/review/open', { method: 'POST', body: JSON.stringify(payload) });

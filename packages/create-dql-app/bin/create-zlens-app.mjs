@@ -487,7 +487,16 @@ async function main() {
   const inRepo = spawnSync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: target });
   if (inRepo.status !== 0) {
     const gitResult = spawnSync('git', ['init', '-q'], { cwd: target });
-    if (gitResult.status === 0) console.log(c.dim('  initialized git repo'));
+    if (gitResult.status === 0) {
+      // Honor a configured init.defaultBranch; otherwise start on `main`, like
+      // the workbench's Initialize Git. Git's own fallback is still `master` on
+      // many machines, and a first send then lands beside GitHub's `main`.
+      const defaultBranch = spawnSync('git', ['config', '--get', 'init.defaultBranch'], { cwd: target, encoding: 'utf-8' });
+      if (defaultBranch.status !== 0 || !String(defaultBranch.stdout ?? '').trim()) {
+        spawnSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: target });
+      }
+      console.log(c.dim('  initialized git repo'));
+    }
   }
 
   const pm = detectPackageManager();
