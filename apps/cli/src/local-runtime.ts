@@ -24452,6 +24452,43 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       return;
     }
+    // Get updates, mid-way: conflicts, per-file choices, continue, cancel, undo.
+    if (req.method === 'GET' && path === '/api/git/update/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON(await readGitUpdateState(projectRoot)));
+      return;
+    }
+    if (req.method === 'GET' && path === '/api/git/update/versions') {
+      const result = await readGitConflictVersions(projectRoot, url.searchParams.get('path') ?? '');
+      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON(result));
+      return;
+    }
+    if (req.method === 'POST' && (path === '/api/git/update/resolve' || path === '/api/git/update/continue' || path === '/api/git/update/cancel' || path === '/api/git/update/undo')) {
+      try {
+        const body = path === '/api/git/update/resolve' ? ((await readJSON(req)) as { path?: unknown; keep?: unknown }) : {};
+        const result = path === '/api/git/update/resolve'
+          ? await resolveGitConflict(projectRoot, body ?? {})
+          : path === '/api/git/update/continue'
+            ? await continueGitUpdate(projectRoot)
+            : path === '/api/git/update/cancel'
+              ? await cancelGitUpdate(projectRoot)
+              : await undoGitUpdate(projectRoot);
+        if (result.ok && path !== '/api/git/update/resolve') {
+          try {
+            await refreshUnifiedProjectIndexes(projectRoot);
+          } catch {
+            // The update itself succeeded; indexes refresh on the next change.
+          }
+        }
+        res.writeHead(result.ok || result.code === 'conflicts' ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
     if (req.method === 'POST' && path === '/api/git/pull') {
       try {
         const result = await gitPull(projectRoot);
@@ -24463,7 +24500,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             result.output = [result.output, refreshWarning].filter(Boolean).join('\n');
           }
         }
-        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(result.ok || result.code === 'conflicts' ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -47462,7 +47499,7 @@ async function gitCommit(
 /** Files a Git host can put in a brand-new repository ("Add a README", a licence, a .gitignore template). */
 const GIT_HOST_STARTER_FILE = /^(?:README|LICENSE|LICENCE|COPYING)(?:\.[A-Za-z0-9]+)?$|^\.git(?:ignore|attributes)$/i;
 
-export type GitRemoteBranchLink = 'absent' | 'linked' | 'merged_starter' | 'behind_or_diverged' | 'merge_failed';
+export type GitRemoteBranchLink = 'absent' | 'linked' | 'merged_starter' | 'behind_or_diverged' | 'unrelated' | 'merge_failed';
 
 /**
  * A local branch with no upstream whose name already exists on the remote: the
@@ -47493,7 +47530,7 @@ export async function linkGitBranchToRemote(gitRoot: string, remote: string, bra
   const files = await execGit(gitRoot, ['ls-tree', '-r', '--name-only', remoteRef]);
   const remoteFiles = files.code === 0 ? files.stdout.split('\n').map((f) => f.trim()).filter(Boolean) : [];
   const starterOnly = mergeBase.code !== 0 && remoteFiles.length > 0 && remoteFiles.every((f) => GIT_HOST_STARTER_FILE.test(f));
-  if (!starterOnly) return { link: 'behind_or_diverged' };
+  if (!starterOnly) return { link: mergeBase.code !== 0 ? 'unrelated' : 'behind_or_diverged' };
   const merged = await execGit(gitRoot, ['merge', '--allow-unrelated-histories', '--no-edit', '-X', 'ours', '-m', `Merge the repository's starter files from ${remote}/${branch}`, remoteRef]);
   if (merged.code !== 0) {
     await execGit(gitRoot, ['merge', '--abort']);
@@ -47668,6 +47705,7 @@ async function gitPush(cwd: string): Promise<{ ok: boolean; error?: string; outp
   const branchName = branch.code === 0 ? branch.stdout.trim() : '';
   if (upstream.code !== 0 && branchName && branchName !== 'HEAD') {
     const { link, detail } = await linkGitBranchToRemote(gitRoot, remote, branchName);
+    if (link === 'unrelated') return { ok: false, code: 'unrelated', error: UNRELATED_REMOTE_MESSAGE };
     if (link === 'behind_or_diverged') {
       return {
         ok: false,
@@ -47854,20 +47892,369 @@ async function gitPull(cwd: string): Promise<{ ok: boolean; error?: string; outp
       if (link === 'linked') return { ok: true, output: `Linked ${branchName} to ${remote}/${branchName}. Already up to date.` };
       if (link === 'merged_starter') return { ok: true, output: `Linked ${branchName} to ${remote}/${branchName} and added the repository's starter files.` };
       if (link === 'merge_failed') return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail ?? ''), ...(detail ? { detail } : {}) };
-      // 'absent' falls through to git's own answer ("send the branch first");
-      // 'behind_or_diverged' is now linked, so the pull below can proceed.
+      if (link === 'unrelated') return { ok: false, code: 'unrelated', error: UNRELATED_REMOTE_MESSAGE };
+      // 'absent' falls through to the update below, which brings in the base
+      // branch for a branch the remote has never seen; 'behind_or_diverged'
+      // is now linked.
     }
   }
-  // `--ff-only` keeps the operation non-destructive: if the local branch has
-  // diverged from upstream, we surface the error rather than auto-merging.
-  // The user can resolve via the terminal or a future merge UI.
-  const res = await execGit(gitRoot, ['pull', '--ff-only'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
-  if (res.code === 0) {
-    await rememberGitRemoteHead(gitRoot);
-    return { ok: true, output: gitErrorOutput(res) };
+  return await gitUpdate(gitRoot);
+}
+
+// ── Get updates (D1, D2) ──────────────────────────────────────────────────
+// One button brings the branch up to date: first with its own copy on the
+// remote, then — on a branch other than the base — with the base branch.
+// Unsent commits are replayed on top (rebase); anything already sent is merged,
+// never rewritten. Conflicts stop the update with the repository mid-operation;
+// the page resolves them file by file, then continues or cancels. Cancel puts
+// everything back as it was; Undo reverses a finished update until the next
+// action. A remote with unrelated work is never combined with the project (D6).
+
+const UNRELATED_REMOTE_MESSAGE = 'That repository already holds other work that is unrelated to this project, so ZLens will not combine them. To add ZLens to that repository, clone it and run "npx create-zlens-app dql" inside it. To share this project on its own, connect an empty repository instead.';
+
+export type GitUpdateOperation = 'rebase' | 'merge';
+
+export interface GitUpdateConflict {
+  path: string;
+  /** Present on this side: false when one side deleted the file. */
+  mine: boolean;
+  theirs: boolean;
+}
+
+export interface GitUpdateState {
+  inProgress: boolean;
+  operation?: GitUpdateOperation;
+  /** What is being brought in, e.g. origin/main. */
+  target?: string;
+  conflicts: GitUpdateConflict[];
+  /** Conflicted files not yet resolved. */
+  unresolved: string[];
+  /** A finished update that can still be undone. */
+  undoAvailable: boolean;
+}
+
+export interface GitUpdateResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  detail?: string;
+  output?: string;
+  state?: GitUpdateState;
+  files?: string[];
+  undoAvailable?: boolean;
+}
+
+interface GitUpdateRecord {
+  branch: string;
+  before: string;
+  after?: string;
+  operation?: GitUpdateOperation;
+  target?: string;
+  /** Targets left to bring in after the current one. */
+  pending?: string[];
+  summary?: string[];
+}
+
+async function gitPathOf(gitRoot: string, name: string): Promise<string> {
+  const res = await execGit(gitRoot, ['rev-parse', '--git-path', name]);
+  const rel = res.code === 0 ? res.stdout.trim() : join('.git', name);
+  return resolve(gitRoot, rel);
+}
+
+async function readUpdateRecord(gitRoot: string): Promise<GitUpdateRecord | null> {
+  try {
+    return JSON.parse(readFileSync(await gitPathOf(gitRoot, 'zlens-update.json'), 'utf-8')) as GitUpdateRecord;
+  } catch {
+    return null;
   }
-  const detail = gitErrorOutput(res);
-  return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
+}
+
+async function writeUpdateRecord(gitRoot: string, record: GitUpdateRecord | null): Promise<void> {
+  const file = await gitPathOf(gitRoot, 'zlens-update.json');
+  if (!record) {
+    rmSync(file, { force: true });
+    return;
+  }
+  writeFileSync(file, `${JSON.stringify(record)}\n`);
+}
+
+async function inProgressOperation(gitRoot: string): Promise<GitUpdateOperation | null> {
+  if (existsSync(await gitPathOf(gitRoot, 'rebase-merge')) || existsSync(await gitPathOf(gitRoot, 'rebase-apply'))) return 'rebase';
+  if (existsSync(await gitPathOf(gitRoot, 'MERGE_HEAD'))) return 'merge';
+  return null;
+}
+
+async function headSha(gitRoot: string): Promise<string> {
+  return (await execGit(gitRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+}
+
+async function countRange(gitRoot: string, range: string[]): Promise<number> {
+  const res = await execGit(gitRoot, ['rev-list', '--count', ...range]);
+  return res.code === 0 ? Number(res.stdout.trim() || 0) : 0;
+}
+
+export async function readGitUpdateState(cwd: string): Promise<GitUpdateState> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { inProgress: false, conflicts: [], unresolved: [], undoAvailable: false };
+  const operation = await inProgressOperation(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!operation) {
+    const branch = (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    const undoAvailable = Boolean(record?.after && record.branch === branch && record.after === await headSha(gitRoot));
+    return { inProgress: false, conflicts: [], unresolved: [], undoAvailable };
+  }
+  // Stage 2 is the side being built on, stage 3 the side coming in. A rebase
+  // replays *your* commits onto the remote, so there "mine" is stage 3.
+  const mineStage = operation === 'rebase' ? '3' : '2';
+  const theirsStage = operation === 'rebase' ? '2' : '3';
+  const ls = await execGit(gitRoot, ['ls-files', '-u', '-z']);
+  const stages = new Map<string, Set<string>>();
+  for (const entry of ls.stdout.split('\0').filter(Boolean)) {
+    const tab = entry.indexOf('\t');
+    const meta = entry.slice(0, tab).split(/\s+/);
+    const path = entry.slice(tab + 1);
+    if (!stages.has(path)) stages.set(path, new Set());
+    stages.get(path)!.add(meta[2] ?? '');
+  }
+  const conflicts = [...stages.entries()].map(([path, set]) => ({ path, mine: set.has(mineStage), theirs: set.has(theirsStage) }));
+  const recorded = record?.operation === operation ? record : null;
+  return {
+    inProgress: true,
+    operation,
+    ...(recorded?.target ? { target: recorded.target } : {}),
+    conflicts,
+    unresolved: conflicts.map((c) => c.path),
+    undoAvailable: false,
+  };
+}
+
+/** Both versions of a conflicted file, for Compare. */
+export async function readGitConflictVersions(cwd: string, path: string): Promise<{ ok: boolean; error?: string; mine?: string | null; theirs?: string | null }> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, error: 'Not a git repository' };
+  const valid = validatePaths(gitRoot, [path]);
+  if (!valid.ok) return { ok: false, error: valid.error };
+  const operation = await inProgressOperation(gitRoot);
+  if (!operation) return { ok: false, error: 'No update is in progress.' };
+  const show = async (stage: string) => {
+    const res = await execGit(gitRoot, ['show', `:${stage}:${path}`]);
+    return res.code === 0 ? res.stdout : null;
+  };
+  return { ok: true, mine: await show(operation === 'rebase' ? '3' : '2'), theirs: await show(operation === 'rebase' ? '2' : '3') };
+}
+
+/** Keep your version or the remote's for one conflicted file. */
+export async function resolveGitConflict(cwd: string, input: { path?: unknown; keep?: unknown }): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const path = typeof input.path === 'string' ? input.path : '';
+  const valid = validatePaths(gitRoot, [path]);
+  if (!valid.ok) return { ok: false, code: 'invalid_path', error: valid.error };
+  if (input.keep !== 'mine' && input.keep !== 'theirs') return { ok: false, code: 'invalid_choice', error: 'Choose mine or theirs.' };
+  const state = await readGitUpdateState(gitRoot);
+  const conflict = state.conflicts.find((c) => c.path === path);
+  if (!state.inProgress || !conflict) return { ok: false, code: 'not_conflicted', error: `${path} has no conflict to resolve.`, state };
+  const keepMine = input.keep === 'mine';
+  const present = keepMine ? conflict.mine : conflict.theirs;
+  if (!present) {
+    // The chosen side deleted the file: keeping that side removes it.
+    const removed = await execGit(gitRoot, ['rm', '--quiet', '--', path]);
+    if (removed.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(removed) };
+  } else {
+    // In a rebase git's --ours is the remote side and --theirs is yours.
+    const side = (state.operation === 'rebase') === keepMine ? '--theirs' : '--ours';
+    const picked = await execGit(gitRoot, ['checkout', side, '--', path]);
+    if (picked.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(picked) };
+    const added = await execGit(gitRoot, ['add', '--', path]);
+    if (added.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(added) };
+  }
+  return { ok: true, state: await readGitUpdateState(gitRoot) };
+}
+
+/** Bring in one target: fast-forward, rebase unsent commits, or merge. Stops on conflicts. */
+async function integrateTarget(gitRoot: string, target: string, record: GitUpdateRecord, mode: 'rebase' | 'merge'): Promise<GitUpdateResult | null> {
+  const incoming = await countRange(gitRoot, [`HEAD..${target}`]);
+  if (incoming === 0) return null;
+  const mineCount = await countRange(gitRoot, [`${target}..HEAD`]);
+  if (mineCount === 0) {
+    const ff = await execGit(gitRoot, ['merge', '--ff-only', '--autostash', target]);
+    if (ff.code !== 0) return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(gitErrorOutput(ff)), detail: gitErrorOutput(ff) };
+    record.summary = [...(record.summary ?? []), `Brought in ${incoming} change${incoming === 1 ? '' : 's'} from ${target}.`];
+    return null;
+  }
+  record.operation = mode;
+  record.target = target;
+  await writeUpdateRecord(gitRoot, record);
+  const env = { ...process.env, GIT_EDITOR: 'true' };
+  const res = mode === 'rebase'
+    ? await execGit(gitRoot, ['rebase', '--autostash', target], { env })
+    : await execGit(gitRoot, ['merge', '--no-edit', '--autostash', '-m', `Merge ${target}`, target], { env });
+  if (res.code !== 0) {
+    if (await inProgressOperation(gitRoot)) {
+      return { ok: false, code: 'conflicts', error: `Some files changed on both sides. Choose which version to keep for each, then continue.`, state: await readGitUpdateState(gitRoot) };
+    }
+    return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(gitErrorOutput(res)), detail: gitErrorOutput(res) };
+  }
+  record.operation = undefined;
+  record.target = undefined;
+  record.summary = [...(record.summary ?? []), mode === 'rebase'
+    ? `Brought in ${incoming} change${incoming === 1 ? '' : 's'} from ${target}; your ${mineCount} unsent change${mineCount === 1 ? ' is' : 's are'} now on top.`
+    : `Brought in ${incoming} change${incoming === 1 ? '' : 's'} from ${target}.`];
+  return null;
+}
+
+/** Runs (or resumes) the update over the remaining targets. */
+async function runUpdateTargets(gitRoot: string, record: GitUpdateRecord): Promise<GitUpdateResult> {
+  while (record.pending && record.pending.length > 0) {
+    const [target, ...rest] = record.pending;
+    record.pending = rest;
+    const remote = target!.split('/')[0]!;
+    // Commits that any remote already has were sent: never rewrite those.
+    const unsent = await countRange(gitRoot, [`${target}..HEAD`, '--not', `--remotes=${remote}`]);
+    const mine = await countRange(gitRoot, [`${target}..HEAD`]);
+    const mode: 'rebase' | 'merge' = unsent === mine ? 'rebase' : 'merge';
+    const stopped = await integrateTarget(gitRoot, target!, record, mode);
+    if (stopped) {
+      await writeUpdateRecord(gitRoot, { ...record, pending: record.pending });
+      return stopped;
+    }
+  }
+  record.after = await headSha(gitRoot);
+  const changed = record.after !== record.before;
+  await writeUpdateRecord(gitRoot, changed ? record : null);
+  await rememberGitRemoteHead(gitRoot);
+  return {
+    ok: true,
+    output: changed ? (record.summary ?? []).join(' ') : 'Already up to date.',
+    undoAvailable: changed,
+  };
+}
+
+export async function gitUpdate(gitRoot: string): Promise<GitUpdateResult> {
+  if (await inProgressOperation(gitRoot)) {
+    return { ok: false, code: 'conflicts', error: 'An update is waiting for you to resolve conflicts. Finish or cancel it first.', state: await readGitUpdateState(gitRoot) };
+  }
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before getting updates.' };
+  const branch = (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  if (!branch || branch === 'HEAD') return { ok: false, code: 'detached', error: 'Switch to a branch before getting updates.' };
+  const fetched = await execGit(gitRoot, ['fetch', '--prune', remote], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (fetched.code !== 0) {
+    const detail = gitErrorOutput(fetched);
+    return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
+  }
+  await rememberGitRemoteHead(gitRoot);
+
+  const targets: string[] = [];
+  const upstreamRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  const upstream = upstreamRes.code === 0 ? upstreamRes.stdout.trim() : '';
+  if (upstream && (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', upstream])).code === 0) targets.push(upstream);
+  const base = await resolveGitBaseBranch(gitRoot);
+  const baseRef = `${remote}/${base}`;
+  if (branch !== base && baseRef !== upstream && (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${baseRef}`])).code === 0) {
+    targets.push(baseRef);
+  }
+  if (targets.length === 0) {
+    return { ok: false, code: 'pull_failed', error: 'This branch is not linked to a remote branch yet. Send the branch first, then get updates.' };
+  }
+
+  // D6: never combine with unrelated history.
+  for (const target of targets) {
+    if ((await countRange(gitRoot, [`HEAD..${target}`])) > 0 && (await execGit(gitRoot, ['merge-base', 'HEAD', target])).code !== 0) {
+      return { ok: false, code: 'unrelated', error: UNRELATED_REMOTE_MESSAGE };
+    }
+  }
+
+  // Unsaved edits ride along unless the remote changed the same files.
+  const status = await execGit(gitRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const unsaved = status.stdout.split('\0').filter(Boolean).map((line) => line.slice(3)).filter(Boolean);
+  if (unsaved.length > 0) {
+    const remoteChanged = new Set<string>();
+    for (const target of targets) {
+      const diff = await execGit(gitRoot, ['diff', '--name-only', `HEAD...${target}`]);
+      for (const file of diff.stdout.split('\n').map((f) => f.trim()).filter(Boolean)) remoteChanged.add(file);
+    }
+    const overlap = unsaved.filter((file) => remoteChanged.has(file));
+    if (overlap.length > 0) {
+      return {
+        ok: false,
+        code: 'unsaved_overlap',
+        files: overlap,
+        error: `The remote also changed ${overlap.slice(0, 3).join(', ')}${overlap.length > 3 ? ` and ${overlap.length - 3} more` : ''}. Keep or discard your unsaved changes to ${overlap.length === 1 ? 'that file' : 'those files'} first, then get updates.`,
+      };
+    }
+  }
+
+  const record: GitUpdateRecord = { branch, before: await headSha(gitRoot), pending: targets, summary: [] };
+  await writeUpdateRecord(gitRoot, record);
+  return await runUpdateTargets(gitRoot, record);
+}
+
+/** After every conflict is resolved: finish the operation and carry on with what is left. */
+export async function continueGitUpdate(cwd: string): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const operation = await inProgressOperation(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!operation || !record) return { ok: false, code: 'nothing_in_progress', error: 'No update is waiting to continue.' };
+  const state = await readGitUpdateState(gitRoot);
+  if (state.unresolved.length > 0) {
+    return { ok: false, code: 'conflicts', error: `Choose a version for ${state.unresolved.length} more file${state.unresolved.length === 1 ? '' : 's'} first.`, state };
+  }
+  const env = { ...process.env, GIT_EDITOR: 'true' };
+  const res = operation === 'rebase'
+    ? await execGit(gitRoot, ['-c', 'core.editor=true', 'rebase', '--continue'], { env })
+    : await execGit(gitRoot, ['commit', '--no-edit'], { env });
+  if (await inProgressOperation(gitRoot)) {
+    const next = await readGitUpdateState(gitRoot);
+    if (next.unresolved.length > 0) {
+      return { ok: false, code: 'conflicts', error: 'The next change also conflicts. Choose which version to keep for each file, then continue.', state: next };
+    }
+    // A replayed commit that became empty after resolution: skip it.
+    if (operation === 'rebase') {
+      const skipped = await execGit(gitRoot, ['rebase', '--skip'], { env });
+      if (skipped.code !== 0 && await inProgressOperation(gitRoot)) {
+        return { ok: false, code: 'conflicts', error: 'The next change also conflicts. Choose which version to keep for each file, then continue.', state: await readGitUpdateState(gitRoot) };
+      }
+    }
+  } else if (res.code !== 0 && operation === 'merge') {
+    return { ok: false, code: 'error', error: gitErrorOutput(res) || 'Git could not finish the update.' };
+  }
+  const target = record.target ?? '';
+  record.summary = [...(record.summary ?? []), `Brought in the changes from ${target}, with your choices for the conflicting files.`];
+  record.operation = undefined;
+  record.target = undefined;
+  return await runUpdateTargets(gitRoot, record);
+}
+
+/** Put everything back exactly as it was before Get updates. */
+export async function cancelGitUpdate(cwd: string): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const operation = await inProgressOperation(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!operation) return { ok: false, code: 'nothing_in_progress', error: 'No update is in progress.' };
+  const aborted = await execGit(gitRoot, operation === 'rebase' ? ['rebase', '--abort'] : ['merge', '--abort']);
+  if (aborted.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(aborted) || 'Git could not cancel the update.' };
+  if (record?.before && record.branch === (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() && await headSha(gitRoot) !== record.before) {
+    // An earlier step of this update finished before the one cancelled.
+    await execGit(gitRoot, ['reset', '--keep', record.before]);
+  }
+  await writeUpdateRecord(gitRoot, null);
+  return { ok: true, output: 'Update cancelled. Everything is as it was before.' };
+}
+
+/** Reverse a finished update, keeping unsaved edits, until anything else changes the branch. */
+export async function undoGitUpdate(cwd: string): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const state = await readGitUpdateState(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!state.undoAvailable || !record) return { ok: false, code: 'nothing_to_undo', error: 'There is no update to undo any more.' };
+  const reset = await execGit(gitRoot, ['reset', '--keep', record.before]);
+  if (reset.code !== 0) return { ok: false, code: 'error', error: `Git could not undo the update without touching your unsaved changes: ${gitErrorOutput(reset)}` };
+  await writeUpdateRecord(gitRoot, null);
+  return { ok: true, output: 'Update undone. Your branch is back where it was.' };
 }
 
 async function readGitBranches(cwd: string): Promise<{ inRepo: boolean; current: string | null; branches: string[] }> {

@@ -19,7 +19,10 @@ use git every day, and a semantic diff for people who do.
        see **Review request opened** and **View on GitHub**.
 
 At the top, the branch menu has **Create new branch…**, and **Get updates** and
-**Send branch** pull and push.
+**Send** bring in the team's changes and send yours. For the whole flow
+(connecting your own repository, sending as a branch, pull requests, and what
+happens when a file changed on both sides), see
+[Share your work with your team](share-with-your-team.md).
 
 If the project is not a git repository yet, the page offers **Initialize Git
 for this project**. With no remote, **Add remote** asks for the
