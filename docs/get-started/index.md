@@ -15,7 +15,8 @@ You end with:
 
 You need:
 
-- Node.js 20 or newer (`node -v`)
+- Node.js 20, 22 or 24, with 24 LTS recommended (`node -v`). Node 25 and 26
+  are not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
 - Python 3.9 to 3.13, to build the sample with dbt (`python3 --version`)
 - git
 

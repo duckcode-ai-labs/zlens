@@ -76,6 +76,10 @@ import {
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
+  DuckDBNodeUnsupportedError,
+  duckdbHasPrebuiltBinary,
+  duckdbNoPrebuiltHelp,
+  duckdbSourceBuildAllowed,
 } from "@zlens/connectors";
 import {
   buildExecutionPlan,
@@ -30701,7 +30705,9 @@ export function formatLocalQueryRuntimeError(
     (driver === 'file' || driver === 'duckdb') &&
     detail.includes('duckdb.node')
   ) {
-    return `Local query runtime is unavailable for driver "${driver}": DuckDB native bindings could not be loaded. Current Node.js runtime: ${currentNode}. Reinstall dependencies with a supported LTS Node release (for example Node 18, 20, or 22), then rerun "pnpm install". Original error: ${detail}`;
+    const noPrebuilt = duckdbNoPrebuiltHelp(currentNode);
+    if (noPrebuilt) return `Local query runtime is unavailable for driver "${driver}": ${noPrebuilt}`;
+    return `Local query runtime is unavailable for driver "${driver}": DuckDB native bindings could not be loaded. Current Node.js runtime: ${currentNode}. Reinstall dependencies with a supported LTS Node release (Node 24, 22, or 20), then rerun "pnpm install". Original error: ${detail}`;
   }
 
   return `Local query runtime is unavailable for driver "${driver}": ${detail}`;
@@ -36664,11 +36670,31 @@ function runConnectorNpm(projectRoot: string, args: string[]): void {
   });
 }
 
+/**
+ * Why ZLens must not npm-install these packages on this Node, or null. Today
+ * that is `duckdb` on a Node it has no prebuilt binary for: the install would
+ * compile DuckDB from source (over ten minutes, and a failure without Python
+ * and a C++ toolchain) unless ZLENS_DUCKDB_BUILD_FROM_SOURCE=1 asks for that.
+ */
+export function connectorInstallBlockedReason(
+  packageNames: string[],
+  nodeVersion = process.versions.node,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (!packageNames.includes('duckdb') || duckdbHasPrebuiltBinary(nodeVersion) || duckdbSourceBuildAllowed(env)) return null;
+  return duckdbNoPrebuiltHelp(nodeVersion);
+}
+
+function logZlensLines(text: string): void {
+  for (const line of text.split('\n')) console.log(`[zlens] ${line}`);
+}
+
 function installPackages(projectRoot: string, packageSpecs: string[]): void {
   const installRoot = connectorInstallRoot(projectRoot);
   // npm 12 blocks a dependency's install script unless package.json allows it,
   // and duckdb downloads its native binary in that script: allow it here.
   const packageNames = packageSpecs.map(packageNameOf);
+  if (connectorInstallBlockedReason(packageNames)) throw new DuckDBNodeUnsupportedError();
   seedConnectorAllowScripts(installRoot, packageNames);
 
   runConnectorNpm(projectRoot, ['install', '--prefix', installRoot, '--no-audit', '--no-fund', ...packageSpecs]);
@@ -36692,13 +36718,23 @@ function installPackages(projectRoot: string, packageSpecs: string[]): void {
  * install/upgrade. Best-effort and non-fatal: an offline machine keeps the manual
  * "Install" button and a clear message rather than a failed startup.
  */
-export function ensureConnectorInstalledForStartup(projectRoot: string, driver: string | undefined): void {
+export function ensureConnectorInstalledForStartup(
+  projectRoot: string,
+  driver: string | undefined,
+  nodeVersion = process.versions.node,
+): void {
   if (!driver) return;
   const definition = CONNECTOR_INSTALLS[driver];
   // Built-in drivers (e.g. the local file driver) and unknown drivers need nothing.
   if (!definition || definition.builtIn || !definition.packageSpec || !definition.packageName) return;
   if (isConnectorPackageInstalled(projectRoot, definition.packageName)) {
-    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
+    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label, nodeVersion);
+    return;
+  }
+  // Never start a silent source build from startup: say which Node to use.
+  const blocked = connectorInstallBlockedReason([definition.packageName], nodeVersion);
+  if (blocked) {
+    logZlensLines(blocked);
     return;
   }
   console.log(`[zlens] Installing the ${definition.label} driver into .dql/connectors (first run after install/upgrade)…`);
@@ -36731,11 +36767,23 @@ function isInsideConnectorRoot(packageDir: string, installRoot: string): boolean
  * Best-effort; a driver ZLens does not manage (the project's own
  * node_modules) is left alone and its load error says how to fix it.
  */
-function repairBlockedConnectorBinding(projectRoot: string, packageName: string, label: string): void {
+function repairBlockedConnectorBinding(
+  projectRoot: string,
+  packageName: string,
+  label: string,
+  nodeVersion = process.versions.node,
+): void {
   if (!isNativeConnectorPackage(packageName)) return;
   const installRoot = connectorInstallRoot(projectRoot);
   const broken = connectorBindingError(connectorModuleSearchPaths(projectRoot), packageName);
-  if (!broken || !isInsideConnectorRoot(broken.packageDir, installRoot)) return;
+  if (!broken) return;
+  // Rebuilding here would be a source build (a copy installed under another Node).
+  const blocked = connectorInstallBlockedReason([packageName], nodeVersion);
+  if (blocked) {
+    logZlensLines(blocked);
+    return;
+  }
+  if (!isInsideConnectorRoot(broken.packageDir, installRoot)) return;
   console.log(`[zlens] The ${label} driver in .dql/connectors has no native binary (npm 12 blocks install scripts that package.json does not allow); rebuilding it…`);
   try {
     if (repairConnectorBinding(installRoot, packageName, (args) => runConnectorNpm(projectRoot, args))) {
