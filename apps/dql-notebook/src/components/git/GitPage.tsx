@@ -19,7 +19,15 @@ import { useNotebookStore } from '../../store/NotebookStore';
 import { themes, type Theme } from '../../themes/notebook-theme';
 import { hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api, type GitGovernedContextGroup } from '../../api/client';
-import { isNoRemoteFailure, remoteUrlInputProblem, REMOTE_URL_EXAMPLES } from './git-connect';
+import {
+  BACKGROUND_FETCH_INTERVAL_MS,
+  isNoRemoteFailure,
+  remoteUrlInputProblem,
+  REMOTE_URL_EXAMPLES,
+  shouldOfferSendAsBranch,
+  syncSummary,
+  type RemoteCheck,
+} from './git-connect';
 
 type Status = Awaited<ReturnType<typeof api.fetchGitStatus>>;
 type RawChange = Status['changes'][number];
@@ -123,6 +131,13 @@ export function GitPage() {
   const [diffView, setDiffView] = useState<'plain' | 'code'>('plain');
   const [sharedInfo, setSharedInfo] = useState<{ count: number; message: string; base: string } | null>(null);
   const [narrowLayout, setNarrowLayout] = useState(() => typeof window !== 'undefined' && window.innerWidth < 980);
+  // D3: what the page knows about the remote from its background fetch.
+  const [remoteCheck, setRemoteCheck] = useState<RemoteCheck>({ state: 'unknown' });
+  // D4: sending from the base branch asks first.
+  const [sendChoiceOpen, setSendChoiceOpen] = useState(false);
+  // D5: the ZLens sample as origin.
+  const [ownRepoInput, setOwnRepoInput] = useState('');
+  const [ownRepoError, setOwnRepoError] = useState<string | null>(null);
   useEffect(() => {
     const onResize = () => setNarrowLayout(window.innerWidth < 980);
     window.addEventListener('resize', onResize);
@@ -169,6 +184,40 @@ export function GitPage() {
     }, 4000);
     return () => window.clearInterval(id);
   }, [refreshAll]);
+
+  // D3: fetch in the background (open, focus, every five minutes) so the page
+  // says what is new on the remote before anyone presses Send. Fetch only:
+  // branches and files are never touched, and a failure is a quiet note.
+  const lastRemoteCheck = useRef(0);
+  const checkRemote = useCallback(async () => {
+    lastRemoteCheck.current = Date.now();
+    const res = await api.gitFetch();
+    if (res.ok) {
+      setRemoteCheck({ state: 'ok' });
+      await refreshAll();
+    } else if (res.code === 'unreachable') {
+      setRemoteCheck({ state: 'unreachable', message: res.error ?? 'Git could not reach the remote.' });
+    }
+  }, [refreshAll]);
+  useEffect(() => {
+    if (!remote.url || readOnly) return;
+    setRemoteCheck({ state: 'unknown' });
+    let running = false;
+    const run = (minGapMs: number) => {
+      if (running || document.visibilityState !== 'visible') return;
+      if (Date.now() - lastRemoteCheck.current < minGapMs) return;
+      running = true;
+      void checkRemote().finally(() => { running = false; });
+    };
+    run(0);
+    const id = window.setInterval(() => run(0), BACKGROUND_FETCH_INTERVAL_MS);
+    const onFocus = () => run(30_000);
+    window.addEventListener('focus', onFocus);
+    return () => {
+      window.clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [remote.url, readOnly, checkRemote]);
 
   // Close the branch menu when clicking outside of it.
   useEffect(() => {
@@ -313,7 +362,53 @@ export function GitPage() {
   const pushOrAskForRemote = async (successMsg: string) => {
     const res = await runOp('push', () => api.gitPush(), successMsg);
     if (isNoRemoteFailure(res)) requestRemote(res.error);
+    if (res.ok) setRemoteCheck({ state: 'ok' });
     return res;
+  };
+  /**
+   * Every plain "send": refuses the sample, asks for updates first when the
+   * remote is ahead, and offers a new branch when on the base branch (D3–D5).
+   */
+  const sendCurrentBranch = async (successMsg: string) => {
+    if (status?.sampleRemote) return flash('err', 'This is the ZLens sample repository. Connect your own repository first.');
+    const behind = status?.behind ?? 0;
+    if (behind > 0) return flash('err', `The remote has ${behind} new change${behind === 1 ? '' : 's'}. Get updates first, then send.`);
+    if (shouldOfferSendAsBranch({ branch: branchInfo.current, baseBranch: status?.baseBranch, baseOnRemote: status?.baseOnRemote })) {
+      setSendChoiceOpen(true);
+      return;
+    }
+    await pushOrAskForRemote(successMsg);
+  };
+  const onSendAsBranch = async () => {
+    setSendChoiceOpen(false);
+    const res = await runOp('push', () => api.gitSendAsBranch());
+    if (isNoRemoteFailure(res)) return requestRemote(res.error);
+    if (!res.ok) return;
+    setRemoteCheck({ state: 'ok' });
+    setReviewUrl(res.prUrl ?? null);
+    setSharedInfo({ count: res.sent ?? 0, message: res.subject ?? '', base: res.base ?? reviewBaseBranch(status) });
+    flash('ok', `Sent to ${res.branch}. Open a pull request so your team can review it.`);
+  };
+  const onSendToBase = async () => {
+    const base = branchInfo.current ?? reviewBaseBranch(status);
+    if (!window.confirm(`Send straight to ${base}? Your team won't get a chance to review these changes first.`)) return;
+    setSendChoiceOpen(false);
+    await pushOrAskForRemote(`Sent to ${base}`);
+  };
+  const onConnectOwnRepo = async () => {
+    const problem = remoteUrlInputProblem(ownRepoInput);
+    if (problem) return setOwnRepoError(problem);
+    setOwnRepoError(null);
+    setBusy('remote');
+    try {
+      const res = await api.gitConnectOwnRemote(ownRepoInput.trim());
+      if (!res.ok) return setOwnRepoError(res.error ?? 'Git could not save the remote.');
+      setOwnRepoInput('');
+      flash('ok', `Connected. Your repository is now origin${res.previous ? `; the sample stays as ${res.previous}` : ''}. Send when you are ready.`);
+      await refreshAll();
+    } finally {
+      setBusy(null);
+    }
   };
 
   const onStage = (path: string) => runOp('stage', () => api.gitStage([path]));
@@ -348,10 +443,11 @@ export function GitPage() {
     // Check before committing, so a commit is never left behind by a push that cannot happen.
     if (!remote.url) return requestRemote('Add a Git remote before committing and pushing.');
     const paths = stagedFiles.length > 0 ? undefined : unstagedFiles.map((entry) => entry.path);
+    if (status?.sampleRemote) return flash('err', 'This is the ZLens sample repository. Connect your own repository first.');
     const c = await runOp('commit', () => api.gitCommit(msg, paths ? { paths } : {}));
     if (!c.ok) return;
     setCommitMsg('');
-    await pushOrAskForRemote('Pushed to remote');
+    await sendCurrentBranch('Sent');
   };
   const onRequestReview = async () => {
     // After a share the composer is cleared — fall back to the shared message.
@@ -387,13 +483,14 @@ export function GitPage() {
   };
   const onPull = () => {
     if (!remote.url) return requestRemote('Add a Git remote before getting updates.');
-    void runOp('pull', () => api.gitPull(), 'Pulled from remote').then((res) => {
+    void runOp('pull', () => api.gitPull(), 'Up to date with the remote').then((res) => {
       if (isNoRemoteFailure(res)) requestRemote(res.error);
+      if (res.ok) setRemoteCheck({ state: 'ok' });
     });
   };
   const onPush = () => {
     if (!remote.url) return requestRemote();
-    void pushOrAskForRemote('Pushed to remote');
+    void sendCurrentBranch('Sent');
   };
 
   // ── Guided share-rail handlers (prototype: describe → share → review) ──────
@@ -415,6 +512,7 @@ export function GitPage() {
     if (!msg) return flash('err', 'Describe your change first');
     if (stagedFiles.length === 0) return flash('err', 'Include at least one change first');
     if (!remote.url) return requestRemote('Add a Git remote before sharing changes.');
+    if (status?.sampleRemote) return flash('err', 'This is the ZLens sample repository. Connect your own repository first.');
     const count = stagedFiles.length;
     const base = reviewBaseBranch(status);
     if (!branchInfo.current || branchInfo.current === 'HEAD' || branchInfo.current === base || branchInfo.current === 'main' || branchInfo.current === 'master') {
@@ -486,6 +584,7 @@ export function GitPage() {
         ahead={status?.ahead ?? 0}
         behind={status?.behind ?? 0}
         remoteUrl={remote.url}
+        sync={syncSummary({ hasRemote: Boolean(remote.url), ahead: status?.ahead ?? 0, behind: status?.behind ?? 0, check: remoteCheck })}
         refreshing={refreshing}
         busy={busy}
         onPull={onPull}
@@ -502,6 +601,29 @@ export function GitPage() {
         onCreateBranch={onCreateBranch}
         branchMenuRef={branchMenuRef}
       />
+
+      {remote.url && status?.sampleRemote && !readOnly && (
+        <SampleRemoteBanner
+          t={t}
+          value={ownRepoInput}
+          onChange={(value) => { setOwnRepoInput(value); if (ownRepoError) setOwnRepoError(null); }}
+          onSubmit={() => void onConnectOwnRepo()}
+          error={ownRepoError}
+          busy={busy === 'remote'}
+        />
+      )}
+
+      {sendChoiceOpen && (
+        <SendChoiceDialog
+          t={t}
+          base={branchInfo.current ?? reviewBaseBranch(status)}
+          unsent={status?.ahead ?? 0}
+          busy={!!busy}
+          onSendAsBranch={() => void onSendAsBranch()}
+          onSendToBase={() => void onSendToBase()}
+          onCancel={() => setSendChoiceOpen(false)}
+        />
+      )}
 
       {!remote.url && !readOnly && (
         <RemoteSetupBanner
@@ -646,6 +768,7 @@ interface TopBarProps {
   ahead: number;
   behind: number;
   remoteUrl: string | null;
+  sync: { text: string; tone: 'muted' | 'ok' | 'warning'; title?: string };
   refreshing: boolean;
   busy: string | null;
   onPull: () => void;
@@ -779,19 +902,24 @@ function TopBar(p: TopBarProps) {
             {prettyRemote(p.remoteUrl)}
           </span>
         </>
-      ) : (
-        <>
-          <span style={{ fontSize: 11, color: t.textMuted }}>·</span>
-          <span style={{ fontSize: 11, color: t.textMuted }} title="No Git remote is configured. Changes stay on this computer.">
-            no remote
-          </span>
-        </>
-      )}
+      ) : null}
 
       <span style={{ fontSize: 11, color: t.textMuted }}>·</span>
-      <span style={{ fontSize: 11, color: t.success, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-        <span style={{ width: 6, height: 6, borderRadius: '50%', background: t.success }} />
-        ready
+      <span
+        role="status"
+        aria-live="polite"
+        data-testid="git-sync-summary"
+        title={p.sync.title}
+        style={{
+          fontSize: 11,
+          color: p.sync.tone === 'ok' ? t.success : p.sync.tone === 'warning' ? t.warning : t.textMuted,
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+        }}
+      >
+        {p.sync.tone !== 'muted' && (
+          <span style={{ width: 6, height: 6, borderRadius: '50%', background: p.sync.tone === 'ok' ? t.success : t.warning }} />
+        )}
+        {p.sync.text}
       </span>
 
       <div style={{ flex: 1 }} />
@@ -806,14 +934,19 @@ function TopBar(p: TopBarProps) {
 
       {!p.readOnly && (
         <>
-          <button onClick={p.onPull} disabled={!!p.busy} style={topBtn(t)} title="Get updates from the shared project">
+          <button
+            onClick={p.onPull}
+            disabled={!!p.busy}
+            style={p.behind > 0 ? { ...topBtn(t), borderColor: t.warning, boxShadow: `0 0 0 2px ${t.warning}33` } : topBtn(t)}
+            title={p.behind > 0 ? `${p.behind} new on the remote: get them before you send` : 'Get updates from the shared project'}
+          >
             <ArrowDown size={12} strokeWidth={1.75} color={t.warning} />
             Get updates
             {p.behind > 0 && <span style={{ fontFamily: t.fontMono, fontSize: 10, color: t.textMuted, marginLeft: 2 }}>{p.behind}</span>}
           </button>
           <button onClick={p.onPush} disabled={!!p.busy} style={topBtn(t, true)} title="Send the current branch to the shared project">
             <ArrowUp size={12} strokeWidth={1.75} />
-            Send branch
+            Send
             {p.ahead > 0 && <span style={{ fontFamily: t.fontMono, fontSize: 10, opacity: 0.75, marginLeft: 2 }}>{p.ahead}</span>}
           </button>
         </>
@@ -895,6 +1028,9 @@ function sameGitStatus(left: Status | null, right: Status): boolean {
     && left!.ahead === right.ahead
     && left!.behind === right.behind
     && left!.baseBranch === right.baseBranch
+    && left!.baseOnRemote === right.baseOnRemote
+    && left!.upstream === right.upstream
+    && left!.sampleRemote === right.sampleRemote
     && left!.changes.length === right.changes.length
     && left!.changes.every((change, index) => change.path === right.changes[index]?.path && change.status === right.changes[index]?.status);
 }
@@ -2029,6 +2165,102 @@ function RemoteSetupBanner({ t, open, onOpen, onClose, value, onChange, onSubmit
           </div>
         </form>
       )}
+    </div>
+  );
+}
+
+/** D5: origin is the ZLens sample. Sending there is never offered; connect your own repository instead. */
+function SampleRemoteBanner({ t, value, onChange, onSubmit, error, busy }: {
+  t: Theme;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void;
+  error: string | null;
+  busy: boolean;
+}) {
+  return (
+    <div data-testid="git-sample-remote" style={{ display: 'grid', gap: 8, padding: '9px 20px', background: t.sidebarBg, borderBottom: `1px solid ${t.headerBorder}`, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <Link2 size={13} strokeWidth={1.75} color={t.accent} />
+        <span style={{ fontSize: 12, fontWeight: 650, color: t.textPrimary }}>This is the ZLens sample</span>
+        <span style={{ fontSize: 11, color: t.textMuted }}>
+          Connect your own repository to share your work. The sample stays connected as upstream, so you can still get its updates.
+        </span>
+      </div>
+      <form
+        onSubmit={(event) => { event.preventDefault(); onSubmit(); }}
+        style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
+      >
+        <label htmlFor="dql-git-own-repo-url" style={{ fontSize: 11, color: t.textSecondary }}>Your repository</label>
+        <input
+          id="dql-git-own-repo-url"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="https://github.com/you/analytics.git"
+          autoComplete="off"
+          spellCheck={false}
+          aria-invalid={Boolean(error)}
+          aria-describedby="dql-git-own-repo-help"
+          style={{
+            flex: '1 1 320px', minWidth: 0, background: t.appBg, color: t.textPrimary,
+            border: `1px solid ${error ? t.error : t.cellBorder}`, borderRadius: 4,
+            padding: '5px 8px', fontSize: 12, fontFamily: t.fontMono, outline: 'none',
+          }}
+        />
+        <button type="submit" disabled={busy} style={{ ...miniBtn(t, 'primary'), opacity: busy ? 0.7 : 1 }}>
+          {busy ? 'Connecting…' : 'Connect'}
+        </button>
+        <div
+          id="dql-git-own-repo-help"
+          role={error ? 'alert' : undefined}
+          style={{ width: '100%', fontSize: 10.5, lineHeight: 1.5, color: error ? t.error : t.textMuted }}
+        >
+          {error ?? 'Create an empty repository on GitHub, GitLab or your Git server and paste its address. Nothing is sent until you press Send.'}
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/** D4: on the base branch, Send offers a new branch (for a pull request) first; sending straight to the base branch asks again. */
+function SendChoiceDialog({ t, base, unsent, busy, onSendAsBranch, onSendToBase, onCancel }: {
+  t: Theme;
+  base: string;
+  unsent: number;
+  busy: boolean;
+  onSendAsBranch: () => void;
+  onSendToBase: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onCancel(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onCancel]);
+  return (
+    <div
+      role="presentation"
+      onMouseDown={(event) => { if (event.target === event.currentTarget) onCancel(); }}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', display: 'grid', placeItems: 'center', zIndex: 200, padding: 16 }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="dql-git-send-choice-title"
+        data-testid="git-send-choice"
+        style={{ width: 'min(440px, 100%)', background: t.cellBg, border: `1px solid ${t.cellBorder}`, borderRadius: 8, boxShadow: '0 16px 40px rgba(0,0,0,0.22)', padding: 18, display: 'grid', gap: 12 }}
+      >
+        <div id="dql-git-send-choice-title" style={{ fontSize: 14, fontWeight: 600, color: t.textPrimary }}>Send your changes for review</div>
+        <div style={{ fontSize: 12, lineHeight: 1.55, color: t.textSecondary }}>
+          You are on <span style={{ fontFamily: t.fontMono }}>{base}</span>, the branch your team shares.
+          {' '}Send {unsent > 0 ? `your ${unsent} change${unsent === 1 ? '' : 's'}` : 'your changes'} as a new branch, then open a pull request so someone can review them before they reach {base}.
+        </div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button type="button" onClick={onCancel} style={miniBtn(t)}>Cancel</button>
+          <button type="button" onClick={onSendToBase} disabled={busy} style={miniBtn(t)}>Send to {base}…</button>
+          <button type="button" autoFocus onClick={onSendAsBranch} disabled={busy} style={miniBtn(t, 'primary')}>Send as a new branch</button>
+        </div>
+      </div>
     </div>
   );
 }

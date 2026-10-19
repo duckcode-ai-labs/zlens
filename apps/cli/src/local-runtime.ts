@@ -24410,6 +24410,44 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       return;
     }
+    // POST /api/git/fetch — the Git page's background check: fetch only.
+    if (req.method === 'POST' && path === '/api/git/fetch') {
+      try {
+        const result = await gitFetch(projectRoot);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, code: 'error', error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
+    // POST /api/git/send-as-branch { name? } — send from the base branch to a new branch.
+    if (req.method === 'POST' && path === '/api/git/send-as-branch') {
+      try {
+        const body = (await readJSON(req)) as { name?: unknown };
+        const result = await gitSendAsBranch(projectRoot, body ?? {});
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
+    // POST /api/git/remote/connect-own { url } — keep the sample as upstream, your repository becomes origin.
+    if (req.method === 'POST' && path === '/api/git/remote/connect-own') {
+      try {
+        const body = (await readJSON(req)) as { url?: unknown };
+        const result = await gitConnectOwnRemote(projectRoot, body ?? {});
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
     if (req.method === 'POST' && path === '/api/git/pull') {
       try {
         const result = await gitPull(projectRoot);
@@ -46583,6 +46621,12 @@ export interface GitStatusResult {
   projectPrefix?: string;
   /** The branch reviews merge into (the remote's default branch). */
   baseBranch?: string;
+  /** Whether the remote already has the base branch (an empty repository has none yet). */
+  baseOnRemote?: boolean;
+  /** The remote branch ahead/behind are counted against, when there is one. */
+  upstream?: string | null;
+  /** `origin` is a ZLens sample repository, which a user should never send to. */
+  sampleRemote?: boolean;
   error?: string;
 }
 
@@ -46877,13 +46921,29 @@ async function readGitStatus(cwd: string): Promise<GitStatusResult> {
   const branchRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const branch = branchRes.code === 0 ? branchRes.stdout.trim() : null;
 
-  const trackRes = await execGit(gitRoot, ['rev-list', '--left-right', '--count', '@{u}...HEAD']);
+  // Counted against the upstream; a branch not linked yet is counted against
+  // the remote branch of the same name, and a branch the remote has never seen
+  // counts every commit no remote has as "not sent yet".
+  const remoteName = await resolveGitRemoteName(gitRoot);
+  const remoteUrl = remoteName ? await execGit(gitRoot, ['remote', 'get-url', remoteName]) : null;
+  const upstreamRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  let upstream: string | null = upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
+  if (!upstream && remoteName && branch && branch !== 'HEAD') {
+    const sameName = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remoteName}/${branch}`]);
+    if (sameName.code === 0) upstream = `${remoteName}/${branch}`;
+  }
   let ahead = 0;
   let behind = 0;
-  if (trackRes.code === 0) {
-    const match = trackRes.stdout.trim().split(/\s+/);
-    behind = Number(match[0] ?? 0);
-    ahead = Number(match[1] ?? 0);
+  if (upstream) {
+    const trackRes = await execGit(gitRoot, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`]);
+    if (trackRes.code === 0) {
+      const match = trackRes.stdout.trim().split(/\s+/);
+      behind = Number(match[0] ?? 0);
+      ahead = Number(match[1] ?? 0);
+    }
+  } else if (remoteName) {
+    const unsent = await execGit(gitRoot, ['rev-list', '--count', 'HEAD', '--not', `--remotes=${remoteName}`]);
+    if (unsent.code === 0) ahead = Number(unsent.stdout.trim() || 0);
   }
 
   // UI-001, E2E-001: the Source Control surface is file-oriented. Git's
@@ -46904,7 +46964,11 @@ async function readGitStatus(cwd: string): Promise<GitStatusResult> {
     }
   }
   const baseBranch = await resolveGitBaseBranch(gitRoot);
-  return { inRepo: true, branch, ahead, behind, changes, projectPrefix, baseBranch };
+  const baseOnRemote = remoteName
+    ? (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remoteName}/${baseBranch}`])).code === 0
+    : false;
+  const sampleRemote = remoteUrl?.code === 0 && isZLensSampleRemote(remoteUrl.stdout.trim());
+  return { inRepo: true, branch, ahead, behind, changes, projectPrefix, baseBranch, baseOnRemote, upstream, sampleRemote };
 }
 
 /**
@@ -47403,6 +47467,125 @@ export async function linkGitBranchToRemote(gitRoot: string, remote: string, bra
 }
 
 /**
+ * The ZLens sample repositories people clone to try ZLens. Sending to them is
+ * never what a user wants (and for a maintainer it would publish test work).
+ */
+const ZLENS_SAMPLE_REMOTE = /github\.com[/:](?:duckcode-ai|duckcode-ai-labs|zlens-app)\/jaffle-shop-(?:duckdb|warehouse)(?:\.git)?\/?$/i;
+
+export function isZLensSampleRemote(url: string | null | undefined): boolean {
+  return Boolean(url && ZLENS_SAMPLE_REMOTE.test(url.trim()));
+}
+
+const SAMPLE_REMOTE_MESSAGE = 'This folder is the ZLens sample, so its remote is the public sample repository. Connect your own repository to share your work.';
+
+/** Fetch only: updates what the page knows about the remote and never touches your branches or files. */
+export async function gitFetch(cwd: string): Promise<{ ok: boolean; code?: string; error?: string; detail?: string }> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet.' };
+  const res = await execGit(gitRoot, ['fetch', '--prune', remote], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (res.code !== 0) {
+    const detail = gitErrorOutput(res);
+    return { ok: false, code: 'unreachable', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
+  }
+  await rememberGitRemoteHead(gitRoot);
+  return { ok: true };
+}
+
+function sendBranchSlug(subject: string): string {
+  return subject.toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '') || 'change';
+}
+
+/**
+ * Send from the base branch without touching it: your unsent commits move to a
+ * new branch (named from your last change, or `name`), the base branch goes
+ * back to where the remote has it, and the new branch is sent. Unsaved edits
+ * come along. The next step is a pull request into the base branch.
+ */
+export async function gitSendAsBranch(cwd: string, input: { name?: unknown }): Promise<{
+  ok: boolean; code?: string; error?: string; detail?: string; branch?: string; base?: string; sent?: number; subject?: string; prUrl?: string;
+}> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before sending changes.' };
+  const remoteUrl = await execGit(gitRoot, ['remote', 'get-url', remote]);
+  if (remoteUrl.code === 0 && isZLensSampleRemote(remoteUrl.stdout)) return { ok: false, code: 'sample_remote', error: SAMPLE_REMOTE_MESSAGE };
+  const current = (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  if (!current || current === 'HEAD') return { ok: false, code: 'detached', error: 'Switch to a branch before sending.' };
+  const unsentRes = await execGit(gitRoot, ['rev-list', '--count', 'HEAD', '--not', `--remotes=${remote}`]);
+  const unsent = unsentRes.code === 0 ? Number(unsentRes.stdout.trim() || 0) : 0;
+  if (unsent === 0) return { ok: false, code: 'nothing_to_send', error: 'Nothing to send yet. Keep your changes first.' };
+
+  const requested = typeof input.name === 'string' ? input.name.trim() : '';
+  const subject = (await execGit(gitRoot, ['log', '-1', '--format=%s'])).stdout.trim();
+  const stem = requested || `zlens/${sendBranchSlug(subject)}`;
+  if (stem.startsWith('-') || (await execGit(gitRoot, ['check-ref-format', '--branch', stem])).code !== 0) {
+    return { ok: false, code: 'invalid_name', error: `"${stem}" is not a valid branch name.` };
+  }
+  let branch = stem;
+  for (let n = 2; ; n += 1) {
+    const local = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+    const remoteRef = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`]);
+    if (local.code !== 0 && remoteRef.code !== 0) break;
+    if (requested) return { ok: false, code: 'branch_exists', error: `A branch named ${requested} already exists. Choose another name.` };
+    branch = n <= 9 ? `${stem}-${n}` : `${stem}-${Date.now().toString(36)}`;
+    if (n > 9) break;
+  }
+
+  const upstreamRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${current}@{u}`]);
+  let previous = upstreamRes.code === 0 ? upstreamRes.stdout.trim() : '';
+  if (!previous && (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${current}`])).code === 0) {
+    previous = `${remote}/${current}`;
+  }
+  const switched = await execGit(gitRoot, ['checkout', '-b', branch]);
+  if (switched.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(switched) || 'Git could not create the branch.' };
+  // The commits now live on the new branch; put the base branch back where the
+  // remote has it, so it never diverges from the team's copy.
+  if (previous && (await execGit(gitRoot, ['merge-base', '--is-ancestor', previous, 'HEAD'])).code === 0) {
+    await execGit(gitRoot, ['branch', '-f', current, previous]);
+  }
+  const pushed = await gitPush(gitRoot);
+  const base = await resolveGitBaseBranch(gitRoot, { network: true });
+  if (!pushed.ok) return { ...pushed, branch, base };
+  return { ok: true, branch, base, sent: unsent, subject, prUrl: gitHubCompareUrl(remoteUrl.code === 0 ? remoteUrl.stdout.trim() : null, branch, base) };
+}
+
+/**
+ * Point the project at your own repository: the current `origin` (usually the
+ * ZLens sample) is kept as `upstream`, branches stop tracking it, and your
+ * repository becomes `origin`. Nothing is contacted until the next send.
+ */
+export async function gitConnectOwnRemote(cwd: string, input: { url?: unknown }): Promise<{ ok: boolean; code?: string; error?: string; url?: string; previous?: string }> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'This project is not a Git repository yet. Initialize Git first.' };
+  const url = validateGitRemoteUrl(input.url);
+  if (!url.ok) return { ok: false, code: 'invalid_url', error: url.error };
+  if (isZLensSampleRemote(url.url)) return { ok: false, code: 'sample_remote', error: 'That is the ZLens sample repository. Enter the address of a repository you own.' };
+  const remotes = (await execGit(gitRoot, ['remote'])).stdout.split('\n').map((r) => r.trim()).filter(Boolean);
+  let previous: string | undefined;
+  if (remotes.includes('origin')) {
+    previous = ['upstream', 'zlens-sample'].find((candidate) => !remotes.includes(candidate));
+    if (!previous) return { ok: false, code: 'remote_exists', error: 'This project already has remotes named origin, upstream and zlens-sample. Rename one in a terminal first.' };
+    const renamed = await execGit(gitRoot, ['remote', 'rename', 'origin', previous]);
+    if (renamed.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(renamed) || 'Git could not rename the remote.' };
+    const branches = (await execGit(gitRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').map((b) => b.trim()).filter(Boolean);
+    for (const name of branches) {
+      const tracked = await execGit(gitRoot, ['config', '--get', `branch.${name}.remote`]);
+      if (tracked.code === 0 && tracked.stdout.trim() === previous) await execGit(gitRoot, ['branch', '--unset-upstream', name]);
+    }
+  }
+  const added = await execGit(gitRoot, ['remote', 'add', 'origin', url.url]);
+  if (added.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(added) || 'Git could not save the remote.' };
+  return { ok: true, url: url.url, ...(previous ? { previous } : {}) };
+}
+
+/**
  * Record the remote's default branch (`refs/remotes/<remote>/HEAD`) when it is
  * not known yet — a remote added in the app rather than cloned — so the status
  * reports the right review base without asking the remote every time. Runs
@@ -47430,6 +47613,8 @@ async function gitPush(cwd: string): Promise<{ ok: boolean; error?: string; outp
   if (!remote) {
     return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before sending changes.' };
   }
+  const pushUrl = await execGit(gitRoot, ['remote', 'get-url', '--push', remote]);
+  if (pushUrl.code === 0 && isZLensSampleRemote(pushUrl.stdout)) return { ok: false, code: 'sample_remote', error: SAMPLE_REMOTE_MESSAGE };
   const branch = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const upstream = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const branchName = branch.code === 0 ? branch.stdout.trim() : '';
