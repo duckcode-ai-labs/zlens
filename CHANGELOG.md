@@ -8,6 +8,57 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.2 - 2026-10-19
+
+Sharing through your own git repository now works from the workbench without
+a terminal, and the DuckDB driver says which Node to use instead of failing
+on Node 25 and 26.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.2` in each project. Use Node 20, 22
+or 24 (Node 24 LTS recommended).
+
+### Source control
+
+- **Connecting your own repository works on the first send.** A repository
+  the host created with a README, licence or `.gitignore` no longer loops
+  between "Get updates first" and "Send the branch first": ZLens brings those
+  files in (your project's README wins; missing `.gitignore` lines are added)
+  and sends. A repository holding other, unrelated work is never combined
+  with the project; the message says how to add ZLens to it instead.
+- **Know before you send.** The Source control page checks the remote in the
+  background and says "3 new on the remote · 1 of yours not sent", "Up to
+  date" or "Can't reach the remote". Send asks you to get updates first
+  instead of failing.
+- **Send from the main branch goes to a new branch by default**, ready for a
+  pull request, and leaves the main branch as the team has it. Sending
+  straight to the main branch asks again.
+- **Get updates works when you and the remote both changed.** Your unsent
+  changes are replayed on top of the team's; changes you already sent are
+  never rewritten. Files changed on both sides get Compare, Keep mine and Keep
+  theirs, then Continue, or Cancel update to put everything back. Undo update
+  reverses a finished update.
+- **Review branches stay current.** Get updates on a review branch also brings
+  in what the team merged into the main branch.
+- **The ZLens sample is read-only.** In a folder cloned from
+  `jaffle-shop-duckdb` or `jaffle-shop-warehouse`, Send is not offered;
+  Connect your own repository keeps the sample as `upstream`.
+- **Pull requests target your repository's default branch** (`main`,
+  `master`, `develop`…), not a guess.
+- **New projects start on `main`** (or your `init.defaultBranch`), not git's
+  `master` fallback.
+- New guide: [Share your work with your team](docs/notebooks/share-with-your-team.md).
+
+### Fixed
+
+- **DuckDB on Node 25 and 26.** ZLens's DuckDB driver has no prebuilt binary
+  for those versions, so its install fell back to a 10-minute source build
+  that usually failed, and the Connections test said the driver was missing.
+  Startup, Connections (Test and Install) and `zlens doctor` now say "use Node
+  24 LTS or 22" and never start that build on their own
+  (`ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` opts in). `@zlens/cli` declares Node 20,
+  22 or 24 in `engines`. Moving to `@duckdb/node-api` is proposed in
+  [RFC 0011](docs/rfcs/0011-duckdb-node-api.md).
+
 ## v0.2.1 - 2026-10-16
 
 ZLens on npm 12. npm 12 (the current `latest`) runs a dependency's install
