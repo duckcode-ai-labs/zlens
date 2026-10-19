@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { checkDuckDBDependency, isSnowflakeSupportedNodeVersion, runDoctor } from './doctor.js';
+import { checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -14,6 +14,20 @@ describe('Snowflake Node runtime support', () => {
     expect(isSnowflakeSupportedNodeVersion('22.18.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('24.4.1')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(false);
+  });
+});
+
+describe('Node.js check', () => {
+  it('passes Node 20, 22 and 24, warns on a newer Node, fails below 20', () => {
+    for (const version of ['20.19.0', '22.18.0', '24.15.0']) {
+      expect(checkNodeVersion(version)).toEqual({ name: 'Node.js', ok: true, detail: `version=${version} (supported: Node 20, 22 or 24)` });
+    }
+    const node26 = checkNodeVersion('26.12.0');
+    expect(node26.ok).toBe(true);
+    expect(node26.advisory).toBe(true);
+    expect(node26.detail).toContain('not supported yet');
+    expect(node26.detail).toContain("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+    expect(checkNodeVersion('18.20.4').ok).toBe(false);
   });
 });
 

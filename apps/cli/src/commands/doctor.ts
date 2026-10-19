@@ -21,7 +21,7 @@ import { listProviderSettings } from '../settings/provider-settings.js';
 import { describeNpmInvocation, resolveNpmInvocation } from '../npm-runtime.js';
 import { betterSqlite3Help, probeBetterSqlite3, type BetterSqlite3Probe } from '../native-deps.js';
 import { connectorBindingError } from '../connector-native.js';
-import { duckdbNoPrebuiltHelp, nativeBindingHelp, nativeInstallContextFor } from '@zlens/connectors';
+import { duckdbNoPrebuiltHelp, duckdbNoPrebuiltReason, nativeBindingHelp, nativeInstallContextFor } from '@zlens/connectors';
 import { fetchLatestPublishedDqlVersion, resolveDqlRuntimeVersionStatus } from '../version-status.js';
 import { resolveRetrievalHealthStatus } from '../retrieval-health.js';
 import { getSemanticRuntimeStatus, explainMissingSemanticRuntime } from '../semantic-runtime.js';
@@ -667,14 +667,18 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function checkNodeVersion(): Check {
-  const match = process.versions.node.match(/^(\d+)/);
+/** Node 20, 22 and 24 are supported; a newer Node runs, but the DuckDB driver has no prebuilt binary for it. */
+export function checkNodeVersion(version = process.versions.node): Check {
+  const match = version.match(/^(\d+)/);
   const major = match ? Number(match[1]) : 0;
-  return {
-    name: 'Node.js',
-    ok: major >= 20,
-    detail: `version=${process.versions.node} (requires Node 20 or newer)`,
-  };
+  if (major < 20) {
+    return { name: 'Node.js', ok: false, detail: `version=${version} (requires Node 20, 22 or 24)` };
+  }
+  const reason = duckdbNoPrebuiltReason(version);
+  if (reason) {
+    return { name: 'Node.js', ok: true, advisory: true, detail: `version=${version} is not supported yet (supported: Node 20, 22 or 24). ${reason}` };
+  }
+  return { name: 'Node.js', ok: true, detail: `version=${version} (supported: Node 20, 22 or 24)` };
 }
 
 export function isSnowflakeSupportedNodeVersion(version = process.versions.node): boolean {
