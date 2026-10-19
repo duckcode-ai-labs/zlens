@@ -21,7 +21,7 @@ import { listProviderSettings } from '../settings/provider-settings.js';
 import { describeNpmInvocation, resolveNpmInvocation } from '../npm-runtime.js';
 import { betterSqlite3Help, probeBetterSqlite3, type BetterSqlite3Probe } from '../native-deps.js';
 import { connectorBindingError } from '../connector-native.js';
-import { nativeBindingHelp, nativeInstallContextFor } from '@zlens/connectors';
+import { duckdbNoPrebuiltHelp, nativeBindingHelp, nativeInstallContextFor } from '@zlens/connectors';
 import { fetchLatestPublishedDqlVersion, resolveDqlRuntimeVersionStatus } from '../version-status.js';
 import { resolveRetrievalHealthStatus } from '../retrieval-health.js';
 import { getSemanticRuntimeStatus, explainMissingSemanticRuntime } from '../semantic-runtime.js';
@@ -817,8 +817,14 @@ function readRunningCliVersion(): string {
   }
 }
 
-function checkDuckDBDependency(projectRoot: string): Check {
+export function checkDuckDBDependency(projectRoot: string, nodeVersion = process.versions.node): Check {
   const status = getConnectorInstallStatuses(projectRoot).find((item) => item.driver === 'duckdb');
+  // No prebuilt binary for this Node: installing or rebuilding means a DuckDB
+  // source build, so name the Node to use instead (a copy that loads is fine).
+  const noPrebuilt = duckdbNoPrebuiltHelp(nodeVersion);
+  if (noPrebuilt && status && (!status.installed || connectorBindingError([status.installPath, projectRoot], 'duckdb'))) {
+    return { name: 'DuckDB connector package', ok: false, detail: noPrebuilt };
+  }
   if (!status) {
     return {
       name: 'DuckDB connector package',

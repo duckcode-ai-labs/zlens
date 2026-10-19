@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import type { ConnectionConfig } from './connector.js';
 import { isNativeBindingError, nativeBindingHelp, nativeInstallContextFor } from './native-binding.js';
+import { DuckDBNodeUnsupportedError, duckdbHasPrebuiltBinary } from './duckdb-node-support.js';
 
 export class MissingConnectorDependencyError extends Error {
   constructor(
@@ -58,6 +59,8 @@ export async function importConnectorDependency(
       // Present here but unloadable: say why instead of "install it" again.
       const packageDir = packageDirOf(req, packageName);
       if (packageDir && isNativeBindingError(error)) {
+        // A rebuild here is a DuckDB source build: say to switch Node instead.
+        if (packageName === 'duckdb' && !duckdbHasPrebuiltBinary()) throw new DuckDBNodeUnsupportedError();
         throw new ConnectorNativeBindingError(packageName, driver, nativeBindingHelp({
           packageName,
           role: DRIVER_ROLES[packageName] ?? `the ${driver} driver`,
@@ -73,6 +76,9 @@ export async function importConnectorDependency(
     const dependencyName = packageName;
     return await import(dependencyName);
   } catch (error) {
+    // Absent or unloadable, duckdb on a Node it has no prebuilt binary for cannot
+    // be fixed by installing it: the install compiles DuckDB from source.
+    if (packageName === 'duckdb' && !duckdbHasPrebuiltBinary()) throw new DuckDBNodeUnsupportedError();
     if (isNativeBindingError(error)) {
       const packageDir = packageDirOf(createRequire(import.meta.url), packageName);
       throw new ConnectorNativeBindingError(packageName, driver, nativeBindingHelp({
