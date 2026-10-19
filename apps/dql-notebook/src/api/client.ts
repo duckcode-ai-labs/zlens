@@ -240,6 +240,23 @@ export interface BlockHistoryResult {
 }
 
 /** Result of a Git write. `code` is the server's machine-readable reason (e.g. `no_remote`, `already_a_repo`, `invalid_url`). */
+/** Get updates mid-way (D1/D2): an operation stopped on conflicts, or a finished update that can be undone. */
+export interface GitUpdateState {
+  inProgress: boolean;
+  operation?: 'rebase' | 'merge';
+  target?: string;
+  conflicts: Array<{ path: string; mine: boolean; theirs: boolean }>;
+  unresolved: string[];
+  undoAvailable: boolean;
+}
+
+export interface GitUpdateResult extends GitWriteResult {
+  output?: string;
+  state?: GitUpdateState;
+  files?: string[];
+  undoAvailable?: boolean;
+}
+
 export interface GitWriteResult {
   ok: boolean;
   error?: string;
@@ -7626,7 +7643,27 @@ export const api = {
     }
   },
 
-  async gitPull(): Promise<GitWriteResult & { output?: string }> {
+  async fetchGitUpdateState(): Promise<GitUpdateState> {
+    return request<GitUpdateState>('/api/git/update/state');
+  },
+
+  async fetchGitConflictVersions(path: string): Promise<{ ok: boolean; error?: string; mine?: string | null; theirs?: string | null }> {
+    try {
+      return await request<any>(`/api/git/update/versions?path=${encodeURIComponent(path)}`);
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  async gitUpdateStep(step: 'resolve' | 'continue' | 'cancel' | 'undo', body: { path?: string; keep?: 'mine' | 'theirs' } = {}): Promise<GitUpdateResult> {
+    try {
+      return await request<any>(`/api/git/update/${step}`, { method: 'POST', body: JSON.stringify(body) });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  async gitPull(): Promise<GitUpdateResult> {
     try {
       return await request<any>('/api/git/pull', { method: 'POST', body: '{}' });
     } catch (e) {

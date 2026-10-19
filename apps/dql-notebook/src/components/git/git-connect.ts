@@ -34,7 +34,8 @@ export const BACKGROUND_FETCH_INTERVAL_MS = 5 * 60 * 1000;
 export type RemoteCheck = { state: 'unknown' } | { state: 'ok' } | { state: 'unreachable'; message: string };
 
 /** The header's one-line sync summary: what is new on the remote and what is not sent yet. */
-export function syncSummary(input: { hasRemote: boolean; ahead: number; behind: number; check: RemoteCheck }): { text: string; tone: 'muted' | 'ok' | 'warning'; title?: string } {
+export function syncSummary(input: { hasRemote: boolean; ahead: number; behind: number; check: RemoteCheck; updating?: boolean }): { text: string; tone: 'muted' | 'ok' | 'warning'; title?: string } {
+  if (input.updating) return { text: 'Update waiting for your choices', tone: 'warning', title: 'Get updates stopped because some files changed on both sides.' };
   if (!input.hasRemote) return { text: 'no remote', tone: 'muted', title: 'No Git remote is configured. Changes stay on this computer.' };
   if (input.check.state === 'unreachable') return { text: "Can't reach the remote", tone: 'warning', title: input.check.message };
   const parts: string[] = [];

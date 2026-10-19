@@ -145,6 +145,7 @@ nav:
   - Notebooks:
       - Work in a notebook: notebooks/index.md
       - Version and diff your work: notebooks/version-and-diff.md
+      - Share your work with your team: notebooks/share-with-your-team.md
   - Apps and dashboards:
       - Read an App: apps/index.md
       - Build an App: apps/build.md

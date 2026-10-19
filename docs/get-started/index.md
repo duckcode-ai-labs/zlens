@@ -156,5 +156,7 @@ to model, and ZLens drafts the entities and joins for you to certify. See
 - [Find your way around](workbench.md) the workbench.
 - [Ask a question](../ask/index.md) in plain English.
 - [Save the query as a block](../blocks/index.md) and certify it.
+- [Share your work with your team](../notebooks/share-with-your-team.md)
+  through your own git repository.
 - [Add ZLens to your own dbt project](your-dbt-project.md), or
   [start from your database](no-dbt.md) without dbt.

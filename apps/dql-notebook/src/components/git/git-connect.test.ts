@@ -44,6 +44,9 @@ describe('syncSummary (D3)', () => {
     expect(syncSummary({ hasRemote: true, ahead: 2, behind: 0, check: ok })).toMatchObject({ text: '2 of yours not sent', tone: 'muted' });
     expect(syncSummary({ hasRemote: true, ahead: 0, behind: 0, check: ok })).toMatchObject({ text: 'Up to date', tone: 'ok' });
   });
+  it('says an update is waiting while conflicts are being resolved', () => {
+    expect(syncSummary({ hasRemote: true, ahead: 0, behind: 0, check: ok, updating: true })).toMatchObject({ text: 'Update waiting for your choices', tone: 'warning' });
+  });
   it('never claims up to date before the first check, and a failed check is a quiet note', () => {
     expect(syncSummary({ hasRemote: true, ahead: 0, behind: 0, check: { state: 'unknown' } }).text).toBe('Checking the remote…');
     expect(syncSummary({ hasRemote: true, ahead: 0, behind: 0, check: { state: 'unreachable', message: 'Git could not sign in to the remote.' } }))
