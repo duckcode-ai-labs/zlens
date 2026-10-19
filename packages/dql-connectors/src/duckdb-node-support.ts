@@ -4,7 +4,7 @@
  * only for these Node majors (ABI 115, 127, 137). On any other Node, npm
  * compiles DuckDB from source: over ten minutes on a fast laptop, and a
  * failure without Python and a C++ toolchain. ZLens says so instead of
- * starting that build. docs/design/duckdb-node-api-migration.md has the way out.
+ * starting that build. docs/rfcs/0011-duckdb-node-api.md has the way out.
  */
 export const DUCKDB_PREBUILT_NODE_MAJORS: readonly number[] = [20, 22, 24];
 
