@@ -15,6 +15,15 @@ export { ConnectionPoolManager } from './connection-pool.js';
 export { QueryExecutor } from './query-executor.js';
 export { MissingConnectorDependencyError, ConnectorNativeBindingError } from './optional-dependency.js';
 export {
+  DUCKDB_PREBUILT_NODE_MAJORS,
+  DUCKDB_SOURCE_BUILD_ENV,
+  DuckDBNodeUnsupportedError,
+  duckdbHasPrebuiltBinary,
+  duckdbNoPrebuiltHelp,
+  duckdbNoPrebuiltReason,
+  duckdbSourceBuildAllowed,
+} from './duckdb-node-support.js';
+export {
   NATIVE_INSTALL_SCRIPT_PACKAGES,
   isNativeBindingError,
   isNodeAbiMismatch,

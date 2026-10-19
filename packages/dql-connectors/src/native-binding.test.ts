@@ -122,6 +122,16 @@ describe('nativeBindingHelp', () => {
 });
 
 describe('importConnectorDependency', () => {
+  // On a Node with no duckdb prebuilt (25, 26) the loader says to switch Node
+  // instead (duckdb-node-support.test.ts); these cases are about Node 24.
+  const realVersions = process.versions;
+  beforeEach(() => {
+    Object.defineProperty(process, 'versions', { value: { ...realVersions, node: '24.15.0' }, configurable: true, enumerable: true });
+  });
+  afterEach(() => {
+    Object.defineProperty(process, 'versions', { value: realVersions, configurable: true, enumerable: true });
+  });
+
   function connectorPackage(root: string, name: string, body: string): void {
     const dir = join(root, 'node_modules', name);
     mkdirSync(dir, { recursive: true });

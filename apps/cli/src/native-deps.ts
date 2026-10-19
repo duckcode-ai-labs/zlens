@@ -92,7 +92,7 @@ export function sqlitePreflightMessage(command: string, probe: () => BetterSqlit
 export function explainNativeDependencyError(error: unknown): string | null {
   if (!error) return null;
   // A connector already explained itself (ConnectorNativeBindingError).
-  if (error instanceof Error && error.name === 'ConnectorNativeBindingError') return error.message;
+  if (error instanceof Error && (error.name === 'ConnectorNativeBindingError' || error.name === 'DuckDBNodeUnsupportedError')) return error.message;
   if (!isNativeBindingError(error)) return null;
   const message = error instanceof Error ? error.message : String(error);
   if (/duckdb/i.test(message) && !/better[-_]sqlite3/i.test(message)) return null;
