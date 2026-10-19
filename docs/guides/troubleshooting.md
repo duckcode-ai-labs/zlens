@@ -87,7 +87,7 @@ npm i -D @zlens/cli@latest && npx zlens --version
 ```
 
 You do **not** need a working `zlens` to upgrade, and you do **not** need to
-downgrade Node — 1.6.30+ installs on Node 20, 22, and 24. If `zlens --version`
+downgrade Node — ZLens installs on Node 20, 22, and 24. If `zlens --version`
 still shows the old number afterward, run `hash -r` (or open a new shell) and
 check `which -a zlens` for a shadowing copy.
 
@@ -104,6 +104,24 @@ zlens doctor
 
 Use `zlens init .` only if you want ZLens folders directly in the current repo
 root.
+
+### "ZLens's DuckDB driver has no prebuilt binary for Node 26 yet"
+
+You are on a Node release the DuckDB driver has no prebuilt binary for (Node
+25 or 26, or an odd-numbered one). Installing it there means compiling DuckDB
+from source, which takes over ten minutes and fails without Python and a C++
+toolchain, so ZLens stops and says so at startup, in the Connections page
+**Test**, and in `zlens doctor`. Switch to Node 24 LTS or 22 and start ZLens
+again; the driver installs on its own:
+
+```bash
+nvm install 24   # or: fnm use 24, volta install node@24
+zlens notebook
+```
+
+To compile DuckDB from source on the newer Node anyway, set
+`ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` before `zlens notebook` and install DuckDB
+from the Connections page.
 
 ### Optional connector package errors
 

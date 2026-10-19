@@ -2,8 +2,14 @@
 
 ## Runtime
 
-- **Node.js** — 20 or newer (20, 22, or 24 LTS). As of **1.6.30** the native
-  local drivers install on Node 23 and 24 too (earlier releases capped at 22).
+- **Node.js** — 20, 22, or 24 LTS (24 recommended). Node 21, 23, 25 and 26
+  are not supported: the `duckdb` package ZLens installs for DuckDB and local
+  files publishes prebuilt binaries only for Node 20, 22 and 24, so on any
+  other Node its install compiles DuckDB from source (over ten minutes, and a
+  failure without Python and a C++ toolchain). ZLens does not start that build
+  on its own; it says to use Node 24 LTS or 22. To build from source anyway,
+  set `ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` and install DuckDB from the
+  Connections page.
 - **Package managers** — npm, pnpm, yarn all work for consuming published packages
 - **OS** — macOS, Linux, Windows
 

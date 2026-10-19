@@ -6,7 +6,10 @@ This page covers the other ways to install and upgrade.
 
 ## Requirements
 
-- Node.js 20 or newer. CI tests Node 20, 22 and 24.
+- Node.js 20, 22 or 24 (24 LTS recommended). CI tests all three. Node 25 and
+  26 are not supported yet: ZLens's DuckDB driver has no prebuilt binary for
+  them, so the driver install would compile DuckDB from source and ZLens stops
+  with "use Node 24 LTS or 22" instead.
 - npm 10 or newer. On npm 12, see [npm 12 and install scripts](#npm-12-and-install-scripts).
 - macOS, Linux or Windows.
 

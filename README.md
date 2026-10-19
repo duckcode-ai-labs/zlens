@@ -67,8 +67,9 @@ an unreviewed number up as a trusted one.
 ## Quickstart
 
 Run ZLens on the Jaffle Shop sample dbt project. It takes about ten minutes
-and needs Node.js 20 or newer, Python 3.9 to 3.13 and git. No warehouse
-account is needed.
+and needs Node.js 20, 22 or 24 (24 LTS recommended), Python 3.9 to 3.13 and
+git. No warehouse account is needed. Node 25 and 26 are not supported yet:
+ZLens's DuckDB driver has no prebuilt binary for them.
 
 **1. Get the sample dbt project and build its DuckDB database**
 
