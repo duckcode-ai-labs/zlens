@@ -104,6 +104,7 @@ import {
   getConnectorInstallStatuses,
   assertConnectionNodeCompatibility,
   ensureConnectorInstalledForStartup,
+  connectorInstallBlockedReason,
   loadProjectConfig,
   isAgentValueProbeColumn,
   markBlockStudioSourceReusable,
@@ -1187,10 +1188,36 @@ describe('formatLocalQueryRuntimeError', () => {
       new Error("Cannot find module '/tmp/duckdb/lib/binding/duckdb.node'"),
     );
 
-    expect(message).toContain('DuckDB native bindings could not be loaded');
-    expect(message).toContain(`Current Node.js runtime: ${process.versions.node}`);
-    expect(message).toContain('Node 18, 20, or 22');
-    expect(message).toContain('pnpm install');
+    const realVersions = process.versions;
+    Object.defineProperty(process, 'versions', { value: { ...realVersions, node: '24.15.0' }, configurable: true, enumerable: true });
+    try {
+      const onSupportedNode = formatLocalQueryRuntimeError(
+        { driver: 'file', filepath: ':memory:' },
+        new Error("Cannot find module '/tmp/duckdb/lib/binding/duckdb.node'"),
+      );
+      expect(onSupportedNode).toContain('DuckDB native bindings could not be loaded');
+      expect(onSupportedNode).toContain('Current Node.js runtime: 24.15.0');
+      expect(onSupportedNode).toContain('Node 24, 22, or 20');
+      expect(onSupportedNode).toContain('pnpm install');
+    } finally {
+      Object.defineProperty(process, 'versions', { value: realVersions, configurable: true, enumerable: true });
+    }
+    expect(message).toContain('Local query runtime is unavailable for driver "file"');
+  });
+
+  it('names the Node to use when DuckDB has no prebuilt binary for this one', () => {
+    const realVersions = process.versions;
+    Object.defineProperty(process, 'versions', { value: { ...realVersions, node: '26.12.0' }, configurable: true, enumerable: true });
+    try {
+      const message = formatLocalQueryRuntimeError(
+        { driver: 'duckdb', filepath: ':memory:' },
+        new Error("Cannot find module '/tmp/duckdb/lib/binding/duckdb.node'"),
+      );
+      expect(message).toContain("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+      expect(message).not.toContain('rerun "pnpm install"');
+    } finally {
+      Object.defineProperty(process, 'versions', { value: realVersions, configurable: true, enumerable: true });
+    }
   });
 });
 
@@ -7402,6 +7429,57 @@ describe('ensureConnectorInstalledForStartup', () => {
     expect(() => ensureConnectorInstalledForStartup(projectRoot, 'file')).not.toThrow();
     expect(() => ensureConnectorInstalledForStartup(projectRoot, 'not-a-real-driver')).not.toThrow();
     expect(existsSync(join(projectRoot, '.dql/connectors'))).toBe(false);
+  });
+
+  it('does not start a DuckDB source build on a Node without a prebuilt binary, and says which Node to use', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-ensure-connector-node26-'));
+    tempDirs.push(projectRoot);
+    vi.stubEnv('ZLENS_DUCKDB_BUILD_FROM_SOURCE', '');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      ensureConnectorInstalledForStartup(projectRoot, 'duckdb', '26.12.0');
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain("[zlens] ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+      expect(output).not.toContain('Installing the DuckDB driver');
+      // npm never ran: it would have created the connector folder.
+      expect(existsSync(join(projectRoot, '.dql/connectors'))).toBe(false);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('does not rebuild a DuckDB copy from another Node on one without a prebuilt binary', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-ensure-connector-node26-'));
+    tempDirs.push(projectRoot);
+    const pkgDir = join(projectRoot, '.dql', 'connectors', 'node_modules', 'duckdb');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'duckdb', version: '1.4.4', main: 'index.js' }));
+    writeFileSync(join(pkgDir, 'index.js'), "throw new Error(\"Cannot find module '/x/node_modules/duckdb/lib/binding/duckdb.node'\");");
+    vi.stubEnv('ZLENS_DUCKDB_BUILD_FROM_SOURCE', '');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      ensureConnectorInstalledForStartup(projectRoot, 'duckdb', '26.12.0');
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain('no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.');
+      expect(output).not.toContain('rebuilding it');
+      // A rebuild first writes allowScripts into .dql/connectors/package.json.
+      expect(existsSync(join(projectRoot, '.dql', 'connectors', 'package.json'))).toBe(false);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('connectorInstallBlockedReason', () => {
+  it('blocks only duckdb, only on a Node without a prebuilt binary, unless a source build is asked for', () => {
+    expect(connectorInstallBlockedReason(['duckdb'], '26.12.0', {})).toContain('no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.');
+    expect(connectorInstallBlockedReason(['duckdb'], '25.2.1', {})).toContain('Node 25');
+    expect(connectorInstallBlockedReason(['duckdb'], '26.12.0', { ZLENS_DUCKDB_BUILD_FROM_SOURCE: '1' })).toBeNull();
+    expect(connectorInstallBlockedReason(['duckdb'], '24.15.0', {})).toBeNull();
+    expect(connectorInstallBlockedReason(['duckdb'], '22.18.0', {})).toBeNull();
+    expect(connectorInstallBlockedReason(['pg', 'ssh2'], '26.12.0', {})).toBeNull();
   });
 });
 

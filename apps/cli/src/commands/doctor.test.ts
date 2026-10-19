@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { isSnowflakeSupportedNodeVersion, runDoctor } from './doctor.js';
+import { checkDuckDBDependency, isSnowflakeSupportedNodeVersion, runDoctor } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -14,6 +14,22 @@ describe('Snowflake Node runtime support', () => {
     expect(isSnowflakeSupportedNodeVersion('22.18.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('24.4.1')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(false);
+  });
+});
+
+describe('DuckDB connector check', () => {
+  it('names the Node to use when DuckDB has no prebuilt binary for this one', () => {
+    const projectDir = makeProject('dql-doctor-duckdb-node26-');
+    const check = checkDuckDBDependency(projectDir, '26.12.0');
+    expect(check.ok).toBe(false);
+    expect(check.detail.split('\n')[0]).toBe("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+  });
+
+  it('still says "missing; install" on Node 24', () => {
+    const projectDir = makeProject('dql-doctor-duckdb-node24-');
+    const check = checkDuckDBDependency(projectDir, '24.15.0');
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain('missing; install from the notebook Connections page');
   });
 });
 
