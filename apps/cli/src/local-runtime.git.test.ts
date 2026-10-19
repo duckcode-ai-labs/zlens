@@ -435,9 +435,8 @@ describe('connecting a project to a repository the host already created', () => 
     const project = projectOnMain('dql-git-work-');
     await withServer(project, async (base) => {
       await postJson(`${base}/api/git/remote`, { url: bare });
-      const sent = await (await postJson(`${base}/api/git/push`, {})).json() as { ok: boolean; error?: string };
-      expect(sent.ok).toBe(false);
-      expect(sent.error).toContain('get updates first');
+      const sent = await (await postJson(`${base}/api/git/push`, {})).json() as { ok: boolean; code?: string; error?: string };
+      expect(sent).toMatchObject({ ok: false, code: 'unrelated' });
     });
     expect(git(project, ['--git-dir', bare, 'ls-tree', '-r', '--name-only', 'main']).split('\n').filter(Boolean)).toEqual(['README.md', 'models/orders.sql']);
     expect(git(project, ['log', '--format=%s']).trim()).toBe('first');
@@ -627,5 +626,178 @@ describe('the ZLens sample is never a place to send (D5)', () => {
     expect(git(project, ['remote', 'get-url', 'upstream']).trim()).toBe('https://github.com/duckcode-ai/jaffle-shop-duckdb.git');
     expect(git(project, ['rev-parse', '--abbrev-ref', '@{u}']).trim()).toBe('origin/main');
     expect(git(project, ['--git-dir', own, 'log', '-1', '--format=%s', 'main']).trim()).toBe('first');
+  });
+});
+
+/** A teammate's clone of `bare` that writes `files` on `branch` and pushes them. */
+function teammateCommits(bare: string, branch: string, files: Record<string, string>, message = 'teammate change'): void {
+  const root = mkdtempSync(join(tmpdir(), 'dql-git-mate2-'));
+  tempDirs.push(root);
+  const clone = join(root, 'mate');
+  git(root, ['clone', bare, clone]);
+  git(clone, ['checkout', branch]);
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(clone, name), content);
+  git(clone, ['add', '-A']);
+  git(clone, ['commit', '-m', message]);
+  git(clone, ['push', 'origin', branch]);
+}
+
+function commitFiles(dir: string, files: Record<string, string>, message: string): void {
+  for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+  git(dir, ['add', '-A']);
+  git(dir, ['commit', '-m', message]);
+}
+
+type UpdateResult = { ok: boolean; code?: string; output?: string; undoAvailable?: boolean; files?: string[]; state?: { inProgress: boolean; operation?: string; unresolved: string[]; conflicts: Array<{ path: string; mine: boolean; theirs: boolean }> } };
+const update = async (base: string): Promise<UpdateResult> => await (await postJson(`${base}/api/git/pull`, {})).json() as UpdateResult;
+const updateStep = async (base: string, step: string, body: unknown = {}): Promise<UpdateResult> => await (await postJson(`${base}/api/git/update/${step}`, body)).json() as UpdateResult;
+
+describe('get updates when you and the remote both changed (D1)', () => {
+  it('replays your unsent commit on top of the remote, and Undo puts it back', async () => {
+    const bare = hostRepo('dql-git-d1-host-', 'main', { 'dql.config.json': '{}\n', 'a.dql': 'a\n' });
+    const project = clonedProject(bare, 'dql-git-d1-');
+    commitFiles(project, { 'mine.dql': 'mine\n' }, 'My change');
+    const before = git(project, ['rev-parse', 'HEAD']).trim();
+    teammateCommits(bare, 'main', { 'theirs.dql': 'theirs\n' }, 'Their change');
+    writeFileSync(join(project, 'draft.dql'), 'unsaved\n');
+    await withServer(project, async (base) => {
+      const res = await update(base);
+      expect(res).toMatchObject({ ok: true, undoAvailable: true });
+      expect(res.output).toContain('your 1 unsent change is now on top');
+      expect(git(project, ['log', '--format=%s', '-3']).trim().split('\n')).toEqual(['My change', 'Their change', 'Initial commit']);
+      expect(readFileSync(join(project, 'draft.dql'), 'utf-8')).toBe('unsaved\n');
+      expect((await (await fetch(`${base}/api/git/update/state`)).json() as { undoAvailable: boolean }).undoAvailable).toBe(true);
+      expect(await updateStep(base, 'undo')).toMatchObject({ ok: true });
+      expect(git(project, ['rev-parse', 'HEAD']).trim()).toBe(before);
+      expect(readFileSync(join(project, 'draft.dql'), 'utf-8')).toBe('unsaved\n');
+      expect(await updateStep(base, 'undo')).toMatchObject({ ok: false, code: 'nothing_to_undo' });
+    });
+  });
+
+  it('stops on a conflict, compares both versions, keeps mine, and continues', async () => {
+    const bare = hostRepo('dql-git-d1c-host-', 'main', { 'dql.config.json': '{}\n', 'revenue.dql': 'v1\n' });
+    const project = clonedProject(bare, 'dql-git-d1c-');
+    commitFiles(project, { 'revenue.dql': 'mine\n' }, 'My revenue');
+    teammateCommits(bare, 'main', { 'revenue.dql': 'theirs\n' }, 'Their revenue');
+    await withServer(project, async (base) => {
+      const res = await update(base);
+      expect(res).toMatchObject({ ok: false, code: 'conflicts' });
+      expect(res.state).toMatchObject({ inProgress: true, operation: 'rebase', unresolved: ['revenue.dql'] });
+      const versions = await (await fetch(`${base}/api/git/update/versions?path=revenue.dql`)).json() as { mine: string; theirs: string };
+      expect(versions).toMatchObject({ mine: 'mine\n', theirs: 'theirs\n' });
+      expect(await updateStep(base, 'continue')).toMatchObject({ ok: false, code: 'conflicts' });
+      expect((await updateStep(base, 'resolve', { path: 'revenue.dql', keep: 'mine' })).state?.unresolved).toEqual([]);
+      expect(await updateStep(base, 'continue')).toMatchObject({ ok: true, undoAvailable: true });
+    });
+    expect(readFileSync(join(project, 'revenue.dql'), 'utf-8')).toBe('mine\n');
+    expect(git(project, ['log', '--format=%s', '-2']).trim().split('\n')).toEqual(['My revenue', 'Their revenue']);
+  });
+
+  it('keeps theirs when asked', async () => {
+    const bare = hostRepo('dql-git-d1t-host-', 'main', { 'dql.config.json': '{}\n', 'revenue.dql': 'v1\n' });
+    const project = clonedProject(bare, 'dql-git-d1t-');
+    commitFiles(project, { 'revenue.dql': 'mine\n', 'other.dql': 'other\n' }, 'My revenue');
+    teammateCommits(bare, 'main', { 'revenue.dql': 'theirs\n' }, 'Their revenue');
+    await withServer(project, async (base) => {
+      await update(base);
+      await updateStep(base, 'resolve', { path: 'revenue.dql', keep: 'theirs' });
+      expect(await updateStep(base, 'continue')).toMatchObject({ ok: true });
+    });
+    expect(readFileSync(join(project, 'revenue.dql'), 'utf-8')).toBe('theirs\n');
+    expect(readFileSync(join(project, 'other.dql'), 'utf-8')).toBe('other\n');
+  });
+
+  it('cancel puts everything back exactly as it was', async () => {
+    const bare = hostRepo('dql-git-d1x-host-', 'main', { 'dql.config.json': '{}\n', 'revenue.dql': 'v1\n' });
+    const project = clonedProject(bare, 'dql-git-d1x-');
+    commitFiles(project, { 'revenue.dql': 'mine\n' }, 'My revenue');
+    const before = git(project, ['rev-parse', 'HEAD']).trim();
+    teammateCommits(bare, 'main', { 'revenue.dql': 'theirs\n' }, 'Their revenue');
+    writeFileSync(join(project, 'draft.dql'), 'unsaved\n');
+    await withServer(project, async (base) => {
+      expect((await update(base)).code).toBe('conflicts');
+      expect(await updateStep(base, 'cancel')).toMatchObject({ ok: true });
+      expect((await (await fetch(`${base}/api/git/update/state`)).json() as { inProgress: boolean }).inProgress).toBe(false);
+    });
+    expect(git(project, ['rev-parse', 'HEAD']).trim()).toBe(before);
+    expect(readFileSync(join(project, 'revenue.dql'), 'utf-8')).toBe('mine\n');
+    expect(readFileSync(join(project, 'draft.dql'), 'utf-8')).toBe('unsaved\n');
+  });
+
+  it('asks you to keep or discard unsaved edits to files the remote also changed', async () => {
+    const bare = hostRepo('dql-git-d1u-host-', 'main', { 'dql.config.json': '{}\n', 'revenue.dql': 'v1\n' });
+    const project = clonedProject(bare, 'dql-git-d1u-');
+    teammateCommits(bare, 'main', { 'revenue.dql': 'theirs\n' }, 'Their revenue');
+    writeFileSync(join(project, 'revenue.dql'), 'unsaved mine\n');
+    const before = git(project, ['rev-parse', 'HEAD']).trim();
+    await withServer(project, async (base) => {
+      const res = await update(base);
+      expect(res).toMatchObject({ ok: false, code: 'unsaved_overlap', files: ['revenue.dql'] });
+    });
+    expect(git(project, ['rev-parse', 'HEAD']).trim()).toBe(before);
+    expect(readFileSync(join(project, 'revenue.dql'), 'utf-8')).toBe('unsaved mine\n');
+  });
+});
+
+describe('unsaved edits to other files ride along (D1)', () => {
+  it('carries a tracked file with unsaved edits across the update and leaves no stash behind', async () => {
+    const bare = hostRepo('dql-git-d1s-host-', 'main', { 'dql.config.json': '{}\n', 'notes.dql': 'v1\n' });
+    const project = clonedProject(bare, 'dql-git-d1s-');
+    commitFiles(project, { 'mine.dql': 'mine\n' }, 'My change');
+    teammateCommits(bare, 'main', { 'theirs.dql': 'theirs\n' }, 'Their change');
+    writeFileSync(join(project, 'notes.dql'), 'unsaved edit\n');
+    await withServer(project, async (base) => {
+      expect((await update(base)).ok).toBe(true);
+    });
+    expect(readFileSync(join(project, 'notes.dql'), 'utf-8')).toBe('unsaved edit\n');
+    expect(git(project, ['stash', 'list']).trim()).toBe('');
+    expect(existsSync(join(project, 'theirs.dql'))).toBe(true);
+  });
+});
+
+describe('review branches bring in the main branch (D2)', () => {
+  it('merges main into a branch that was already sent, never rewriting it', async () => {
+    const bare = hostRepo('dql-git-d2s-host-', 'main', { 'dql.config.json': '{}\n' });
+    const project = clonedProject(bare, 'dql-git-d2s-');
+    git(project, ['checkout', '-b', 'zlens/revenue']);
+    commitFiles(project, { 'revenue.dql': 'r\n' }, 'Revenue block');
+    git(project, ['push', '-u', 'origin', 'zlens/revenue']);
+    const sent = git(project, ['rev-parse', 'HEAD']).trim();
+    teammateCommits(bare, 'main', { 'orders.dql': 'o\n' }, 'Orders on main');
+    await withServer(project, async (base) => {
+      const res = await update(base);
+      expect(res.ok).toBe(true);
+      expect(res.output).toContain('from origin/main');
+    });
+    expect(git(project, ['merge-base', '--is-ancestor', sent, 'HEAD']).trim()).toBe('');
+    expect(git(project, ['rev-list', '--parents', '-1', 'HEAD']).trim().split(' ')).toHaveLength(3);
+    expect(existsSync(join(project, 'orders.dql'))).toBe(true);
+  });
+
+  it('rebases a branch that was never sent onto main', async () => {
+    const bare = hostRepo('dql-git-d2u-host-', 'main', { 'dql.config.json': '{}\n' });
+    const project = clonedProject(bare, 'dql-git-d2u-');
+    git(project, ['checkout', '-b', 'zlens/local-only']);
+    commitFiles(project, { 'local.dql': 'l\n' }, 'Local block');
+    teammateCommits(bare, 'main', { 'orders.dql': 'o\n' }, 'Orders on main');
+    await withServer(project, async (base) => {
+      expect((await update(base)).ok).toBe(true);
+    });
+    expect(git(project, ['log', '--format=%s', '-3']).trim().split('\n')).toEqual(['Local block', 'Orders on main', 'Initial commit']);
+  });
+});
+
+describe('a remote holding unrelated work is never combined (D6)', () => {
+  it('refuses to send or update, and says how to add ZLens to that repository', async () => {
+    const bare = hostRepo('dql-git-d6-host-', 'main', { 'README.md': '# shop\n', 'models/orders.sql': 'select 1\n' });
+    const project = projectOnMain('dql-git-d6-');
+    await withServer(project, async (base) => {
+      await postJson(`${base}/api/git/remote`, { url: bare });
+      const sent = await (await postJson(`${base}/api/git/push`, {})).json() as { ok: boolean; code?: string; error?: string };
+      expect(sent).toMatchObject({ ok: false, code: 'unrelated' });
+      expect(sent.error).toContain('create-zlens-app');
+      expect(await update(base)).toMatchObject({ ok: false, code: 'unrelated' });
+    });
+    expect(git(project, ['log', '--format=%s']).trim()).toBe('first');
   });
 });

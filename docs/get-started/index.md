@@ -15,7 +15,8 @@ You end with:
 
 You need:
 
-- Node.js 20 or newer (`node -v`)
+- Node.js 20, 22 or 24, with 24 LTS recommended (`node -v`). Node 25 and 26
+  are not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
 - Python 3.9 to 3.13, to build the sample with dbt (`python3 --version`)
 - git
 
@@ -156,5 +157,7 @@ to model, and ZLens drafts the entities and joins for you to certify. See
 - [Find your way around](workbench.md) the workbench.
 - [Ask a question](../ask/index.md) in plain English.
 - [Save the query as a block](../blocks/index.md) and certify it.
+- [Share your work with your team](../notebooks/share-with-your-team.md)
+  through your own git repository.
 - [Add ZLens to your own dbt project](your-dbt-project.md), or
   [start from your database](no-dbt.md) without dbt.

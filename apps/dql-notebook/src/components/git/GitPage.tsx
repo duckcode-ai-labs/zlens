@@ -18,7 +18,7 @@ import {
 import { useNotebookStore } from '../../store/NotebookStore';
 import { themes, type Theme } from '../../themes/notebook-theme';
 import { hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
-import { api, type GitGovernedContextGroup } from '../../api/client';
+import { api, type GitGovernedContextGroup, type GitUpdateState } from '../../api/client';
 import {
   BACKGROUND_FETCH_INTERVAL_MS,
   isNoRemoteFailure,
@@ -138,6 +138,10 @@ export function GitPage() {
   // D5: the ZLens sample as origin.
   const [ownRepoInput, setOwnRepoInput] = useState('');
   const [ownRepoError, setOwnRepoError] = useState<string | null>(null);
+  // D1/D2: an update stopped on conflicts, the choices made so far, and Undo.
+  const [updateState, setUpdateState] = useState<GitUpdateState | null>(null);
+  const [conflictChoices, setConflictChoices] = useState<Record<string, 'mine' | 'theirs'>>({});
+  const [compare, setCompare] = useState<{ path: string; mine: string | null; theirs: string | null } | null>(null);
   useEffect(() => {
     const onResize = () => setNarrowLayout(window.innerWidth < 980);
     window.addEventListener('resize', onResize);
@@ -149,12 +153,15 @@ export function GitPage() {
     setRefreshing(true);
     setLoadError(null);
     try {
-      const [s, b, r, context] = await Promise.all([
+      const [s, b, r, context, update] = await Promise.all([
         api.fetchGitStatus(),
         api.fetchGitBranches(),
         api.fetchGitRemote(),
         api.fetchGitGovernedContext(),
+        api.fetchGitUpdateState().catch(() => null),
       ]);
+      setUpdateState((previous) => sameUpdateState(previous, update) ? previous : update);
+      if (!update?.inProgress) setConflictChoices((previous) => Object.keys(previous).length ? {} : previous);
       // Keep a background poll invisible when nothing actually changed. In
       // particular, do not replace the selected-file status every four seconds.
       setStatus((previous) => sameGitStatus(previous, s) ? previous : s);
@@ -370,6 +377,7 @@ export function GitPage() {
    * remote is ahead, and offers a new branch when on the base branch (D3–D5).
    */
   const sendCurrentBranch = async (successMsg: string) => {
+    if (updateState?.inProgress) return flash('err', 'Finish or cancel the update first.');
     if (status?.sampleRemote) return flash('err', 'This is the ZLens sample repository. Connect your own repository first.');
     const behind = status?.behind ?? 0;
     if (behind > 0) return flash('err', `The remote has ${behind} new change${behind === 1 ? '' : 's'}. Get updates first, then send.`);
@@ -483,10 +491,39 @@ export function GitPage() {
   };
   const onPull = () => {
     if (!remote.url) return requestRemote('Add a Git remote before getting updates.');
-    void runOp('pull', () => api.gitPull(), 'Up to date with the remote').then((res) => {
+    setConflictChoices({});
+    void runOp('pull', () => api.gitPull()).then((res) => {
       if (isNoRemoteFailure(res)) requestRemote(res.error);
-      if (res.ok) setRemoteCheck({ state: 'ok' });
+      if (res.ok) {
+        setRemoteCheck({ state: 'ok' });
+        flash('ok', res.output || 'Up to date with the remote');
+      }
     });
+  };
+  // ── Finishing an update that stopped on conflicts (D1/D2) ──────────────────
+  const onKeepVersion = async (path: string, keep: 'mine' | 'theirs') => {
+    const res = await runOp('resolve', () => api.gitUpdateStep('resolve', { path, keep }));
+    if (res.ok) setConflictChoices((previous) => ({ ...previous, [path]: keep }));
+  };
+  const onCompare = async (path: string) => {
+    const res = await api.fetchGitConflictVersions(path);
+    if (!res.ok) return flash('err', res.error ?? 'Could not load both versions');
+    setCompare({ path, mine: res.mine ?? null, theirs: res.theirs ?? null });
+  };
+  const onContinueUpdate = async () => {
+    const res = await runOp('continue', () => api.gitUpdateStep('continue'));
+    if (res.ok) {
+      setConflictChoices({});
+      flash('ok', res.output || 'Update finished');
+    }
+  };
+  const onCancelUpdate = async () => {
+    if (!window.confirm('Cancel this update? Everything goes back to how it was before you pressed Get updates.')) return;
+    const res = await runOp('cancel', () => api.gitUpdateStep('cancel'), 'Update cancelled. Everything is as it was before.');
+    if (res.ok) setConflictChoices({});
+  };
+  const onUndoUpdate = () => {
+    void runOp('undo', () => api.gitUpdateStep('undo'), 'Update undone. Your branch is back where it was.');
   };
   const onPush = () => {
     if (!remote.url) return requestRemote();
@@ -579,16 +616,18 @@ export function GitPage() {
       <TopBar
         t={t}
         readOnly={readOnly}
-        branchCurrent={branchInfo.current}
+        branchCurrent={updateState?.inProgress && branchInfo.current === 'HEAD' ? 'updating…' : branchInfo.current}
         branches={branchInfo.branches}
         ahead={status?.ahead ?? 0}
         behind={status?.behind ?? 0}
         remoteUrl={remote.url}
-        sync={syncSummary({ hasRemote: Boolean(remote.url), ahead: status?.ahead ?? 0, behind: status?.behind ?? 0, check: remoteCheck })}
+        sync={syncSummary({ hasRemote: Boolean(remote.url), ahead: status?.ahead ?? 0, behind: status?.behind ?? 0, check: remoteCheck, updating: Boolean(updateState?.inProgress) })}
         refreshing={refreshing}
         busy={busy}
         onPull={onPull}
         onPush={onPush}
+        undoAvailable={Boolean(updateState?.undoAvailable)}
+        onUndoUpdate={onUndoUpdate}
         onRefresh={() => void refreshAll()}
         prUrl={prUrl}
         onCheckout={onCheckout}
@@ -640,6 +679,30 @@ export function GitPage() {
         />
       )}
 
+      {updateState?.inProgress && !readOnly && (
+        <UpdateConflictPanel
+          t={t}
+          state={updateState}
+          choices={conflictChoices}
+          busy={!!busy}
+          onKeep={(path, keep) => void onKeepVersion(path, keep)}
+          onCompare={(path) => void onCompare(path)}
+          onContinue={() => void onContinueUpdate()}
+          onCancel={() => void onCancelUpdate()}
+        />
+      )}
+
+      {compare && (
+        <CompareVersionsDialog t={t} compare={compare} onClose={() => setCompare(null)} />
+      )}
+
+      {updateState?.inProgress && !readOnly ? (
+        <div data-testid="git-update-waiting" style={{ flex: 1, display: 'grid', placeItems: 'center', padding: 24, color: t.textMuted, fontSize: 12.5, textAlign: 'center' }}>
+          Choose a version for each file above, then Continue — or Cancel update to go back to how things were.
+          <br />
+          Your unsaved changes are safe and come back when the update finishes.
+        </div>
+      ) : (
       <div style={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <FileTree
           t={t}
@@ -728,6 +791,7 @@ export function GitPage() {
           />
         ) : null}
       </div>
+      )}
 
       {toast && <Toast t={t} kind={toast.kind} text={toast.text} />}
     </div>
@@ -773,6 +837,8 @@ interface TopBarProps {
   busy: string | null;
   onPull: () => void;
   onPush: () => void;
+  undoAvailable: boolean;
+  onUndoUpdate: () => void;
   onRefresh: () => void;
   prUrl: string | null;
   onCheckout: (name: string) => void;
@@ -944,6 +1010,11 @@ function TopBar(p: TopBarProps) {
             Get updates
             {p.behind > 0 && <span style={{ fontFamily: t.fontMono, fontSize: 10, color: t.textMuted, marginLeft: 2 }}>{p.behind}</span>}
           </button>
+          {p.undoAvailable && (
+            <button onClick={p.onUndoUpdate} disabled={!!p.busy} style={topBtn(t)} title="Put your branch back where it was before the last Get updates">
+              Undo update
+            </button>
+          )}
           <button onClick={p.onPush} disabled={!!p.busy} style={topBtn(t, true)} title="Send the current branch to the shared project">
             <ArrowUp size={12} strokeWidth={1.75} />
             Send
@@ -992,6 +1063,9 @@ function miniBtn(t: Theme, kind: 'primary' | 'default' = 'default'): React.CSSPr
   };
 }
 
+/** D7: the whole sharing flow, in the docs. */
+const SHARE_GUIDE_URL = 'https://github.com/duckcode-ai-labs/zlens/blob/main/docs/notebooks/share-with-your-team.md';
+
 function prettyRemote(url: string): string {
   return url.replace(/^git@([^:]+):/, '$1/').replace(/^https?:\/\//, '').replace(/\.git$/, '');
 }
@@ -1015,6 +1089,16 @@ function guidedReviewBranchName(message: string): string {
 /** The branch reviews merge into: the remote's default branch, as the server reports it. */
 function reviewBaseBranch(status: Status | null): string {
   return status?.baseBranch || 'main';
+}
+
+function sameUpdateState(left: GitUpdateState | null, right: GitUpdateState | null): boolean {
+  if (!left || !right) return left === right;
+  return left.inProgress === right.inProgress
+    && left.operation === right.operation
+    && left.target === right.target
+    && left.undoAvailable === right.undoAvailable
+    && sameStringList(left.unresolved, right.unresolved)
+    && sameStringList(left.conflicts.map((c) => c.path), right.conflicts.map((c) => c.path));
 }
 
 function sameStringList(left: string[], right: string[]): boolean {
@@ -1083,7 +1167,10 @@ function ShareRail({ t, branch, pickedCount, totalCount, commitMsg, setCommitMsg
     <aside style={{ width: 'clamp(280px, 26vw, 350px)', flexShrink: 0, background: t.cellBg, borderLeft: `1px solid ${t.headerBorder}`, display: 'flex', flexDirection: 'column', minHeight: 0, overflow: 'auto' }}>
       <div style={{ padding: '14px 16px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
         <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Share your work</div>
-        <div style={{ fontSize: 11, color: t.textMuted, marginTop: 2 }}>Four steps — no git commands needed.</div>
+        <div style={{ fontSize: 11, color: t.textMuted, marginTop: 2 }}>
+          Four steps — no git commands needed.{' '}
+          <a href={SHARE_GUIDE_URL} target="_blank" rel="noreferrer" style={{ color: t.accent }}>How sharing works</a>
+        </div>
       </div>
       <div style={{ padding: '14px 16px 20px', display: 'flex', flexDirection: 'column' }}>
         {/* Step 1 — pick */}
@@ -2259,6 +2346,99 @@ function SendChoiceDialog({ t, base, unsent, busy, onSendAsBranch, onSendToBase,
           <button type="button" onClick={onCancel} style={miniBtn(t)}>Cancel</button>
           <button type="button" onClick={onSendToBase} disabled={busy} style={miniBtn(t)}>Send to {base}…</button>
           <button type="button" autoFocus onClick={onSendAsBranch} disabled={busy} style={miniBtn(t, 'primary')}>Send as a new branch</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * D1/D2: Get updates stopped because some files changed on both sides. Each
+ * file gets Keep mine / Keep theirs / Compare; Continue finishes the update and
+ * Cancel puts everything back as it was.
+ */
+function UpdateConflictPanel({ t, state, choices, busy, onKeep, onCompare, onContinue, onCancel }: {
+  t: Theme;
+  state: GitUpdateState;
+  choices: Record<string, 'mine' | 'theirs'>;
+  busy: boolean;
+  onKeep: (path: string, keep: 'mine' | 'theirs') => void;
+  onCompare: (path: string) => void;
+  onContinue: () => void;
+  onCancel: () => void;
+}) {
+  const paths = Array.from(new Set([...Object.keys(choices), ...state.unresolved]));
+  const remaining = state.unresolved.length;
+  return (
+    <div data-testid="git-update-conflicts" role="region" aria-label="Finish getting updates" style={{ display: 'grid', gap: 10, padding: '12px 20px', background: t.sidebarBg, borderBottom: `1px solid ${t.headerBorder}`, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+        <span style={{ fontSize: 12.5, fontWeight: 650, color: t.textPrimary }}>Finish getting updates</span>
+        <span style={{ fontSize: 11.5, color: t.textMuted }}>
+          {remaining > 0
+            ? `${remaining} file${remaining === 1 ? '' : 's'} changed both here and${state.target ? ` on ${state.target}` : ' on the remote'}. Choose which version to keep for each.`
+            : 'Every file has a version chosen. Continue to finish the update.'}
+        </span>
+        <div style={{ flex: 1 }} />
+        <button type="button" onClick={onCancel} disabled={busy} style={miniBtn(t)}>Cancel update</button>
+        <button type="button" onClick={onContinue} disabled={busy || remaining > 0} style={{ ...miniBtn(t, 'primary'), opacity: busy || remaining > 0 ? 0.6 : 1 }}>Continue</button>
+      </div>
+      <div style={{ display: 'grid', gap: 4 }}>
+        {paths.map((path) => {
+          const chosen = choices[path];
+          const conflict = state.conflicts.find((c) => c.path === path);
+          return (
+            <div key={path} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '5px 8px', background: t.cellBg, border: `1px solid ${t.cellBorder}`, borderRadius: 5 }}>
+              <span style={{ fontFamily: t.fontMono, fontSize: 11.5, color: t.textPrimary, flex: '1 1 220px', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }} title={path}>{path}</span>
+              {chosen ? (
+                <span style={{ fontSize: 11, color: t.success }}>{chosen === 'mine' ? 'Keeping yours' : 'Keeping the remote version'}</span>
+              ) : (
+                <>
+                  <button type="button" onClick={() => onCompare(path)} disabled={busy} style={miniBtn(t)}>Compare</button>
+                  <button type="button" onClick={() => onKeep(path, 'theirs')} disabled={busy} style={miniBtn(t)}>
+                    {conflict && !conflict.theirs ? 'Delete it (as on the remote)' : 'Keep theirs'}
+                  </button>
+                  <button type="button" onClick={() => onKeep(path, 'mine')} disabled={busy} style={miniBtn(t, 'primary')}>
+                    {conflict && !conflict.mine ? 'Delete it (as you did)' : 'Keep mine'}
+                  </button>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Both versions of a conflicted file, side by side. */
+function CompareVersionsDialog({ t, compare, onClose }: {
+  t: Theme;
+  compare: { path: string; mine: string | null; theirs: string | null };
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+  const column = (label: string, text: string | null) => (
+    <div style={{ display: 'grid', gridTemplateRows: 'auto 1fr', minWidth: 0, minHeight: 0 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: t.textSecondary, padding: '0 0 6px' }}>{label}</div>
+      <pre style={{ margin: 0, overflow: 'auto', background: t.appBg, border: `1px solid ${t.cellBorder}`, borderRadius: 5, padding: 10, fontSize: 11.5, fontFamily: t.fontMono, color: t.textPrimary, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        {text ?? '(deleted on this side)'}
+      </pre>
+    </div>
+  );
+  return (
+    <div role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.32)', display: 'grid', placeItems: 'center', zIndex: 200, padding: 16 }}>
+      <div role="dialog" aria-modal="true" aria-label={`Compare versions of ${compare.path}`} data-testid="git-compare-versions" style={{ width: 'min(1000px, 100%)', height: 'min(640px, 100%)', background: t.cellBg, border: `1px solid ${t.cellBorder}`, borderRadius: 8, boxShadow: '0 16px 40px rgba(0,0,0,0.22)', padding: 16, display: 'grid', gridTemplateRows: 'auto 1fr auto', gap: 12 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono }}>{compare.path}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 12, minHeight: 0, overflow: 'auto' }}>
+          {column('Yours', compare.mine)}
+          {column('On the remote', compare.theirs)}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button type="button" autoFocus onClick={onClose} style={miniBtn(t)}>Close</button>
         </div>
       </div>
     </div>
