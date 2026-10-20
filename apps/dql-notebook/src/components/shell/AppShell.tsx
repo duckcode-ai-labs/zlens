@@ -1,6 +1,6 @@
 import React, { lazy, Suspense, useCallback, useRef, useState, useEffect } from 'react';
 import { HostPageView } from './HostPageView';
-import { readAppPageLink, withAppPageLink } from '../apps/app-links';
+import { readAppDraftLink, readAppPageLink, withAppPageLink, withoutAppDraftLink } from '../apps/app-links';
 import { useShallow } from 'zustand/react/shallow';
 import { CommandPalette } from '../palette/CommandPalette';
 import { InspectorPanel } from './InspectorPanel';
@@ -150,6 +150,13 @@ export function AppShell() {
   useEffect(() => {
     const link = readAppPageLink(window.location.href);
     if (link) dispatch({ type: 'OPEN_APP', appId: link.appId, ...(link.pageId ? { dashboardId: link.pageId } : {}), experience: 'view', section: 'dashboards' });
+    // A draft link (`?appDraft=<id>`, from MCP `build_dql_app`) opens that
+    // draft in App Studio once, on load.
+    const draftId = readAppDraftLink(window.location.href);
+    if (draftId) {
+      window.history.replaceState(window.history.state, '', withoutAppDraftLink(window.location.href));
+      dispatch({ type: 'OPEN_APP_DRAFT', draftId });
+    }
   }, [dispatch]);
 
   // While a published page is open for reading, the address bar is its link.

@@ -245,11 +245,25 @@ export {
 export {
   AppSourceCatalogError,
   appSourceTrustTier,
+  matchAppSourceCatalogRecords,
   queryAppSourceCatalog,
   rankAppSourcesByTrust,
   resolveAppSourceCatalogRecords,
   shortlistAppSources,
 } from './app-source-catalog.js';
+export {
+  APP_BUILD_HANDOFF_SOURCE_LIMIT,
+  appBuildHandoffSourceKind,
+  appBuildHandoffSourceSummary,
+  appDraftSourceFromCatalogRecord,
+  appStudioDraftPath,
+  createAppBuildHandoffDraft,
+} from './app-build-handoff.js';
+export type {
+  AppBuildHandoffGap,
+  AppBuildHandoffInput,
+  AppBuildHandoffSourceSummary,
+} from './app-build-handoff.js';
 export {
   planAppBuildBrief,
   deterministicDatasetQuery,

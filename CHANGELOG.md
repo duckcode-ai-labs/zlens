@@ -15,6 +15,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   feature on, and the "Turn on field-based tiles" banner is gone. To turn
   them off for a project, set `"apps": { "datasets": false }` in
   `dql.config.json`; Studio then says so in one line.
+- **Apps that AI builds in Ask open in App Studio.** The Ask Build Brief's
+  button is now **Open in App Studio**. It makes a local App Studio draft that
+  opens at the Data step: the data behind the tiles you kept becomes the
+  App's data, and it uses **Only certified data** unless you kept data that
+  needs review. No App files are written until you publish, and publishing
+  goes through the publish checks. AI-written SQL is never added as a tile;
+  its question is listed under **Not covered yet**. The Build Brief says
+  **Certified**, **Metrics · Needs review** and **Draft SQL · Needs review**.
+- **Removed: `POST /api/apps/ai-builds/:id/commit`.** It wrote an Ask
+  proposal straight into `apps/<id>`. Use
+  `POST /api/apps/ai-builds/:id/open-in-studio`, which returns the App Studio
+  draft instead.
+
+### AI agents (MCP)
+
+- **Breaking: `build_dql_app` starts an App Studio draft and writes no App
+  files.** It used to write a draft App under `apps/`. It now returns
+  `draftId`, `appId`, `name`, `domain`, `sourcePolicy`, `openPath`
+  (`/?appDraft=<id>`), `openUrl` when `zlens notebook` is running on the
+  project, `sources` (each with its kind, trust and the reason it was picked),
+  `notCoveredYet`, `warnings` and `nextActions`. Open the link to check the
+  data, build the pages and publish in App Studio.
+  - Removed from the result: `plan`, `generated`, `validation`,
+    `certifiedTiles`, `draftTiles` and `lifecycle`.
+  - `owner`, `aiLayout` and `overwrite` are still accepted but ignored.
+  - `saveDraft: false` returns the picked data without creating a draft.
+  - `blocks` still names the exact certified blocks to use, now as the App's
+    data.
 
 ## v0.2.2 - 2026-10-19
 

@@ -129,10 +129,11 @@ const EXPECTED_TEST_FILES = 189;
 // 2534 with Build grounded on the warehouse catalog in a project without dbt (build-from-prompt.test.ts, +1).
 // 2537 with the certified-only AI shortlist and trust-ordered App sources (app-source-catalog.test.ts, +3).
 // 2539 with planner notes in plain words and built-in pick reasons (app-builder-orchestrator.test.ts, +2).
-const EXPECTED_TESTS = 2539;
+// 2541 with Ask and MCP App builds handed to App Studio drafts (design D9, app-source-catalog.test.ts, +2).
+const EXPECTED_TESTS = 2541;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 72 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2463.
+// The ordinary lane's share is the difference: 2465.
 const EXPECTED_HEAVY_TESTS = 76;
 
 const LANES = ['all', 'ordinary', 'heavy'];

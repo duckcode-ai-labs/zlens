@@ -80,6 +80,7 @@ import { KpiCard, usesKpiCard } from './KpiCard';
 import { AddDataBrowser } from './builder/AddDataBrowser';
 import { DataStep } from './builder/DataStep';
 import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
+import { appStudioAiDataResume } from './app-studio-handoff';
 import {
   FIELD_TILES_OFF_MESSAGE,
   appDataItems,
@@ -605,6 +606,15 @@ export function AppStudioV2({
         setName(selected.name);
         setActivePageId(selected.pages[0]?.id ?? 'overview');
         setSavedMessage('Resumed local draft');
+        // An AI draft with no pages built yet (one Ask or an MCP client made,
+        // or a "Describe with AI" draft left early) opens at the AI Data step.
+        const aiResume = appStudioAiDataResume(selected);
+        if (aiResume) {
+          setPrompt(aiResume.prompt);
+          setStage('data');
+          setAiDataFlow(true);
+          await requestAiProposal(selected, aiResume.prompt, aiResume.requiredSourceIds, false);
+        }
         return;
       }
       if (!baseAppId) return;

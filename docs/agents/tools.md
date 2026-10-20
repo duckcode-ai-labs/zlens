@@ -88,7 +88,7 @@ The workbench is the ZLens runtime that `npm run notebook` (or
 | Tool | What it does | Read-only |
 |---|---|---|
 | `list_apps` | The Apps with their dashboards and tiles: each tile's block, that block's status, and the trust label the tile carries (Certified only when its block is). Also each App's schedules. | yes |
-| `build_dql_app` | Drafts a new App from a description: certified blocks for tiles first, review-only placeholders where none fits. `name` sets the App name and `blocks` the exact certified blocks to use; `saveDraft: false` returns the plan only. Never certifies or publishes. | no (writes a draft App) |
+| `build_dql_app` | Starts a new App from a description as an App Studio draft. Picks certified data (Datasets, Metrics, saved queries) with a reason for each, and lists what no certified data covers. Returns the draft id and a link that opens it in App Studio at the Data step (`openUrl` when the workbench is running, always `openPath`). `name` sets the App name and `blocks` the exact certified blocks to use; `saveDraft: false` returns the picks only. Writes no App files; never certifies or publishes. | no (writes a local App Studio draft) |
 | `list_notebooks` | The notebooks and their cells (markdown and SQL). Pass `path` for one notebook in full. | yes |
 | `list_datasets`, `describe_dataset` | The approved App Datasets and their fields. | yes |
 | `preview_tile_query`, `query_dataset` | Query an App Dataset by fields, without SQL. Creates no App or draft. | yes |

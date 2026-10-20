@@ -367,9 +367,15 @@ async function dbtLane(project, runtimeUrl) {
     await call(lane, mcp, 'build_block_from_prompt', { prompt: 'weekly order count' }, ok((b) => expectThat(b.ok && /_drafts\//.test(b.draftBlockPath ?? '') && b.trustLabel === 'AI-Generated', `draft ${b.draftBlockPath}`)), { label: 'governed metric, no model' });
     await call(lane, mcp, 'build_block_from_prompt', { prompt: 'x', mode: 'edit' }, fails('blockPath'));
 
-    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', saveDraft: false }, ok((b) => expectThat(b.ok === true && b.plan && b.generated === undefined, 'plan-only app draft')));
+    // Design D9: an App AI builds is an App Studio draft that opens at the Data step; no App files.
+    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', saveDraft: false }, ok((b) => expectThat(b.ok === true && b.saved === false && Array.isArray(b.sources) && b.draftId === undefined, 'picks-only App draft')));
     await call(lane, mcp, 'build_dql_app', {}, fails('prompt'));
-    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', name: 'Beverage Performance', blocks: ['beverage_revenue_by_product', 'top_beverage_customers'] }, ok((b) => expectThat(b.ok && b.appId === 'beverage-performance' && b.certifiedTiles === 2 && b.lifecycle === 'draft' && existsSync(join(project, 'apps', 'beverage-performance')), `app ${b.appId} tiles ${b.certifiedTiles} lifecycle ${b.lifecycle}`)), { label: 'named, exact blocks, saved' });
+    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', name: 'Beverage Performance', blocks: ['beverage_revenue_by_product', 'top_beverage_customers'] }, ok((b) => expectThat(
+      b.ok && b.saved === true && /^build_/.test(b.draftId ?? '') && b.appId === 'beverage-performance'
+        && b.openPath === `/?appDraft=${b.draftId}` && b.sources?.length === 2 && b.sources.every((s) => s.trust === 'Certified' && s.reason)
+        && !existsSync(join(project, 'apps', 'beverage-performance')),
+      `draft ${b.draftId} app ${b.appId} open ${b.openPath} sources ${JSON.stringify(b.sources)?.slice(0, 200)}`,
+    )), { label: 'named, exact blocks, App Studio draft' });
     await call(lane, mcp, 'build_dql_app', { prompt: 'x', blocks: ['no_such_block'] }, fails('Only certified blocks'));
     await call(lane, mcp, 'list_apps', {}, ok((b) => {
       const app = b.apps?.find((a) => a.name === 'Jaffle Growth Review');

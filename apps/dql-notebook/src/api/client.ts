@@ -8101,21 +8101,28 @@ export const api = {
   },
 
   /** Two-phase build, step 2: the user confirmed — create the app from the selection. */
-  async commitAppAiBuild(sessionId: string, input: {
+  /**
+   * Open an Ask App proposal in App Studio: the server makes a local App
+   * Studio draft (no App files) that opens at the AI Data step.
+   */
+  async openAppAiBuildInStudio(sessionId: string, input: {
     selectedTileIds?: string[];
-    force?: boolean;
     expectedProposalHash?: string;
     appName?: string;
-    pageTitle?: string;
     audience?: string;
-    filterIds?: string[];
-    tileOverrides?: Record<string, { title?: string; viz?: string }>;
   } = {}): Promise<
-    { ok: true; session: AppAiBuildSession; app: AppSummary | null; dashboardId: string | null } | { ok: false; error: string }
+    | {
+      ok: true;
+      draft: AppStudioBuildDraft;
+      sources: Array<{ sourceId: string; title: string; kind: 'Dataset' | 'Metrics' | 'Saved query'; trust: 'Certified' | 'Needs review'; domain?: string; reason: string }>;
+      notCoveredYet: string[];
+      reused: boolean;
+    }
+    | { ok: false; error: string }
   > {
     try {
       return await request(
-        `/api/apps/ai-builds/${encodeURIComponent(sessionId)}/commit`,
+        `/api/apps/ai-builds/${encodeURIComponent(sessionId)}/open-in-studio`,
         { method: 'POST', body: JSON.stringify(input) },
       );
     } catch (e) {

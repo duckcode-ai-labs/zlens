@@ -76,8 +76,9 @@ Ask a question, for example *"How has revenue changed by month?"*.
   nothing. Claude cannot certify; a person does, in Block Studio or with
   `zlens certify --from-draft`.
 - *"What Apps do we have and are their tiles certified?"* uses `list_apps`;
-  *"Draft an App for beverage performance"* uses `build_dql_app` and writes a
-  draft App under `apps/`.
+  *"Draft an App for beverage performance"* uses `build_dql_app`, which
+  starts an App Studio draft and returns a link that opens it at the Data
+  step. Nothing is written to `apps/` until you publish from App Studio.
 
 Claude Code asks before it runs a tool unless you allow it. To allow every
 ZLens tool for the session, answer "don't ask again" for `dql`, or add

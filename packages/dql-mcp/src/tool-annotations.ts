@@ -53,7 +53,7 @@ const SPECS: Record<DqlToolName, AnnotationSpec> = {
   certify: { title: 'Check a block against the certification rules' },
   suggest_block: { title: 'Save a draft block', writes: true, idempotent: true },
   build_block_from_prompt: { title: 'Draft a block from a description', writes: true },
-  build_dql_app: { title: 'Draft an App', writes: true },
+  build_dql_app: { title: 'Start an App in App Studio', writes: true },
   build_dql_block: { title: 'Save a draft block (old name of suggest_block)', writes: true, idempotent: true },
   list_datasets: { title: 'List App Datasets' },
   describe_dataset: { title: 'Describe an App Dataset' },

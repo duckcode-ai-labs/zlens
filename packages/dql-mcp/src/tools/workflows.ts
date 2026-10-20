@@ -1,21 +1,29 @@
 import type { DQLContext } from '../context.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
-  KGStore,
+  APP_BUILD_HANDOFF_SOURCE_LIMIT,
+  appBuildHandoffSourceSummary,
+  appStudioDraftPath,
   askScopeFromWorkspace,
+  createAppBuildHandoffDraft,
   defaultKgPath,
+  ensureAgentProjectReady,
   ensureMetadataCatalogFresh,
-  generateAppFromPlan,
+  matchAppSourceCatalogRecords,
   planAgentAnswer,
-  planAppFromPrompt,
+  planAppBuildBrief,
   reindexProject,
   resolveDomainContextEnvelope,
-  validateAppPlan,
+  shortlistAppSources,
+  type AppSourceCatalogRecord,
   type DomainContextEnvelope,
   type MetadataAllowedSqlContext,
   type MetadataObject,
   type ReindexProjectResult,
 } from '@zlens/agent';
 import { resolveTrustLabel, trustLabelIdForRoute } from '@zlens/core';
+import { LocalAppStorage, defaultLocalAppsDbPath } from '@zlens/project';
 import { suggestBlock } from './suggest-block.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
 
@@ -157,60 +165,128 @@ async function buildDqlAppOnce(
   ctx: DQLContext,
   args: Parameters<typeof buildDqlApp>[1],
 ) {
-  const kgPath = defaultKgPath(ctx.projectRoot);
-  await reindexProject(ctx.projectRoot, { kgPath });
-  const kg = new KGStore(kgPath);
-  try {
-    const unknownBlocks = (args.blocks ?? []).filter((name) => ctx.manifest.blocks[name]?.status !== 'certified');
-    if (unknownBlocks.length > 0) {
+  const prompt = args.prompt?.trim() ?? '';
+  if (!prompt) return { ok: false as const, error: 'prompt is required: describe what the App is for.' };
+  const unknownBlocks = (args.blocks ?? []).filter((name) => ctx.manifest.blocks[name]?.status !== 'certified');
+  if (unknownBlocks.length > 0) {
+    return {
+      ok: false as const,
+      error: `Only certified blocks can be App data; not certified or not found: ${unknownBlocks.join(', ')}. Use search_blocks with status "certified".`,
+    };
+  }
+  await ensureAgentProjectReady(ctx.projectRoot);
+  const domain = cleanOptional(args.domain);
+  // The App's data: the blocks the caller named exactly, or what the App
+  // Studio planner picks from certified data for the request.
+  let picks: Array<{ source: AppSourceCatalogRecord; reason: string }>;
+  let notCoveredYet: Array<{ question: string; reason?: string }> = [];
+  if (args.blocks?.length) {
+    const matched = matchAppSourceCatalogRecords(ctx.projectRoot, { blockNames: args.blocks }, 'governed_only');
+    if (matched.unmatched.length) {
       return {
         ok: false as const,
-        error: `Only certified blocks can be App tiles; not certified or not found: ${unknownBlocks.join(', ')}. Use search_blocks with status "certified".`,
+        error: `These certified blocks are not in the App data catalog yet: ${matched.unmatched.join(', ')}. Run inspect_dql_project with refresh, then retry.`,
       };
     }
-    const planned = planAppFromPrompt({
-      prompt: args.prompt,
-      kg,
-      domain: cleanOptional(args.domain),
-      owner: cleanOptional(args.owner),
-      plannerMode: args.aiLayout ? 'ai_assisted' : 'deterministic',
-      ...(args.blocks?.length ? { preferredBlockIds: args.blocks.map((name) => `block:${name}`), maxCertifiedTiles: args.blocks.length } : {}),
+    picks = matched.items.map((source) => ({ source, reason: 'You named this block.' }));
+  } else {
+    const candidates = shortlistAppSources(ctx.projectRoot, prompt, {
+      sourcePolicy: 'governed_only',
+      ...(domain ? { domains: [domain] } : {}),
+    }).items;
+    const brief = await planAppBuildBrief({
+      prompt,
+      candidates,
+      requiredSourceIds: [],
+      sourcePolicy: 'governed_only',
+      ...(domain ? { domain } : {}),
     });
-    const name = cleanOptional(args.name);
-    const plan = name ? { ...planned, name, appId: appIdFor(name) } : planned;
-    const validation = validateAppPlan(plan, kg);
-    const generated = args.saveDraft === false
-      ? undefined
-      : generateAppFromPlan(ctx.projectRoot, plan, kg, { overwrite: args.overwrite === true });
-    if (generated) {
-      ctx.refresh();
-      await ensureMetadataCatalogFresh(ctx.projectRoot, { force: true }).catch(() => undefined);
-    }
+    const byId = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
+    picks = brief.selectedSourceIds.flatMap((sourceId) => {
+      const source = byId.get(sourceId);
+      const component = brief.components.find((candidate) => candidate.sourceId === sourceId);
+      return source ? [{ source, reason: component?.rationale || `Matched ${source.title} for this request.` }] : [];
+    });
+    const covered = new Set(brief.components.flatMap((component) => component.requirementIds));
+    notCoveredYet = brief.requirements
+      .filter((requirement) => !covered.has(requirement.id))
+      .map((requirement) => ({ question: requirement.question, reason: 'No certified data covers this question yet.' }));
+  }
+  picks = picks.slice(0, APP_BUILD_HANDOFF_SOURCE_LIMIT);
+  const name = cleanOptional(args.name) ?? appNameFromPrompt(prompt);
+  const sources = picks.map((pick) => appBuildHandoffSourceSummary(pick.source, pick.reason));
+  // The gaps are reported, not stored: App Studio plans again from the same
+  // goal and lists them under "Not covered yet" itself.
+  const draft = createAppBuildHandoffDraft({
+    goal: prompt,
+    name,
+    ...(domain ? { domain } : {}),
+    sources: picks.map((pick) => pick.source),
+    sourcePolicy: 'governed_only',
+  });
+  const nothingPicked = sources.length === 0
+    ? ['No certified data matched this request. App Studio shows what AI finds and lists what is not covered yet.']
+    : [];
+  if (args.saveDraft === false) {
     return {
-      ok: true,
-      appId: plan.appId,
-      name: plan.name,
-      domain: plan.domain,
-      audience: plan.audience,
-      lifecycle: plan.lifecycle,
-      certifiedTiles: validation.certifiedTiles,
-      draftTiles: validation.draftTiles,
-      validation,
-      plan,
-      generated,
-      nextActions: generated
-        ? [
-          'Open the generated app draft in DQL.',
-          'Review draft/research tiles before stakeholder use.',
-          'Run zlens app build after review.',
-        ]
-        : [
-          'Review the returned plan.',
-          'Call build_dql_app again with saveDraft=true to write files.',
-        ],
+      ok: true as const,
+      saved: false,
+      appId: draft.appId,
+      name: draft.name,
+      domain: domain ?? null,
+      sourcePolicy: 'Only certified data',
+      sources,
+      notCoveredYet: notCoveredYet.map((gap) => gap.question),
+      warnings: nothingPicked,
+      nextActions: ['Call build_dql_app again without saveDraft:false to create the App Studio draft.'],
     };
+  }
+  const storage = new LocalAppStorage(defaultLocalAppsDbPath(ctx.projectRoot));
+  try {
+    storage.saveAppBuildDraft(draft);
   } finally {
-    kg.close();
+    storage.close();
+  }
+  const openPath = appStudioDraftPath(draft.id);
+  const notebook = runningNotebookUrl(ctx.projectRoot);
+  return {
+    ok: true as const,
+    saved: true,
+    draftId: draft.id,
+    appId: draft.appId,
+    name: draft.name,
+    domain: domain ?? null,
+    sourcePolicy: 'Only certified data',
+    openPath,
+    ...(notebook ? { openUrl: `${notebook}${openPath}` } : {}),
+    sources,
+    notCoveredYet: notCoveredYet.map((gap) => gap.question),
+    warnings: nothingPicked,
+    nextActions: [
+      notebook
+        ? `Open ${notebook}${openPath} to review the App in App Studio. It opens at the Data step.`
+        : `Start the workbench (zlens notebook) and open ${openPath} to review the App in App Studio. It opens at the Data step.`,
+      'Check the data AI picked, build the pages, then publish. Nothing is written to the project until you publish.',
+    ],
+  };
+}
+
+/** A short App name from the request when the caller gives none. */
+function appNameFromPrompt(prompt: string): string {
+  const words = prompt.replace(/^(?:please\s+)?(?:build|create|make|draft|design)\s+(?:me\s+)?(?:an?\s+)?(?:app\s+(?:for|about|on)\s+)?/i, '').trim() || prompt;
+  const name = words.charAt(0).toUpperCase() + words.slice(1);
+  return name.length > 80 ? `${name.slice(0, 77).trimEnd()}…` : name;
+}
+
+/** The address of the `zlens notebook` running on this project, when there is one. */
+function runningNotebookUrl(projectRoot: string): string | undefined {
+  try {
+    const descriptor = JSON.parse(readFileSync(join(projectRoot, '.dql', 'local', 'notebook.json'), 'utf-8')) as { pid?: unknown; url?: unknown };
+    if (typeof descriptor.url !== 'string' || !/^https?:\/\//.test(descriptor.url)) return undefined;
+    if (typeof descriptor.pid === 'number') process.kill(descriptor.pid, 0);
+    return descriptor.url.replace(/\/$/, '');
+  } catch {
+    return undefined;
   }
 }
 
@@ -323,10 +399,6 @@ function summarizeObject(object: MetadataObject) {
 
 function isCertified(object: MetadataObject): boolean {
   return object.status === 'certified' || object.payload?.certification === 'certified';
-}
-
-function appIdFor(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'app';
 }
 
 function cleanOptional(value: string | undefined): string | undefined {
