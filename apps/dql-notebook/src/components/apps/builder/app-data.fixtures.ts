@@ -1,4 +1,4 @@
-import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
+import type { AppBlockRecommendation, AppStudioAiProposal, AppStudioBuildDraft } from '../../../api/client';
 
 /** Catalog rows and drafts shared by the App data tests. */
 
@@ -78,4 +78,75 @@ export function draftWith(input: {
     reviewTasks: input.reviewTasks ?? [],
     createdAt: '', updatedAt: '',
   } as unknown as Draft;
+}
+
+/**
+ * An AI proposal as the server returns it: two picked sources (a Dataset and
+ * Metrics), one tile each with the planner's reason on `sourceEvidence`, a
+ * planner note, one uncovered requirement and, optionally, a question.
+ */
+export function aiProposal(input: { clarify?: boolean } = {}): AppStudioAiProposal {
+  const orders = appDataSourceFromCandidateForFixture(orderLinesDataset);
+  const margin = appDataSourceFromCandidateForFixture(marginMetrics);
+  return {
+    id: 'proposal-1', draftId: 'build_1', baseRevision: 3, baseProposalHash: 'hash',
+    plannerProvenance: { version: 1, mode: 'deterministic', providerInvocation: 'not_attempted' },
+    mode: 'replace', targetPageId: 'overview',
+    proposedTileIds: ['revenue-trend', 'margin-kpi'],
+    defaultSelectedSourceIds: [orders.id, margin.id],
+    warnings: ['Revenue by channel was not added because no Dataset has a channel field.'],
+    clarifications: input.clarify ? [{
+      id: 'period', question: 'Which period should the App open on?', required: true,
+      choices: [{ id: 'week', label: 'Last week' }, { id: 'month', label: 'Last month', description: 'Calendar month' }],
+    }] : [],
+    summary: { requirements: 2, covered: 1, gaps: 1, certifiedSources: 2, semanticSources: 1 },
+    operations: [
+      { type: 'set_frame', frame: { goal: 'Weekly revenue health for finance', metrics: [], dimensions: [], filters: [] } },
+      {
+        type: 'set_requirements',
+        requirements: [
+          { id: 'trend', question: 'How is revenue trending?', role: 'trend', required: true, measures: [], dimensions: [], filters: [] },
+          { id: 'channel', question: 'Which channel drives revenue?', role: 'driver', required: true, measures: [], dimensions: [], filters: [] },
+        ],
+        coverage: [
+          { requirementId: 'trend', status: 'covered', sourceIds: [orders.id], componentIds: ['revenue-trend'], reasons: [] },
+          { requirementId: 'channel', status: 'gap', sourceIds: [], componentIds: [], reasons: ['No channel field'] },
+        ],
+      },
+      { type: 'upsert_source', source: orders },
+      { type: 'upsert_source', source: margin },
+      {
+        type: 'upsert_page',
+        page: {
+          version: 2, id: 'overview', metadata: { title: 'Overview', visibility: 'private', lifecycle: 'draft' },
+          layout: {
+            kind: 'grid', cols: 12, rowHeight: 80, items: [
+              {
+                i: 'revenue-trend', x: 0, y: 0, w: 8, h: 4, title: 'Revenue trend', viz: { type: 'line' }, sourceId: orders.id,
+                query: { dimensions: [], measures: [{ measure: 'revenue' }] },
+                sourceEvidence: [{ source: orders.id, reason: 'Order lines carries revenue by order date.', kind: 'block', trustState: 'certified' }],
+              },
+              {
+                i: 'margin-kpi', x: 8, y: 0, w: 4, h: 4, title: 'Gross margin', viz: { type: 'single_value' }, sourceId: margin.id,
+                query: { dimensions: [], measures: [{ measure: 'gross_margin' }] },
+                sourceEvidence: [{ source: margin.id, reason: 'Margin metrics answer profitability.', kind: 'semantic', trustState: 'certified' }],
+              },
+            ],
+          },
+        },
+      },
+    ],
+  } as unknown as AppStudioAiProposal;
+}
+
+function appDataSourceFromCandidateForFixture(candidate: AppBlockRecommendation): Draft['sources'][number] {
+  return {
+    id: candidate.sourceId ?? candidate.id,
+    kind: candidate.kind === 'semantic' ? 'governed_semantic' : 'block',
+    sourceRef: candidate.path,
+    qualifiedIdentity: candidate.name,
+    ...(candidate.capabilities ? { capabilities: candidate.capabilities } : {}),
+    trustState: 'certified',
+    reviewStatus: 'not_required',
+  } as Draft['sources'][number];
 }

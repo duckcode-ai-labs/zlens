@@ -39,7 +39,6 @@ import type { ThemeMode } from '../../themes/notebook-theme';
 import { themes } from '../../themes/notebook-theme';
 import { AiSidePanel } from '../agent/AiSidePanel';
 import { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog } from './builder/DatasetProposalDialog';
-import { DatasetTileBuilder } from './builder/DatasetTileBuilder';
 import { DataPanel, type DataPanelTarget } from './builder/DataPanel';
 import { DraftTileCard, DraftTileInspector, draftVisualization, type DraftTileState } from './builder/DraftTile';
 import { encodedChartConfig, encodedTileResult } from './dashboard-chart-config';
@@ -126,7 +125,12 @@ import {
   appStudioProposalSourceAddMode,
   appStudioProposalRequiredSourceIds,
   appStudioPlannerProvenanceLabel,
-  availableAppStudioProposalSources,
+  appStudioAiComposeRequest,
+  appStudioAiDataModel,
+  appStudioNewDataSources,
+  appStudioPickedDraftSources,
+  appStudioUncoveredRequirements,
+  appStudioUnresolvedClarifications,
   summarizeAppStudioAiPlan,
   operationsForSelectedAppStudioSources,
   type AppStudioAiPlanSummary,
@@ -192,7 +196,7 @@ import {
 import { PublishedAppAudience } from './AppAudienceEditor';
 
 // Moved to builder/; re-exported for existing callers and tests.
-export { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog, DatasetTileBuilder };
+export { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog };
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -450,6 +454,12 @@ export function AppStudioV2({
   const [catalogRefreshNonce, setCatalogRefreshNonce] = useState(0);
   /** A new manual App picks its data first (the Data step), then opens the canvas. */
   const [stage, setStage] = useState<StudioStage>('canvas');
+  /**
+   * The App's first AI proposal ("Describe with AI") goes through the Data
+   * step: AI shows the data it picked, then Build pages shows its tiles. Off
+   * once the proposal is applied or discarded.
+   */
+  const [aiDataFlow, setAiDataFlow] = useState(false);
   /** The canvas "+ Add data" dialog. */
   const [addDataOpen, setAddDataOpen] = useState(false);
   /** Catalog records resolved when data was added, so the App's data list can show domain and owner. */
@@ -782,6 +792,20 @@ export function AppStudioV2({
     setSelectedProposalSourceIds(new Set(proposal?.defaultSelectedSourceIds ?? proposalSummary?.sources.map((source) => source.id) ?? []));
   }, [proposal, proposalSummary]);
 
+  // The AI Data step shows each pick's domain: resolve the picks the catalog page did not list.
+  useEffect(() => {
+    if (!draft || !aiDataFlow || !proposalSummary) return;
+    const seen = new Set([...Object.keys(knownSourceItems), ...catalog.map((item) => item.sourceId ?? item.id)]);
+    const missing = proposalSummary.sources.map((source) => source.id).filter((sourceId) => !seen.has(sourceId));
+    if (!missing.length) return;
+    let active = true;
+    void api.resolveAppSourceCandidates(draft.id, missing, { includeReviewRequired: true }).then((resolved) => {
+      if (!active) return;
+      setKnownSourceItems((items) => ({ ...items, ...Object.fromEntries(resolved.items.map((item) => [item.sourceId ?? item.id, item])) }));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [aiDataFlow, draft?.id, proposalSummary]);
+
   useEffect(() => {
     if (!proposalSummary || selectedSource || catalog.length === 0) return;
     const sourceRefs = new Set(proposalSummary.sources.map((source) => source.label.toLowerCase()));
@@ -808,6 +832,7 @@ export function AppStudioV2({
       setName(result.draft.name);
       setActivePageId(result.draft.pages[0]?.id ?? 'overview');
       setStage(initialStudioStage({ mode, resumingDraft: false, editingPublishedApp: Boolean(baseAppId) }));
+      setAiDataFlow(mode === 'ai' && !baseAppId);
       setSavedMessage('Saved locally');
       setPreviewRunsByPage({});
       setPreviewVariablesByPage({});
@@ -927,8 +952,10 @@ export function AppStudioV2({
     sourceId: string,
     reviewRequired: boolean,
     source?: AppBlockRecommendation,
-  ) => {
-    if (!draft || !proposal || !proposalSummary) return;
+    /** The Data step shows the activity steps while AI re-plans. */
+    showActivity = false,
+  ): Promise<boolean> => {
+    if (!draft || !proposal || !proposalSummary) return false;
     const requiredSourceIds = appStudioProposalRequiredSourceIds(selectedProposalSourceIds, sourceId);
     const addMode = appStudioProposalSourceAddMode({
       alreadyProposed: proposalSummary.sources.some((candidate) => candidate.id === sourceId),
@@ -938,7 +965,7 @@ export function AppStudioV2({
     if (source) setSelectedSource(source);
     if (addMode === 'select_existing') {
       setSelectedProposalSourceIds((current) => new Set([...current, sourceId]));
-      return;
+      return true;
     }
     setProposalAddingSourceId(sourceId);
     try {
@@ -954,15 +981,31 @@ export function AppStudioV2({
             returnToProposal: true,
             error: 'Data that needs review could not be allowed. Your existing proposal is unchanged.',
           });
-          return;
+          return false;
         }
-        await requestAiProposal(next, prompt, requiredSourceIds, true);
-      } else {
-        await reviseAiProposal(undefined, requiredSourceIds, false);
+        return await requestAiProposal(next, prompt, requiredSourceIds, true);
       }
+      return await reviseAiProposal(undefined, requiredSourceIds, showActivity);
     } finally {
       setProposalAddingSourceId(null);
     }
+  };
+
+  /**
+   * The data rule changes while AI's picks are open (Data step "Change"):
+   * save the rule, then plan again with the picks kept as required data.
+   */
+  const changeAiSourcePolicy = async (nextPolicy: AppStudioBuildDraft['sourcePolicy']) => {
+    const requiredSourceIds = appStudioProposalRequiredSourceIds(selectedProposalSourceIds);
+    const retry = appStudioProposalRetry(prompt, requiredSourceIds);
+    setAiActivityIndex(0);
+    setAiActivity({ status: 'running', retry, returnToProposal: Boolean(proposal) });
+    const next = await mutate([{ type: 'set_source_policy', sourcePolicy: nextPolicy }]);
+    if (!next) {
+      setAiActivity({ status: 'error', retry, returnToProposal: Boolean(proposal), error: 'The data rule could not be changed. The AI picks are unchanged.' });
+      return;
+    }
+    await requestAiProposal(next, prompt, requiredSourceIds, Boolean(proposal));
   };
 
   const retryAiActivity = (activity: AppStudioAiActivity) => {
@@ -1278,16 +1321,10 @@ export function AppStudioV2({
     setSavedMessage('Composing App…');
     try {
       const previous = draft;
-      const result = await api.composeAppBuild(draft.id, {
-        mode: 'ai',
-        expectedRevision: draft.revision,
-        expectedProposalHash: draft.proposalHash,
-        proposalId: proposal.id,
-        selectedSourceIds: Array.from(selectedProposalSourceIds),
-        ...(skippedProposalTileIds.size > 0 ? { rejectedTileIds: Array.from(skippedProposalTileIds) } : {}),
-      });
+      const result = await api.composeAppBuild(draft.id, appStudioAiComposeRequest(draft, proposal.id, selectedProposalSourceIds, skippedProposalTileIds));
       const next = result.draft;
       setDraft(next);
+      setAiDataFlow(false);
       setUndoStack((items) => [...items.slice(-29), previous]);
       setRedoStack([]);
       setPreviewRunsByPage({});
@@ -2753,7 +2790,57 @@ export function AppStudioV2({
     if (firstDataset) setChosenDatasetKey(firstDataset.id);
   };
 
+  /** Build pages: the AI picks are settled; the canvas shows the proposed tiles for review. */
+  const buildPagesFromAiData = () => {
+    setStage('canvas');
+    setPanel('sources');
+    setPanelOpen(typeof window === 'undefined' || window.innerWidth > 820);
+    setProposalPageId(null);
+    setSavedMessage('Review the proposed tiles · nothing is saved until you apply');
+  };
+  /** Discard AI's picks; the Data step stays open so the author can pick data by hand. */
+  const discardAiData = () => {
+    setProposal(null);
+    setAiActivity(null);
+    setAiDataFlow(false);
+    setProposalPageId(null);
+    setSavedMessage('AI proposal discarded · pick the data yourself');
+  };
+
   if (stage === 'data') {
+    const aiStep = aiDataFlow && (proposal || aiActivity) ? {
+      status: aiActivity?.status === 'running' ? 'running' as const : aiActivity?.status === 'error' ? 'error' as const : 'ready' as const,
+      goal: proposalSummary?.frame?.goal || draft.frame.goal || prompt,
+      ...(proposal && proposalSummary ? { model: appStudioAiDataModel(proposal, proposalSummary, selectedProposalSourceIds, knownItems) } : {}),
+      activitySteps: APP_STUDIO_AI_ACTIVITY_LABELS,
+      activityIndex: aiActivityIndex,
+      ...(aiActivity?.error ? { activityError: aiActivity.error } : {}),
+      ...(proposal && appStudioPlannerProvenanceLabel(proposal) ? { plannerLabel: appStudioPlannerProvenanceLabel(proposal) } : {}),
+      sourcePolicy: draft.sourcePolicy,
+      busy,
+      pickedSources: proposal ? appStudioPickedDraftSources(proposal, selectedProposalSourceIds) : [],
+      onRemovePick: (sourceId: string) => setSelectedProposalSourceIds((current) => {
+        const next = new Set(current);
+        next.delete(sourceId);
+        return next;
+      }),
+      onAddBack: (sourceId: string, reviewRequired: boolean) => void addSourceToAiProposal(sourceId, reviewRequired, undefined, true),
+      onGenerateGap: (requirementId: string) => void generateAiGap(requirementId),
+      onAnswer: (questionId: string, answerId: string) => void reviseAiProposal({ [questionId]: answerId }),
+      onRevise: () => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true),
+      onRetry: () => { if (aiActivity) retryAiActivity(aiActivity); },
+      ...(proposal ? { onDismissActivityError: () => setAiActivity(null) } : {}),
+      onBuildPages: buildPagesFromAiData,
+      onDiscard: discardAiData,
+    } : undefined;
+    // Adding data while AI's picks are open makes it required and plans again;
+    // removing it moves it to AI suggestions. Nothing is saved until Apply.
+    const browser = aiStep ? {
+      ...addDataBrowserProps,
+      onAdd: (sourceId: string, options: { allowReview: boolean }) => addSourceToAiProposal(sourceId, options.allowReview, knownItems.find((item) => (item.sourceId ?? item.id) === sourceId), true),
+      onRemove: aiStep.onRemovePick,
+      onChangePolicy: (nextPolicy: AppStudioBuildDraft['sourcePolicy']) => void changeAiSourcePolicy(nextPolicy),
+    } : addDataBrowserProps;
     return <div className="dql-studio-v2 studio-data-stage">
       <style>{APP_STUDIO_V2_STYLES}</style>
       <DataStep
@@ -2764,8 +2851,15 @@ export function AppStudioV2({
         onBack={onBack}
         onOpenCanvas={openCanvas}
         onSkip={() => { setStage('canvas'); setPanel('sources'); }}
-        browser={addDataBrowserProps}
+        browser={browser}
+        {...(aiStep ? { ai: aiStep } : {})}
       />
+      {datasetAuthoringProposal ? <ContextProposalReviewDrawer
+        proposal={datasetAuthoringProposal}
+        theme={themes[themeMode]}
+        onClose={() => setDatasetAuthoringProposal(null)}
+        onCommitted={finishDatasetAuthoringProposal}
+      /> : null}
     </div>;
   }
 
@@ -3288,26 +3382,24 @@ export function AppStudioV2({
           onReturn={aiActivity.returnToProposal && proposal ? () => setAiActivity(null) : undefined}
           onRetry={() => retryAiActivity(aiActivity)}
         /> : proposal && proposalSummary ? <AiPlanReview
-            proposal={proposal}
+          proposal={proposal}
           summary={proposalSummary}
-          catalog={catalog}
-          catalogQuery={catalogQuery}
           sourcePolicy={draft.sourcePolicy}
           selectedSourceIds={selectedProposalSourceIds}
-          addingSourceId={proposalAddingSourceId}
+          newSources={aiDataFlow ? [] : appStudioNewDataSources(proposalSummary, selectedProposalSourceIds, draft.sources)}
+          skippedTileIds={skippedProposalTileIds}
           busy={busy}
-          onRevise={() => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true)}
           changeCount={proposalChangeCount}
+          showPlanNotes={!aiDataFlow}
+          {...(aiDataFlow ? { onBackToData: () => setStage('data') } : {})}
+          onRevise={() => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true)}
           onApply={() => void applyProposal()}
-          onDismiss={() => { if (projectedPage && !projectedPage.isNew) setActivePageId(projectedPage.id); setProposal(null); setProposalPageId(null); }}
-          onCatalogQuery={setCatalogQuery}
-          onAddSource={(source) => void addSourceToAiProposal(source.sourceId ?? source.id, source.eligibility?.localPreview === false, source)}
-          onAddProposalSource={(sourceId, reviewRequired) => void addSourceToAiProposal(sourceId, reviewRequired)}
+          onDismiss={() => { if (projectedPage && !projectedPage.isNew) setActivePageId(projectedPage.id); setProposal(null); setProposalPageId(null); setAiDataFlow(false); }}
           onAnswerClarification={(questionId, answerId) => void reviseAiProposal({ [questionId]: answerId })}
           onGenerateGap={(requirementId) => void generateAiGap(requirementId)}
-          onToggleSource={(sourceId) => setSelectedProposalSourceIds((current) => {
+          onToggleTile={(tileId) => setSkippedProposalTileIds((current) => {
             const next = new Set(current);
-            if (next.has(sourceId)) next.delete(sourceId); else next.add(sourceId);
+            if (next.has(tileId)) next.delete(tileId); else next.add(tileId);
             return next;
           })}
         /> : null}
@@ -3385,7 +3477,7 @@ export function AppStudioV2({
             <input id="studio-ai-replace-page" type="checkbox" checked={replacePageWithAi} onChange={(event) => setReplacePageWithAi(event.target.checked)} />
             Rebuild this page instead (replaces its current tiles)
           </label>
-          <button type="button" className="primary" disabled={busy || previewing} onClick={() => void requestAiProposal()}><Sparkles size={13} /> {replacePageWithAi ? 'Propose a new page' : 'Propose additions'}</button>
+          <button type="button" className="primary" disabled={busy || previewing} onClick={() => { setAiDataFlow(false); void requestAiProposal(); }}><Sparkles size={13} /> {replacePageWithAi ? 'Propose a new page' : 'Propose additions'}</button>
         </section> : null}
         {aiScope === 'tile' && autopilotReview ? <AppAutopilotReviewCard
           proposal={autopilotReview}
@@ -3591,134 +3683,112 @@ export function PublishReadinessDialog({
   </div>;
 }
 
+/**
+ * The canvas AI review (design D3): the proposed tiles, kept or skipped one by
+ * one, then Apply. The data a proposal uses is checked in the Data step for a
+ * new AI App; a canvas proposal (Ask AI, Draft with AI, App settings) lists
+ * only the data it would add to the App.
+ */
 export function AiPlanReview({
   proposal,
   summary,
-  catalog,
-  catalogQuery,
   sourcePolicy,
   selectedSourceIds,
-  addingSourceId,
+  newSources = [],
+  skippedTileIds = new Set<string>(),
   busy,
-  onRevise,
   changeCount = 0,
+  showPlanNotes = true,
+  onBackToData,
   onApply,
   onDismiss,
-  onCatalogQuery,
-  onAddSource,
-  onAddProposalSource,
+  onToggleTile,
+  onRevise,
   onAnswerClarification,
   onGenerateGap,
-  onToggleSource,
 }: {
   proposal: AppStudioAiProposal;
   summary: AppStudioAiPlanSummary;
-  catalog: AppBlockRecommendation[];
-  catalogQuery: string;
   sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
   selectedSourceIds: ReadonlySet<string>;
-  addingSourceId: string | null;
+  /** Selected proposal sources the App does not have yet. */
+  newSources?: AppStudioAiPlanSummary['sources'];
+  skippedTileIds?: ReadonlySet<string>;
   busy: boolean;
-  onRevise: () => void;
-  /** Tile, page, and link changes the canvas shows for the selected sources. */
+  /** Tile, page, and link changes the canvas shows for the kept tiles. */
   changeCount?: number;
+  /** Planner notes, gaps and questions; the Data step already showed them for a new AI App. */
+  showPlanNotes?: boolean;
+  /** Back to the AI Data step, while the tiles are not applied yet. */
+  onBackToData?: () => void;
   onApply: () => void;
   onDismiss: () => void;
-  onCatalogQuery: (query: string) => void;
-  onAddSource: (source: AppBlockRecommendation) => void;
-  onAddProposalSource: (sourceId: string, reviewRequired: boolean) => void;
+  onToggleTile: (tileId: string) => void;
+  onRevise: () => void;
   onAnswerClarification: (questionId: string, answerId: string) => void;
   onGenerateGap: (requirementId: string) => void;
-  onToggleSource: (sourceId: string) => void;
 }): JSX.Element {
-  const unresolved = proposal.clarifications.filter((item) => item.required && !item.answerId);
-  const requirementOperation = proposal.operations.find((operation) => operation.type === 'set_requirements');
-  const uncoveredRequirements = requirementOperation?.type === 'set_requirements'
-    ? requirementOperation.requirements.filter((requirement) => requirementOperation.coverage?.some((coverage) => coverage.requirementId === requirement.id && coverage.status === 'gap'))
-    : [];
-  const selectedComponents = summary.components.filter((component) => !component.sourceId || selectedSourceIds.has(component.sourceId));
+  const unresolved = appStudioUnresolvedClarifications(proposal);
+  const uncoveredRequirements = appStudioUncoveredRequirements(proposal);
   const selectedSources = summary.sources.filter((source) => selectedSourceIds.has(source.id));
-  const suggestedSources = summary.sources.filter((source) => !selectedSourceIds.has(source.id));
+  // Page text from a starting layout is drawn on the canvas but is not a tile to keep or skip.
+  const tiles = summary.components.filter((component) => component.source !== 'Page content'
+    && (!component.sourceId || selectedSourceIds.has(component.sourceId)));
+  const keptTiles = tiles.filter((tile) => !skippedTileIds.has(tile.id));
   const plannerProvenanceLabel = appStudioPlannerProvenanceLabel(proposal);
-  const availableSources = availableAppStudioProposalSources(summary, catalog, catalogQuery).slice(0, 10);
-  const sourceNeedle = catalogQuery.trim().toLowerCase();
-  const matchesSourceQuery = (source: AppStudioAiPlanSummary['sources'][number]) => !sourceNeedle || [
-    source.label, source.sourceRef, sourceKindLabel(source.kind, source.capabilities), source.rationale ?? '',
-    ...summary.components.filter((component) => component.sourceId === source.id).flatMap((component) => [component.title, component.visualization]),
-  ].join(' ').toLowerCase().includes(sourceNeedle);
-  const visibleSelectedSources = selectedSources.filter(matchesSourceQuery);
-  const visibleSuggestedSources = suggestedSources.filter(matchesSourceQuery);
-  const viewDescription = (source: AppStudioAiPlanSummary['sources'][number]) => {
-    const views = summary.components.filter((component) => component.sourceId === source.id);
-    if (!views.length) return 'AI will use this data as context.';
-    return `Creates ${views.length} ${views.length === 1 ? 'tile' : 'tiles'}: ${views.map((view) => view.title).join(', ')}`;
-  };
-  const sourceRow = (source: AppStudioAiPlanSummary['sources'][number], selected: boolean) => {
-    const blockedByPolicy = source.trustState !== 'certified' && sourcePolicy === 'governed_only';
-    const adding = addingSourceId === source.id;
-    return <article key={source.id} className={`proposal-source-row ${selected ? 'selected' : ''}`}>
-    <span className={`proposal-source-trust ${source.trustState}`}>{source.trustState === 'certified' ? <ShieldCheck size={15} /> : <FileText size={15} />}</span>
-    <div><strong>{source.label}</strong><small>{sourceKindLabel(source.kind, source.capabilities)} · {trustLabel(source.trustState)}</small><p>{viewDescription(source)}</p>{source.rationale ? <p className="proposal-source-why">Why: {source.rationale}</p> : null}</div>
-    <button type="button" className={selected ? 'remove' : 'add'} disabled={busy} title={blockedByPolicy ? 'Allow data that needs review for this App and rebuild the proposal with this source.' : undefined} onClick={() => selected ? onToggleSource(source.id) : onAddProposalSource(source.id, blockedByPolicy)} aria-label={`${selected ? 'Remove' : blockedByPolicy ? 'Allow data that needs review and add' : 'Add'} ${source.label}${summary.sources.filter((item) => item.label === source.label).length > 1 ? ` for ${summary.components.filter((component) => component.sourceId === source.id).map((component) => component.title).join(', ') || source.id}` : ''}`}>
-      {selected ? <><X size={13} /> Remove</> : adding ? 'Adding…' : blockedByPolicy ? 'Allow data that needs review & add' : <><Plus size={13} /> Add</>}
-    </button>
-  </article>;
-  };
+  const sourceLabel = (sourceId?: string) => summary.sources.find((source) => source.id === sourceId)?.label;
+  const applyLabel = busy ? 'Applying…' : changeCount > 0 ? `Apply ${changeCount} ${changeCount === 1 ? 'change' : 'changes'}` : 'Apply';
 
-  return <section className="studio-ai-plan proposal-source-picker" aria-labelledby="proposal-source-title">
+  return <section className="studio-ai-plan proposal-tile-review" aria-labelledby="proposal-tile-review-title">
     <header>
       <span><Sparkles size={18} /></span>
       <div>
         <small>AI PROPOSAL</small>
-        <h1 id="proposal-source-title">Review the plan</h1>
-        <p>AI understood: <strong>{summary.frame?.goal ?? 'Build a governed analytics App'}</strong>. Proposed tiles are on the canvas. Remove any source you do not trust; nothing is saved until you apply.</p>
+        <h1 id="proposal-tile-review-title">Review the tiles</h1>
+        <p>AI understood: <strong>{summary.frame?.goal ?? 'Build a governed analytics App'}</strong>. Proposed tiles are on the canvas. Keep or skip each one; nothing is saved until you apply.</p>
         {plannerProvenanceLabel ? <small className="proposal-planner-provenance">{plannerProvenanceLabel}</small> : null}
-        {proposal.warnings?.length ? <ul className="proposal-warnings" aria-label="AI planner notes">{proposal.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul> : null}
+        {showPlanNotes && proposal.warnings?.length ? <ul className="proposal-warnings" aria-label="AI planner notes">{proposal.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul> : null}
       </div>
       <button type="button" onClick={onDismiss} aria-label="Discard AI proposal"><X size={16} /></button>
     </header>
 
+    {onBackToData ? <button type="button" className="proposal-back-to-data" onClick={onBackToData} disabled={busy}><ArrowLeft size={13} /> Back to data</button> : null}
+
     <div className="proposal-source-summary" aria-label="AI proposal summary">
-      <span><strong>{selectedSources.length}</strong> selected sources</span>
-      <span><strong>{selectedComponents.length}</strong> planned tiles</span>
+      <span><strong>{keptTiles.length}</strong> of {tiles.length} {tiles.length === 1 ? 'tile' : 'tiles'} kept</span>
       <span><strong>{sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allows data that needs review'}</strong> data rule</span>
     </div>
 
     <div className="proposal-source-body">
-      <label className="proposal-source-search"><Search size={15} /><input value={catalogQuery} onChange={(event) => onCatalogQuery(event.target.value)} placeholder="Search proposed and available sources" aria-label="Search proposed and available sources" /></label>
-
-      <section className="proposal-source-group" aria-labelledby="selected-proposal-sources">
-        <div className="proposal-source-heading"><div><h2 id="selected-proposal-sources">Selected for this App</h2><p>Remove anything you do not want AI to use.</p></div><strong>{selectedSources.length}</strong></div>
-        <div className="proposal-source-list">
-          {visibleSelectedSources.map((source) => sourceRow(source, true))}
-          {!selectedSources.length ? <div className="proposal-source-empty"><Blocks size={18} /><div><strong>Select at least one source</strong><p>Add an AI suggestion or more certified data below.</p></div></div> : null}
-          {selectedSources.length > 0 && !visibleSelectedSources.length ? <p className="studio-ai-plan-empty">No selected source matches this search.</p> : null}
-        </div>
-      </section>
-
-      {visibleSuggestedSources.length ? <section className="proposal-source-group" aria-labelledby="ai-source-suggestions">
-        <div className="proposal-source-heading"><div><h2 id="ai-source-suggestions">AI suggestions</h2><p>Sources removed from the selection remain available here.</p></div><strong>{suggestedSources.length}</strong></div>
-        <div className="proposal-source-list">{visibleSuggestedSources.map((source) => sourceRow(source, false))}</div>
+      {newSources.length ? <section className="proposal-source-group" aria-labelledby="proposal-new-data">
+        <div className="proposal-source-heading"><div><h2 id="proposal-new-data">New data for this App</h2><p>Applying adds this data to the App's data.</p></div><strong>{newSources.length}</strong></div>
+        <div className="proposal-source-list">{newSources.map((source) => <article key={source.id} className="proposal-source-row new-data">
+          <span className={`proposal-source-trust ${source.trustState}`}>{source.trustState === 'certified' ? <ShieldCheck size={15} /> : <FileText size={15} />}</span>
+          <div><strong>New data for this App: {source.label}</strong><small>{sourceKindLabel(source.kind, source.capabilities)} · {trustLabel(source.trustState)}</small>{source.rationale ? <p className="proposal-source-why">Why: {source.rationale}</p> : null}</div>
+        </article>)}</div>
       </section> : null}
 
-      <section className="proposal-source-group" aria-labelledby="available-proposal-sources">
-        <div className="proposal-source-heading"><div><h2 id="available-proposal-sources">More App sources</h2><p>Add certified data, or explicitly allow data that needs review.</p></div><strong>{availableSources.length}</strong></div>
-        <div className="proposal-catalog-list">
-          {availableSources.map((source) => <article key={source.id}>
-            <span className={source.status === 'certified' ? 'certified' : 'review_required'}>{source.status === 'certified' ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-            <div><strong>{humanize(source.name)}</strong><small>{source.domain || 'General'} · {sourceCatalogKindLabel(source)} · {trustLabel(source.status)}</small><p>{source.description || source.reasons[0] || 'Available data source'}</p></div>
-            <button type="button" onClick={() => onAddSource(source)} disabled={busy} title={source.eligibility?.localPreview === false ? 'Allow data that needs review for this App and rebuild the proposal with this source.' : undefined}>{addingSourceId === (source.sourceId ?? source.id) ? 'Adding…' : source.eligibility?.localPreview === false ? 'Allow data that needs review & add' : <><Plus size={13} /> Add</>}</button>
-          </article>)}
-          {!availableSources.length ? <p className="studio-ai-plan-empty">{catalogQuery.trim() ? 'No additional source matches this search.' : 'All available data is already proposed.'}</p> : null}
+      <section className="proposal-source-group" aria-labelledby="proposal-tiles">
+        <div className="proposal-source-heading"><div><h2 id="proposal-tiles">Proposed tiles</h2><p>Skip any tile you do not want. You can also keep or skip it on the canvas.</p></div><strong>{keptTiles.length}</strong></div>
+        <div className="proposal-source-list">
+          {tiles.map((tile) => {
+            const skipped = skippedTileIds.has(tile.id);
+            const toggleable = proposal.proposedTileIds?.includes(tile.id) ?? false;
+            return <article key={tile.id} className={`proposal-source-row proposal-tile-row ${skipped ? '' : 'selected'}`}>
+              <span className="proposal-source-trust certified"><LayoutDashboard size={15} /></span>
+              <div><strong>{tile.title}</strong><small>{[tile.visualization, sourceLabel(tile.sourceId)].filter(Boolean).join(' · ')}</small></div>
+              {toggleable ? <button type="button" className={skipped ? 'add' : 'remove'} disabled={busy} onClick={() => onToggleTile(tile.id)} aria-label={`${skipped ? 'Keep' : 'Skip'} ${tile.title}`}>{skipped ? <><Plus size={13} /> Keep</> : <><X size={13} /> Skip</>}</button> : null}
+            </article>;
+          })}
+          {!tiles.length ? <p className="studio-ai-plan-empty">This proposal adds no tiles.</p> : null}
         </div>
       </section>
 
-      {sourcePolicy === 'include_review_required' ? <div className="studio-ai-review-lane"><FileText size={14} /><p><strong>Data that needs review is allowed</strong><small>It stays labeled Needs review and cannot be published to the Project until it is replaced, certified, or removed.</small></p></div> : <div className="studio-ai-review-lane"><FileText size={14} /><p><strong>Only certified data is used</strong><small>Use “Allow data that needs review &amp; add” on the data you want. Its trust does not change.</small></p></div>}
-      {uncoveredRequirements.length ? <section className="studio-ai-questions"><header><strong>Uncovered requirements</strong><small>{uncoveredRequirements.length} gaps</small></header>{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy || sourcePolicy !== 'include_review_required'}>{sourcePolicy === 'include_review_required' ? 'Generate draft DQL that needs review' : 'Allow data that needs review to generate'}</button></div>)}</section> : null}
-      {unresolved.length ? <section className="studio-ai-questions"><header><strong>AI needs one more decision</strong><small>{unresolved.length} required</small></header>{unresolved.map((item) => <fieldset key={item.id}><legend>{item.question}</legend>{item.choices.map((choice) => <button key={choice.id} type="button" onClick={() => onAnswerClarification(item.id, choice.id)} disabled={busy}><strong>{choice.label}</strong>{choice.description ? <small>{choice.description}</small> : null}</button>)}</fieldset>)}<button type="button" onClick={onRevise} disabled={busy}>{busy ? 'Updating…' : 'Re-run proposal'}</button></section> : null}
+      {showPlanNotes && uncoveredRequirements.length ? <section className="studio-ai-questions"><header><strong>Not covered yet</strong><small>{uncoveredRequirements.length} {uncoveredRequirements.length === 1 ? 'gap' : 'gaps'}</small></header>{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy || sourcePolicy !== 'include_review_required'}>{sourcePolicy === 'include_review_required' ? 'Generate draft DQL that needs review' : 'Allow data that needs review to generate'}</button></div>)}</section> : null}
+      {showPlanNotes && unresolved.length ? <section className="studio-ai-questions"><header><strong>AI needs one more decision</strong><small>{unresolved.length} required</small></header>{unresolved.map((item) => <fieldset key={item.id}><legend>{item.question}</legend>{item.choices.map((choice) => <button key={choice.id} type="button" onClick={() => onAnswerClarification(item.id, choice.id)} disabled={busy}><strong>{choice.label}</strong>{choice.description ? <small>{choice.description}</small> : null}</button>)}</fieldset>)}<button type="button" onClick={onRevise} disabled={busy}>{busy ? 'Updating…' : 'Re-run proposal'}</button></section> : null}
     </div>
 
-    <footer><span>{selectedSources.length} {selectedSources.length === 1 ? 'source' : 'sources'} · {selectedComponents.length} {selectedComponents.length === 1 ? 'tile' : 'tiles'}</span><button type="button" onClick={onDismiss}>Discard</button><button type="button" className="primary" onClick={onApply} disabled={busy || unresolved.length > 0 || selectedSources.length === 0}><Sparkles size={14} /> {busy ? 'Applying…' : changeCount > 0 ? `Apply ${changeCount} ${changeCount === 1 ? 'change' : 'changes'}` : `Apply with ${selectedSources.length} ${selectedSources.length === 1 ? 'source' : 'sources'}`}</button></footer>
+    <footer><span>{keptTiles.length} {keptTiles.length === 1 ? 'tile' : 'tiles'} to add</span><button type="button" onClick={onDismiss}>Discard</button><button type="button" className="primary" onClick={onApply} disabled={busy || unresolved.length > 0 || selectedSources.length === 0}><Sparkles size={14} /> {applyLabel}</button></footer>
   </section>;
 }
 

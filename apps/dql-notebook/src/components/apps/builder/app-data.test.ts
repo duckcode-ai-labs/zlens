@@ -123,9 +123,10 @@ describe('App data: one list per App (design D1, D3, D4)', () => {
     expect(unusedSourcesPublishNote(0)).toBeNull();
   });
 
-  it('starts a new manual App at the Data step and everything else on the canvas', () => {
+  it('starts a new App, manual or AI, at the Data step and everything else on the canvas', () => {
     expect(initialStudioStage({ mode: 'manual', resumingDraft: false, editingPublishedApp: false })).toBe('data');
-    expect(initialStudioStage({ mode: 'ai', resumingDraft: false, editingPublishedApp: false })).toBe('canvas');
+    expect(initialStudioStage({ mode: 'ai', resumingDraft: false, editingPublishedApp: false })).toBe('data');
+    expect(initialStudioStage({ mode: 'ai', resumingDraft: false, editingPublishedApp: true })).toBe('canvas');
     expect(initialStudioStage({ mode: 'manual', resumingDraft: true, editingPublishedApp: false })).toBe('canvas');
     expect(initialStudioStage({ mode: 'manual', resumingDraft: false, editingPublishedApp: true })).toBe('canvas');
     expect(openCanvasLabel(0)).toBe('Open canvas');
