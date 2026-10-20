@@ -38,6 +38,7 @@ import {
   appBuildPreviewIntentFingerprint,
   applyAppBuildDraftOperations,
   packDashboardLayoutItems,
+  appSourceIdsUsedByTiles,
   type AppDocument,
   type BlockParameterDefinition,
   type DashboardDisplayMetadata,
@@ -8378,7 +8379,9 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     const receipt = receipts.find((candidate) => candidate.pageId === page.id);
     if (!receipt || receipt.revision !== draft.revision) errors.push(`Run a current settled preview for page ${page.metadata.title || page.id} before Project publication.`);
   }
-  for (const source of draft.sources) {
+  // Publication writes pages only. A source connected from the Data step that
+  // no tile uses is not published, so it cannot block publishing (design D4).
+  for (const source of appBuildSourcesUsedByTiles(draft)) {
     if (source.kind === 'block' || source.kind === 'certified_block') {
       const block = blocks.find((candidate) => candidate.id === source.sourceRef || candidate.name === source.sourceRef || candidate.path === source.sourceRef);
       const lifecycle = source.lifecycle ?? (source.kind === 'certified_block' ? 'certified' : block?.status);
@@ -8589,13 +8592,19 @@ function appBuildRequirementBlocksPublication(draft: AppBuildDraft, requirement:
 
 function appBuildReviewTaskBlocksPublication(draft: AppBuildDraft, task: AppBuildDraft['reviewTasks'][number]): boolean {
   if (task.status !== 'open') return false;
-  if (task.sourceId && draft.sources.some((source) => source.id === task.sourceId)) return true;
+  if (task.sourceId && appSourceIdsUsedByTiles(draft).has(task.sourceId)) return true;
   if (task.tileId && draft.pages.some((page) => page.layout.items.some((tile) => tile.i === task.tileId))) return true;
   if (task.pageId && draft.pages.some((page) => page.id === task.pageId)) return true;
   // v2 AI plans previously persisted general guidance as open tasks without an
   // attached source, page, or tile. Keep those reminders readable, but do not
   // turn them into an unexplained hard publication gate.
   return false;
+}
+
+/** The draft sources a tile uses; only these are part of what Publish writes. */
+function appBuildSourcesUsedByTiles(draft: AppBuildDraft): AppBuildDraftSource[] {
+  const used = appSourceIdsUsedByTiles(draft);
+  return draft.sources.filter((source) => used.has(source.id));
 }
 
 function hasCurrentAppBuildPreflightReceipt(draft: AppBuildDraft): boolean {
@@ -8688,11 +8697,12 @@ export function publishStoredAppBuildDraft(
   const owner = hostActor() ?? `${process.env.USER ?? 'owner'}@local`;
   const domain = draft.pages[0]?.metadata.domain || 'general';
   const name = draft.name.trim() || draft.appId;
-  const hasCertifiedAnalysis = draft.sources.some((source) => (
+  const publishedSources = appBuildSourcesUsedByTiles(draft);
+  const hasCertifiedAnalysis = publishedSources.some((source) => (
     (source.kind === 'block' || source.kind === 'certified_block')
     || ((source.kind === 'governed_semantic' || source.kind === 'semantic_query') && Boolean(source.capabilities?.dataset))
   ) && source.trustState === 'certified' && source.lifecycle === 'certified');
-  const hasReviewRequiredSource = draft.sources.some((source) => source.trustState !== 'certified'
+  const hasReviewRequiredSource = publishedSources.some((source) => source.trustState !== 'certified'
     || ((source.kind === 'governed_semantic' || source.kind === 'semantic_query')
       && !source.capabilities?.dataset
       && source.reviewStatus !== 'approved'));

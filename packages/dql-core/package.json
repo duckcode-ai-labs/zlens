@@ -59,6 +59,10 @@
       "types": "./dist/apps/canvas-page.d.ts",
       "import": "./dist/apps/canvas-page.js"
     },
+    "./apps/app-data-sources": {
+      "types": "./dist/apps/app-data-sources.d.ts",
+      "import": "./dist/apps/app-data-sources.js"
+    },
     "./apps/viz-encoding": {
       "types": "./dist/apps/viz-encoding.d.ts",
       "import": "./dist/apps/viz-encoding.js"

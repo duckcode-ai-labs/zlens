@@ -161,6 +161,8 @@ export {
   appBuildPreviewIntentFingerprint,
   packDashboardLayoutItems,
 } from './app-build-draft.js';
+export { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from './app-data-sources.js';
+export type { AppDataSourceLike, AppDataTileLike, AppDataDraftLike } from './app-data-sources.js';
 export type {
   AppBuildDraft,
   AppBuildFrame,

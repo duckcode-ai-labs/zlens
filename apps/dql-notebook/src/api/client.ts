@@ -3076,6 +3076,10 @@ export interface AppBlockRecommendation {
   reasons: string[];
   /** Canonical AppSourceCatalog identity. Legacy recommend-blocks rows omit it. */
   sourceId?: string;
+  /** Catalog source kind: a DQL block or a semantic model. Legacy rows omit it. */
+  kind?: 'block' | 'semantic';
+  /** Project-relative source file. Legacy rows omit it. */
+  sourcePath?: string;
   qualifiedIdentity?: string;
   sourceRevision?: string;
   snapshotId?: string;
@@ -4860,6 +4864,8 @@ function appSourceCandidateToRecommendation(source: AppSourceCandidateWire): App
   return {
     id: source.sourceId,
     sourceId: source.sourceId,
+    kind: source.kind,
+    sourcePath: source.sourcePath,
     qualifiedIdentity: source.qualifiedIdentity,
     sourceRevision: source.sourceRevision,
     snapshotId: source.snapshotId,
