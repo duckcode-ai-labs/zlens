@@ -100,3 +100,38 @@ test('a new manual App picks its data first, then builds a tile from a measure',
   await expect(page.getByRole('complementary', { name: 'New tile' })).toBeVisible();
   await expect(page.locator('article.draft-tile')).toBeVisible();
 });
+
+test('a saved query gets fields with Add fields, then builds tiles by its measures', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.goto(server!.baseUrl);
+  await expect(page.getByRole('button', { name: 'Apps', exact: true })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: 'Apps', exact: true }).click();
+  await page.getByRole('button', { name: 'Build new App' }).click();
+  await page.getByRole('tab', { name: 'Start manually' }).click();
+  await page.getByRole('button', { name: /Open blank Studio/ }).click();
+  await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
+
+  // A saved query has no fields until Add fields checks its columns against its rows.
+  const browser = page.getByRole('region', { name: 'Add data' });
+  await browser.getByRole('tab', { name: /Saved queries/ }).click();
+  await browser.getByRole('button', { name: 'Add fields to Top Customers' }).click();
+  const dialog = page.locator('.saved-query-fields-card');
+  await expect(dialog.getByRole('heading', { name: 'Check the numbers' })).toBeVisible({ timeout: 30_000 });
+  await expect(dialog.getByText('Adding fields sends this saved query back for review.')).toBeVisible();
+  await expect(dialog.getByText(/Each row is one/)).toBeVisible();
+  await dialog.getByRole('button', { name: 'Check and add fields' }).click();
+  await expect(dialog.getByRole('heading', { name: 'Fields added' })).toBeVisible({ timeout: 60_000 });
+  await expect(dialog.getByText('Top Customers has fields now and is certified: its checks passed.')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Use its fields' }).click();
+
+  // It is a certified Dataset now: listed with Datasets & Metrics, with Measures.
+  await expect(browser.getByRole('tab', { name: /Datasets & Metrics/ })).toHaveAttribute('aria-selected', 'true');
+  const row = browser.locator('article.add-data-row').filter({ hasText: 'Top Customers' });
+  await expect(row).toContainText('Dataset · Certified');
+  await expect(row.getByRole('heading', { name: 'Measures' })).toBeVisible();
+  await browser.getByRole('button', { name: 'Add to App: Top Customers' }).click();
+  await page.getByRole('button', { name: /Open canvas with 1 source/ }).click();
+  const dataPane = page.locator('.data-panel');
+  await expect(dataPane.locator('.dataset-current')).toContainText('Top Customers');
+  await expect(dataPane.locator('.field-groups').getByRole('heading', { name: 'Measures' })).toBeVisible();
+});

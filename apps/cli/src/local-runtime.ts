@@ -229,6 +229,7 @@ import {
   validateDatasetGrainProof,
   checkTileCalculations,
   renderTableDatasetBlock,
+  tableDatasetDeclaration,
   resolveBlockReplacement,
   groupingIdentityGapOfSql,
   detectResultOrdering,
@@ -236,6 +237,8 @@ import {
   type ResultOrdering,
 } from '@zlens/core';
 import {
+  addDatasetDefinitionToBlockSource,
+  DatasetDeclarationPatchError,
   prepareDatasetDeclarationPatch,
   type DatasetDeclarationPatch,
 } from '@zlens/core/datasets/source-authoring.node';
@@ -779,7 +782,7 @@ import {
 import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
 import { refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
 import { resolveResultReviewMode } from './result-review-setting.js';
-import { TableDatasetError, applyTableDatasetChoices, draftTableDataset, listWarehouseTables } from './datasets/table-dataset.js';
+import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation } from './datasets/table-dataset.js';
 import {
   discoverWarehouseModel,
   observedJoinsFromQueries,
@@ -20141,6 +20144,188 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ...(error instanceof TableDatasetError ? { code: error.code } : {}),
           error: message === 'BLOCK_EXISTS' ? 'A Dataset with that name already exists. Choose another name.' : message,
         });
+      }
+      return;
+    }
+
+    // Add fields to a saved query (design D1): a saved query (a block with no
+    // Dataset definition) gets one from its own output columns, checked
+    // against its rows like "Start from a table", written onto the same block
+    // file (same name, same id). Governance: a Dataset definition is a material
+    // change, so a certified saved query goes back to review, and only the
+    // same certification check as the table path certifies it again. A
+    // certified saved query whose check fails is left untouched unless the
+    // author explicitly sends it for review (`allowReview`).
+    if (path === '/api/app-datasets/saved-queries/draft' || path === '/api/app-datasets/saved-queries/create') {
+      const reply = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      if (req.method !== 'POST') {
+        reply(405, { ok: false, error: 'Use POST.' });
+        return;
+      }
+      try {
+        if (!datasetsAppFeatureEnabled(projectConfig)) {
+          reply(409, { ok: false, code: 'APP_DATASETS_FEATURE_DISABLED', error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before adding fields.' });
+          return;
+        }
+        const body = await readJSON(req) as Record<string, unknown>;
+        const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
+        if (!sourceId) {
+          reply(400, { ok: false, code: 'SAVED_QUERY_SOURCE_REQUIRED', error: 'Choose the saved query to add fields to.' });
+          return;
+        }
+        const snapshot = projectSnapshot();
+        await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+        const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
+        const source = resolved.items[0];
+        if (!source || resolved.missingSourceIds.length > 0) {
+          reply(404, { ok: false, code: 'DATASET_SOURCE_NOT_FOUND', error: 'That saved query is not in this project any more. Refresh the list.' });
+          return;
+        }
+        const block = source.kind === 'block' ? resolveDatasetSourceManifestBlock(snapshot.manifest, source.executionRef) : null;
+        if (!block || block.blockType === 'semantic' || source.capabilities.dataset?.kind === 'semantic' || source.capabilities.semanticModelId) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query. Only a saved query can get fields; Metrics already have them.` });
+          return;
+        }
+        if (block.datasetGrain || block.datasetFields?.length || block.datasetMeasures?.length || source.capabilities.dataset) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_ALREADY_DATASET', error: `${source.title} already has fields. Use its Measures and Dimensions in the Data pane.` });
+          return;
+        }
+        const blockPath = normalize(block.filePath).replace(/^\/+/, '');
+        const absolute = isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
+        if (!absolute || !existsSync(absolute)) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved block file ZLens can change.` });
+          return;
+        }
+        const blockSource = readFileSync(absolute, 'utf-8');
+        const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+        const requestedRevision = typeof body.sourceRevision === 'string' ? body.sourceRevision.trim() : '';
+        if (requestedRevision && requestedRevision !== sourceRevision) {
+          reply(409, { ok: false, code: 'SOURCE_CHANGED', error: `${source.title} changed after you opened it. Close this and try again.` });
+          return;
+        }
+        const previousStatus = blockSourceStatus(blockSource);
+        if (previousStatus === 'deprecated') {
+          reply(409, { ok: false, code: 'SAVED_QUERY_DEPRECATED', error: `${source.title} is retired, so it cannot get fields.` });
+          return;
+        }
+        const active = requireActiveConnection();
+        const tableMapping = await resolveSemanticTableMapping(executor, active, semanticLayer, projectRoot);
+        const semanticCompose = semanticLayer
+          ? await composeSemanticBlockSqlForRuntime(blockSource, semanticLayer, {
+              driver: active.driver,
+              tableMapping,
+              projectRoot,
+              projectConfig,
+              detectedProvider: semanticDetectedProvider,
+            })
+          : null;
+        const plan = buildExecutionPlan(
+          { id: `saved-query-fields-${source.sourceId}`, type: 'dql', source: blockSource, title: block.name },
+          { semanticLayer, driver: active.driver, tableMapping, semanticSql: semanticCompose?.sql ?? undefined },
+        );
+        const sql = semanticCompose?.sql ?? plan?.sql;
+        if (!sql) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_HAS_NO_SQL', error: `${source.title} has no SQL ZLens can run to read its columns.` });
+          return;
+        }
+        if ((plan?.sqlParams?.length ?? 0) > 0 || (block.parameters?.length ?? 0) > 0) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens cannot check its rows. Add fields works on saved queries without parameters.` });
+          return;
+        }
+        const relation = savedQueryRelation(sql, active.driver);
+        const limits = { maxRows: 5_000, maxBytes: 16 * 1024 * 1024, batchSize: 1_000, deadlineMs: 60_000 };
+        // One row: some drivers report no columns for an empty result.
+        const shape = await executor.executePositional(`SELECT * FROM ${relation} LIMIT 1`, [], active, { ...limits, purpose: 'metadata' });
+        const run = async (statement: string, purpose: 'data' | 'metadata' = 'data') => (await executor.executePositional(statement, [], active, { ...limits, purpose })).rows as Array<Record<string, unknown>>;
+        const legacyGrain = typeof block.grain === 'string' ? block.grain : undefined;
+        const drafted = await draftSavedQueryDataset({
+          blockName: block.name,
+          ...(legacyGrain ? { grain: legacyGrain } : {}),
+          relation,
+          // The connector's normalised kind (number, date, datetime…); `driverType` names the driver on some connectors.
+          columns: shape.columns.map((column) => ({ name: column.name, ...(column.type && column.type !== 'unknown' && column.type !== 'null' ? { type: column.type } : {}) })),
+          driver: active.driver,
+          run,
+        });
+        const certified = previousStatus === 'certified';
+        if (path === '/api/app-datasets/saved-queries/draft') {
+          reply(200, {
+            ok: true,
+            source: { sourceId: source.sourceId, name: block.name, sourceRevision, status: previousStatus },
+            rows: drafted.rows,
+            proposal: drafted.proposal,
+            sendsBackForReview: certified,
+          });
+          return;
+        }
+        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures);
+        if (!proposal.key) {
+          reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${source.title} is filled and different on every row, so ZLens cannot count its rows safely.` });
+          return;
+        }
+        const declaration = tableDatasetDeclaration(proposal, block.name);
+        const pendingStatus: 'draft' | 'review' = certified || previousStatus === 'review' ? 'review' : 'draft';
+        const { after } = addDatasetDefinitionToBlockSource({
+          source: blockSource,
+          filePath: blockPath,
+          blockName: block.name,
+          grain: declaration.grain,
+          fields: declaration.fields,
+          measures: declaration.measures,
+          status: pendingStatus,
+        });
+        // The same check as "Certify and use this data" (and Block Studio's
+        // Certify), run on the new source before anything is written.
+        const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+        let blockers: string[] = [];
+        let passed = false;
+        let verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>> | undefined;
+        try {
+          verdict = await certifyBlockStudioSource(after, blockPath, { enterprise });
+          blockers = Array.from(new Set(verdict.checklist.blockers));
+          passed = verdict.certification.certified && blockers.length === 0;
+        } catch (error) {
+          blockers = [error instanceof Error ? error.message : String(error)];
+        }
+        if (!passed && certified && body.allowReview !== true) {
+          reply(409, {
+            ok: false,
+            code: 'SAVED_QUERY_REVIEW_REQUIRED',
+            blockers,
+            details: { blockers },
+            error: `${source.title} is certified, and with these fields it did not pass its checks, so nothing changed. Send it for review to add the fields anyway.`,
+          });
+          return;
+        }
+        writeFileSync(absolute, after, 'utf-8');
+        let status: 'certified' | 'review' | 'draft' = pendingStatus;
+        if (passed && verdict) {
+          setBlockStudioStatus(projectRoot, blockPath, 'certified', explicitCertificationReceipt({ source: after, via: 'app-dataset', enterprise, verdict }));
+          status = 'certified';
+        } else {
+          // Drops a certification receipt the companion file may still hold.
+          setBlockStudioStatus(projectRoot, blockPath, pendingStatus);
+        }
+        await refreshLocalMetadataCatalog(projectRoot);
+        const found = queryAppSourceCatalog(projectRoot, { query: block.name, sourcePolicy: 'include_review_required', limit: 50 })
+          .items.find((item) => normalize(item.sourcePath).replace(/^\/+/, '') === blockPath);
+        let keyChecked = false;
+        if (found && status === 'certified') {
+          try {
+            await validateDatasetSourceGrain({ sourceId: found.sourceId });
+            keyChecked = true;
+          } catch {
+            // The first tile run checks it again; a failed check keeps the Dataset out of tiles.
+          }
+        }
+        reply(200, { ok: true, path: blockPath, previousStatus, status, blockers, keyChecked, sourceId: found?.sourceId ?? source.sourceId });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const code = error instanceof TableDatasetError || error instanceof DatasetDeclarationPatchError ? error.code : undefined;
+        reply(code ? 409 : 400, { ok: false, ...(code ? { code } : {}), error: message });
       }
       return;
     }

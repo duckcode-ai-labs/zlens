@@ -4,7 +4,77 @@ import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
 import { api, type WarehouseTableSummary } from '../../../api/client';
 import { messageOf } from './studio-ui';
 
-type Choice = { name: string; include: boolean; format: 'number' | 'currency' | 'percent'; currency?: string };
+export type NumberChoice = { name: string; include: boolean; format: 'number' | 'currency' | 'percent'; currency?: string };
+type Choice = NumberChoice;
+
+/** The proposal's numbers as the author's starting choices. */
+export function initialNumberChoices(proposal: TableDatasetProposal): NumberChoice[] {
+  return proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format, ...(measure.currency ? { currency: measure.currency } : {}) }));
+}
+
+/**
+ * "Check the numbers": what one row is (checked against the rows), which
+ * numbers to keep and how to show them, and what tiles can group and filter
+ * by. Shared by "Start from a table" and "Add fields" on a saved query.
+ */
+export function DatasetNumbersCheck({
+  proposal,
+  rows,
+  choices,
+  onChoice,
+  noKeyMessage,
+  groupByKey = false,
+}: {
+  proposal: TableDatasetProposal;
+  rows: number;
+  choices: NumberChoice[];
+  onChoice: (measure: string, patch: Partial<NumberChoice>) => void;
+  noKeyMessage: string;
+  /** A saved query's row identity is often its grouping (a region, a customer name): list it too. */
+  groupByKey?: boolean;
+}): JSX.Element {
+  const dates = proposal.fields.filter((field) => field.role === 'time');
+  const groups = proposal.fields.filter((field) => field.role === 'dimension' || (groupByKey && field.role === 'key'));
+  return <>
+    {proposal.key ? (
+      <p className="table-dataset-row"><Check size={14} aria-hidden="true" /><span>Each row is one <strong>{proposal.key.entity.replace(/_/g, ' ')}</strong>: <code>{proposal.key.column}</code> is filled and different on all {rows.toLocaleString()} rows, so rows can be counted safely.</span></p>
+    ) : (
+      <p className="table-dataset-error" role="alert">{noKeyMessage}</p>
+    )}
+    <fieldset className="table-dataset-numbers">
+      <legend>Numbers</legend>
+      {proposal.measures.map((measure) => {
+        const choice = choices.find((entry) => entry.name === measure.name);
+        return (
+          <div key={measure.name} className={`table-dataset-number ${choice?.include ? '' : 'off'}`}>
+            <label htmlFor={`number-${measure.name}`}>
+              <input id={`number-${measure.name}`} type="checkbox" checked={Boolean(choice?.include)} onChange={(event) => onChoice(measure.name, { include: event.target.checked })} />
+              <Hash size={12} aria-hidden="true" />
+              <strong>{measure.label}</strong>
+              <span>{measure.reason}</span>
+            </label>
+            {measure.aggregation === 'sum' ? (
+              <select aria-label={`Show ${measure.label} as`} value={choice?.format ?? measure.format} disabled={!choice?.include} onChange={(event) => onChoice(measure.name, { format: event.target.value as NumberChoice['format'], ...(event.target.value === 'currency' ? { currency: choice?.currency ?? 'USD' } : {}) })}>
+                <option value="number">Number</option>
+                <option value="currency">Money</option>
+                <option value="percent">Percent</option>
+              </select>
+            ) : null}
+          </div>
+        );
+      })}
+    </fieldset>
+    {groups.length || dates.length ? (
+      <div className="table-dataset-groups">
+        <span>Group and filter by</span>
+        <p>
+          {dates.map((field) => <span key={field.name} className="chip"><CalendarDays size={11} aria-hidden="true" /> {field.label}</span>)}
+          {groups.map((field) => <span key={field.name} className="chip">{field.label}</span>)}
+        </p>
+      </div>
+    ) : null}
+  </>;
+}
 
 /**
  * Start from a table (RFC 0009, "15-minute first page"). Pick a table; DQL
@@ -71,7 +141,7 @@ export function TableDatasetDialog({
       }
       setDraft({ proposal: response.proposal, rows: response.rows ?? 0 });
       setName(response.proposal.name);
-      setChoices(response.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format, ...(measure.currency ? { currency: measure.currency } : {}) })));
+      setChoices(initialNumberChoices(response.proposal));
     });
   };
   useEffect(() => {
@@ -103,8 +173,6 @@ export function TableDatasetDialog({
 
   const proposal = draft?.proposal;
   const keptCount = choices.filter((choice) => choice.include).length;
-  const dates = proposal?.fields.filter((field) => field.role === 'time') ?? [];
-  const groups = proposal?.fields.filter((field) => field.role === 'dimension') ?? [];
 
   return (
     <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="table-dataset-title">
@@ -146,43 +214,7 @@ export function TableDatasetDialog({
               <span>Name</span>
               <input id="table-dataset-name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
             </label>
-            {proposal.key ? (
-              <p className="table-dataset-row"><Check size={14} aria-hidden="true" /><span>Each row is one <strong>{proposal.key.entity.replace(/_/g, ' ')}</strong>: <code>{proposal.key.column}</code> is filled and different on all {draft!.rows.toLocaleString()} rows, so rows can be counted safely.</span></p>
-            ) : (
-              <p className="table-dataset-error" role="alert">No column is filled and different on every row, so ZLens cannot count this table's rows safely. Choose a table with an id column.</p>
-            )}
-            <fieldset className="table-dataset-numbers">
-              <legend>Numbers</legend>
-              {proposal.measures.map((measure) => {
-                const choice = choices.find((entry) => entry.name === measure.name);
-                return (
-                  <div key={measure.name} className={`table-dataset-number ${choice?.include ? '' : 'off'}`}>
-                    <label htmlFor={`number-${measure.name}`}>
-                      <input id={`number-${measure.name}`} type="checkbox" checked={Boolean(choice?.include)} onChange={(event) => setChoice(measure.name, { include: event.target.checked })} />
-                      <Hash size={12} aria-hidden="true" />
-                      <strong>{measure.label}</strong>
-                      <span>{measure.reason}</span>
-                    </label>
-                    {measure.aggregation === 'sum' ? (
-                      <select aria-label={`Show ${measure.label} as`} value={choice?.format ?? measure.format} disabled={!choice?.include} onChange={(event) => setChoice(measure.name, { format: event.target.value as Choice['format'], ...(event.target.value === 'currency' ? { currency: choice?.currency ?? 'USD' } : {}) })}>
-                        <option value="number">Number</option>
-                        <option value="currency">Money</option>
-                        <option value="percent">Percent</option>
-                      </select>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </fieldset>
-            {groups.length || dates.length ? (
-              <div className="table-dataset-groups">
-                <span>Group and filter by</span>
-                <p>
-                  {dates.map((field) => <span key={field.name} className="chip"><CalendarDays size={11} aria-hidden="true" /> {field.label}</span>)}
-                  {groups.map((field) => <span key={field.name} className="chip">{field.label}</span>)}
-                </p>
-              </div>
-            ) : null}
+            <DatasetNumbersCheck proposal={proposal} rows={draft!.rows} choices={choices} onChoice={setChoice} noKeyMessage="No column is filled and different on every row, so ZLens cannot count this table's rows safely. Choose a table with an id column." />
             {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
             {error ? <p className="table-dataset-error" role="alert">{error}</p> : null}
           </div>

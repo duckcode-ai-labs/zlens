@@ -113,7 +113,8 @@ function actionFor(method: string, path: string): DqlAction {
 
   // Trust decisions. Every route that can leave something certified is a
   // certification: the Block Studio job route, the older synchronous route,
-  // the explicit "Certify and use this data" Dataset-from-a-table action, and
+  // the explicit "Certify and use this data" Dataset-from-a-table action, its
+  // "Add fields" twin for a saved query (it certifies when the check passes), and
   // approving a semantic tile on an App page. Saving (a notebook cell, an
   // Ask answer, an imported candidate) only ever writes a draft, so it is
   // authoring, not certification.
@@ -121,6 +122,7 @@ function actionFor(method: string, path: string): DqlAction {
     /\/certify(\/|$)/.test(path)
     || /^\/api\/block-studio\/certifications(\/|$)/.test(path)
     || path === '/api/app-datasets/tables/create'
+    || path === '/api/app-datasets/saved-queries/create'
     || /^\/api\/apps\/[^/]+\/dashboards\/[^/]+\/approve-semantic$/.test(path)
   )) return 'dataset.certify';
   if (!read && /^\/api\/agent\/hints\/[^/]+(\/(review|lifecycle))?$/.test(path)) return 'hint.review';
@@ -178,7 +180,7 @@ function actionFor(method: string, path: string): DqlAction {
   // A published page runs its Dataset tiles and filter lists through these.
   if (!read && (path === '/api/app-datasets/run' || path === '/api/app-datasets/field-values')) return 'app.view';
   if (!read && path === '/api/app-datasets/enable') return 'settings.manage';
-  if (!read && path === '/api/app-datasets/tables/draft') return 'dataset.author';
+  if (!read && (path === '/api/app-datasets/tables/draft' || path === '/api/app-datasets/saved-queries/draft')) return 'dataset.author';
   if (!read && AUTHORING_FAMILIES.some((family) => under(path, family))) return 'dataset.author';
 
   return read ? 'project.read' : 'project.write';

@@ -3,6 +3,29 @@ import type { DashboardVizStyle } from '@zlens/core/apps/viz-style';
 import type { ResultOrdering } from '@zlens/core/apps/result-measures';
 import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
 
+export interface SavedQueryDatasetDraft {
+  ok: boolean;
+  source?: { sourceId: string; name: string; sourceRevision: string; status: 'certified' | 'review' | 'draft' | 'deprecated' };
+  rows?: number;
+  proposal?: TableDatasetProposal;
+  /** The saved query is certified: adding fields sends it back for review until its check passes. */
+  sendsBackForReview?: boolean;
+  code?: string;
+  error?: string;
+}
+
+export interface SavedQueryDatasetResult {
+  ok: boolean;
+  status?: 'certified' | 'review' | 'draft';
+  previousStatus?: 'certified' | 'review' | 'draft';
+  sourceId?: string;
+  path?: string;
+  blockers?: string[];
+  keyChecked?: boolean;
+  code?: string;
+  error?: string;
+}
+
 export interface WarehouseTableSummary {
   id: string;
   name: string;
@@ -8680,6 +8703,30 @@ export const api = {
       return await request('/api/app-datasets/tables/create', { method: 'POST', body: JSON.stringify(input) });
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  },
+
+  /** Add fields to a saved query (design D1): what DQL proposes from its output columns, checked against its rows. */
+  async draftSavedQueryDataset(sourceId: string): Promise<SavedQueryDatasetDraft> {
+    try {
+      return await request('/api/app-datasets/saved-queries/draft', { method: 'POST', body: JSON.stringify({ sourceId }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** Write the author's choice onto the same saved query block, then run its certification check. */
+  async createSavedQueryDataset(input: { sourceId: string; sourceRevision?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; allowReview?: boolean }): Promise<SavedQueryDatasetResult> {
+    try {
+      return await request('/api/app-datasets/saved-queries/create', { method: 'POST', body: JSON.stringify(input) });
+    } catch (error) {
+      const details = error instanceof DqlApiError && error.details && typeof error.details === 'object' ? error.details as { blockers?: unknown } : undefined;
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}),
+        ...(Array.isArray(details?.blockers) ? { blockers: details.blockers.filter((item): item is string => typeof item === 'string') } : {}),
+      };
     }
   },
 

@@ -111,7 +111,8 @@ describe('App Builder orchestrator', () => {
     expect(brief.components.find((component) => component.sourceId === candidates[0].sourceId)?.requirementIds).toEqual(['requirement-1']);
     expect(brief.components.find((component) => component.sourceId === candidates[1].sourceId)?.requirementIds).toEqual(['requirement-2']);
     expect(brief.components.find((component) => component.sourceId === 'app:block:customers:growth')?.requirementIds).toEqual([]);
-    expect(brief.warnings).toEqual(expect.arrayContaining([expect.stringContaining('unsupported requirement coverage was removed')]));
+    expect(brief.warnings).toEqual(['New customer growth can\'t answer “New-customer growth for the last 90 days” with its approved fields yet.']);
+    expect(brief.warnings.join(' ')).not.toMatch(/requirement-\d/);
   });
 
   it('retains explicitly required certified and draft sources omitted by the provider', async () => {
@@ -138,7 +139,7 @@ describe('App Builder orchestrator', () => {
     expect(brief.selectedSourceIds).toEqual(requiredCandidates.map((candidate) => candidate.sourceId));
     const appendedDraft = brief.components.find((component) => component.sourceId === requiredCandidates[1].sourceId);
     expect(appendedDraft).toMatchObject({ view: 'line', requirementIds: [] });
-    expect(brief.warnings).toEqual([expect.stringContaining('declared measures, dimensions, and filters did not match')]);
+    expect(brief.warnings).toEqual([expect.stringContaining('its fields don\'t match anything you asked for yet')]);
   });
 
   it('rejects a required source that was not supplied as a candidate card', async () => {
@@ -168,7 +169,7 @@ describe('App Builder orchestrator', () => {
     });
 
     expect(brief.components.find((component) => component.sourceId === capabilityCandidates[1].sourceId)?.requirementIds).toEqual([]);
-    expect(brief.warnings).toEqual([expect.stringContaining('declared measures, dimensions, and filters did not match')]);
+    expect(brief.warnings).toEqual([expect.stringContaining('its fields don\'t match anything you asked for yet')]);
   });
 
   it('rejects provider capability fields that contradict the visible requirement question', async () => {
@@ -189,7 +190,7 @@ describe('App Builder orchestrator', () => {
     });
 
     expect(brief.components).toEqual([expect.objectContaining({ sourceId: revenueCandidate.sourceId, requirementIds: [] })]);
-    expect(brief.warnings).toEqual([expect.stringContaining('unsupported requirement coverage was removed')]);
+    expect(brief.warnings).toEqual(['Revenue trend can\'t answer what you asked with its approved fields yet.']);
   });
 
   it('keeps an explicitly required deterministic source without claiming unsupported coverage', async () => {
@@ -204,7 +205,43 @@ describe('App Builder orchestrator', () => {
     expect(brief.planningMode).toBe('deterministic_fallback');
     expect(brief.selectedSourceIds).toEqual([revenueOrders.sourceId]);
     expect(brief.components).toEqual([expect.objectContaining({ sourceId: revenueOrders.sourceId, requirementIds: [] })]);
-    expect(brief.warnings).toEqual([expect.stringContaining('unsupported requirement coverage was removed')]);
+    expect(brief.warnings).toEqual(['Revenue orders can\'t answer what you asked with its approved fields yet.']);
+  });
+
+  it('names sources and questions in plain words, never ids, in planner notes', async () => {
+    const topCustomers = { ...source('app:block:sales:top', 'top_customers', 'certified'), capabilities: { ...candidates[0].capabilities, measures: ['lifetime_value'], outputs: ['lifetime_value'] } };
+    const brief = await planAppBuildBrief({
+      prompt: 'Top customers and revenue by region',
+      candidates: [topCustomers],
+      requiredSourceIds: [],
+      sourcePolicy: 'governed_only',
+      complete: async () => JSON.stringify({
+        frame: { goal: 'Top customers and revenue by region' },
+        requirements: [
+          { id: 'requirement-1', question: 'Top customers', role: 'breakdown', required: true, measures: [], dimensions: [], filters: [] },
+          { id: 'requirement-2', question: 'Revenue by region', role: 'breakdown', required: true, measures: ['revenue'], dimensions: ['region'], filters: [] },
+        ],
+        components: [{ id: 'c1', title: 'top_customers', sourceId: topCustomers.sourceId, requirementIds: ['requirement-1', 'requirement-2'], role: 'breakdown', view: 'bar', rationale: 'x' }],
+      }),
+    });
+    expect(brief.warnings).toEqual(['Top Customers covers only part of what you asked. It doesn\'t answer “Revenue by region”.']);
+  });
+
+  it('explains a built-in pick by the words that matched and its trust', async () => {
+    const topCustomers = {
+      ...source('app:block:sales:top', 'top_customers', 'certified'),
+      description: 'Customers ranked by lifetime value.',
+      capabilities: { ...candidates[0].capabilities, measures: ['lifetime_value'], dimensions: ['customer_name'], outputs: ['lifetime_value'], filters: [] },
+    };
+    const brief = await planAppBuildBrief({
+      prompt: 'Show my best customers by value',
+      candidates: [topCustomers, { ...candidates[1], description: undefined }],
+      requiredSourceIds: [],
+      sourcePolicy: 'include_review_required',
+    });
+    const byId = new Map(brief.components.map((component) => [component.sourceId, component.rationale]));
+    expect(byId.get(topCustomers.sourceId)).toBe('Its name, description and fields match “customers”, “value” · Certified saved query');
+    expect(byId.get(candidates[1].sourceId)).toBe('One of the closest matches in the data you can use · Saved query · Needs review');
   });
 
   it('AGT-026 plans several source-bound Dataset tiles, falls back from invented query authority, and keeps coverage query-specific', async () => {

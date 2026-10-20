@@ -79,6 +79,7 @@ import { PivotTable } from './PivotTable';
 import { KpiCard, usesKpiCard } from './KpiCard';
 import { AddDataBrowser } from './builder/AddDataBrowser';
 import { DataStep } from './builder/DataStep';
+import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
 import {
   FIELD_TILES_OFF_MESSAGE,
   appDataItems,
@@ -521,6 +522,8 @@ export function AppStudioV2({
   const [datasetAuthoringSource, setDatasetAuthoringSource] = useState<AppBlockRecommendation | null>(null);
   const [datasetAuthoringProposal, setDatasetAuthoringProposal] = useState<ContextAuthoringProposalV1 | null>(null);
   const [datasetRebindPrompt, setDatasetRebindPrompt] = useState<{ sourceId: string; title: string } | null>(null);
+  /** The saved query "Add fields" is open for (Data pane). */
+  const [savedQueryFields, setSavedQueryFields] = useState<AppBlockRecommendation | null>(null);
   const [copilotOpen, setCopilotOpen] = useState(false);
   /** Edit shows the build chrome; View shows the page exactly as a reader sees it. */
   const [studioView, setStudioView] = useState<'edit' | 'view'>('edit');
@@ -1566,6 +1569,22 @@ export function AppStudioV2({
       setError(messageOf(cause));
       return false;
     }
+  };
+
+  /**
+   * A saved query got fields (design D1): it is a Dataset now. The catalog
+   * reloads; when the saved query is already this App's data, its copy in
+   * the App is replaced with the new one so the Data pane shows its fields.
+   */
+  const savedQueryFieldsAdded = async (sourceId: string, status: 'certified' | 'review' | 'draft') => {
+    setSavedQueryFields(null);
+    setCatalogRefreshNonce((current) => current + 1);
+    const current = latestDraftRef.current;
+    const inApp = Boolean(current?.sources.some((source) => source.id === sourceId));
+    if (inApp && !(await addDataSource(sourceId, { allowReview: false }))) return;
+    setSavedMessage(status === 'certified'
+      ? 'Fields added · it is a certified Dataset now'
+      : 'Fields added · it needs review before tiles from it can be published');
   };
 
   const removeDataSource = async (sourceId: string) => {
@@ -2781,6 +2800,8 @@ export function AppStudioV2({
     onAdd: addDataSource,
     onRemove: (sourceId: string) => void removeDataSource(sourceId),
     onChangePolicy: changeSourcePolicy,
+    fieldsEnabled: datasetTilesEnabled,
+    onFieldsAdded: (sourceId: string, status: 'certified' | 'review' | 'draft') => void savedQueryFieldsAdded(sourceId, status),
   };
   const openCanvas = () => {
     setStage('canvas');
@@ -3301,6 +3322,7 @@ export function AppStudioV2({
             onAddContent={(kind) => void addComponent(kind, null)}
             {...(activeDatasetItem && datasetSourceAuthoringModel(activeDatasetItem) ? { onAuthorDataset: openDatasetAuthoring } : {})}
             {...(activeDatasetItem?.sourceId && draft.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === activeDatasetItem.sourceId)) ? { onRefreshBinding: (item: AppBlockRecommendation) => { if (item.sourceId) void refreshDatasetBinding(item.sourceId); } } : {})}
+            {...(datasetTilesEnabled ? { onAddFields: setSavedQueryFields } : {})}
             pickerRequest={dataPickerRequest}
           /> : null}
           {panel === 'filters' ? <FiltersPanel draft={draft} activePageId={activePage?.id} catalog={catalog} candidates={filterCandidates} runtimeFilterFields={runtimeFilterFields} previewRunsByPage={previewRunsByPage} previewing={previewing} disabled={busy || previewing} onRunPreview={() => void runPreview()} onSave={(configuration) => void saveFilter(configuration)} onRemove={(id) => void removeFilter(id)} /> : null}
@@ -3564,6 +3586,12 @@ export function AppStudioV2({
         onConfirm={() => void refreshDatasetBinding(datasetRebindPrompt.sourceId, true)}
       /> : null}
       {markOverlays}
+      {savedQueryFields ? <SavedQueryFieldsDialog
+        sourceId={savedQueryFields.sourceId ?? savedQueryFields.id}
+        name={savedQueryFields.name}
+        onClose={() => setSavedQueryFields(null)}
+        onAdded={(sourceId, status) => void savedQueryFieldsAdded(sourceId, status)}
+      /> : null}
       {addDataOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="studio-add-data-title" onKeyDown={(event) => { if (event.key === 'Escape' && !(event.target as HTMLElement).closest('.table-dataset-card')) setAddDataOpen(false); }}>
         <section className="studio-add-data-card">
           <header><div><h2 id="studio-add-data-title">Add data</h2><p>Connect a Dataset, Metrics, a saved query or a database table to this App.</p></div><button type="button" className="icon" onClick={() => setAddDataOpen(false)} aria-label="Close"><X size={15} /></button></header>

@@ -223,6 +223,15 @@ export const APP_STUDIO_V2_STYLES = `
 .filter-mapping label > svg { color:var(--accent); }
 .filter-mapping label.unsupported > svg { color:var(--text-muted); }
 .filter-required { grid-template-columns:15px minmax(0,1fr) !important; align-items:start; gap:7px !important; }
+/* Filter link suggestions (D10): other Datasets with the same field, unchecked. */
+.filter-link-suggestions { border:1px dashed color-mix(in srgb,var(--accent) 40%,var(--border-default)) !important; border-radius:8px; padding:9px !important; background:var(--bg-1); }
+.filter-link-suggestions legend { padding:0 4px; font-size:13px; font-weight:600; color:var(--text-primary); text-transform:none; letter-spacing:0; }
+.filter-link-suggestions label { min-width:0; border:1px solid var(--border-subtle); border-radius:8px; padding:7px; display:grid; grid-template-columns:15px minmax(0,1fr); align-items:center; gap:6px; background:var(--bg-2); cursor:pointer; }
+.filter-link-suggestions label:has(input:checked) { border-color:color-mix(in srgb,var(--accent) 42%,var(--border-default)); background:var(--accent-dim); }
+.filter-link-suggestions label > input { width:13px; height:13px; accent-color:var(--accent); }
+.filter-link-suggestions label > span { min-width:0; display:grid; gap:1px; }
+.filter-link-suggestions label strong { font-size:13px; line-height:1.35; overflow-wrap:anywhere; }
+.filter-link-suggestions label small { color:var(--text-tertiary); font-size:11px; }
 .filter-required > input { width:14px !important; height:14px !important; padding:0 !important; accent-color:var(--accent); }
 .filter-required > span { display:grid; gap:1px; text-transform:none !important; letter-spacing:0 !important; }
 .filter-required strong { font-size:13px; }
@@ -1414,6 +1423,23 @@ export const APP_STUDIO_V2_STYLES = `
 .table-dataset-card > footer button { height:32px; padding:0 14px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--text-primary); font-size:13px; font-weight:500; cursor:pointer; }
 .table-dataset-card > footer button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg, #fff); font-weight:600; }
 .table-dataset-card > footer button:disabled { opacity:.5; cursor:not-allowed; }
+/* Add fields to a saved query (design D1). */
+.saved-query-fields-notice { margin:0; padding:8px 10px; border:1px solid color-mix(in srgb,var(--status-warning) 40%,var(--border-default)); border-radius:8px; background:color-mix(in srgb,var(--status-warning) 8%,var(--bg-2)); color:var(--text-secondary); font-size:12px; line-height:1.5; }
+.saved-query-fields-notice strong { color:var(--text-primary); }
+.saved-query-fields-card .table-dataset-error { display:grid; gap:8px; }
+.saved-query-fields-card .table-dataset-error p { margin:0; }
+.saved-query-fields-card .table-dataset-error button { justify-self:start; height:30px; padding:0 12px; border:1px solid var(--status-error); border-radius:8px; background:var(--bg-1); color:var(--status-error); font-size:12px; font-weight:600; cursor:pointer; }
+.saved-query-fields-done { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:8px; background:var(--accent-dim); }
+.saved-query-fields-done.review { background:color-mix(in srgb,var(--status-warning) 8%,var(--bg-2)); }
+.saved-query-fields-done svg { flex:none; margin-top:2px; color:var(--accent); }
+.saved-query-fields-done.review svg { color:var(--status-warning); }
+.saved-query-fields-done div { display:grid; gap:4px; }
+.saved-query-fields-done strong { font-size:13px; }
+.saved-query-fields-done small { color:var(--text-secondary); font-size:12px; line-height:1.45; }
+.saved-query-add-fields { display:grid; gap:6px; }
+.saved-query-add-fields button { justify-self:start; display:inline-flex; align-items:center; gap:4px; border:1px solid var(--accent); background:var(--accent-dim); color:var(--accent); border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+.saved-query-add-fields button:disabled { opacity:.5; cursor:default; }
+.add-data-action button.add-fields { border-color:color-mix(in srgb,var(--accent) 45%,var(--border-default)); color:var(--accent); background:transparent; }
 /* Start form: the App's domain. */
 .launch-domain-field { display:grid; gap:6px; }
 .launch-domain-field > span { font-size:14px; font-weight:600; color:var(--text-secondary); }
@@ -1487,6 +1513,10 @@ export const APP_STUDIO_V2_STYLES = `
 .data-step-skeleton li .add-data-mark { width:24px; height:24px; }
 .data-step-skeleton li strong { width:70%; }
 .data-step-skeleton li small { width:45%; }
+/* AI mode: the picks carry a reason each, so the list gets room to read, and
+   it scrolls on its own so "Not covered yet" is never cut off below the fold. */
+.ai-data-step .data-step-body { grid-template-columns:minmax(360px,40%) minmax(0,1fr); }
+.ai-data-step .data-step-list { max-height:max(260px, calc(100vh - 290px)); overflow:auto; overscroll-behavior:contain; align-content:start; }
 .proposal-back-to-data { margin:0 16px 10px; justify-self:start; display:inline-flex; align-items:center; gap:5px; border:0; background:transparent; padding:0; color:var(--accent); font-size:12px; font-weight:600; }
 .proposal-back-to-data:hover { text-decoration:underline; }
 .proposal-back-to-data:disabled { opacity:.5; cursor:default; }
@@ -1581,8 +1611,8 @@ export const APP_STUDIO_V2_STYLES = `
 .dataset-source-actions { display:flex; flex-wrap:wrap; gap:10px; }
 .readiness-unused-note { margin:0; display:flex; align-items:center; gap:8px; padding:10px 12px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--bg-1); color:var(--text-secondary); font-size:13px; }
 @media (max-width:820px) {
-  .data-step-body { grid-template-columns:minmax(0,1fr); }
-  .data-step-list { position:static; }
+  .data-step-body, .ai-data-step .data-step-body { grid-template-columns:minmax(0,1fr); }
+  .data-step-list, .ai-data-step .data-step-list { position:static; max-height:none; overflow:visible; }
 }
 @media (max-width:620px) {
   .add-data-row { grid-template-columns:minmax(0,1fr); }

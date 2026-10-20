@@ -256,7 +256,10 @@ function ensureRequiredSources(
     });
     const removed = component.requirementIds.filter((requirementId) => !requirementIds.includes(requirementId));
     if (removed.length) {
-      warnings.push(`${component.title} remains in the proposal, but unsupported requirement coverage was removed: ${removed.join(', ')}.`);
+      warnings.push(partialCoverageNote(component.title, removed.flatMap((requirementId) => {
+        const requirement = requirementsById.get(requirementId);
+        return requirement ? [requirement.question] : [];
+      }), requirementIds.length, brief.requirements.length));
     }
     return requirementIds.length === component.requirementIds.length ? component : { ...component, requirementIds };
   });
@@ -278,7 +281,7 @@ function ensureRequiredSources(
       ? deterministicDatasetQuery(candidate.capabilities.dataset, match, role)
       : undefined;
     if (candidate.capabilities.dataset && !query) {
-      warnings.push(`${candidate.title} was explicitly selected, but no approved Dataset field query can represent it. It remains an uncovered requirement.`);
+      warnings.push(`You added ${plannerSourceName(candidate.title)}, but it can't answer this with its approved fields yet.`);
       continue;
     }
     components.push({
@@ -290,11 +293,11 @@ function ensureRequiredSources(
       role,
       view: inferView(candidate, components.length),
       rationale: match
-        ? `Explicitly required source with a structured capability match for ${match.question}.`
-        : 'Explicitly required source; no structured requirement capability match was found.',
+        ? `You added it, and its fields match “${match.question}” · ${sourceKindAndTrust(candidate)}`
+        : `You added it · ${sourceKindAndTrust(candidate)}`,
     });
     if (!match) {
-      warnings.push(`${candidate.title} was explicitly added without requirement coverage because its declared measures, dimensions, and filters did not match a requirement.`);
+      warnings.push(`You added ${plannerSourceName(candidate.title)}, but its fields don't match anything you asked for yet.`);
     }
   }
   return {
@@ -498,7 +501,7 @@ function normalizePlannedInteractions(input: {
       : undefined;
     const pageTargets = scope === 'page' && pageId ? targets.filter((componentId) => pageByComponent.get(componentId) === pageId) : targets;
     if (!pageId && scope === 'page' || pageTargets.length === 0) {
-      warnings.push(`The requested ${id} filter was omitted because no exact approved Dataset field mapping was available.`);
+      warnings.push(`The ${plannerDisplayTitle(record.label, humanizePlannerId(id))} filter was left out: no tile has an approved field for it.`);
       continue;
     }
     filterIds.add(id);
@@ -538,7 +541,7 @@ function normalizePlannedInteractions(input: {
     const output = tileQueryOutputAliases(from.query).find((candidate) => candidate.kind === 'dimension'
       && sameDatasetName(fromField, candidate.alias, candidate.alias));
     if (!output || !exactField(toComponentId, toField)) {
-      warnings.push('A requested cross-filter was omitted because it did not name an exact selected output and approved target field.');
+      warnings.push('A click-to-filter link between two tiles was left out: its fields aren\'t approved on both tiles.');
       continue;
     }
     const key = `${fromComponentId}:${output.alias}:${toComponentId}:${toField}`;
@@ -559,7 +562,7 @@ function normalizePlannedInteractions(input: {
       return exact ? [exact.name] : [];
     });
     if (fields.length === 0) {
-      warnings.push(`The requested detail drill for ${pageId} was omitted because it did not name approved Dataset fields.`);
+      warnings.push(`The row details on ${pageById.get(pageId)?.title ?? humanizePlannerId(pageId)} were left out: they don't use approved fields.`);
       continue;
     }
     drilledPages.add(pageId);
@@ -703,7 +706,7 @@ function deterministicBrief(
       ? deterministicDatasetQuery(candidate.capabilities.dataset, primaryRequirement, role)
       : undefined;
     if (candidate.capabilities.dataset && !query) {
-      deterministicWarnings.push(`${candidate.title} has no approved Dataset field query for this request, so it remains an uncovered source.`);
+      deterministicWarnings.push(`${plannerSourceName(candidate.title)} can't answer this with its approved fields yet.`);
       return [];
     }
     const coveredRequirementIds = candidate.capabilities.dataset && query
@@ -720,7 +723,7 @@ function deterministicBrief(
       ...(query ? { query } : {}),
       role,
       view: inferView(candidate, index),
-      rationale: candidate.reasons[0] ?? `Matched ${candidate.title} from the App source catalog.`,
+      rationale: deterministicRationale(primaryRequirement?.question ?? input.prompt, candidate),
     }];
   });
   return {
@@ -751,6 +754,92 @@ function deterministicBrief(
     candidateSourceIds: candidates.map((candidate) => candidate.sourceId),
     warnings: deterministicWarnings,
   };
+}
+
+/**
+ * A source name a business reader recognises: "top_customers" reads
+ * "Top Customers"; a name that already has spaces is kept as written.
+ */
+export function plannerSourceName(title: string): string {
+  const trimmed = title.trim();
+  return /\s/.test(trimmed) ? trimmed : humanizePlannerId(trimmed);
+}
+
+/** "Certified saved query", "Certified Dataset", "Metrics · Needs review" (the App glossary). */
+export function sourceKindAndTrust(candidate: Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>): string {
+  const kind = candidate.capabilities.dataset?.kind === 'semantic'
+    ? 'Metrics'
+    : candidate.capabilities.dataset
+      ? 'Dataset'
+      : candidate.capabilities.semanticModelId || candidate.kind === 'semantic'
+        ? 'Metrics'
+        : 'saved query';
+  return candidate.trust === 'certified'
+    ? `Certified ${kind}`
+    : `${kind.charAt(0).toUpperCase()}${kind.slice(1)} · Needs review`;
+}
+
+const RATIONALE_IGNORED_WORDS = new Set(['all', 'any', 'are', 'but', 'each', 'how', 'into', 'our', 'over', 'per', 'show', 'than', 'that', 'their', 'this', 'what', 'when', 'which', 'who', 'why', 'your']);
+
+/** A note for a tile kept in the plan that answers only part of the request. */
+function partialCoverageNote(title: string, questions: string[], keptCount: number, requirementCount: number): string {
+  const name = plannerSourceName(title);
+  const question = questions[0];
+  const quotable = requirementCount > 1 && question && question.length <= 120;
+  if (keptCount === 0) {
+    return quotable && questions.length === 1
+      ? `${name} can't answer “${question}” with its approved fields yet.`
+      : `${name} can't answer what you asked with its approved fields yet.`;
+  }
+  return quotable
+    ? `${name} covers only part of what you asked. It doesn't answer “${question}”${questions.length > 1 ? ` and ${questions.length - 1} more` : ''}.`
+    : `${name} covers only part of what you asked.`;
+}
+
+/**
+ * Why the built-in planner (no AI provider) picked a source, in words: which
+ * of the request's words its name, description or fields contain, and its
+ * type and trust. "Its name and description match “customers” · Certified saved query".
+ */
+export function deterministicRationale(
+  question: string,
+  candidate: Pick<AppSourceCatalogRecord, 'title' | 'description' | 'tags' | 'kind' | 'trust' | 'capabilities'>,
+): string {
+  const asked = new Map<string, string>();
+  for (const raw of question.split(/[^A-Za-z0-9]+/)) {
+    const [normalized] = Array.from(deterministicWords(raw));
+    // Connecting words ("by", "per", "show") say nothing about why data fits.
+    if (!normalized || normalized.length < 3 || RATIONALE_IGNORED_WORDS.has(normalized)) continue;
+    if (!asked.has(normalized)) asked.set(normalized, raw.toLowerCase());
+  }
+  const name = deterministicWords(candidate.title);
+  const description = deterministicWords([candidate.description ?? '', ...candidate.tags].join(' '));
+  const fields = deterministicWords([
+    ...candidate.capabilities.measures,
+    ...candidate.capabilities.dimensions,
+    ...candidate.capabilities.filters,
+  ].join(' '));
+  const matched: string[] = [];
+  const places = new Set<'name' | 'description' | 'fields'>();
+  for (const [normalized, spelled] of asked) {
+    const where = [
+      name.has(normalized) ? 'name' as const : null,
+      description.has(normalized) ? 'description' as const : null,
+      fields.has(normalized) ? 'fields' as const : null,
+    ].filter((place): place is 'name' | 'description' | 'fields' => place !== null);
+    if (!where.length) continue;
+    matched.push(spelled);
+    where.forEach((place) => places.add(place));
+  }
+  const trust = sourceKindAndTrust(candidate);
+  if (!matched.length) return `One of the closest matches in the data you can use · ${trust}`;
+  const placeOrder = (['name', 'description', 'fields'] as const).filter((place) => places.has(place));
+  const placeWords = placeOrder.length === 1
+    ? placeOrder[0]
+    : `${placeOrder.slice(0, -1).join(', ')} and ${placeOrder[placeOrder.length - 1]}`;
+  const subject = placeOrder.length === 1 && placeOrder[0] === 'fields' ? 'Its fields match' : `Its ${placeWords} ${placeOrder.length === 1 ? 'matches' : 'match'}`;
+  const words = matched.slice(0, 3).map((word) => `“${word}”`).join(', ');
+  return `${subject} ${words}${matched.length > 3 ? ` and ${matched.length - 3} more` : ''} · ${trust}`;
 }
 
 const DETERMINISTIC_REQUIREMENT_STOP_WORDS = new Set([

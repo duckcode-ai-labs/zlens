@@ -4,6 +4,7 @@ import {
   proposeTableDataset,
   readWarehouseCatalog,
   warehouseRelationId,
+  wordsFor,
   type TableDatasetProposal,
   type TableProfile,
 } from '@zlens/core';
@@ -104,6 +105,49 @@ export async function draftTableDataset(input: { table: WarehouseTableSummary; d
   }
   const profile = await profileTable({ relation: input.table.relation, columns: proposal.keyCandidates, driver: input.driver, run: input.run });
   return { proposal: applyTableProfile(proposal, profile, input.table.name), rows: profile.rows };
+}
+
+/**
+ * "Add fields" to a saved query (design D1): the same proposal as a table,
+ * read from the saved query's output columns, with its SQL as the relation
+ * (a subquery), checked against its rows. A saved query's result is often
+ * already grouped, so a text column that is different on every row (a
+ * customer name in a top-10 list) can be its row identity too; those are
+ * checked after id-like columns and never become counts of their own.
+ */
+export async function draftSavedQueryDataset(input: {
+  /** The block's name: names the proposal and, without a grain, what one row is. */
+  blockName: string;
+  /** The block's legacy `grain = "customer"`, when it declares one: what one row is. */
+  grain?: string;
+  /** The saved query as a relation: `(<its SQL>) AS "dql_saved_query"` (see `savedQueryRelation`). */
+  relation: string;
+  /** Its output columns and their warehouse types, read from a zero-row run. */
+  columns: Array<{ name: string; type?: string }>;
+  driver: string;
+  run: RunSql;
+}): Promise<{ proposal: TableDatasetProposal; rows: number }> {
+  const rowName = input.grain?.trim() || input.blockName;
+  const proposal = proposeTableDataset({ table: rowName, relation: input.relation, columns: input.columns });
+  if (!proposal.fields.length) {
+    throw new TableDatasetError('SAVED_QUERY_HAS_NO_COLUMNS', `${wordsFor(input.blockName)} has no columns ZLens can read by name.`);
+  }
+  const textColumns = proposal.fields
+    .filter((field) => field.role === 'dimension' && field.type === 'string')
+    .map((field) => field.name);
+  const keyCandidates = [...proposal.keyCandidates, ...textColumns]
+    .filter((name, index, all) => all.indexOf(name) === index)
+    .slice(0, 8);
+  const profile = await profileTable({ relation: input.relation, columns: keyCandidates, driver: input.driver, run: input.run });
+  const settled = applyTableProfile({ ...proposal, keyCandidates }, profile, rowName);
+  return { proposal: { ...settled, name: wordsFor(input.blockName) }, rows: profile.rows };
+}
+
+/** A saved query's SQL as a relation the proposal and its checks read from. */
+export function savedQueryRelation(sql: string, driver: string): string {
+  const body = sql.trim().replace(/;\s*$/, '');
+  if (!body) throw new TableDatasetError('SAVED_QUERY_HAS_NO_SQL', 'This saved query has no SQL to read columns from.');
+  return `(${body}) AS ${getDialect(driver).quoteIdentifier('dql_saved_query')}`;
 }
 
 /** Counts rows, and distinct and non-empty values of the key candidates, in one scan. */

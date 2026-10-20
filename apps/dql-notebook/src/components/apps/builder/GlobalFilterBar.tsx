@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowLeft, Check, ChevronDown, Filter, Play, Plus, Search, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
 import type { AppBlockRecommendation, AppStudioBuildDraft, DashboardRunResponse } from '../../../api/client';
-import { defaultStudioFilterType, filterTileMappingsForField, type StudioFilterCandidate, type StudioRuntimeFilterFields, type StudioFilterTileMapping } from '../app-studio-filter-candidates';
+import { defaultStudioFilterType, filterLinkSuggestions, filterPrimarySourceId, filterTileMappingsForField, initialFilterMappingKeys, type StudioFilterCandidate, type StudioFilterLinkSuggestion, type StudioRuntimeFilterFields, type StudioFilterTileMapping } from '../app-studio-filter-candidates';
 import { humanize, PanelTitle } from './studio-ui';
 
 type StudioFilterScope = 'page' | 'app';
@@ -21,6 +21,8 @@ export type StudioFilterConfiguration = {
   scope: StudioFilterScope;
   required: boolean;
   selectedMappingKeys: string[];
+  /** The Dataset the field was picked from; other Datasets are only suggested (D10). */
+  primarySourceId?: string;
 };
 
 export type StudioFilterControlType = StudioDashboardFilter['type'];
@@ -79,6 +81,10 @@ export function FiltersPanel({
     ? mappings.filter((mapping) => mapping.pageId === activePage?.id)
     : mappings;
   const selectedMappings = new Set(configuration?.selectedMappingKeys ?? []);
+  const linkSuggestions = useMemo(
+    () => filterLinkSuggestions(visibleMappings, configuration?.primarySourceId, draft.sources),
+    [configuration?.primarySourceId, draft.sources, visibleMappings],
+  );
   const selectedVisibleCount = visibleMappings.filter((mapping) => mapping.supported && selectedMappings.has(mapping.key)).length;
   const supportedVisibleCount = visibleMappings.filter((mapping) => mapping.supported).length;
   const fieldAvailability = useMemo(
@@ -96,6 +102,7 @@ export function FiltersPanel({
 
   const chooseField = (candidate: StudioFilterCandidate) => {
     const candidateMappings = filterTileMappingsForField(draft.pages, catalog, candidate.id, runtimeFilterFields, draft.sources);
+    const primarySourceId = filterPrimarySourceId(candidateMappings, activePage?.id);
     setConfiguration({
       id: candidate.id,
       fieldId: candidate.id,
@@ -103,7 +110,10 @@ export function FiltersPanel({
       type: defaultStudioFilterType(candidate.id),
       scope: 'app',
       required: false,
-      selectedMappingKeys: candidateMappings.filter((mapping) => mapping.supported).map((mapping) => mapping.key),
+      // Only the picked field's own Dataset (and tiles that expose the field
+      // directly) start linked; other Datasets are suggestions (D10).
+      selectedMappingKeys: initialFilterMappingKeys(candidateMappings, primarySourceId),
+      ...(primarySourceId ? { primarySourceId } : {}),
     });
   };
   const editFilter = (item: { filter: StudioDashboardFilter; pageIds: string[] }) => {
@@ -123,6 +133,8 @@ export function FiltersPanel({
       return page?.layout.items.find((tile) => tile.i === mapping.tileId)?.filterBindings
         ?.some((binding) => binding.filter === item.filter.id && binding.capability !== 'unsupported') ?? false;
     });
+    const primarySourceId = linked.find((mapping) => mapping.datasetId && mapping.sourceId)?.sourceId
+      ?? filterPrimarySourceId(filterMappings, activePage?.id);
     setConfiguration({
       id: item.filter.id,
       fieldId,
@@ -131,6 +143,7 @@ export function FiltersPanel({
       scope: item.pageIds.length > 1 ? 'app' : 'page',
       required: item.filter.required ?? false,
       selectedMappingKeys: linked.map((mapping) => mapping.key),
+      ...(primarySourceId ? { primarySourceId } : {}),
     });
   };
   const setAllVisibleMappings = (checked: boolean) => {
@@ -138,6 +151,12 @@ export function FiltersPanel({
     const visibleKeys = new Set(visibleMappings.filter((mapping) => mapping.supported).map((mapping) => mapping.key));
     const next = new Set(configuration.selectedMappingKeys);
     for (const key of visibleKeys) checked ? next.add(key) : next.delete(key);
+    setConfiguration({ ...configuration, selectedMappingKeys: [...next] });
+  };
+  const toggleSuggestion = (suggestion: StudioFilterLinkSuggestion, checked: boolean) => {
+    if (!configuration) return;
+    const next = new Set(configuration.selectedMappingKeys);
+    for (const key of suggestion.mappingKeys) checked ? next.add(key) : next.delete(key);
     setConfiguration({ ...configuration, selectedMappingKeys: [...next] });
   };
   const toggleMapping = (mapping: StudioFilterTileMapping) => {
@@ -161,6 +180,18 @@ export function FiltersPanel({
         {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).length === 0 ? <p className="panel-empty">No additional fields match this search.</p> : null}
       </> : <div className="filter-builder">
         <section className="filter-builder-field"><span><ShieldCheck size={15} /></span><div><small>FIELD</small><strong>{humanize(configuration.fieldId)}</strong></div>{!editingExisting ? <button type="button" onClick={() => setConfiguration({ ...configuration, fieldId: '', selectedMappingKeys: [] })}>Change</button> : null}</section>
+        {linkSuggestions.length ? <fieldset className="filter-link-suggestions" aria-label="Also filter these tiles?">
+          <legend>Also filter these tiles?</legend>
+          <small>Other Datasets in this App have a field with the same name. Nothing is linked until you check it.</small>
+          {linkSuggestions.map((suggestion) => {
+            const checked = suggestion.mappingKeys.every((key) => selectedMappings.has(key));
+            const label = `${suggestion.datasetName} · ${humanize(suggestion.field)}`;
+            return <label key={suggestion.sourceId}>
+              <input type="checkbox" checked={checked} onChange={() => toggleSuggestion(suggestion, !checked)} aria-label={`Also filter ${label}`} />
+              <span><strong>{label}</strong><small>{suggestion.tileCount} {suggestion.tileCount === 1 ? 'tile' : 'tiles'}</small></span>
+            </label>;
+          })}
+        </fieldset> : null}
         <label><span>Display label</span><input value={configuration.label} onChange={(event) => setConfiguration({ ...configuration, label: event.target.value })} /></label>
         <label><span>Control</span><select value={configuration.type} onChange={(event) => setConfiguration({ ...configuration, type: event.target.value as StudioFilterControlType })}>{filterControlOptions(configuration.fieldId).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
         {dateControl ? <section className={`filter-availability ${dateFieldHasNoValues ? 'empty' : fieldAvailability?.dateRange ? 'ready' : ''}`}>

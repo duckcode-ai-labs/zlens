@@ -5,7 +5,10 @@ import {
   defaultStudioFilterType,
   discoverAppFilterCandidates,
   discoverPageFilterCandidates,
+  filterLinkSuggestions,
+  filterPrimarySourceId,
   filterTileMappingsForField,
+  initialFilterMappingKeys,
   type StudioFilterTileMapping,
 } from './app-studio-filter-candidates';
 
@@ -248,5 +251,53 @@ describe('App Studio filter discovery (UI-022)', () => {
       supported: false,
       reason: expect.stringContaining('not an approved physical field'),
     });
+  });
+
+  it('D10 suggests other Datasets with the same field, unchecked, and links one only when checked', () => {
+    const datasetSource = (id: string, label: string, regionType: 'string' | 'number') => ({
+      id, kind: 'governed_block', sourceRef: id, qualifiedIdentity: `commerce::block::${label}::abc123`, sourceRevision: `rev-${id}`,
+      trustState: 'certified', reviewStatus: 'approved',
+      capabilities: {
+        measures: [], dimensions: [], outputs: [], filters: [], parameters: [],
+        dataset: {
+          id: `dataset.${id}`, kind: 'block', label, operations: ['group'],
+          fields: [
+            { name: 'revenue', kind: 'measure', status: 'approved', aggregation: 'sum' },
+            { name: 'Region', qualifiedId: 'region', kind: 'physical', status: 'approved', role: regionType === 'number' ? 'attribute' : 'dimension', type: regionType },
+          ],
+        },
+      },
+    });
+    const sources = [
+      datasetSource('orders', 'Orders', 'string'),
+      datasetSource('customers', 'Journey Customers', 'string'),
+      datasetSource('codes', 'Region codes', 'number'),
+    ] as unknown as AppStudioBuildDraft['sources'];
+    const tile = (i: string, sourceId: string) => ({ i, title: i, x: 0, y: 0, w: 4, h: 3, sourceId, sourceRevision: `rev-${sourceId}`, query: { measures: [{ measure: 'revenue' }], dimensions: [{ field: 'region' }] }, viz: { type: 'bar' } });
+    const pages = [{
+      version: 3,
+      id: 'overview',
+      metadata: { title: 'Overview' },
+      datasets: sources.map((source) => ({ id: `ds_${source.id}`, sourceId: source.id, sourceRevision: `rev-${source.id}`, snapshotId: 's', contractFingerprint: 'f' })),
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [tile('orders-by-region', 'orders'), tile('customers-by-region', 'customers'), tile('codes', 'codes')] },
+    }] as unknown as AppStudioBuildDraft['pages'];
+
+    const mappings = filterTileMappingsForField(pages, [], 'region', {}, sources);
+    const primary = filterPrimarySourceId(mappings, 'overview');
+    expect(primary).toBe('orders');
+    // A new filter starts linked to the picked field's Dataset only.
+    const initial = new Set(initialFilterMappingKeys(mappings, primary));
+    expect([...initial]).toEqual(['overview:orders-by-region']);
+
+    const suggestions = filterLinkSuggestions(mappings, primary, sources);
+    expect(suggestions).toEqual([{ sourceId: 'customers', datasetName: 'Journey Customers', field: 'Region', mappingKeys: ['overview:customers-by-region'], tileCount: 1 }]);
+    // Unchecked: the other Dataset's binding records no tiles.
+    expect(datasetFilterBindingsForSelection(mappings, initial)).toMatchObject({
+      ds_orders: { field: 'Region', tileIds: ['orders-by-region'] },
+      ds_customers: { field: 'Region', tileIds: [] },
+    });
+    // Checking the suggestion adds its explicit Dataset binding.
+    const checked = new Set([...initial, ...suggestions[0]!.mappingKeys]);
+    expect(datasetFilterBindingsForSelection(mappings, checked).ds_customers).toEqual({ field: 'Region', tileIds: ['customers-by-region'] });
   });
 });

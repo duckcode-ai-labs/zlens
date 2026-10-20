@@ -46,8 +46,10 @@ you say so.
    trust and domain, such as **Dataset · Certified · Commerce**, **Creates N
    tiles**, and a **Why:** line with the reason AI picked it.
     - **Remove** moves a pick to **AI suggestions**; **Add back** returns it.
-    - **Notes from AI** lists what the planner could not do, for example a
-      tile it could not add.
+    - **Notes from AI** lists what the planner could not do, in plain words
+      with the data's name, for example *Top Customers covers only part of
+      what you asked.* or *Journey Customers can't answer this with its
+      approved fields yet.*
     - **Not covered yet** lists the parts of your request no data answers.
       **Generate draft DQL that needs review** drafts a Dataset for one of
       them; it needs **Also allow data that needs review**.
@@ -66,7 +68,9 @@ you say so.
    **Back to data** returns to the AI picks until you apply.
 
 Without an AI provider, a simpler built-in planner picks the data and the
-review says **Deterministic planner fallback**.
+review says **Deterministic planner fallback**. Its **Why:** line names the
+words of your request the data matched and its trust, for example *Its name
+and description match “customers” · Certified saved query*.
 
 ## 2. Choose the data
 
@@ -74,7 +78,8 @@ review says **Deterministic planner fallback**.
 and an **Add data** list on the right with three tabs:
 
 - **Datasets & Metrics**: data with fields, listed certified first.
-- **Saved queries**: blocks without fields; their result is used as it is.
+- **Saved queries**: blocks without fields; their result is used as it is,
+  until you **Add fields** (see below).
 - **Database tables**: a table becomes a Dataset after ZLens checks it once.
 
 Search with **Search Datasets, Metrics and saved queries**, and narrow the list
@@ -92,6 +97,8 @@ rows of a Dataset.
   while the App allows only certified data.
 - On **Database tables**, click **Check and add**, check the numbers, and click
   **Certify and use this data**. The new Dataset is added to the App.
+- On **Saved queries**, **Add fields** gives a saved query fields (see
+  [Add fields to a saved query](#add-fields-to-a-saved-query)).
 
 Click **Open canvas with N sources**, or **Skip, start empty**. You can add
 more later: on the canvas, the **Data** tab's source menu lists **This App's
@@ -105,7 +112,34 @@ The left panel has three tabs: **Data**, **Pages** and **Filters**. On the
 - **A Dataset or Metrics**: click a measure or a dimension. A new tile appears
   on the page; add more fields, then click **Add to page**.
 - **A saved query**: under **Add as**, click **Table**, **Chart** or **KPI**.
-  Saved queries have no fields, so you cannot pick measures and dimensions.
+  Saved queries have no fields, so you cannot pick measures and dimensions
+  until you click **Add fields**.
+
+### Add fields to a saved query
+
+A saved query can become a Dataset, so you can build tiles from its
+**Measures** and **Dimensions**:
+
+1. Choose the saved query on the **Data** tab and click **Add fields** (or
+   **Add fields** on its row in **Add data → Saved queries**).
+2. **Check the numbers** reads the saved query's columns and checks them
+   against its rows: *Each row is one …* names the column that is different on
+   every row, **Numbers** lists what to add up or count (switch any off, and
+   pick **Number**, **Money** or **Percent**), and **Group and filter by** lists
+   the rest.
+3. Click **Check and add fields**. ZLens writes the fields into the same saved
+   query file (same name, same place; no copy) and runs the same certification
+   checks as **Certify and use this data**.
+   - Checks pass: the saved query is a **Certified** Dataset.
+   - Checks fail: it keeps its fields and stays **Needs review**.
+4. Click **Use its fields**. The **Data** tab shows its **Measures** and
+   **Dimensions**.
+
+A certified saved query shows *Adding fields sends this saved query back for
+review.* If its checks pass it is certified again right away. If they fail,
+nothing changes until you click **Send for review and add fields**, which adds
+the fields and leaves it **Needs review**. A saved query that asks for values
+(parameters) cannot get fields yet.
 
 The tile shows its rows. Its **Tile settings** panel shows **Data & trust**,
 for example **Certified** and the Dataset or saved query it uses.
@@ -138,6 +172,12 @@ its type, trust and **Why:** line. **Apply N changes** adds that data to
 3. Choose **Apply to**: **This page** or **All compatible pages**, and the
    **Linked tiles**.
 4. Click **Create filter**.
+
+A new filter starts linked to the tiles of the Dataset you picked the field
+from. When other Datasets in the App have an approved field with the same
+name and kind, **Also filter these tiles?** lists each as *Dataset · field*,
+unchecked. Check one to link its tiles too; nothing is linked by name on its
+own.
 
 ## 6. Preview
 

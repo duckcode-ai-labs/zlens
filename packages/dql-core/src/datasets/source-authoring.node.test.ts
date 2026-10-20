@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+  addDatasetDefinitionToBlockSource,
   DatasetDeclarationPatchError,
   prepareDatasetDeclarationPatch,
   type DatasetDeclarationPatch,
 } from './source-authoring.node.js';
+import { applyTableProfile, proposeTableDataset, tableDatasetDeclaration } from './table-draft.js';
 
 const source = `block "Daily customer Dataset" {
   domain = "commerce"
@@ -156,3 +158,36 @@ describe('Dataset source authoring patch', () => {
     })).toThrow(expect.objectContaining({ code: 'DATASET_FIELD_INVENTORY_REQUIRED' }));
   });
 });
+
+describe('Add fields to a saved query (design D1)', () => {
+  const savedQuery = `block "Region revenue" {
+  domain = "commerce"
+  type = "custom"
+  status = "certified"
+  owner = "commerce@example.test"
+  description = "Revenue for each region."
+  query = """SELECT region, SUM(net_amount) AS net_amount FROM order_lines GROUP BY region"""
+}`;
+  const drafted = proposeTableDataset({ table: 'region', relation: '(…) AS q', columns: [{ name: 'region', type: 'VARCHAR' }, { name: 'net_amount', type: 'DOUBLE' }] });
+  const proposal = applyTableProfile({ ...drafted, keyCandidates: ['region'] }, { rows: 4, columns: { region: { distinct: 4, nonNull: 4 } } }, 'region');
+  const unkeyed = applyTableProfile({ ...drafted, keyCandidates: ['region'] }, { rows: 4, columns: { region: { distinct: 3, nonNull: 4 } } }, 'region');
+
+  it('writes grain, fields and measures onto the same block, keeping its name and query', () => {
+    const declaration = tableDatasetDeclaration(proposal, 'Region revenue');
+    expect(declaration.grain).toEqual({ entities: ['region'], keys: ['region'], keyEvidence: 'proof.region-revenue' });
+    const result = addDatasetDefinitionToBlockSource({ source: savedQuery, filePath: 'blocks/region.dql', blockName: 'Region revenue', ...declaration, status: 'review' });
+    expect(result.after).toContain('block "Region revenue" {');
+    expect(result.after).toContain('status = "review"');
+    expect(result.after).toContain('keys = ["region"]');
+    expect(result.after).toMatch(/net_amount \{ agg = "sum"/);
+    expect(result.after).toContain('GROUP BY region');
+    expect(result.afterFingerprint).not.toBe(result.beforeFingerprint);
+    expect(() => addDatasetDefinitionToBlockSource({ source: result.after, filePath: 'blocks/region.dql', blockName: 'Region revenue', ...declaration, status: 'review' }))
+      .toThrow(expect.objectContaining({ code: 'SAVED_QUERY_ALREADY_DATASET' }));
+  });
+
+  it('needs a row identity before it can write fields', () => {
+    expect(() => tableDatasetDeclaration(unkeyed, 'Region revenue')).toThrow('TABLE_DATASET_KEY_REQUIRED');
+  });
+});
+
