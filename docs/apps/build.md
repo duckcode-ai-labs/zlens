@@ -1,8 +1,9 @@
 # Build an App
 
-An App is a set of pages for a team or a decision, built from blocks and
-datasets. You build it in **App Studio** as a private draft, then publish it
-as files in your project.
+An App is a set of pages for a team or a decision, built from Datasets,
+Metrics and saved queries. You build it in **App Studio** as a private draft,
+then publish it as files in your project. The words App Studio uses are listed
+in [Words used in App Studio](index.md#words-used-in-app-studio).
 
 ## 1. Start a new App
 
@@ -24,24 +25,40 @@ as files in your project.
 App Studio opens. The App is a private local draft; the header says
 **Saved locally**.
 
+You can change the data rule later in the App's settings: **Data rule** is
+**Only certified data** or **Also allow data that needs review**.
+
+### Review what AI picked
+
+With **Describe with AI**, App Studio shows **Review the plan** before anything
+is applied. Each source shows its type and trust, such as **Dataset ·
+Certified**, the tiles it creates, and a short **Why:** line with the reason AI
+picked it. Notes from the planner, for example a tile it could not add, are
+listed under the header. With **Only certified data**, AI is given certified
+data only.
+
 ## 2. Add tiles
 
 The left panel has three tabs: **Data**, **Pages** and **Filters**.
 
-To add a tile from a block:
+To add a tile from a saved query:
 
 1. On the **Data** tab, open the source menu at the top and choose **Saved
    queries and all sources…**.
-2. Find your block. Each source shows its trust, such as **Certified** or
-   **Review required**.
+2. Find your data with **Search Datasets, Metrics and saved queries**. Each
+   row shows its type (**Dataset**, **Metrics** or **Saved query**) and its
+   trust: **Certified** or **Needs review**. Certified Datasets are listed
+   first, then Metrics, then saved queries, then data that needs review.
 3. Click **Add Table**, **Add Chart** or **Add KPI**.
 
 The tile appears on the page with its rows. Its **Tile settings** panel shows
-**Data & trust**, for example **Certified** and the block's file.
+**Data & trust**, for example **Certified** and the saved query's file.
 
-You can also build a tile from fields: pick a dataset in the source menu, then
-click a measure or a dimension. A source marked **Review required** shows
-**Enable review lane & add…** instead.
+You can also build a tile from fields: pick a Dataset in the source menu, then
+click a measure or a dimension. To start from a database table, choose **Start
+from a table…** in the source menu; ZLens checks the table once and turns it
+into a Dataset in the App's domain. Data marked **Needs review** shows
+**Allow data that needs review & add…** instead.
 
 Other ways to add content:
 
@@ -64,7 +81,7 @@ Other ways to add content:
 2. Set a **Display label** and a **Control**: **Searchable dropdown**,
    **Searchable multi-select**, **Date range** or **Single date**.
 3. Choose **Apply to**: **This page** or **All compatible pages**, and the
-   **Linked components**.
+   **Linked tiles**.
 4. Click **Create filter**.
 
 ## 5. Preview

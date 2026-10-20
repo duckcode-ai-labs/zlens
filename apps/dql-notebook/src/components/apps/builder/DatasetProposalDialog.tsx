@@ -35,7 +35,7 @@ export function DatasetSourceAuthoringDialog({
   }, [initial?.id, model?.descriptor.sourceRevision, source.sourceRevision]);
 
   if (!model) {
-    return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Dataset source authoring unavailable"><section className="dataset-source-authoring-card"><header><span><FileText size={17} /></span><div><small>DATASET SOURCE</small><h2>Authoring is unavailable</h2></div><button type="button" className="icon" onClick={onClose} aria-label="Close Dataset source authoring"><X size={15} /></button></header><p>Refresh this source from the governed catalog before authoring a block-backed Dataset definition.</p><footer><button type="button" onClick={onClose}>Close</button></footer></section></div>;
+    return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Dataset source authoring unavailable"><section className="dataset-source-authoring-card"><header><span><FileText size={17} /></span><div><small>DATASET SOURCE</small><h2>Authoring is unavailable</h2></div><button type="button" className="icon" onClick={onClose} aria-label="Close Dataset source authoring"><X size={15} /></button></header><p>Refresh this source from the catalog before authoring a block-backed Dataset definition.</p><footer><button type="button" onClick={onClose}>Close</button></footer></section></div>;
   }
 
   const chooseCandidate = (candidate: DatasetCalculatedMeasureCandidate) => {
@@ -64,7 +64,7 @@ export function DatasetSourceAuthoringDialog({
     <section className="dataset-source-authoring-card">
       <header>
         <span><FileText size={17} /></span>
-        <div><small>GOVERNED DATASET DEFINITION</small><h2>Author Dataset definition</h2><p>{model.descriptor.label} · source revision <code>{source.sourceRevision?.slice(0, 18)}</code></p></div>
+        <div><small>DATASET DEFINITION</small><h2>Author Dataset definition</h2><p>{model.descriptor.label} · source revision <code>{source.sourceRevision?.slice(0, 18)}</code></p></div>
         <button type="button" className="icon" onClick={onClose} disabled={disabled} aria-label="Close Dataset source authoring"><X size={15} /></button>
       </header>
       <div className="dataset-source-authoring-body">
@@ -106,7 +106,7 @@ export function DatasetSourceAuthoringDialog({
         </section>
         {message ? <p className="dataset-source-authoring-message" role="status">{message}</p> : null}
       </div>
-      <footer><span>Saving creates a review-required source proposal. It does not change this App’s Dataset binding.</span><button type="button" onClick={onClose} disabled={disabled}>Cancel</button><button type="button" className="primary" onClick={preview} disabled={disabled}><FileText size={13} /> Review source change</button></footer>
+      <footer><span>Saving creates a source proposal that needs review. It does not change this App’s Dataset binding.</span><button type="button" onClick={onClose} disabled={disabled}>Cancel</button><button type="button" className="primary" onClick={preview} disabled={disabled}><FileText size={13} /> Review source change</button></footer>
     </section>
   </div>;
 }
@@ -142,12 +142,12 @@ export function DatasetSourceRebindReviewDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }): JSX.Element {
-  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Enable review preview for Dataset refresh">
+  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Allow data that needs review for Dataset refresh">
     <section className="dataset-source-rebind-card">
-      <header><span><FileText size={17} /></span><div><small>REVIEW-REQUIRED DATASET</small><h2>Refresh this App binding?</h2></div><button type="button" className="icon" onClick={onCancel} disabled={disabled} aria-label="Close Dataset refresh"><X size={15} /></button></header>
-      <p><strong>{humanize(title)}</strong> changed and is currently review-required. You can explicitly enable local review preview and refresh this App’s saved source revision.</p>
-      <p>This does not certify the Dataset. Existing previews are cleared, and Project publication stays blocked until the governed source is certified.</p>
-      <footer><button type="button" onClick={onCancel} disabled={disabled}>Keep current binding</button><button type="button" className="primary" onClick={onConfirm} disabled={disabled}><FileText size={13} /> Enable review preview &amp; refresh</button></footer>
+      <header><span><FileText size={17} /></span><div><small>DATASET NEEDS REVIEW</small><h2>Refresh this App binding?</h2></div><button type="button" className="icon" onClick={onCancel} disabled={disabled} aria-label="Close Dataset refresh"><X size={15} /></button></header>
+      <p><strong>{humanize(title)}</strong> changed and currently needs review. You can explicitly allow data that needs review and refresh this App’s saved source revision.</p>
+      <p>This does not certify the Dataset. Existing previews are cleared, and Project publication stays blocked until the Dataset is certified.</p>
+      <footer><button type="button" onClick={onCancel} disabled={disabled}>Keep current binding</button><button type="button" className="primary" onClick={onConfirm} disabled={disabled}><FileText size={13} /> Allow data that needs review &amp; refresh</button></footer>
     </section>
   </div>;
 }

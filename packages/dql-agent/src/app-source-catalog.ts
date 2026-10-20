@@ -148,9 +148,11 @@ export function queryAppSourceCatalog(
     const result = kindFilter
       ? undefined
       : lease.catalog.queryObjectsPage({ ...queryInput, offset, limit: pageSize });
-    const items = filteredItems
+    // Relevance picks the page; trust orders it. Re-ranking stays within the
+    // page so the cursor keeps addressing the same relevance-ordered rows.
+    const items = rankAppSourcesByTrust(filteredItems
       ? filteredItems.slice(offset, offset + pageSize)
-      : result!.items.map((object) => appSourceFromMetadata(object, lease.snapshotId, policy));
+      : result!.items.map((object) => appSourceFromMetadata(object, lease.snapshotId, policy)));
     const total = filteredItems?.length ?? result!.total;
     const nextOffset = offset + items.length;
     const inventory = lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
@@ -226,28 +228,64 @@ export function resolveAppSourceCatalogRecords(
   }
 }
 
-/** Return a bounded candidate-card set for one App-specific planning call. */
+/**
+ * Return a bounded candidate-card set for one App-specific planning call.
+ *
+ * "Only certified data" (`governed_only`) bounds what the planner sees: the
+ * shortlist then holds certified sources only. Sources the author requires
+ * explicitly are resolved separately and keep their own policy check.
+ * Within the prompt matches, and then within the fill-up rows, sources are
+ * trust-ordered (see `rankAppSourcesByTrust`).
+ */
 export function shortlistAppSources(
   projectRoot: string,
   prompt: string,
   options: { sourcePolicy?: AppBuildSourcePolicy; limit?: number; domains?: string[] } = {},
 ): AppSourceCatalogPage {
   const limit = Math.min(12, Math.max(8, Math.floor(options.limit ?? 12)));
+  const certifiedOnly = (options.sourcePolicy ?? 'governed_only') === 'governed_only';
+  // Over-fetch when review-required rows are dropped so the shortlist still fills.
+  const fetchLimit = certifiedOnly ? 100 : limit;
+  const allowed = (item: AppSourceCatalogRecord) => !certifiedOnly || item.trust === 'certified';
   const primary = queryAppSourceCatalog(projectRoot, {
     query: prompt,
-    limit,
+    limit: fetchLimit,
     domains: options.domains,
     sourcePolicy: options.sourcePolicy,
   });
-  if (primary.items.length >= limit) return primary;
+  const matched = rankAppSourcesByTrust(primary.items.filter(allowed).slice(0, limit));
+  if (matched.length >= limit) return { ...primary, items: matched, nextCursor: undefined };
   const fallback = queryAppSourceCatalog(projectRoot, {
-    limit,
+    limit: fetchLimit,
     domains: options.domains,
     sourcePolicy: options.sourcePolicy,
   });
-  const seen = new Set(primary.items.map((item) => item.sourceId));
-  const items = [...primary.items, ...fallback.items.filter((item) => !seen.has(item.sourceId))].slice(0, limit);
+  const seen = new Set(matched.map((item) => item.sourceId));
+  const fill = rankAppSourcesByTrust(fallback.items.filter((item) => allowed(item) && !seen.has(item.sourceId)));
+  const items = [...matched, ...fill].slice(0, limit);
   return { ...primary, items, nextCursor: undefined };
+}
+
+/**
+ * Trust tier of an App source, lower first: certified Dataset (a block with
+ * fields), certified Metrics (a semantic model), certified saved query (a
+ * plain block), then anything that needs review.
+ */
+export function appSourceTrustTier(source: Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>): number {
+  if (source.trust !== 'certified') return 3;
+  const dataset = source.capabilities.dataset;
+  const semantic = source.kind === 'semantic' || dataset?.kind === 'semantic' || Boolean(source.capabilities.semanticModelId);
+  if (dataset && !semantic) return 0;
+  if (semantic) return 1;
+  return 2;
+}
+
+/** Stable trust re-rank: the incoming (relevance) order is kept within each tier. */
+export function rankAppSourcesByTrust<T extends Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>>(sources: readonly T[]): T[] {
+  return sources
+    .map((source, index) => ({ source, index, tier: appSourceTrustTier(source) }))
+    .sort((left, right) => left.tier - right.tier || left.index - right.index)
+    .map((entry) => entry.source);
 }
 
 export class AppSourceCatalogError extends Error {

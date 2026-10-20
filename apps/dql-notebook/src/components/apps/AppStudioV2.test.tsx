@@ -221,7 +221,7 @@ describe('Studio Dataset source authoring (APP-055)', () => {
     const markup = renderToStaticMarkup(
       <DatasetSourceRebindReviewDialog title="Order lines Dataset" disabled={false} onCancel={() => undefined} onConfirm={() => undefined} />,
     );
-    expect(markup).toContain('Enable review preview &amp; refresh');
+    expect(markup).toContain('Allow data that needs review &amp; refresh');
     expect(markup).toContain('Project publication stays blocked');
     expect(markup).toContain('does not certify the Dataset');
   });
@@ -609,5 +609,69 @@ describe('Studio field-based tiles are on by default (APP-007)', () => {
     expect(markup).not.toContain('Turn on field-based tiles');
     expect(markup).not.toContain('Turning on');
     expect(markup).toMatch(/<button[^>]*class="source-add-view"[^>]*disabled=""/);
+  });
+});
+
+describe('Studio honest AI review and App domain (D6, D7, D8)', () => {
+  it('uses the App domain from the draft, never the no-domain default', () => {
+    const page = (domain?: string) => ({ pages: [{ metadata: { title: 'Overview', ...(domain ? { domain } : {}) } }] }) as never;
+    expect(studio.appDraftDomain(page('finance'))).toBe('finance');
+    expect(studio.appDraftDomain(page('general'))).toBeUndefined();
+    expect(studio.appDraftDomain(page())).toBeUndefined();
+    expect(studio.appDraftDomain(null)).toBeUndefined();
+  });
+
+  it('shows why AI picked each source, its notes, and one set of source words', () => {
+    const AiPlanReview = studio.AiPlanReview;
+    const markup = renderToStaticMarkup(
+      <AiPlanReview
+        proposal={{
+          id: 'proposal-1', draftId: 'draft-1', baseRevision: 1, baseProposalHash: 'hash',
+          operations: [], clarifications: [],
+          warnings: ['Revenue by channel was not added because its Dataset query is not covered.'],
+          summary: { requirements: 1, covered: 1, gaps: 0, certifiedSources: 2, semanticSources: 1 },
+        } as never}
+        summary={{
+          pages: [{ id: 'overview', title: 'Overview' }],
+          components: [{ id: 'revenue', title: 'Revenue trend', visualization: 'Line', source: 'orders', sourceId: 'source.orders' }],
+          sources: [
+            {
+              id: 'source.orders', label: 'Orders', sourceRef: 'orders', kind: 'certified_block', trustState: 'certified', reviewStatus: 'not_required',
+              componentIds: ['revenue'], rationale: 'Orders carries revenue by order date.',
+              capabilities: { measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [], dataset: { kind: 'block' } as never },
+            },
+            { id: 'source.margin', label: 'Margin', sourceRef: 'margin', kind: 'governed_semantic', trustState: 'certified', reviewStatus: 'not_required', componentIds: [] },
+          ],
+        }}
+        catalog={[{
+          id: 'semantic.customers', sourceId: 'semantic.customers', name: 'customers', domain: 'sales', status: 'certified', owner: null, tags: [],
+          path: 'semantic/customers.yml', fingerprint: 'f', lastModified: '', description: 'Customer counts', score: 1, reasons: [],
+          capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], semanticModelId: 'customers' },
+        }]}
+        catalogQuery=""
+        sourcePolicy="governed_only"
+        selectedSourceIds={new Set(['source.orders'])}
+        addingSourceId={null}
+        busy={false}
+        onRevise={() => undefined}
+        onApply={() => undefined}
+        onDismiss={() => undefined}
+        onCatalogQuery={() => undefined}
+        onAddSource={() => undefined}
+        onAddProposalSource={() => undefined}
+        onAnswerClarification={() => undefined}
+        onGenerateGap={() => undefined}
+        onToggleSource={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Why: Orders carries revenue by order date.');
+    expect(markup).toContain('Revenue by channel was not added because its Dataset query is not covered.');
+    expect(markup).toContain('Dataset · Certified');
+    expect(markup).toContain('Metrics · Certified');
+    expect(markup).toContain('sales · Metrics · Certified');
+    expect(markup).toContain('Creates 1 tile: Revenue trend');
+    expect(markup).toContain('planned tiles');
+    expect(markup).toContain('Only certified data');
+    expect(markup).not.toMatch(/Certified block|Review required|review lane|planned views/);
   });
 });

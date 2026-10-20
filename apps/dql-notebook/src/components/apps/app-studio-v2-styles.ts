@@ -602,6 +602,7 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-ai-plan > header p { max-width:700px; margin:2px 0 0; color:var(--text-secondary); font-size:13px; line-height:1.5; }
 .studio-ai-plan > header p strong { color:var(--text-primary); }
 .studio-ai-plan > header .proposal-planner-provenance { color:var(--text-tertiary); font-size:12px; font-weight:600; letter-spacing:0; }
+.studio-ai-plan > header .proposal-warnings { margin:6px 0 0; padding-left:16px; display:grid; gap:2px; color:var(--text-secondary); font-size:12px; line-height:1.4; }
 .studio-ai-plan > header > button { width:31px; height:31px; flex:none; border:0; border-radius:8px; display:grid; place-items:center; background:transparent; color:var(--text-tertiary); }
 .studio-ai-plan > header > button:hover { background:var(--bg-0); color:var(--text-primary); }
 .proposal-source-summary { display:flex; align-items:center; gap:7px; flex-wrap:wrap; padding:11px 24px; border-bottom:1px solid var(--border-subtle); background:var(--bg-1); }
@@ -626,6 +627,7 @@ export const APP_STUDIO_V2_STYLES = `
 .proposal-source-row strong, .proposal-catalog-list strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .proposal-source-row small, .proposal-catalog-list small { color:var(--text-tertiary); font-size:12px; }
 .proposal-source-row p, .proposal-catalog-list p { margin:1px 0 0; color:var(--text-secondary); font-size:12px; line-height:1.4; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.proposal-source-row p.proposal-source-why { color:var(--text-tertiary); white-space:normal; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .proposal-source-row > button, .proposal-catalog-list > article > button { border:1px solid var(--border-default); background:var(--bg-2); border-radius:8px; padding:7px 9px; display:flex; align-items:center; gap:5px; color:var(--accent); font-size:12px; font-weight:600; }
 .proposal-source-row > button, .proposal-catalog-list > article > button { max-width:190px; white-space:normal; line-height:1.25; text-align:center; justify-content:center; }
 .proposal-source-row > button.remove { color:var(--text-secondary); }

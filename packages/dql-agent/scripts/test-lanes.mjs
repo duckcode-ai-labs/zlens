@@ -127,7 +127,8 @@ const EXPECTED_TEST_FILES = 189;
 // (port of c0e24814).
 // 2533 with the second look at an AI-drafted result (ask-pipeline.test.ts, +5) (port of 1f08af7e / 59683be5).
 // 2534 with Build grounded on the warehouse catalog in a project without dbt (build-from-prompt.test.ts, +1).
-const EXPECTED_TESTS = 2534;
+// 2537 with the certified-only AI shortlist and trust-ordered App sources (app-source-catalog.test.ts, +3).
+const EXPECTED_TESTS = 2537;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 72 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2458.

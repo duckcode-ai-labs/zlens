@@ -75,7 +75,7 @@ export function DatasetTileBuilder({
     : `${humanize(query.measures[0]?.measure ?? 'Measure')}${query.dimensions[0] ? ` by ${humanize(query.dimensions[0].field)}` : ''}`;
   return <section className="dataset-tile-builder" aria-label={`Build a tile from ${descriptor.label}`}>
     <header><span><Blocks size={13} /></span><div><small>{descriptor.label.toUpperCase()}</small><strong>Pick measures and a grouping. The preview updates as you go.</strong></div></header>
-    <p className="dataset-builder-description">{descriptor.trust === 'certified' ? 'Certified Dataset' : 'Review-required Dataset'} · fields compile to governed SQL on every run.</p>
+    <p className="dataset-builder-description">{descriptor.trust === 'certified' ? 'Certified Dataset' : 'Dataset · Needs review'} · fields compile to governed SQL on every run.</p>
     {!detail ? <label><span>Show as</span><select value={view} disabled={disabled} onChange={(event) => {
       const next = event.target.value as typeof view;
       setView(next);

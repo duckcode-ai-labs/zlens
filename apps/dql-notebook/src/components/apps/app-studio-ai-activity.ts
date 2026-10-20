@@ -1,6 +1,6 @@
 export const APP_STUDIO_AI_ACTIVITY_LABELS = [
   'Understanding your decision',
-  'Finding certified and draft blocks',
+  'Finding certified Datasets, Metrics and saved queries',
   'Checking trust and capabilities',
   'Preparing source review',
 ] as const;
@@ -53,7 +53,7 @@ export function appStudioSourceActionLabel(input: {
   if (input.status === 'adding') return 'Adding…';
   if (input.status === 'added') return `Added to ${input.pageTitle?.trim() || 'Overview'}`;
   if (input.status === 'error') return `Try add ${input.view}`;
-  if (input.reviewRequired) return `Enable review lane & add ${input.view}`;
+  if (input.reviewRequired) return `Allow data that needs review & add ${input.view}`;
   if (input.alreadyUsed) return `Add another ${input.view}`;
   return `Add ${input.view}`;
 }

@@ -2020,6 +2020,53 @@ describe('Apps command center API helpers', () => {
     expect(JSON.stringify(page)).not.toContain('SELECT region');
   });
 
+  it('carries the planner reason onto each AI tile and keeps review-required data out when only certified data is allowed', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', {
+      name: 'Total Revenue',
+      domain: 'revenue',
+      status: 'certified',
+      tags: ['revenue', 'kpi'],
+      description: 'Executive revenue KPI',
+      chart: 'single_value',
+    });
+    writeBlock(root, 'revenue/draft_revenue.dql', {
+      name: 'Draft Revenue Split',
+      domain: 'revenue',
+      status: 'draft',
+      tags: ['revenue'],
+      description: 'Draft revenue split by region',
+      chart: 'bar',
+    });
+    const draft = createStoredAppBuildDraft(root, {
+      name: 'Revenue',
+      goal: 'Track revenue',
+      domain: 'revenue',
+      authoringMode: 'ai',
+      sourcePolicy: 'governed_only',
+      template: 'operational_dashboard',
+    });
+
+    const proposal = await proposeAppBuildDraftOperations(root, draft, { prompt: 'Build a revenue app.' });
+
+    const sources = proposal.operations.flatMap((operation) => operation.type === 'upsert_source' ? [operation.source] : []);
+    expect(sources.length).toBeGreaterThan(0);
+    expect(sources.every((source) => source.trustState === 'certified')).toBe(true);
+    expect(proposal.candidateSourceIds?.some((id) => id.includes('draft_revenue'))).toBeFalsy();
+    const page = proposal.operations.find((operation) => operation.type === 'upsert_page');
+    const tiles = page?.type === 'upsert_page' ? page.page.layout.items.filter((item) => item.sourceId) : [];
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.sourceEvidence).toEqual([expect.objectContaining({
+        source: tile.sourceId,
+        kind: 'planner_rationale',
+        reason: expect.stringMatching(/\S/),
+        trustState: 'certified',
+      })]);
+    }
+    expect(proposal.summary).toMatchObject({ certifiedSources: sources.length, semanticSources: 0 });
+  });
+
   it('uses one catalog for all-draft AI and manual composition, with explicit gap generation (PRD-007, API-014)', async () => {
     const root = createProject();
     writeBlock(root, 'sales/orders-by-region.dql', {

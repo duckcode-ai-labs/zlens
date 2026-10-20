@@ -4327,6 +4327,8 @@ export async function proposeAppBuildDraftOperations(
     componentPageIdById.set(component.id, pageState.pageId);
     const plannedPage = brief.pages.find((candidate) => candidate.id === pageState.planId);
     const sectionId = plannedPage?.sections.find((section) => section.componentIds.includes(component.id))?.id;
+    // The planner's one-line reason travels with the tile so the review can say why.
+    const rationale = cleanString(component.rationale).slice(0, 500);
     const tile: DashboardGridItem = {
       i: tileId,
       x: (itemIndex % 2) * 6,
@@ -4348,6 +4350,14 @@ export async function proposeAppBuildDraftOperations(
       review: { status: certified ? 'not_required' : 'required', sourceFingerprint: source.sourceRevision },
       trustState: certified ? 'certified' : 'review_required',
       reviewStatus: certified ? 'certified' : 'review_required',
+      ...(rationale ? {
+        sourceEvidence: [{
+          source: source.sourceId,
+          reason: rationale,
+          kind: 'planner_rationale',
+          trustState: certified ? 'certified' as const : 'review_required' as const,
+        }],
+      } : {}),
       ...(sectionId ? { sectionId } : {}),
     };
     pageState.reservedItems.push(tile);
@@ -4581,7 +4591,11 @@ export async function proposeAppBuildDraftOperations(
       covered: coverage.filter((item) => item.status === 'covered').length,
       gaps: coverage.filter((item) => item.status === 'gap').length,
       certifiedSources: plannedSources.filter((source) => source.lifecycle === 'certified').length,
-      semanticSources: 0,
+      semanticSources: plannedSources.filter((source) => (
+        source.kind === 'semantic'
+        || source.capabilities.dataset?.kind === 'semantic'
+        || Boolean(source.capabilities.semanticModelId)
+      )).length,
     },
   };
 }
