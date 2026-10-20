@@ -89,7 +89,7 @@ interface Ctx {
   url: URL;
   path: string;
   projectRoot: string;
-  /** Explicit local project opt-in for Dataset field-query authoring. */
+  /** Dataset field-query authoring; on unless explicitly `false` (`apps.datasets: false`). */
   datasetsEnabled?: boolean;
   /** With a host (RFC 0010): whether the person may open this App; the list shows only those. */
   mayViewApp?: (appId: string) => Promise<boolean>;
@@ -497,7 +497,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       });
       sendJson(res, 200, {
         ok: true,
-        features: { datasets: ctx.datasetsEnabled === true },
+        features: { datasets: ctx.datasetsEnabled !== false },
         ...page,
       });
     } catch (err) {
@@ -911,7 +911,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       if (ctx.datasetsEnabled === false && body.mode === 'manual' && body.selections.some((selection) => selection.query !== undefined)) {
         sendJson(res, 409, {
           ok: false,
-          error: 'APP_DATASETS_FEATURE_DISABLED: enable apps.datasets in dql.config.json before composing field-based Dataset tiles.',
+          error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before composing them.',
         });
         return true;
       }
@@ -4192,7 +4192,7 @@ export async function proposeAppBuildDraftOperations(
   });
   const byId = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
   if (hooks?.datasetsEnabled === false && brief.components.some((component) => byId.get(component.sourceId)?.capabilities.dataset)) {
-    throw new Error('APP_DATASETS_FEATURE_DISABLED: enable apps.datasets in dql.config.json before asking AI to author field-based Dataset tiles.');
+    throw new Error('APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before asking AI to author them.');
   }
   type PlannedPageState = {
     planId: string;

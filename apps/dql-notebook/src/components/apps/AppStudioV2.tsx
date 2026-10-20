@@ -421,8 +421,8 @@ export function AppStudioV2({
   // Start from a table: the dialog, and the new Dataset to open once the catalog lists it.
   const [tableDialogOpen, setTableDialogOpen] = useState(false);
   const [pendingDatasetSourceId, setPendingDatasetSourceId] = useState<string | null>(null);
-  const [datasetTilesEnabled, setDatasetTilesEnabled] = useState(false);
-  const [enablingDatasets, setEnablingDatasets] = useState(false);
+  // Field-based tiles are on unless the project sets `apps.datasets: false`.
+  const [datasetTilesEnabled, setDatasetTilesEnabled] = useState(true);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [proposal, setProposal] = useState<AppStudioAiProposal | null>(null);
@@ -600,7 +600,7 @@ export function AppStudioV2({
         setCatalog(page.items);
         setCatalogNextCursor(page.nextCursor);
         setCatalogTotal(page.total);
-        setDatasetTilesEnabled(page.features?.datasets === true);
+        setDatasetTilesEnabled(page.features?.datasets !== false);
       }).catch((cause) => {
         if (active && !controller.signal.aborted) {
           setCatalog([]);
@@ -1474,19 +1474,6 @@ export function AppStudioV2({
     }]);
   };
 
-  const enableDatasetTiles = async () => {
-    setEnablingDatasets(true);
-    const result = await api.enableDatasetTiles();
-    setEnablingDatasets(false);
-    if (!result.ok) {
-      setCatalogError(result.error || 'ZLens could not turn on field-based tiles for this project.');
-      return;
-    }
-    setCatalogRefreshNonce((current) => current + 1);
-    // Tiles that were refused while the feature was off can run now.
-    void runPreview();
-  };
-
   const loadMoreSources = async () => {
     if (!draft || !catalogNextCursor || catalogLoading) return;
     setCatalogLoading(true);
@@ -1503,7 +1490,7 @@ export function AppStudioV2({
       });
       setCatalogNextCursor(page.nextCursor);
       setCatalogTotal(page.total);
-      setDatasetTilesEnabled(page.features?.datasets === true);
+      setDatasetTilesEnabled(page.features?.datasets !== false);
     } catch (cause) {
       setCatalogError(messageOf(cause));
     } finally {
@@ -3147,7 +3134,7 @@ export function AppStudioV2({
           <button type="button" className="mobile-drawer-close" onClick={() => setPanelOpen(false)} aria-label="Close Studio drawer"><X size={16} /></button>
           {panel === 'pages' ? <PagesPanel draft={draft} activePageId={activePage?.id} onOpen={setActivePageId} onAdd={() => void addPage()} template={draft.template} onApplyTemplate={(nextTemplate) => void applyTemplate(nextTemplate)} /> : null}
           {panel === 'sources' && dataPaneOpen && dataView === 'fields' ? <DataPanel datasets={datasetItems} active={activeDatasetItem} target={dataPanelTarget} disabled={busy || previewing} loading={catalogLoading} onChooseDataset={chooseDataset} onPickField={pickField} onBrowseSources={() => setDataView('sources')} onStartFromTable={() => setTableDialogOpen(true)} onAddContent={(kind) => void addComponent(kind, null)} /> : null}
-          {panel === 'sources' && (!dataPaneOpen || dataView === 'sources') ? <>{dataPaneOpen ? <button type="button" className="panel-back" onClick={() => setDataView('fields')}><ArrowLeft size={13} /> Dataset fields</button> : null}<SourcesPanel usedSources={draft.sources} items={filteredCatalog} selected={selectedSource} query={catalogQuery} loading={catalogLoading} error={catalogError} disabled={busy || previewing} datasetTilesEnabled={datasetTilesEnabled} enablingDatasets={enablingDatasets} onEnableDatasets={() => void enableDatasetTiles()} sourceFeedback={sourceFeedback} onQuery={setCatalogQuery} onSelect={selectSource} onAdd={(item, kind) => void addComponent(kind, item)} onAddDataset={(item, kind, query, title) => void addComponent(kind, item, query, title)} onAuthorDataset={openDatasetAuthoring} onRefreshDatasetBinding={(sourceId) => void refreshDatasetBinding(sourceId)} onAddContent={(kind) => void addComponent(kind, null)} policy={draft.sourcePolicy} total={catalogTotal} hasMore={Boolean(catalogNextCursor)} onLoadMore={() => void loadMoreSources()} onEnableReview={() => void mutate([{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }])} /></> : null}
+          {panel === 'sources' && (!dataPaneOpen || dataView === 'sources') ? <>{dataPaneOpen ? <button type="button" className="panel-back" onClick={() => setDataView('fields')}><ArrowLeft size={13} /> Dataset fields</button> : null}<SourcesPanel usedSources={draft.sources} items={filteredCatalog} selected={selectedSource} query={catalogQuery} loading={catalogLoading} error={catalogError} disabled={busy || previewing} datasetTilesEnabled={datasetTilesEnabled} sourceFeedback={sourceFeedback} onQuery={setCatalogQuery} onSelect={selectSource} onAdd={(item, kind) => void addComponent(kind, item)} onAddDataset={(item, kind, query, title) => void addComponent(kind, item, query, title)} onAuthorDataset={openDatasetAuthoring} onRefreshDatasetBinding={(sourceId) => void refreshDatasetBinding(sourceId)} onAddContent={(kind) => void addComponent(kind, null)} policy={draft.sourcePolicy} total={catalogTotal} hasMore={Boolean(catalogNextCursor)} onLoadMore={() => void loadMoreSources()} onEnableReview={() => void mutate([{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }])} /></> : null}
           {panel === 'filters' ? <FiltersPanel draft={draft} activePageId={activePage?.id} catalog={catalog} candidates={filterCandidates} runtimeFilterFields={runtimeFilterFields} previewRunsByPage={previewRunsByPage} previewing={previewing} disabled={busy || previewing} onRunPreview={() => void runPreview()} onSave={(configuration) => void saveFilter(configuration)} onRemove={(id) => void removeFilter(id)} /> : null}
         </section>
       </aside> : null}
@@ -3749,7 +3736,10 @@ function PagesPanel({ draft, activePageId, onOpen, onAdd, template, onApplyTempl
   </>;
 }
 
-function SourcesPanel({
+/** Shown only when a project sets `apps.datasets: false`; field-based tiles are on by default. */
+const FIELD_TILES_OFF_MESSAGE = 'Field-based tiles are turned off for this project (apps.datasets is false in dql.config.json).';
+
+export function SourcesPanel({
   usedSources,
   items,
   selected,
@@ -3758,8 +3748,6 @@ function SourcesPanel({
   error,
   disabled,
   datasetTilesEnabled,
-  enablingDatasets = false,
-  onEnableDatasets,
   sourceFeedback,
   onQuery,
   onSelect,
@@ -3782,8 +3770,6 @@ function SourcesPanel({
   error: string | null;
   disabled: boolean;
   datasetTilesEnabled: boolean;
-  enablingDatasets?: boolean;
-  onEnableDatasets?: () => void;
   sourceFeedback: AppStudioSourceFeedback | null;
   onQuery: (value: string) => void;
   onSelect: (item: AppBlockRecommendation) => void;
@@ -3803,7 +3789,7 @@ function SourcesPanel({
   const usedIdentifiers = new Set(usedDataSources.flatMap((source) => [source.id, source.sourceRef]));
   const visibleItems = items.filter((item) => viewFilter === 'all' || recommendedComponentKind(item) === viewFilter);
   return <>
-    {!datasetTilesEnabled ? <div className="source-catalog-empty" role="status"><strong>Build tiles from Dataset fields</strong><small>Pick measures and groupings from a governed Dataset instead of pinning a finished block. This writes <code>{'"apps": { "datasets": true }'}</code> to <code>dql.config.json</code>.</small>{onEnableDatasets ? <button type="button" className="primary" disabled={disabled || enablingDatasets} onClick={onEnableDatasets}>{enablingDatasets ? 'Turning on…' : 'Turn on field-based tiles'}</button> : null}</div> : null}
+    {!datasetTilesEnabled ? <div className="source-catalog-empty" role="status"><small>{FIELD_TILES_OFF_MESSAGE}</small></div> : null}
     <label className="source-search-primary">
       <Search size={15} />
       <input id="studio-field-search" value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search Datasets, blocks, metrics" aria-label="Search governed sources" />
@@ -3850,7 +3836,7 @@ function SourcesPanel({
           <span className={item.status === 'certified' ? 'certified' : 'review'}>{item.status === 'certified' ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
           <div><strong title={item.name}>{humanize(item.name)}</strong><small>{humanize(item.domain)} · {sourceCatalogKindLabel(item)} · {item.status === 'certified' ? 'Certified' : 'Review required'}{isUsed ? ' · In App' : ''}</small></div>
         </button>
-        <button type="button" className="source-add-view" disabled={disabled || datasetDisabled} title={datasetDisabled ? 'Turn on field-based tiles at the top of this list to build from Dataset fields.' : blockedByPolicy ? 'Enable the review lane and add this draft block in one saved change.' : undefined} onClick={() => item.capabilities?.dataset ? onSelect(item) : onAdd(item, kind)} aria-label={item.capabilities?.dataset ? `Configure fields for ${item.name}` : `${actionLabel}: ${item.name}`}>{item.capabilities?.dataset ? <><Settings2 size={13} /> Configure fields</> : <><Plus size={13} /> {actionLabel}</>}</button>
+        <button type="button" className="source-add-view" disabled={disabled || datasetDisabled} title={datasetDisabled ? FIELD_TILES_OFF_MESSAGE : blockedByPolicy ? 'Enable the review lane and add this draft block in one saved change.' : undefined} onClick={() => item.capabilities?.dataset ? onSelect(item) : onAdd(item, kind)} aria-label={item.capabilities?.dataset ? `Configure fields for ${item.name}` : `${actionLabel}: ${item.name}`}>{item.capabilities?.dataset ? <><Settings2 size={13} /> Configure fields</> : <><Plus size={13} /> {actionLabel}</>}</button>
         {rowFeedback ? <small className={`source-action-feedback ${rowFeedback.status}`} role={rowFeedback.status === 'error' ? 'alert' : 'status'}>{rowFeedback.status === 'error' ? rowFeedback.message : actionLabel}</small> : null}
         {isSelected ? <div className="source-catalog-detail">
           <p>{item.description || `${humanize(item.name)} from the ${humanize(item.domain)} domain.`}</p>
@@ -3862,7 +3848,7 @@ function SourcesPanel({
               {isUsed ? <button type="button" className="dataset-author-source" disabled={disabled || !item.sourceId} onClick={() => item.sourceId && onRefreshDatasetBinding(item.sourceId)}><ShieldCheck size={12} /> Refresh this App binding</button> : null}
             </>
             : item.capabilities?.dataset
-              ? <div className="source-view-options"><small>Turn on field-based tiles at the top of this list to build from this Dataset's fields.</small></div>
+              ? <div className="source-view-options"><small>{FIELD_TILES_OFF_MESSAGE}</small></div>
             : <div className="source-view-options" aria-label={`Add ${item.name} with another view`}>
               <button type="button" disabled={disabled} aria-label={blockedByPolicy ? `Enable review lane and add ${item.name} as KPI` : undefined} onClick={() => onAdd(item, 'kpi')}><Gauge size={13} /> KPI</button>
               <button type="button" disabled={disabled} aria-label={blockedByPolicy ? `Enable review lane and add ${item.name} as Chart` : undefined} onClick={() => onAdd(item, 'chart')}><BarChart3 size={13} /> Chart</button>
@@ -4224,7 +4210,7 @@ export function StudioTilePreview({
     return <div className="live-component-preview driver"><DriverView analysis={run.driver} compact={tile.h <= 4} /></div>;
   }
   if (run.status !== 'ok' && run.error?.startsWith('APP_DATASETS_FEATURE_DISABLED')) {
-    return <div className="preview-state error"><strong>Field-based tiles are off</strong><span>Turn them on from the Sources panel to run this tile.</span></div>;
+    return <div className="preview-state error"><strong>Field-based tiles are off</strong><span>{FIELD_TILES_OFF_MESSAGE}</span></div>;
   }
   if (run.status !== 'ok' || !run.result) return <div className="preview-state error"><strong>{humanize(run.status)}</strong><span>{run.error ?? 'This component could not run with the current source and filters.'}</span></div>;
   const visualization = tile.query

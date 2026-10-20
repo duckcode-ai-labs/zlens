@@ -3,9 +3,9 @@
 | Field              | Value                                                                  |
 | ------------------ | ---------------------------------------------------------------------- |
 | **Author(s)**      | @KKranthi6881                                                          |
-| **Status**         | Accepted; implemented behind `apps.datasets` for the pilot             |
+| **Status**         | Accepted; implemented and on by default (`apps.datasets: false` turns it off) |
 | **Created**        | 2026-09-10 (revised 2026-09-17)                                        |
-| **Targets**        | DQL after `1.17.3`, local opt-in                                       |
+| **Targets**        | DQL after `1.17.3`; on by default after ZLens 0.2.2                    |
 | **Implementation** | landed on `main`, `b5a34727`..`8e0d3f4c`                               |
 | **Amends**         | `PRD-004`, `PRD-007`, `AGT-026` (adds a field-query tile kind)         |
 
@@ -630,8 +630,10 @@ organization approvals.
 ## Milestones
 
 The plan was journey-first. The implementation landed M1–M4 together.
-Everything is gated by `apps.datasets` (off by default). The result cache has
-a separate opt-in.
+Everything is gated by `apps.datasets`. It was off by default during the
+pilot; field-based tiles are now on by default, and `apps.datasets: false` in
+`dql.config.json` turns them off for a project. The result cache has a separate
+opt-in.
 
 | Milestone | Scope |
 | --------- | ----- |
@@ -680,7 +682,7 @@ New IDs for decisions this RFC locks:
 | `APP-076` | Committed M1 pilot App compiles without drift and runs from a clean checkout |
 | `APP-077` | Apps published before Datasets run and republish unchanged |
 | `APP-078` | Detail navigation carries a clicked mark into a carried filter bound to the same field; Dataset filters list their bound field's values |
-| `APP-079` | Field tiles can be turned on from Studio or the viewer in one action (`POST /api/app-datasets/enable`); the `APP-007` gate is unchanged |
+| `APP-079` | Field tiles can be turned back on from the viewer in one action (`POST /api/app-datasets/enable`); the `APP-007` gate is unchanged |
 
 All are recorded in
 [`00-decisions.md`](../specs/dql-2-domain-context/00-decisions.md) and

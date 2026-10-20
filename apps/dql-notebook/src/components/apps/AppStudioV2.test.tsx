@@ -552,3 +552,62 @@ describe('Studio legacy semantic conversion (M4-CONV-01)', () => {
     expect(markup).not.toContain('Run SQL');
   });
 });
+
+describe('Studio field-based tiles are on by default (APP-007)', () => {
+  const datasetSource = {
+    id: 'source.order-lines', sourceId: 'source.order-lines', name: 'order_lines', domain: 'commerce',
+    status: 'certified', owner: null, tags: [], path: 'blocks/commerce/order-lines.dql', fingerprint: 'sha256:a',
+    lastModified: '2026-10-01T00:00:00.000Z', description: 'Order lines', score: 1, reasons: [],
+    capabilities: {
+      measures: ['revenue'], dimensions: ['region'], outputs: ['region', 'revenue'], filters: [],
+      dataset: { id: 'dataset.order-lines', kind: 'block' },
+    },
+  };
+
+  function renderSourcesPanel(datasetTilesEnabled: boolean): string {
+    const SourcesPanel = studio.SourcesPanel;
+    return renderToStaticMarkup(
+      <SourcesPanel
+        usedSources={[]}
+        items={[datasetSource] as any}
+        selected={null}
+        query=""
+        loading={false}
+        error={null}
+        disabled={false}
+        datasetTilesEnabled={datasetTilesEnabled}
+        sourceFeedback={null}
+        onQuery={vi.fn()}
+        onSelect={vi.fn()}
+        onAdd={vi.fn()}
+        onAddDataset={vi.fn()}
+        onAuthorDataset={vi.fn()}
+        onRefreshDatasetBinding={vi.fn()}
+        onAddContent={vi.fn()}
+        policy="governed_only"
+        total={1}
+        hasMore={false}
+        onLoadMore={vi.fn()}
+        onEnableReview={vi.fn()}
+      />,
+    );
+  }
+
+  it('shows no opt-in banner and keeps Dataset rows usable when the feature is on', () => {
+    const markup = renderSourcesPanel(true);
+    expect(markup).not.toContain('Build tiles from Dataset fields');
+    expect(markup).not.toContain('Turn on field-based tiles');
+    expect(markup).not.toContain('turned off for this project');
+    expect(markup).toContain('Configure fields');
+    expect(markup).not.toMatch(/<button[^>]*class="source-add-view"[^>]*disabled=""/);
+  });
+
+  it('shows one plain line and no write button when apps.datasets is false', () => {
+    const markup = renderSourcesPanel(false);
+    expect(markup).toContain('Field-based tiles are turned off for this project (apps.datasets is false in dql.config.json).');
+    expect(markup).not.toContain('Build tiles from Dataset fields');
+    expect(markup).not.toContain('Turn on field-based tiles');
+    expect(markup).not.toContain('Turning on');
+    expect(markup).toMatch(/<button[^>]*class="source-add-view"[^>]*disabled=""/);
+  });
+});

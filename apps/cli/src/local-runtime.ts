@@ -898,10 +898,9 @@ export interface ProjectConfig {
   manifestVersion?: 1 | 2 | 3;
   modeling?: { mode?: ManifestModelingMode };
   /**
-   * Explicit opt-ins for locally evolving App authoring surfaces. Dataset
-   * field queries remain off until the project owner enables them, so an
-   * existing App keeps its legacy block semantics after an upgrade. New
-   * projects are created with `datasets: true` (APP-007).
+   * Switches for App authoring surfaces. Field-based Dataset tiles are on
+   * unless `datasets` is explicitly `false`, which turns them off for the
+   * project (APP-007).
    */
   apps?: {
     datasets?: boolean;
@@ -13315,7 +13314,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   ): Promise<DatasetTileSaveAsBlockResponse> => {
     const refuse = (code: string, error: string, status = 409): DatasetTileSaveAsBlockResponse => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('DATASET_TILE_SAVE_DISABLED', 'Dataset tile authoring is disabled for this project. Enable apps.datasets before saving a reusable block.');
+      return refuse('DATASET_TILE_SAVE_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before saving a reusable block.');
     }
     const run = dashboardRunEvidence.get(input.runId);
     if (!run || run.expiresAt < Date.now()) {
@@ -13460,7 +13459,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   ): Promise<DatasetTileReplaceWithBlockResponse> => {
     const refuse = (code: string, error: string, status = 409): DatasetTileReplaceWithBlockResponse => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('DATASET_TILE_REPLACE_DISABLED', 'Dataset tile authoring is disabled for this project. Enable apps.datasets before replacing a tile.');
+      return refuse('DATASET_TILE_REPLACE_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before replacing a tile.');
     }
     const run = dashboardRunEvidence.get(input.runId);
     if (!run || run.expiresAt < Date.now()) {
@@ -13753,7 +13752,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   }): Promise<SemanticConversionPrepared | Extract<SemanticTileConversionPreviewResponse, { ok: false }>> => {
     const refuse = (code: string, error: string, status = 409): Extract<SemanticTileConversionPreviewResponse, { ok: false }> => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('SEMANTIC_TILE_CONVERSION_DISABLED', 'Dataset tile authoring is disabled for this project. Enable apps.datasets before converting this semantic tile.');
+      return refuse('SEMANTIC_TILE_CONVERSION_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before converting this semantic tile.');
     }
     const storage = new LocalAppStorage(defaultLocalAppsDbPath(projectRoot), { owner: currentRecordOwner() });
     let draft: AppBuildDraft | null;
@@ -19998,9 +19997,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
-    // One explicit author action turns field-based Dataset tiles on for this
-    // project, instead of asking them to hand-edit dql.config.json. It only
-    // sets `apps.datasets`; every other key is preserved.
+    // One explicit author action turns field-based Dataset tiles back on for a
+    // project that set `apps.datasets: false`, instead of asking them to
+    // hand-edit dql.config.json. It only sets `apps.datasets`; every other key
+    // is preserved. When the feature is already on (the default) it writes
+    // nothing.
     if (req.method === 'POST' && path === '/api/app-datasets/enable') {
       try {
         const configPath = join(projectRoot, 'dql.config.json');
@@ -20010,7 +20011,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const apps = raw.apps && typeof raw.apps === 'object' && !Array.isArray(raw.apps)
           ? raw.apps as Record<string, unknown>
           : {};
-        if (apps.datasets !== true) {
+        if (apps.datasets === false) {
           raw.apps = { ...apps, datasets: true };
           writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
           projectConfig = loadProjectConfig(projectRoot);
@@ -20940,7 +20941,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 tileType: 'dataset',
                 title: item.title,
                 trustState: 'review_required',
-                error: 'APP_DATASETS_FEATURE_DISABLED: enable apps.datasets in dql.config.json before running field-based Dataset tiles.',
+                error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before running them.',
               });
               continue;
             }
@@ -34752,9 +34753,12 @@ export function loadProjectConfig(projectRoot: string): ProjectConfig {
   return config;
 }
 
-/** Dataset-backed field tiles are intentionally an explicit local project opt-in. */
+/**
+ * Dataset-backed field tiles are on by default. `apps.datasets: false` in
+ * dql.config.json is the only way to turn them off for a project (APP-007).
+ */
 export function datasetsAppFeatureEnabled(config: Pick<ProjectConfig, 'apps'>): boolean {
-  return config.apps?.datasets === true;
+  return config.apps?.datasets !== false;
 }
 
 /**

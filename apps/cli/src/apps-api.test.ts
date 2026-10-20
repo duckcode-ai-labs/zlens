@@ -2803,7 +2803,21 @@ describe('Apps command center API helpers', () => {
     expect((stale.payload as any).error).toContain('APP_BUILD_PROPOSAL_CONFLICT');
   });
 
-  it('reports and enforces the explicit local Dataset feature opt-in (APP-007)', async () => {
+  it('reports field-based Dataset tiles as on when the runtime does not turn them off (APP-007)', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Default Dataset App', goal: 'Explore revenue by region', authoringMode: 'manual',
+      sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    const unset = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {});
+    expect(unset).toMatchObject({ status: 200, payload: { features: { datasets: true } } });
+    const on = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {}, { datasetsEnabled: true });
+    expect(on).toMatchObject({ status: 200, payload: { features: { datasets: true } } });
+  });
+
+  it('reports and enforces apps.datasets: false as the off-switch (APP-007)', async () => {
     const root = createProject();
     writeDatasetBlock(root, 'commerce/order-lines.dql');
     const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {

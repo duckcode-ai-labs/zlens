@@ -8677,7 +8677,7 @@ export const api = {
     }
   },
 
-  /** Turn on field-based Dataset tiles for this project (writes `apps.datasets: true`). */
+  /** Turn field-based Dataset tiles back on for a project that set `apps.datasets: false` (they are on by default). */
   async enableDatasetTiles(): Promise<{ ok: boolean; datasets?: boolean; error?: string }> {
     try {
       return await request('/api/app-datasets/enable', { method: 'POST', body: '{}' });

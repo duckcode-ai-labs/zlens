@@ -3647,13 +3647,34 @@ describe('Dataset App Builder real DuckDB pilot', () => {
     }
   }, 120_000);
 
-  duckDbIt('APP-079 turns field tiles on with one action and keeps every other config key', async () => {
-    const pilot = await startPilotProject('dql-app-datasets-enable-');
+  duckDbIt('APP-007 runs field tiles when apps.datasets is not set (on by default)', async () => {
+    const pilot = await startPilotProject('dql-app-datasets-default-on-');
     try {
       const { projectRoot } = pilot;
       const configPath = join(projectRoot, 'dql.config.json');
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       delete config.apps.datasets;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      await pilot.restart();
+      const ran = await request(pilot.base, '/api/apps/commerce-pilot/dashboards/overview/run', 'POST', { fullRun: true });
+      expect(findTile(ran.body.tiles, 'Revenue')).toMatchObject({ status: 'ok', result: { rows: [{ revenue: 130 }] } });
+
+      // Already on: the enable action reports it and writes nothing.
+      const enabled = await request(pilot.base, '/api/app-datasets/enable', 'POST', {});
+      expect(enabled.body).toEqual({ ok: true, datasets: true });
+      expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual(config);
+    } finally {
+      await pilot.stop();
+    }
+  }, 120_000);
+
+  duckDbIt('APP-079 turns field tiles back on with one action and keeps every other config key', async () => {
+    const pilot = await startPilotProject('dql-app-datasets-enable-');
+    try {
+      const { projectRoot } = pilot;
+      const configPath = join(projectRoot, 'dql.config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      config.apps.datasets = false;
       writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
       // The runtime reads the flag it loaded; restart onto the edited config.
       await pilot.restart();
