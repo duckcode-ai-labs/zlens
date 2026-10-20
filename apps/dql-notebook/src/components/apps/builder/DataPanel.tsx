@@ -17,7 +17,7 @@ export type DataPanelTarget =
  * The Data tab: a switcher over the App's data (its sources), the chosen
  * source's fields, and **+ Add data**. Clicking a field builds the tile — a
  * new draft tile, or the selected Dataset tile. A saved query has no fields;
- * it is added whole as a Table, Chart or KPI.
+ * it is added whole as a Table, Chart or KPI, or gets fields with Add fields.
  */
 export function DataPanel({
   appData,
@@ -32,6 +32,7 @@ export function DataPanel({
   onAddContent,
   onAuthorDataset,
   onRefreshBinding,
+  onAddFields,
   pickerRequest = 0,
   defaultPickerOpen = false,
   loading = false,
@@ -53,6 +54,8 @@ export function DataPanel({
   onAuthorDataset?: (item: AppBlockRecommendation) => void;
   /** Refresh this App's binding to the active Dataset's current revision. */
   onRefreshBinding?: (item: AppBlockRecommendation) => void;
+  /** Add fields to the chosen saved query (it becomes a Dataset). Absent when field tiles are off. */
+  onAddFields?: (item: AppBlockRecommendation) => void;
   /** Changing this number opens the switcher (tile settings "Choose another Dataset"). */
   pickerRequest?: number;
   defaultPickerOpen?: boolean;
@@ -148,7 +151,10 @@ export function DataPanel({
         <button type="button" disabled={disabled} aria-label={`Add ${humanize(savedQuery.name)} as Chart`} onClick={() => onAddSavedQuery(savedQuery, 'chart')}><BarChart3 size={13} /> Chart</button>
         <button type="button" disabled={disabled} aria-label={`Add ${humanize(savedQuery.name)} as KPI`} onClick={() => onAddSavedQuery(savedQuery, 'kpi')}><Gauge size={13} /> KPI</button>
       </div>
-      <small className="field-help">{SAVED_QUERY_NO_FIELDS}</small>
+      {onAddFields ? <div className="saved-query-add-fields">
+        <small className="field-help">{SAVED_QUERY_NO_FIELDS}</small>
+        <button type="button" disabled={disabled} onClick={() => onAddFields(savedQuery)} aria-label={`Add fields to ${humanize(savedQuery.name)}`}><Plus size={13} /> Add fields</button>
+      </div> : <small className="field-help">{SAVED_QUERY_NO_FIELDS}</small>}
     </div> : null}
 
     {!active ? (loading && !appData.length

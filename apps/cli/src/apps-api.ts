@@ -4129,6 +4129,12 @@ function materializeAppBuildProposalReviewAnalyses(
   };
 }
 
+/** A tile or source name in a planner note: "top_customers" reads "Top Customers". */
+function plannerNoteTitle(title: string): string {
+  const trimmed = title.trim();
+  return /\s/.test(trimmed) ? trimmed : trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 /**
  * AI is a coauthor of the same local AppBuildDraft used by manual authoring.
  * This adapter reuses the governed planner, compiles its result outside the
@@ -4289,8 +4295,8 @@ export async function proposeAppBuildDraftOperations(
       const normalized = normalizeTileQuery(component.query);
       const validation = normalized ? validateTileQuery(descriptor, normalized) : undefined;
       if (!normalized || !tileQueryValidationRuns(validation)) {
-        const detail = validation?.diagnostics.map((diagnostic) => diagnostic.message).join(' ') || 'The proposed Dataset field query is malformed or not approved.';
-        warnings.push(`${component.title} was not added because its Dataset query is not covered by the current source contract: ${detail}`);
+        // A plain note for the author; the field-level diagnostics stay out of it.
+        warnings.push(`${plannerNoteTitle(component.title)} wasn't added: it uses fields ${plannerNoteTitle(source.title)} doesn't have approved.`);
         continue;
       }
       // Show Me (RFC 0009) picks the chart for the fields and lays them on
@@ -4302,7 +4308,7 @@ export async function proposeAppBuildDraftOperations(
       viz = { type: choice?.viz ?? 'table', ...(choice?.encoding ? { encoding: choice.encoding } : {}) };
       const visualization = datasetTileVisualizationCompatibility(normalized, viz.type);
       if (!visualization.compatible) {
-        warnings.push(`${component.title} was not added because ${visualization.message}`);
+        warnings.push(`${plannerNoteTitle(component.title)} wasn't added. ${visualization.message}`);
         continue;
       }
       query = normalized;

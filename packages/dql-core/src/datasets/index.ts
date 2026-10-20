@@ -83,6 +83,7 @@ export {
   proposeTableDataset,
   renderTableDatasetBlock,
   tableColumnKind,
+  tableDatasetDeclaration,
   tableProfileColumns,
   wordsFor,
 } from './table-draft.js';

@@ -109,6 +109,66 @@ export function prepareDatasetDeclarationPatch(input: {
   };
 }
 
+/**
+ * "Add fields" (design D1): give a saved query block (one without a Dataset
+ * definition) its first grain, fields and measures, in memory. The block
+ * keeps its name, query and every other property; only the Dataset
+ * declarations and its lifecycle status change. The caller decides the
+ * status (a certified block goes back to review until a certification check
+ * passes) and owns file reads, writes and revision checks.
+ */
+export function addDatasetDefinitionToBlockSource(input: {
+  source: string;
+  filePath: string;
+  blockName: string;
+  grain: ManifestDatasetGrain;
+  fields: ManifestDatasetField[];
+  measures: ManifestDatasetMeasure[];
+  status: 'draft' | 'review';
+}): { after: string; beforeFingerprint: string; afterFingerprint: string } {
+  const program = parse(input.source, input.filePath);
+  const matches = program.statements.filter((statement): statement is BlockDeclNode =>
+    statement.kind === NodeKind.BlockDecl && statement.name === input.blockName,
+  );
+  if (matches.length !== 1) {
+    throw new DatasetDeclarationPatchError(
+      matches.length === 0 ? 'DATASET_SOURCE_TARGET_NOT_FOUND' : 'DATASET_SOURCE_TARGET_AMBIGUOUS',
+      matches.length === 0
+        ? `Saved query ${input.blockName} no longer resolves in ${input.filePath}.`
+        : `Saved query ${input.blockName} is ambiguous in ${input.filePath}.`,
+    );
+  }
+  const target = matches[0]!;
+  if (target.datasetGrain || target.datasetFields?.length || target.datasetMeasures?.length) {
+    throw new DatasetDeclarationPatchError('SAVED_QUERY_ALREADY_DATASET', `${input.blockName} already has fields.`);
+  }
+  if (!input.fields.length || !input.measures.length) {
+    throw new DatasetDeclarationPatchError('DATASET_CHANGE_EMPTY', 'Keep at least one field and one number before adding fields.');
+  }
+  const nextTarget: BlockDeclNode = {
+    ...target,
+    datasetGrain: cloneGrain(input.grain),
+    datasetFields: input.fields.map(cloneField),
+    datasetMeasures: input.measures.map(cloneMeasure),
+    status: input.status,
+  };
+  const after = formatProgram({
+    ...program,
+    statements: program.statements.map((statement) => statement === target ? nextTarget : statement),
+  });
+  parse(after, input.filePath);
+  const validation = validateDatasetBlockSource(after, input.filePath);
+  const errors = validation.diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  if (errors.length > 0) {
+    throw new DatasetDeclarationPatchError('DATASET_CHANGE_INVALID', errors.map((diagnostic) => diagnostic.message).join(' '));
+  }
+  const proposed = validation.blocks.filter((block) => block.name === input.blockName);
+  if (proposed.length !== 1 || !proposed[0]!.datasetGrain) {
+    throw new DatasetDeclarationPatchError('DATASET_CHANGE_COMPILE_FAILED', 'The new fields did not compile to one Dataset block.');
+  }
+  return { after, beforeFingerprint: fingerprint(input.source), afterFingerprint: fingerprint(after) };
+}
+
 function hasPatch(patch: DatasetDeclarationPatch): boolean {
   return patch.grain !== undefined || patch.fields !== undefined || patch.measures !== undefined;
 }

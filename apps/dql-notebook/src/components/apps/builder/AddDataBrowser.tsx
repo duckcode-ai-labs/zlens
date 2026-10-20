@@ -11,6 +11,7 @@ import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { groupDatasetFields } from './field-query';
 import { humanize, messageOf } from './studio-ui';
 import { TableDatasetDialog } from './TableDatasetDialog';
+import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
 import {
   TABLE_BECOMES_DATASET_HINT,
   addDataCatalogRequest,
@@ -48,6 +49,10 @@ export interface AddDataBrowserProps {
   onAdd: (sourceId: string, options: { allowReview: boolean }) => Promise<boolean>;
   onRemove: (sourceId: string) => void;
   onChangePolicy: (policy: SourcePolicy) => void;
+  /** Field-based tiles are on, so a saved query can get fields (default on). */
+  fieldsEnabled?: boolean;
+  /** A saved query got fields; the App refreshes its copy when the saved query is already in it. */
+  onFieldsAdded?: (sourceId: string, status: 'certified' | 'review' | 'draft') => void;
 }
 
 /**
@@ -69,6 +74,8 @@ export function AddDataBrowser({
   onAdd,
   onRemove,
   onChangePolicy,
+  fieldsEnabled = true,
+  onFieldsAdded,
 }: AddDataBrowserProps): JSX.Element {
   const [tab, setTab] = useState<AddDataTab>(initialTab);
   const [query, setQuery] = useState('');
@@ -85,6 +92,7 @@ export function AddDataBrowser({
   const [tables, setTables] = useState<WarehouseTableSummary[] | null>(null);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [checkingTable, setCheckingTable] = useState<WarehouseTableSummary | null>(null);
+  const [addingFieldsTo, setAddingFieldsTo] = useState<AppBlockRecommendation | null>(null);
   const load = useRef<CatalogLoader>(loadCatalog ?? ((input, signal) => api.listAppSourceCandidates(draftId, input, signal)));
   load.current = loadCatalog ?? ((input, signal) => api.listAppSourceCandidates(draftId, input, signal));
 
@@ -170,6 +178,17 @@ export function AddDataBrowser({
     }
   };
 
+  const fieldsAdded = (sourceId: string, status: 'certified' | 'review' | 'draft') => {
+    setAddingFieldsTo(null);
+    // It is a Dataset now: it lists with Datasets & Metrics, open on its fields.
+    setTab('datasets');
+    setQuery('');
+    setReloadNonce((current) => current + 1);
+    setHighlightId(sourceId);
+    setExpandedId(sourceId);
+    onFieldsAdded?.(sourceId, status);
+  };
+
   const tabs: Array<[AddDataTab, string, number | null]> = [
     ['datasets', 'Datasets & Metrics', split.datasets.length],
     ['queries', 'Saved queries', split.queries.length],
@@ -219,6 +238,7 @@ export function AddDataBrowser({
         onToggle={() => setExpandedId((current) => current === (item.sourceId ?? item.id) ? null : (item.sourceId ?? item.id))}
         onAdd={(allowReview) => void add(item, allowReview)}
         onRemove={() => onRemove(item.sourceId ?? item.id)}
+        {...(fieldsEnabled && sourceCatalogKindLabel(item) === 'Saved query' ? { onAddFields: () => setAddingFieldsTo(item) } : {})}
       />)}
       {nextCursor ? <button type="button" className="add-data-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Show more'}</button> : null}
     </div> : <div className="add-data-list" role="tabpanel" aria-label="Database tables">
@@ -240,6 +260,12 @@ export function AddDataBrowser({
       onClose={() => setCheckingTable(null)}
       onCreated={(sourceId) => void tableCreated(sourceId)}
     /> : null}
+    {addingFieldsTo ? <SavedQueryFieldsDialog
+      sourceId={addingFieldsTo.sourceId ?? addingFieldsTo.id}
+      name={addingFieldsTo.name}
+      onClose={() => setAddingFieldsTo(null)}
+      onAdded={fieldsAdded}
+    /> : null}
   </section>;
 }
 
@@ -254,6 +280,7 @@ function AddDataRow({
   onToggle,
   onAdd,
   onRemove,
+  onAddFields,
 }: {
   item: AppBlockRecommendation;
   draft: Pick<AppStudioBuildDraft, 'sources' | 'pages'>;
@@ -265,6 +292,8 @@ function AddDataRow({
   onToggle: () => void;
   onAdd: (allowReview: boolean) => void;
   onRemove: () => void;
+  /** A saved query: open "Add fields". */
+  onAddFields?: () => void;
 }): JSX.Element {
   const sourceId = item.sourceId ?? item.id;
   const added = isAddedToApp(draft.sources, item);
@@ -279,6 +308,7 @@ function AddDataRow({
       <ChevronDown size={14} className="chevron" aria-hidden="true" />
     </button>
     <div className="add-data-action">
+      {onAddFields ? <button type="button" className="add-fields" disabled={disabled} onClick={onAddFields} aria-label={`Add fields to ${humanize(item.name)}`} title="Give this saved query Measures and Dimensions">Add fields</button> : null}
       {added
         ? <><span className="add-data-added"><Check size={13} /> Added</span><RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={disabled} onRemove={onRemove} /></>
         : <button type="button" className={reviewChoice ? 'review' : 'primary'} disabled={disabled || adding} onClick={() => onAdd(reviewChoice)} aria-label={`${reviewChoice ? 'Allow data that needs review and add' : 'Add to App'}: ${humanize(item.name)}`}>{adding ? 'Adding…' : reviewChoice ? 'Allow data that needs review & add' : <><Plus size={13} /> Add to App</>}</button>}
@@ -323,7 +353,7 @@ function AddDataDetail({ item }: { item: AppBlockRecommendation }): JSX.Element 
       {groups.review.length ? <section><h4>Needs review</h4><p>{groups.review.map((field) => <span key={field.name} className="chip muted">{humanize(field.name)}</span>)}</p></section> : null}
     </div> : <div className="add-data-fields">
       <section><h4>Columns</h4><p>{outputs.length ? outputs.map((column) => <span key={column} className="chip">{humanize(column)}</span>) : <small>Run it once to see its columns.</small>}</p></section>
-      <small className="add-data-muted">A saved query is used as it is: no fields to pick.</small>
+      <small className="add-data-muted">A saved query is used as it is: no fields to pick until you add fields.</small>
     </div>}
     {sampleQuery ? <div className="add-data-sample">
       {!sample ? <button type="button" className="link" disabled={sampling} onClick={showSample}>{sampling ? 'Reading rows…' : 'Show 10 sample rows'}</button> : null}

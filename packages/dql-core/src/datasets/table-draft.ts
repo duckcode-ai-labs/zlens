@@ -198,6 +198,41 @@ export function tableProfileColumns(proposal: TableDatasetProposal): string[] {
   return proposal.keyCandidates.slice(0, 8);
 }
 
+/**
+ * A checked proposal as Dataset declarations (grain, fields, measures), the
+ * same ones `renderTableDatasetBlock` writes. "Add fields" writes these onto
+ * an existing saved query block instead of a new file.
+ */
+export function tableDatasetDeclaration(proposal: TableDatasetProposal, blockName: string): {
+  grain: { entities: string[]; keys: string[]; keyEvidence: string };
+  fields: Array<{ name: string; role: TableDatasetField['role']; type: TableColumnKind; grains?: string[]; primary?: boolean }>;
+  measures: Array<{ name: string; aggregation: TableDatasetMeasure['aggregation']; from: string; additive: 'additive' | 'non_additive'; allowedAggs: Array<TableDatasetMeasure['aggregation']>; format: TableDatasetMeasure['format']; currency?: string }>;
+} {
+  if (!proposal.key) throw new Error('TABLE_DATASET_KEY_REQUIRED: no column is different on every row, so rows cannot be counted safely.');
+  const included = proposal.measures.filter((measure) => measure.include);
+  if (!included.length) throw new Error('TABLE_DATASET_MEASURE_REQUIRED: keep at least one number to count or add up.');
+  const slug = blockName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'table';
+  return {
+    grain: { entities: [proposal.key.entity], keys: [proposal.key.column], keyEvidence: `proof.${slug}` },
+    fields: proposal.fields.map((field) => ({
+      name: field.name,
+      role: field.role,
+      type: field.type,
+      ...(field.grains?.length ? { grains: [...field.grains] } : {}),
+      ...(field.primary ? { primary: true } : {}),
+    })),
+    measures: included.map((measure) => ({
+      name: measure.name,
+      aggregation: measure.aggregation,
+      from: measure.from,
+      additive: measure.aggregation === 'sum' ? 'additive' as const : 'non_additive' as const,
+      allowedAggs: [measure.aggregation],
+      format: measure.format,
+      ...(measure.format === 'currency' && measure.currency ? { currency: measure.currency } : {}),
+    })),
+  };
+}
+
 function quote(value: string): string {
   return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
 }

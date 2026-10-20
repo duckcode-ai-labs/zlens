@@ -17,6 +17,9 @@ export type StudioFilterTileMapping = {
    * field name on another source. */
   datasetId?: string;
   datasetField?: string;
+  /** The approved physical field's type and role, for link suggestions (D10). */
+  datasetFieldType?: string;
+  datasetFieldRole?: string;
   sourceId?: string;
   sourceRevision?: string;
   reason?: string;
@@ -63,6 +66,83 @@ export function datasetFilterBindingsForSelection(
       field: binding.field,
       tileIds: [...binding.tileIds].sort(),
     }]));
+}
+
+/**
+ * Filter link suggestions (design D10). A new filter starts linked only to
+ * the Dataset whose field the author picked (the first Dataset tile using
+ * that field, on this page first) and to non-Dataset tiles that expose it.
+ * Other Datasets in the App with an approved dimension of the same name and
+ * kind are offered as "Also filter these tiles?", unchecked: nothing links
+ * across Datasets by name on its own.
+ */
+export type StudioFilterLinkSuggestion = {
+  sourceId: string;
+  datasetName: string;
+  field: string;
+  mappingKeys: string[];
+  tileCount: number;
+};
+
+/** The Dataset a new filter's field comes from: the first Dataset tile using it, on the active page first. */
+export function filterPrimarySourceId(mappings: StudioFilterTileMapping[], activePageId?: string): string | undefined {
+  const dataset = mappings.filter((mapping) => mapping.supported && mapping.datasetId && mapping.sourceId);
+  return (dataset.find((mapping) => mapping.pageId === activePageId) ?? dataset[0])?.sourceId;
+}
+
+/** What a new filter links at first: its own Dataset's tiles and non-Dataset tiles that expose the field. */
+export function initialFilterMappingKeys(mappings: StudioFilterTileMapping[], primarySourceId: string | undefined): string[] {
+  return mappings
+    .filter((mapping) => mapping.supported && (!mapping.datasetId || mapping.sourceId === primarySourceId))
+    .map((mapping) => mapping.key);
+}
+
+function fieldTypeFamily(type: string | undefined): string {
+  if (type === 'date' || type === 'timestamp') return 'time';
+  return type ?? 'unknown';
+}
+
+/** Other Datasets in the App with an approved dimension of the same name and kind (D10). */
+export function filterLinkSuggestions(
+  mappings: StudioFilterTileMapping[],
+  primarySourceId: string | undefined,
+  boundSources: AppStudioBuildDraft['sources'] = [],
+): StudioFilterLinkSuggestion[] {
+  if (!primarySourceId) return [];
+  const primary = mappings.find((mapping) => mapping.supported && mapping.sourceId === primarySourceId && mapping.datasetField);
+  if (!primary) return [];
+  const family = fieldTypeFamily(primary.datasetFieldType);
+  const groups = new Map<string, StudioFilterLinkSuggestion>();
+  for (const mapping of mappings) {
+    if (!mapping.supported || !mapping.datasetId || !mapping.datasetField || !mapping.sourceId || mapping.sourceId === primarySourceId) continue;
+    if (mapping.datasetFieldRole === 'attribute' || fieldTypeFamily(mapping.datasetFieldType) !== family) continue;
+    if (mapping.datasetField.toLowerCase() !== primary.datasetField!.toLowerCase()) continue;
+    const current = groups.get(mapping.sourceId);
+    if (current) {
+      current.mappingKeys.push(mapping.key);
+      current.tileCount += 1;
+      continue;
+    }
+    const source = boundSources.find((candidate) => candidate.id === mapping.sourceId);
+    groups.set(mapping.sourceId, {
+      sourceId: mapping.sourceId,
+      datasetName: datasetDisplayName(source, mapping.sourceName),
+      field: mapping.datasetField,
+      mappingKeys: [mapping.key],
+      tileCount: 1,
+    });
+  }
+  return [...groups.values()].sort((left, right) => left.datasetName.localeCompare(right.datasetName));
+}
+
+function datasetDisplayName(source: AppStudioBuildDraft['sources'][number] | undefined, fallback: string): string {
+  const identity = source?.qualifiedIdentity ?? fallback;
+  const name = source?.capabilities?.dataset?.label?.trim()
+    || identity.match(/::block::(.+?)::[0-9a-f]+$/i)?.[1]
+    || identity.split('::').at(-1)
+    || identity;
+  // "top_customers" reads "Top Customers"; a name with spaces is kept as written.
+  return /\s/.test(name) ? name : name.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function defaultStudioFilterType(fieldId: string): 'daterange' | 'number' | 'select' {
@@ -144,6 +224,8 @@ export function filterTileMappingsForField(
           mode: 'predicate' as const,
           datasetId: datasetMapping.datasetId,
           datasetField: datasetMapping.field,
+          datasetFieldType: datasetMapping.type,
+          datasetFieldRole: datasetMapping.role,
           sourceId: tile.sourceId,
           sourceRevision: tile.sourceRevision,
         };
@@ -238,7 +320,7 @@ function datasetMappingForTile(
   tile: StudioTile,
   fieldId: string,
   boundSources: AppStudioBuildDraft['sources'],
-): { datasetId: string; field: string } | null {
+): { datasetId: string; field: string; type: string; role: string } | null {
   if (!(tile.query || tile.driver) || !tile.sourceId || !tile.sourceRevision) return null;
   const source = boundSources.find((candidate) => candidate.id === tile.sourceId);
   const descriptor = source?.capabilities?.dataset;
@@ -253,7 +335,9 @@ function datasetMappingForTile(
     && field.status === 'approved'
     && (normalizeFieldId(field.name) === normalized || normalizeFieldId(field.qualifiedId) === normalized)
   ));
-  return physical ? { datasetId: binding.id, field: physical.name } : null;
+  return physical && physical.kind === 'physical'
+    ? { datasetId: binding.id, field: physical.name, type: physical.type, role: physical.role }
+    : null;
 }
 
 function normalizeFieldId(value: string): string {
