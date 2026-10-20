@@ -84,7 +84,7 @@ export function DataPanel({
         </button>)}
         <hr />
         {onStartFromTable ? <button type="button" role="menuitem" onClick={() => { setPickerOpen(false); onStartFromTable(); }}><span><strong>Start from a table…</strong><small>Pick a table in your database</small></span></button> : null}
-        <button type="button" role="menuitem" onClick={() => { setPickerOpen(false); onBrowseSources(); }}><span><strong>Saved queries and all sources…</strong><small>Blocks, metrics and data that needs review</small></span></button>
+        <button type="button" role="menuitem" onClick={() => { setPickerOpen(false); onBrowseSources(); }}><span><strong>Saved queries and all sources…</strong><small>Metrics, saved queries and data that needs review</small></span></button>
       </div> : null}
     </div>
 

@@ -244,7 +244,9 @@ export {
 } from './app-source-policy.js';
 export {
   AppSourceCatalogError,
+  appSourceTrustTier,
   queryAppSourceCatalog,
+  rankAppSourcesByTrust,
   resolveAppSourceCatalogRecords,
   shortlistAppSources,
 } from './app-source-catalog.js';

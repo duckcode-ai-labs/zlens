@@ -12,6 +12,8 @@ export interface AppStudioAiPlanSummary {
     trustState: AppStudioBuildDraft['sources'][number]['trustState'];
     reviewStatus: AppStudioBuildDraft['sources'][number]['reviewStatus'];
     componentIds: string[];
+    /** Source capabilities, so the review can tell a Dataset from a saved query. */
+    capabilities?: AppStudioBuildDraft['sources'][number]['capabilities'];
     rationale?: string;
   }>;
 }
@@ -103,6 +105,7 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
         trustState: operation.source.trustState,
         reviewStatus: operation.source.reviewStatus,
         componentIds: [],
+        ...(operation.source.capabilities ? { capabilities: operation.source.capabilities } : {}),
       });
     } else if (operation.type === 'upsert_page') {
       pages.set(operation.page.id, { id: operation.page.id, title: operation.page.metadata.title });

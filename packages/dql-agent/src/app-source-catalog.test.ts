@@ -6,8 +6,11 @@ import {
   ensureAgentProjectReady,
   MetadataCatalog,
   queryAppSourceCatalog,
+  rankAppSourcesByTrust,
   resolveAppSourceCatalogRecords,
+  shortlistAppSources,
 } from './index.js';
+import type { AppSourceCatalogRecord } from './index.js';
 
 describe('AppSourceCatalogService', () => {
   let projectRoot: string;
@@ -131,6 +134,77 @@ describe('AppSourceCatalogService', () => {
       lifecycle: 'draft',
       trust: 'review_required',
     });
+  });
+
+  it('keeps review-required sources out of the AI shortlist when the App uses only certified data', async () => {
+    await ensureAgentProjectReady(projectRoot);
+
+    const certifiedOnly = shortlistAppSources(projectRoot, 'performance customer growth revenue', { sourcePolicy: 'governed_only' });
+    expect(certifiedOnly.items.length).toBeGreaterThan(0);
+    expect(certifiedOnly.items.every((source) => source.trust === 'certified')).toBe(true);
+    expect(certifiedOnly.items.map((source) => source.domain)).toEqual(['sales']);
+
+    const reviewAllowed = shortlistAppSources(projectRoot, 'performance customer growth revenue', { sourcePolicy: 'include_review_required' });
+    expect(reviewAllowed.items.map((source) => source.lifecycle).sort()).toEqual(['certified', 'draft']);
+
+    // An explicitly required source still resolves; its own policy check is the caller's.
+    const draftId = reviewAllowed.items.find((source) => source.lifecycle === 'draft')!.sourceId;
+    const required = resolveAppSourceCatalogRecords(projectRoot, [draftId], 'governed_only');
+    expect(required.items).toHaveLength(1);
+    expect(required.items[0]).toMatchObject({ trust: 'review_required', eligibility: { localPreview: false } });
+  });
+
+  it('orders catalog pages and the AI shortlist by trust after relevance', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    // The draft matches the prompt best, yet a certified source leads the page.
+    const page = queryAppSourceCatalog(projectRoot, { query: 'performance', sourcePolicy: 'include_review_required' });
+    expect(page.items.map((source) => source.trust)).toEqual(['certified', 'review_required']);
+    const shortlist = shortlistAppSources(projectRoot, 'performance', { sourcePolicy: 'include_review_required' });
+    expect(shortlist.items.map((source) => source.trust)).toEqual(['certified', 'review_required']);
+  });
+
+  it('ranks certified Datasets, then Metrics, then saved queries, then sources that need review', () => {
+    const source = (id: string, patch: Partial<AppSourceCatalogRecord>): AppSourceCatalogRecord => ({
+      sourceId: id,
+      qualifiedIdentity: id,
+      sourceRevision: 'r1',
+      snapshotId: 's1',
+      kind: 'block',
+      lifecycle: 'certified',
+      trust: 'certified',
+      executable: true,
+      name: id,
+      title: id,
+      sourcePath: `${id}.dql`,
+      executionRef: `${id}.dql`,
+      tags: [],
+      capabilities: { measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [] },
+      eligibility: { discoverable: true, localPreview: true, projectPublish: true, reasonCodes: [] },
+      reasons: [],
+      ...patch,
+    });
+    const dataset = { kind: 'block' } as unknown as NonNullable<AppSourceCatalogRecord['capabilities']['dataset']>;
+    const fields = { ...source('x', {}).capabilities, dataset };
+    const ranked = rankAppSourcesByTrust([
+      source('review-dataset', { trust: 'review_required', lifecycle: 'draft', capabilities: fields }),
+      source('saved-query-a', {}),
+      source('metrics', { kind: 'semantic' }),
+      source('dataset-a', { capabilities: fields }),
+      source('review-query', { trust: 'review_required', lifecycle: 'review' }),
+      source('saved-query-b', {}),
+      source('dataset-b', { capabilities: fields }),
+      source('metrics-model', { capabilities: { ...source('x', {}).capabilities, semanticModelId: 'orders' } }),
+    ]);
+    expect(ranked.map((item) => item.sourceId)).toEqual([
+      'dataset-a',
+      'dataset-b',
+      'metrics',
+      'metrics-model',
+      'saved-query-a',
+      'saved-query-b',
+      'review-dataset',
+      'review-query',
+    ]);
   });
 
   it('PERF-003 pages and exact-searches a 4,000-source warm index within response budgets', () => {

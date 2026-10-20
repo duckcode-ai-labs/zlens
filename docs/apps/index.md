@@ -47,6 +47,22 @@ trust.
     People who only read Apps never see draft or needs-review tiles. Those
     appear only while you build.
 
+## Words used in App Studio
+
+App Studio uses one set of words for data and trust:
+
+| Word | Means |
+|---|---|
+| **Data** | The data an App's tiles use. |
+| **Dataset** | Data with fields: measures to add up or count, dimensions and time to group by. You build tiles by picking its fields. |
+| **Metrics** | Measures and dimensions from a semantic model. |
+| **Saved query** | A block without fields. Its result is used as it is. |
+| **Database table** | A table in your database. It becomes a Dataset after **Start from a table** checks it. |
+| **Domain** | A label that filters the lists, such as `finance`. It is not a kind of data. |
+| **Certified** | Someone owns the data and checked it. |
+| **Needs review** | Nobody has certified the data yet. A page that uses it cannot publish. |
+| **Tile** | One KPI, chart, table or text box on a page. |
+
 ## Change a filter
 
 Filters sit above the tiles.

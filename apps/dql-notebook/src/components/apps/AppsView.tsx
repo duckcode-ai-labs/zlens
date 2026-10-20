@@ -5,9 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   ArrowLeft,
   ArrowRight,
-  AlertTriangle,
   BarChart3,
-  Blocks,
   BookOpenText,
   Bot,
   CalendarDays,
@@ -29,7 +27,6 @@ import {
   Pencil,
   Plus,
   Search,
-  Send,
   ShieldCheck,
   Sparkles,
   Star,
@@ -38,7 +35,6 @@ import {
   Trash2,
   User,
   Users,
-  Wrench,
   Workflow,
   X,
 } from 'lucide-react';
@@ -64,11 +60,11 @@ import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appPageUrl } from './app-links';
-import { AppBuildProposalPanel, defaultProposalSelection, type AppBuildBriefEdits } from './AppBuildProposalPanel';
+import { defaultProposalSelection, type AppBuildBriefEdits } from './AppBuildProposalPanel';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
 import { APP_STYLES } from './app-styles';
 import { cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
-import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, PanelHead, SettingsPanel, StatusSeal } from './AppSidePanels';
+import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, SettingsPanel, StatusSeal } from './AppSidePanels';
 import { FollowPageButton } from './FollowPageButton';
 import { AskAboutApp } from './AskAboutApp';
 import { ResearchPanel } from './ResearchPanel';
@@ -108,7 +104,7 @@ import {
   valuesForDashboardPage,
   writePersistedAppFilterValues,
 } from './app-dashboard-filter-scope';
-import { authoredDomainOptions, resolveAuthoredDomainId, type AuthoredDomainOption } from '../domains/authored-domain-options';
+import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/authored-domain-options';
 import { useOperations } from '../../operations/OperationsProvider';
 import { appLibraryLaunchExpanded, type AppLibraryLaunchPreference } from './app-library-launch';
 
@@ -137,12 +133,6 @@ interface AppPromptExample {
   title: string;
   domain: string;
   prompt: string;
-}
-
-interface AgentSkillCard {
-  id: string;
-  title: string;
-  description: string;
 }
 
 const DEFAULT_PROMPT = 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders.';
@@ -209,24 +199,6 @@ const APP_PROMPT_EXAMPLES: AppPromptExample[] = [
   },
 ];
 
-const AGENT_SKILLS: AgentSkillCard[] = [
-  {
-    id: 'match',
-    title: 'Find blocks',
-    description: 'Search certified blocks, terms, views, and lineage.',
-  },
-  {
-    id: 'story',
-    title: 'Shape story',
-    description: 'Order the app around the business decision.',
-  },
-  {
-    id: 'draft',
-    title: 'Draft gaps',
-    description: 'Keep missing sections visible as draft work instead of hiding them.',
-  },
-];
-
 function normalizeAppTheme(themeMode: string): 'obsidian' | 'paper' | 'white' {
   if (themeMode === 'obsidian' || themeMode === 'dark' || themeMode === 'midnight') return 'obsidian';
   if (themeMode === 'white' || themeMode === 'arctic') return 'white';
@@ -285,8 +257,6 @@ export function AppsView(): JSX.Element {
   const [builderExistingAppId, setBuilderExistingAppId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(() => state.activeAppDraftId);
   const [catalog, setCatalog] = useState<AppBlockRecommendation[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(() => new Set());
   const [generated, setGenerated] = useState<GenerateAppResponse | null>(null);
   const [buildSession, setBuildSession] = useState<AppAiBuildSession | null>(null);
@@ -753,7 +723,9 @@ export function AppsView(): JSX.Element {
     setBuilderTemplate(config.template);
     setBuilderPrompt(config.mode === 'ai' ? config.prompt : 'A dashboard of live, checked numbers');
     setBuilderName(config.mode === 'manual' ? config.name : '');
-    setBuilderDomain((current) => resolveAuthoredDomainId(current, state.authoredDomains));
+    // A new App starts in no domain. Never inherit the domain of the App
+    // opened for editing last; it would silently scope AI and the catalog.
+    setBuilderDomain('');
     setBuilderAudience('stakeholders');
     setSelectedBlocks(new Set());
     setBuilderError(null);
@@ -1444,7 +1416,7 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
           <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private"><ShieldCheck size={12} /> Private draft</span></div>
           <span className="dql-app-draft-mark"><LayoutDashboard size={15} /></span>
         </div>
-        <StatusSeal tone={needsReview ? 'draft' : 'agentic'}>{needsReview ? 'review required' : 'local draft'}</StatusSeal>
+        <StatusSeal tone={needsReview ? 'draft' : 'agentic'}>{needsReview ? 'needs review' : 'local draft'}</StatusSeal>
         <h3>{draft.name}</h3>
         <p>{cleanStakeholderCopy(draft.frame.goal || 'A private App draft ready to shape in Studio.')}</p>
         <div className="dql-app-card-mini">
@@ -1454,7 +1426,7 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
         </div>
         <div className="dql-app-card-signals">
           <span><ShieldCheck size={13} /> Not in Project source</span>
-          <span><Sparkles size={13} /> {draft.sourcePolicy === 'include_review_required' ? 'Review lane enabled' : 'Governed sources'}</span>
+          <span><Sparkles size={13} /> {draft.sourcePolicy === 'include_review_required' ? 'Also allows data that needs review' : 'Only certified data'}</span>
         </div>
       </div>
       <div className="dql-app-card-depth">
@@ -1610,521 +1582,6 @@ function DeleteAppDialog({
           <button type="button" className="danger" onClick={onConfirm} disabled={!confirmed || deleting}>{deleting ? 'Deleting…' : 'Delete App'}</button>
         </div>
       </section>
-    </div>
-  );
-}
-
-function AppCreateSurface({
-  mode,
-  existingAppId,
-  appName,
-  prompt,
-  domain,
-  domainOptions,
-  owner,
-  audience,
-  promptExamples,
-  catalog,
-  catalogLoading,
-  catalogError,
-  selectedBlocks,
-  generated,
-  buildSession,
-  proposalSelection,
-  proposalFilterSelection,
-  proposalEdits,
-  committing,
-  themeMode,
-  onToggleProposalTile,
-  onToggleProposalFilter,
-  onProposalEdit,
-  onCommitProposal,
-  saving,
-  error,
-  onBack,
-  onModeChange,
-  onAppNameChange,
-  onPromptChange,
-  onDomainChange,
-  onOwnerChange,
-  onAudienceChange,
-  onToggleBlock,
-  onBuild,
-  onClarificationChoice,
-  onOpenGenerated,
-  onAddBlock,
-}: {
-  mode: BuilderMode;
-  existingAppId: string | null;
-  appName: string;
-  prompt: string;
-  domain: string;
-  domainOptions: AuthoredDomainOption[];
-  owner: string;
-  audience: string;
-  promptExamples: AppPromptExample[];
-  catalog: AppBlockRecommendation[];
-  catalogLoading: boolean;
-  catalogError: string | null;
-  selectedBlocks: Set<string>;
-  generated: GenerateAppResponse | null;
-  buildSession: AppAiBuildSession | null;
-  proposalSelection: Set<string>;
-  proposalFilterSelection: Set<string>;
-  proposalEdits: Record<string, { title?: string; viz?: string }>;
-  committing: boolean;
-  themeMode: ThemeMode;
-  onToggleProposalTile: (tileId: string) => void;
-  onToggleProposalFilter: (filterId: string) => void;
-  onProposalEdit: (tileId: string, edit: { title?: string; viz?: string }) => void;
-  onCommitProposal: (edits?: AppBuildBriefEdits) => void;
-  onAddBlock: (blockId: string) => void;
-  saving: boolean;
-  error: string | null;
-  onBack: () => void;
-  onModeChange: (mode: BuilderMode) => void;
-  onAppNameChange: (value: string) => void;
-  onPromptChange: (value: string) => void;
-  onDomainChange: (value: string) => void;
-  onOwnerChange: (value: string) => void;
-  onAudienceChange: (value: string) => void;
-  onToggleBlock: (blockId: string) => void;
-  onBuild: () => void;
-  onClarificationChoice: (question: string, choice: string) => void;
-  onOpenGenerated: () => void;
-}) {
-  const [addMoreOpen, setAddMoreOpen] = useState(false);
-  const [addQuery, setAddQuery] = useState('');
-  const selected = catalog.filter((block) => selectedBlocks.has(block.id));
-  const selectedFilterIds = Array.from(new Set(selected.flatMap((block) => block.filterIds ?? [])));
-  const contextDomainLabel = domain.trim() || 'Auto domain';
-  const contextOwnerLabel = owner.trim() || 'Local owner';
-  const proposal = buildSession?.status === 'proposed' ? buildSession.proposal : undefined;
-  const plan = generated?.plan
-    ?? (buildSession?.plan as GeneratedAppPlan | undefined)
-    ?? planFromSelection(appName, prompt, domain, owner, selected);
-  const sessionWarnings = buildSession?.warnings ?? [];
-  const scopedReportCount = planScopedReportCount(plan);
-  const isPageBuild = Boolean(existingAppId);
-
-  // ── Redesigned AI build flow (Apps Redesign.dc.html) ──────────────────────
-  // library send → user bubble → building stream (orb + shimmer + staggered
-  // steps while the real propose call runs) → proposal checklist → commit.
-  if (mode === 'ai') {
-    const tiles = proposal?.tiles ?? [];
-    const certifiedTileCount = tiles.filter((tile) => tile.certification === 'certified').length;
-    const semanticTileCount = tiles.filter((tile) => tile.certification === 'reviewed_semantic').length;
-    const selectedCount = tiles.filter((tile) => proposalSelection.has(tile.id)).length;
-    const proposalBlockIds = new Set(tiles.map((tile) => tile.blockId).filter(Boolean));
-    const addNeedle = addQuery.trim().toLowerCase();
-    const addPool = catalog.filter((block) =>
-      !proposalBlockIds.has(block.id)
-      && (!addNeedle || block.name.toLowerCase().includes(addNeedle) || (block.description ?? '').toLowerCase().includes(addNeedle)));
-    const detectedFilters = (plan.globalFilters?.length ? plan.globalFilters : plan.pages[0]?.filters ?? []).slice(0, 8);
-    const buildFrameFilterLabels = Array.from(new Set([
-      ...(proposal?.buildFrame?.filters ?? []),
-      ...detectedFilters.map((filter) => filter.label || filter.id),
-    ])).filter(Boolean);
-    const glyphFor = (viz: string): string => {
-      const v = viz.toLowerCase();
-      // One mark per shape: everything that was not a KPI or a table used to
-      // share a single glyph, so a brief of six varied tiles looked identical.
-      if (v.includes('kpi') || v.includes('metric') || v.includes('single')) return 'Σ';
-      if (v.includes('table') || v.includes('pivot')) return '▤';
-      if (v.includes('line') || v.includes('trend')) return '⟋';
-      if (v.includes('area')) return '◺';
-      if (v.includes('pie') || v.includes('donut')) return '◕';
-      if (v.includes('scatter')) return '⁘';
-      if (v.includes('gauge')) return '◑';
-      if (v.includes('funnel')) return '▽';
-      if (v.includes('heatmap')) return '▩';
-      if (v.includes('text') || v.includes('narrative')) return '¶';
-      return '▦';
-    };
-    const vizLabel = (viz: string): string => {
-      const v = viz.toLowerCase();
-      if (v.includes('kpi') || v.includes('single')) return 'KPI';
-      if (v.includes('table')) return 'Table';
-      if (v.includes('line')) return 'Line chart';
-      if (v.includes('bar')) return 'Bar chart';
-      return viz ? viz.charAt(0).toUpperCase() + viz.slice(1) : 'Auto';
-    };
-    return (
-      <div className="dql-app-flow-scroll">
-        <div className="dql-app-flow">
-          <div className="dql-app-flow-head">
-            <h2>{isPageBuild ? 'Build a new App page' : 'Build an app'}</h2>
-            <p>{isPageBuild
-              ? 'ZLens plans one page from the existing App context, then waits for approval without changing any current page.'
-              : 'ZLens resolves certified blocks and semantic metrics, then waits for your approval before writing a private App draft.'}</p>
-          </div>
-
-          {/* sent prompt */}
-          <div className="dql-app-flow-bubble">{prompt}</div>
-
-          {/* building stream */}
-          {saving ? (
-            <div className="dql-app-buildstream">
-              <span className="dql-app-buildorb"><Sparkles size={14} /></span>
-              <div className="dql-app-buildbody">
-                <span className="dql-app-shimmer">Finding certified blocks…</span>
-                <div className="dql-app-buildsteps">
-                  <span style={{ animationDelay: '0.2s' }}><Check size={11} className="ok" />Matched domain <code>{contextDomainLabel.toLowerCase()}</code></span>
-                  <span style={{ animationDelay: '0.8s' }}><Check size={11} className="ok" />Scanning certified blocks and semantic metrics</span>
-                  <span style={{ animationDelay: '1.4s' }}><i className="dot" />Detecting app filters from block parameters…</span>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* proposal */}
-          {!saving && proposal ? (
-            <div className="dql-app-buildstream proposal">
-              <span className="dql-app-buildorb still"><Sparkles size={14} /></span>
-              <div className="dql-app-buildbody wide">
-                <div className="dql-app-proposal-lede">
-                  <strong>{isPageBuild ? 'Page Build Brief' : 'Build Brief'} · {proposal.intent.target === 'personal' ? 'Personal Draft' : 'Shared Project target'}</strong><br />
-                  Found {certifiedTileCount} certified block{certifiedTileCount === 1 ? '' : 's'}{semanticTileCount > 0 ? ` and ${semanticTileCount} governed semantic view${semanticTileCount === 1 ? '' : 's'}` : ''}.
-                  {isPageBuild
-                    ? ' The approved page is added atomically; existing pages remain unchanged.'
-                    : ' Every generated App starts private; review-required sources must pass publication checks before sharing.'}
-                </div>
-                <label className="dql-app-buildbrief-name">
-                  <span>{isPageBuild ? 'Page name' : 'Draft name'}</span>
-                  <input value={appName} onChange={(event) => onAppNameChange(event.target.value)} maxLength={120} />
-                </label>
-                <label className="dql-app-buildbrief-name">
-                  <span>Audience</span>
-                  <input value={audience} onChange={(event) => onAudienceChange(event.target.value)} maxLength={120} />
-                </label>
-                {proposal.buildFrame ? (
-                  <div className="dql-app-build-frame" aria-label="App Build Frame">
-                    <header><strong>Build Frame</strong><span>Editable intent before source commit</span></header>
-                    <dl>
-                      <div><dt>Decision</dt><dd>{proposal.buildFrame.goal}</dd></div>
-                      <div><dt>Metrics</dt><dd>{proposal.buildFrame.metrics.join(', ') || 'Clarification needed'}</dd></div>
-                      <div><dt>Dimensions</dt><dd>{proposal.buildFrame.dimensions.join(', ') || 'None required'}</dd></div>
-                      <div><dt>Filters</dt><dd>{buildFrameFilterLabels.join(', ') || 'No governed page filters detected'}</dd></div>
-                    </dl>
-                  </div>
-                ) : null}
-                <div className="dql-app-proposal-card">
-                  {tiles.map((tile) => {
-                    const on = proposalSelection.has(tile.id);
-                    const certifiedTile = tile.certification === 'certified';
-                    const semanticTile = tile.certification === 'reviewed_semantic';
-                    return (
-                      <button
-                        key={tile.id}
-                        type="button"
-                        className={`dql-app-proposal-row ${on ? '' : 'off'}`}
-                        onClick={() => onToggleProposalTile(tile.id)}
-                        disabled={Boolean(tile.error)}
-                        title={tile.repair?.message ?? tile.error ?? tile.preflight.message}
-                      >
-                        <span className={`dql-app-prop-check ${on ? 'on' : ''}`}>{on ? <Check size={10} strokeWidth={3.2} /> : null}</span>
-                        <span className={`dql-app-prop-glyph ${certifiedTile && glyphFor(tile.viz) === '▤' ? 'green' : ''}`}>{glyphFor(tile.viz)}</span>
-                        <span className="dql-app-prop-name">
-                          <b>{tile.blockId ?? tile.title}</b>
-                          <small>{tile.description ?? tile.question ?? tile.title}</small>
-                        </span>
-                        <span className={`dql-app-prop-badge ${certifiedTile ? 'certified' : 'draft'}`}>
-                          {certifiedTile
-                            ? 'Certified'
-                            : tile.repair?.status === 'repaired'
-                              ? 'Auto-repaired · review'
-                              : tile.repair?.status === 'failed'
-                                ? 'Repair blocked'
-                                : semanticTile ? 'Semantic · review' : 'Exploratory · review'}
-                        </span>
-                        <span className="dql-app-prop-viz">{vizLabel(tile.viz)}</span>
-                        <small>{tile.preflight.status.replace('_', ' ')}</small>
-                      </button>
-                    );
-                  })}
-                  {tiles.filter((tile) => tile.repair).map((tile) => (
-                    <div key={`repair-${tile.id}`} className="dql-app-flow-gaps">
-                      <span>
-                        {tile.repair?.status === 'repaired' ? <Wrench size={12} /> : <AlertTriangle size={12} />}
-                        {tile.title}: {tile.repair?.message}
-                      </span>
-                    </div>
-                  ))}
-                  <button type="button" className="dql-app-addmore" onClick={() => setAddMoreOpen((open) => !open)}>
-                    <Plus size={13} strokeWidth={2.2} /> Add more blocks
-                  </button>
-                  {addMoreOpen ? (
-                    <div className="dql-app-addmore-panel">
-                      <div className="dql-app-addmore-search">
-                        <Search size={12} />
-                        <input
-                          value={addQuery}
-                          onChange={(event) => setAddQuery(event.target.value)}
-                          placeholder={`Search ${catalog.length} certified block${catalog.length === 1 ? '' : 's'}…`}
-                        />
-                      </div>
-                      {catalogLoading ? <div className="dql-app-addmore-hint">Loading certified blocks…</div> : null}
-                      {addPool.slice(0, 6).map((block) => (
-                        <button key={block.id} type="button" className="dql-app-addmore-row" onClick={() => { setAddQuery(''); onAddBlock(block.id); }}>
-                          <Plus size={12} strokeWidth={2.2} />
-                          <span>{block.name}</span>
-                          <small>{block.domain ?? 'certified'} · {block.status}</small>
-                        </button>
-                      ))}
-                      {!catalogLoading && addPool.length === 0 ? <div className="dql-app-addmore-hint">No more matching certified blocks.</div> : null}
-                    </div>
-                  ) : null}
-                </div>
-
-                <details className="dql-app-buildbrief-edit">
-                  <summary>Edit tile titles and visualizations</summary>
-                  <div>
-                    {tiles.filter((tile) => !tile.error).map((tile) => {
-                      const edit = proposalEdits[tile.id] ?? { title: tile.title, viz: tile.viz };
-                      const visualizations = Array.from(new Set([...(tile.allowedVisualizations ?? []), tile.viz, 'table']));
-                      return (
-                        <label key={`edit-${tile.id}`}>
-                          <input value={edit.title ?? tile.title} onChange={(event) => onProposalEdit(tile.id, { title: event.target.value })} maxLength={120} />
-                          <select value={edit.viz ?? tile.viz} onChange={(event) => onProposalEdit(tile.id, { viz: event.target.value })}>
-                            {visualizations.map((viz) => <option key={viz} value={viz}>{vizLabel(viz)}</option>)}
-                          </select>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </details>
-
-                {detectedFilters.length > 0 ? (
-                  <div className="dql-app-detected">
-                    <span className="dql-app-detected-label">Page filters · select what belongs in this App</span>
-                    {detectedFilters.map((filter) => (
-                      <button
-                        key={filter.id}
-                        type="button"
-                        className={`dql-app-detected-pill ${proposalFilterSelection.has(filter.id) ? 'selected' : 'off'}`}
-                        aria-pressed={proposalFilterSelection.has(filter.id)}
-                        onClick={() => onToggleProposalFilter(filter.id)}
-                      >
-                        {proposalFilterSelection.has(filter.id) ? <Check size={11} /> : <Plus size={11} />}
-                        {filter.label} · <strong>{formatVariableValue(filter.default ?? 'Any')}</strong>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-
-                {proposal.gaps.length > 0 ? (
-                  <div className="dql-app-flow-gaps">
-                    {proposal.gaps.slice(0, 3).map((gap) => (
-                      <span key={gap.id}><AlertTriangle size={12} /> {gap.question}</span>
-                    ))}
-                  </div>
-                ) : null}
-
-                {proposal.clarifications?.length ? (
-                  <div className="dql-app-clarifications" aria-label="Questions to improve this App">
-                    <strong>Questions before publication</strong>
-                    {proposal.clarifications.map((clarification) => (
-                      <div key={clarification.id}>
-                        <span>{clarification.question}{clarification.required ? ' · required' : ''}</span>
-                        <div>{clarification.choices.map((choice) => <button key={choice} type="button" disabled={saving} onClick={() => onClarificationChoice(clarification.question, choice)}>{choice}</button>)}</div>
-                      </div>
-                    ))}
-                    <small>Select a choice to re-plan this Build Brief immediately against governed sources.</small>
-                  </div>
-                ) : null}
-
-                <div className="dql-app-flow-actions">
-                  <button type="button" className="dql-app-flow-build" onClick={() => onCommitProposal()} disabled={committing || selectedCount === 0}>
-                    <LayoutDashboard size={13} />
-                    {committing
-                      ? (isPageBuild ? 'Adding page…' : 'Building draft…')
-                      : `${isPageBuild ? 'Add page' : 'Build private draft'} with ${selectedCount} tile${selectedCount === 1 ? '' : 's'}`}
-                  </button>
-                  <button type="button" className="dql-app-flow-reset" onClick={onBack}>{isPageBuild ? 'Back to app' : 'Start over'}</button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* propose failed or empty state fallback */}
-          {!saving && !proposal ? (
-            <div className="dql-app-flow-actions">
-              <button type="button" className="dql-app-flow-build" onClick={onBuild}>
-                <Sparkles size={13} /> Create Build Brief
-              </button>
-              <button type="button" className="dql-app-flow-reset" onClick={onBack}>{isPageBuild ? 'Back to app' : 'Start over'}</button>
-            </div>
-          ) : null}
-
-          {error ? <div className="dql-app-error">{error}</div> : null}
-          {sessionWarnings.length > 0 && !saving ? (
-            <div className="dql-app-flow-gaps">
-              {sessionWarnings.slice(0, 2).map((warning, index) => (
-                <span key={`${warning}-${index}`}><AlertTriangle size={12} /> {warning}</span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="dql-app-create-shell">
-      <div className="dql-app-buildbar">
-        <button type="button" className="dql-app-back dql-app-back-label" onClick={onBack}>
-          <ArrowLeft size={14} />
-          <span>Apps</span>
-        </button>
-        <span className="dql-app-name-input">
-          <input aria-label="App name" placeholder="Untitled Analytics App" value={appName} onChange={(event) => onAppNameChange(event.target.value)} spellCheck={false} />
-        </span>
-        <StatusSeal tone={generated ? 'agentic' : 'draft'}>{generated ? 'generated' : 'draft'}</StatusSeal>
-        {/* This surface only renders in manual mode now — AI mode uses the chat flow above. */}
-        <div className="dql-app-mode-seg">
-          <button type="button" onClick={() => onModeChange('ai')}>
-            <Sparkles size={15} /> Build AI
-          </button>
-          <button type="button" className="on" onClick={() => onModeChange('classic')}>
-            <Blocks size={15} /> Manual
-          </button>
-        </div>
-        <div className="dql-app-build-actions">
-          <span className="dql-app-persona"><b>CFO</b> CFO</span>
-          {generated ? <button type="button" className="dql-apps-btn dql-apps-btn-line" onClick={onOpenGenerated}>Open app</button> : null}
-          <button type="button" className="dql-apps-btn dql-apps-btn-primary" onClick={onBuild} disabled={saving}>
-            {saving ? 'Creating...' : 'Create private App'}
-          </button>
-        </div>
-      </div>
-
-      <div className="dql-app-create-workspace clean classic">
-        <section className="dql-app-ai-start">
-          <div className="dql-app-ai-start-main">
-            <div className="dql-app-ai-start-copy">
-              <h1>Start with a governed canvas.</h1>
-              <p>Add certified sources now or begin with an empty page, then use the same canvas for components, filters, formatting, and optional review-required analysis.</p>
-            </div>
-
-            <div className="dql-app-ai-start-card">
-              <textarea
-                value={prompt}
-                onChange={(event) => onPromptChange(event.target.value)}
-                rows={3}
-                aria-label="App purpose"
-                placeholder="Optional: describe the business decision this App supports."
-              />
-              <button type="button" className="dql-app-ai-start-send" onClick={onBuild} disabled={saving} title="Create private App">
-                {saving ? <Workflow size={19} /> : <Send size={19} />}
-              </button>
-            </div>
-
-            <div className="dql-app-suggestions dql-app-ai-start-examples" aria-label="App templates">
-              <span>Templates</span>
-              {[
-                { title: 'Executive Brief', prompt: 'Create an executive brief with an editorial summary, KPI band, trend, narrative implications, and governed evidence.' },
-                { title: 'Operational Dashboard', prompt: 'Create an operational dashboard with global filters, KPIs, trends, driver breakdowns, and a detail table.' },
-                { title: 'Investigation', prompt: 'Create an investigation page with the question, validated findings, comparisons, driver analysis, caveats, and evidence.' },
-              ].map((item) => (
-                <button key={item.title} type="button" onClick={() => onPromptChange(item.prompt)}>
-                  {item.title}
-                </button>
-              ))}
-            </div>
-
-            <details className="dql-app-ai-context dql-app-ai-start-advanced" open>
-              <summary>
-                <span>App setup</span>
-                <b>{contextDomainLabel} / {contextOwnerLabel}</b>
-                <ChevronDown size={14} />
-              </summary>
-              <div className="dql-app-ai-context-grid">
-                <label>Domain
-                  <select value={domain} onChange={(event) => onDomainChange(event.target.value)}>
-                    <option value="">Global / cross-domain</option>
-                    {domainOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                </label>
-                <label>Owner<input value={owner} onChange={(event) => onOwnerChange(event.target.value)} /></label>
-                <label>Audience<input value={audience} onChange={(event) => onAudienceChange(event.target.value)} /></label>
-              </div>
-              <BlockIndex
-                title="Certified sources"
-                subtitle={`${selectedBlocks.size} selected · optional`}
-                catalog={catalog}
-                loading={catalogLoading}
-                error={catalogError}
-                selectedBlocks={selectedBlocks}
-                onToggleBlock={onToggleBlock}
-              />
-            </details>
-
-            {proposal && !generated ? (
-              <div style={{ border: `1px solid ${themes[themeMode].cellBorder}`, background: themes[themeMode].appBg, borderRadius: 10, padding: 14 }}>
-                <AppBuildProposalPanel
-                  proposal={proposal}
-                  t={themes[themeMode]}
-                  selected={proposalSelection}
-                  onToggle={onToggleProposalTile}
-                  onCreate={(edits) => onCommitProposal(edits)}
-                  defaultName={appName}
-                  busy={committing}
-                  error={null}
-                />
-              </div>
-            ) : null}
-
-            {generated ? (
-              <div className="dql-app-ai-result dql-app-ai-start-result">
-                Generated <b>{generated.plan.name}</b> with {generated.validation.certifiedTiles} certified app tile
-                {generated.validation.certifiedTiles === 1 ? '' : 's'} and {scopedReportCount} scoped report
-                {scopedReportCount === 1 ? '' : 's'}.
-                {buildSession ? <small>Session {buildSession.id}</small> : null}
-              </div>
-            ) : null}
-
-            {error ? <div className="dql-app-error">{error}</div> : null}
-          </div>
-
-          <aside className="dql-app-ai-start-context">
-            <section className="dql-app-ai-context-card">
-              <PanelHead
-                title="Draft contents"
-                meta={`${selected.length} source${selected.length === 1 ? '' : 's'}`}
-              />
-              <div className="dql-app-ai-evidence-list">
-                {selected.map((item) => (
-                  <div key={`selected-${item.id}`} className="dql-app-ai-evidence-row">
-                    <span><Check size={14} /></span>
-                    <div><b>{item.name}</b><small>{item.description || `${item.domain} certified block`}</small></div>
-                    <StatusSeal tone="certified">Included</StatusSeal>
-                  </div>
-                ))}
-                {selected.length === 0 ? <EmptyPanel title="Blank canvas" detail="Select sources on the left, or create the App now and add components in Studio." compact /> : null}
-              </div>
-            </section>
-
-            <section className="dql-app-ai-context-card">
-              <PanelHead title="Page filters" meta="added from source parameters" />
-              <div className="dql-app-ai-filter-preview">
-                {selectedFilterIds.slice(0, 6).map((filterId) => (
-                  <span key={filterId}><small>{formatBusinessLabel(filterId)}</small><b>Included</b></span>
-                ))}
-                {selectedFilterIds.length === 0 ? <p className="dql-app-filter-empty">No parameter-backed filters in the selected sources. After creation, run the page and use Edit → Filters to add compatible result fields.</p> : null}
-              </div>
-            </section>
-
-            <section className="dql-app-ai-context-card">
-              <PanelHead title="Next step" meta="private draft" />
-              <div className="dql-app-ai-gap-list">
-                <span><Check size={13} /> Create the private App, then add KPI, chart, table, pivot, text, and filter components from Edit mode.</span>
-                <span><ShieldCheck size={13} /> Nothing is published to the project until you choose Publish to Project.</span>
-              </div>
-            </section>
-          </aside>
-        </section>
-
-      </div>
     </div>
   );
 }
@@ -2652,7 +2109,7 @@ function AppWorkspaceSurface({
                 title={semanticRunReady
                   ? 'Approve the successful semantic run for publication'
                   : repairedSemanticTileIds.length > 0
-                    ? 'AI-repaired semantic previews are review-required and cannot be approved as governed semantic results'
+                    ? 'AI-repaired Metrics previews need review and cannot be approved as certified Metrics results'
                     : 'Run this dashboard successfully before semantic approval'}
               >
                 <Check size={14} /> Approve semantic ({semanticTileIds.length})
@@ -3008,71 +2465,6 @@ function AppWorkspaceSurface({
   );
 }
 
-function BlockIndex({
-  title,
-  subtitle,
-  catalog,
-  loading,
-  error,
-  selectedBlocks,
-  onToggleBlock,
-}: {
-  title: string;
-  subtitle: string;
-  catalog: AppBlockRecommendation[];
-  loading: boolean;
-  error: string | null;
-  selectedBlocks: Set<string>;
-  onToggleBlock: (blockId: string) => void;
-}) {
-  const [query, setQuery] = useState('');
-  const blocks = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return catalog;
-    return catalog.filter((block) => [
-      block.name,
-      block.domain,
-      block.status,
-      block.description,
-      block.owner ?? '',
-      ...(block.tags ?? []),
-    ].join(' ').toLowerCase().includes(needle));
-  }, [catalog, query]);
-  return (
-    <div className="dql-app-palette">
-      <div className="dql-app-palette-title">
-        <span><Blocks size={14} /> {title}</span>
-        <b>{subtitle}</b>
-      </div>
-      <label className="dql-app-palette-search">
-        <Search size={14} />
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search blocks, domains, tags"
-        />
-      </label>
-      {loading ? <EmptyPanel title="Loading blocks..." detail="Finding certified blocks for this domain." compact /> : null}
-      {!loading && error ? <div className="dql-app-error" role="alert">Could not load certified sources. {error}</div> : null}
-      {!loading && !error && blocks.length === 0 ? <EmptyPanel title="No blocks found." detail="Try another domain or search term, or create a blank App and add sources later." compact /> : null}
-      {blocks.slice(0, 24).map((block, index) => {
-        const selected = selectedBlocks.has(block.id);
-        return (
-          <button key={`${block.id}-${index}`} type="button" className={selected ? 'selected' : ''} onClick={() => onToggleBlock(block.id)}>
-            <span className="dql-app-palette-icon"><LineChart size={14} /></span>
-            <span>
-              <b>{block.name}</b>
-              <small>{block.domain} / {block.chartType ?? 'table'}</small>
-            </span>
-            <i>{selected ? 'using' : block.status}</i>
-          </button>
-        );
-      })}
-      {blocks.length > 24 ? <div className="dql-app-palette-more">{blocks.length - 24} more matches</div> : null}
-    </div>
-  );
-}
-
 /**
  * An `h1` that becomes an input while customizing.
  *
@@ -3329,13 +2721,6 @@ function UnifiedAppAiPanel({
   );
 }
 
-function planScopedReportCount(plan: GeneratedAppPlan): number {
-  const rootReports = Array.isArray(plan.scopedReports) ? plan.scopedReports.length : 0;
-  const planningReports = Array.isArray(plan.planning?.scopedReports) ? plan.planning.scopedReports.length : 0;
-  if (rootReports > 0 || planningReports > 0) return Math.max(rootReports, planningReports);
-  return Array.isArray(plan.missingEvidence) ? plan.missingEvidence.length : 0;
-}
-
 function plannedAppFilterIds(plan: GeneratedAppPlan | undefined): string[] {
   if (!plan) return [];
   return Array.from(new Set([
@@ -3483,7 +2868,7 @@ function sampleDashboardRows(rows?: Array<Record<string, unknown>>, columns?: st
 function formatCopilotRouteLabel(route: AppCopilotRoute): string {
   if (route === 'certified_answer') return 'Answered from trusted logic';
   if (route === 'dataset_chart_answer') return 'Answered from this chart';
-  if (route === 'generated_answer') return 'Generated — review required';
+  if (route === 'generated_answer') return 'Generated — needs review';
   if (route === 'investigation') return 'Needs analysis';
   if (route === 'app_change_proposal') return 'App change idea';
   if (route === 'metadata_answer') return 'Metadata answer';
@@ -3614,10 +2999,10 @@ function AddPageDialog({
           >
             <span>{exploreGaps ? <Check size={11} strokeWidth={3} /> : null}</span>
             <b>Explore uncovered gaps with AI SQL</b>
-            <small>Personal App only · bounded preview · review required</small>
+            <small>Personal App only · bounded preview · needs review</small>
           </button>
         ) : (
-          <small className="dql-app-page-source-policy">Shared-project pages use certified blocks and governed semantic metrics.</small>
+          <small className="dql-app-page-source-policy">Shared-project pages use certified Datasets, Metrics and saved queries.</small>
         )}
         {error ? <div className="dql-app-error">{error}</div> : null}
         <div>
@@ -3733,60 +3118,6 @@ export function DatasetChartAnswerPanel({
   );
 }
 
-function planFromSelection(
-  name: string,
-  prompt: string,
-  domain: string,
-  owner: string,
-  selected: AppBlockRecommendation[],
-): GeneratedAppPlan {
-  const tiles = selected.map((block, index) => ({
-    id: block.id || `tile-${index + 1}`,
-    title: block.name,
-    kind: 'certified_block' as const,
-    description: block.description,
-    blockId: block.name,
-    sourceNodeId: block.id,
-    viz: block.chartType ?? 'table',
-    certification: 'certified' as const,
-    reviewStatus: 'certified' as const,
-    rationale: 'Selected from the certified block palette.',
-  }));
-  return {
-    version: 2,
-    mode: 'stakeholder',
-    publicationIntent: 'shared_project',
-    requirements: [{ id: 'primary', question: prompt, role: 'detail', measures: [], dimensions: [], filters: [] }],
-    requirementCoverage: tiles.map((tile) => ({
-      requirementId: 'primary',
-      status: 'covered' as const,
-      source: 'certified_block' as const,
-      tileId: tile.id,
-      sourceId: tile.sourceNodeId,
-      trustState: 'certified',
-      reasons: ['Explicitly selected certified block.'],
-    })),
-    storyEvidencePlan: { version: 1, goal: prompt, audience: 'stakeholder', eligibleTileIds: tiles.map((tile) => tile.id) },
-    appId: slugify(name) || 'new-app',
-    name,
-    prompt,
-    skills: AGENT_SKILLS.map((skill) => ({
-      id: skill.id,
-      title: skill.title,
-      description: skill.description,
-    })),
-    domain,
-    audience: 'stakeholder',
-    businessGoal: prompt,
-    owner,
-    lifecycle: 'draft',
-    tags: ['app-builder'],
-    pages: [{ id: 'overview', title: 'Overview', filters: [], tiles }],
-    caveats: [],
-    reviewTasks: [],
-  };
-}
-
 function isSharedProjectApp(app: AppSummary): boolean {
   if (app.publicationIntent) return app.publicationIntent === 'shared_project';
   if (app.visibility) return app.visibility === 'shared';
@@ -3814,6 +3145,3 @@ function shortHash(value: string): string {
   return Math.abs(hash).toString(16).slice(0, 7).padStart(7, '0');
 }
 
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-}
