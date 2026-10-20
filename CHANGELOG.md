@@ -8,6 +8,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Apps
+
+- **Field-based tiles are on by default.** App Studio builds tiles from a
+  Dataset's measures and dimensions without first asking you to turn the
+  feature on, and the "Turn on field-based tiles" banner is gone. To turn
+  them off for a project, set `"apps": { "datasets": false }` in
+  `dql.config.json`; Studio then says so in one line.
+
 ## v0.2.2 - 2026-10-19
 
 Sharing through your own git repository now works from the workbench without

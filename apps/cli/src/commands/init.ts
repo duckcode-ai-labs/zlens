@@ -255,9 +255,8 @@ function buildConfig(
     },
   };
 
-  // New projects start with field-based Dataset tiles on. The default stays
-  // off for existing projects (decision APP-007), so an upgrade never changes
-  // how an App already in git behaves.
+  // Field-based Dataset tiles are on by default (APP-007); new projects write
+  // the switch explicitly so `apps.datasets: false` is easy to find.
   config.apps = { datasets: true };
 
   // Persist the resolved local owner so AI-drafted blocks pass the Certifier's
