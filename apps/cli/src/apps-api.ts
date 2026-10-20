@@ -17,6 +17,7 @@ import type {
   AppBuilderPlannerCompletion,
   AppBuilderPlannerProvenance,
   AppPlan,
+  AppBuildHandoffSourceSummary,
   AppSourceCatalogRecord,
   ContextAuthoringProposalV1,
   NarrateInput,
@@ -34,6 +35,8 @@ import {
   normalizeDqlArtifactReference,
   suggestAppId,
   createAppBuildDraft,
+  createBlankAppBuildPage,
+  newAppBuildDraftId,
   appBuildDraftHash,
   appBuildPreviewIntentFingerprint,
   applyAppBuildDraftOperations,
@@ -1237,19 +1240,18 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
-  // … then commit (user confirmed the selection → write the app files).
-  const commitMatch = path.match(/^\/api\/apps\/ai-builds\/([^/]+)\/commit$/);
-  if (commitMatch && req.method === 'POST') {
+  // … then open it in App Studio (the author kept a selection → a local App
+  // Studio draft that opens at the AI Data step; no App files are written).
+  const openInStudioMatch = path.match(/^\/api\/apps\/ai-builds\/([^/]+)\/open-in-studio$/);
+  if (openInStudioMatch && req.method === 'POST') {
     try {
-      const body = await readJson<CommitAppAiBuildInput>(req);
-      const result = await commitAppAiBuild(projectRoot, decodeURIComponent(commitMatch[1]), body, {
-        narrate: ctx.narrate,
-      });
+      const body = await readJson<OpenAppAiBuildInStudioInput>(req);
+      const result = await openAppAiBuildInStudio(projectRoot, decodeURIComponent(openInStudioMatch[1]), body);
       if (!result.ok) {
-        sendJson(res, result.status ?? 400, { ok: false, error: result.error });
+        sendJson(res, result.status, { ok: false, error: result.error });
         return true;
       }
-      sendJson(res, 201, { ok: true, session: result.session, app: result.app, dashboardId: result.dashboardId });
+      sendJson(res, result.reused ? 200 : 201, result);
     } catch (err) {
       sendJson(res, 500, { ok: false, error: (err as Error).message });
     }
@@ -2184,6 +2186,8 @@ interface AppAiBuildSession {
   proposalHash?: string;
   /** Tile ids the user confirmed at commit time (audit trail). */
   committedTileIds?: string[];
+  /** The App Studio draft this proposal was opened as (Ask builds open in App Studio). */
+  studioDraftId?: string;
   committedBrief?: {
     appName?: string;
     pageTitle?: string;
@@ -4725,10 +4729,141 @@ export interface CommitAppAiBuildInput {
   tileOverrides?: Record<string, { title?: string; viz?: string }>;
 }
 
+export interface OpenAppAiBuildInStudioInput {
+  /** Proposal tile ids the author kept; omitted = the ones selected by default. */
+  selectedTileIds?: string[];
+  expectedProposalHash?: string;
+  appName?: string;
+  audience?: string;
+}
+
+export type OpenAppAiBuildInStudioResult =
+  | {
+    ok: true;
+    draft: AppBuildDraft;
+    /** The data the draft starts with, in the App Studio words. */
+    sources: AppBuildHandoffSourceSummary[];
+    /** Questions App Studio lists under "Not covered yet". */
+    notCoveredYet: string[];
+    /** True when this proposal was already opened and the same draft is returned. */
+    reused: boolean;
+  }
+  | { ok: false; error: string; status: number };
+
 /**
- * Phase 2 of the two-phase app build: the user confirmed the proposal — filter the
- * plan to the selected tiles, re-validate (fail closed on drift), write the app
- * files, and mark the session ready.
+ * Open an Ask `app_build` proposal in App Studio (design D9). The proposal
+ * becomes a local App Studio draft, never App files: the brief is the App's
+ * goal, the certified blocks and Metrics the author kept become the App's data
+ * (App Studio requires them when it plans pages), and the question behind any
+ * kept AI-written SQL tile is listed under "Not covered yet". App Studio
+ * plans again from the goal, so it finds the other gaps itself.
+ * The draft uses "Only certified data" unless the author kept data that needs
+ * review. App Studio then opens it at the AI Data step and publishing goes
+ * through the publish checks.
+ */
+export async function openAppAiBuildInStudio(
+  projectRoot: string,
+  sessionId: string,
+  input: OpenAppAiBuildInStudioInput = {},
+): Promise<OpenAppAiBuildInStudioResult> {
+  const session = getAppAiBuildSession(projectRoot, sessionId);
+  if (!session) return { ok: false, error: `AI build session "${sessionId}" not found`, status: 404 };
+  if (session.studioDraftId) {
+    const existing = loadStoredAppBuildDraft(projectRoot, session.studioDraftId);
+    if (existing && existing.state !== 'project_published') {
+      return { ok: true, draft: existing, sources: [], notCoveredYet: handoffGapQuestions(existing), reused: true };
+    }
+  }
+  if (session.status !== 'proposed' || !session.proposal) {
+    return { ok: false, error: session.error ?? 'This App build has no proposal to open.', status: 400 };
+  }
+  if (!input.expectedProposalHash || input.expectedProposalHash !== session.proposalHash) {
+    return { ok: false, error: 'The App proposal changed or is stale. Ask again before opening it in App Studio.', status: 409 };
+  }
+  if (session.inputs.existingAppId) {
+    return { ok: false, error: 'To add a page to an existing App, open that App in App Studio and describe the page with AI.', status: 400 };
+  }
+  const proposal = session.proposal;
+  const selected = new Set(input.selectedTileIds
+    ?? proposal.tiles.filter((tile) => tile.selectedByDefault && !tile.error).map((tile) => tile.id));
+  const kept = proposal.tiles.filter((tile) => !tile.error && selected.has(tile.id));
+  const semanticTiles = kept.filter((tile) => tile.source === 'semantic_query' && tile.semantic);
+  // AI-written SQL is never written as an App tile. The draft model keeps
+  // data that needs review only under "Data that needs review", so the
+  // question goes to "Not covered yet", where App Studio can generate a
+  // draft that needs review on request.
+  const draftSqlTiles = kept.filter((tile) => tile.source === 'ai_generated');
+  const {
+    appBuildHandoffSourceSummary,
+    createAppBuildHandoffDraft,
+    ensureAgentProjectReady,
+    matchAppSourceCatalogRecords,
+  } = await import('@zlens/agent');
+  await ensureAgentProjectReady(projectRoot);
+  const matched = matchAppSourceCatalogRecords(projectRoot, {
+    blockNames: kept.flatMap((tile) => tile.source === 'certified_block' && tile.blockId ? [tile.blockId] : []),
+    semanticModels: semanticTiles.flatMap((tile) => tile.semantic!.semanticModelRefs ?? []),
+    metrics: semanticTiles.flatMap((tile) => tile.semantic!.metrics ?? []),
+  }, 'include_review_required');
+  const reviewDataKept = draftSqlTiles.length > 0 || matched.items.some((source) => source.trust !== 'certified');
+  const plan = (session.plan ?? {}) as Partial<AppPlan>;
+  // Only the questions behind kept Draft SQL are carried. App Studio plans
+  // again from the same goal over its own catalog and finds the other gaps.
+  const gaps = draftSqlTiles.map((tile) => ({
+    question: cleanString(tile.question) || tile.title,
+    reason: 'Ask wrote SQL for this question. Draft SQL is not added to an App; generate a draft that needs review in App Studio instead.',
+  }));
+  let draft: AppBuildDraft;
+  try {
+    draft = createAppBuildHandoffDraft({
+      goal: session.prompt || proposal.buildFrame.goal,
+      name: cleanString(input.appName) || cleanString(plan.name) || undefined,
+      domain: session.inputs.domain || cleanString(plan.domain) || undefined,
+      audience: cleanString(input.audience) || session.inputs.audience || proposal.buildFrame.audience,
+      sources: matched.items,
+      sourcePolicy: reviewDataKept ? 'include_review_required' : 'governed_only',
+      gaps,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error), status: 400 };
+  }
+  writeStoredAppBuildDraft(projectRoot, draft);
+  writeAppAiBuildSession(projectRoot, {
+    ...session,
+    status: 'ready',
+    updatedAt: new Date().toISOString(),
+    committedTileIds: kept.map((tile) => tile.id),
+    studioDraftId: draft.id,
+  });
+  const reasonFor = (source: AppSourceCatalogRecord) => {
+    const tile = kept.find((candidate) => candidate.blockId?.toLowerCase() === source.name.toLowerCase())
+      ?? semanticTiles.find((candidate) => candidate.semantic!.metrics.some((metric) => source.capabilities.measures.includes(metric)));
+    return tile ? `Ask picked it for ${tile.title}.` : 'Ask picked it for this App.';
+  };
+  return {
+    ok: true,
+    draft,
+    sources: draft.sources.flatMap((draftSource) => {
+      const source = matched.items.find((item) => item.sourceId === draftSource.id);
+      return source ? [appBuildHandoffSourceSummary(source, reasonFor(source))] : [];
+    }),
+    notCoveredYet: handoffGapQuestions(draft),
+    reused: false,
+  };
+}
+
+function handoffGapQuestions(draft: AppBuildDraft): string[] {
+  return draft.requirements
+    .filter((requirement) => draft.coverage.some((coverage) => coverage.requirementId === requirement.id && coverage.status === 'gap'))
+    .map((requirement) => requirement.question);
+}
+
+/**
+ * Legacy phase 2 of the two-phase app build: filter the plan to the selected
+ * tiles, re-validate (fail closed on drift), write the app files, and mark the
+ * session ready. No HTTP route or AI surface reaches it any more: Ask builds
+ * open in App Studio (`openAppAiBuildInStudio`) and publish through the
+ * publish checks.
  */
 export async function commitAppAiBuild(
   projectRoot: string,
@@ -7659,29 +7794,13 @@ export function createStoredAppBuildDraft(
   if (baseAppId && !base) throw new Error(`App "${baseAppId}" not found.`);
   const name = cleanString(input.name) || base?.app.name || cleanString(input.goal) || 'Untitled App';
   const appId = base?.app.id || cleanString(input.appId) || suggestAppId(name);
-  const id = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const pageId = 'overview';
-  const emptyItems: DashboardGridItem[] = [];
-  const blankPage: DashboardDocument = {
-    version: 2,
-    id: pageId,
-    metadata: {
-      title: 'Overview',
-      description: cleanString(input.goal) || `Local draft canvas for ${name}`,
-      domain: cleanString(input.domain) || base?.app.domain || 'general',
-      audience: cleanString(input.audience) || base?.app.audience || 'stakeholders',
-      visibility: 'private',
-      lifecycle: 'draft',
-    },
-    layout: {
-      kind: 'grid', cols: 12, rowHeight: 80, items: emptyItems,
-      responsive: {
-        wide: { kind: 'grid', cols: 12, rowHeight: 80, items: emptyItems },
-        medium: { kind: 'grid', cols: 6, rowHeight: 80, items: emptyItems },
-        narrow: { kind: 'grid', cols: 1, rowHeight: 80, items: emptyItems },
-      },
-    },
-  };
+  const id = newAppBuildDraftId();
+  const blankPage = createBlankAppBuildPage({
+    name,
+    goal: cleanString(input.goal),
+    domain: cleanString(input.domain) || base?.app.domain,
+    audience: cleanString(input.audience) || base?.app.audience,
+  });
   const basePages = base
     ? findDashboardsForApp(base.appDir)
       .map((path) => loadDashboardDocument(path).document)

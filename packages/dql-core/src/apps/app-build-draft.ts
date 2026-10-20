@@ -262,6 +262,44 @@ export function createAppBuildDraft(input: {
   return { ...draftWithoutHash, proposalHash: appBuildDraftHash(draftWithoutHash) };
 }
 
+/** A new local App Build Draft id, in the one format every entry point uses. */
+export function newAppBuildDraftId(now = Date.now()): string {
+  return `build_${now}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * The empty first page of a new local App Build Draft. App Studio, Ask and
+ * MCP all start from this page; its domain is the App's domain.
+ */
+export function createBlankAppBuildPage(input: {
+  name: string;
+  goal?: string;
+  domain?: string;
+  audience?: string;
+}): DashboardDocument {
+  const items: DashboardGridItem[] = [];
+  return {
+    version: 2,
+    id: 'overview',
+    metadata: {
+      title: 'Overview',
+      description: input.goal?.trim() || `Local draft canvas for ${input.name}`,
+      domain: input.domain?.trim() || 'general',
+      audience: input.audience?.trim() || 'stakeholders',
+      visibility: 'private',
+      lifecycle: 'draft',
+    },
+    layout: {
+      kind: 'grid', cols: 12, rowHeight: 80, items,
+      responsive: {
+        wide: { kind: 'grid', cols: 12, rowHeight: 80, items },
+        medium: { kind: 'grid', cols: 6, rowHeight: 80, items },
+        narrow: { kind: 'grid', cols: 1, rowHeight: 80, items },
+      },
+    },
+  };
+}
+
 export function applyAppBuildDraftOperations(
   draft: AppBuildDraft,
   expectedRevision: number,

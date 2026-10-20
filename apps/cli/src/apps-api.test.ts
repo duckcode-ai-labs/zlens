@@ -38,6 +38,7 @@ import {
   recommendDashboardTile,
   recommendVisualization,
   matchAppDraftForQuestion,
+  openAppAiBuildInStudio,
   writeDashboardForTest,
 } from './apps-api.js';
 
@@ -4970,6 +4971,142 @@ SELECT * FROM hidden_trace
     if (!preview.ok) return;
     expect((preview.preview as { title?: string; cells?: unknown[] }).title).toBe('Investigation Notes');
     expect((preview.preview as { cells: unknown[] }).cells.length).toBeGreaterThan(0);
+  });
+});
+
+describe('Ask App proposals open in App Studio (design D9)', () => {
+  const revenueBlock = {
+    name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue', 'kpi'], description: 'Executive revenue KPI', chart: 'single_value',
+  };
+
+  it('opens the proposal as an App Studio draft with the kept data required, and writes no App files', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
+    const prompt = 'Build a revenue app for leadership and explain why revenue is changing.';
+    const session = await proposeAppAiBuild(root, { prompt, domain: 'revenue', owner: 'owner@local' });
+    expect(session.status).toBe('proposed');
+    const kept = session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id);
+    expect(session.proposal!.gaps.length).toBeGreaterThan(0);
+
+    const opened = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/open-in-studio`, 'POST', {
+      selectedTileIds: kept,
+      expectedProposalHash: session.proposalHash,
+      appName: 'Leadership Revenue',
+    });
+    expect(opened.status).toBe(201);
+    const payload = opened.payload as { ok: true; draft: AppBuildDraft; sources: Array<{ title: string; kind: string; trust: string; reason: string }>; notCoveredYet: string[] };
+    const draft = payload.draft;
+    expect(draft).toMatchObject({
+      name: 'Leadership Revenue',
+      authoringMode: 'ai',
+      sourcePolicy: 'governed_only',
+      frame: expect.objectContaining({ goal: prompt }),
+    });
+    expect(draft.pages[0]?.metadata.domain).toBe('revenue');
+    // The page is empty: App Studio builds the tiles after the Data step.
+    expect(draft.pages.every((page) => page.layout.items.length === 0)).toBe(true);
+    expect(draft.sources).toEqual([expect.objectContaining({ kind: 'block', trustState: 'certified', qualifiedIdentity: expect.stringContaining('Total Revenue') })]);
+    expect(payload.sources).toEqual([expect.objectContaining({ title: 'Total Revenue', trust: 'Certified', reason: expect.stringContaining('Ask picked it') })]);
+    // Ask's own gaps are not copied: App Studio plans again from the goal.
+    expect(payload.notCoveredYet).toEqual([]);
+    expect(draft.requirements).toEqual([]);
+
+    // Nothing reached the project; the draft is in the local App Studio store.
+    expect(existsSync(join(root, 'apps'))).toBe(false);
+    expect(getAppAiBuildSession(root, session.id)).toMatchObject({ status: 'ready', studioDraftId: draft.id });
+    const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
+    expect((listed.payload as { drafts: AppBuildDraft[] }).drafts.map((candidate) => candidate.id)).toContain(draft.id);
+
+    // The App Studio planner proposes the kept data (it is required) and
+    // finds what it does not cover itself.
+    const proposal = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: draft.frame.goal,
+      expectedRevision: draft.revision,
+      proposalHash: draft.proposalHash,
+      selectedBlockIds: draft.sources.map((source) => source.id),
+      mode: 'add',
+    });
+    expect(proposal.status).toBe(201);
+    const operations = (proposal.payload as { proposal: { operations: Array<Record<string, any>> } }).proposal.operations;
+    expect(operations.some((operation) => operation.type === 'upsert_source' && operation.source.id === draft.sources[0]!.id)).toBe(true);
+    const requirements = operations.find((operation) => operation.type === 'set_requirements')!;
+    expect(requirements.requirements.length).toBeGreaterThan(0);
+
+    // Opening the same proposal again returns the same draft.
+    const again = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/open-in-studio`, 'POST', {
+      selectedTileIds: kept,
+      expectedProposalHash: session.proposalHash,
+    });
+    expect(again.status).toBe(200);
+    expect((again.payload as { draft: AppBuildDraft }).draft.id).toBe(draft.id);
+  });
+
+  it('lists AI-written SQL under Not covered yet and allows data that needs review only when the author kept it', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
+    const propose = () => proposeAppAiBuild(root, {
+      prompt: 'Build a revenue app and explain why revenue is changing.',
+      domain: 'revenue', owner: 'owner@local', mode: 'personal', exploreGaps: true, maxGeneratedTiles: 1,
+    }, {
+      generateGovernedAnswer: async (question) => ({
+        text: `Exploration for ${question}`,
+        sql: 'SELECT region, SUM(revenue) AS revenue FROM analytics.orders GROUP BY region',
+        suggestedViz: 'bar',
+        result: { columns: ['region', 'revenue'], rows: [{ region: 'NA', revenue: 100 }], rowCount: 1 },
+      } as never),
+    });
+
+    const session = await propose();
+    const draftSql = session.proposal!.tiles.find((tile) => tile.source === 'ai_generated' && !tile.error)!;
+    expect(draftSql).toBeTruthy();
+    const certified = session.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id);
+    const opened = await openAppAiBuildInStudio(root, session.id, {
+      selectedTileIds: [...certified, draftSql.id],
+      expectedProposalHash: session.proposalHash,
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    expect(opened.draft.sourcePolicy).toBe('include_review_required');
+    expect(opened.notCoveredYet).toContain(draftSql.question || draftSql.title);
+    // No AI-written SQL became an App tile, a draft source or a file.
+    expect(opened.draft.pages.flatMap((page) => page.layout.items)).toEqual([]);
+    expect(opened.draft.sources.some((source) => source.kind === 'review_dql' || source.kind === 'exploratory_sql')).toBe(false);
+    expect(existsSync(join(root, 'apps'))).toBe(false);
+    expect(existsSync(join(root, '.dql', 'local', 'app-builds', opened.draft.id))).toBe(false);
+    // App Studio keeps the question under "Not covered yet" when it plans pages.
+    const planned = await invokeAppsApi(root, `/api/app-builds/${opened.draft.id}/ai-proposals`, 'POST', {
+      prompt: opened.draft.frame.goal,
+      expectedRevision: opened.draft.revision,
+      proposalHash: opened.draft.proposalHash,
+      selectedBlockIds: opened.draft.sources.map((source) => source.id),
+      mode: 'add',
+    });
+    expect(planned.status).toBe(201);
+    const setRequirements = (planned.payload as { proposal: { operations: Array<Record<string, any>> } }).proposal.operations
+      .find((operation) => operation.type === 'set_requirements')!;
+    const carried = setRequirements.requirements.find((candidate: { question: string }) => candidate.question === (draftSql.question || draftSql.title));
+    expect(carried).toBeTruthy();
+    expect(setRequirements.coverage.find((candidate: { requirementId: string }) => candidate.requirementId === carried.id)?.status).toBe('gap');
+
+    // Not kept: the draft stays on "Only certified data".
+    const second = await propose();
+    const notKept = await openAppAiBuildInStudio(root, second.id, {
+      selectedTileIds: second.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id),
+      expectedProposalHash: second.proposalHash,
+    });
+    expect(notKept.ok && notKept.draft.sourcePolicy).toBe('governed_only');
+  });
+
+  it('refuses a stale proposal and no longer serves the direct App write route', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
+    const session = await proposeAppAiBuild(root, { prompt: 'Build a revenue app for leadership.', domain: 'revenue', owner: 'owner@local' });
+    const ids = session.proposal!.tiles.map((tile) => tile.id);
+    const stale = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/open-in-studio`, 'POST', { selectedTileIds: ids, expectedProposalHash: 'wrong' });
+    expect(stale.status).toBe(409);
+    const commit = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/commit`, 'POST', { selectedTileIds: ids, expectedProposalHash: session.proposalHash });
+    expect(commit.status).not.toBe(201);
+    expect(existsSync(join(root, 'apps'))).toBe(false);
   });
 });
 

@@ -349,7 +349,7 @@ describe('Dataset chart answer presentation (APP-066)', () => {
   });
 });
 
-describe('Build Brief: tiles the commit will not build', () => {
+describe('Build Brief: tiles App Studio will not build', () => {
   const proposal = (target: 'personal' | 'shared_project', tiles: Array<Partial<AppBuildProposalTile>>) => ({
     intent: { target, initialVisibility: 'private' as const },
     tiles: tiles.map((tile, index) => ({
@@ -362,22 +362,20 @@ describe('Build Brief: tiles the commit will not build', () => {
   } as unknown as AppBuildProposal);
   const all = (p: AppBuildProposal) => new Set(p.tiles.map((tile) => tile.id));
 
-  it('flags an AI tile with no query, which becomes an appendix question rather than a tile', () => {
+  it('lists an AI tile with no query under Not covered yet rather than as a tile', () => {
     const p = proposal('personal', [{ title: 'What is the decision story behind this?' }]);
     const [first, ...rest] = unbuildableSelectedTiles(p, all(p));
     expect(rest).toEqual([]);
     expect(first?.title).toBe('What is the decision story behind this?');
     expect(first?.reason).toMatch(/nothing to show/i);
+    expect(first?.reason).toMatch(/Not covered yet/);
   });
 
-  it('flags exploratory SQL in a Shared Project and names the way out', () => {
-    const p = proposal('shared_project', [{ title: 'Revenue by region', sql: 'select 1' }]);
-    expect(unbuildableSelectedTiles(p, all(p))[0]?.reason).toMatch(/Personal Draft/);
-  });
-
-  it('accepts the same exploratory tile in a Personal Draft', () => {
-    const p = proposal('personal', [{ title: 'Revenue by region', sql: 'select 1' }]);
-    expect(unbuildableSelectedTiles(p, all(p))).toEqual([]);
+  it('never adds Draft SQL to an App, in a Personal Draft or a Shared Project, and names the way forward', () => {
+    for (const target of ['personal', 'shared_project'] as const) {
+      const p = proposal(target, [{ title: 'Revenue by region', sql: 'select 1' }]);
+      expect(unbuildableSelectedTiles(p, all(p))[0]?.reason).toMatch(/Draft SQL is not added to an App.*Not covered yet.*needs review/);
+    }
   });
 
   it('never flags a certified block, and never flags a tile the author deselected', () => {

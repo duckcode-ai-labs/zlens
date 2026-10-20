@@ -229,6 +229,64 @@ export function resolveAppSourceCatalogRecords(
 }
 
 /**
+ * Catalog records for the blocks and Metrics an AI build named outside App
+ * Studio (an Ask `app_build` proposal or the MCP `build_dql_app` tool), so the
+ * App Studio draft can carry them as the App's data. A block is matched by its
+ * exact name; Metrics by semantic model or metric name. Certified records win
+ * when a name is declared more than once. Names that match nothing are
+ * returned in `unmatched` rather than guessed.
+ */
+export function matchAppSourceCatalogRecords(
+  projectRoot: string,
+  refs: { blockNames?: string[]; semanticModels?: string[]; metrics?: string[] },
+  sourcePolicy: AppBuildSourcePolicy = 'governed_only',
+): { snapshotId: string; items: AppSourceCatalogRecord[]; unmatched: string[] } {
+  const clean = (values: string[] | undefined) => Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+  const blockNames = clean(refs.blockNames);
+  const models = new Set(clean(refs.semanticModels).map((value) => value.toLowerCase()));
+  const metrics = clean(refs.metrics);
+  const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+  try {
+    const inventory = lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
+      .filter((object) => object.status !== 'deprecated')
+      .map((object) => appSourceFromMetadata(object, lease.snapshotId, sourcePolicy));
+    const preferCertified = (candidates: AppSourceCatalogRecord[]) => rankAppSourcesByTrust(candidates)[0];
+    const items: AppSourceCatalogRecord[] = [];
+    const unmatched: string[] = [];
+    const add = (record: AppSourceCatalogRecord | undefined, ref: string) => {
+      if (!record) unmatched.push(ref);
+      else if (!items.some((item) => item.sourceId === record.sourceId)) items.push(record);
+    };
+    for (const name of blockNames) {
+      add(preferCertified(inventory.filter((record) => record.kind === 'block' && record.name.toLowerCase() === name.toLowerCase())), name);
+    }
+    const semantic = inventory.filter((record) => record.kind === 'semantic' || Boolean(record.capabilities.semanticModelId));
+    const modelOf = (record: AppSourceCatalogRecord) => record.capabilities.semanticModelId?.toLowerCase() ?? '';
+    const lastSegment = (value: string) => value.toLowerCase().split(/[:./]/).filter(Boolean).pop() ?? value.toLowerCase();
+    for (const model of models) {
+      const byModel = semantic.filter((record) => modelOf(record) === model || lastSegment(modelOf(record)) === lastSegment(model));
+      if (byModel.length) add(preferCertified(byModel), model);
+    }
+    for (const metric of metrics) {
+      const wanted = lastSegment(metric);
+      const byMetric = semantic.filter((record) => (
+        record.capabilities.measures.some((measure) => measure.toLowerCase() === wanted)
+        || Object.entries(record.capabilities.metricCapabilities ?? {}).some(([key, capability]) => (
+          lastSegment(key) === wanted || lastSegment(capability.metricId) === wanted
+        ))
+      ));
+      // A metric already covered by a matched model adds nothing new.
+      if (byMetric.some((record) => items.some((item) => item.sourceId === record.sourceId))) continue;
+      add(preferCertified(byMetric), metric);
+    }
+    // An unmatched model name is not reported on its own: its metrics are.
+    return { snapshotId: lease.snapshotId, items, unmatched };
+  } finally {
+    lease.release();
+  }
+}
+
+/**
  * Return a bounded candidate-card set for one App-specific planning call.
  *
  * "Only certified data" (`governed_only`) bounds what the planner sees: the

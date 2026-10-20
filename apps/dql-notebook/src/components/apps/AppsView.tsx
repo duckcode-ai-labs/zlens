@@ -60,7 +60,7 @@ import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appPageUrl } from './app-links';
-import { defaultProposalSelection, type AppBuildBriefEdits } from './AppBuildProposalPanel';
+import { defaultProposalSelection } from './AppBuildProposalPanel';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
 import { APP_STYLES } from './app-styles';
 import { cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
@@ -861,49 +861,6 @@ export function AppsView(): JSX.Element {
       return;
     }
     await refreshApps(appId, dashboardId ?? state.activeDashboardId ?? undefined, 'workspace');
-  };
-
-  const runCommitProposal = async (edits?: AppBuildBriefEdits) => {
-    if (!buildSession || buildSession.status !== 'proposed') return;
-    setCommitting(true);
-    setBuilderError(null);
-    // Edits made in the shared Build Brief win over the surface's own fields:
-    // they are the ones the author was looking at when they pressed Build.
-    const name = (edits?.appName ?? edits?.pageTitle ?? builderName).trim();
-    const result = await api.commitAppAiBuild(buildSession.id, {
-      selectedTileIds: Array.from(proposalSelection),
-      expectedProposalHash: buildSession.proposalHash,
-      ...(builderExistingAppId
-        ? { pageTitle: name || undefined }
-        : { appName: name || undefined }),
-      audience: (edits?.audience ?? builderAudience).trim() || undefined,
-      filterIds: Array.from(proposalFilterSelection),
-      tileOverrides: { ...proposalEdits, ...(edits?.tileOverrides ?? {}) },
-    });
-    setCommitting(false);
-    if (!result.ok) {
-      setBuilderError(result.error);
-      return;
-    }
-    const session = result.session;
-    setBuildSession(session);
-    persistAppBuild(null);
-    setDurableBuildSessionId(null);
-    setBuildOperationId(null);
-    const response: GenerateAppResponse = {
-      ok: true,
-      plan: session.plan as GeneratedAppPlan,
-      validation: session.validation as GenerateAppResponse['validation'],
-      generated: { paths: session.generatedPaths },
-      app: result.app,
-      dashboardId: result.dashboardId,
-    };
-    setGenerated(response);
-    setExplainOpen(true);
-    // You just authored this App, so land in the mode where you can adjust it.
-    // Landing in read-only `view` hid the toolbar, the save status, and every
-    // tile's edit chrome, which read as "there is no way to edit or save".
-    await refreshApps(result.app?.id ?? response.plan.appId, result.dashboardId, 'workspace', { experience: 'build', section: 'dashboards' });
   };
 
   const runClassicCreate = async () => {

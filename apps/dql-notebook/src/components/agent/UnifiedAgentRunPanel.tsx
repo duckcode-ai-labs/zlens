@@ -75,7 +75,8 @@ import { controlStyle } from '../../themes/control-tokens';
 import { AskComposerOptions } from './AskComposerOptions';
 import { answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading } from './answer-trust';
 import { StructuredAnswerText } from './AgentAnswerCard';
-import { AppBuildProposalPanel, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
+import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
+import { openAppProposalInStudio } from '../apps/app-studio-handoff';
 import { ResultView } from '../output/ResultView';
 import { DraftReviewCard } from '../blocks/DraftReviewCard';
 import { SaveAsBlockModal } from '../modals/SaveAsBlockModal';
@@ -5741,10 +5742,10 @@ export function simpleRunTitle(run: AgentRun): string {
 }
 
 /**
- * The `app_proposal` artifact card: the confirmable pre-create content list from the
- * two-phase app build. Owns the whole confirm flow — per-tile toggles, the Create
- * call to the commit endpoint (a plain REST call keyed by sessionId, same pattern as
- * AddToAppButton), and the created-app success state with an Open link.
+ * The `app_proposal` artifact card: the Ask App proposal before it opens in
+ * App Studio (design D9). Per-tile toggles choose the data the App keeps;
+ * "Open in App Studio" makes a local App Studio draft (no App files) and opens
+ * Apps on it at the AI Data step. Publishing goes through the publish checks.
  */
 function AppProposalArtifact({
   artifact,
@@ -5765,7 +5766,7 @@ function AppProposalArtifact({
   const [selected, setSelected] = useState<Set<string>>(() => (proposal ? defaultProposalSelection(proposal) : new Set()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<{ appId: string; dashboardId?: string; name: string } | null>(null);
+  const [opened, setOpened] = useState<{ appId: string; draftId: string; name: string } | null>(null);
 
   if (!proposal || !sessionId) {
     return (
@@ -5779,29 +5780,23 @@ function AppProposalArtifact({
     );
   }
 
-  const commit = async (edits: AppBuildBriefEdits) => {
+  const openInStudio = async (edits: AppBuildBriefEdits) => {
     setBusy(true);
     setError(null);
-    // The chat path used to send only the selection, so a name or tile title
-    // typed in this brief was silently discarded even though the API accepts it.
-    const result = await api.commitAppAiBuild(sessionId, {
-      selectedTileIds: Array.from(selected),
-      expectedProposalHash: proposalHash,
-      ...(edits.appName ? { appName: edits.appName } : {}),
-      ...(edits.pageTitle ? { pageTitle: edits.pageTitle } : {}),
-      ...(edits.audience ? { audience: edits.audience } : {}),
-      ...(Object.keys(edits.tileOverrides).length > 0 ? { tileOverrides: edits.tileOverrides } : {}),
+    const result = await openAppProposalInStudio({
+      sessionId,
+      selectedTileIds: selected,
+      proposalHash,
+      edits,
+      openInStudio: (id, input) => api.openAppAiBuildInStudio(id, input),
+      onOpenApp,
     });
     setBusy(false);
     if (!result.ok) {
       setError(result.error);
       return;
     }
-    setCreated({
-      appId: result.app?.id ?? result.session.appId ?? '',
-      dashboardId: result.dashboardId ?? undefined,
-      name: result.app?.name ?? artifact.title,
-    });
+    setOpened({ appId: result.appId, draftId: result.draftId, name: result.name });
   };
 
   return (
@@ -5812,16 +5807,18 @@ function AppProposalArtifact({
           {cleanPresentationText(artifact.title)}
         </div>
       </div>
-      {created ? (
+      {opened ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: t.success, fontSize: 12, fontWeight: 750 }}>
-            <CheckCircle2 size={13} /> Created {created.name}
+            <CheckCircle2 size={13} /> {opened.name} is a draft in App Studio
           </span>
-          {created.appId && onOpenApp ? (
-            <button type="button" className="dql-hover" onClick={() => onOpenApp(created.appId, created.dashboardId)} style={smallButtonStyle(t)}>
-              Open app
+          {onOpenApp ? (
+            <button type="button" className="dql-hover" onClick={() => onOpenApp(opened.appId, undefined, opened.draftId)} style={smallButtonStyle(t)}>
+              {OPEN_IN_APP_STUDIO_LABEL}
             </button>
-          ) : null}
+          ) : (
+            <span style={{ fontSize: 11.5, color: t.textMuted }}>Find it in Apps under Drafts.</span>
+          )}
         </div>
       ) : (
         <AppBuildProposalPanel
@@ -5836,7 +5833,7 @@ function AppProposalArtifact({
               return next;
             });
           }}
-          onCreate={(edits) => void commit(edits)}
+          onCreate={(edits) => void openInStudio(edits)}
           defaultName={artifact.title}
           busy={busy}
           error={error}

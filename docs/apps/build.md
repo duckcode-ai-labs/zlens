@@ -72,6 +72,24 @@ review says **Deterministic planner fallback**. Its **Why:** line names the
 words of your request the data matched and its trust, for example *Its name
 and description match “customers” · Certified saved query*.
 
+### From Ask or an MCP client
+
+An App that AI builds outside App Studio opens in App Studio at the Data step,
+so you check the data first. Nothing is written to your project until you
+publish, and publishing goes through the same checks.
+
+- **Ask.** When you ask for an App, Ask shows a **Build Brief**: its tiles
+  with their trust (**Certified**, **Metrics · Needs review**, **Draft SQL ·
+  Needs review**) and **Not covered yet**. Untick what you don't want and
+  click **Open in App Studio**. The data behind the tiles you kept becomes the
+  App's data, and App Studio opens at **AI picked N sources**. Ask's SQL is
+  never added as a tile: its question is listed under **Not covered yet**.
+  The App uses **Only certified data** unless you kept data that needs review.
+- **An MCP client** (Claude Code, Codex, Cursor). `build_dql_app` picks
+  certified data for your description and returns a link to the draft, for
+  example `http://127.0.0.1:3474/?appDraft=build_…`. Open it to continue in
+  App Studio. The draft is also listed in **Apps** under **Drafts**.
+
 ## 2. Choose the data
 
 **Data for this App** lists the App's data on the left (**This App's data**)

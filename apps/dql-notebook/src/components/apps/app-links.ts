@@ -25,6 +25,30 @@ export function readAppPageLink(href: string): AppPageLink | null {
   return { appId, pageId };
 }
 
+const DRAFT_PARAM = 'appDraft';
+
+/**
+ * `?appDraft=<id>` opens that local App Studio draft. MCP `build_dql_app`
+ * returns this link; App Studio then starts at the AI Data step.
+ */
+export function readAppDraftLink(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  const draftId = url.searchParams.get(DRAFT_PARAM)?.trim() ?? '';
+  return /^[a-z0-9_:-]{1,128}$/i.test(draftId) ? draftId : null;
+}
+
+/** The href without the draft link, so a reload does not reopen the draft. */
+export function withoutAppDraftLink(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete(DRAFT_PARAM);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 /** The href with this page's link set, or with the link removed when `link` is null. */
 export function withAppPageLink(href: string, link: AppPageLink | null): string {
   const url = new URL(href);

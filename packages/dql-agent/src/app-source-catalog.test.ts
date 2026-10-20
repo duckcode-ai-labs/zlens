@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  appStudioDraftPath,
+  createAppBuildHandoffDraft,
   ensureAgentProjectReady,
+  matchAppSourceCatalogRecords,
   MetadataCatalog,
   queryAppSourceCatalog,
   rankAppSourcesByTrust,
@@ -250,5 +253,41 @@ describe('AppSourceCatalogService', () => {
     } finally {
       catalog.close();
     }
+  });
+
+  it('D9 matches the blocks an Ask or MCP build named, certified first, and reports names it cannot find', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const matched = matchAppSourceCatalogRecords(projectRoot, { blockNames: ['performance', 'No Such Block'] }, 'include_review_required');
+    expect(matched.items).toHaveLength(1);
+    expect(matched.items[0]).toMatchObject({ name: 'Performance', domain: 'sales', trust: 'certified' });
+    expect(matched.unmatched).toEqual(['No Such Block']);
+  });
+
+  it('D9 makes an AI App draft with the picked data, its gaps and only certified data unless review data was kept', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const all = queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items;
+    const certified = all.filter((source) => source.trust === 'certified');
+    const draft = createAppBuildHandoffDraft({
+      goal: 'Sales performance for leadership',
+      domain: 'sales',
+      sources: all,
+      gaps: [{ question: 'Why is churn rising?' }, { question: 'why is churn rising?' }],
+    });
+    expect(draft).toMatchObject({
+      appId: 'sales-performance-for-leadership',
+      authoringMode: 'ai',
+      sourcePolicy: 'governed_only',
+      frame: expect.objectContaining({ goal: 'Sales performance for leadership' }),
+    });
+    expect(draft.sources.map((source) => source.id)).toEqual(certified.map((source) => source.sourceId));
+    expect(draft.pages).toHaveLength(1);
+    expect(draft.pages[0]).toMatchObject({ metadata: expect.objectContaining({ domain: 'sales' }), layout: expect.objectContaining({ items: [] }) });
+    expect(draft.requirements.map((requirement) => requirement.question)).toEqual(['Why is churn rising?']);
+    expect(draft.coverage).toEqual([expect.objectContaining({ status: 'gap', sourceIds: [] })]);
+    expect(appStudioDraftPath(draft.id)).toBe(`/?appDraft=${draft.id}`);
+
+    const withReview = createAppBuildHandoffDraft({ goal: 'Sales and customers', sources: all, sourcePolicy: 'include_review_required' });
+    expect(withReview.sources).toHaveLength(all.length);
+    expect(withReview.sources.find((source) => source.trustState === 'review_required')).toMatchObject({ reviewStatus: 'required' });
   });
 });

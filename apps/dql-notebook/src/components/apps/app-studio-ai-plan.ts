@@ -252,12 +252,22 @@ export function appStudioCreatesTilesLabel(count: number): string {
   return `Creates ${count} ${count === 1 ? 'tile' : 'tiles'}`;
 }
 
-/** Requirements the proposal could not cover with the data it found. */
+/**
+ * Requirements the proposal could not cover with the data it found. A
+ * question asked twice (an Ask or MCP gap the planner finds again) is listed once.
+ */
 export function appStudioUncoveredRequirements(proposal: AppStudioAiProposal): Array<{ id: string; question: string }> {
   const operation = proposal.operations.find((candidate) => candidate.type === 'set_requirements');
   if (operation?.type !== 'set_requirements') return [];
+  const seen = new Set<string>();
   return operation.requirements
     .filter((requirement) => operation.coverage?.some((coverage) => coverage.requirementId === requirement.id && coverage.status === 'gap'))
+    .filter((requirement) => {
+      const key = requirement.question.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
     .map((requirement) => ({ id: requirement.id, question: requirement.question }));
 }
 

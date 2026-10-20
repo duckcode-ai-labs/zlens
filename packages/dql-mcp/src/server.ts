@@ -138,8 +138,9 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'the certification rules (a check only; people certify), `lineage_impact` for ' +
   'dependencies and impact, and `kg_search` for the knowledge graph.\n' +
   'Apps and notebooks: `list_apps` lists the Apps with their dashboards, tiles, the ' +
-  'block behind each tile and its trust; `build_dql_app` drafts a new App (certified ' +
-  'tiles first, review-only placeholders otherwise; never certifies); `list_notebooks` ' +
+  'block behind each tile and its trust; `build_dql_app` starts a new App as an App ' +
+  'Studio draft (certified data only, no App files; give the user its openUrl or openPath ' +
+  'so they check the data and publish there; never certifies); `list_notebooks` ' +
   'reads the notebooks.\n' +
   'Never present generated SQL or draft output as certified.';
 

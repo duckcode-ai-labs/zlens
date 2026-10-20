@@ -9108,10 +9108,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return {
         summary: proposed
           ? `Proposed ${certifiedCount} certified tile${certifiedCount === 1 ? '' : 's'}`
-            + (semanticCount > 0 ? ` + ${semanticCount} reviewed semantic tile${semanticCount === 1 ? '' : 's'}` : '')
-            + (generatedCount > 0 ? ` + ${generatedCount} AI-generated (review required)` : '')
+            + (semanticCount > 0 ? ` + ${semanticCount} Metrics tile${semanticCount === 1 ? '' : 's'} that need${semanticCount === 1 ? 's' : ''} review` : '')
+            + (generatedCount > 0 ? ` + ${generatedCount} Draft SQL tile${generatedCount === 1 ? '' : 's'} that need${generatedCount === 1 ? 's' : ''} review` : '')
             + (gapCount > 0 ? `; ${gapCount} question${gapCount === 1 ? '' : 's'} still uncovered` : '')
-            + '. Review the list and confirm to create the app.'
+            + '. Review the list, then open it in App Studio to check the data before AI builds pages.'
           : 'App build needs more certified DQL coverage before a proposal can be assembled.',
         status: proposed ? 'needs_review' : undefined,
         trustState: proposed ? 'review_required' : undefined,
@@ -9133,14 +9133,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             proposed,
             proposed ? 'info' : 'blocking',
             proposed
-              ? `Proposal is backed by ${certifiedCount} certified tile${certifiedCount === 1 ? '' : 's'}; nothing is created until you confirm.`
+              ? `Proposal is backed by ${certifiedCount} certified tile${certifiedCount === 1 ? '' : 's'}; it opens as an App Studio draft and nothing is written to the project until you publish.`
               : session.error ?? 'No certified app tiles matched the request.',
             session,
           ),
         ],
         nextActions: proposed
           ? [
-              { id: 'confirm-app-build', label: 'Create this app', artifactKind: 'app_proposal' },
+              { id: 'confirm-app-build', label: 'Open in App Studio', artifactKind: 'app_proposal' },
               { id: 'adjust-app-build', label: 'Adjust the plan', route: 'app_build', artifactKind: 'app_proposal' },
             ]
           : [
