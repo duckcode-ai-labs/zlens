@@ -53,11 +53,11 @@ App Studio uses one set of words for data and trust:
 
 | Word | Means |
 |---|---|
-| **Data** | The data an App's tiles use. |
+| **Data** | The data an App uses: its list of Datasets, Metrics and saved queries, chosen on **Data for this App** or with **+ Add data…**. |
 | **Dataset** | Data with fields: measures to add up or count, dimensions and time to group by. You build tiles by picking its fields. |
 | **Metrics** | Measures and dimensions from a semantic model. |
 | **Saved query** | A block without fields. Its result is used as it is. |
-| **Database table** | A table in your database. It becomes a Dataset after **Start from a table** checks it. |
+| **Database table** | A table in your database. It becomes a Dataset after ZLens checks it once (**Database tables** in **Add data**). |
 | **Domain** | A label that filters the lists, such as `finance`. It is not a kind of data. |
 | **Certified** | Someone owns the data and checked it. |
 | **Needs review** | Nobody has certified the data yet. A page that uses it cannot publish. |

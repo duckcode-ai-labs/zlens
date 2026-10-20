@@ -2218,6 +2218,101 @@ describe('Apps command center API helpers', () => {
     expect(existsSync(join(root, '.dql', 'local', 'app-builds', aiDraft.id, 'order-growth.dql'))).toBe(false);
   });
 
+  it('PR3 keeps the Start form domain on the draft and the Add data catalog filters by it', async () => {
+    const root = createProject();
+    writeBlock(root, 'sales/orders.dql', {
+      name: 'Sales Orders', domain: 'sales', status: 'certified', tags: ['orders'], description: 'Orders by region', chart: 'bar',
+    });
+    writeBlock(root, 'finance/margin.dql', {
+      name: 'Finance Margin', domain: 'finance', status: 'certified', tags: ['margin'], description: 'Gross margin', chart: 'bar',
+    });
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Sales App', goal: 'Sales health', authoringMode: 'manual', sourcePolicy: 'governed_only', domain: 'sales',
+    });
+    expect(created.status, JSON.stringify(created.payload)).toBe(201);
+    const draft = (created.payload as any).draft;
+    const domain = draft.pages[0].metadata.domain;
+    expect(domain).toBe('sales');
+
+    const scoped = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100&domain=${encodeURIComponent(domain)}`, 'GET', {});
+    expect((scoped.payload as any).items.map((item: any) => item.name)).toEqual(['Sales Orders']);
+    const all = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100`, 'GET', {});
+    expect((all.payload as any).items.map((item: any) => item.name).sort()).toEqual(['Finance Margin', 'Sales Orders']);
+
+    // "All domains" on the Start form sends no domain; the server keeps `general`.
+    const unscoped = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Any App', goal: 'Anything', authoringMode: 'manual', sourcePolicy: 'governed_only',
+    });
+    expect((unscoped.payload as any).draft.pages[0].metadata.domain).toBe('general');
+  });
+
+  it('PR3 connects data before any tile; data no tile uses never blocks Publish and is not written (design D4)', async () => {
+    const root = createProject();
+    writeBlock(root, 'sales/draft-orders.dql', {
+      name: 'Draft Orders', domain: 'sales', status: 'draft', tags: ['orders'], description: 'Unreviewed orders', chart: 'bar',
+    });
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      appId: 'data-first', name: 'Data First', goal: 'Order health', authoringMode: 'manual', sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100`, 'GET', {});
+    const items = (catalog.payload as any).items as any[];
+    const dataset = items.find((item) => item.capabilities?.dataset);
+    const review = items.find((item) => item.name === 'Draft Orders');
+    expect(dataset).toMatchObject({ trust: 'certified' });
+    expect(review).toMatchObject({ trust: 'review_required', eligibility: { localPreview: false } });
+    // The Add data browser sends the catalog card as the API builds it for a composed tile.
+    const draftSource = (item: any) => ({
+      id: item.sourceId, kind: item.kind === 'semantic' ? 'governed_semantic' : 'block',
+      sourceRef: item.executionRef, qualifiedIdentity: item.qualifiedIdentity, sourcePath: item.sourcePath, executionRef: item.executionRef,
+      snapshotId: item.snapshotId, sourceRevision: item.sourceRevision, sourceFingerprint: item.sourceRevision,
+      lifecycle: item.lifecycle, capabilities: item.capabilities,
+      trustState: item.trust === 'certified' ? 'certified' : 'review_required',
+      reviewStatus: item.trust === 'certified' ? 'not_required' : 'required',
+    });
+
+    // Data that needs review is refused while only certified data is allowed.
+    const refused = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+      operations: [{ type: 'upsert_source', source: draftSource(review) }],
+    });
+    expect(refused.status).toBe(400);
+
+    const patched = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+      operations: [
+        { type: 'set_source_policy', sourcePolicy: 'include_review_required' },
+        { type: 'upsert_source', source: draftSource(dataset) },
+        { type: 'upsert_source', source: draftSource(review) },
+      ],
+    });
+    expect(patched.status, JSON.stringify(patched.payload)).toBe(200);
+    const connected = (patched.payload as any).draft as AppBuildDraft;
+    expect(connected.sources.map((source) => source.id).sort()).toEqual([dataset.sourceId, review.sourceId].sort());
+    expect(connected.sources.find((source) => source.id === dataset.sourceId)?.capabilities?.dataset).toBeTruthy();
+    expect(connected.pages[0]!.layout.items).toEqual([]);
+
+    expect(preflightStoredAppBuildDraft(root, connected)).toEqual([]);
+    const result = publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, connected));
+    expect(result.draft.state).toBe('project_published');
+    const page = readFileSync(join(root, 'apps/data-first/dashboards/overview.dqld'), 'utf-8');
+    expect(page).not.toContain(review.sourceId);
+    expect(page).not.toContain(dataset.sourceId);
+
+    // Once a tile uses the review data, it blocks publishing again.
+    const second = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      appId: 'data-second', name: 'Data Second', goal: 'Orders', authoringMode: 'manual', sourcePolicy: 'include_review_required',
+    });
+    const secondDraft = (second.payload as any).draft;
+    const composed = await invokeAppsApi(root, `/api/app-builds/${secondDraft.id}/compose`, 'POST', {
+      mode: 'manual', expectedRevision: secondDraft.revision, expectedProposalHash: secondDraft.proposalHash,
+      selections: [{ sourceId: review.sourceId, pageId: 'overview', view: 'table' }],
+    });
+    expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
+    expect(preflightStoredAppBuildDraft(root, (composed.payload as any).draft).join(' ')).toMatch(/review-required and cannot be published/);
+  });
+
   it('stores a field-builder query with its v3 Dataset binding atomically (APP-031)', async () => {
     const root = createProject();
     writeDatasetBlock(root, 'commerce/order-lines.dql');

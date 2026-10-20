@@ -1,4 +1,5 @@
 import type { AppStudioBuildDraft, AppStudioDraftOperation, DashboardRunResponse } from '../../api/client';
+import { appSourceIdsUsedByTiles } from '@zlens/core/apps/app-data-sources';
 
 export type AppPublicationStepKind = 'questions' | 'review' | 'preview' | 'sources';
 
@@ -76,7 +77,8 @@ function appBuildRequirementAppliesToPublication(
 export function blockingPublicationReviewTasks(draft: AppStudioBuildDraft): AppStudioBuildDraft['reviewTasks'] {
   const pageIds = new Set(draft.pages.map((page) => page.id));
   const tileIds = new Set(draft.pages.flatMap((page) => page.layout.items.map((tile) => tile.i)));
-  const sourceIds = new Set(draft.sources.map((source) => source.id));
+  // A source no tile uses is not published (design D4), so its tasks do not block.
+  const sourceIds = appSourceIdsUsedByTiles(draft);
   return draft.reviewTasks.filter((task) => {
     if (task.status !== 'open') return false;
     if (task.sourceId && sourceIds.has(task.sourceId)) return true;
@@ -248,7 +250,11 @@ export function planLegacySemanticApproval(
 
 export function publicationBlockingSources(draft: AppStudioBuildDraft): AppStudioBuildDraft['sources'] {
   const pendingLegacySourceIds = new Set(legacySemanticSourcesNeedingApproval(draft).map((source) => source.id));
+  // Publish writes pages only: a connected source that no tile uses is left
+  // out of the App and never blocks publishing (design D4).
+  const usedSourceIds = appSourceIdsUsedByTiles(draft);
   return draft.sources.filter((source) => {
+    if (!usedSourceIds.has(source.id)) return false;
     if (isSemanticSource(source)) {
       if (isDatasetBackedAppSource(source)) {
         // A successful preview never certifies a Dataset. Its governed source

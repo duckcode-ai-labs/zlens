@@ -16,11 +16,14 @@ type Choice = { name: string; include: boolean; format: 'number' | 'currency' | 
  */
 export function TableDatasetDialog({
   domain,
+  initialTable,
   onClose,
   onCreated,
 }: {
   /** The App's area, so the new Dataset sits beside its other data. */
   domain?: string;
+  /** A table already chosen in the Add data browser: open straight on its check. */
+  initialTable?: WarehouseTableSummary;
   onClose: () => void;
   onCreated: (sourceId: string | undefined, name: string) => void;
 }): JSX.Element {
@@ -71,6 +74,11 @@ export function TableDatasetDialog({
       setChoices(response.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format, ...(measure.currency ? { currency: measure.currency } : {}) })));
     });
   };
+  useEffect(() => {
+    if (initialTable) pick(initialTable);
+    // Only the table the dialog opened with; later picks come from the list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialTable?.id]);
   const setChoice = (measure: string, patch: Partial<Choice>) => setChoices((current) => current.map((choice) => (choice.name === measure ? { ...choice, ...patch } : choice)));
   const save = () => {
     if (!picked || !draft) return;

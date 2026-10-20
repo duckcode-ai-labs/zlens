@@ -723,9 +723,10 @@ export function AppsView(): JSX.Element {
     setBuilderTemplate(config.template);
     setBuilderPrompt(config.mode === 'ai' ? config.prompt : 'A dashboard of live, checked numbers');
     setBuilderName(config.mode === 'manual' ? config.name : '');
-    // A new App starts in no domain. Never inherit the domain of the App
-    // opened for editing last; it would silently scope AI and the catalog.
-    setBuilderDomain('');
+    // A new App starts in the domain chosen on the Start form, or none. Never
+    // inherit the domain of the App opened for editing last; it would
+    // silently scope AI and the catalog.
+    setBuilderDomain(config.domain?.trim() ?? '');
     setBuilderAudience('stakeholders');
     setSelectedBlocks(new Set());
     setBuilderError(null);
@@ -1086,6 +1087,7 @@ export function AppsView(): JSX.Element {
           filter={libraryFilter}
           favorites={favorites}
           localDrafts={localDrafts}
+          domainOptions={builderDomainOptions}
           onSearch={setSearch}
           onFilter={setLibraryFilter}
           onToggleFavorite={(appId) => {
@@ -1126,6 +1128,7 @@ export function AppsView(): JSX.Element {
           startImmediately
           baseAppId={builderExistingAppId}
           domain={builderDomain}
+          domainOptions={builderDomainOptions}
           audience={builderAudience}
           themeMode={state.themeMode}
           onBack={returnToAppLibrary}
@@ -1270,6 +1273,7 @@ function AppLibrarySurface({
   filter,
   favorites,
   localDrafts,
+  domainOptions,
   onSearch,
   onFilter,
   onToggleFavorite,
@@ -1280,6 +1284,7 @@ function AppLibrarySurface({
 }: {
   apps: AppSummary[];
   allApps: AppSummary[];
+  domainOptions: ReturnType<typeof authoredDomainOptions>;
   loading: boolean;
   search: string;
   filter: LibraryFilter;
@@ -1330,6 +1335,7 @@ function AppLibrarySurface({
         {launchExpanded && canAuthor ? (
           <AppStudioLaunchSurface
             config={launchConfig}
+            domainOptions={domainOptions}
             onChange={(patch) => setLaunchConfig((current) => ({ ...current, ...patch }))}
             onSubmit={() => onStartStudio(launchConfig)}
           />

@@ -15,15 +15,18 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
       chose and every tile before anything is applied. Needs an
       [AI provider](../get-started/ai-provider.md).
     - **Start manually**: answer **What should this App be called?**
-4. Pick a **Starting layout**: **Executive Brief**, **Operational Dashboard**,
+4. Pick a **Domain**, or leave **All domains**. Lists of data start on this
+   domain; you can still pick data from any domain.
+5. Pick a **Starting layout**: **Executive Brief**, **Operational Dashboard**,
    **Investigation** or **Blank canvas**.
-5. Leave **Only certified data** on. **Also let me try data that needs review**
+6. Leave **Only certified data** on. **Also let me try data that needs review**
    is useful while exploring, but a page that uses such data cannot publish
    until the data is certified.
-6. Click **Generate editable App** (AI) or **Open blank Studio** (manual).
+7. Click **Generate editable App** (AI) or **Open blank Studio** (manual).
 
-App Studio opens. The App is a private local draft; the header says
-**Saved locally**.
+The App is a private local draft; the header says **Saved locally**. With
+**Start manually**, App Studio opens on **Data for this App** first. With AI,
+it opens on the canvas.
 
 You can change the data rule later in the App's settings: **Data rule** is
 **Only certified data** or **Also allow data that needs review**.
@@ -37,28 +40,47 @@ picked it. Notes from the planner, for example a tile it could not add, are
 listed under the header. With **Only certified data**, AI is given certified
 data only.
 
-## 2. Add tiles
+## 2. Choose the data
 
-The left panel has three tabs: **Data**, **Pages** and **Filters**.
+**Data for this App** lists the App's data on the left (**This App's data**)
+and an **Add data** list on the right with three tabs:
 
-To add a tile from a saved query:
+- **Datasets & Metrics**: data with fields, listed certified first.
+- **Saved queries**: blocks without fields; their result is used as it is.
+- **Database tables**: a table becomes a Dataset after ZLens checks it once.
 
-1. On the **Data** tab, open the source menu at the top and choose **Saved
-   queries and all sources…**.
-2. Find your data with **Search Datasets, Metrics and saved queries**. Each
-   row shows its type (**Dataset**, **Metrics** or **Saved query**) and its
-   trust: **Certified** or **Needs review**. Certified Datasets are listed
-   first, then Metrics, then saved queries, then data that needs review.
-3. Click **Add Table**, **Add Chart** or **Add KPI**.
+Search with **Search Datasets, Metrics and saved queries**, and narrow the list
+with the domain buttons (**All** or one domain). The **Data rule** line shows
+**Only certified data** or **Also allow data that needs review**; **Change**
+switches it.
 
-The tile appears on the page with its rows. Its **Tile settings** panel shows
-**Data & trust**, for example **Certified** and the saved query's file.
+Each row shows its type, its trust (**Certified** or **Needs review**), its
+domain and owner. Click a row to see its **Measures**, **Dimensions** and
+**Time**, or a saved query's **Columns**; **Show 10 sample rows** reads a few
+rows of a Dataset.
 
-You can also build a tile from fields: pick a Dataset in the source menu, then
-click a measure or a dimension. To start from a database table, choose **Start
-from a table…** in the source menu; ZLens checks the table once and turns it
-into a Dataset in the App's domain. Data marked **Needs review** shows
-**Allow data that needs review & add…** instead.
+- Click **Add to App**. The row then says **Added**, with **Remove**.
+- Data marked **Needs review** shows **Allow data that needs review & add**
+  while the App allows only certified data.
+- On **Database tables**, click **Check and add**, check the numbers, and click
+  **Certify and use this data**. The new Dataset is added to the App.
+
+Click **Open canvas with N sources**, or **Skip, start empty**. You can add
+more later: on the canvas, the **Data** tab's source menu lists **This App's
+data** first, then **+ Add data…**.
+
+## 3. Add tiles
+
+The left panel has three tabs: **Data**, **Pages** and **Filters**. On the
+**Data** tab, choose a source from **This App's data**:
+
+- **A Dataset or Metrics**: click a measure or a dimension. A new tile appears
+  on the page; add more fields, then click **Add to page**.
+- **A saved query**: under **Add as**, click **Table**, **Chart** or **KPI**.
+  Saved queries have no fields, so you cannot pick measures and dimensions.
+
+The tile shows its rows. Its **Tile settings** panel shows **Data & trust**,
+for example **Certified** and the Dataset or saved query it uses.
 
 Other ways to add content:
 
@@ -66,7 +88,7 @@ Other ways to add content:
 - **Heading** and **Text** under **Page elements**.
 - **Ask AI** in the top bar to change the page with AI.
 
-## 3. Arrange pages
+## 4. Arrange pages
 
 - **Readers see this page as**: **Dashboard**, **Report** or **Custom layout**.
 - Add a page with **+** next to the page tabs, or **New page** on the
@@ -75,7 +97,7 @@ Other ways to add content:
 - A tile's **⋯** menu has **View DQL and SQL**, **Change with AI**,
   **Tile settings**, **Duplicate** and **Remove tile**.
 
-## 4. Add filters
+## 5. Add filters
 
 1. Open the **Filters** tab and click **New filter**.
 2. Set a **Display label** and a **Control**: **Searchable dropdown**,
@@ -84,12 +106,12 @@ Other ways to add content:
    **Linked tiles**.
 4. Click **Create filter**.
 
-## 5. Preview
+## 6. Preview
 
 - **Preview** shows the page exactly as readers will see it. **Edit** goes back.
 - **Run** runs every tile on the page.
 
-## 6. Publish
+## 7. Publish
 
 1. Click **Publish**.
 2. ZLens checks the App. If something blocks publishing, the dialog lists
@@ -98,6 +120,10 @@ Other ways to add content:
    button.
 3. When the dialog says **Ready to publish** and **All checks passed**, click
    **Publish to Project**.
+
+Data in **This App's data** that no tile uses does not block publishing. It is
+not saved with the App, and the dialog says so, for example **1 data source not
+used by any tile will not be saved with the App.**
 
 Publishing writes the App as files in your project. Nothing is committed for
 you. The App opens in view mode, and its badge shows its trust, for example

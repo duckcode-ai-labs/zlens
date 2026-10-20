@@ -151,8 +151,21 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
       trustState: 'review_required',
       reviewStatus: 'required',
     }];
+    draft.pages[0]!.layout.items[0]!.block = { blockId: 'orders_by_region' };
     expect(publicationBlockingSources(draft).map((source) => source.id)).toEqual(['source:draft-orders']);
     expect(localPublicationSteps(draft).map((step) => step.id)).toContain('sources');
+  });
+
+  it('never blocks publishing on connected data no tile uses; Publish leaves it out (design D4)', () => {
+    const draft = draftFixture();
+    draft.sources.push({
+      id: 'source:draft-orders', kind: 'block', sourceRef: 'orders_by_region', lifecycle: 'draft',
+      trustState: 'review_required', reviewStatus: 'required',
+    });
+    draft.reviewTasks.push({ id: 'review-orders', message: 'Certify orders.', status: 'open', sourceId: 'source:draft-orders' });
+    expect(publicationBlockingSources(draft)).toEqual([]);
+    expect(blockingPublicationReviewTasks(draft)).toEqual([]);
+    expect(localPublicationSteps(draft).map((step) => step.id)).not.toContain('sources');
   });
 
   it('treats two settled pages backed by a certified semantic Dataset as ready without legacy result approval', () => {
@@ -246,7 +259,7 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
     };
     draft.pages[0] = {
       ...draft.pages[0]!,
-      layout: { ...draft.pages[0]!.layout, items: [legacyTile, datasetTile] },
+      layout: { ...draft.pages[0]!.layout, items: [legacyTile, datasetTile, { ...draft.pages[0]!.layout.items[0]!, i: 'review-dataset', sourceId: reviewDataset.id }] },
     };
 
     expect(isDatasetBackedAppSource(certifiedDataset)).toBe(true);
@@ -489,6 +502,7 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
       trustState: 'review_required',
       reviewStatus: 'required',
     }];
+    draft.pages[0]!.layout.items[0]!.block = { blockId: 'orders_by_region' };
 
     expect(publicationBlockerCount(draft, [
       'Source sales.revenue changed after selection.',

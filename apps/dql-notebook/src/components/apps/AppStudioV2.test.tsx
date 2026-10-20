@@ -556,59 +556,52 @@ describe('Studio legacy semantic conversion (M4-CONV-01)', () => {
 describe('Studio field-based tiles are on by default (APP-007)', () => {
   const datasetSource = {
     id: 'source.order-lines', sourceId: 'source.order-lines', name: 'order_lines', domain: 'commerce',
-    status: 'certified', owner: null, tags: [], path: 'blocks/commerce/order-lines.dql', fingerprint: 'sha256:a',
+    status: 'certified', trust: 'certified', owner: null, tags: [], path: 'blocks/commerce/order-lines.dql', fingerprint: 'sha256:a',
     lastModified: '2026-10-01T00:00:00.000Z', description: 'Order lines', score: 1, reasons: [],
     capabilities: {
-      measures: ['revenue'], dimensions: ['region'], outputs: ['region', 'revenue'], filters: [],
-      dataset: { id: 'dataset.order-lines', kind: 'block' },
+      measures: ['revenue'], dimensions: ['region'], outputs: ['region', 'revenue'], filters: [], parameters: [],
+      dataset: {
+        id: 'dataset.order-lines', kind: 'block', label: 'Order lines', operations: ['group'],
+        fields: [
+          { name: 'revenue', kind: 'measure', status: 'approved', aggregation: 'sum', dependsOn: ['net_amount'] },
+          { name: 'region', kind: 'physical', status: 'approved', role: 'dimension', type: 'string' },
+        ],
+      },
     },
   };
 
-  function renderSourcesPanel(datasetTilesEnabled: boolean): string {
-    const SourcesPanel = studio.SourcesPanel;
+  async function renderDataPanel(datasetTilesEnabled: boolean): Promise<string> {
+    const { DataPanel } = await import('./builder/DataPanel');
     return renderToStaticMarkup(
-      <SourcesPanel
-        usedSources={[]}
-        items={[datasetSource] as any}
-        selected={null}
-        query=""
-        loading={false}
-        error={null}
+      <DataPanel
+        appData={[datasetSource] as any}
+        active={datasetSource as any}
+        target={{ kind: 'none' }}
         disabled={false}
         datasetTilesEnabled={datasetTilesEnabled}
-        sourceFeedback={null}
-        onQuery={vi.fn()}
-        onSelect={vi.fn()}
-        onAdd={vi.fn()}
-        onAddDataset={vi.fn()}
-        onAuthorDataset={vi.fn()}
-        onRefreshDatasetBinding={vi.fn()}
+        onChoose={vi.fn()}
+        onPickField={vi.fn()}
+        onAddData={vi.fn()}
+        onAddSavedQuery={vi.fn()}
         onAddContent={vi.fn()}
-        policy="governed_only"
-        total={1}
-        hasMore={false}
-        onLoadMore={vi.fn()}
-        onEnableReview={vi.fn()}
       />,
     );
   }
 
-  it('shows no opt-in banner and keeps Dataset rows usable when the feature is on', () => {
-    const markup = renderSourcesPanel(true);
+  it('shows no opt-in banner and lists the Dataset fields when the feature is on', async () => {
+    const markup = await renderDataPanel(true);
     expect(markup).not.toContain('Build tiles from Dataset fields');
     expect(markup).not.toContain('Turn on field-based tiles');
     expect(markup).not.toContain('turned off for this project');
-    expect(markup).toContain('Configure fields');
-    expect(markup).not.toMatch(/<button[^>]*class="source-add-view"[^>]*disabled=""/);
+    expect(markup).toContain('Measures');
+    expect(markup).toContain('Revenue');
   });
 
-  it('shows one plain line and no write button when apps.datasets is false', () => {
-    const markup = renderSourcesPanel(false);
+  it('shows one plain line and no fields when apps.datasets is false', async () => {
+    const markup = await renderDataPanel(false);
     expect(markup).toContain('Field-based tiles are turned off for this project (apps.datasets is false in dql.config.json).');
-    expect(markup).not.toContain('Build tiles from Dataset fields');
     expect(markup).not.toContain('Turn on field-based tiles');
-    expect(markup).not.toContain('Turning on');
-    expect(markup).toMatch(/<button[^>]*class="source-add-view"[^>]*disabled=""/);
+    expect(markup).not.toContain('Search fields');
   });
 });
 
@@ -673,5 +666,44 @@ describe('Studio honest AI review and App domain (D6, D7, D8)', () => {
     expect(markup).toContain('planned tiles');
     expect(markup).toContain('Only certified data');
     expect(markup).not.toMatch(/Certified block|Review required|review lane|planned views/);
+  });
+});
+
+describe('Publish leaves out data no tile uses (design D4)', () => {
+  it('notes connected sources that no tile uses and does not count them as fixes', () => {
+    const PublishReadinessDialog = studio.PublishReadinessDialog;
+    const unused = (id: string) => ({ id, kind: 'block' as const, sourceRef: `blocks/${id}.dql`, lifecycle: 'draft' as const, trustState: 'review_required' as const, reviewStatus: 'required' as const });
+    const draft = {
+      version: 3, id: 'build_1', appId: 'revenue-app', name: 'Revenue App', revision: 2, proposalHash: 'hash',
+      authoringMode: 'manual', template: 'blank', sourcePolicy: 'include_review_required', state: 'local_draft',
+      frame: { goal: 'Revenue', metrics: [], dimensions: [], filters: [] }, requirements: [], coverage: [],
+      sources: [unused('orders'), unused('customers')],
+      pages: [{ version: 2, id: 'overview', metadata: { title: 'Overview' }, layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [] } }],
+      reviewTasks: [], createdAt: '', updatedAt: '',
+    } as never;
+    const markup = renderToStaticMarkup(
+      <PublishReadinessDialog
+        draft={draft}
+        serverIssues={[]}
+        busy={false}
+        previewRun={null}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onRunPreview={vi.fn()}
+        onRunAllPreviews={vi.fn()}
+        onRemoveRequirement={vi.fn()}
+        onReviseRequirement={vi.fn()}
+        onAnswerQuestion={vi.fn()}
+        onResolveTask={vi.fn()}
+        onOpenSources={vi.fn()}
+        onOpenFilters={vi.fn()}
+        onRefreshSources={vi.fn()}
+        onApproveSemantic={vi.fn()}
+        onRemoveLocalAnalysis={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('2 data sources not used by any tile will not be saved with the App.');
+    expect(markup).toContain('Ready to publish');
+    expect(markup).not.toContain('Local analysis cannot publish');
   });
 });
