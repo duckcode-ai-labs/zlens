@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { tileQueryHash } from '@zlens/core/apps/tile-query';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as AppStudioV2Module from './AppStudioV2';
+import { summarizeAppStudioAiPlan, appStudioNewDataSources } from './app-studio-ai-plan';
+import { aiProposal, marginMetrics, orderLinesDataset } from './builder/app-data.fixtures';
 
 // AppStudioV2 pulls in most of the Studio (charts, the AI panel, every builder
 // panel), so its first import can take several seconds on a busy machine. Load
@@ -24,10 +26,6 @@ async function datasetSourceAuthoringDialog() {
 
 async function datasetSourceRebindReviewDialog() {
   return studio.DatasetSourceRebindReviewDialog;
-}
-
-async function datasetTileBuilder() {
-  return studio.DatasetTileBuilder;
 }
 
 async function appAutopilotReviewCard() {
@@ -229,28 +227,26 @@ describe('Studio Dataset source authoring (APP-055)', () => {
 
 describe('Studio Dataset period comparison authoring (APP-060)', () => {
   it('offers an explicit calendar-period control from an approved Dataset time field', async () => {
-    const DatasetTileBuilder = await datasetTileBuilder();
+    const { TileQueryEditor } = await import('./builder/TileQueryEditor');
+    const descriptor = {
+      version: 1, id: 'source.orders', kind: 'block', sourceRevision: 'sha256:orders', snapshotId: 'snapshot-1',
+      contractRef: { kind: 'block_source', id: 'commerce::orders', fingerprint: 'sha256:contract' },
+      binding: { sourceQualifiedId: 'commerce::orders', sourceRevision: 'sha256:orders', contractFingerprint: 'sha256:contract', state: 'valid' },
+      label: 'Orders', lifecycle: 'certified', trust: 'certified',
+      grain: { entityIds: ['order_line'], keyFields: ['order_line_id'] },
+      fields: [
+        { kind: 'physical', name: 'order_date', qualifiedId: 'field:order_date', type: 'date', role: 'time', status: 'approved', time: { grains: ['day', 'month'], primary: true } },
+        { kind: 'measure', name: 'revenue', qualifiedId: 'measure:revenue', aggregation: 'sum', from: 'net_amount', dependsOn: ['net_amount'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
+      ],
+      operations: ['filter', 'group', 'compare', 'having'], execution: { route: 'governed_sql' },
+    } as any;
     const markup = renderToStaticMarkup(
-      <DatasetTileBuilder
-        source={{
-          id: 'source.orders', sourceId: 'source.orders', sourceRevision: 'sha256:orders', name: 'Orders', domain: 'commerce',
-          capabilities: {
-            dataset: {
-              version: 1, id: 'source.orders', kind: 'block', sourceRevision: 'sha256:orders', snapshotId: 'snapshot-1',
-              contractRef: { kind: 'block_source', id: 'commerce::orders', fingerprint: 'sha256:contract' },
-              binding: { sourceQualifiedId: 'commerce::orders', sourceRevision: 'sha256:orders', contractFingerprint: 'sha256:contract', state: 'valid' },
-              label: 'Orders', lifecycle: 'certified', trust: 'certified',
-              grain: { entityIds: ['order_line'], keyFields: ['order_line_id'] },
-              fields: [
-                { kind: 'physical', name: 'order_date', qualifiedId: 'field:order_date', type: 'date', role: 'time', status: 'approved', time: { grains: ['day', 'month'], primary: true } },
-                { kind: 'measure', name: 'revenue', qualifiedId: 'measure:revenue', aggregation: 'sum', from: 'net_amount', dependsOn: ['net_amount'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
-              ],
-              operations: ['filter', 'group', 'compare', 'having'], execution: { route: 'governed_sql' },
-            },
-          },
-        } as any}
+      <TileQueryEditor
+        descriptor={descriptor}
+        query={{ dimensions: [], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true }}
         disabled={false}
-        onAdd={vi.fn()}
+        onChange={vi.fn()}
+        idPrefix="period-comparison"
       />,
     );
 
@@ -613,59 +609,68 @@ describe('Studio honest AI review and App domain (D6, D7, D8)', () => {
     expect(studio.appDraftDomain(page())).toBeUndefined();
     expect(studio.appDraftDomain(null)).toBeUndefined();
   });
+});
 
-  it('shows why AI picked each source, its notes, and one set of source words', () => {
+describe('Canvas AI review keeps only the tiles (design D3, D5)', () => {
+  const review = (props: Partial<Parameters<typeof studio.AiPlanReview>[0]> = {}) => {
+    const proposal = aiProposal();
+    const summary = summarizeAppStudioAiPlan(proposal);
     const AiPlanReview = studio.AiPlanReview;
-    const markup = renderToStaticMarkup(
+    return renderToStaticMarkup(
       <AiPlanReview
-        proposal={{
-          id: 'proposal-1', draftId: 'draft-1', baseRevision: 1, baseProposalHash: 'hash',
-          operations: [], clarifications: [],
-          warnings: ['Revenue by channel was not added because its Dataset query is not covered.'],
-          summary: { requirements: 1, covered: 1, gaps: 0, certifiedSources: 2, semanticSources: 1 },
-        } as never}
-        summary={{
-          pages: [{ id: 'overview', title: 'Overview' }],
-          components: [{ id: 'revenue', title: 'Revenue trend', visualization: 'Line', source: 'orders', sourceId: 'source.orders' }],
-          sources: [
-            {
-              id: 'source.orders', label: 'Orders', sourceRef: 'orders', kind: 'certified_block', trustState: 'certified', reviewStatus: 'not_required',
-              componentIds: ['revenue'], rationale: 'Orders carries revenue by order date.',
-              capabilities: { measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [], dataset: { kind: 'block' } as never },
-            },
-            { id: 'source.margin', label: 'Margin', sourceRef: 'margin', kind: 'governed_semantic', trustState: 'certified', reviewStatus: 'not_required', componentIds: [] },
-          ],
-        }}
-        catalog={[{
-          id: 'semantic.customers', sourceId: 'semantic.customers', name: 'customers', domain: 'sales', status: 'certified', owner: null, tags: [],
-          path: 'semantic/customers.yml', fingerprint: 'f', lastModified: '', description: 'Customer counts', score: 1, reasons: [],
-          capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], semanticModelId: 'customers' },
-        }]}
-        catalogQuery=""
+        proposal={proposal}
+        summary={summary}
         sourcePolicy="governed_only"
-        selectedSourceIds={new Set(['source.orders'])}
-        addingSourceId={null}
+        selectedSourceIds={new Set(proposal.defaultSelectedSourceIds)}
         busy={false}
-        onRevise={() => undefined}
-        onApply={() => undefined}
-        onDismiss={() => undefined}
-        onCatalogQuery={() => undefined}
-        onAddSource={() => undefined}
-        onAddProposalSource={() => undefined}
-        onAnswerClarification={() => undefined}
-        onGenerateGap={() => undefined}
-        onToggleSource={() => undefined}
+        changeCount={2}
+        onApply={vi.fn()}
+        onDismiss={vi.fn()}
+        onToggleTile={vi.fn()}
+        onRevise={vi.fn()}
+        onAnswerClarification={vi.fn()}
+        onGenerateGap={vi.fn()}
+        {...props}
       />,
     );
-    expect(markup).toContain('Why: Orders carries revenue by order date.');
-    expect(markup).toContain('Revenue by channel was not added because its Dataset query is not covered.');
+  };
+
+  it('after Build pages: proposed tiles with keep or skip, Apply N changes, Discard and Back to data', () => {
+    const markup = review({ showPlanNotes: false, onBackToData: vi.fn(), skippedTileIds: new Set(['margin-kpi']) });
+    expect(markup).toContain('Review the tiles');
+    expect(markup).toContain('Back to data');
+    expect(markup).toContain('Revenue trend');
+    expect(markup).toContain('aria-label="Skip Revenue trend"');
+    expect(markup).toContain('aria-label="Keep Gross margin"');
+    expect(markup).toContain('1</strong> of 2 tiles kept');
+    expect(markup).toContain('Apply 2 changes');
+    expect(markup).toContain('>Discard</button>');
+    // The data lives in the Data step now.
+    expect(markup).not.toMatch(/Selected for this App|AI suggestions|More App sources|Apply with|Search proposed and available sources|New data for this App/);
+    expect(markup).not.toContain('Revenue by channel was not added');
+    expect(markup).not.toContain('Not covered yet');
+  });
+
+  it('has no Back to data link when the proposal did not come from the Data step', () => {
+    expect(review()).not.toContain('Back to data');
+  });
+
+  it('lists the data an Ask AI proposal adds as New data for this App, with the reason', () => {
+    const proposal = aiProposal();
+    const summary = summarizeAppStudioAiPlan(proposal);
+    const selected = new Set(proposal.defaultSelectedSourceIds);
+    const margin = proposal.operations.find((operation) => operation.type === 'upsert_source' && operation.source.id === marginMetrics.sourceId);
+    // The App already has Margin; only Order lines is new.
+    const newSources = appStudioNewDataSources(summary, selected, margin?.type === 'upsert_source' ? [margin.source] : []);
+    expect(newSources.map((source) => source.id)).toEqual([orderLinesDataset.sourceId]);
+    const markup = review({ newSources });
+    expect(markup).toContain('New data for this App: Order Lines');
+    expect(markup).toContain('Why: Order lines carries revenue by order date.');
     expect(markup).toContain('Dataset · Certified');
-    expect(markup).toContain('Metrics · Certified');
-    expect(markup).toContain('sales · Metrics · Certified');
-    expect(markup).toContain('Creates 1 tile: Revenue trend');
-    expect(markup).toContain('planned tiles');
-    expect(markup).toContain('Only certified data');
-    expect(markup).not.toMatch(/Certified block|Review required|review lane|planned views/);
+    expect(markup).not.toContain('New data for this App: Margin');
+    // Canvas proposals still show the planner notes and gaps.
+    expect(markup).toContain('Revenue by channel was not added because no Dataset has a channel field.');
+    expect(markup).toContain('Not covered yet');
   });
 });
 

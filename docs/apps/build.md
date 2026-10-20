@@ -11,8 +11,8 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 2. Click **Build new App** if the form is not already open.
 3. Choose how to start:
     - **Describe with AI**: answer **What decision should this App support?**
-      AI picks certified data and drafts a first version. You review the data it
-      chose and every tile before anything is applied. Needs an
+      AI picks certified data and drafts a first version. You check the data it
+      chose and every tile before anything is applied. Works best with an
       [AI provider](../get-started/ai-provider.md).
     - **Start manually**: answer **What should this App be called?**
 4. Pick a **Domain**, or leave **All domains**. Lists of data start on this
@@ -24,21 +24,49 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
    until the data is certified.
 7. Click **Generate editable App** (AI) or **Open blank Studio** (manual).
 
-The App is a private local draft; the header says **Saved locally**. With
-**Start manually**, App Studio opens on **Data for this App** first. With AI,
-it opens on the canvas.
+The App is a private local draft; the header says **Saved locally**. Both ways
+open on the Data step first: with **Start manually** it is **Data for this
+App**; with AI it shows the data AI picked (see below).
 
 You can change the data rule later in the App's settings: **Data rule** is
 **Only certified data** or **Also allow data that needs review**.
 
-### Review what AI picked
+### Build with AI: describe, check the data, build pages, review tiles
 
-With **Describe with AI**, App Studio shows **Review the plan** before anything
-is applied. Each source shows its type and trust, such as **Dataset ·
-Certified**, the tiles it creates, and a short **Why:** line with the reason AI
-picked it. Notes from the planner, for example a tile it could not add, are
-listed under the header. With **Only certified data**, AI is given certified
-data only.
+With **Describe with AI**, AI works in four steps and nothing is applied until
+you say so.
+
+1. **Describe.** While AI plans, the Data step says **AI is picking data** and
+   shows its progress: **Understanding your decision**, **Finding certified
+   Datasets, Metrics and saved queries**, **Checking trust and capabilities**
+   and **Preparing source review**.
+2. **Check the data AI picked.** The Data step says **AI picked N sources**,
+   **For:** your goal, and *Check the data before AI builds pages. Remove
+   anything you don’t trust.* Each pick under **AI picks** shows its type,
+   trust and domain, such as **Dataset · Certified · Commerce**, **Creates N
+   tiles**, and a **Why:** line with the reason AI picked it.
+    - **Remove** moves a pick to **AI suggestions**; **Add back** returns it.
+    - **Notes from AI** lists what the planner could not do, for example a
+      tile it could not add.
+    - **Not covered yet** lists the parts of your request no data answers.
+      **Generate draft DQL that needs review** drafts a Dataset for one of
+      them; it needs **Also allow data that needs review**.
+    - If AI needs a choice from you, **AI needs one more decision** asks it;
+      answer it, or click **Re-run proposal**.
+    - The **Add data** list on the right works as for a manual App. **Add to
+      App** makes AI plan again with that data, and the progress shows while
+      it does.
+    - With **Only certified data**, AI is given certified data only.
+3. **Build pages.** Click **Build pages with N sources**. **Discard** drops
+   AI's picks and leaves you on **Data for this App** to pick data yourself.
+4. **Review the tiles.** The canvas shows the proposed tiles, and the
+   **Review the tiles** panel lists them. **Skip** leaves a tile out and
+   **Keep** brings it back, here or on the tile itself. Click **Apply N
+   changes** to add the tiles and their data to the App, or **Discard**.
+   **Back to data** returns to the AI picks until you apply.
+
+Without an AI provider, a simpler built-in planner picks the data and the
+review says **Deterministic planner fallback**.
 
 ## 2. Choose the data
 
@@ -87,6 +115,11 @@ Other ways to add content:
 - **Add tile** on the page, or **Draft with AI** on an empty page.
 - **Heading** and **Text** under **Page elements**.
 - **Ask AI** in the top bar to change the page with AI.
+
+An AI proposal on the canvas opens **Review the tiles**. When it uses data the
+App does not have yet, the review lists it as **New data for this App:** with
+its type, trust and **Why:** line. **Apply N changes** adds that data to
+**This App's data**, the same way **Add to App** does.
 
 ## 4. Arrange pages
 

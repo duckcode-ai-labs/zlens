@@ -274,9 +274,13 @@ export function openCanvasLabel(count: number): string {
 
 export type StudioStage = 'data' | 'canvas';
 
-/** A new manual App starts at the Data step; drafts and published Apps opened for edit go to the canvas. */
+/**
+ * A new App starts at the Data step: a manual App picks its data there, and an
+ * AI App shows the data AI picked before pages are built. Drafts and published
+ * Apps opened for edit go to the canvas.
+ */
 export function initialStudioStage(input: { mode: 'ai' | 'manual'; resumingDraft: boolean; editingPublishedApp: boolean }): StudioStage {
-  return input.mode === 'manual' && !input.resumingDraft && !input.editingPublishedApp ? 'data' : 'canvas';
+  return !input.resumingDraft && !input.editingPublishedApp ? 'data' : 'canvas';
 }
 
 /**
