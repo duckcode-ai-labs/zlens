@@ -18,8 +18,15 @@ in the sample project:
 3. The result card says `AI-generated`.
 4. Under the result, a line reads **Saved for review as a draft block (not
    certified):** and the draft's path, such as
-   `blocks/_drafts/many_orders_placed_each_store_location.dql`.
+   `domains/commerce/blocks/_drafts/many_orders_placed_each_store_location.dql`.
 5. **Open draft to review** opens that draft in Block Studio.
+
+The draft is named after its file, here `many_orders_placed_each_store_location`.
+When every table the answer reads is listed in one Domain's **Source systems**
+(in the sample, `orders` and `locations` are both in **commerce**), the draft
+is saved in that Domain and its **Domain** is already set. When the tables
+belong to more than one Domain, or to none, the draft is saved in
+`blocks/_drafts/` with no Domain, and you pick one when you certify.
 
 If the same question is asked again, ZLens reuses the same draft and counts
 the repeats (**asked N times**). A question many people ask is a good one to
@@ -30,10 +37,14 @@ certify first.
 1. Click **Open draft to review**, or find it in **Blocks** in the **Drafts**
    folder.
 2. Check the SQL and click **Run** to look at the rows.
-3. Set an **Owner** and a clear description. Add a test if you can.
-4. Click **Certify**.
+3. Check the **Block name** and **Domain**, set an **Owner** and a clear
+   description. Add a test if you can.
+4. Click **Certify**. If the draft has no Domain yet and your project has
+   Domains, Block Studio asks for one first.
 
-When it passes, the block is **Certified**. Ask uses it from then on: the
+When it passes, the block is **Certified** and is saved in its Domain under its
+name. A certified block is available to Apps because it is certified, so it
+carries no `app-source` tag. Ask uses it from then on: the
 same question now gets a **Certified answer**. See
 [Save and certify](../blocks/certify.md).
 

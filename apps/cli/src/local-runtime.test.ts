@@ -5530,6 +5530,45 @@ LIMIT \${top_n}
     }
   });
 
+  it('never saves a block with an empty name', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-block-empty-name-'));
+    tempDirs.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), '{}\n');
+    let server: Server | undefined;
+    try {
+      const port = await startLocalServer({
+        rootDir: projectRoot,
+        projectRoot,
+        executor: {} as QueryExecutor,
+        connection: { driver: 'file' },
+        preferredPort: 0,
+        captureServer: (created) => { server = created; },
+      });
+      const cleared = `block "" {
+  type = "custom"
+  status = "draft"
+  query = """SELECT 1 AS value"""
+}`;
+      const save = (name: string) => fetch(`http://127.0.0.1:${port}/api/block-studio/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: cleared, metadata: { name, domain: 'finance', owner: 'analytics' } }),
+      });
+      const blank = await save('   ');
+      expect(blank.status).toBe(400);
+      expect((await blank.json() as { error: string }).error).toMatch(/Block name is required/);
+      expect(existsSync(join(projectRoot, 'blocks'))).toBe(false);
+
+      const named = await save('order_value');
+      expect(named.status).toBe(200);
+      const saved = readFileSync(join(projectRoot, (await named.json() as { path: string }).path), 'utf-8');
+      expect(saved).toContain('block "order_value" {');
+      expect(saved).not.toContain('block ""');
+    } finally {
+      await new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve());
+    }
+  });
+
   it('stamps App-source reuse only when a generated draft is explicitly saved or added', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-block-reusable-save-'));
     tempDirs.push(projectRoot);

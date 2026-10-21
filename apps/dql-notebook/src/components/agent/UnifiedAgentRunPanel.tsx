@@ -1266,7 +1266,7 @@ export function UnifiedAgentRunPanel({
             <span style={{ fontSize: 11, color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{reader ? 'Certified answers first, then approved metrics, then new SQL marked Needs review' : 'Certified first · semantic next · generated SQL last'}</span>
           </div>
 
-          <div ref={askScrollRef} onScroll={onThreadScroll} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div ref={askScrollRef} data-testid="ask-thread-scroll" onScroll={onThreadScroll} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ width: 'min(720px, 100% - 48px)', margin: '0 auto', padding: '26px 0 12px', display: 'flex', flexDirection: 'column', gap: 26 }}>
               {presentedItems.length === 0 && !running && askRefusal ? (
                 <div role="note" style={{ margin: 'auto 0', display: 'grid', gap: 12, justifyItems: 'center', textAlign: 'center', color: t.textSecondary, paddingTop: 40 }}>
@@ -1323,9 +1323,12 @@ export function UnifiedAgentRunPanel({
 
               {running && <RunProgress events={runningEvents} t={t} streamingAnswer={streamingAnswer} thinkingMode={thinkingMode} backgroundRun={backgroundRun} />}
             </div>
+          </div>
 
+            {/* The composer sits below the thread, not over it: the thread's scroll area ends where the scope chip
+                begins, so the end of an answer (its action row) is never covered. */}
             {askRefusal ? null : (
-            <div style={{ width: 'min(720px, 100% - 48px)', margin: 'auto auto 0', padding: '10px 0 16px', position: 'sticky', bottom: 0, background: 'linear-gradient(to top, var(--bg-canvas) 82%, transparent)' }}>
+            <div data-testid="ask-composer-dock" style={{ flexShrink: 0, width: 'min(720px, 100% - 48px)', margin: '0 auto', padding: '10px 0 16px', background: 'var(--bg-canvas)' }}>
               {error ? <div style={{ color: t.error, fontSize: 12, marginBottom: 8 }}>{error}</div> : null}
               {scopeControl ? <div style={{ marginBottom: 7 }}>{scopeControl}</div> : onClearScope ? (
                 <div style={{ width: 'fit-content', maxWidth: '100%', marginBottom: 7, padding: '4px 7px 4px 9px', border: '1px solid var(--border-default)', borderRadius: 999, background: 'var(--bg-2)', color: t.textMuted, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1368,7 +1371,6 @@ export function UnifiedAgentRunPanel({
               <div style={{ textAlign: 'center', fontSize: 11, color: t.textMuted, marginTop: 8 }}>Each answer says what it is built on: certified, governed, or needs review.</div>
             </div>
             )}
-          </div>
         </div>
 
         {/* Inspector */}

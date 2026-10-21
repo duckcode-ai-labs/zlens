@@ -317,6 +317,7 @@ import {
   type ExploratoryExecutionFreezeV1,
   type SqlAuthorizationCheck,
   setProviderUsageListener,
+  hasGeneratedAppSourceOrigin,
 } from '@zlens/agent';
 import { applyEvalCassette, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, resolveAgentFollowUpContext } from './llm/providers/provider-runner.js';
 import type {
@@ -26409,7 +26410,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
           report({ phase: 'publishing', progress: 82, message: 'Publishing the certified block.' });
           const publishedDraftSource = certifiedBesideDraft ? stripDraftEditName(draftSource) : draftSource;
-          const certifiedSource = setBlockStudioStatusInSource(publishedDraftSource, 'certified');
+          const certifiedSource = setBlockStudioStatusInSource(withoutAskOriginReuseTag(publishedDraftSource), 'certified');
           const certifiedMetadata = parseBlockSourceMetadata(certifiedSource);
           const savedPath = saveBlockStudioArtifacts(projectRoot, {
             currentPath: canonicalPath ?? draftPath,
@@ -26584,17 +26585,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const normalizedBlockPath = normalize(blockPath).replace(/^\/+/, '');
           const parsed = parseBlockSourceMetadata(certifiedSource);
           if (isDraftBlockPath(normalizedBlockPath)) {
+            const publishedSource = withoutAskOriginReuseTag(certifiedSource);
+            const published = parseBlockSourceMetadata(publishedSource);
             const savedPath = saveBlockStudioArtifacts(projectRoot, {
               currentPath: normalizedBlockPath,
-              source: certifiedSource,
-              name: parsed.name,
-              domain: parsed.domain,
-              description: parsed.description,
-              owner: parsed.owner,
-              tags: parsed.tags,
+              source: publishedSource,
+              name: published.name,
+              domain: published.domain,
+              description: published.description,
+              owner: published.owner,
+              tags: published.tags,
               certification: receipt,
             });
-            if (result.preview) writeBlockStudioRunSummary(projectRoot, savedPath, certifiedSource, result.preview.result);
+            if (result.preview) writeBlockStudioRunSummary(projectRoot, savedPath, publishedSource, result.preview.result);
             return openBlockStudioDocument(projectRoot, savedPath, semanticLayer);
           }
           // Certify exactly what was evaluated: flipping the status of a file
@@ -27572,9 +27575,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ error: 'Block source is required.' }));
           return;
         }
-        if (!metadata.name || typeof metadata.name !== 'string') {
+        if (typeof metadata.name !== 'string' || !metadata.name.trim()) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Block name is required.' }));
+          res.end(serializeJSON({ error: 'Block name is required. Type a name in Block name, then save.' }));
           return;
         }
         const validation = validateBlockStudioSource(source, semanticLayer);
@@ -40531,7 +40534,11 @@ export function openBlockStudioDocument(
   const metadata = {
     name: parsedMetadata.name || companion?.name || fileName,
     path: normalizedPath,
-    domain: parsedMetadata.domain || companion?.domain || inferBlockStudioPathDomain(projectRoot, normalizedPath) || 'uncategorized',
+    // A drafts folder is never a domain: a draft with no domain of its own opens with none, so the reviewer picks one.
+    domain: parsedMetadata.domain
+      || withoutDraftsFolder(companion?.domain)
+      || withoutDraftsFolder(inferBlockStudioPathDomain(projectRoot, normalizedPath))
+      || (isDraftBlockPath(normalizedPath) ? '' : 'uncategorized'),
     folderPath: inferBlockStudioFolderPath(projectRoot, normalizedPath),
     description: parsedMetadata.description || companion?.description || '',
     owner: parsedMetadata.owner || companion?.owner || '',
@@ -42446,7 +42453,8 @@ export function saveBlockStudioArtifacts(
     && existsSync(previousAbsolute)
     && blockSourceStatus(readFileSync(previousAbsolute, 'utf-8')) === 'certified'
     && comparable(readFileSync(previousAbsolute, 'utf-8')) === comparable(options.source);
-  const source = options.certification || unchangedCertified ? options.source : demoteCertifiedSource(options.source);
+  const declared = withDeclaredBlockName(options.source, options.name);
+  const source = options.certification || unchangedCertified ? declared : demoteCertifiedSource(declared);
   const previousCompanion = unchangedCertified && !options.certification && previousPath
     ? blockCompanionRelativePath(projectRoot, previousPath)
     : null;
@@ -42618,6 +42626,16 @@ export function canonicalForDraftBeside(projectRoot: string, draftPath: string):
   return found;
 }
 
+/**
+ * A block is never written as `block ""`: an empty declared name drops the block out of the block tree. The name the
+ * person saved under fills it. A declared name is otherwise left as it is.
+ */
+export function withDeclaredBlockName(source: string, name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return source;
+  return source.replace(/^(\s*block\s+)""/im, (_match, prefix: string) => `${prefix}"${trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+}
+
 export function saveBlockStudioDraftArtifacts(
   projectRoot: string,
   options: {
@@ -42667,7 +42685,7 @@ export function saveBlockStudioDraftArtifacts(
   }
 
   // A draft is never certified, whatever status the incoming source claims.
-  const draftSource = demoteCertifiedSource(options.source);
+  const draftSource = demoteCertifiedSource(withDeclaredBlockName(options.source, options.name));
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, draftSource.trimEnd() + '\n', 'utf-8');
   const companionSlug = targetRelativePath.split('/').pop()?.replace(/\.dql$/, '') || slug;
@@ -42796,6 +42814,13 @@ function isBlockStudioBlockPath(value: string | null | undefined): boolean {
   return normalized.startsWith('blocks/')
     || /^domains\/.+\/blocks\//.test(normalized)
     || normalized.startsWith(`${PRIVATE_BLOCK_PREFIX}/`);
+}
+
+/** `_drafts/finance` → `finance`; `_drafts` alone names no domain. */
+function withoutDraftsFolder(domain: string | undefined): string {
+  const value = domain?.trim() ?? '';
+  if (value === '_drafts') return '';
+  return value.startsWith('_drafts/') ? value.slice('_drafts/'.length) : value;
 }
 
 function inferBlockStudioPathDomain(projectRoot: string, blockPath: string): string {
@@ -43173,6 +43198,34 @@ export function markBlockStudioSourceReusable(source: string): string {
     return source.replace(/\btags\s*=\s*\[[\s\S]*?\]/i, `tags = [${rendered}]`);
   }
   return source.replace(/(\bblock\s+"[^"]+"\s*\{)/i, `$1\n  tags = [${rendered}]`);
+}
+
+/**
+ * Certifying is the reuse decision for an Ask-origin (AI-generated) block: a
+ * certified block is an App source by its status, so the `app-source` marker
+ * that let the uncertified draft into the App catalog is dropped from the
+ * certified source. Blocks without generated origin keep their tags.
+ */
+export function withoutAskOriginReuseTag(source: string): string {
+  const parsed = parseBlockSourceMetadata(source);
+  if (!parsed.tags.some((tag) => tag.trim().toLowerCase() === APP_SOURCE_REUSABLE_TAG)) return source;
+  const field = (key: string) => source.match(new RegExp(`\\b${key}\\s*=\\s*"([^"]*)"`))?.[1];
+  const askedTimes = source.match(/\basked_times\s*=\s*(\d+)/)?.[1];
+  const generated = hasGeneratedAppSourceOrigin({
+    tags: parsed.tags,
+    draftMetadata: {
+      sourceQuestion: field('source_question'),
+      contextPackId: field('context_pack_id'),
+      routeIntent: field('route_intent'),
+      firstAsked: field('first_asked'),
+      lastAsked: field('last_asked'),
+      ...(askedTimes ? { askedTimes: Number(askedTimes) } : {}),
+    },
+  });
+  if (!generated) return source;
+  const remaining = parsed.tags.filter((tag) => tag.trim().toLowerCase() !== APP_SOURCE_REUSABLE_TAG);
+  if (remaining.length === 0) return source.replace(/^[ \t]*tags\s*=\s*\[[^\]]*\][ \t]*\r?\n/im, '');
+  return source.replace(/\btags\s*=\s*\[[\s\S]*?\]/i, `tags = [${remaining.map((tag) => JSON.stringify(tag)).join(', ')}]`);
 }
 
 /**

@@ -77,7 +77,7 @@ import type { CompletePathResult } from '../lineage/lineage-constants';
 import { TableOutput } from '../output/TableOutput';
 import { BlockLibraryPanel } from '../panels/BlockLibraryPanel';
 import { BuildSidebar } from '../panels/BuildSidebar';
-import { blockDomainOptions } from './domain-options';
+import { blockDomainOptions, certifyNeedsDomain } from './domain-options';
 import { MetricDetailPanel } from '../panels/MetricDetailPanel';
 import { SemanticSearchBar } from '../panels/SemanticSearchBar';
 import { SemanticTreeNode as TreeRow } from '../panels/SemanticTreeNode';
@@ -1079,7 +1079,11 @@ export function BlockStudio() {
   };
 
   const handleCertify = async (override?: { source: string; metadata: BlockStudioMetadata }): Promise<boolean> => {
-    if (!state.blockStudioMetadata?.name.trim() || !state.blockStudioMetadata.owner.trim()) {
+    if (
+      !state.blockStudioMetadata?.name.trim()
+      || !state.blockStudioMetadata.owner.trim()
+      || certifyNeedsDomain(override?.source ?? state.blockStudioDraft, (override?.metadata ?? state.blockStudioMetadata).domain, state.authoredDomains)
+    ) {
       pendingIdentityActionRef.current = 'certify';
       setSaveIdentityOpen(true);
       return false;
@@ -2154,6 +2158,9 @@ export function BlockStudio() {
       {saveIdentityOpen && state.blockStudioMetadata && (
         <BlockIdentityDialog
           metadata={state.blockStudioMetadata}
+          domains={pendingIdentityActionRef.current === 'certify' && certifyNeedsDomain(state.blockStudioDraft, state.blockStudioMetadata.domain, state.authoredDomains)
+            ? state.authoredDomains
+            : undefined}
           onCancel={() => {
             pendingIdentityActionRef.current = null;
             setSaveIdentityOpen(false);
@@ -2161,6 +2168,7 @@ export function BlockStudio() {
           onConfirm={(identity) => {
             let draft = setBlockName(state.blockStudioDraft, identity.name);
             draft = setBlockStringField(draft, 'owner', identity.owner);
+            if (identity.domain) draft = setBlockStringField(draft, 'domain', identity.domain);
             dispatch({ type: 'SET_BLOCK_STUDIO_METADATA', metadata: { ...state.blockStudioMetadata!, ...identity } });
             dispatch({ type: 'SET_BLOCK_STUDIO_DRAFT', draft });
             setSaveIdentityOpen(false);
@@ -2450,18 +2458,23 @@ function selectionChipStyle(t: Theme, selected: boolean): React.CSSProperties {
 
 function BlockIdentityDialog({
   metadata,
+  domains,
   onCancel,
   onConfirm,
   t,
 }: {
   metadata: BlockStudioOpenPayload['metadata'];
+  /** Set when certifying needs a Domain first (an Ask draft in no Domain): the dialog asks for one. */
+  domains?: Domain[];
   onCancel: () => void;
-  onConfirm: (identity: { name: string; owner: string }) => void;
+  onConfirm: (identity: { name: string; owner: string; domain?: string }) => void;
   t: Theme;
 }) {
   const [name, setName] = useState(metadata.name);
   const [owner, setOwner] = useState(metadata.owner);
-  const ready = Boolean(name.trim() && owner.trim());
+  const [domain, setDomain] = useState('');
+  const domainOptions = domains ? blockDomainOptions(undefined, domains) : [];
+  const ready = Boolean(name.trim() && owner.trim() && (!domains || domain));
   return (
     <div role="dialog" aria-modal="true" aria-label="Save block" style={{ position: 'absolute', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.32)', padding: 18 }}>
       <div style={{ width: 420, maxWidth: '100%', display: 'grid', gap: 14, padding: 18, borderRadius: 10, border: `1px solid ${t.headerBorder}`, background: t.cellBg, boxShadow: '0 24px 70px rgba(0,0,0,.35)' }}>
@@ -2471,9 +2484,18 @@ function BlockIdentityDialog({
         </div>
         <FieldLabel label="Block name" t={t}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} style={importInputStyle(t)} /></FieldLabel>
         <FieldLabel label="Owner" t={t}><input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="analytics@company.com or team name" style={importInputStyle(t)} /></FieldLabel>
+        {domains && (
+          <FieldLabel label="Domain" t={t}>
+            <select aria-label="Certify into domain" value={domain} onChange={(event) => setDomain(event.target.value)} style={importInputStyle(t)}>
+              <option value="">Select domain…</option>
+              {domainOptions.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
+            </select>
+            <div style={{ fontSize: 10, lineHeight: 1.45, color: t.textMuted }}>This draft came from an AI answer and is not in a Domain yet. Pick the Domain it belongs to.</div>
+          </FieldLabel>
+        )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" onClick={onCancel} style={secondaryImportButtonStyle(t)}>Cancel</button>
-          <button type="button" disabled={!ready} onClick={() => ready && onConfirm({ name: name.trim(), owner: owner.trim() })} style={{ ...primaryImportButtonStyle(t), opacity: ready ? 1 : .55 }}>Save block</button>
+          <button type="button" disabled={!ready} onClick={() => ready && onConfirm({ name: name.trim(), owner: owner.trim(), ...(domains ? { domain } : {}) })} style={{ ...primaryImportButtonStyle(t), opacity: ready ? 1 : .55 }}>{domains ? 'Certify block' : 'Save block'}</button>
         </div>
       </div>
     </div>
@@ -3617,7 +3639,14 @@ function CompactBlockIdentity({
   return (
     <PanelBox title="Details" hint="Name, ownership, and where this block lives." t={t}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <FieldLabel label="Block name" t={t}><input value={metadata?.name ?? ''} onChange={(event) => onTextChange('name', event.target.value)} style={{ ...input, fontFamily: t.fontMono }} /></FieldLabel>
+        <FieldLabel label="Block name" t={t}>
+          <input aria-label="Block name" aria-invalid={metadata ? !metadata.name.trim() : undefined} value={metadata?.name ?? ''} onChange={(event) => onTextChange('name', event.target.value)} style={{ ...input, fontFamily: t.fontMono }} />
+          {metadata && !metadata.name.trim() && (
+            <div role="alert" data-testid="block-name-required" style={{ marginTop: 5, fontSize: 10, color: t.error }}>
+              A block needs a name. Type one to save; until then the block keeps its previous name.
+            </div>
+          )}
+        </FieldLabel>
         <FieldLabel label="Domain" t={t}>
           <select aria-label="Block domain" value={metadata?.domain ?? ''} onChange={(event) => onTextChange('domain', event.target.value)} style={input}>
             <option value="">Select domain…</option>

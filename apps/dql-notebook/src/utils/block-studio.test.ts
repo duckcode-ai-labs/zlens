@@ -7,6 +7,7 @@ import {
   parseSemanticVisualFields,
   reconcileSemanticCompatibility,
   removeVisualBlockParameter,
+  setBlockName,
   setBlockQuery,
   setSemanticMetrics,
   setSemanticRuntimeFilters,
@@ -196,5 +197,22 @@ SELECT region, revenue FROM revenue WHERE region = \${region}
     expect(result).toContain('custom_limit: number = 10');
     expect(result).not.toContain('unrelated_region: string');
     expect(result).not.toContain('unrelated_region = "dynamic"');
+  });
+});
+
+describe('block name edits', () => {
+  it('never writes an empty block name, so clearing the field and typing a new one renames the block', () => {
+    const cleared = setBlockName(SOURCE, '');
+    expect(cleared).toContain('block "Revenue by Region" {');
+    expect(cleared).not.toContain('block ""');
+    expect(setBlockName(cleared, '   ')).toContain('block "Revenue by Region" {');
+    expect(setBlockName(cleared, 'revenue_by_region')).toContain('block "revenue_by_region" {');
+  });
+
+  it('renames a block under a format header and repairs a block saved with an empty name', () => {
+    const headed = `// dql-format: 1\n\n${SOURCE}`;
+    expect(setBlockName(headed, 'regional_revenue')).toBe(`// dql-format: 1\n\n${SOURCE.replace('Revenue by Region', 'regional_revenue')}`);
+    const broken = SOURCE.replace('"Revenue by Region"', '""');
+    expect(setBlockName(broken, 'revenue_by_region')).toContain('block "revenue_by_region" {');
   });
 });
