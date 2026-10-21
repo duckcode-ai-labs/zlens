@@ -59,3 +59,39 @@ export function appLifecycleLabel(lifecycle: string | undefined, certified: bool
   const stage = lifecycle === 'review' ? 'App in review' : lifecycle === 'deprecated' ? 'App deprecated' : 'App draft';
   return draftCount > 0 ? `${stage} · ${draftCount} change${draftCount === 1 ? '' : 's'} pending` : stage;
 }
+
+/** Tile trust from an App page's settled run in this session. */
+export interface AppRunTrust {
+  certified: number;
+  total: number;
+}
+
+/**
+ * The library card's seal. It reads the App's lifecycle, but never contradicts
+ * the App itself: when a settled run of one of its pages in this session found
+ * tiles that are not certified, the card shows that run's count (the same
+ * words the App header shows) instead of "App certified" (B1).
+ */
+export function appCardSeal(input: {
+  lifecycle: string | undefined;
+  certification: string | undefined;
+  draftCount: number;
+  runTrust?: AppRunTrust | null;
+}): { certified: boolean; label: string } {
+  const lifecycleCertified = input.certification === 'certified' || input.lifecycle === 'certified';
+  const run = input.runTrust;
+  if (lifecycleCertified && run && run.total > 0 && run.certified < run.total) {
+    return { certified: false, label: `${run.certified} of ${run.total} tiles certified` };
+  }
+  return {
+    certified: lifecycleCertified,
+    label: appLifecycleLabel(input.lifecycle, lifecycleCertified, input.draftCount),
+  };
+}
+
+/** One App's run trust across the pages a person has opened, for its card. */
+export function appRunTrustAcrossPages(pages: Record<string, AppRunTrust> | undefined): AppRunTrust | null {
+  const entries = Object.values(pages ?? {});
+  if (entries.length === 0) return null;
+  return entries.reduce((sum, page) => ({ certified: sum.certified + page.certified, total: sum.total + page.total }), { certified: 0, total: 0 });
+}

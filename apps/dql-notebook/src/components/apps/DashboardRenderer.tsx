@@ -96,6 +96,7 @@ import { datasetTileVisualizationCompatibility } from '@zlens/core/apps/tile-que
 import { pivotLayout } from '@zlens/core/apps/pivot';
 import { encodingFromQuery } from '@zlens/core/apps/viz-encoding';
 import { PivotTable } from './PivotTable';
+import { dashboardPageRevision, dashboardRunKey, shouldRerunStaleDashboardRun } from './dashboard-run-key';
 import { KpiCard, usesKpiCard } from './KpiCard';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
@@ -277,6 +278,12 @@ export function DashboardRenderer({
   const visibleTileIdsRef = useRef<string[]>([]);
   const pendingAffectedTileIdsRef = useRef<string[] | null>(null);
   const latestSettledRunRef = useRef<DashboardRunResponse | null>(null);
+  // A run reads the newest page and callback through refs, so a re-fetched copy
+  // of the same page (a new object, same content) never starts a run (B1).
+  const dashboardRef = useRef(dashboard);
+  dashboardRef.current = dashboard;
+  const onRunChangeRef = useRef(onRunChange);
+  onRunChangeRef.current = onRunChange;
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   // Server-persisted conversation thread, keyed per app dashboard so a page
@@ -571,7 +578,10 @@ export function DashboardRenderer({
     nextCrossFilters: DashboardDatasetCrossFilter[],
     nextHierarchyDrills: DashboardDatasetHierarchyDrill[],
     schedule?: { tileId?: string; affectedTileIds?: string[] },
+    staleAttempt = 0,
   ): Promise<DashboardRunResponse | null> => {
+    const onRunChange = onRunChangeRef.current;
+    const layoutItems = dashboardRef.current.layout.items;
     const requestId = runRequestRef.current + 1;
     runRequestRef.current = requestId;
     const isCurrent = () => runRequestRef.current === requestId;
@@ -599,18 +609,27 @@ export function DashboardRenderer({
     try {
       const result = await api.runDashboard(appId, dashboard.id, nextVariables, nextCrossFilters, {
         runScope: runScopeRef.current,
+        // The server orders this viewer's requests by this number, not by when
+        // they arrive, so an older request can never cancel a newer one.
+        runSequence: requestId,
         ...(schedule?.tileId ? { tileId: schedule.tileId } : {}),
         // A bounded run never earns the page story, even when its set happens
         // to name every tile, so only send the bound when a tile is hidden.
         ...(schedule?.affectedTileIds?.length
           ? { affectedTileIds: schedule.affectedTileIds }
-          : visibleTileIdsRef.current.length < dashboard.layout.items.length ? { visibleTileIds: visibleTileIdsRef.current } : {}),
+          : visibleTileIdsRef.current.length < layoutItems.length ? { visibleTileIds: visibleTileIdsRef.current } : {}),
         ...(nextHierarchyDrills.length ? { datasetDrills: nextHierarchyDrills } : {}),
         ...viewerFilterOption(),
       });
       if (!isCurrent()) return null;
+      // A reader has no Run button. If the newest run went stale (a newer
+      // interaction or a project change overtook it), run it again rather
+      // than leave "superseded" on the page.
+      if (shouldRerunStaleDashboardRun(result, staleAttempt)) {
+        return runLatest(nextVariables, nextCrossFilters, nextHierarchyDrills, schedule, staleAttempt + 1);
+      }
       const accepted = result?.partial && boundedRefresh && priorRun
-        ? mergePartialDashboardRun(priorRun, result, dashboard.layout.items)
+        ? mergePartialDashboardRun(priorRun, result, layoutItems)
         : result;
       setRun(accepted);
       if (accepted) latestSettledRunRef.current = accepted;
@@ -644,13 +663,33 @@ export function DashboardRenderer({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [appId, dashboard.id, dashboard.layout.items, onRunChange]);
+  }, [appId, dashboard.id]);
+
+  // B1: the page runs when what a run reads changes — the page's content and
+  // the effective filter values — never because a parent handed over a new
+  // object with the same content.
+  const pageRevision = useMemo(() => dashboardPageRevision(dashboard), [dashboard]);
+  const autoRunKey = useMemo(() => dashboardRunKey({
+    appId,
+    page: dashboard,
+    pageRevision,
+    variables: runVariables,
+    viewerFilters: runViewerFilters,
+    crossFilters: effectiveCrossFilters,
+    hierarchyDrills: effectiveHierarchyDrills,
+    persona: state.activePersona?.userId ?? null,
+  // `dashboard` is read for its filter defaults, which pageRevision already covers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [appId, effectiveCrossFilters, effectiveHierarchyDrills, pageRevision, runVariables, runViewerFilters, state.activePersona?.userId]);
+  const autoRunInputsRef = useRef({ runVariables, effectiveCrossFilters, effectiveHierarchyDrills });
+  autoRunInputsRef.current = { runVariables, effectiveCrossFilters, effectiveHierarchyDrills };
 
   useEffect(() => {
     const affectedTileIds = pendingAffectedTileIdsRef.current;
     pendingAffectedTileIdsRef.current = null;
-    void runLatest(runVariables, effectiveCrossFilters, effectiveHierarchyDrills, affectedTileIds?.length ? { affectedTileIds } : undefined);
-  }, [dashboard.layout.items.length, effectiveCrossFilters, effectiveHierarchyDrills, runLatest, runVariables, runViewerFilters, state.activePersona?.userId]);
+    const inputs = autoRunInputsRef.current;
+    void runLatest(inputs.runVariables, inputs.effectiveCrossFilters, inputs.effectiveHierarchyDrills, affectedTileIds?.length ? { affectedTileIds } : undefined);
+  }, [autoRunKey, runLatest]);
 
   useEffect(() => {
     const rerun = () => {

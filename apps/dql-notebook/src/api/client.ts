@@ -2684,6 +2684,8 @@ export interface DashboardRunResponse {
   executedTileIds?: string[];
   /** The runtime discarded this response before it could become current evidence. */
   stale?: boolean;
+  /** Why the run went stale: a newer interaction overtook it, or the project changed while it ran. */
+  staleCause?: 'superseded' | 'project_changed';
   staleReason?: string;
   /**
    * A full run can return current safe component results alongside failures.
@@ -3025,6 +3027,11 @@ export interface DashboardDriverAnalysisV1 {
 
 export interface DashboardRunOptions {
   runScope?: string;
+  /**
+   * This viewer's request number, increasing per mounted viewer. The server
+   * uses it so a request that arrives late never cancels a newer one.
+   */
+  runSequence?: number;
   /** Bypass the optional local Dataset delivery cache for a fresh live run. */
   refresh?: boolean;
   /** A preview/publish candidate must execute every authored tile. */
@@ -8650,7 +8657,7 @@ export const api = {
     // so the viewer shows why a page did not run, not a generic failure.
     return request<DashboardRunResponse>(
       `/api/apps/${encodeURIComponent(appId)}/dashboards/${encodeURIComponent(dashboardId)}/run`,
-      { method: 'POST', body: JSON.stringify({ variables: variables ?? {}, ...(crossFilters?.length ? { crossFilters } : {}), ...(options?.runScope ? { runScope: options.runScope } : {}), ...(options?.refresh ? { refresh: true } : {}), ...(options?.fullRun ? { fullRun: true } : {}), ...(options?.tileId ? { tileId: options.tileId } : {}), ...(options?.visibleTileIds !== undefined ? { visibleTileIds: options.visibleTileIds } : {}), ...(options?.affectedTileIds !== undefined ? { affectedTileIds: options.affectedTileIds } : {}), ...(options?.datasetDrills?.length ? { datasetDrills: options.datasetDrills } : {}), ...(options?.driverProbe ? { driverProbe: options.driverProbe } : {}), ...(options?.exploreProbe ? { exploreProbe: options.exploreProbe } : {}), ...(options?.viewerFilters?.length ? { viewerFilters: options.viewerFilters } : {}) }) },
+      { method: 'POST', body: JSON.stringify({ variables: variables ?? {}, ...(crossFilters?.length ? { crossFilters } : {}), ...(options?.runScope ? { runScope: options.runScope } : {}), ...(options?.runSequence !== undefined ? { runSequence: options.runSequence } : {}), ...(options?.refresh ? { refresh: true } : {}), ...(options?.fullRun ? { fullRun: true } : {}), ...(options?.tileId ? { tileId: options.tileId } : {}), ...(options?.visibleTileIds !== undefined ? { visibleTileIds: options.visibleTileIds } : {}), ...(options?.affectedTileIds !== undefined ? { affectedTileIds: options.affectedTileIds } : {}), ...(options?.datasetDrills?.length ? { datasetDrills: options.datasetDrills } : {}), ...(options?.driverProbe ? { driverProbe: options.driverProbe } : {}), ...(options?.exploreProbe ? { exploreProbe: options.exploreProbe } : {}), ...(options?.viewerFilters?.length ? { viewerFilters: options.viewerFilters } : {}) }) },
     );
   },
 
