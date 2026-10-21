@@ -4,6 +4,7 @@ import { themes } from '../../themes/notebook-theme';
 import { api } from '../../api/client';
 import type { Cell } from '../../store/types';
 import { authoredDomainOptionsWithCurrent } from '../domains/authored-domain-options';
+import { savedBlockGitPath } from './artifact-location';
 
 interface SaveAsBlockModalProps {
   cell: Cell;
@@ -20,14 +21,6 @@ interface SaveAsBlockModalProps {
 
 function RequiredMark() {
   return <span style={{ color: '#ff7b72', marginLeft: 2 }}>*</span>;
-}
-
-function slugify(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 }
 
 function extractSemanticRefs(content: string): string[] {
@@ -95,7 +88,7 @@ export function SaveAsBlockModal({
   }, [onClose]);
 
   const knownDomains = authoredDomainOptionsWithCurrent(domain, state.authoredDomains);
-  const blockPath = `${domain.trim() ? `blocks/${slugify(domain)}/` : 'blocks/'}${slugify(name) || 'new-block'}.dql`;
+  const blockPath = savedBlockGitPath(state.authoredDomains, domain, name);
 
   const handleSave = async () => {
     if (hasErrors) {
@@ -138,7 +131,7 @@ export function SaveAsBlockModal({
         lineage: cell.dqlArtifact?.lineage,
       });
       const file = {
-        name: `${slugify(name) || 'new-block'}.dql`,
+        name: result.path.split('/').pop() ?? result.path,
         path: result.path,
         type: 'block' as const,
         folder: 'blocks',
