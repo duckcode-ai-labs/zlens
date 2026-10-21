@@ -181,6 +181,8 @@ function actionFor(method: string, path: string): DqlAction {
   if (!read && (path === '/api/app-datasets/run' || path === '/api/app-datasets/field-values')) return 'app.view';
   if (!read && path === '/api/app-datasets/enable') return 'settings.manage';
   if (!read && (path === '/api/app-datasets/tables/draft' || path === '/api/app-datasets/saved-queries/draft')) return 'dataset.author';
+  // Reading a saved query's result columns as fields (design D1) is part of building an App: it changes no block.
+  if (!read && path === '/api/app-datasets/saved-queries/fields') return 'app.author';
   if (!read && AUTHORING_FAMILIES.some((family) => under(path, family))) return 'dataset.author';
 
   return read ? 'project.read' : 'project.write';

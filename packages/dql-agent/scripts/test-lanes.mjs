@@ -132,10 +132,13 @@ const EXPECTED_TEST_FILES = 189;
 // 2541 with Ask and MCP App builds handed to App Studio drafts (design D9, app-source-catalog.test.ts, +2).
 // 2542 with one notebook's Notebook AI conversations listed for its History (session-store.test.ts, +1).
 // 2544 with the keyword planner building tiles from a just-checked table (B13, app-builder-orchestrator.test.ts, +2).
-const EXPECTED_TESTS = 2544;
+// 2546 with saved query result fields kept per revision and in the saved query trust tier (design D1, registry.test.ts, +2).
+// 2548 with the keyword planner building field tiles from a saved query's result, and showing it as it is
+// when its fields cannot answer (design D1, app-builder-orchestrator.test.ts, +2).
+const EXPECTED_TESTS = 2548;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 72 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2468.
+// The ordinary lane's share is the difference: 2472.
 const EXPECTED_HEAVY_TESTS = 76;
 
 const LANES = ['all', 'ordinary', 'heavy'];

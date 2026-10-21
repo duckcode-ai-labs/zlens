@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DashboardDocument, DatasetDescriptor } from '@zlens/core';
+import { savedQueryResultDescriptor, type DashboardDocument, type DatasetDescriptor } from '@zlens/core';
 import { resolveDashboardDatasetFilters, resolveRelativeDateRange } from './dashboard-dataset-filters.js';
 
 const descriptor = {
@@ -124,5 +124,38 @@ describe('keep only and exclude from a clicked mark (RFC 0009 step 6a)', () => {
     const period = resolve(page(), click('order_date_month', false, 'monthly'));
     expect(period.filters).toEqual([]);
     expect(period.unbound[0]?.code).toBe('CROSS_FILTER_UNSUPPORTED');
+  });
+});
+
+describe('filters on the fields of a saved query result (design D1)', () => {
+  const result = savedQueryResultDescriptor({
+    sourceId: 'app:block:orders:top', sourceRevision: 'r1', savedQuery: 'top_customers', qualifiedId: 'orders::block::top_customers',
+    lifecycle: 'certified', certified: true, typesFrom: 'probe',
+    columns: [{ name: 'customer_name', type: 'VARCHAR' }, { name: 'first_order', type: 'DATE' }, { name: 'lifetime_spend', type: 'DOUBLE' }],
+  })!;
+  const doc = {
+    version: 3, id: 'overview', title: 'Overview', metadata: {},
+    datasets: [{ id: 'top', sourceId: result.id, sourceRevision: 'r1', snapshotId: 's1', contractFingerprint: result.contractRef.fingerprint }],
+    filters: [
+      { id: 'customer', type: 'multiselect', label: 'Customer', datasetBindings: { top: { field: 'customer_name' } } },
+      { id: 'since', type: 'daterange', label: 'Since', datasetBindings: { top: { field: 'first_order' } } },
+    ],
+    layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [{ i: 'bar', x: 0, y: 0, w: 6, h: 4, sourceId: result.id, sourceRevision: 'r1', query: { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'lifetime_spend' }] }, viz: { type: 'bar' } }] },
+  } as unknown as DashboardDocument;
+
+  it('binds page filters and click-to-filter through the result columns, like any physical field', () => {
+    const resolved = resolveDashboardDatasetFilters({
+      dashboard: doc,
+      item: doc.layout.items[0]!,
+      descriptor: result,
+      values: { customer: ['Ada', 'Lin'], since: { start: '2024-01-01' } },
+      crossFilters: [{ fromTileId: 'bar', fromSourceId: result.id, fromSourceRevision: 'r1', field: 'customer_name', values: ['Ada'] }],
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.filters).toEqual([
+      { field: 'customer_name', op: 'in', values: ['Ada', 'Lin'] },
+      { field: 'first_order', op: 'gte', values: ['2024-01-01'] },
+      { field: 'customer_name', op: 'eq', values: ['Ada'] },
+    ]);
   });
 });

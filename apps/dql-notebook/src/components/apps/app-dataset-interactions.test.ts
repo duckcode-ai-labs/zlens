@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
+import { savedQueryResultDescriptor } from '@zlens/core/datasets/result-fields';
 import type { DashboardDocumentResponse } from '../../api/client';
 import {
   buildDatasetCrossFilter,
@@ -273,5 +274,50 @@ describe('carrying a clicked mark into a detail page', () => {
     expect(carriedNavigationVariables({ page, tile, carryFilterIds: ['region'], variables: { region: ['CA'] }, crossFilters: [mark] })).toEqual({ region: ['CA'] });
     expect(carriedNavigationVariables({ page, tile, carryFilterIds: ['channel'], variables: {}, crossFilters: [mark] })).toEqual({});
     expect(carriedNavigationVariables({ page, tile, carryFilterIds: ['region'], variables: {}, crossFilters: [{ ...mark, fromTileId: 'other' }] })).toEqual({});
+  });
+});
+
+describe('click-to-filter on a saved query\'s result fields (design D1)', () => {
+  const result = savedQueryResultDescriptor({
+    sourceId: 'source-top', sourceRevision: 'sha256:top', savedQuery: 'top_customers', qualifiedId: 'orders::block::top_customers',
+    lifecycle: 'certified', certified: true, typesFrom: 'probe',
+    columns: [{ name: 'customer_name', type: 'VARCHAR' }, { name: 'lifetime_spend', type: 'DOUBLE' }],
+  })!;
+  const orders = savedQueryResultDescriptor({
+    sourceId: 'source-lines', sourceRevision: 'sha256:lines', savedQuery: 'order_lines', qualifiedId: 'orders::block::order_lines',
+    lifecycle: 'certified', certified: true, typesFrom: 'probe',
+    columns: [{ name: 'customer_name', type: 'VARCHAR' }, { name: 'net_amount', type: 'DOUBLE' }],
+  })!;
+  const resultPage = {
+    version: 3,
+    id: 'overview',
+    metadata: { title: 'Overview' },
+    datasets: [
+      { id: 'top', sourceId: 'source-top', sourceRevision: 'sha256:top', snapshotId: 's', contractFingerprint: result.contractRef.fingerprint },
+      { id: 'lines', sourceId: 'source-lines', sourceRevision: 'sha256:lines', snapshotId: 's', contractFingerprint: orders.contractRef.fingerprint },
+    ],
+    layout: {
+      kind: 'grid', cols: 12, rowHeight: 80,
+      items: [{
+        i: 'spend', x: 0, y: 0, w: 6, h: 4, sourceId: 'source-top', sourceRevision: 'sha256:top',
+        query: { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'lifetime_spend' }] }, viz: { type: 'bar' },
+      }],
+    },
+  } as unknown as DashboardDocumentResponse['dashboard'];
+
+  it('keeps only a clicked customer on the tile\'s own saved query, and offers to link the same column elsewhere', () => {
+    const tile = resultPage.layout.items[0]!;
+    expect(buildDatasetCrossFilter(resultPage, tile, 'customer_name', ['Ada'])).toEqual({
+      crossFilter: { fromTileId: 'spend', fromSourceId: 'source-top', fromSourceRevision: 'sha256:top', field: 'customer_name', values: ['Ada'] },
+    });
+    const proposal = proposeDatasetCrossFilterLinks({
+      page: resultPage,
+      tile,
+      descriptorFor: (binding) => (binding.id === 'top' ? result : orders) as DatasetDescriptor,
+    });
+    expect(proposal?.mappings).toEqual([
+      { fromTileId: 'spend', fromField: 'customer_name', toDataset: 'top', toField: 'customer_name' },
+      { fromTileId: 'spend', fromField: 'customer_name', toDataset: 'lines', toField: 'customer_name' },
+    ]);
   });
 });

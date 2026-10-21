@@ -103,6 +103,10 @@
       "types": "./dist/datasets/table-draft.d.ts",
       "import": "./dist/datasets/table-draft.js"
     },
+    "./datasets/result-fields": {
+      "types": "./dist/datasets/result-fields.d.ts",
+      "import": "./dist/datasets/result-fields.js"
+    },
     "./datasets/descriptor": {
       "types": "./dist/datasets/descriptor.d.ts",
       "import": "./dist/datasets/descriptor.js"

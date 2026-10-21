@@ -110,6 +110,8 @@ import {
   datasetDescriptorFromSemanticMetrics,
   datasetDescriptorFromManifestBlock,
   loadDatasetGrainProofs,
+  loadSavedQueryResultColumns,
+  savedQueryResultDescriptorFromManifestBlock,
   type SemanticDatasetFieldProjection,
   type SemanticDatasetMeasureProjection,
 } from '../datasets/index.js';
@@ -5243,6 +5245,7 @@ function addManifestBlockSourceObjects(
 ): void {
   const declarations = manifest.blockDeclarations ?? Object.values(manifest.blocks ?? {});
   const datasetProofs = loadDatasetGrainProofs(projectRoot);
+  const resultColumns = loadSavedQueryResultColumns(projectRoot);
   for (const block of declarations) {
     // A legacy semantic block has no SQL and is not an App source: semantic
     // Datasets are projected below from exact metric capability contracts.
@@ -5265,6 +5268,17 @@ function addManifestBlockSourceObjects(
       ? { proofState: 'not_a_dataset' as const }
       : datasetDescriptorFromManifestBlock({ block, sourceId, sourceRevision, proofs: datasetProofs });
     const lifecycle = dataset.descriptor?.lifecycle ?? normalizeBlockSourceLifecycle(block.status);
+    // A saved query (no Dataset definition) offers its result columns as
+    // fields once their types are known (design D1). Its trust is its own.
+    const resultDescriptor = dataset.descriptor || block.blockType === 'semantic'
+      ? undefined
+      : savedQueryResultDescriptorFromManifestBlock({
+        block,
+        sourceId,
+        sourceRevision,
+        lifecycle: lifecycle as NonNullable<typeof dataset.descriptor>['lifecycle'],
+        observed: resultColumns.get(sourceId),
+      });
     const outputs = block.declaredOutputs
       ?? block.outputContract?.map((output) => output.name).filter(Boolean)
       ?? block.outputs?.map((output) => output.name).filter(Boolean)
@@ -5310,7 +5324,7 @@ function addManifestBlockSourceObjects(
         executionRef: block.filePath,
         sourceRevision,
         fingerprint: sourceRevision,
-        dataset: dataset.descriptor,
+        dataset: dataset.descriptor ?? resultDescriptor,
         datasetProofState: dataset.proofState,
         datasetProofReason: dataset.reason,
         tags: block.tags,

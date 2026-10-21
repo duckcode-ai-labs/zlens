@@ -83,6 +83,8 @@ export interface DatasetSourceAuthoringModel {
 export function datasetSourceAuthoringModel(source: AppBlockRecommendation): DatasetSourceAuthoringModel | undefined {
   const descriptor = source.capabilities?.dataset;
   if (!descriptor || descriptor.kind !== 'block' || !source.qualifiedIdentity || !source.sourceRevision || !source.path) return undefined;
+  // A saved query's result fields are read, not authored: "Make row-level" writes a definition (design D1).
+  if (descriptor.result) return undefined;
   const physicalFields = datasetPhysicalFields(descriptor);
   return {
     source,

@@ -8733,7 +8733,20 @@ export const api = {
     }
   },
 
-  /** Add fields to a saved query (design D1): what DQL proposes from its output columns, checked against its rows. */
+  /**
+   * Read a saved query's result columns as fields (design D1): no review
+   * step, nothing written to the block, its trust unchanged. Afterwards the
+   * catalog lists the saved query with its fields.
+   */
+  async readSavedQueryFields(sourceId: string): Promise<{ ok: boolean; sourceId?: string; sourceRevision?: string; read?: boolean; descriptor?: DatasetDescriptor; error?: string; code?: string }> {
+    try {
+      return await request('/api/app-datasets/saved-queries/fields', { method: 'POST', body: JSON.stringify({ sourceId }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** Make a saved query row-level (design D1, formerly "Add fields"): what DQL proposes from its output columns, checked against its rows. */
   async draftSavedQueryDataset(sourceId: string): Promise<SavedQueryDatasetDraft> {
     try {
       return await request('/api/app-datasets/saved-queries/draft', { method: 'POST', body: JSON.stringify({ sourceId }) });

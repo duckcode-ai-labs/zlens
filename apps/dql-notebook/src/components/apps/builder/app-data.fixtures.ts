@@ -1,4 +1,5 @@
 import type { AppBlockRecommendation, AppStudioAiProposal, AppStudioBuildDraft } from '../../../api/client';
+import { savedQueryResultDescriptor } from '@zlens/core/datasets/result-fields';
 
 /** Catalog rows and drafts shared by the App data tests. */
 
@@ -55,6 +56,29 @@ export const draftRevenueQuery = {
   path: 'blocks/growth/draft-revenue.dql', description: 'Unreviewed revenue logic.',
   eligibility: { discoverable: true, localPreview: false, projectPublish: false, reasonCodes: ['REVIEW_POLICY'] },
   capabilities: { measures: [], dimensions: [], outputs: ['revenue'], filters: [], parameters: [] },
+} as unknown as AppBlockRecommendation;
+
+/** A saved query whose result columns were read as fields (design D1). */
+export const monthlyRevenueQuery = {
+  ...base,
+  id: 'app:block:commerce/monthly-revenue', sourceId: 'app:block:commerce/monthly-revenue', kind: 'block',
+  name: 'monthly_revenue', domain: 'commerce', status: 'certified', lifecycle: 'certified', trust: 'certified',
+  path: 'blocks/monthly_revenue.dql', sourceRevision: 'sha256:monthly', description: 'Revenue for each month.',
+  capabilities: {
+    measures: ['gross_revenue'], dimensions: [], outputs: ['month', 'gross_revenue', 'avg_order_value'], filters: [], parameters: [],
+    dataset: savedQueryResultDescriptor({
+      sourceId: 'app:block:commerce/monthly-revenue', sourceRevision: 'sha256:monthly', savedQuery: 'monthly_revenue',
+      qualifiedId: 'commerce::block::monthly_revenue', domain: 'commerce', lifecycle: 'certified', certified: true, typesFrom: 'probe',
+      columns: [{ name: 'month', type: 'TIMESTAMP' }, { name: 'gross_revenue', type: 'DOUBLE' }, { name: 'avg_order_value', type: 'DOUBLE' }],
+      groupBy: ['month'],
+    }),
+  },
+} as unknown as AppBlockRecommendation;
+
+/** A Dataset made from a database table ("Check and add"). */
+export const ordersTableDataset = {
+  ...orderLinesDataset,
+  id: 'app:block:commerce/orders', sourceId: 'app:block:commerce/orders', name: 'orders', tags: ['app-datasets', 'from-table'],
 } as unknown as AppBlockRecommendation;
 
 type Draft = AppStudioBuildDraft;

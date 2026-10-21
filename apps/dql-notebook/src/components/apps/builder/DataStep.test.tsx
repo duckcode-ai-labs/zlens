@@ -27,14 +27,15 @@ describe('Data step (design D3)', () => {
     expect(markup).toContain('Skip, start empty');
     expect(markup).toContain('Open canvas');
     expect(markup).not.toContain('Open canvas with');
-    expect(markup).toContain('Datasets &amp; Metrics');
+    expect(markup).toContain('aria-label="Kind of data"');
   });
 
   it('lists the App data with type, trust and domain, and counts it on Open canvas', () => {
     const draft = draftWith({ sources: [appDataSourceFromCandidate(orderLinesDataset)] });
     const markup = renderToStaticMarkup(<DataStep draft={draft} known={[orderLinesDataset]} onBack={vi.fn()} onOpenCanvas={vi.fn()} onSkip={vi.fn()} browser={browser} />);
     expect(markup).toContain('Open canvas with 1 source');
-    expect(markup).toContain('Dataset · Certified · Commerce');
+    // The origin label: a Dataset written in DQL is a saved query made row-level.
+    expect(markup).toContain('Saved query · Certified · Commerce');
     expect(markup).toContain('aria-label="Remove Order Lines from this App"');
     expect(markup).toContain('1 source');
   });
@@ -73,12 +74,13 @@ describe('Data pane: this App data and + Add data (design D5)', () => {
     expect(markup).toContain('Click a field to start a new tile.');
   });
 
-  it('adds a saved query whole as a Table, Chart or KPI and says it has no fields', () => {
+  it('adds a saved query whose columns are not read yet as it is, with no "no fields" note', () => {
     const markup = renderToStaticMarkup(<DataPanel {...props} active={appData[1]!} />);
+    expect(markup).toContain('Add as it is');
     expect(markup).toContain('aria-label="Add Top Customers as Table"');
     expect(markup).toContain('aria-label="Add Top Customers as Chart"');
     expect(markup).toContain('aria-label="Add Top Customers as KPI"');
-    expect(markup).toContain('Saved queries have no fields. Add fields to build tiles by Measures and Dimensions.');
+    expect(markup).not.toContain('Saved queries have no fields');
     expect(markup).not.toContain('Search fields');
   });
 
@@ -169,7 +171,7 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(markup).toContain('Build pages with 2 sources');
     expect(markup).toContain('>Discard</button>');
     // The Add data browser is on the right; picked data shows as Added.
-    expect(markup).toContain('Datasets &amp; Metrics');
+    expect(markup).toContain('aria-label="Kind of data"');
   });
 
   it('lists the planner notes and the requirements not covered yet, with the review-required DQL action', () => {

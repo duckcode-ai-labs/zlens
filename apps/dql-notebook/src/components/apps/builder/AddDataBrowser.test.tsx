@@ -1,10 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
+import type { WarehouseTableSummary } from '../../../api/client';
 import { AddDataBrowser } from './AddDataBrowser';
 import { appDataSourceFromCandidate } from './app-data';
-import { draftRevenueQuery, draftWith, marginMetrics, orderLinesDataset, topCustomersQuery } from './app-data.fixtures';
+import { draftRevenueQuery, draftWith, marginMetrics, monthlyRevenueQuery, orderLinesDataset, ordersTableDataset, topCustomersQuery } from './app-data.fixtures';
 
-const catalog = [orderLinesDataset, marginMetrics, topCustomersQuery, draftRevenueQuery];
+const catalog = [ordersTableDataset, orderLinesDataset, monthlyRevenueQuery, marginMetrics, topCustomersQuery, draftRevenueQuery];
+const tables = [
+  { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7, rowCountEstimate: 935 },
+] as unknown as WarehouseTableSummary[];
 
 function render(props: Partial<Parameters<typeof AddDataBrowser>[0]> = {}): string {
   return renderToStaticMarkup(<AddDataBrowser
@@ -12,6 +16,7 @@ function render(props: Partial<Parameters<typeof AddDataBrowser>[0]> = {}): stri
     draft={draftWith()}
     sourcePolicy="governed_only"
     initialItems={catalog}
+    initialTables={tables}
     onAdd={vi.fn(async () => true)}
     onRemove={vi.fn()}
     onChangePolicy={vi.fn()}
@@ -19,28 +24,46 @@ function render(props: Partial<Parameters<typeof AddDataBrowser>[0]> = {}): stri
   />);
 }
 
-describe('Add data browser (design D3)', () => {
-  it('shows three tabs and lists Datasets and Metrics apart from saved queries', () => {
+describe('Add data browser: one list (design D1)', () => {
+  it('shows every kind of data in one list, with its origin, trust and domain, and no tabs', () => {
     const markup = render();
-    expect(markup).toContain('Datasets &amp; Metrics');
-    expect(markup).toContain('Saved queries');
-    expect(markup).toContain('Database tables');
-    expect(markup).toContain('Search Datasets, Metrics and saved queries');
-    expect(markup).toContain('Order Lines');
-    expect(markup).toContain('Dataset · Certified · Commerce · analytics@example.com');
+    expect(markup).not.toContain('role="tablist"');
+    expect(markup).not.toContain('Datasets &amp; Metrics');
+    expect(markup).toContain('role="group" aria-label="Kind of data"');
+    for (const chip of ['>All<', '>Tables<', '>Saved queries<', '>Metrics<']) expect(markup).toContain(chip);
+    expect(markup).toContain('Search tables, saved queries and Metrics');
+    expect(markup).toContain('Table · Certified · Commerce · analytics@example.com');
+    expect(markup).toContain('Saved query · Certified · Commerce · analytics@example.com');
     expect(markup).toContain('Metrics · Certified · Finance');
-    expect(markup).not.toContain('Top Customers');
+    expect(markup).toContain('Saved query · Certified · Orders');
+    expect(markup).toContain('Saved query · Needs review · Growth');
+    // A database table not checked yet is in the same list and goes through the check.
+    expect(markup).toContain('Table · Not checked yet · dev · 7 columns · ~935 rows');
+    expect(markup).toContain('aria-label="Check customers and add it as a Dataset"');
+    expect(markup).toContain('A table becomes a Dataset after ZLens checks it once.');
+    // In the catalog's trust order, tables not checked yet last.
+    const order = ['Orders', 'Order Lines', 'Monthly Revenue', 'Margin', 'Top Customers', 'Draft Revenue', '>customers<'].map((name) => markup.indexOf(name));
+    expect(order.every((position, index) => position >= 0 && (index === 0 || position > order[index - 1]!))).toBe(true);
+  });
 
-    const queries = render({ initialTab: 'queries' });
+  it('narrows the list with one chip at a time', () => {
+    const queries = render({ initialKind: 'queries' });
+    expect(queries).toContain('Monthly Revenue');
     expect(queries).toContain('Top Customers');
-    expect(queries).toContain('Saved query · Certified · Orders');
-    expect(queries).toContain('Saved query · Needs review · Growth');
-    expect(queries).not.toContain('Order Lines');
+    expect(queries).not.toContain('Margin');
+    expect(queries).not.toContain('Check customers and add');
+    const onlyTables = render({ initialKind: 'tables' });
+    expect(onlyTables).toContain('aria-label="Add to App: Orders"');
+    expect(onlyTables).toContain('Check customers and add');
+    expect(onlyTables).not.toContain('Top Customers');
+    expect(render({ initialKind: 'metrics' })).toContain('Margin');
+    // A domain chip shows catalog data only: database tables have no domain.
+    expect(render({ appDomain: 'commerce' })).not.toContain('Check customers and add');
   });
 
   it('starts the domain chips on the App domain and shows the data rule with a way to change it', () => {
     const markup = render({ appDomain: 'commerce', domainOptions: [{ value: 'finance', label: 'Finance' }] });
-    expect(markup).toMatch(/<button type="button" aria-pressed="false" class="">All<\/button>/);
+    expect(markup).toMatch(/<button type="button" aria-pressed="false" class="">All domains<\/button>/);
     expect(markup).toMatch(/aria-pressed="true" class="on">commerce<\/button>/);
     expect(markup).toContain('>Finance</button>');
     expect(markup).toContain('Data rule: <strong>Only certified data</strong>');
@@ -56,13 +79,24 @@ describe('Add data browser (design D3)', () => {
   });
 
   it('asks before adding data that needs review while only certified data is allowed', () => {
-    const governed = render({ initialTab: 'queries' });
+    const governed = render();
     expect(governed).toContain('Allow data that needs review &amp; add');
     expect(governed).toContain('aria-label="Allow data that needs review and add: Draft Revenue"');
     expect(governed).toContain('aria-label="Add to App: Top Customers"');
-    const allowed = render({ initialTab: 'queries', sourcePolicy: 'include_review_required' });
+    const allowed = render({ sourcePolicy: 'include_review_required' });
     expect(allowed).not.toContain('Allow data that needs review &amp; add');
     expect(allowed).toContain('aria-label="Add to App: Draft Revenue"');
+  });
+
+  it('puts Make row-level under ⋯ on saved queries only, with no Add fields button or no-fields note', () => {
+    const markup = render();
+    expect(markup).not.toContain('Add fields');
+    expect(markup).not.toContain('no fields');
+    expect(markup).toContain('aria-label="More for Monthly Revenue"');
+    expect(markup).toContain('aria-label="More for Top Customers"');
+    expect(markup).not.toContain('aria-label="More for Order Lines"');
+    expect(markup).not.toContain('aria-label="More for Margin"');
+    expect(render({ fieldsEnabled: false })).not.toContain('aria-label="More for');
   });
 
   it('says what to do when there is no certified data yet', () => {
@@ -71,12 +105,5 @@ describe('Add data browser (design D3)', () => {
     expect(markup).toContain('Start from a database table, or allow data that needs review.');
     expect(markup).toContain('Start from a database table</button>');
     expect(markup).toContain('>Allow data that needs review</button>');
-  });
-
-  it('turns a database table into a Dataset after one check', () => {
-    const markup = render({ initialTab: 'tables' });
-    expect(markup).toContain('A table becomes a Dataset after ZLens checks it once.');
-    expect(markup).toContain('Search tables');
-    expect(markup).not.toContain('role="group" aria-label="Domain"');
   });
 });

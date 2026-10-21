@@ -56,7 +56,7 @@ export interface AppBuildHandoffSourceSummary {
 /** A Dataset has fields, Metrics come from a semantic model, a saved query is a plain block. */
 export function appBuildHandoffSourceKind(source: Pick<AppSourceCatalogRecord, 'kind' | 'capabilities'>): AppBuildHandoffSourceSummary['kind'] {
   if (source.capabilities.dataset?.kind === 'semantic') return 'Metrics';
-  if (source.capabilities.dataset) return 'Dataset';
+  if (source.capabilities.dataset && !source.capabilities.dataset.result) return 'Dataset';
   if (source.capabilities.semanticModelId || source.kind === 'semantic') return 'Metrics';
   return 'Saved query';
 }

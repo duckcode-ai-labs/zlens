@@ -100,7 +100,8 @@ describe('display names, never internal IDs (B7)', () => {
 });
 
 describe('two items with the same name show where they come from (B14)', () => {
-  const ordersTable = { ...orderLinesDataset, id: 'orders-table', sourceId: 'orders-table', name: 'orders' } as unknown as AppBlockRecommendation;
+  // A Dataset made from a database table (design D1 origin labels read the from-table tag).
+  const ordersTable = { ...orderLinesDataset, id: 'orders-table', sourceId: 'orders-table', name: 'orders', tags: ['app-datasets', 'from-table'] } as unknown as AppBlockRecommendation;
   const ordersMetrics = {
     ...orderLinesDataset, id: 'orders-metrics', sourceId: 'orders-metrics', name: 'Orders', kind: 'semantic',
     capabilities: { ...orderLinesDataset.capabilities, dataset: { ...orderLinesDataset.capabilities!.dataset!, kind: 'semantic' } },

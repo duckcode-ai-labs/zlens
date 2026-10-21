@@ -280,7 +280,8 @@ function ensureRequiredSources(
     const query = candidate.capabilities.dataset
       ? deterministicDatasetQuery(candidate.capabilities.dataset, match, role)
       : undefined;
-    if (candidate.capabilities.dataset && !query) {
+    // A saved query's result fields (design D1) that can't express this still show its result as it is.
+    if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) {
       warnings.push(`You added ${plannerSourceName(candidate.title)}, but it can't answer this with its approved fields yet.`);
       continue;
     }
@@ -733,7 +734,7 @@ function deterministicBrief(
     const query = candidate.capabilities.dataset
       ? deterministicDatasetQuery(candidate.capabilities.dataset, primaryRequirement, role)
       : undefined;
-    if (candidate.capabilities.dataset && !query) {
+    if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) {
       deterministicWarnings.push(`${plannerSourceName(candidate.title)} can't answer this with its approved fields yet.`);
       return [];
     }
@@ -1057,8 +1058,9 @@ function normalizeComponents(
       : undefined;
     // A Dataset card must always carry a validated, field-level query. Do not
     // fall back to a legacy block tile when its governed descriptor cannot
-    // express the requested component.
-    if (candidate.capabilities.dataset && !query) return [];
+    // express the requested component. A saved query's result fields
+    // (design D1) are not a row-level contract: its result shows as it is.
+    if (candidate.capabilities.dataset && !query && !candidate.capabilities.dataset.result) return [];
     // Style is presentation only: malformed fields are dropped, never fatal.
     const style = readDashboardVizStyle(record.style, `components[${index}].style`, () => undefined);
     return [{

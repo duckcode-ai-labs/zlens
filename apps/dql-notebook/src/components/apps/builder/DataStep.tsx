@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Database, FileText, Plus, ShieldCheck, Sparkles,
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
 import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './AddDataBrowser';
 import { humanize } from './studio-ui';
-import { appDataItems, openCanvasLabel, sourceCatalogKindLabel, tilesUsingSource, trustLabel } from './app-data';
+import { appDataItems, openCanvasLabel, sourceOriginLabel, tilesUsingSource, trustLabel } from './app-data';
 import {
   appStudioAiPickedHeading,
   appStudioBuildPagesLabel,
@@ -96,11 +96,11 @@ export function DataStep({
             const sourceId = item.sourceId ?? item.id;
             return <li key={sourceId}>
               <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-              <p><strong title={item.name}>{humanize(item.name)}</strong><small>{[sourceCatalogKindLabel(item), trustLabel(certified ? 'certified' : 'review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : ''].filter(Boolean).join(' · ')}</small></p>
+              <p><strong title={item.name}>{humanize(item.name)}</strong><small>{[sourceOriginLabel(item), trustLabel(certified ? 'certified' : 'review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : ''].filter(Boolean).join(' · ')}</small></p>
               <RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={browser.disabled} onRemove={() => browser.onRemove(sourceId)} />
             </li>;
           })}
-        </ul> : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data yet</strong><small>Add a Dataset, Metrics or a saved query from the list, or start from a database table.</small></p></div>}
+        </ul> : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data yet</strong><small>Add a table, a saved query or Metrics from the list. Everything you add has fields.</small></p></div>}
       </aside>
       <div className="data-step-browser">
         <AddDataBrowser {...browser} draftId={draft.id} draft={draft} sourcePolicy={draft.sourcePolicy} />

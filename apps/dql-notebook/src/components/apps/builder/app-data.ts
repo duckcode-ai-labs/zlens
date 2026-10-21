@@ -23,13 +23,19 @@ export const FIELD_TILES_OFF_MESSAGE = 'Field-based tiles are turned off for thi
 
 export const TABLE_BECOMES_DATASET_HINT = 'A table becomes a Dataset after ZLens checks it once.';
 
-export const SAVED_QUERY_NO_FIELDS = 'Saved queries have no fields. Add fields to build tiles by Measures and Dimensions.';
+/** What "Make row-level" is for, next to the action (design D1). */
+export const MAKE_ROW_LEVEL_HINT = 'Only needed for row-safe measures, like distinct counts or averages over rows. ZLens checks what one row is and may send the saved query back for review.';
+
+/** How a saved query's result fields add up, under its fields (design D1). */
+export const SAVED_QUERY_FIELDS_NOTE = 'Fields from its result. Grouped by its own columns, values show as they are; rolled up, numbers add up (Sum). Averages and rates are never added up.';
 
 // ── One glossary (docs/apps/index.md "Words used in App Studio") ─────────────
 
 /** A Dataset has fields, Metrics come from a semantic model, a saved query is a plain block. */
 export function sourceCatalogKindLabel(source: Pick<AppBlockRecommendation, 'capabilities' | 'kind'>): 'Dataset' | 'Metrics' | 'Saved query' {
   if (source.capabilities?.dataset?.kind === 'semantic') return 'Metrics';
+  // Fields read from a saved query's result keep it a saved query (design D1).
+  if (source.capabilities?.dataset?.result) return 'Saved query';
   if (source.capabilities?.dataset) return 'Dataset';
   if (source.capabilities?.semanticModelId || source.kind === 'semantic') return 'Metrics';
   return 'Saved query';
@@ -45,8 +51,30 @@ export function sourceKindLabel(
   if (kind === 'exploratory_sql') return 'Draft SQL';
   if (kind === 'governed_semantic' || kind === 'semantic_query') return 'Metrics';
   if (capabilities?.dataset?.kind === 'semantic' || capabilities?.semanticModelId) return 'Metrics';
-  if (capabilities?.dataset) return 'Dataset';
+  if (capabilities?.dataset && !capabilities.dataset.result) return 'Dataset';
   return 'Saved query';
+}
+
+/**
+ * Where an item came from, as the one Add data list labels it (design D1):
+ * a database table (a Dataset made from one, or a table not checked yet), a
+ * saved query (a block, with fields from its result or made row-level), or
+ * Metrics from a semantic model.
+ */
+export function sourceOriginLabel(source: Pick<AppBlockRecommendation, 'capabilities' | 'kind'> & { tags?: string[] }): 'Table' | 'Saved query' | 'Metrics' {
+  if (sourceCatalogKindLabel(source) === 'Metrics') return 'Metrics';
+  if (source.capabilities?.dataset && !source.capabilities.dataset.result && (source.tags ?? []).includes('from-table')) return 'Table';
+  return 'Saved query';
+}
+
+/** A saved query (a block) whose result columns ZLens has not read yet. */
+export function savedQueryNeedsFields(source: Pick<AppBlockRecommendation, 'capabilities' | 'kind'>): boolean {
+  return sourceCatalogKindLabel(source) === 'Saved query' && !source.capabilities?.dataset && source.kind !== 'semantic';
+}
+
+/** A saved query that "Make row-level" applies to: no row-level Dataset definition yet. */
+export function canMakeRowLevel(source: Pick<AppBlockRecommendation, 'capabilities' | 'kind'>): boolean {
+  return sourceCatalogKindLabel(source) === 'Saved query' && source.kind !== 'semantic';
 }
 
 /** Visible trust uses two words only. */
@@ -56,19 +84,22 @@ export function trustLabel(trust: string | undefined): 'Certified' | 'Needs revi
 
 // ── The Add data browser ─────────────────────────────────────────────────────
 
-export type AddDataTab = 'datasets' | 'queries' | 'tables';
+/** The filter chips over the one Add data list (design D1). */
+export type AddDataKind = 'all' | 'tables' | 'queries' | 'metrics';
 
-/** Datasets and Metrics have fields; a saved query is a block without them. */
-export function addDataTabFor(item: Pick<AppBlockRecommendation, 'capabilities' | 'kind'>): 'datasets' | 'queries' {
-  return sourceCatalogKindLabel(item) === 'Saved query' ? 'queries' : 'datasets';
+export const ADD_DATA_KINDS: ReadonlyArray<[AddDataKind, string]> = [
+  ['all', 'All'], ['tables', 'Tables'], ['queries', 'Saved queries'], ['metrics', 'Metrics'],
+];
+
+/** The chip a catalog item belongs to. Database tables not checked yet are always `tables`. */
+export function addDataKindOf(item: Pick<AppBlockRecommendation, 'capabilities' | 'kind'> & { tags?: string[] }): Exclude<AddDataKind, 'all'> {
+  const origin = sourceOriginLabel(item);
+  return origin === 'Metrics' ? 'metrics' : origin === 'Table' ? 'tables' : 'queries';
 }
 
-/** Split one trust-ordered catalog page into the two source tabs, keeping its order. */
-export function splitAddDataCatalog(items: AppBlockRecommendation[]): { datasets: AppBlockRecommendation[]; queries: AppBlockRecommendation[] } {
-  const datasets: AppBlockRecommendation[] = [];
-  const queries: AppBlockRecommendation[] = [];
-  for (const item of items) (addDataTabFor(item) === 'datasets' ? datasets : queries).push(item);
-  return { datasets, queries };
+/** The catalog items one chip shows, in the catalog's trust order. */
+export function filterAddDataCatalog(items: AppBlockRecommendation[], kind: AddDataKind): AppBlockRecommendation[] {
+  return kind === 'all' ? items : items.filter((item) => addDataKindOf(item) === kind);
 }
 
 /** The catalog request for one search and domain chip. "All domains" sends no domain. */

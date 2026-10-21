@@ -369,6 +369,8 @@ import {
   datasetBlockProofMaterial,
   datasetDescriptorFromManifestBlock,
   loadDatasetGrainProofs,
+  isPlainSavedQueryBlock,
+  recordSavedQueryResultColumns,
   readIndexedDomainKnowledge,
   readIndexedKnowledge360,
   compactSemanticRuntimeFailure,
@@ -13209,6 +13211,117 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   };
 
   /**
+   * Fields for a saved query (design D1): read the column names and types of
+   * its result once per revision, through the ordinary execution preparation
+   * (dbt refs, read-only) and a one-row read, and keep them as local runtime
+   * state. The catalog then offers the result's columns as fields on the same
+   * shelves as a Dataset. Nothing is written to the block and its trust is
+   * unchanged. Reads of one source revision share one in-flight read.
+   */
+  type SavedQueryFieldsOutcome =
+    | { ok: true; source: ReturnType<typeof resolveAppSourceCatalogRecords>['items'][number]; read: boolean }
+    | { ok: false; status: number; code: string; error: string };
+  const savedQueryFieldReads = new Map<string, Promise<SavedQueryFieldsOutcome>>();
+  const readSavedQueryResultFields = async (input: { sourceId: string; connection?: ConnectionConfig; refresh?: boolean }): Promise<SavedQueryFieldsOutcome> => {
+    const snapshot = projectSnapshot();
+    if (input.refresh !== false) await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [input.sourceId], 'include_review_required');
+    const source = resolved.items[0];
+    if (!source || resolved.missingSourceIds.length > 0) {
+      return { ok: false, status: 404, code: 'DATASET_SOURCE_NOT_FOUND', error: 'That saved query is not in this project any more. Refresh the list.' };
+    }
+    if (source.capabilities.dataset) return { ok: true, source, read: false };
+    const block = source.kind === 'block' ? resolveDatasetSourceManifestBlock(snapshot.manifest, source.executionRef) : null;
+    if (!block || block.blockType === 'semantic' || source.capabilities.semanticModelId) {
+      return { ok: false, status: 409, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query. Only a saved query's result columns can be read as fields.` };
+    }
+    if (!isPlainSavedQueryBlock(block)) {
+      return { ok: false, status: 409, code: 'SAVED_QUERY_ALREADY_DATASET', error: `${source.title} already has fields.` };
+    }
+    if ((block.parameters?.length ?? 0) > 0) {
+      return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens can't read its columns. Add it as a table, chart or KPI.` };
+    }
+    const key = `${source.sourceId}\u0000${source.sourceRevision}`;
+    const pending = savedQueryFieldReads.get(key);
+    if (pending) return pending;
+    const reading = (async (): Promise<SavedQueryFieldsOutcome> => {
+      const blockSource = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+      const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+      if (sourceRevision !== source.sourceRevision) {
+        return { ok: false, status: 409, code: 'SOURCE_CHANGED', error: `${source.title} changed while ZLens was reading it. Try again.` };
+      }
+      const connection = input.connection ?? requireActiveConnection();
+      const tableMapping = await resolveSemanticTableMapping(executor, connection, semanticLayer, projectRoot);
+      const semanticCompose = semanticLayer
+        ? await composeSemanticBlockSqlForRuntime(blockSource, semanticLayer, {
+            driver: connection.driver,
+            tableMapping,
+            projectRoot,
+            projectConfig,
+            detectedProvider: semanticDetectedProvider,
+          })
+        : null;
+      const plan = buildExecutionPlan(
+        { id: `saved-query-result-${source.sourceId}`, type: 'dql', source: blockSource, title: block.name },
+        { semanticLayer, driver: connection.driver, tableMapping, semanticSql: semanticCompose?.sql ?? undefined },
+      );
+      const sql = semanticCompose?.sql ?? plan?.sql;
+      if (!sql) return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_NO_SQL', error: `${source.title} has no SQL ZLens can run to read its columns.` };
+      if ((plan?.sqlParams?.length ?? 0) > 0) {
+        return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens can't read its columns. Add it as a table, chart or KPI.` };
+      }
+      const preparation = await prepareAnalyticalExecutionSql({
+        // One row: some drivers report no columns for an empty result.
+        sql: `SELECT * FROM ${savedQueryRelation(sql, connection.driver)} LIMIT 1`,
+        subject: 'Saved query result fields',
+        executor,
+        connection,
+        projectRoot,
+        projectConfig,
+        enforceReadOnly: true,
+      });
+      const shape = await executor.executePositional(preparation.executedSql, [], preparation.connection, {
+        maxRows: 1, maxBytes: 4 * 1024 * 1024, batchSize: 1, deadlineMs: 60_000, purpose: 'metadata',
+      });
+      const columns = shape.columns
+        .filter((column) => Boolean(column.name))
+        .map((column) => ({ name: column.name, ...(column.type && column.type !== 'unknown' && column.type !== 'null' ? { type: column.type } : {}) }));
+      if (!columns.length) return { ok: false, status: 409, code: 'SAVED_QUERY_NO_COLUMNS', error: `${source.title} returned no columns ZLens could read.` };
+      recordSavedQueryResultColumns(projectRoot, { sourceId: source.sourceId, sourceRevision, columns, typesFrom: 'probe' });
+      // A batch refreshes the catalog once, after its last read.
+      if (input.refresh === false) return { ok: true, source, read: true };
+      await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+      const refreshed = resolveAppSourceCatalogRecords(projectRoot, [source.sourceId], 'include_review_required').items[0];
+      if (!refreshed?.capabilities.dataset) {
+        return { ok: false, status: 409, code: 'SAVED_QUERY_NO_FIELDS', error: `None of the columns of ${source.title} can be used as fields (names must be plain words like gross_revenue).` };
+      }
+      return { ok: true, source: refreshed, read: true };
+    })();
+    savedQueryFieldReads.set(key, reading);
+    try {
+      return await reading;
+    } finally {
+      savedQueryFieldReads.delete(key);
+    }
+  };
+  /**
+   * The AI paths (the App planner, the Ask handoff): read the result fields
+   * of a bounded set of saved queries, one after another, then refresh the
+   * catalog once. A saved query that can't be read stays as it is.
+   */
+  const readSavedQueryResultFieldsBatch = async (sourceIds: string[]): Promise<void> => {
+    if (!datasetsAppFeatureEnabled(projectConfig)) return;
+    const snapshot = projectSnapshot();
+    await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+    let readAny = false;
+    for (const sourceId of Array.from(new Set(sourceIds)).slice(0, 12)) {
+      const outcome = await readSavedQueryResultFields({ sourceId, refresh: false }).catch(() => undefined);
+      if (outcome?.ok && outcome.read) readAny = true;
+    }
+    if (readAny) await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+  };
+
+  /**
    * Key proofs for certified content (`POST /api/keys/prove`): DQL's own
    * grain proof for each certified block Dataset that declares keys, and its
    * own relationship validation for each certified join with keys, run as
@@ -19922,7 +20035,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       const snapshot = projectSnapshot();
       await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
-      const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      let resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      // A saved query's result fields (design D1) are read on first use.
+      if (resolved.items[0]?.kind === 'block' && !resolved.items[0].capabilities.dataset) {
+        const outcome = await readSavedQueryResultFields({ sourceId }).catch(() => undefined);
+        if (outcome?.ok && outcome.read) resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      }
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0) {
@@ -20226,7 +20344,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
-    // Add fields to a saved query (design D1): a saved query (a block with no
+    // Make a saved query row-level (design D1, formerly "Add fields"): a saved query (a block with no
     // Dataset definition) gets one from its own output columns, checked
     // against its rows like "Start from a table", written onto the same block
     // file (same name, same id). Governance: a Dataset definition is a material
@@ -20234,7 +20352,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // same certification check as the table path certifies it again. A
     // certified saved query whose check fails is left untouched unless the
     // author explicitly sends it for review (`allowReview`).
-    if (path === '/api/app-datasets/saved-queries/draft' || path === '/api/app-datasets/saved-queries/create') {
+    if (path === '/api/app-datasets/saved-queries/draft' || path === '/api/app-datasets/saved-queries/create' || path === '/api/app-datasets/saved-queries/fields') {
       const reply = (status: number, body: Record<string, unknown>) => {
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(body));
@@ -20254,6 +20372,24 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reply(400, { ok: false, code: 'SAVED_QUERY_SOURCE_REQUIRED', error: 'Choose the saved query to add fields to.' });
           return;
         }
+        // Read a saved query's result columns as fields (design D1). It
+        // writes local runtime state only: the block and its trust stay as
+        // they are.
+        if (path === '/api/app-datasets/saved-queries/fields') {
+          const outcome = await readSavedQueryResultFields({ sourceId, ...(requestConnection(body) ? { connection: await resolveExecutionConnection(body) } : {}) });
+          if (!outcome.ok) {
+            reply(outcome.status, { ok: false, code: outcome.code, error: outcome.error });
+            return;
+          }
+          reply(200, {
+            ok: true,
+            sourceId: outcome.source.sourceId,
+            sourceRevision: outcome.source.sourceRevision,
+            read: outcome.read,
+            ...(outcome.source.capabilities.dataset ? { descriptor: outcome.source.capabilities.dataset } : {}),
+          });
+          return;
+        }
         const snapshot = projectSnapshot();
         await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
         const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
@@ -20267,7 +20403,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query. Only a saved query can get fields; Metrics already have them.` });
           return;
         }
-        if (block.datasetGrain || block.datasetFields?.length || block.datasetMeasures?.length || source.capabilities.dataset) {
+        // Fields read from its result (design D1) are not a Dataset definition:
+        // "Make row-level" still adds one.
+        if (block.datasetGrain || block.datasetFields?.length || block.datasetMeasures?.length || (source.capabilities.dataset && !source.capabilities.dataset.result)) {
           reply(409, { ok: false, code: 'SAVED_QUERY_ALREADY_DATASET', error: `${source.title} already has fields. Use its Measures and Dimensions in the Data pane.` });
           return;
         }
@@ -20310,7 +20448,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
         if ((plan?.sqlParams?.length ?? 0) > 0 || (block.parameters?.length ?? 0) > 0) {
-          reply(409, { ok: false, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens cannot check its rows. Add fields works on saved queries without parameters.` });
+          reply(409, { ok: false, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens cannot check its rows. Make row-level works on saved queries without parameters.` });
           return;
         }
         const relation = savedQueryRelation(sql, active.driver);
@@ -20901,11 +21039,24 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             const sourcePolicy: AppBuildSourcePolicy = loadedDraftDashboard
               ? loaded.draftSourcePolicy
               : 'governed_only';
-            const resolvedSources = resolveAppSourceCatalogRecords(
+            let resolvedSources = resolveAppSourceCatalogRecords(
               projectRoot,
               datasetSourceIds,
               sourcePolicy,
             );
+            // A field tile over a saved query (design D1) needs its result
+            // columns. They are local runtime state, so a fresh checkout or
+            // a changed saved query reads them again here, once.
+            const savedQueriesWithoutFields = resolvedSources.items.filter((source) => source.kind === 'block' && !source.capabilities.dataset);
+            if (savedQueriesWithoutFields.length > 0) {
+              const fieldsConnection = await resolveExecutionConnection(body as Record<string, unknown>);
+              let readAny = false;
+              for (const source of savedQueriesWithoutFields) {
+                const outcome = await readSavedQueryResultFields({ sourceId: source.sourceId, connection: fieldsConnection }).catch(() => undefined);
+                if (outcome?.ok && outcome.read) readAny = true;
+              }
+              if (readAny) resolvedSources = resolveAppSourceCatalogRecords(projectRoot, datasetSourceIds, sourcePolicy);
+            }
             for (const source of resolvedSources.items) datasetSourceById.set(source.sourceId, source);
             // HH-13: a Dataset this person may not use refuses its tiles only, not the page.
             const allowed = await hostAllowedSources(hostHooks, currentPrincipal(), resolvedSources.items.map((source) => ({ id: source.sourceId, kind: 'dataset' as const, name: source.title, ...(source.domain ? { domain: source.domain } : {}) })));
@@ -21382,7 +21533,210 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 dashboardValues: dashboardVariables,
                 boundParameters,
               });
-              if (source.kind === 'block') {
+              if (source.kind === 'block' && discoveryDescriptor.result) {
+                // Fields of a saved query's result (design D1): one query over
+                // the saved query's complete result, through the same compiler,
+                // filters and execution boundary as a Dataset tile. There is no
+                // row-level grain to prove: the result's own rows are the grain,
+                // and the contract check says whether the tile shows them as
+                // they are or rolls them up (with the receipt saying so).
+                const savedQueryResult = discoveryDescriptor.result;
+                const block = resolveDatasetSourceManifestBlock(manifest, source.executionRef);
+                if (!block || !isPlainSavedQueryBlock(block)) {
+                  throw new Error(`Saved query ${source.title} no longer resolves to its saved block. Refresh it in the Data pane.`);
+                }
+                assertAppAccess({
+                  app: loaded.app,
+                  domain: block.domain ?? loaded.dashboard.metadata.domain ?? loaded.app.domain,
+                  level: 'read',
+                });
+                const blockSource = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+                const currentSourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+                if (currentSourceRevision !== source.sourceRevision || currentSourceRevision !== item.sourceRevision) {
+                  throw new Error('This saved query changed after the tile was made. Refresh it in the Data pane and pick its fields again.');
+                }
+                if (datasetDrills.get(item.i)) {
+                  throw new DashboardRunRequestError('A saved query\'s fields have no drill levels.');
+                }
+                if (item.query.comparison) {
+                  throw new Error('Period comparisons need row-level data. Use "Make row-level" on this saved query first.');
+                }
+                const descriptor = discoveryDescriptor;
+                const effectiveDatasetQuery = item.query;
+                const invocation = prepareBlockInvocation({
+                  block: block.name,
+                  source: blockSource,
+                  parameters: datasetSourceParameters,
+                  parameterSources: Object.fromEntries(Object.keys(boundParameters).map((name) => [name, 'surface' as const])),
+                  surface: 'app',
+                });
+                if (invocation.errors.length || invocation.unresolvedParameters.length) {
+                  throw new Error(invocation.errors[0] ?? `Needs values for: ${invocation.unresolvedParameters.join(', ')}`);
+                }
+                const tableMapping = await resolveSemanticTableMapping(executor, datasetTargetConnection, semanticLayer, projectRoot);
+                const semanticCompose = semanticLayer
+                  ? await composeSemanticBlockSqlForRuntime(blockSource, semanticLayer, {
+                      driver: datasetTargetConnection.driver,
+                      tableMapping,
+                      projectRoot,
+                      projectConfig,
+                      detectedProvider: semanticDetectedProvider,
+                      parameters: invocation.values,
+                    })
+                  : null;
+                const blockPlan = buildExecutionPlan(
+                  { id: item.i, type: 'dql', source: blockSource, title: item.title ?? block.name },
+                  {
+                    semanticLayer,
+                    driver: datasetTargetConnection.driver,
+                    tableMapping,
+                    parameters: invocation.values,
+                    semanticSql: semanticCompose?.sql ?? undefined,
+                  },
+                );
+                const sourceSql = semanticCompose?.sql ?? blockPlan?.sql;
+                if (!sourceSql) {
+                  throw new Error(semanticCompose?.diagnostics.find((diagnostic) => diagnostic.severity === 'error')?.message ?? 'The saved query produced no SQL to run.');
+                }
+                const compiled = compileDatasetTileQuery({
+                  descriptor,
+                  query: effectiveDatasetQuery,
+                  sourceSql,
+                  sourceSqlParams: blockPlan?.sqlParams,
+                  sourceVariables: blockPlan?.variables,
+                  filters: filterResolution.filters,
+                  parameters: datasetSourceParameters,
+                  driver: datasetTargetConnection.driver,
+                });
+                const boundValues: Record<string, unknown> = { ...compiled.variables, ...invocation.values };
+                datasetBoundParameters.set(item.i, compiled.sqlParams.map((parameter) => ({
+                  position: parameter.position,
+                  name: parameter.name,
+                  ...(Object.prototype.hasOwnProperty.call(boundValues, parameter.name) ? { value: boundValues[parameter.name] } : {}),
+                }) as DatasetTileBoundParameter));
+                const queryExecutionKey = fingerprintDashboardRuntimeState({
+                  sourceId: source.sourceId,
+                  sourceRevision: currentSourceRevision,
+                  target: datasetTargetFingerprint,
+                  query: compiled.queryFingerprint,
+                  filters: compiled.filterFingerprint,
+                  parameters: boundValues,
+                });
+                let queryExecution = datasetQueryExecutions.get(queryExecutionKey);
+                if (!queryExecution) {
+                  queryExecution = analyticalExecutionService.execute({
+                    sql: compiled.sql,
+                    subject: 'App saved query field query',
+                    connection: datasetTargetConnection,
+                    sqlParams: compiled.sqlParams,
+                    variables: boundValues,
+                    signal: activeDashboardRun!.controller.signal,
+                  });
+                  datasetQueryExecutions.set(queryExecutionKey, queryExecution);
+                }
+                const execution = await queryExecution;
+                const datasetResult = decorateDatasetResult(execution.result, descriptor, effectiveDatasetQuery);
+                const tileExecutionFingerprint = fingerprintDashboardRuntimeState({
+                  runInput: datasetRunInputFingerprint,
+                  snapshotId: runSnapshot.snapshotId,
+                  tileId: item.i,
+                  sourceId: source.sourceId,
+                  sourceRevision: currentSourceRevision,
+                  query: compiled.queryFingerprint,
+                  filters: compiled.filterFingerprint,
+                  unboundFilters: filterResolution.unbound,
+                  parameters: datasetSourceParameters,
+                });
+                const executedParameterEvidence = datasetBoundParameterEvidence(invocation.values);
+                const executedParameterFingerprint = `sha256:${fingerprintDashboardRuntimeState(invocation.values)}`;
+                const rolledUp = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup');
+                datasetEffectiveQueries.set(item.i, structuredClone(effectiveDatasetQuery));
+                tiles.push({
+                  tileId: item.i,
+                  status: 'ok',
+                  tileType: 'dataset',
+                  title: item.title ?? descriptor.label,
+                  viz: item.viz,
+                  chartConfig: datasetChartConfig(blockPlan?.chartConfig, item, descriptor, effectiveDatasetQuery),
+                  result: datasetResult,
+                  compiledSqlFingerprint: execution.compiledSqlFingerprint,
+                  resultFingerprint: execution.resultFingerprint,
+                  executionFingerprint: tileExecutionFingerprint,
+                  trustState: descriptor.trust,
+                  citation: { kind: 'dataset_query', name: descriptor.label, path: block.filePath },
+                  filters: {
+                    applied: compiled.appliedFilters,
+                    unbound: filterResolution.unbound,
+                  },
+                  dataset: {
+                    sourceId: source.sourceId,
+                    sourceRevision: currentSourceRevision,
+                    contractFingerprint: descriptor.contractRef.fingerprint,
+                    validation: compiled.validation,
+                    trust: descriptor.trust,
+                    lifecycle: descriptor.lifecycle,
+                    binding: {
+                      ...descriptor.binding,
+                      state: 'valid',
+                      activeSnapshotId: runSnapshot.snapshotId,
+                      activeTargetFingerprint: datasetTargetFingerprint,
+                    },
+                    savedQueryResult: { savedQuery: savedQueryResult.savedQuery, rolledUp },
+                    authoredQueryFingerprint: tileQueryHash(item.query),
+                    hierarchy: { activeSteps: [], candidates: [] },
+                    explore: { fields: datasetExploreFields(descriptor) },
+                    queryFingerprint: compiled.queryFingerprint,
+                    filterFingerprint: compiled.filterFingerprint,
+                    executionFingerprint: tileExecutionFingerprint,
+                    parameterEvidence: executedParameterEvidence,
+                    executionProvenance: {
+                      version: 1,
+                      kind: 'block_runtime',
+                      sourceId: source.sourceId,
+                      sourceRevision: currentSourceRevision,
+                      contractFingerprint: descriptor.contractRef.fingerprint,
+                      queryFingerprint: compiled.queryFingerprint,
+                      filterFingerprint: compiled.filterFingerprint,
+                      executionFingerprint: tileExecutionFingerprint,
+                      parameterFingerprint: executedParameterFingerprint,
+                      compiledSqlFingerprint: execution.compiledSqlFingerprint,
+                      executedSqlFingerprint: executionFingerprint(execution.preparation.executedSql),
+                      resultFingerprint: execution.resultFingerprint,
+                      targetFingerprint: datasetTargetFingerprint,
+                    },
+                    appliedFilters: compiled.appliedFilters,
+                    unboundFilters: filterResolution.unbound,
+                  },
+                  artifact: {
+                    version: 1,
+                    sourceKind: 'dataset_query',
+                    name: item.title ?? descriptor.label,
+                    sourcePath: block.filePath,
+                    authoredQuerySpec: renderDatasetTileAuthoredQuerySpec({
+                      descriptor,
+                      query: item.query,
+                      filters: compiled.appliedFilters,
+                      parameterEvidence: executedParameterEvidence,
+                    }),
+                    dql: renderDatasetTileDql({
+                      descriptor,
+                      query: effectiveDatasetQuery,
+                      filters: compiled.appliedFilters,
+                      parameters: datasetSourceParameters,
+                    }),
+                    sql: execution.preparation.executedSql.slice(0, 40_000),
+                    trustState: descriptor.trust,
+                    explanation: [
+                      rolledUp
+                        ? (compiled.validation.adaptations.find((adaptation) => adaptation.kind === 'saved_query_rollup')?.message ?? `Rolled up from the result of ${savedQueryResult.savedQuery}.`)
+                        : `Shows the rows of ${savedQueryResult.savedQuery} as they are.`,
+                      `This tile ran as one query over the complete result of the saved query ${savedQueryResult.savedQuery}; its trust is the saved query's own.`,
+                      filterResolution.unbound.length > 0 ? `${filterResolution.unbound.length} explicitly unmapped dashboard filter(s) did not apply.` : 'All mapped dashboard filters were bound through the saved query\'s result columns.',
+                    ],
+                    executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
+                  },
+                });
+              } else if (source.kind === 'block') {
                 const block = resolveDatasetSourceManifestBlock(manifest, source.executionRef);
                 if (!block) {
                   throw new Error(`Dataset source ${source.qualifiedIdentity} no longer resolves to its authored block path.`);
@@ -23503,6 +23857,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           path,
           projectRoot,
           datasetsEnabled: datasetsAppFeatureEnabled(projectConfig),
+          readSavedQueryFields: readSavedQueryResultFieldsBatch,
           answerFiguresRule: figuresRuleForRequest,
           // With a host, an Ask answer's text is not shown to others where its figures depend on the reader.
           ...(hostHooks ? {
@@ -23817,7 +24172,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   if (currentTargetFingerprint !== record.targetFingerprint) {
                     return { ok: false, error: `Dataset tile ${record.tileId} was previewed against a different warehouse target. Run the draft again after validating the current source.` };
                   }
-                  if (record.kind === 'block') {
+                  if (record.savedQueryResult) {
+                    // Fields of a saved query's result: still a saved query
+                    // with the same field contract (checked above), and no
+                    // grain proof to recheck.
+                    if (!descriptor.result) {
+                      return { ok: false, error: `Dataset tile ${record.tileId} was previewed over a saved query's result, and that source is not one any more. Run the draft again.` };
+                    }
+                  } else if (record.kind === 'block') {
                     const grainProof = record.grainProof;
                     if (!grainProof) {
                       return { ok: false, error: `Dataset tile ${record.tileId} has no persisted declared grain proof scope. Run the current draft again after validating the source.` };
@@ -32107,6 +32469,20 @@ function previewDatasetBindingEvidenceFromTile(tile: Record<string, unknown>): L
     target = { target: 'connection', ...(typeof executionTarget.connectionName === 'string' ? { connectionName: executionTarget.connectionName } : {}) };
   }
   if (!target) return undefined;
+  // A tile over a saved query's result fields (design D1) has no grain proof:
+  // its binding is the source revision, field contract and observed target.
+  if (agentRunRecord(dataset?.savedQueryResult)) {
+    return {
+      tileId,
+      kind: 'block',
+      sourceId,
+      sourceRevision,
+      contractFingerprint,
+      targetFingerprint,
+      executionTarget: target,
+      savedQueryResult: true,
+    };
+  }
   if (dataset?.semanticTargetBinding) {
     return {
       tileId,

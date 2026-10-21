@@ -6,6 +6,7 @@ import {
   type DatasetPhysicalField,
 } from '../datasets/descriptor.js';
 import { datasetAggregateComponentRequirements } from '../datasets/component-proof.js';
+import { savedQueryResultRollup } from '../datasets/result-fields.js';
 import { sha256Hex } from './sha256-sync.js';
 import { checkTileCalculations, normalizeTileCalculations, tileCalcMeasureReferences } from './tile-calcs.js';
 
@@ -126,6 +127,7 @@ export interface TileQueryDiagnostic {
     | 'AGGREGATE_GRAIN_EVIDENCE_REQUIRED'
     | 'AGGREGATE_TIME_BUCKET_REQUIRED'
     | 'NON_ADDITIVE_AGGREGATE_ROLLUP'
+    | 'NON_ADDITIVE_RESULT_ROLLUP'
     | 'NON_ADDITIVE_TIME_ROLLUP'
     | 'TIME_GRAIN_BELOW_SOURCE_GRAIN'
     | 'INVALID_TIME_GRAIN'
@@ -146,7 +148,7 @@ export interface TileQueryDiagnostic {
  * recorded on receipts and disclosed next to the result.
  */
 export interface TileQueryAdaptation {
-  kind: 'aggregate_time_rollup' | 'aggregate_entity_rollup';
+  kind: 'aggregate_time_rollup' | 'aggregate_entity_rollup' | 'saved_query_rollup';
   message: string;
 }
 
@@ -446,6 +448,12 @@ export function validateTileQuery(descriptor: DatasetDescriptor, query: TileQuer
   if (typeof query.limit === 'number' && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 10_000)) {
     diagnostics.push({ code: 'INVALID_LIMIT', message: 'A tile limit must be a positive integer no greater than 10,000.' });
   }
+  // A saved query's result (design D1): as it is at its own grouping, rolled
+  // up otherwise, and an average or a ratio is never summed.
+  const savedQueryRollup = savedQueryResultRollup(descriptor, query, measureQuery.measures.map((selection) => datasetMeasureField(descriptor, selection.measure)?.name ?? selection.measure));
+  for (const blocked of savedQueryRollup.blocked) {
+    diagnostics.push({ code: 'NON_ADDITIVE_RESULT_ROLLUP', field: blocked.measure, message: blocked.message });
+  }
   if (diagnostics.length > 0) return { outcome: 'rejected', diagnostics, adaptations: [] };
   if (needsReview.length > 0) return { outcome: 'needs_review', diagnostics: needsReview, adaptations: [] };
   // Every rollup check above passed, so re-aggregating an aggregate Dataset is
@@ -461,6 +469,7 @@ export function validateTileQuery(descriptor: DatasetDescriptor, query: TileQuer
         : `Rolled up across the Dataset's ${descriptor.grain.timeGrain} periods.`,
     });
   }
+  if (savedQueryRollup.adaptation) adaptations.push(savedQueryRollup.adaptation);
   if (descriptor.grain.aggregate && aggregateSafety.entityRollup) {
     adaptations.push({
       kind: 'aggregate_entity_rollup',

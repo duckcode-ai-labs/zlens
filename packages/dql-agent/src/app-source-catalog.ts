@@ -333,7 +333,8 @@ export function appSourceTrustTier(source: Pick<AppSourceCatalogRecord, 'kind' |
   if (source.trust !== 'certified') return 3;
   const dataset = source.capabilities.dataset;
   const semantic = source.kind === 'semantic' || dataset?.kind === 'semantic' || Boolean(source.capabilities.semanticModelId);
-  if (dataset && !semantic) return 0;
+  // A saved query's result fields (design D1) keep it a saved query here.
+  if (dataset && !semantic && !dataset.result) return 0;
   if (semantic) return 1;
   return 2;
 }

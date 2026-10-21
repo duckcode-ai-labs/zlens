@@ -5,7 +5,7 @@ import { DatasetNumbersCheck, initialNumberChoices, type NumberChoice } from './
 import { humanize, messageOf } from './studio-ui';
 
 /** Shown before the author confirms, when the saved query is certified. */
-export const ADD_FIELDS_SENDS_BACK_FOR_REVIEW = 'Adding fields sends this saved query back for review.';
+export const MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW = 'Making it row-level sends this saved query back for review.';
 
 export type SavedQueryFieldsApi = {
   draft: (sourceId: string) => Promise<SavedQueryDatasetDraft>;
@@ -20,15 +20,15 @@ const defaultApi: SavedQueryFieldsApi = {
 /** What the dialog says once the server answered a create. */
 export function savedQueryFieldsOutcome(result: SavedQueryDatasetResult, name: string): { kind: 'certified' | 'review' | 'refused' | 'error'; message: string } {
   if (result.ok && result.status === 'certified') {
-    return { kind: 'certified', message: `${name} has fields now and is certified: its checks passed.` };
+    return { kind: 'certified', message: `${name} is row-level now and certified: its checks passed.` };
   }
   if (result.ok) {
-    return { kind: 'review', message: `${name} has fields now. It needs review: it did not pass its checks yet.` };
+    return { kind: 'review', message: `${name} is row-level now. It needs review: it did not pass its checks yet.` };
   }
   if (result.code === 'SAVED_QUERY_REVIEW_REQUIRED') {
-    return { kind: 'refused', message: `${name} is certified, and with these fields it did not pass its checks, so nothing changed yet.` };
+    return { kind: 'refused', message: `${name} is certified, and made row-level it did not pass its checks, so nothing changed yet.` };
   }
-  return { kind: 'error', message: result.error ?? 'ZLens could not add fields to this saved query.' };
+  return { kind: 'error', message: result.error ?? 'ZLens could not make this saved query row-level.' };
 }
 
 export type SavedQueryFieldsSubmission =
@@ -37,7 +37,7 @@ export type SavedQueryFieldsSubmission =
   | { kind: 'error'; message: string };
 
 /**
- * One "Check and add fields" press: write the author's numbers onto the saved
+ * One "Check and make row-level" press: write the author's numbers onto the saved
  * query and say what happened. `allowReview` is the explicit second press
  * that sends a certified saved query back for review after a failed check.
  */
@@ -61,7 +61,9 @@ export async function submitSavedQueryFields(client: SavedQueryFieldsApi, input:
 }
 
 /**
- * Add fields to a saved query (design D1). The same "Check the numbers" step
+ * Make a saved query row-level (design D1; formerly "Add fields"). A saved
+ * query already shows its result's columns as fields; this is only needed for
+ * row-safe measures (distinct counts, averages over rows). The same "Check the numbers" step
  * as "Start from a table", for an existing saved query: ZLens reads its
  * columns, checks what one row is against its rows, and writes the fields
  * onto the same saved query file. The same certification check as the table
@@ -148,8 +150,8 @@ export function SavedQueryFieldsDialog({
         <header>
           <span className="table-dataset-icon"><FileText size={17} aria-hidden="true" /></span>
           <div>
-            <h2 id="saved-query-fields-title">{done ? 'Fields added' : 'Check the numbers'}</h2>
-            <p>{proposal ? `Add fields to ${label} · ${(draft?.rows ?? 0).toLocaleString()} rows` : `Add fields to ${label}`}</p>
+            <h2 id="saved-query-fields-title">{done ? 'Row-level now' : 'Check the numbers'}</h2>
+            <p>{proposal ? `Make ${label} row-level · ${(draft?.rows ?? 0).toLocaleString()} rows` : `Make ${label} row-level`}</p>
           </div>
           <button type="button" className="icon" onClick={onClose} disabled={saving} aria-label="Close"><X size={15} /></button>
         </header>
@@ -161,17 +163,17 @@ export function SavedQueryFieldsDialog({
               {done.status === 'certified' ? <ShieldCheck size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
               <div>
                 <strong>{done.message}</strong>
-                <small>Its Measures and Dimensions are in the Data pane.{done.blockers.length ? ` Why it needs review: ${done.blockers.join(' ')}` : ''}</small>
+                <small>Its row-level Measures and Dimensions are in the Data pane.{done.blockers.length ? ` Why it needs review: ${done.blockers.join(' ')}` : ''}</small>
               </div>
             </div>
           ) : proposal ? (
             <>
-              {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{ADD_FIELDS_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its certification checks right away: if they pass, it is certified again.</p> : null}
+              {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its certification checks right away: if they pass, it is certified again.</p> : null}
               <DatasetNumbersCheck proposal={proposal} rows={draft?.rows ?? 0} choices={choices} onChoice={setChoice} groupByKey noKeyMessage={`No column in ${label} is filled and different on every row, so ZLens cannot count its rows safely. Add an id column to the saved query first.`} />
               {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
               {refusal ? <div className="table-dataset-error" role="alert">
-                <p>{label} is certified, and with these fields it did not pass its checks, so nothing changed yet.{refusal.length ? ` ${refusal.join(' ')}` : ''}</p>
-                <button type="button" disabled={saving} onClick={() => save(true)}>Send for review and add fields</button>
+                <p>{label} is certified, and made row-level it did not pass its checks, so nothing changed yet.{refusal.length ? ` ${refusal.join(' ')}` : ''}</p>
+                <button type="button" disabled={saving} onClick={() => save(true)}>Send for review and make row-level</button>
               </div> : null}
             </>
           ) : null}
@@ -180,10 +182,10 @@ export function SavedQueryFieldsDialog({
 
         <footer>
           {done ? <span /> : <button type="button" onClick={onClose} disabled={saving}>Cancel</button>}
-          {!done && proposal ? <small>ZLens writes the fields into this saved query's file (same name, same place) and checks it compiles and runs.</small> : null}
+          {!done && proposal ? <small>ZLens writes a row-level definition into this saved query's file (same name, same place) and checks it compiles and runs.</small> : null}
           {done
             ? <button type="button" className="primary" onClick={() => onAdded(done.sourceId, done.status)}>Use its fields</button>
-            : proposal ? <button type="button" className="primary" disabled={saving || !proposal.key || keptCount === 0} onClick={() => save(false)}>{saving ? 'Checking…' : 'Check and add fields'}</button> : null}
+            : proposal ? <button type="button" className="primary" disabled={saving || !proposal.key || keptCount === 0} onClick={() => save(false)}>{saving ? 'Checking…' : 'Check and make row-level'}</button> : null}
         </footer>
       </section>
     </div>
