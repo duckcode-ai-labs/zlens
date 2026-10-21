@@ -2,6 +2,7 @@ import React from 'react';
 import { Boxes, Database, FolderOpen, GitBranch, Layers, RefreshCw } from 'lucide-react';
 import type { Theme } from '../../themes/notebook-theme';
 import {
+  databaseOnlyUnavailable,
   EXISTING_PROJECT_TITLE,
   MODEL_SOURCE_OPTIONS,
   type DraftOutcome,
@@ -39,7 +40,7 @@ export function ModelSourceChooser({
   name?: string;
   t: Theme;
 }) {
-  const card = (id: ModelSource, title: string, body: React.ReactNode, disabled: boolean) => {
+  const card = (id: ModelSource, title: string, body: React.ReactNode, disabled: boolean, note?: string | null) => {
     const selected = value === id;
     const inputId = `${name}-${id}`;
     return (
@@ -57,7 +58,8 @@ export function ModelSourceChooser({
           background: selected ? 'var(--accent-dim)' : t.cellBg,
           padding: '13px 14px',
           cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
+          // A card that explains why it is unavailable keeps that note readable.
+          opacity: disabled && !note ? 0.6 : 1,
           fontFamily: t.font,
           minWidth: 0,
         }}
@@ -71,7 +73,7 @@ export function ModelSourceChooser({
           disabled={disabled}
           onChange={() => onChange(id)}
           aria-labelledby={`${inputId}-title`}
-          aria-describedby={`${inputId}-body`}
+          aria-describedby={note ? `${inputId}-body ${inputId}-note` : `${inputId}-body`}
           style={{ marginTop: 3, accentColor: t.accent, flexShrink: 0 }}
         />
         <span style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
@@ -79,7 +81,8 @@ export function ModelSourceChooser({
             <span style={{ color: selected ? t.accent : t.textSecondary, display: 'inline-flex' }}>{ICONS[id]}</span>
             {title}
           </span>
-          <span id={`${inputId}-body`} style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5 }}>{body}</span>
+          <span id={`${inputId}-body`} style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5, opacity: disabled && note ? 0.6 : 1 }}>{body}</span>
+          {note ? <span id={`${inputId}-note`} data-model-source-note="" style={{ fontSize: 11.5, color: t.textPrimary, lineHeight: 1.5, borderTop: `1px solid ${t.headerBorder}`, paddingTop: 6 }}>{note}</span> : null}
         </span>
       </label>
     );
@@ -91,7 +94,10 @@ export function ModelSourceChooser({
         Where does your data model live?
       </legend>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
-        {MODEL_SOURCE_OPTIONS.map((option) => card(option.id, option.title, option.body, dbtOnly && option.id !== 'dbt'))}
+        {MODEL_SOURCE_OPTIONS.map((option) => {
+          const unavailable = option.id === 'warehouse' ? databaseOnlyUnavailable(existing) : null;
+          return card(option.id, option.title, option.body, (dbtOnly && option.id !== 'dbt') || (Boolean(unavailable) && value !== 'warehouse'), unavailable);
+        })}
       </div>
       {card(
         'existing',
