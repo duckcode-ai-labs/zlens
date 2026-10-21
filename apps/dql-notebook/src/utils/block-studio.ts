@@ -59,7 +59,9 @@ export interface SemanticVisualFields {
  * temporarily missing closing brace) from erasing the last valid identity
  * fields before the server validator can respond.
  */
-export function hasCompleteBlockEnvelope(content: string): boolean {
+export function hasCompleteBlockEnvelope(source: string): boolean {
+  // The formatter's `// dql-format: 1` header (and any leading comment) comes before the block.
+  const content = source.slice(leadingCommentLength(source));
   if (!/^\s*block\s+"[^"]+"\s*\{/i.test(content)) return false;
   let depth = 0;
   let sawOpeningBrace = false;
@@ -565,9 +567,25 @@ export function setBlockStringField(content: string, key: string, value: string)
 
 export function setBlockName(content: string, value: string): string {
   const escaped = value.replace(/"/g, '\\"');
-  return /^\s*block\s+"/i.test(content)
-    ? content.replace(/^(\s*block\s+)"[^"]+"/i, `$1"${escaped}"`)
+  const header = content.slice(0, leadingCommentLength(content));
+  const body = content.slice(header.length);
+  return /^\s*block\s+"/i.test(body)
+    ? `${header}${body.replace(/^(\s*block\s+)"[^"]*"/i, `$1"${escaped}"`)}`
     : content;
+}
+
+/**
+ * The length of the comment lines and blank lines a block file opens with,
+ * such as the formatter's `// dql-format: 1` header. Every editor helper reads
+ * the block after them, so a saved file and a new draft edit the same way.
+ */
+export function leadingCommentLength(content: string): number {
+  return /^(?:[ \t]*(?:\/\/[^\n]*)?\r?\n)*/.exec(content)?.[0].length ?? 0;
+}
+
+/** The file declares a block, after any leading comment lines. */
+export function startsWithBlockDeclaration(content: string): boolean {
+  return /^\s*block\s+"/i.test(content.slice(leadingCommentLength(content)));
 }
 
 export function setBlockTags(content: string, tags: string[]): string {
@@ -676,11 +694,15 @@ export function appendSemanticRefToQuery(content: string, reference: string): st
  * params, parameterPolicy, filterBindings, tests, and future/unknown clauses.
  */
 export function setBlockQuery(content: string, sql: string): string {
-  const parsed = parseBlockDocument(content);
-  if (!parsed) return content;
-  const next = setBlockStringField(content, 'type', 'custom');
   const rendered = `  query = """\n${sql.trimEnd()}\n  """`;
   const queryField = /\n\s*query\s*=\s*"""[\s\S]*?"""/i;
+  const parsed = parseBlockDocument(content);
+  if (!parsed) {
+    // Never drop typed SQL silently: a draft the helpers cannot read as a
+    // block (mid-edit in DQL Source) still gets its query replaced in place.
+    return queryField.test(content) ? content.replace(queryField, `\n${rendered}`) : content;
+  }
+  const next = setBlockStringField(content, 'type', 'custom');
   return queryField.test(next)
     ? next.replace(queryField, `\n${rendered}`)
     : insertBlockField(next, rendered, true);
@@ -715,10 +737,11 @@ export function extractSemanticReferences(content: string): {
 }
 
 function parseBlockDocument(content: string): ParsedBlockDocument | null {
-  if (!/^\s*block\s+"/i.test(content.trim())) return null;
+  const body = content.slice(leadingCommentLength(content));
+  if (!/^\s*block\s+"/i.test(body.trim())) return null;
   const str = (key: string) =>
     content.match(new RegExp(`\\b${key}\\s*=\\s*"([^"]*)"`, 'i'))?.[1] ?? '';
-  const name = content.match(/^\s*block\s+"([^"]+)"/i)?.[1] ?? '';
+  const name = body.match(/^\s*block\s+"([^"]+)"/i)?.[1] ?? '';
   const tagsMatch = content.match(/\btags\s*=\s*\[([^\]]*)\]/i);
   const queryMatch = content.match(/query\s*=\s*"""([\s\S]*?)"""/i);
   return {
@@ -888,12 +911,53 @@ function insertBlockField(content: string, field: string, beforeClosingBrace: bo
   const trimmed = content.trimEnd();
   const lines = trimmed.split('\n');
   const openIndex = lines.findIndex((line) => /^\s*block\s+"[^"]*"\s*\{/i.test(line));
-  if (openIndex < 0 || !/\n\}\s*$/.test(trimmed)) {
+  // The block's own closing brace, found by depth (strings and comments
+  // skipped), not "the last line": a comment or a second declaration after
+  // the block must never receive the field (B10).
+  const closeAt = openIndex < 0 ? -1 : blockClosingBraceOffset(trimmed, lines.slice(0, openIndex).reduce((total, line) => total + line.length + 1, 0));
+  if (openIndex < 0 || closeAt < 0) {
     return `${trimmed}\n${field}\n`;
   }
-  if (beforeClosingBrace) return trimmed.replace(/\n\}\s*$/, `\n\n${field}\n}`);
+  if (beforeClosingBrace) {
+    const before = trimmed.slice(0, closeAt).replace(/[ \t]*$/, '');
+    return `${before.endsWith('\n') ? before : `${before}\n`}\n${field}\n${trimmed.slice(closeAt)}`;
+  }
   const after = blockFieldInsertionLine(lines, openIndex);
   return [...lines.slice(0, after + 1), field, ...lines.slice(after + 1)].join('\n');
+}
+
+/** The offset of the `}` that closes the block opened at or after `from`, or -1. */
+function blockClosingBraceOffset(content: string, from: number): number {
+  let depth = 0;
+  let opened = false;
+  for (let at = from; at < content.length; at++) {
+    if (content.startsWith('"""', at)) {
+      const end = content.indexOf('"""', at + 3);
+      if (end < 0) return -1;
+      at = end + 2;
+      continue;
+    }
+    const ch = content[at];
+    if (ch === '/' && content[at + 1] === '/') {
+      const newline = content.indexOf('\n', at);
+      if (newline < 0) return -1;
+      at = newline;
+      continue;
+    }
+    if (ch === '"') {
+      at++;
+      while (at < content.length && content[at] !== '"' && content[at] !== '\n') at += content[at] === '\\' ? 2 : 1;
+      continue;
+    }
+    if (ch === '{') {
+      depth++;
+      opened = true;
+    } else if (ch === '}') {
+      depth--;
+      if (opened && depth === 0) return at;
+    }
+  }
+  return -1;
 }
 
 /**

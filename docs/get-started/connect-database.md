@@ -114,6 +114,15 @@ catalog · 13 tables and views with their keys and comments**. A failed or
 empty refresh keeps the previous index. **Refresh metadata** rebuilds it
 later.
 
+In **Guided Setup** the same section is one question, **Which schemas should
+ZLens read?** (Database only and Both). Setup lists the schemas as soon as the
+connection test passes; tick them and **Apply and synchronize**. Index mode,
+the typed list, the index details and **Refresh metadata** are under
+**Advanced**, closed. With a dbt project the whole section is under
+**Advanced**, since dbt already says which tables matter, and so is
+**Import from a dbt profile**. Database only never shows the dbt profiles
+from your home folder.
+
 The scope is saved in `dql.config.json` under `metadataScopes`. The terminal
 equivalent is:
 

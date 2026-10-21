@@ -7,7 +7,7 @@ import type { Server } from 'node:http';
 import { describe, expect, it } from 'vitest';
 import { QueryExecutor, type ConnectionConfig } from '@zlens/connectors';
 import { startLocalServer } from '../local-runtime.js';
-import { applyTableDatasetChoices } from './table-dataset.js';
+import { applyTableDatasetChoices, draftTableDataset, tableModelStates } from './table-dataset.js';
 import { readEnv } from '@zlens/core';
 
 /**
@@ -35,6 +35,47 @@ describe('start from a table', () => {
     };
     const next = applyTableDatasetChoices(proposal, [{ name: 'amount', include: false, format: 'number', from: 'secret_column', aggregation: 'max' }, { name: 'injected', include: true }]);
     expect(next.measures).toEqual([{ ...proposal.measures[0], include: false, format: 'number' }]);
+  });
+
+  it('marks tables the model binds as Modeled and tables setup drafted as Drafted, with their checked key (D7)', () => {
+    const tables = [
+      { id: 'warehouse.dev.customers', relation: '"dev"."customers"' },
+      { id: 'warehouse.dev.orders', relation: '"dev"."orders"' },
+      { id: 'warehouse.dev.payments', relation: '"dev"."payments"' },
+    ];
+    const states = tableModelStates({
+      tables,
+      entities: [{ dbtUniqueId: 'warehouse.dev.customers', localId: 'customers', domain: 'dev', businessName: 'Customers', grain: 'customer_id', keys: ['customer_id'] }],
+      proposals: [
+        { id: 'ctxprop_old', status: 'committed', origin: 'warehouse_discovery', operations: [{ kind: 'modeling_change', change: { operation: 'upsert_entity', value: { id: 'payments', domain: 'dev', dbtModel: 'warehouse.dev.payments', grain: 'payment_id' } } }] },
+        { id: 'ctxprop_new', status: 'proposed', origin: 'warehouse_discovery', operations: [
+          { kind: 'modeling_change', change: { operation: 'upsert_entity', value: { id: 'orders', domain: 'dev', dbtModel: 'warehouse.dev.orders', businessName: 'Orders', grain: 'order_id', keys: ['order_id'] } } },
+          { kind: 'modeling_change', change: { operation: 'upsert_entity', value: { id: 'customers', domain: 'dev', dbtModel: 'warehouse.dev.customers', grain: 'customer_id' } } },
+          { kind: 'modeling_change', change: { operation: 'upsert_relationship', value: { id: 'orders_customers', domain: 'dev', from: 'orders', to: 'customers' } } },
+        ] },
+      ],
+    });
+    expect(states.get('warehouse.dev.customers')).toEqual({ state: 'modeled', entity: 'Customers', domain: 'dev', key: 'customer_id' });
+    expect(states.get('warehouse.dev.orders')).toEqual({ state: 'drafted', entity: 'Orders', domain: 'dev', key: 'order_id', proposalId: 'ctxprop_new' });
+    // A proposal already committed (or turned down) is not a draft waiting for review.
+    expect(states.has('warehouse.dev.payments')).toBe(false);
+  });
+
+  it('checks a modeled row key on its own first, so Check and add is one quick count (D7)', async () => {
+    const statements: string[] = [];
+    const run = async (sql: string) => {
+      statements.push(sql);
+      return [{ dql_rows: 3, dql_distinct_0: 3, dql_filled_0: 3 }];
+    };
+    const table = { id: 'warehouse.dev.orders', name: 'orders', schema: 'dev', relation: '"dev"."orders"', kind: 'table', columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'customer_id', type: 'VARCHAR' }, { name: 'store_id', type: 'VARCHAR' }, { name: 'order_total', type: 'DOUBLE' }] };
+    const drafted = await draftTableDataset({ table, driver: 'duckdb', run, modeledKey: 'order_id' });
+    expect(drafted.proposal.key).toEqual({ column: 'order_id', entity: 'order' });
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain('COUNT(DISTINCT "order_id")');
+    expect(statements[0]).not.toContain('customer_id');
+    // The same numbers as without the modeled key: only the check is shorter.
+    const plain = await draftTableDataset({ table, driver: 'duckdb', run: async () => [{ dql_rows: 3, dql_distinct_0: 3, dql_filled_0: 3, dql_distinct_1: 2, dql_filled_1: 3, dql_distinct_2: 1, dql_filled_2: 3 }] });
+    expect(drafted.proposal.measures.map((measure) => measure.name)).toEqual(plain.proposal.measures.map((measure) => measure.name));
   });
 
   duckDbIt('lists tables, drafts a checked Dataset, saves it certified, and App Studio lists it', async () => {

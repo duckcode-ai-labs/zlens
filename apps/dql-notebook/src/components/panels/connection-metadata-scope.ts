@@ -74,3 +74,12 @@ export function additionalDiscoveredSchemaCount(
     0,
   );
 }
+
+/**
+ * A value that is a generated identifier, such as `LOCAL_88B5DE228E554CBCCCF7F634`:
+ * it means nothing to a person, so the panel never prints it (design D7).
+ */
+export function looksLikeGeneratedId(value: string): boolean {
+  const text = value.trim();
+  return /^[A-Za-z]*_?[0-9A-Fa-f]{16,}$/.test(text) || /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(text);
+}

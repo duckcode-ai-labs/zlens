@@ -7,7 +7,53 @@ import type { CLIFlags } from '../args.js';
 import { ensureDqlGitignore } from '../git-contract.js';
 import { runNotebook } from './notebook.js';
 
-export async function runInit(targetArg: string | null, flags: CLIFlags): Promise<void> {
+/** What a folder already holds: a dbt project (here or a level up) and a DuckDB file. */
+export interface FolderContents {
+  isDbt: boolean;
+  dbtProjectDir: string | null;
+  /** A DuckDB file, relative to the folder (e.g. `jaffle_shop.duckdb` or `../dev.duckdb`). */
+  duckdbPath: string | null;
+}
+
+/**
+ * Detect a dbt project — either *in* this directory, or as a sibling (the
+ * canonical `acme/dbt/` + `acme/analytics/` layout) — and a DuckDB file, in the
+ * workspace OR the dbt project dir (the .duckdb often lives next to
+ * dbt_project.yml, a level up from the ZLens workspace).
+ */
+export function detectFolderContents(targetDir: string): FolderContents {
+  let isDbt = existsSync(join(targetDir, 'dbt_project.yml'));
+  let dbtProjectDir: string | null = isDbt ? targetDir : null;
+  if (!dbtProjectDir) {
+    for (const rel of ['..', '../..', '../dbt', '../../dbt']) {
+      const probe = join(targetDir, rel, 'dbt_project.yml');
+      if (existsSync(probe)) {
+        dbtProjectDir = resolve(targetDir, rel);
+        isDbt = true;
+        break;
+      }
+    }
+  }
+  return { isDbt, dbtProjectDir, duckdbPath: detectDuckDBFile(targetDir, dbtProjectDir) };
+}
+
+/**
+ * The project type a folder gets: dbt-first with a dbt project, database only
+ * (warehouse-first, RFC 0007) with a database file and no dbt, and undecided
+ * otherwise — Guided Setup then asks where the data lives.
+ */
+export function initProjectKind(contents: FolderContents, warehouseFirstFlag = false): 'dbt' | 'database' | 'undecided' {
+  if (contents.isDbt) return 'dbt';
+  if (warehouseFirstFlag || contents.duckdbPath) return 'database';
+  return 'undecided';
+}
+
+export async function runInit(
+  targetArg: string | null,
+  flags: CLIFlags,
+  /** `summary`: one line instead of the full report, for `zlens notebook <folder>` creating a project. */
+  options: { output?: 'full' | 'summary' } = {},
+): Promise<void> {
   const targetDir = resolve(targetArg || '.');
   const projectName = basename(targetDir) || 'dql-project';
 
@@ -27,23 +73,10 @@ export async function runInit(targetArg: string | null, flags: CLIFlags): Promis
     return;
   }
 
-  // Detect if this is a dbt project — either *in* this directory, or as a
-  // sibling (the canonical `acme/dbt/` + `acme/analytics/` layout).
-  let isDbt = existsSync(join(targetDir, 'dbt_project.yml'));
-  let dbtProjectDir: string | null = isDbt ? targetDir : null;
-  if (!dbtProjectDir) {
-    for (const rel of ['..', '../..', '../dbt', '../../dbt']) {
-      const probe = join(targetDir, rel, 'dbt_project.yml');
-      if (existsSync(probe)) {
-        dbtProjectDir = resolve(targetDir, rel);
-        isDbt = true;
-        break;
-      }
-    }
-  }
-  // Detect DuckDB file — in the workspace OR the dbt project dir (common layout:
-  // the .duckdb lives next to dbt_project.yml, a level up from the ZLens workspace).
-  const duckdbPath = detectDuckDBFile(targetDir, dbtProjectDir);
+  const contents = detectFolderContents(targetDir);
+  const { isDbt, dbtProjectDir, duckdbPath } = contents;
+  // A database file and no dbt project is a database-only project: no flag needed.
+  const warehouseFirst = initProjectKind(contents, flags.warehouseFirst === true) === 'database';
 
   // Don't overwrite existing dql.config.json
   const configPath = join(targetDir, 'dql.config.json');
@@ -51,7 +84,7 @@ export async function runInit(targetArg: string | null, flags: CLIFlags): Promis
     // Resolve the local OSS owner up front (git user.email → $USER → guest@local)
     // and persist it as identity.owner so drafts are never born "Missing owner".
     const owner = resolveLocalOwner(targetDir, { persist: false });
-    const config = buildConfig(projectName, isDbt, duckdbPath, dbtProjectDir, targetDir, owner, flags.warehouseFirst === true);
+    const config = buildConfig(projectName, isDbt, duckdbPath, dbtProjectDir, targetDir, owner, warehouseFirst);
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
   }
 
@@ -142,6 +175,12 @@ export async function runInit(targetArg: string | null, flags: CLIFlags): Promis
     return;
   }
 
+  if (options.output === 'summary') {
+    const kind = isDbt ? 'dbt project' : projectConfig.modeling?.mode === 'warehouse-first' ? 'Database only' : 'no data source yet';
+    console.log(`\n  ✓ Created a ZLens project in ${targetDir} (${kind}${duckdbPath ? ` · ${duckdbPath}` : ''}).`);
+    return;
+  }
+
   console.log(`\n  ✓ ZLens project initialized: ${projectName}`);
   console.log(`    Path: ${targetDir}`);
   console.log('');
@@ -159,7 +198,7 @@ export async function runInit(targetArg: string | null, flags: CLIFlags): Promis
       console.log(`    Modeling: preserved existing manifest v${projectConfig.manifestVersion ?? 2} configuration`);
     }
   } else if (projectConfig.manifestVersion === 3 && projectConfig.modeling?.mode === 'warehouse-first') {
-    console.log('    Modeling: manifest v3, warehouse-first (entities bind to warehouse tables; no dbt needed)');
+    console.log('    Project type: Database only (ZLens reads the database\'s tables; no dbt needed)');
   }
   console.log('');
   console.log('  Created:');
@@ -180,15 +219,15 @@ export async function runInit(targetArg: string | null, flags: CLIFlags): Promis
   // bare `zlens` only works after a global install and was misleading for the
   // recommended existing-repo `npm i -D` path.
   console.log(`    ${step + 1}. npx zlens doctor`);
-  console.log(`    ${step + 2}. npx zlens notebook`);
   if (isDbt) {
+    console.log(`    ${step + 2}. npx zlens notebook`);
     console.log(`    ${step + 3}. npx zlens compile .`);
     console.log(`    ${step + 4}. npx zlens sync dbt .`);
   } else if (projectConfig.modeling?.mode === 'warehouse-first') {
-    console.log(`    ${step + 3}. npx zlens sync warehouse --schemas <schema>   (reads tables, columns and keys)`);
+    console.log(`    ${step + 2}. npx zlens notebook   (Guided Setup: choose the schemas ZLens reads, then Draft my models)`);
   } else {
-    console.log('');
-    console.log('  No dbt project? `zlens init --warehouse-first` models your warehouse tables directly.');
+    // No dbt project and no database file yet: Guided Setup asks where the data lives.
+    console.log(`    ${step + 2}. npx zlens notebook   (Guided Setup asks whether you use dbt or a database only)`);
   }
   console.log('');
 

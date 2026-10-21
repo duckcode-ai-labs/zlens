@@ -98,14 +98,108 @@ export async function listWarehouseTables(input: { projectRoot: string; driver: 
  * What DQL proposes for one table, checked against its rows: which column is
  * different on every row (so rows can be counted), and the row count.
  */
-export async function draftTableDataset(input: { table: WarehouseTableSummary; driver: string; run: RunSql }): Promise<{ proposal: TableDatasetProposal; rows: number }> {
+export async function draftTableDataset(input: {
+  table: WarehouseTableSummary;
+  driver: string;
+  run: RunSql;
+  /** The row key setup or Modeling already checked for this table (design D7): checked alone first. */
+  modeledKey?: string;
+}): Promise<{ proposal: TableDatasetProposal; rows: number }> {
+  const primaryKey = input.table.primaryKey ?? (input.modeledKey ? [input.modeledKey] : undefined);
   // ZLens writes this Dataset's SQL, so cents columns are read as dollars.
-  const proposal = proposeTableDataset({ table: input.table.name, relation: input.table.relation, columns: input.table.columns, ...(input.table.primaryKey ? { primaryKey: input.table.primaryKey } : {}), convertMinorUnits: true });
+  const proposal = proposeTableDataset({ table: input.table.name, relation: input.table.relation, columns: input.table.columns, ...(primaryKey ? { primaryKey } : {}), convertMinorUnits: true });
   if (!proposal.fields.length) {
     throw new TableDatasetError('TABLE_HAS_NO_COLUMNS', `${input.table.name} has no columns ZLens can read by name.`);
   }
+  // A key the model already checked is counted on its own (one distinct count,
+  // not up to eight); only when it no longer holds are the other candidates tried.
+  if (input.modeledKey && proposal.keyCandidates.includes(input.modeledKey)) {
+    const quick = await profileTable({ relation: input.table.relation, columns: [input.modeledKey], driver: input.driver, run: input.run });
+    const settled = applyTableProfile(proposal, quick, input.table.name);
+    if (settled.key) return { proposal: settled, rows: quick.rows };
+  }
   const profile = await profileTable({ relation: input.table.relation, columns: proposal.keyCandidates, driver: input.driver, run: input.run });
   return { proposal: applyTableProfile(proposal, profile, input.table.name), rows: profile.rows };
+}
+
+/**
+ * Whether a database table is already modeled (design D7): an entity in the
+ * project's model binds it ("Modeled"), or "Draft my models" drafted one that
+ * waits for review in Modeling ("Drafted"). Both carry the row key that was
+ * checked, so "Check and add" reuses it.
+ */
+export interface TableModelState {
+  state: 'modeled' | 'drafted';
+  entity: string;
+  domain: string;
+  /** The checked row key, when it is one column. */
+  key?: string;
+  /** The drafted proposal Modeling opens for review. */
+  proposalId?: string;
+}
+
+interface ModelEntityLike {
+  dbtUniqueId?: string;
+  relation?: string;
+  localId?: string;
+  id?: string;
+  domain: string;
+  businessName?: string;
+  grain?: string;
+  keys?: string[];
+}
+
+interface ProposalLike {
+  id: string;
+  status?: string;
+  origin?: string;
+  operations?: ReadonlyArray<{ kind?: string; change?: unknown }>;
+}
+
+const bareRelation = (relation: string | undefined): string => (relation ?? '').replace(/["`\[\]]/g, '').toLowerCase();
+
+function singleKey(grain: string | undefined, keys: string[] | undefined): string | undefined {
+  const fromGrain = grain?.split(',').map((part) => part.trim()).filter(Boolean) ?? [];
+  if (fromGrain.length === 1) return fromGrain[0];
+  return !fromGrain.length && keys?.length === 1 ? keys[0] : undefined;
+}
+
+export function tableModelStates(input: {
+  tables: Array<Pick<WarehouseTableSummary, 'id' | 'relation'>>;
+  entities: ModelEntityLike[];
+  /** Newest first, as the proposal store lists them. */
+  proposals: ProposalLike[];
+}): Map<string, TableModelState> {
+  const states = new Map<string, TableModelState>();
+  const byId = new Map(input.tables.map((table) => [table.id, table.id]));
+  const byRelation = new Map(input.tables.map((table) => [bareRelation(table.relation), table.id]));
+  const tableFor = (id: unknown, relation?: unknown): string | undefined =>
+    (typeof id === 'string' ? byId.get(id) : undefined) ?? (typeof relation === 'string' ? byRelation.get(bareRelation(relation)) : undefined);
+  for (const entity of input.entities) {
+    const table = tableFor(entity.dbtUniqueId, entity.relation);
+    if (!table || states.has(table)) continue;
+    const key = singleKey(entity.grain, entity.keys);
+    states.set(table, { state: 'modeled', entity: entity.businessName || entity.localId || entity.id || table, domain: entity.domain, ...(key ? { key } : {}) });
+  }
+  for (const proposal of input.proposals) {
+    if (proposal.status !== 'proposed' || proposal.origin !== 'warehouse_discovery') continue;
+    for (const operation of proposal.operations ?? []) {
+      const change = operation.change as { operation?: string; value?: Record<string, unknown> } | undefined;
+      const value = change?.operation === 'upsert_entity' ? change.value : undefined;
+      if (!value) continue;
+      const table = tableFor(value.dbtModel, value.relation);
+      if (!table || states.has(table)) continue;
+      const key = singleKey(typeof value.grain === 'string' ? value.grain : undefined, Array.isArray(value.keys) ? value.keys.filter((item): item is string => typeof item === 'string') : undefined);
+      states.set(table, {
+        state: 'drafted',
+        entity: String(value.businessName ?? value.id ?? table),
+        domain: String(value.domain ?? ''),
+        proposalId: proposal.id,
+        ...(key ? { key } : {}),
+      });
+    }
+  }
+  return states;
 }
 
 /**

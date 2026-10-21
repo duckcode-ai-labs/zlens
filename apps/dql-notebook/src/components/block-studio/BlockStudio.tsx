@@ -77,7 +77,7 @@ import type { CompletePathResult } from '../lineage/lineage-constants';
 import { TableOutput } from '../output/TableOutput';
 import { BlockLibraryPanel } from '../panels/BlockLibraryPanel';
 import { BuildSidebar } from '../panels/BuildSidebar';
-import { blockDomainOptions } from './domain-options';
+import { GLOBAL_BLOCK_DOMAIN, blockDomainOptions, blockDomainSelectValue } from './domain-options';
 import { MetricDetailPanel } from '../panels/MetricDetailPanel';
 import { SemanticSearchBar } from '../panels/SemanticSearchBar';
 import { SemanticTreeNode as TreeRow } from '../panels/SemanticTreeNode';
@@ -107,6 +107,7 @@ import {
   setBlockQuery,
   setBlockTags,
   setDqlSectionBody,
+  startsWithBlockDeclaration,
   upsertVisualBlockParameter,
   upsertSemanticSelection,
   upsertVisualizationConfig,
@@ -1640,6 +1641,9 @@ export function BlockStudio() {
             />
           )}
           <div style={{ flex: 1 }} />
+          {/* Run, Save draft and Certify stay in view at any width (B10): the
+              toolbar scrolls sideways under them, never them off-screen. */}
+          <div data-block-toolbar-actions="" style={{ position: 'sticky', right: 0, zIndex: 2, flexShrink: 0, display: 'flex', alignItems: 'center', gap: 10, alignSelf: 'stretch', paddingLeft: 10, background: t.cellBg, boxShadow: `-8px 0 8px -8px ${t.headerBorder}` }}>
           {/* The block overview has its own Run and Delete; the toolbar shows them only while editing. */}
           <BlockToolbarActions
             readOnly={readOnlyBlocks}
@@ -1667,6 +1671,7 @@ export function BlockStudio() {
               {saveError}
             </span>
           )}
+          </div>
         </div>
         {recoveryError && recoveryScope === 'save' && (
           <div role="alert" style={{ flexShrink: 0, display: 'flex', alignItems: 'flex-start', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--status-error)', background: 'var(--status-error-bg)', color: t.textPrimary, fontFamily: t.font }}>
@@ -2154,6 +2159,7 @@ export function BlockStudio() {
       {saveIdentityOpen && state.blockStudioMetadata && (
         <BlockIdentityDialog
           metadata={state.blockStudioMetadata}
+          action={pendingIdentityActionRef.current === 'certify' ? 'certify' : 'save'}
           onCancel={() => {
             pendingIdentityActionRef.current = null;
             setSaveIdentityOpen(false);
@@ -2448,13 +2454,27 @@ function selectionChipStyle(t: Theme, selected: boolean): React.CSSProperties {
   };
 }
 
+/**
+ * The name-and-owner dialog in plain words (the #158 wording rules): saving
+ * keeps a draft and never certifies; certifying is its own step and says what
+ * it checks.
+ */
+export function blockIdentityDialogCopy(action: 'save' | 'certify'): { title: string; body: string } {
+  return action === 'certify'
+    ? { title: 'Name this block', body: 'Every block needs a name and an owner (the person or team to ask about it). Then ZLens checks that it runs and its tests pass, and certifies it with your name and today\'s date.' }
+    : { title: 'Name this block', body: 'Every block needs a name and an owner (the person or team to ask about it). Saving keeps it as a draft; certifying it is a separate step.' };
+}
+
 function BlockIdentityDialog({
   metadata,
+  action = 'save',
   onCancel,
   onConfirm,
   t,
 }: {
   metadata: BlockStudioOpenPayload['metadata'];
+  /** What happens after the name and owner are set: Save draft or Certify. */
+  action?: 'save' | 'certify';
   onCancel: () => void;
   onConfirm: (identity: { name: string; owner: string }) => void;
   t: Theme;
@@ -2466,8 +2486,8 @@ function BlockIdentityDialog({
     <div role="dialog" aria-modal="true" aria-label="Save block" style={{ position: 'absolute', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.32)', padding: 18 }}>
       <div style={{ width: 420, maxWidth: '100%', display: 'grid', gap: 14, padding: 18, borderRadius: 10, border: `1px solid ${t.headerBorder}`, background: t.cellBg, boxShadow: '0 24px 70px rgba(0,0,0,.35)' }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 850, color: t.textPrimary }}>Save governed block</div>
-          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: t.textMuted }}>Name and owner are required. ZLens will run the local governance checks and certify the block when they pass; otherwise it remains a draft with blockers.</div>
+          <div style={{ fontSize: 15, fontWeight: 850, color: t.textPrimary }}>{blockIdentityDialogCopy(action).title}</div>
+          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: t.textMuted }}>{blockIdentityDialogCopy(action).body}</div>
         </div>
         <FieldLabel label="Block name" t={t}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} style={importInputStyle(t)} /></FieldLabel>
         <FieldLabel label="Owner" t={t}><input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="analytics@company.com or team name" style={importInputStyle(t)} /></FieldLabel>
@@ -3619,8 +3639,8 @@ function CompactBlockIdentity({
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
         <FieldLabel label="Block name" t={t}><input value={metadata?.name ?? ''} onChange={(event) => onTextChange('name', event.target.value)} style={{ ...input, fontFamily: t.fontMono }} /></FieldLabel>
         <FieldLabel label="Domain" t={t}>
-          <select aria-label="Block domain" value={metadata?.domain ?? ''} onChange={(event) => onTextChange('domain', event.target.value)} style={input}>
-            <option value="">Select domain…</option>
+          <select aria-label="Block domain" value={blockDomainSelectValue(metadata?.domain)} onChange={(event) => onTextChange('domain', event.target.value || GLOBAL_BLOCK_DOMAIN)} style={input}>
+            <option value="">Global / cross-domain</option>
             {options.map((domain) => (
               <option key={domain.value} value={domain.value} disabled={domain.disabled}>
                 {domain.label}
@@ -3885,6 +3905,7 @@ function SqlBlockVisualBuilder({
       />
       <PanelBox title="Query" hint="Write raw SQL — it compiles into a governed DQL script." t={t}>
         <textarea
+          aria-label="Block SQL"
           rows={7}
           value={sqlDraft}
           onChange={(event) => editSql(event.target.value)}
@@ -6733,7 +6754,7 @@ function appendSnippetToDraft(source: string, snippet: string): string {
   if (queryMatch) {
     return source.replace(queryMatch[0], `query = """${queryMatch[1].trimEnd()}\n${snippet}\n"""`);
   }
-  if (/^\s*block\s+"/i.test(source.trim())) {
+  if (startsWithBlockDeclaration(source)) {
     return source.replace(/\n\}\s*$/, `\n\n  query = """\n${snippet}\n  """\n}\n`);
   }
   return `${source.trimEnd()}\n${snippet}\n`;
@@ -6750,12 +6771,8 @@ function applyGeneratedSqlToBlockDraft(source: string, sql: string): string {
     return source.replace(queryMatch[0], `query = """\n${clean}\n  """`);
   }
 
-  if (/^\s*block\s+"/i.test(sourceText)) {
-    const queryBlock = `\n  query = """\n${clean}\n  """\n`;
-    if (/\}\s*$/.test(source)) {
-      return source.replace(/\}\s*$/, `${queryBlock}}\n`);
-    }
-    return `${source.trimEnd()}${queryBlock}`;
+  if (startsWithBlockDeclaration(sourceText)) {
+    return setBlockQuery(source, clean);
   }
 
   return clean;

@@ -106,4 +106,22 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('Start from a database table</button>');
     expect(markup).toContain('>Allow data that needs review</button>');
   });
+  it('marks tables setup drafted or Modeling models, lists them first, and links drafts to Modeling (D7)', () => {
+    const modeledTables = [
+      { id: 'dev.payments', name: 'payments', schema: 'dev', relation: 'dev.payments', columnCount: 4 },
+      { id: 'dev.orders', name: 'orders', schema: 'dev', relation: 'dev.orders', columnCount: 9, modeled: { state: 'drafted', entity: 'Orders', domain: 'dev', key: 'order_id', proposalId: 'ctxprop_1' } },
+      { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7, modeled: { state: 'modeled', entity: 'Customers', domain: 'dev', key: 'customer_id' } },
+    ] as unknown as WarehouseTableSummary[];
+    const markup = render({ initialItems: [], initialTables: modeledTables, initialKind: 'tables' });
+    expect(markup).toContain('Table · Modeled · dev · 7 columns');
+    expect(markup).toContain('Table · Drafted — review to use · dev · 9 columns');
+    expect(markup).toContain('Drafted in setup with its row key (order_id) and joins.');
+    expect(markup).toContain('>Review in Modeling</button>');
+    expect(markup).toContain('Table · Not checked yet · dev · 4 columns');
+    // Modeled first, then drafted, then the rest; each still goes through Check and add.
+    const order = ['>customers<', '>orders<', '>payments<'].map((name) => markup.indexOf(name));
+    expect(order[0]).toBeLessThan(order[1]!);
+    expect(order[1]).toBeLessThan(order[2]!);
+    expect(markup).toContain('aria-label="Check orders and add it as a Dataset"');
+  });
 });
