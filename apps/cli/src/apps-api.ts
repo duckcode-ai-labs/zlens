@@ -8,7 +8,8 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
 import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { hostActor } from './host/request-context.js';
+import { hostActor, hostActorDisplayName } from './host/request-context.js';
+import { blockCertificationByline, gitUserName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -507,6 +508,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         ok: true,
         features: { datasets: ctx.datasetsEnabled !== false },
         ...page,
+        items: withCertificationBylines(projectRoot, page.items),
       });
     } catch (err) {
       const error = err as Error & { code?: string };
@@ -540,7 +542,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         body.sourceIds ?? [],
         body.includeReviewRequired === true ? 'include_review_required' : current.sourcePolicy,
       );
-      sendJson(res, 200, { ok: true, ...result });
+      sendJson(res, 200, { ok: true, ...result, items: withCertificationBylines(projectRoot, result.items) });
     } catch (err) {
       const error = err as Error & { code?: string };
       sendJson(res, 400, { ok: false, code: error.code, error: error.message });
@@ -2046,6 +2048,11 @@ type AppListEntry = {
   audience?: string;
   lifecycle: NonNullable<AppDocument['lifecycle']>;
   certification: 'certified' | 'uncertified';
+  /** Who published the App as certified, and when (D5). */
+  certifiedBy?: string;
+  certifiedAt?: string;
+  /** When the App's document or pages last changed. */
+  updatedAt?: string;
   status?: 'ready' | 'empty' | 'review';
   storage: 'shared' | 'mine' | 'template';
   visibility: NonNullable<AppDocument['visibility']>;
@@ -2064,6 +2071,42 @@ type AppListEntry = {
   homepage?: AppDocument['homepage'];
 };
 
+/**
+ * Catalog items with who certified each certified block and when (D5), read
+ * from its receipt, so the Data list says "Certified by <name> · <date>".
+ */
+function withCertificationBylines<Item extends { trust?: string; kind?: string; sourcePath?: string }>(
+  projectRoot: string,
+  items: Item[],
+): Array<Item & { certification?: CertificationByline }> {
+  return items.map((item) => {
+    if (item.trust !== 'certified' || item.kind === 'semantic' || !item.sourcePath) return item;
+    const certification = blockCertificationByline(projectRoot, item.sourcePath);
+    return certification ? { ...item, certification } : item;
+  });
+}
+
+/**
+ * The name recorded when an App is published as certified: the host's
+ * signed-in person, else git `user.name`, else the publishing owner.
+ */
+function appCertifierName(projectRoot: string, owner: string): string {
+  return (hostActor() ? hostActorDisplayName() ?? hostActor() : gitUserName(projectRoot)) ?? owner;
+}
+
+/** When an App's files last changed: its document and its pages. */
+function appUpdatedAt(appDir: string, dashboardPaths: string[]): string | undefined {
+  let latest = 0;
+  for (const path of [join(appDir, 'dql.app.json'), ...dashboardPaths]) {
+    try {
+      latest = Math.max(latest, statSync(path).mtimeMs);
+    } catch {
+      // A file that vanished mid-listing just doesn't count.
+    }
+  }
+  return latest > 0 ? new Date(latest).toISOString() : undefined;
+}
+
 function collectAppsList(projectRoot: string): AppListEntry[] {
   const out: AppListEntry[] = [];
   for (const p of findAppDocuments(projectRoot)) {
@@ -2071,10 +2114,12 @@ function collectAppsList(projectRoot: string): AppListEntry[] {
     if (!document) continue;
     const appDir = p.slice(0, -'/dql.app.json'.length);
     const dashboards: Array<{ id: string; title: string }> = [];
-    for (const d of findDashboardsForApp(appDir)) {
+    const dashboardPaths = findDashboardsForApp(appDir);
+    for (const d of dashboardPaths) {
       const { document: dd } = loadDashboardDocument(d);
       if (dd) dashboards.push({ id: dd.id, title: dd.metadata.title });
     }
+    const updatedAt = appUpdatedAt(appDir, dashboardPaths);
     out.push({
       id: document.id,
       name: document.name,
@@ -2092,6 +2137,9 @@ function collectAppsList(projectRoot: string): AppListEntry[] {
       audience: document.audience ?? audienceFromTags(document.tags ?? []),
       lifecycle: document.lifecycle ?? 'draft',
       certification: document.lifecycle === 'certified' ? 'certified' : 'uncertified',
+      ...(document.certifiedBy ? { certifiedBy: document.certifiedBy } : {}),
+      ...(document.certifiedAt ? { certifiedAt: document.certifiedAt } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
       status: document.lifecycle === 'review' ? 'review' : dashboards.length > 0 ? 'ready' : 'empty',
       storage: document.visibility === 'private' ? 'mine' : document.visibility === 'template' ? 'template' : 'shared',
       visibility: document.visibility ?? 'shared',
@@ -5668,11 +5716,16 @@ export function promoteAppForStakeholders(
     };
   }
   const lifecycle = input.lifecycle === 'certified' || input.lifecycle === 'deprecated' ? input.lifecycle : 'review';
+  const { certifiedBy: _priorCertifiedBy, certifiedAt: _priorCertifiedAt, ...withoutCertifier } = loaded.app;
   const app: AppDocument = {
-    ...loaded.app,
+    ...withoutCertifier,
     visibility: 'shared',
     publicationIntent: 'shared_project',
     lifecycle,
+    // Certifying records who did it and when; any other lifecycle drops the record.
+    ...(lifecycle === 'certified'
+      ? { certifiedBy: appCertifierName(projectRoot, hostActor() ?? loaded.app.owners[0] ?? 'local'), certifiedAt: new Date().toISOString() }
+      : {}),
   };
   const appPath = join(loaded.appDir, 'dql.app.json');
   const parsedApp = parseAppDocument(JSON.stringify(app), appPath);
@@ -8478,6 +8531,8 @@ function appBuildSourceFingerprint(draft: AppBuildDraft): string {
 const DRAFT_OWNED_APP_FIELDS = new Set([
   'version', 'id', 'name', 'description', 'visibility', 'publicationIntent', 'ownerDomain',
   'usesDomains', 'requiredExports', 'domain', 'audience', 'lifecycle', 'homepage',
+  // Recorded on every publish as certified, and dropped when it is not.
+  'certifiedBy', 'certifiedAt',
 ]);
 
 function mergeRepublishedAppDocument(appDir: string, generated: AppDocument): AppDocument {
@@ -8544,6 +8599,8 @@ export function publishStoredAppBuildDraft(
     domain,
     audience: draft.frame.audience,
     lifecycle,
+    // Who published it as certified, and when: the card says "App certified by <name> · <date>".
+    ...(lifecycle === 'certified' ? { certifiedBy: appCertifierName(projectRoot, owner), certifiedAt: new Date().toISOString() } : {}),
     owners: [owner],
     members: [{ userId: owner, displayName: owner, roles: ['owner', 'analyst'] }],
     roles: [

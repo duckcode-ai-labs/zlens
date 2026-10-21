@@ -234,6 +234,11 @@ export interface AppSummary {
   audience?: string;
   lifecycle?: 'draft' | 'review' | 'certified' | 'deprecated';
   certification?: 'certified' | 'uncertified';
+  /** Who published the App as certified, and when (D5). */
+  certifiedBy?: string;
+  certifiedAt?: string;
+  /** When the App's document or pages last changed. */
+  updatedAt?: string;
   status?: 'ready' | 'empty' | 'review';
   storage?: 'shared' | 'mine' | 'template';
   visibility?: 'shared' | 'private' | 'template';
@@ -1147,6 +1152,8 @@ export interface BlockStudioMetadata {
    */
   certification?: {
     certifiedBy: string;
+    /** The certifier's display name, when one was recorded. */
+    certifiedByName?: string;
     certifiedAt: string;
     via: string;
     rules: 'oss' | 'enterprise';

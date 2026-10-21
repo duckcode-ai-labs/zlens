@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { FileText, ShieldCheck, X } from 'lucide-react';
-import { api, type SavedQueryDatasetDraft, type SavedQueryDatasetResult } from '../../../api/client';
+import { api, type CertificationByline, type SavedQueryDatasetDraft, type SavedQueryDatasetResult } from '../../../api/client';
+import { CertifiedReceiptNote } from './CertifiedReceiptNote';
 import { DatasetNumbersCheck, initialNumberChoices, type NumberChoice } from './TableDatasetDialog';
 import { humanize, messageOf } from './studio-ui';
 
@@ -32,7 +33,7 @@ export function savedQueryFieldsOutcome(result: SavedQueryDatasetResult, name: s
 }
 
 export type SavedQueryFieldsSubmission =
-  | { kind: 'added'; status: 'certified' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[] }
+  | { kind: 'added'; status: 'certified' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[]; certification?: CertificationByline }
   | { kind: 'refused'; message: string; blockers: string[] }
   | { kind: 'error'; message: string };
 
@@ -57,7 +58,7 @@ export async function submitSavedQueryFields(client: SavedQueryFieldsApi, input:
   const outcome = savedQueryFieldsOutcome(result, input.name);
   if (outcome.kind === 'refused') return { kind: 'refused', message: outcome.message, blockers: result.blockers ?? [] };
   if (outcome.kind === 'error') return { kind: 'error', message: outcome.message };
-  return { kind: 'added', status: result.status ?? 'review', sourceId: result.sourceId ?? input.sourceId, message: outcome.message, blockers: result.blockers ?? [] };
+  return { kind: 'added', status: result.status ?? 'review', sourceId: result.sourceId ?? input.sourceId, message: outcome.message, blockers: result.blockers ?? [], ...(result.certification ? { certification: result.certification } : {}) };
 }
 
 /**
@@ -95,7 +96,7 @@ export function SavedQueryFieldsDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string[] | null>(null);
-  const [done, setDone] = useState<{ status: 'certified' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[] } | null>(null);
+  const [done, setDone] = useState<{ status: 'certified' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[]; certification?: CertificationByline } | null>(null);
 
   useEffect(() => {
     if (initialDraft) return undefined;
@@ -133,7 +134,7 @@ export function SavedQueryFieldsDialog({
         return;
       }
       setRefusal(null);
-      setDone({ status: submission.status, sourceId: submission.sourceId, message: submission.message, blockers: submission.blockers });
+      setDone({ status: submission.status, sourceId: submission.sourceId, message: submission.message, blockers: submission.blockers, ...(submission.certification ? { certification: submission.certification } : {}) });
     }).catch((cause) => {
       setSaving(false);
       setError(messageOf(cause));
@@ -166,7 +167,9 @@ export function SavedQueryFieldsDialog({
                 <small>Its row-level Measures and Dimensions are in the Data pane.{done.blockers.length ? ` Why it needs review: ${done.blockers.join(' ')}` : ''}</small>
               </div>
             </div>
-          ) : proposal ? (
+          ) : null}
+          {done?.status === 'certified' && done.certification ? <CertifiedReceiptNote certification={done.certification} /> : null}
+          {!done && proposal ? (
             <>
               {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its certification checks right away: if they pass, it is certified again.</p> : null}
               <DatasetNumbersCheck proposal={proposal} rows={draft?.rows ?? 0} choices={choices} onChoice={setChoice} groupByKey noKeyMessage={`No column in ${label} is filled and different on every row, so ZLens cannot count its rows safely. Add an id column to the saved query first.`} />

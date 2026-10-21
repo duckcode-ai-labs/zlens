@@ -188,7 +188,7 @@ test('a filter that does not apply to a tile still publishes, and readers see "N
   await page.getByRole('button', { name: 'Create filter' }).click();
   // Studio shows the stored choice on the tile itself.
   await expect(page.getByText('Not filtered by Customer Name').first()).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText(/Preview settled/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
 
   // Picking a customer in the editor re-runs only the linked Dataset tile, at
   // once and without Run; the unlinked Saved query tile is never re-run or blanked.
@@ -262,7 +262,7 @@ test('a start-only date range means "from" that day, in the editor and for reade
   await expect(page.getByText(/No date values/)).toHaveCount(0);
   await page.getByRole('button', { name: 'Create filter' }).click();
   await expect(page.getByLabel('Ordered At start')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText(/Preview settled/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
 
   // Only a start date: the control says "From 3 Jan 2024" and the linked tile
   // keeps 3 and 4 January; the unlinked tile is untouched.

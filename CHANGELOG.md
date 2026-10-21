@@ -59,6 +59,38 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   short tile. The click-to-filter hint under a chart shows on hover or while a
   click-filter is active, not all the time.
 
+- **"Certified by <name> · <date>" everywhere.** "Certified" now always says
+  who and when: on tiles and their receipts, the Data list and Add data rows,
+  the App header (**All data certified by Kranthi · 21 Oct**), the Apps card
+  (**App certified by Kranthi · 21 Oct**), block pages, and the result of
+  **Certify and use this data** and **Make row-level**. Certifying records the
+  person's display name (the host's signed-in person, else git `user.name`)
+  beside the identity and time it already recorded, and publishing an App as
+  certified records who and when in `dql.app.json` (`certifiedBy`,
+  `certifiedAt`). Data certified before this shows **Certified · date** or
+  **Certified**. Receipts list the **Checks passed** in plain words: what one
+  row is (the row key), how each number is shown (money stored as cents is
+  shown in dollars), and the Certify checklist (ran without errors, tests
+  passed). Enterprise steward rules are unchanged.
+- **Plain words; technical details on request.** App Studio and the reader say
+  **All tiles up to date** (not "Preview settled · 3/3 ready"),
+  **Unpublished changes (only you can see them)** (not "Safe local edit draft"
+  or "LOCAL DRAFT · Not in Project source · Revision N"), **Page style:
+  Dashboard**, **Summarise / Show rows**, **12 rows**, and
+  **Clicking a bar filters other Customers tiles** instead of "Keep only
+  reaches tiles on this Dataset". Ids, hashes, run and snapshot ids, raw trust
+  states and fingerprints in tile receipts, the evidence appendix, block
+  receipts and the Dataset definition dialog sit under a **Technical details**
+  toggle that starts closed. Table headers show column types as icons with
+  **Number**, **Text** and **Date** tooltips.
+- **The auto-written Summary is off by default.** Reader pages, new and
+  existing, show the Summary (formerly "Business Story") only when the
+  page's author added it with **Summary** under **Page elements**
+  (`metadata.summary` on the page). Preview now shows exactly what readers
+  see: the Ask box, the trust line, the Summary when added, then the tiles.
+- **Apps cards show Pages and Updated.** "Books", zero "analysis" and
+  "local insights" counts and "Shared Project" are gone; counts appear only
+  when they are above zero.
 - **Everything you add has fields.** A saved query's result columns are now
   fields on the same shelves as any other data, with no review step: numbers
   are Measures, text and true/false columns are Dimensions, dates are Time

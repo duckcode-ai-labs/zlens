@@ -31,7 +31,8 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 7. Click **Generate editable App** (AI), **Suggest from keywords** (no AI
    provider) or **Open blank Studio** (manual).
 
-The App is a private local draft; the header says **Saved locally**. Both ways
+The App is a private draft; the header says **Unpublished changes (only you
+can see them)**. Both ways
 open on the Data step first: with **Start manually** it is **Data for this
 App**; with AI it shows the data AI picked (see below).
 
@@ -142,7 +143,8 @@ certified data** or **Also allow data that needs review**; **Change** switches
 it.
 
 Each row shows where it comes from (**Table**, **Saved query** or **Metrics**),
-its trust (**Certified** or **Needs review**), its domain and owner. Click a
+its trust (**Certified by** *name* **·** *date*, or **Needs review**), its
+domain and owner. Click a
 row to see its **Measures**, **Dimensions** and **Time**; **Show 10 sample
 rows** reads a few of its rows.
 
@@ -151,7 +153,12 @@ rows** reads a few of its rows.
   while the App allows only certified data.
 - On a table that is **Not checked yet**, click **Check and add**, check the
   numbers, and click **Certify and use this data**. The new Dataset is added
-  to the App.
+  to the App, and the list says who certified it and when, for example
+  **Orders · Certified by Kranthi · 21 Oct**, with the **Checks passed**: what
+  one row is (the row key), how each number is shown (money stored as cents is
+  shown in dollars), and its tests. You are recorded as the person who
+  certified it: the signed-in person with a host, otherwise your git
+  `user.name`.
 - On a saved query, **⋯ → Make row-level** is only needed for row-safe
   measures (see [Make a saved query row-level](#make-a-saved-query-row-level)).
 
@@ -223,12 +230,16 @@ for review.* If its checks pass it is certified again right away. If they
 fail, nothing changes until you click **Send for review and make row-level**.
 
 The tile shows its rows. Its **Tile settings** panel shows **Data & trust**,
-for example **Certified** and the data it uses.
+for example **Certified by Kranthi · 21 Oct**, the checks that passed, the
+data it uses, and how many rows it shows (**12 rows**).
 
 Other ways to add content:
 
 - **Add tile** on the page, or **Draft with AI** on an empty page.
 - **Heading** and **Text** under **Page elements**.
+- **Summary** under **Page elements** adds a short auto-written summary of the
+  page's numbers above the tiles. Pages have no Summary unless you add it;
+  **Remove Summary** takes it off again.
 - **Ask AI** in the top bar to change the page with AI.
 
 An AI proposal on the canvas opens **Review the tiles**. When it uses data the
@@ -263,7 +274,7 @@ comes from, for example *Orders · Table* and *Orders · Metrics*.
 
 ## 4. Arrange pages
 
-- **Readers see this page as**: **Dashboard**, **Report** or **Custom layout**.
+- **Page style**: **Dashboard**, **Report** or **Custom layout**.
 - Add a page with **+** next to the page tabs, or **New page** on the
   **Pages** tab.
 - Use **Undo** and **Redo** freely.
@@ -357,8 +368,20 @@ the pill's tooltip says why. Text tiles never show filter pills.
 
 ## 6. Preview
 
-- **Preview** shows the page exactly as readers will see it. **Edit** goes back.
-- **Run** runs every tile on the page.
+- **Preview** shows the page exactly as readers will see it: the **Ask about**
+  box, the trust line, the **Summary** if you added one, and the tiles.
+  Questions typed in Preview are not sent. **Edit** goes back.
+- **Run** runs every tile on the page. When every tile has run, the header says
+  **All tiles up to date**.
+
+Under **Filters, sort and more**, **Show** is **Summarise** (add up rows into
+a KPI, chart or table) or **Show rows** (pick columns and how many rows; it
+needs a column that is unique on every row).
+
+On a chart, a hint says what clicking does, for example **Clicking a bar
+filters other Customers tiles**, with a button to link more tiles. Table
+headers show each column's type as an icon; hover it for **Number**, **Text**
+or **Date**.
 
 ## 7. Publish
 

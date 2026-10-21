@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { certifiedByLabel, plainCertificationChecks } from '@zlens/core/apps/reader-trust';
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
 import { renderSemanticBlockSource } from '@zlens/core/blocks';
@@ -3067,12 +3068,23 @@ export const BLOCK_TESTS_HINT = 'Optional. Certify runs them: a declared test mu
 /** Why a certified block shows Recertify: its source changed after the receipt was written. */
 export const CERTIFIED_SOURCE_CHANGED_LINE = 'Edited after it was certified: this source no longer matches its certification receipt, so Ask treats the block as needing recertification. Open it in the builder and Re-certify.';
 
-/** One line saying who certified this block, when, and how — or that no receipt exists. */
+/** One line saying who certified this block and when (D5) — or that no receipt exists. */
 export function certificationReceiptLine(receipt: BlockStudioMetadata['certification'] | undefined): string {
   if (!receipt) return 'Certified · no certification receipt on file (certified before receipts were recorded, or edited by hand).';
+  return certifiedByLabel({ by: receipt.certifiedBy, name: receipt.certifiedByName, at: receipt.certifiedAt });
+}
+
+/** The receipt's ids and exact record, kept under Technical details (D6). */
+export function certificationReceiptTechnical(receipt: NonNullable<BlockStudioMetadata['certification']>): string {
   const when = Number.isNaN(Date.parse(receipt.certifiedAt)) ? receipt.certifiedAt : new Date(receipt.certifiedAt).toLocaleString();
   const via = CERTIFICATION_SURFACE_LABELS[receipt.via] ?? receipt.via;
-  return `Certified by ${receipt.certifiedBy} · ${when} · via ${via} · ${receipt.rules === 'enterprise' ? 'enterprise' : 'OSS'} rules`;
+  return [
+    `Recorded as ${receipt.certifiedBy}`,
+    when,
+    `via ${via}`,
+    `${receipt.rules === 'enterprise' ? 'enterprise' : 'OSS'} rules`,
+    receipt.sourceSha256 ? `source sha256 ${receipt.sourceSha256.slice(0, 12)}…` : '',
+  ].filter(Boolean).join(' · ');
 }
 
 export function BlockDetailView({
@@ -3155,6 +3167,15 @@ export function BlockDetailView({
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
                 {certificationReceiptLine(metadata?.certification)}
+                {metadata?.certification && plainCertificationChecks(metadata.certification.checks).length ? (
+                  <div data-testid="block-certification-checks">Checks passed: {plainCertificationChecks(metadata.certification.checks).join(' · ')}</div>
+                ) : null}
+                {metadata?.certification ? (
+                  <details className="dql-technical-details">
+                    <summary style={{ cursor: 'pointer' }}>Technical details</summary>
+                    <span>{certificationReceiptTechnical(metadata.certification)}</span>
+                  </details>
+                ) : null}
               </div>
             ) : null}
             {certified && metadata?.certificationSourceChanged ? (

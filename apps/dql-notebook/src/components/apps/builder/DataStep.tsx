@@ -1,4 +1,5 @@
 import { ArrowLeft, ArrowRight, Database, FileText, Plus, ShieldCheck, Sparkles, X } from 'lucide-react';
+import { certifiedByLabel } from '../reader-trust';
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
 import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './AddDataBrowser';
 import { humanize } from './studio-ui';
@@ -103,7 +104,7 @@ export function DataStep({
             const sourceId = item.sourceId ?? item.id;
             return <li key={sourceId}>
               <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-              <p><strong title={item.name}>{humanize(item.name)}</strong><small>{[sourceOriginLabel(item), trustLabel(certified ? 'certified' : 'review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : ''].filter(Boolean).join(' · ')}</small></p>
+              <p><strong title={item.name}>{humanize(item.name)}</strong><small>{[sourceOriginLabel(item), certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : ''].filter(Boolean).join(' · ')}</small></p>
               <RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={browser.disabled} onRemove={() => browser.onRemove(sourceId)} />
             </li>;
           })}

@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { certifiedByLabel } from '../reader-trust';
 import { CalendarDays, Check, ChevronDown, Database, FileText, Hash, MoreHorizontal, Plus, Search, ShieldCheck, Table2, X } from 'lucide-react';
 import {
   api,
   type AppBlockRecommendation,
   type AppSourceCandidatePage,
   type AppStudioBuildDraft,
+  type CertificationByline,
   type WarehouseTableSummary,
 } from '../../../api/client';
+import { CertifiedReceiptNote } from './CertifiedReceiptNote';
 import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { groupDatasetFields } from './field-query';
 import { humanize, messageOf } from './studio-ui';
@@ -114,6 +117,8 @@ export function AddDataBrowser({
   const [tables, setTables] = useState<WarehouseTableSummary[] | null>(initialTables ?? null);
   const [tablesError, setTablesError] = useState<string | null>(null);
   const [checkingTable, setCheckingTable] = useState<WarehouseTableSummary | null>(null);
+  // "Certify and use this data" says who certified it and which checks passed (D5).
+  const [certifiedNotice, setCertifiedNotice] = useState<{ name: string; certification: CertificationByline } | null>(null);
   const [rowLevelFor, setRowLevelFor] = useState<AppBlockRecommendation | null>(null);
   /** Saved queries whose result columns are being read, or could not be. */
   const [fieldReads, setFieldReads] = useState<Record<string, { state: 'reading' } | { state: 'failed'; error: string }>>({});
@@ -217,8 +222,9 @@ export function AddDataBrowser({
     }).catch((cause) => setFieldReads((current) => ({ ...current, [sourceId]: { state: 'failed', error: messageOf(cause) } })));
   };
 
-  const tableCreated = async (sourceId: string | undefined) => {
+  const tableCreated = async (sourceId: string | undefined, name?: string, certification?: CertificationByline) => {
     setCheckingTable(null);
+    setCertifiedNotice(certification ? { name: name ?? '', certification } : null);
     setQuery('');
     setReloadNonce((current) => current + 1);
     if (!sourceId) return;
@@ -258,6 +264,7 @@ export function AddDataBrowser({
         <button type="button" aria-pressed={domain === ''} className={domain === '' ? 'on' : ''} onClick={() => setDomain('')}>All domains</button>
         {chips.map((chip) => <button key={chip.value} type="button" aria-pressed={domain === chip.value} className={domain === chip.value ? 'on' : ''} onClick={() => setDomain(chip.value)}>{chip.label}</button>)}
       </div>
+      {certifiedNotice ? <CertifiedReceiptNote name={certifiedNotice.name} certification={certifiedNotice.certification} /> : null}
       <p className="add-data-rule"><ShieldCheck size={13} aria-hidden="true" /><span>Data rule: <strong>{sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allow data that needs review'}</strong></span><button type="button" className="link" disabled={disabled} onClick={() => onChangePolicy(sourcePolicy === 'governed_only' ? 'include_review_required' : 'governed_only')}>Change</button></p>
     </div>
 
@@ -314,7 +321,7 @@ export function AddDataBrowser({
       initialTable={checkingTable}
       {...(domain || appDomain ? { domain: domain || appDomain } : {})}
       onClose={() => setCheckingTable(null)}
-      onCreated={(sourceId) => void tableCreated(sourceId)}
+      onCreated={(sourceId, name, certification) => void tableCreated(sourceId, name, certification)}
     /> : null}
     {rowLevelFor ? <SavedQueryFieldsDialog
       sourceId={rowLevelFor.sourceId ?? rowLevelFor.id}
@@ -364,7 +371,7 @@ function AddDataRow({
   const certified = !needsReview(item);
   const origin = sourceOriginLabel(item);
   const [menuOpen, setMenuOpen] = useState(false);
-  const meta = [origin, trustLabel(certified ? 'certified' : 'review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.owner ?? ''].filter(Boolean).join(' · ');
+  const meta = [origin, certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.owner ?? ''].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>

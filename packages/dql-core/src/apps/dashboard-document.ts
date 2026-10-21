@@ -497,6 +497,11 @@ export interface DashboardDocument {
     reviewCadence?: string;
     businessRules?: string[];
     caveats?: string[];
+    /**
+     * The author added the auto-written Summary to this page (D6). Off unless
+     * set: readers never get the Summary on a page whose author did not add it.
+     */
+    summary?: boolean;
   };
   params?: DashboardParam[];
   filters?: DashboardFilter[];
@@ -887,6 +892,7 @@ function readMetadata(raw: unknown, err: (m: string) => void): DashboardDocument
     reviewCadence: typeof o.reviewCadence === 'string' ? o.reviewCadence : undefined,
     businessRules: stringArrayOrUndefined(o.businessRules, 'metadata.businessRules', err),
     caveats: stringArrayOrUndefined(o.caveats, 'metadata.caveats', err),
+    ...(o.summary === true ? { summary: true } : {}),
   };
 }
 

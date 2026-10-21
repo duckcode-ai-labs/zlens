@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { AlertTriangle, Ban, Landmark, ShieldCheck, X } from 'lucide-react';
-import type { ReaderTrust, ReaderTrustState, ReceiptRow } from './reader-trust';
+import { splitTechnicalRows, type ReaderTrust, type ReaderTrustState, type ReceiptRow } from './reader-trust';
 
 const ICONS: Record<ReaderTrustState, typeof ShieldCheck> = {
   certified: ShieldCheck,
@@ -14,9 +14,43 @@ export function TrustStateIcon({ state, size = 12 }: { state: ReaderTrustState; 
   return <Icon size={size} strokeWidth={2.2} aria-hidden="true" />;
 }
 
+/** Receipt rows as a definition list. */
+function ReceiptRows({ rows }: { rows: ReceiptRow[] }): JSX.Element {
+  return (
+    <dl>
+      {rows.map((row) => (
+        <div key={row.label}>
+          <dt>{row.label}</dt>
+          <dd className={row.code ? 'code' : undefined}>{row.list ? <ul className="dql-receipt-list">{row.list.map((entry) => <li key={entry}>{entry}</li>)}</ul> : row.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+/**
+ * Plain rows first; ids, hashes, file paths and fingerprints under a
+ * **Technical details** toggle that starts collapsed (D6).
+ */
+export function ReceiptBody({ rows }: { rows: ReceiptRow[] }): JSX.Element {
+  const { plain, technical } = splitTechnicalRows(rows);
+  return (
+    <>
+      <ReceiptRows rows={plain} />
+      {technical.length ? (
+        <details className="dql-technical-details">
+          <summary>Technical details</summary>
+          <ReceiptRows rows={technical} />
+        </details>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * The trust label on a reader tile. It is a button: it opens the tile's
- * receipt, the evidence behind its numbers.
+ * receipt, the evidence behind its numbers. A certified tile says who
+ * certified it and when: "Certified by Kranthi · 21 Oct" (D5).
  */
 export function ReaderTrustBadge({
   trust,
@@ -56,28 +90,22 @@ export function ReaderTrustBadge({
         className={`dql-trust-badge ${trust.state}`}
         aria-expanded={open}
         aria-controls={open ? popoverId : undefined}
-        title={`${trust.label}: ${trust.detail} Click for the receipt.`}
+        title={`${trust.byline ?? trust.label}: ${trust.detail}${freshness ? ` ${freshness}.` : ''} Click for the receipt.`}
         onClick={() => onOpenChange(!open)}
       >
         <TrustStateIcon state={trust.state} size={11} />
-        <span>{trust.label}</span>
-        {freshness ? <span className="dql-trust-age">· {freshness}</span> : null}
+        <span>{trust.byline ?? trust.label}</span>
+        {/* Who and when already date a certified tile; its freshness is in the receipt and the tooltip. */}
+        {freshness && !(trust.byline && trust.byline !== trust.label) ? <span className="dql-trust-age">· {freshness}</span> : null}
       </button>
       {open ? (
         <div id={popoverId} className="dql-receipt" role="dialog" aria-label="Receipt for this tile">
           <header>
-            <span className={`dql-receipt-state ${trust.state}`}><TrustStateIcon state={trust.state} size={13} /> {trust.label}</span>
+            <span className={`dql-receipt-state ${trust.state}`}><TrustStateIcon state={trust.state} size={13} /> {trust.byline ?? trust.label}</span>
             <button type="button" className="dql-receipt-close" aria-label="Close receipt" onClick={() => onOpenChange(false)}><X size={13} /></button>
           </header>
           <p>{trust.detail}</p>
-          <dl>
-            {receipt.map((row) => (
-              <div key={row.label}>
-                <dt>{row.label}</dt>
-                <dd className={row.code ? 'code' : undefined}>{row.value}</dd>
-              </div>
-            ))}
-          </dl>
+          <ReceiptBody rows={receipt.filter((row) => row.label !== 'Certified')} />
           {onShowEvidence ? (
             <button type="button" className="dql-receipt-more" onClick={() => { onOpenChange(false); onShowEvidence(); }}>
               Show the query and SQL

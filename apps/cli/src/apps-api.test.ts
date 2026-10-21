@@ -3989,6 +3989,28 @@ describe('Apps command center API helpers', () => {
     expect(promotedDashboard.metadata.lifecycle).toBe('review');
   });
 
+  it('records who certified an App and when, drops it on any other lifecycle, and lists it with the last update (D5, D6)', () => {
+    const root = createProject();
+    const app = createAppPackage(root, { name: 'Certified App', domain: 'revenue', owners: ['owner@local'], tags: [], selectedBlockIds: [] });
+    expect(app.ok).toBe(true);
+    const appPath = join(root, 'apps/certified-app/dql.app.json');
+
+    const certified = promoteAppForStakeholders(root, 'certified-app', { lifecycle: 'certified' });
+    expect(certified.ok).toBe(true);
+    const written = JSON.parse(readFileSync(appPath, 'utf-8'));
+    expect(written).toMatchObject({ lifecycle: 'certified', certifiedBy: expect.any(String), certifiedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
+    expect(written.certifiedBy.trim()).not.toBe('');
+    const listed = __test__.collectAppsList(root).find((entry) => entry.id === 'certified-app')!;
+    expect(listed).toMatchObject({ certification: 'certified', certifiedBy: written.certifiedBy, certifiedAt: written.certifiedAt, updatedAt: expect.stringMatching(/^\d{4}-/) });
+
+    const reviewed = promoteAppForStakeholders(root, 'certified-app', { lifecycle: 'review' });
+    expect(reviewed.ok).toBe(true);
+    const after = JSON.parse(readFileSync(appPath, 'utf-8'));
+    expect(after.lifecycle).toBe('review');
+    expect(after.certifiedBy).toBeUndefined();
+    expect(after.certifiedAt).toBeUndefined();
+  });
+
   it('blocks shared publication while an app contains exploratory draft analysis', () => {
     const root = createProject();
     const app = createAppPackage(root, {

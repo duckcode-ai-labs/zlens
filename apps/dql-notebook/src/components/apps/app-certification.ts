@@ -1,5 +1,5 @@
 import type { DashboardDocumentResponse, DashboardRunResponse } from '../../api/client';
-import { appTrustSummary, type AppTrustState, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
+import { appTrustSummary, certifiedByLabel, type AppTrustState, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
 
 type DashboardLayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
 type RunTile = DashboardRunResponse['tiles'][number];
@@ -11,6 +11,17 @@ export interface AppCertificationRollup {
   state: AppTrustState;
   /** The header badge text. */
   label: string;
+  /** Who certified the page's certified tiles and when: "Certified by Kranthi · 21 Oct" (D5). */
+  byline?: string;
+}
+
+/**
+ * "All data certified" with who and when (D5): "All data certified by
+ * Kranthi · 21 Oct", or "All data certified · 21 Oct" with no person recorded.
+ */
+export function allDataCertifiedLabel(byline: string | undefined): string {
+  if (!byline || byline === 'Certified') return 'All data certified';
+  return `All data ${byline.charAt(0).toLowerCase()}${byline.slice(1)}`;
 }
 
 /**
@@ -41,7 +52,10 @@ export function appCertificationRollup(
     total: summary.total,
     allCertified: summary.allCertified,
     state: summary.state,
-    label: summary.state === 'certified' || summary.total === 0 || summary.state === 'pending'
+    ...(summary.byline ? { byline: summary.byline } : {}),
+    label: summary.state === 'certified'
+      ? allDataCertifiedLabel(summary.byline)
+      : summary.total === 0 || summary.state === 'pending'
       ? summary.label
       : draftCount > 0 && summary.certified === summary.total
         ? `${summary.text} · ${draftCount} draft pending`
@@ -54,8 +68,17 @@ export function appCertificationRollup(
  * certified), worded so it cannot be read as data trust, which is shown per
  * tile inside the App.
  */
-export function appLifecycleLabel(lifecycle: string | undefined, certified: boolean, draftCount: number): string {
-  if (certified) return 'App certified';
+export function appLifecycleLabel(
+  lifecycle: string | undefined,
+  certified: boolean,
+  draftCount: number,
+  certifier?: { by?: string; at?: string },
+): string {
+  if (certified) {
+    // "App certified by Kranthi · 21 Oct" when ZLens recorded who and when (D5).
+    const byline = certifier && (certifier.by || certifier.at) ? certifiedByLabel({ name: certifier.by, at: certifier.at }) : '';
+    return byline && byline !== 'Certified' ? `App ${byline.charAt(0).toLowerCase()}${byline.slice(1)}` : 'App certified';
+  }
   const stage = lifecycle === 'review' ? 'App in review' : lifecycle === 'deprecated' ? 'App deprecated' : 'App draft';
   return draftCount > 0 ? `${stage} · ${draftCount} change${draftCount === 1 ? '' : 's'} pending` : stage;
 }
@@ -77,6 +100,9 @@ export function appCardSeal(input: {
   certification: string | undefined;
   draftCount: number;
   runTrust?: AppRunTrust | null;
+  /** Who published the App as certified, and when. */
+  certifiedBy?: string;
+  certifiedAt?: string;
 }): { certified: boolean; label: string } {
   const lifecycleCertified = input.certification === 'certified' || input.lifecycle === 'certified';
   const run = input.runTrust;
@@ -85,7 +111,7 @@ export function appCardSeal(input: {
   }
   return {
     certified: lifecycleCertified,
-    label: appLifecycleLabel(input.lifecycle, lifecycleCertified, input.draftCount),
+    label: appLifecycleLabel(input.lifecycle, lifecycleCertified, input.draftCount, { by: input.certifiedBy, at: input.certifiedAt }),
   };
 }
 

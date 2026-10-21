@@ -85,6 +85,7 @@ export {
   proposeTableDataset,
   renderTableDatasetBlock,
   tableColumnKind,
+  tableDatasetCheckSentences,
   tableDatasetDeclaration,
   tableProfileColumns,
   wordsFor,

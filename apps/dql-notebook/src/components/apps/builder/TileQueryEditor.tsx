@@ -228,9 +228,9 @@ export function TileQueryEditor({
 
   const filterFieldEntry = fields.filterable.find((field) => field.name === filterField);
   return <div className="tile-query-editor">
-    <fieldset className="dataset-builder-mode"><legend>Build mode</legend>
-      <label><input type="radio" name={`${idPrefix}-mode`} checked={!detail} disabled={disabled} onChange={() => changeMode('metrics')} /><span><strong>Measures and grouping</strong><small>Aggregate live rows into a KPI, chart, or table.</small></span></label>
-      <label title={detailSupported ? undefined : 'This Dataset has no validated grain key for row details.'}><input type="radio" name={`${idPrefix}-mode`} checked={detail} disabled={disabled || !detailSupported} onChange={() => changeMode('detail')} /><span><strong>Bounded row details</strong><small>{detailSupported ? 'Choose source columns and a row limit.' : 'Not available: this Dataset has no validated grain key.'}</small></span></label>
+    <fieldset className="dataset-builder-mode"><legend>Show</legend>
+      <label><input type="radio" name={`${idPrefix}-mode`} checked={!detail} disabled={disabled} onChange={() => changeMode('metrics')} /><span><strong>Summarise</strong><small>Add up rows into a KPI, chart or table.</small></span></label>
+      <label title={detailSupported ? undefined : 'Needs a column that is filled and different on every row.'}><input type="radio" name={`${idPrefix}-mode`} checked={detail} disabled={disabled || !detailSupported} onChange={() => changeMode('detail')} /><span><strong>Show rows</strong><small>{detailSupported ? 'Pick columns and how many rows to show.' : 'Needs a column that is filled and different on every row.'}</small></span></label>
     </fieldset>
 
     {!detail ? <>

@@ -97,7 +97,7 @@ test('a bar by customer is sorted by spend and shows the top 25; Top 10 comes fr
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${server!.baseUrl}/?appDraft=${draftId}`);
-  await expect(page.getByText(/Preview settled/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
 
   // Build a bar by customer from field clicks.
   const fields = page.locator('.data-panel .field-groups');

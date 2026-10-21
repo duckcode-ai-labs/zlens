@@ -201,10 +201,13 @@ describe('Studio Dataset source authoring (APP-055)', () => {
       />,
     );
 
-    expect(markup).toContain('Native grain proposal');
+    expect(markup).toContain('What is one row?');
     expect(markup).toContain('Author Dataset definition');
-    expect(markup).toContain('proof.customer-day');
-    expect(markup).toContain('Physical field roles');
+    // Ids and proof references sit under a collapsed Technical details toggle (D6).
+    expect(markup).toMatch(/<details class="dql-technical-details"><summary>Technical details<\/summary>[\s\S]*proof\.customer-day[\s\S]*<\/details>/);
+    expect(markup).not.toMatch(/<details[^>]*open/);
+    expect(markup).not.toContain('Native grain proposal');
+    expect(markup).toContain('Column types');
     expect(markup).toContain('Dataset native time bucket');
     expect(markup).toContain('order_date role');
     expect(markup).toContain('Gross margin');

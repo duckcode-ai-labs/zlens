@@ -230,6 +230,7 @@ import {
   checkTileCalculations,
   renderTableDatasetBlock,
   tableDatasetDeclaration,
+  tableDatasetCheckSentences,
   resolveBlockReplacement,
   groupingIdentityGapOfSql,
   detectResultOrdering,
@@ -265,8 +266,11 @@ import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { blockTestAssertionName, evaluateBlockTestAssertion } from './block-test-assertions.js';
 import {
   applyCompanionCertification,
+  blockCertificationByline,
   blockSourceStatus,
   buildCertificationReceipt,
+  certificationByline,
+  gitUserName,
   buildDeprecationRecord,
   demoteCertifiedSource,
   passedCheckNames,
@@ -833,7 +837,7 @@ import {
 import { prepareBlockInvocation } from './block-invocation.js';
 import { readPrivateConnections, redactConnections, resolveSecretReferences, storeConnectionSecrets } from './connection-secrets.js';
 import { connectionEnvironmentReferences } from './connection-env.js';
-import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPrincipal, currentRequestContext, destinationForRequest, hostActor, hostAllowedSources, hostFiguresDependOnReader, hostGitAuthor, anyHostedServer, hostModelProvider, HOST_IDENTITY_UNAVAILABLE, installHostPersonaSlots, processHostHooks, registerServerHooks, resolveHostPrincipal, resolveHostPrincipalOutcome, resultValuesMayReachModel, safeAppNotFound, safeHomeCards, safeHostBanner, safeNextLink, scopedHostHooks, setHostGitHooks, setHostModelHooks, setProcessToolHooks, currentToolHooks, unregisterServerHooks, withRequestContext, withServerScope, type DqlServerScope, type DqlFollow, type DqlHostHooks, type DqlRunStoreLike } from './host/request-context.js';
+import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPrincipal, currentRequestContext, destinationForRequest, hostActor, hostActorDisplayName, hostAllowedSources, hostFiguresDependOnReader, hostGitAuthor, anyHostedServer, hostModelProvider, HOST_IDENTITY_UNAVAILABLE, installHostPersonaSlots, processHostHooks, registerServerHooks, resolveHostPrincipal, resolveHostPrincipalOutcome, resultValuesMayReachModel, safeAppNotFound, safeHomeCards, safeHostBanner, safeNextLink, scopedHostHooks, setHostGitHooks, setHostModelHooks, setProcessToolHooks, currentToolHooks, unregisterServerHooks, withRequestContext, withServerScope, type DqlServerScope, type DqlFollow, type DqlHostHooks, type DqlRunStoreLike } from './host/request-context.js';
 import { isRunPass, issueRunPass, redeemRunPass, revokeRunPass } from './host/schedule-runs.js';
 import { setDeliverySink } from './schedule/notifiers/index.js';
 import { routeAction, type DqlAction } from './host/route-actions.js';
@@ -13033,12 +13037,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     via: CertificationSurface;
     enterprise: boolean;
     verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>>;
+    /** Plain-word checks this surface ran beyond the Certify checklist (row key, number formats). */
+    extraChecks?: string[];
   }): CertificationReceipt => buildCertificationReceipt({
     source: input.source,
     certifiedBy: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false })) ?? parseBlockSourceMetadata(input.source).owner,
+    // The name "Certified by" shows: the host's display name, else git user.name.
+    certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
     via: input.via,
     enterprise: input.enterprise,
-    checks: passedCheckNames(input.verdict.checklist),
+    checks: [...(input.extraChecks ?? []), ...passedCheckNames(input.verdict.checklist)],
     warnings: input.verdict.certification.warnings.map((warning) => `${warning.rule}: ${warning.message}`),
   });
 
@@ -20323,6 +20331,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // against the complete table before any tile trusts it.
         let status: 'certified' | 'draft' = 'draft';
         let blockers: string[] = [];
+        let receipt: CertificationReceipt | null = null;
         try {
           const saved = readFileSync(join(projectRoot, created.path), 'utf-8');
           // With a host, the host decides whether every enterprise gate applies (as for Block Studio).
@@ -20330,7 +20339,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const verdict = await certifyBlockStudioSource(saved, created.path, { enterprise });
           blockers = Array.from(new Set(verdict.checklist.blockers));
           if (verdict.certification.certified && blockers.length === 0) {
-            setBlockStudioStatus(projectRoot, created.path, 'certified', explicitCertificationReceipt({ source: saved, via: 'app-dataset', enterprise, verdict }));
+            receipt = explicitCertificationReceipt({ source: saved, via: 'app-dataset', enterprise, verdict, extraChecks: tableDatasetCheckSentences(proposal, drafted.rows) });
+            setBlockStudioStatus(projectRoot, created.path, 'certified', receipt);
             status = 'certified';
           }
         } catch (error) {
@@ -20348,7 +20358,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // The first tile run checks it again; a failed check keeps the Dataset in review.
           }
         }
-        reply(201, { ok: true, path: created.path, status, blockers, keyChecked, ...(found ? { sourceId: found.sourceId } : {}) });
+        reply(201, {
+          ok: true,
+          path: created.path,
+          status,
+          blockers,
+          keyChecked,
+          ...(found ? { sourceId: found.sourceId } : {}),
+          // Who certified it and the checks that passed, for "Certified by <name> · <date>".
+          ...(receipt ? { certification: certificationByline(receipt) } : {}),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         reply(error instanceof TableDatasetError ? 409 : message === 'BLOCK_EXISTS' ? 409 : 400, {
@@ -20534,8 +20553,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         writeFileSync(absolute, after, 'utf-8');
         let status: 'certified' | 'review' | 'draft' = pendingStatus;
+        let receipt: CertificationReceipt | null = null;
         if (passed && verdict) {
-          setBlockStudioStatus(projectRoot, blockPath, 'certified', explicitCertificationReceipt({ source: after, via: 'app-dataset', enterprise, verdict }));
+          receipt = explicitCertificationReceipt({ source: after, via: 'app-dataset', enterprise, verdict, extraChecks: tableDatasetCheckSentences(proposal, drafted.rows) });
+          setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
           status = 'certified';
         } else {
           // Drops a certification receipt the companion file may still hold.
@@ -20553,7 +20574,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // The first tile run checks it again; a failed check keeps the Dataset out of tiles.
           }
         }
-        reply(200, { ok: true, path: blockPath, previousStatus, status, blockers, keyChecked, sourceId: found?.sourceId ?? source.sourceId });
+        reply(200, { ok: true, path: blockPath, previousStatus, status, blockers, keyChecked, sourceId: found?.sourceId ?? source.sourceId, ...(receipt ? { certification: certificationByline(receipt) } : {}) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const code = error instanceof TableDatasetError || error instanceof DatasetDeclarationPatchError ? error.code : undefined;
@@ -23154,6 +23175,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           // population, so a top 5 with no rank column is never summed.
           const ordering = block ? blockResultOrdering(block, typeof tile.title === 'string' ? tile.title : undefined) : undefined;
           if (ordering) tile.ordering = ordering;
+        }
+        // Who certified each certified tile's source, and when (D5): every
+        // surface shows "Certified by <name> · <date>" from the receipt the
+        // explicit Certify action wrote. Old certifications carry `{}`.
+        for (const tile of tiles) {
+          if (tile.status !== 'ok') continue;
+          const datasetSourceId = typeof tile.dataset?.sourceId === 'string' ? tile.dataset.sourceId : undefined;
+          const certifiedPath = tile.dataset
+            ? (tile.dataset.trust === 'certified' && datasetSourceId ? datasetSourceById.get(datasetSourceId)?.sourcePath : undefined)
+            : tile.certificationStatus === 'certified' && typeof tile.blockPath === 'string' ? tile.blockPath : undefined;
+          if (!certifiedPath) continue;
+          const certification = blockCertificationByline(projectRoot, certifiedPath);
+          if (certification) tile.certification = certification;
         }
         tiles.sort((left, right) => (tileOrder.get(left.tileId) ?? 0) - (tileOrder.get(right.tileId) ?? 0));
         localApps.current?.close();

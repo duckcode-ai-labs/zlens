@@ -125,6 +125,15 @@ export interface AppDocument extends ProductDomainContext {
    */
   audienceGroups?: string[];
   lifecycle?: AppLifecycle;
+  /**
+   * Who published the App as certified, and when (D5): the display name of
+   * the person (the host's signed-in person, else the git user), recorded
+   * whenever the lifecycle becomes `certified` through ZLens. Absent on Apps
+   * certified before this was recorded.
+   */
+  certifiedBy?: string;
+  /** ISO-8601 time the App became certified. */
+  certifiedAt?: string;
   owners: string[];
   tags?: string[];
   notebooks?: AppNotebookRef[];
@@ -301,6 +310,8 @@ function validateAppDocument(raw: unknown, path: string): AppDocumentLoadResult 
   const audience = optionalString(obj, 'audience', err);
   const audienceGroups = obj.audienceGroups === undefined ? undefined : stringArray(obj, 'audienceGroups', err).map((group) => group.trim()).filter(Boolean);
   const lifecycle = enumField(obj, 'lifecycle', ['draft', 'review', 'certified', 'deprecated'] as const, err, 'draft');
+  const certifiedBy = optionalString(obj, 'certifiedBy', err)?.trim() || undefined;
+  const certifiedAt = optionalString(obj, 'certifiedAt', err)?.trim() || undefined;
   if (obj.usesDomains !== undefined) stringArray(obj, 'usesDomains', err);
   if (obj.requiredExports !== undefined) stringArray(obj, 'requiredExports', err);
   const productContext = normalizeProductDomainContext(obj, domain);
@@ -354,6 +365,8 @@ function validateAppDocument(raw: unknown, path: string): AppDocumentLoadResult 
     audience,
     ...(audienceGroups && audienceGroups.length ? { audienceGroups: [...new Set(audienceGroups)] } : {}),
     lifecycle,
+    ...(lifecycle === 'certified' && certifiedBy ? { certifiedBy } : {}),
+    ...(lifecycle === 'certified' && certifiedAt ? { certifiedAt } : {}),
     owners,
     tags,
     notebooks: notebooks.length > 0 ? notebooks : undefined,

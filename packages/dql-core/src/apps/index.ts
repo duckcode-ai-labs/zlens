@@ -250,8 +250,8 @@ export {
   insertCanvasNodes, moveCanvasNode, parseCanvasHtml, rebindCanvasValue, removeCanvasNode, replaceCanvasNode, serializeCanvasNodes,
 } from './canvas-page.js';
 export type { CanvasIssue, CanvasNode, CanvasPath, CanvasPieceKind, CheckedCanvas } from './canvas-page.js';
-export { READER_TRUST_LABELS, appTrustSummary, isDataTileForTrust, readerTileTrust, readerTrustCounts, readerTrustSummary } from './reader-trust.js';
-export type { AppTrustState, AppTrustSummary, ReaderTrust, ReaderTrustItem, ReaderTrustState, ReaderTrustTile } from './reader-trust.js';
+export { READER_TRUST_LABELS, appTrustSummary, certifiedByAcross, certifiedByLabel, certifiedDateLabel, certifierDisplayName, isDataTileForTrust, plainCertificationChecks, readerTileTrust, readerTrustCounts, readerTrustSummary } from './reader-trust.js';
+export type { AppTrustState, AppTrustSummary, CertificationByline, ReaderTrust, ReaderTrustItem, ReaderTrustState, ReaderTrustTile } from './reader-trust.js';
 export { evaluateMonitors, readAppMonitors, MAX_MONITORS_PER_SCHEDULE } from './monitors.js';
 export type { AppMonitor, AppMonitorCondition, MonitorEvaluation, MonitorPreviousValue, MonitorStatus } from './monitors.js';
 export { diffDashboardPages, diffAppDeliveries, renderLayoutDiffSvg, NUMBER_ASPECTS } from './app-diff.js';

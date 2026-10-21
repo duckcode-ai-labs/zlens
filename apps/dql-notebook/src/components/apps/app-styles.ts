@@ -4729,6 +4729,10 @@ export const APP_STYLES = `
 .dql-receipt dt { color: var(--dql-app-muted); }
 .dql-receipt dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .dql-receipt dd.code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; user-select: all; }
+.dql-receipt-list { margin: 0; padding-left: 14px; display: grid; gap: 2px; }
+.dql-technical-details { margin-top: 10px; }
+.dql-technical-details > summary { cursor: pointer; color: var(--dql-app-muted, var(--text-secondary)); font-size: 12px; font-weight: 600; }
+.dql-technical-details[open] > summary { margin-bottom: 6px; }
 .dql-receipt-more { margin-top: 10px; height: 28px; padding: 0 10px; border: 1px solid var(--dql-app-line-2); border-radius: 8px; background: var(--dql-app-surface); color: var(--dql-app-accent); font: 600 12px var(--font-ui); cursor: pointer; }
 .dql-receipt-more:hover { background: var(--dql-app-accent-soft); }
 .dql-trust-lens-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--dql-app-muted); font: 400 12px var(--font-ui); font-variant-numeric: tabular-nums; }

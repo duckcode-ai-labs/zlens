@@ -51,7 +51,11 @@ import { DriverView } from './DriverView';
 import { StoryView } from './StoryView';
 import { StoryEditor } from './builder/StoryEditor';
 import { CanvasEditor } from './builder/CanvasEditor';
-import { PageFormatPicker } from './builder/PageFormatPicker';
+import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
+import { ReaderPreviewParts } from './ReaderPreviewParts';
+import { certifiedByLabel, plainCertificationChecks } from './reader-trust';
+import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
+import { SAVED_UNPUBLISHED, UNPUBLISHED_CHANGES, previewSettledWords, rowCountWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -545,7 +549,7 @@ export function AppStudioV2({
   const [redoStack, setRedoStack] = useState<AppStudioBuildDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savedMessage, setSavedMessage] = useState('Local draft');
+  const [savedMessage, setSavedMessage] = useState<string>(UNPUBLISHED_CHANGES);
   const [previewRunsByPage, setPreviewRunsByPage] = useState<Record<string, DashboardRunResponse>>({});
   const [previewing, setPreviewing] = useState(false);
   const [savingDatasetTileId, setSavingDatasetTileId] = useState<string | null>(null);
@@ -674,7 +678,7 @@ export function AppStudioV2({
         setDraft(selected);
         setName(selected.name);
         setActivePageId(selected.pages[0]?.id ?? 'overview');
-        setSavedMessage('Resumed local draft');
+        setSavedMessage(UNPUBLISHED_CHANGES);
         // An AI draft with no pages built yet (one Ask or an MCP client made,
         // or a "Describe with AI" draft left early) opens at the AI Data step.
         const aiResume = appStudioAiDataResume(selected);
@@ -701,7 +705,7 @@ export function AppStudioV2({
       setDraft(resolved);
       setName(resolved.name);
       setActivePageId(resolved.pages[0]?.id ?? 'overview');
-      setSavedMessage('Safe local edit draft');
+      setSavedMessage(UNPUBLISHED_CHANGES);
     }).catch((cause) => {
       if (active && (baseAppId || initialDraftId)) setError(messageOf(cause));
     }).finally(() => {
@@ -918,7 +922,7 @@ export function AppStudioV2({
       setActivePageId(result.draft.pages[0]?.id ?? 'overview');
       setStage(initialStudioStage({ mode, resumingDraft: false, editingPublishedApp: Boolean(baseAppId) }));
       setAiDataFlow(mode === 'ai' && !baseAppId);
-      setSavedMessage('Saved locally');
+      setSavedMessage(SAVED_UNPUBLISHED);
       setPreviewRunsByPage({});
       setPreviewVariablesByPage({});
       setFilterOptionsByPage({});
@@ -1180,7 +1184,7 @@ export function AppStudioV2({
         setUndoStack((items) => [...items.slice(-29), previous]);
         setRedoStack([]);
       }
-      setSavedMessage('Saved locally');
+      setSavedMessage(SAVED_UNPUBLISHED);
       return result.draft;
     } catch (cause) {
       setSavedMessage('Save failed');
@@ -1279,7 +1283,7 @@ export function AppStudioV2({
       setPreviewHierarchyDrillsByPage({});
       setFilterOptionsByPage({});
       setSavedDatasetReviewDrafts({});
-      setSavedMessage(`Replaced with review draft after equivalence proof ${result.equivalenceProofFingerprint.slice(0, 18)}…`);
+      setSavedMessage('Replaced with the review draft · its results match');
     } catch (cause) {
       setError(messageOf(cause));
       setSavedMessage('Dataset tile was not replaced');
@@ -1352,7 +1356,7 @@ export function AppStudioV2({
       setFilterOptionsByPage({});
       setSavedDatasetReviewDrafts({});
       setSemanticTileConversionPreviews({});
-      setSavedMessage(`Converted to a Dataset query after equivalence proof ${result.equivalenceProofFingerprint.slice(0, 18)}…`);
+      setSavedMessage('Converted to a Dataset query · its results match');
     } catch (cause) {
       setError(messageOf(cause));
       setSavedMessage('Dataset conversion was not applied');
@@ -2563,7 +2567,7 @@ export function AppStudioV2({
       if (sequence !== previewSequenceRef.current) return null;
       setDraft(recorded.draft);
       setPublishIssues([]);
-      setSavedMessage(`Preview settled · ${settlement.readyCount}/${settlement.totalCount} ready`);
+      setSavedMessage(previewSettledWords(settlement.readyCount, settlement.totalCount));
       return recorded.draft;
     } catch (cause) {
       if (sequence === previewSequenceRef.current) setError(messageOf(cause));
@@ -3111,12 +3115,20 @@ export function AppStudioV2({
     : previewRun.partial || previewRun.incomplete
       ? 'Run the whole page first: the last run covered only some tiles.'
       : null;
+  // The auto-written Summary is something the author adds (D6); readers get it only then.
+  const summaryAdded = pageShowsSummary(activePage?.metadata);
+  const toggleSummary = async (on: boolean) => {
+    if (!activePage) return;
+    const { summary: _summary, ...metadata } = activePage.metadata;
+    const next = await mutate([{ type: 'upsert_page', page: { ...activePage, metadata: on ? { ...metadata, summary: true } : metadata } }]);
+    if (next) setSavedMessage(on ? SUMMARY_OPTION.added : SUMMARY_OPTION.removed);
+  };
   const setPresentation = async (presentation: 'dashboard' | 'story' | 'canvas') => {
     if (!activePage) return;
     const current = activePage.narrative;
     if ((current?.presentation ?? 'dashboard') === presentation) return;
     const next = await mutate([{ type: 'set_narrative', pageId: activePage.id, narrative: { ...(current ?? { version: 1, blocks: [] }), version: 1, presentation } }]);
-    if (next) setSavedMessage(`Readers now see this page as ${presentation === 'dashboard' ? 'a dashboard' : presentation === 'story' ? 'a report' : 'a custom layout'}`);
+    if (next) setSavedMessage(`Page style: ${pageFormatLabel(presentation)}`);
   };
   const draftStory = async (instruction: string) => {
     if (!draft || !activePage || !previewRun || storyDraftBlocked) return;
@@ -3447,7 +3459,7 @@ export function AppStudioV2({
                     .map((notice) => <div key={notice.key} className="tile-filter-notice" role="note" title={`${notice.label}. ${notice.detail}`}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>) : null}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
                   {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the Dataset query and the SQL it compiled to.</p>; })()}</div> : null}
-                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={datasetLinkProposal(activePage!, tile)} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
+                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={editing ? datasetLinkProposal(activePage!, tile) : undefined} sourceLabel={draft.sources.find((source) => source.id === tile.sourceId)?.capabilities?.dataset?.label} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
                   {placed && canArrange ? <>
                     <span className="tile-resize-handle e" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-e'); }} />
                     <span className="tile-resize-handle s" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-s'); }} />
@@ -3513,6 +3525,8 @@ export function AppStudioV2({
             onAddData={() => setAddDataOpen(true)}
             onAddSavedQuery={(item, kind) => void addComponent(kind, item)}
             onAddContent={(kind) => void addComponent(kind, null)}
+            summaryAdded={summaryAdded}
+            onToggleSummary={() => void toggleSummary(!summaryAdded)}
             {...(activeDatasetItem && datasetSourceAuthoringModel(activeDatasetItem) ? { onAuthorDataset: openDatasetAuthoring } : {})}
             {...(activeDatasetItem?.sourceId && draft.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === activeDatasetItem.sourceId)) ? { onRefreshBinding: (item: AppBlockRecommendation) => { if (item.sourceId) void refreshDatasetBinding(item.sourceId); } } : {})}
             {...(datasetTilesEnabled ? { onMakeRowLevel: setSavedQueryFields } : {})}
@@ -3534,6 +3548,15 @@ export function AppStudioV2({
             </header>
             {(activePage?.filters ?? []).length ? <div className="studio-page-filterbar">{activePage!.filters!.map((filter) => <StudioFilterControl key={filter.id} filter={filter} availability={activeFilterOptions[filter.id]} searchSource={datasetOptionSource(filter as never, (activePage as { datasets?: never }).datasets)} value={previewVariables[filter.id] ?? filter.default} applying={previewing} onChange={(value) => applyFilterValue(filter, value)} />)}</div> : null}
             {previewCrossFilters.length ? <div className="studio-mark-filterbar" role="status" aria-label="Selected Dataset result marks"><span>Selected marks</span>{previewCrossFilters.map((filter) => <button key={`${filter.fromTileId}:${filter.field}`} type="button" onClick={() => removeDatasetCrossFilter(filter.fromTileId, filter.field)}>{humanize(filter.field)}: {filter.values.map(String).join(', ')} <X size={11} /></button>)}<button type="button" className="clear" onClick={clearDatasetCrossFilters}>Reset marks</button></div> : null}
+            {/* What readers get above the tiles: Preview shows all of it, Edit only the Summary (D6). */}
+            {activePage && !projectedPage && !canvasMode && !storyMode ? <ReaderPreviewParts
+              parts={readerPageParts({ summary: summaryAdded, hasDataTiles: pageHasDataTiles(activePage), mayAsk: true }).filter((part) => editing ? part === 'summary' : true)}
+              appName={name || draft.name}
+              items={activePage.layout.items}
+              run={previewRun}
+              {...(editing ? { onRemoveSummary: () => void toggleSummary(false) } : {})}
+              onAskInPreview={() => setSavedMessage('Readers ask about this page here once it is published. Questions are not sent from Preview.')}
+            /> : null}
             {previewRun?.incomplete ? <div className="studio-preview-incomplete" role="status" aria-label="Incomplete preview">
               <strong>Preview incomplete · {previewRun.tiles.filter((tile) => tile.status === 'ok').length}/{previewRun.tiles.length} tiles ready</strong>
               <span>{previewRun.incomplete.message}</span>
@@ -4210,7 +4233,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     </> : null}
     {dataTile && tab === 'data' ? <>
     {tile.query && dataset && tileEncoding ? <DatasetTileQueryInspector descriptor={dataset} query={tile.query} visualization={tile.viz.type} encoding={tileEncoding} disabled={disabled} onChange={updateDatasetQuery} onShelves={updateShelves} onOpenSources={onOpenSources} result={run?.status === 'ok' ? run.result : undefined} /> : null}
-    <section className="data-trust"><label>Data & trust</label><div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : trustLabel(tile.trustState)}</strong></div>{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Dataset'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Needs review: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? `Settled on ${run.result?.rowCount ?? run.result?.rows.length ?? 0} rows` : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable block</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new block is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
+    <section className="data-trust"><label>Data & trust</label><div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : tile.trustState === 'certified' && run?.certification ? certifiedByLabel(run.certification) : trustLabel(tile.trustState)}</strong></div>{!calculatedTrust && tile.trustState === 'certified' && plainCertificationChecks(run?.certification?.checks).length ? <small>Checks passed: {plainCertificationChecks(run?.certification?.checks).join(' · ')}</small> : null}{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Dataset'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Needs review: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? rowCountWords(run.result?.rowCount ?? run.result?.rows.length ?? 0) : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable block</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new block is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
     {tile.semantic && !tile.query ? <section className="dataset-reusable-block"><strong>Convert to Dataset query</strong><p>Preview an exact field-query mapping for this legacy semantic tile. ZLens runs both paths in one fresh read scope before it can apply the change. The original semantic payload is retained as provenance; this does not certify the source.</p><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onPreviewLegacySemanticConversion}>{previewingLegacySemanticConversion ? 'Proving conversion…' : 'Preview Dataset conversion'}</button>{semanticTileConversionPreview ? <div className="dataset-review-replacement"><small>Mapped source: {semanticTileConversionPreview.candidate.sourceId}</small><small>Mapped query: {semanticTileConversionPreview.candidate.query.measures.map((measure) => measure.measure).join(', ')}{semanticTileConversionPreview.candidate.query.dimensions.length ? ` by ${semanticTileConversionPreview.candidate.query.dimensions.map((dimension) => dimension.field).join(', ')}` : ''}</small><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onAcceptLegacySemanticConversion}>{acceptingLegacySemanticConversion ? 'Rechecking and applying…' : 'Apply Dataset conversion'}</button></div> : <small>Preview first. Unsupported bindings, source drift, or an incomplete comparison stay with the original semantic tile.</small>}</section> : null}
     </> : null}
     {dataTile && tab === 'visual' ? <>
@@ -4426,9 +4449,12 @@ export function StudioTilePreview({
   hasNavigation = false,
   linkProposal,
   onLinkField,
+  sourceLabel,
   chartHeight: placedChartHeight,
   onMark,
 }: {
+  /** The tile's data, in words, for the click-to-filter hint. */
+  sourceLabel?: string;
   /** A clicked mark opens the click menu (RFC 0009 step 6a). */
   onMark?: (row: Record<string, unknown>, at: MarkPointer | undefined, hierarchyCandidates: RuntimeDatasetHierarchyDrillCandidate[]) => void;
   tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number];
@@ -4565,12 +4591,22 @@ export function StudioTilePreview({
         {hierarchy.activeSteps.length > 0 && onDrillBack ? <button type="button" onClick={onDrillBack}>Up one level</button> : null}
       </div> : null}
       {!selectableFields.length && linkProposal && onLinkField ? <div className={`dataset-link-hint ${activeCrossFilters.length ? '' : 'hover-only'}`} role="note">
-        <span>{onMark ? 'Keep only reaches tiles on this Dataset.' : `Clicking this ${chart === 'table' ? 'table' : 'chart'} filters nothing yet.`}</span>
-        <button type="button" onClick={onLinkField} title={`Map ${humanize(linkProposal.fieldLabel)} to: ${linkProposal.targetLabels.join(', ')}`}>{onMark ? 'Also filter' : 'Link'} {humanize(linkProposal.fieldLabel)} {onMark ? 'on' : 'to'} {linkProposal.mappings.length === 1 ? linkProposal.targetLabels[0] : `${linkProposal.mappings.length} Datasets`}</button>
+        <span>{crossFilterHint({ chart, filters: Boolean(onMark), sourceLabel })}</span>
+        <button type="button" onClick={onLinkField} title={`Map ${humanize(linkProposal.fieldLabel)} to: ${linkProposal.targetLabels.join(', ')}`}>{onMark ? 'Also filter' : 'Link to'} {linkProposal.mappings.length === 1 ? linkProposal.targetLabels[0] : `${linkProposal.mappings.length} Datasets`} by {humanize(linkProposal.fieldLabel)}</button>
       </div> : null}
       {hasNavigation ? <button type="button" className="dataset-detail-navigation" onClick={onNavigate}>Open details <ArrowRight size={13} /></button> : null}
     </div>
   );
+}
+
+/**
+ * The click-to-filter hint on a tile (D6): "Clicking a bar filters other
+ * Orders tiles." Replaces "Keep only reaches tiles on this Dataset."
+ */
+export function crossFilterHint(input: { chart: string; filters: boolean; sourceLabel?: string }): string {
+  const mark = input.chart === 'table' || input.chart === 'pivot' ? 'row' : input.chart === 'line' || input.chart === 'area' || input.chart === 'scatter' ? 'point' : input.chart === 'pie' || input.chart === 'donut' ? 'slice' : 'bar';
+  if (!input.filters) return `Clicking this ${input.chart === 'table' ? 'table' : 'chart'} filters nothing yet.`;
+  return `Clicking a ${mark} filters other ${input.sourceLabel ? humanize(input.sourceLabel) : 'tiles on this data'}${input.sourceLabel ? ' tiles' : ''}.`;
 }
 
 function datasetCrossFilterFields(
