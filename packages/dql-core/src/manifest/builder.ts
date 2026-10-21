@@ -3022,6 +3022,8 @@ function blockDeclToManifestBlock(block: any, filePath: string): ManifestBlock {
     reviewCadence: agent.reviewCadence,
     businessRules: agent.businessRules,
     caveats: agent.caveats,
+    synonyms: agent.synonyms,
+    primaryTerms: agent.primaryTerms,
     datalexContract: typeof block.datalexContract === 'string' ? block.datalexContract : undefined,
     draftMetadata: extractDraftMetadata(block),
     outputs: columnLineage?.parsed && columnLineage.columns.length > 0
@@ -3420,6 +3422,8 @@ function extractAgentMetadata(block: any): {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  synonyms?: string[];
+  primaryTerms?: string[];
 } {
   return {
     llmContext: typeof block.llmContext === 'string' ? block.llmContext : undefined,
@@ -3431,6 +3435,8 @@ function extractAgentMetadata(block: any): {
     reviewCadence: typeof block.reviewCadence === 'string' ? block.reviewCadence : undefined,
     businessRules: Array.isArray(block.businessRules) ? block.businessRules : undefined,
     caveats: Array.isArray(block.caveats) ? block.caveats : undefined,
+    synonyms: Array.isArray(block.synonyms) && block.synonyms.length > 0 ? block.synonyms : undefined,
+    primaryTerms: Array.isArray(block.primaryTerms) && block.primaryTerms.length > 0 ? block.primaryTerms : undefined,
   };
 }
 

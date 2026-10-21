@@ -267,9 +267,11 @@ import {
   applyCompanionCertification,
   blockSourceStatus,
   buildCertificationReceipt,
+  buildDeprecationRecord,
   demoteCertifiedSource,
   passedCheckNames,
   readCompanionCertification,
+  readCompanionDeprecation,
   sourceSha256,
   withBlockStatus,
   describesReviewPending,
@@ -25535,7 +25537,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ error: 'Use /api/block-studio/certify so validation, run, and tests gate certification.' }));
           return;
         }
-        setBlockStudioStatus(projectRoot, blockPath, newStatus);
+        setBlockStudioStatus(
+          projectRoot,
+          blockPath,
+          newStatus,
+          undefined,
+          newStatus === 'deprecated'
+            ? hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false }))
+            : undefined,
+        );
         await refreshLocalMetadataCatalog(projectRoot);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ ok: true, status: newStatus }));
@@ -41660,9 +41670,15 @@ async function processDqlGenerationSessionForProject(
       generationMode,
       generationProvider: generatorName,
     });
+    // The draft becomes a semantic block only when the SQL is exactly a metric
+    // query; otherwise it runs the imported SQL, and an output named like a
+    // metric is only noted.
+    const semanticSource = buildSemanticImportCandidateSource(enriched, patch, semanticLayer);
+    const metricNameNotes = semanticSource ? [] : semanticMetricNameNotes(enriched, semanticLayer);
     const validated: BlockStudioImportCandidate = {
       ...enriched,
-      dqlSource: buildSemanticImportCandidateSource(enriched, patch, semanticLayer) ?? enriched.dqlSource,
+      dqlSource: semanticSource ?? enriched.dqlSource,
+      ...(metricNameNotes.length > 0 ? { conversionNotes: [...(enriched.conversionNotes ?? []), ...metricNameNotes] } : {}),
       validation: validateBlockStudioSource(enriched.dqlSource, semanticLayer),
       analysisStatus: 'ready',
     };
@@ -42920,14 +42936,17 @@ function setBlockStudioStatusInSource(source: string, newStatus: string): string
  *
  * Certifying is never a plain status flip: `certified` requires the receipt of
  * an explicit Certify action that ran the certification rules, and that
- * receipt is written beside `reviewStatus: certified`. Any other status drops
+ * receipt is written beside `reviewStatus: certified`. Draft and review drop
  * the receipt, so the YAML never claims a certification the source lost.
+ * Deprecating keeps it as history and records who deprecated the block, and
+ * when, beside it (`reviewStatus: deprecated` tells every reader it no longer holds).
  */
 export function setBlockStudioStatus(
   projectRoot: string,
   blockPath: string,
   newStatus: string,
   certification?: CertificationReceipt,
+  deprecatedBy?: string | null,
 ): void {
   if (newStatus === 'certified' && !certification) {
     throw new Error('Certifying a block requires a certification receipt from an explicit Certify action.');
@@ -42936,7 +42955,8 @@ export function setBlockStudioStatus(
   if (!isBlockStudioBlockPath(normalizedPath)) throw new Error('Invalid block path');
   const absPath = join(projectRoot, normalizedPath);
   if (!existsSync(absPath)) throw new Error('Block file not found');
-  const source = setBlockStudioStatusInSource(readFileSync(absPath, 'utf-8'), newStatus);
+  const previousSource = readFileSync(absPath, 'utf-8');
+  const source = setBlockStudioStatusInSource(previousSource, newStatus);
   writeFileSync(absPath, source, 'utf-8');
 
   const companionPath = blockCompanionRelativePath(projectRoot, normalizedPath);
@@ -42944,10 +42964,15 @@ export function setBlockStudioStatus(
   const absCompanionPath = join(projectRoot, companionPath);
   if (!existsSync(absCompanionPath)) return;
   const status = blockSourceStatus(source);
+  const previousStatus = blockSourceStatus(previousSource);
   const receipt = status === 'certified' && certification
     ? { ...certification, sourceSha256: sourceSha256(source) }
     : null;
-  writeFileSync(absCompanionPath, applyCompanionCertification(readFileSync(absCompanionPath, 'utf-8'), status, receipt), 'utf-8');
+  // Deprecating a block that is already deprecated keeps the first record.
+  const deprecation = status === 'deprecated' && previousStatus !== 'deprecated'
+    ? buildDeprecationRecord({ deprecatedBy, via: 'block-studio', previousStatus })
+    : null;
+  writeFileSync(absCompanionPath, applyCompanionCertification(readFileSync(absCompanionPath, 'utf-8'), status, receipt, deprecation), 'utf-8');
 }
 
 interface DqlGenerationPatch {
@@ -43219,29 +43244,19 @@ function deterministicDqlGenerationPatch(
   };
 }
 
+/**
+ * A semantic block for an imported query that is exactly a metric query, else
+ * null and the draft keeps the imported SQL. See {@link exactSemanticImportMatch}.
+ */
 function buildSemanticImportCandidateSource(
   candidate: BlockStudioImportCandidate,
   patch: DqlGenerationPatch,
   semanticLayer?: SemanticLayer,
 ): string | null {
   if (!semanticLayer || candidate.recommendedAction === 'reuse_existing') return null;
-  const aggregateAliases = Array.from(candidate.sql.matchAll(/\b(?:sum|count|avg|min|max)\s*\([^)]*\)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)/gi))
-    .map((match) => match[1]);
-  if (aggregateAliases.length === 0) return null;
-
-  const metrics = semanticLayer.listMetrics();
-  const matchedMetrics = aggregateAliases.map((alias) => metrics.find((metric) => normalizedTerm(metric.name) === normalizedTerm(alias)));
-  if (matchedMetrics.some((metric) => !metric)) return null;
-  const metricNames = Array.from(new Set(matchedMetrics.map((metric) => metric!.name)));
-  const compatibleDimensions = semanticLayer.listCompatibleDimensions(metricNames);
-  const compatibleByName = new Map(compatibleDimensions.map((dimension) => [normalizedTerm(dimension.name), dimension]));
-  const groupFields = extractDqlGenerationGroupByFields(candidate.sql)
-    .map((field) => field.split('.').pop() ?? field)
-    .filter((field) => !/^\d+$/.test(field));
-  const matchedDimensions = groupFields.map((field) => compatibleByName.get(normalizedTerm(field)));
-  if (groupFields.length > 0 && matchedDimensions.some((dimension) => !dimension)) return null;
-
-  const dimensionNames = Array.from(new Set(matchedDimensions.map((dimension) => dimension!.name)));
+  const match = exactSemanticImportMatch(candidate.sql, semanticLayer);
+  if (!match) return null;
+  const compatibleByName = new Map(semanticLayer.listCompatibleDimensions(match.metrics).map((dimension) => [normalizedTerm(dimension.name), dimension]));
   const allowedFilters = (patch.allowedFilters ?? [])
     .map((filter) => compatibleByName.get(normalizedTerm(filter))?.name)
     .filter((filter): filter is string => Boolean(filter));
@@ -43252,10 +43267,96 @@ function buildSemanticImportCandidateSource(
     description: candidate.description,
     owner: candidate.owner,
     tags: candidate.tags,
-    metrics: metricNames,
-    dimensions: dimensionNames,
+    metrics: match.metrics,
+    dimensions: match.dimensions,
     requestedFilters: allowedFilters,
-    visualization: { chart: dimensionNames.length > 0 ? 'bar' : 'kpi' },
+    visualization: { chart: match.dimensions.length > 0 ? 'bar' : 'kpi' },
+  });
+}
+
+/**
+ * The metrics and dimensions an imported query is exactly, or null. Nothing in
+ * the SQL may be lost: one table, no join, filter, HAVING, ORDER BY, LIMIT,
+ * DISTINCT, CTE, window or subquery; every aggregate output is a metric with
+ * the same aggregate over the same table and no filter of its own; every other
+ * output is a compatible dimension under its own name, and the query groups by
+ * exactly those (positions count). A same-named output is not enough:
+ * `count(*) as order_count` over a join is not the `order_count` metric.
+ */
+export function exactSemanticImportMatch(sql: string, semanticLayer: SemanticLayer): { metrics: string[]; dimensions: string[] } | null {
+  const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').trim().replace(/;\s*$/, '').replace(/\s+/g, ' ');
+  if (!text || text.includes(';')) return null;
+  if (/\b(?:join|where|having|order|limit|qualify|union|intersect|except|distinct|over|top|with)\b/i.test(text) || /\(\s*select\b/i.test(text)) return null;
+  const shape = /^select (.+?) from ([A-Za-z_][\w.]*)(?: (?:as )?(?!group\b)([A-Za-z_]\w*))?(?: group by (.+))?$/i.exec(text);
+  if (!shape) return null;
+  const table = normalizedTerm(shape[2]!.split('.').pop() ?? '');
+  const items = splitDqlGenerationSqlList(shape[1]!).map((item) => item.trim());
+  const sameExpression = (left: string, right: string) => {
+    const clean = (value: string) => value.toLowerCase().replace(/\b[a-z_]\w*\./g, '').replace(/\s+/g, '');
+    return clean(left) === clean(right);
+  };
+  const metricAggregate = (metric: MetricDefinition): string | null => {
+    if (/\(/.test(metric.sql)) return metric.sql;
+    if (metric.type === 'count_distinct') return `COUNT(DISTINCT ${metric.sql})`;
+    return metric.type === 'custom' ? null : `${metric.type}(${metric.sql})`;
+  };
+  const metrics = semanticLayer.listMetrics();
+  const metricNames: string[] = [];
+  const columns: string[] = [];
+  const columnAt = new Map<number, string>();
+  for (const [index, item] of items.entries()) {
+    const aggregate = /^((?:sum|count|avg|min|max) ?\(.*\)) (?:as )?([A-Za-z_]\w*)$/i.exec(item);
+    if (aggregate) {
+      const metric = metrics.find((candidate) => normalizedTerm(candidate.name) === normalizedTerm(aggregate[2]!));
+      const expected = metric ? metricAggregate(metric) : null;
+      if (!metric || !expected || !sameExpression(aggregate[1]!, expected)) return null;
+      if (normalizedTerm(metric.table.split('.').pop() ?? '') !== table) return null;
+      if ((metric.filters && Object.keys(metric.filters).length > 0) || metric.filter) return null;
+      metricNames.push(metric.name);
+      continue;
+    }
+    const column = /^(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)(?: (?:as )?([A-Za-z_]\w*))?$/i.exec(item);
+    if (!column || (column[2] && normalizedTerm(column[2]) !== normalizedTerm(column[1]!))) return null;
+    columns.push(column[1]!);
+    columnAt.set(index + 1, column[1]!);
+  }
+  if (metricNames.length === 0) return null;
+  // GROUP BY 1 names the first selected item, which must be a plain column.
+  const grouped = (shape[4] ? splitDqlGenerationSqlList(shape[4]) : []).map((entry) => {
+    const field = entry.trim();
+    return normalizedTerm(/^\d+$/.test(field) ? columnAt.get(Number(field)) ?? '' : field.split('.').pop() ?? field);
+  });
+  const columnSet = new Set(columns.map(normalizedTerm));
+  if (grouped.length !== columnSet.size || grouped.some((field) => !columnSet.has(field))) return null;
+  const compatible = new Map(semanticLayer.listCompatibleDimensions(Array.from(new Set(metricNames))).map((dimension) => [normalizedTerm(dimension.name), dimension]));
+  const dimensions: string[] = [];
+  for (const name of columns) {
+    const dimension = compatible.get(normalizedTerm(name));
+    if (!dimension) return null;
+    const dimensionSql = (dimension.sql ?? '').trim();
+    if (dimensionSql && /^[A-Za-z_][\w.]*$/.test(dimensionSql) && normalizedTerm(dimensionSql.split('.').pop() ?? '') !== normalizedTerm(name)) return null;
+    dimensions.push(dimension.name);
+  }
+  return { metrics: Array.from(new Set(metricNames)), dimensions: Array.from(new Set(dimensions)) };
+}
+
+/**
+ * Notes for imported outputs that share a semantic metric's name when the
+ * draft keeps the imported SQL; the reviewer decides whether the two should agree.
+ */
+function semanticMetricNameNotes(
+  candidate: BlockStudioImportCandidate,
+  semanticLayer?: SemanticLayer,
+): string[] {
+  if (!semanticLayer || candidate.recommendedAction === 'reuse_existing') return [];
+  const metrics = semanticLayer.listMetrics();
+  const aliases = Array.from(candidate.sql.matchAll(/\b(?:sum|count|avg|min|max)\s*\([^)]*\)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)/gi))
+    .map((match) => match[1]!);
+  return Array.from(new Set(aliases)).flatMap((alias) => {
+    const metric = metrics.find((item) => normalizedTerm(item.name) === normalizedTerm(alias));
+    return metric
+      ? [`${alias} has the same name as the semantic metric ${metric.name}. The draft runs your SQL, not the metric; check that they agree, or use the metric instead.`]
+      : [];
   });
 }
 
@@ -45498,10 +45599,13 @@ function writeBlockCompanionFile(
   // The companion's reviewStatus always mirrors the `.dql` status, so the
   // source and its YAML can never disagree about whether a block is certified.
   const status = blockSourceStatus(options.content);
-  const previousReceipt = status === 'certified' && options.certification === undefined && existsSync(companionPath)
-    ? readCompanionCertification(readFileSync(companionPath, 'utf-8'))
+  const previousCompanion = existsSync(companionPath) ? readFileSync(companionPath, 'utf-8') : null;
+  const previousReceipt = (status === 'certified' && options.certification === undefined) || status === 'deprecated'
+    ? readCompanionCertification(previousCompanion)
     : null;
-  const receipt = status === 'certified' ? (options.certification ?? previousReceipt) : null;
+  // A deprecated block keeps the receipt it was certified with, and its deprecation record.
+  const receipt = status === 'certified' ? (options.certification ?? previousReceipt) : status === 'deprecated' ? previousReceipt : null;
+  const deprecation = status === 'deprecated' ? readCompanionDeprecation(previousCompanion) : null;
   const lines = [
     `name: ${options.slug}`,
     `block: ${options.slug}`,
@@ -45555,7 +45659,7 @@ function writeBlockCompanionFile(
     if (options.importMeta.sourceKind) lines.push(`  sourceKind: ${yamlScalar(options.importMeta.sourceKind)}`);
     if (options.importMeta.sourcePath) lines.push(`  sourcePath: ${yamlScalar(options.importMeta.sourcePath)}`);
   }
-  writeFileSync(companionPath, applyCompanionCertification(lines.join('\n'), status, receipt), 'utf-8');
+  writeFileSync(companionPath, applyCompanionCertification(lines.join('\n'), status, receipt, deprecation), 'utf-8');
   return relative(projectRoot, companionPath).replaceAll('\\', '/');
 }
 

@@ -45,6 +45,37 @@ describe('local metadata catalog', () => {
     rmSync(projectRoot, { recursive: true, force: true });
   });
 
+  it('finds a block by a question alias from its Context panel', async () => {
+    writeFileSync(
+      join(projectRoot, 'blocks', 'assist_leaders.dql'),
+      `block "Assist Leaders" {
+  domain = "nba"
+  type = "custom"
+  status = "certified"
+  owner = "analytics@example.com"
+  description = "Players ranked by assists."
+  synonyms = ["playmakers", "dime leaders"]
+  primaryTerms = ["court vision"]
+  query = """
+    SELECT player_name, SUM(assists) AS total_assists
+    FROM fct_player_performance
+    GROUP BY 1
+  """
+}`,
+      'utf-8',
+    );
+    await ensureMetadataCatalogFresh(projectRoot);
+    const catalog = openMetadataCatalog(projectRoot);
+    try {
+      expect(catalog.searchObjects({ query: 'playmakers', objectTypes: ['dql_block'] }).map((row) => row.objectKey))
+        .toEqual(['dql:block:Assist Leaders']);
+      expect(catalog.searchObjects({ query: 'court vision', objectTypes: ['dql_block'] }).map((row) => row.objectKey))
+        .toEqual(['dql:block:Assist Leaders']);
+    } finally {
+      catalog.close();
+    }
+  });
+
   it('CTX-003 keeps SQL bodies and prior row values out of metadata FTS queries', () => {
     const query = buildFollowUpSearchQuery('what product did they buy?', {
       kind: 'drilldown',

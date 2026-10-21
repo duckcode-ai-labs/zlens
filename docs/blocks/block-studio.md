@@ -64,8 +64,21 @@ The toolbar at the top has:
 Switch between **Visual Builder** and **DQL Source** to edit the block in a
 form or as text. Above the visual builder, the **Query** toggle switches
 between **Semantic picker** (metrics and dimensions) and **Raw SQL**.
-**Context** opens a panel with the block's context; the block's `llmContext`
-is the **Agent guidance** field there.
+**Context** opens a panel with the block's context. Each field is written
+into the block's DQL:
+
+| Field | DQL field | What it holds |
+|---|---|---|
+| **Business outcome** | `businessOutcome` | The decision or outcome the block supports. |
+| **Agent guidance** | `llmContext` | A short note for AI about when to use the block. |
+| **Business terms** | `primaryTerms` | Business words for what the block measures, such as `net revenue`. Free text: they need not name a term declared in the project (`terms` does). |
+| **Source systems** | `sourceSystems` | Where the data comes from, such as `billing`. |
+| **Question aliases** | `synonyms` | Other words people use when they ask for this block, such as `sales, bookings`. |
+| **Rules and caveats** | `caveats` | Known limitations or interpretation rules, one per line. |
+
+Type a value and press Enter or a comma to add it to a list field; click a
+value to remove it. A field the block does not have yet is added with the
+block's other fields, above its query, chart and tests.
 
 The tabs at the bottom are **Results**, **Run inputs**, **Lineage**,
 **History** and **Metadata**. The certification panel is in **Metadata**.
@@ -108,6 +121,9 @@ Ask and your AI agents find blocks by what they say about themselves. In the
 - `outputs`: the columns it returns,
 - `llmContext`: a short note for AI about when to use the block (the
   **Agent guidance** field in the **Context** panel).
+- `synonyms`: other words people use for it (the **Question aliases**
+  field). Ask finds a block by its aliases and business terms as well as by
+  its name and description.
 
 Certification records these as warnings when they are missing.
 

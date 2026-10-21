@@ -338,6 +338,12 @@ function formatBlock(node: BlockDeclNode, level: number, state: FormatState): st
   if (node.caveats && node.caveats.length > 0) {
     lines.push(`${indent(level + 1, state)}caveats = [${node.caveats.map(quote).join(', ')}]`);
   }
+  if (node.synonyms && node.synonyms.length > 0) {
+    lines.push(`${indent(level + 1, state)}synonyms = [${node.synonyms.map(quote).join(', ')}]`);
+  }
+  if (node.primaryTerms && node.primaryTerms.length > 0) {
+    lines.push(`${indent(level + 1, state)}primaryTerms = [${node.primaryTerms.map(quote).join(', ')}]`);
+  }
   if (node.examples && node.examples.length > 0) {
     lines.push(`${indent(level + 1, state)}examples = [${formatBlockExamples(node.examples)}]`);
   }
