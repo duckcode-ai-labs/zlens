@@ -12,6 +12,7 @@ import {
   dateRangeParts,
   isDashboardDateFilterType,
   isDashboardNarrativeTile,
+  isEmptyDashboardDateValue,
   resolveDashboardDateFilter,
   type DashboardDocument,
   type DashboardGridItem,
@@ -46,6 +47,11 @@ function isEmptyFilterValue(value: unknown): boolean {
   if (value === undefined || value === null) return true;
   if (typeof value === 'string' && value.trim() === '') return true;
   return Array.isArray(value) && value.length === 0;
+}
+
+/** A date range with neither end set has no value, like an empty dropdown. */
+function isEmptyPageFilterValue(filter: Pick<DashboardFilter, 'type'>, value: unknown): boolean {
+  return isEmptyFilterValue(value) || (isDashboardDateFilterType(filter.type) && isEmptyDashboardDateValue(value));
 }
 
 function semanticLiteral(value: unknown): string {
@@ -89,7 +95,7 @@ export function dashboardSemanticFiltersForTile(
       continue;
     }
     const value = dashboardValues[filter.id];
-    if (isEmptyFilterValue(value)) {
+    if (isEmptyPageFilterValue(filter, value)) {
       skip('no_value', 'no value supplied');
       continue;
     }
@@ -124,15 +130,16 @@ function semanticConditions(
     const resolved = resolveDashboardDateFilter({ filterId: filter.label ?? filter.id, type: filter.type, value, timezone: filter.timezone, now });
     if (!resolved) return { skip: 'no_value', reason: 'no value supplied' };
     if (resolved.kind === 'error') return { skip: 'invalid_value', reason: resolved.message };
+    // A one-sided range sends only its own side ("from" / "until").
     if (resolved.kind === 'explicit') {
       return { filters: [
-        { dimension, operator: 'gte', values: [semanticLiteral(resolved.start)] },
-        { dimension, operator: 'lte', values: [semanticLiteral(resolved.end)] },
+        ...(resolved.start !== undefined ? [{ dimension, operator: 'gte', values: [semanticLiteral(resolved.start)] }] : []),
+        ...(resolved.end !== undefined ? [{ dimension, operator: 'lte', values: [semanticLiteral(resolved.end)] }] : []),
       ] };
     }
     return { filters: [
-      { dimension, operator: 'gte', values: [resolved.bounds.startDate] },
-      { dimension, operator: 'lt', values: [resolved.bounds.endExclusiveDate] },
+      ...(resolved.bounds.startDate ? [{ dimension, operator: 'gte', values: [resolved.bounds.startDate] }] : []),
+      ...(resolved.bounds.endExclusiveDate ? [{ dimension, operator: 'lt', values: [resolved.bounds.endExclusiveDate] }] : []),
     ] };
   }
   if (filter.type === 'number_range') {
@@ -189,7 +196,7 @@ export function dashboardTileFilterReport(input: {
 }): DashboardTileFilterReport | undefined {
   if (isDashboardNarrativeTile(input.item) || input.tile.status !== 'ok') return undefined;
   const active = (input.dashboard.filters ?? []).filter((filter) => (
-    !(filter.scope?.page && filter.scope.page !== input.dashboard.id) && !isEmptyFilterValue(input.values[filter.id])
+    !(filter.scope?.page && filter.scope.page !== input.dashboard.id) && !isEmptyPageFilterValue(filter, input.values[filter.id])
   ));
   const report: DashboardTileFilterReport = { applied: [], notApplied: [] };
   if (active.length === 0) return report;

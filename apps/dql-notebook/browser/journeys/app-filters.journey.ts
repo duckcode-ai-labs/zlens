@@ -9,9 +9,13 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
  * A filter that does not apply to one tile, against the built `zlens notebook`
  * CLI on the jaffle-supply-chain fixture: a page with a Dataset tile and a
  * Saved query tile → Filters → Customer Name → the Saved query tile set to
- * "Does not apply" → publishing is allowed → a reader who picks a customer
- * sees the Dataset tile narrowed and "Not filtered by Customer Name" on the
- * Saved query tile.
+ * "Does not apply" → picking a customer in the editor re-runs only the linked
+ * tile, at once, without Run → publishing is allowed → a reader who picks a
+ * customer sees the Dataset tile narrowed and "Not filtered by Customer Name"
+ * on the Saved query tile.
+ *
+ * A second App checks a one-sided date range: only a start date means "from"
+ * that day (the control says "From …") and the linked tile narrows.
  *
  * It starts its own server on its own copy of the fixture: the certified
  * Dataset and App it adds would change what the shared server's journeys count.
@@ -21,7 +25,11 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
 let workDir = '';
 let server: NotebookServer | null = null;
 let draftId = '';
+let itemsDraftId = '';
 const shotsDir = process.env.ZLENS_FILTER_SHOTS_DIR;
+
+type RunRequest = { affectedTileIds?: string[]; fullRun?: boolean; refresh?: boolean; variables?: Record<string, unknown> };
+type RunResponse = { tiles: Array<{ tileId: string; status?: string; result?: { rows?: Array<Record<string, unknown>> } }> };
 
 async function call<T>(path: string, body?: unknown): Promise<T> {
   const response = await fetch(`${server!.baseUrl}${path}`, body === undefined
@@ -67,6 +75,34 @@ test.beforeAll(async () => {
       { sourceId: sourceId('top_customers'), view: 'table', title: 'Top customers' },
     ],
   });
+
+  // A second certified Dataset with a timestamp (order_items.ordered_at) and an
+  // App that lists items by day next to the same Saved query tile.
+  const itemsTable = listing.tables.find((candidate) => candidate.name === 'order_items')!;
+  const itemsDraft = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: itemsTable.id });
+  const itemsCreated = await call<{ status: string }>('/api/app-datasets/tables/create', {
+    tableId: itemsTable.id,
+    name: 'Order items',
+    domain: 'orders',
+    measures: itemsDraft.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
+  });
+  expect(itemsCreated.status).toBe('certified');
+  const itemsApp = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
+    name: 'Item Review', goal: 'Review order items', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+  });
+  itemsDraftId = itemsApp.draft.id;
+  const itemCandidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${itemsDraftId}/source-candidates?limit=50`);
+  const itemSourceId = (name: string) => itemCandidates.items.find((candidate) => candidate.name === name)!.sourceId;
+  const countMeasure = itemsDraft.proposal.measures.find((measure) => measure.name.endsWith('_count') && measure.include)!.name;
+  await call(`/api/app-builds/${itemsDraftId}/compose`, {
+    expectedRevision: itemsApp.draft.revision,
+    expectedProposalHash: itemsApp.draft.proposalHash,
+    mode: 'manual',
+    selections: [
+      { sourceId: itemSourceId('Order items'), view: 'table', title: 'Items by day', query: { dimensions: [{ field: 'ordered_at', timeGrain: 'day' }], measures: [{ measure: countMeasure }] } },
+      { sourceId: itemSourceId('top_customers'), view: 'table', title: 'Top customers' },
+    ],
+  });
 });
 
 test.afterAll(async () => {
@@ -100,6 +136,42 @@ test('a filter that does not apply to a tile still publishes, and readers see "N
   await page.getByRole('button', { name: 'Create filter' }).click();
   // Studio shows the stored choice on the tile itself.
   await expect(page.getByText('Not filtered by Customer Name').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/Preview settled/)).toBeVisible({ timeout: 60_000 });
+
+  // Picking a customer in the editor re-runs only the linked Dataset tile, at
+  // once and without Run; the unlinked Saved query tile is never re-run or blanked.
+  const runs: RunRequest[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/api\/app-builds\/[^/]+\/dashboards\/[^/]+\/run$/.test(request.url())) {
+      runs.push(JSON.parse(request.postData() ?? '{}') as RunRequest);
+    }
+  });
+  const filteredRun = page.waitForResponse((response) => /\/dashboards\/[^/]+\/run$/.test(response.url())
+    && (JSON.parse(response.request().postData() ?? '{}') as RunRequest).variables?.customer_name === 'Alice');
+  const customerControl = page.locator('.studio-page-filterbar details.studio-filter.dropdown');
+  await customerControl.locator('summary').click();
+  await customerControl.getByRole('button', { name: 'Alice', exact: true }).click();
+  const filtered = await (await filteredRun).json() as RunResponse;
+  const filterRun = runs.find((run) => run.variables?.customer_name === 'Alice')!;
+  expect(filterRun.fullRun).toBeFalsy();
+  expect(filterRun.affectedTileIds).toHaveLength(1);
+  const linkedTile = filtered.tiles.find((tile) => tile.tileId === filterRun.affectedTileIds![0])!;
+  expect(linkedTile.status).toBe('ok');
+  expect(linkedTile.result?.rows?.map((row) => row.customer_name)).toEqual(['Alice']);
+  expect(filtered.tiles.map((tile) => tile.tileId)).toEqual([linkedTile.tileId]);
+  await expect(page.getByText('Customer Name applied · 1 tile updated')).toBeVisible();
+  await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible();
+  await expect(page.getByText('Preview is not loaded')).toHaveCount(0);
+
+  // A second change runs the NEW choice, not the previous one.
+  const secondRun = page.waitForResponse((response) => /\/dashboards\/[^/]+\/run$/.test(response.url())
+    && (JSON.parse(response.request().postData() ?? '{}') as RunRequest).variables?.customer_name === 'Bob');
+  await customerControl.locator('summary').click();
+  await customerControl.getByRole('button', { name: 'Bob', exact: true }).click();
+  const second = await (await secondRun).json() as RunResponse;
+  expect(second.tiles.find((tile) => tile.tileId === linkedTile.tileId)?.result?.rows?.map((row) => row.customer_name)).toEqual(['Bob']);
+  await expect(customerControl.locator('summary strong')).toHaveText('Bob');
+  await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible();
 
   // "Does not apply" is a decision, not a gap: publishing is allowed.
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
@@ -119,4 +191,51 @@ test('a filter that does not apply to a tile still publishes, and readers see "N
     await pill.scrollIntoViewIfNeeded();
     await page.screenshot({ path: join(shotsDir, '11-reader-not-filtered.png') });
   }
+});
+
+test('a start-only date range means "from" that day, in the editor and for readers', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${server!.baseUrl}/?appDraft=${itemsDraftId}`);
+  await expect(page.getByText('Items by day').first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Showing 1–4 of 4 rows')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible({ timeout: 60_000 });
+
+  await page.getByRole('tab', { name: 'Filters' }).click();
+  await page.getByRole('button', { name: 'New filter' }).click();
+  await page.locator('.filter-field-results button').filter({ hasText: 'Ordered At' }).first().click();
+  // A date control never needs a value list: no "No date values" warning.
+  await expect(page.getByText(/No date values/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Create filter' }).click();
+  await expect(page.getByLabel('Ordered At start')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/Preview settled/)).toBeVisible({ timeout: 60_000 });
+
+  // Only a start date: the control says "From 3 Jan 2024" and the linked tile
+  // keeps 3 and 4 January; the unlinked tile is untouched.
+  await page.getByLabel('Ordered At start').fill('2024-01-03');
+  await expect(page.locator('.studio-page-filterbar').getByText('From 3 Jan 2024')).toBeVisible();
+  await expect(page.getByText('Showing 1–2 of 2 rows')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible();
+  await expect(page.getByText('Preview is not loaded')).toHaveCount(0);
+  await expect(page.getByText(/could not be converted into a predicate|No date values/)).toHaveCount(0);
+
+  // Only an end date: "Until 1 Jan 2024" keeps that whole day.
+  await page.getByLabel('Ordered At start').fill('');
+  await page.getByLabel('Ordered At end').fill('2024-01-01');
+  await expect(page.locator('.studio-page-filterbar').getByText('Until 1 Jan 2024')).toBeVisible();
+  await expect(page.getByText('Showing 1–1 of 1 rows').or(page.getByText('Showing 1–1 of 1 row'))).toBeVisible({ timeout: 60_000 });
+
+  // A reader gets the same rule: only a "from" date keeps 3 and 4 January.
+  await page.getByRole('button', { name: 'Review and publish to Project' }).click();
+  await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await expect(page).toHaveURL(/app=item-review/, { timeout: 60_000 });
+  await page.goto(`${server!.baseUrl}/?app=item-review&page=overview`);
+  const from = page.getByLabel('Ordered At from');
+  await expect(from).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Showing 1–4 of 4 rows')).toBeVisible({ timeout: 60_000 });
+  await from.fill('2024-01-03');
+  await expect(page.locator('.dql-app-filter-range-note')).toHaveText('From 3 Jan 2024');
+  await expect(page.getByText('Showing 1–2 of 2 rows')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible();
 });

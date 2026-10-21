@@ -2,6 +2,7 @@ import {
   dashboardDateBoundsForColumn,
   datasetPhysicalField,
   isDashboardDateFilterType,
+  isEmptyDashboardDateValue,
   resolveDashboardDateFilter,
   resolveRelativeDateRange,
   tileQueryOutputAliases,
@@ -68,7 +69,7 @@ export function resolveDashboardDatasetFilters(input: {
     if (filter.scope?.page && filter.scope.page !== input.dashboard.id) continue;
     if (filter.scope?.tileIds && !filter.scope.tileIds.includes(input.item.i)) continue;
     const value = input.values[filter.id];
-    if (isEmptyDashboardFilterValue(value)) {
+    if (isEmptyDashboardFilterValue(value) || (isDashboardDateFilterType(filter.type) && isEmptyDashboardDateValue(value))) {
       if (filter.required) {
         errors.push({
           filterId: filter.id,
@@ -202,14 +203,23 @@ function dashboardFilterToTileFilter(
     if (resolved.kind === 'explicit') {
       // Explicit timestamp boundaries are already precise. Preserve their
       // caller-declared semantics rather than guessing an extra calendar day.
-      return { filters: [{ field: field.name, op: 'between', values: [resolved.start, resolved.end] }] };
+      // An open side is left out ("from" / "until").
+      if (resolved.start !== undefined && resolved.end !== undefined) {
+        return { filters: [{ field: field.name, op: 'between', values: [resolved.start, resolved.end] }] };
+      }
+      return { filters: resolved.start !== undefined
+        ? [{ field: field.name, op: 'gte', values: [resolved.start] }]
+        : [{ field: field.name, op: 'lte', values: [resolved.end] }] };
     }
+    // Calendar dates on every column type, timestamps included: the time
+    // buckets (DATE_TRUNC on the same column) use the column's own calendar,
+    // so the filter must too. A range ending 30 June keeps 23:30 on 30 June
+    // and never puts a 1 July row into a July bucket.
     const column = field.type === 'timestamp' ? 'timestamp' : field.type === 'date' ? 'date' : 'unknown';
-    const bounds = dashboardDateBoundsForColumn(resolved.bounds, column, timezone);
-    if ('error' in bounds) return { error: `${filterId} ${bounds.error}` };
+    const bounds = dashboardDateBoundsForColumn(resolved.bounds, column);
     return { filters: [
-      { field: field.name, op: 'gte', values: [bounds.start] },
-      { field: field.name, op: 'lt', values: [bounds.endExclusive] },
+      ...(bounds.start ? [{ field: field.name, op: 'gte' as const, values: [bounds.start] }] : []),
+      ...(bounds.endExclusive ? [{ field: field.name, op: 'lt' as const, values: [bounds.endExclusive] }] : []),
     ] };
   }
   if (type === 'number_range') {

@@ -3470,7 +3470,8 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       const tile = findTile(run.body.tiles, 'Revenue');
       expect(tile.status, tile.error).toBe('ok');
       expect(tile.dataset.appliedFilters).toEqual([
-        expect.objectContaining({ field: 'order_date', op: 'gte', values: [`${range.start}T00:00:00.000Z`] }),
+        // Calendar dates, the calendar the time buckets use (new-user fix B5).
+        expect.objectContaining({ field: 'order_date', op: 'gte', values: [range.start] }),
         expect.objectContaining({ field: 'order_date', op: 'lt' }),
       ]);
       const expected = await executor.executeQuery(

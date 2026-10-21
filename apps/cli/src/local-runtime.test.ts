@@ -8563,6 +8563,16 @@ describe('prepareLocalExecution', () => {
       sourceTileIds: ['orders'],
       valueCount: 0,
     }]);
+    // A tile whose result does not carry the field (a month bucket named
+    // order_date_month) was not read: that is "unknown", never "no values".
+    const unread = collectDashboardFilterOptions(dashboard, [{
+      tileId: 'orders',
+      status: 'ok',
+      result: { columns: ['order_date_month', 'revenue'], rows: [{ order_date_month: '2025-03-01', revenue: 10 }], rowCount: 1 },
+      filterableColumns: [{ column: 'order_date_month', predicateTarget: 'order_date_month' }],
+    }]);
+    expect(unread).toEqual([]);
+    expect(collectDashboardFilterOptions(dashboard, [])).toEqual([]);
   });
 
   it('fills block parameters from dashboard filters before execution', () => {

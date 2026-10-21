@@ -275,6 +275,12 @@ export {
   isCalendarDate,
   nextCalendarDate,
   dateRangeParts,
+  dateRangeEnds,
+  isEmptyDashboardDateValue,
+  describeDashboardDateRange,
+  formatDashboardCalendarDate,
+  DASHBOARD_DATE_OPEN_START,
+  DASHBOARD_DATE_OPEN_END,
 } from './filter-dates.js';
 export type { DashboardDateFilterBounds, DashboardDateFilterResolution, DashboardDateFilterType } from './filter-dates.js';
 export {

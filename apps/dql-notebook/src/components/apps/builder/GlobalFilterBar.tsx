@@ -1,8 +1,12 @@
 import { useMemo, useState } from 'react';
-import { ArrowLeft, Check, ChevronDown, Filter, Play, Plus, Search, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
+import { ArrowLeft, CalendarDays, Check, ChevronDown, Filter, Plus, Search, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
+import { formatDashboardCalendarDate } from '@zlens/core/apps/filter-dates';
 import type { AppBlockRecommendation, AppStudioBuildDraft, DashboardRunResponse } from '../../../api/client';
 import { defaultStudioFilterType, filterLinkSuggestions, filterPrimarySourceId, filterTileMappingsForField, initialFilterMappingKeys, type StudioFilterCandidate, type StudioFilterLinkSuggestion, type StudioRuntimeFilterFields, type StudioFilterTileMapping } from '../app-studio-filter-candidates';
 import { humanize, PanelTitle } from './studio-ui';
+import { filterLinkedTileIds } from '../app-studio-filter-values';
+
+export { filterLinkedTileIds };
 
 type StudioFilterScope = 'page' | 'app';
 
@@ -36,9 +40,7 @@ export function FiltersPanel({
   candidates,
   runtimeFilterFields,
   previewRunsByPage,
-  previewing,
   disabled,
-  onRunPreview,
   onSave,
   onRemove,
 }: {
@@ -48,9 +50,11 @@ export function FiltersPanel({
   candidates: StudioFilterCandidate[];
   runtimeFilterFields: StudioRuntimeFilterFields;
   previewRunsByPage: Record<string, DashboardRunResponse>;
-  previewing: boolean;
+  /** Kept for callers; the date note no longer depends on a run in flight. */
+  previewing?: boolean;
   disabled: boolean;
-  onRunPreview: () => void;
+  /** Kept for callers; a date control never asks for a run before it is created. */
+  onRunPreview?: () => void;
   onSave: (configuration: StudioFilterConfiguration) => void;
   onRemove: (id: string) => void;
 }): JSX.Element {
@@ -195,10 +199,12 @@ export function FiltersPanel({
         </fieldset> : null}
         <label><span>Display label</span><input value={configuration.label} onChange={(event) => setConfiguration({ ...configuration, label: event.target.value })} /></label>
         <label><span>Control</span><select value={configuration.type} onChange={(event) => setConfiguration({ ...configuration, type: event.target.value as StudioFilterControlType })}>{filterControlOptions(configuration.fieldId).map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-        {dateControl ? <section className={`filter-availability ${dateFieldHasNoValues ? 'empty' : fieldAvailability?.dateRange ? 'ready' : ''}`}>
-          <span>{dateFieldHasNoValues ? <X size={14} /> : fieldAvailability?.dateRange ? <Check size={14} /> : <Play size={14} />}</span>
-          <div><strong>{previewing ? 'Checking available dates…' : dateFieldHasNoValues ? 'No date values found' : fieldAvailability?.dateRange ? `${fieldAvailability.dateRange.min} – ${fieldAvailability.dateRange.max}` : 'Check available dates'}</strong><small>{previewing ? 'The settled preview is checking the selected field.' : dateFieldHasNoValues ? 'This field has no usable dates in the current result. Choose another field or refresh the data.' : fieldAvailability?.dateRange ? `${fieldAvailability.valueCount} dated rows found across ${fieldAvailability.checkedComponents} linked ${fieldAvailability.checkedComponents === 1 ? 'tile' : 'tiles'}.` : 'Run the current page once before creating this date control.'}</small></div>
-          {!previewing && !fieldAvailability?.dateRange ? <button type="button" onClick={onRunPreview} disabled={disabled}><Play size={12} /> Run preview</button> : null}
+        {dateControl ? <section className={`filter-availability ${fieldAvailability?.dateRange ? 'ready' : ''}`}>
+          <span>{fieldAvailability?.dateRange ? <Check size={14} /> : <CalendarDays size={14} />}</span>
+          {/* A date control never needs a value list, so nothing here blocks
+              creating it. Dates the current preview holds are a hint only;
+              "no dates" is said only when every linked tile's column was read. */}
+          <div><strong>{fieldAvailability?.dateRange ? `Data from ${formatDashboardCalendarDate(fieldAvailability.dateRange.min)} to ${formatDashboardCalendarDate(fieldAvailability.dateRange.max)}` : dateFieldHasNoValues ? 'No dates in the current preview' : 'Any date'}</strong><small>{configuration.type === 'daterange' ? 'Readers set a start, an end, or both. Only a start means “from”; only an end means “until”.' : 'Readers pick one day; it keeps that whole day.'}</small></div>
         </section> : null}
         <fieldset><legend>Apply to</legend><div className="filter-scope-switch"><button type="button" className={configuration.scope === 'page' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'page' })}>This page</button><button type="button" className={configuration.scope === 'app' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'app' })}>All compatible pages</button></div><small>{configuration.scope === 'app' ? 'One dashboard control is retained on every page. Unmapped Dataset tiles stay visibly excluded until linked.' : `Only ${activePage?.metadata.title ?? 'this page'} receives this control.`}</small></fieldset>
         <fieldset className="filter-mapping"><legend>Tiles</legend><header><span>Applies to {selectedVisibleCount} of {visibleMappings.length} {visibleMappings.length === 1 ? 'tile' : 'tiles'}</span>{supportedVisibleCount > 0 ? <button type="button" onClick={() => setAllVisibleMappings(selectedVisibleCount !== supportedVisibleCount)}>{selectedVisibleCount === supportedVisibleCount ? 'Apply to none' : 'Apply to all'}</button> : null}</header>
@@ -212,7 +218,7 @@ export function FiltersPanel({
           })}</div>
         </fieldset>
         <label className="filter-required"><input type="checkbox" checked={configuration.required} onChange={(event) => setConfiguration({ ...configuration, required: event.target.checked })} /><span><strong>Require a value</strong><small>Publication and runs require this filter to be set.</small></span></label>
-        <div className="filter-builder-actions"><button type="button" onClick={() => setConfiguration(null)}>Cancel</button><button type="button" className="primary" disabled={disabled || !configuration.label.trim() || selectedVisibleCount === 0 || dateFieldHasNoValues} onClick={() => { onSave(configuration); setConfiguration(null); }}>{editingExisting ? 'Save filter' : 'Create filter'}</button></div>
+        <div className="filter-builder-actions"><button type="button" onClick={() => setConfiguration(null)}>Cancel</button><button type="button" className="primary" disabled={disabled || !configuration.label.trim() || selectedVisibleCount === 0} onClick={() => { onSave(configuration); setConfiguration(null); }}>{editingExisting ? 'Save filter' : 'Create filter'}</button></div>
       </div>}
     </>;
   }
@@ -327,19 +333,6 @@ export function mergeStudioDateRanges(
 }
 
 export function linkedComponentCount(draft: AppStudioBuildDraft, filterId: string): number {
-  return draft.pages.reduce((count, page) => {
-    const filter = page.filters?.find((candidate) => candidate.id === filterId);
-    if (!filter) return count;
-    return count + page.layout.items.filter((tile) => {
-      if (filter.scope?.tileIds && !filter.scope.tileIds.includes(tile.i)) return false;
-      if ((tile.query || tile.driver) && tile.sourceId && tile.sourceRevision) {
-        return Boolean(page.datasets?.some((dataset) => {
-          if (dataset.sourceId !== tile.sourceId || dataset.sourceRevision !== tile.sourceRevision) return false;
-          const binding = filter.datasetBindings?.[dataset.id];
-          return Boolean(binding && (!binding.tileIds || binding.tileIds.includes(tile.i)));
-        }));
-      }
-      return tile.filterBindings?.some((binding) => binding.filter === filterId && binding.capability !== 'unsupported') ?? false;
-    }).length;
-  }, 0);
+  return draft.pages.reduce((count, page) => count + filterLinkedTileIds(page, filterId).length, 0);
 }
+

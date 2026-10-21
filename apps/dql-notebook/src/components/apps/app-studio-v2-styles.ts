@@ -884,6 +884,8 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-page-filterbar .studio-filter input::placeholder { color:var(--text-primary); font-weight:600; }
 .studio-page-filterbar .studio-filter:not(.empty) > small { display:none; }
 .studio-page-filterbar .studio-filter.range { display:flex; align-items:center; gap:6px; height:32px; padding:0 10px; box-sizing:border-box; }
+.studio-page-filterbar .studio-filter.range.one-sided > small { display:inline; color:var(--text-secondary); font-size:12px; font-weight:600; white-space:nowrap; }
+.studio-page-filterbar .studio-filter.range > small em { font-style:normal; color:var(--text-muted); font-weight:500; }
 .studio-page-grid { gap:14px; }
 .studio-component-card { position:relative; overflow:visible; border-color:var(--border-subtle); border-radius:12px; background:var(--bg-2); }
 .studio-edit .studio-component-card { cursor:pointer; }

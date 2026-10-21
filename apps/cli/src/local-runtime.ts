@@ -236,7 +236,10 @@ import {
   type RelationKeyKnowledge,
   type ResultOrdering,
   DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  DASHBOARD_DATE_OPEN_END,
+  DASHBOARD_DATE_OPEN_START,
   dashboardDateBoundsForColumn,
+  isEmptyDashboardDateValue,
   dashboardFilterDoesNotApplyBinding,
   isDashboardDateFilterType,
   resolveDashboardDateFilter,
@@ -37542,7 +37545,11 @@ export function collectDashboardFilterOptions(
     }
 
     if (values.size === 0) {
-      if (dateControl) {
+      // "No values" only when a linked tile's column was actually read and
+      // held no dates. When no column could be read (no tile ran yet, or the
+      // tile shows the field bucketed under another name) nothing is known,
+      // so nothing is reported: "couldn't read" is not "none" (B4).
+      if (dateControl && sourceTileIds.length > 0) {
         optionSets.push({
           filterId: filter.id,
           values: [],
@@ -37713,7 +37720,7 @@ export function applyDashboardFiltersToBlockExecution(input: {
       continue;
     }
     const value = dashboardFilterValue(filter, variables);
-    if (isEmptyDashboardFilterValue(value)) {
+    if (isEmptyDashboardFilterValue(value) || (isDashboardDateFilterType(filter.type) && isEmptyDashboardDateValue(value))) {
       skippedFilters.push({ filter: filter.id, reason: 'no value supplied', code: 'no_value' });
       continue;
     }
@@ -37753,7 +37760,14 @@ export function applyDashboardFiltersToBlockExecution(input: {
       variables,
     });
     if (!predicate) {
-      skippedFilters.push({ filter: filter.id, reason: 'filter value could not be converted into a predicate', code: 'invalid_value' });
+      const dateProblem = isDashboardDateFilterType(filter.type)
+        ? resolveDashboardDateFilter({ filterId: filter.label ?? filter.id, type: filter.type, value, timezone: filter.timezone, now: input.now })
+        : null;
+      skippedFilters.push({
+        filter: filter.id,
+        reason: dateProblem?.kind === 'error' ? dateProblem.message : 'filter value could not be converted into a predicate',
+        code: 'invalid_value',
+      });
       continue;
     }
     clauses.push(predicate);
@@ -37825,12 +37839,14 @@ function bindDashboardFilterToExistingParams(
   // column expects). A single date fills both with that day and a relative
   // date resolves to its range first. Only generated WHERE clauses use the
   // exclusive next-day bound (see buildDashboardFilterPredicate).
+  // An open side of a one-sided calendar range receives the earliest or
+  // latest date, so `BETWEEN :start AND :end` still reads "from" / "until".
   const resolvedDate = resolveDashboardDateFilter({ filterId: filter.id, type: filter.type, value, timezone: filter.timezone, now });
   const range = resolvedDate?.kind === 'calendar'
-    ? { start: resolvedDate.bounds.startDate, end: resolvedDate.bounds.endDate }
+    ? { start: resolvedDate.bounds.startDate ?? DASHBOARD_DATE_OPEN_START, end: resolvedDate.bounds.endDate ?? DASHBOARD_DATE_OPEN_END }
     : resolvedDate?.kind === 'explicit'
-      ? { start: resolvedDate.start, end: resolvedDate.end }
-      : filter.type === 'date' || filter.type === 'relative_date' ? null : dashboardRangeValue(value);
+      ? (resolvedDate.start !== undefined && resolvedDate.end !== undefined ? { start: resolvedDate.start, end: resolvedDate.end } : null)
+      : filter.type === 'date' || filter.type === 'relative_date' || filter.type === 'daterange' ? null : dashboardRangeValue(value);
   if (range) {
     const baseNames = uniqueDashboardStrings([
       filter.id,
@@ -37941,17 +37957,32 @@ function buildDashboardFilterPredicate(input: {
     timezone: input.timezone,
     now: input.now,
   });
+  // A one-sided range compares only its own side ("from" / "until").
   if (resolvedDate?.kind === 'calendar') {
     const bounds = dashboardDateBoundsForColumn(resolvedDate.bounds, 'unknown');
-    if ('error' in bounds) return null;
-    const start = addDashboardFilterParam(input, 'start', bounds.start);
-    const end = addDashboardFilterParam(input, 'end_exclusive', bounds.endExclusive);
-    return `${input.expression} >= CAST($${start.position} AS DATE) AND ${input.expression} < CAST($${end.position} AS DATE)`;
+    const clauses: string[] = [];
+    if (bounds.start) {
+      const start = addDashboardFilterParam(input, 'start', bounds.start);
+      clauses.push(`${input.expression} >= CAST($${start.position} AS DATE)`);
+    }
+    if (bounds.endExclusive) {
+      const end = addDashboardFilterParam(input, 'end_exclusive', bounds.endExclusive);
+      clauses.push(`${input.expression} < CAST($${end.position} AS DATE)`);
+    }
+    return clauses.length ? clauses.join(' AND ') : null;
   }
   if (resolvedDate?.kind === 'explicit') {
-    const start = addDashboardFilterParam(input, 'start', resolvedDate.start);
+    if (resolvedDate.start !== undefined && resolvedDate.end !== undefined) {
+      const start = addDashboardFilterParam(input, 'start', resolvedDate.start);
+      const end = addDashboardFilterParam(input, 'end', resolvedDate.end);
+      return `${input.expression} BETWEEN $${start.position} AND $${end.position}`;
+    }
+    if (resolvedDate.start !== undefined) {
+      const start = addDashboardFilterParam(input, 'start', resolvedDate.start);
+      return `${input.expression} >= $${start.position}`;
+    }
     const end = addDashboardFilterParam(input, 'end', resolvedDate.end);
-    return `${input.expression} BETWEEN $${start.position} AND $${end.position}`;
+    return `${input.expression} <= $${end.position}`;
   }
   // An incomplete or invalid date value is skipped rather than bound as a
   // scalar equality (which would produce invalid SQL or a wrong match).
