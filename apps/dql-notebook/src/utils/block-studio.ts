@@ -565,12 +565,19 @@ export function setBlockStringField(content: string, key: string, value: string)
   return insertBlockField(content, `  ${key} = "${escaped}"`);
 }
 
+/**
+ * Rename the block declaration. A blank name is never written: the source keeps
+ * its previous name until a new one is typed (a `block ""` declaration drops out
+ * of the block tree). The declaration may follow a `// dql-format: 1` header or
+ * comments, and an empty name left by an older editor is repaired.
+ */
 export function setBlockName(content: string, value: string): string {
+  if (!value.trim()) return content;
   const escaped = value.replace(/"/g, '\\"');
   const header = content.slice(0, leadingCommentLength(content));
   const body = content.slice(header.length);
   return /^\s*block\s+"/i.test(body)
-    ? `${header}${body.replace(/^(\s*block\s+)"[^"]*"/i, `$1"${escaped}"`)}`
+    ? `${header}${body.replace(/^(\s*block\s+)"(?:[^"\\]|\\.)*"/i, (_match, prefix: string) => `${prefix}"${escaped}"`)}`
     : content;
 }
 

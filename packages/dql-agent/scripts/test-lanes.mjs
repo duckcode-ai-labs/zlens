@@ -139,10 +139,11 @@ const EXPECTED_TEST_FILES = 189;
 // 2550 with keyword planner request parts kept as notes, never publish blockers (design D4, app-builder-orchestrator.test.ts, +1).
 // 2552 with stories that describe tiles narrowed by different filters each with their own scope, and read
 // date ranges as dates (dashboard-story.test.ts, +2).
-const EXPECTED_TESTS = 2552;
+// 2554 with an Ask review draft named after its own id and given the one Domain its tables belong to (drafts.test.ts, +2).
+const EXPECTED_TESTS = 2554;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2475.
+// The ordinary lane's share is the difference: 2477.
 const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];

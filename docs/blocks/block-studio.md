@@ -92,6 +92,10 @@ The tabs at the bottom are **Results**, **Run inputs**, **Lineage**,
 3. Click **Run** to check the rows.
 4. Click **Save draft**.
 
+A block always has a name. If you clear **Block name**, Block Studio says
+**A block needs a name** and keeps the previous name until you type a new one;
+**Save draft** asks for a name first.
+
 Saving a certified block does not change the certified version: your edit is
 saved as a separate draft beside it until you certify it.
 
