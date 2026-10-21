@@ -75,6 +75,7 @@ App Studio uses one set of words for data and trust:
 | **Saved query** | A block. Its result's columns are its fields, with no review step: grouped by its own columns its values show as they are, otherwise numbers add up (**Sum**) and averages are never added up. |
 | **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and writes a row-level definition, for row-safe measures such as distinct counts. |
 | **Dataset** | Data with a row-level definition: a checked table, or a saved query made row-level. |
+| **Related table** | A table a Dataset's rows point to through a checked many-to-one join (each order has one customer). Its fields show under the Dataset as **Orders → Customer**, and totals stay the same. |
 | **Metrics** | Measures and dimensions from a semantic model. |
 | **Domain** | A label that filters the lists, such as `finance`. It is not a kind of data. |
 | **Certified** | Someone owns the data and checked it. ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. |

@@ -276,6 +276,42 @@ selected, **Delete** removes it, also while you are in its **Tile settings**
 When two items in **This App's data** have the same name, each shows where it
 comes from, for example *Orders · Table* and *Orders · Metrics*.
 
+### Fields from related tables
+
+A table's rows often point to other tables: each order has one customer and
+one store. When ZLens knows that join and it is checked as **many-to-one**,
+the other table's fields are fields of your table too. Under **Orders**, the
+field list shows **Orders → Customer** (**Customer Name**, **Signed Up At**, …)
+and **Orders → Location** (**Location Name**). Click or drag them like any
+field: **Order Total** with **Location Name** is a bar labelled with store
+names, not their ids. A join can go one step further when that step is also
+many-to-one (**Orders → Customer → Region**). In **Add data**, a table's row
+says which tables it reaches, for example *joins: customers, locations*.
+
+- **Totals never change.** ZLens joins the other table with a LEFT JOIN on the
+  join's keys, and only when that table holds each key once, so no order is
+  counted twice and orders without a customer still count. When the join's
+  last warehouse check no longer covers it, ZLens checks again (one quick
+  query) before the tile runs; if the key now repeats, the tile says so and
+  does not run.
+- **The other way is not followed.** One customer has many orders, so
+  **Customers** does not show order fields: they would count each customer
+  once per order. The field list says *Orders per customer: add it from
+  Orders*. Add **Orders** to the App and use its fields.
+- **Trust.** A join that is certified (in Modeling) keeps the tile's trust. A
+  join that was only drafted, for example by **Draft my models** in setup,
+  shows **Needs review** on its group, and a tile that uses it is **Needs
+  review**, like any data nobody has certified yet. Certify the join in
+  **Modeling** to change that.
+- **Receipt.** A tile's receipt lists each join it used, for example *Joined to
+  customers on customer_id (each order has one customer — checked)*.
+
+ZLens reads joins from what the project already knows: Modeling relationships
+(including the ones imported from dbt and MetricFlow), joins **Draft my
+models** drafted and checked in setup, and dbt `relationships` tests. A table
+with no such join shows only its own fields. A saved query's fields don't
+follow joins.
+
 ## 4. Arrange pages
 
 - **Page style**: **Dashboard**, **Report** or **Custom layout**.
@@ -308,6 +344,13 @@ name and kind, **Also filter these tiles?** lists each as *Dataset · field*,
 unchecked. Check one to link its tiles too; nothing is linked by name on its
 own.
 
+A Dataset that reaches the field through a join (see [Fields from related
+tables](#fields-from-related-tables)) is offered the same way, with the join
+named: a **Customer Name** filter lists the Orders trend as *Orders · via
+Customer*, and its tile row says *From Orders · via Customer*. Once checked,
+picking a customer narrows the Orders trend to that customer's orders. A tile
+you don't link says **Not filtered by Customer Name**, as before.
+
 ### Applies or Does not apply
 
 Every tile on the filter's pages gets one of two choices, and both are saved
@@ -336,7 +379,7 @@ not saved for readers.
 
 | Tile | How the filter applies |
 | --- | --- |
-| Dataset | A condition on the Dataset field the filter is mapped to. |
+| Dataset | A condition on the Dataset field the filter is mapped to, also a field of a related table (the tile then joins that table). |
 | Metrics | A condition on a dimension of the metric's model, also when the tile doesn't group by it (a KPI). Text search works with the DQL native compiler; with MetricFlow the tile shows **Not filtered by**. |
 | Saved query (fields) | A condition on the saved query's result column the filter is mapped to, like a Dataset field. Click-to-filter works the same way. |
 | Saved query (as it is) | A parameter with the filter's name (`region`, or `period_start` / `period_end` for a range), otherwise a condition on the result column the filter is linked to. |

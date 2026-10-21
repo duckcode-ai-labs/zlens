@@ -1,4 +1,4 @@
-import type { DatasetDescriptor, DatasetField, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
+import type { DatasetDescriptor, DatasetField, DatasetJoin, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
 import { datasetTileVisualizationCompatibility, type TileQuery } from '@zlens/core/apps/tile-query';
 import { chartFromEncoding, refName, type DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
 
@@ -12,24 +12,66 @@ export type TileView = 'kpi' | 'chart' | 'table';
 
 export const EMPTY_TILE_QUERY: TileQuery = { dimensions: [], measures: [], respectsGlobalFilters: true };
 
+/**
+ * The fields of one related table a Dataset reaches through a checked
+ * many-to-one join (design D2): "Orders → Customer". `review` is a join
+ * nobody certified yet (drafted in setup): its fields can be used, and a
+ * tile that uses them needs review.
+ */
+export type RelatedFieldGroup = {
+  join: DatasetJoin;
+  /** The join path in words: "Customer", "Customer → Region". */
+  path: string;
+  review: boolean;
+  fields: DatasetPhysicalField[];
+};
+
 export type FieldGroups = {
   measures: DatasetField[];
   time: DatasetPhysicalField[];
   dimensions: DatasetPhysicalField[];
   review: DatasetField[];
+  related: RelatedFieldGroup[];
 };
+
+/** A join's path from the Dataset in words, and whether any join on it needs review. */
+export function datasetJoinPath(descriptor: Pick<DatasetDescriptor, 'joins'>, joinId: string): { path: string; review: boolean } {
+  const chain: DatasetJoin[] = [];
+  let join = descriptor.joins?.find((candidate) => candidate.id === joinId);
+  while (join && !chain.includes(join)) {
+    chain.unshift(join);
+    join = join.parent ? descriptor.joins?.find((candidate) => candidate.id === join!.parent) : undefined;
+  }
+  return { path: chain.map((step) => step.label).join(' → '), review: chain.some((step) => step.trust !== 'certified') };
+}
 
 /** Fields in the order the Data panel lists them. Suggested fields are shown but cannot be used. */
 export function groupDatasetFields(descriptor: DatasetDescriptor, search = ''): FieldGroups {
-  const needle = search.trim().toLowerCase();
+  const needle = search.trim().toLowerCase().replace(/[\s_]+/g, ' ');
+  const words = (value: string) => value.replace(/_/g, ' ').toLowerCase();
   const matches = (field: DatasetField) => !needle
     || field.name.toLowerCase().includes(needle)
-    || field.name.replace(/_/g, ' ').toLowerCase().includes(needle);
-  const groups: FieldGroups = { measures: [], time: [], dimensions: [], review: [] };
+    || words(field.name).includes(needle)
+    || Boolean(field.kind === 'physical' && field.related && (
+      words(field.related.column).includes(needle)
+      || `${datasetJoinPath(descriptor, field.related.join).path.toLowerCase()} ${words(field.related.column)}`.includes(needle)
+    ));
+  const groups: FieldGroups = { measures: [], time: [], dimensions: [], review: [], related: [] };
   // A number column that a measure adds up is shown once, as that measure.
   const measureInputs = new Set(descriptor.fields.flatMap((field) => (field.kind === 'measure' ? field.dependsOn.map((name) => name.toLowerCase()) : [])));
   for (const field of descriptor.fields) {
     if (!matches(field)) continue;
+    if (field.kind === 'physical' && field.related) {
+      const join = descriptor.joins?.find((candidate) => candidate.id === field.related!.join);
+      if (!join) continue;
+      let group = groups.related.find((candidate) => candidate.join.id === join.id);
+      if (!group) {
+        group = { join, ...datasetJoinPath(descriptor, join.id), fields: [] };
+        groups.related.push(group);
+      }
+      group.fields.push(field);
+      continue;
+    }
     if (field.status !== 'approved') groups.review.push(field);
     else if (field.kind === 'measure') groups.measures.push(field);
     else if (field.role === 'time' || field.type === 'date' || field.type === 'timestamp') groups.time.push(field);

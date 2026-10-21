@@ -59,7 +59,12 @@ export interface ReaderTrustTile {
   tileType?: string;
   repair?: unknown;
   aiPin?: { certification?: string; reviewStatus?: string } | null;
-  dataset?: { trust?: string; validation?: { outcome?: string } | null } | null;
+  dataset?: {
+    trust?: string;
+    validation?: { outcome?: string } | null;
+    /** Joins to related tables the tile used (design D2), in plain words. */
+    joins?: Array<{ trust?: string; sentence?: string }> | null;
+  } | null;
   artifact?: { trustState?: string; sourceKind?: string } | null;
   certificationStatus?: string | null;
   trustState?: string;
@@ -204,6 +209,10 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
   if (dataset) {
     const outcome = dataset.validation?.outcome;
     if (outcome === 'rejected') return trust('blocked', 'The Dataset contract rejected this query.');
+    // A join nobody certified yet (drafted in setup) makes the tile Needs review, like other review data.
+    if (dataset.trust === 'certified' && outcome !== 'needs_review' && dataset.joins?.some((join) => join.trust !== 'certified')) {
+      return trust('review', 'It uses a join between tables that nobody has certified yet.');
+    }
     const calculated = Boolean((item.query as { calculations?: unknown[] } | undefined)?.calculations?.length);
     if (dataset.trust === 'certified' && outcome !== 'needs_review' && calculated) {
       // Checked arithmetic over certified measures is governed, not certified:

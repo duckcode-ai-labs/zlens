@@ -95,6 +95,9 @@ export function readerTileReceipt(
   if (trust?.state === 'certified' && trust.checks?.length) rows.push({ label: 'Checks passed', value: trust.checks.join(' · '), list: trust.checks });
   push('Source file', tile?.artifact?.sourcePath ?? tile?.citation?.path ?? tile?.blockPath, false, true);
   push('Owner', item.owner);
+  // How related tables were joined, in plain words (design D2).
+  const joins = (tile?.dataset as { joins?: Array<{ sentence?: string }> } | undefined)?.joins ?? [];
+  if (joins.length) rows.push({ label: 'Joined', value: joins.map((join) => join.sentence).join(' · '), list: joins.flatMap((join) => (join.sentence ? [join.sentence] : [])) });
   // Every calculation's expression, so a reader can see how a number was made.
   push('Calculations', calculationWords(item.query as TileQuery | undefined).join(' · ') || undefined);
   const applied = tile?.filters?.applied ?? [];

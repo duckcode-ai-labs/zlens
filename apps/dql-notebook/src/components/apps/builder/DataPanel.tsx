@@ -86,21 +86,22 @@ export function DataPanel({
   const groups = descriptor && datasetTilesEnabled ? groupDatasetFields(descriptor, search) : null;
   const rowLevel = active && onMakeRowLevel && canMakeRowLevel(active) ? onMakeRowLevel : undefined;
   const used = queryFieldNames(target.kind === 'none' ? undefined : target.query);
-  const fieldRow = (field: DatasetField, meta: string, glyph: JSX.Element, locked = false) => {
+  const fieldRow = (field: DatasetField, meta: string, glyph: JSX.Element, locked = false, options: { label?: string; review?: boolean } = {}) => {
     const on = used.has(field.name.toLowerCase());
+    const label = options.label ?? humanize(field.name);
     return <button
       key={field.name}
       type="button"
       className={`data-field ${on ? 'on' : ''}`}
       disabled={disabled || locked}
       aria-pressed={on}
-      title={locked ? 'Suggested field — it needs review in the Dataset before tiles can use it.' : on ? `Remove ${humanize(field.name)}` : `Add ${humanize(field.name)}, or drag it onto a shelf`}
+      title={locked ? 'Suggested field — it needs review in the Dataset before tiles can use it.' : options.review ? `${label} comes through a join nobody has certified yet: a tile that uses it needs review.` : on ? `Remove ${label}` : `Add ${label}, or drag it onto a shelf`}
       onClick={() => onPickField(field)}
       draggable={!disabled && !locked}
       onDragStart={(event) => writeFieldDrag(event, field.kind === 'measure' ? { measure: field.name } : { dimension: field.name })}
     >
       <span className="glyph">{glyph}</span>
-      <span className="name">{humanize(field.name)}</span>
+      <span className="name">{label}</span>
       {locked ? <span className="badge">Suggested</span> : <span className="meta">{meta}</span>}
       {on ? <Check size={13} className="check" /> : null}
     </button>;
@@ -159,8 +160,15 @@ export function DataPanel({
         {groups.time.length ? <section><h3>Time</h3>{groups.time.map((field) => fieldRow(field, field.time?.grains?.slice(0, 3).join(' · ') ?? field.type, <CalendarDays size={14} />))}</section> : null}
         {groups.dimensions.length ? <section><h3>Dimensions</h3>{groups.dimensions.map((field) => fieldRow(field, field.kind === 'physical' && field.role === 'key' ? 'key' : '', field.kind === 'physical' && field.role === 'key' ? <Hash size={13} /> : <span className="aa">Aa</span>))}</section> : null}
         {groups.review.length ? <section><h3>Needs review</h3>{groups.review.map((field) => fieldRow(field, '', field.kind === 'measure' ? measureGlyph : <span className="aa">Aa</span>, true))}</section> : null}
-        {!groups.measures.length && !groups.time.length && !groups.dimensions.length && !groups.review.length ? <p className="field-empty">No field matches “{search}”.</p> : null}
+        {/* Fields of related tables (design D2): each order has one customer, so they are just fields of Orders. */}
+        {groups.related.map((group) => <section key={group.join.id} className="related-fields" aria-label={`${humanize(descriptor!.label)} → ${group.path}`}>
+          <h3 title={`Joined on ${group.join.keys.map((pair) => pair.from).join(', ')}: ${group.join.sentence}, so totals stay the same.`}>{humanize(descriptor!.label)} → {group.path}{group.review ? <span className="badge">Needs review</span> : null}</h3>
+          {/* The heading says Needs review once; each row keeps the reason in its tooltip. */}
+          {group.fields.map((field) => fieldRow(field, field.time?.grains?.slice(0, 3).join(' · ') ?? '', field.role === 'time' ? <CalendarDays size={14} /> : <span className="aa">Aa</span>, false, { label: humanize(field.related!.column), review: group.review }))}
+        </section>)}
+        {!groups.measures.length && !groups.time.length && !groups.dimensions.length && !groups.review.length && !groups.related.length ? <p className="field-empty">No field matches “{search}”.</p> : null}
       </div>
+      {descriptor?.joinNotes?.length && !search ? <div className="field-help join-notes" role="note">{descriptor.joinNotes.map((note) => <small key={note}>{note}</small>)}</div> : null}
       {resultFields ? <small className="field-help">{SAVED_QUERY_FIELDS_NOTE}</small> : null}
       {active && (onAuthorDataset || onRefreshBinding) ? <div className="dataset-source-actions">
         {onAuthorDataset ? <button type="button" className="link" disabled={disabled} onClick={() => onAuthorDataset(active)}><FileText size={12} /> Author Dataset definition</button> : null}

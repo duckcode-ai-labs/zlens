@@ -15,7 +15,11 @@ import {
   tileQueryValidationRuns,
   validateTileQuery,
   checkTileCalculations,
+  datasetJoinsUsed,
+  datasetRelatedFieldsUsed,
   type DatasetDescriptor,
+  type DatasetJoin,
+  type DatasetPhysicalField,
   type DatasetMeasureField,
   type TileCalcExpr,
   type TileCalculation,
@@ -61,6 +65,8 @@ export interface CompiledDatasetTileQuery {
   appliedFilters: Array<{ field: string; op: TileFilterOperator; values: unknown[]; placement: 'where' | 'having' }>;
   /** The Dataset-contract outcome this SQL was compiled under (C8). */
   validation: Pick<TileQueryValidation, 'outcome' | 'adaptations'>;
+  /** Joins to related tables the SQL uses (design D2), parents first; empty for the Dataset's own fields. */
+  joins: DatasetJoin[];
 }
 
 /**
@@ -133,9 +139,17 @@ export function compileDatasetTileQuery(input: {
     );
     }
   }
-  const sourceSql = stripTerminator(input.sourceSql);
-  if (!sourceSql) throw new TileQueryCompilationError('DATASET_SOURCE_EMPTY', 'The dataset source has no executable SQL.');
+  const ownSourceSql = stripTerminator(input.sourceSql);
+  if (!ownSourceSql) throw new TileQueryCompilationError('DATASET_SOURCE_EMPTY', 'The dataset source has no executable SQL.');
   const dialect = getDialect(input.driver);
+  // Fields from related tables (design D2): only the joins this tile reads
+  // are added, each a LEFT JOIN on a key the related table holds once, so
+  // the Dataset's rows are never multiplied. A tile on the Dataset's own
+  // fields compiles exactly as before.
+  const joins = datasetJoinsUsed(input.descriptor, effectiveQuery);
+  const sourceSql = joins.length
+    ? joinedDatasetSourceSql(ownSourceSql, joins, datasetRelatedFieldsUsed(input.descriptor, effectiveQuery), input.driver, dialect.quoteIdentifier.bind(dialect))
+    : ownSourceSql;
   const sourceParams = [...(input.sourceSqlParams ?? [])];
   const variables: Record<string, unknown> = { ...(input.sourceVariables ?? {}) };
   let nextPosition = sourceParams.reduce((maximum, parameter) => Math.max(maximum, parameter.position), 0);
@@ -179,7 +193,8 @@ export function compileDatasetTileQuery(input: {
         }
         return field;
       })
-      : input.descriptor.fields.filter((field): field is NonNullable<ReturnType<typeof datasetPhysicalField>> => field.kind === 'physical' && field.status === 'approved');
+      // Rows of the Dataset show its own columns unless related ones are chosen.
+      : input.descriptor.fields.filter((field): field is NonNullable<ReturnType<typeof datasetPhysicalField>> => field.kind === 'physical' && field.status === 'approved' && !field.related);
     if (fields.length === 0) throw new TileQueryCompilationError('DATASET_DETAIL_FIELDS_MISSING', 'This dataset has no approved physical fields for detail rows.');
     const limit = resolveLimit(input.query.limit, input.parameters);
     if (!limit) throw new TileQueryCompilationError('DATASET_DETAIL_LIMIT_REQUIRED', 'Detail rows require an explicit bounded row limit.');
@@ -207,7 +222,7 @@ export function compileDatasetTileQuery(input: {
       role: 'dimension' as const,
       ref: datasetDimensionRef(field.qualifiedId),
       type: field.type,
-    })), input.query, appliedFilters, validation);
+    })), input.query, appliedFilters, validation, joins);
   }
 
   const dimensions = input.query.dimensions.map((selection) => {
@@ -375,7 +390,53 @@ export function compileDatasetTileQuery(input: {
       ref: `total:${dimension.alias}`,
       type: 'number' as const,
     })) : []),
-  ], input.query, appliedFilters, validation);
+  ], input.query, appliedFilters, validation, joins);
+}
+
+const SAFE_RELATION = /^(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)){0,2}$/;
+
+/**
+ * The Dataset's complete source with the related tables a tile reads joined
+ * on: every source row once, plus the related columns it uses under their
+ * field names. The joins come from the server's descriptor, never a request.
+ */
+function joinedDatasetSourceSql(
+  sourceSql: string,
+  joins: DatasetJoin[],
+  fields: DatasetPhysicalField[],
+  driver: string,
+  quote: (identifier: string) => string,
+): string {
+  const column = (name: string) => sourceColumnReference(name, driver, quote);
+  const alias = (join: DatasetJoin) => `__dql_j_${join.id}`;
+  const byId = new Map(joins.map((join) => [join.id, join]));
+  for (const join of joins) {
+    if (!SAFE_RELATION.test(join.relation.trim())) {
+      throw new TileQueryCompilationError('DATASET_JOIN_INVALID', `The related table ${join.table} is not a plain table name.`);
+    }
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(join.id) || join.keys.some((pair) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(pair.from) || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(pair.to))) {
+      throw new TileQueryCompilationError('DATASET_JOIN_INVALID', `The join to ${join.table} does not name plain columns.`);
+    }
+    if (join.parent && !byId.has(join.parent)) {
+      throw new TileQueryCompilationError('DATASET_JOIN_INVALID', `The join to ${join.table} starts from a join this tile does not use.`);
+    }
+  }
+  const selected = fields.map((field) => {
+    const join = byId.get(field.related!.join);
+    if (!join || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(field.related!.column)) {
+      throw new TileQueryCompilationError('DATASET_FIELD_DRIFT', `Related field ${field.name} no longer resolves to a join.`);
+    }
+    return `${alias(join)}.${column(field.related!.column)} AS ${column(field.name)}`;
+  });
+  return [
+    `SELECT __dql_base.*${selected.length ? `, ${selected.join(', ')}` : ''}`,
+    `FROM (${sourceSql}) AS __dql_base`,
+    ...joins.map((join) => {
+      const parent = join.parent ? alias(byId.get(join.parent)!) : '__dql_base';
+      const on = join.keys.map((pair) => `${parent}.${column(pair.from)} = ${alias(join)}.${column(pair.to)}`).join(' AND ');
+      return `LEFT JOIN ${join.relation.trim()} AS ${alias(join)} ON ${on}`;
+    }),
+  ].join('\n');
 }
 
 /**
@@ -506,7 +567,7 @@ function compileQuickCalculations(input: {
  * block's own SQL did). Output aliases stay quoted so result columns keep the
  * authored spelling.
  */
-function sourceColumnReference(name: string, driver: string, quote: (identifier: string) => string): string {
+export function sourceColumnReference(name: string, driver: string, quote: (identifier: string) => string): string {
   return driver === 'snowflake' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : quote(name);
 }
 
@@ -538,9 +599,11 @@ function compiledResult(
   query: TileQuery,
   appliedFilters: CompiledDatasetTileQuery['appliedFilters'],
   validation: TileQueryValidation,
+  joins: DatasetJoin[] = [],
 ): CompiledDatasetTileQuery {
   return {
     validation: { outcome: validation.outcome, adaptations: validation.adaptations },
+    joins,
     sql,
     sqlParams,
     variables,

@@ -22,7 +22,7 @@ export function plainBindingLabel(binding: Pick<StoryBinding, 'label'> & Partial
   return bindingCaption(binding, catalog);
 }
 
-const READER_ROWS = new Set(['Source', 'Certified', 'Owner', 'Calculations', 'Filters', 'Last refreshed', 'Cached at']);
+const READER_ROWS = new Set(['Source', 'Certified', 'Owner', 'Joined', 'Calculations', 'Filters', 'Last refreshed', 'Cached at']);
 
 /** The receipt for one bound number: its words, value, tile, trust and the rows a reader needs. */
 export function numberReceiptInfo(

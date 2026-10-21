@@ -150,6 +150,12 @@ import {
   type DashboardDisplayTrustState,
   type DashboardGridItem,
   type DatasetDescriptor,
+  type DatasetJoin,
+  adoptDatasetJoins,
+  datasetJoinReceiptSentence,
+  datasetJoinsTrust,
+  datasetJoinsUsed,
+  relatedFieldWords,
   type StoryBindingCatalog,
   type StoryBindingTileInput,
   type ReaderTrustItem,
@@ -371,6 +377,7 @@ import {
   currentMetadataFingerprint,
   ensureMetadataCatalogFresh,
   queryAppSourceCatalog,
+  registerAppSourceRecordDecorator,
   resolveAppSourceCatalogRecords,
   datasetBindingAuthorityForManifestBlock,
   datasetBlockProofMaterial,
@@ -644,7 +651,8 @@ import { editionFingerprint, followsPage, homePersonKey, movedOnPage, pageFigure
 import { addPageMonitor, listPageMonitors, MonitorStoreError, removePageMonitor } from './schedule/app-monitor-store.js';
 import { loadOrCreateSnapshotKey, localSnapshotSigner, readSnapshotPublicKey, signSnapshotWith, snapshotBodyIssues, snapshotFigures, snapshotFileName, verifySnapshot } from './snapshot/app-snapshot.js';
 import { dashboardDriverProbeItem, dashboardExploreProbeItem, expandDashboardDriverItems, foldDashboardDriverTiles, withDriverFilterScopes } from './datasets/dashboard-drivers.js';
-import { compileDatasetTileQuery, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
+import { compileDatasetTileQuery, sourceColumnReference, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
+import { decorateDatasetDescriptor, joinableTables, joinRepeatsKeyMessage, joinUniquenessSql, readDbtArtifacts, relatedTablesContext, type RelatedTablesContext } from './datasets/related-tables.js';
 import { summarizeDatasetChartFacts } from './datasets/dataset-chart-fact-summary.js';
 import { planDatasetTilePromotion, type DatasetTileBoundParameter } from './datasets/dataset-tile-promotion.js';
 import { proveDatasetResultEquivalence } from './datasets/result-equivalence.js';
@@ -8094,6 +8102,86 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   };
 
   const contextProposalStore = new FileContextAuthoringProposalStore(projectRoot);
+
+  /**
+   * Fields from related tables (design D2). Every App source record the
+   * catalog returns (Data pane, planner, previews, runs) carries the related
+   * fields its table Dataset reaches through checked many-to-one joins. The
+   * relationships are re-read from the model, open setup drafts and dbt tests
+   * when any of them changes (checked at most every two seconds).
+   */
+  const datasetQuote = (driver: string) => {
+    const dialect = getDialect(driver);
+    return (name: string) => sourceColumnReference(name, driver, dialect.quoteIdentifier.bind(dialect));
+  };
+  let relatedTablesState: { checkedAt: number; key: string; context: RelatedTablesContext; manifest: DQLManifest } | undefined;
+  const currentRelatedTables = (fresh = false): { context: RelatedTablesContext; manifest: DQLManifest } => {
+    if (!fresh && relatedTablesState && Date.now() - relatedTablesState.checkedAt < 2_000) return relatedTablesState;
+    const snapshot = projectSnapshot();
+    const proposalSignature = (() => {
+      try {
+        return readdirSync(contextProposalStore.directory)
+          .filter((name) => name.endsWith('.json'))
+          .map((name) => `${name}:${statSync(join(contextProposalStore.directory, name)).mtimeMs}`)
+          .sort()
+          .join('|');
+      } catch {
+        return '';
+      }
+    })();
+    const catalog = readWarehouseCatalog(projectRoot);
+    const key = `${snapshot.snapshotId}\u0000${proposalSignature}\u0000${catalog.snapshot?.fingerprint ?? ''}`;
+    if (relatedTablesState?.key === key) {
+      relatedTablesState = { ...relatedTablesState, checkedAt: Date.now() };
+      return relatedTablesState;
+    }
+    const context = relatedTablesContext({
+      manifest: snapshot.manifest,
+      proposals: contextProposalStore.list(),
+      ...(catalog.snapshot ? { warehouseCatalog: catalog.snapshot } : {}),
+      ...(readDbtArtifacts(snapshot.manifest.dbtProvenance) ? { dbt: readDbtArtifacts(snapshot.manifest.dbtProvenance)! } : {}),
+    });
+    relatedTablesState = { checkedAt: Date.now(), key, context, manifest: snapshot.manifest };
+    return relatedTablesState;
+  };
+  const unregisterRelatedFields = registerAppSourceRecordDecorator(projectRoot, (record) => {
+    const descriptor = record.capabilities.dataset;
+    if (record.kind !== 'block' || !descriptor || descriptor.kind !== 'block' || descriptor.result) return record;
+    let state = currentRelatedTables();
+    let block = resolveDatasetSourceManifestBlock(state.manifest, record.executionRef);
+    // A Dataset saved a moment ago is not in the state read before it.
+    if (!block) {
+      state = currentRelatedTables(true);
+      block = resolveDatasetSourceManifestBlock(state.manifest, record.executionRef);
+    }
+    const { context } = state;
+    if (!block || !context.edges.length) return record;
+    const decorated = decorateDatasetDescriptor({ descriptor, block, context, quote: datasetQuote(connection?.driver ?? 'duckdb') });
+    return decorated === descriptor ? record : { ...record, capabilities: { ...record.capabilities, dataset: decorated } };
+  });
+
+  /**
+   * Before a tile joins a related table whose key uniqueness no current
+   * evidence covers (a drafted join, a dbt test, evidence gone stale), one
+   * bounded query checks that no key value repeats there. The answer is kept
+   * for one minute per warehouse target.
+   */
+  const joinUniquenessChecks = new Map<string, { at: number; check: Promise<boolean> }>();
+  const ensureJoinsAddNoRows = async (joins: DatasetJoin[], target: ConnectionConfig, targetFingerprint: string, datasetLabel: string): Promise<void> => {
+    for (const join of joins) {
+      if (join.uniqueness === 'current') continue;
+      const sql = joinUniquenessSql(join, datasetQuote(target.driver));
+      const key = `${targetFingerprint}\u0000${sql}`;
+      let entry = joinUniquenessChecks.get(key);
+      if (!entry || Date.now() - entry.at > 60_000) {
+        const check = executor.executeQuery(sql, [], {}, target).then((result) => result.rows.length === 0);
+        entry = { at: Date.now(), check };
+        joinUniquenessChecks.set(key, entry);
+        check.catch(() => joinUniquenessChecks.delete(key));
+      }
+      if (!(await entry.check)) throw new Error(joinRepeatsKeyMessage(join, datasetLabel));
+    }
+  };
 
   /**
    * UI-019: authoring must never dead-end on a Domain/Area that does not exist
@@ -20337,7 +20425,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             source: listing.source,
             tables: listing.tables.map(({ columns, ...table }) => {
               const modeled = modelStates.get(table.id);
-              return { ...table, columnCount: columns.length, ...(modeled ? { modeled } : {}) };
+              // The tables its rows point to (design D2): their fields come with it.
+              const joins = (() => { try { return joinableTables(currentRelatedTables().context, table.relation); } catch { return []; } })();
+              return { ...table, columnCount: columns.length, ...(modeled ? { modeled } : {}), ...(joins.length ? { joins } : {}) };
             }),
           });
           return;
@@ -21893,7 +21983,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   authority,
                   parameterValues: invocation.values,
                 });
-                const grainDescriptor = provisionalDataset.descriptor;
+                // Related fields (design D2) are the server's own discovery, adopted onto the rebuilt descriptor.
+                const grainDescriptor = provisionalDataset.descriptor ? adoptDatasetJoins(provisionalDataset.descriptor, discoveryDescriptor) : undefined;
                 const declaredProofId = grainDescriptor?.grain.keyEvidence?.trim();
                 if (!grainDescriptor || !declaredProofId) {
                   throw new Error('This Dataset no longer has a complete declaration-derived grain proof scope. Refresh and revalidate the source.');
@@ -22063,10 +22154,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   authority,
                   parameterValues: invocation.values,
                 });
-                const descriptor = runtimeDataset.descriptor;
-                if (!descriptor || runtimeDataset.proofState !== 'valid' || descriptor.binding.state !== 'valid') {
+                const ownDescriptor = runtimeDataset.descriptor;
+                if (!ownDescriptor || runtimeDataset.proofState !== 'valid' || ownDescriptor.binding.state !== 'valid') {
                   throw new Error(datasetProofFailureMessage(runtimeDataset.proofState));
                 }
+                const descriptor = adoptDatasetJoins(ownDescriptor, discoveryDescriptor);
                 // Revalidate the exact interaction against the proof-bound
                 // descriptor. The provisional descriptor above only exists to
                 // prepare a fresh full-source grain check.
@@ -22177,6 +22269,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   }
                   aggregatePreparation = await componentProof;
                 }
+                // Fields from related tables (design D2): the joins this tile
+                // reads, each checked to hold one related row per key before
+                // it runs. A drafted join keeps the tile Needs review.
+                const tileJoins = datasetJoinsUsed(descriptor, {
+                  ...effectiveDatasetQuery,
+                  filters: [...(effectiveDatasetQuery.filters ?? []), ...filterResolution.filters],
+                });
+                await ensureJoinsAddNoRows(tileJoins, datasetTargetConnection, datasetTargetFingerprint, descriptor.label);
+                const tileTrust = descriptor.trust === 'certified' && datasetJoinsTrust(tileJoins) === 'certified' ? 'certified' as const : 'review_required' as const;
+                const joinReceipts = tileJoins.map((join) => ({ id: join.id, table: join.table, trust: join.trust, sentence: datasetJoinReceiptSentence(join, tileJoins) }));
                 const executionSourceSql = aggregateScope?.preparedSourceSql ?? sourceSql;
                 const executionSourceSqlParams = aggregateScope?.sourceSqlParams ?? blockPlan?.sqlParams;
                 const executionSourceVariables = aggregateScope?.sourceVariables ?? blockPlan?.variables;
@@ -22353,7 +22455,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                         })}`,
                         dialect: datasetTargetConnection.driver,
                         adapterFingerprint: 'dataset_block_runtime_v1',
-                        compilerFingerprint: 'dataset_tile_compiler_v1',
+                        // A joined tile's result also depends on the joins it read.
+                        compilerFingerprint: tileJoins.length
+                          ? `dataset_tile_compiler_v1+joins:${fingerprintDashboardRuntimeState(tileJoins.map((join) => ({ relation: join.relation, keys: join.keys, parent: join.parent ?? null })))}`
+                          : 'dataset_tile_compiler_v1',
                         rowBoundFingerprint: `normalized_result_rows:${NOTEBOOK_EXECUTE_PREVIEW_ROW_LIMIT}`,
                         personaPolicyFingerprint: personaFingerprint,
                       }
@@ -22450,7 +22555,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   compiledSqlFingerprint,
                   resultFingerprint,
                   executionFingerprint: tileExecutionFingerprint,
-                  trustState: descriptor.trust,
+                  trustState: tileTrust,
                   citation: { kind: 'dataset_query', name: descriptor.label, path: block.filePath },
                   filters: {
                     applied: appliedFilters,
@@ -22462,6 +22567,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     contractFingerprint: descriptor.contractRef.fingerprint,
                     validation: tileValidation,
                     trust: descriptor.trust,
+                    ...(joinReceipts.length ? { joins: joinReceipts } : {}),
                     lifecycle: descriptor.lifecycle,
                     binding: descriptor.binding,
                     proofState: runtimeDataset.proofState,
@@ -22526,8 +22632,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                       parameters: datasetSourceParameters,
                     }),
                     ...(cacheDelivery ? {} : { sql: executedSql.slice(0, 40_000) }),
-                    trustState: descriptor.trust,
+                    trustState: tileTrust,
                     explanation: [
+                      ...joinReceipts.map((join) => `${join.sentence}.`),
                       ...(cacheDelivery
                         ? ['Cached local Dataset delivery. It did not dispatch fresh SQL and cannot save, replace, prove equivalence, or publish this App page.', `Cached at ${String(cacheDelivery.cachedAt ?? 'an unknown time')}; use Refresh for a live execution.`]
                         : ['This field tile compiled over the complete governed Dataset source at run time.', `Source proof ${descriptor.binding.proofId ?? 'is'} valid for the active target and source revision.`]),
@@ -23883,6 +23990,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   result: tile.result,
                   trustState: tile.trustState,
                   filters: tile.filters,
+                  // The joins to related tables it used, in plain words (design D2).
+                  ...(Array.isArray(dataset?.joins) ? { joins: dataset.joins } : {}),
                   receipt,
                 }
               : {
@@ -31359,6 +31468,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   server.once('close', () => {
     runtimeClosing = true;
     unregisterServerHooks(scope.id);
+    unregisterRelatedFields();
     syncProcessHostHooks();
     datasetResultCache?.close();
     for (const watcher of [...projectWatchers]) closeProjectWatcher(watcher);
@@ -33047,6 +33157,8 @@ function decorateDatasetResult(
       kind: field.type === 'boolean' ? 'boolean' : field.type === 'date' || field.type === 'timestamp' ? 'date' : field.type === 'number' ? 'number' : 'text',
       ref: datasetPresentationDimensionRef(field.qualifiedId),
       ...(dimension.timeGrain ? { grain: dimension.timeGrain } : {}),
+      // A related table's field reads as words ("Location Name"), never its joined name (design D2).
+      ...(field.related ? { label: (relatedFieldWords(field.name) ?? field.related.column).replace(/\b\w/g, (letter) => letter.toUpperCase()) } : {}),
     };
     for (const name of [alias, field.name, field.qualifiedId]) expected.set(normalizeDatasetPresentationColumn(name), meta);
   }

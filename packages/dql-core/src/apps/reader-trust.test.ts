@@ -10,6 +10,14 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
     expect(readerTileTrust({ text: { markdown: 'x' } }, { status: 'ok', tileType: 'text' })).toBeNull();
   });
 
+  it('keeps a certified Dataset tile certified through a certified join, and a drafted join makes it Needs review (D2)', () => {
+    const joined = (trust: string) => ({ status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'covered' }, joins: [{ trust, sentence: 'Joined to customers on customer_id (each order has one customer — checked)' }] } });
+    expect(readerTileTrust({ query: {} }, joined('certified'))?.state).toBe('certified');
+    const review = readerTileTrust({ query: {} }, joined('review_required'));
+    expect(review?.state).toBe('review');
+    expect(review?.detail).toBe('It uses a join between tables that nobody has certified yet.');
+  });
+
   it('summarises a page', () => {
     const certified = readerTileTrust({ block: {} }, { status: 'ok', certificationStatus: 'certified' });
     const review = readerTileTrust({ block: {} }, { status: 'ok' });

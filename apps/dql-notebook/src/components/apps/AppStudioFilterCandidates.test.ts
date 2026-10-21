@@ -300,4 +300,55 @@ describe('App Studio filter discovery (UI-022)', () => {
     const checked = new Set([...initial, ...suggestions[0]!.mappingKeys]);
     expect(datasetFilterBindingsForSelection(mappings, checked).ds_customers).toEqual({ field: 'Region', tileIds: ['customers-by-region'] });
   });
+
+  it('D2 offers a tile whose Dataset joins to the field\'s table as linkable "via" the join, unchecked, and one filter candidate', () => {
+    const own = (name: string, type = 'string') => ({ kind: 'physical', name, qualifiedId: name, type, role: 'dimension', status: 'approved' });
+    const customers = {
+      id: 'customers', kind: 'governed_block', sourceRef: 'customers', qualifiedIdentity: 'shop::block::Customers::abc', sourceRevision: 'rev-customers', trustState: 'certified', reviewStatus: 'approved',
+      capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: {
+        id: 'dataset.customers', kind: 'block', label: 'Customers', operations: ['group'],
+        fields: [{ name: 'customer_count', kind: 'measure', status: 'approved', aggregation: 'count_distinct' }, own('customer_id'), own('customer_name')],
+      } },
+    };
+    const orders = {
+      id: 'orders', kind: 'governed_block', sourceRef: 'orders', qualifiedIdentity: 'shop::block::Orders::def', sourceRevision: 'rev-orders', trustState: 'certified', reviewStatus: 'approved',
+      capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: {
+        id: 'dataset.orders', kind: 'block', label: 'Orders', operations: ['group', 'trend'],
+        fields: [
+          { name: 'order_total', kind: 'measure', status: 'approved', aggregation: 'sum' },
+          own('customer_id'),
+          own('ordered_at', 'timestamp'),
+          { ...own('customer__customer_name'), related: { join: 'customer', column: 'customer_name' } },
+        ],
+        joins: [{ id: 'customer', label: 'Customer', table: 'customers', relation: '"main"."customers"', keys: [{ from: 'customer_id', to: 'customer_id' }], cardinality: 'many_to_one', trust: 'certified', origin: 'model', relationshipId: 'r', uniqueness: 'current', sentence: 'each order has one customer' }],
+      } },
+    };
+    const sources = [customers, orders] as unknown as AppStudioBuildDraft['sources'];
+    const pages = [{
+      version: 3,
+      id: 'overview',
+      metadata: { title: 'Overview' },
+      datasets: sources.map((source) => ({ id: `ds_${source.id}`, sourceId: source.id, sourceRevision: `rev-${source.id}`, snapshotId: 's', contractFingerprint: 'f' })),
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [
+        { i: 'trend', title: 'Orders trend', x: 0, y: 0, w: 6, h: 3, sourceId: 'orders', sourceRevision: 'rev-orders', query: { measures: [{ measure: 'order_total' }], dimensions: [{ field: 'ordered_at', timeGrain: 'month' }] }, viz: { type: 'line' } },
+        { i: 'people', title: 'Customers', x: 6, y: 0, w: 6, h: 3, sourceId: 'customers', sourceRevision: 'rev-customers', query: { measures: [{ measure: 'customer_count' }], dimensions: [{ field: 'customer_name' }] }, viz: { type: 'bar' } },
+      ] },
+    }] as unknown as AppStudioBuildDraft['pages'];
+
+    // One "Customer Name" candidate, reaching both tiles: the related field is the same filter.
+    const candidates = discoverAppFilterCandidates(pages, [], {}, sources);
+    expect(candidates.find((candidate) => candidate.id === 'customer_name')).toMatchObject({ affectedTileCount: 2, sourceNames: ['Customers', 'Orders'] });
+    expect(candidates.some((candidate) => candidate.id === 'customer__customer_name')).toBe(false);
+
+    const mappings = filterTileMappingsForField(pages, [], 'customer_name', {}, sources);
+    expect(mappings.find((mapping) => mapping.tileId === 'trend')).toMatchObject({ supported: true, datasetId: 'ds_orders', datasetField: 'customer__customer_name', via: 'Customer' });
+    // The table with the column of its own is the filter's own Dataset, though the trend comes first on the page.
+    const primary = filterPrimarySourceId(mappings, 'overview');
+    expect(primary).toBe('customers');
+    // Never automatic: the trend is offered, unchecked.
+    const initial = new Set(initialFilterMappingKeys(mappings, primary));
+    expect([...initial]).toEqual(['overview:people']);
+    expect(filterLinkSuggestions(mappings, primary, sources)).toEqual([{ sourceId: 'orders', datasetName: 'Orders', field: 'customer__customer_name', via: 'Customer', mappingKeys: ['overview:trend'], tileCount: 1 }]);
+    expect(datasetFilterBindingsForSelection(mappings, new Set([...initial, 'overview:trend'])).ds_orders).toEqual({ field: 'customer__customer_name', tileIds: ['trend'] });
+  });
 });

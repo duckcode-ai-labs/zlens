@@ -140,10 +140,12 @@ const EXPECTED_TEST_FILES = 189;
 // 2552 with stories that describe tiles narrowed by different filters each with their own scope, and read
 // date ranges as dates (dashboard-story.test.ts, +2).
 // 2554 with an Ask review draft named after its own id and given the one Domain its tables belong to (drafts.test.ts, +2).
-const EXPECTED_TESTS = 2554;
+// 2555 with the runtime's App source record decorator (fields from related tables, design D2,
+// app-source-catalog.test.ts, +1).
+const EXPECTED_TESTS = 2555;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2477.
+// The ordinary lane's share is the difference: 2478.
 const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];

@@ -239,10 +239,11 @@ export function FiltersPanel({
         <section className="filter-builder-field"><span><ShieldCheck size={15} /></span><div><small>FIELD</small><strong>{humanize(configuration.fieldId)}</strong></div>{!editingExisting ? <button type="button" onClick={() => setConfiguration({ ...configuration, fieldId: '', selectedMappingKeys: [] })}>Change</button> : null}</section>
         {linkSuggestions.length ? <fieldset className="filter-link-suggestions" aria-label="Also filter these tiles?">
           <legend>Also filter these tiles?</legend>
-          <small>Other Datasets in this App have a field with the same name. Nothing is linked until you check it.</small>
+          <small>Other Datasets in this App have this field, or reach it through a checked join. Nothing is linked until you check it.</small>
           {linkSuggestions.map((suggestion) => {
             const checked = suggestion.mappingKeys.every((key) => selectedMappings.has(key));
-            const label = `${suggestion.datasetName} · ${humanize(suggestion.field)}`;
+            // "Orders · via Customer": the Dataset reaches the field through its Customer join (design D2).
+            const label = suggestion.via ? `${suggestion.datasetName} · via ${suggestion.via}` : `${suggestion.datasetName} · ${humanize(suggestion.field)}`;
             return <label key={suggestion.sourceId}>
               <input type="checkbox" checked={checked} onChange={() => toggleSuggestion(suggestion, !checked)} aria-label={`Also filter ${label}`} />
               <span><strong>{label}</strong><small>{suggestion.tileCount} {suggestion.tileCount === 1 ? 'tile' : 'tiles'}</small></span>
@@ -306,7 +307,7 @@ export function FilterTileChoice({ mapping, applies, onChoose, onUseDateField, o
   const tileName = humanize(mapping.tileTitle);
   const sourceName = sourceDisplayName(mapping.sourceName);
   return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason ? plainSourceText(mapping.reason) : undefined} data-testid="filter-tile-choice">
-    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}` : mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
+    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}` : mapping.via ? `via ${mapping.via}` : mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
       {!mapping.supported && mapping.dateFieldOptions?.length && onUseDateField ? <span className="filter-date-field-options">{mapping.dateFieldOptions.map((option) => <button key={option.field} type="button" onClick={() => onUseDateField(option.field)}>Use {humanize(option.field)} on {sourceName}</button>)}</span> : null}
       {mapping.supported && mapping.mappedFrom && onClearDateField ? <button type="button" className="filter-date-field-clear" onClick={onClearDateField}>Don’t use {humanize(mapping.datasetField ?? '')}</button> : null}
     </span>

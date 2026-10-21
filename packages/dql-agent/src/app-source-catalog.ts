@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import type {
   AppBuildSourceCapabilities,
   AppBuildSourceLifecycle,
@@ -77,6 +78,36 @@ type AppSourceCursor = {
 };
 
 const APP_SOURCE_OBJECT_TYPE = 'dql_block_source';
+
+/**
+ * A runtime may add what only it knows to each catalog record before any
+ * caller reads it: the local runtime adds the fields of related tables a
+ * table Dataset can reach through checked many-to-one joins (design D2). It
+ * is registered per project root and applied to every record this module
+ * returns, so the Data pane, the planner, previews and runs all read one
+ * descriptor. A decorator that throws leaves the record as it was.
+ */
+export type AppSourceRecordDecorator = (record: AppSourceCatalogRecord) => AppSourceCatalogRecord;
+const recordDecorators = new Map<string, AppSourceRecordDecorator>();
+
+/** Register the record decorator for one project; returns a function that removes it. */
+export function registerAppSourceRecordDecorator(projectRoot: string, decorate: AppSourceRecordDecorator): () => void {
+  const key = resolve(projectRoot);
+  recordDecorators.set(key, decorate);
+  return () => {
+    if (recordDecorators.get(key) === decorate) recordDecorators.delete(key);
+  };
+}
+
+function decorateRecord(projectRoot: string, record: AppSourceCatalogRecord): AppSourceCatalogRecord {
+  const decorate = recordDecorators.get(resolve(projectRoot));
+  if (!decorate) return record;
+  try {
+    return decorate(record);
+  } catch {
+    return record;
+  }
+}
 const DEFAULT_LIFECYCLES: AppBuildSourceLifecycle[] = [
   'certified',
   'review',
@@ -152,7 +183,7 @@ export function queryAppSourceCatalog(
     // page so the cursor keeps addressing the same relevance-ordered rows.
     const items = rankAppSourcesByTrust(filteredItems
       ? filteredItems.slice(offset, offset + pageSize)
-      : result!.items.map((object) => appSourceFromMetadata(object, lease.snapshotId, policy)));
+      : result!.items.map((object) => appSourceFromMetadata(object, lease.snapshotId, policy))).map((record) => decorateRecord(projectRoot, record));
     const total = filteredItems?.length ?? result!.total;
     const nextOffset = offset + items.length;
     const inventory = lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
@@ -219,7 +250,7 @@ export function resolveAppSourceCatalogRecords(
       snapshotId: lease.snapshotId,
       items: uniqueIds.flatMap((id) => {
         const object = byId.get(id);
-        return object ? [appSourceFromMetadata(object, lease.snapshotId, sourcePolicy)] : [];
+        return object ? [decorateRecord(projectRoot, appSourceFromMetadata(object, lease.snapshotId, sourcePolicy))] : [];
       }),
       missingSourceIds: uniqueIds.filter((id) => !byId.has(id)),
     };
@@ -249,7 +280,7 @@ export function matchAppSourceCatalogRecords(
   try {
     const inventory = lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
       .filter((object) => object.status !== 'deprecated')
-      .map((object) => appSourceFromMetadata(object, lease.snapshotId, sourcePolicy));
+      .map((object) => decorateRecord(projectRoot, appSourceFromMetadata(object, lease.snapshotId, sourcePolicy)));
     const preferCertified = (candidates: AppSourceCatalogRecord[]) => rankAppSourcesByTrust(candidates)[0];
     const items: AppSourceCatalogRecord[] = [];
     const unmatched: string[] = [];

@@ -248,6 +248,7 @@ export {
   matchAppSourceCatalogRecords,
   queryAppSourceCatalog,
   rankAppSourcesByTrust,
+  registerAppSourceRecordDecorator,
   resolveAppSourceCatalogRecords,
   shortlistAppSources,
 } from './app-source-catalog.js';
@@ -321,6 +322,7 @@ export type {
   AppSourceCatalogQuery,
   AppSourceCatalogRecord,
   AppSourceEligibility,
+  AppSourceRecordDecorator,
   AppSourceTrust,
 } from './app-source-catalog.js';
 export { seedDomainSkills, buildDomainReferenceSkills } from "./skills/domain-skills.js";
