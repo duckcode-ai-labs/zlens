@@ -432,9 +432,9 @@ is non-deterministic. Either:
 1. Pin the test data (commit a small CSV that drives the test).
 2. Loosen the assertion (a lower bound rather than an exact `==`).
 3. Move volatile expectations to `invariants` (which are documentation for the
-   agent, not executable). Note `assert` compares a single returned column to a
-   value (`assert <column> <op> <value>`) — wrap any aggregation in the block's
-   SQL and assert on the resulting column.
+   agent, not executable). Note `assert` compares a returned column to a value
+   on every row (`assert <column> <op> <value>`) — wrap any aggregation in the
+   block's SQL and assert on the resulting column.
 
 ---
 

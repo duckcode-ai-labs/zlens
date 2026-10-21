@@ -13,6 +13,7 @@ built from blocks.
 | A notebook cell | **Save Block** on the cell. See [Notebooks](../notebooks/index.md#save-a-cell-as-a-block). |
 | An Ask answer you want to keep | **Save as block** on the answer, or the review draft Ask saves for you. See [Answers that need review](../ask/needs-review.md). |
 | Nothing yet | **New block** in [Block Studio](block-studio.md) |
+| A dbt project | `zlens propose` in a terminal: it ranks your dbt models and writes one draft block per high-value model. See the [CLI reference](../reference/cli.md). |
 | A terminal | `zlens new block "<name>"` or `zlens import sql <path>` |
 
 Whichever way you start, the result is a **draft**. A person certifies it
@@ -33,15 +34,15 @@ the block is saved only on your machine, outside git, until you publish it.
 
 ## Block status
 
-Block Studio shows a block's status as a badge:
+Block Studio shows a block's status as a badge in capital letters:
 
 | Badge | Means |
 |---|---|
-| **Draft** | Saved, not reviewed. Ask does not use it as a trusted answer. |
-| **Certified** | A person certified it. Ask and Apps treat it as trusted. |
-| **In review** | Marked for review. |
-| **Recertify** | Something it depends on changed; certify it again. |
-| **Deprecated** | Retired. If it names a replacement, Block Studio shows **Replaced by** and links to it. |
+| **DRAFT** | Saved, not reviewed. Ask does not use it as a trusted answer. |
+| **CERTIFIED** | A person certified it. Ask and Apps treat it as trusted. |
+| **IN REVIEW** | The source says `status = "review"`. Block Studio never sets this status; it appears only when someone writes it into the `.dql` file. |
+| **RECERTIFY** | The block was certified, but its source was edited after that (it no longer matches its certification receipt), or something it depends on changed. Ask does not treat it as certified until someone certifies it again. See [Save and certify](certify.md#edited-after-certification). |
+| **DEPRECATED** | Retired. If it names a replacement, Block Studio shows **Replaced by** and links to it. |
 
 ## What a block file looks like
 
@@ -70,7 +71,8 @@ block "Top customers by lifetime spend" {
   your project uses domain folders.
 - Drafts that Ask or Import SQL created go in a `_drafts/` folder until they
   are certified.
-- Each block has a companion file under `semantic-layer/blocks/` that records
-  its review status and, once certified, who certified it.
+- Once a block is saved, it has a companion file under `semantic-layer/blocks/`
+  that records its review status and, once certified, the certification
+  receipt. A block that has never been saved has no companion file yet.
 
 The full syntax is in the [DQL language reference](../reference/language.md).

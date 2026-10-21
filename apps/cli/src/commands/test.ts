@@ -6,55 +6,7 @@ import { buildExecutionPlan, type NotebookCell } from '@zlens/notebook';
 import { loadProjectConfig, prepareLocalExecution } from '../local-runtime.js';
 import type { ProjectConfig } from '../local-runtime.js';
 import type { CLIFlags } from '../args.js';
-
-function formatExpected(expr: any): string {
-  if (expr === null || expr === undefined) return 'null';
-  if (typeof expr !== 'object') return String(expr);
-  if (Object.prototype.hasOwnProperty.call(expr, 'value')) return String(expr.value);
-  if (Object.prototype.hasOwnProperty.call(expr, 'name')) return String(expr.name);
-  if (expr.kind === 'ArrayLiteral' && Array.isArray(expr.elements)) {
-    return `[${expr.elements.map((e: any) => formatExpected(e)).join(', ')}]`;
-  }
-  return JSON.stringify(expr);
-}
-
-function evaluateAssertion(
-  field: string,
-  operator: string,
-  expected: unknown,
-  result: { columns: string[]; rows: Record<string, unknown>[]; rowCount: number },
-): { pass: boolean; actual: unknown; message: string } {
-  // row_count is a special field
-  if (field === 'row_count') {
-    const actual = result.rowCount;
-    const exp = Number(expected);
-    const pass = compareValues(actual, operator, exp);
-    return { pass, actual, message: `row_count ${operator} ${expected}` };
-  }
-
-  // Column-level assertions: check if column exists and apply to first row
-  if (!result.columns.includes(field)) {
-    return { pass: false, actual: undefined, message: `Column '${field}' not found in results` };
-  }
-
-  const actual = result.rows[0]?.[field];
-  const pass = compareValues(actual, operator, expected);
-  return { pass, actual, message: `${field} ${operator} ${expected}` };
-}
-
-function compareValues(actual: unknown, operator: string, expected: unknown): boolean {
-  const a = Number(actual);
-  const e = Number(expected);
-  switch (operator) {
-    case '>': return a > e;
-    case '>=': return a >= e;
-    case '<': return a < e;
-    case '<=': return a <= e;
-    case '==': case '=': return actual == expected;
-    case '!=': return actual != expected;
-    default: return false;
-  }
-}
+import { blockTestAssertionName, evaluateBlockTestAssertion, formatBlockTestExpected } from '../block-test-assertions.js';
 
 function resolveConnection(flags: CLIFlags, projectConfig: ProjectConfig): ConnectionConfig {
   const conn = flags.connection;
@@ -109,7 +61,7 @@ export async function runTest(filePath: string, flags: CLIFlags): Promise<void> 
       console.log(`    Tests: ${testCount} assertion(s)`);
       if (testCount > 0) {
         for (const test of b.tests) {
-          console.log(`    -> assert ${test.field} ${test.operator} ${formatExpected(test.expected)}`);
+          console.log(`    -> assert ${test.field} ${test.operator} ${formatBlockTestExpected(test.expected)}`);
         }
       }
       console.log('    Status: Dry run (no database connection)');
@@ -157,18 +109,18 @@ export async function runTest(filePath: string, flags: CLIFlags): Promise<void> 
         ? rawResult.columns.map((c: any) => typeof c === 'string' ? c : c?.name ?? String(c))
         : [];
       const rows = Array.isArray(rawResult?.rows) ? rawResult.rows : [];
-      const rowCount = rows.length;
 
       // Run assertions
       for (const test of plan.tests) {
         totalTests++;
-        const assertion = evaluateAssertion(test.field, test.operator, test.expected, { columns, rows, rowCount });
-        if (assertion.pass) {
+        const name = blockTestAssertionName(test);
+        const assertion = evaluateBlockTestAssertion(test, { columns, rows });
+        if (assertion.passed) {
           passed++;
-          console.log(`    PASS: assert ${assertion.message} (actual: ${assertion.actual})`);
+          console.log(`    PASS: ${name} (actual: ${String(assertion.actual)})`);
         } else {
           failed++;
-          console.log(`    FAIL: assert ${assertion.message} (actual: ${assertion.actual})`);
+          console.log(`    FAIL: ${name} — ${assertion.error ?? 'failed'}`);
         }
       }
     } catch (err) {

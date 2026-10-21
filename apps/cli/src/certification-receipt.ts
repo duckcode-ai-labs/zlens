@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { certifiedSourceSha256 } from '@zlens/core';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 /**
@@ -124,8 +124,9 @@ export function withBlockStatus(source: string, status: string): string {
   return status === 'certified' ? withoutReviewPendingTags(next) : next;
 }
 
+/** The fingerprint a receipt records; `@zlens/core` compares it with the file on disk. */
 export function sourceSha256(source: string): string {
-  return createHash('sha256').update(source.trimEnd() + '\n').digest('hex');
+  return certifiedSourceSha256(source);
 }
 
 export function buildCertificationReceipt(input: {

@@ -9,7 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { buildManifest, resolveDataLexManifestPath, resolveDbtManifestPath, type DQLManifest } from '@zlens/core';
+import { buildManifest, changedSinceCertifiedMessage, resolveDataLexManifestPath, resolveDbtManifestPath, type DQLManifest } from '@zlens/core';
 import type { CLIFlags } from '../args.js';
 
 export async function runVerify(
@@ -64,10 +64,14 @@ export async function runVerify(
 
   const drift = diffManifest(onDisk, fresh);
   const json = (flags as { format?: string }).format === 'json';
+  // Not drift between source and manifest, so not a failure: a certified block
+  // edited after its receipt was written, which Ask no longer serves as certified.
+  const warnings = changedCertifiedBlocks(fresh);
+  if (!json) for (const warning of warnings) console.error(`  ⚠ ${warning}`);
 
   if (drift.length === 0) {
     if (json) {
-      console.log(JSON.stringify({ ok: true }));
+      console.log(JSON.stringify(warnings.length > 0 ? { ok: true, warnings } : { ok: true }));
     } else {
       console.log('  ✓ Manifest verified — no drift between source tree and dql-manifest.json.');
     }
@@ -75,13 +79,19 @@ export async function runVerify(
   }
 
   if (json) {
-    console.log(JSON.stringify({ ok: false, drift }, null, 2));
+    console.log(JSON.stringify({ ok: false, drift, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2));
   } else {
     console.error(`  ✗ Manifest drift detected:`);
     for (const item of drift) console.error(`    - ${item}`);
     console.error('\n  Run `zlens compile` to regenerate, then commit.');
   }
   process.exit(1);
+}
+
+function changedCertifiedBlocks(manifest: DQLManifest): string[] {
+  return Object.values(manifest.blocks)
+    .filter((block) => block.certificationSourceChanged)
+    .map((block) => `${block.filePath}: ${changedSinceCertifiedMessage(block.name, null)} Certify it again (Block Studio's Re-certify).`);
 }
 
 function diffManifest(a: DQLManifest, b: DQLManifest): string[] {

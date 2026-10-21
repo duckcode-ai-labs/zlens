@@ -1154,6 +1154,12 @@ export interface BlockStudioMetadata {
     checks?: string[];
     warnings?: string[];
   };
+  /**
+   * The source says certified but was edited after its receipt was written
+   * (the receipt's sourceSha256 no longer matches). Ask treats it as pending
+   * recertification until it is certified again.
+   */
+  certificationSourceChanged?: boolean;
   /** Fingerprint of the source that was opened; used for save/certify conflict checks. */
   sourceFingerprint?: string;
   sourceKind?: string;

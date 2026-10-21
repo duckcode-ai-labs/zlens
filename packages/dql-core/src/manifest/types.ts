@@ -384,7 +384,14 @@ export interface ManifestBlock {
   filePath: string;
   domain?: string;
   owner?: string;
+  /**
+   * Lifecycle status. A block whose source says `certified` but no longer
+   * matches its certification receipt is `pending_recertification` here, so
+   * nothing serves an edited block as certified.
+   */
   status?: string;
+  /** True when the source declares `certified` but was edited after its certification receipt was written. */
+  certificationSourceChanged?: boolean;
   blockType?: string;
   /** Raw SQL from the block's query */
   sql: string;

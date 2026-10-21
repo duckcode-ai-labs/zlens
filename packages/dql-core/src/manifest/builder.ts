@@ -71,6 +71,7 @@ import { domainFolderSlug } from './domain-writer.js';
 import { loadDomainPackageRegistry } from './domain-package-registry.js';
 import type { DomainPackageRegistryResult } from './domain-package-registry.js';
 import { buildManifestKnowledgeGraph, compactManifestKnowledgeGraph } from './knowledge-graph.js';
+import { certifiedBlockFileState, changedSinceCertifiedMessage } from '../trust/certification-source.js';
 import { loadManifestKnowledgeSkills, manifestKnowledgeSkillInputFiles } from './knowledge-skills.js';
 
 // ---- Public API ----
@@ -919,6 +920,7 @@ function scanBlocks(
   const blocks: Record<string, ManifestBlock> = {};
   const all: ManifestBlock[] = [];
   const seenFiles = new Set<string>();
+  let companionRegistry: DomainPackageRegistryResult | undefined;
 
   for (const dir of dirs) {
     const dirPath = join(projectRoot, dir);
@@ -938,6 +940,10 @@ function scanBlocks(
           if (block.kind !== 'BlockDecl') continue;
 
           const nextBlock = blockDeclToManifestBlock(block, relPath);
+          markChangedSinceCertified(projectRoot, nextBlock, source, diagnostics, () => {
+            companionRegistry ??= loadDomainPackageRegistry(projectRoot);
+            return companionRegistry;
+          });
           validateDatasetBlockContract(nextBlock, diagnostics);
           all.push(nextBlock);
           if (blocks[block.name]) {
@@ -967,6 +973,35 @@ function scanBlocks(
   }
 
   return { blocks, all };
+}
+
+/**
+ * A block certified by an explicit Certify action carries a receipt with the
+ * fingerprint of the source it certified. When the source on disk no longer
+ * matches it, the block was edited after certification (outside ZLens, which
+ * demotes an edited block on save): report it as pending recertification and
+ * say so. A block with no receipt (certified before receipts) stays certified.
+ */
+function markChangedSinceCertified(
+  projectRoot: string,
+  block: ManifestBlock,
+  source: string,
+  diagnostics: ManifestDiagnostic[] | undefined,
+  registry: () => DomainPackageRegistryResult,
+): void {
+  if (block.status !== 'certified') return;
+  const { state, companionPath } = certifiedBlockFileState(projectRoot, block.filePath, source, {
+    packageForPath: (filePath) => registry().packageForPath(filePath),
+  });
+  if (state !== 'changed') return;
+  block.status = 'pending_recertification';
+  block.certificationSourceChanged = true;
+  diagnostics?.push({
+    kind: 'resolve',
+    filePath: block.filePath,
+    severity: 'warning',
+    message: changedSinceCertifiedMessage(block.name, companionPath),
+  });
 }
 
 function shouldReplaceDuplicateBlock(existing: ManifestBlock, next: ManifestBlock): boolean {
