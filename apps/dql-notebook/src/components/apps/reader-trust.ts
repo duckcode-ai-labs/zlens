@@ -14,8 +14,8 @@ import {
  * with signed snapshots and digests in step 10). This module adds what only
  * the reader needs: freshness and the receipt behind a tile.
  */
-export { READER_TRUST_LABELS, readerTrustCounts, readerTrustSummary } from '@zlens/core/apps/reader-trust';
-export type { ReaderTrust, ReaderTrustState } from '@zlens/core/apps/reader-trust';
+export { READER_TRUST_LABELS, certifiedByLabel, plainCertificationChecks, readerTrustCounts, readerTrustSummary } from '@zlens/core/apps/reader-trust';
+export type { CertificationByline, ReaderTrust, ReaderTrustState } from '@zlens/core/apps/reader-trust';
 
 type LayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
 type RunTile = DashboardRunResponse['tiles'][number];
@@ -56,6 +56,18 @@ export interface ReceiptRow {
   value: string;
   /** Fingerprints and ids are shown in a monospace face and can be copied. */
   code?: boolean;
+  /**
+   * Ids, hashes, file paths and fingerprints: shown only under the
+   * collapsed **Technical details** toggle (D6).
+   */
+  technical?: boolean;
+  /** Several items (the checks that passed), shown as a list. */
+  list?: string[];
+}
+
+/** The rows a person reads first, and the ones kept under Technical details. */
+export function splitTechnicalRows(rows: ReceiptRow[]): { plain: ReceiptRow[]; technical: ReceiptRow[] } {
+  return { plain: rows.filter((row) => !row.technical), technical: rows.filter((row) => row.technical) };
 }
 
 const short = (value: string | undefined | null) => (value ? (value.length > 16 ? `${value.slice(0, 12)}…` : value) : undefined);
@@ -72,12 +84,16 @@ export function readerTileReceipt(
   ranAtMs: number | undefined,
 ): ReceiptRow[] {
   const rows: ReceiptRow[] = [];
-  const push = (label: string, value: string | undefined | null, code = false) => {
-    if (value !== undefined && value !== null && String(value).trim() !== '') rows.push({ label, value: String(value), ...(code ? { code } : {}) });
+  const push = (label: string, value: string | undefined | null, code = false, technical = code) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') rows.push({ label, value: String(value), ...(code ? { code } : {}), ...(technical ? { technical } : {}) });
   };
   const source = tile?.artifact?.name ?? tile?.citation?.name ?? tile?.blockPath ?? item.block?.blockId ?? tile?.dataset?.sourceId;
   push('Source', source);
-  push('Source file', tile?.artifact?.sourcePath ?? tile?.citation?.path ?? tile?.blockPath);
+  const trust = readerTileTrust(item, tile);
+  // Who certified it and when, and the checks that passed (D5).
+  if (trust?.state === 'certified' && trust.byline && trust.byline !== 'Certified') push('Certified', trust.byline);
+  if (trust?.state === 'certified' && trust.checks?.length) rows.push({ label: 'Checks passed', value: trust.checks.join(' · '), list: trust.checks });
+  push('Source file', tile?.artifact?.sourcePath ?? tile?.citation?.path ?? tile?.blockPath, false, true);
   push('Owner', item.owner);
   // Every calculation's expression, so a reader can see how a number was made.
   push('Calculations', calculationWords(item.query as TileQuery | undefined).join(' · ') || undefined);
@@ -87,7 +103,7 @@ export function readerTileReceipt(
     : 'None applied');
   const rowCount = tile?.result?.rowCount ?? tile?.result?.rows?.length;
   push('Rows', rowCount !== undefined ? rowCount.toLocaleString() : undefined);
-  push('Ran', ranAtMs !== undefined ? new Date(ranAtMs).toLocaleString() : undefined);
+  push('Last refreshed', ranAtMs !== undefined ? new Date(ranAtMs).toLocaleString() : undefined);
   push('Cached at', tile?.dataset?.cacheDelivery?.cachedAt ? new Date(tile.dataset.cacheDelivery.cachedAt).toLocaleString() : undefined);
   push('Result fingerprint', short(tile?.result?.resultFingerprint ?? tile?.dataset?.executionProvenance?.resultFingerprint ?? (tile as { resultFingerprint?: string } | undefined)?.resultFingerprint), true);
   push('SQL fingerprint', short(tile?.dataset?.executionProvenance?.executedSqlFingerprint ?? (tile as { compiledSqlFingerprint?: string } | undefined)?.compiledSqlFingerprint), true);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyTableProfile, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetDeclaration } from './table-draft.js';
+import { applyTableProfile, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -155,5 +155,27 @@ describe('a period column as the row key (B12)', () => {
     const proposal = proposeTableDataset({ table: 'monthly_revenue', relation: '(SELECT 1) AS q', columns: monthly });
     expect(applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 11, nonNull: 12 } } }, 'monthly_revenue').key).toBeUndefined();
     expect(applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 11, nonNull: 11 } } }, 'monthly_revenue').key).toBeUndefined();
+  });
+});
+
+describe('the checks a certification receipt lists (D5)', () => {
+  it('says what one row is and how each kept number is shown, including cents', () => {
+    const columns = [
+      { name: 'order_id', type: 'VARCHAR' },
+      { name: 'subtotal_cents', type: 'BIGINT' },
+      { name: 'tip_pennies', type: 'INTEGER' },
+      { name: 'order_total', type: 'DECIMAL(12,2)' },
+    ];
+    const converted = applyTableProfile(proposeTableDataset({ table: 'orders', relation: 'main.orders', columns, convertMinorUnits: true }), { rows: 1250, columns: { order_id: { distinct: 1250, nonNull: 1250 } } }, 'orders');
+    const sentences = tableDatasetCheckSentences(converted, 1250);
+    expect(sentences[0]).toBe('Row key: each row is one order (order_id is filled and different on all 1,250 rows)');
+    expect(sentences[1]).toMatch(/^Number formats: /);
+    expect(sentences[1]).toContain('Subtotal: shown in dollars (stored as cents)');
+    expect(sentences[1]).toContain('Order total: money');
+
+    const plain = applyTableProfile(proposeTableDataset({ table: 'orders', relation: 'main.orders', columns }), { rows: 3, columns: { order_id: { distinct: 3, nonNull: 3 } } }, 'orders');
+    expect(tableDatasetCheckSentences(plain, 3)[1]).toContain('Subtotal cents: a plain number (stored as cents)');
+    const withoutKey = { ...plain, key: undefined, measures: plain.measures.map((measure) => ({ ...measure, include: false })) };
+    expect(tableDatasetCheckSentences(withoutKey, 3)).toEqual([]);
   });
 });

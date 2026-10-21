@@ -176,6 +176,8 @@ describe('fields from a saved query result', () => {
       expect(Object.keys(byMonth.result.rows[0]).sort()).toEqual(['gross_revenue', 'month_month']);
       expect(byMonth.dataset.validation).toEqual({ outcome: 'covered', adaptations: [] });
       expect(byMonth.trustState).toBe('certified');
+      // D5: a certified tile carries who certified its source; one certified by hand, before receipts, carries {}.
+      expect(byMonth.certification).toEqual({});
       expect(byMonth.artifact.sql).toContain('WITH ds AS');
       // Rolled up: summed, and the receipt says from what.
       const byQuarter = findTile(run.body.tiles, 'Revenue by quarter');
@@ -190,6 +192,7 @@ describe('fields from a saved query result', () => {
       // Needs review stays Needs review.
       const reviewTile = findTile(run.body.tiles, 'Draft revenue');
       expect(reviewTile.trustState).toBe('review_required');
+      expect(reviewTile.certification).toBeUndefined();
       expect(reviewTile.dataset.validation.adaptations[0].message).toBe('Rolled up from the result of Region draft, which needs review.');
 
       // An average is never summed.

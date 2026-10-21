@@ -1,4 +1,7 @@
-import { certifiedSourceSha256 } from '@zlens/core';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { blockCompanionRelativePath, certifiedSourceSha256 } from '@zlens/core';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 /**
@@ -15,6 +18,12 @@ import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 export interface CertificationReceipt {
   /** Who certified: the host's signed-in person, else the local git/OS owner. */
   certifiedBy: string;
+  /**
+   * The certifier's display name, when one is known (the host's display name,
+   * else git `user.name`), so badges say "Certified by Kranthi" instead of an
+   * email. Receipts written before this was recorded have none.
+   */
+  certifiedByName?: string;
   /** ISO-8601 timestamp of the certification. */
   certifiedAt: string;
   /** The surface the explicit Certify action came from. */
@@ -162,6 +171,7 @@ export function sourceSha256(source: string): string {
 export function buildCertificationReceipt(input: {
   source: string;
   certifiedBy: string | undefined | null;
+  certifiedByName?: string | undefined | null;
   via: CertificationSurface;
   enterprise?: boolean;
   checks?: string[];
@@ -169,8 +179,10 @@ export function buildCertificationReceipt(input: {
   now?: Date;
 }): CertificationReceipt {
   const certifiedBy = input.certifiedBy?.trim() || 'local';
+  const certifiedByName = input.certifiedByName?.replace(/[\r\n]/g, ' ').trim();
   return {
     certifiedBy,
+    ...(certifiedByName && certifiedByName !== certifiedBy ? { certifiedByName } : {}),
     certifiedAt: (input.now ?? new Date()).toISOString(),
     via: input.via,
     rules: input.enterprise ? 'enterprise' : 'oss',
@@ -295,6 +307,7 @@ export function readCompanionCertification(companion: string | null | undefined)
     const certifiedAt = receipt.certifiedAt as unknown;
     return {
       certifiedBy: receipt.certifiedBy,
+      ...(typeof receipt.certifiedByName === 'string' && receipt.certifiedByName.trim() ? { certifiedByName: receipt.certifiedByName.trim() } : {}),
       certifiedAt: certifiedAt instanceof Date ? certifiedAt.toISOString() : String(certifiedAt),
       via: (receipt.via ?? 'block-studio') as CertificationSurface,
       rules: receipt.rules === 'enterprise' ? 'enterprise' : 'oss',
@@ -302,6 +315,65 @@ export function readCompanionCertification(companion: string | null | undefined)
       ...(Array.isArray(receipt.checks) ? { checks: receipt.checks.map(String) } : {}),
       ...(Array.isArray(receipt.warnings) ? { warnings: receipt.warnings.map(String) } : {}),
     };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Best-effort git `user.name` (project first, then global): the display name
+ * a local certification records, so "Certified by" names a person rather
+ * than an email address. Never throws.
+ */
+export function gitUserName(projectRoot: string): string | undefined {
+  const run = (args: string[]): string | undefined => {
+    try {
+      const out = execFileSync('git', args, { cwd: projectRoot, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      return out || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  return run(['config', 'user.name']) ?? run(['config', '--global', 'user.name']);
+}
+
+/** Who certified a block and when, as every App surface shows it (D5). */
+export interface CertificationByline {
+  /** The recorded identity ("local" when none was known). */
+  by?: string;
+  /** The display name, when one was recorded. */
+  name?: string;
+  /** ISO-8601 time of certification. */
+  at?: string;
+  /** Checks that passed, by checklist name or as plain sentences. */
+  checks?: string[];
+}
+
+/** The byline of a receipt, for the browser. */
+export function certificationByline(receipt: CertificationReceipt): CertificationByline {
+  return {
+    by: receipt.certifiedBy,
+    ...(receipt.certifiedByName ? { name: receipt.certifiedByName } : {}),
+    at: receipt.certifiedAt,
+    ...(receipt.checks?.length ? { checks: receipt.checks } : {}),
+  };
+}
+
+/**
+ * Who certified a certified block file and when, read from its companion
+ * receipt; `{}` for a block certified before receipts were recorded, and
+ * null when the block is not certified or cannot be read.
+ */
+export function blockCertificationByline(projectRoot: string, blockPath: string | undefined | null): CertificationByline | null {
+  if (!blockPath) return null;
+  try {
+    const absolute = join(projectRoot, blockPath);
+    if (!existsSync(absolute)) return null;
+    if (blockSourceStatus(readFileSync(absolute, 'utf-8')) !== 'certified') return null;
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath);
+    const companion = companionPath && existsSync(join(projectRoot, companionPath)) ? readFileSync(join(projectRoot, companionPath), 'utf-8') : null;
+    const receipt = readCompanionCertification(companion);
+    return receipt ? certificationByline(receipt) : {};
   } catch {
     return null;
   }

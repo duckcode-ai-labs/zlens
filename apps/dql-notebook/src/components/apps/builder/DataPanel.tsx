@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { BarChart3, CalendarDays, Check, ChevronDown, FileText, Gauge, Hash, Heading, MoreHorizontal, Plus, Search, ShieldCheck, Table2, Type, X } from 'lucide-react';
+import { BarChart3, CalendarDays, Check, ChevronDown, FileText, Gauge, Hash, Heading, MoreHorizontal, Plus, Search, ShieldCheck, Sparkles, Table2, Type, X } from 'lucide-react';
 import type { AppBlockRecommendation } from '../../../api/client';
 import type { DatasetDescriptor, DatasetField } from '@zlens/core/datasets/descriptor';
 import type { TileQuery } from '@zlens/core/apps/tile-query';
@@ -7,6 +7,8 @@ import { groupDatasetFields, queryFieldNames } from './field-query';
 import { humanize } from './studio-ui';
 import { writeFieldDrag } from './ShelfEditor';
 import { appDataSameNameOrigins } from './app-data-names';
+import { SUMMARY_OPTION } from '../reader-page-structure';
+import { certifiedByLabel } from '../reader-trust';
 import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canMakeRowLevel, needsReview, sourceCatalogKindLabel, trustLabel } from './app-data';
 
 export type DataPanelTarget =
@@ -32,6 +34,8 @@ export function DataPanel({
   onAddData,
   onAddSavedQuery,
   onAddContent,
+  summaryAdded = false,
+  onToggleSummary,
   onAuthorDataset,
   onRefreshBinding,
   onMakeRowLevel,
@@ -53,6 +57,10 @@ export function DataPanel({
   onAddData: () => void;
   onAddSavedQuery: (item: AppBlockRecommendation, kind: 'kpi' | 'chart' | 'table') => void;
   onAddContent: (kind: 'heading' | 'text') => void;
+  /** The page has the auto-written Summary (D6). */
+  summaryAdded?: boolean;
+  /** Add or remove the page's auto-written Summary. */
+  onToggleSummary?: () => void;
   /** Author the active Dataset's definition, when it is a DQL block Dataset. */
   onAuthorDataset?: (item: AppBlockRecommendation) => void;
   /** Refresh this App's binding to the active Dataset's current revision. */
@@ -106,7 +114,7 @@ export function DataPanel({
         <span className="dataset-icon"><TableGlyph /></span>
         <span className="dataset-text">
           <strong>{active ? humanize(active.name) : appData.length ? 'Choose your data' : 'No data yet'}{active && sameNames.get(active.id) ? <em className="same-name-origin"> · {sameNames.get(active.id)}</em> : null}</strong>
-          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceCatalogKindLabel(active)} · {trustLabel(activeCertified ? 'certified' : 'review')}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
+          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceCatalogKindLabel(active)} · {activeCertified ? certifiedByLabel(active.certification) : trustLabel('review')}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
         </span>
         <ChevronDown size={14} />
       </button>
@@ -121,7 +129,7 @@ export function DataPanel({
         {appData.map((item) => {
           const certified = !needsReview(item);
           return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === active?.id} className={item.id === active?.id ? 'on' : ''} onClick={() => { onChoose(item); setPickerOpen(false); setSearch(''); }}>
-            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceCatalogKindLabel(item)} · {trustLabel(certified ? 'certified' : 'review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
+            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceCatalogKindLabel(item)} · {certified ? certifiedByLabel(item.certification) : trustLabel('review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
             {item.id === active?.id ? <Check size={13} /> : null}
           </button>;
         })}
@@ -187,6 +195,7 @@ export function DataPanel({
     <div className="content-quick-add compact">
       <button type="button" disabled={disabled} onClick={() => onAddContent('heading')}><Heading size={14} /><span><strong>Heading</strong></span></button>
       <button type="button" disabled={disabled} onClick={() => onAddContent('text')}><Type size={14} /><span><strong>Text</strong></span></button>
+      {onToggleSummary ? <button type="button" disabled={disabled} aria-pressed={summaryAdded} title={SUMMARY_OPTION.hint} onClick={onToggleSummary}><Sparkles size={14} /><span><strong>{summaryAdded ? 'Remove Summary' : SUMMARY_OPTION.label}</strong></span></button> : null}
     </div>
   </div>;
 }

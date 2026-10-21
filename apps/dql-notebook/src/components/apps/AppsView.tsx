@@ -93,7 +93,9 @@ import {
   type ViewerDashboardFilter,
 } from './dashboard-filters';
 import { semanticApprovalState } from './app-semantic-approval';
-import { appCardSeal, appCertificationRollup, appRunTrustAcrossPages, type AppRunTrust } from './app-certification';
+import { relativeAge } from './reader-trust';
+import { UNPUBLISHED_CHANGES } from './app-studio-words';
+import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
 import {
@@ -1231,6 +1233,21 @@ function AppLibrarySurface({
   );
 }
 
+/** "5 min ago", "21 Oct", or "—" when the time is not known. */
+export function appCardUpdated(at: string | undefined, nowMs: number = Date.now()): string {
+  const ms = at ? Date.parse(at) : NaN;
+  return Number.isFinite(ms) ? relativeAge(ms, nowMs) : '—';
+}
+
+/** The card's extra signals: only counts above zero, in plain words. */
+export function appCardSignals(input: { draftCount: number; researchCount: number; aiPinCount: number }): string[] {
+  const out: string[] = [];
+  if (input.draftCount > 0) out.push(`${input.draftCount} unpublished change${input.draftCount === 1 ? '' : 's'}`);
+  if (input.researchCount > 0) out.push(`${input.researchCount} ${input.researchCount === 1 ? 'analysis' : 'analyses'}`);
+  if (input.aiPinCount > 0) out.push(`${input.aiPinCount} saved insight${input.aiPinCount === 1 ? '' : 's'}`);
+  return out;
+}
+
 function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: () => void }) {
   const needsReview = draft.reviewTasks.some((task) => task.status === 'open');
   const domain = draft.pages[0]?.metadata.domain || 'Local workspace';
@@ -1241,21 +1258,19 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
           <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private"><ShieldCheck size={12} /> Private draft</span></div>
           <span className="dql-app-draft-mark"><LayoutDashboard size={15} /></span>
         </div>
-        <StatusSeal tone={needsReview ? 'draft' : 'agentic'}>{needsReview ? 'needs review' : 'local draft'}</StatusSeal>
+        <StatusSeal tone={needsReview ? 'draft' : 'agentic'}>{needsReview ? 'needs review' : 'Unpublished'}</StatusSeal>
         <h3>{draft.name}</h3>
         <p>{cleanStakeholderCopy(draft.frame.goal || 'A private App draft ready to shape in Studio.')}</p>
         <div className="dql-app-card-mini">
           <MiniMetric label="Pages" value={String(draft.pages.length)} />
-          <MiniMetric label="Mode" value={draft.authoringMode === 'ai' ? 'AI + manual' : 'Manual'} />
-          <MiniMetric label="Revision" value={String(draft.revision)} />
+          <MiniMetric label="Updated" value={appCardUpdated(draft.updatedAt)} />
         </div>
         <div className="dql-app-card-signals">
-          <span><ShieldCheck size={13} /> Not in Project source</span>
-          <span><Sparkles size={13} /> {draft.sourcePolicy === 'include_review_required' ? 'Also allows data that needs review' : 'Only certified data'}</span>
+          <span><ShieldCheck size={13} /> {UNPUBLISHED_CHANGES}</span>
         </div>
       </div>
       <div className="dql-app-card-depth">
-        <span>Saved locally</span>
+        <span>{draft.sourcePolicy === 'include_review_required' ? 'Also allows data that needs review' : 'Only certified data'}</span>
         <button type="button" className="dql-app-card-act primary" onClick={onOpen}>Continue <ArrowRight size={12} /></button>
       </div>
     </article>
@@ -1286,19 +1301,20 @@ function AppCard({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const draftCount = app.drafts?.length ?? 0;
-  const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust });
+  const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust, certifiedBy: app.certifiedBy, certifiedAt: app.certifiedAt });
   const certified = seal.certified;
   const researchCount = app.investigations ?? 0;
   const aiPinCount = app.aiPins ?? 0;
   const shared = isSharedProjectApp(app);
-  const trustLabel = certified ? 'Certified app' : draftCount > 0 || researchCount > 0 || aiPinCount > 0 ? 'Review needed' : 'Draft app';
+  // Only what a person acts on: no zero counts (D6).
+  const signals = appCardSignals({ draftCount: reader ? 0 : draftCount, researchCount, aiPinCount: reader ? 0 : aiPinCount });
   return (
     <article className="dql-app-card">
       <div className="dql-app-card-body" onClick={onOpen}>
         <div className="dql-app-card-top">
           <div className="dql-app-card-labels">
             <span className="dql-app-eyebrow">{app.domain || 'Domain'}</span>
-            <span className={`dql-app-visibility ${shared ? 'shared' : 'private'}`}>{shared ? <Users size={12} /> : <ShieldCheck size={12} />}{reader ? (shared ? 'Shared' : 'Private') : shared ? 'Shared Project' : 'Private Project'}</span>
+            <span className={`dql-app-visibility ${shared ? 'shared' : 'private'}`}>{shared ? <Users size={12} /> : <ShieldCheck size={12} />}{shared ? 'Shared' : 'Private'}</span>
           </div>
           <button
             type="button"
@@ -1330,14 +1346,11 @@ function AppCard({
         <p>{cleanStakeholderCopy(app.description || appLibraryWords(reader).appNote(app))}</p>
         <div className="dql-app-card-mini">
           <MiniMetric label="Pages" value={String(app.dashboards.length)} />
-          <MiniMetric label="Books" value={String(app.notebooks?.length ?? 0)} />
-          {reader ? null : <MiniMetric label="Drafts" value={String(draftCount)} />}
+          <MiniMetric label="Updated" value={appCardUpdated(app.updatedAt)} />
         </div>
-        <div className="dql-app-card-signals">
-          <span><ShieldCheck size={13} /> {trustLabel}</span>
-          <span><Search size={13} /> {researchCount} analysis</span>
-          {reader ? null : <span><Sparkles size={13} /> {aiPinCount} local insights</span>}
-        </div>
+        {signals.length ? <div className="dql-app-card-signals">
+          {signals.map((signal) => <span key={signal}>{signal.includes('analys') ? <Search size={13} /> : <Sparkles size={13} />} {signal}</span>)}
+        </div> : null}
       </div>
       <div className="dql-app-card-depth">
         <span>{primaryOwner(app)}</span>
@@ -1545,7 +1558,7 @@ function AppWorkspaceSurface({
   const certification = pageTrust && pageTrust.state !== 'pending' && pageTrust.state !== 'empty'
     ? {
         allCertified: pageTrust.allCertified && draftCount === 0,
-        label: pageTrust.allCertified && draftCount === 0 ? pageTrust.label : draftCount > 0 && pageTrust.allCertified ? `${pageTrust.text} · ${draftCount} App draft pending` : pageTrust.text,
+        label: pageTrust.allCertified && draftCount === 0 ? allDataCertifiedLabel(pageTrust.byline) : draftCount > 0 && pageTrust.allCertified ? `${pageTrust.text} · ${draftCount} App draft pending` : pageTrust.text,
       }
     : rollup;
   const [chartAnswer, setChartAnswer] = useState<{

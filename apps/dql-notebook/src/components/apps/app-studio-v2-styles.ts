@@ -1455,6 +1455,14 @@ export const APP_STUDIO_V2_STYLES = `
 .saved-query-fields-card .table-dataset-error button { justify-self:start; height:30px; padding:0 12px; border:1px solid var(--status-error); border-radius:8px; background:var(--bg-1); color:var(--status-error); font-size:12px; font-weight:600; cursor:pointer; }
 .saved-query-fields-done { display:flex; gap:10px; align-items:flex-start; padding:10px 12px; border-radius:8px; background:var(--accent-dim); }
 .saved-query-fields-done.review { background:color-mix(in srgb,var(--status-warning) 8%,var(--bg-2)); }
+.certified-receipt-note { display:flex; gap:10px; align-items:flex-start; margin:8px 0; padding:10px 12px; border:1px solid color-mix(in srgb,var(--accent) 30%,var(--border-subtle)); border-radius:8px; background:var(--accent-dim); color:var(--text-primary); }
+.certified-receipt-note > svg { flex:none; margin-top:2px; color:var(--accent); }
+.certified-receipt-note strong { display:block; font-size:13px; }
+.certified-receipt-note small { display:block; margin-top:6px; color:var(--text-secondary); font-size:11px; font-weight:600; }
+.certified-receipt-note ul { margin:3px 0 0; padding-left:16px; color:var(--text-secondary); font-size:12px; line-height:1.45; }
+.studio-reader-parts { display:grid; gap:10px; margin:0 0 12px; }
+.studio-summary-pending { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 12px; border:1px dashed var(--border-default); border-radius:8px; color:var(--text-secondary); font-size:12px; }
+.studio-summary-pending button { margin-left:auto; height:26px; padding:0 10px; border:1px solid var(--border-default); border-radius:4px; background:var(--bg-2); color:var(--text-primary); font:600 12px var(--font-ui, inherit); cursor:pointer; }
 .saved-query-fields-done svg { flex:none; margin-top:2px; color:var(--accent); }
 .saved-query-fields-done.review svg { color:var(--status-warning); }
 .saved-query-fields-done div { display:grid; gap:4px; }

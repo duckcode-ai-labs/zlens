@@ -36,6 +36,7 @@ import {
 } from './dashboard-tile-model';
 import { autoLayoutDashboardItems, autoLayoutRank, layoutScore, packDashboardItems, reorderTileForDrop } from './dashboard-layout';
 import { READER_TRUST_LABELS, readerTileFreshness, readerTileReceipt, readerTileTrust, readerTrustCounts } from './reader-trust';
+import { pageShowsSummary } from './reader-page-structure';
 import { appTrustSummary, type AppTrustSummary, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
 import { dashboardTileFilterChoice, isDashboardNarrativeTile } from '@zlens/core/apps/filter-reach';
 import { plainDescription, ReaderTrustBadge, TrustLensBar } from './ReaderTrust';
@@ -389,9 +390,11 @@ export function DashboardRenderer({
     () => (storySections ? activeLayout.items : null),
     [activeLayout.items, storySections],
   );
+  // The auto-written Summary is off unless the page's author added it (D6).
+  const summaryAdded = pageShowsSummary(dashboard.metadata);
   const dashboardStory = useMemo(
-    () => (editable || storySections || run?.partial || run?.incomplete ? null : buildDashboardStory(visibleItems, tileResults, runVariables)),
-    [editable, run?.incomplete, run?.partial, runVariables, storySections, tileResults, visibleItems],
+    () => (editable || !summaryAdded || storySections || run?.partial || run?.incomplete ? null : buildDashboardStory(visibleItems, tileResults, runVariables)),
+    [editable, summaryAdded, run?.incomplete, run?.partial, runVariables, storySections, tileResults, visibleItems],
   );
   useEffect(() => {
     if (editable) return;
@@ -1309,7 +1312,7 @@ export function DashboardRenderer({
         </div>
       ) : null}
 
-      {storyNarrative || canvasPage ? null : !editable && businessStory ? (
+      {storyNarrative || canvasPage || !summaryAdded ? null : !editable && businessStory ? (
         <BusinessStoryPanel story={businessStory} onResearch={openCopilot} onEvidence={openLineage} />
       ) : dashboardStory ? <DashboardStoryStrip story={dashboardStory} /> : null}
 
@@ -1506,7 +1509,7 @@ export function DashboardRenderer({
           {visibleItems.map((item) => renderGridTile(item))}
         </div>
       )}
-      {!editable && run ? <ReviewAppendix run={run} variables={runVariables} /> : null}
+      {!editable && run ? <ReviewAppendix run={run} variables={runVariables} ranAtMs={Object.values(tileRanAt).reduce<number | undefined>((latest, at) => (latest === undefined || at > latest ? at : latest), undefined)} /> : null}
       </div>
 
       {lineageOpen && !onOpenLineageNode && (
@@ -2549,21 +2552,29 @@ export function storySourceChipLabel(story: Pick<DashboardStoryBrief, 'generated
   return certified ? 'Verified result summary' : 'Result summary · sources need review';
 }
 
-function BusinessStoryPanel({
+/**
+ * The auto-written Summary of a page's current numbers. Shown only on pages
+ * whose author added it (`metadata.summary`, D6); App Studio's Preview uses
+ * the same panel so authors see what readers will.
+ */
+export function BusinessStoryPanel({
   story,
   onEvidence,
   onResearch,
+  onRemove,
 }: {
   story: DashboardStoryBrief;
-  onEvidence: () => void;
-  onResearch: () => void;
+  onEvidence?: () => void;
+  onResearch?: () => void;
+  /** For the author, in App Studio: take the Summary off the page. */
+  onRemove?: () => void;
 }): JSX.Element {
   return (
-    <section style={{ ...dashboardStoryStripStyle, padding: '20px 22px', marginBottom: 16 }} aria-label="Business Story">
+    <section style={{ ...dashboardStoryStripStyle, padding: '20px 22px', marginBottom: 16 }} aria-label="Summary">
       <div style={dashboardStoryHeaderStyle}>
         <div style={dashboardStoryIconStyle}><Sparkles size={15} strokeWidth={2.2} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={dashboardStoryKickerStyle}>Business Story · current filters</div>
+          <div style={dashboardStoryKickerStyle}>Summary (auto-written)</div>
           <h2 style={{ ...dashboardStoryTitleStyle, fontSize: 20 }}>{story.headline}</h2>
         </div>
         <TrustPill trust={story.trustState} />
@@ -2583,19 +2594,30 @@ function BusinessStoryPanel({
         <span style={dashboardStoryChipStyle}>{story.evidenceRefs.length} evidence source{story.evidenceRefs.length === 1 ? '' : 's'}</span>
         {story.caveat ? <span style={dashboardStoryChipStyle}>{story.caveat}</span> : null}
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={onEvidence} style={storyActionButtonStyle}>View evidence</button>
-        {isViewerLink() ? null : <button type="button" onClick={onResearch} style={storyActionButtonStyle}>Research deeper</button>}
+        {onEvidence ? <button type="button" onClick={onEvidence} style={storyActionButtonStyle}>View evidence</button> : null}
+        {isViewerLink() || !onResearch ? null : <button type="button" onClick={onResearch} style={storyActionButtonStyle}>Research deeper</button>}
+        {onRemove ? <button type="button" onClick={onRemove} style={storyActionButtonStyle}>Remove Summary</button> : null}
       </div>
     </section>
   );
 }
 
-function ReviewAppendix({
+/** The appendix's trust line in plain words, never a raw state like "draft_ready". */
+export function appendixTrustWords(trustState: string | undefined): string {
+  if (trustState === 'certified') return 'All sources certified';
+  if (trustState === 'governed') return 'From the governed model';
+  return 'Some sources need review';
+}
+
+export function ReviewAppendix({
   run,
   variables,
+  ranAtMs,
 }: {
   run: DashboardRunResponse;
   variables: Record<string, unknown>;
+  /** When this run settled, for "Last refreshed". */
+  ranAtMs?: number;
 }): JSX.Element {
   const issues = run.tiles.filter((tile) => tile.status !== 'ok');
   const activeFilters = Object.entries(variables).filter(([, value]) => value !== undefined && value !== null && value !== '');
@@ -2612,17 +2634,10 @@ function ReviewAppendix({
           <AlertTriangle size={13} /> {run.incomplete.message}
         </div> : null}
         <div style={reviewAppendixGridStyle}>
-          <div><strong>Run</strong><br /><span>{run.runId}</span></div>
-          <div><strong>Snapshot</strong><br /><span>{run.snapshotId}</span></div>
-          <div><strong>Trust</strong><br /><span>{run.story.trustState}</span></div>
-          <div><strong>Filters</strong><br /><span>{activeFilters.length ? activeFilters.map(([key, value]) => `${key}: ${String(value)}`).join(' · ') : 'Current unfiltered scope'}</span></div>
+          {ranAtMs !== undefined ? <div><strong>Last refreshed</strong><br /><span>{new Date(ranAtMs).toLocaleString()}</span></div> : null}
+          <div><strong>Trust</strong><br /><span>{appendixTrustWords(run.story.trustState)}</span></div>
+          <div><strong>Filters</strong><br /><span>{activeFilters.length ? activeFilters.map(([key, value]) => `${key}: ${String(value)}`).join(' · ') : 'No filters'}</span></div>
         </div>
-        {!run.incomplete ? <div>
-          <strong style={{ fontSize: 12 }}>Evidence used by the story</strong>
-          <div style={{ ...dashboardStoryChipRowStyle, marginTop: 7 }}>
-            {run.story.evidenceRefs.map((ref) => <span key={ref} style={dashboardStoryChipStyle}>{ref}</span>)}
-          </div>
-        </div> : null}
         {issues.length ? (
           <div>
             <strong style={{ fontSize: 12 }}>Items requiring review</strong>
@@ -2631,6 +2646,21 @@ function ReviewAppendix({
             </ul>
           </div>
         ) : null}
+        {/* Ids and the story's evidence references, for whoever needs to check them (D6). */}
+        <details className="dql-technical-details">
+          <summary>Technical details</summary>
+          <div style={{ ...reviewAppendixGridStyle, marginTop: 8 }}>
+            <div><strong>Run</strong><br /><span>{run.runId}</span></div>
+            <div><strong>Snapshot</strong><br /><span>{run.snapshotId}</span></div>
+            <div><strong>Trust state</strong><br /><span>{run.story.trustState}</span></div>
+          </div>
+          {!run.incomplete && run.story.evidenceRefs.length ? <div style={{ marginTop: 8 }}>
+            <strong style={{ fontSize: 12 }}>Evidence used by the summary</strong>
+            <div style={{ ...dashboardStoryChipRowStyle, marginTop: 7 }}>
+              {run.story.evidenceRefs.map((ref) => <span key={ref} style={dashboardStoryChipStyle}>{ref}</span>)}
+            </div>
+          </div> : null}
+        </details>
       </div>
     </details>
   );
@@ -3084,20 +3114,28 @@ export function TileEvidencePanel({
             <div style={{ display: 'grid', gap: 12, fontSize: 13, lineHeight: 1.5 }}>
               <EvidenceRow label="Source" value={artifact?.sourcePath ?? tile.citation?.path ?? tile.citation?.name ?? sourceLabel} />
               <EvidenceRow label="Result" value={runEvidence.result} />
-              {tile.dataset?.sourceId ? <EvidenceRow label="Dataset source" value={`${tile.dataset.sourceId}${tile.dataset.sourceRevision ? ` · ${tile.dataset.sourceRevision}` : ''}`} /> : null}
-              {tile.dataset?.queryFingerprint ? <EvidenceRow label="Dataset query" value={tile.dataset.queryFingerprint} /> : null}
-              {tile.dataset?.filterFingerprint ? <EvidenceRow label="Dataset filters" value={tile.dataset.filterFingerprint} /> : null}
-              {tile.dataset?.executionFingerprint ? <EvidenceRow label="Execution" value={tile.dataset.executionFingerprint} /> : null}
               {comparisonSummary ? <EvidenceRow label="Period comparison" value={comparisonSummary} /> : null}
-              {tile.dataset?.proofState ? <EvidenceRow label="Grain evidence" value={tile.dataset.proofState} /> : null}
               {grainEvidenceDetail ? <EvidenceRow label="Current grain check" value={grainEvidenceDetail} /> : null}
-              {isDatasetArtifact && currentDatasetEvidence ? <>
-                <EvidenceRow label="Bound parameters" value="Values are redacted; binding types and fingerprints are listed below." />
-                <EvidenceRows rows={currentDatasetEvidence.parameterEvidence} />
-                <EvidenceRows rows={currentDatasetEvidence.provenance} />
-                {currentDatasetEvidence.receipt.rows.length ? <EvidenceRows rows={currentDatasetEvidence.receipt.rows} /> : null}
-                {currentDatasetEvidence.receipt.notice ? <EvidenceRow label="Provider receipt" value={currentDatasetEvidence.receipt.notice} /> : null}
-              </> : null}
+              {/* Ids, revisions and fingerprints, for whoever needs to check them (D6). */}
+              {tile.dataset?.sourceId || tile.dataset?.queryFingerprint || tile.dataset?.proofState || (isDatasetArtifact && currentDatasetEvidence) ? (
+                <details className="dql-technical-details">
+                  <summary>Technical details</summary>
+                  <div style={{ display: 'grid', gap: 12, marginTop: 8 }}>
+                    {tile.dataset?.sourceId ? <EvidenceRow label="Dataset source" value={`${tile.dataset.sourceId}${tile.dataset.sourceRevision ? ` · ${tile.dataset.sourceRevision}` : ''}`} /> : null}
+                    {tile.dataset?.queryFingerprint ? <EvidenceRow label="Dataset query" value={tile.dataset.queryFingerprint} /> : null}
+                    {tile.dataset?.filterFingerprint ? <EvidenceRow label="Dataset filters" value={tile.dataset.filterFingerprint} /> : null}
+                    {tile.dataset?.executionFingerprint ? <EvidenceRow label="Execution" value={tile.dataset.executionFingerprint} /> : null}
+                    {tile.dataset?.proofState ? <EvidenceRow label="Grain evidence" value={tile.dataset.proofState} /> : null}
+                    {isDatasetArtifact && currentDatasetEvidence ? <>
+                      <EvidenceRow label="Bound parameters" value="Values are redacted; binding types and fingerprints are listed below." />
+                      <EvidenceRows rows={currentDatasetEvidence.parameterEvidence} />
+                      <EvidenceRows rows={currentDatasetEvidence.provenance} />
+                      {currentDatasetEvidence.receipt.rows.length ? <EvidenceRows rows={currentDatasetEvidence.receipt.rows} /> : null}
+                      {currentDatasetEvidence.receipt.notice ? <EvidenceRow label="Provider receipt" value={currentDatasetEvidence.receipt.notice} /> : null}
+                    </> : null}
+                  </div>
+                </details>
+              ) : null}
               {isDatasetArtifact && !currentDatasetEvidence ? <EvidenceRow label="Execution evidence" value="This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence." /> : null}
               {isDatasetArtifact ? <EvidenceRow label="Notebook" value="Dataset queries cannot be opened in Notebook yet." /> : null}
               {artifact?.explanation?.length ? (

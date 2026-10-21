@@ -95,7 +95,7 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await page.locator('.filter-field-results button').filter({ hasText: 'Customer Name' }).click();
   await page.getByRole('button', { name: 'Create filter' }).click();
   await expect(page.getByText('3 linked tiles')).toBeVisible({ timeout: 30_000 });
-  await expect(page.getByText('3/3 ready')).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('All tiles up to date')).toBeVisible({ timeout: 60_000 });
 
   // Every reader page run from here on, with the first one held back in transit.
   const readerRuns: unknown[] = [];
@@ -126,6 +126,8 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await expect(page.getByText('No result.')).toHaveCount(0);
   await expect(page.getByText(/superseded/i)).toHaveCount(0);
   await expect(page.getByText(/\d+ of 3 tiles certified/i)).toHaveCount(0);
+  // D5: the header says who certified the data and when.
+  await expect(page.getByText(/^All data certified( by .+)? · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible();
   // Publishing ran the page once, and that run is the one on screen.
   expect(readerRuns).toHaveLength(1);
   expect(readerResponses.some((response) => response.stale)).toBe(false);
@@ -135,6 +137,9 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await page.getByRole('button', { name: 'Apps', exact: true }).last().click();
   const card = page.locator('article.dql-app-card').filter({ hasText: 'Sales Review' });
   await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect(card.getByText('App certified')).toBeVisible();
+  await expect(card.getByText(/^App certified( by .+)? · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible();
+  // D6: Pages and Updated, without the zero counts.
+  await expect(card.getByText('Updated')).toBeVisible();
+  await expect(card.getByText(/Books|local insights|Shared Project/)).toHaveCount(0);
   await expect(card.getByText(/\d+ of 3 tiles certified/i)).toHaveCount(0);
 });

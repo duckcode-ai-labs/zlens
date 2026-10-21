@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, type CSSProperties } from 'react';
+import { Braces, CalendarDays, Hash, ToggleLeft, Type, type LucideIcon } from 'lucide-react';
 import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme';
 import type { QueryResult } from '../../store/types';
 import { inferColumnKind, type ColumnKind } from '../../utils/column-kind';
@@ -64,14 +65,18 @@ function isNumeric(value: unknown): boolean {
   return false;
 }
 
-function columnKindBadge(kind: ColumnKind): { icon: string; color: string } {
+/**
+ * A column's type as an icon with a plain-word tooltip (D6): Number, Text,
+ * Date, Yes/No or Structured, instead of a bare "#", "A" or "D".
+ */
+export function columnKindBadge(kind: ColumnKind): { Icon: LucideIcon; label: string; color: string } {
   switch (kind) {
-    case 'numeric': return { icon: '#', color: '#79c0ff' };
-    case 'date': return { icon: 'D', color: '#e3b341' };
-    case 'bool': return { icon: 'B', color: '#a371f7' };
-    case 'json': return { icon: '{}', color: '#ff7b72' };
+    case 'numeric': return { Icon: Hash, label: 'Number', color: '#79c0ff' };
+    case 'date': return { Icon: CalendarDays, label: 'Date', color: '#e3b341' };
+    case 'bool': return { Icon: ToggleLeft, label: 'Yes/No', color: '#a371f7' };
+    case 'json': return { Icon: Braces, label: 'Structured', color: '#ff7b72' };
     case 'string':
-    default: return { icon: 'A', color: '#56d364' };
+    default: return { Icon: Type, label: 'Text', color: '#56d364' };
   }
 }
 
@@ -355,23 +360,24 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
                         const badge = columnKindBadge(kind);
                         return (
                           <span
-                            title={kind}
+                            title={badge.label}
+                            aria-label={badge.label}
+                            role="img"
+                            className="dql-column-kind"
                             style={{
-                              fontSize: 11,
-                              fontFamily: t.fontMono,
-                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
                               color: `color-mix(in srgb, ${badge.color} 45%, var(--text-primary, currentColor))`,
                               background: `${badge.color}15`,
                               border: `1px solid ${badge.color}40`,
                               borderRadius: 3,
-                              padding: '0 4px',
-                              minWidth: 14,
-                              textAlign: 'center',
-                              lineHeight: '14px',
+                              width: 16,
+                              height: 16,
                               flexShrink: 0,
                             }}
                           >
-                            {badge.icon}
+                            <badge.Icon size={11} strokeWidth={2.2} aria-hidden="true" />
                           </span>
                         );
                       })()}

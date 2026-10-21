@@ -42,7 +42,7 @@ clip('import-certify', async ({ page, sample, director }) => {
   await director.click(page.getByRole('button', { name: /^commerce\b/ }).first(), { after: 500 });
   await director.click(page.getByRole('button', { name: /^Top Locations By Order Count commerce/ }).first(), { after: 600 });
   const receipt = page.getByTestId('block-certification-receipt');
-  await expect(receipt).toContainText('Certified by analytics@jaffle.shop');
+  await expect(receipt).toContainText(/Certified by \w/);
   director.poster();
   await director.point(receipt, { x: -14, y: 8 });
   await director.beat(2800);

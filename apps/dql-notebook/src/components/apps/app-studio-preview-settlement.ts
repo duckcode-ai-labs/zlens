@@ -56,7 +56,7 @@ export function settleStudioPreviewRun(result: DashboardRunResponse): StudioPrev
       kind: 'unavailable',
       readyCount,
       totalCount,
-      message: result.staleReason ?? 'This preview was superseded or changed while it was running. Run the current page again.',
+      message: result.staleReason ?? 'The page changed while it was running. Run it again.',
     };
   }
   if (result.partial) {
@@ -64,7 +64,7 @@ export function settleStudioPreviewRun(result: DashboardRunResponse): StudioPrev
       kind: 'unavailable',
       readyCount,
       totalCount,
-      message: 'This is a bounded component refresh. Run the full page before using preview evidence.',
+      message: 'Some tiles were updated. Run the whole page before publishing.',
     };
   }
   return { kind: 'receipt_candidate', readyCount, totalCount };

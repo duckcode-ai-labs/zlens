@@ -808,6 +808,13 @@ export function hostActor(): string | undefined {
   return principal.email?.trim() || principal.displayName?.trim() || principal.id;
 }
 
+/** The host's signed-in person's display name, for "Certified by <name>"; undefined without a host. */
+export function hostActorDisplayName(): string | undefined {
+  const principal = currentPrincipal();
+  if (!principal || principal.source !== 'host') return undefined;
+  return principal.displayName?.trim() || undefined;
+}
+
 /**
  * Accept only a well-formed principal from a hook. Anything else — no id,
  * an unknown kind, a thrown error — refuses the request.

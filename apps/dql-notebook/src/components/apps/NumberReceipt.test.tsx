@@ -18,7 +18,7 @@ describe('numbers that explain themselves (RFC 0009 step 6a)', () => {
     expect(plainBindingLabel(leaderValue, { [leader.key]: leader, [leaderValue.key]: leaderValue })).toBe('Revenue of the top region (US)');
     const info = numberReceiptInfo(binding, items, run, Date.UTC(2026, 8, 24, 9, 30))!;
     expect(info).toMatchObject({ label: 'Revenue for US', value: '$85', tileTitle: 'Revenue by region', trust: { state: 'certified' } });
-    expect(info.rows.map((row) => row.label)).toEqual(['Owner', 'Filters', 'Ran']);
+    expect(info.rows.map((row) => row.label)).toEqual(['Owner', 'Filters', 'Last refreshed']);
     expect(info.rows.find((row) => row.label === 'Filters')?.value).toBe('channel Web');
     const card = renderToStaticMarkup(<NumberReceiptCard info={info} />);
     expect(card).toContain('<strong>$85</strong>');

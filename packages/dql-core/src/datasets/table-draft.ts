@@ -455,3 +455,26 @@ export function renderTableDatasetBlock(input: {
     '',
   ].join('\n');
 }
+
+/**
+ * The checks a table (or a saved query made row-level) passed before it was
+ * certified, in plain words, for its certification receipt (D5): what one
+ * row is and how it was checked, and how each kept number is shown,
+ * including money stored in cents.
+ */
+export function tableDatasetCheckSentences(proposal: TableDatasetProposal, rows: number): string[] {
+  const out: string[] = [];
+  if (proposal.key) {
+    const entity = proposal.key.timeGrain ?? proposal.key.entity.replace(/_/g, ' ');
+    out.push(`Row key: each row is one ${entity} (${proposal.key.column} is filled and different on all ${rows.toLocaleString('en-US')} rows)`);
+  }
+  const formats = proposal.measures
+    .filter((measure) => measure.include && measure.aggregation === 'sum')
+    .map((measure) => {
+      if (measure.minorUnits) return `${measure.label}: a plain number (stored as ${measure.minorUnits})`;
+      if (measure.unitNote) return `${measure.label}: ${measure.unitNote.charAt(0).toLowerCase()}${measure.unitNote.slice(1)}`;
+      return `${measure.label}: ${measure.format === 'currency' ? 'money' : measure.format === 'percent' ? 'a percent' : 'a number'}`;
+    });
+  if (formats.length) out.push(`Number formats: ${formats.join('; ')}`);
+  return out;
+}

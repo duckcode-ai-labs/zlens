@@ -16,8 +16,13 @@ The workbench opens on **Apps**.
    owners...** to find one.
 3. Click **View** on the App's card.
 
+Each card shows how many **Pages** the App has and when it was last
+**Updated**. A certified App's card says who published it as certified and
+when, for example **App certified by Kranthi · 21 Oct**.
+
 The App opens on its first page. At the top you see the App's name and its
-trust badge, for example **All data certified** or **2 of 3 tiles certified**.
+trust badge, for example **All data certified by Kranthi · 21 Oct** or
+**2 of 3 tiles certified**.
 **View** and **Edit** switch between reading and building; see
 [Build an App](build.md).
 
@@ -27,21 +32,32 @@ Each tile has a trust label:
 
 | Label | Means |
 |---|---|
-| **Certified** | Runs a certified block exactly as it was reviewed. |
+| **Certified by** *name* **·** *date* | Runs certified data exactly as it was reviewed, and says who certified it and when, for example **Certified by Kranthi · 21 Oct**. |
 | **Governed** | Built from approved semantic metrics and dimensions. |
 | **Needs review** | Uses data nobody has certified yet. |
 | **Blocked** | Cannot run, for example because of a policy. |
 
-The label also says how fresh the result is, such as **Updated just now**.
+Data certified before ZLens recorded who certified it says **Certified · 21 Oct**,
+or just **Certified**. Other labels also say how fresh the result is, such as
+**Updated just now**.
 
 Click the label to open the tile's receipt. It shows the **Source**, the
-**Source file**, the **Owner**, the **Filters** applied, the number of
-**Rows**, when it **Ran**, and fingerprints of the result and the SQL.
-**Show the query and SQL** opens what ran.
+**Checks passed** when the data was certified (for example what one row is,
+how numbers are shown, and its tests), the **Owner**, the **Filters** applied,
+the number of **Rows**, and when it was **Last refreshed**. Ids, the source
+file and the fingerprints of the result and the SQL are under
+**Technical details**, which starts closed. **Show the query and SQL** opens
+what ran.
 
 The bar above the tiles summarizes the page, for example
 **All 1 tile certified**. Turn on **Trust lens** to highlight each tile's
 trust.
+
+Some pages have a **Summary (auto-written)** above the tiles: a few sentences
+about the page's current numbers. It appears only when the page's author added
+it. The **Evidence & review appendix** at the bottom says when the page was
+last refreshed and which tiles need review; ids are under
+**Technical details**.
 
 !!! note
     People who only read Apps never see draft or needs-review tiles. Those
@@ -61,7 +77,11 @@ App Studio uses one set of words for data and trust:
 | **Dataset** | Data with a row-level definition: a checked table, or a saved query made row-level. |
 | **Metrics** | Measures and dimensions from a semantic model. |
 | **Domain** | A label that filters the lists, such as `finance`. It is not a kind of data. |
-| **Certified** | Someone owns the data and checked it. |
+| **Certified** | Someone owns the data and checked it. ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. |
+| **Certified by** | The person who certified the data: the signed-in person with a host, otherwise your git `user.name`. Older data shows **Certified · date** or **Certified**. |
+| **Unpublished changes** | Changes to an App that only you can see until you publish. |
+| **Summary** | A short auto-written paragraph about a page's numbers. Off unless the author adds it. |
+| **Technical details** | Ids, hashes and fingerprints, kept out of the way under a toggle that starts closed. |
 | **Needs review** | Nobody has certified the data yet. A page that uses it cannot publish. |
 | **Tile** | One KPI, chart, table or text box on a page. |
 

@@ -2,6 +2,9 @@ import type { DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
 import type { DashboardVizStyle } from '@zlens/core/apps/viz-style';
 import type { ResultOrdering } from '@zlens/core/apps/result-measures';
 import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
+import type { CertificationByline } from '@zlens/core/apps/reader-trust';
+
+export type { CertificationByline };
 
 export interface SavedQueryDatasetDraft {
   ok: boolean;
@@ -22,6 +25,8 @@ export interface SavedQueryDatasetResult {
   path?: string;
   blockers?: string[];
   keyChecked?: boolean;
+  /** Who certified it and the checks that passed, when it was certified. */
+  certification?: CertificationByline;
   code?: string;
   error?: string;
 }
@@ -2397,6 +2402,8 @@ export interface DashboardDocumentResponse {
       reviewCadence?: string;
       businessRules?: string[];
       caveats?: string[];
+      /** The author added the auto-written Summary to this page (D6). */
+      summary?: boolean;
     };
     params?: Array<{ id: string; type: string; default?: unknown; description?: string }>;
     filters?: Array<{
@@ -2738,6 +2745,8 @@ export interface DashboardRunResponse {
     blockId?: string;
     blockPath?: string;
     certificationStatus?: string | null;
+    /** Who certified this tile's source and when, with the checks that passed (D5). */
+    certification?: CertificationByline | null;
     /** Bound to a retired block: what replaces it, for App Studio authors only. */
     retirement?: { replacedBy?: string; replacementPath?: string; deprecatedOn?: string };
     title?: string;
@@ -3161,6 +3170,8 @@ export interface AppBlockRecommendation {
     projectPublish: boolean;
     reasonCodes: string[];
   };
+  /** Who certified it and when, for a certified block (D5). */
+  certification?: CertificationByline;
 }
 
 export interface AppSourceCandidatePage {
@@ -3202,6 +3213,7 @@ interface AppSourceCandidateWire {
   eligibility: NonNullable<AppBlockRecommendation['eligibility']>;
   score?: number;
   reasons: string[];
+  certification?: CertificationByline;
 }
 
 export interface CreateAppRequest {
@@ -4944,6 +4956,7 @@ function appSourceCandidateToRecommendation(source: AppSourceCandidateWire): App
     eligibility: source.eligibility,
     score: source.score ?? 0,
     reasons: source.reasons,
+    ...(source.certification ? { certification: source.certification } : {}),
   };
 }
 
@@ -8750,7 +8763,7 @@ export const api = {
   },
 
   /** Save the author's choice as a Dataset they own. */
-  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }> }): Promise<{ ok: boolean; status?: 'certified' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; error?: string }> {
+  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }> }): Promise<{ ok: boolean; status?: 'certified' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; certification?: CertificationByline; error?: string }> {
     try {
       return await request('/api/app-datasets/tables/create', { method: 'POST', body: JSON.stringify(input) });
     } catch (error) {

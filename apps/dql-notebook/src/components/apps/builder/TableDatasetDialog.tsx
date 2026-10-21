@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, CalendarDays, Hash, Search, Table2, X } from 'lucide-react';
 import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
-import { api, type WarehouseTableSummary } from '../../../api/client';
+import { api, type CertificationByline, type WarehouseTableSummary } from '../../../api/client';
 import { messageOf } from './studio-ui';
 
 export type NumberChoice = { name: string; include: boolean; format: 'number' | 'currency' | 'percent'; currency?: string };
@@ -96,7 +96,8 @@ export function TableDatasetDialog({
   /** A table already chosen in the Add data browser: open straight on its check. */
   initialTable?: WarehouseTableSummary;
   onClose: () => void;
-  onCreated: (sourceId: string | undefined, name: string) => void;
+  /** Who certified it and the checks that passed come back with it (D5). */
+  onCreated: (sourceId: string | undefined, name: string, certification?: CertificationByline) => void;
 }): JSX.Element {
   const [tables, setTables] = useState<WarehouseTableSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -165,7 +166,7 @@ export function TableDatasetDialog({
         setError(`Saved as a draft, not certified: it did not pass its checks yet. ${(response.blockers ?? []).join(' ') || 'Run it once to see why.'}`);
         return;
       }
-      onCreated(response.sourceId, name.trim() || draft.proposal.name);
+      onCreated(response.sourceId, name.trim() || draft.proposal.name, response.certification);
     }).catch((cause) => {
       setSaving(false);
       setError(messageOf(cause));

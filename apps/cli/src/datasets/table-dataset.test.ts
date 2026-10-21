@@ -72,6 +72,13 @@ describe('start from a table', () => {
       expect(created.status, created.text).toBe(201);
       expect(created.body).toMatchObject({ ok: true, status: 'certified', keyChecked: true });
       expect(created.body.sourceId).toEqual(expect.any(String));
+      // D5: who certified it and when, and the checks that passed, in plain words.
+      expect(created.body.certification).toMatchObject({ by: expect.any(String), at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
+      expect(created.body.certification.checks).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^Row key: each row is one order line \(order_line_id is filled and different on all [\d,]+ rows\)$/),
+        expect.stringMatching(/^Number formats: .*Net amount: money/),
+        'run',
+      ]));
       const source = readFileSync(join(projectRoot, created.body.path), 'utf-8');
       expect(source).toContain('status = "certified"');
       expect(source).toContain('keys = ["order_line_id"]');
@@ -82,6 +89,8 @@ describe('start from a table', () => {
       const candidates = await call(base, `/api/app-builds/${encodeURIComponent(app.body.draft.id)}/source-candidates?limit=50`);
       const listed = candidates.body.items.find((item: { sourceId: string }) => item.sourceId === created.body.sourceId);
       expect(listed).toMatchObject({ lifecycle: 'certified', trust: 'certified' });
+      // The Data list names who certified it and when (D5).
+      expect(listed.certification).toMatchObject({ by: created.body.certification.by, at: created.body.certification.at });
       expect(listed.capabilities.dataset.fields.filter((field: { kind: string }) => field.kind === 'measure').map((field: { name: string }) => field.name).sort())
         .toEqual(['customer_count', 'margin_amount', 'net_amount', 'order_count', 'order_line_count']);
 
@@ -129,6 +138,8 @@ describe('start from a table', () => {
       const created = await call(base, '/api/app-datasets/tables/create', { tableId: shopOrders.id, name: 'Shop orders', domain: 'commerce' });
       expect(created.status, created.text).toBe(201);
       expect(created.body).toMatchObject({ ok: true, status: 'certified', keyChecked: true });
+      // The receipt says the cents were shown in dollars (D5, B11).
+      expect(created.body.certification.checks.find((check: string) => check.startsWith('Number formats:'))).toContain('Subtotal: shown in dollars (stored as cents)');
       const source = readFileSync(join(projectRoot, created.body.path), 'utf-8');
       expect(source).toContain('"subtotal_cents" / 100.0 AS "subtotal"');
       // A tile, a KPI and a filter all read the same dollars.
