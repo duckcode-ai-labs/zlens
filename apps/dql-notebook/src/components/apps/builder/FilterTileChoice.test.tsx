@@ -27,7 +27,9 @@ describe('Filters tab: each tile says Applies or Does not apply', () => {
   it('lets a tile that cannot take the field only be "Does not apply", with why', () => {
     const markup = renderToStaticMarkup(<FilterTileChoice mapping={cannotTake} applies={false} onChoose={() => undefined} />);
     expect(markup).toContain('unsupported');
-    expect(markup).toContain('customer name is not exposed by revenue_trend.');
+    // An older stored reason reads in plain words, with the source's name.
+    expect(markup).toContain('Revenue Trend has no Customer Name field.');
+    expect(markup).not.toContain('not exposed');
     expect(markup).toMatch(/aria-checked="false" class="" disabled=""[^>]*>.*Applies/);
   });
 });

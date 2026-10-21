@@ -1,5 +1,6 @@
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../api/client';
 import { DASHBOARD_FILTER_DOES_NOT_APPLY_REASON } from '@zlens/core/apps/filter-reach';
+import { missingFieldReason, sourceDisplayName } from './source-names';
 
 type StudioPage = AppStudioBuildDraft['pages'][number];
 type StudioTile = StudioPage['layout']['items'][number];
@@ -178,13 +179,7 @@ export function filterLinkSuggestions(
 }
 
 function datasetDisplayName(source: AppStudioBuildDraft['sources'][number] | undefined, fallback: string): string {
-  const identity = source?.qualifiedIdentity ?? fallback;
-  const name = source?.capabilities?.dataset?.label?.trim()
-    || identity.match(/::block::(.+?)::[0-9a-f]+$/i)?.[1]
-    || identity.split('::').at(-1)
-    || identity;
-  // "top_customers" reads "Top Customers"; a name with spaces is kept as written.
-  return /\s/.test(name) ? name : name.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  return sourceDisplayName(source?.qualifiedIdentity ?? fallback, source?.capabilities?.dataset?.label);
 }
 
 export function defaultStudioFilterType(fieldId: string): 'daterange' | 'number' | 'select' {
@@ -280,7 +275,7 @@ export function filterTileMappingsForField(
         tileTitle: tile.title || tile.i,
         sourceName,
         supported: false,
-        reason: `${fieldId.replace(/_/g, ' ')} is not an approved physical field on this Dataset source.`,
+        reason: missingFieldReason(sourceName, fieldId),
       };
     }
     const fields = governedFieldsForTile(tile, catalog, boundSources);
@@ -307,7 +302,7 @@ export function filterTileMappingsForField(
         binding: runtimeField?.column ?? fieldId,
         mode: tile.semantic ? 'semantic' as const : existing?.mode ?? 'predicate' as const,
       } : {
-        reason: `${fieldId.replace(/_/g, ' ')} is not exposed by ${sourceName}.`,
+        reason: missingFieldReason(sourceName, fieldId),
       }),
     };
   }));
@@ -391,12 +386,13 @@ function sourceNameForTile(
   catalog: AppBlockRecommendation[],
   boundSources: AppStudioBuildDraft['sources'],
 ): string {
+  // The name a person reads ("Customers"), never the internal identity.
   const bound = tile.sourceId ? boundSources.find((source) => source.id === tile.sourceId) : undefined;
-  if (bound) return bound.qualifiedIdentity ?? bound.sourceRef;
+  if (bound) return datasetDisplayName(bound, bound.sourceRef);
   const blockId = tile.block ? ('blockId' in tile.block ? tile.block.blockId : tile.block.ref) : null;
   const source = blockId ? catalog.find((item) => item.id === blockId || item.name === blockId) : null;
-  if (source) return source.name;
-  if (tile.semantic) return tile.semantic.id;
-  if (tile.draftAnalysis) return tile.draftAnalysis.ref;
+  if (source) return sourceDisplayName(source.qualifiedIdentity ?? source.name, source.capabilities?.dataset?.label ?? source.name);
+  if (tile.semantic) return sourceDisplayName(tile.semantic.id);
+  if (tile.draftAnalysis) return sourceDisplayName(tile.draftAnalysis.ref);
   return tile.title || tile.i;
 }

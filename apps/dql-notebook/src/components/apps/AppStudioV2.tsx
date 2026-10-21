@@ -40,8 +40,11 @@ import { themes } from '../../themes/notebook-theme';
 import { AiSidePanel } from '../agent/AiSidePanel';
 import { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog } from './builder/DatasetProposalDialog';
 import { DataPanel, type DataPanelTarget } from './builder/DataPanel';
-import { DraftTileCard, DraftTileInspector, draftVisualization, type DraftTileState } from './builder/DraftTile';
+import { DraftTileCard, DraftTileInspector, draftVisualization, withDraftSortDefault, type DraftTileState } from './builder/DraftTile';
 import { encodedChartConfig, encodedTileResult } from './dashboard-chart-config';
+import { plainSourceText, sourceDisplayName } from './source-names';
+import { BarCapNote } from './builder/BarCapNote';
+import { barCategoryCap } from './builder/sort-top-n';
 import { ProposedTileCard } from './builder/ProposedTile';
 import { ChartStylePanel, compactVizStyle } from './builder/ChartStylePanel';
 import { DriverView } from './DriverView';
@@ -59,13 +62,16 @@ import {
   CANVAS_GAP_PX,
   canvasRowHeight,
   canvasShortcut,
+  canvasShortcutApplies,
   cellsFromPixels,
   copyTileId,
   incrementalPreviewPlan,
   loadStudioHistory,
   saveStudioHistory,
+  selectionAfterAdd,
   tileBodyHeight,
   type CanvasShortcut,
+  type StudioAddOrigin,
 } from './builder/canvas-interactions';
 import { firstFreeGridCell, moveGridItem, nudgeGridItem, placeGridCopy, resizeGridItem, settleGridLayout } from '@zlens/core/apps/grid-layout';
 import { projectProposal, type ProposedPage } from './builder/proposal-preview';
@@ -1631,6 +1637,8 @@ export function AppStudioV2({
     datasetVisualization?: AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'],
     /** The shelves the author built the tile on (RFC 0009). */
     datasetEncoding?: DashboardVizEncoding,
+    /** How the tile was made; a tile built from field clicks is not left selected. */
+    origin: StudioAddOrigin = 'source',
   ): Promise<boolean> => {
     if (!draft || !activePage) return false;
     const source = kind === 'heading' || kind === 'text'
@@ -1712,7 +1720,7 @@ export function AppStudioV2({
         setDraft(result.draft);
         setUndoStack((items) => [...items.slice(-29), previous]);
         setRedoStack([]);
-        setSelectedTileId(result.tileIds[0] ?? null);
+        setSelectedTileId(selectionAfterAdd(origin, result.tileIds[0]));
         setSourceFeedback({ sourceId, status: 'added', view, pageTitle: activePage.metadata.title });
         sourceFeedbackTimerRef.current = window.setTimeout(() => {
           setSourceFeedback((current) => current?.sourceId === sourceId ? null : current);
@@ -3120,7 +3128,8 @@ export function AppStudioV2({
     const history = shortcut.kind === 'undo' || shortcut.kind === 'redo';
     if (!history && card && card !== element) return;
     const onCanvas = !element || element === document.body || Boolean(canvasRef.current?.contains(element));
-    if (!history && !onCanvas) return;
+    const inSettingsPanel = Boolean(selectedTileId && element?.closest('.studio-right.has-selection'));
+    if (!canvasShortcutApplies(shortcut, { onCanvas, inSettingsPanel, key: event.key })) return;
     event.preventDefault();
     if (busy || gesture) return;
     void runCanvasShortcut(shortcut, targetTileId);
@@ -3253,7 +3262,8 @@ export function AppStudioV2({
     const query = queryFromEncoding(encoding, base.query, descriptorTimeGrain(activeDescriptor));
     const next = { ...base, encoding, query };
     const keepView = base.viewChosen && datasetTileVisualizationCompatibility(query, draftVisualization(activeDescriptor, next)).compatible;
-    setDraftTile({ ...next, view: keepView ? base.view : autoTileView(query, encoding, descriptorTimeField(activeDescriptor)), viewChosen: keepView });
+    // A field leaving the tile drops its sort; that is not the author's choice.
+    setDraftTile(withDraftSortDefault(activeDescriptor, { ...base, query: next.query }, { ...next, view: keepView ? base.view : autoTileView(query, encoding, descriptorTimeField(activeDescriptor)), viewChosen: keepView }));
     setSelectedTileId(null);
     setCopilotOpen(false);
     setSettingsOpen(false);
@@ -3270,9 +3280,10 @@ export function AppStudioV2({
     // A new pivot asks for its totals from the start.
     const query = visualization === 'pivot' ? withPivotRollups(withoutRowLimit(draftTile.query), draftTile.encoding, undefined) : draftTile.query;
     const added = activeDescriptor
-      ? await addComponent(draftTile.view, activeDatasetItem, query, title, visualization as AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], draftTile.encoding)
-      : await addComponent(draftTile.view, activeDatasetItem, draftTile.query, title, tileVisualization(draftTile.query, draftTile.view));
-    if (added) setDraftTile(null);
+      ? await addComponent(draftTile.view, activeDatasetItem, query, title, visualization as AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], draftTile.encoding, 'field_draft')
+      : await addComponent(draftTile.view, activeDatasetItem, draftTile.query, title, tileVisualization(draftTile.query, draftTile.view), undefined, 'field_draft');
+    // The next field click starts a new tile instead of changing this one.
+    if (added) { setDraftTile(null); setSelectedTileId(null); }
   };
   const askAiAboutTile = (tileId: string) => {
     selectAppAutopilotTile(tileId);
@@ -3299,7 +3310,7 @@ export function AppStudioV2({
                   aria-label={`App tile: ${tile.title || humanize(tile.i)}`}
                   data-tile-id={tile.i}
                   tabIndex={editing && !projectedPage ? 0 : undefined}
-                  className={`studio-component-card ${extraClass} ${editing && selectedTileId === tile.i ? 'selected' : ''} ${gesture?.origin.i === tile.i ? 'gesturing' : ''} ${tile.text ? 'text-tile' : ''}`}
+                  className={`studio-component-card ${extraClass} ${editing && selectedTileId === tile.i ? 'selected' : ''} ${gesture?.origin.i === tile.i ? 'gesturing' : ''} ${tile.text ? 'text-tile' : ''} ${tileMenuId === tile.i ? 'menu-open' : ''}`}
                   style={placed
                     ? { gridColumn: `${tile.x + 1} / span ${tile.w}`, gridRow: `${tile.y + 1} / span ${tile.h}` }
                     : { '--studio-tile-width': Math.min(tile.w, breakpoint === 'medium' ? 6 : breakpoint === 'narrow' ? 1 : 12), minHeight: tile.text ? undefined : breakpoint === 'narrow' ? Math.max(180, tile.h * 58) : Math.max(150, tile.h * 68) } as CSSProperties}
@@ -3308,9 +3319,9 @@ export function AppStudioV2({
                   <header onPointerDown={placed ? (event) => startGesture(event, tile, 'move') : undefined}>
                     {editing ? <span className="drag-handle" aria-hidden="true" title={canArrange ? 'Drag to move. Arrow keys move the selected tile.' : undefined}>⠿</span> : null}
                     {badge}
-                    <strong>{tile.title || humanize(tile.i)}</strong>
+                    <strong title={tile.title || humanize(tile.i)}>{tile.title || humanize(tile.i)}</strong>
                     <span className={`trust-dot ${tile.trustState ?? 'draft_ready'}`} title={tile.trustState === 'certified' ? 'Certified source' : tile.trustState === 'review_required' ? 'Needs review before publishing' : 'Draft'} />
-                    <div className="tile-tools" onClick={(event) => event.stopPropagation()}>
+                    <div className={`tile-tools ${tileMenuId === tile.i ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
                       {editing && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
                       {tile.query ? <button type="button" className={`studio-tile-dql-toggle ${dqlTileId === tile.i ? 'on' : ''}`} aria-pressed={dqlTileId === tile.i} aria-label="View DQL" title="View DQL" onClick={() => setDqlTileId((current) => current === tile.i ? null : tile.i)}><Code2 size={13} /></button> : null}
                       <button type="button" className="tile-more" aria-label="Tile actions" aria-haspopup="menu" aria-expanded={tileMenuId === tile.i} title="More" onClick={() => setTileMenuId((current) => current === tile.i ? null : tile.i)}><MoreHorizontal size={14} /></button>
@@ -3324,7 +3335,7 @@ export function AppStudioV2({
                       </div> : null}
                     </div>
                   </header>
-                  {unsupportedTileFilters(tile).map((binding) => <div key={binding.filter} className="tile-filter-notice"><Filter size={11} /><span><strong>Not filtered by {studioFilterLabel(activePage, binding.filter)}</strong> · {binding.unsupportedReason ?? `${humanize(binding.filter)} does not affect this tile.`}</span></div>)}
+                  {unsupportedTileFilters(tile).map((binding) => <div key={binding.filter} className="tile-filter-notice"><Filter size={11} /><span><strong>Not filtered by {studioFilterLabel(activePage, binding.filter)}</strong> · {binding.unsupportedReason ? plainSourceText(binding.unsupportedReason) : `${humanize(binding.filter)} does not affect this tile.`}</span></div>)}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
                   {datasetTileNotices(previewRun?.tiles.find((item) => item.tileId === tile.i), { filterLabels: studioFilterLabels(activePage) })
                     // A "Does not apply" choice is already shown above from the page itself.
@@ -3505,7 +3516,7 @@ export function AppStudioV2({
       </aside> : null}
       {rightPane === 'draft' && draftTile && activeDescriptor && activeDatasetItem ? <aside className="studio-right" aria-label="New tile">
         <header><div><small>NEW TILE</small><strong>Built from {humanize(activeDatasetItem.name)}</strong></div><button type="button" className="ghost-icon" onClick={() => setDraftTile(null)} aria-label="Cancel new tile"><X size={16} /></button></header>
-        <DraftTileInspector descriptor={activeDescriptor} datasetLabel={humanize(activeDatasetItem.name)} draft={draftTile} disabled={busy} onChange={setDraftTile} onCancel={() => setDraftTile(null)} onAdd={() => void commitDraftTile()} result={draftResult} />
+        <DraftTileInspector descriptor={activeDescriptor} datasetLabel={humanize(activeDatasetItem.name)} draft={draftTile} disabled={busy} onChange={(next) => setDraftTile((current) => withDraftSortDefault(activeDescriptor, current, next))} onCancel={() => setDraftTile(null)} onAdd={() => void commitDraftTile()} result={draftResult} />
       </aside> : null}
       {rightPane === 'inspector' || rightPane === 'settings' ? <aside className={`studio-right ${selectedTile ? 'has-selection' : ''}`} aria-label={selectedTile ? 'Tile settings' : 'App settings'}>
         <header><div><small>{selectedTile ? tileKindLabel(selectedTile) : 'APP'}</small><strong>{selectedTile ? 'Tile settings' : 'App settings'}</strong></div><button type="button" className="ghost-icon" onClick={() => { setSelectedTileId(null); setSettingsOpen(false); }} aria-label={selectedTile ? 'Close tile settings' : 'Close App settings'}><X size={16} /></button></header>
@@ -4077,7 +4088,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     </> : null}
     {dataTile && tab === 'data' ? <>
     {tile.query && dataset && tileEncoding ? <DatasetTileQueryInspector descriptor={dataset} query={tile.query} visualization={tile.viz.type} encoding={tileEncoding} disabled={disabled} onChange={updateDatasetQuery} onShelves={updateShelves} onOpenSources={onOpenSources} result={run?.status === 'ok' ? run.result : undefined} /> : null}
-    <section className="data-trust"><label>Data & trust</label><div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : trustLabel(tile.trustState)}</strong></div>{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Dataset'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${'blockId' in tile.block ? tile.block.blockId : tile.block.ref}` : tile.semantic ? `Metrics: ${tile.semantic.id}` : tile.draftAnalysis ? `Draft DQL · Needs review: ${tile.draftAnalysis.ref}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? `Settled on ${run.result?.rowCount ?? run.result?.rows.length ?? 0} rows` : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable block</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new block is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
+    <section className="data-trust"><label>Data & trust</label><div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : trustLabel(tile.trustState)}</strong></div>{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Dataset'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Needs review: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? `Settled on ${run.result?.rowCount ?? run.result?.rows.length ?? 0} rows` : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable block</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new block is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
     {tile.semantic && !tile.query ? <section className="dataset-reusable-block"><strong>Convert to Dataset query</strong><p>Preview an exact field-query mapping for this legacy semantic tile. ZLens runs both paths in one fresh read scope before it can apply the change. The original semantic payload is retained as provenance; this does not certify the source.</p><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onPreviewLegacySemanticConversion}>{previewingLegacySemanticConversion ? 'Proving conversion…' : 'Preview Dataset conversion'}</button>{semanticTileConversionPreview ? <div className="dataset-review-replacement"><small>Mapped source: {semanticTileConversionPreview.candidate.sourceId}</small><small>Mapped query: {semanticTileConversionPreview.candidate.query.measures.map((measure) => measure.measure).join(', ')}{semanticTileConversionPreview.candidate.query.dimensions.length ? ` by ${semanticTileConversionPreview.candidate.query.dimensions.map((dimension) => dimension.field).join(', ')}` : ''}</small><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onAcceptLegacySemanticConversion}>{acceptingLegacySemanticConversion ? 'Rechecking and applying…' : 'Apply Dataset conversion'}</button></div> : <small>Preview first. Unsupported bindings, source drift, or an incomplete comparison stay with the original semantic tile.</small>}</section> : null}
     </> : null}
     {dataTile && tab === 'visual' ? <>
@@ -4108,7 +4119,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
       ? <DatasetInteractionInspector tile={tile} page={page} pages={pages} sources={sources} descriptor={dataset} disabled={disabled} onChange={onUpdateInteractions} />
       : <p className="field-help">Click actions, cross-filters and drill-downs are available for tiles built from Dataset fields.</p>) : null}
     <footer className="inspector-footer">
-      <span className={`run-state ${run?.status === 'ok' ? 'ok' : run ? 'error' : ''}`}>{run ? run.status === 'ok' ? `Live · ${rowCount} ${rowCount === 1 ? 'row' : 'rows'}` : 'Last run failed' : 'Not run yet'}</span>
+      <span className={`run-state ${run?.status === 'ok' ? 'ok' : run ? 'error' : ''}`}>{run ? run.status === 'ok' ? liveRowsLabel(rowCount ?? 0, run.result?.rows.length) : 'Last run failed' : 'Not run yet'}</span>
       <button type="button" className="delete-component" onClick={onDelete}><Trash2 size={14} /> Remove</button>
     </footer>
     <small className="inspector-id">{pageId} / {tile.i}</small>
@@ -4314,6 +4325,7 @@ export function StudioTilePreview({
     return () => observer.disconnect();
   }, [placed, run]);
   const [markActionId, setMarkActionId] = useState<string>('filter');
+  const [barShowAll, setBarShowAll] = useState(false);
   useEffect(() => {
     const node = frameRef.current;
     if (!node || typeof ResizeObserver === 'undefined') return;
@@ -4350,6 +4362,10 @@ export function StudioTilePreview({
     ...encodedChartConfig(tile),
   } as CellChartConfig;
   const shownResult = encodedTileResult(tile, run.result);
+  // Above 50 categories a bar chart draws the top 25 until the author asks for all.
+  const barCap = chart === 'table' || chart === 'kpi' || chart === 'pivot'
+    ? null
+    : barCategoryCap(shownResult, { chart, category: chartConfig.x, value: chartConfig.y, query: tile.query, showAll: barShowAll });
   const hierarchy = run.dataset?.hierarchy;
   const hierarchyCandidates = (hierarchy?.candidates ?? []).filter((candidate) => (
     run.result!.rows.some((row) => row[candidate.fromAlias] !== undefined && row[candidate.fromAlias] !== null)
@@ -4382,7 +4398,10 @@ export function StudioTilePreview({
           ? <PivotTable result={shownResult} layout={pivotLayout(tile.viz.encoding ?? encodingFromQuery(tile.query, 'pivot'), tile.query)} themeMode={themeMode} conditionalFormats={tile.viz.style?.conditional} maxHeight={placed ? chartHeight : height} {...(onRowSelect ? { onCellClick: onRowSelect } : {})} />
           : chart === 'table' || chart === 'pivot'
           ? <TableOutput result={shownResult} themeMode={themeMode} maxHeight={placed ? chartHeight : height} initialPageSize={10} onRowClick={onRowSelect} conditionalFormats={tile.viz.style?.conditional} />
-          : <ChartOutput result={shownResult} themeMode={themeMode} chartConfig={{ ...chartConfig, title: undefined }} availableHeight={chartHeight} availableWidth={width} onMarkSelect={onRowSelect} />}
+          : <>
+            <BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} />
+            <ChartOutput result={barCap?.result ?? shownResult} themeMode={themeMode} chartConfig={{ ...chartConfig, title: undefined }} availableHeight={barCap?.cappable ? Math.max(96, chartHeight - 24) : chartHeight} availableWidth={width} onMarkSelect={onRowSelect} />
+          </>}
       </div>
       {selectableFields.length ? <div className={`dataset-mark-controls marks ${selectedForTile.length ? 'has-selection' : ''}`} aria-label="Cross-filter selection">
         <span>Select a result mark</span>
@@ -4572,6 +4591,12 @@ function proposalSummaryText(page: ProposedPage): { text: string; removed: numbe
     removed ? `replaces ${plural(removed, 'existing tile', 'existing tiles')}` : '',
   ].filter(Boolean);
   return { text: parts.length ? parts.join(', ') : 'no changes on this page', removed };
+}
+
+/** "Live · 935 rows", and "· first 500 loaded" when the tile holds only the first rows. */
+export function liveRowsLabel(rowCount: number, loaded?: number): string {
+  const base = `Live · ${rowCount.toLocaleString('en-US')} ${rowCount === 1 ? 'row' : 'rows'}`;
+  return typeof loaded === 'number' && loaded < rowCount ? `${base} · first ${loaded.toLocaleString('en-US')} loaded` : base;
 }
 
 function tileKindLabel(tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]): string {

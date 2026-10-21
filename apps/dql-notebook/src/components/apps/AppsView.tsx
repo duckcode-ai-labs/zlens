@@ -60,7 +60,7 @@ import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appPageUrl } from './app-links';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
 import { APP_STYLES } from './app-styles';
-import { cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
+import { appHeaderTitle, cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
 import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, SettingsPanel, StatusSeal } from './AppSidePanels';
 import { FollowPageButton } from './FollowPageButton';
 import { AskAboutApp } from './AskAboutApp';
@@ -104,6 +104,7 @@ import {
 import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/authored-domain-options';
 import { useOperations } from '../../operations/OperationsProvider';
 import { appLibraryLaunchExpanded, type AppLibraryLaunchPreference } from './app-library-launch';
+import { plainSourceText } from './source-names';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -1863,8 +1864,8 @@ function AppWorkspaceSurface({
             <span>Apps</span>
           </button>
         )}
-        {/* A reader sees the App's name; its id is for the people who build it. */}
-        <span className="dql-app-crumb"><b>{hostReader(hostUi) ? (tidyTitle(workspaceAppName) || workspaceAppId || 'App') : (workspaceAppId ?? 'app')}</b></span>
+        {/* Everyone reads the App's name; builders find its id in the tooltip. */}
+        <span className="dql-app-crumb" title={hostReader(hostUi) ? undefined : workspaceAppId ?? undefined}><b>{appHeaderTitle(workspaceAppName, workspaceAppId)}</b></span>
         {onDashboards ? (
           <StatusSeal tone={certification.allCertified ? 'certified' : 'draft'} title="Data trust: whether every tile on this page ran from a certified source.">
             {certification.label}
@@ -2048,7 +2049,7 @@ function AppWorkspaceSurface({
                             <span
                               key={filter.id}
                               className={`dql-app-filter-coverage ${coverage.applied.length === 0 ? 'is-none' : 'is-partial'}`}
-                              title={`Unaffected: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${tile.reason}` : ''}`).join('; ')}`}
+                              title={`Unaffected: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${plainSourceText(tile.reason)}` : ''}`).join('; ')}`}
                             >
                               {formatBusinessLabel(filter.id)} affects {coverage.applied.length} of {coverage.filterable} tiles
                             </span>

@@ -98,6 +98,9 @@ import { encodingFromQuery } from '@zlens/core/apps/viz-encoding';
 import { PivotTable } from './PivotTable';
 import { dashboardPageRevision, dashboardRunKey, shouldRerunStaleDashboardRun } from './dashboard-run-key';
 import { KpiCard, usesKpiCard } from './KpiCard';
+import { plainSourceText } from './source-names';
+import { BarCapNote } from './builder/BarCapNote';
+import { barCategoryCap } from './builder/sort-top-n';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -1603,7 +1606,7 @@ export function dashboardTileFilterNotices(input: {
     return {
       unfilteredNotice: tileUnfilteredNotice(
         [...declared.map((entry) => label(entry.filter)), ...viewerIgnored],
-        declared.length ? declared.map((entry) => `${label(entry.filter)}: ${entry.reason}`).join(' ') : undefined,
+        declared.length ? declared.map((entry) => `${label(entry.filter)}: ${plainSourceText(entry.reason)}`).join(' ') : undefined,
       ),
       datasetUnboundNotices,
     };
@@ -2767,6 +2770,7 @@ export function TileBody({
   onNavigate?: () => void;
 }): JSX.Element {
   const [markActionId, setMarkActionId] = useState<string>('filter');
+  const [barShowAll, setBarShowAll] = useState(false);
   if (loading && !tile) return <span>Loading data...</span>;
   if (tile?.tileType === 'text') {
     if (genUi) {
@@ -2884,12 +2888,14 @@ export function TileBody({
       dataView = <div style={{ width: '100%', alignSelf: 'stretch' }}><TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} conditionalFormats={item.viz.style?.conditional} /></div>;
     }
   } else {
+    // Above 50 categories a bar chart draws the top 25 until the reader asks for all.
+    const barCap = chart === 'kpi' ? null : barCategoryCap(displayResult, { chart, category: chartConfig.x, value: chartConfig.y, query: item.query, showAll: barShowAll });
     const chartResult = chart === 'kpi'
       ? summarizeDashboardKpiResult(displayResult, chartConfig.y)
-      : displayResult;
+      : barCap?.result ?? displayResult;
     // The tile header is the App title. Passing the same title into the shared
     // chart renderer duplicated it inside the plot and consumed scarce height.
-    dataView = (
+    const chartFrame = (
       <DashboardChartFrame>
         {(availableHeight) => (
           <ChartOutput
@@ -2902,6 +2908,9 @@ export function TileBody({
         )}
       </DashboardChartFrame>
     );
+    dataView = barCap?.cappable
+      ? <div style={{ width: '100%', alignSelf: 'stretch', display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}><BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} /><div style={{ flex: '1 1 0', minHeight: 0 }}>{chartFrame}</div></div>
+      : chartFrame;
   }
   const detailAction = onNavigate ? (
     <button

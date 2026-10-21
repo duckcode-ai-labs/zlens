@@ -140,6 +140,21 @@ function SortArrow({ dir, color }: { dir: SortDir; color: string }) {
 
 // ─── TableOutput ──────────────────────────────────────────────────────────────
 
+/**
+ * The row count above a table. When the result holds only the first rows of
+ * a larger one (rowCount is the full count), it says so, so the table agrees
+ * with "Live · 935 rows" next to it.
+ */
+export function tableRowCountLabel(input: { rangeStart: number; rangeEnd: number; loaded: number; total?: number; matching?: number }): string {
+  const { rangeStart, rangeEnd, loaded, matching } = input;
+  const total = typeof input.total === 'number' && input.total > loaded ? input.total : undefined;
+  if (matching !== undefined) {
+    return `Showing ${rangeStart}–${rangeEnd} of ${matching} matching (${total ? `first ${loaded.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}` : loaded} total)`;
+  }
+  if (total) return `Showing ${rangeStart}–${rangeEnd} of the first ${loaded.toLocaleString('en-US')} rows · ${total.toLocaleString('en-US')} in total`;
+  return `Showing ${rangeStart}–${rangeEnd} of ${loaded} ${loaded === 1 ? 'row' : 'rows'}`;
+}
+
 export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport }: TableOutputProps) {
   const hosted = useHostUi().host;
   const [exportNote, setExportNote] = useState<string | null>(null);
@@ -259,9 +274,7 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
 
         {/* Row count */}
         <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
-          {filterText
-            ? `Showing ${rangeStart}–${rangeEnd} of ${sortedRows.length} matching (${result.rows.length} total)`
-            : `Showing ${rangeStart}–${rangeEnd} of ${result.rows.length} ${result.rows.length === 1 ? 'row' : 'rows'}`}
+          {tableRowCountLabel({ rangeStart, rangeEnd, loaded: result.rows.length, total: result.rowCount, matching: filterText ? sortedRows.length : undefined })}
         </span>
 
         <div style={{ flex: 1 }} />

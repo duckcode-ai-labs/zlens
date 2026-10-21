@@ -712,3 +712,11 @@ describe('Publish leaves out data no tile uses (design D4)', () => {
     expect(markup).not.toContain('Local analysis cannot publish');
   });
 });
+
+describe('tile settings row count (B14)', () => {
+  it('says how many rows the tile holds when it holds only the first rows', () => {
+    expect(studio.liveRowsLabel(935, 500)).toBe('Live · 935 rows · first 500 loaded');
+    expect(studio.liveRowsLabel(10, 10)).toBe('Live · 10 rows');
+    expect(studio.liveRowsLabel(1)).toBe('Live · 1 row');
+  });
+});

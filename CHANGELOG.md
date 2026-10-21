@@ -10,6 +10,42 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Sort and Top N on the field menu.** A measure pill's **⋯** menu now has
+  **Show top** **5**, **10**, **25**, **All** or another number, next to
+  **Ascending** and **Descending**. It writes the same sort and row limit as
+  **Filters, sort and more**, so the two always agree.
+  - A new bar chart over categories is sorted by its measure, highest first.
+    Saved tiles are unchanged.
+  - A bar chart with more than 50 categories draws the top 25 with
+    "Showing top 25 of 935 · Show all", in the editor and for readers. A tile
+    with its own **Show top** number is drawn as set.
+- **Source names instead of internal IDs.** The filter field list says
+  "from Customers", not `General::Block::Customers::8f7f…`. A tile a filter
+  can't reach says "Monthly Revenue has no Customer Name field." instead of
+  "not exposed by commerce::block::monthly_revenue::88e1…" or "approved
+  physical field", in the editor, the Filters tab and for readers (older Apps'
+  stored reasons read the same way). Filter field search ignores spaces,
+  underscores and capitals: "customer name" finds Customer Name.
+- **Smaller editor fixes.**
+  - After **Add to page** the new tile is not selected, so the next field
+    click starts a new tile instead of changing the one just added.
+  - **Delete** removes the selected tile while focus is in its **Tile
+    settings** (not while typing in a field).
+  - A tile's **⋯** menu opens above its own table and the tiles after it.
+  - Tile titles wrap to a second line instead of "Lif…", and a KPI figure
+    shrinks to fit its tile instead of "$2,880.…". A tile's tools keep their
+    own room in the header (on their own row in a narrow tile), so they never
+    cover the title or the trust dot.
+  - A table holding the first 500 of 935 rows says "Showing 1–10 of the first
+    500 rows · 935 in total", and **Tile settings** says "Live · 935 rows ·
+    first 500 loaded".
+  - **Add data** shows "Finding data…" while it loads, not "No certified data
+    yet" and a 0 count.
+  - The App editor's top bar no longer scrolls out of view.
+  - The reader's top bar shows the App's name, not its id.
+  - Two items with the same name show where they come from: "Orders · Table"
+    and "Orders · Metrics".
+
 - **Editor filters apply at once, to linked tiles only.** Changing a filter
   in App Studio re-runs just the tiles it applies to, without pressing
   **Run**; other tiles keep their result. A second change now runs the new
