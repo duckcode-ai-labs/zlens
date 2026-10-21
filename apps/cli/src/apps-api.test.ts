@@ -2637,6 +2637,92 @@ describe('Apps command center API helpers', () => {
   });
 
 
+  it('D4 keyword suggestions note what they did not match, and never block publishing with it', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Keyword App', goal: 'Revenue by region', authoringMode: 'ai', sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    // No planAppBuild hook: no AI provider, so the keyword matcher plans.
+    const proposed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: 'Revenue by region. Keep it short and clear.', expectedRevision: draft.revision, proposalHash: draft.proposalHash,
+    });
+    expect(proposed.status).toBe(201);
+    const proposal = (proposed.payload as any).proposal;
+    expect(proposal.plannerProvenance).toMatchObject({ mode: 'deterministic', providerInvocation: 'not_attempted' });
+    const requirements = proposal.operations.find((operation: any) => operation.type === 'set_requirements');
+    expect(requirements.requirements.length).toBeGreaterThan(0);
+    expect(requirements.requirements.every((requirement: any) => requirement.required === false)).toBe(true);
+    expect(requirements.coverage.some((item: any) => item.status === 'gap')).toBe(true);
+
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'ai', proposalId: proposal.id, selectedSourceIds: proposal.defaultSelectedSourceIds,
+      expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+    });
+    expect(composed.status).toBe(200);
+    const saved = (composed.payload as any).draft;
+    // The gap is still there to read ("Not covered yet"), but it is no publish fix.
+    expect(saved.coverage.some((item: any) => item.status === 'gap')).toBe(true);
+    expect(preflightStoredAppBuildDraft(root, saved).join('\n')).not.toContain('Required App question is unresolved');
+  });
+
+  it('D4 a proposal never adds a tile the page already shows, and its question stays covered', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Revise App', goal: 'Revenue by region', authoringMode: 'manual', sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {});
+    const source = (catalog.payload as any).items.find((item: any) => item.capabilities?.dataset?.id);
+    const manual = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'manual', expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+      selections: [{
+        sourceId: source.sourceId, pageId: 'overview', view: 'chart', title: 'Revenue by region',
+        query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] },
+      }],
+    });
+    expect(manual.status).toBe(200);
+    const before = (manual.payload as any).draft;
+    const handTileId = before.pages[0].layout.items[0].i;
+    // The plan asks for the same chart again (sorted differently) and one new KPI.
+    const provider = async () => JSON.stringify({
+      frame: { goal: 'Revenue by region' },
+      requirements: [
+        { id: 'by-region', question: 'Revenue by region', role: 'breakdown', required: true, measures: ['revenue'], dimensions: ['region'], filters: [] },
+        { id: 'orders', question: 'Order count', role: 'kpi', required: true, measures: ['order_count'], dimensions: [], filters: [] },
+      ],
+      components: [
+        { id: 'region-again', title: 'Revenue by region', sourceId: source.sourceId, requirementIds: ['by-region'], role: 'breakdown', view: 'bar', rationale: 'Regions',
+          query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }], orderBy: [{ alias: 'revenue', direction: 'desc' }] } },
+        { id: 'orders-kpi', title: 'Order count', sourceId: source.sourceId, requirementIds: ['orders'], role: 'kpi', view: 'kpi', rationale: 'Count', query: { dimensions: [], measures: [{ measure: 'order_count' }] } },
+      ],
+      pages: [{ id: 'overview', title: 'Overview', componentIds: ['region-again', 'orders-kpi'], sections: [] }],
+      filters: [], navigation: [], crossFilters: [], detailDrills: [],
+    });
+    const proposed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: 'Revise the page', expectedRevision: before.revision, proposalHash: before.proposalHash, pageId: 'overview',
+    }, { planAppBuild: provider });
+    expect(proposed.status).toBe(201);
+    const proposal = (proposed.payload as any).proposal;
+    expect(proposal.proposedTileIds).toEqual(['orders-kpi']);
+    const page = proposal.operations.find((operation: any) => operation.type === 'upsert_page').page;
+    expect(page.layout.items.map((item: any) => item.i)).toEqual([handTileId, 'orders-kpi']);
+    expect(proposal.warnings).toContain('Revenue by region is already on this page, so it wasn\'t added again.');
+    const coverage = proposal.operations.find((operation: any) => operation.type === 'set_requirements').coverage;
+    expect(coverage.find((item: any) => item.requirementId === 'by-region')).toMatchObject({ status: 'covered', componentIds: [handTileId] });
+
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'ai', proposalId: proposal.id, selectedSourceIds: proposal.defaultSelectedSourceIds,
+      expectedRevision: before.revision, expectedProposalHash: before.proposalHash,
+    });
+    expect(composed.status).toBe(200);
+    const saved = (composed.payload as any).draft;
+    expect(saved.pages[0].layout.items.map((item: any) => item.i)).toEqual([handTileId, 'orders-kpi']);
+    expect(new Map(saved.coverage.map((item: any) => [item.requirementId, item.status])).get('by-region')).toBe('covered');
+  });
+
   it('APP-065 prepares and atomically applies a source-pinned universal App Autopilot Dataset change', async () => {
     const root = createProject();
     writeDatasetBlock(root, 'commerce/order-lines.dql');

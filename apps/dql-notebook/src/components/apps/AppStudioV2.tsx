@@ -122,7 +122,6 @@ import { ChartOutput } from '../output/ChartOutput';
 import { TableOutput } from '../output/TableOutput';
 import { APP_STUDIO_V2_STYLES } from './app-studio-v2-styles';
 import {
-  APP_STUDIO_AI_ACTIVITY_LABELS,
   appStudioProposalRetry,
   appStudioReviewAddRetry,
   appStudioRevisionRetry,
@@ -145,6 +144,16 @@ import {
   operationsForSelectedAppStudioSources,
   type AppStudioAiPlanSummary,
 } from './app-studio-ai-plan';
+import {
+  appStudioAskWords,
+  appStudioPlannerVoice,
+  appStudioPlannerWords,
+  CONNECT_AI_ACTION,
+  CONNECT_AI_TO_DESCRIBE,
+  KEYWORD_SUGGESTIONS_LABEL,
+  TRY_KEYWORD_SUGGESTIONS,
+  type AppStudioPlannerVoice,
+} from './app-studio-ai-voice';
 import {
   datasetFilterBindingsForSelection,
   studioTileFilterBindings,
@@ -305,6 +314,8 @@ export interface AppStudioLaunchConfig {
   sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
   /** The App's domain; '' is "All domains" (the server keeps `general`). */
   domain?: string;
+  /** With no AI provider, the author chose "Try keyword suggestions" (design D4). */
+  keywordSuggestions?: boolean;
 }
 
 export interface AppStudioV2Props {
@@ -324,6 +335,14 @@ export interface AppStudioV2Props {
   onBack: () => void;
   onPublished: (app: AppSummary, dashboardId?: string) => void;
   onDraftDeleted: (recovery: { appName: string; recoveryId: string }) => void;
+  /**
+   * Whether an AI provider is connected (design D4); `undefined` while the
+   * settings load, which reads as connected. Without one, plans come from the
+   * keyword matcher and say so, and AI-only actions ask to connect a provider.
+   */
+  aiConnected?: boolean;
+  /** Opens Settings → AI provider. */
+  onConnectAi?: () => void;
 }
 
 const TEMPLATE_OPTIONS: Array<{ id: StudioTemplate; title: string; description: string }> = [
@@ -338,6 +357,8 @@ export function AppStudioLaunchSurface({
   domainOptions = [],
   busy = false,
   error,
+  aiConnected,
+  onConnectAi,
   onChange,
   onSubmit,
 }: {
@@ -346,10 +367,20 @@ export function AppStudioLaunchSurface({
   domainOptions?: AuthoredDomainOption[];
   busy?: boolean;
   error?: string | null;
+  /**
+   * Whether an AI provider is connected (design D4); `undefined` while the
+   * settings load. With none, Describe with AI asks to connect one first and
+   * offers keyword suggestions as a labelled second choice.
+   */
+  aiConnected?: boolean;
+  /** Opens Settings → AI provider. */
+  onConnectAi?: () => void;
   onChange: (patch: Partial<AppStudioLaunchConfig>) => void;
   onSubmit: () => void;
 }): JSX.Element {
-  const canSubmit = config.mode === 'ai' ? Boolean(config.prompt.trim()) : Boolean(config.name.trim());
+  const noAi = aiConnected === false;
+  const connectFirst = config.mode === 'ai' && noAi && !config.keywordSuggestions;
+  const canSubmit = config.mode === 'ai' ? !connectFirst && Boolean(config.prompt.trim()) : Boolean(config.name.trim());
   return <section className="dql-app-studio-home" aria-labelledby="app-studio-home-title">
     <style>{APP_STUDIO_V2_STYLES}</style>
     <div className="dql-studio-v2-intro">
@@ -362,12 +393,20 @@ export function AppStudioLaunchSurface({
         <button type="button" role="tab" aria-selected={config.mode === 'ai'} className={config.mode === 'ai' ? 'on' : ''} onClick={() => onChange({ mode: 'ai', template: config.template === 'blank' ? 'operational_dashboard' : config.template })}><Sparkles size={16} /> Describe with AI</button>
         <button type="button" role="tab" aria-selected={config.mode === 'manual'} className={config.mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank', name: config.name || 'Untitled Analytics App' })}><LayoutDashboard size={16} /> Start manually</button>
       </div>
-      <label className="primary-field">
+      {connectFirst ? <section className="ai-launch-connect" aria-labelledby="ai-launch-connect-title">
+        <strong id="ai-launch-connect-title">{CONNECT_AI_TO_DESCRIBE}</strong>
+        <p>No AI provider is connected, so nothing can read your request and pick data for you yet. Connect one in Settings, or start manually.</p>
+        <p>Keyword suggestions match the words you type to your certified data. They are not AI, and you check every source and tile before anything is applied.</p>
+        <span className="ai-launch-connect-actions">
+          {onConnectAi ? <button type="button" className="primary" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
+          <button type="button" onClick={() => onChange({ keywordSuggestions: true })}>{TRY_KEYWORD_SUGGESTIONS}</button>
+        </span>
+      </section> : <label className="primary-field">
         <span>{config.mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
         {config.mode === 'ai'
           ? <textarea value={config.prompt} onChange={(event) => onChange({ prompt: event.target.value })} placeholder="Build a weekly revenue health App for finance leaders with trends, drivers, and customer detail." rows={4} />
           : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Revenue Operations" />}
-      </label>
+      </label>}
       <label className="launch-domain-field">
         <span>Domain</span>
         <select value={config.domain ?? ''} onChange={(event) => onChange({ domain: event.target.value })} aria-label="Domain">
@@ -376,7 +415,9 @@ export function AppStudioLaunchSurface({
         </select>
         <small>Lists of data start on this domain. You can still pick data from any domain.</small>
       </label>
-      {config.mode === 'ai' ? <div className="ai-launch-explainer"><span><Sparkles size={16} /></span><div><strong>AI picks your certified data and drafts a first version</strong><small>You review the data it chose and every tile before anything is applied.</small></div></div> : null}
+      {config.mode === 'ai' && !connectFirst ? (noAi
+        ? <div className="ai-launch-explainer keywords"><span><Sparkles size={16} /></span><div><strong>{KEYWORD_SUGGESTIONS_LABEL}</strong><small>Words in your request are matched to your certified data. No AI is used; you review every source and tile before anything is applied.{onConnectAi ? <> <button type="button" className="link" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button></> : null}</small></div></div>
+        : <div className="ai-launch-explainer"><span><Sparkles size={16} /></span><div><strong>AI picks your certified data and drafts a first version</strong><small>You review the data it chose and every tile before anything is applied.</small></div></div>) : null}
       <details className="launch-options" open={config.mode === 'manual'}>
         <summary><span>Starting layout</span><strong>{TEMPLATE_OPTIONS.find((option) => option.id === config.template)?.title ?? 'Operational Dashboard'}</strong><ChevronDown size={15} /></summary>
         <div className="template-grid">
@@ -388,7 +429,7 @@ export function AppStudioLaunchSurface({
         <label className="studio-review-toggle"><input type="checkbox" checked={config.sourcePolicy === 'include_review_required'} onChange={(event) => onChange({ sourcePolicy: event.target.checked ? 'include_review_required' : 'governed_only' })} /><i aria-hidden="true" /><span><strong>Also let me try data that needs review</strong><small>Useful while exploring; a page that uses it cannot publish until that data is certified.</small></span></label>
       </section>
       {error ? <div className="studio-error" role="alert">{error}</div> : null}
-      <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : config.mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : <><LayoutDashboard size={17} /> Open blank Studio</>}</button>
+      {connectFirst ? null : <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : config.mode === 'ai' ? <><Sparkles size={17} /> {noAi ? 'Suggest from keywords' : 'Generate editable App'}</> : <><LayoutDashboard size={17} /> Open blank Studio</>}</button>}
       <small className="launch-next-step">Private local draft first · review sources and preview results · publish only when ready</small>
     </div>
   </section>;
@@ -398,6 +439,7 @@ function AppStudioAiActivitySurface({
   docked = false,
   activity,
   label,
+  voice = 'ai',
   onBack,
   onReturn,
   onRetry,
@@ -406,6 +448,8 @@ function AppStudioAiActivitySurface({
   docked?: boolean;
   activity: AppStudioAiActivity;
   label: string;
+  /** Keyword suggestions say so while they run (design D4). */
+  voice?: AppStudioPlannerVoice;
   onBack: () => void;
   onReturn?: () => void;
   onRetry: () => void;
@@ -416,13 +460,13 @@ function AppStudioAiActivitySurface({
     <div>
       <span className="loading-mark"><Sparkles size={20} /></span>
       {activity.status === 'running' ? <>
-        <strong id="studio-ai-activity-title">{docked ? 'Drafting a plan' : 'Preparing your editable App proposal'}</strong>
+        <strong id="studio-ai-activity-title">{voice === 'keywords' ? 'Matching your words to your data' : docked ? 'Drafting a plan' : 'Preparing your editable App proposal'}</strong>
         <small className="studio-ai-activity-label" role="status" aria-live="polite">{label}</small>
         <small>{docked ? 'Proposed tiles appear on the canvas for you to apply or discard. Sources keep their catalog trust.' : 'Data stays Certified or Needs review exactly as cataloged. You review it before the canvas is generated.'}</small>
       </> : <>
-        <strong id="studio-ai-activity-title">The source proposal needs another try</strong>
+        <strong id="studio-ai-activity-title">{voice === 'keywords' ? appStudioPlannerWords('keywords').errorTitle : 'The source proposal needs another try'}</strong>
         <small role="alert">{activity.error ?? 'App Studio could not prepare the source proposal.'}</small>
-        <span className="studio-ai-activity-actions">{onReturn ? <button type="button" onClick={onReturn}>Back to source review</button> : null}<button type="button" className="primary" onClick={onRetry}>Try AI proposal again</button></span>
+        <span className="studio-ai-activity-actions">{onReturn ? <button type="button" onClick={onReturn}>Back to source review</button> : null}<button type="button" className="primary" onClick={onRetry}>{appStudioPlannerWords(voice).retryLabel}</button></span>
       </>}
     </div>
   </section>;
@@ -444,6 +488,8 @@ export function AppStudioV2({
   onBack,
   onPublished,
   onDraftDeleted,
+  aiConnected,
+  onConnectAi,
 }: AppStudioV2Props): JSX.Element {
   const [draft, setDraft] = useState<AppStudioBuildDraft | null>(null);
   /** The App's domain, stored on its first page when the draft is created; `general` means every domain. */
@@ -908,11 +954,11 @@ export function AppStudioV2({
       setProposal(result.proposal);
       setAiActivity(null);
       setCopilotOpen(false);
-      setSavedMessage('AI plan ready for review');
+      setSavedMessage(appStudioPlannerVoice(result.proposal, aiConnected) === 'keywords' ? 'Keyword suggestions ready for review' : 'AI plan ready for review');
       return true;
     } catch (cause) {
       const message = messageOf(cause);
-      setSavedMessage('AI proposal needs attention');
+      setSavedMessage(aiConnected === false ? 'Keyword suggestions need attention' : 'AI proposal needs attention');
       setAiActivity({ status: 'error', retry, returnToProposal, error: message });
       return false;
     } finally {
@@ -943,7 +989,7 @@ export function AppStudioV2({
       });
       setProposal(result.proposal);
       if (showActivity) setAiActivity(null);
-      setSavedMessage('AI proposal revised on the server');
+      setSavedMessage(appStudioPlannerVoice(result.proposal, aiConnected) === 'keywords' ? 'Keyword suggestions updated' : 'AI proposal revised on the server');
       return true;
     } catch (cause) {
       const message = messageOf(cause);
@@ -2946,16 +2992,24 @@ export function AppStudioV2({
     setAiActivity(null);
     setAiDataFlow(false);
     setProposalPageId(null);
-    setSavedMessage('AI proposal discarded · pick the data yourself');
+    setSavedMessage(`${appStudioPlannerVoice(proposal, aiConnected) === 'keywords' ? 'Keyword suggestions' : 'AI proposal'} discarded · pick the data yourself`);
   };
 
+  // Who makes a plan (design D4): the open proposal's provenance decides, else
+  // the provider settings. Entry points that ask for a plan use the settings.
+  const planVoice: AppStudioPlannerVoice = appStudioPlannerVoice(proposal, aiConnected);
+  const planWords = appStudioPlannerWords(planVoice);
+  const askVoice: AppStudioPlannerVoice = aiConnected === false ? 'keywords' : 'ai';
+  const askWords = appStudioAskWords(askVoice);
   if (stage === 'data') {
     const aiStep = aiDataFlow && (proposal || aiActivity) ? {
       status: aiActivity?.status === 'running' ? 'running' as const : aiActivity?.status === 'error' ? 'error' as const : 'ready' as const,
       goal: proposalSummary?.frame?.goal || draft.frame.goal || prompt,
       ...(proposal && proposalSummary ? { model: appStudioAiDataModel(proposal, proposalSummary, selectedProposalSourceIds, knownItems) } : {}),
-      activitySteps: APP_STUDIO_AI_ACTIVITY_LABELS,
+      activitySteps: planWords.activitySteps,
       activityIndex: aiActivityIndex,
+      voice: planVoice,
+      ...(onConnectAi ? { onConnectAi } : {}),
       ...(aiActivity?.error ? { activityError: aiActivity.error } : {}),
       ...(proposal && appStudioPlannerProvenanceLabel(proposal) ? { plannerLabel: appStudioPlannerProvenanceLabel(proposal) } : {}),
       sourcePolicy: draft.sourcePolicy,
@@ -3042,7 +3096,10 @@ export function AppStudioV2({
   const canvasMode = Boolean(activePage?.narrative?.presentation === 'canvas' && !projectedPage);
   const storyCatalog = previewRun ? buildStoryBindingCatalog(previewRun.tiles as StoryBindingTileInput[], Object.fromEntries((activePage?.layout.items ?? []).map((item) => [item.i, item.title]))) : {};
   const storyPageTiles = (activePage?.layout.items ?? []).filter((item) => !item.text).map((item) => ({ tileId: item.i, title: item.title || humanize(item.i) }));
-  const storyDraftBlocked = !previewRun
+  // Designing a layout needs a real AI provider; keyword suggestions cannot (design D4).
+  const storyDraftBlocked = aiConnected === false
+    ? `${CONNECT_AI_ACTION} to design with AI.`
+    : !previewRun
     ? 'Run the page first: the report is drafted from its latest complete results.'
     : previewRun.partial || previewRun.incomplete
       ? 'Run the whole page first: the last run covered only some tiles.'
@@ -3412,7 +3469,7 @@ export function AppStudioV2({
             <button type="button" className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => { setStudioView('view'); setSelectedTileId(null); setSettingsOpen(false); setTileMenuId(null); }} title="See the page exactly as readers will">Preview</button>
           </div>
           <button type="button" className="preview" onClick={() => void runPreview()} disabled={previewing || busy} aria-label={previewing ? 'Running preview' : 'Run preview'} title="Run every tile on this page again"><Play size={13} /><span>{previewing ? 'Running…' : 'Run'}</span></button>
-          <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label="Ask AI"><Sparkles size={14} /><span>Ask AI</span></button>
+          <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label={askWords.toolbar} title={askVoice === 'keywords' ? KEYWORD_SUGGESTIONS_LABEL : undefined}><Sparkles size={14} /><span>{askWords.toolbar}</span></button>
           <button type="button" className="publish" onClick={() => void publishFromToolbar()} disabled={busy} aria-label={`Review and publish to Project${publishStepCount ? `, ${publishStepCount} ${publishStepCount === 1 ? 'fix' : 'fixes'} needed` : ''}`}><span>Publish</span>{publishStepCount ? <small>{publishStepCount} {publishStepCount === 1 ? 'fix' : 'fixes'}</small> : null}</button>
           <button type="button" className="ghost-icon overflow-button" aria-label="More draft actions" aria-expanded={actionsOpen} onClick={() => setActionsOpen((open) => !open)}><MoreHorizontal size={17} /></button>
           {actionsOpen ? <div className="studio-overflow-menu" role="menu">
@@ -3477,7 +3534,7 @@ export function AppStudioV2({
               <strong>Choose a tile to change with AI</strong>
               <span>Use “Edit with AI” on a Dataset tile. Clicking a chart keeps its own behavior and does not select the tile.</span>
             </div> : null}
-            {projectedPage ? <div className={`proposal-banner ${proposalSummaryText(projectedPage).removed ? 'warn' : ''}`} role="status"><Sparkles size={14} /><span><strong>AI proposal</strong> · {proposalSummaryText(projectedPage).text}. Nothing is saved until you apply.</span></div> : null}
+            {projectedPage ? <div className={`proposal-banner ${proposalSummaryText(projectedPage).removed ? 'warn' : ''}`} role="status"><Sparkles size={14} /><span><strong>{planWords.bannerLabel}</strong> · {proposalSummaryText(projectedPage).text}. Nothing is saved until you apply.</span></div> : null}
             {/* A report or custom layout shows the tile being built above it; Add to page puts it at the end. */}
             {(canvasMode || storyMode) && editing && draftTile && activeDescriptor ? <div className="studio-draft-slot"><DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} /></div> : null}
             {canvasMode ? canvasArea : storyMode ? storyArea : <>
@@ -3516,7 +3573,7 @@ export function AppStudioV2({
                   item.change === 'removed' ? <span className="proposal-badge removed">WILL BE REMOVED</span> : projectedPage.linkedTileIds.has(item.tile.i) ? <span className="proposal-badge link">PROPOSED LINK</span> : null,
                 ))
                 : canvasItems.map((tile) => renderTile(tile, '', null, breakpoint === 'wide'))}
-              {!visibleItems.length && !draftTile && !projectedPage ? <div className="empty-canvas"><span><Plus size={22} /></span><strong>This page is empty</strong><p>{editing ? 'Choose your data in the Data panel, then click the numbers and fields you want to see. You can also ask AI to draft the page.' : 'Switch to Edit to add tiles to this page.'}</p>{editing ? <div className="empty-actions"><button type="button" className="primary" onClick={openAddTile}><Plus size={14} /> Add tile</button><button type="button" onClick={() => { setAiScope('page'); setCopilotOpen(true); }}><Sparkles size={14} /> Draft with AI</button></div> : null}</div> : null}
+              {!visibleItems.length && !draftTile && !projectedPage ? <div className="empty-canvas"><span><Plus size={22} /></span><strong>This page is empty</strong><p>{editing ? `Choose your data in the Data panel, then click the numbers and fields you want to see. ${askVoice === 'keywords' ? 'You can also get keyword suggestions for the page.' : 'You can also ask AI to draft the page.'}` : 'Switch to Edit to add tiles to this page.'}</p>{editing ? <div className="empty-actions"><button type="button" className="primary" onClick={openAddTile}><Plus size={14} /> Add tile</button><button type="button" onClick={() => { setAiScope('page'); setCopilotOpen(true); }}><Sparkles size={14} /> {askWords.draftPage}</button></div> : null}</div> : null}
             </div>
             {canArrange && visibleItems.length ? <p id="studio-canvas-keys" className="studio-canvas-keys">Drag a tile by its header or resize it from its edges. With a tile selected: arrow keys move it, Shift + arrows resize, {modifierKeyLabel()}D duplicates, Delete removes, {modifierKeyLabel()}Z undoes.</p> : null}
             </>}
@@ -3524,11 +3581,12 @@ export function AppStudioV2({
         </div>
       </main>
 
-      {rightPane === 'proposal' ? <aside className="studio-right studio-plan-pane" aria-label="AI proposal">
+      {rightPane === 'proposal' ? <aside className="studio-right studio-plan-pane" aria-label={planWords.reviewPaneLabel}>
         {aiActivity ? <AppStudioAiActivitySurface
           docked
           activity={aiActivity}
-          label={APP_STUDIO_AI_ACTIVITY_LABELS[aiActivityIndex] ?? APP_STUDIO_AI_ACTIVITY_LABELS[0]}
+          label={planWords.activitySteps[aiActivityIndex] ?? planWords.activitySteps[0] ?? ''}
+          voice={planVoice}
           onBack={onBack}
           onReturn={aiActivity.returnToProposal && proposal ? () => setAiActivity(null) : undefined}
           onRetry={() => retryAiActivity(aiActivity)}
@@ -3542,6 +3600,7 @@ export function AppStudioV2({
           busy={busy}
           changeCount={proposalChangeCount}
           showPlanNotes={!aiDataFlow}
+          voice={planVoice}
           {...(aiDataFlow ? { onBackToData: () => setStage('data') } : {})}
           onRevise={() => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true)}
           onApply={() => void applyProposal()}
@@ -3590,7 +3649,7 @@ export function AppStudioV2({
           />
         ) : (
           <>
-            <BuildFrameInspector draft={draft} prompt={prompt} previewRun={previewRun} onPrompt={setPrompt} onAskAi={() => { setAiScope('page'); setCopilotOpen(true); }} onSourcePolicy={(nextPolicy) => void mutate([{ type: 'set_source_policy', sourcePolicy: nextPolicy }])} onResolveTask={(task) => void resolveReviewTask(task)} onApproveSemantic={() => void approveSemanticPreview()} />
+            <BuildFrameInspector draft={draft} prompt={prompt} previewRun={previewRun} askLabel={askWords.buildOrRevise} onPrompt={setPrompt} onAskAi={() => { setAiScope('page'); setCopilotOpen(true); }} onSourcePolicy={(nextPolicy) => void mutate([{ type: 'set_source_policy', sourcePolicy: nextPolicy }])} onResolveTask={(task) => void resolveReviewTask(task)} onApproveSemantic={() => void approveSemanticPreview()} />
             {/* Who the published App is for (RFC 0010 HH-16). */}
             {draft.appId ? <div className="inspector-body"><PublishedAppAudience key={draft.appId} appId={draft.appId} /></div> : null}
           </>
@@ -3599,7 +3658,7 @@ export function AppStudioV2({
 
       {rightPane === 'ai' ? <AiSidePanel
         t={themes[themeMode]}
-        title="AI"
+        title={askWords.panelTitle}
         subtitle={draft.name}
         dock="column"
         expanded={copilotExpanded}
@@ -3613,7 +3672,7 @@ export function AppStudioV2({
         resizable
         minResizeWidth={360}
         maxResizeWidth={900}
-        ariaLabel="Ask AI"
+        ariaLabel={askWords.toolbar}
         className="studio-copilot-panel"
       >
         <div className="studio-ai-scope" role="tablist" aria-label="What should AI work on?">
@@ -3623,12 +3682,13 @@ export function AppStudioV2({
         {aiScope === 'page' ? <section className="studio-ai-page-scope">
           <label htmlFor="studio-ai-page-prompt">Describe the page or the change you want</label>
           <textarea id="studio-ai-page-prompt" value={prompt} rows={5} onChange={(event) => setPrompt(event.target.value)} placeholder="Revenue and order trends by region for the weekly business review" />
-          <small>{draft.sourcePolicy === 'governed_only' ? 'AI plans tiles from certified Datasets, Metrics and saved queries only.' : 'AI plans tiles from Datasets, Metrics and saved queries, including data that needs review.'} New tiles are added below what is already here, and you keep or skip each one before anything changes.</small>
+          <small>{askWords.pageHelp(draft.sourcePolicy === 'governed_only')}</small>
+          {askVoice === 'keywords' && onConnectAi ? <button type="button" className="link studio-ai-connect-link" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
           <label htmlFor="studio-ai-replace-page" className="studio-ai-replace">
             <input id="studio-ai-replace-page" type="checkbox" checked={replacePageWithAi} onChange={(event) => setReplacePageWithAi(event.target.checked)} />
             Rebuild this page instead (replaces its current tiles)
           </label>
-          <button type="button" className="primary" disabled={busy || previewing} onClick={() => { setAiDataFlow(false); void requestAiProposal(); }}><Sparkles size={13} /> {replacePageWithAi ? 'Propose a new page' : 'Propose additions'}</button>
+          <button type="button" className="primary" disabled={busy || previewing} onClick={() => { setAiDataFlow(false); void requestAiProposal(); }}><Sparkles size={13} /> {replacePageWithAi ? askWords.proposePage : askWords.proposeAdditions}</button>
         </section> : null}
         {aiScope === 'tile' && autopilotReview ? <AppAutopilotReviewCard
           proposal={autopilotReview}
@@ -3639,7 +3699,12 @@ export function AppStudioV2({
           }}
           onApply={() => void applyAutopilotChange()}
         /> : null}
-        {aiScope === 'tile' ? <Suspense fallback={<div className="studio-copilot-loading">Loading…</div>}>
+        {aiScope === 'tile' && askVoice === 'keywords' ? <section className="studio-ai-connect" aria-label="Changing a tile needs AI">
+          <strong>Changing a tile needs an AI provider</strong>
+          <span>Keyword suggestions can add tiles to a page, but they cannot read or change one tile. Connect an AI provider, or change the tile yourself in Tile settings.</span>
+          {onConnectAi ? <button type="button" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
+        </section> : null}
+        {aiScope === 'tile' && askVoice !== 'keywords' ? <Suspense fallback={<div className="studio-copilot-loading">Loading…</div>}>
           <UnifiedAgentRunPanel
             themeMode={themeMode}
             title="Edit tile with AI"
@@ -3688,6 +3753,7 @@ export function AppStudioV2({
         onRunAllPreviews={() => void runAllPreviewsAndReview()}
         onRemoveRequirement={(requirementId) => void removeRequirementFromPublishScope(requirementId)}
         onReviseRequirement={reviseRequirementWithAi}
+        reviseLabel={askWords.revise}
         onAnswerQuestion={(questionId, answerId) => void answerBuildFrameQuestion(questionId, answerId)}
         onResolveTask={(task) => void resolveReviewTask(task)}
         onOpenSources={() => { setPublishReviewOpen(false); setPanel('sources'); setPanelOpen(true); }}
@@ -3745,6 +3811,7 @@ export function PublishReadinessDialog({
   onRunAllPreviews,
   onRemoveRequirement,
   onReviseRequirement,
+  reviseLabel = 'Revise with AI',
   onAnswerQuestion,
   onResolveTask,
   onOpenSources,
@@ -3763,6 +3830,8 @@ export function PublishReadinessDialog({
   onRunAllPreviews: () => void;
   onRemoveRequirement: (requirementId: string) => void;
   onReviseRequirement: (question: string) => void;
+  /** "Suggest from keywords" when no AI provider is connected (design D4). */
+  reviseLabel?: string;
   onAnswerQuestion: (questionId: string, answerId: string) => void;
   onResolveTask: (task: AppStudioBuildDraft['reviewTasks'][number]) => void;
   onOpenSources: () => void;
@@ -3806,7 +3875,7 @@ export function PublishReadinessDialog({
         </section>)}
         {requirements.map((requirement) => <section className="readiness-item" key={requirement.id}>
           <span className="step-mark"><Sparkles size={15} /></span>
-          <div><strong>Unanswered App question</strong><p>{requirement.question}</p><small>ZLens will not pretend that an unrelated tile covers this question.</small><div className="readiness-actions"><button type="button" className="primary" onClick={() => onReviseRequirement(requirement.question)} disabled={busy}><Bot size={13} /> Revise with AI</button><button type="button" onClick={() => onRemoveRequirement(requirement.id)} disabled={busy}>Remove from publish scope</button></div></div>
+          <div><strong>Unanswered App question</strong><p>{requirement.question}</p><small>ZLens will not pretend that an unrelated tile covers this question.</small><div className="readiness-actions"><button type="button" className="primary" onClick={() => onReviseRequirement(requirement.question)} disabled={busy}><Bot size={13} /> {reviseLabel}</button><button type="button" onClick={() => onRemoveRequirement(requirement.id)} disabled={busy}>Remove from publish scope</button></div></div>
         </section>)}
         {tasks.map((task) => <section className="readiness-item" key={task.id}>
           <span className="step-mark"><FileText size={15} /></span>
@@ -3856,6 +3925,7 @@ export function AiPlanReview({
   busy,
   changeCount = 0,
   showPlanNotes = true,
+  voice = 'ai',
   onBackToData,
   onApply,
   onDismiss,
@@ -3876,6 +3946,8 @@ export function AiPlanReview({
   changeCount?: number;
   /** Planner notes, gaps and questions; the Data step already showed them for a new AI App. */
   showPlanNotes?: boolean;
+  /** Keyword suggestions are labelled as such, never as AI (design D4). */
+  voice?: AppStudioPlannerVoice;
   /** Back to the AI Data step, while the tiles are not applied yet. */
   onBackToData?: () => void;
   onApply: () => void;
@@ -3895,23 +3967,24 @@ export function AiPlanReview({
   const plannerProvenanceLabel = appStudioPlannerProvenanceLabel(proposal);
   const sourceLabel = (sourceId?: string) => summary.sources.find((source) => source.id === sourceId)?.label;
   const applyLabel = busy ? 'Applying…' : changeCount > 0 ? `Apply ${changeCount} ${changeCount === 1 ? 'change' : 'changes'}` : 'Apply';
+  const words = appStudioPlannerWords(voice);
 
   return <section className="studio-ai-plan proposal-tile-review" aria-labelledby="proposal-tile-review-title">
     <header>
       <span><Sparkles size={18} /></span>
       <div>
-        <small>AI PROPOSAL</small>
+        <small>{words.reviewEyebrow}</small>
         <h1 id="proposal-tile-review-title">Review the tiles</h1>
-        <p>AI understood: <strong>{summary.frame?.goal ?? 'Build a governed analytics App'}</strong>. Proposed tiles are on the canvas. Keep or skip each one; nothing is saved until you apply.</p>
+        <p>{words.understood}: <strong>{summary.frame?.goal ?? 'Build a governed analytics App'}</strong>. Proposed tiles are on the canvas. Keep or skip each one; nothing is saved until you apply.</p>
         {plannerProvenanceLabel ? <small className="proposal-planner-provenance">{plannerProvenanceLabel}</small> : null}
-        {showPlanNotes && proposal.warnings?.length ? <ul className="proposal-warnings" aria-label="AI planner notes">{proposal.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul> : null}
+        {showPlanNotes && proposal.warnings?.length ? <ul className="proposal-warnings" aria-label={words.notesLabel}>{proposal.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul> : null}
       </div>
-      <button type="button" onClick={onDismiss} aria-label="Discard AI proposal"><X size={16} /></button>
+      <button type="button" onClick={onDismiss} aria-label={words.discardLabel}><X size={16} /></button>
     </header>
 
     {onBackToData ? <button type="button" className="proposal-back-to-data" onClick={onBackToData} disabled={busy}><ArrowLeft size={13} /> Back to data</button> : null}
 
-    <div className="proposal-source-summary" aria-label="AI proposal summary">
+    <div className="proposal-source-summary" aria-label={`${words.reviewPaneLabel} summary`}>
       <span><strong>{keptTiles.length}</strong> of {tiles.length} {tiles.length === 1 ? 'tile' : 'tiles'} kept</span>
       <span><strong>{sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allows data that needs review'}</strong> data rule</span>
     </div>
@@ -3941,7 +4014,7 @@ export function AiPlanReview({
         </div>
       </section>
 
-      {showPlanNotes && uncoveredRequirements.length ? <section className="studio-ai-questions"><header><strong>Not covered yet</strong><small>{uncoveredRequirements.length} {uncoveredRequirements.length === 1 ? 'gap' : 'gaps'}</small></header>{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy || sourcePolicy !== 'include_review_required'}>{sourcePolicy === 'include_review_required' ? 'Generate draft DQL that needs review' : 'Allow data that needs review to generate'}</button></div>)}</section> : null}
+      {showPlanNotes && uncoveredRequirements.length ? <section className="studio-ai-questions" aria-label="Not covered yet"><header><strong>Not covered yet</strong><small>{uncoveredRequirements.length} {voice === 'keywords' ? (uncoveredRequirements.length === 1 ? 'note' : 'notes') : (uncoveredRequirements.length === 1 ? 'gap' : 'gaps')}</small></header>{voice === 'keywords' ? <p>No suggested source matched these. They are notes, not publish blockers.</p> : null}{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy || sourcePolicy !== 'include_review_required'}>{sourcePolicy === 'include_review_required' ? 'Generate draft DQL that needs review' : 'Allow data that needs review to generate'}</button></div>)}</section> : null}
       {showPlanNotes && unresolved.length ? <section className="studio-ai-questions"><header><strong>AI needs one more decision</strong><small>{unresolved.length} required</small></header>{unresolved.map((item) => <fieldset key={item.id}><legend>{item.question}</legend>{item.choices.map((choice) => <button key={choice.id} type="button" onClick={() => onAnswerClarification(item.id, choice.id)} disabled={busy}><strong>{choice.label}</strong>{choice.description ? <small>{choice.description}</small> : null}</button>)}</fieldset>)}<button type="button" onClick={onRevise} disabled={busy}>{busy ? 'Updating…' : 'Re-run proposal'}</button></section> : null}
     </div>
 
@@ -4036,10 +4109,10 @@ function PagesPanel({ draft, activePageId, onOpen, onAdd, template, onApplyTempl
   </>;
 }
 
-function BuildFrameInspector({ draft, prompt, previewRun, onPrompt, onAskAi, onSourcePolicy, onResolveTask, onApproveSemantic }: { draft: AppStudioBuildDraft; prompt: string; previewRun: DashboardRunResponse | null; onPrompt: (value: string) => void; onAskAi: () => void; onSourcePolicy: (value: AppStudioBuildDraft['sourcePolicy']) => void; onResolveTask: (task: AppStudioBuildDraft['reviewTasks'][number]) => void; onApproveSemantic: () => void }): JSX.Element {
+function BuildFrameInspector({ draft, prompt, previewRun, askLabel = 'Ask AI to build or revise this page', onPrompt, onAskAi, onSourcePolicy, onResolveTask, onApproveSemantic }: { draft: AppStudioBuildDraft; prompt: string; previewRun: DashboardRunResponse | null; askLabel?: string; onPrompt: (value: string) => void; onAskAi: () => void; onSourcePolicy: (value: AppStudioBuildDraft['sourcePolicy']) => void; onResolveTask: (task: AppStudioBuildDraft['reviewTasks'][number]) => void; onApproveSemantic: () => void }): JSX.Element {
   const openTasks = blockingPublicationReviewTasks(draft);
   const semanticNeedsApproval = legacySemanticTilesNeedingApproval(draft).length > 0;
-  return <div className="inspector-body"><section><label>Business decision</label><textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} rows={5} /></section><section><label>Data rule</label><select value={draft.sourcePolicy} onChange={(event) => onSourcePolicy(event.target.value as AppStudioBuildDraft['sourcePolicy'])}><option value="governed_only">Only certified data</option><option value="include_review_required">Also allow data that needs review</option></select><small className="field-help">Data that needs review stays local and blocks Project publication until it is replaced or certified.</small></section><section className="frame-facts"><label>Build Frame</label><div><span>Audience</span><strong>{draft.frame.audience || 'Stakeholders'}</strong></div><div><span>Metrics</span><strong>{draft.frame.metrics.join(', ') || 'Needs clarification'}</strong></div><div><span>Dimensions</span><strong>{draft.frame.dimensions.join(', ') || 'Automatic'}</strong></div><div><span>Data rule</span><strong>{draft.sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allows data that needs review'}</strong></div></section>{semanticNeedsApproval ? <section><label>Semantic review</label><button type="button" className="review-action" onClick={onApproveSemantic} disabled={!previewRun}><ShieldCheck size={14} /> {previewRun ? 'Approve this settled result' : 'Run preview to approve'}</button></section> : null}{openTasks.length ? <section className="review-task-list"><label>Review tasks</label>{openTasks.map((task) => <div key={task.id}><span>{task.message}</span><button type="button" onClick={() => onResolveTask(task)}><Check size={12} /> Resolve</button></div>)}</section> : null}<button type="button" className="ask-ai" onClick={onAskAi}><Bot size={16} /> Ask AI to build or revise this page</button><section className="trust-summary"><ShieldCheck size={17} /><div><strong>Nothing publishes silently</strong><p>AI changes are typed diffs. Project publication revalidates live source trust and filter bindings.</p></div></section></div>;
+  return <div className="inspector-body"><section><label>Business decision</label><textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} rows={5} /></section><section><label>Data rule</label><select value={draft.sourcePolicy} onChange={(event) => onSourcePolicy(event.target.value as AppStudioBuildDraft['sourcePolicy'])}><option value="governed_only">Only certified data</option><option value="include_review_required">Also allow data that needs review</option></select><small className="field-help">Data that needs review stays local and blocks Project publication until it is replaced or certified.</small></section><section className="frame-facts"><label>Build Frame</label><div><span>Audience</span><strong>{draft.frame.audience || 'Stakeholders'}</strong></div><div><span>Metrics</span><strong>{draft.frame.metrics.join(', ') || 'Needs clarification'}</strong></div><div><span>Dimensions</span><strong>{draft.frame.dimensions.join(', ') || 'Automatic'}</strong></div><div><span>Data rule</span><strong>{draft.sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allows data that needs review'}</strong></div></section>{semanticNeedsApproval ? <section><label>Semantic review</label><button type="button" className="review-action" onClick={onApproveSemantic} disabled={!previewRun}><ShieldCheck size={14} /> {previewRun ? 'Approve this settled result' : 'Run preview to approve'}</button></section> : null}{openTasks.length ? <section className="review-task-list"><label>Review tasks</label>{openTasks.map((task) => <div key={task.id}><span>{task.message}</span><button type="button" onClick={() => onResolveTask(task)}><Check size={12} /> Resolve</button></div>)}</section> : null}<button type="button" className="ask-ai" onClick={onAskAi}><Bot size={16} /> {askLabel}</button><section className="trust-summary"><ShieldCheck size={17} /><div><strong>Nothing publishes silently</strong><p>AI changes are typed diffs. Project publication revalidates live source trust and filter bindings.</p></div></section></div>;
 }
 
 export function ComponentInspector({ initialTab = 'data', tile, run, pageId, page, pages, sources, dataset, disabled, onOpenSources, onSaveDatasetTileAsBlock, savingDatasetTileAsBlock, savedDatasetReviewDraft, onReplaceDatasetTileWithBlock = () => undefined, replacingDatasetTileWithBlock = false, onPreviewLegacySemanticConversion = () => undefined, previewingLegacySemanticConversion = false, semanticTileConversionPreview, onAcceptLegacySemanticConversion = () => undefined, acceptingLegacySemanticConversion = false, onRefreshDatasetTile, onUpdate, onUpdateInteractions, onDelete }: { initialTab?: 'data' | 'visual' | 'interactions'; tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]; run?: DashboardRunResponse['tiles'][number]; pageId: string; page: AppStudioBuildDraft['pages'][number]; pages: AppStudioBuildDraft['pages']; sources: AppStudioBuildDraft['sources']; dataset?: DatasetDescriptor; disabled: boolean; onOpenSources: () => void; onSaveDatasetTileAsBlock: () => void; savingDatasetTileAsBlock: boolean; savedDatasetReviewDraft?: Extract<DatasetTileSaveAsBlockResponse, { ok: true }>; onReplaceDatasetTileWithBlock?: () => void; replacingDatasetTileWithBlock?: boolean; onPreviewLegacySemanticConversion?: () => void; previewingLegacySemanticConversion?: boolean; semanticTileConversionPreview?: Extract<SemanticTileConversionPreviewResponse, { ok: true }>; onAcceptLegacySemanticConversion?: () => void; acceptingLegacySemanticConversion?: boolean; onRefreshDatasetTile: () => void; onUpdate: (patch: Partial<typeof tile>) => void; onUpdateInteractions: (interactions: AppStudioBuildDraft['pages'][number]['interactions']) => void; onDelete: () => void }): JSX.Element {

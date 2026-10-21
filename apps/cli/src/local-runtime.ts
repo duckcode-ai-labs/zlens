@@ -18748,7 +18748,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (req.method === 'GET' && path === '/api/settings/providers') {
       const manages = await hostedMay('settings.manage');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ providers: manages ? listProviderSettings(projectRoot) : listProviderSettings(projectRoot).map(({ apiKeyPreview: _preview, ...provider }) => ({ ...provider, hasApiKey: false, baseUrl: undefined, ...(provider.source === 'env' ? { source: 'none' as const, configured: false, enabled: false } : {}) })) }));
+      res.end(serializeJSON({
+        providers: manages ? listProviderSettings(projectRoot) : listProviderSettings(projectRoot).map(({ apiKeyPreview: _preview, ...provider }) => ({ ...provider, hasApiKey: false, baseUrl: undefined, ...(provider.source === 'env' ? { source: 'none' as const, configured: false, enabled: false } : {}) })),
+        // Whether a model can be asked at all (design D4), so App Studio can be
+        // honest without seeing which keys the server holds.
+        assistAvailable: assistProviderAvailable(projectRoot),
+      }));
       return;
     }
 
@@ -44579,6 +44584,22 @@ async function createBlockStudioAssistProvider(
  * providers. Returns the settings id alongside the transport so callers keep
  * naming the provider the user actually configured.
  */
+/**
+ * Whether `selectAssistProvider` would find a model, without building one or
+ * reaching the network: replay cassettes, a host's model, or a local provider
+ * that is enabled and configured. App Studio reads it to open on
+ * Start manually and label keyword suggestions when there is none (design D4).
+ */
+export function assistProviderAvailable(projectRoot: string): boolean {
+  if (createEvalCassetteReplayProvider(projectRoot)) return true;
+  try {
+    if (hostModelProvider()) return true;
+  } catch {
+    return false;
+  }
+  return listProviderSettings(projectRoot).some((provider) => provider.enabled && provider.configured);
+}
+
 async function selectAssistProvider(
   projectRoot: string,
   requestedProvider?: ProviderSettingsId,

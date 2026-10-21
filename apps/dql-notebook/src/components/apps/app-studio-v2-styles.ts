@@ -32,6 +32,16 @@ export const APP_STUDIO_V2_STYLES = `
 .ai-launch-explainer > div { display:grid; gap:3px; }
 .ai-launch-explainer strong { font-size:13px; line-height:1.35; }
 .ai-launch-explainer small { color:var(--text-tertiary); font-size:13px; line-height:1.45; }
+.ai-launch-connect { display:grid; gap:10px; border:1px solid var(--border-default); background:var(--bg-2); border-radius:12px; padding:14px; }
+.ai-launch-connect strong { font-size:14px; line-height:1.35; color:var(--text-primary); }
+.ai-launch-connect p { margin:0; color:var(--text-secondary); font-size:13px; line-height:1.45; }
+.ai-launch-connect-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.ai-launch-connect-actions button { border:1px solid var(--border-default); background:var(--bg-1); color:var(--text-primary); border-radius:8px; padding:7px 12px; font-size:13px; font-weight:600; cursor:pointer; }
+.ai-launch-connect-actions button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg); }
+.studio-ai-connect { display:grid; gap:8px; border:1px solid var(--border-default); background:var(--bg-2); border-radius:8px; padding:12px; color:var(--text-secondary); font-size:12px; line-height:1.45; }
+.studio-ai-connect strong { color:var(--text-primary); font-size:13px; }
+.studio-ai-connect button { justify-self:start; border:1px solid var(--accent); background:var(--accent); color:var(--accent-fg); border-radius:8px; padding:6px 11px; font-size:12px; font-weight:600; cursor:pointer; }
+.data-step-provenance button.link, .proposal-planner-provenance button.link, .ai-launch-explainer button.link { padding:0; border:0; background:transparent; color:var(--accent); font:inherit; cursor:pointer; text-decoration:underline; }
 .launch-options { border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-1); overflow:hidden; }
 .launch-options > summary { list-style:none; min-height:44px; padding:0 13px; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:9px; cursor:pointer; color:var(--text-secondary); font-size:13px; }
 .launch-options > summary::-webkit-details-marker { display:none; }
@@ -672,6 +682,8 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-ai-scope button.on { background:var(--bg-2); color:var(--text-primary); font-weight:600; box-shadow:0 1px 2px color-mix(in srgb,var(--text-primary) 12%,transparent); }
 .studio-ai-page-scope { display:grid; gap:8px; margin:12px; }
 .studio-ai-page-scope label { color:var(--text-primary); font-size:13px; font-weight:600; }
+.studio-ai-page-scope button.studio-ai-connect-link { justify-self:start; padding:0; border:0; background:transparent; color:var(--accent); font-size:12px; text-decoration:underline; cursor:pointer; }
+.studio-ai-connect { margin:12px; }
 .studio-ai-page-scope textarea { width:100%; box-sizing:border-box; resize:vertical; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-2); color:var(--text-primary); font:inherit; font-size:13px; padding:8px; }
 .studio-ai-page-scope small { color:var(--text-tertiary); font-size:12px; }
 .studio-ai-page-scope .primary { justify-self:start; display:inline-flex; align-items:center; gap:6px; border:0; border-radius:8px; background:var(--accent); color:var(--accent-fg); font:inherit; font-size:13px; font-weight:600; padding:7px 12px; cursor:pointer; }
@@ -1517,6 +1529,7 @@ export const APP_STUDIO_V2_STYLES = `
 .data-step-notes ul li { display:list-item; padding:0; border:0; background:transparent; color:var(--text-secondary); font-size:12px; line-height:1.45; }
 .data-step-list .studio-ai-questions > div { display:grid; gap:6px; }
 .data-step-list .studio-ai-questions > div > p { margin:0; color:var(--text-secondary); font-size:12px; line-height:1.45; }
+.studio-ai-questions > p.data-step-not-covered-note, .studio-ai-questions > p { margin:0; color:var(--text-tertiary); font-size:12px; line-height:1.45; }
 .data-step-list .studio-ai-questions fieldset { margin:0; padding:0; border:0; display:grid; gap:6px; }
 .data-step-list .studio-ai-questions legend { margin-bottom:4px; font-size:12px; color:var(--text-primary); }
 .data-step-list .studio-ai-questions fieldset button { display:grid; gap:2px; text-align:left; }

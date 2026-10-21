@@ -1,5 +1,6 @@
 import type { AppBlockRecommendation, AppStudioAiProposal, AppStudioBuildDraft, AppStudioDraftOperation } from '../../api/client';
 import { sourceKindLabel, trustLabel } from './builder/app-data';
+import { KEYWORD_SUGGESTIONS_LABEL } from './app-studio-ai-voice';
 
 export interface AppStudioAiPlanSummary {
   frame?: AppStudioBuildDraft['frame'];
@@ -36,7 +37,8 @@ export function appStudioPlannerProvenanceLabel(
       : 'AI planner response';
   }
   if (provenance.mode === 'deterministic' && provenance.providerInvocation === 'not_attempted') {
-    return 'Deterministic planner fallback';
+    // The built-in keyword matcher, never called AI (design D4).
+    return KEYWORD_SUGGESTIONS_LABEL;
   }
   return undefined;
 }
@@ -77,7 +79,11 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
   const sourceOperations = proposal.operations
     .filter((operation): operation is Extract<AppStudioDraftOperation, { type: 'upsert_source' }> => operation.type === 'upsert_source')
     .map((operation) => operation.source);
+  // An add-mode proposal carries the page's existing tiles too; only the tiles
+  // it adds are proposed tiles ("3 tiles to add", never the page's own count).
+  const proposedTileIds = proposal.proposedTileIds ? new Set(proposal.proposedTileIds) : undefined;
   const addTile = (tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]) => {
+    if (proposedTileIds && !proposedTileIds.has(tile.i)) return;
     const blockRef = tile.block
       ? ('blockId' in tile.block ? tile.block.blockId : tile.block.ref)
       : undefined;

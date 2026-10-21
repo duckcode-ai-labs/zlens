@@ -136,10 +136,11 @@ const EXPECTED_TEST_FILES = 189;
 // 2548 with the keyword planner building field tiles from a saved query's result, and showing it as it is
 // when its fields cannot answer (design D1, app-builder-orchestrator.test.ts, +2).
 // 2549 with a block found by its Context panel question aliases and business terms (catalog.test.ts, +1).
-const EXPECTED_TESTS = 2549;
+// 2550 with keyword planner request parts kept as notes, never publish blockers (design D4, app-builder-orchestrator.test.ts, +1).
+const EXPECTED_TESTS = 2550;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2472.
+// The ordinary lane's share is the difference: 2473.
 const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];

@@ -76,23 +76,24 @@ clip('app-builder', async ({ page, sample, director }) => {
   await director.point(page.locator('.studio-page-grid .studio-component-card').first());
   await director.beat(1500);
 
-  // 4. Describe with AI: it shows the data it picked, and why, before building pages.
+  // 4. Describe with AI with no provider connected: keyword suggestions, labelled
+  // as such (design D4), show the data they matched, and why, before building pages.
   await director.click(page.getByRole('button', { name: 'Back to Apps' }), { after: 400 });
   await director.click(page.getByRole('button', { name: 'Build new App' }));
   await director.click(page.getByRole('tab', { name: 'Describe with AI' }), { after: 300 });
+  await director.click(page.getByRole('button', { name: 'Try keyword suggestions' }), { after: 300 });
   await director.type(
     page.getByRole('textbox', { name: 'What decision should this App support?' }),
     'Customer spend and order counts for the commerce team',
     { clear: true },
   );
-  await director.click(page.getByRole('button', { name: /Generate editable App/ }), { after: 300 });
-  const picked = page.getByRole('heading', { name: /^AI picked \d+ sources?$/ });
+  await director.click(page.getByRole('button', { name: /Suggest from keywords/ }), { after: 300 });
+  const picked = page.getByRole('heading', { name: 'Suggested from keywords · no AI connected' });
   await director.fastForward(() => expect(picked).toBeVisible({ timeout: 60_000 }));
-  await expect(page.getByText('Deterministic planner fallback')).toBeVisible();
   await director.beat(600);
   await director.point(picked);
   await director.beat(1000);
-  const picks = page.getByRole('list', { name: 'AI picks' });
+  const picks = page.getByRole('list', { name: 'Keyword suggestions' });
   director.poster();
   await director.point(picks.getByText(/^Why: /).first());
   await director.beat(1800);
@@ -101,7 +102,7 @@ clip('app-builder', async ({ page, sample, director }) => {
 
   // 5. Build pages, then review the proposed tiles before anything is applied.
   await director.click(page.getByRole('button', { name: /Build pages with \d+ sources?/ }), { after: 300 });
-  const review = page.getByRole('complementary', { name: 'AI proposal' });
+  const review = page.getByRole('complementary', { name: 'Keyword suggestions' });
   await director.fastForward(() => expect(review.getByRole('heading', { name: 'Review the tiles' })).toBeVisible({ timeout: 60_000 }));
   await expect(page.locator('.proposal-tile').first()).toBeVisible();
   await director.beat(800);

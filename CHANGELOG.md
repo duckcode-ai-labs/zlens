@@ -10,6 +10,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Honest when no AI is connected.** With no AI provider, **Build new App**
+  opens on **Start manually**, and **Describe with AI** says **Connect an AI
+  provider to describe an App** (to Settings → AI provider) with **Try keyword
+  suggestions** as the second choice. The built-in keyword matcher is never
+  called AI: its Data step says **Suggested from keywords · no AI connected**,
+  and its activity steps, notes, canvas tile review and the Studio's **Suggest
+  tiles** entry point say the same. What only an AI can do (changing one tile,
+  designing a layout) says **Connect an AI provider**. With a provider
+  connected, nothing changes. The providers settings answer now includes
+  `assistAvailable`, so this also holds under a host's model.
+  - Parts of a request the keywords did not match are notes under **Not
+    covered yet**, never publish fixes: no more **Unanswered App question** for
+    *Keep it short and clear*.
+  - A proposal never adds a tile the page already shows (it says so in its
+    notes), and the review counts only the tiles it adds, so a revise no longer
+    duplicates tiles.
 - **Everything you add has fields.** A saved query's result columns are now
   fields on the same shelves as any other data, with no review step: numbers
   are Measures, text and true/false columns are Dimensions, dates are Time
