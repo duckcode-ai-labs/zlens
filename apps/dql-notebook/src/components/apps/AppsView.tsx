@@ -41,12 +41,10 @@ import {
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import {
   api,
-  type AppBlockRecommendation,
   type AppDocumentSummary,
   type DashboardDocumentResponse,
   type DashboardRunResponse,
   type AppAiBuildSession,
-  type GenerateAppResponse,
   type GeneratedAppPlan,
   type AppAskResponse,
   type LocalAppInvestigation,
@@ -60,7 +58,6 @@ import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appPageUrl } from './app-links';
-import { defaultProposalSelection } from './AppBuildProposalPanel';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
 import { APP_STYLES } from './app-styles';
 import { cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
@@ -169,13 +166,6 @@ function persistAppBuild(value: PersistedAppBuild | null): void {
   }
 }
 
-function createAppBuildSessionId(): string {
-  const suffix = typeof window.crypto?.randomUUID === 'function'
-    ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
-    : Math.random().toString(36).slice(2, 14);
-  return `app_build_${Date.now()}_${suffix}`;
-}
-
 const APP_PROMPT_EXAMPLES: AppPromptExample[] = [
   {
     title: 'Revenue story',
@@ -219,7 +209,7 @@ export function AppsView(): JSX.Element {
   })));
   const dispatch = useDispatch();
   const queryClient = useQueryClient();
-  const { operations, track: trackOperation } = useOperations();
+  const { operations } = useOperations();
   const appTheme = useMemo(() => normalizeAppTheme(state.themeMode), [state.themeMode]);
   const [surface, setSurface] = useState<AppSurface>(() => state.activeAppDraftId ? 'create' : state.activeAppId ? 'workspace' : 'library');
   const experience = state.activeAppExperience;
@@ -251,25 +241,15 @@ export function AppsView(): JSX.Element {
   const builderNameTouchedRef = useRef(false);
   const [builderDomain, setBuilderDomain] = useState('');
   const builderDomainOptions = useMemo(() => authoredDomainOptions(state.authoredDomains), [state.authoredDomains]);
-  const [builderOwner, setBuilderOwner] = useState('analytics');
   const [builderAudience, setBuilderAudience] = useState('stakeholders');
   const builderAudienceTouchedRef = useRef(false);
   const [builderExistingAppId, setBuilderExistingAppId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(() => state.activeAppDraftId);
-  const [catalog, setCatalog] = useState<AppBlockRecommendation[]>([]);
-  const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(() => new Set());
-  const [generated, setGenerated] = useState<GenerateAppResponse | null>(null);
   const [buildSession, setBuildSession] = useState<AppAiBuildSession | null>(null);
   const initialPersistedBuildRef = useRef<PersistedAppBuild | null>(readPersistedAppBuild());
   const [durableBuildSessionId, setDurableBuildSessionId] = useState<string | null>(initialPersistedBuildRef.current?.sessionId ?? null);
   const [buildOperationId, setBuildOperationId] = useState<string | null>(initialPersistedBuildRef.current?.operationId ?? null);
   const loadedBuildSessionRef = useRef<string | null>(null);
-  const [proposalSelection, setProposalSelection] = useState<Set<string>>(new Set());
-  const [proposalFilterSelection, setProposalFilterSelection] = useState<Set<string>>(new Set());
-  const [proposalEdits, setProposalEdits] = useState<Record<string, { title?: string; viz?: string }>>({});
-  const [committing, setCommitting] = useState(false);
-  const [builderError, setBuilderError] = useState<string | null>(null);
-  const [builderSaving, setBuilderSaving] = useState(false);
   const [addPageOpen, setAddPageOpen] = useState(false);
   const [addPageTitle, setAddPageTitle] = useState('');
   const [addPageExploreGaps, setAddPageExploreGaps] = useState(false);
@@ -342,29 +322,13 @@ export function AppsView(): JSX.Element {
     setBuilderPrompt(session.prompt || DEFAULT_PROMPT);
     setBuilderExistingAppId(session.inputs.existingAppId ?? null);
     setBuilderDomain(resolveAuthoredDomainId(session.inputs.domain, state.authoredDomains));
-    setBuilderOwner(session.inputs.owner ?? 'analytics');
     setBuilderAudience(session.inputs.audience ?? 'stakeholders');
     setBuilderExploreGaps(session.inputs.exploreGaps === true);
-    if (session.status === 'building') {
-      setBuilderSaving(true);
-      return;
-    }
-    setBuilderSaving(false);
-    if (session.status === 'error') {
-      setBuilderError(session.error ?? 'The App proposal did not complete.');
-      return;
-    }
-    setBuilderError(null);
-    setProposalSelection(session.proposal ? defaultProposalSelection(session.proposal) : new Set());
+    if (session.status === 'building' || session.status === 'error') return;
     // This runs on every build-status transition, so seeding must not clobber
-    // what the author has typed. Previously a name or tile title entered during
-    // the build was silently reverted to the planner's own wording.
-    setProposalEdits((current) => Object.fromEntries((session.proposal?.tiles ?? []).map((tile) => [
-      tile.id,
-      current[tile.id] ?? { title: tile.title, viz: tile.viz },
-    ])));
+    // what the author has typed. Previously a name was silently reverted to
+    // the planner's own wording.
     const plan = session.plan as GeneratedAppPlan | undefined;
-    setProposalFilterSelection(new Set(plannedAppFilterIds(plan)));
     const planName = session.inputs.existingAppId ? plan?.pages[0]?.title : plan?.name;
     if (planName) setBuilderName((current) => (builderNameTouchedRef.current ? current : planName));
     if (plan?.audience) setBuilderAudience((current) => (builderAudienceTouchedRef.current ? current : plan.audience!));
@@ -384,7 +348,6 @@ export function AppsView(): JSX.Element {
     setBuilderPrompt(persisted.prompt);
     setBuilderExistingAppId(persisted.existingAppId ?? null);
     setBuilderMode('ai');
-    setBuilderSaving(true);
     setSurface('create');
   }, []);
 
@@ -400,7 +363,6 @@ export function AppsView(): JSX.Element {
       && (activeBuildOperation.status === 'queued' || activeBuildOperation.status === 'running')
       && (!buildSession || buildSession.status === 'building')
     ) {
-      setBuilderSaving(true);
       setSurface('create');
     }
 
@@ -411,23 +373,13 @@ export function AppsView(): JSX.Element {
       if (cancelled) return;
       if (!session || session.status === 'building') {
         if (session) applyRecoveredBuildSession(session);
-        if (activeBuildOperation && ['failed', 'cancelled', 'interrupted'].includes(activeBuildOperation.status)) {
-          setBuilderSaving(false);
-          setBuilderError(activeBuildOperation.error?.message ?? (
-            activeBuildOperation.status === 'cancelled'
-              ? 'The App proposal was cancelled.'
-              : 'The App proposal did not complete.'
-          ));
-          return;
-        }
+        if (activeBuildOperation && ['failed', 'cancelled', 'interrupted'].includes(activeBuildOperation.status)) return;
         timer = window.setTimeout(() => { void recover(); }, 900);
         return;
       }
       // The durable session is authoritative. A LAN client can retain an older
       // queued/running operation in the React Query cache after the proposal is
-      // already written. Always clear the spinner before the duplicate-session
-      // guard so that stale progress cannot hide a completed Build Brief.
-      setBuilderSaving(false);
+      // already written.
       if (loadedBuildSessionRef.current === session.id && buildSession?.status === session.status) return;
       loadedBuildSessionRef.current = session.id;
       applyRecoveredBuildSession(session);
@@ -704,7 +656,6 @@ export function AppsView(): JSX.Element {
       setBuilderPrompt(app.description ?? `Improve ${app.name} for ${app.audience ?? 'stakeholders'}.`);
       setBuilderDomain(resolveAuthoredDomainId(app.domain, state.authoredDomains));
       setBuilderAudience(app.audience ?? 'stakeholders');
-      setBuilderError(null);
       setSurface('create');
       return;
     }
@@ -728,121 +679,8 @@ export function AppsView(): JSX.Element {
     // silently scope AI and the catalog.
     setBuilderDomain(config.domain?.trim() ?? '');
     setBuilderAudience('stakeholders');
-    setSelectedBlocks(new Set());
-    setBuilderError(null);
-    setGenerated(null);
     setBuildSession(null);
-    setProposalEdits({});
-    setProposalFilterSelection(new Set());
     setSurface('create');
-  };
-
-  const toggleSelectedBlock = (blockId: string) => {
-    setSelectedBlocks((current) => {
-      const next = new Set(current);
-      if (next.has(blockId)) next.delete(blockId);
-      else next.add(blockId);
-      return next;
-    });
-  };
-
-  const runGenerate = async (options?: { extraBlockIds?: string[]; prompt?: string }) => {
-    const extras = (options?.extraBlockIds ?? []).filter((id) => typeof id === 'string');
-    const prompt = (options?.prompt ?? builderPrompt).trim();
-    if (!prompt) {
-      setBuilderError('Describe the app you want to build.');
-      return;
-    }
-    setBuilderSaving(true);
-    setBuilderError(null);
-    const preferredBlockIds = builderMode === 'classic'
-      ? Array.from(selectedBlocks)
-      : Array.from(new Set([
-          ...Array.from(selectedBlocks),
-          ...extras,
-        ]));
-    // Two-phase build: propose first (no files) — the user reviews the content
-    // list with per-tile toggles and confirms before anything is created. The
-    // client owns the session id before the request starts, so route changes can
-    // reconnect even during the server-acceptance window.
-    const sessionId = createAppBuildSessionId();
-    const persisted: PersistedAppBuild = {
-      sessionId,
-      prompt,
-      ...(builderExistingAppId ? { existingAppId: builderExistingAppId } : {}),
-      createdAt: new Date().toISOString(),
-    };
-    persistAppBuild(persisted);
-    setDurableBuildSessionId(sessionId);
-    setBuildOperationId(null);
-    loadedBuildSessionRef.current = null;
-    setBuildSession(null);
-    setGenerated(null);
-    try {
-      const accepted = await api.proposeAppAiBuildInBackground({
-        sessionId,
-        prompt,
-        existingAppId: builderExistingAppId ?? undefined,
-        domain: builderDomain.trim() || undefined,
-        owner: builderOwner.trim() || undefined,
-        force: false,
-        selectedBlockIds: preferredBlockIds,
-        plannerMode: 'ai_assisted',
-        mode: 'personal',
-        exploreGaps: builderExploreGaps,
-      });
-      trackOperation(accepted.operation);
-      setBuildOperationId(accepted.operation.id);
-      persistAppBuild({ ...persisted, operationId: accepted.operation.id });
-      // Do not wait solely on the global EventSource. Remote/LAN EventSource
-      // cannot send the server bearer token, so its queued frame can remain in
-      // memory even after the operation has completed. Poll the durable build
-      // artifact directly; reload recovery remains a second safety net.
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        const session = await api.getAppAiBuild(sessionId);
-        if (session && session.status !== 'building') {
-          loadedBuildSessionRef.current = session.id;
-          applyRecoveredBuildSession(session);
-          return;
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-      }
-      setBuilderSaving(false);
-      setBuilderError('The proposal is still running. You can retry now; ZLens will also recover the completed Build Brief when you return to Apps.');
-    } catch (error) {
-      setBuilderSaving(false);
-      setBuilderError(error instanceof Error ? error.message : String(error));
-      persistAppBuild(null);
-      setDurableBuildSessionId(null);
-      setBuildOperationId(null);
-    }
-  };
-
-  // "Add more blocks" in the proposal: adding a certified catalog block
-  // re-proposes the build with that block pinned, so the new tile arrives
-  // through the same governed propose flow (no client-side tile fabrication).
-  const addBlockToProposal = (blockId: string) => {
-    setSelectedBlocks((current) => {
-      const next = new Set(current);
-      next.add(blockId);
-      return next;
-    });
-    void runGenerate({ extraBlockIds: [blockId] });
-  };
-
-  const applyClarificationChoice = (question: string, choice: string) => {
-    const nextPrompt = `${builderPrompt.trim()}\n${question} ${choice}`;
-    setBuilderPrompt(nextPrompt);
-    void runGenerate({ prompt: nextPrompt });
-  };
-
-  const toggleProposalTile = (tileId: string) => {
-    setProposalSelection((current) => {
-      const next = new Set(current);
-      if (next.has(tileId)) next.delete(tileId);
-      else next.add(tileId);
-      return next;
-    });
   };
 
   /**
@@ -856,47 +694,9 @@ export function AppsView(): JSX.Element {
     const appId = state.activeAppId;
     if (!appId || !name.trim()) return;
     const result = await api.renameApp(appId, dashboardId ? { pageTitle: name.trim(), dashboardId } : { name: name.trim() });
-    if (!result.ok) {
-      setBuilderError(result.error);
-      return;
-    }
+    // A refused rename leaves the old name in place; nothing on this view shows the error yet.
+    if (!result.ok) return;
     await refreshApps(appId, dashboardId ?? state.activeDashboardId ?? undefined, 'workspace');
-  };
-
-  const runClassicCreate = async () => {
-    const selected = catalog.filter((block) => selectedBlocks.has(block.id));
-    const resolvedName = builderName.trim() || 'Untitled Analytics App';
-    const resolvedDomain = builderDomain.trim() || selected[0]?.domain || builderDomainOptions[0]?.value || 'general';
-    setBuilderName(resolvedName);
-    setBuilderDomain(resolvedDomain);
-    setBuilderSaving(true);
-    setBuilderError(null);
-    try {
-      const result = await api.createApp({
-        name: resolvedName,
-        domain: resolvedDomain,
-        dashboardTitle: 'Overview',
-        purpose: builderPrompt.trim(),
-        audience: builderAudience.trim() || 'stakeholders',
-        visibility: 'private',
-        lifecycle: 'draft',
-        tags: ['app-builder', resolvedDomain.toLowerCase()],
-        owners: [builderOwner.trim() || 'owner@local'],
-        selectedBlockIds: Array.from(selectedBlocks),
-      });
-      await refreshApps(result.app.id, result.dashboardId, 'workspace', { experience: 'build', section: 'dashboards' });
-    } catch (err) {
-      setBuilderError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBuilderSaving(false);
-    }
-  };
-
-  const openGeneratedWorkspace = () => {
-    const appId = generated?.app?.id ?? generated?.plan.appId;
-    if (!appId) return;
-    dispatch({ type: 'OPEN_APP', appId, dashboardId: generated?.dashboardId ?? undefined, experience: 'build', section: 'dashboards' });
-    setSurface('workspace');
   };
 
   const startDashboardPageBuilder = () => {
@@ -916,16 +716,11 @@ export function AppsView(): JSX.Element {
     setBuilderPrompt(request);
     setBuilderName('New App page');
     setBuilderDomain(resolveAuthoredDomainId(appDoc.app.domain, state.authoredDomains));
-    setBuilderOwner(appDoc.app.owners[0] ?? 'analytics');
     setBuilderAudience(appDoc.app.audience ?? 'stakeholders');
     const localDraft = appDoc.app.publicationIntent === 'personal'
       || (!appDoc.app.publicationIntent && appDoc.app.visibility === 'private');
     setBuilderExploreGaps(localDraft && addPageExploreGaps);
-    setSelectedBlocks(new Set());
-    setBuilderError(null);
-    setGenerated(null);
     setBuildSession(null);
-    setProposalEdits({});
     setAddPageOpen(false);
     setAddPageTitle('');
     setAddPageExploreGaps(false);
@@ -1018,8 +813,8 @@ export function AppsView(): JSX.Element {
       await queryClient.invalidateQueries({ queryKey: ['apps'] });
       await queryClient.invalidateQueries({ queryKey: ['app-builds'] });
       await refreshApps();
-    } catch (error) {
-      setBuilderError(error instanceof Error ? error.message : String(error));
+    } catch {
+      // Nothing on this view shows a failed restore yet; the App stays deleted.
     }
   };
 
@@ -2682,14 +2477,6 @@ function UnifiedAppAiPanel({
       </Suspense>
     </AiSidePanel>
   );
-}
-
-function plannedAppFilterIds(plan: GeneratedAppPlan | undefined): string[] {
-  if (!plan) return [];
-  return Array.from(new Set([
-    ...(plan.globalFilters ?? []).map((filter) => filter.id),
-    ...plan.pages.flatMap((page) => (page.filters ?? []).map((filter) => filter.id)),
-  ]));
 }
 
 function getDashboardItemBlockId(item: DashboardDocumentResponse['dashboard']['layout']['items'][number]): string | null {
