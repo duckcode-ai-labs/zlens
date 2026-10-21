@@ -5454,9 +5454,13 @@ export const api = {
     return request<{ owner: string }>('/api/identity');
   },
 
-  async getProviderSettings(): Promise<{ providers: ProviderSettings[] }> {
+  /**
+   * `assistAvailable` is the server's own answer to "can a model be asked?"
+   * (a host's model or a usable provider), without revealing which keys it holds.
+   */
+  async getProviderSettings(): Promise<{ providers: ProviderSettings[]; assistAvailable?: boolean }> {
     try {
-      return await request<{ providers: ProviderSettings[] }>('/api/settings/providers');
+      return await request<{ providers: ProviderSettings[]; assistAvailable?: boolean }>('/api/settings/providers');
     } catch {
       return { providers: [] };
     }

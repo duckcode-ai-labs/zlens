@@ -692,11 +692,15 @@ function deterministicBrief(
   warnings: string[] = [],
 ): AppBuilderBuildBrief {
   const requirementQuestions = deterministicRequirementQuestions(input.prompt);
+  // Parts of the request the keyword matcher split out are notes, never
+  // publish blockers (design D4): no AI read the request, so a part it could
+  // not match ("Keep it short and clear") is not a question the App must answer.
+  // App Studio lists the uncovered ones under "Not covered yet".
   const requirements = requirementQuestions.map((question, index): AppBuildRequirement => ({
     id: `requirement-${index + 1}`,
     question,
     role: inferRequirementRole(question, index),
-    required: true,
+    required: false,
     measures: [],
     dimensions: [],
     filters: [],

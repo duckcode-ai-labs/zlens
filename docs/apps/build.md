@@ -10,12 +10,16 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 ## 1. Start a new App
 
 1. In the left rail, click **Apps**.
-2. Click **Build new App** if the form is not already open.
+2. Click **Build new App** if the form is not already open. With an
+   [AI provider](../get-started/ai-provider.md) connected it opens on
+   **Describe with AI**; without one it opens on **Start manually**.
 3. Choose how to start:
     - **Describe with AI**: answer **What decision should this App support?**
       AI picks certified data and drafts a first version. You check the data it
-      chose and every tile before anything is applied. Works best with an
-      [AI provider](../get-started/ai-provider.md).
+      chose and every tile before anything is applied. Without an AI provider
+      this tab says **Connect an AI provider to describe an App**, with
+      **Connect an AI provider** (Settings → AI provider) and **Try keyword
+      suggestions** (see [Without an AI provider](#without-an-ai-provider-keyword-suggestions)).
     - **Start manually**: answer **What should this App be called?**
 4. Pick a **Domain**, or leave **All domains**. Lists of data start on this
    domain; you can still pick data from any domain.
@@ -24,7 +28,8 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 6. Leave **Only certified data** on. **Also let me try data that needs review**
    is useful while exploring, but a page that uses such data cannot publish
    until the data is certified.
-7. Click **Generate editable App** (AI) or **Open blank Studio** (manual).
+7. Click **Generate editable App** (AI), **Suggest from keywords** (no AI
+   provider) or **Open blank Studio** (manual).
 
 The App is a private local draft; the header says **Saved locally**. Both ways
 open on the Data step first: with **Start manually** it is **Data for this
@@ -69,10 +74,37 @@ you say so.
    changes** to add the tiles and their data to the App, or **Discard**.
    **Back to data** returns to the AI picks until you apply.
 
-Without an AI provider, a simpler built-in planner picks the data and the
-review says **Deterministic planner fallback**. Its **Why:** line names the
-words of your request the data matched and its trust, for example *Its name
-and description match “customers” · Certified saved query*.
+### Without an AI provider: keyword suggestions
+
+With no AI provider connected, nothing reads your request, so App Studio never
+says AI picked anything. **Try keyword suggestions** uses a simple built-in
+matcher instead, and every place it shows up says so:
+
+- The Data step heading is **Suggested from keywords · no AI connected**, the
+  list is **Keyword suggestions** (removed ones go to **Removed suggestions**),
+  and the planner's notes are under **Notes**. The progress reads **Reading the
+  words in your request**, **Matching them to certified Datasets, Metrics and
+  saved queries**, and so on.
+- Each suggestion's **Why:** line names the words of your request it matched
+  and its trust, for example *Its name and description match “customers” ·
+  Certified saved query*.
+- Parts of your request no suggestion matched (such as *Keep it short and
+  clear*) are listed under **Not covered yet** as notes. They are never
+  publish fixes: add tiles for them yourself, or leave them out.
+- The tile review on the canvas is labelled **Keyword suggestions** and says
+  **Matched on:** your request.
+
+In the Studio, one rule applies to every AI entry point. What keyword
+suggestions can do is offered with the same label: the toolbar's **Suggest
+tiles** (instead of **Ask AI**), **Suggest tiles from keywords** on an empty
+page or in the App settings, and **Suggest from keywords** in the publish
+review. What only an AI can do says **Connect an AI provider** instead:
+changing one tile (**Edit with AI**) and **Design layout with AI**. With an AI
+provider connected, all of these work as described above.
+
+Whichever planner runs, a proposal never adds a tile the page already shows:
+the plan's note says *Revenue by region is already on this page, so it wasn't
+added again*, and the review counts only the tiles it adds.
 
 ### From Ask or an MCP client
 

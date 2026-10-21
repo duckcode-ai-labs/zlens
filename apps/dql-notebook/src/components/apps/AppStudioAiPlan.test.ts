@@ -230,7 +230,7 @@ describe('App Studio AI plan review (AGT-025, UI-022)', () => {
         mode: 'deterministic',
         providerInvocation: 'not_attempted',
       },
-    })).toBe('Deterministic planner fallback');
+    })).toBe('Suggested from keywords · no AI connected');
     // A failed planner creates no proposal and therefore cannot be presented
     // as a configured-provider success or as a fallback.
     expect(appStudioPlannerProvenanceLabel({})).toBeUndefined();

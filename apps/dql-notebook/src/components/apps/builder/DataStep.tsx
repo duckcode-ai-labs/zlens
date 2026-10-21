@@ -4,12 +4,12 @@ import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './Ad
 import { humanize } from './studio-ui';
 import { appDataItems, openCanvasLabel, sourceOriginLabel, tilesUsingSource, trustLabel } from './app-data';
 import {
-  appStudioAiPickedHeading,
   appStudioBuildPagesLabel,
   appStudioCreatesTilesLabel,
   type AppStudioAiDataModel,
   type AppStudioAiPick,
 } from '../app-studio-ai-plan';
+import { appStudioPlannerWords, CONNECT_AI_ACTION, type AppStudioPlannerVoice } from '../app-studio-ai-voice';
 
 /**
  * The AI mode of the Data step (design D3, AI path): the data an AI proposal
@@ -28,6 +28,13 @@ export interface DataStepAiProps {
   activityIndex: number;
   activityError?: string;
   plannerLabel?: string;
+  /**
+   * Who made the plan (design D4): an AI provider, or the built-in keyword
+   * matcher when none is connected. Absent reads as AI, as before.
+   */
+  voice?: AppStudioPlannerVoice;
+  /** Opens the AI provider settings; shown with keyword suggestions. */
+  onConnectAi?: () => void;
   sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
   busy: boolean;
   /** The picked sources, so the Add data browser marks them Added. */
@@ -44,7 +51,7 @@ export interface DataStepAiProps {
   onDiscard: () => void;
 }
 
-export const AI_DATA_STEP_INTRO = 'Check the data before AI builds pages. Remove anything you don’t trust.';
+export const AI_DATA_STEP_INTRO = appStudioPlannerWords('ai').intro;
 
 /**
  * The Data step (design D3): an App picks its data before the canvas opens,
@@ -129,6 +136,8 @@ function AiDataStep({
   ai: DataStepAiProps;
 }): JSX.Element {
   const model = ai.model;
+  const voice = ai.voice ?? 'ai';
+  const words = appStudioPlannerWords(voice);
   const running = ai.status === 'running';
   const locked = ai.busy || running;
   const reviewAllowed = ai.sourcePolicy === 'include_review_required';
@@ -139,11 +148,11 @@ function AiDataStep({
       <p>
         <strong title={pick.label}>{pick.label}</strong>
         <small>{pick.meta}</small>
-        <small className="data-step-tiles">{appStudioCreatesTilesLabel(pick.tileTitles.length)}</small>
+        <small className="data-step-tiles">{pick.tileTitles.length ? appStudioCreatesTilesLabel(pick.tileTitles.length) : words.contextOnly}</small>
         {pick.rationale ? <small className="data-step-why">Why: {pick.rationale}</small> : null}
       </p>
       {picked
-        ? <button type="button" className="remove" disabled={locked} onClick={() => ai.onRemovePick(pick.id)} aria-label={`Remove ${pick.label} from the AI picks`}><X size={12} /> Remove</button>
+        ? <button type="button" className="remove" disabled={locked} onClick={() => ai.onRemovePick(pick.id)} aria-label={`Remove ${pick.label} from ${words.removeFrom}`}><X size={12} /> Remove</button>
         : <button type="button" className="remove" disabled={locked} onClick={() => ai.onAddBack(pick.id, blockedByPolicy)} aria-label={`${blockedByPolicy ? 'Allow data that needs review and add back' : 'Add back'} ${pick.label}`}><Plus size={12} /> {blockedByPolicy ? 'Allow data that needs review & add' : 'Add back'}</button>}
     </li>;
   };
@@ -153,10 +162,12 @@ function AiDataStep({
       <button type="button" className="ghost-icon" onClick={onBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button>
       <div>
         <small>{draft.name}</small>
-        <h1 id="studio-data-step-title">{model ? appStudioAiPickedHeading(model.picked.length) : 'AI is picking data'}</h1>
+        <h1 id="studio-data-step-title">{model ? words.pickedHeading(model.picked.length) : words.pendingHeading}</h1>
         <p className="data-step-goal">For: <strong>{ai.goal}</strong></p>
-        <p>{AI_DATA_STEP_INTRO}</p>
-        {ai.plannerLabel ? <small className="data-step-provenance">{ai.plannerLabel}</small> : null}
+        <p>{words.intro}</p>
+        {voice === 'keywords'
+          ? (ai.onConnectAi ? <small className="data-step-provenance">No AI provider is connected. <button type="button" className="link" onClick={ai.onConnectAi}>{CONNECT_AI_ACTION}</button> to have AI pick the data.</small> : null)
+          : ai.plannerLabel ? <small className="data-step-provenance">{ai.plannerLabel}</small> : null}
       </div>
     </header>
     {error ? <div className="studio-error" role="alert">{error}{onDismissError ? <button type="button" onClick={onDismissError} aria-label="Dismiss">×</button> : null}</div> : null}
@@ -164,37 +175,39 @@ function AiDataStep({
       <span className="loading-mark"><Sparkles size={15} /></span>
       <div>
         <strong>{model ? 'Updating the plan with your data' : 'Preparing the plan'}</strong>
-        <ol aria-label="AI activity">{ai.activitySteps.map((step, index) => <li key={step} className={index === ai.activityIndex ? 'on' : index < ai.activityIndex ? 'done' : ''} aria-current={index === ai.activityIndex ? 'step' : undefined}>{step}</li>)}</ol>
+        <ol aria-label={words.activityLabel}>{ai.activitySteps.map((step, index) => <li key={step} className={index === ai.activityIndex ? 'on' : index < ai.activityIndex ? 'done' : ''} aria-current={index === ai.activityIndex ? 'step' : undefined}>{step}</li>)}</ol>
         <small className="studio-ai-activity-label">{activityLabel}</small>
       </div>
     </div> : null}
     {ai.status === 'error' ? <div className="data-step-activity error" role="alert">
       <div>
-        <strong>The AI proposal needs another try</strong>
+        <strong>{words.errorTitle}</strong>
         <small>{ai.activityError ?? 'App Studio could not prepare the proposal.'}</small>
         <span className="data-step-activity-actions">
           {model && ai.onDismissActivityError ? <button type="button" onClick={ai.onDismissActivityError}>Keep current picks</button> : null}
-          <button type="button" className="primary" onClick={ai.onRetry}>Try AI proposal again</button>
+          <button type="button" className="primary" onClick={ai.onRetry}>{words.retryLabel}</button>
         </span>
       </div>
     </div> : null}
     <div className="data-step-body">
       <aside className="data-step-list" aria-labelledby="data-step-list-title">
-        <div className="data-step-list-head"><h2 id="data-step-list-title">AI picks</h2><small>{model ? `${model.picked.length} ${model.picked.length === 1 ? 'source' : 'sources'}` : 'Looking…'}</small></div>
+        <div className="data-step-list-head"><h2 id="data-step-list-title">{words.picksTitle}</h2><small>{model ? `${model.picked.length} ${model.picked.length === 1 ? 'source' : 'sources'}` : 'Looking…'}</small></div>
         {!model ? <ul className="data-step-skeleton" aria-hidden="true">{[0, 1, 2].map((index) => <li key={index}><span className="add-data-mark" /><p><strong>&nbsp;</strong><small>&nbsp;</small></p></li>)}</ul> : <>
-          {model.picked.length ? <ul aria-label="AI picks">{model.picked.map((pick) => pickRow(pick, true))}</ul>
-            : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data picked</strong><small>Add back an AI suggestion, or add data from the list.</small></p></div>}
+          {model.picked.length ? <ul aria-label={words.picksTitle}>{model.picked.map((pick) => pickRow(pick, true))}</ul>
+            : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data picked</strong><small>{words.emptyPicksHint}</small></p></div>}
           {model.suggestions.length ? <section className="data-step-group" aria-labelledby="data-step-suggestions">
-            <h3 id="data-step-suggestions">AI suggestions</h3>
+            <h3 id="data-step-suggestions">{words.removedTitle}</h3>
             <p>Data you removed stays here.</p>
-            <ul aria-label="AI suggestions">{model.suggestions.map((pick) => pickRow(pick, false))}</ul>
+            <ul aria-label={words.removedTitle}>{model.suggestions.map((pick) => pickRow(pick, false))}</ul>
           </section> : null}
           {model.warnings.length ? <section className="data-step-group data-step-notes" aria-labelledby="data-step-notes">
-            <h3 id="data-step-notes">Notes from AI</h3>
-            <ul aria-label="AI planner notes">{model.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul>
+            <h3 id="data-step-notes">{words.notesTitle}</h3>
+            <ul aria-label={words.notesLabel}>{model.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul>
           </section> : null}
           {model.uncovered.length ? <section className="studio-ai-questions" aria-label="Not covered yet">
-            <header><strong>Not covered yet</strong><small>{model.uncovered.length} {model.uncovered.length === 1 ? 'gap' : 'gaps'}</small></header>
+            <header><strong>Not covered yet</strong><small>{model.uncovered.length} {model.uncovered.length === 1 ? (voice === 'keywords' ? 'note' : 'gap') : (voice === 'keywords' ? 'notes' : 'gaps')}</small></header>
+            {/* Keyword suggestions only note what they did not match (design D4): never publish blockers. */}
+            {voice === 'keywords' ? <p className="data-step-not-covered-note">No suggested source matched these parts of your request. They are notes, not publish blockers: add tiles for them yourself, or leave them out.</p> : null}
             {model.uncovered.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => ai.onGenerateGap(requirement.id)} disabled={locked || !reviewAllowed}>{reviewAllowed ? 'Generate draft DQL that needs review' : 'Allow data that needs review to generate'}</button></div>)}
           </section> : null}
           {model.clarifications.length ? <section className="studio-ai-questions" aria-label="AI needs one more decision">

@@ -3923,6 +3923,36 @@ function uniqueAppSourceRecords(sources: AppSourceCatalogRecord[]): AppSourceCat
   });
 }
 
+/**
+ * What a tile shows, for spotting a proposed tile the page already has: the
+ * same source with the same fields (dimensions, measures, calculations,
+ * filters) as the same kind of visual, or the same saved query shown as it
+ * is. Sort, Top N and styling are left out: two tiles that differ only there
+ * show the same thing. A table and a chart of the same fields are different.
+ */
+function plannedTileContentKey(item: Pick<DashboardGridItem, 'sourceId' | 'query' | 'block' | 'viz'>): string | undefined {
+  const blockRef = item.block ? ('blockId' in item.block ? item.block.blockId : item.block.ref) : undefined;
+  const kind = item.viz?.type === 'single_value' ? 'kpi' : item.viz?.type ?? '';
+  if (item.query) {
+    const query = normalizeTileQuery(item.query);
+    if (!query || !item.sourceId) return undefined;
+    const { orderBy: _orderBy, limit: _limit, ...content } = query;
+    return `query:${item.sourceId}:${kind}:${stableTileJson(content)}`;
+  }
+  if (blockRef) return `block:${item.sourceId ?? ''}:${kind}:${blockRef}`;
+  return undefined;
+}
+
+function stableTileJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableTileJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort()
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableTileJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function uniqueTileId(existing: DashboardGridItem[], preferred: string): string {
   const base = slugify(preferred) || 'component';
   const ids = new Set(existing.map((item) => item.i));
@@ -4369,6 +4399,22 @@ export async function proposeAppBuildDraftOperations(
         pageState.datasetBindings.push(binding);
         pageState.datasetBindingBySource.set(source.sourceId, binding);
       }
+    }
+    // A proposal never adds a tile the page already shows (design D4: "Revise"
+    // duplicated tiles). The component points at the existing tile instead, so
+    // its question still counts as covered and filters still reach it; its
+    // source stays in the proposal (already the App's) so that coverage holds.
+    // Only tiles already on the page count; a plan that repeats itself is left as planned.
+    const contentKey = plannedTileContentKey({ sourceId: source.sourceId, viz, ...(query ? { query } : { block: { ref: source.executionRef } }) });
+    const alreadyShown = contentKey
+      ? pageState.structuralItems.find((item) => plannedTileContentKey(item) === contentKey)
+      : undefined;
+    if (alreadyShown) {
+      componentTileIdById.set(component.id, alreadyShown.i);
+      componentPageIdById.set(component.id, pageState.pageId);
+      emittedComponents.push({ ...component, ...(query ? { query } : {}) });
+      warnings.push(`${plannerNoteTitle(alreadyShown.title || component.title)} is already on this page, so it wasn't added again.`);
+      continue;
     }
     const itemIndex = pageState.plannedItems.length;
     const tileId = uniqueTileId(pageState.reservedItems, component.id || `component-${itemIndex + 1}`);

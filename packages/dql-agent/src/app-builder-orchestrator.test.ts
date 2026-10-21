@@ -115,6 +115,19 @@ describe('App Builder orchestrator', () => {
     expect(brief.warnings.join(' ')).not.toMatch(/requirement-\d/);
   });
 
+  it('keeps the keyword planner\'s request parts as notes, never publish blockers (design D4)', async () => {
+    const brief = await planAppBuildBrief({
+      prompt: 'Revenue trend, orders by region. Keep it short and clear.',
+      candidates,
+      requiredSourceIds: [],
+      sourcePolicy: 'include_review_required',
+      complete: async () => undefined,
+    });
+    expect(brief.plannerProvenance.mode).toBe('deterministic');
+    expect(brief.requirements.length).toBeGreaterThan(1);
+    expect(brief.requirements.every((requirement) => requirement.required === false)).toBe(true);
+  });
+
   it('retains explicitly required certified and draft sources omitted by the provider', async () => {
     const requiredCandidates = [
       { ...candidates[0], capabilities: { ...candidates[0].capabilities, measures: ['margin'], outputs: ['margin'] } },

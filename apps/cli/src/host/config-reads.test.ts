@@ -62,3 +62,43 @@ describe('without a host', () => {
     expect(await get('/api/skills/settings')).toContain(projectRoot);
   });
 });
+
+/**
+ * App Studio reads `assistAvailable` to be honest when no AI is connected
+ * (design D4): Start manually by default, keyword suggestions labelled. It says
+ * whether a model can be asked, never which key the server holds.
+ */
+describe('whether a model can be asked (assistAvailable)', () => {
+  const PROVIDER_ENV = [
+    'ANTHROPIC_API_KEY', 'GEMINI_API_KEY', 'ZLENS_OPENAI_COMPAT_API_KEY', 'ZLENS_OPENAI_COMPAT_BASE_URL', 'ZLENS_OPENAI_COMPAT_MODEL',
+    'OLLAMA_BASE_URL', 'OLLAMA_MODEL', 'ZLENS_EVAL_CASSETTE_DIR', 'ZLENS_EVAL_CASSETTE_MODE', 'DQL_EVAL_CASSETTE_DIR', 'DQL_EVAL_CASSETTE_MODE',
+  ];
+  const savedEnv = new Map<string, string | undefined>();
+  afterEach(() => {
+    for (const [key, value] of savedEnv) if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    savedEnv.clear();
+  });
+  const clearOtherProviders = () => {
+    for (const key of PROVIDER_ENV) {
+      savedEnv.set(key, process.env[key]);
+      delete process.env[key];
+    }
+  };
+
+  it('is true with a configured provider, also for someone who may not see the key', async () => {
+    clearOtherProviders();
+    const local = await start();
+    expect(JSON.parse(await local.get('/api/settings/providers')).assistAvailable).toBe(true);
+    const hosted = await start({ authorize: (_principal, action) => ({ allow: action !== 'settings.manage' }) });
+    const providers = await hosted.get('/api/settings/providers');
+    expect(JSON.parse(providers).assistAvailable).toBe(true);
+    expect(providers).not.toMatch(/"hasApiKey":true|sk-CANARY/);
+  });
+
+  it('is false when no provider is configured', async () => {
+    clearOtherProviders();
+    const { get } = await start();
+    delete process.env.OPENAI_API_KEY;
+    expect(JSON.parse(await get('/api/settings/providers')).assistAvailable).toBe(false);
+  });
+});

@@ -59,6 +59,7 @@ import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel'
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appPageUrl } from './app-links';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
+import { appStudioAiConnected, appStudioDefaultLaunchMode } from './app-studio-ai-voice';
 import { APP_STYLES } from './app-styles';
 import { appHeaderTitle, cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
 import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, SettingsPanel, StatusSeal } from './AppSidePanels';
@@ -290,6 +291,19 @@ export function AppsView(): JSX.Element {
     staleTime: 10_000,
     enabled: !readOnlyLink,
   });
+  // Whether an AI provider is connected (design D4): the Build new App form
+  // opens on Start manually without one, and keyword suggestions say so.
+  const providerSettingsQuery = useQuery({
+    queryKey: ['app-studio-ai-connected'],
+    queryFn: () => api.getProviderSettings(),
+    staleTime: 0,
+    enabled: !readOnlyLink,
+  });
+  const aiConnected = providerSettingsQuery.data ? appStudioAiConnected(providerSettingsQuery.data) : undefined;
+  const openAiProviderSettings = () => {
+    dispatch({ type: 'SET_SETTINGS_TAB', tab: 'ai' });
+    dispatch({ type: 'SET_MAIN_VIEW', view: 'settings' });
+  };
   const personaQuery = useQuery({
     queryKey: ['persona'],
     queryFn: () => api.getPersona(),
@@ -874,6 +888,8 @@ export function AppsView(): JSX.Element {
             });
           }}
           onStartStudio={startStudioBuilder}
+          aiConnected={aiConnected}
+          onConnectAi={openAiProviderSettings}
           onContinueDraft={(draft) => {
             setBuilderDraftId(draft.id);
             setBuilderExistingAppId(draft.baseApp?.appId ?? null);
@@ -906,6 +922,8 @@ export function AppsView(): JSX.Element {
           domainOptions={builderDomainOptions}
           audience={builderAudience}
           themeMode={state.themeMode}
+          aiConnected={aiConnected}
+          onConnectAi={openAiProviderSettings}
           onBack={returnToAppLibrary}
           onPublished={(app, dashboardId) => {
             void queryClient.invalidateQueries({ queryKey: ['app-builds'] });
@@ -1054,6 +1072,8 @@ function AppLibrarySurface({
   onFilter,
   onToggleFavorite,
   onStartStudio,
+  aiConnected,
+  onConnectAi,
   onContinueDraft,
   onOpenApp,
   onDeleteApp,
@@ -1073,18 +1093,32 @@ function AppLibrarySurface({
   onFilter: (value: LibraryFilter) => void;
   onToggleFavorite: (appId: string) => void;
   onStartStudio: (config: AppStudioLaunchConfig) => void;
+  /** Whether an AI provider is connected; `undefined` while settings load (design D4). */
+  aiConnected?: boolean;
+  onConnectAi?: () => void;
   onContinueDraft: (draft: AppStudioBuildDraft) => void;
   onOpenApp: (app: AppSummary, experience?: AppExperience) => void;
   onDeleteApp: (app: AppSummary) => void;
 }) {
   const counts = libraryCounts(allApps, localDrafts, favorites);
-  const [launchConfig, setLaunchConfig] = useState<AppStudioLaunchConfig>({
-    mode: 'ai',
-    prompt: DEFAULT_PROMPT,
-    name: 'Untitled Analytics App',
-    template: 'operational_dashboard',
-    sourcePolicy: 'governed_only',
+  // Start manually until the settings say an AI provider is connected (design
+  // D4); then Describe with AI, unless the author already picked a tab.
+  const [launchConfig, setLaunchConfig] = useState<AppStudioLaunchConfig>(() => {
+    const mode = appStudioDefaultLaunchMode(aiConnected);
+    return {
+      mode,
+      prompt: DEFAULT_PROMPT,
+      name: 'Untitled Analytics App',
+      template: mode === 'manual' ? 'blank' : 'operational_dashboard',
+      sourcePolicy: 'governed_only',
+    };
   });
+  const launchModeTouched = useRef(false);
+  useEffect(() => {
+    if (launchModeTouched.current) return;
+    const mode = appStudioDefaultLaunchMode(aiConnected);
+    setLaunchConfig((current) => current.mode === mode ? current : { ...current, mode, template: mode === 'manual' ? 'blank' : 'operational_dashboard' });
+  }, [aiConnected]);
   const [launchPreference, setLaunchPreference] = useState<AppLibraryLaunchPreference>('auto');
   const launchExpanded = appLibraryLaunchExpanded({
     preference: launchPreference,
@@ -1115,7 +1149,12 @@ function AppLibrarySurface({
           <AppStudioLaunchSurface
             config={launchConfig}
             domainOptions={domainOptions}
-            onChange={(patch) => setLaunchConfig((current) => ({ ...current, ...patch }))}
+            aiConnected={aiConnected}
+            {...(onConnectAi ? { onConnectAi } : {})}
+            onChange={(patch) => {
+              if (patch.mode) launchModeTouched.current = true;
+              setLaunchConfig((current) => ({ ...current, ...patch }));
+            }}
             onSubmit={() => onStartStudio(launchConfig)}
           />
         ) : null}
