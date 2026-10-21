@@ -405,11 +405,15 @@ published run, App Autopilot, Ask about this chart, and MCP.
    `last_N_days` (N is 1–3660), `today`, `yesterday`, `month_to_date`,
    `quarter_to_date`, or `year_to_date`. It resolves to an inclusive calendar
    range ending today in the filter's timezone; `last_7_days` is today and
-   the six days before it. A timestamp field requires a declared IANA
-   timezone. A date field uses UTC when none is declared. From there the
-   filter is exactly a `daterange`: `>= start` and `< day after end`. For a
-   timestamp field, both boundaries are local midnights converted to UTC
-   instants, which stays correct across daylight-saving changes.
+   the six days before it. "Today" uses UTC when no timezone is declared.
+   From there the filter is exactly a `daterange`: `>= start` and `< day
+   after end`. Both boundaries are compared as calendar dates on every field
+   type, timestamps included, so the filter uses the same calendar as the
+   time buckets that group the field (`DATE_TRUNC` on the column). An earlier
+   revision converted timestamp boundaries to instants in the filter's
+   timezone; that put 1 July rows into a range ending 30 June when the
+   buckets used the column's own clock (new-user fix B5). A `daterange` with
+   only a start means "from", with only an end "until" (D8).
 6. **Period comparison.** Periods come from the explicit `comparison`
    contract and the governed calendar. The completeness policy decides
    whether the current partial period is used, and a partial current period

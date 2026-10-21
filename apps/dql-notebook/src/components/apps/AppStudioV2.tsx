@@ -106,6 +106,7 @@ import { numberReceiptInfo } from './NumberReceipt';
 import type { MarkPointer } from '../output/echarts/EChartsChart';
 import { ShowMePanel, currentShowMeChart, tileShowMe } from './builder/ShowMe';
 import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
+import { studioDateControlHint, studioFilterRunPlan, studioFilterValue } from './app-studio-filter-values';
 import { DatasetInteractionInspector, DatasetTileQueryInspector } from './builder/InteractionLayer';
 import { humanize, messageOf } from './builder/studio-ui';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
@@ -559,6 +560,15 @@ export function AppStudioV2({
   const previewSequenceRef = useRef(0);
   const previewRunScopeRef = useRef(createAppStudioPreviewRunScope());
   const filterPreviewTimerRef = useRef<number | null>(null);
+  // The latest state, for filter re-runs that start before React re-renders
+  // (an immediate run) or after it (a debounced one). A closure would carry
+  // the values from when the control changed, which ran the PREVIOUS choice.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const previewAppScopedFilterValuesRef = useRef(previewAppScopedFilterValues);
+  previewAppScopedFilterValuesRef.current = previewAppScopedFilterValues;
+  const previewVariablesByPageRef = useRef(previewVariablesByPage);
+  previewVariablesByPageRef.current = previewVariablesByPage;
   const sourceFeedbackTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   // The App keeps one durable universal-AI thread. The selected page/tile/run
@@ -2332,6 +2342,8 @@ export function AppStudioV2({
       edit?: boolean;
       /** Explicit user refresh bypasses the optional local result cache. */
       refresh?: boolean;
+      /** A rerun of the tiles linked to this changed filter (its label). */
+      filterLabel?: string;
     },
   ): Promise<AppStudioBuildDraft | null> {
     const page = targetDraft.pages.find((candidate) => candidate.id === pageId);
@@ -2378,7 +2390,8 @@ export function AppStudioV2({
     try {
       const variables = previewVariablesForPage(
         page,
-        variablesOverride ?? previewVariablesByPage[page.id] ?? {},
+        variablesOverride ?? previewVariablesByPageRef.current[page.id] ?? {},
+        previewAppScopedFilterValuesRef.current,
       );
       const crossFilters = crossFiltersOverride ?? previewCrossFiltersByPage[page.id] ?? [];
       const result = await api.runAppBuildPreview(targetDraft.id, page.id, variables, crossFilters, {
@@ -2427,9 +2440,12 @@ export function AppStudioV2({
             : current);
         }
         if (settlement.kind === 'incomplete') setPublishIssues([settlement.message]);
-        setSavedMessage(interaction?.edit && result.partial && settlement.kind === 'unavailable'
-          ? `Updated ${affectedTileIds.length === 1 ? '1 tile' : `${affectedTileIds.length} tiles`} · Run the whole page before publishing`
-          : settlement.message);
+        const updatedTiles = affectedTileIds.length === 1 ? '1 tile' : `${affectedTileIds.length} tiles`;
+        setSavedMessage(interaction?.filterLabel && result.partial && settlement.kind === 'unavailable'
+          ? `${interaction.filterLabel} applied · ${updatedTiles} updated`
+          : interaction?.edit && result.partial && settlement.kind === 'unavailable'
+            ? `Updated ${updatedTiles} · Run the whole page before publishing`
+            : settlement.message);
         return null;
       }
       const recorded = await api.patchAppBuild(targetDraft.id, targetDraft.revision, [{
@@ -2456,6 +2472,13 @@ export function AppStudioV2({
       if (sequence === previewSequenceRef.current) setPreviewing(false);
     }
   }
+
+  const runPreviewForDraftRef = useRef(runPreviewForDraft);
+  runPreviewForDraftRef.current = runPreviewForDraft;
+  const previewRunsByPageRef = useRef(previewRunsByPage);
+  previewRunsByPageRef.current = previewRunsByPage;
+  const previewHierarchyDrillsByPageRef = useRef(previewHierarchyDrillsByPage);
+  previewHierarchyDrillsByPageRef.current = previewHierarchyDrillsByPage;
 
   const runPreview = async (pageId = activePage?.id, refresh = false) => {
     if (!draft || !pageId) return;
@@ -2502,49 +2525,85 @@ export function AppStudioV2({
     await publish(false, current);
   };
 
-  const applyFilterValue = (filter: NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number], value: unknown) => {
+  /**
+   * A filter change re-runs only the tiles linked to that filter, at once, the
+   * way the reader view applies a filter. Every other tile keeps its result:
+   * it is never re-run or blanked. Typing into a text or number control waits
+   * a moment so each keystroke does not start a run; the run then reads the
+   * latest state, never the values from when the timer was set.
+   */
+  const applyFilterValue = (filter: NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number], rawValue: unknown) => {
     if (!draft || !activePage) return;
+    const value = studioFilterValue(filter, rawValue);
     const pageId = activePage.id;
+    const label = filter.label ?? humanize(filter.id);
     const linkedPageIds = new Set(pagesForDashboardFilterValue(draft.pages, pageId, filter));
-    const nextVariablesByPage = { ...previewVariablesByPage };
+    const nextVariablesByPage = { ...previewVariablesByPageRef.current };
     for (const linkedPageId of linkedPageIds) {
-      nextVariablesByPage[linkedPageId] = { ...(nextVariablesByPage[linkedPageId] ?? {}), [filter.id]: value };
+      const { [filter.id]: _previous, ...rest } = nextVariablesByPage[linkedPageId] ?? {};
+      nextVariablesByPage[linkedPageId] = value === undefined ? rest : { ...rest, [filter.id]: value };
     }
-    const nextAppScopedValues = isAppScopedDashboardFilter(filter)
-      ? { ...previewAppScopedFilterValues, [filter.id]: value }
-      : previewAppScopedFilterValues;
-    if (isAppScopedDashboardFilter(filter)) setPreviewAppScopedFilterValues(nextAppScopedValues);
-    const nextVariables = previewVariablesForPage(
-      activePage,
-      nextVariablesByPage[pageId] ?? { [filter.id]: value },
-      nextAppScopedValues,
-    );
+    if (isAppScopedDashboardFilter(filter)) {
+      const { [filter.id]: _previous, ...rest } = previewAppScopedFilterValuesRef.current;
+      const nextAppScopedValues = value === undefined ? rest : { ...rest, [filter.id]: value };
+      previewAppScopedFilterValuesRef.current = nextAppScopedValues;
+      setPreviewAppScopedFilterValues(nextAppScopedValues);
+    }
+    previewVariablesByPageRef.current = nextVariablesByPage;
     setPreviewVariablesByPage(nextVariablesByPage);
-    setPreviewHierarchyDrillsByPage((current) => {
-      const next = { ...current };
-      for (const linkedPageId of linkedPageIds) delete next[linkedPageId];
-      return next;
-    });
-    setPreviewRunsByPage((current) => {
-      const next = { ...current };
-      for (const linkedPageId of linkedPageIds) delete next[linkedPageId];
-      return next;
-    });
-    previewSequenceRef.current += 1;
-    setPreviewing(false);
-    if (filterPreviewTimerRef.current !== null) window.clearTimeout(filterPreviewTimerRef.current);
-    const range = filter.type === 'daterange' && value && typeof value === 'object' && !Array.isArray(value)
-      ? value as { start?: string; end?: string }
-      : null;
-    if (range && Boolean(range.start) !== Boolean(range.end)) {
-      setSavedMessage(`Choose both ${filter.label ?? humanize(filter.id)} dates`);
+    // Other pages that carry this App filter run again when they are opened.
+    const otherPageIds = [...linkedPageIds].filter((linkedPageId) => linkedPageId !== pageId);
+    if (otherPageIds.length) {
+      setPreviewRunsByPage((current) => {
+        const next = { ...current };
+        for (const linkedPageId of otherPageIds) delete next[linkedPageId];
+        return next;
+      });
+      setPreviewHierarchyDrillsByPage((current) => {
+        const next = { ...current };
+        for (const linkedPageId of otherPageIds) delete next[linkedPageId];
+        return next;
+      });
+    }
+    if (filterPreviewTimerRef.current !== null) {
+      window.clearTimeout(filterPreviewTimerRef.current);
+      filterPreviewTimerRef.current = null;
+    }
+    const run = () => {
+      const latestDraft = draftRef.current;
+      const page = latestDraft?.pages.find((candidate) => candidate.id === pageId);
+      if (!latestDraft || !page) return;
+      const variables = previewVariablesForPage(page, previewVariablesByPageRef.current[pageId] ?? {}, previewAppScopedFilterValuesRef.current);
+      // Nothing settled to keep yet (the page has not run, or a full run is
+      // in flight): run the whole page with the new value instead.
+      const plan = studioFilterRunPlan({ page, filterId: filter.id, hasSettledPreview: Boolean(previewRunsByPageRef.current[pageId]) });
+      if (plan.kind === 'none') {
+        setSavedMessage(`${label} is not linked to a tile on this page`);
+        return;
+      }
+      if (plan.kind === 'page') {
+        setSavedMessage(`${label} changed · running the page…`);
+        void runPreviewForDraftRef.current(latestDraft, pageId, variables);
+        return;
+      }
+      const linkedTileIds = plan.tileIds;
+      setSavedMessage(`${label} changed · updating ${linkedTileIds.length === 1 ? '1 linked tile' : `${linkedTileIds.length} linked tiles`}…`);
+      void runPreviewForDraftRef.current(latestDraft, pageId, variables, undefined, {
+        // A hierarchy drill on a linked tile is re-run with it, under the new value.
+        hierarchyDrills: (previewHierarchyDrillsByPageRef.current[pageId] ?? []).filter((drill) => linkedTileIds.includes(drill.tileId)),
+        affectedTileIds: linkedTileIds,
+        filterLabel: label,
+      });
+    };
+    if (filter.type === 'search' || filter.type === 'number' || filter.type === 'string') {
+      setSavedMessage(`${label} changed · applying…`);
+      filterPreviewTimerRef.current = window.setTimeout(() => {
+        filterPreviewTimerRef.current = null;
+        run();
+      }, 300);
       return;
     }
-    setSavedMessage(`${filter.label ?? humanize(filter.id)} changed · applying automatically…`);
-    filterPreviewTimerRef.current = window.setTimeout(() => {
-      filterPreviewTimerRef.current = null;
-      void runPreviewForDraft(draft, pageId, nextVariables);
-    }, 320);
+    run();
   };
 
   const applyDatasetCrossFilter = (tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number], field: string, values: unknown[], exclude = false) => {
@@ -4112,20 +4171,18 @@ function StudioFilterControl({
   useEffect(() => setQuery(String(value ?? '')), [value]);
   if (filter.type === 'daterange') {
     const range = value && typeof value === 'object' && !Array.isArray(value) ? value as { start?: string; end?: string } : {};
-    const availabilityLabel = applying
-      ? 'Checking dates…'
-      : availability?.dateRange
-        ? `Available ${availability.dateRange.min} – ${availability.dateRange.max}`
-        : availability?.valueCount === 0
-          ? 'No date values exist for this field'
-          : 'Run preview to check available dates';
-    return <label className={`studio-filter range ${availability?.valueCount === 0 ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" min={availability?.dateRange?.min} max={availability?.dateRange?.max} aria-label={`${label} start`} value={range.start ?? ''} onChange={(event) => onChange({ ...range, start: event.target.value })} /><i>–</i><input type="date" min={availability?.dateRange?.min} max={availability?.dateRange?.max} aria-label={`${label} end`} value={range.end ?? ''} onChange={(event) => onChange({ ...range, end: event.target.value })} /><small>{availabilityLabel}</small></label>;
+    const hint = studioDateControlHint({ type: 'daterange', value, availability });
+    // No min/max: a reader may pick any day, and the run's own dates are only a hint.
+    // A one-sided range says so on the control itself ("From 1 Mar 2025").
+    const oneSided = Boolean(range.start) !== Boolean(range.end);
+    return <label className={`studio-filter range ${hint.empty ? 'empty' : ''} ${oneSided ? 'one-sided' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" aria-label={`${label} start`} value={range.start ?? ''} onChange={(event) => onChange({ ...range, start: event.target.value })} /><i>–</i><input type="date" aria-label={`${label} end`} value={range.end ?? ''} onChange={(event) => onChange({ ...range, end: event.target.value })} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
   }
   if (filter.type === 'boolean') {
     return <label className="studio-filter boolean" aria-busy={applying}><input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} /><span>{label}</span></label>;
   }
   if (filter.type === 'date') {
-    return <label className={`studio-filter ${availability?.valueCount === 0 ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" min={availability?.dateRange?.min} max={availability?.dateRange?.max} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /><small>{applying ? 'Checking dates…' : availability?.dateRange ? `Available ${availability.dateRange.min} – ${availability.dateRange.max}` : availability?.valueCount === 0 ? 'No date values exist for this field' : 'Run preview to check available dates'}</small></label>;
+    const hint = studioDateControlHint({ type: 'date', value, availability });
+    return <label className={`studio-filter ${hint.empty ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" aria-label={label} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
   }
   if (optionValues.length > 0 && (filter.type === 'select' || filter.type === 'multiselect')) {
     return <StudioFilterDropdown label={label} values={optionValues} value={value} multiple={filter.type === 'multiselect'} applying={applying} truncated={availability?.truncated ?? false} onChange={onChange} />;

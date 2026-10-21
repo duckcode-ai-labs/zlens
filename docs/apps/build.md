@@ -193,6 +193,9 @@ its type, trust and **Why:** line. **Apply N changes** adds that data to
 4. Under **Tiles**, set each tile to **Applies** or **Does not apply**.
 5. Click **Create filter**.
 
+A date control needs no list of values, so you can create it before the page
+has run.
+
 A new filter starts linked to the tiles of the Dataset you picked the field
 from. When other Datasets in the App have an approved field with the same
 name and kind, **Also filter these tiles?** lists each as *Dataset · field*,
@@ -215,6 +218,14 @@ does, and the publish check sends you to the Filters tab to choose. A Saved
 query tile marked **Does not apply** is not filtered even when it has a
 parameter with the filter's name.
 
+### Trying a filter in the editor
+
+The new control appears above the page. Changing its value re-runs only the
+tiles it applies to, at once, with no need to press **Run**; the header says
+"*Filter* applied · 1 tile updated". Tiles the filter does not apply to keep
+their result and are never blanked. The values you try in the editor are
+not saved for readers.
+
 ### How filters reach each tile
 
 | Tile | How the filter applies |
@@ -232,14 +243,19 @@ Every tile uses the same date rule:
 - A date range keeps everything from the start date through the whole end
   date: `>= start` and `< the day after end`. 1–31 March includes rows late on
   31 March.
+- You can set just one end. Only a start means "from that day" and the
+  control says **From 1 Mar 2025**; only an end means "until that day",
+  **Until 30 Jun 2025**. Clearing both ends removes the filter.
 - A single date is that whole day, so it also matches timestamp columns.
 - A relative date, such as the last 7 days, becomes a date range first, with
   today taken in the filter's timezone.
-- Timestamp fields on a Dataset use the filter's timezone. On Metrics, Saved
-  query and draft tiles the dates are compared as written, in the warehouse's
-  timezone.
+- Dates are compared as calendar days on every tile, timestamp columns
+  included, in the same calendar that groups a chart by day or month. A range
+  ending 30 June keeps an order at 23:30 on 30 June and never adds a July
+  point. The filter's timezone only decides what "today" is.
 - A Saved query's `_start` / `_end` parameters receive the dates you picked;
-  `_end` is the last day itself, not the day after.
+  `_end` is the last day itself, not the day after. With only one end set, the
+  other parameter receives `0001-01-01` or `9999-12-31`.
 
 ### What readers see
 

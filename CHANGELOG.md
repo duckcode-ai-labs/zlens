@@ -10,6 +10,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Editor filters apply at once, to linked tiles only.** Changing a filter
+  in App Studio re-runs just the tiles it applies to, without pressing
+  **Run**; other tiles keep their result. A second change now runs the new
+  choice (before, an App-wide filter ran the previous one).
+  - A date range can have one end: only a start means "from that day"
+    (**From 1 Mar 2025**), only an end "until that day". This works on every
+    tile type, in the editor and for readers.
+  - Date filters compare calendar days on timestamp columns too, the same
+    calendar a chart's day or month buckets use, so a range ending 30 June no
+    longer plots a July point.
+  - No more "No date values exist for this field" when values just weren't
+    read yet, and no "could not be converted into a predicate" from a
+    half-filled range. A date filter can be created before the page has run.
+
 - **App filters work the same on every tile.** Each tile on a filter's page
   is now **Applies** or **Does not apply** in the Filters tab, and both
   choices are saved. **Does not apply** no longer blocks publishing; only a

@@ -3,6 +3,8 @@ import { CalendarDays, ChevronDown, Hash, List, ToggleLeft, Type } from 'lucide-
 import { api, type DashboardDocumentResponse } from '../../api/client';
 import { defaultParameterFilterValue, type DashboardFilterCandidate, type DashboardFilterCoverage } from './dashboard-filters';
 import { formatBusinessLabel } from './app-text';
+import { describeDashboardDateRange } from '@zlens/core/apps/filter-dates';
+import { studioFilterValue } from './app-studio-filter-values';
 
 /**
  * The App dashboard filter row: the controls, their value coercion, and the
@@ -314,16 +316,17 @@ function DashboardFilterInput({
       : {};
     const start = typeof range.start === 'string' ? range.start : '';
     const end = typeof range.end === 'string' ? range.end : '';
-    // Emit a range ONLY when both ends are set (runtime needs both for BETWEEN);
-    // a partial range is sent as undefined so the filter is simply skipped.
-    const emit = (nextStart: string, nextEnd: string) =>
-      onChange(nextStart && nextEnd ? { start: nextStart, end: nextEnd } : undefined);
+    // One end is a "from" / "until" range (the runtime keeps rows from the
+    // start, or up to the end); neither end clears the filter.
+    const emit = (nextStart: string, nextEnd: string) => onChange(studioFilterValue(filter, { start: nextStart, end: nextEnd }));
+    const oneSided = Boolean(start) !== Boolean(end);
     return (
       <label className="dql-app-filter-select dql-app-filter-range" title={filter.bindsTo ? `${label} -> ${filter.bindsTo}` : label} aria-label={label}>
         <span className="dql-app-filter-icon">{filterIconForDashboardFilter(filter)}</span>
         <input type="date" value={start} aria-label={`${label} from`} onChange={(event) => emit(event.target.value, end)} />
         <span className="dql-app-filter-range-sep">–</span>
         <input type="date" value={end} aria-label={`${label} to`} onChange={(event) => emit(start, event.target.value)} />
+        {oneSided ? <span className="dql-app-filter-range-note">{describeDashboardDateRange({ start, end })}</span> : null}
       </label>
     );
   }

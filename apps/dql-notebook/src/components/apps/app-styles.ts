@@ -1748,6 +1748,13 @@ export const APP_STYLES = `
   width: 64px;
 }
 
+.dql-app-filter-select .dql-app-filter-range-note {
+  color: var(--dql-app-ink);
+  font: 600 12px var(--font-ui);
+  text-transform: none;
+  white-space: nowrap;
+}
+
 .dql-app-filter-empty {
   color: var(--dql-app-faint);
   font: 600 11px var(--font-ui);

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   dashboardDateBoundsForColumn,
+  describeDashboardDateRange,
+  isEmptyDashboardDateValue,
   resolveDashboardDateFilter,
   resolveRelativeDateRange,
 } from './filter-dates.js';
@@ -45,6 +47,7 @@ describe('the one App date rule', () => {
   it('keeps explicit non-calendar boundaries as written', () => {
     expect(resolveDashboardDateFilter({ filterId: 'season', type: 'daterange', value: [2016, 2017] })).toEqual({ kind: 'explicit', start: 2016, end: 2017 });
     expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: ['2026-03-01'] })).toMatchObject({ kind: 'error' });
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: 'March' })).toMatchObject({ kind: 'error' });
     expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: ['2026-03-31', '2026-03-01'] })).toMatchObject({ kind: 'error' });
   });
 
@@ -54,15 +57,46 @@ describe('the one App date rule', () => {
     expect(resolveDashboardDateFilter({ filterId: 'region', type: 'select', value: 'East' })).toBeNull();
   });
 
-  it('compares date columns with calendar dates and timestamp columns with local-midnight instants', () => {
+  it('compares every column with calendar dates, timestamps included, so buckets and filter share one calendar', () => {
     const bounds = { startDate: '2026-03-07', endDate: '2026-03-08', endExclusiveDate: '2026-03-09' };
     expect(dashboardDateBoundsForColumn(bounds, 'date')).toEqual({ start: '2026-03-07', endExclusive: '2026-03-09' });
-    expect(dashboardDateBoundsForColumn(bounds, 'unknown', 'America/New_York')).toEqual({ start: '2026-03-07', endExclusive: '2026-03-09' });
-    // The US switches to daylight time on 8 March 2026: the end is 04:00Z, not 05:00Z.
-    expect(dashboardDateBoundsForColumn(bounds, 'timestamp', 'America/New_York')).toEqual({
-      start: '2026-03-07T05:00:00.000Z',
-      endExclusive: '2026-03-09T04:00:00.000Z',
+    expect(dashboardDateBoundsForColumn(bounds, 'unknown')).toEqual({ start: '2026-03-07', endExclusive: '2026-03-09' });
+    // No instant in a timezone: 23:30 on 8 March stays in, 00:30 on 9 March stays out,
+    // whatever zone the filter was created in (B5).
+    expect(dashboardDateBoundsForColumn(bounds, 'timestamp')).toEqual({ start: '2026-03-07', endExclusive: '2026-03-09' });
+    expect(dashboardDateBoundsForColumn({ startDate: '2026-03-07' }, 'timestamp')).toEqual({ start: '2026-03-07' });
+    expect(dashboardDateBoundsForColumn({ endDate: '2026-03-08', endExclusiveDate: '2026-03-09' }, 'date')).toEqual({ endExclusive: '2026-03-09' });
+  });
+
+  it('reads a one-sided range as "from" or "until" (D8)', () => {
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: { start: '2025-03-01' } })).toEqual({
+      kind: 'calendar', bounds: { startDate: '2025-03-01' },
     });
-    expect(dashboardDateBoundsForColumn(bounds, 'timestamp')).toMatchObject({ error: expect.stringMatching(/IANA timezone/) });
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: { start: '2025-03-01', end: '' } })).toEqual({
+      kind: 'calendar', bounds: { startDate: '2025-03-01' },
+    });
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: { end: '2025-06-30' } })).toEqual({
+      kind: 'calendar', bounds: { endDate: '2025-06-30', endExclusiveDate: '2025-07-01' },
+    });
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: ['', '2025-06-30'] })).toEqual({
+      kind: 'calendar', bounds: { endDate: '2025-06-30', endExclusiveDate: '2025-07-01' },
+    });
+    expect(resolveDashboardDateFilter({ filterId: 'season', type: 'daterange', value: { min: 2016 } })).toEqual({ kind: 'explicit', start: 2016 });
+  });
+
+  it('treats a range with neither end as no value', () => {
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: { start: '', end: '' } })).toBeNull();
+    expect(resolveDashboardDateFilter({ filterId: 'period', type: 'daterange', value: ['', null] })).toBeNull();
+    expect(isEmptyDashboardDateValue({ start: '', end: undefined })).toBe(true);
+    expect(isEmptyDashboardDateValue({ start: '2025-03-01' })).toBe(false);
+    expect(isEmptyDashboardDateValue({ region: '' })).toBe(false);
+  });
+
+  it('describes a range the way the control shows it', () => {
+    expect(describeDashboardDateRange({ start: '2025-03-01' })).toBe('From 1 Mar 2025');
+    expect(describeDashboardDateRange({ end: '2025-06-30' })).toBe('Until 30 Jun 2025');
+    expect(describeDashboardDateRange({ start: '2025-03-01', end: '2025-06-30' })).toBe('1 Mar 2025 – 30 Jun 2025');
+    expect(describeDashboardDateRange({ start: '', end: '' })).toBeNull();
+    expect(describeDashboardDateRange(undefined)).toBeNull();
   });
 });
