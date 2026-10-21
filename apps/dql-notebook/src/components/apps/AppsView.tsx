@@ -92,7 +92,7 @@ import {
   type ViewerDashboardFilter,
 } from './dashboard-filters';
 import { semanticApprovalState } from './app-semantic-approval';
-import { appCertificationRollup, appLifecycleLabel } from './app-certification';
+import { appCardSeal, appCertificationRollup, appRunTrustAcrossPages, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
 import {
@@ -727,7 +727,26 @@ export function AppsView(): JSX.Element {
     setSurface('create');
   };
 
-  const dashboardVariables = useMemo(() => ({ ...appliedDashboardFilterValues }), [appliedDashboardFilterValues]);
+  // The page's filter values with its defaults filled in on the same render
+  // the page arrives, not one effect later. Otherwise the viewer's first run
+  // went out with `{}` and a second with the defaults a moment after, and the
+  // two could cancel each other on the server (B1).
+  const dashboardVariables = useMemo(() => valuesForDashboardPage({
+    filters: dashboardFilters,
+    pageValues: appliedDashboardFilterValues,
+    appValues: appliedAppScopedDashboardFilterValues,
+    defaultValue: defaultDashboardFilterValue,
+  }), [appliedAppScopedDashboardFilterValues, appliedDashboardFilterValues, dashboardFilters]);
+  // Each App page's tile trust from its last settled run, so the library card
+  // never says "App certified" while the App itself says otherwise.
+  const [runTrustByApp, setRunTrustByApp] = useState<Record<string, Record<string, AppRunTrust>>>({});
+  const recordPageRunTrust = useCallback((appId: string, pageId: string, trust: AppRunTrust) => {
+    setRunTrustByApp((current) => {
+      const prior = current[appId]?.[pageId];
+      if (prior && prior.certified === trust.certified && prior.total === trust.total) return current;
+      return { ...current, [appId]: { ...(current[appId] ?? {}), [pageId]: trust } };
+    });
+  }, []);
 
   const handleDashboardFilterChange = useCallback((filter: DashboardFilter, value: unknown) => {
     if (!activeDashboardFilterPageId) return;
@@ -833,6 +852,7 @@ export function AppsView(): JSX.Element {
       {surface === 'library' ? (
         <AppLibrarySurface
           apps={filteredApps}
+          runTrustByApp={runTrustByApp}
           allApps={state.apps}
           loading={appLibraryLoading}
           search={search}
@@ -958,6 +978,7 @@ export function AppsView(): JSX.Element {
             void refreshApps(state.activeAppId, dashboard.id, 'workspace');
           }}
           onInvestigationsChanged={handleInvestigationsChanged}
+          onPageRunTrust={recordPageRunTrust}
           onOpenLineageNode={(nodeId) => {
             dispatch({
               type: 'OPEN_LINEAGE_DETAIL',
@@ -1033,8 +1054,11 @@ function AppLibrarySurface({
   onContinueDraft,
   onOpenApp,
   onDeleteApp,
+  runTrustByApp,
 }: {
   apps: AppSummary[];
+  /** Tile trust from each App page's last settled run in this session. */
+  runTrustByApp?: Record<string, Record<string, AppRunTrust>>;
   allApps: AppSummary[];
   domainOptions: ReturnType<typeof authoredDomainOptions>;
   loading: boolean;
@@ -1156,6 +1180,7 @@ function AppLibrarySurface({
               onEdit={canAuthor ? () => onOpenApp(app, 'build') : undefined}
               onDelete={canAuthor ? () => onDeleteApp(app) : undefined}
               reader={reader}
+              runTrust={appRunTrustAcrossPages(runTrustByApp?.[app.id])}
             />
           ))}
         </div>
@@ -1203,6 +1228,7 @@ function AppCard({
   onEdit,
   onDelete,
   reader = false,
+  runTrust,
 }: {
   app: AppSummary;
   favorite: boolean;
@@ -1213,10 +1239,13 @@ function AppCard({
   onDelete?: () => void;
   /** A hosted reader: no local drafts or local insights on the card. */
   reader?: boolean;
+  /** Tile trust from this App's settled runs in this session. */
+  runTrust?: AppRunTrust | null;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const certified = app.certification === 'certified' || app.lifecycle === 'certified';
   const draftCount = app.drafts?.length ?? 0;
+  const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust });
+  const certified = seal.certified;
   const researchCount = app.investigations ?? 0;
   const aiPinCount = app.aiPins ?? 0;
   const shared = isSharedProjectApp(app);
@@ -1245,7 +1274,7 @@ function AppCard({
         {/* The card shows the App's lifecycle, not its data trust: whether each
             tile's source is certified is shown inside the App, from its run. */}
         <StatusSeal tone={certified ? 'certified' : draftCount > 0 ? 'draft' : 'agentic'} title="App lifecycle (draft, in review, certified). Data trust is shown on each tile inside the App.">
-          {appLifecycleLabel(app.lifecycle, certified, draftCount)}
+          {seal.label}
         </StatusSeal>
         <h3>
           <a
@@ -1387,6 +1416,7 @@ function AppWorkspaceSurface({
   onDashboardChanged,
   onInvestigationsChanged,
   onOpenLineageNode,
+  onPageRunTrust,
 }: {
   /** Matching local-library entry; its presence is required for writes. */
   app: AppSummary | null;
@@ -1432,6 +1462,8 @@ function AppWorkspaceSurface({
   onDashboardChanged: (dashboard: DashboardDocumentResponse['dashboard']) => void;
   onInvestigationsChanged: (investigations: LocalAppInvestigation[]) => void;
   onOpenLineageNode: (nodeId: string) => void;
+  /** A page's tile trust once its whole-page run settles (for the library card). */
+  onPageRunTrust?: (appId: string, pageId: string, trust: AppRunTrust) => void;
 }) {
   const readOnlyLink = isViewerLink();
   const hostUi = useHostUi();
@@ -1460,6 +1492,14 @@ function AppWorkspaceSurface({
   // The rendered page reports the aggregate it shows next to its tiles; the
   // header repeats that exact value (plus any pending App drafts) rather than
   // computing its own. Before the page reports, the rollup says "not checked".
+  const settledPageTrustAppId = metadataApp?.id;
+  const settledPageTrustPageId = dashboardDoc?.dashboard.id;
+  useEffect(() => {
+    if (!onPageRunTrust || !settledPageTrustAppId || !settledPageTrustPageId) return;
+    if (!dashboardRun || dashboardRun.stale || dashboardRun.partial) return;
+    if (!pageTrust || pageTrust.state === 'pending' || pageTrust.state === 'empty') return;
+    onPageRunTrust(settledPageTrustAppId, settledPageTrustPageId, { certified: pageTrust.certified, total: pageTrust.total });
+  }, [dashboardRun, onPageRunTrust, pageTrust, settledPageTrustAppId, settledPageTrustPageId]);
   const certification = pageTrust && pageTrust.state !== 'pending' && pageTrust.state !== 'empty'
     ? {
         allCertified: pageTrust.allCertified && draftCount === 0,

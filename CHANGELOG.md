@@ -23,6 +23,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - No more "No date values exist for this field" when values just weren't
     read yet, and no "could not be converted into a predicate" from a
     half-filled range. A date filter can be created before the page has run.
+- **A just-published App opens on its results.** It no longer opens on
+  "0 of N tiles certified", "No result." and "A newer dashboard interaction
+  superseded this run." An App page runs once when it opens, also when it has
+  filters, and runs again only when the page or a filter value changes. The
+  local server orders one viewer's runs by when they were asked for, not when
+  they arrived, and an identical request shares the run already in progress
+  instead of cancelling it. If a run still comes back stale, the reader runs
+  it again by itself. The Apps card no longer says "App certified" while the
+  App's last run in that session found tiles that are not certified.
+  - Page-run requests take an optional `runSequence`; a stale response says
+    why in `staleCause` (`superseded` or `project_changed`).
 
 - **App filters work the same on every tile.** Each tile on a filter's page
   is now **Applies** or **Does not apply** in the Filters tab, and both

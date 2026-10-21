@@ -596,6 +596,14 @@ import {
   viewerFilterPageFilters,
   viewerFilterVariables,
 } from './app-viewer-filters.js';
+import {
+  admitDashboardRun,
+  DASHBOARD_RUN_SUPERSEDED_REASON,
+  dashboardRunRequestKey,
+  parseDashboardRunSequence,
+  sharedDashboardRunResponse,
+  supersededDashboardRunBody,
+} from './dashboard-run-admission.js';
 import { gatherProposeEnrichment } from './propose-enrich.js';
 import {
   applyAppAutopilotChange,
@@ -5426,10 +5434,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
    * same mounted viewer scope. A second browser tab has its own scope and
    * must never cancel the first tab's warehouse request.
    */
-  const activeDashboardRuns = new Map<string, {
-    generation: number;
-    controller: AbortController;
-  }>();
+  const activeDashboardRuns = new Map<string, ActiveDashboardRun>();
+  /**
+   * The highest request number each mounted viewer has sent (B1). A request
+   * that reaches the server after a newer one from the same viewer must not
+   * cancel it: arrival order is not the order the viewer asked in.
+   */
+  const dashboardRunSequences = new Map<string, { sequence: number; at: number }>();
   /**
    * M4-CONV-01 keeps a semantic-to-Dataset preview entirely server-local.
    * The browser receives the reviewed candidate, but never owns the source
@@ -20402,7 +20413,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const mcpDatasetRun = (req.method === 'POST' && path === '/api/app-datasets/run') || datasetFieldValuesRun;
     if (req.method === 'POST' && (appDashRun || mcpDatasetRun)) {
       let activeDashboardRunKey: string | undefined;
-      let activeDashboardRun: { generation: number; controller: AbortController } | undefined;
+      let activeDashboardRun: ActiveDashboardRun | undefined;
       let chartRunScopeKey: string | undefined;
       let chartRunScopeGeneration: number | undefined;
       let dashboardRequestAbortHandler: (() => void) | undefined;
@@ -20561,8 +20572,64 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const supersessionKey = dashboardRunSupersessionKey(runSurface, appId, dashboardId, body.runScope);
         // One viewer's newer interaction supersedes only that person's own runs.
-        activeDashboardRunKey = supersessionKey ? `${currentPrincipal()?.id ?? ''}\u0000${supersessionKey}` : undefined;
-        const priorDashboardRun = activeDashboardRunKey ? activeDashboardRuns.get(activeDashboardRunKey) : undefined;
+        const viewerRunKey = supersessionKey ? `${currentPrincipal()?.id ?? ''}\u0000${supersessionKey}` : undefined;
+        const priorDashboardRun = viewerRunKey ? activeDashboardRuns.get(viewerRunKey) : undefined;
+        const requestSequence = viewerRunKey ? parseDashboardRunSequence((body as Record<string, unknown>).runSequence) : undefined;
+        const now = Date.now();
+        for (const [key, seen] of dashboardRunSequences) {
+          if (now - seen.at > 60 * 60_000) dashboardRunSequences.delete(key);
+        }
+        // B1: a published reader's identical request joins the run in flight
+        // instead of cancelling it. App Studio previews keep their own rule (an
+        // explicit preview is always a fresh run), and so do a forced refresh,
+        // a probe and an export.
+        const requestBody = body as Record<string, unknown>;
+        const shareableRun = Boolean(viewerRunKey)
+          && runSurface === 'apps'
+          && !mcpRequest
+          && !appDashExport
+          && requestBody.refresh !== true
+          && requestBody.driverProbe === undefined
+          && requestBody.exploreProbe === undefined;
+        const requestKey = shareableRun
+          ? dashboardRunRequestKey({
+            surface: runSurface,
+            appId,
+            dashboardId,
+            dashboard: loaded.dashboard,
+            snapshotId: runSnapshot.snapshotId,
+            person: { principal: currentPrincipal()?.id ?? null, persona: activePersonaAppId() ?? null, owner: activePersonaRunOwnerFingerprint() },
+            variables: dashboardVariables,
+            viewerFilters,
+            crossFilters: requestBody.crossFilters,
+            datasetDrills: requestBody.datasetDrills,
+            tileId: requestedTileId,
+            visibleTileIds: requestedVisibleTileIds,
+            affectedTileIds: requestedAffectedTileIds,
+            fullRun: fullDashboardRun,
+          })
+          : undefined;
+        const admission = admitDashboardRun({
+          prior: priorDashboardRun,
+          lastSequence: viewerRunKey ? dashboardRunSequences.get(viewerRunKey)?.sequence : undefined,
+          requestKey,
+          sequence: requestSequence,
+        });
+        if (admission.kind === 'refuse_older') {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON(supersededDashboardRunBody(appId, dashboardId)));
+          return;
+        }
+        if (admission.kind === 'reuse' && priorDashboardRun) {
+          priorDashboardRun.followers += 1;
+          if (viewerRunKey && requestSequence !== undefined) dashboardRunSequences.set(viewerRunKey, { sequence: requestSequence, at: now });
+          const shared = await priorDashboardRun.shared.promise;
+          res.writeHead(shared?.status ?? 200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(shared?.body ?? serializeJSON(supersededDashboardRunBody(appId, dashboardId)));
+          return;
+        }
+        activeDashboardRunKey = viewerRunKey;
+        if (viewerRunKey && requestSequence !== undefined) dashboardRunSequences.set(viewerRunKey, { sequence: requestSequence, at: now });
         // The newest interaction owns this mounted viewer scope. A caller
         // that does not provide a scope retains legacy independent-request
         // behavior rather than accidentally cancelling another viewer.
@@ -20570,6 +20637,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         activeDashboardRun = {
           generation: (priorDashboardRun?.generation ?? 0) + 1,
           controller: new AbortController(),
+          ...(requestKey ? { requestKey } : {}),
+          ...(requestSequence !== undefined ? { sequence: requestSequence } : {}),
+          followers: 0,
+          shared: sharedDashboardRunResponse(),
         };
         if (activeDashboardRunKey) activeDashboardRuns.set(activeDashboardRunKey, activeDashboardRun);
         // A chart answer is tied to a settled server result, but the result is
@@ -20584,7 +20655,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           chartRunScopeGeneration = (datasetChartScopeGenerations.get(chartRunScopeKey) ?? 0) + 1;
           datasetChartScopeGenerations.set(chartRunScopeKey, chartRunScopeGeneration);
         }
-        dashboardRequestAbortHandler = () => activeDashboardRun?.controller.abort(new Error('Dashboard request was disconnected.'));
+        // A viewer that joined this run still wants its result, so one caller
+        // going away does not cancel it for the other.
+        dashboardRequestAbortHandler = () => {
+          if (activeDashboardRun && activeDashboardRun.followers > 0) return;
+          activeDashboardRun?.controller.abort(new Error('Dashboard request was disconnected.'));
+        };
         req.once('aborted', dashboardRequestAbortHandler);
         const dashboardRunIsCurrent = () => Boolean(
           activeDashboardRun
@@ -23358,8 +23434,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           sendExportFile(res, exportFile({ columns, rows }, tileExport, typeof tile?.title === 'string' ? tile.title : dashboardId));
           return;
         }
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({
+        const runResponseBody = serializeJSON({
           appId,
           dashboardId,
           persona: activePersonaAppId() ? { appId: activePersonaAppId() } : null,
@@ -23383,18 +23458,29 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           } : {}),
           ...(staleRun ? {
             stale: true,
+            // The viewer re-runs a stale page by itself; say why it went stale.
+            staleCause: supersededRun ? 'superseded' : 'project_changed',
             staleReason: !supersededRun
               ? 'The project changed while this dashboard was running. Results and story were invalidated; run the current dashboard again.'
-              : 'A newer dashboard interaction superseded this run. Results and story were invalidated; run the current dashboard again.',
+              : DASHBOARD_RUN_SUPERSEDED_REASON,
           } : {}),
-        }));
+        });
+        activeDashboardRun?.shared.settle({ status: 200, body: runResponseBody });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(runResponseBody);
       } catch (err) {
         if (dashboardRequestAbortHandler) req.off('aborted', dashboardRequestAbortHandler);
         if (activeDashboardRunKey && activeDashboardRun && activeDashboardRuns.get(activeDashboardRunKey) === activeDashboardRun) {
           activeDashboardRuns.delete(activeDashboardRunKey);
         }
-        res.writeHead(err instanceof DashboardRunRequestError ? 400 : 500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ error: err instanceof Error ? err.message : String(err) }));
+        const status = err instanceof DashboardRunRequestError ? 400 : 500;
+        const errorBody = serializeJSON({ error: err instanceof Error ? err.message : String(err) });
+        activeDashboardRun?.shared.settle({ status, body: errorBody });
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(errorBody);
+      } finally {
+        // Any other way out (an export, a Dataset MCP answer) leaves nothing to share.
+        activeDashboardRun?.shared.settle(null);
       }
       return;
     }
@@ -31732,6 +31818,19 @@ function resolveDatasetSourceManifestBlock(
  * scripts and old clients: their requests are independent rather than sharing
  * a process-global page cancellation slot.
  */
+/** A page run in flight for one mounted viewer. */
+type ActiveDashboardRun = {
+  generation: number;
+  controller: AbortController;
+  /** What it computes (dashboardRunRequestKey), when an identical request may join it. */
+  requestKey?: string;
+  /** The browser's number for the request that started it. */
+  sequence?: number;
+  /** Requests that joined it and wait for its result. */
+  followers: number;
+  shared: ReturnType<typeof sharedDashboardRunResponse>;
+};
+
 export function dashboardRunSupersessionKey(
   surface: 'apps' | 'app-builds' | 'dataset-mcp',
   appId: string,
