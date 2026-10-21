@@ -100,7 +100,7 @@ import { dashboardPageRevision, dashboardRunKey, shouldRerunStaleDashboardRun } 
 import { KpiCard, usesKpiCard } from './KpiCard';
 import { plainSourceText } from './source-names';
 import { BarCapNote } from './builder/BarCapNote';
-import { barCategoryCap } from './builder/sort-top-n';
+import { barCategoryCap, withBarCategoryLimit } from './builder/sort-top-n';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -2901,7 +2901,7 @@ export function TileBody({
           <ChartOutput
             result={chartResult}
             themeMode={themeMode}
-            chartConfig={{ ...chartConfig, title: undefined }}
+            chartConfig={withBarCategoryLimit({ ...chartConfig, title: undefined }, barCap)}
             availableHeight={availableHeight}
             onMarkSelect={selectResultRow}
           />

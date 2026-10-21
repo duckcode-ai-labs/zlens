@@ -140,6 +140,16 @@ export function barCategoryCap(
   return { result: { ...result, rows }, total, shown: keep.size, loaded: order.length, capped: true, cappable: true };
 }
 
+/**
+ * The chart settings that draw every bar the cap kept. Without this the chart
+ * drew only its default first 20 categories under a "Showing top 25" note.
+ * An author's own item limit stands.
+ */
+export function withBarCategoryLimit<T extends { maxItems?: number }>(config: T, cap: Pick<BarCategoryCap, 'shown'> | null | undefined): T {
+  if (!cap || config.maxItems !== undefined || cap.shown <= 0) return config;
+  return { ...config, maxItems: cap.shown };
+}
+
 /** "Showing top 25 of 935". */
 export function barCapNote(cap: Pick<BarCategoryCap, 'shown' | 'total'>): string {
   return `Showing top ${cap.shown} of ${cap.total.toLocaleString('en-US')}`;

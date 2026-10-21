@@ -2662,6 +2662,21 @@ export interface DashboardRunFilterIssue {
   message?: string;
 }
 
+/** One page of a Dataset field's distinct values (see `api.datasetFieldValues`). */
+export type DatasetFieldValuesResponse = {
+  ok: boolean;
+  values: string[];
+  /** More values exist than were returned. */
+  truncated?: boolean;
+  /** How many values the field has (browsing only), up to the server's count limit. */
+  valueCount?: number;
+  /** The field has more values than the server counts. */
+  valueCountCapped?: boolean;
+  /** The search text these values match, when searching. */
+  search?: string;
+  error?: string;
+};
+
 /** What one tile did with the page's filters (see `filterReport`). */
 export interface DashboardTileFilterReport {
   applied: string[];
@@ -8702,9 +8717,15 @@ export const api = {
    * Distinct values of one approved Dataset field, for a Dataset-bound page
    * filter's options. Runs as a governed field query; nothing is App evidence.
    */
-  async datasetFieldValues(sourceId: string, field: string): Promise<{ ok: boolean; values: string[]; truncated?: boolean; error?: string }> {
+  /**
+   * Distinct values of one Dataset field for a filter control: the first page
+   * for browsing (with how many values exist), or, with `search`, the values
+   * that contain the typed text, searched on the server over every value.
+   */
+  async datasetFieldValues(sourceId: string, field: string, options: { search?: string } = {}): Promise<DatasetFieldValuesResponse> {
     try {
-      return await request('/api/app-datasets/field-values', { method: 'POST', body: JSON.stringify({ sourceId, field }) });
+      const search = options.search?.trim();
+      return await request('/api/app-datasets/field-values', { method: 'POST', body: JSON.stringify({ sourceId, field, ...(search ? { search } : {}) }) });
     } catch (error) {
       return { ok: false, values: [], error: error instanceof Error ? error.message : String(error) };
     }

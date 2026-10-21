@@ -25,7 +25,52 @@ export type StudioFilterTileMapping = {
   sourceId?: string;
   sourceRevision?: string;
   reason?: string;
+  /**
+   * A date filter on a tile whose Dataset has no field of the filter's name:
+   * that Dataset's own date and time fields, so the author can map one
+   * ("Use Ordered At on Order Items"). Never applied on its own.
+   */
+  dateFieldOptions?: Array<{ field: string; type: string }>;
+  /** The filter field this tile's mapped field stands in for (an author's date mapping). */
+  mappedFrom?: string;
 };
+
+/**
+ * An author's explicit field choice per Dataset (by source id) for one
+ * filter, e.g. a "Month" date filter that uses `ordered_at` on Order Items.
+ */
+export type StudioFilterFieldOverrides = Record<string, string>;
+
+export type StudioFilterMappingOptions = {
+  fieldOverrides?: StudioFilterFieldOverrides;
+  /** The filter is a date control, so tiles without the field offer their own date fields. */
+  dateFilter?: boolean;
+};
+
+/** Whether a filter control type filters by date. */
+export function isStudioDateFilterType(type: string | undefined): boolean {
+  return type === 'daterange' || type === 'date' || type === 'relative_date';
+}
+
+/**
+ * The field overrides a saved filter already carries: each Dataset binding
+ * whose field is not the filter's own field (by name).
+ */
+export function studioFilterFieldOverrides(
+  pages: StudioPage[],
+  filterId: string,
+  fieldId: string,
+): StudioFilterFieldOverrides {
+  const overrides: StudioFilterFieldOverrides = {};
+  for (const page of pages) {
+    const filter = page.filters?.find((candidate) => candidate.id === filterId);
+    for (const [datasetId, binding] of Object.entries(filter?.datasetBindings ?? {})) {
+      const dataset = page.datasets?.find((candidate) => candidate.id === datasetId);
+      if (dataset && normalizeFieldId(binding.field) !== normalizeFieldId(fieldId)) overrides[dataset.sourceId] = binding.field;
+    }
+  }
+  return overrides;
+}
 
 export type StudioFilterCandidate = {
   id: string;
@@ -243,9 +288,11 @@ export function filterTileMappingsForField(
   fieldId: string,
   runtimeFields: StudioRuntimeFilterFields = {},
   boundSources: AppStudioBuildDraft['sources'] = [],
+  options: StudioFilterMappingOptions = {},
 ): StudioFilterTileMapping[] {
   return pages.flatMap((page) => dataTiles(page).map((tile) => {
-    const datasetMapping = datasetMappingForTile(page, tile, fieldId, boundSources);
+    const datasetMapping: { datasetId: string; field: string; type: string; role: string; mappedFrom?: string } | null = datasetMappingForTile(page, tile, fieldId, boundSources)
+      ?? overriddenDatasetMappingForTile(page, tile, fieldId, boundSources, options.fieldOverrides);
     if (tile.query || tile.driver) {
       const sourceName = sourceNameForTile(tile, catalog, boundSources);
       if (datasetMapping) {
@@ -265,8 +312,10 @@ export function filterTileMappingsForField(
           datasetFieldRole: datasetMapping.role,
           sourceId: tile.sourceId,
           sourceRevision: tile.sourceRevision,
+          ...(datasetMapping.mappedFrom ? { mappedFrom: datasetMapping.mappedFrom } : {}),
         };
       }
+      const dateFieldOptions = options.dateFilter ? datasetDateFieldsForTile(page, tile, boundSources) : [];
       return {
         key: studioFilterMappingKey(page.id, tile.i),
         pageId: page.id,
@@ -276,6 +325,8 @@ export function filterTileMappingsForField(
         sourceName,
         supported: false,
         reason: missingFieldReason(sourceName, fieldId),
+        ...(tile.sourceId ? { sourceId: tile.sourceId } : {}),
+        ...(dateFieldOptions.length ? { dateFieldOptions } : {}),
       };
     }
     const fields = governedFieldsForTile(tile, catalog, boundSources);
@@ -375,6 +426,47 @@ function datasetMappingForTile(
   return physical && physical.kind === 'physical'
     ? { datasetId: binding.id, field: physical.name, type: physical.type, role: physical.role }
     : null;
+}
+
+/** The Dataset behind a tile and its page binding, when both are current. */
+function tileDataset(page: StudioPage, tile: StudioTile, boundSources: AppStudioBuildDraft['sources']) {
+  if (!(tile.query || tile.driver) || !tile.sourceId || !tile.sourceRevision) return null;
+  const descriptor = boundSources.find((candidate) => candidate.id === tile.sourceId)?.capabilities?.dataset;
+  const binding = page.datasets?.find((candidate) => candidate.sourceId === tile.sourceId && candidate.sourceRevision === tile.sourceRevision);
+  return descriptor && binding ? { descriptor, binding } : null;
+}
+
+/** A tile's Dataset field the author chose for this filter instead of a same-named one. */
+function overriddenDatasetMappingForTile(
+  page: StudioPage,
+  tile: StudioTile,
+  fieldId: string,
+  boundSources: AppStudioBuildDraft['sources'],
+  overrides: StudioFilterFieldOverrides | undefined,
+): { datasetId: string; field: string; type: string; role: string; mappedFrom: string } | null {
+  const chosen = tile.sourceId ? overrides?.[tile.sourceId] : undefined;
+  if (!chosen) return null;
+  const dataset = tileDataset(page, tile, boundSources);
+  if (!dataset) return null;
+  const physical = dataset.descriptor.fields.find((field) => field.kind === 'physical' && field.status === 'approved' && normalizeFieldId(field.name) === normalizeFieldId(chosen));
+  return physical && physical.kind === 'physical'
+    ? { datasetId: dataset.binding.id, field: physical.name, type: physical.type, role: physical.role, mappedFrom: fieldId }
+    : null;
+}
+
+/** A tile's approved date and time fields, for mapping a date filter by hand. */
+function datasetDateFieldsForTile(
+  page: StudioPage,
+  tile: StudioTile,
+  boundSources: AppStudioBuildDraft['sources'],
+): Array<{ field: string; type: string }> {
+  const dataset = tileDataset(page, tile, boundSources);
+  if (!dataset) return [];
+  return dataset.descriptor.fields.flatMap((field) => field.kind === 'physical'
+    && field.status === 'approved'
+    && (field.type === 'date' || field.type === 'timestamp' || field.role === 'time')
+    ? [{ field: field.name, type: field.type }]
+    : []);
 }
 
 function normalizeFieldId(value: string): string {

@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
   Activity, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, FileText, Filter,
-  Gauge, Heading, LayoutDashboard, LineChart, Monitor, MoreHorizontal, PanelRight,
+  Gauge, Heading, Info, LayoutDashboard, LineChart, Monitor, MoreHorizontal, PanelRight,
   Play, Plus, Redo2, ScatterChart, Search, Settings2, ShieldCheck, Smartphone, Sparkles, Table2,
   Trash2, Type, Undo2, Upload, X,
 } from 'lucide-react';
@@ -44,7 +44,7 @@ import { DraftTileCard, DraftTileInspector, draftVisualization, withDraftSortDef
 import { encodedChartConfig, encodedTileResult } from './dashboard-chart-config';
 import { plainSourceText, sourceDisplayName } from './source-names';
 import { BarCapNote } from './builder/BarCapNote';
-import { barCategoryCap } from './builder/sort-top-n';
+import { barCategoryCap, withBarCategoryLimit } from './builder/sort-top-n';
 import { ProposedTileCard } from './builder/ProposedTile';
 import { ChartStylePanel, compactVizStyle } from './builder/ChartStylePanel';
 import { DriverView } from './DriverView';
@@ -112,13 +112,15 @@ import { useMarkInteractions } from './useMarkInteractions';
 import { numberReceiptInfo } from './NumberReceipt';
 import type { MarkPointer } from '../output/echarts/EChartsChart';
 import { ShowMePanel, currentShowMeChart, tileShowMe } from './builder/ShowMe';
-import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
+import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, studioFilterMappingOptions, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
 import { studioDateControlHint, studioFilterRunPlan, studioFilterValue } from './app-studio-filter-values';
 import { DatasetInteractionInspector, DatasetTileQueryInspector } from './builder/InteractionLayer';
 import { humanize, messageOf } from './builder/studio-ui';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { ContextProposalReviewDrawer } from '../modeling/ContextProposalReviewDrawer';
 import { ChartOutput } from '../output/ChartOutput';
+import { filterValueCapHint, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
+import { studioTileFilterNotices } from './app-studio-filter-notices';
 import { TableOutput } from '../output/TableOutput';
 import { APP_STUDIO_V2_STYLES } from './app-studio-v2-styles';
 import {
@@ -230,6 +232,7 @@ type StudioFilterAvailability = {
   values: string[];
   truncated: boolean;
   valueCount?: number;
+  valueCountCapped?: boolean;
   dateRange?: { min: string; max: string };
 };
 
@@ -782,7 +785,7 @@ export function AppStudioV2({
   // A preview run lists option values only for some filters. Dataset-bound
   // choice filters fall back to the field's distinct values, the same lookup
   // the published viewer uses, so a Region filter is never a blank text box.
-  const datasetFieldValueCacheRef = useRef<Record<string, string[]>>({});
+  const datasetFieldValueCacheRef = useRef<Record<string, FilterValueList>>({});
   useEffect(() => {
     if (!activePage) return;
     let cancelled = false;
@@ -792,20 +795,23 @@ export function AppStudioV2({
       const source = datasetOptionSource(filter as never, (activePage as { datasets?: never }).datasets);
       if (!source) continue;
       const key = `${source.sourceId}:${source.field}`;
-      const apply = (values: string[]) => {
-        if (cancelled || values.length === 0) return;
+      // The first page of values, and whether more exist: a capped list
+      // searches every value on the server as the author types.
+      const apply = (list: FilterValueList) => {
+        if (cancelled || list.values.length === 0) return;
         setFilterOptionsByPage((current) => {
           const pageOptions = current[activePage.id] ?? {};
           if (pageOptions[filter.id]?.values.length) return current;
-          return { ...current, [activePage.id]: { ...pageOptions, [filter.id]: { values, truncated: false, valueCount: values.length } } };
+          return { ...current, [activePage.id]: { ...pageOptions, [filter.id]: { values: list.values, truncated: Boolean(list.truncated), valueCount: list.valueCount ?? list.values.length, ...(list.valueCountCapped ? { valueCountCapped: true } : {}) } } };
         });
       };
       const cached = datasetFieldValueCacheRef.current[key];
       if (cached) { apply(cached); continue; }
       void api.datasetFieldValues(source.sourceId, source.field).then((result) => {
         if (!result.ok) return;
-        datasetFieldValueCacheRef.current[key] = result.values;
-        apply(result.values);
+        const list: FilterValueList = { values: result.values, truncated: result.truncated, ...(result.valueCount !== undefined ? { valueCount: result.valueCount } : {}), ...(result.valueCountCapped ? { valueCountCapped: true } : {}) };
+        datasetFieldValueCacheRef.current[key] = list;
+        apply(list);
       });
     }
     return () => { cancelled = true; };
@@ -1869,7 +1875,8 @@ export function AppStudioV2({
   const saveFilter = async (configuration: StudioFilterConfiguration) => {
     if (!draft || !activePage) return;
     const selected = new Set(configuration.selectedMappingKeys);
-    const mappings = filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources);
+    // A date filter's hand-mapped date fields become that Dataset's binding.
+    const mappings = filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources, studioFilterMappingOptions(configuration));
     if (!mappings.some((mapping) => mapping.supported)) {
       setError('This field is not available on a compatible tile.');
       return;
@@ -3417,6 +3424,8 @@ export function AppStudioV2({
                     {editing ? <span className="drag-handle" aria-hidden="true" title={canArrange ? 'Drag to move. Arrow keys move the selected tile.' : undefined}>⠿</span> : null}
                     {badge}
                     <strong title={tile.title || humanize(tile.i)}>{tile.title || humanize(tile.i)}</strong>
+                    {/* "Rolled up from a saved query" sits behind an icon, never over the value. */}
+                    <TileAdaptedNote run={previewRun?.tiles.find((item) => item.tileId === tile.i)} />
                     <span className={`trust-dot ${tile.trustState ?? 'draft_ready'}`} title={tile.trustState === 'certified' ? 'Certified source' : tile.trustState === 'review_required' ? 'Needs review before publishing' : 'Draft'} />
                     <div className={`tile-tools ${tileMenuId === tile.i ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
                       {editing && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
@@ -3432,12 +3441,11 @@ export function AppStudioV2({
                       </div> : null}
                     </div>
                   </header>
-                  {unsupportedTileFilters(tile).map((binding) => <div key={binding.filter} className="tile-filter-notice"><Filter size={11} /><span><strong>Not filtered by {studioFilterLabel(activePage, binding.filter)}</strong> · {binding.unsupportedReason ? plainSourceText(binding.unsupportedReason) : `${humanize(binding.filter)} does not affect this tile.`}</span></div>)}
+                  {/* "Not filtered by …" in Edit and Preview, from the run's filter
+                      report, or the page's stored choice when the run predates it. */}
+                  {activePage ? studioTileFilterNotices({ page: activePage, tile, run: previewRun?.tiles.find((item) => item.tileId === tile.i), values: previewVariables, mode: editing ? 'edit' : 'preview' })
+                    .map((notice) => <div key={notice.key} className="tile-filter-notice" role="note" title={`${notice.label}. ${notice.detail}`}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>) : null}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
-                  {datasetTileNotices(previewRun?.tiles.find((item) => item.tileId === tile.i), { filterLabels: studioFilterLabels(activePage) })
-                    // A "Does not apply" choice is already shown above from the page itself.
-                    .filter((notice) => !unsupportedTileFilters(tile).some((binding) => notice.key.startsWith(`${binding.filter}:`)))
-                    .map((notice) => <div key={notice.key} className={`tile-filter-notice ${notice.kind}`} title={notice.detail}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
                   {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the Dataset query and the SQL it compiled to.</p>; })()}</div> : null}
                   {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={datasetLinkProposal(activePage!, tile)} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
                   {placed && canArrange ? <>
@@ -3524,7 +3532,7 @@ export function AppStudioV2({
               {editing && !projectedPages && activePage ? <PageFormatPicker value={canvasMode ? 'canvas' : storyMode ? 'story' : 'dashboard'} disabled={busy} onChange={(format) => void setPresentation(format)} /> : null}
               {editing && !projectedPages && !storyMode && !canvasMode ? <button type="button" className="add-tile" onClick={openAddTile}><Plus size={14} /> Add tile</button> : null}
             </header>
-            {(activePage?.filters ?? []).length ? <div className="studio-page-filterbar">{activePage!.filters!.map((filter) => <StudioFilterControl key={filter.id} filter={filter} availability={activeFilterOptions[filter.id]} value={previewVariables[filter.id] ?? filter.default} applying={previewing} onChange={(value) => applyFilterValue(filter, value)} />)}</div> : null}
+            {(activePage?.filters ?? []).length ? <div className="studio-page-filterbar">{activePage!.filters!.map((filter) => <StudioFilterControl key={filter.id} filter={filter} availability={activeFilterOptions[filter.id]} searchSource={datasetOptionSource(filter as never, (activePage as { datasets?: never }).datasets)} value={previewVariables[filter.id] ?? filter.default} applying={previewing} onChange={(value) => applyFilterValue(filter, value)} />)}</div> : null}
             {previewCrossFilters.length ? <div className="studio-mark-filterbar" role="status" aria-label="Selected Dataset result marks"><span>Selected marks</span>{previewCrossFilters.map((filter) => <button key={`${filter.fromTileId}:${filter.field}`} type="button" onClick={() => removeDatasetCrossFilter(filter.fromTileId, filter.field)}>{humanize(filter.field)}: {filter.values.map(String).join(', ')} <X size={11} /></button>)}<button type="button" className="clear" onClick={clearDatasetCrossFilters}>Reset marks</button></div> : null}
             {previewRun?.incomplete ? <div className="studio-preview-incomplete" role="status" aria-label="Incomplete preview">
               <strong>Preview incomplete · {previewRun.tiles.filter((tile) => tile.status === 'ok').length}/{previewRun.tiles.length} tiles ready</strong>
@@ -4280,12 +4288,15 @@ function StaticComponentPreview({ loading, view }: { loading: boolean; view?: st
 function StudioFilterControl({
   filter,
   availability,
+  searchSource,
   value,
   applying,
   onChange,
 }: {
   filter: NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number];
   availability?: StudioFilterAvailability;
+  /** The Dataset field behind the values, so a capped list can search every value. */
+  searchSource?: FilterValueSource;
   value: unknown;
   applying: boolean;
   onChange: (value: unknown) => void;
@@ -4310,7 +4321,7 @@ function StudioFilterControl({
     return <label className={`studio-filter ${hint.empty ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" aria-label={label} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
   }
   if (optionValues.length > 0 && (filter.type === 'select' || filter.type === 'multiselect')) {
-    return <StudioFilterDropdown label={label} values={optionValues} value={value} multiple={filter.type === 'multiselect'} applying={applying} truncated={availability?.truncated ?? false} onChange={onChange} />;
+    return <StudioFilterDropdown label={label} values={optionValues} value={value} multiple={filter.type === 'multiselect'} applying={applying} truncated={availability?.truncated ?? false} {...(availability?.valueCount !== undefined ? { valueCount: availability.valueCount } : {})} {...(availability?.valueCountCapped ? { valueCountCapped: true } : {})} {...(searchSource ? { searchSource } : {})} onChange={onChange} />;
   }
   if (optionValues.length > 0 && filter.type === 'search') {
     const listId = `studio-filter-${filter.id.replace(/[^a-z0-9_-]/gi, '-')}-options`;
@@ -4328,13 +4339,27 @@ function StudioFilterControl({
   return <label className="studio-filter" aria-busy={applying}><span>{label}</span><input type={filter.type === 'number' ? 'number' : 'search'} value={String(value ?? '')} placeholder="All values" onChange={(event) => onChange(filter.type === 'number' && event.target.value !== '' ? Number(event.target.value) : event.target.value)} /><small>{applying ? 'Applying…' : 'Updates automatically'}</small></label>;
 }
 
-function StudioFilterDropdown({
+/**
+ * "Rolled up from a saved query" (and other grain adaptations) as an info
+ * icon in the tile header, with the explanation in its tooltip. As a block
+ * above the result it covered a KPI's number at the default tile size.
+ */
+export function TileAdaptedNote({ run }: { run?: DashboardRunResponse['tiles'][number] }): JSX.Element | null {
+  const adapted = datasetTileNotices(run).filter((notice) => notice.kind === 'adapted');
+  if (!adapted.length) return null;
+  return <span className="tile-adapted-note" role="note" tabIndex={0} aria-label={adapted.map((notice) => `${notice.label}: ${notice.detail}`).join(' ')} title={adapted.map((notice) => `${notice.label}. ${notice.detail}`).join('\n')}><Info size={12} aria-hidden="true" /></span>;
+}
+
+export function StudioFilterDropdown({
   label,
   values,
   value,
   multiple,
   applying,
   truncated,
+  valueCount,
+  valueCountCapped,
+  searchSource,
   onChange,
 }: {
   label: string;
@@ -4343,6 +4368,11 @@ function StudioFilterDropdown({
   multiple: boolean;
   applying: boolean;
   truncated: boolean;
+  /** How many values the field has, when the server counted them. */
+  valueCount?: number;
+  valueCountCapped?: boolean;
+  /** Where to search every value when the list is capped. */
+  searchSource?: FilterValueSource;
   onChange: (value: unknown) => void;
 }): JSX.Element {
   const [query, setQuery] = useState('');
@@ -4350,7 +4380,10 @@ function StudioFilterDropdown({
   const selected = multiple
     ? new Set(Array.isArray(value) ? value.map(String) : value === undefined || value === null || value === '' ? [] : [String(value)])
     : new Set(value === undefined || value === null || value === '' ? [] : [String(value)]);
-  const visible = values.filter((option) => option.toLowerCase().includes(query.trim().toLowerCase()));
+  const list: FilterValueList = { values, truncated, ...(valueCount !== undefined ? { valueCount } : {}), ...(valueCountCapped ? { valueCountCapped: true } : {}) };
+  const search = useFilterValueSearch(searchSource, list, query);
+  const visible = search.values;
+  const capHint = filterValueCapHint(list);
   const summary = selected.size === 0
     ? 'All values'
     : multiple
@@ -4373,8 +4406,8 @@ function StudioFilterDropdown({
       <label><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search values" autoComplete="off" /></label>
       <button type="button" className="filter-option-clear" onClick={() => { onChange(multiple ? [] : ''); if (!multiple && detailsRef.current) detailsRef.current.open = false; }}>All values</button>
       <div>{visible.map((option) => <button key={option} type="button" className={selected.has(option) ? 'on' : ''} onClick={() => selectValue(option)}>{multiple ? <span className="filter-option-check">{selected.has(option) ? <Check size={11} /> : null}</span> : null}<span>{option}</span>{!multiple && selected.has(option) ? <Check size={12} /> : null}</button>)}</div>
-      {visible.length === 0 ? <small>No matching values</small> : null}
-      <footer>{applying ? 'Applying…' : `${values.length}${truncated ? '+' : ''} available values`}</footer>
+      {visible.length === 0 ? <small>{search.searching ? 'Searching all values…' : 'No matching values'}</small> : null}
+      <footer>{applying ? 'Applying…' : query.trim() && search.searching ? 'Searching all values…' : query.trim() && search.truncated ? `First ${visible.length} matches · type more to narrow` : !query.trim() && capHint ? capHint : `${values.length}${truncated ? '+' : ''} available values`}</footer>
     </div>
   </details>;
 }
@@ -4514,7 +4547,7 @@ export function StudioTilePreview({
           ? <TableOutput result={shownResult} themeMode={themeMode} maxHeight={placed ? chartHeight : height} initialPageSize={10} onRowClick={onRowSelect} conditionalFormats={tile.viz.style?.conditional} />
           : <>
             <BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} />
-            <ChartOutput result={barCap?.result ?? shownResult} themeMode={themeMode} chartConfig={{ ...chartConfig, title: undefined }} availableHeight={barCap?.cappable ? Math.max(96, chartHeight - 24) : chartHeight} availableWidth={width} onMarkSelect={onRowSelect} />
+            <ChartOutput result={barCap?.result ?? shownResult} themeMode={themeMode} chartConfig={withBarCategoryLimit({ ...chartConfig, title: undefined }, barCap)} availableHeight={barCap?.cappable ? Math.max(96, chartHeight - 24) : chartHeight} availableWidth={width} onMarkSelect={onRowSelect} />
           </>}
       </div>
       {selectableFields.length ? <div className={`dataset-mark-controls marks ${selectedForTile.length ? 'has-selection' : ''}`} aria-label="Cross-filter selection">
@@ -4531,7 +4564,7 @@ export function StudioTilePreview({
         {hierarchy.activeSteps.length > 0 ? <small>All › {hierarchy.activeSteps.map((step) => step.values.map(String).join(', ')).join(' › ')}</small> : null}
         {hierarchy.activeSteps.length > 0 && onDrillBack ? <button type="button" onClick={onDrillBack}>Up one level</button> : null}
       </div> : null}
-      {!selectableFields.length && linkProposal && onLinkField ? <div className="dataset-link-hint" role="note">
+      {!selectableFields.length && linkProposal && onLinkField ? <div className={`dataset-link-hint ${activeCrossFilters.length ? '' : 'hover-only'}`} role="note">
         <span>{onMark ? 'Keep only reaches tiles on this Dataset.' : `Clicking this ${chart === 'table' ? 'table' : 'chart'} filters nothing yet.`}</span>
         <button type="button" onClick={onLinkField} title={`Map ${humanize(linkProposal.fieldLabel)} to: ${linkProposal.targetLabels.join(', ')}`}>{onMark ? 'Also filter' : 'Link'} {humanize(linkProposal.fieldLabel)} {onMark ? 'on' : 'to'} {linkProposal.mappings.length === 1 ? linkProposal.targetLabels[0] : `${linkProposal.mappings.length} Datasets`}</button>
       </div> : null}
@@ -4758,18 +4791,6 @@ interface CanvasGesture {
 
 function modifierKeyLabel(): string {
   return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
-}
-
-function unsupportedTileFilters(tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]) {
-  return (tile.filterBindings ?? []).filter((binding) => binding.capability === 'unsupported' || Boolean(binding.unsupportedReason));
-}
-
-function studioFilterLabels(page: AppStudioBuildDraft['pages'][number] | null | undefined): Record<string, string> {
-  return Object.fromEntries((page?.filters ?? []).map((filter) => [filter.id, filter.label ?? humanize(filter.id)]));
-}
-
-function studioFilterLabel(page: AppStudioBuildDraft['pages'][number] | null | undefined, filterId: string): string {
-  return studioFilterLabels(page)[filterId] ?? humanize(filterId);
 }
 
 function templateIcon(id: StudioTemplate): JSX.Element {

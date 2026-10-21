@@ -26,6 +26,39 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - A proposal never adds a tile the page already shows (it says so in its
     notes), and the review counts only the tiles it adds, so a revise no longer
     duplicates tiles.
+- **Filters say where they don't apply while you edit.** The builder and
+  Preview now mark every tile a filter skips with "Not filtered by <filter>",
+  the same notice readers see: pick a customer, and a revenue KPI the customer
+  filter doesn't reach says so. The notice comes from the run's own report of
+  which filters applied, and from the page's link choices before a tile has
+  run with the new value. Edit also shows each tile's reach before a value is
+  set; Preview shows notices only for filters that have a value, as readers
+  see them.
+- **The page summary describes filters correctly.** A date range reads
+  "1 Jan 2025 – 30 Jun 2025" (not `[object Object]`), filters use their
+  labels, and tiles narrowed by different filters are each described with the
+  filters that reached them ("For Month … (not filtered by Customer Name)")
+  instead of claiming no tile was filtered.
+- **Search every value in a filter.** A filter's value list loads the first
+  200 values and says "Type to search all 930 values"; typing searches every
+  value of the field on the server (a bound, escaped match through the
+  governed query compiler), in the builder and in the published App, where the
+  long native list is now a searchable control. `POST
+  /api/app-datasets/field-values` takes an optional `search` and returns
+  `valueCount` when browsing.
+- **Map a date filter to a tile's own date field.** When a date filter's field
+  isn't on a tile's data, the Filters tab offers that data's date and time
+  fields ("Use Ordered At on Order Items"). Nothing maps on its own; the choice
+  is saved as that data's filter binding and kept when the filter is reopened.
+- **Numbers and labels stay visible.** "Rolled up from a saved query" moved to
+  an info icon in the tile header, so a KPI's value shows at the default tile
+  size; "Not filtered by" notices are one line. Bar charts name every bar
+  (long names are shortened, with the full name in the tooltip; crowded
+  columns rotate their labels), draw every bar a "Showing top 25" note counts
+  (they drew only 20), and a top-25 list gets one row per bar, scrolling in a
+  short tile. The click-to-filter hint under a chart shows on hover or while a
+  click-filter is active, not all the time.
+
 - **Everything you add has fields.** A saved query's result columns are now
   fields on the same shelves as any other data, with no review step: numbers
   are Measures, text and true/false columns are Dimensions, dates are Time

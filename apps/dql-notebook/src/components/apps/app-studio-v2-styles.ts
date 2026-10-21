@@ -228,6 +228,9 @@ export const APP_STUDIO_V2_STYLES = `
 .filter-mapping-row.applies { border-color:color-mix(in srgb,var(--accent) 42%,var(--border-default)); background:var(--accent-dim); }
 .filter-mapping-row.unsupported { background:var(--bg-0); }
 .filter-mapping-row > span { min-width:0; display:grid; gap:1px; }
+.filter-date-field-options { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
+.filter-date-field-options button, .filter-date-field-clear { justify-self:start; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--accent); font-size:12px; font-weight:600; padding:3px 7px; cursor:pointer; }
+.filter-date-field-clear { margin-top:4px; border:0; background:none; padding:0; color:var(--text-tertiary); font-weight:500; }
 .filter-mapping-row strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .filter-mapping-row small { color:var(--text-tertiary); font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
 .filter-applies-switch { display:grid; grid-template-columns:1fr 1.4fr; gap:3px; border-radius:8px; padding:2px; background:var(--bg-0); }
@@ -1674,6 +1677,21 @@ export const APP_STUDIO_V2_STYLES = `
   .studio-component-card > header .tile-tools { order:-1; flex:1 0 100%; justify-content:flex-end; margin-left:0; }
 }
 .tile-filter-notice > span { min-width:0; overflow-wrap:anywhere; }
+/* A notice is one short line (its full text is in its tooltip), so it never
+   pushes a KPI's value or a chart out of a tile at its default size. */
+.tile-filter-notice { flex:none; padding:3px 8px; margin-top:4px; font-size:12px; white-space:nowrap; overflow:hidden; }
+.tile-filter-notice > span { overflow:hidden; text-overflow:ellipsis; overflow-wrap:normal; }
+/* "Rolled up from a saved query" lives behind this icon in the header. */
+.tile-adapted-note { flex:none; display:inline-flex; align-items:center; color:var(--text-tertiary); cursor:help; border-radius:4px; }
+.tile-adapted-note:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+/* Interaction hints show while the pointer is on the tile, when it is selected, or while a click-filter is active. */
+.live-component-preview { position:relative; }
+.dataset-link-hint.hover-only { display:none; position:absolute; left:8px; right:8px; bottom:6px; z-index:2; box-shadow:0 4px 12px rgba(0,0,0,.08); }
+.studio-component-card:hover .dataset-link-hint.hover-only,
+.studio-component-card:focus-within .dataset-link-hint.hover-only,
+.studio-component-card.selected .dataset-link-hint.hover-only { display:flex; }
+/* Long text stays inside its card when the canvas narrows. */
+.studio-component-card .live-component-preview, .studio-component-card .tile-text { overflow:hidden; overflow-wrap:anywhere; }
 /* Charts follow the tile's width when panels open and close. */
 .live-component-preview, .live-component-body, .studio-tile-preview-interactions { min-width:0; }
 .live-component-body { overflow:hidden; }

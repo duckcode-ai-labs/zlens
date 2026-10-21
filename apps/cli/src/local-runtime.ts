@@ -20007,13 +20007,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       const measure = descriptor.fields.find((candidate) => candidate.kind === 'measure' && candidate.status === 'approved');
       if (!measure) throw new DashboardRunRequestError(`${descriptor.label} has no approved measure to group ${field} by.`);
+      // Typed search runs on the server over every value of the field (a
+      // bound, escaped ILIKE through the governed compiler), so a value past
+      // the first page is still found. Only text fields are searched this way.
+      const search = datasetFieldValueSearchText(body.search);
+      const searching = Boolean(search) && physical.type === 'string';
       return {
         sourceId,
         query: {
           dimensions: [{ field: physical.name }],
           measures: [{ measure: measure.name }],
+          ...(searching ? { filters: [{ field: physical.name, op: 'contains' as const, values: [search] }] } : {}),
           orderBy: [{ alias: physical.name, direction: 'asc' }],
-          limit: DATASET_FIELD_VALUE_LIMIT + 1,
+          // Browsing reads up to the count limit so the control can say how
+          // many values exist ("Type to search all 930 values"); it still
+          // returns only the first page.
+          limit: (searching ? DATASET_FIELD_VALUE_LIMIT : DATASET_FIELD_VALUE_COUNT_LIMIT) + 1,
         },
       };
     };
@@ -20566,9 +20575,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       let chartRunScopeGeneration: number | undefined;
       let dashboardRequestAbortHandler: (() => void) | undefined;
       try {
+        const fieldValuesBody = datasetFieldValuesRun ? await readJSON(req) : undefined;
         const mcpRequest = mcpDatasetRun
           ? await resolveMcpDatasetRuntimeRequest(datasetFieldValuesRun
-            ? datasetFieldValuesQuery(await readJSON(req))
+            ? datasetFieldValuesQuery(fieldValuesBody)
             : await readJSON(req))
           : undefined;
         const runSurface = mcpRequest ? 'dataset-mcp' as const : appDashRun![1] as 'apps' | 'app-builds';
@@ -23426,11 +23436,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           goal: loaded.dashboard.story?.goal ?? loaded.dashboard.metadata.businessOutcome ?? loaded.dashboard.metadata.title,
           audience: loaded.dashboard.story?.audience ?? loaded.dashboard.metadata.audience,
           filters: dashboardVariables,
+          filterLabels: Object.fromEntries((loaded.dashboard.filters ?? []).flatMap((filter) => filter.label?.trim() ? [[filter.id, filter.label.trim()]] : [])),
           tiles: settledTiles.map((tile) => {
             const dashboardItem = loaded.dashboard.layout.items.find((item) => item.i === tile.tileId);
-            const effectiveStoryFilters = dashboardItem?.block && !dashboardItem.query
+            // The tile's own filter report is the server's word on which page
+            // filters reached it; a filter it did not apply never scopes its facts.
+            const filterReport = (tilesWithFilters.find((candidate) => candidate.tileId === tile.tileId) as { filterReport?: { notApplied?: Array<{ filter: string }> } } | undefined)?.filterReport;
+            const effectiveStoryFilters = withoutNotAppliedStoryFilters(dashboardItem?.block && !dashboardItem.query
               ? dashboardStoryFiltersForBlockTile(dashboardVariables, tile, dashboardItem)
-              : dashboardStoryFiltersForTile(loaded.dashboard, dashboardVariables, tile.dataset);
+              : dashboardStoryFiltersForTile(loaded.dashboard, dashboardVariables, tile.dataset), filterReport);
             const datasetScope = dashboardItem?.query
               ? {
                   // A Dataset tile is a whole-scope value only when its query
@@ -23721,9 +23735,25 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             .map((row) => row[field])
             .filter((value) => value !== null && value !== undefined && value !== '')
             .map(String)));
+          const searched = Boolean(mcpRequest.query.filters?.length);
+          const search = datasetFieldValueSearchText((fieldValuesBody as Record<string, unknown> | undefined)?.search);
+          // A non-text field has no server search: its values are matched here.
+          const matched = search && !searched
+            ? values.filter((value) => value.toLowerCase().includes(search.toLowerCase()))
+            : values;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON(tile?.status === 'ok' && !staleRun
-            ? { ok: true, field, values: values.slice(0, DATASET_FIELD_VALUE_LIMIT), truncated: values.length > DATASET_FIELD_VALUE_LIMIT }
+            ? {
+                ok: true,
+                field,
+                values: matched.slice(0, DATASET_FIELD_VALUE_LIMIT),
+                truncated: matched.length > DATASET_FIELD_VALUE_LIMIT,
+                ...(search ? { search } : {
+                  // How many values the field has, up to the count limit.
+                  valueCount: Math.min(values.length, DATASET_FIELD_VALUE_COUNT_LIMIT),
+                  ...(values.length > DATASET_FIELD_VALUE_COUNT_LIMIT ? { valueCountCapped: true } : {}),
+                }),
+              }
             : { ok: false, field, values: [], error: tile?.error ?? 'The field values did not settle. Retry the page.' }));
           return;
         }
@@ -32289,6 +32319,16 @@ export function dashboardStoryFiltersForTile(
     .filter(([filterId]) => !excluded.has(filterId)));
 }
 
+/** Story filters minus the page filters the tile's run report says it did not apply. */
+export function withoutNotAppliedStoryFilters(
+  filters: Record<string, unknown>,
+  report: { notApplied?: Array<{ filter: string }> } | undefined,
+): Record<string, unknown> {
+  const skipped = new Set((report?.notApplied ?? []).map((entry) => entry.filter));
+  if (skipped.size === 0) return filters;
+  return Object.fromEntries(Object.entries(filters).filter(([filterId]) => !skipped.has(filterId)));
+}
+
 /**
  * The page filter values a block tile's figures actually reflect: filters the
  * runtime applied to it (predicate or parameter) and block parameters a page
@@ -32849,6 +32889,13 @@ function bindScopedStatement(
 
 /** Options offered for one Dataset-bound page filter. */
 const DATASET_FIELD_VALUE_LIMIT = 200;
+/** Values counted for "Type to search all N values"; more reads "5,000+". */
+const DATASET_FIELD_VALUE_COUNT_LIMIT = 5_000;
+
+/** A filter's typed search text: trimmed, bounded, or empty for none. */
+export function datasetFieldValueSearchText(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, 200) : '';
+}
 
 function errorCodeForDatasetTile(error: unknown): string {
   if (error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string') {
