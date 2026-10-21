@@ -5,6 +5,7 @@ import { defaultParameterFilterValue, type DashboardFilterCandidate, type Dashbo
 import { formatBusinessLabel } from './app-text';
 import { describeDashboardDateRange } from '@zlens/core/apps/filter-dates';
 import { studioFilterValue } from './app-studio-filter-values';
+import { plainSourceText } from './source-names';
 
 /**
  * The App dashboard filter row: the controls, their value coercion, and the
@@ -168,7 +169,7 @@ export function DashboardFilterEditor({
             <span
               className={`dql-app-filter-coverage${partial ? ' is-partial' : ''}${none ? ' is-none' : ''}`}
               title={coverage.unaffected.length
-                ? `Not applied to: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${tile.reason}` : ''}`).join('; ')}`
+                ? `Not applied to: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${plainSourceText(tile.reason)}` : ''}`).join('; ')}`
                 : 'Applies to every tile on this page.'}
             >
               {none

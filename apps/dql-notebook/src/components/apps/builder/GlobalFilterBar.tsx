@@ -5,6 +5,7 @@ import type { AppBlockRecommendation, AppStudioBuildDraft, DashboardRunResponse 
 import { defaultStudioFilterType, filterLinkSuggestions, filterPrimarySourceId, filterTileMappingsForField, initialFilterMappingKeys, type StudioFilterCandidate, type StudioFilterLinkSuggestion, type StudioRuntimeFilterFields, type StudioFilterTileMapping } from '../app-studio-filter-candidates';
 import { humanize, PanelTitle } from './studio-ui';
 import { filterLinkedTileIds } from '../app-studio-filter-values';
+import { plainSourceText, searchMatches, sourceDisplayName } from '../source-names';
 
 export { filterLinkedTileIds };
 
@@ -28,6 +29,22 @@ export type StudioFilterConfiguration = {
   /** The Dataset the field was picked from; other Datasets are only suggested (D10). */
   primarySourceId?: string;
 };
+
+/**
+ * Whether a filter field matches the typed search. It ignores case, spaces
+ * and underscores, and matches the label a person reads ("customer name"
+ * finds `customer_name`) and the data it comes from.
+ */
+export function filterCandidateMatches(candidate: Pick<StudioFilterCandidate, 'id' | 'sourceNames'>, search: string): boolean {
+  return searchMatches(search, [candidate.id, humanize(candidate.id), ...candidate.sourceNames.map((name) => sourceDisplayName(name))]);
+}
+
+/** "from Customers" or "from Customers and Orders", never an internal identity. */
+export function filterCandidateOrigin(candidate: Pick<StudioFilterCandidate, 'sourceNames'>): string {
+  const names = [...new Set(candidate.sourceNames.map((name) => sourceDisplayName(name)))];
+  if (!names.length) return '';
+  return `from ${names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`}`;
+}
 
 export type StudioFilterControlType = StudioDashboardFilter['type'];
 
@@ -73,10 +90,7 @@ export function FiltersPanel({
     return [...byId.values()];
   }, [draft.pages]);
   const existingIds = new Set(logicalFilters.map((item) => item.filter.id));
-  const visibleCandidates = candidates.filter((candidate) => {
-    const needle = fieldQuery.trim().toLowerCase();
-    return !needle || [candidate.id, ...candidate.sourceNames].join(' ').toLowerCase().includes(needle);
-  });
+  const visibleCandidates = candidates.filter((candidate) => filterCandidateMatches(candidate, fieldQuery));
   const mappings = useMemo(
     () => configuration?.fieldId ? filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources) : [],
     [catalog, configuration?.fieldId, draft.pages, draft.sources, runtimeFilterFields],
@@ -179,7 +193,7 @@ export function FiltersPanel({
         <label className="filter-field-search"><Search size={14} /><input autoFocus value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} placeholder="Search fields" /></label>
         <div className="filter-field-results">
           {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).map((candidate) => <button key={candidate.id} type="button" onClick={() => chooseField(candidate)}>
-            <span><Filter size={14} /></span><div><strong>{humanize(candidate.id)}</strong><small>{candidate.sourceNames.map(humanize).join(', ')}</small><em>{candidate.affectedTileCount} compatible · {candidate.pageCount} {candidate.pageCount === 1 ? 'page' : 'pages'}</em></div><ChevronDown size={13} />
+            <span><Filter size={14} /></span><div><strong>{humanize(candidate.id)}</strong><small>{filterCandidateOrigin(candidate)}</small><em>{candidate.affectedTileCount} compatible · {candidate.pageCount} {candidate.pageCount === 1 ? 'page' : 'pages'}</em></div><ChevronDown size={13} />
           </button>)}
         </div>
         {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).length === 0 ? <p className="panel-empty">No additional fields match this search.</p> : null}
@@ -249,8 +263,8 @@ export function FilterTileChoice({ mapping, applies, onChoose }: {
   onChoose: (applies: boolean) => void;
 }): JSX.Element {
   const tileName = humanize(mapping.tileTitle);
-  return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason} data-testid="filter-tile-choice">
-    <span><strong>{tileName}</strong><small>{mapping.supported ? `${humanize(mapping.sourceName)} · ${mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : mapping.reason}</small></span>
+  return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason ? plainSourceText(mapping.reason) : undefined} data-testid="filter-tile-choice">
+    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceDisplayName(mapping.sourceName)} · ${mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small></span>
     <div className="filter-applies-switch" role="radiogroup" aria-label={`Does this filter apply to ${tileName}?`}>
       <button type="button" role="radio" aria-checked={applies} className={applies ? 'on' : ''} disabled={!mapping.supported} onClick={() => onChoose(true)}><Check size={11} /> Applies</button>
       <button type="button" role="radio" aria-checked={!applies} className={!applies ? 'on' : ''} onClick={() => onChoose(false)}><X size={11} /> Does not apply</button>

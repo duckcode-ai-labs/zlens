@@ -100,7 +100,7 @@ describe('App Studio filter discovery (UI-022)', () => {
 
     expect(discoverAppFilterCandidates(pages, catalog)).toContainEqual({
       id: 'customer_segment',
-      sourceNames: ['Monthly revenue', 'segment_metrics'],
+      sourceNames: ['Monthly revenue', 'Segment Metrics'],
       affectedTileCount: 2,
       pageCount: 1,
     });
@@ -114,7 +114,7 @@ describe('App Studio filter discovery (UI-022)', () => {
     expect(filterTileMappingsForField(pages, catalog, 'customer_segment')).toEqual([
       expect.objectContaining({ key: 'overview:revenue', supported: true, mode: 'predicate' }),
       expect.objectContaining({ key: 'overview:segments', supported: true, mode: 'semantic' }),
-      expect.objectContaining({ key: 'detail:orders', supported: false, reason: expect.stringContaining('not exposed') }),
+      expect.objectContaining({ key: 'detail:orders', supported: false, reason: 'Orders has no Customer Segment field.' }),
     ]);
   });
 
@@ -196,8 +196,8 @@ describe('App Studio filter discovery (UI-022)', () => {
     }] as AppStudioBuildDraft['sources'];
 
     expect(discoverAppFilterCandidates(pages, [], {}, boundSources)).toEqual([
-      { id: 'order_date', sourceNames: ['sales::block::Orders by Region'], affectedTileCount: 1, pageCount: 1 },
-      { id: 'region', sourceNames: ['sales::block::Orders by Region'], affectedTileCount: 1, pageCount: 1 },
+      { id: 'order_date', sourceNames: ['Orders by Region'], affectedTileCount: 1, pageCount: 1 },
+      { id: 'region', sourceNames: ['Orders by Region'], affectedTileCount: 1, pageCount: 1 },
     ]);
   });
 
@@ -237,9 +237,9 @@ describe('App Studio filter discovery (UI-022)', () => {
     }] as unknown as AppStudioBuildDraft['sources'];
 
     expect(discoverAppFilterCandidates(pages, [], {}, boundSources)).toEqual([{
-      id: 'order_line_id', sourceNames: ['commerce::orders'], affectedTileCount: 1, pageCount: 1,
+      id: 'order_line_id', sourceNames: ['Orders'], affectedTileCount: 1, pageCount: 1,
     }, {
-      id: 'region', sourceNames: ['commerce::orders'], affectedTileCount: 1, pageCount: 1,
+      id: 'region', sourceNames: ['Orders'], affectedTileCount: 1, pageCount: 1,
     }]);
     expect(filterTileMappingsForField(pages, [], 'region', {}, boundSources)).toEqual([
       expect.objectContaining({
@@ -249,7 +249,7 @@ describe('App Studio filter discovery (UI-022)', () => {
     ]);
     expect(filterTileMappingsForField(pages, [], 'revenue', {}, boundSources)[0]).toMatchObject({
       supported: false,
-      reason: expect.stringContaining('not an approved physical field'),
+      reason: expect.stringMatching(/^Orders has no .+ field\.$/),
     });
   });
 

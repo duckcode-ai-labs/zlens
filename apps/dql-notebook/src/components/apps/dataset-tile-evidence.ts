@@ -4,6 +4,7 @@ import type {
   DashboardDatasetParameterEvidence,
   DashboardRunResponse,
 } from '../../api/client';
+import { plainSourceText } from './source-names';
 
 type DashboardRunTile = DashboardRunResponse['tiles'][number];
 
@@ -28,14 +29,14 @@ export function datasetTileNotices(tile: DashboardRunTile | undefined, options: 
   for (const issue of tile?.dataset?.unboundFilters ?? []) {
     const name = nameOf(issue.filterId);
     notices.push(issue.code === 'DATASET_TILE_EXCLUDED'
-      ? { key: `${issue.filterId}:${issue.code}`, kind: 'excluded', label: `Not filtered by ${name}`, detail: issue.message }
-      : { key: `${issue.filterId}:${issue.code}`, kind: 'not_linked', label: `Not filtered by ${name}`, detail: issue.message });
+      ? { key: `${issue.filterId}:${issue.code}`, kind: 'excluded', label: `Not filtered by ${name}`, detail: plainSourceText(issue.message) }
+      : { key: `${issue.filterId}:${issue.code}`, kind: 'not_linked', label: `Not filtered by ${name}`, detail: plainSourceText(issue.message) });
   }
   // Every other data tile reports what the server did with each page filter.
   // A Dataset tile already said so above; text tiles never carry a report.
   if (!tile?.dataset && tile?.tileType !== 'text') {
     for (const entry of tile?.filterReport?.notApplied ?? []) {
-      notices.push({ key: `${entry.filter}:${entry.code}`, kind: 'not_linked', label: `Not filtered by ${nameOf(entry.filter)}`, detail: entry.reason });
+      notices.push({ key: `${entry.filter}:${entry.code}`, kind: 'not_linked', label: `Not filtered by ${nameOf(entry.filter)}`, detail: plainSourceText(entry.reason) });
     }
   }
   if (tile?.dataset?.validation?.outcome === 'adapted') {

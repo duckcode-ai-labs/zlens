@@ -1020,7 +1020,19 @@ function formatKpiValue(column: string, raw: unknown, values: unknown[], format?
   return formatDisplayValue(column, raw, values, { compact: Math.abs(num) >= 100_000, format, ...(meta ? { meta } : {}) });
 }
 
-function KpiCard({ result, themeMode, chartConfig }: { result: QueryResult; themeMode: ThemeMode; chartConfig?: CellChartConfig }) {
+/**
+ * The largest KPI figure size (px) that fits the tile's width, so "$2,880.40"
+ * is never cut to "$2,880.…" at the default tile size. Without a measured
+ * width the usual responsive size applies.
+ */
+export function kpiValueFontSize(text: string, availableWidth?: number): number | undefined {
+  if (!availableWidth || availableWidth <= 0) return undefined;
+  // Monospace digits are about 0.62em wide; keep a little padding.
+  const fit = Math.floor((availableWidth - 16) / (Math.max(1, text.length) * 0.62));
+  return Math.max(16, Math.min(40, fit));
+}
+
+function KpiCard({ result, themeMode, chartConfig, availableWidth }: { result: QueryResult; themeMode: ThemeMode; chartConfig?: CellChartConfig; availableWidth?: number }) {
   const t = themes[themeMode];
   const palette = getPalette(chartConfig?.colorPalette, themeMode);
   const row = result.rows[0];
@@ -1030,6 +1042,7 @@ function KpiCard({ result, themeMode, chartConfig }: { result: QueryResult; them
     : measureColumns(result).find((c) => isNumericValue(row[c])) ?? result.columns[0];
 
   const displayVal = formatKpiValue(yCol, row[yCol], result.rows.map((item) => item[yCol]), chartConfig?.format, metaFor(result, yCol));
+  const kpiFit = kpiValueFontSize(displayVal, availableWidth);
 
   return (
     <div className="dql-kpi-card" style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', minHeight: 54, padding: '8px 4px', boxSizing: 'border-box', minWidth: 0 }}>
@@ -1041,9 +1054,10 @@ function KpiCard({ result, themeMode, chartConfig }: { result: QueryResult; them
           // resolve container-query units, which could collapse the KPI figure
           // to an almost invisible size. Viewport-independent bounds stay
           // readable in compact tiles and in the cloud embed.
-          fontSize: 'clamp(24px, 3.2vw, 40px)', fontWeight: 750, fontFamily: t.fontMono, color: palette[0] ?? t.accent,
+          fontSize: kpiFit ? `min(clamp(24px, 3.2vw, 40px), ${kpiFit}px)` : 'clamp(24px, 3.2vw, 40px)', fontWeight: 750, fontFamily: t.fontMono, color: palette[0] ?? t.accent,
           lineHeight: 1.1, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        }}
+          ...(kpiFit ? { '--kpi-fit': `${kpiFit}px` } : {}),
+        } as React.CSSProperties}
       >{displayVal}</span>
     </div>
   );
@@ -1144,7 +1158,7 @@ export function ChartOutput({ result, themeMode, chartConfig, availableHeight, a
 
   // KPI renders without toggle bar
   if (resolvedType === 'kpi') {
-    return <KpiCard result={result} themeMode={themeMode} chartConfig={chartConfig} />;
+    return <KpiCard result={result} themeMode={themeMode} chartConfig={chartConfig} availableWidth={availableWidth} />;
   }
 
   return (

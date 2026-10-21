@@ -12,6 +12,11 @@ export function tidyTitle(value?: string | null): string {
     .trim();
 }
 
+/** The App's name in the reader header: its name, never its slug, unless it has none. */
+export function appHeaderTitle(name?: string | null, id?: string | null): string {
+  return tidyTitle(name) || id || 'App';
+}
+
 export function formatBusinessLabel(value?: string | null): string {
   const clean = String(value ?? '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return 'Business';

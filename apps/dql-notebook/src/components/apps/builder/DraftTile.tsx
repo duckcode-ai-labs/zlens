@@ -27,6 +27,8 @@ import { pivotLayout, withPivotRollups } from '@zlens/core/apps/pivot';
 import { encodingFromQuery } from '@zlens/core/apps/viz-encoding';
 import { PivotTable } from '../PivotTable';
 import { KpiCard, usesKpiCard } from '../KpiCard';
+import { BarCapNote } from './BarCapNote';
+import { barCategoryCap, sortTouched, withDefaultBarSort } from './sort-top-n';
 
 export type DraftTileState = {
   /** Catalog item id of the Dataset the tile is built from. */
@@ -40,7 +42,20 @@ export type DraftTileState = {
   /** The chart type picked in Show Me; kept while the shelves still read that way. */
   chart?: string;
   title: string;
+  /** True once the author sets a sort or Top N; the bar default stops applying. */
+  sortChosen?: boolean;
 };
+
+/**
+ * The draft after a change, with a new bar chart sorted by its measure,
+ * highest first, until the author chooses a sort or Top N themselves.
+ */
+export function withDraftSortDefault(descriptor: DatasetDescriptor, previous: DraftTileState | null, next: DraftTileState): DraftTileState {
+  const sortChosen = Boolean(next.sortChosen || previous?.sortChosen || (previous && sortTouched(previous.query, next.query)));
+  if (sortChosen) return { ...next, sortChosen: true };
+  const query = withDefaultBarSort(next.query, draftVisualization(descriptor, next));
+  return query === next.query ? next : { ...next, query };
+}
 
 /** The chart type a draft is added as: its view, drawn the way its shelves read. */
 export function draftVisualization(descriptor: DatasetDescriptor, draft: DraftTileState): string {
@@ -128,6 +143,7 @@ export function DatasetQueryPreview({
   onResult?: (result: QueryResult | undefined) => void;
 }): JSX.Element {
   const [preview, setPreview] = useState<PreviewState>({ state: 'idle' });
+  const [barShowAll, setBarShowAll] = useState(false);
   const latest = useRef(0);
   // A pivot previews with its totals, as the added tile will run.
   const runQuery = visualization === 'pivot' && !query.detail
@@ -185,7 +201,14 @@ export function DatasetQueryPreview({
   if (visualization === 'pivot' && !query.detail) return <PivotTable result={shown} layout={pivotLayout(encoding ?? encodingFromQuery(query, 'pivot'), query)} themeMode={themeMode} maxHeight={height + 20} />;
   if (visualization === 'table' || visualization === 'pivot') return <TableOutput result={shown} themeMode={themeMode} maxHeight={height + 20} initialPageSize={10} />;
   if ((visualization === 'single_value' || visualization === 'kpi') && usesKpiCard(query, undefined)) return <KpiCard result={shown} query={query} label="This KPI" />;
-  return <ChartOutput result={shown} themeMode={themeMode} chartConfig={{ ...encodedChartConfig(shelved), chart: visualization === 'single_value' || visualization === 'kpi' ? 'kpi' : visualization.replace(/_/g, '-') } as CellChartConfig} availableHeight={height} />;
+  const chartConfig = { ...encodedChartConfig(shelved), chart: visualization === 'single_value' || visualization === 'kpi' ? 'kpi' : visualization.replace(/_/g, '-') } as CellChartConfig;
+  // Above 50 categories a bar chart draws the top 25, as the added tile will.
+  const barCap = barCategoryCap(shown, { chart: visualization, category: chartConfig.x, value: chartConfig.y, query, showAll: barShowAll });
+  if (!barCap.cappable) return <ChartOutput result={shown} themeMode={themeMode} chartConfig={chartConfig} availableHeight={height} />;
+  return <>
+    <BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} />
+    <ChartOutput result={barCap.result} themeMode={themeMode} chartConfig={chartConfig} availableHeight={Math.max(96, height - 24)} />
+  </>;
 }
 
 /** The new tile on the canvas, drawn live as fields are picked. */

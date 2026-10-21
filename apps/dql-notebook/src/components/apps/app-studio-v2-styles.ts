@@ -1050,7 +1050,7 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-topbar { background:var(--bg-2); }
 .studio-workspace { background:var(--bg-canvas); }
 .live-component-preview .dql-kpi-card { align-items:flex-start !important; justify-content:flex-end !important; padding:4px 6px 10px !important; }
-.live-component-preview .dql-kpi-value { font-family:inherit !important; font-size:clamp(26px,2.4vw,34px) !important; font-weight:600 !important; letter-spacing:-.02em; color:var(--text-primary) !important; }
+.live-component-preview .dql-kpi-value { font-family:inherit !important; font-size:min(clamp(26px,2.4vw,34px), var(--kpi-fit, 99px)) !important; font-weight:600 !important; letter-spacing:-.02em; color:var(--text-primary) !important; }
 .dataset-mark-controls.marks { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); border:0; }
 .dataset-mark-controls.marks:focus-within { position:static; width:auto; height:auto; margin:6px 0 0; overflow:visible; clip:auto; padding:6px 0 0; border-top:1px solid var(--border-subtle); }
 .dataset-mark-controls { border-top:0; padding:6px 2px 0; }
@@ -1624,6 +1624,31 @@ export const APP_STUDIO_V2_STYLES = `
   .add-data-row { grid-template-columns:minmax(0,1fr); }
   .add-data-action { justify-content:flex-start; padding:0 10px 10px 48px; }
 }
+/* The editor header stays in view: the Studio never scrolls itself (focus or scrollIntoView used to move it). */
+.dql-studio-v2 { overflow:clip; }
+.studio-topbar { position:sticky; top:0; }
+/* A tile's menu opens above its own table and the tiles after it, and stays visible while open. */
+.tile-tools.open { opacity:1; }
+.studio-component-card.menu-open { z-index:9; }
+.studio-component-card.menu-open > header { position:relative; z-index:8; }
+/* A short tile title wraps to a second line instead of reading "Lif…"; the full title is in its tooltip. */
+.studio-component-card > header strong { white-space:normal; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; line-height:1.25; min-width:0; overflow-wrap:break-word; }
+/* The tile's tools keep their own room in the header row, so they never cover the title or the trust dot.
+   A narrow tile puts them on their own row above the title instead of squeezing the title. */
+.studio-component-card > header { position:relative; flex-wrap:wrap; container-type:inline-size; }
+/* Basis 0 so a long title wraps inside itself instead of pushing the tools to another row; it still grows to its full width. */
+.studio-component-card > header strong { flex:1 1 0; max-width:max-content; }
+.studio-component-card > header .trust-dot { flex:none; }
+@container (max-width: 240px) {
+  .studio-component-card > header .tile-tools { order:-1; flex:1 0 100%; justify-content:flex-end; margin-left:0; }
+}
+.tile-filter-notice > span { min-width:0; overflow-wrap:anywhere; }
+/* Charts follow the tile's width when panels open and close. */
+.live-component-preview, .live-component-body, .studio-tile-preview-interactions { min-width:0; }
+.live-component-body { overflow:hidden; }
+.bar-cap-note button:hover { text-decoration:underline; }
+.same-name-origin { font-style:normal; font-weight:500; color:var(--text-tertiary); }
+.shelf-menu-row input[aria-label="Custom top N"] { width:110px; }
 @keyframes studio-skeleton { 50% { opacity:.45; } }
 @media (prefers-reduced-motion:reduce) { .data-step-activity .loading-mark, .data-step-skeleton li .add-data-mark, .data-step-skeleton li strong, .data-step-skeleton li small, .studio-canvas-frame, .policy-toggle i:after, .studio-review-toggle i:after, .dql-studio-v2-loading .loading-mark, .preview-state.loading .preview-loading-mark, .preview-skeleton i, .preview-skeleton path { transition:none; animation:none; } }
 `;

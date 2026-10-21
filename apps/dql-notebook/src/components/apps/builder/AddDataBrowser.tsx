@@ -12,6 +12,7 @@ import { groupDatasetFields } from './field-query';
 import { humanize, messageOf } from './studio-ui';
 import { TableDatasetDialog } from './TableDatasetDialog';
 import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
+import { appDataSameNameOrigins } from './app-data-names';
 import {
   TABLE_BECOMES_DATASET_HINT,
   addDataCatalogRequest,
@@ -83,7 +84,8 @@ export function AddDataBrowser({
   const [items, setItems] = useState<AppBlockRecommendation[]>(initialItems);
   const [catalogDomains, setCatalogDomains] = useState<Record<string, number>>({});
   const [nextCursor, setNextCursor] = useState<string | undefined>();
-  const [loading, setLoading] = useState(false);
+  // Catalog tabs load on open: start loading so the list never flashes "No certified data yet / 0".
+  const [loading, setLoading] = useState(initialTab !== 'tables' && !initialItems.length);
   const [error, setError] = useState<string | null>(null);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -146,6 +148,7 @@ export function AddDataBrowser({
   const chips = useMemo(() => addDataDomainChips(domainOptions, catalogDomains, appDomain), [domainOptions, catalogDomains, appDomain]);
   const split = useMemo(() => splitAddDataCatalog(items), [items]);
   const rows = tab === 'queries' ? split.queries : split.datasets;
+  const sameNames = useMemo(() => appDataSameNameOrigins(items), [items]);
   const noCertifiedData = !loading && !error && !query.trim() && items.every((item) => needsReview(item));
   const tableNeedle = query.trim().toLowerCase();
   const shownTables = (tables ?? []).filter((table) => !tableNeedle || `${table.schema ?? ''}.${table.name}`.toLowerCase().includes(tableNeedle)).slice(0, 200);
@@ -238,6 +241,7 @@ export function AddDataBrowser({
         onToggle={() => setExpandedId((current) => current === (item.sourceId ?? item.id) ? null : (item.sourceId ?? item.id))}
         onAdd={(allowReview) => void add(item, allowReview)}
         onRemove={() => onRemove(item.sourceId ?? item.id)}
+        sameNameOrigin={sameNames.get(item.id)}
         {...(fieldsEnabled && sourceCatalogKindLabel(item) === 'Saved query' ? { onAddFields: () => setAddingFieldsTo(item) } : {})}
       />)}
       {nextCursor ? <button type="button" className="add-data-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Show more'}</button> : null}
@@ -281,6 +285,7 @@ function AddDataRow({
   onAdd,
   onRemove,
   onAddFields,
+  sameNameOrigin,
 }: {
   item: AppBlockRecommendation;
   draft: Pick<AppStudioBuildDraft, 'sources' | 'pages'>;
@@ -294,6 +299,8 @@ function AddDataRow({
   onRemove: () => void;
   /** A saved query: open "Add fields". */
   onAddFields?: () => void;
+  /** Told apart from another item with the same name ("Table" or "Metrics"). */
+  sameNameOrigin?: string;
 }): JSX.Element {
   const sourceId = item.sourceId ?? item.id;
   const added = isAddedToApp(draft.sources, item);
@@ -304,7 +311,7 @@ function AddDataRow({
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} data-source-id={sourceId}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-      <div><strong title={item.name}>{humanize(item.name)}</strong><small>{meta}</small>{item.description ? <p>{item.description}</p> : null}</div>
+      <div><strong title={item.name}>{humanize(item.name)}{sameNameOrigin ? <em className="same-name-origin"> · {sameNameOrigin}</em> : null}</strong><small>{meta}</small>{item.description ? <p>{item.description}</p> : null}</div>
       <ChevronDown size={14} className="chevron" aria-hidden="true" />
     </button>
     <div className="add-data-action">

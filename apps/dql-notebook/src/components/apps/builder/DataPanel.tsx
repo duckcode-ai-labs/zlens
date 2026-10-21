@@ -7,6 +7,7 @@ import { groupDatasetFields, queryFieldNames } from './field-query';
 import { humanize } from './studio-ui';
 import { writeFieldDrag } from './ShelfEditor';
 import { FIELD_TILES_OFF_MESSAGE, SAVED_QUERY_NO_FIELDS, needsReview, sourceCatalogKindLabel, trustLabel } from './app-data';
+import { appDataSameNameOrigins } from './app-data-names';
 
 export type DataPanelTarget =
   | { kind: 'none' }
@@ -90,12 +91,13 @@ export function DataPanel({
   };
   const measureGlyph = <span className="sigma">Σ</span>;
   const activeCertified = active ? !needsReview(active) : false;
+  const sameNames = appDataSameNameOrigins(appData);
   return <div className="data-panel">
     <div className="dataset-picker">
       <button type="button" className="dataset-current" aria-expanded={pickerOpen} aria-haspopup="menu" onClick={() => setPickerOpen((open) => !open)}>
         <span className="dataset-icon"><TableGlyph /></span>
         <span className="dataset-text">
-          <strong>{active ? humanize(active.name) : appData.length ? 'Choose your data' : 'No data yet'}</strong>
+          <strong>{active ? humanize(active.name) : appData.length ? 'Choose your data' : 'No data yet'}{active && sameNames.get(active.id) ? <em className="same-name-origin"> · {sameNames.get(active.id)}</em> : null}</strong>
           {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceCatalogKindLabel(active)} · {trustLabel(activeCertified ? 'certified' : 'review')}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
         </span>
         <ChevronDown size={14} />
@@ -105,7 +107,7 @@ export function DataPanel({
         {appData.map((item) => {
           const certified = !needsReview(item);
           return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === active?.id} className={item.id === active?.id ? 'on' : ''} onClick={() => { onChoose(item); setPickerOpen(false); setSearch(''); }}>
-            <span><strong>{humanize(item.name)}</strong><small>{sourceCatalogKindLabel(item)} · {trustLabel(certified ? 'certified' : 'review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
+            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceCatalogKindLabel(item)} · {trustLabel(certified ? 'certified' : 'review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
             {item.id === active?.id ? <Check size={13} /> : null}
           </button>;
         })}

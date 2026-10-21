@@ -175,6 +175,31 @@ App does not have yet, the review lists it as **New data for this App:** with
 its type, trust and **Why:** line. **Apply N changes** adds that data to
 **This App's data**, the same way **Add to App** does.
 
+### Sort and show the top N
+
+Click **⋯** on a measure's pill on the shelves:
+
+- **Sort**: **Ascending** or **Descending** by that measure, or **Clear**.
+- **Show top**: **5**, **10**, **25**, **All**, or type another number and
+  click **Show**. The tile shows that many rows, highest first.
+
+A new bar chart over categories (not dates) is sorted by its measure,
+highest first. A bar chart with more than 50 categories draws the top 25 and
+says *Showing top 25 of 935 · Show all*. **Show all** draws every category;
+**Top 25** goes back. A tile with its own **Show top** number draws exactly
+that many.
+
+**Filters, sort and more** in **Tile settings** has the same **Sort by** and
+**Show top** controls. Both edit the same tile, so they always agree.
+
+After **Add to page** the new tile is not selected: the next field you click
+starts another new tile. To change a tile, click it first. With a tile
+selected, **Delete** removes it, also while you are in its **Tile settings**
+(but not while you type in a field).
+
+When two items in **This App's data** have the same name, each shows where it
+comes from, for example *Orders · Table* and *Orders · Metrics*.
+
 ## 4. Arrange pages
 
 - **Readers see this page as**: **Dashboard**, **Report** or **Custom layout**.
@@ -195,6 +220,11 @@ its type, trust and **Why:** line. **Apply N changes** adds that data to
 
 A date control needs no list of values, so you can create it before the page
 has run.
+
+Each field in the list says where it comes from, for example *from
+Customers*. The search ignores spaces, underscores and capitals, so
+*customer name* finds **Customer Name**. A tile that can't take the field says
+why in plain words, for example *Monthly Revenue has no Customer Name field.*
 
 A new filter starts linked to the tiles of the Dataset you picked the field
 from. When other Datasets in the App have an approved field with the same
