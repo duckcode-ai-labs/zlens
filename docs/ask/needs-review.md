@@ -40,7 +40,8 @@ certify first.
 3. Check the **Block name** and **Domain**, set an **Owner** and a clear
    description. Add a test if you can.
 4. Click **Certify**. If the draft has no Domain yet and your project has
-   Domains, Block Studio asks for one first.
+   Domains, Block Studio asks for one first: a Domain, or **Global /
+   cross-domain** for an answer that spans Domains.
 
 When it passes, the block is **Certified** and is saved in its Domain under its
 name. A certified block is available to Apps because it is certified, so it

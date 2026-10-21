@@ -4,19 +4,19 @@
  * TOC rail with scroll-tracked active section (compares the container's
  * scrollTop to section offsets — never scrollIntoView, so the app shell does
  * not jump), a 680px article with dark code blocks, a purple info callout,
- * the trust-labels grid, troubleshooting cards, image placeholders awaiting
- * real captures, and a "Was this helpful?" footer.
+ * the trust-labels grid, troubleshooting cards, and a "Was this helpful?"
+ * footer. No image placeholders: a step says what you see instead (D7).
  */
 import React, { useRef, useState } from 'react';
-import { Image, Info, MessageCircle } from 'lucide-react';
+import { Info, MessageCircle } from 'lucide-react';
 import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 
-const SECTIONS = [
-  { title: 'Installation', mins: '3 min' },
-  { title: 'Run CLI commands', mins: '3 min' },
-  { title: 'Connect your database', mins: '4 min' },
-  { title: 'Sync your dbt project', mins: '2 min' },
+export const SECTIONS = [
+  { title: 'Install and open', mins: '3 min' },
+  { title: 'Guided Setup', mins: '4 min' },
+  { title: 'Run CLI commands', mins: '2 min' },
+  { title: 'Build your first App', mins: '5 min' },
   { title: 'Create your first block', mins: '5 min' },
   { title: 'Ask your first question', mins: '3 min' },
   { title: 'Share your work', mins: '3 min' },
@@ -75,13 +75,10 @@ export function HelpDocsPage() {
     </h2>
   );
   const para: React.CSSProperties = { margin: '12px 0 0' };
-  const shot = (caption: string, placeholder: string) => (
-    <div style={{ margin: '16px 0 0' }}>
-      <div style={{ width: '100%', height: 300, borderRadius: 10, border: `1.5px dashed ${t.cellBorder}`, background: t.appBg, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 8, color: t.textMuted }}>
-        <Image size={22} strokeWidth={1.5} />
-        <span style={{ fontSize: 12, fontStyle: 'italic', maxWidth: 420, textAlign: 'center' }}>{placeholder}</span>
-      </div>
-      <div style={{ marginTop: 6, fontSize: 11.5, color: t.textMuted, textAlign: 'center' }}>{caption}</div>
+  const callout = (body: React.ReactNode) => (
+    <div style={{ margin: '14px 0 0', display: 'flex', gap: 9, alignItems: 'flex-start', border: '1px solid var(--status-info-border)', background: 'var(--accent-dim)', borderRadius: 10, padding: '11px 13px' }}>
+      <Info size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
+      <span style={{ fontSize: 12.5, lineHeight: 1.6, color: t.textSecondary }}>{body}</span>
     </div>
   );
   const troubleCard = (title: string, body: React.ReactNode) => (
@@ -138,43 +135,44 @@ export function HelpDocsPage() {
         <div style={{ width: 'min(680px, 100% - 56px)', margin: '0 auto', padding: '34px 0 80px', fontSize: 14, lineHeight: 1.7, color: t.textSecondary }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.accent }}>Guide</div>
           <h1 style={{ margin: '6px 0 0', fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em', color: t.textPrimary, lineHeight: 1.25 }}>Getting started with ZLens</h1>
-          <div style={{ marginTop: 8, fontSize: 13.5, color: t.textMuted }}>From install to your first governed answer — about 20 minutes.</div>
+          <div style={{ marginTop: 8, fontSize: 13.5, color: t.textMuted }}>From a database file or a dbt project to your first published App — about 20 minutes.</div>
 
           <div ref={setSectionRef(0)} style={{ marginTop: 36 }}>
-            {h2('01', 'Installation')}
-            <p style={para}>ZLens runs locally next to your dbt project. The recommended setup creates a <span style={inlineCode}>dql/</span> workspace and installs the CLI inside it, so every repository keeps the version it was tested with.</p>
-            <pre style={{ ...codeBlock, margin: '14px 0 0' }}>cd my-dbt-project{'\n'}dbt parse{'\n'}npx create-zlens-app@latest dql{'\n'}cd dql{'\n'}npm install{'\n'}npm run doctor{'\n'}npm run notebook</pre>
-            <div style={{ margin: '14px 0 0', display: 'flex', gap: 9, alignItems: 'flex-start', border: '1px solid var(--status-info-border)', background: 'var(--accent-dim)', borderRadius: 10, padding: '11px 13px' }}>
-              <Info size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
-              <span style={{ fontSize: 12.5, lineHeight: 1.6, color: t.textSecondary }}><strong>Requirements:</strong> Node 20+, git, and a dbt project (dbt-core 1.6+ or dbt Cloud). ZLens can install optional DuckDB and Snowflake drivers into the project when needed; Databricks uses the built-in HTTPS connector.</span>
-            </div>
-            {shot('The workbench opens on localhost with your project loaded.', 'Screenshot: terminal after `npm run notebook` opens the workbench')}
+            {h2('01', 'Install and open')}
+            <p style={para}>Install the CLI once, then open the folder that holds your data: a database file (DuckDB) or a dbt project.</p>
+            <pre style={{ ...codeBlock, margin: '14px 0 0' }}>npm i -g @zlens/cli --allow-scripts=better-sqlite3{'\n'}zlens notebook ./shop</pre>
+            <p style={para}>In a folder with no ZLens project, ZLens asks <strong>No ZLens project here. Create one? [Y/n]</strong>. Press Enter: a folder with a database file and no dbt becomes a <strong>Database only</strong> project with a connection to the file; a folder with <span style={inlineCode}>dbt_project.yml</span> becomes a dbt project. The workbench then opens on Guided Setup.</p>
+            <p style={para}>Without a terminal, ZLens prints the one command to run instead: <span style={inlineCode}>npx zlens notebook ./shop --yes</span>.</p>
+            {callout(<><strong>Requirements:</strong> Node 20, 22 or 24, and a database ZLens can read (a DuckDB file, PostgreSQL, Snowflake and more). A dbt project is optional. Working in one of the sample repositories? Follow its README; it already holds a ZLens project.</>)}
           </div>
 
           <div ref={setSectionRef(1)} style={{ marginTop: 44 }}>
-            {h2('02', 'Run CLI commands')}
-            <p style={para}>A project-local install puts the executable in <span style={inlineCode}>node_modules/.bin</span>. npm scripts can use it automatically; your normal shell cannot. Use a starter script for daily commands or <span style={inlineCode}>npm exec -- zlens</span> for any other command.</p>
-            <pre style={codeBlock}>npm run doctor       <span style={comment}># project setup and readiness</span>{'\n'}npm run notebook     <span style={comment}># local browser UI</span>{'\n'}npm run sync         <span style={comment}># refresh dbt state</span>{'\n'}npm run compile      <span style={comment}># write dql-manifest.json</span>{'\n'}npm exec -- zlens model list{'\n'}npm exec -- zlens --help</pre>
-            <p style={para}>A bare <span style={inlineCode}>zlens ...</span> command requires the optional global install: <span style={inlineCode}>npm install -g @zlens/cli</span>. See the <a href={CLI_REFERENCE_URL} target="_blank" rel="noreferrer" style={{ color: t.accent, textDecoration: 'none' }}>complete CLI reference</a> for all commands, subcommands, flags, examples, and exit codes.</p>
+            {h2('02', 'Guided Setup')}
+            <p style={para}>Setup asks where your data model lives and picks the card for you from what the folder holds: <strong>Database only</strong>, <strong>dbt project</strong>, or <strong>Open an existing ZLens project</strong>.</p>
+            <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <li><strong>Connect your database.</strong> A database file in the folder is already connected and tested for you; otherwise fill in the form and <strong>Save connection</strong>, which tests before saving.</li>
+              <li><strong>Which schemas should ZLens read?</strong> The schemas are listed as soon as the test passes. Tick the ones that hold your tables and click <strong>Apply and synchronize</strong>. ZLens reads tables, columns, keys and comments — never rows.</li>
+              <li><strong>Draft my models</strong> drafts your tables and the joins between them, each checked on the data. You review them in Modeling.</li>
+              <li>AI is optional. Finish, and start where you like.</li>
+            </ol>
+            <p style={para}>Technical settings (index mode, semantic adapters, dbt profile import) are under <strong>Advanced</strong>. Setup remembers where you are: stop the notebook halfway and it opens on the same step next time.</p>
           </div>
 
           <div ref={setSectionRef(2)} style={{ marginTop: 44 }}>
-            {h2('03', 'Connect your database')}
-            <p style={para}>Open <strong>Settings → Database</strong>. Pick your warehouse and the form adjusts to what that warehouse needs — DuckDB uses a file path, while Snowflake supports password, key-pair, SSO, OAuth, and workload-identity authentication.</p>
-            <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <li>Choose your warehouse from the dropdown.</li>
-              <li>Fill the connection fields (credentials stay in <span style={inlineCode}>.dql/</span>, never leave your machine).</li>
-              <li>Click <strong>Test connection</strong> — you should see model count and latency.</li>
-              <li>Save. The status dot in the sidebar turns green.</li>
-            </ol>
-            {shot('A successful test shows models found and round-trip time.', 'Screenshot: Settings → Database with a passing test')}
+            {h2('03', 'Run CLI commands')}
+            <p style={para}>With the global install, run <span style={inlineCode}>zlens …</span> anywhere. A project-local install puts the executable in <span style={inlineCode}>node_modules/.bin</span>: use the project&apos;s npm scripts or <span style={inlineCode}>npm exec -- zlens</span>.</p>
+            <pre style={codeBlock}>zlens doctor          <span style={comment}># project setup and readiness</span>{'\n'}zlens notebook        <span style={comment}># local browser UI</span>{'\n'}zlens sync warehouse  <span style={comment}># read the chosen schemas again</span>{'\n'}zlens sync dbt        <span style={comment}># refresh dbt state (dbt projects)</span>{'\n'}zlens --help</pre>
+            <p style={para}>See the <a href={CLI_REFERENCE_URL} target="_blank" rel="noreferrer" style={{ color: t.accent, textDecoration: 'none' }}>complete CLI reference</a> for all commands, flags, examples, and exit codes.</p>
           </div>
 
           <div ref={setSectionRef(3)} style={{ marginTop: 44 }}>
-            {h2('04', 'Sync your dbt project')}
-            <p style={para}>ZLens reads your dbt manifest and keeps ownership where it belongs: models, columns, tests, and lineage stay in dbt. ZLens layers governed context on top — domains, blocks, skills.</p>
-            <pre style={codeBlock}>npm run sync      <span style={comment}># runs zlens sync dbt with the local CLI</span></pre>
-            <p style={para}>After a sync, the <strong>Domains</strong> page shows your models grouped by folder, ready to bind into business entities. Re-run after any dbt change.</p>
+            {h2('04', 'Build your first App')}
+            <p style={para}>Open <strong>Apps → Build new App</strong>, give it a name, and choose its data. The <strong>Data</strong> list shows every table, saved query and Metrics in one place. Tables setup drafted say <strong>Drafted — review to use</strong>; tables your model binds say <strong>Modeled</strong>.</p>
+            <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <li>On a table, click <strong>Check and add</strong>. ZLens checks what one row is and which numbers add up, then adds it with fields.</li>
+              <li>On the canvas, click fields — a number and a date make a line chart, a number and a name make a bar chart, one number makes a KPI.</li>
+              <li>Add filters, then <strong>Publish</strong>. Readers see the numbers with who checked the data.</li>
+            </ol>
           </div>
 
           <div ref={setSectionRef(4)} style={{ marginTop: 44 }}>
@@ -186,7 +184,6 @@ export function HelpDocsPage() {
               <li>Add parameters (like <span style={inlineCode}>{'${region}'}</span>) so the block is reusable.</li>
               <li>Run it, check the result, and <strong>Save draft</strong>. Certification happens in review.</li>
             </ol>
-            {shot('The semantic picker searches all certified measures — no SQL required.', 'Screenshot: Visual Builder with the semantic picker open')}
           </div>
 
           <div ref={setSectionRef(5)} style={{ marginTop: 44 }}>
@@ -208,15 +205,15 @@ export function HelpDocsPage() {
           <div ref={setSectionRef(6)} style={{ marginTop: 44 }}>
             {h2('07', 'Share your work')}
             <p style={para}>Everything you author is a file in Git. The <strong>Source control</strong> page walks you through it without git commands: pick changes, describe them in plain words, share to your branch, and open a review request. Nothing reaches main without an approval.</p>
-            {shot('Three steps: pick, describe, share — then ask for review.', 'Screenshot: Source control with the guided share flow')}
           </div>
 
           <div ref={setSectionRef(7)} style={{ marginTop: 44 }}>
             {h2('08', 'Troubleshooting')}
             <div style={{ margin: '14px 0 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {troubleCard('“dbt manifest not found”', <>Run <span style={inlineCode}>dbt parse</span> in the dbt project, then <span style={inlineCode}>npm run sync</span> from its ZLens workspace. ZLens needs a compiled manifest to read lineage.</>)}
+              {troubleCard('“No ZLens project here”', <>Press Enter to create one, or run <span style={inlineCode}>npx zlens notebook &lt;folder&gt; --yes</span>. A folder with a database file becomes Database only; a folder with <span style={inlineCode}>dbt_project.yml</span> becomes a dbt project.</>)}
+              {troubleCard('“dbt manifest not found”', <>Run <span style={inlineCode}>dbt parse</span> in the dbt project, then <span style={inlineCode}>zlens sync dbt</span> from its ZLens workspace. ZLens needs a compiled manifest to read lineage.</>)}
               {troubleCard('“zlens: command not found”', <>A project-local install uses <span style={inlineCode}>npm run ...</span> or <span style={inlineCode}>npm exec -- zlens ...</span>. Install the CLI globally only if you want bare <span style={inlineCode}>zlens ...</span> commands.</>)}
-              {troubleCard('Connection test fails', <>Check <span style={inlineCode}>npm run doctor</span> and <strong>Settings → Database</strong>. Test candidate credentials before saving them.</>)}
+              {troubleCard('Connection test fails', <>Check <span style={inlineCode}>zlens doctor</span> and <strong>Settings → Database</strong>. A DuckDB file written by a newer DuckDB (2.x) cannot be opened yet; rebuild it with <span style={inlineCode}>pip install &apos;duckdb&lt;1.5&apos;</span>.</>)}
               {troubleCard('AI answers feel wrong', <>Add a skill with your definitions (&quot;revenue = recognized, not bookings&quot;) and certify more blocks. Trust labels tell you which route produced each answer.</>)}
             </div>
           </div>

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parse } from './parser.js';
+import { Parser, parse } from './parser.js';
 import { NodeKind } from '../ast/nodes.js';
 import { analyze } from '../semantic/analyzer.js';
 
@@ -1044,4 +1044,17 @@ describe('Block declarations — Phase A schema enforcement', () => {
     }
     expect(true).toBe(true);
   }, 5000);
+});
+
+describe('parse error message (B10)', () => {
+  it('names the line, column and token of the first problem, not only the file', () => {
+    const source = '// dql-format: 1\n\nblock "x" {\n  query = """SELECT 1"""\n}\n  owner = "sales-analytics"\n';
+    let message = '';
+    try {
+      new Parser(source, '<block-invocation>').parse();
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+    expect(message).toMatch(/^Parse errors in <block-invocation>: line 6, column 3: Unexpected token 'owner'/);
+  });
 });

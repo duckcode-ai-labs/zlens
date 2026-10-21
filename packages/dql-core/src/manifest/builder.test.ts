@@ -678,6 +678,25 @@ describe('buildManifest block extraction', () => {
     expect(manifest.lineage.domainTrust.NBA).toMatchObject({ total: 1, certified: 0 });
   });
 
+  it('never turns the old welcome notebook placeholder "Example Customer Rollup" into a block (D7)', () => {
+    mkdirSync(join(tmpDir, 'notebooks'), { recursive: true });
+    const starter = (sql: string) => `block "Example Customer Rollup" {
+  domain = "Customer"
+  type = "custom"
+  status = "draft"
+  owner = "analytics"
+  query = """
+    ${sql}
+  """
+}`;
+    writeFileSync(join(tmpDir, 'notebooks', 'welcome.dqlnb'), JSON.stringify({ version: 1, cells: [{ id: 'dql-example', type: 'dql', source: starter('SELECT 1 AS customer_count') }] }));
+    expect(buildManifest({ projectRoot: tmpDir, dqlVersion: 'test' }).blocks['Example Customer Rollup']).toBeUndefined();
+
+    // Someone replaced the placeholder query: it is their block now.
+    writeFileSync(join(tmpDir, 'notebooks', 'welcome.dqlnb'), JSON.stringify({ version: 1, cells: [{ id: 'dql-example', type: 'dql', source: starter('SELECT COUNT(*) AS customer_count FROM customers') }] }));
+    expect(buildManifest({ projectRoot: tmpDir, dqlVersion: 'test' }).blocks['Example Customer Rollup']?.sql).toContain('FROM customers');
+  });
+
   it('extracts notebook DQL block SQL and metadata from the parsed block', () => {
     mkdirSync(join(tmpDir, 'notebooks'), { recursive: true });
     writeFileSync(join(tmpDir, 'notebooks', 'analysis.dqlnb'), JSON.stringify({

@@ -1556,6 +1556,17 @@ function stringArrayValue(value: unknown): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
+/**
+ * The placeholder block older welcome notebooks carried ("Example Customer
+ * Rollup", `SELECT 1 AS customer_count`). It is not data anyone can use, so it
+ * never becomes a block: it showed up in every new App's Data step (design D7).
+ * Only the untouched starter is skipped; an edited copy is a real block.
+ */
+export function isStarterPlaceholderBlock(blockName: string | undefined, sql: string | undefined): boolean {
+  if (blockName !== 'Example Customer Rollup') return false;
+  return (sql ?? '').replace(/\s+/g, ' ').trim().replace(/;$/, '').toLowerCase() === 'select 1 as customer_count';
+}
+
 /** Extract blocks declared inside notebook DQL cells into the blocks map. */
 function extractNotebookBlocks(notebooks: Record<string, ManifestNotebook>): Record<string, ManifestBlock> {
   const blocks: Record<string, ManifestBlock> = {};
@@ -1563,6 +1574,8 @@ function extractNotebookBlocks(notebooks: Record<string, ManifestNotebook>): Rec
   for (const [nbPath, nb] of Object.entries(notebooks)) {
     for (const cell of nb.cells) {
       if (cell.type !== 'dql' || !cell.blockName) continue;
+      const placeholder = /query\s*=\s*"""([\s\S]*?)"""/i.exec(cell.source)?.[1];
+      if (isStarterPlaceholderBlock(cell.blockName, placeholder)) continue;
 
       // Only add if not already found as a standalone block file
       if (!blocks[cell.blockName]) {

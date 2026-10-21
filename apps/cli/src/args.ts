@@ -37,6 +37,8 @@ export interface CLIFlags {
   skipTests: boolean;
   save?: boolean;
   force?: boolean;
+  /** `zlens notebook <folder> --yes`: create a project in a folder that has none, without asking. */
+  yes?: boolean;
   /** `zlens init --warehouse-first`: model the warehouse directly, no dbt (RFC 0007). */
   warehouseFirst?: boolean;
   http?: boolean;
@@ -235,6 +237,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       flags.skipTests = true;
     } else if (arg === '--save') {
       flags.save = true;
+    } else if (arg === '--yes' || arg === '-y') {
+      flags.yes = true;
     } else if (arg === '--warehouse-first') {
       flags.warehouseFirst = true;
     } else if (arg === '--force' || arg === '-f') {

@@ -72,6 +72,19 @@ describe('where the data model lives', () => {
     expect(initialModelSource({ existing })).toBe('warehouse');
   });
 
+  it('pre-selects the card from what the folder holds (D7)', () => {
+    const warehouse = existingProjectFromStatus(warehouseProject);
+    // A new Database only project (zlens init found a DuckDB file) opens on Database only…
+    expect(initialModelSource({ existing: warehouse, hasDomains: false })).toBe('warehouse');
+    // …one whose model is already written opens as an existing project.
+    expect(initialModelSource({ existing: warehouse, hasDomains: true })).toBe('existing');
+    // A folder with only a database connection and no dbt project: Database only.
+    expect(initialModelSource({ existing: null, databaseFileConnection: true })).toBe('warehouse');
+    // dbt keeps #143's card, even with Domains or a database file.
+    expect(initialModelSource({ existing: existingProjectFromStatus(dbtProject), hasDomains: true, databaseFileConnection: true })).toBe('dbt');
+    expect(initialModelSource({ existing: null, dbtProjectFound: true, databaseFileConnection: true })).toBe('dbt');
+  });
+
   it('Database only is unavailable for a folder that already reads dbt, and says to choose Both', () => {
     const dbtExisting = existingProjectFromStatus(dbtProject);
     const hybridExisting = existingProjectFromStatus(hybridProject);

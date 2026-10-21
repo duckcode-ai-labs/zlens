@@ -33,13 +33,15 @@ import { DbtProjectEditor } from '../settings/DbtProjectEditor';
 import {
   additionalDiscoveredSchemaCount,
   formatMetadataScopeEditor,
+  looksLikeGeneratedId,
   metadataScopeIncludes,
   parseMetadataScopeEditor,
   toggleAdditionalMetadataScope,
 } from './connection-metadata-scope';
+import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 
-interface ConnectionInfo {
+export interface ConnectionInfo {
   default: string;
   connections: Record<string, any>;
   activeConnection?: { source: 'dql_config' | 'dbt_profile' | 'runtime'; driver: string; profileId?: string } | null;
@@ -163,10 +165,16 @@ function chooseFallbackDefault(connections: Record<string, any>): string | undef
 
 export function ConnectionPanel({
   variant = 'panel',
+  setupSource = null,
+  initialInfo,
   onConfigured,
   onMetadataSynced,
 }: {
   variant?: 'panel' | 'page' | 'setup';
+  /** Guided Setup's answer to "Where does your data model live?": Database only hides dbt profiles (design D7). */
+  setupSource?: 'dbt' | 'warehouse' | 'both' | 'existing' | null;
+  /** Connections to show before the server answers (and in tests). */
+  initialInfo?: ConnectionInfo;
   onConfigured?: (detail: string) => void;
   /** Apply and synchronize (or Refresh metadata) finished: Guided Setup can draft models from it. */
   onMetadataSynced?: (result: { status: WarehouseMetadataStatus; warehouseCatalog?: WarehouseCatalogSummary }) => void;
@@ -180,7 +188,7 @@ export function ConnectionPanel({
   const isPage = variant === 'page';
   const isSetup = variant === 'setup';
 
-  const [info, setInfo] = useState<ConnectionInfo | null>(null);
+  const [info, setInfo] = useState<ConnectionInfo | null>(initialInfo ?? null);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // connection key being edited
@@ -194,12 +202,18 @@ export function ConnectionPanel({
   const [providerReadiness, setProviderReadiness] = useState<ProviderSettings[]>([]);
   const [dbtConfigured, setDbtConfigured] = useState(false);
   const [dbtPreparation, setDbtPreparation] = useState<DbtOnboardingJob | null>(null);
-  const [metadataMode, setMetadataMode] = useState<ConnectionMetadataScopeV1['mode']>('dbt_relations');
+  const [metadataMode, setMetadataMode] = useState<ConnectionMetadataScopeV1['mode']>(initialInfo?.modelingMode === 'warehouse-first' ? 'selected_scopes' : 'dbt_relations');
   const [metadataScopeText, setMetadataScopeText] = useState('');
   const [metadataSyncing, setMetadataSyncing] = useState(false);
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null);
   const [metadataDiscovery, setMetadataDiscovery] = useState<WarehouseMetadataDiscovery | null>(null);
   const [metadataDiscovering, setMetadataDiscovering] = useState(false);
+  // Only the latest connection test may set the result: an older, slower test
+  // (or one racing a save on a DuckDB file) never overrides a newer one.
+  const testSeqRef = useRef(0);
+  const persistingRef = useRef(false);
+  // Guided Setup lists the schemas on its own once the test passes, once per connection.
+  const autoDiscoveredRef = useRef<string | null>(null);
 
   // Edit form state (inline editor for the "manage all connections" list)
   const [editName, setEditName] = useState('');
@@ -234,14 +248,22 @@ export function ConnectionPanel({
   useEffect(() => {
     if (!info || (isPage && state.settingsTab !== 'database')) return;
     if (!Object.values(info.connections).some((candidate) => !isPlaceholderLocalConnection(candidate))) return;
+    // A save tests the connection it just wrote; testing it a second time at
+    // once could race it on the same database file.
+    if (persistingRef.current) return;
     let active = true;
+    const seq = ++testSeqRef.current;
     setTesting(true);
     void api.testConnection()
-      .then((result) => { if (active) setTestResult(result); })
-      .catch((error) => {
-        if (active) setTestResult({ ok: false, message: error instanceof Error ? error.message : String(error) });
+      .then((result) => {
+        if (!active || seq !== testSeqRef.current) return;
+        setTestResult(result);
+        if (result.ok) onConfigured?.(result.message);
       })
-      .finally(() => { if (active) setTesting(false); });
+      .catch((error) => {
+        if (active && seq === testSeqRef.current) setTestResult({ ok: false, message: error instanceof Error ? error.message : String(error) });
+      })
+      .finally(() => { if (active && seq === testSeqRef.current) setTesting(false); });
     return () => { active = false; };
   }, [connectionIdentity, isPage, state.settingsTab]);
 
@@ -310,9 +332,11 @@ export function ConnectionPanel({
       setTestResult({ ok: false, message: 'Add or import a connection before testing.' });
       return;
     }
+    const seq = ++testSeqRef.current;
     setTesting(true);
     setTestResult(null);
     const result = await api.testConnection();
+    if (seq !== testSeqRef.current) return;
     setTestResult(result);
     if (result.ok) onConfigured?.(result.message);
     setTesting(false);
@@ -350,6 +374,18 @@ export function ConnectionPanel({
       setMetadataDiscovering(false);
     }
   };
+
+  // Guided Setup asks one plain question, "Which schemas should ZLens read?",
+  // so it lists the schemas as soon as the connection test passes (design D7);
+  // the button stays to list them again.
+  useEffect(() => {
+    if (!isSetup || !testResult?.ok || !info?.default || metadataDiscovering || metadataDiscovery) return;
+    if (autoDiscoveredRef.current === connectionIdentity) return;
+    autoDiscoveredRef.current = connectionIdentity;
+    void handleMetadataDiscovery();
+    // handleMetadataDiscovery reads the same state this effect depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSetup, testResult?.ok, info?.default, connectionIdentity, metadataDiscovering, metadataDiscovery]);
 
   const setAdditionalMetadataScope = (
     catalogOrDatabase: string,
@@ -467,6 +503,7 @@ export function ConnectionPanel({
     previousName: string | null;
   }): Promise<boolean> => {
     if (!info) return false;
+    persistingRef.current = true;
     setSaving(true);
     setSaveMsg(null);
 
@@ -503,6 +540,7 @@ export function ConnectionPanel({
       setAddingNew(false);
       // Re-test the hot-swapped connection and refresh schema
       try {
+        testSeqRef.current += 1;
         setTesting(true);
         const result = await api.testConnection();
         setTestResult(result);
@@ -529,6 +567,7 @@ export function ConnectionPanel({
       if (rolledBack) setInfo(rolledBack);
       setSaveMsg(`Test or save failed. Previous connection preserved: ${e.message}`);
     } finally {
+      persistingRef.current = false;
       setSaving(false);
     }
     return ok;
@@ -1115,16 +1154,30 @@ export function ConnectionPanel({
   const selectedAdditionalMetadataScopes = parseMetadataScopeEditor(metadataScopeText);
   // RFC 0007: without dbt, the selected schemas are the whole modeled warehouse.
   const warehouseFirst = info?.modelingMode === 'warehouse-first';
+  // Guided Setup asks one plain question; index mode, the typed list and the
+  // index details sit under Advanced (design D7).
+  const setupSchemaQuestion = isSetup && setupSource !== 'dbt';
+  const observedTarget = metadataStatus?.observedTarget
+    ? [
+      metadataStatus.observedTarget.accountOrWorkspace,
+      metadataStatus.observedTarget.role,
+      metadataStatus.observedTarget.warehouse,
+      metadataStatus.observedTarget.defaultCatalogOrDatabase,
+      metadataStatus.observedTarget.defaultSchema,
+    ].filter((value): value is string => Boolean(value) && !looksLikeGeneratedId(String(value)))
+    : [];
   const metadataScopeEditor = connected ? (
     <div style={{ maxWidth: 640, border: `1px solid ${t.cellBorder}`, borderRadius: 12, background: t.cellBg, padding: '16px 18px', display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
-        <div style={{ fontSize: 14, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Metadata scope</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>{setupSchemaQuestion ? 'Which schemas should ZLens read?' : 'Metadata scope'}</div>
         <div style={{ fontSize: 11.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
-          ZLens synchronizes this authorized scope into local SQLite. Warm Ask, Notebook, and Block Studio searches use that index instead of scanning the warehouse.
+          {setupSchemaQuestion
+            ? 'Tick the schemas that hold your tables. ZLens reads their tables, columns, keys and comments — never their rows.'
+            : 'ZLens synchronizes this authorized scope into local SQLite. Warm Ask, Notebook, and Block Studio searches use that index instead of scanning the warehouse.'}
         </div>
       </div>
       <div style={{ border: `1px solid ${t.cellBorder}`, borderRadius: 9, padding: '11px 12px', background: t.editorBg, display: 'flex', flexDirection: 'column', gap: 9 }}>
-        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary, fontFamily: t.font }}>
+        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary, fontFamily: t.font, display: setupSchemaQuestion && warehouseFirst ? 'none' : undefined }}>
           {warehouseFirst ? (
             <>
               <strong style={{ color: t.textPrimary }}>Choose the schemas to model.</strong>
@@ -1154,7 +1207,7 @@ export function ConnectionPanel({
                 ? <>{additionalDiscoveredSchemaCount(metadataDiscovery).toLocaleString()} schema(s) available</>
                 : <>{metadataDiscovery.dbtScopes.reduce((count, scope) => count + scope.schemas.length, 0).toLocaleString()} dbt-covered schema(s)
                   {' · '}{additionalDiscoveredSchemaCount(metadataDiscovery).toLocaleString()} additional schema(s) available</>}
-              {' · '}{metadataDiscovery.queryCount.toLocaleString()} discovery query(s)
+              {setupSchemaQuestion ? null : <>{' · '}{metadataDiscovery.queryCount.toLocaleString()} discovery query(s)</>}
             </div>
             {metadataDiscovery.scopes.map((scope) => (
               <div key={scope.catalogOrDatabase} style={{ borderTop: `1px solid ${t.cellBorder}`, paddingTop: 7 }}>
@@ -1204,6 +1257,7 @@ export function ConnectionPanel({
           </div>
         ) : null}
       </div>
+      <AdvancedDisclosure enabled={isSetup} hint="index mode, typed schema list and index details" t={t}>
       <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontFamily: t.font }}>
         <span style={{ fontSize: 11.5, fontWeight: 650, color: t.textSecondary }}>Index mode</span>
         <select
@@ -1247,6 +1301,19 @@ export function ConnectionPanel({
           {metadataStatus.capturedAt ? ` · ${new Date(metadataStatus.capturedAt).toLocaleString()}` : ''}
         </div>
       ) : null}
+      {isSetup ? (
+        <div>
+          <button
+            type="button"
+            onClick={() => void handleMetadataRefresh()}
+            disabled={metadataSyncing || metadataStatus?.state === 'missing'}
+            style={{ height: 30, padding: '0 12px', borderRadius: 8, border: `1px solid ${t.cellBorder}`, background: t.cellBg, color: t.textSecondary, fontSize: 11.5, fontWeight: 650, cursor: metadataSyncing ? 'not-allowed' : 'pointer', fontFamily: t.font }}
+          >
+            Refresh metadata
+          </button>
+        </div>
+      ) : null}
+      </AdvancedDisclosure>
       {info?.warehouseCatalog ? (
         <div style={{ fontSize: 11.5, color: info.warehouseCatalog.error ? 'var(--status-error)' : info.warehouseCatalog.relations ? 'var(--status-success)' : 'var(--status-warning)', fontFamily: t.font }}>
           {info.warehouseCatalog.error
@@ -1256,15 +1323,9 @@ export function ConnectionPanel({
               : 'Modeling catalog not synchronized · Apply and synchronize to read tables, keys and comments for Modeling'}
         </div>
       ) : null}
-      {metadataStatus?.observedTarget ? (
+      {!isSetup && observedTarget.length ? (
         <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.fontMono }}>
-          {[
-            metadataStatus.observedTarget.accountOrWorkspace,
-            metadataStatus.observedTarget.role,
-            metadataStatus.observedTarget.warehouse,
-            metadataStatus.observedTarget.defaultCatalogOrDatabase,
-            metadataStatus.observedTarget.defaultSchema,
-          ].filter(Boolean).join(' · ')}
+          {observedTarget.join(' · ')}
         </div>
       ) : null}
       {metadataMessage ? (
@@ -1281,14 +1342,16 @@ export function ConnectionPanel({
         >
           {metadataSyncing ? 'Synchronizing…' : 'Apply and synchronize'}
         </button>
-        <button
-          type="button"
-          onClick={() => void handleMetadataRefresh()}
-          disabled={metadataSyncing || metadataStatus?.state === 'missing'}
-          style={{ height: 32, padding: '0 13px', borderRadius: 8, border: `1px solid ${t.cellBorder}`, background: t.cellBg, color: t.textSecondary, fontSize: 12, fontWeight: 650, cursor: metadataSyncing ? 'not-allowed' : 'pointer', fontFamily: t.font }}
-        >
-          Refresh metadata
-        </button>
+        {isSetup ? null : (
+          <button
+            type="button"
+            onClick={() => void handleMetadataRefresh()}
+            disabled={metadataSyncing || metadataStatus?.state === 'missing'}
+            style={{ height: 32, padding: '0 13px', borderRadius: 8, border: `1px solid ${t.cellBorder}`, background: t.cellBg, color: t.textSecondary, fontSize: 12, fontWeight: 650, cursor: metadataSyncing ? 'not-allowed' : 'pointer', fontFamily: t.font }}
+          >
+            Refresh metadata
+          </button>
+        )}
       </div>
       {!testResult?.ok ? (
         <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.font }}>Test the active connection before applying its metadata scope.</div>
@@ -1300,7 +1363,9 @@ export function ConnectionPanel({
       <div>
         <div style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Database connection</div>
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
-          Import a dbt profile or configure the warehouse directly. The candidate is tested before it replaces the active connection.
+          {isSetup && setupSource === 'warehouse'
+            ? 'Connect the database directly. ZLens tests it before it replaces the active connection.'
+            : 'Import a dbt profile or configure the warehouse directly. The candidate is tested before it replaces the active connection.'}
         </div>
       </div>
       <div style={{ border: `1px solid ${testResult?.ok ? 'var(--status-success-border)' : 'var(--border-subtle)'}`, borderRadius: 12, background: t.cellBg, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 12, maxWidth: 640 }}>
@@ -1309,7 +1374,7 @@ export function ConnectionPanel({
         </span>
         <div style={{ flex: 1, minWidth: 0, fontFamily: t.font }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>
-            {(DRIVER_LABELS[String(info?.connections?.[info?.default ?? '']?.driver ?? '')] ?? info?.connections?.[info?.default ?? '']?.driver ?? 'No connection yet')}
+            {!info ? 'Reading connection…' : (DRIVER_LABELS[String(info.connections?.[info.default ?? '']?.driver ?? '')] ?? info.connections?.[info.default ?? '']?.driver ?? 'No connection yet')}
             {connected ? ' · configured' : ''}
           </div>
           <div style={{ fontSize: 11.5, marginTop: 2, color: testing ? t.textMuted : testResult ? (testResult.ok ? 'var(--status-success)' : 'var(--status-error)') : t.textMuted }}>
@@ -1320,10 +1385,15 @@ export function ConnectionPanel({
           {testing ? 'Testing…' : 'Test connection'}
         </button>
       </div>
-      <div style={{ maxWidth: 640 }}>
-        {profilePathSection}
-        {dbtProfilesSection}
-      </div>
+      {/* Database only has no dbt: personal ~/.dbt profiles never show there (design D7). */}
+      {isSetup && setupSource === 'warehouse' ? null : (
+        <AdvancedDisclosure enabled={isSetup} label="Import from a dbt profile" hint="profiles.yml" t={t}>
+          <div style={{ maxWidth: 640 }}>
+            {profilePathSection}
+            {dbtProfilesSection}
+          </div>
+        </AdvancedDisclosure>
+      )}
       <DatabaseConnectionForm
         t={t}
         driver={primaryDriver}
@@ -1337,7 +1407,9 @@ export function ConnectionPanel({
         installing={installingDriver === primaryDriver}
         onInstall={() => void handleInstallConnector(primaryDriver)}
       />
-      {metadataScopeEditor}
+      {isSetup && setupSource === 'dbt' && metadataScopeEditor
+        ? <AdvancedDisclosure enabled label="Advanced" hint="warehouse schemas outside dbt" t={t}>{metadataScopeEditor}</AdvancedDisclosure>
+        : metadataScopeEditor}
     </div>
   );
 
