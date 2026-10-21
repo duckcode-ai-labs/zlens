@@ -339,8 +339,11 @@ export class ConversationStore {
     return row ? rowToThread(row) : null;
   }
 
-  /** `ownerId` lists only that person's conversations (a host's signed-in person). */
-  listThreads(options: { limit?: number; includeArchived?: boolean; ownerId?: string } = {}): ConversationThread[] {
+  /**
+   * `ownerId` lists only that person's conversations (a host's signed-in person);
+   * `notebookPath` only the Notebook AI conversations held in that notebook.
+   */
+  listThreads(options: { limit?: number; includeArchived?: boolean; ownerId?: string; notebookPath?: string } = {}): ConversationThread[] {
     // Pinned conversations lead, then recency. Ordering here rather than in the
     // client keeps the `limit` meaningful: a favourite must not fall off the end
     // of the page simply because it has not been used lately.
@@ -350,6 +353,10 @@ export class ConversationStore {
     if (options.ownerId !== undefined) {
       where.push('owner_id = ?');
       params.push(options.ownerId);
+    }
+    if (options.notebookPath !== undefined) {
+      where.push('notebook_path = ?');
+      params.push(options.notebookPath);
     }
     const rows = this.db.prepare(`SELECT * FROM conversation_threads ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY favorite DESC, updated_at DESC LIMIT ?`)
       .all(...params, options.limit ?? 50);

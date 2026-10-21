@@ -180,7 +180,13 @@ lineage** (DQL) to see the tables, joins, filters and outputs. On a DQL cell,
 - **Notebook AI** (top right) opens a side panel that answers questions using
   the whole notebook, dbt and semantic metadata, and certified blocks. It needs
   an [AI provider](../get-started/ai-provider.md).
-- **History** shows this notebook's earlier Notebook AI conversations.
+- **Ask AI** on a SQL or DQL cell (hover over the cell) opens the same panel on
+  that cell, titled with the cell's type and name, such as
+  **SQL cell · store_names**. The AI gets the cell's query, and
+  its error when the last run failed, so you can ask "Fix this query" or
+  "Explain this cell".
+- **History** lists this notebook's Notebook AI conversations. Click one to
+  continue it. Saved research for the notebook is listed below them.
 
 An answer comes with a button that puts it in the notebook:
 
