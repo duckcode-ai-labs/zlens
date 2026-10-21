@@ -129,6 +129,9 @@ export function buildKGFromManifest(manifest: DQLManifest): {
         qualifiedId: `${block.domain ?? 'global'}::block::${block.name}`,
         localId: block.name,
         aliases: [block.name],
+        // Question aliases from the block's Context panel: indexed for retrieval
+        // (never used as an identity, so an alias cannot shadow another object's name).
+        ...(block.synonyms?.length ? { synonyms: block.synonyms } : {}),
         metricRefs: [
           ...new Set([
             ...(block.metricRef ? [block.metricRef] : []),
@@ -141,6 +144,7 @@ export function buildKGFromManifest(manifest: DQLManifest): {
       datalexContract: block.datalexContract,
       businessRules: block.businessRules ?? block.invariants,
       caveats: block.caveats,
+      primaryTerms: block.primaryTerms,
       dataState: block.dataState,
       dataStateDetail: block.dataStateDetail,
       sourcePath: block.filePath,

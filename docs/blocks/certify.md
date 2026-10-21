@@ -193,5 +193,28 @@ certified, writes the receipt (with `via: cli`), and prints
 
 Only certified blocks have **Deprecate**.
 
+Deprecating keeps the block's certification receipt in its companion YAML and
+records the deprecation beside it:
+
+```yaml
+reviewStatus: deprecated
+certification:
+  certifiedBy: you@example.com
+  certifiedAt: '2026-10-15T20:27:48.466Z'
+  via: block-studio
+  rules: oss
+  sourceSha256: b8e2…
+deprecation:
+  deprecatedBy: you@example.com
+  deprecatedAt: '2026-10-21T09:12:03.120Z'
+  via: block-studio
+  previousStatus: certified
+```
+
+The receipt is kept as history: with `reviewStatus: deprecated`, Ask, Apps
+and Block Studio no longer treat the block as certified. **Deprecated by** is
+found the same way as **Certified by**. Moving the block back to **draft**
+removes both records.
+
 To send people to a newer block, set `replacedBy` in the block. Block Studio
 then shows **Replaced by** with **Open the replacement →**.

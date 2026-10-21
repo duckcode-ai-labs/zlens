@@ -1280,6 +1280,10 @@ export class Parser {
     let reviewCadence: string | undefined;
     let businessRules: string[] | undefined;
     let caveats: string[] | undefined;
+    // Question aliases: other words people use for what this block answers.
+    let synonyms: string[] | undefined;
+    // Business terms in the block's own words (free text; `terms` names declared terms).
+    let primaryTerms: string[] | undefined;
     // v1.4 — block certification status. Already surfaced by the manifest
     // builder via extractProp, the certifier, and the agent's "block-first"
     // matcher; the parser just needs to accept it as a valid top-level
@@ -1668,7 +1672,9 @@ export class Parser {
           || this.current().value === 'decisionUse'
           || this.current().value === 'reviewCadence'
           || this.current().value === 'businessRules'
-          || this.current().value === 'caveats')
+          || this.current().value === 'caveats'
+          || this.current().value === 'synonyms'
+          || this.current().value === 'primaryTerms')
       ) {
         // Agent-facing metadata. Identifier-keyed to avoid new lexer keywords.
         const keyToken = this.advance();
@@ -1731,12 +1737,21 @@ export class Parser {
               .map((e) => e.value);
           }
         } else if (keyToken.value === 'caveats') {
-          const arrExpr = this.parseArrayLiteral();
-          if (arrExpr.kind === NodeKind.ArrayLiteral) {
-            caveats = arrExpr.elements
-              .filter((e): e is import('../ast/nodes.js').StringLiteralNode => e.kind === NodeKind.StringLiteral)
-              .map((e) => e.value);
+          // One rule may be written as a plain string; it reads as a one-item list.
+          if (this.check(TokenType.StringLiteral)) {
+            caveats = [this.advance().value];
+          } else {
+            const arrExpr = this.parseArrayLiteral();
+            if (arrExpr.kind === NodeKind.ArrayLiteral) {
+              caveats = arrExpr.elements
+                .filter((e): e is import('../ast/nodes.js').StringLiteralNode => e.kind === NodeKind.StringLiteral)
+                .map((e) => e.value);
+            }
           }
+        } else if (keyToken.value === 'synonyms') {
+          synonyms = this.parseStringArrayValues();
+        } else if (keyToken.value === 'primaryTerms') {
+          primaryTerms = this.parseStringArrayValues();
         }
       } else {
         if (
@@ -1752,7 +1767,7 @@ export class Parser {
           continue;
         }
         this.error(
-          `Unexpected token '${this.current().value}' inside block. Expected 'domain', 'type', 'status', 'datalex_contract', 'metric', 'metrics', 'dimensions', 'description', 'tags', 'owner', 'terms', 'pattern', 'grain', 'fields', 'measures', 'entities', 'outputs', 'allowedFilters', 'parameterPolicy', 'filterBindings', 'metricMappings', 'sourceSystems', 'replacementFor', 'params', 'query', 'visualization', 'tests', 'llmContext', 'invariants', 'examples', 'businessOutcome', 'businessOwner', 'decisionUse', 'reviewCadence', 'businessRules', 'caveats', 'replacedBy', 'deprecatedOn', Tier-2 draft metadata fields, or '}'.`,
+          `Unexpected token '${this.current().value}' inside block. Expected 'domain', 'type', 'status', 'datalex_contract', 'metric', 'metrics', 'dimensions', 'description', 'tags', 'owner', 'terms', 'pattern', 'grain', 'fields', 'measures', 'entities', 'outputs', 'allowedFilters', 'parameterPolicy', 'filterBindings', 'metricMappings', 'sourceSystems', 'replacementFor', 'params', 'query', 'visualization', 'tests', 'llmContext', 'invariants', 'examples', 'businessOutcome', 'businessOwner', 'decisionUse', 'reviewCadence', 'businessRules', 'caveats', 'synonyms', 'primaryTerms', 'replacedBy', 'deprecatedOn', Tier-2 draft metadata fields, or '}'.`,
         );
         this.advance();
       }
@@ -1808,6 +1823,8 @@ export class Parser {
       reviewCadence,
       businessRules,
       caveats,
+      synonyms,
+      primaryTerms,
       status,
       replacedBy,
       deprecatedOn,

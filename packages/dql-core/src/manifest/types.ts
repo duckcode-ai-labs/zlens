@@ -480,6 +480,10 @@ export interface ManifestBlock {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  /** Question aliases: other words people use for what the block answers. Ask matches on them. */
+  synonyms?: string[];
+  /** Business terms in the block's own words; unlike `termRefs` they need not name a declared term. */
+  primaryTerms?: string[];
   /**
    * v1.6 — DataLex contract reference (`<domain>.<Entity>.<contract_name>`
    * with optional `@<version>` suffix). When present, the compiler

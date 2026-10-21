@@ -2908,7 +2908,8 @@ function BlockContextInspector({
           <ContextTokenEditor key={item.key} label={item.label} hint={item.hint} values={array(item.key)} onChange={(values) => onChange(setBlockArray(source, item.key, values))} t={t} />
         ))}
         <FieldLabel label="Rules and caveats" t={t}>
-          <SourceTextField value={field('caveats')} onChange={(next) => onChange(setBlockStringField(source, 'caveats', next))} placeholder="Known limitation or interpretation rule" style={importInputStyle(t)} />
+          {/* One rule per line; the block keeps them as a list (`caveats = [...]`). */}
+          <SourceTextField multiline rows={2} value={(array('caveats').length > 0 ? array('caveats') : [field('caveats')].filter(Boolean)).join('\n')} onChange={(next) => onChange(setBlockArray(source, 'caveats', next.split(/\r?\n/)))} placeholder="Known limitation or interpretation rule, one per line" style={{ ...importInputStyle(t), resize: 'vertical' }} />
         </FieldLabel>
       </div>
       <div style={{ fontSize: 10, color: t.textMuted }}>Available authoring context: {semanticCount} semantic objects, {databaseStats.schemas} schemas, {databaseStats.columns} columns. SQL completion uses the same loaded catalog.</div>
@@ -5071,7 +5072,7 @@ function SmartImportOverview({
   );
 }
 
-function ImportCandidateDetail({
+export function ImportCandidateDetail({
   session,
   candidate,
   loading,
@@ -5083,6 +5084,7 @@ function ImportCandidateDetail({
   onReviewInEditor,
   runError,
   themeMode,
+  initialContextOpen = false,
   t,
 }: {
   session: BlockStudioImportSession;
@@ -5096,6 +5098,8 @@ function ImportCandidateDetail({
   onReviewInEditor: (candidate: BlockStudioImportCandidate) => void;
   runError?: string | null;
   themeMode: ThemeMode;
+  /** Whether "Show context" starts open. */
+  initialContextOpen?: boolean;
   t: Theme;
 }) {
   const [name, setName] = useState(candidate.name);
@@ -5116,7 +5120,7 @@ function ImportCandidateDetail({
   const [sql, setSql] = useState(candidate.sql);
   const [aiBusy, setAiBusy] = useState<string | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
-  const [contextOpen, setContextOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(initialContextOpen);
 
   useEffect(() => {
     setName(candidate.name);
@@ -5333,7 +5337,7 @@ function ImportCandidateDetail({
 
         {contextOpen && (
         <div style={{ display: 'grid', gap: 12 }}>
-          {(candidate.similarityMatches?.length || candidate.draftSave?.status === 'skipped') && (
+          {((candidate.similarityMatches?.length ?? 0) > 0 || candidate.draftSave?.status === 'skipped') && (
             <PanelBox title="Reuse recommendation" t={t}>
               <div style={{ display: 'grid', gap: 8 }}>
                 <InfoLine label="Action" value={candidate.recommendedAction ?? 'create_new'} t={t} />
@@ -5349,7 +5353,7 @@ function ImportCandidateDetail({
             </PanelBox>
           )}
 
-          {(candidate.parameterDecisions?.length || candidate.filterBindings?.length) && (
+          {((candidate.parameterDecisions?.length ?? 0) > 0 || (candidate.filterBindings?.length ?? 0) > 0) && (
             <PanelBox title="Parameter contract" t={t}>
               <div style={{ display: 'grid', gap: 8 }}>
                 {(candidate.parameterDecisions ?? []).slice(0, 8).map((decision) => (

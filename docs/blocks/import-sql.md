@@ -41,6 +41,19 @@ The **Drafts** list shows one row per query. Click a draft to see:
 Click **Show context (N)** to see the **Grounding**: the tables and columns
 ZLens matched, with any warnings. **Hide context** closes it again.
 
+The draft runs your SQL, and so does its preview. Only a query that is
+exactly a metric query becomes a semantic block: one table, no joins,
+filters, `ORDER BY` or `LIMIT`, each aggregate the same as a metric's
+definition and named like it, and every other column a dimension it groups
+by. For example, `select region, sum(revenue) as total_revenue from orders
+group by 1` becomes the `total_revenue` metric by `region`.
+
+A matching name alone is not enough. If an output only shares a metric's
+name (say `count(*) as order_count` over a join, and a metric named
+`order_count`), the draft runs your query, and **Generation audit** in the
+context panel notes the shared name, so you can check that the two agree or
+use the metric instead.
+
 Edit the review details if something is wrong. **Edit full DQL** opens the
 whole block. If ZLens finds a similar certified block, the save button reads
 **Reuse existing** and is disabled, and there is no **Certify**: use the

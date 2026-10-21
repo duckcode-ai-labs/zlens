@@ -99,6 +99,10 @@ Canonical block fields:
 | `grain` | Row or business grain, such as `customer_id`, `order_month`, or `segment` |
 | `entities` | Business entities represented by the block |
 | `terms` | Business term references implemented or used by the block |
+| `primaryTerms` | Business words for what the block measures, in free text (unlike `terms`, they need not name a declared term). Ask matches on them |
+| `synonyms` | Question aliases: other words people use when they ask for this block. Ask matches on them |
+| `businessRules` | Business rules the block encodes |
+| `caveats` | Known limitations or interpretation rules, as a list (a single string is read as a one-item list) |
 | `outputs` | Declared output columns reviewers expect from the block |
 | `dimensions` | Declared grouping dimensions. In `type = "semantic"` blocks these are MetricFlow dimensions; in `type = "custom"` blocks they are reusable business-contract dimensions, not semantic dependencies |
 | `allowedFilters` | Filters considered safe and meaningful for reuse |

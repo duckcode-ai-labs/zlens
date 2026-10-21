@@ -703,6 +703,41 @@ describe('Parser - Block Declaration', () => {
     }
   });
 
+  it('parses the Block Studio context fields: question aliases and rules and caveats', () => {
+    const source = `block "Orders by Store" {
+      domain = "commerce"
+      type = "custom"
+      businessOutcome = "Staff stores to demand"
+      llmContext = "Use for order counts per store"
+      terms = ["Order"]
+      sourceSystems = ["dbt:orders"]
+      synonyms = ["store orders", "orders per location"]
+      primaryTerms = ["order volume"]
+      caveats = ["Excludes cancelled orders"]
+      query = """SELECT 1 AS order_count"""
+    }`;
+    const ast = parse(source);
+    const block = ast.statements[0];
+    expect(block.kind).toBe(NodeKind.BlockDecl);
+    if (block.kind === NodeKind.BlockDecl) {
+      expect(block.synonyms).toEqual(['store orders', 'orders per location']);
+      expect(block.caveats).toEqual(['Excludes cancelled orders']);
+      expect(block.termRefs).toEqual(['Order']);
+      expect(block.primaryTerms).toEqual(['order volume']);
+    }
+  });
+
+  it('reads a single-string caveats as a one-item list', () => {
+    const ast = parse(`block "x" {
+      type = "custom"
+      caveats = "Excludes refunds"
+      query = """SELECT 1"""
+    }`);
+    const block = ast.statements[0];
+    if (block.kind !== NodeKind.BlockDecl) throw new Error('expected a block');
+    expect(block.caveats).toEqual(['Excludes refunds']);
+  });
+
   it('parses a full block with all sections', () => {
     const source = `block "Revenue by Segment" {
       domain = "revenue"

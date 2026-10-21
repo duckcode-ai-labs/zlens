@@ -37,6 +37,36 @@ export type CertificationSurface =
 
 export type BlockLifecycleStatus = 'draft' | 'review' | 'certified' | 'deprecated';
 
+/**
+ * The record a Deprecate action leaves in the companion YAML. A deprecated
+ * block keeps its certification receipt beside this record, so the tracked
+ * source still says who certified it and who retired it, and when.
+ */
+export interface DeprecationRecord {
+  /** Who deprecated: the host's signed-in person, else the local git/OS owner. */
+  deprecatedBy: string;
+  /** ISO-8601 timestamp of the deprecation. */
+  deprecatedAt: string;
+  /** The surface the Deprecate action came from. */
+  via: CertificationSurface;
+  /** The block's status just before it was deprecated. */
+  previousStatus: BlockLifecycleStatus;
+}
+
+export function buildDeprecationRecord(input: {
+  deprecatedBy: string | undefined | null;
+  via: CertificationSurface;
+  previousStatus: BlockLifecycleStatus;
+  now?: Date;
+}): DeprecationRecord {
+  return {
+    deprecatedBy: input.deprecatedBy?.trim() || 'local',
+    deprecatedAt: (input.now ?? new Date()).toISOString(),
+    via: input.via,
+    previousStatus: input.previousStatus,
+  };
+}
+
 const STATUS_LINE = /^\s*status\s*=\s*"([^"]*)"/m;
 
 /** The `status = "…"` a `.dql` source declares, defaulting to draft. */
@@ -206,21 +236,52 @@ function removeTopLevelKey(yaml: string, key: string): string {
 
 /**
  * Write the companion's lifecycle so it always agrees with the `.dql` source:
- * `reviewStatus` mirrors the block's status, and the `certification` receipt is
- * present only while the block is certified.
+ * `reviewStatus` mirrors the block's status. The `certification` receipt is
+ * written while the block is certified; a deprecated block keeps the receipt
+ * it had (passed in, else the one already in `companion`) beside its
+ * `deprecation` record. Draft and review hold neither.
+ *
+ * Every reader trusts a receipt only while `reviewStatus` is certified, so a
+ * receipt kept on a deprecated block is history, never a claim.
  */
 export function applyCompanionCertification(
   companion: string,
   status: BlockLifecycleStatus,
   receipt: CertificationReceipt | null | undefined,
+  deprecation?: DeprecationRecord | null,
 ): string {
-  let next = removeTopLevelKey(removeTopLevelKey(companion, 'reviewStatus'), 'certification').trimEnd();
+  const keptReceipt = status === 'deprecated' ? receipt ?? readCompanionCertification(companion) : null;
+  const keptDeprecation = status === 'deprecated' ? deprecation ?? readCompanionDeprecation(companion) : null;
+  let next = removeTopLevelKey(removeTopLevelKey(removeTopLevelKey(companion, 'reviewStatus'), 'certification'), 'deprecation').trimEnd();
   if (status === 'certified') next = withoutCompanionReviewPendingTags(next);
   next += `\nreviewStatus: ${status}\n`;
   if (status === 'certified' && receipt) {
     next += dumpYaml({ certification: receipt }, { lineWidth: 200, noRefs: true });
   }
+  if (keptReceipt) next += dumpYaml({ certification: keptReceipt }, { lineWidth: 200, noRefs: true });
+  if (keptDeprecation) next += dumpYaml({ deprecation: keptDeprecation }, { lineWidth: 200, noRefs: true });
   return next.endsWith('\n') ? next : `${next}\n`;
+}
+
+/** The deprecation record a companion YAML holds, when it holds a valid one. */
+export function readCompanionDeprecation(companion: string | null | undefined): DeprecationRecord | null {
+  if (!companion) return null;
+  try {
+    const parsed = loadYaml(companion) as { deprecation?: Partial<DeprecationRecord> } | null;
+    const record = parsed?.deprecation;
+    if (!record || typeof record !== 'object' || typeof record.deprecatedBy !== 'string') return null;
+    const deprecatedAt = record.deprecatedAt as unknown;
+    if (deprecatedAt === undefined) return null;
+    const previous = record.previousStatus;
+    return {
+      deprecatedBy: record.deprecatedBy,
+      deprecatedAt: deprecatedAt instanceof Date ? deprecatedAt.toISOString() : String(deprecatedAt),
+      via: (record.via ?? 'block-studio') as CertificationSurface,
+      previousStatus: previous === 'certified' || previous === 'review' || previous === 'deprecated' ? previous : 'draft',
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** The certification receipt a companion YAML holds, when it holds a valid one. */

@@ -584,10 +584,11 @@ export function setBlockTags(content: string, tags: string[]): string {
  */
 export function setBlockArray(content: string, key: string, values: string[]): string {
   const unique = Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
-  const rendered = `${key} = [${unique.map((value) => `"${escapeDqlValue(value)}"`).join(', ')}]`;
-  const field = new RegExp(`(\\b${key}\\s*=\\s*)\\[[\\s\\S]*?\\]`, 'i');
-  if (field.test(content)) return content.replace(field, `$1[${unique.map((value) => `"${escapeDqlValue(value)}"`).join(', ')}]`);
-  return insertBlockField(content, `  ${rendered}`);
+  const list = `[${unique.map((value) => `"${escapeDqlValue(value)}"`).join(', ')}]`;
+  // A list, or a single string an earlier version wrote (`caveats = "…"`).
+  const field = new RegExp(`(\\b${key}\\s*=\\s*)(?:\\[[\\s\\S]*?\\]|"(?:[^"\\\\]|\\\\.)*")`, 'i');
+  if (field.test(content)) return content.replace(field, (_whole, prefix: string) => `${prefix}${list}`);
+  return insertBlockField(content, `  ${key} = ${list}`);
 }
 
 export function upsertVisualizationConfig(content: string, chartConfig: CellChartConfig): string {
@@ -876,13 +877,57 @@ function escapeDqlString(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
+/**
+ * Add a clause the block does not have yet. A `key = value` field joins the
+ * block's other top-level fields, before its first section (params, query,
+ * visualization, tests …), so it never lands after `tests { }`; a section
+ * (`beforeClosingBrace`) goes last, before the block's closing brace. The file
+ * may open with comments, such as the formatter's `// dql-format: 1` header.
+ */
 function insertBlockField(content: string, field: string, beforeClosingBrace: boolean = false): string {
   const trimmed = content.trimEnd();
-  if (!/^\s*block\s+"/i.test(trimmed)) {
+  const lines = trimmed.split('\n');
+  const openIndex = lines.findIndex((line) => /^\s*block\s+"[^"]*"\s*\{/i.test(line));
+  if (openIndex < 0 || !/\n\}\s*$/.test(trimmed)) {
     return `${trimmed}\n${field}\n`;
   }
-  const insertion = beforeClosingBrace
-    ? `\n\n${field}\n`
-    : `\n${field}`;
-  return trimmed.replace(/\n\}\s*$/, `${insertion}\n}`);
+  if (beforeClosingBrace) return trimmed.replace(/\n\}\s*$/, `\n\n${field}\n}`);
+  const after = blockFieldInsertionLine(lines, openIndex);
+  return [...lines.slice(0, after + 1), field, ...lines.slice(after + 1)].join('\n');
+}
+
+/**
+ * The line after which a new top-level field goes: the last single-line
+ * `key = value` field before the block's first section or multi-line value
+ * (the opening line when there is none). `query` counts as a section.
+ */
+function blockFieldInsertionLine(lines: string[], openIndex: number): number {
+  let depth = 1;
+  let inTripleQuote = false;
+  let insertAfter = openIndex;
+  for (let index = openIndex + 1; index < lines.length; index++) {
+    const line = lines[index];
+    const trimmedLine = line.trim();
+    if (trimmedLine === '' || trimmedLine.startsWith('//')) continue;
+    const field = /^\s*([A-Za-z_]\w*)\s*=/.exec(line);
+    for (let at = 0; at < line.length; at++) {
+      if (inTripleQuote) {
+        if (line.startsWith('"""', at)) { inTripleQuote = false; at += 2; }
+        continue;
+      }
+      if (line.startsWith('"""', at)) { inTripleQuote = true; at += 2; continue; }
+      const ch = line[at];
+      if (ch === '/' && line[at + 1] === '/') break;
+      if (ch === '"') {
+        at++;
+        while (at < line.length && line[at] !== '"') at += line[at] === '\\' ? 2 : 1;
+        continue;
+      }
+      if (ch === '{' || ch === '[' || ch === '(') depth++;
+      else if (ch === '}' || ch === ']' || ch === ')') depth--;
+    }
+    if (!field || field[1].toLowerCase() === 'query' || depth !== 1 || inTripleQuote) break;
+    insertAfter = index;
+  }
+  return insertAfter;
 }
