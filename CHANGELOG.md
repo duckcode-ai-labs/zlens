@@ -10,6 +10,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **App filters work the same on every tile.** Each tile on a filter's page
+  is now **Applies** or **Does not apply** in the Filters tab, and both
+  choices are saved. **Does not apply** no longer blocks publishing; only a
+  tile with neither choice does, and the publish check points to the Filters
+  tab. Readers see **Not filtered by** *filter* on those tiles.
+  - Metrics tiles filter on any dimension of the metric's model, so a KPI is
+    filtered too. A date range is no longer sent as a list of two days.
+  - One date rule everywhere: a date range runs from the start date through
+    the whole end date, a single date is that whole day, and a relative date
+    becomes a range first. Saved query `_end` parameters still receive the
+    last day you picked.
+  - Draft tiles take linked filters the same way Saved query tiles do, and
+    their evidence says which filters applied and which didn't.
+  - A Saved query tile marked **Does not apply** is not filtered through a
+    parameter with the filter's name.
+  - Each tile in a page-run response has `filterReport`: the page filters
+    that applied and the ones that didn't, with why. Readers' pills use it.
+  - The publish message for a tile with no choice is now *page/tile* **has no
+    choice for filter** *Label*.
+
 - **Field-based tiles are on by default.** App Studio builds tiles from a
   Dataset's measures and dimensions without first asking you to turn the
   feature on, and the "Turn on field-based tiles" banner is gone. To turn

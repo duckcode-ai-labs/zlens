@@ -264,3 +264,28 @@ export {
   showMeInputFromEncoding, showMeInputFromQuery,
 } from './show-me.js';
 export type { ShowMeChart, ShowMeDimension, ShowMeFacts, ShowMeInput, ShowMeMeasure, ShowMeSuggestion, ShowMeVizType } from './show-me.js';
+
+export {
+  resolveDashboardDateFilter,
+  dashboardDateBoundsForColumn,
+  isDashboardDateFilterType,
+  resolveRelativeDateRange,
+  calendarDateInTimezone,
+  calendarDateBoundaryInTimezone,
+  isCalendarDate,
+  nextCalendarDate,
+  dateRangeParts,
+} from './filter-dates.js';
+export type { DashboardDateFilterBounds, DashboardDateFilterResolution, DashboardDateFilterType } from './filter-dates.js';
+export {
+  DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  dashboardTileFilterChoice,
+  dashboardFilterDoesNotApplyBinding,
+  isDashboardNarrativeTile,
+} from './filter-reach.js';
+export type {
+  DashboardTileFilterChoice,
+  DashboardFilterReachItem,
+  DashboardFilterReachFilter,
+  DashboardFilterReachPage,
+} from './filter-reach.js';

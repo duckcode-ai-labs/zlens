@@ -37,6 +37,7 @@ import {
 import { autoLayoutDashboardItems, autoLayoutRank, layoutScore, packDashboardItems, reorderTileForDrop } from './dashboard-layout';
 import { READER_TRUST_LABELS, readerTileFreshness, readerTileReceipt, readerTileTrust, readerTrustCounts } from './reader-trust';
 import { appTrustSummary, type AppTrustSummary, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
+import { dashboardTileFilterChoice, isDashboardNarrativeTile } from '@zlens/core/apps/filter-reach';
 import { plainDescription, ReaderTrustBadge, TrustLensBar } from './ReaderTrust';
 import { DriverPanel, DriverView } from './DriverView';
 import { StoryView, storyEditionSummary } from './StoryView';
@@ -528,6 +529,7 @@ export function DashboardRenderer({
           onOpenNotebook={(nextTile) => void openTileInNotebook(item, nextTile)}
           activeVariables={runVariables}
           viewerFilterIds={viewerFilterIds}
+          filterLabels={dashboardFilterLabels(dashboard)}
           onExport={tileExport?.(item.i)}
           crossFilterFields={datasetCrossFilterFields(dashboard, item)}
           onSelectDatasetMark={(field, values) => applyDatasetMark(item, field, values)}
@@ -1418,6 +1420,7 @@ export function DashboardRenderer({
                       onOpenNotebook={(nextTile) => void openTileInNotebook(item, nextTile)}
                       activeVariables={runVariables}
                       viewerFilterIds={viewerFilterIds}
+                      filterLabels={dashboardFilterLabels(dashboard)}
                       onExport={tileExport?.(item.i)}
                       crossFilterFields={datasetCrossFilterFields(dashboard, item)}
                       onSelectDatasetMark={(field, values) => applyDatasetMark(item, field, values)}
@@ -1524,10 +1527,13 @@ export function DashboardRenderer({
 }
 
 /**
- * Dataset field tiles receive their actual page-filter scope from the server
- * runtime. Legacy block bindings are not a valid fallback for them: a v3
- * Dataset tile deliberately keeps its filter mapping on the page's exact
- * `datasetBindings`, not on `item.filterBindings`.
+ * The "Not filtered by …" pill for one tile.
+ *
+ * Once a run exists, every tile type uses the server's own word: Dataset
+ * tiles their `dataset.unboundFilters`, every other tile its `filterReport`
+ * (which page filters actually applied and which did not, with why). Before a
+ * run, the page document's choices stand in. Text and heading tiles never show
+ * filter pills.
  */
 export function dashboardTileFilterNotices(input: {
   item: DashboardLayoutItem;
@@ -1535,7 +1541,11 @@ export function dashboardTileFilterNotices(input: {
   activeVariables?: Record<string, unknown>;
   /** The viewer's own session filters; whether they reached a tile is the server's word, not the document's. */
   viewerFilterIds?: string[];
+  /** Page filter labels by id; a pill names the filter the reader sees. */
+  filterLabels?: Record<string, string>;
 }) {
+  const label = (filterId: string) => input.filterLabels?.[filterId] ?? filterId;
+  if (isDashboardNarrativeTile(input.item)) return { unfilteredNotice: null, datasetUnboundNotices: [] };
   const datasetUnboundNotices = input.tile?.dataset?.unboundFilters ?? [];
   // A viewer filter is never in the page document, so only the server's
   // applied list says whether it narrowed this tile — for every tile kind.
@@ -1548,24 +1558,36 @@ export function dashboardTileFilterNotices(input: {
   if (input.item.query || input.item.driver) {
     return { unfilteredNotice: tileUnfilteredNotice(viewerIgnored), datasetUnboundNotices };
   }
+  const report = input.tile?.filterReport;
+  if (report) {
+    const declared = report.notApplied.filter((entry) => !viewerIds.has(entry.filter));
+    return {
+      unfilteredNotice: tileUnfilteredNotice(
+        [...declared.map((entry) => label(entry.filter)), ...viewerIgnored],
+        declared.length ? declared.map((entry) => `${label(entry.filter)}: ${entry.reason}`).join(' ') : undefined,
+      ),
+      datasetUnboundNotices,
+    };
+  }
   const active = Object.entries(input.activeVariables ?? {})
     .filter(([key, value]) => !viewerIds.has(key) && value !== undefined && value !== null && value !== '')
     .map(([key]) => key);
   if (active.length === 0) return { unfilteredNotice: tileUnfilteredNotice(viewerIgnored), datasetUnboundNotices };
-  const declaredIgnored = active.filter((filterId) => {
-    const binding: { unsupportedReason?: string; binding?: string; param?: string } | undefined =
-      (input.item.filterBindings ?? []).find((candidate) => candidate.filter === filterId)
-      ?? (input.item.parameterBindings ?? []).find((candidate) => (candidate.filter || candidate.field || candidate.param) === filterId);
-    return !binding || Boolean(binding.unsupportedReason) || !(binding.binding ?? binding.param);
-  });
+  const declaredIgnored = active
+    .filter((filterId) => dashboardTileFilterChoice({}, input.item, { id: filterId }).choice !== 'applies')
+    .map(label);
   return { unfilteredNotice: tileUnfilteredNotice([...declaredIgnored, ...viewerIgnored]), datasetUnboundNotices };
 }
 
-function tileUnfilteredNotice(ignored: string[]): { label: string; detail: string } | null {
+function dashboardFilterLabels(dashboard: { filters?: Array<{ id: string; label?: string }> } | null | undefined): Record<string, string> {
+  return Object.fromEntries((dashboard?.filters ?? []).flatMap((filter) => filter.label ? [[filter.id, filter.label]] : []));
+}
+
+function tileUnfilteredNotice(ignored: string[], detail?: string): { label: string; detail: string } | null {
   if (ignored.length === 0) return null;
   return {
     label: ignored.length === 1 ? `Not filtered by ${ignored[0]}` : `Not filtered by ${ignored.length} page filters`,
-    detail: `This tile has no column bound to ${ignored.join(', ')}, so it shows the full scope while the rest of the page is narrowed.`,
+    detail: detail ?? `This tile has no column bound to ${ignored.join(', ')}, so it shows the full scope while the rest of the page is narrowed.`,
   };
 }
 
@@ -1601,6 +1623,7 @@ function DashboardTile({
   onOpenNotebook,
   activeVariables,
   viewerFilterIds,
+  filterLabels,
   crossFilterFields = [],
   onSelectDatasetMark,
   onDrillDatasetMark,
@@ -1642,6 +1665,8 @@ function DashboardTile({
   activeVariables?: Record<string, unknown>;
   /** Which of `activeVariables` are the viewer's own session filters. */
   viewerFilterIds?: string[];
+  /** Page filter labels, so a pill says "Not filtered by Customer Name". */
+  filterLabels?: Record<string, string>;
   /** Server-owned, explicitly authored Dataset mapping origins for this tile. */
   crossFilterFields?: string[];
   onSelectDatasetMark?: (field: string, values: unknown[]) => void;
@@ -1730,7 +1755,7 @@ function DashboardTile({
    * narrower scope, and the two are indistinguishable on screen — the reader
    * compares a filtered tile against an unfiltered one and never knows.
    */
-  const { unfilteredNotice, datasetUnboundNotices } = dashboardTileFilterNotices({ item, tile, activeVariables, viewerFilterIds });
+  const { unfilteredNotice, datasetUnboundNotices } = dashboardTileFilterNotices({ item, tile, activeVariables, viewerFilterIds, filterLabels });
   const comparisonSummary = item.query ? datasetComparisonSummary(item.query.comparison) : undefined;
 
   /**
@@ -2050,7 +2075,7 @@ function DashboardTile({
               </span>
             </div>
           ) : null}
-          {datasetUnboundNotices.length || tile?.dataset?.validation?.outcome === 'adapted' ? datasetTileNotices(tile).map((notice) => (
+          {datasetUnboundNotices.length || tile?.dataset?.validation?.outcome === 'adapted' ? datasetTileNotices(tile, { filterLabels }).map((notice) => (
             <div key={notice.key} style={{ marginTop: 5 }}>
               <span style={generatedMetaPillStyle} title={notice.detail}>
                 {notice.kind === 'adapted' ? <Activity size={9} /> : <Filter size={9} />} {notice.label}

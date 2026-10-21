@@ -159,10 +159,11 @@ export function FiltersPanel({
     for (const key of suggestion.mappingKeys) checked ? next.add(key) : next.delete(key);
     setConfiguration({ ...configuration, selectedMappingKeys: [...next] });
   };
-  const toggleMapping = (mapping: StudioFilterTileMapping) => {
-    if (!configuration || !mapping.supported) return;
+  /** "Applies" links the tile; "Does not apply" is a saved author choice (never a gap). */
+  const setMapping = (mapping: StudioFilterTileMapping, applies: boolean) => {
+    if (!configuration || (applies && !mapping.supported)) return;
     const next = new Set(configuration.selectedMappingKeys);
-    if (next.has(mapping.key)) next.delete(mapping.key); else next.add(mapping.key);
+    if (applies) next.add(mapping.key); else next.delete(mapping.key);
     setConfiguration({ ...configuration, selectedMappingKeys: [...next] });
   };
 
@@ -200,13 +201,14 @@ export function FiltersPanel({
           {!previewing && !fieldAvailability?.dateRange ? <button type="button" onClick={onRunPreview} disabled={disabled}><Play size={12} /> Run preview</button> : null}
         </section> : null}
         <fieldset><legend>Apply to</legend><div className="filter-scope-switch"><button type="button" className={configuration.scope === 'page' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'page' })}>This page</button><button type="button" className={configuration.scope === 'app' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'app' })}>All compatible pages</button></div><small>{configuration.scope === 'app' ? 'One dashboard control is retained on every page. Unmapped Dataset tiles stay visibly excluded until linked.' : `Only ${activePage?.metadata.title ?? 'this page'} receives this control.`}</small></fieldset>
-        <fieldset className="filter-mapping"><legend>Linked tiles</legend><header><span>{selectedVisibleCount}/{supportedVisibleCount} compatible linked</span><button type="button" onClick={() => setAllVisibleMappings(selectedVisibleCount !== supportedVisibleCount)}>{selectedVisibleCount === supportedVisibleCount ? 'Clear compatible' : 'Link all compatible'}</button></header>
+        <fieldset className="filter-mapping"><legend>Tiles</legend><header><span>Applies to {selectedVisibleCount} of {visibleMappings.length} {visibleMappings.length === 1 ? 'tile' : 'tiles'}</span>{supportedVisibleCount > 0 ? <button type="button" onClick={() => setAllVisibleMappings(selectedVisibleCount !== supportedVisibleCount)}>{selectedVisibleCount === supportedVisibleCount ? 'Apply to none' : 'Apply to all'}</button> : null}</header>
+          <small className="filter-mapping-hint">Each tile either takes this filter or shows “Not filtered by {configuration.label.trim() || humanize(configuration.fieldId)}” to readers. Both choices are saved; neither blocks publishing.</small>
           <div>{draft.pages.filter((page) => configuration.scope === 'app' || page.id === activePage?.id).map((page) => {
             const pageMappings = visibleMappings.filter((mapping) => mapping.pageId === page.id);
             if (!pageMappings.length) return null;
-            return <section key={page.id}><small>{page.metadata.title}</small>{pageMappings.map((mapping) => <label key={mapping.key} className={mapping.supported ? '' : 'unsupported'} title={mapping.reason}>
-              <input type="checkbox" checked={mapping.supported && selectedMappings.has(mapping.key)} disabled={!mapping.supported} onChange={() => toggleMapping(mapping)} /><span><strong>{humanize(mapping.tileTitle)}</strong><small>{mapping.supported ? `${humanize(mapping.sourceName)} · ${mapping.datasetId ? 'Dataset field mapping' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : mapping.reason}</small></span>{mapping.supported ? <Check size={13} /> : <X size={13} />}
-            </label>)}</section>;
+            return <section key={page.id}><small>{page.metadata.title}</small>{pageMappings.map((mapping) => (
+              <FilterTileChoice key={mapping.key} mapping={mapping} applies={mapping.supported && selectedMappings.has(mapping.key)} onChoose={(applies) => setMapping(mapping, applies)} />
+            ))}</section>;
           })}</div>
         </fieldset>
         <label className="filter-required"><input type="checkbox" checked={configuration.required} onChange={(event) => setConfiguration({ ...configuration, required: event.target.checked })} /><span><strong>Require a value</strong><small>Publication and runs require this filter to be set.</small></span></label>
@@ -229,6 +231,26 @@ export function FiltersPanel({
   </>;
 }
 
+
+/**
+ * One tile's explicit choice for a filter: "Applies" (linked) or "Does not
+ * apply" (a saved exclusion readers see as "Not filtered by …"). A tile that
+ * cannot take the field can only be "Does not apply", with the reason shown.
+ */
+export function FilterTileChoice({ mapping, applies, onChoose }: {
+  mapping: StudioFilterTileMapping;
+  applies: boolean;
+  onChoose: (applies: boolean) => void;
+}): JSX.Element {
+  const tileName = humanize(mapping.tileTitle);
+  return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason} data-testid="filter-tile-choice">
+    <span><strong>{tileName}</strong><small>{mapping.supported ? `${humanize(mapping.sourceName)} · ${mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : mapping.reason}</small></span>
+    <div className="filter-applies-switch" role="radiogroup" aria-label={`Does this filter apply to ${tileName}?`}>
+      <button type="button" role="radio" aria-checked={applies} className={applies ? 'on' : ''} disabled={!mapping.supported} onClick={() => onChoose(true)}><Check size={11} /> Applies</button>
+      <button type="button" role="radio" aria-checked={!applies} className={!applies ? 'on' : ''} onClick={() => onChoose(false)}><X size={11} /> Does not apply</button>
+    </div>
+  </div>;
+}
 
 export function filterControlOptions(fieldId: string): Array<{ value: StudioFilterControlType; label: string }> {
   const common: Array<{ value: StudioFilterControlType; label: string }> = [

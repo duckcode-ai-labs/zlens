@@ -235,7 +235,21 @@ import {
   detectResultOrdering,
   type RelationKeyKnowledge,
   type ResultOrdering,
+  DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  dashboardDateBoundsForColumn,
+  dashboardFilterDoesNotApplyBinding,
+  isDashboardDateFilterType,
+  resolveDashboardDateFilter,
 } from '@zlens/core';
+import {
+  dashboardSemanticFiltersForTile,
+  dashboardTileFilterExplanation,
+  dashboardTileFilterReport,
+  dashboardTileFiltersAllApplied,
+  dashboardValuesForTile,
+  dashboardFilterValuesForTile,
+  type DashboardTileFilterSkip,
+} from './dashboard-tile-filters.js';
 import {
   addDatasetDefinitionToBlockSource,
   DatasetDeclarationPatchError,
@@ -9840,6 +9854,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       parameters?: Record<string, unknown>;
       parameterSources?: Record<string, 'policy' | 'explicit' | 'question' | 'prior_result' | 'surface' | 'default'>;
       rowLimit?: number;
+      /**
+       * App page filters for a draft tile: wraps the compiled SQL with the
+       * same governed wrapper and parameter rules as a Saved query tile.
+       */
+      applyFilters?: (input: {
+        sql: string;
+        sqlParams: SQLParamSpec[];
+        variables: Record<string, unknown>;
+      }) => { sql: string; sqlParams: SQLParamSpec[]; variables: Record<string, unknown> };
     },
     executionConnection?: ConnectionConfig,
     executionConnectionName?: string,
@@ -9920,7 +9943,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // joins, aggregation, aliases, or any other frozen artifact semantics.
     const compiledSql = semanticCompose?.sql ?? plan!.sql;
     const qualificationRepairs: string[] = [];
-    const executableSql = !semanticCompose?.sql && metadata.qualifiedSchemaContext?.length
+    const qualifiedSql = !semanticCompose?.sql && metadata.qualifiedSchemaContext?.length
       ? qualifyUnambiguousSqlRelationsFromSchema(
           compiledSql,
           metadata.qualifiedSchemaContext,
@@ -9928,6 +9951,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           activeConnection.driver,
         )
       : compiledSql;
+    const filtered = invocationInput?.applyFilters?.({
+      sql: qualifiedSql,
+      sqlParams: [...(plan?.sqlParams ?? [])],
+      variables: { ...(plan?.variables ?? {}), ...invocation.values },
+    });
+    const executableSql = filtered?.sql ?? qualifiedSql;
+    const executionSqlParams = filtered?.sqlParams ?? plan?.sqlParams;
+    const executionVariables = filtered?.variables ?? { ...(plan?.variables ?? {}), ...invocation.values };
 
     if (metadata.askV2Closure) {
       const closureValidation = validateAuthorizedSqlReferences(executableSql, metadata.askV2Closure.contextPack, {
@@ -9988,8 +10019,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // governed behavior when no preview bound was requested.
       enforceReadOnly: invocationInput?.rowLimit !== undefined,
       rowLimit: invocationInput?.rowLimit,
-      sqlParams: plan?.sqlParams,
-      variables: { ...(plan?.variables ?? {}), ...invocation.values },
+      sqlParams: executionSqlParams,
+      variables: executionVariables,
       executePrepared: async (preparation) => {
         return executePreparedArtifactTraceBoundary({
           preparedSql: preparation.executedSql,
@@ -10015,8 +10046,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             }
             return executor.executeQuery(
               preparation.executedSql,
-              plan?.sqlParams ?? [],
-              runtimeVariables({ ...(plan?.variables ?? {}), ...invocation.values }),
+              executionSqlParams ?? [],
+              runtimeVariables(executionVariables),
               preparation.connection,
             );
           }
@@ -20945,6 +20976,33 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             let draftParameters: Record<string, unknown> = {};
             let draftTargetConnection: ConnectionConfig | undefined;
             let draftRepairPlan: ReturnType<typeof buildExecutionPlan> | undefined;
+            // Linked page filters reach a draft tile the same way they reach a
+            // Saved query tile: the same governed wrapper and parameter rules.
+            // What applied and what did not is reported with the result.
+            let draftFilterApplication: DashboardFilterApplicationResult | undefined;
+            const applyDraftFilters = (input: { sql: string; sqlParams: SQLParamSpec[]; variables: Record<string, unknown> }) => {
+              draftFilterApplication = applyDashboardFiltersToBlockExecution({
+                sql: input.sql,
+                sqlParams: input.sqlParams,
+                variables: { ...input.variables, ...dashboardFilterValuesForTile(executionDashboard, item, dashboardVariables) },
+                block: { name: item.title ?? item.i },
+                dashboard: executionDashboard,
+                tileId: item.i,
+                tileFilterBindings: item.filterBindings,
+              });
+              return draftFilterApplication;
+            };
+            const draftFilterSummary = () => draftFilterApplication
+              ? { applied: draftFilterApplication.appliedFilters, skipped: draftFilterApplication.skippedFilters }
+              : undefined;
+            const draftExecutedLine = (repaired: boolean) => {
+              if (repaired) return 'A bounded repair ran on the original data target without changing the saved source file.';
+              const summary = draftFilterSummary();
+              const anyApplied = Boolean(summary?.applied.some((entry) => (executionDashboard.filters ?? []).some((filter) => filter.id === entry.filter)));
+              return summary && anyApplied && dashboardTileFiltersAllApplied(executionDashboard, summary)
+                ? 'The saved App-scoped DQL was executed with the current filters.'
+                : 'The saved App-scoped DQL was executed.';
+            };
             try {
               const localDraftPath = loaded.draftArtifactsDir
                 ? join(loaded.draftArtifactsDir, item.draftAnalysis.ref)
@@ -20985,20 +21043,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 result = await executeDqlArtifactSourceForAgent(
                   draftSource,
                   { name: item.title ?? item.i, path: draftAppRelativePath },
-                  { question: item.title, parameters: draftParameters },
+                  { question: item.title, parameters: draftParameters, applyFilters: applyDraftFilters },
                 );
               } catch (executionError) {
                 const repaired = await repairFailedAppTileExecution({
                   source: 'draft_analysis',
                   question: item.title ?? item.i,
-                  sourceSql: draftRepairPlan?.sql,
+                  sourceSql: draftFilterApplication?.sql ?? draftRepairPlan?.sql,
                   sourceDql: draftSource,
                   artifactName: item.title ?? item.i,
                   error: executionError,
                   targetConnection: draftTargetConnection,
                   targetConnectionName: projectConfig.defaultConnectionName,
-                  sqlParams: draftRepairPlan?.sqlParams,
-                  variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters },
+                  sqlParams: draftFilterApplication?.sqlParams ?? draftRepairPlan?.sqlParams,
+                  variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters, ...(draftFilterApplication?.variables ?? {}) },
                 });
                 if (!repaired.ok) {
                   tiles.push({
@@ -21028,6 +21086,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 repairedSql = repaired.repairedSql;
                 repairedDql = repaired.repairedDql;
               }
+              // Which columns a viewer may filter is a property of the draft's
+              // own SQL, not of the page-filtered statement that wrapped it.
+              if (draftRepairPlan?.sql && !repair) unfilteredBlockSql.set(item.i, draftRepairPlan.sql);
               tiles.push({
                 tileId: item.i,
                 status: 'ok',
@@ -21036,6 +21097,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 viz: item.viz,
                 chartConfig: mergeDashboardChartConfig(result.chartConfig as object | undefined, item),
                 result,
+                ...(draftFilterSummary() ? { filters: draftFilterSummary() } : {}),
                 trustState: 'review_required',
                 citation: { kind: repair ? 'app_draft_analysis_repaired' : 'app_draft_analysis', name: item.title ?? item.i, path: draftAppRelativePath },
                 ...(repair ? { repair } : {}),
@@ -21045,11 +21107,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   name: item.title ?? item.i,
                   sourcePath: draftAppRelativePath,
                   dql: (repairedDql ?? draftSource).slice(0, 40_000),
-                  ...(repairedSql ?? draftRepairPlan?.sql ? { sql: (repairedSql ?? draftRepairPlan!.sql).slice(0, 40_000) } : {}),
+                  ...(repairedSql ?? result.sql ?? draftRepairPlan?.sql ? { sql: (repairedSql ?? result.sql ?? draftRepairPlan!.sql).slice(0, 40_000) } : {}),
                   trustState: 'review_required',
                   explanation: [
                     'This is private App analysis and remains review-required.',
-                    repair ? 'A bounded repair ran on the original data target without changing the saved source file.' : 'The saved App-scoped DQL was executed with the current filters.',
+                    draftExecutedLine(Boolean(repair)),
+                    ...(draftFilterSummary() ? dashboardTileFilterExplanation(executionDashboard, draftFilterSummary()!) : []),
                   ],
                   executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
                 },
@@ -21058,14 +21121,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               const repaired = await repairFailedAppTileExecution({
                 source: 'draft_analysis',
                 question: item.title ?? item.i,
-                sourceSql: draftRepairPlan?.sql,
+                sourceSql: draftFilterApplication?.sql ?? draftRepairPlan?.sql,
                 sourceDql: draftSource,
                 artifactName: item.title ?? item.i,
                 error: err,
                 targetConnection: draftTargetConnection,
                 targetConnectionName: projectConfig.defaultConnectionName,
-                sqlParams: draftRepairPlan?.sqlParams,
-                variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters },
+                sqlParams: draftFilterApplication?.sqlParams ?? draftRepairPlan?.sqlParams,
+                variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters, ...(draftFilterApplication?.variables ?? {}) },
               });
               if (repaired.ok && draftSource) {
                 tiles.push({
@@ -21079,6 +21142,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   trustState: 'review_required',
                   citation: { kind: 'app_draft_analysis_repaired', name: item.title ?? item.i, path: draftAppRelativePath },
                   repair: repaired.repair,
+                  ...(draftFilterSummary() ? { filters: draftFilterSummary() } : {}),
                   artifact: {
                     version: 1,
                     sourceKind: 'draft_analysis',
@@ -21087,7 +21151,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     dql: (repaired.repairedDql ?? draftSource).slice(0, 40_000),
                     sql: repaired.repairedSql.slice(0, 40_000),
                     trustState: 'review_required',
-                    explanation: ['A bounded DQL repair executed on the original data target. The saved App analysis was not changed.'],
+                    explanation: [
+                      'A bounded DQL repair executed on the original data target. The saved App analysis was not changed.',
+                      ...(draftFilterSummary() ? dashboardTileFilterExplanation(executionDashboard, draftFilterSummary()!) : []),
+                    ],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
                   },
                 });
@@ -22175,7 +22242,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               if (missingModels.length) throw new Error(`Semantic definition changed; missing model(s): ${missingModels.join(', ')}`);
               const targetConnection = requireActiveConnection(requestConnection(body as Record<string, unknown>) ?? connection);
               const tableMapping = await resolveSemanticTableMapping(executor, targetConnection, semanticLayer, projectRoot);
-              const activeFilters = dashboardSemanticFiltersForTile(executionDashboard, item, dashboardVariables);
+              // A page filter reaches any dimension the tile's metrics can be
+              // filtered on — including ones a KPI does not group by.
+              const filterLayer = semanticLayer;
+              const semanticFilterResolution = dashboardSemanticFiltersForTile(executionDashboard, item, dashboardVariables, {
+                dimensionAvailable: (dimension) => Boolean(filterLayer.resolveDimension(
+                  parseSemanticDimensionSelection(dimension).reference,
+                  item.semantic!.metrics,
+                )),
+              });
+              const activeFilters = semanticFilterResolution.filters;
+              const semanticFilterSummary = {
+                applied: semanticFilterResolution.applied,
+                skipped: semanticFilterResolution.skipped,
+              };
               const staticFilters = (item.semantic.filters ?? []).map((filter) => ({
                 dimension: filter.field,
                 operator: filter.operator,
@@ -22254,6 +22334,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 title: item.title ?? item.semantic.id,
                 viz: item.viz,
                 result: normalizedResult,
+                filters: semanticFilterSummary,
                 ...(executionFingerprints ?? {}),
                 trustState: 'review_required',
                 citation: { kind: repair ? 'semantic_query_repaired' : 'semantic_query', name: item.semantic.id },
@@ -22267,6 +22348,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   explanation: [
                     `Metrics: ${item.semantic.metrics.join(', ') || 'none'}.`,
                     `Dimensions: ${item.semantic.dimensions?.join(', ') || 'none'}.`,
+                    ...dashboardTileFilterExplanation(executionDashboard, semanticFilterSummary),
                     repair ? 'The composed SQL needed bounded repair and therefore remains review-required.' : 'The governed semantic intent was composed for the active warehouse and remains review-required until approval.',
                   ],
                   executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -22332,10 +22414,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               dashboardValues: dashboardVariables,
               requestValues: variables,
             });
+            // A filter the author marked "Does not apply" for this tile must not
+            // reach it through a block parameter of the same name either.
+            const tileDashboardVariables = dashboardValuesForTile(executionDashboard, item, dashboardVariables);
             blockInvocation = prepareBlockInvocation({
               block: block.name,
               source: blockSource,
-              parameters: { ...dashboardVariables, ...boundParameters },
+              parameters: { ...tileDashboardVariables, ...boundParameters },
               parameterSources: Object.fromEntries(
                 Object.keys(boundParameters).map((name) => [name, 'surface' as const]),
               ),
@@ -22399,7 +22484,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             blockFilterApplication = applyDashboardFiltersToBlockExecution({
               sql: blockBaseSql,
               sqlParams: blockPlan?.sqlParams ?? [],
-              variables: { ...(blockPlan?.variables ?? {}), ...dashboardVariables },
+              variables: { ...(blockPlan?.variables ?? {}), ...tileDashboardVariables },
               block,
               dashboard: viewerExecutionDashboard,
               tileId: item.i,
@@ -22648,7 +22733,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const runDialect = (() => {
           try { return requireActiveConnection().driver || 'duckdb'; } catch { return 'duckdb'; }
         })();
-        const tilesWithFilters = settledTiles.map((tile) => {
+        const tilesWithFilterColumns = settledTiles.map((tile) => {
           const executedSql = unfilteredBlockSql.get(tile.tileId) ?? (tile as { artifact?: { sql?: unknown } }).artifact?.sql;
           const columns = (tile as { result?: { columns?: string[] } }).result?.columns ?? [];
           if (typeof executedSql !== 'string' || columns.length === 0) return tile;
@@ -22661,6 +22746,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           } catch {
             return tile; // Unparseable SQL simply offers no filter candidates.
           }
+        });
+        // Per tile, which page filters actually applied and which did not
+        // (with why), from what each tile's own execution path did — for every
+        // tile type. Readers' "Not filtered by …" pills come from this, not
+        // from the page document.
+        const tilesWithFilters = tilesWithFilterColumns.map((tile) => {
+          const item = loaded.dashboard.layout.items.find((candidate) => candidate.i === tile.tileId);
+          const filterReport = item
+            ? dashboardTileFilterReport({ dashboard: loaded.dashboard, item, tile, values: dashboardVariables })
+            : undefined;
+          return filterReport ? { ...tile, filterReport } : tile;
         });
         const filterOptions = collectDashboardFilterOptions(loaded.dashboard, tilesWithFilters);
         const filterFingerprint = fingerprintDashboardRuntimeState({
@@ -37325,6 +37421,8 @@ export async function prepareAnalyticalExecutionSql(input: {
   };
 }
 
+export { dashboardSemanticFiltersForTile, dashboardTileFilterReport } from './dashboard-tile-filters.js';
+
 export interface DashboardFilterApplicationResult {
   sql: string;
   sqlParams: SQLParamSpec[];
@@ -37335,10 +37433,7 @@ export interface DashboardFilterApplicationResult {
     mode: 'parameter' | 'predicate';
     paramNames: string[];
   }>;
-  skippedFilters: Array<{
-    filter: string;
-    reason: string;
-  }>;
+  skippedFilters: DashboardTileFilterSkip[];
 }
 
 export function dashboardRuntimeVariables(
@@ -37366,28 +37461,6 @@ export interface DashboardFilterOptionSet {
    */
   valueCount?: number;
   dateRange?: { min: string; max: string };
-}
-
-/** Resolve semantic filters only through the component's explicit mapping. */
-export function dashboardSemanticFiltersForTile(
-  dashboard: Pick<DashboardDocument, 'filters'>,
-  item: Pick<DashboardGridItem, 'i' | 'semantic' | 'filterBindings'>,
-  dashboardValues: Record<string, unknown>,
-): Array<{ dimension: string; operator: string; values: string[] }> {
-  if (!item.semantic) return [];
-  return (dashboard.filters ?? []).flatMap((filter) => {
-    if (filter.scope?.tileIds && !filter.scope.tileIds.includes(item.i)) return [];
-    const binding = item.filterBindings?.find((candidate) =>
-      candidate.filter === filter.id
-      && candidate.capability !== 'unsupported'
-      && !candidate.unsupportedReason,
-    );
-    const dimension = binding?.binding;
-    const value = dashboardValues[filter.id];
-    if (!dimension || !item.semantic?.dimensions?.includes(dimension) || isEmptyDashboardFilterValue(value)) return [];
-    const values = Array.isArray(value) ? value.map(String) : [String(value)];
-    return [{ dimension, operator: values.length > 1 ? 'in' : 'equals', values }];
-  });
 }
 
 type DashboardFilterOptionTile = {
@@ -37573,6 +37646,8 @@ export function applyDashboardFiltersToBlockExecution(input: {
   dashboard: Pick<DashboardDocument, 'filters'>;
   tileId?: string;
   tileFilterBindings?: DashboardGridItem['filterBindings'];
+  /** Reference instant for relative dates; the run's clock by default. */
+  now?: Date;
 }): DashboardFilterApplicationResult {
   const variables = { ...input.variables };
   const sqlParams = [...input.sqlParams];
@@ -37581,18 +37656,39 @@ export function applyDashboardFiltersToBlockExecution(input: {
   const clauses: string[] = [];
   let nextPosition = sqlParams.reduce((max, param) => Math.max(max, param.position), 0);
 
+  // Decision order for one page filter on one Saved query (or draft) tile.
+  // An explicit author choice always wins over name matching:
+  //   1. The filter's own `scope.tileIds` leaves this tile out → skip.
+  //   2. The author marked this tile "Does not apply" (a tile filterBinding
+  //      with capability 'unsupported') → skip. No parameter-name or
+  //      allowedFilters matching may bind it after that.
+  //   3. No value right now → skip.
+  //   4. A block parameter named for the filter (id/bindsTo, `<base>_start` /
+  //      `<base>_end`, start_date/end_date, …) → bind the parameter.
+  //   5. A predicate binding (tile filterBindings → block filterBindings →
+  //      allowedFilters) → wrap the result in a WHERE clause.
+  //   6. Otherwise → skip as not linked.
   for (const filter of input.dashboard.filters ?? []) {
     if (filter.scope?.tileIds && input.tileId && !filter.scope.tileIds.includes(input.tileId)) {
-      skippedFilters.push({ filter: filter.id, reason: 'component is outside this filter scope' });
+      skippedFilters.push({ filter: filter.id, reason: 'component is outside this filter scope', code: 'does_not_apply' });
+      continue;
+    }
+    const doesNotApply = dashboardFilterDoesNotApplyBinding({ filterBindings: input.tileFilterBindings }, filter.id);
+    if (doesNotApply) {
+      skippedFilters.push({
+        filter: filter.id,
+        reason: doesNotApply.unsupportedReason?.trim() || DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+        code: 'does_not_apply',
+      });
       continue;
     }
     const value = dashboardFilterValue(filter, variables);
     if (isEmptyDashboardFilterValue(value)) {
-      skippedFilters.push({ filter: filter.id, reason: 'no value supplied' });
+      skippedFilters.push({ filter: filter.id, reason: 'no value supplied', code: 'no_value' });
       continue;
     }
 
-    const paramNames = bindDashboardFilterToExistingParams(filter, value, input.block, sqlParams, variables);
+    const paramNames = bindDashboardFilterToExistingParams(filter, value, input.block, sqlParams, variables, input.now);
     if (paramNames.length > 0) {
       appliedFilters.push({
         filter: filter.id,
@@ -37604,18 +37700,20 @@ export function applyDashboardFiltersToBlockExecution(input: {
 
     const binding = resolveDashboardFilterBinding(filter, input.block, input.tileFilterBindings);
     if (!binding) {
-      skippedFilters.push({ filter: filter.id, reason: `block "${input.block.name}" does not declare a compatible filter binding` });
+      skippedFilters.push({ filter: filter.id, reason: `block "${input.block.name}" does not declare a compatible filter binding`, code: 'not_linked' });
       continue;
     }
     const expression = dashboardFilterExpression(binding);
     if (!expression) {
-      skippedFilters.push({ filter: filter.id, reason: `filter binding "${binding}" is not safe for runtime predicate injection` });
+      skippedFilters.push({ filter: filter.id, reason: `filter binding "${binding}" is not safe for runtime predicate injection`, code: 'unsupported' });
       continue;
     }
     const predicate = buildDashboardFilterPredicate({
       expression,
       filterId: filter.id,
       filterType: filter.type,
+      timezone: filter.timezone,
+      now: input.now,
       value,
       params: sqlParams,
       nextPosition: () => {
@@ -37625,7 +37723,7 @@ export function applyDashboardFiltersToBlockExecution(input: {
       variables,
     });
     if (!predicate) {
-      skippedFilters.push({ filter: filter.id, reason: 'filter value could not be converted into a predicate' });
+      skippedFilters.push({ filter: filter.id, reason: 'filter value could not be converted into a predicate', code: 'invalid_value' });
       continue;
     }
     clauses.push(predicate);
@@ -37674,6 +37772,7 @@ function bindDashboardFilterToExistingParams(
   block: Pick<ManifestBlock, 'parameterPolicy'>,
   sqlParams: SQLParamSpec[],
   variables: Record<string, unknown>,
+  now?: Date,
 ): string[] {
   const availableParamNames = new Set(sqlParams.map((param) => param.name));
   const declaredParamNames = new Set((block.parameterPolicy ?? []).map((entry) => entry.name));
@@ -37691,7 +37790,17 @@ function bindDashboardFilterToExistingParams(
   }
   if (applied.length > 0) return applied;
 
-  const range = dashboardRangeValue(value);
+  // Range parameters receive the chosen calendar dates as-is: `_end` is the
+  // INCLUSIVE last day (what a hand-written `BETWEEN :start AND :end` on a DATE
+  // column expects). A single date fills both with that day and a relative
+  // date resolves to its range first. Only generated WHERE clauses use the
+  // exclusive next-day bound (see buildDashboardFilterPredicate).
+  const resolvedDate = resolveDashboardDateFilter({ filterId: filter.id, type: filter.type, value, timezone: filter.timezone, now });
+  const range = resolvedDate?.kind === 'calendar'
+    ? { start: resolvedDate.bounds.startDate, end: resolvedDate.bounds.endDate }
+    : resolvedDate?.kind === 'explicit'
+      ? { start: resolvedDate.start, end: resolvedDate.end }
+      : filter.type === 'date' || filter.type === 'relative_date' ? null : dashboardRangeValue(value);
   if (range) {
     const baseNames = uniqueDashboardStrings([
       filter.id,
@@ -37783,20 +37892,47 @@ function buildDashboardFilterPredicate(input: {
   expression: string;
   filterId: string;
   filterType: NonNullable<DashboardDocument['filters']>[number]['type'];
+  timezone?: string;
+  now?: Date;
   value: unknown;
   params: SQLParamSpec[];
   nextPosition: () => number;
   variables: Record<string, unknown>;
 }): string | null {
-  const range = input.filterType === 'daterange' ? dashboardRangeValue(input.value) : null;
-  if (range) {
-    const start = addDashboardFilterParam(input, 'start', range.start);
-    const end = addDashboardFilterParam(input, 'end', range.end);
+  // Dates follow the one App date rule (@zlens/core filter-dates). The
+  // wrapped result's column type is not known here, so the calendar dates are
+  // compared as DATE values: `>= start AND < day after end`. The explicit CAST
+  // lets a TIMESTAMP column compare with them (DuckDB refuses TIMESTAMP vs a
+  // VARCHAR parameter); the warehouse reads them in its session zone.
+  const resolvedDate = resolveDashboardDateFilter({
+    filterId: input.filterId,
+    type: input.filterType,
+    value: input.value,
+    timezone: input.timezone,
+    now: input.now,
+  });
+  if (resolvedDate?.kind === 'calendar') {
+    const bounds = dashboardDateBoundsForColumn(resolvedDate.bounds, 'unknown');
+    if ('error' in bounds) return null;
+    const start = addDashboardFilterParam(input, 'start', bounds.start);
+    const end = addDashboardFilterParam(input, 'end_exclusive', bounds.endExclusive);
+    return `${input.expression} >= CAST($${start.position} AS DATE) AND ${input.expression} < CAST($${end.position} AS DATE)`;
+  }
+  if (resolvedDate?.kind === 'explicit') {
+    const start = addDashboardFilterParam(input, 'start', resolvedDate.start);
+    const end = addDashboardFilterParam(input, 'end', resolvedDate.end);
     return `${input.expression} BETWEEN $${start.position} AND $${end.position}`;
   }
-  // A daterange with only one bound set is incomplete — skip it rather than binding
-  // the partial object as a scalar equality (which would produce invalid SQL).
-  if (input.filterType === 'daterange') return null;
+  // An incomplete or invalid date value is skipped rather than bound as a
+  // scalar equality (which would produce invalid SQL or a wrong match).
+  if (isDashboardDateFilterType(input.filterType)) return null;
+  if (input.filterType === 'number_range') {
+    const range = dashboardRangeValue(input.value);
+    if (!range) return null;
+    const low = addDashboardFilterParam(input, 'min', range.start);
+    const high = addDashboardFilterParam(input, 'max', range.end);
+    return `${input.expression} BETWEEN $${low.position} AND $${high.position}`;
+  }
   const values = Array.isArray(input.value) ? input.value.filter((item) => !isEmptyDashboardFilterValue(item)) : [input.value];
   if (values.length === 0) return null;
   if (input.filterType === 'search' && values.length === 1) {

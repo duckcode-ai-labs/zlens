@@ -213,15 +213,18 @@ export const APP_STUDIO_V2_STYLES = `
 .filter-mapping > div { max-height:300px; overflow:auto; display:grid; gap:8px; }
 .filter-mapping > div > section { display:grid; gap:4px; }
 .filter-mapping > div > section > small { padding:3px 2px 1px; color:var(--text-secondary); font-size:12px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; }
-.filter-mapping label { min-width:0; border:1px solid var(--border-subtle); border-radius:8px; padding:7px; display:grid; grid-template-columns:15px minmax(0,1fr) 14px; align-items:center; gap:6px; background:var(--bg-2); }
-.filter-mapping label:has(input:checked) { border-color:color-mix(in srgb,var(--accent) 42%,var(--border-default)); background:var(--accent-dim); }
-.filter-mapping label.unsupported { opacity:.64; background:var(--bg-0); }
-.filter-mapping label > input { width:13px; height:13px; accent-color:var(--accent); }
-.filter-mapping label > span { min-width:0; display:grid; gap:1px; }
-.filter-mapping label strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.filter-mapping label small { color:var(--text-tertiary); font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
-.filter-mapping label > svg { color:var(--accent); }
-.filter-mapping label.unsupported > svg { color:var(--text-muted); }
+.filter-mapping .filter-mapping-hint { color:var(--text-tertiary); font-size:11px; line-height:1.35; }
+.filter-mapping-row { min-width:0; border:1px solid var(--border-subtle); border-radius:8px; padding:7px; display:grid; gap:6px; background:var(--bg-2); }
+.filter-mapping-row.applies { border-color:color-mix(in srgb,var(--accent) 42%,var(--border-default)); background:var(--accent-dim); }
+.filter-mapping-row.unsupported { background:var(--bg-0); }
+.filter-mapping-row > span { min-width:0; display:grid; gap:1px; }
+.filter-mapping-row strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.filter-mapping-row small { color:var(--text-tertiary); font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
+.filter-applies-switch { display:grid; grid-template-columns:1fr 1.4fr; gap:3px; border-radius:8px; padding:2px; background:var(--bg-0); }
+.filter-applies-switch button { min-height:24px; border:0; border-radius:8px; background:transparent; color:var(--text-tertiary); font-size:11px; font-weight:600; display:inline-flex; align-items:center; justify-content:center; gap:4px; }
+.filter-applies-switch button.on { background:var(--bg-2); color:var(--text-primary); box-shadow:0 1px 3px color-mix(in srgb,var(--text-primary) 10%,transparent); }
+.filter-mapping-row.applies .filter-applies-switch button.on { color:var(--accent); }
+.filter-applies-switch button:disabled { opacity:.45; cursor:not-allowed; }
 .filter-required { grid-template-columns:15px minmax(0,1fr) !important; align-items:start; gap:7px !important; }
 /* Filter link suggestions (D10): other Datasets with the same field, unchecked. */
 .filter-link-suggestions { border:1px dashed color-mix(in srgb,var(--accent) 40%,var(--border-default)) !important; border-radius:8px; padding:9px !important; background:var(--bg-1); }

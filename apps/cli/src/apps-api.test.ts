@@ -1565,7 +1565,19 @@ describe('Apps command center API helpers', () => {
       ...readyDraft,
       pages: [{ ...page, layout: { ...page.layout, items: page.layout.items.map((tile) => tile.i === 'revenue-trend' ? { ...tile, filterBindings: [] } : tile) } }],
     };
-    expect(preflightStoredAppBuildDraft(root, missingExclusion)).toContain('overview/revenue-trend does not have a preflighted binding for filter Customer Name.');
+    expect(preflightStoredAppBuildDraft(root, missingExclusion)).toContain('overview/revenue-trend has no choice for filter Customer Name. Open the Filters tab and set this tile to Applies or Does not apply.');
+    // The Filters tab's "Does not apply" choice is stored and resolves the tile.
+    const authorDoesNotApply = {
+      ...readyDraft,
+      pages: [{ ...page, layout: { ...page.layout, items: page.layout.items.map((tile) => tile.i === 'revenue-trend'
+        ? { ...tile, filterBindings: [{ filter: 'customer_name', capability: 'unsupported' as const, unsupportedReason: 'Author: does not apply' }] }
+        : tile) } }],
+    };
+    expect(preflightStoredAppBuildDraft(root, authorDoesNotApply)).toEqual([]);
+    // A linked tile that has not run in a settled preview still needs one.
+    expect(preflightStoredAppBuildDraft(root, { ...readyDraft, previewReceipts: [] }).some((issue) => (
+      issue.includes('overview/customer-profile does not have a preflighted binding for filter Customer Name.')
+    ))).toBe(true);
   });
 
   it('deletes only the selected App package and moves it to recoverable local trash', () => {

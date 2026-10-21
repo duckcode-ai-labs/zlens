@@ -139,6 +139,7 @@ import {
 } from './app-studio-ai-plan';
 import {
   datasetFilterBindingsForSelection,
+  studioTileFilterBindings,
   discoverAppFilterCandidates,
   filterTileMappingsForField,
   type StudioRuntimeFilterFields,
@@ -1804,7 +1805,9 @@ export function AppStudioV2({
             // A date-only control represents a calendar range. Persist the
             // browser's declared IANA zone so timestamp Dataset fields can
             // compile an exact start-inclusive/end-exclusive interval.
-            ...(configuration.type === 'daterange' ? {
+            // Single and relative dates follow the same rule (a whole day /
+            // a resolved range), so they carry the zone too.
+            ...(configuration.type === 'daterange' || configuration.type === 'date' || configuration.type === 'relative_date' ? {
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
             } : {}),
             // A page/app filter must still visit unmapped Dataset tiles so the
@@ -1824,16 +1827,18 @@ export function AppStudioV2({
       for (const tile of page.layout.items.filter((item) => item.block || item.semantic || item.draftAnalysis)) {
         const mapping = pageMappings.find((item) => item.tileId === tile.i);
         const currentBindings = tile.filterBindings ?? [];
-        const nextBindings = currentBindings.filter((binding) => binding.filter !== configuration.id);
-        if (shouldAddToPage && mapping?.supported && selected.has(mapping.key)) {
-          nextBindings.push({
-            filter: configuration.id,
-            binding: mapping.binding ?? configuration.fieldId,
-            mode: mapping.mode ?? 'predicate',
-            required: configuration.required,
-            capability: 'preflight_required',
-          });
-        }
+        // "Applies" stores a link; "Does not apply" (unchecked, or a tile that
+        // cannot take this field) stores an explicit exclusion so publishing
+        // treats the tile as decided and readers see "Not filtered by …".
+        const nextBindings = studioTileFilterBindings({
+          tile,
+          filterId: configuration.id,
+          fieldId: configuration.fieldId,
+          required: configuration.required,
+          filterOnPage: shouldAddToPage,
+          applies: Boolean(mapping?.supported && selected.has(mapping.key)),
+          mapping,
+        });
         if (JSON.stringify(nextBindings) !== JSON.stringify(currentBindings)) {
           operations.push({ type: 'update_tile', pageId: page.id, tileId: tile.i, patch: { filterBindings: nextBindings } });
         }
@@ -3260,9 +3265,12 @@ export function AppStudioV2({
                       </div> : null}
                     </div>
                   </header>
-                  {unsupportedTileFilters(tile).map((binding) => <div key={binding.filter} className="tile-filter-notice"><Filter size={11} /><span>{binding.unsupportedReason ?? `${humanize(binding.filter)} does not affect this tile.`}</span></div>)}
+                  {unsupportedTileFilters(tile).map((binding) => <div key={binding.filter} className="tile-filter-notice"><Filter size={11} /><span><strong>Not filtered by {studioFilterLabel(activePage, binding.filter)}</strong> · {binding.unsupportedReason ?? `${humanize(binding.filter)} does not affect this tile.`}</span></div>)}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
-                  {datasetTileNotices(previewRun?.tiles.find((item) => item.tileId === tile.i)).map((notice) => <div key={notice.key} className={`tile-filter-notice ${notice.kind}`} title={notice.detail}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
+                  {datasetTileNotices(previewRun?.tiles.find((item) => item.tileId === tile.i), { filterLabels: studioFilterLabels(activePage) })
+                    // A "Does not apply" choice is already shown above from the page itself.
+                    .filter((notice) => !unsupportedTileFilters(tile).some((binding) => notice.key.startsWith(`${binding.filter}:`)))
+                    .map((notice) => <div key={notice.key} className={`tile-filter-notice ${notice.kind}`} title={notice.detail}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
                   {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the Dataset query and the SQL it compiled to.</p>; })()}</div> : null}
                   {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={datasetLinkProposal(activePage!, tile)} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
                   {placed && canArrange ? <>
@@ -4558,6 +4566,14 @@ function modifierKeyLabel(): string {
 
 function unsupportedTileFilters(tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]) {
   return (tile.filterBindings ?? []).filter((binding) => binding.capability === 'unsupported' || Boolean(binding.unsupportedReason));
+}
+
+function studioFilterLabels(page: AppStudioBuildDraft['pages'][number] | null | undefined): Record<string, string> {
+  return Object.fromEntries((page?.filters ?? []).map((filter) => [filter.id, filter.label ?? humanize(filter.id)]));
+}
+
+function studioFilterLabel(page: AppStudioBuildDraft['pages'][number] | null | undefined, filterId: string): string {
+  return studioFilterLabels(page)[filterId] ?? humanize(filterId);
 }
 
 function templateIcon(id: StudioTemplate): JSX.Element {

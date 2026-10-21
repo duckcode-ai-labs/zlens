@@ -152,7 +152,7 @@ describe('dataset tile notices shared by Studio and the viewer', () => {
       },
     } as never);
     expect(notices.map((notice) => [notice.kind, notice.label])).toEqual([
-      ['excluded', 'Excluded from region'],
+      ['excluded', 'Not filtered by region'],
       ['not_linked', 'Not filtered by sales channel'],
       ['adapted', 'Rolled up over time'],
     ]);
