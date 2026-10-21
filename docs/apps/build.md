@@ -5,6 +5,8 @@ Metrics and saved queries. You build it in **App Studio** as a private draft,
 then publish it as files in your project. The words App Studio uses are listed
 in [Words used in App Studio](index.md#words-used-in-app-studio).
 
+{{ clip("app-builder") }}
+
 ## 1. Start a new App
 
 1. In the left rail, click **Apps**.

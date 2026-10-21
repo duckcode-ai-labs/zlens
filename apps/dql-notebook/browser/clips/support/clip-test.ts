@@ -34,8 +34,12 @@ export interface Sample {
   freshProject(name?: string): string;
   /** Environment that makes git (and so ZLens's owner lookup) see the sample's analyst. */
   gitEnv: NodeJS.ProcessEnv;
-  /** Serve a project with `zlens notebook` (stopped after the clip). */
-  serve(projectDir: string): Promise<NotebookServer>;
+  /**
+   * Serve a project with `zlens notebook` (stopped after the clip). `ai: false`
+   * serves it with no AI provider and no cassettes, so AI features use the
+   * built-in planner and nothing reaches a model, even with --record-ask.
+   */
+  serve(projectDir: string, options?: { ai?: boolean }): Promise<NotebookServer>;
 }
 
 function env(name: string): string {
@@ -43,6 +47,12 @@ function env(name: string): string {
   if (!value) throw new Error(`${name} is not set: run the clips through \`pnpm docs:clips\` (clips-setup.ts sets it).`);
   return value;
 }
+
+/** Blanks every AI provider the server could pick up from the environment (as the browser journeys do). */
+const NO_AI_PROVIDER: NodeJS.ProcessEnv = {
+  ANTHROPIC_API_KEY: '', OPENAI_API_KEY: '', GEMINI_API_KEY: '', ZLENS_OPENAI_COMPAT_API_KEY: '',
+  OLLAMA_BASE_URL: '', OLLAMA_MODEL: '', ZLENS_EVAL_CASSETTE_DIR: '', ZLENS_EVAL_CASSETTE_MODE: '',
+};
 
 export function askMode(): 'replay' | 'record' {
   return process.env.ZLENS_CLIPS_ASK_MODE === 'record' ? 'record' : 'replay';
@@ -76,8 +86,8 @@ const test = base.extend<{ clipId: string; sample: Sample; director: Director }>
         cpSync(env('ZLENS_CLIPS_TEMPLATE_DIR'), projectDir, { recursive: true });
         return projectDir;
       },
-      async serve(projectDir) {
-        if (mode === 'record') {
+      async serve(projectDir, { ai = true } = {}) {
+        if (ai && mode === 'record') {
           // The provider the recording uses, set the way Settings → AI provider does.
           const provider = process.env.ZLENS_CLIPS_PROVIDER || 'claude-code';
           mkdirSync(join(projectDir, '.dql'), { recursive: true });
@@ -87,11 +97,13 @@ const test = base.extend<{ clipId: string; sample: Sample; director: Director }>
             providers: { [provider]: { id: provider, enabled: true, updatedAt: new Date().toISOString() } },
           }, null, 2)}\n`);
         }
-        mkdirSync(cassettes, { recursive: true });
+        if (ai) mkdirSync(cassettes, { recursive: true });
         const server = await startNotebookServer({
           projectDir,
           workDir: join(workDir, `server-${servers.length + 1}`),
-          env: { ...gitEnv, ZLENS_EVAL_CASSETTE_DIR: cassettes, ZLENS_EVAL_CASSETTE_MODE: mode },
+          env: ai
+            ? { ...gitEnv, ZLENS_EVAL_CASSETTE_DIR: cassettes, ZLENS_EVAL_CASSETTE_MODE: mode }
+            : { ...gitEnv, ...NO_AI_PROVIDER },
         });
         servers.push(server);
         return server;

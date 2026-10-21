@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { AppSourceCatalogRecord } from '@zlens/agent';
+import type { AppPlan, AppSourceCatalogRecord } from '@zlens/agent';
 import type { AppBuildDraft, AppBuildDraftSource, DashboardDocument, DatasetDescriptor } from '@zlens/core';
 import { appBuildPreviewIntentFingerprint, loadDashboardDocument } from '@zlens/core';
 import { defaultLocalAppsDbPath, defaultPersonaRegistry, LocalAppStorage } from '@zlens/project';
@@ -14,7 +14,6 @@ import {
   addAskResultToAppBuildDraft,
   approveAppSemanticTiles,
   applyAppAutopilotChange,
-  commitAppAiBuild,
   createAppAiBuildSession,
   createAppPackage,
   createStoredAppBuildDraft,
@@ -65,6 +64,18 @@ afterEach(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** Writes the App an AI build session planned, the way the App generator does. */
+async function generateAppFromSessionPlan(root: string, session: Awaited<ReturnType<typeof proposeAppAiBuild>>, plan = session.plan as AppPlan) {
+  const { KGStore, defaultKgPath, generateAppFromPlan, reindexProject } = await import('@zlens/agent');
+  await reindexProject(root, { kgPath: defaultKgPath(root) });
+  const kg = new KGStore(defaultKgPath(root));
+  try {
+    return generateAppFromPlan(root, plan, kg, { overwrite: true });
+  } finally {
+    kg.close();
+  }
+}
 
 function publishedDatasetDescriptor(
   sourceId: string,
@@ -1787,64 +1798,6 @@ describe('Apps command center API helpers', () => {
     expect(loaded?.status).toBe('proposed');
   });
 
-  it('commits a confirmed proposal into app files and marks the session ready', async () => {
-    const root = createProject();
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue',
-      domain: 'revenue',
-      status: 'certified',
-      tags: ['revenue', 'kpi'],
-      description: 'Executive revenue KPI',
-      chart: 'single_value',
-      allowedFilters: ['region'],
-      filterBindings: [{ filter: 'region', binding: 'customer_region' }],
-    });
-
-    const session = await proposeAppAiBuild(root, {
-      prompt: 'Build a revenue app for leadership.',
-      domain: 'revenue',
-      owner: 'owner@local',
-    });
-    expect(session.status).toBe('proposed');
-    const selected = session.proposal!.tiles.map((tile) => tile.id);
-
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds: selected,
-      expectedProposalHash: session.proposalHash,
-      appName: 'Leadership Revenue Brief',
-      audience: 'Finance leadership',
-      filterIds: [],
-      tileOverrides: { [selected[0]]: { title: 'Revenue pulse', viz: 'bar' } },
-    });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-    expect(committed.session.status).toBe('ready');
-    expect(committed.session.committedTileIds).toEqual(selected);
-    expect(committed.session.committedBrief).toMatchObject({
-      appName: 'Leadership Revenue Brief',
-      audience: 'Finance leadership',
-      filterIds: [],
-    });
-    expect(committed.session.generatedPaths.some((path) => path.endsWith('dql.app.json'))).toBe(true);
-    for (const path of committed.session.generatedPaths) {
-      expect(existsSync(join(root, path))).toBe(true);
-    }
-    const manifestPath = committed.session.generatedPaths.find((path) => path.endsWith('dql.app.json'))!;
-    expect(JSON.parse(readFileSync(join(root, manifestPath), 'utf-8'))).toMatchObject({ name: 'Leadership Revenue Brief', audience: 'Finance leadership' });
-    const dashboardPath = committed.session.generatedPaths.find((path) => path.endsWith('.dqld'))!;
-    const dashboard = JSON.parse(readFileSync(join(root, dashboardPath), 'utf-8'));
-    expect(dashboard.filters).toEqual([]);
-    expect(dashboard.layout.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ i: selected[0], title: 'Revenue pulse', viz: expect.objectContaining({ type: 'bar' }) }),
-    ]));
-    expect(dashboard.layout.items.find((item: { i: string }) => item.i === selected[0]).filterBindings ?? []).toEqual([]);
-
-    // Double-commit is refused — the app already exists.
-    const again = await commitAppAiBuild(root, session.id, { selectedTileIds: selected, expectedProposalHash: session.proposalHash });
-    expect(again.ok).toBe(false);
-    if (!again.ok) expect(again.status).toBe(409);
-  });
-
   it('keeps uncovered requirements as visible gaps and never persists generated SQL or local aiPins', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', {
@@ -1890,12 +1843,8 @@ describe('Apps command center API helpers', () => {
     expect(session.proposal!.coverage.generatedTiles).toBe(0);
     expect(session.proposal!.gaps.length).toBeGreaterThan(0);
 
-    const selected = session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id);
-    const committed = await commitAppAiBuild(root, session.id, { selectedTileIds: selected, expectedProposalHash: session.proposalHash });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-
-    const dashboardPath = committed.session.generatedPaths.find((path) => path.endsWith('.dqld'));
+    const generated = await generateAppFromSessionPlan(root, session);
+    const dashboardPath = generated.paths.find((path) => path.endsWith('.dqld'));
     expect(dashboardPath).toBeTruthy();
     const doc = JSON.parse(readFileSync(join(root, dashboardPath!), 'utf-8')) as {
       story?: { goal: string; eligibleTileIds?: string[] };
@@ -1907,7 +1856,7 @@ describe('Apps command center API helpers', () => {
     expect(doc.layout.items.some((item) => item.text?.markdown?.includes('SELECT '))).toBe(false);
   });
 
-  it('materializes explicitly accepted Personal Draft exploration as app-scoped review DQL', async () => {
+  it('proposes Personal Draft exploration as an unselected review tile and writes no App', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', {
       name: 'Total Revenue',
@@ -1948,33 +1897,6 @@ describe('Apps command center API helpers', () => {
       preflight: { status: 'passed' },
     });
     expect(existsSync(join(root, 'apps'))).toBe(false);
-
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds: [exploratory!.id],
-      expectedProposalHash: session.proposalHash,
-    });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-
-    const manifestPath = committed.session.generatedPaths.find((path) => path.endsWith('dql.app.json'))!;
-    const manifest = JSON.parse(readFileSync(join(root, manifestPath), 'utf-8')) as { visibility: string; publicationIntent: string };
-    expect(manifest).toMatchObject({ visibility: 'private', publicationIntent: 'personal' });
-    const draftPath = committed.session.generatedPaths.find((path) => path.includes('/drafts/') && path.endsWith('.dql'));
-    expect(draftPath).toBeTruthy();
-    expect(readFileSync(join(root, draftPath!), 'utf-8')).toContain('status = "review"');
-
-    const dashboardPath = committed.session.generatedPaths.find((path) => path.endsWith('.dqld'))!;
-    const dashboard = JSON.parse(readFileSync(join(root, dashboardPath), 'utf-8')) as {
-      layout: { items: Array<{ draftAnalysis?: { ref: string }; sourceClass?: string; review?: { status: string }; text?: { markdown: string } }> };
-    };
-    expect(dashboard.layout.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        draftAnalysis: expect.objectContaining({ ref: expect.stringMatching(/^drafts\/.+\.dql$/) }),
-        sourceClass: 'exploratory_analysis',
-        review: expect.objectContaining({ status: 'required' }),
-      }),
-    ]));
-    expect(dashboard.layout.items.some((item) => item.text?.markdown?.includes('SELECT '))).toBe(false);
   });
 
   it('does not generate uncovered SQL unless the user explicitly requests the gap action', async () => {
@@ -3259,7 +3181,7 @@ describe('Apps command center API helpers', () => {
     expect(failed.proposal!.gaps.length).toBeGreaterThan(0);
   });
 
-  it('refuses to commit a proposal with no certified tiles (apps need a certified anchor)', async () => {
+  it('proposes no certified tiles and writes no App when nothing certified matches (apps need a certified anchor)', async () => {
     const root = createProject();
     // No certified blocks in the project → the proposal has 0 certified tiles.
     const session = await proposeAppAiBuild(root, {
@@ -3272,58 +3194,10 @@ describe('Apps command center API helpers', () => {
       expect(session.proposal!.coverage.certifiedTiles).toBe(0);
       const certifiedIds = session.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id);
       expect(certifiedIds).toEqual([]);
-      const committed = await commitAppAiBuild(root, session.id, {
-        selectedTileIds: session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id),
-        expectedProposalHash: session.proposalHash,
-      });
-      // Rejected either way (no selectable tiles → 400, or the certified-coverage
-      // guard → 409). What matters: no certified-less app is ever created.
-      expect(committed.ok).toBe(false);
-      if (!committed.ok) expect([400, 409]).toContain(committed.status);
     } else {
       // Or propose itself reports the coverage error — either way, no app is created.
       expect(session.status).toBe('error');
     }
-    expect(existsSync(join(root, 'apps'))).toBe(false);
-  });
-
-  it('refuses to commit an empty selection', async () => {
-    const root = createProject();
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue',
-      domain: 'revenue',
-      status: 'certified',
-      tags: ['revenue', 'kpi'],
-      description: 'Executive revenue KPI',
-      chart: 'single_value',
-    });
-
-    const session = await proposeAppAiBuild(root, {
-      prompt: 'Build a revenue app for leadership.',
-      domain: 'revenue',
-      owner: 'owner@local',
-    });
-    const rejected = await commitAppAiBuild(root, session.id, { selectedTileIds: [], expectedProposalHash: session.proposalHash });
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) expect(rejected.error).toContain('at least one tile');
-  });
-
-  it('rejects stale proposal hashes and source drift without writing an App', async () => {
-    const root = createProject();
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI', chart: 'single_value',
-    });
-    const session = await proposeAppAiBuild(root, { prompt: 'Build a revenue app', domain: 'revenue', owner: 'owner@local' });
-    expect(session.status).toBe('proposed');
-    const ids = session.proposal!.tiles.map((tile) => tile.id);
-    const staleHash = await commitAppAiBuild(root, session.id, { selectedTileIds: ids, expectedProposalHash: 'wrong' });
-    expect(staleHash.ok).toBe(false);
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI changed after proposal', chart: 'single_value',
-    });
-    const drifted = await commitAppAiBuild(root, session.id, { selectedTileIds: ids, expectedProposalHash: session.proposalHash });
-    expect(drifted.ok).toBe(false);
-    if (!drifted.ok) expect(drifted.status).toBe(409);
     expect(existsSync(join(root, 'apps'))).toBe(false);
   });
 
@@ -3335,22 +3209,22 @@ describe('Apps command center API helpers', () => {
       name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI', chart: 'single_value',
     });
 
-    // 1. Build, editing the brief on the way through.
+    // 1. Build from the AI plan, editing the brief on the way through.
     const session = await proposeAppAiBuild(root, { prompt: 'Build a revenue app for leadership.', domain: 'revenue', owner: 'owner@local' });
     expect(session.status).toBe('proposed');
-    const tiles = session.proposal!.tiles.filter((tile) => !tile.error);
-    expect(tiles.length).toBeGreaterThan(0);
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds: tiles.map((tile) => tile.id),
-      expectedProposalHash: session.proposalHash,
-      appName: 'Leadership Revenue',
-      tileOverrides: { [tiles[0].id]: { title: 'Revenue right now' } },
+    const plan = session.plan as AppPlan;
+    const firstTileId = plan.pages[0].tiles.find((tile) => tile.kind === 'certified_block')!.id;
+    const generated = await generateAppFromSessionPlan(root, session, {
+      ...plan,
+      name: 'Leadership Revenue',
+      pages: plan.pages.map((page) => ({
+        ...page,
+        tiles: page.tiles.map((tile) => (tile.id === firstTileId ? { ...tile, title: 'Revenue right now' } : tile)),
+      })),
     });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-    const appId = committed.app!.id;
+    const appId = plan.appId;
     const appPath = join(root, `apps/${appId}/dql.app.json`);
-    const dashboardPath = join(root, committed.session.generatedPaths.find((path) => path.endsWith('.dqld'))!);
+    const dashboardPath = join(root, generated.paths.find((path) => path.endsWith('.dqld'))!);
 
     // The brief's edits reached disk.
     expect(JSON.parse(readFileSync(appPath, 'utf-8')).name).toBe('Leadership Revenue');
@@ -3422,7 +3296,7 @@ describe('Apps command center API helpers', () => {
     expect(renameApp(root, 'revenue-app', {}).ok).toBe(false);
   });
 
-  it('adds one approved AI page without rewriting existing App content and rejects stale App drift (API-009, UI-017, E2E-016)', async () => {
+  it('proposes an AI page for an existing App without rewriting its content (API-009, UI-017)', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', {
       name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI', chart: 'single_value',
@@ -3445,52 +3319,6 @@ describe('Apps command center API helpers', () => {
     expect(session.dashboardId).not.toBe('overview');
     expect(readFileSync(appPath, 'utf-8')).toBe(originalAppSource);
     expect(readFileSync(originalDashboardPath, 'utf-8')).toBe(originalDashboardSource);
-
-    const selectedTileIds = session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id);
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds,
-      expectedProposalHash: session.proposalHash,
-      pageTitle: 'Leadership Revenue Drivers',
-      appName: 'This must not rename the App',
-    });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-    expect(readFileSync(appPath, 'utf-8')).toBe(originalAppSource);
-    expect(readFileSync(originalDashboardPath, 'utf-8')).toBe(originalDashboardSource);
-    expect(committed.session.generatedPaths).toEqual([
-      `apps/revenue-app/dashboards/${committed.dashboardId}.dqld`,
-    ]);
-    const added = loadDashboardDocument(join(root, committed.session.generatedPaths[0]));
-    expect(added.document?.metadata.title).toBe('Leadership Revenue Drivers');
-
-    // Drift detection covers what a page add can actually conflict with: the
-    // App manifest and its dashboard documents. Generated prose and notebook
-    // output do not participate — hashing them made an unrelated edit fail the
-    // commit with an unexplained conflict.
-    const tolerantSession = await proposeAppAiBuild(root, {
-      prompt: 'Add a revenue driver page for leadership', existingAppId: 'revenue-app',
-    });
-    expect(tolerantSession.status).toBe('proposed');
-    writeFileSync(join(root, 'apps/revenue-app/README.md'), '# Concurrent edit\n', 'utf-8');
-    const tolerantCommit = await commitAppAiBuild(root, tolerantSession.id, {
-      selectedTileIds: tolerantSession.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id),
-      expectedProposalHash: tolerantSession.proposalHash,
-    });
-    expect(tolerantCommit.ok).toBe(true);
-
-    const staleSession = await proposeAppAiBuild(root, {
-      prompt: 'Add a quarterly revenue outlook page', existingAppId: 'revenue-app',
-    });
-    expect(staleSession.status).toBe('proposed');
-    // A real conflict: the page this proposal was built against changed.
-    writeFileSync(originalDashboardPath, `${readFileSync(originalDashboardPath, 'utf-8')}\n`, 'utf-8');
-    const staleCommit = await commitAppAiBuild(root, staleSession.id, {
-      selectedTileIds: staleSession.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id),
-      expectedProposalHash: staleSession.proposalHash,
-    });
-    expect(staleCommit.ok).toBe(false);
-    if (!staleCommit.ok) expect(staleCommit.status).toBe(409);
-    expect(existsSync(join(root, `apps/revenue-app/dashboards/${staleSession.dashboardId}.dqld`))).toBe(false);
   });
 
   it('returns a research proposal without creating an investigation when context is required', async () => {

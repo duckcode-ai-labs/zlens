@@ -18,6 +18,7 @@ export const CLIP_IDS = [
   'import-certify',
   'notebook',
   'app-ask',
+  'app-builder',
   'lineage',
   'mcp-connect',
 ];
