@@ -591,3 +591,42 @@ describe('a DuckDB file another process holds', () => {
     expect(duckDBOpenFailureMessage('/p/x.duckdb', 'IO Error: No such file')).toBe('DuckDB connection failed: IO Error: No such file');
   });
 });
+
+// New-user review blocker (B2): Python duckdb 2.0 wrote the dbt sample's file,
+// and DuckDB's message did not say which release could read it or how to fix it.
+describe('a DuckDB file written by a newer DuckDB', () => {
+  // The Node duckdb 1.4.4 driver's exact message for a file Python duckdb 2.0.0 wrote.
+  const duckdb2 = [
+    'IO Error: Trying to read a database file with version number 999, but we can only read versions between 64 and 67.',
+    'The database file was created with an newer version of DuckDB.',
+    '',
+    'Newer DuckDB version might introduce backward incompatible changes (possibly guarded by compatibility settings).',
+    'See the storage page for migration strategy and more information: https://duckdb.org/internals/storage',
+  ].join('\n');
+
+  it('says DuckDB 2.x wrote it, that ZLens reads 1.4, and how to rebuild it', async () => {
+    const { duckDBOpenFailureMessage } = await import('./duckdb.js');
+    const message = duckDBOpenFailureMessage('/p/jaffle_shop.duckdb', duckdb2);
+    const [guidance, ...rest] = message.split('\n');
+    expect(guidance).toBe(
+      'This database file was written by a newer DuckDB (2.x). ZLens reads files from DuckDB 1.4. '
+      + "Rebuild it with `pip install 'duckdb<1.5'` (then rerun dbt), or use a file written by DuckDB 1.4.",
+    );
+    // DuckDB's own words stay underneath, with the file they are about.
+    expect(rest.join('\n')).toBe(`Original DuckDB error (/p/jaffle_shop.duckdb): ${duckdb2}`);
+  });
+
+  it('does not claim 2.x for another newer storage version', async () => {
+    const { duckDBNewerFileMessage } = await import('./duckdb.js');
+    const message = duckDBNewerFileMessage('/p/x.duckdb', 'IO Error: Trying to read a database file with version number 68, but we can only read versions between 64 and 67.\nThe database file was created with an newer version of DuckDB.');
+    expect(message).toMatch(/^This database file was written by a newer DuckDB\. ZLens reads files from DuckDB 1\.4\./);
+    expect(message).not.toContain('2.x');
+  });
+
+  it('leaves other open failures alone', async () => {
+    const { duckDBNewerFileMessage, duckDBOpenFailureMessage } = await import('./duckdb.js');
+    expect(duckDBNewerFileMessage('/p/x.duckdb', 'IO Error: No such file')).toBeUndefined();
+    expect(duckDBNewerFileMessage('/p/x.duckdb', 'IO Error: Trying to read a database file with version number 39, but we can only read versions between 64 and 67.\nThe database file was created with an older version of DuckDB.')).toBeUndefined();
+    expect(duckDBOpenFailureMessage('/p/x.duckdb', 'IO Error: Could not set lock on file "/p/x.duckdb": Conflicting lock is held in node (PID 7)')).toMatch(/^DuckDB file \/p\/x\.duckdb is in use/);
+  });
+});

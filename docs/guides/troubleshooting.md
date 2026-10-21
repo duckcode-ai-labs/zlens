@@ -170,6 +170,27 @@ Stop that process (Ctrl+C in the workbench's terminal) and run the command
 again. The workbench shows the same message when another program holds the
 file.
 
+### "This database file was written by a newer DuckDB (2.x)"
+
+The full message also shows DuckDB's own words: "Trying to read a database
+file with version number 999, but we can only read versions between 64 and
+67. The database file was created with an newer version of DuckDB."
+
+ZLens reads DuckDB files with DuckDB 1.4. DuckDB 2.0 (Python `duckdb` 2.0,
+which `dbt-duckdb` installs unless you pin it, or the 2.0 `duckdb` CLI) writes
+files that 1.4 cannot open. Stop the workbench, install DuckDB 1.4 where the
+file is built, and rebuild the file:
+
+```bash
+pip install 'duckdb<1.5'   # in the virtual environment that runs dbt
+rm jaffle_shop.duckdb      # your DuckDB file; dbt recreates it
+dbt seed && dbt build
+```
+
+To keep it pinned, add `duckdb>=1.4,<1.5` to your `requirements.txt`. The
+samples do this, and their `./setup.sh` rebuilds a file written by a newer
+DuckDB for you.
+
 ---
 
 ## Authoring blocks
