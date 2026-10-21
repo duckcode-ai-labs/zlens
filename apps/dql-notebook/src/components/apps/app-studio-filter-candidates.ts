@@ -1,4 +1,5 @@
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../api/client';
+import { DASHBOARD_FILTER_DOES_NOT_APPLY_REASON } from '@zlens/core/apps/filter-reach';
 
 type StudioPage = AppStudioBuildDraft['pages'][number];
 type StudioTile = StudioPage['layout']['items'][number];
@@ -66,6 +67,47 @@ export function datasetFilterBindingsForSelection(
       field: binding.field,
       tileIds: [...binding.tileIds].sort(),
     }]));
+}
+
+/**
+ * A Saved query, Metrics or draft tile's filter bindings after the author
+ * chose "Applies" or "Does not apply" for one filter in the Filters tab.
+ *
+ * Both choices are stored. "Applies" is a link the next preview checks;
+ * "Does not apply" is an explicit exclusion (`capability: 'unsupported'` with
+ * a reason) that readers see as "Not filtered by …" and that never blocks
+ * publishing. A tile that cannot take the field (an App-scope filter on a
+ * page whose tiles do not expose it) is stored as "Does not apply" with why.
+ * Dataset tiles keep their choice on the filter's `datasetBindings` instead.
+ */
+export function studioTileFilterBindings(input: {
+  tile: Pick<StudioTile, 'filterBindings'>;
+  filterId: string;
+  fieldId: string;
+  required: boolean;
+  /** Whether the filter is on this tile's page at all. */
+  filterOnPage: boolean;
+  applies: boolean;
+  mapping?: StudioFilterTileMapping;
+}): NonNullable<StudioTile['filterBindings']> {
+  const rest = (input.tile.filterBindings ?? []).filter((binding) => binding.filter !== input.filterId);
+  if (!input.filterOnPage) return rest;
+  if (input.applies && input.mapping?.supported) {
+    return [...rest, {
+      filter: input.filterId,
+      binding: input.mapping.binding ?? input.fieldId,
+      mode: input.mapping.mode ?? 'predicate',
+      required: input.required,
+      capability: 'preflight_required',
+    }];
+  }
+  return [...rest, {
+    filter: input.filterId,
+    capability: 'unsupported',
+    unsupportedReason: input.mapping && !input.mapping.supported && input.mapping.reason
+      ? input.mapping.reason
+      : DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  }];
 }
 
 /**

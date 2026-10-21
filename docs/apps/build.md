@@ -189,15 +189,63 @@ its type, trust and **Why:** line. **Apply N changes** adds that data to
 1. Open the **Filters** tab and click **New filter**.
 2. Set a **Display label** and a **Control**: **Searchable dropdown**,
    **Searchable multi-select**, **Date range** or **Single date**.
-3. Choose **Apply to**: **This page** or **All compatible pages**, and the
-   **Linked tiles**.
-4. Click **Create filter**.
+3. Choose **Apply to**: **This page** or **All compatible pages**.
+4. Under **Tiles**, set each tile to **Applies** or **Does not apply**.
+5. Click **Create filter**.
 
 A new filter starts linked to the tiles of the Dataset you picked the field
 from. When other Datasets in the App have an approved field with the same
 name and kind, **Also filter these tiles?** lists each as *Dataset · field*,
 unchecked. Check one to link its tiles too; nothing is linked by name on its
 own.
+
+### Applies or Does not apply
+
+Every tile on the filter's pages gets one of two choices, and both are saved
+with the page:
+
+- **Applies**: the filter narrows the tile.
+- **Does not apply**: the tile keeps showing everything, and readers see a
+  **Not filtered by** *filter* pill on it. A tile that can't take the field
+  (an App-wide filter on a page whose tiles don't have it) starts as **Does not
+  apply**, with the reason shown.
+
+**Does not apply** never blocks publishing. Only a tile with neither choice
+does, and the publish check sends you to the Filters tab to choose. A Saved
+query tile marked **Does not apply** is not filtered even when it has a
+parameter with the filter's name.
+
+### How filters reach each tile
+
+| Tile | How the filter applies |
+| --- | --- |
+| Dataset | A condition on the Dataset field the filter is mapped to. |
+| Metrics | A condition on a dimension of the metric's model, also when the tile doesn't group by it (a KPI). Text search works with the DQL native compiler; with MetricFlow the tile shows **Not filtered by**. |
+| Saved query | A parameter with the filter's name (`region`, or `period_start` / `period_end` for a range), otherwise a condition on the result column the filter is linked to. |
+| Draft (needs review) | The same as a Saved query tile. Its evidence lists the filters that applied and the ones that didn't. |
+| Text | Never filtered. |
+
+### Dates
+
+Every tile uses the same date rule:
+
+- A date range keeps everything from the start date through the whole end
+  date: `>= start` and `< the day after end`. 1–31 March includes rows late on
+  31 March.
+- A single date is that whole day, so it also matches timestamp columns.
+- A relative date, such as the last 7 days, becomes a date range first, with
+  today taken in the filter's timezone.
+- Timestamp fields on a Dataset use the filter's timezone. On Metrics, Saved
+  query and draft tiles the dates are compared as written, in the warehouse's
+  timezone.
+- A Saved query's `_start` / `_end` parameters receive the dates you picked;
+  `_end` is the last day itself, not the day after.
+
+### What readers see
+
+Readers' pills come from the run that drew the page. When a filter did not
+narrow a tile, for any reason, the tile shows **Not filtered by** *filter*, and
+the pill's tooltip says why. Text tiles never show filter pills.
 
 ## 6. Preview
 

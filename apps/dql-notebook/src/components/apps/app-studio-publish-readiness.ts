@@ -18,15 +18,25 @@ export type AppPublicationIssueAction = 'sources' | 'refresh_sources' | 'filters
 export function publicationIssueSummaries(issues: string[]): Array<{ id: string; title: string; detail: string; action: AppPublicationIssueAction }> {
   const known = /Required App question is unresolved|Review task is still open|Run a current settled preview|requires snapshot-bound semantic approval|is review-required and cannot be published|references app-scoped exploratory DQL|Resolve required Build Frame clarifications/i;
   const summaries = issues.filter((issue) => !known.test(issue)).map((issue) => {
+    const choiceMatch = issue.match(/^[^/]+\/[^ ]+ has no choice for filter (.+?)\. Open the Filters tab/i);
+    if (choiceMatch) {
+      const label = choiceMatch[1];
+      const affected = issues.filter((candidate) => candidate.includes(`has no choice for filter ${label}.`)).length;
+      return {
+        id: `filters:${label.toLowerCase()}`,
+        title: `Choose where ${label} applies`,
+        detail: `${affected} ${affected === 1 ? 'tile has' : 'tiles have'} no choice for ${label}. Open Filters, edit ${label}, and set each tile to Applies or Does not apply.`,
+        action: 'filters' as const,
+      };
+    }
     const filterMatch = issue.match(/^[^/]+\/[^ ]+ does not have a preflighted binding for filter (.+)\.$/i);
     if (filterMatch) {
       const label = filterMatch[1];
-      const affected = issues.filter((candidate) => candidate.endsWith(`binding for filter ${label}.`)).length;
       return {
-        id: `filters:${label.toLowerCase()}`,
-        title: `Limit ${label} to compatible components`,
-        detail: `${label} is applied to ${affected} ${affected === 1 ? 'component that cannot' : 'components that cannot'} use it. Open Filters, edit ${label}, and keep only the compatible components selected.`,
-        action: 'filters' as const,
+        id: `filters-preview:${label.toLowerCase()}`,
+        title: `Refresh the preview for ${label}`,
+        detail: `${label} is linked to tiles that have not run with it yet. Run the page preview once so ZLens can check the link.`,
+        action: 'preview' as const,
       };
     }
     if (/filter|binding/i.test(issue)) return { id: 'filters', title: 'Finish filter wiring', detail: issue, action: 'filters' as const };

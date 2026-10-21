@@ -2662,6 +2662,12 @@ export interface DashboardRunFilterIssue {
   message?: string;
 }
 
+/** What one tile did with the page's filters (see `filterReport`). */
+export interface DashboardTileFilterReport {
+  applied: string[];
+  notApplied: Array<{ filter: string; code: 'does_not_apply' | 'not_linked' | 'unsupported' | 'invalid_value'; reason: string }>;
+}
+
 export interface DashboardRunResponse {
   appId: string;
   dashboardId: string;
@@ -2750,6 +2756,12 @@ export interface DashboardRunResponse {
       /** Dataset filters intentionally unmapped from this tile's source. */
       unbound?: DashboardRunFilterIssue[];
     };
+    /**
+     * Server truth for every tile type: which page filters (with a value)
+     * narrowed this tile and which did not, with why. Readers' "Not filtered
+     * by …" pills come from this once a run exists.
+     */
+    filterReport?: DashboardTileFilterReport;
     invocation?: {
       resolvedParameters: Array<{
         name: string;

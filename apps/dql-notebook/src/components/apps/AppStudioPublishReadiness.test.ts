@@ -133,6 +133,18 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
     ])).toEqual([]);
   });
 
+  it('sends a tile with no filter choice to the Filters tab, and an unchecked link to preview', () => {
+    const summaries = publicationIssueSummaries([
+      'overview/revenue-trend has no choice for filter Customer Name. Open the Filters tab and set this tile to Applies or Does not apply.',
+      'overview/orders has no choice for filter Customer Name. Open the Filters tab and set this tile to Applies or Does not apply.',
+      'overview/top-customers does not have a preflighted binding for filter Region.',
+    ]);
+    expect(summaries).toEqual([
+      expect.objectContaining({ title: 'Choose where Customer Name applies', action: 'filters', detail: expect.stringContaining('2 tiles have no choice for Customer Name') }),
+      expect.objectContaining({ title: 'Refresh the preview for Region', action: 'preview' }),
+    ]);
+  });
+
   it('routes certified fingerprint drift to refresh but draft resolution failures to replacement (UI-023)', () => {
     expect(publicationIssueSummaries(['Source sales.revenue changed after selection.'])[0]?.action).toBe('refresh_sources');
     expect(publicationIssueSummaries(['overview/orders no longer resolves to a certified block.'])[0]).toMatchObject({

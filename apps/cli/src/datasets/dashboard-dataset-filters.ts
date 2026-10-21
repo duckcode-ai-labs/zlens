@@ -1,5 +1,9 @@
 import {
+  dashboardDateBoundsForColumn,
   datasetPhysicalField,
+  isDashboardDateFilterType,
+  resolveDashboardDateFilter,
+  resolveRelativeDateRange,
   tileQueryOutputAliases,
   type DashboardDocument,
   type DashboardGridItem,
@@ -184,44 +188,29 @@ function dashboardFilterToTileFilter(
   value: unknown,
   now: Date,
 ): { filters: TileQueryFilter[] } | { error: string } {
-  let values = Array.isArray(value) ? value : [value];
-  if (type === 'relative_date') {
-    if (values.length !== 1 || typeof values[0] !== 'string') return { error: `${filterId} requires one relative date such as last_30_days.` };
-    if (field.type !== 'date' && field.type !== 'timestamp') {
+  const values = Array.isArray(value) ? value : [value];
+  // Dates follow the one App date rule (@zlens/core filter-dates): a range is
+  // start-inclusive and end-exclusive at the next day, a single date is that
+  // whole day, and a relative date resolves to a range first.
+  if (isDashboardDateFilterType(type)) {
+    if (type === 'relative_date' && field.type !== 'date' && field.type !== 'timestamp') {
       return { error: `${filterId} is a relative date, but ${field.name} is not a date or timestamp field.` };
     }
-    if (field.type === 'timestamp' && !timezone) {
-      return { error: `${filterId} requires a declared IANA timezone before it can bound timestamp values.` };
+    const resolved = resolveDashboardDateFilter({ filterId, type, value, timezone, now });
+    if (!resolved) return { error: `${filterId} requires a date value.` };
+    if (resolved.kind === 'error') return { error: resolved.message };
+    if (resolved.kind === 'explicit') {
+      // Explicit timestamp boundaries are already precise. Preserve their
+      // caller-declared semantics rather than guessing an extra calendar day.
+      return { filters: [{ field: field.name, op: 'between', values: [resolved.start, resolved.end] }] };
     }
-    const range = resolveRelativeDateRange(values[0], calendarDateInTimezone(now, timezone ?? 'UTC'));
-    if (!range) return { error: `${filterId} uses an unknown relative date ${values[0]}. Use last_N_days, today, yesterday, month_to_date, quarter_to_date, or year_to_date.` };
-    // A relative date is an inclusive calendar range ending today in the
-    // filter's timezone; from here it is exactly a date range.
-    type = 'daterange';
-    values = [range.start, range.end];
-  }
-  if (type === 'daterange') {
-    if (values.length !== 2) return { error: `${filterId} requires exactly two values for a range.` };
-    if (!values.every((candidate) => typeof candidate === 'string')) return { error: `${filterId} requires ISO date values.` };
-    const [start, end] = values as string[];
-    if (isCalendarDate(start) && isCalendarDate(end)) {
-      if (field.type === 'timestamp' && !timezone) {
-        return { error: `${filterId} requires a declared IANA timezone before it can bound timestamp values.` };
-      }
-      const exclusiveEnd = field.type === 'timestamp'
-        ? calendarDateBoundaryInTimezone(nextCalendarDate(end), timezone!)
-        : nextCalendarDate(end);
-      const inclusiveStart = field.type === 'timestamp'
-        ? calendarDateBoundaryInTimezone(start, timezone!)
-        : start;
-      return { filters: [
-        { field: field.name, op: 'gte', values: [inclusiveStart] },
-        { field: field.name, op: 'lt', values: [exclusiveEnd] },
-      ] };
-    }
-    // Explicit timestamp boundaries are already precise. Preserve their
-    // caller-declared semantics rather than guessing an extra calendar day.
-    return { filters: [{ field: field.name, op: 'between', values }] };
+    const column = field.type === 'timestamp' ? 'timestamp' : field.type === 'date' ? 'date' : 'unknown';
+    const bounds = dashboardDateBoundsForColumn(resolved.bounds, column, timezone);
+    if ('error' in bounds) return { error: `${filterId} ${bounds.error}` };
+    return { filters: [
+      { field: field.name, op: 'gte', values: [bounds.start] },
+      { field: field.name, op: 'lt', values: [bounds.endExclusive] },
+    ] };
   }
   if (type === 'number_range') {
     if (values.length !== 2) return { error: `${filterId} requires exactly two values for a range.` };
@@ -239,74 +228,8 @@ function dashboardFilterToTileFilter(
   return { filters: [{ field: field.name, op: 'eq', values }] };
 }
 
-/**
- * Resolve a relative-date preset to an inclusive calendar range. `today` is
- * the calendar date in the filter's timezone (UTC when none is declared, which
- * only a date field allows). `last_N_days` includes today: last_7_days is
- * today and the six days before it.
- */
-export function resolveRelativeDateRange(preset: string, today: string): { start: string; end: string } | undefined {
-  const [year, month, day] = today.split('-').map(Number);
-  const shift = (days: number) => new Date(Date.UTC(year, month - 1, day + days)).toISOString().slice(0, 10);
-  const lastDays = /^last_(\d{1,4})_days$/.exec(preset);
-  if (lastDays) {
-    const count = Number(lastDays[1]);
-    if (count < 1 || count > 3660) return undefined;
-    return { start: shift(-(count - 1)), end: today };
-  }
-  if (preset === 'today') return { start: today, end: today };
-  if (preset === 'yesterday') return { start: shift(-1), end: shift(-1) };
-  if (preset === 'month_to_date') return { start: `${today.slice(0, 7)}-01`, end: today };
-  if (preset === 'quarter_to_date') {
-    const quarterMonth = String(Math.floor((month - 1) / 3) * 3 + 1).padStart(2, '0');
-    return { start: `${today.slice(0, 4)}-${quarterMonth}-01`, end: today };
-  }
-  if (preset === 'year_to_date') return { start: `${today.slice(0, 4)}-01-01`, end: today };
-  return undefined;
-}
-
-function calendarDateInTimezone(instant: Date, timezone: string): string {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
-  }).formatToParts(instant).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
-
-function isCalendarDate(value: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const [year, month, day] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
-}
-
-function nextCalendarDate(value: string): string {
-  const [year, month, day] = value.split('-').map(Number);
-  const next = new Date(Date.UTC(year, month - 1, day + 1));
-  return next.toISOString().slice(0, 10);
-}
-
-/** Convert a declared local calendar boundary to a UTC timestamp without
- * treating a daylight-saving day as a fixed 24-hour duration. */
-function calendarDateBoundaryInTimezone(date: string, timezone: string): string {
-  const [year, month, day] = date.split('-').map(Number);
-  const requested = Date.UTC(year, month - 1, day, 0, 0, 0);
-  const formatter = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
-  });
-  let instant = requested;
-  // One correction resolves ordinary offsets; a second resolves a DST
-  // transition at local midnight without assuming a 24-hour calendar day.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const parts = Object.fromEntries(formatter.formatToParts(new Date(instant))
-      .filter((part) => part.type !== 'literal')
-      .map((part) => [part.type, Number(part.value)]));
-    const observed = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
-    instant += requested - observed;
-  }
-  return new Date(instant).toISOString();
-}
+/** Kept for existing callers; the rule itself lives in @zlens/core. */
+export { resolveRelativeDateRange };
 
 function isEmptyDashboardFilterValue(value: unknown): boolean {
   return value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0);

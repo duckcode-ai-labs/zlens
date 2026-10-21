@@ -26,6 +26,7 @@ import type {
   ResearchPlan as AppResearchPlan,
 } from '@zlens/agent';
 import {
+  dashboardTileFilterChoice,
   loadAppDocument,
   findAppDocuments,
   loadDashboardDocument,
@@ -5791,19 +5792,31 @@ function appPublicationReadiness(
       }
       if ((dashboard.version === 2 || dashboard.version === 3) && (item.block || item.semantic || item.draftAnalysis)) {
         for (const filter of dashboard.filters ?? []) {
-          if (filter.scope?.tileIds && !filter.scope.tileIds.includes(item.i)) continue;
-          const binding = item.filterBindings?.find((candidate) => candidate.filter === filter.id);
-          // An explicit unsupported binding is a governed exclusion, not a
-          // missing binding. Studio shows the reason on the affected tile and
-          // the filter deliberately leaves that tile unchanged.
-          if (binding?.capability === 'unsupported' && binding.unsupportedReason?.trim()) continue;
-          const settled = options.settledPageIds?.has(dashboard.id) ?? false;
-          if (!binding || (!binding.binding && binding.mode !== 'parameter') || (binding.capability === 'preflight_required' && !settled)) {
+          // Each tile needs an author choice for each page filter: "Applies"
+          // (a link) or "Does not apply" (an explicit, stored exclusion such
+          // as a filterBinding with capability 'unsupported'). "Does not
+          // apply" is resolved: readers see "Not filtered by …" on the tile.
+          // Only a tile with neither blocks publication.
+          const { choice } = dashboardTileFilterChoice(dashboard, item, filter);
+          if (choice === 'does_not_apply' || choice === 'not_applicable') continue;
+          const label = filter.label ?? filter.id;
+          if (choice === 'unlinked') {
             blockers.push({
               dashboardId: dashboard.id,
               tileId: item.i,
               code: 'filter_not_preflighted',
-              message: `${dashboard.id}/${item.i} does not have a preflighted binding for filter ${filter.label ?? filter.id}.`,
+              message: `${dashboard.id}/${item.i} has no choice for filter ${label}. Open the Filters tab and set this tile to Applies or Does not apply.`,
+            });
+            continue;
+          }
+          const binding = item.filterBindings?.find((candidate) => candidate.filter === filter.id);
+          const settled = options.settledPageIds?.has(dashboard.id) ?? false;
+          if (binding?.capability === 'preflight_required' && !settled) {
+            blockers.push({
+              dashboardId: dashboard.id,
+              tileId: item.i,
+              code: 'filter_not_preflighted',
+              message: `${dashboard.id}/${item.i} does not have a preflighted binding for filter ${label}.`,
             });
           }
         }

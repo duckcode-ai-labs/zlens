@@ -91,6 +91,14 @@
       "types": "./dist/apps/reader-trust.d.ts",
       "import": "./dist/apps/reader-trust.js"
     },
+    "./apps/filter-dates": {
+      "types": "./dist/apps/filter-dates.d.ts",
+      "import": "./dist/apps/filter-dates.js"
+    },
+    "./apps/filter-reach": {
+      "types": "./dist/apps/filter-reach.d.ts",
+      "import": "./dist/apps/filter-reach.js"
+    },
     "./datasets/table-draft": {
       "types": "./dist/datasets/table-draft.d.ts",
       "import": "./dist/datasets/table-draft.js"

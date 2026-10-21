@@ -22,13 +22,21 @@ export type DatasetTileNotice = {
   detail: string;
 };
 
-export function datasetTileNotices(tile: DashboardRunTile | undefined): DatasetTileNotice[] {
+export function datasetTileNotices(tile: DashboardRunTile | undefined, options: { filterLabels?: Record<string, string> } = {}): DatasetTileNotice[] {
   const notices: DatasetTileNotice[] = [];
+  const nameOf = (filterId: string) => options.filterLabels?.[filterId] ?? filterId.replace(/[_-]+/g, ' ');
   for (const issue of tile?.dataset?.unboundFilters ?? []) {
-    const name = issue.filterId.replace(/[_-]+/g, ' ');
+    const name = nameOf(issue.filterId);
     notices.push(issue.code === 'DATASET_TILE_EXCLUDED'
-      ? { key: `${issue.filterId}:${issue.code}`, kind: 'excluded', label: `Excluded from ${name}`, detail: issue.message }
+      ? { key: `${issue.filterId}:${issue.code}`, kind: 'excluded', label: `Not filtered by ${name}`, detail: issue.message }
       : { key: `${issue.filterId}:${issue.code}`, kind: 'not_linked', label: `Not filtered by ${name}`, detail: issue.message });
+  }
+  // Every other data tile reports what the server did with each page filter.
+  // A Dataset tile already said so above; text tiles never carry a report.
+  if (!tile?.dataset && tile?.tileType !== 'text') {
+    for (const entry of tile?.filterReport?.notApplied ?? []) {
+      notices.push({ key: `${entry.filter}:${entry.code}`, kind: 'not_linked', label: `Not filtered by ${nameOf(entry.filter)}`, detail: entry.reason });
+    }
   }
   if (tile?.dataset?.validation?.outcome === 'adapted') {
     for (const adaptation of tile.dataset.validation.adaptations) {
