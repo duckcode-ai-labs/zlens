@@ -17,6 +17,7 @@ export type {
   DatasetFieldStatus,
   DatasetFieldType,
   DatasetGrain,
+  DatasetJoin,
   DatasetKind,
   DatasetLifecycle,
   DatasetMeasureAggregation,
@@ -88,8 +89,25 @@ export {
   tableDatasetCheckSentences,
   tableDatasetDeclaration,
   tableProfileColumns,
+  singularWords,
   wordsFor,
 } from './table-draft.js';
+export {
+  adoptDatasetJoins,
+  bareRelation,
+  datasetFieldForFilter,
+  datasetJoinReceiptSentence,
+  datasetJoinsTrust,
+  datasetJoinsUsed,
+  datasetRelatedFieldsUsed,
+  discoverDatasetJoins,
+  relatedFieldParts,
+  relatedFieldWords,
+  tileQueryFieldNames,
+  withDatasetJoins,
+  withoutDatasetJoins,
+} from './related-fields.js';
+export type { DiscoveredDatasetJoins, RelatedRelationshipEdge } from './related-fields.js';
 export type { TableColumnInput, TableColumnKind, TableDatasetField, TableDatasetMeasure, TableDatasetProposal, TableProfile } from './table-draft.js';
 export {
   NON_ADDITIVE_REASON,

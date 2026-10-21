@@ -1,5 +1,7 @@
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../api/client';
 import { DASHBOARD_FILTER_DOES_NOT_APPLY_REASON } from '@zlens/core/apps/filter-reach';
+import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
+import { datasetFieldForFilter, relatedFieldParts } from '@zlens/core/datasets/related-fields';
 import { missingFieldReason, sourceDisplayName } from './source-names';
 
 type StudioPage = AppStudioBuildDraft['pages'][number];
@@ -33,6 +35,12 @@ export type StudioFilterTileMapping = {
   dateFieldOptions?: Array<{ field: string; type: string }>;
   /** The filter field this tile's mapped field stands in for (an author's date mapping). */
   mappedFrom?: string;
+  /**
+   * The join path the filter reaches this tile's Dataset through, in words
+   * ("Customer"): a Customer Name filter reaches the Orders trend through
+   * its Customer join (design D2). Still linked only when the author says so.
+   */
+  via?: string;
 };
 
 /**
@@ -168,13 +176,17 @@ export type StudioFilterLinkSuggestion = {
   sourceId: string;
   datasetName: string;
   field: string;
+  /** The join path the filter reaches this Dataset through ("Customer"), design D2. */
+  via?: string;
   mappingKeys: string[];
   tileCount: number;
 };
 
 /** The Dataset a new filter's field comes from: the first Dataset tile using it, on the active page first. */
 export function filterPrimarySourceId(mappings: StudioFilterTileMapping[], activePageId?: string): string | undefined {
-  const dataset = mappings.filter((mapping) => mapping.supported && mapping.datasetId && mapping.sourceId);
+  // A Dataset with the field of its own comes before one that reaches it through a join.
+  const supported = mappings.filter((mapping) => mapping.supported && mapping.datasetId && mapping.sourceId);
+  const dataset = supported.some((mapping) => !mapping.via) ? supported.filter((mapping) => !mapping.via) : supported;
   return (dataset.find((mapping) => mapping.pageId === activePageId) ?? dataset[0])?.sourceId;
 }
 
@@ -204,7 +216,8 @@ export function filterLinkSuggestions(
   for (const mapping of mappings) {
     if (!mapping.supported || !mapping.datasetId || !mapping.datasetField || !mapping.sourceId || mapping.sourceId === primarySourceId) continue;
     if (mapping.datasetFieldRole === 'attribute' || fieldTypeFamily(mapping.datasetFieldType) !== family) continue;
-    if (mapping.datasetField.toLowerCase() !== primary.datasetField!.toLowerCase()) continue;
+    // The same column, whether the Dataset has it or reaches it through a join (design D2).
+    if (filterColumn(mapping.datasetField) !== filterColumn(primary.datasetField!)) continue;
     const current = groups.get(mapping.sourceId);
     if (current) {
       current.mappingKeys.push(mapping.key);
@@ -216,11 +229,17 @@ export function filterLinkSuggestions(
       sourceId: mapping.sourceId,
       datasetName: datasetDisplayName(source, mapping.sourceName),
       field: mapping.datasetField,
+      ...(mapping.via ? { via: mapping.via } : {}),
       mappingKeys: [mapping.key],
       tileCount: 1,
     });
   }
   return [...groups.values()].sort((left, right) => left.datasetName.localeCompare(right.datasetName));
+}
+
+/** A filter field's column: a related field "customer__customer_name" reads the column customer_name. */
+function filterColumn(field: string): string {
+  return (relatedFieldParts(field)?.column ?? field).toLowerCase();
 }
 
 function datasetDisplayName(source: AppStudioBuildDraft['sources'][number] | undefined, fallback: string): string {
@@ -258,6 +277,14 @@ export function discoverAppFilterCandidates(
       }
     }
   }
+  // A related field ("customer__customer_name") is the same filter as the
+  // column it reads when another source has that column: one candidate, which
+  // reaches the joined Dataset through its join.
+  const plainIds = new Set([...fieldIds].filter((id) => !relatedFieldParts(id)).map((id) => id.toLowerCase()));
+  for (const id of [...fieldIds]) {
+    const parts = relatedFieldParts(id);
+    if (parts && plainIds.has(parts.column.toLowerCase())) fieldIds.delete(id);
+  }
   return [...fieldIds]
     .map((id) => {
       const mappings = filterTileMappingsForField(pages, catalog, id, runtimeFields, boundSources).filter((mapping) => mapping.supported);
@@ -291,7 +318,7 @@ export function filterTileMappingsForField(
   options: StudioFilterMappingOptions = {},
 ): StudioFilterTileMapping[] {
   return pages.flatMap((page) => dataTiles(page).map((tile) => {
-    const datasetMapping: { datasetId: string; field: string; type: string; role: string; mappedFrom?: string } | null = datasetMappingForTile(page, tile, fieldId, boundSources)
+    const datasetMapping: { datasetId: string; field: string; type: string; role: string; mappedFrom?: string; via?: string } | null = datasetMappingForTile(page, tile, fieldId, boundSources)
       ?? overriddenDatasetMappingForTile(page, tile, fieldId, boundSources, options.fieldOverrides);
     if (tile.query || tile.driver) {
       const sourceName = sourceNameForTile(tile, catalog, boundSources);
@@ -313,6 +340,7 @@ export function filterTileMappingsForField(
           sourceId: tile.sourceId,
           sourceRevision: tile.sourceRevision,
           ...(datasetMapping.mappedFrom ? { mappedFrom: datasetMapping.mappedFrom } : {}),
+          ...(datasetMapping.via ? { via: datasetMapping.via } : {}),
         };
       }
       const dateFieldOptions = options.dateFilter ? datasetDateFieldsForTile(page, tile, boundSources) : [];
@@ -408,7 +436,7 @@ function datasetMappingForTile(
   tile: StudioTile,
   fieldId: string,
   boundSources: AppStudioBuildDraft['sources'],
-): { datasetId: string; field: string; type: string; role: string } | null {
+): { datasetId: string; field: string; type: string; role: string; via?: string } | null {
   if (!(tile.query || tile.driver) || !tile.sourceId || !tile.sourceRevision) return null;
   const source = boundSources.find((candidate) => candidate.id === tile.sourceId);
   const descriptor = source?.capabilities?.dataset;
@@ -417,15 +445,24 @@ function datasetMappingForTile(
     && candidate.sourceRevision === tile.sourceRevision
   ));
   if (!descriptor || !binding) return null;
-  const normalized = normalizeFieldId(fieldId);
-  const physical = descriptor.fields.find((field) => (
-    field.kind === 'physical'
-    && field.status === 'approved'
-    && (normalizeFieldId(field.name) === normalized || normalizeFieldId(field.qualifiedId) === normalized)
-  ));
-  return physical && physical.kind === 'physical'
-    ? { datasetId: binding.id, field: physical.name, type: physical.type, role: physical.role }
-    : null;
+  // Its own field of that name, else the one related field that reads the
+  // column through a checked join ("Orders · via Customer"), design D2.
+  const found = datasetFieldForFilter(descriptor, fieldId);
+  if (!found) return null;
+  const via = found.join ? joinPathWords(descriptor.joins ?? [], found.join.id) : undefined;
+  return { datasetId: binding.id, field: found.field.name, type: found.field.type, role: found.field.role, ...(via ? { via } : {}) };
+}
+
+/** "Customer" or "Customer → Region": a join's path from its Dataset. */
+function joinPathWords(joins: DatasetJoin[], joinId: string): string {
+  const chain: string[] = [];
+  let join = joins.find((candidate) => candidate.id === joinId);
+  while (join && chain.length < 4) {
+    chain.unshift(join.label);
+    const parent = join.parent;
+    join = parent ? joins.find((candidate) => candidate.id === parent) : undefined;
+  }
+  return chain.join(' → ');
 }
 
 /** The Dataset behind a tile and its page binding, when both are current. */

@@ -60,6 +60,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Fields from related tables (design D2).** A table Dataset now shows the
+  fields of the tables its rows point to through a checked many-to-one join:
+  under **Orders**, **Orders → Customer → Customer Name** and **Orders →
+  Location → Location Name**, up to two steps when each is many-to-one. A bar
+  of **Order Total** by **Location Name** reads store names, not UUIDs. The
+  tile query adds a LEFT JOIN on the join's keys only for the related fields
+  it uses, and only when the related table holds each key once: current
+  warehouse evidence covers that, otherwise one bounded query checks it before
+  the tile runs, and a repeated key stops the tile with a plain message. A
+  test checks that totals and counts are identical with and without a joined
+  field. One-to-many joins are never followed; the field list says *Orders per
+  customer: add it from Orders*. Joins come from Modeling relationships (with
+  the ones imported from dbt and MetricFlow), joins **Draft my models**
+  drafted in setup, and dbt `relationships` tests. A certified join keeps the
+  tile's trust; a drafted one shows **Needs review** on its group and makes a
+  tile that uses it **Needs review**. The receipt lists each join: *Joined to
+  customers on customer_id (each order has one customer — checked)*. **Add
+  data** says which tables a table reaches (*joins: customers, locations*).
+  - **Filters reach joined tiles.** A **Customer Name** filter offers the
+    Orders trend as *Orders · via Customer* under **Also filter these
+    tiles?** (still unchecked until you check it), and the field appears once
+    in the filter list. Unlinked tiles still say **Not filtered by**.
+  - Descriptors gain optional `joins`, `joinNotes` and a field's `related`
+    (read, checked and round-tripped by the descriptor reader); existing
+    Datasets and tiles are unchanged, and a tile on a Dataset's own fields
+    compiles to the same SQL as before. The App source catalog takes a
+    runtime record decorator (`registerAppSourceRecordDecorator`), so the Data
+    pane, planner, previews and runs read one descriptor.
 - **Honest when no AI is connected.** With no AI provider, **Build new App**
   opens on **Start manually**, and **Describe with AI** says **Connect an AI
   provider to describe an App** (to Settings → AI provider) with **Try keyword

@@ -55,6 +55,8 @@ export interface WarehouseTableSummary {
    * checked row key is reused by "Check and add".
    */
   modeled?: { state: 'modeled' | 'drafted'; entity: string; domain: string; key?: string; proposalId?: string };
+  /** Tables its rows point to through a many-to-one join; their fields come with it (design D2). */
+  joins?: string[];
 }
 import type { DiffReport } from '@zlens/core/format';
 import { normalizeDqlArtifactReference, type DqlArtifactReference } from '@zlens/core/artifacts';
@@ -2841,6 +2843,8 @@ export interface DashboardRunResponse {
       /** C8 outcome the tile ran under; adaptations are disclosed with the result. */
       validation?: { outcome: 'covered' | 'adapted' | 'needs_review' | 'rejected'; adaptations: Array<{ kind: string; message: string }> };
       grainRuntimeEvidence?: DashboardDatasetGrainRuntimeEvidence;
+      /** Joins to related tables the tile used (design D2): who certified each, in plain words. */
+      joins?: Array<{ id: string; table: string; trust: 'certified' | 'review_required'; sentence: string }>;
       semanticTargetBinding?: unknown;
       semanticReceipt?: unknown;
       /** Server-derived choices for a declared hierarchy on this effective query. */
@@ -2869,6 +2873,8 @@ export type DatasetTileQueryPreview =
     result?: { columns?: unknown[]; rows?: Array<Record<string, unknown>>; rowCount?: number; truncated?: boolean };
     validation?: { outcome: string; adaptations?: Array<{ kind: string; message: string }> };
     trustState?: string;
+    /** Joins to related tables the query used (design D2). */
+    joins?: Array<{ id: string; table: string; trust: 'certified' | 'review_required'; sentence: string }>;
   }
   | { ok: false; error?: string; validation?: { outcome: string } };
 

@@ -329,3 +329,70 @@ describe('pivot totals (RFC 0009 step 4)', () => {
       .toThrowError(expect.objectContaining({ message: expect.stringContaining('remove the row limit') }));
   });
 });
+
+describe('fields from related tables (design D2)', () => {
+  const joined = (): DatasetDescriptor => {
+    const base = orderLines();
+    return {
+      ...base,
+      fields: [
+        ...base.fields,
+        { kind: 'physical', name: 'customer_id', qualifiedId: 'order_lines.customer_id', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'customer__customer_name', qualifiedId: 'related::customer::customer_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'customer', column: 'customer_name' } },
+        { kind: 'physical', name: 'customer__region__region_name', qualifiedId: 'related::customer__region::region_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'customer__region', column: 'region_name' } },
+      ],
+      joins: [
+        { id: 'customer', label: 'Customer', table: 'customers', relation: '"main"."customers"', keys: [{ from: 'customer_id', to: 'customer_id' }], cardinality: 'many_to_one', trust: 'certified', origin: 'model', relationshipId: 'shop::relationship::orders_customers', uniqueness: 'current', sentence: 'each order line has one customer' },
+        { id: 'customer__region', parent: 'customer', label: 'Region', table: 'regions', relation: '"main"."regions"', keys: [{ from: 'region_id', to: 'id' }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: 'p1:op', uniqueness: 'recheck', sentence: 'each customer has one region' },
+      ],
+    } as DatasetDescriptor;
+  };
+
+  it('compiles a tile on its own fields exactly as before', () => {
+    expect(compile('duckdb', grouped, joined()).sql).toBe(QUOTED_ANSI);
+    expect(compile('duckdb', grouped, joined()).joins).toEqual([]);
+  });
+
+  it('LEFT JOINs the related table on the relationship keys and selects only the related fields used', () => {
+    const compiled = compile('duckdb', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, joined());
+    expect(compiled.sql).toBe([
+      'WITH ds AS (SELECT __dql_base.*, __dql_j_customer."customer_name" AS "customer__customer_name"',
+      'FROM (SELECT * FROM order_lines) AS __dql_base',
+      'LEFT JOIN "main"."customers" AS __dql_j_customer ON __dql_base."customer_id" = __dql_j_customer."customer_id")',
+      'SELECT ds."customer__customer_name" AS "customer__customer_name", SUM(ds."net_amount") AS "revenue"',
+      'FROM ds',
+      'GROUP BY ds."customer__customer_name"',
+    ].join('\n'));
+    expect(compiled.joins.map((join) => join.id)).toEqual(['customer']);
+  });
+
+  it('follows a second hop through its parent, and a page filter on a related field adds the join', () => {
+    const compiled = compileDatasetTileQuery({
+      descriptor: joined(),
+      query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] },
+      filters: [{ field: 'customer__region__region_name', op: 'in', values: ['West'] }],
+      driver: 'duckdb',
+      sourceSql: 'SELECT * FROM order_lines',
+    });
+    expect(compiled.sql).toContain('LEFT JOIN "main"."customers" AS __dql_j_customer ON __dql_base."customer_id" = __dql_j_customer."customer_id"\nLEFT JOIN "main"."regions" AS __dql_j_customer__region ON __dql_j_customer."region_id" = __dql_j_customer__region."id"');
+    expect(compiled.sql).toContain('__dql_j_customer__region."region_name" AS "customer__region__region_name"');
+    expect(compiled.sql).toContain('WHERE ds."customer__region__region_name" IN ($1)');
+    expect(compiled.joins.map((join) => join.id)).toEqual(['customer', 'customer__region']);
+  });
+
+  it('keeps Snowflake references unquoted so upper-cased names resolve, and detail rows default to own columns', () => {
+    const snowflake = compile('snowflake', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, joined());
+    expect(snowflake.sql).toContain('__dql_j_customer.customer_name AS customer__customer_name');
+    expect(snowflake.sql).toContain('ON __dql_base.customer_id = __dql_j_customer.customer_id');
+    const detail = compile('duckdb', { dimensions: [], measures: [], detail: true, limit: 5 }, joined());
+    expect(detail.joins).toEqual([]);
+    expect(detail.sql).not.toContain('customer__customer_name');
+  });
+
+  it('refuses a join whose relation is not a plain table name', () => {
+    const descriptor = joined();
+    descriptor.joins![0] = { ...descriptor.joins![0]!, relation: 'customers; DROP TABLE x' };
+    expect(() => compile('duckdb', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, descriptor))
+      .toThrowError(expect.objectContaining({ code: 'DATASET_JOIN_INVALID' }));
+  });
+});

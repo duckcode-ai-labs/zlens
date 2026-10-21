@@ -315,7 +315,7 @@ export function AddDataBrowser({
       {shownTables.map((table) => <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}`} role="listitem" data-table-id={table.id} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
         <div className="add-data-summary static">
           <span className="add-data-mark"><Table2 size={14} /></span>
-          <div><strong>{table.name}</strong><small>{['Table', tableModelLabel(table), table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : ''].filter(Boolean).join(' · ')}</small>
+          <div><strong>{table.name}</strong><small>{['Table', tableModelLabel(table), table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : '', table.joins?.length ? `joins: ${table.joins.join(', ')}` : ''].filter(Boolean).join(' · ')}</small>
             {table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
           </div>
         </div>
@@ -440,6 +440,7 @@ function AddDataDetail({ item, fieldsEnabled, fieldRead }: { item: AppBlockRecom
       {groups.time.length ? <section><h4>Time</h4><p>{groups.time.map((field) => <span key={field.name} className="chip"><CalendarDays size={11} aria-hidden="true" /> {humanize(field.name)}</span>)}</p></section> : null}
       {groups.dimensions.length ? <section><h4>Dimensions</h4><p>{groups.dimensions.map((field) => <span key={field.name} className="chip">{field.kind === 'physical' && field.role === 'key' ? <Hash size={11} aria-hidden="true" /> : null} {humanize(field.name)}</span>)}</p></section> : null}
       {groups.review.length ? <section><h4>Needs review</h4><p>{groups.review.map((field) => <span key={field.name} className="chip muted">{humanize(field.name)}</span>)}</p></section> : null}
+      {groups.related.length ? <section><h4>From related tables</h4><p>{groups.related.map((group) => <span key={group.join.id} className={`chip${group.review ? ' muted' : ''}`} title={group.join.sentence}>{group.path} · {group.fields.length} {group.fields.length === 1 ? 'field' : 'fields'}{group.review ? ' · needs review' : ''}</span>)}</p></section> : null}
       {descriptor?.result ? <small className="add-data-muted">{SAVED_QUERY_FIELDS_NOTE}</small> : null}
     </div> : <div className="add-data-fields">
       <section><h4>Columns</h4><p>{outputs.length ? outputs.map((column) => <span key={column} className="chip">{humanize(column)}</span>) : <small>No columns listed yet.</small>}</p></section>

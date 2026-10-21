@@ -10,6 +10,7 @@ import {
   MetadataCatalog,
   queryAppSourceCatalog,
   rankAppSourcesByTrust,
+  registerAppSourceRecordDecorator,
   resolveAppSourceCatalogRecords,
   shortlistAppSources,
 } from './index.js';
@@ -81,6 +82,27 @@ describe('AppSourceCatalogService', () => {
       cursor: governed.nextCursor,
       sourcePolicy: 'include_review_required',
     })).toThrow(/catalog changed/i);
+  });
+
+  it('applies the runtime\'s record decorator to every catalog read, and a failing one changes nothing (D2)', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const unregister = registerAppSourceRecordDecorator(projectRoot, (record) => ({ ...record, reasons: [...record.reasons, 'decorated'] }));
+    try {
+      const page = queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' });
+      expect(page.items.every((item) => item.reasons.includes('decorated'))).toBe(true);
+      const resolved = resolveAppSourceCatalogRecords(projectRoot, page.items.map((item) => item.sourceId), 'include_review_required');
+      expect(resolved.items.every((item) => item.reasons.includes('decorated'))).toBe(true);
+      expect(matchAppSourceCatalogRecords(projectRoot, { blockNames: ['Performance'] }, 'include_review_required').items[0]!.reasons).toContain('decorated');
+    } finally {
+      unregister();
+    }
+    expect(queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items.some((item) => item.reasons.includes('decorated'))).toBe(false);
+    const removeFailing = registerAppSourceRecordDecorator(projectRoot, () => { throw new Error('boom'); });
+    try {
+      expect(queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items).toHaveLength(2);
+    } finally {
+      removeFailing();
+    }
   });
 
   it('PRD-007 excludes generated legacy drafts until an explicit reusable tag is present', async () => {

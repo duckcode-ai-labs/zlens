@@ -137,7 +137,8 @@ export function wordsFor(name: string): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : name;
 }
 
-function singular(name: string): string {
+/** "order_lines" → "order line": a table name as one row of it, in lower-case words. */
+export function singularWords(name: string): string {
   const words = wordsFor(name).toLowerCase();
   if (words.endsWith('ies')) return `${words.slice(0, -3)}y`;
   if (words.endsWith('ses') || words.endsWith('xes')) return words.slice(0, -2);
@@ -169,7 +170,7 @@ export function proposeTableDataset(input: {
     .map((column) => ({ name: column.name, kind: tableColumnKind(column.type) }));
   const skipped = input.columns.filter((column) => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(column.name)).map((column) => column.name);
   const primary = input.primaryKey?.length === 1 ? input.primaryKey[0] : undefined;
-  const tableStem = singular(input.table).replace(/\s+/g, '_');
+  const tableStem = singularWords(input.table).replace(/\s+/g, '_');
   const keyCandidates = [
     ...(primary ? [primary] : []),
     ...columns.filter((column) => column.name.toLowerCase() === 'id').map((column) => column.name),
@@ -278,7 +279,7 @@ export function applyTableProfile(proposal: TableDatasetProposal, profile: Table
     const { key: _key, ...rest } = proposal;
     return rest;
   }
-  const entity = singular(table);
+  const entity = singularWords(table);
   const keyField = proposal.fields.find((field) => field.name === key);
   const timeGrain = keyField?.role === 'time' ? nativeTimeGrain(keyField) : undefined;
   if (keyField && timeGrain) {

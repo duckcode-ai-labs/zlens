@@ -107,6 +107,10 @@
       "types": "./dist/datasets/result-fields.d.ts",
       "import": "./dist/datasets/result-fields.js"
     },
+    "./datasets/related-fields": {
+      "types": "./dist/datasets/related-fields.d.ts",
+      "import": "./dist/datasets/related-fields.js"
+    },
     "./datasets/descriptor": {
       "types": "./dist/datasets/descriptor.d.ts",
       "import": "./dist/datasets/descriptor.js"

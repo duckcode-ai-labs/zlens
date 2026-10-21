@@ -67,7 +67,7 @@ export function draftVisualization(descriptor: DatasetDescriptor, draft: DraftTi
 type PreviewState =
   | { state: 'idle' }
   | { state: 'running' }
-  | { state: 'ready'; result: QueryResult; ms: number }
+  | { state: 'ready'; result: QueryResult; ms: number; reviewJoin?: boolean }
   | { state: 'failed'; message: string };
 
 /**
@@ -84,9 +84,15 @@ export function draftColumnsMeta(descriptor: DatasetDescriptor, query: TileQuery
     meta.push({ name, kind, ...(field.format?.currency ? { unit: field.format.currency } : {}), ...(field.format?.decimals !== undefined ? { decimals: field.format.decimals } : {}) });
   }
   for (const dimension of query.dimensions) {
-    if (!dimension.timeGrain) continue;
+    const related = descriptor.fields.find((candidate) => candidate.kind === 'physical' && candidate.related && candidate.name.toLowerCase() === dimension.field.toLowerCase());
+    if (!dimension.timeGrain) {
+      // A related table's field reads as words ("Location Name"), never its joined name (design D2).
+      const name = dimension.alias ?? dimension.field;
+      if (related && columns.includes(name)) meta.push({ name, kind: 'text', label: humanize(related.name) });
+      continue;
+    }
     const name = dimension.alias ?? columns.find((column) => column === `${dimension.field}_${dimension.timeGrain}`) ?? dimension.field;
-    if (columns.includes(name)) meta.push({ name, kind: 'date', grain: dimension.timeGrain });
+    if (columns.includes(name)) meta.push({ name, kind: 'date', grain: dimension.timeGrain, ...(related ? { label: humanize(related.name) } : {}) });
   }
   // Calculations carry their own format and name, as the page run gives them.
   for (const output of checkTileCalculations(descriptor, query).outputs) {
@@ -172,6 +178,7 @@ export function DatasetQueryPreview({
         setPreview({
           state: 'ready',
           ms: Math.round(performance.now() - started),
+          reviewJoin: Boolean(response.joins?.some((join) => join.trust !== 'certified')),
           result: { columns, rows, rowCount: response.result?.rowCount ?? rows.length, ...(descriptor ? { columnsMeta: draftColumnsMeta(descriptor, runQuery, columns) } : {}) },
         });
       }).catch(() => {
@@ -187,7 +194,8 @@ export function DatasetQueryPreview({
     if (!onStatus) return;
     if (preview.state === 'ready') {
       const count = preview.result.rowCount ?? preview.result.rows.length;
-      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${preview.ms} ms`, 'ok');
+      // A join nobody certified yet (drafted in setup) makes the tile Needs review (design D2).
+      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${preview.ms} ms${preview.reviewJoin ? ' · Needs review: it uses a join that is not certified yet' : ''}`, 'ok');
     } else if (preview.state === 'running') onStatus('Running…', 'idle');
     else if (preview.state === 'failed') onStatus('Run failed', 'error');
   }, [preview]);

@@ -1119,6 +1119,10 @@ export const APP_STUDIO_V2_STYLES = `
 .data-field .meta { min-width:0; flex:0 1000 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-tertiary); font-family:var(--font-mono, ui-monospace, monospace); font-size:11px; font-weight:400; }
 .data-field .badge { padding:1px 6px; border-radius:4px; background:color-mix(in srgb,var(--status-warning) 12%,var(--bg-2)); color:var(--status-warning); font-size:11px; font-weight:600; }
 .data-field .check { flex:none; }
+.field-groups .related-fields h3 { display:flex; align-items:center; gap:6px; text-transform:none; letter-spacing:0; font-size:12px; }
+.field-groups .related-fields h3 .badge { padding:1px 6px; border-radius:4px; background:color-mix(in srgb,var(--status-warning) 12%,var(--bg-2)); color:var(--status-warning); font-size:11px; font-weight:600; }
+.join-notes { display:grid; gap:4px; margin:6px 8px 0; }
+.join-notes small { color:var(--text-tertiary); font-size:12px; line-height:1.4; }
 .field-empty { margin:6px 2px; color:var(--text-tertiary); font-size:13px; line-height:1.5; }
 .field-empty button { border:0; background:transparent; color:var(--accent); font-weight:600; padding:0; }
 .content-quick-add.compact { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
