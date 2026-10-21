@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ContextAuthoringProposalV1, DbtOnboardingStatusResponse, WarehouseDiscoveryReport } from '../../api/client';
 import {
+  setupFinishTarget,
   DATABASE_ONLY_DBT_PROJECT,
   databaseOnlyUnavailable,
   draftErrorMessage,
@@ -201,5 +202,12 @@ describe('synchronize an existing project', () => {
   it('needs a connection for the warehouse part', async () => {
     const steps = await synchronizeExistingProject(existingProjectFromStatus(warehouseProject)!, null, fakeApi());
     expect(steps).toEqual([{ kind: 'warehouse', ok: false, message: 'Add and test a database connection first.' }]);
+  });
+});
+
+describe('where Finish setup goes', () => {
+  it('goes where the highlighted start card says: Apps unless models were drafted', () => {
+    expect(setupFinishTarget({ drafted: false })).toEqual({ target: 'apps', action: 'Build an App' });
+    expect(setupFinishTarget({ drafted: true })).toEqual({ target: 'domains', action: 'Open Modeling' });
   });
 });

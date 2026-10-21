@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyTableProfile, proposeTableDataset, renderTableDatasetBlock, tableColumnKind } from './table-draft.js';
+import { applyTableProfile, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetDeclaration } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -53,5 +53,107 @@ describe('start from a table', () => {
     expect(block.datasetMeasures?.map((measure) => measure.name)).toEqual(['order_line_count', 'net_amount', 'quantity', 'customer_count']);
     expect(block.datasetFields).toHaveLength(8);
     expect(() => renderTableDatasetBlock({ proposal: { ...proposal, key: undefined }, blockName: 'x', domain: 'd', owner: 'o', columnSql: (name) => name })).toThrow('TABLE_DATASET_KEY_REQUIRED');
+  });
+
+  it('marks every field and number the check confirmed as approved', () => {
+    const proposal = applyTableProfile(proposeTableDataset({ table: 'order_lines', relation: 'main.order_lines', columns: columns.slice(0, 8) }), { rows: 5, columns: { order_line_id: { distinct: 5, nonNull: 5 } } }, 'order_lines');
+    const source = renderTableDatasetBlock({ proposal, blockName: 'Order lines', domain: 'sales', owner: 'ana@example.com', columnSql: (name) => `"${name}"` });
+    const block = new Parser(source, 'order-lines.dql').parse().statements[0] as { datasetMeasures?: Array<{ status?: string }>; datasetFields?: Array<{ status?: string }> };
+    expect(block.datasetFields?.every((field) => field.status === 'approved')).toBe(true);
+    expect(block.datasetMeasures?.every((measure) => measure.status === 'approved')).toBe(true);
+    const declaration = tableDatasetDeclaration(proposal, 'Order lines');
+    expect([...declaration.fields, ...declaration.measures].every((entry) => entry.status === 'approved')).toBe(true);
+  });
+});
+
+describe('money stored as cents (B11)', () => {
+  const orders = [
+    { name: 'order_id', type: 'VARCHAR' },
+    { name: 'ordered_at', type: 'TIMESTAMP' },
+    { name: 'subtotal_cents', type: 'BIGINT' },
+    { name: 'tax_paid_cents', type: 'BIGINT' },
+    { name: 'order_total_cents', type: 'BIGINT' },
+    { name: 'order_total', type: 'DECIMAL(12,2)' },
+    { name: 'tip_pennies', type: 'INTEGER' },
+    { name: 'discount_percent', type: 'DOUBLE' },
+  ];
+
+  it('finds cents and pennies as whole words only', () => {
+    expect(['subtotal_cents', 'cents', 'amountInCents', 'price_in_cents', 'tip_pennies', 'percent', 'centsus', 'discount_percent'].map(minorUnitOf))
+      .toEqual(['cents', 'cents', 'cents', 'cents', 'pennies', undefined, undefined, undefined]);
+  });
+
+  it('reads cents columns in dollars, as Money, and says so', () => {
+    const proposal = proposeTableDataset({ table: 'orders', relation: 'main.orders', columns: orders, convertMinorUnits: true });
+    const subtotal = proposal.fields.find((field) => field.column === 'subtotal_cents');
+    expect(subtotal).toMatchObject({ name: 'subtotal', label: 'Subtotal', role: 'attribute', divideBy: 100 });
+    // "order_total" already exists, so the dollars field keeps a distinct name.
+    expect(proposal.fields.find((field) => field.column === 'order_total_cents')?.name).toBe('order_total_dollars');
+    const measures = Object.fromEntries(proposal.measures.map((measure) => [measure.from, measure]));
+    expect(measures.subtotal).toMatchObject({ format: 'currency', currency: 'USD', unitNote: 'Shown in dollars (stored as cents)' });
+    expect(measures.tax_paid).toMatchObject({ format: 'currency', unitNote: 'Shown in dollars (stored as cents)' });
+    expect(measures.tip).toMatchObject({ format: 'currency', currency: 'GBP', unitNote: 'Shown in pounds (stored as pennies)' });
+    expect(measures.subtotal.minorUnits).toBeUndefined();
+
+    const profiled = applyTableProfile(proposal, { rows: 3, columns: { order_id: { distinct: 3, nonNull: 3 } } }, 'orders');
+    const source = renderTableDatasetBlock({ proposal: profiled, blockName: 'Orders', domain: 'sales', owner: 'ana@example.com', columnSql: (name) => `"${name}"` });
+    // The division is in the Dataset's SQL, so tiles, KPIs, tables, filters and exports all read dollars.
+    expect(source).toContain('"subtotal_cents" / 100.0 AS "subtotal"');
+    expect(source).toContain('"order_total_cents" / 100.0 AS "order_total_dollars"');
+    expect(source).toContain('"order_total", ');
+    expect(source).toContain('subtotal_cents, tax_paid_cents, order_total_cents are stored as cents and read in dollars; tip_pennies is stored as pennies and read in pounds.');
+    const block = new Parser(source, 'orders.dql').parse().statements[0] as { datasetFields?: Array<{ name: string }>; datasetMeasures?: Array<{ name: string; from?: string; format?: string }> };
+    expect(block.datasetFields?.map((field) => field.name)).toContain('subtotal');
+    expect(block.datasetMeasures?.find((measure) => measure.name === 'subtotal')).toMatchObject({ from: 'subtotal', format: 'currency' });
+    // A declaration on someone else's SQL cannot divide.
+    expect(() => tableDatasetDeclaration(profiled, 'Orders')).toThrow('TABLE_DATASET_CONVERSION_UNSUPPORTED');
+  });
+
+  it('keeps cents as a plain number where the Dataset cannot convert them', () => {
+    const proposal = proposeTableDataset({ table: 'orders', relation: '(SELECT 1) AS q', columns: orders });
+    expect(proposal.fields.find((field) => field.name === 'subtotal_cents')).toMatchObject({ role: 'attribute' });
+    expect(proposal.fields.some((field) => field.divideBy)).toBe(false);
+    const subtotal = proposal.measures.find((measure) => measure.from === 'subtotal_cents')!;
+    expect(subtotal).toMatchObject({ format: 'number', minorUnits: 'cents' });
+    expect(subtotal.currency).toBeUndefined();
+    expect(subtotal.unitNote).toMatch(/^Stored as cents, so it is shown as a plain number/);
+  });
+});
+
+describe('a period column as the row key (B12)', () => {
+  const monthly = [
+    { name: 'month', type: 'TIMESTAMP' },
+    { name: 'gross_revenue', type: 'DOUBLE' },
+    { name: 'order_count', type: 'BIGINT' },
+  ];
+
+  it('knows the period a date column stands for, and leaves instants alone', () => {
+    expect(nativeTimeGrain({ name: 'month', type: 'timestamp', role: 'time' })).toBe('month');
+    expect(nativeTimeGrain({ name: 'order_week', type: 'date', role: 'time' })).toBe('week');
+    expect(nativeTimeGrain({ name: 'fiscal_quarter', type: 'timestamp', role: 'time' })).toBe('quarter');
+    expect(nativeTimeGrain({ name: 'day', type: 'date', role: 'time' })).toBe('day');
+    expect(nativeTimeGrain({ name: 'shipped_on', type: 'date', role: 'time' })).toBe('day');
+    expect(nativeTimeGrain({ name: 'ordered_at', type: 'timestamp', role: 'time' })).toBeUndefined();
+  });
+
+  it('checks a month that is filled and different on every row as the key, and keeps it a time field', () => {
+    const proposal = proposeTableDataset({ table: 'monthly_revenue', relation: '(SELECT 1) AS q', columns: monthly });
+    expect(proposal.keyCandidates).toEqual(['month']);
+    const profiled = applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 12, nonNull: 12 } } }, 'monthly_revenue');
+    expect(profiled.key).toEqual({ column: 'month', entity: 'monthly_revenue', timeGrain: 'month' });
+    expect(profiled.fields.find((field) => field.name === 'month')).toMatchObject({ role: 'time', grains: ['month', 'quarter', 'year'], primary: true });
+    // Counting months is not a business number.
+    expect(profiled.measures.map((measure) => measure.name)).toEqual(['gross_revenue', 'order_count']);
+    const declaration = tableDatasetDeclaration(profiled, 'Monthly revenue');
+    expect(declaration.grain).toEqual({ entities: ['monthly_revenue'], keys: ['month'], keyEvidence: 'proof.monthly-revenue', aggregate: true, timeGrain: 'month', timeBucketBy: 'month' });
+    const source = renderTableDatasetBlock({ proposal: { ...profiled, relation: 'main.monthly' }, blockName: 'Monthly revenue', domain: 'sales', owner: 'ana@example.com', columnSql: (name) => `"${name}"` });
+    const block = new Parser(source, 'monthly.dql').parse().statements[0] as { datasetGrain?: Record<string, unknown> };
+    expect(block.datasetGrain).toMatchObject({ keys: ['month'], aggregate: true, timeGrain: 'month', timeBucketBy: 'month' });
+  });
+
+  it('does not take a repeated or partly empty month as the key', () => {
+    const proposal = proposeTableDataset({ table: 'monthly_revenue', relation: '(SELECT 1) AS q', columns: monthly });
+    expect(applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 11, nonNull: 12 } } }, 'monthly_revenue').key).toBeUndefined();
+    expect(applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 11, nonNull: 11 } } }, 'monthly_revenue').key).toBeUndefined();
   });
 });

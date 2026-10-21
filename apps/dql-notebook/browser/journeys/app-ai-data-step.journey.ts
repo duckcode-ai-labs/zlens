@@ -71,7 +71,11 @@ test('AI shows the data it picked in the Data step, then builds pages for tile r
   await page.getByRole('button', { name: 'Apps', exact: true }).click();
   await page.getByRole('button', { name: 'Build new App' }).click();
   await page.getByRole('tab', { name: 'Describe with AI' }).click();
-  await page.getByRole('textbox', { name: 'What decision should this App support?' }).fill('Journey customers overview for the sales team');
+  // The example request is a placeholder, not text a request is appended to.
+  const describe = page.getByRole('textbox', { name: 'What decision should this App support?' });
+  await expect(describe).toHaveValue('');
+  await expect(describe).toHaveAttribute('placeholder', /\S/);
+  await describe.fill('Journey customers overview for the sales team\nKeep it short and clear.');
   await page.getByRole('button', { name: /Generate editable App/ }).click();
 
   // The Data step shows what AI picked, with the planner's reason, before any page is built.
@@ -108,4 +112,7 @@ test('AI shows the data it picked in the Data step, then builds pages for tile r
   await expect(page.getByRole('complementary', { name: 'AI proposal' })).toHaveCount(0, { timeout: 30_000 });
   await expect(page.locator('.studio-page-grid .studio-component-card').first()).toBeVisible();
   await expect(page.locator('.proposal-tile')).toHaveCount(0);
+  // The App is named from the first line of the request, and the name stays editable.
+  await expect(page.getByRole('textbox', { name: 'App name' })).toHaveValue('Journey customers overview for the sales team');
+  await expect(page.getByRole('textbox', { name: 'App name' })).toBeEditable();
 });

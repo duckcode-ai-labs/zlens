@@ -155,6 +155,8 @@ export type {
 } from './tile-query.js';
 
 export {
+  appNameFromGoal,
+  APP_NAME_FROM_GOAL_MAX,
   createAppBuildDraft,
   createBlankAppBuildPage,
   newAppBuildDraftId,

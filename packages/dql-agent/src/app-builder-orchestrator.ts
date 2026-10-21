@@ -613,9 +613,37 @@ function componentSatisfiesRequirement(
   requirement: AppBuildRequirement,
   candidate: AppSourceCatalogRecord,
 ): boolean {
-  if (!candidateSatisfiesStructuredRequirement(requirement, candidate)) return false;
   const descriptor = candidate.capabilities.dataset;
+  if (!candidateSatisfiesStructuredRequirement(requirement, candidate)) {
+    // A question with no declared fields (the keyword planner's) is covered
+    // when the tile's own query names every word that matters in it:
+    // "Top 10 regions by net amount" by net_amount grouped by region.
+    const structured = requirement.measures.length > 0 || requirement.dimensions.length > 0 || requirement.filters.length > 0;
+    if (structured || !descriptor || !component.query || !datasetQueryNamesQuestion(requirement.question, component.query)) return false;
+  }
   return !descriptor || Boolean(component.query && datasetPlannedQueryCoversRequirement(component.query, requirement, descriptor));
+}
+
+/** Words about how to show a number, not which number: "top 10 … as a KPI". */
+const PRESENTATION_WORDS = new Set([
+  'as', 'best', 'bottom', 'breakdown', 'by', 'chart', 'each', 'headline', 'highest', 'kpi', 'largest', 'least',
+  'list', 'lowest', 'most', 'over', 'per', 'rank', 'ranking', 'show', 'smallest', 'time', 'top', 'total', 'trend', 'worst',
+]);
+const GRAIN_WORDS: Record<string, string> = {
+  daily: 'day', weekly: 'week', monthly: 'month', quarterly: 'quarter', yearly: 'year', annual: 'year', annually: 'year',
+};
+
+/** True when every word of the question that names data is named by the query's measures, groups or time grain. */
+function datasetQueryNamesQuestion(question: string, query: TileQuery): boolean {
+  const asked = Array.from(deterministicWords(question))
+    .filter((token) => !PRESENTATION_WORDS.has(token) && !/^\d+$/.test(token))
+    .map((token) => GRAIN_WORDS[token] ?? token);
+  if (asked.length === 0) return false;
+  const named = deterministicWords([
+    ...query.measures.map((selection) => selection.measure),
+    ...query.dimensions.flatMap((selection) => [selection.field, selection.timeGrain ?? '']),
+  ].join(' '));
+  return asked.every((token) => named.has(token));
 }
 
 function questionEvidenceMatchesCandidate(
@@ -888,8 +916,11 @@ function deterministicCandidateScore(question: string, candidate: AppSourceCatal
 
 function inferRequirementRole(question: string, index: number): AppBuilderComponentRole {
   const normalized = question.toLowerCase();
+  // "Total revenue as a KPI" is one number, whatever else it mentions.
+  if (/\bkpi\b|\bheadline\b/.test(normalized)) return 'kpi';
   if (/trend|growth|change|week|month|quarter|year|over time/.test(normalized)) return 'trend';
   if (/region|segment|category|channel|breakdown|rank|top/.test(normalized)) return 'breakdown';
+  if (/^total\b/.test(normalized)) return 'kpi';
   if (/detail|customer|order|record|list/.test(normalized)) return 'detail';
   return index === 0 ? 'kpi' : 'evidence';
 }
@@ -1059,6 +1090,13 @@ function normalizedDatasetQuery(
  * A provider may choose a query only from the compact approved card. When it
  * cannot, this deterministic fallback uses one approved measure and the
  * narrowest role-compatible group. It never invents a field or lowers trust.
+ *
+ * The measure and the group are the ones whose words match the question
+ * best ("net amount" by "region"). A grouping field never shares the
+ * measure's name (a number column is both a field and its own total, and
+ * grouping a total by itself is not a question). The first combination the
+ * Dataset accepts wins, so one unusable pairing never makes a checked
+ * Dataset "unable to answer".
  */
 export function deterministicDatasetQuery(
   descriptor: DatasetDescriptor,
@@ -1067,29 +1105,77 @@ export function deterministicDatasetQuery(
 ): TileQuery | undefined {
   const approvedMeasures = datasetMeasures(descriptor).filter((field) => field.status === 'approved');
   const approvedFields = datasetPhysicalFields(descriptor).filter((field) => field.status === 'approved');
+  const question = requirement?.question ?? '';
   const requiredMeasures = requirement?.measures ?? [];
-  const matchingMeasure = requiredMeasures.length > 0
-    ? approvedMeasures.find((measure) => requiredMeasures.some((required) => sameDatasetName(required, measure.name, measure.qualifiedId)))
-    : approvedMeasures.find((measure) => wordsMatch(requirement?.question ?? '', `${measure.name} ${measure.qualifiedId}`))
-      ?? approvedMeasures[0];
-  if (!matchingMeasure) return undefined;
+  const measures = requiredMeasures.length > 0
+    ? approvedMeasures.filter((measure) => requiredMeasures.some((required) => sameDatasetName(required, measure.name, measure.qualifiedId)))
+    : rankedByWords(question, approvedMeasures, (measure) => `${measure.name} ${measure.qualifiedId}`);
+  if (measures.length === 0) return undefined;
 
-  const dimensions: TileQuery['dimensions'] = [];
-  if (role === 'trend') {
-    const time = approvedFields.find((field) => field.role === 'time' && Boolean(field.time?.grains.length));
-    if (time?.time?.grains.length) {
-      const grain = time.time.grains.includes('month') ? 'month' : time.time.grains[0];
-      dimensions.push({ field: time.name, ...(grain ? { timeGrain: grain } : {}) });
+  const requiredDimensions = requirement?.dimensions ?? [];
+  const groupings = (measureName: string): Array<TileQuery['dimensions']> => {
+    if (role === 'trend') {
+      // The time field the question names, else the Dataset's primary one.
+      const times = rankedByWords(question, approvedFields
+        .filter((field) => field.role === 'time' && Boolean(field.time?.grains.length))
+        .sort((left, right) => Number(Boolean(right.time?.primary)) - Number(Boolean(left.time?.primary))), (field) => field.name);
+      const options: Array<TileQuery['dimensions']> = times.map((time) => {
+        const grains = time.time?.grains ?? [];
+        const grain = grains.includes('month') ? 'month' : grains[0];
+        return [{ field: time.name, ...(grain ? { timeGrain: grain } : {}) }];
+      });
+      return [...options, []];
     }
-  } else if (role === 'breakdown' || role === 'detail' || role === 'evidence') {
-    const requiredDimensions = requirement?.dimensions ?? [];
-    const dimension = requiredDimensions.length > 0
-      ? approvedFields.find((field) => requiredDimensions.some((required) => sameDatasetName(required, field.name, field.qualifiedId)))
-      : approvedFields.find((field) => field.role === 'dimension' || field.role === 'key' || field.role === 'attribute');
-    if (dimension) dimensions.push({ field: dimension.name });
+    if (role === 'breakdown' || role === 'detail' || role === 'evidence') {
+      if (requiredDimensions.length > 0) {
+        return approvedFields
+          .filter((field) => requiredDimensions.some((required) => sameDatasetName(required, field.name, field.qualifiedId)))
+          .map((field) => [{ field: field.name }]);
+      }
+      const groupable = approvedFields
+        .filter((field) => (field.role === 'dimension' || field.role === 'key' || field.role === 'attribute') && field.name.toLowerCase() !== measureName.toLowerCase());
+      // Words that named the measure ("amount" in "by net amount") do not pick the group.
+      const measureWords = deterministicWords(measureName);
+      const groupWords = Array.from(deterministicWords(question)).filter((token) => !measureWords.has(token));
+      const score = (field: (typeof groupable)[number]) => {
+        const available = deterministicWords(field.name);
+        return groupWords.filter((token) => available.has(token)).length;
+      };
+      const ranked = [...groupable].sort((left, right) => score(right) - score(left) || groupingRank(left) - groupingRank(right));
+      const options: Array<TileQuery['dimensions']> = ranked.map((field) => [{ field: field.name }]);
+      // A Dataset with nothing to group by still answers with its total.
+      return options.length > 0 ? options : [[]];
+    }
+    return [[]];
+  };
+  for (const measure of measures) {
+    for (const dimensions of groupings(measure.name)) {
+      const query: TileQuery = { dimensions, measures: [{ measure: measure.name }] };
+      if (tileQueryValidationRuns(validateTileQuery(descriptor, query))) return query;
+    }
   }
-  const query: TileQuery = { dimensions, measures: [{ measure: matchingMeasure.name }] };
-  return tileQueryValidationRuns(validateTileQuery(descriptor, query)) ? query : undefined;
+  return undefined;
+}
+
+/** Text categories group best, then other categories, the row key, and plain numbers last. */
+function groupingRank(field: ReturnType<typeof datasetPhysicalFields>[number]): number {
+  if (field.role === 'dimension') return field.type === 'string' ? 0 : 1;
+  if (field.role === 'key') return 2;
+  return 3;
+}
+
+/** Items whose words match the question most, in their own order when tied. */
+function rankedByWords<T>(question: string, items: T[], text: (item: T) => string): T[] {
+  const requested = deterministicWords(question);
+  if (requested.size === 0) return [...items];
+  const score = (item: T) => {
+    const available = deterministicWords(text(item));
+    return Array.from(requested).filter((token) => available.has(token)).length;
+  };
+  return items
+    .map((item, index) => ({ item, index, score: score(item) }))
+    .sort((left, right) => right.score - left.score || left.index - right.index)
+    .map((entry) => entry.item);
 }
 
 export function datasetPlannedQueryCoversRequirement(query: TileQuery, requirement: AppBuildRequirement, descriptor: DatasetDescriptor): boolean {

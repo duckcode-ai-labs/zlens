@@ -99,7 +99,8 @@ export async function listWarehouseTables(input: { projectRoot: string; driver: 
  * different on every row (so rows can be counted), and the row count.
  */
 export async function draftTableDataset(input: { table: WarehouseTableSummary; driver: string; run: RunSql }): Promise<{ proposal: TableDatasetProposal; rows: number }> {
-  const proposal = proposeTableDataset({ table: input.table.name, relation: input.table.relation, columns: input.table.columns, ...(input.table.primaryKey ? { primaryKey: input.table.primaryKey } : {}) });
+  // ZLens writes this Dataset's SQL, so cents columns are read as dollars.
+  const proposal = proposeTableDataset({ table: input.table.name, relation: input.table.relation, columns: input.table.columns, ...(input.table.primaryKey ? { primaryKey: input.table.primaryKey } : {}), convertMinorUnits: true });
   if (!proposal.fields.length) {
     throw new TableDatasetError('TABLE_HAS_NO_COLUMNS', `${input.table.name} has no columns ZLens can read by name.`);
   }
@@ -113,7 +114,8 @@ export async function draftTableDataset(input: { table: WarehouseTableSummary; d
  * (a subquery), checked against its rows. A saved query's result is often
  * already grouped, so a text column that is different on every row (a
  * customer name in a top-10 list) can be its row identity too; those are
- * checked after id-like columns and never become counts of their own.
+ * checked after id-like columns and never become counts of their own. So can
+ * a period column (one row per month), checked last.
  */
 export async function draftSavedQueryDataset(input: {
   /** The block's name: names the proposal and, without a grain, what one row is. */
@@ -135,7 +137,15 @@ export async function draftSavedQueryDataset(input: {
   const textColumns = proposal.fields
     .filter((field) => field.role === 'dimension' && field.type === 'string')
     .map((field) => field.name);
-  const keyCandidates = [...proposal.keyCandidates, ...textColumns]
+  // A period column (a month) can be the row key too, when it is filled and
+  // different on every row (B12): checked last, after ids and text, with the
+  // same proof.
+  const timeKeys = new Set(proposal.fields.filter((field) => field.role === 'time').map((field) => field.name));
+  const keyCandidates = [
+    ...proposal.keyCandidates.filter((name) => !timeKeys.has(name)),
+    ...textColumns,
+    ...proposal.keyCandidates.filter((name) => timeKeys.has(name)),
+  ]
     .filter((name, index, all) => all.indexOf(name) === index)
     .slice(0, 8);
   const profile = await profileTable({ relation: input.relation, columns: keyCandidates, driver: input.driver, run: input.run });
@@ -184,7 +194,9 @@ export function applyTableDatasetChoices(proposal: TableDatasetProposal, raw: un
     measures: proposal.measures.map((measure) => {
       const choice = byName.get(measure.name);
       if (!choice) return measure;
-      const format = choice.format === 'currency' || choice.format === 'percent' || choice.format === 'number' ? choice.format : measure.format;
+      const asked = choice.format === 'currency' || choice.format === 'percent' || choice.format === 'number' ? choice.format : measure.format;
+      // A number stored in cents that the Dataset does not convert is never Money: it would read 100 times too large.
+      const format = measure.minorUnits && asked === 'currency' ? measure.format : asked;
       const currency = typeof choice.currency === 'string' && /^[A-Z]{3}$/.test(choice.currency) ? choice.currency : measure.currency;
       return {
         ...measure,

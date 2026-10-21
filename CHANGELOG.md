@@ -35,6 +35,27 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - Page-run requests take an optional `runSequence`; a stale response says
     why in `staleCause` (`superseded` or `project_changed`).
 
+- **Smaller App builder fixes for a first-time user.**
+  - A line or area chart plots only the field chosen as **Y / value**, as bars
+    already did.
+  - **Check the numbers** reads `…_cents` and `…_pennies` columns divided by
+    100 in the Dataset's own SQL and shows them as Money, with "Shown in
+    dollars (stored as cents)", so tiles, KPIs, tables and filters agree.
+    **Add fields** on a saved query keeps them a plain number, because it
+    does not change the saved query's SQL.
+  - **Add fields** accepts a month (or another period, or a date) that is
+    filled and different on every row as the row key. It stays a time field,
+    and tiles can roll it up to quarters, years and one total.
+  - Every field the check confirms is written as approved, and the keyword
+    planner (no AI) builds tiles from a table checked a moment ago: it picks
+    the number and the grouping your request names, and no longer says the
+    table "can't answer".
+  - **Describe with AI** starts empty; its example is a placeholder. The App
+    is named from the first line of the request (at most 60 characters), and
+    you can rename it.
+  - **Finish setup** goes where the highlighted card says: **Build an App**,
+    or Modeling when models were drafted.
+
 - **App filters work the same on every tile.** Each tile on a filter's page
   is now **Applies** or **Does not apply** in the Filters tab, and both
   choices are saved. **Does not apply** no longer blocks publishing; only a

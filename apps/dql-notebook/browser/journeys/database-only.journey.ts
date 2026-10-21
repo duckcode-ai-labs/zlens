@@ -78,6 +78,8 @@ test('Database only: connect, choose schemas, synchronize, draft models, review 
   await setup.getByRole('button', { name: /Continue to optional AI/ }).click();
   await setup.getByRole('button', { name: 'Skip AI for now' }).click();
   await expect(setup.getByText('Review drafted models')).toBeVisible();
+  // The button goes where the highlighted card says.
+  await expect(setup.getByRole('button', { name: /Finish setup/ })).toHaveText(/Finish setup · Open Modeling/);
   await setup.getByRole('button', { name: /Finish setup/ }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
 

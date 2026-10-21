@@ -35,6 +35,7 @@ import {
   parseDashboardDocument,
   normalizeDqlArtifactReference,
   suggestAppId,
+  appNameFromGoal,
   createAppBuildDraft,
   createBlankAppBuildPage,
   newAppBuildDraftId,
@@ -7395,7 +7396,8 @@ export function createStoredAppBuildDraft(
   const baseAppId = cleanString(input.baseAppId);
   const base = baseAppId ? loadAppById(projectRoot, baseAppId) : null;
   if (baseAppId && !base) throw new Error(`App "${baseAppId}" not found.`);
-  const name = cleanString(input.name) || base?.app.name || cleanString(input.goal) || 'Untitled App';
+  // A described App is named from the first line of its description.
+  const name = cleanString(input.name) || base?.app.name || appNameFromGoal(cleanString(input.goal)) || 'Untitled App';
   const appId = base?.app.id || cleanString(input.appId) || suggestAppId(name);
   const id = newAppBuildDraftId();
   const blankPage = createBlankAppBuildPage({

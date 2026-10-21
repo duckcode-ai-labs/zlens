@@ -1,4 +1,5 @@
 import {
+  appNameFromGoal,
   createAppBuildDraft,
   createBlankAppBuildPage,
   newAppBuildDraftId,
@@ -104,7 +105,7 @@ export function createAppBuildHandoffDraft(
 ): AppBuildDraft {
   const goal = input.goal.trim();
   if (!goal) throw new Error('An App build needs a description of what the App is for.');
-  const name = (input.name?.trim() || goal).slice(0, 120);
+  const name = (input.name?.trim() || appNameFromGoal(goal)).slice(0, 120);
   const sourcePolicy: AppBuildSourcePolicy = input.sourcePolicy ?? 'governed_only';
   const seen = new Set<string>();
   const sources = input.sources
