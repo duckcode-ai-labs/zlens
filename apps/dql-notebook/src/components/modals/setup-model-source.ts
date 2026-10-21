@@ -125,24 +125,32 @@ export function existingProjectFromStatus(
 }
 
 /**
- * The card selected when step 1 opens. An update that must reapply the dbt
- * project, a configured project and a detected dbt project keep today's dbt
- * card; a fresh folder without dbt asks.
+ * The card selected when step 1 opens, read from what the folder holds
+ * (design D7). An update that must reapply the dbt project, a configured
+ * project and a detected dbt project keep today's dbt card (#143). A Database
+ * only project whose model is already written (it has Domains) opens as an
+ * existing project; a new one, or a folder whose only data is a database file,
+ * opens on Database only. A folder with neither asks.
  */
 export function initialModelSource(input: {
   requested?: ModelSource | null;
   requiresDbtReapply?: boolean;
   existing: ExistingProject | null;
   dbtProjectFound?: boolean;
+  /** The project already has Domains (its model is written in the repository). */
+  hasDomains?: boolean;
+  /** The project's connection is a database file (DuckDB), and there is no dbt project. */
+  databaseFileConnection?: boolean;
 }): ModelSource | null {
   if (input.requiresDbtReapply) return 'dbt';
   if (input.requested && (input.requested !== 'existing' || input.existing)) return input.requested;
   if (input.existing) {
-    if (input.existing.mode === 'warehouse-first') return 'warehouse';
+    if (input.existing.mode === 'warehouse-first') return input.hasDomains ? 'existing' : 'warehouse';
     if (input.existing.mode === 'hybrid') return 'both';
     return 'dbt';
   }
-  return input.dbtProjectFound ? 'dbt' : null;
+  if (input.dbtProjectFound) return 'dbt';
+  return input.databaseFileConnection ? 'warehouse' : null;
 }
 
 /** The modeling mode a choice turns on when the user continues from step 1. */

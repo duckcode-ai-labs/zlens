@@ -43,6 +43,16 @@ function hasRealConnection(connections: Record<string, unknown>): boolean {
   });
 }
 
+/** The default connection is a database file (DuckDB with a path). */
+function databaseFileConnection(info: { default?: string; connections?: Record<string, unknown> }): boolean {
+  const connection = info.default ? info.connections?.[info.default] : undefined;
+  if (!connection || typeof connection !== 'object') return false;
+  const record = connection as Record<string, unknown>;
+  const driver = String(record.driver ?? record.type ?? '').toLowerCase();
+  const filepath = String(record.filepath ?? record.path ?? '').trim();
+  return driver === 'duckdb' && Boolean(filepath) && filepath !== ':memory:';
+}
+
 function providerSummary(provider: ProviderSettings | null): string {
   if (!provider) return 'No AI provider configured.';
   return `${provider.label}${provider.model ? ` · ${provider.model}` : ''}`;
@@ -106,7 +116,8 @@ export function SetupOnboarding({
       api.getBlockStudioDbtStatus().catch(() => null),
       api.getConnections().catch(() => null),
       api.getProviderSettings().catch(() => null),
-    ]).then(([onboarding, dbt, connectionInfo, providerInfo]) => {
+      api.getSetupProgress().catch(() => null),
+    ]).then(([onboarding, dbt, connectionInfo, providerInfo, progress]) => {
       if (!alive) return;
       if (onboarding?.dbt?.configured || (dbt?.configured && dbt.artifacts.manifest.exists)) {
         setProjectState(onboarding?.modeling?.snapshotState === 'ready' ? 'passed' : 'configured');
@@ -127,12 +138,25 @@ export function SetupOnboarding({
       if (catalog?.relations && !catalog.error) setCatalogReady(true);
       const project = existingProjectFromStatus(onboarding, realConnection ? connectionInfo : null);
       setExisting(project);
-      setSource((current) => current ?? initialModelSource({
+      // A restart resumes where setup was left (design D7), unless an update must reapply dbt first.
+      const resume = progress && !launch?.requiresDbtReapply ? progress : null;
+      setSource((current) => current ?? resume?.source ?? initialModelSource({
         requested: requestedSource,
         requiresDbtReapply: Boolean(launch?.requiresDbtReapply),
         existing: project,
         dbtProjectFound: Boolean(onboarding?.dbt?.projectFound),
+        hasDomains: (onboarding?.domains?.count ?? 0) > 0,
+        databaseFileConnection: Boolean(connectionInfo && databaseFileConnection(connectionInfo)),
       }));
+      if (resume) {
+        setStep(resume.step);
+        if (resume.aiSkipped) setAiSkipped(true);
+        if (resume.draft) setDraft(resume.draft);
+        if (resume.source === 'warehouse') {
+          setProjectState('configured');
+          setProjectDetail('Database only · no dbt project');
+        }
+      }
       const provider = providerInfo?.providers.find((candidate) => candidate.active && candidate.configured)
         ?? providerInfo?.providers.find((candidate) => candidate.enabled && candidate.configured)
         ?? null;
@@ -143,6 +167,17 @@ export function SetupOnboarding({
     }).finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, []);
+
+  // Save the step and answers so a restart resumes here (design D7).
+  useEffect(() => {
+    if (loading) return;
+    void api.saveSetupProgress({
+      step: step as 1 | 2 | 3 | 4,
+      ...(source ? { source } : {}),
+      ...(aiSkipped ? { aiSkipped } : {}),
+      ...(draft ? { draft } : {}),
+    }).catch(() => undefined);
+  }, [loading, step, source, aiSkipped, draft]);
 
   const acknowledge = async (): Promise<boolean> => {
     setAcknowledging(true);
@@ -352,6 +387,7 @@ export function SetupOnboarding({
             <SetupSection eyebrow="Step 2 of 4" title={stepTwo.title} description={stepTwo.description} t={t}>
               <ConnectionPanel
                 variant="setup"
+                setupSource={source}
                 onConfigured={(detail) => {
                   setDatabaseState('passed');
                   setDatabaseDetail(detail);

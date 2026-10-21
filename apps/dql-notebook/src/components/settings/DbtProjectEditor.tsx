@@ -11,6 +11,7 @@ import {
 } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
+import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { dbtPreparationFromResponse } from './dbt-preparation-model';
 import { watchMetricFlowInstall } from './metricflow-install-watch';
 
@@ -407,6 +408,8 @@ export function DbtProjectEditor({
         </div>
       </div>
 
+      {/* Guided Setup (compact) keeps the adapters under Advanced (design D7). */}
+      <AdvancedDisclosure enabled={compact} hint="semantic execution adapters" t={t}>
       <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, background: t.cellBg, padding: 16, display: 'grid', gap: 12 }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Semantic execution adapters</div>
@@ -545,6 +548,7 @@ export function DbtProjectEditor({
           </div>
         </details>
       </div>
+      </AdvancedDisclosure>
     </div>
   );
 }

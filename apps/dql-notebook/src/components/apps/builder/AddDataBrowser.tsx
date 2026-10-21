@@ -16,6 +16,8 @@ import { humanize, messageOf } from './studio-ui';
 import { TableDatasetDialog } from './TableDatasetDialog';
 import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
 import { appDataSameNameOrigins } from './app-data-names';
+import { useDispatch } from '../../../store/NotebookStore';
+import { rememberProposalForModeling } from '../../modals/setup-model-source';
 import {
   ADD_DATA_KINDS,
   MAKE_ROW_LEVEL_HINT,
@@ -101,6 +103,7 @@ export function AddDataBrowser({
   fieldsEnabled = true,
   onFieldsAdded,
 }: AddDataBrowserProps): JSX.Element {
+  const dispatch = useDispatch();
   const [kind, setKind] = useState<AddDataKind>(initialKind);
   const [query, setQuery] = useState('');
   const [domain, setDomain] = useState(appDomain ?? '');
@@ -179,7 +182,10 @@ export function AddDataBrowser({
   const tableNeedle = query.trim().toLowerCase().replace(/[\s_]+/g, '');
   // Database tables have no domain: a domain chip shows the catalog only.
   const shownTables = (kind === 'all' || kind === 'tables') && !domain
-    ? (tables ?? []).filter((table) => !tableNeedle || `${table.schema ?? ''}.${table.name}`.toLowerCase().replace(/[\s_]+/g, '').includes(tableNeedle)).slice(0, 200)
+    ? (tables ?? []).filter((table) => !tableNeedle || `${table.schema ?? ''}.${table.name}`.toLowerCase().replace(/[\s_]+/g, '').includes(tableNeedle))
+      // Tables setup or Modeling already modeled come first (design D7).
+      .sort((left, right) => tableModelRank(left) - tableModelRank(right))
+      .slice(0, 200)
     : [];
   const counts = useMemo(() => {
     const value: Record<AddDataKind, number> = { all: items.length + (tables?.length ?? 0), tables: tables?.length ?? 0, queries: 0, metrics: 0 };
@@ -249,6 +255,11 @@ export function AddDataBrowser({
   };
 
   const searchLabel = 'Search tables, saved queries and Metrics';
+  /** Open Modeling on the drafted models (setup's "Draft my models"). */
+  const reviewDraftedModels = (proposalId: string | undefined) => {
+    if (proposalId) rememberProposalForModeling(proposalId);
+    dispatch({ type: 'SET_MAIN_VIEW', view: 'domains' });
+  };
 
   return <section className="add-data-browser" aria-label="Add data">
     <div className="add-data-controls">
@@ -301,10 +312,12 @@ export function AddDataBrowser({
       })}
       {nextCursor && kind !== 'tables' ? <button type="button" className="add-data-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Show more'}</button> : null}
       {shownTables.length ? <p className="add-data-hint"><Table2 size={13} aria-hidden="true" /> {TABLE_BECOMES_DATASET_HINT}</p> : null}
-      {shownTables.map((table) => <article key={table.id} className="add-data-row table" role="listitem" data-table-id={table.id}>
+      {shownTables.map((table) => <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}`} role="listitem" data-table-id={table.id} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
         <div className="add-data-summary static">
           <span className="add-data-mark"><Table2 size={14} /></span>
-          <div><strong>{table.name}</strong><small>{['Table', 'Not checked yet', table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : ''].filter(Boolean).join(' · ')}</small></div>
+          <div><strong>{table.name}</strong><small>{['Table', tableModelLabel(table), table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : ''].filter(Boolean).join(' · ')}</small>
+            {table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
+          </div>
         </div>
         <div className="add-data-action"><button type="button" disabled={disabled} onClick={() => setCheckingTable(table)} aria-label={`Check ${table.name} and add it as a Dataset`}><Plus size={13} /> Check and add</button></div>
       </article>)}
@@ -440,6 +453,22 @@ function AddDataDetail({ item, fieldsEnabled, fieldRead }: { item: AppBlockRecom
       {sample && !sample.error ? (sample.rows.length ? <div className="add-data-sample-table"><table><thead><tr>{columns.map((column) => <th key={column}>{humanize(column)}</th>)}</tr></thead><tbody>{sample.rows.map((row, index) => <tr key={index}>{columns.map((column) => <td key={column}>{formatSampleValue(row[column])}</td>)}</tr>)}</tbody></table></div> : <p className="add-data-muted">No rows.</p>) : null}
     </div> : null}
   </div>;
+}
+
+/**
+ * A database table's trust word in the list (design D7): "Modeled" when the
+ * project's model binds it, "Drafted — review to use" when setup drafted it
+ * and it waits for review in Modeling, else "Not checked yet". Either way
+ * "Check and add" reuses the row key the model checked.
+ */
+export function tableModelLabel(table: Pick<WarehouseTableSummary, 'modeled'>): string {
+  if (table.modeled?.state === 'modeled') return 'Modeled';
+  if (table.modeled?.state === 'drafted') return 'Drafted — review to use';
+  return 'Not checked yet';
+}
+
+function tableModelRank(table: Pick<WarehouseTableSummary, 'modeled'>): number {
+  return table.modeled?.state === 'modeled' ? 0 : table.modeled?.state === 'drafted' ? 1 : 2;
 }
 
 function formatSampleValue(value: unknown): string {

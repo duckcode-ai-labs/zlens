@@ -159,6 +159,10 @@ rows** reads a few of its rows.
   shown in dollars), and its tests. You are recorded as the person who
   certified it: the signed-in person with a host, otherwise your git
   `user.name`.
+- Tables your model already binds say **Modeled**, and tables Guided Setup's
+  **Draft my models** drafted say **Drafted — review to use**, with
+  **Review in Modeling**. Both are listed first, and **Check and add** reuses
+  the row key the model checked, so the check counts one column.
 - On a saved query, **⋯ → Make row-level** is only needed for row-safe
   measures (see [Make a saved query row-level](#make-a-saved-query-row-level)).
 

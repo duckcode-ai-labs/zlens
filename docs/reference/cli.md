@@ -43,7 +43,7 @@ installation.
 
 | Command | What it does |
 | --- | --- |
-| `zlens init [dir]` | Initialize ZLens in a project (auto-detects dbt) |
+| `zlens init [dir]` | Initialize ZLens in a project. A dbt project makes a dbt project; a DuckDB file and no dbt makes a Database only project (`warehouse-first`); an empty folder leaves the choice to Guided Setup |
 | `zlens init [dir] --warehouse-first` | Initialize a project that models the database's own tables, no dbt needed (`manifestVersion: 3`, `modeling.mode: "warehouse-first"`) |
 | `zlens doctor [path]` | Run local setup checks |
 | `zlens doctor scale` | Report enterprise-scale manifest/cache/index health |
@@ -99,7 +99,7 @@ Exits **1** on changes — scriptable like `git diff`.
 | `zlens build <file.dql>` | Compile to a static HTML bundle |
 | `zlens preview <file.dql>` | Local browser preview |
 | `zlens serve [dir]` | Serve a built bundle |
-| `zlens notebook [path]` | Launch the browser-first notebook |
+| `zlens notebook [path]` | Launch the browser-first notebook. In a folder with no ZLens project it asks "No ZLens project here. Create one? [Y/n]" and creates it as `zlens init` would; `--yes` creates it without asking; without a terminal it prints the one command to run |
 
 ### Data & semantic
 
@@ -216,6 +216,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--verbose` | Detailed output |
 | `--open` / `--no-open` | Auto-open the browser on `preview`/`serve` |
 | `--no-schedules` | `zlens notebook` does not run the project's App schedules |
+| `--yes`, `-y` | `zlens notebook` creates a project in a folder that has none, without asking |
 | `--check` | For `fmt`: non-zero exit if changes needed |
 | `--input <path>` | Source for scaffold-style migrations |
 | `--out-dir <path>` | Output directory for `build` |

@@ -18,6 +18,41 @@ only the connection differs.
     README, or use your own database. The examples below use that
     `jaffle_shop.duckdb` file, whose tables are in the `dev` schema.
 
+## The quickest start: open the folder
+
+Put the database file in a folder and open that folder. No `init`, no flags:
+
+```bash
+npm i -g @zlens/cli --allow-scripts=better-sqlite3
+zlens notebook ./shop
+```
+
+```text
+  No ZLens project here. Create one? [Y/n]
+  Found the database jaffle_shop.duckdb; the project will be Database only.
+```
+
+Press Enter. ZLens creates a Database only project in the folder, with a
+connection to the file, and opens the workbench on **Guided Setup** with
+**Database only** already chosen. Setup asks two plain questions, connects
+the file (it tests the connection itself), lists the schemas it can see, and
+drafts your tables and joins. See [Or use Guided Setup](#or-use-guided-setup)
+for the steps. A folder that holds `dbt_project.yml` becomes a dbt project
+instead.
+
+Without a terminal (a script, CI, a desktop launcher) `zlens notebook` never
+waits for an answer. It prints the one command to run:
+
+```text
+No ZLens project here: /work/shop (found the database jaffle_shop.duckdb).
+To create one and open it, run:
+
+  npx zlens notebook shop --yes
+```
+
+`--yes` creates the project without asking. The rest of this page does the
+same steps from the terminal, one at a time.
+
 You end with:
 
 - a ZLens project that models your database directly (`warehouse-first`)
@@ -54,17 +89,18 @@ To install the CLI into a project instead of globally, see
 mkdir my-analytics
 cd my-analytics
 cp /path/to/jaffle_shop.duckdb .
-zlens init --warehouse-first
+zlens init
 ```
 
 The `cp` line is only for DuckDB: the database file sits in the project
-folder. `zlens init --warehouse-first` prints what it found:
+folder. A DuckDB file and no dbt project make a Database only project; no
+flag is needed. `zlens init` prints what it found:
 
 ```text
   Detected:
     dbt project: no
     DuckDB file: jaffle_shop.duckdb
-    Modeling: manifest v3, warehouse-first (entities bind to warehouse tables; no dbt needed)
+    Project type: Database only (ZLens reads the database's tables; no dbt needed)
 ```
 
 It writes `dql.config.json` with:
@@ -78,10 +114,12 @@ When it finds a DuckDB file in the folder, it also adds a `default` connection
 to it. Otherwise the project has no connection yet; you add one in the next
 step.
 
-Plain `zlens init`, without the flag, does not switch modes on its own. If
-you started that way, choose **Database only** in Guided Setup (see
-[below](#or-use-guided-setup)), or open **Modeling** in the workbench and
-click **Model my warehouse without dbt**.
+For a database that is not a file (PostgreSQL, Snowflake …), run
+`zlens init --warehouse-first`, or plain `zlens init` and choose **Database
+only** in Guided Setup (see [below](#or-use-guided-setup)). In a folder with
+neither a dbt project nor a database file, `zlens init` leaves the choice to
+Guided Setup. You can also open **Modeling** in the workbench and click
+**Model my warehouse without dbt**.
 
 You can also create the project with `create-zlens-app`, which adds npm
 scripts and installs the CLI into the project:
@@ -177,12 +215,13 @@ Modeling works from, and to the local index Ask searches.
   **returned no authorized relations**, the schema name is wrong or your
   login cannot see it.
 
-In the workbench, the same step is **Settings → Database → Metadata scope**.
-In a warehouse-first project it says **Choose the schemas to model**. Click
-**Find available databases & schemas**, list them one line per database
-(`DATABASE: SCHEMA, SCHEMA`) and click **Apply and synchronize**. The status
-line then reads **Modeling catalog · 13 tables and views with their keys and
-comments**.
+In the workbench, the same step is **Settings → Database → Metadata scope**
+(in Guided Setup it is the question **Which schemas should ZLens read?**). In
+a warehouse-first project it says **Choose the schemas to model**. Click
+**Find available databases & schemas**, tick the schemas (or list them one
+line per database, `DATABASE: SCHEMA, SCHEMA`) and click **Apply and
+synchronize**. The status line then reads **Modeling catalog · 13 tables and
+views with their keys and comments**.
 
 ### Optional: show the drafter what the columns hold
 
@@ -337,11 +376,20 @@ step asks **Where does your data model live?**:
   the models and certifications come from the repository, so there are no
   modeling questions.
 
+Setup chooses the card from what the folder holds: **Database only** for a
+folder with a database file and no dbt project, **dbt project** when it finds
+`dbt_project.yml`, and **Open an existing ZLens project** for a Database only
+project whose model is already written.
+
 With **Database only**, Setup walks through the steps above:
 
-1. Connect your database and test it (**Save connection** tests it first).
-2. Under **Metadata scope**, click **Find available databases & schemas** and
-   tick the schemas to model.
+1. Connect your database. A DuckDB file found in the folder is already
+   connected, and Setup tests it for you; otherwise fill in the form and
+   **Save connection** (it tests before saving). Personal dbt profiles from
+   your home folder are not shown: there is no dbt here.
+2. **Which schemas should ZLens read?** Setup lists the schemas as soon as the
+   test passes (**Find available databases & schemas** lists them again).
+   Tick the ones that hold your tables.
 3. Click **Apply and synchronize**.
 4. Click **Draft my models**. It runs the same discovery as
    `zlens model discover --validate` and says what it drafted, for example
@@ -350,7 +398,17 @@ With **Database only**, Setup walks through the steps above:
 5. On the last step, **Review drafted models** opens **Modeling** with the
    drafts as a proposal. Save it, then certify the joins Ask may rely on, as
    in [step 6](#6-review-and-certify).
-6. Ask a question.
+6. Build an App or ask a question.
+
+Index mode, the typed schema list and the technical index details are under
+**Advanced** on step 2, closed. Setup saves where you are: stop
+`zlens notebook` and start it again, and Setup opens on the same step with
+your answers. Finishing or closing Setup clears that.
+
+In **Apps → Data**, the tables Setup drafted show **Drafted — review to use**,
+with a link to Modeling, and tables your model already binds show
+**Modeled**; both are listed first. **Check and add** reuses the row key the
+draft checked, so it counts one column instead of guessing.
 
 You can run Guided Setup again from **Settings → Overview → Guided Setup**.
 

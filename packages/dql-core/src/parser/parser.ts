@@ -134,10 +134,8 @@ export class Parser {
     }
 
     if (this.reporter.hasErrors()) {
-      throw new DQLSyntaxError(
-        `Parse errors in ${this.file ?? '<input>'}`,
-        this.reporter.getErrors(),
-      );
+      const errors = this.reporter.getErrors();
+      throw new DQLSyntaxError(parseErrorSummary(this.file ?? '<input>', errors), errors);
     }
 
     return {
@@ -2700,4 +2698,19 @@ export class Parser {
 export function parse(source: string, file?: string): ProgramNode {
   const parser = new Parser(source, file);
   return parser.parse();
+}
+
+/**
+ * "Parse errors in <block-invocation>" alone told the author nothing to fix
+ * (B10): the message names the first problem's line, column and what the
+ * parser found there, and how many more there are.
+ */
+export function parseErrorSummary(file: string, errors: ReadonlyArray<{ message: string; span?: { start?: { line?: number; column?: number } } }>): string {
+  const first = errors[0];
+  if (!first) return `Parse errors in ${file}`;
+  const line = first.span?.start?.line;
+  const column = first.span?.start?.column;
+  const where = line ? `line ${line}${column ? `, column ${column}` : ''}: ` : '';
+  const more = errors.length > 1 ? ` (and ${errors.length - 1} more)` : '';
+  return `Parse errors in ${file}: ${where}${first.message}${more}`;
 }

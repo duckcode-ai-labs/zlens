@@ -108,8 +108,10 @@ The first time, ZLens opens **Guided Setup** in four steps.
    under **Connect your dbt project**, you see **dbt project ready** with
    the path field showing `.` (this folder). Click **Preview**. ZLens shows
    the models, sources and metrics it found and says **Nothing has changed
-   yet**. Click **Apply project**, then **Continue to database**. (No dbt
-   project of your own? See [No dbt? Start from your database](no-dbt.md).)
+   yet**. Click **Apply project**, then **Continue to database**. The
+   semantic execution adapters are under **Advanced**; you don't need them
+   here. (No dbt project of your own? See
+   [No dbt? Start from your database](no-dbt.md).)
 2. **Connect your database.** The sample's DuckDB connection is already set
    up: you see **DuckDB · configured** and **Test passed**. Click
    **Continue to optional AI**.
@@ -118,7 +120,9 @@ The first time, ZLens opens **Guided Setup** in four steps.
    ([how](ai-provider.md)) or click **Continue to finish**.
 4. **Where do you want to start?** Click **Finish setup**.
 
-You can run the setup again later from **Settings → Overview → Guided Setup**.
+Setup saves where you are: if you stop `zlens notebook` halfway, it opens on
+the same step next time. You can run the setup again later from
+**Settings → Overview → Guided Setup**.
 
 ## 6. Run your first query
 
@@ -148,9 +152,17 @@ one with `npx create-zlens-app@latest dql` from the dbt repo; see
 
 ## No dbt?
 
-ZLens also works straight on your database: connect it, choose the schemas
-to model, and ZLens drafts the entities and joins for you to certify. See
-[No dbt? Start from your database](no-dbt.md).
+ZLens also works straight on your database. Open the folder that holds your
+database file:
+
+```bash
+zlens notebook ./shop
+```
+
+It asks **No ZLens project here. Create one? [Y/n]**, creates a Database only
+project around the file and opens Guided Setup on **Database only**. Setup
+asks which schemas to read and drafts the entities and joins for you to
+certify. See [No dbt? Start from your database](no-dbt.md).
 
 ## Next
 

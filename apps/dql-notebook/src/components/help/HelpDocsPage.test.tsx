@@ -32,3 +32,26 @@ describe('Help page outside links (N1)', () => {
     expect(html).not.toContain('/discussions');
   });
 });
+
+describe('Help guide matches the first start (D7)', () => {
+  const html = renderToStaticMarkup(<NotebookProvider><HelpDocsPage /></NotebookProvider>);
+
+  it('shows no image placeholders', () => {
+    expect(html).not.toContain('Screenshot:');
+    expect(html).not.toMatch(/border:\s*1\.5px dashed/);
+  });
+
+  it('starts from a folder, without create-zlens-app or a required dbt project', () => {
+    expect(html).not.toContain('create-zlens-app');
+    expect(html).not.toContain('and a dbt project');
+    expect(html).toContain('zlens notebook ./shop');
+    expect(html).toContain('No ZLens project here. Create one? [Y/n]');
+    expect(html).toContain('Which schemas should ZLens read?');
+    expect(html).toContain('Database only');
+  });
+
+  it('covers Apps', () => {
+    expect(html).toContain('Build your first App');
+    expect(html).toContain('Drafted — review to use');
+  });
+});

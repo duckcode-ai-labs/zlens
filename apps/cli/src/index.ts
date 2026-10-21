@@ -41,7 +41,7 @@ const HELP = `
   zlens — ZLens CLI
 
   Usage:
-    zlens init [directory]           Initialize ZLens in a project (auto-detects dbt)
+    zlens init [directory]           Initialize ZLens in a project (auto-detects dbt or a DuckDB file)
     zlens new <type> <name>         Create a domain, block, semantic block, view, term, dashboard, or workbook
     zlens build <file.dql>          Compile a DQL file to a static HTML bundle
     zlens doctor [path]             Run local setup checks for a ZLens project
@@ -88,6 +88,7 @@ const HELP = `
     zlens diff <path> --impact --write-recertification
                                     Mark impacted semantic YAML pending recertification
     zlens notebook [path]           Launch the browser-first notebook for a project
+                                    (offers to create one in a folder without a project)
     zlens semantic <sub> [path]     Semantic layer: list, validate, query, pull
     zlens compile [path]            Generate project manifest (dql-manifest.json)
     zlens sync dbt [path]           Diff, compile, and reindex dbt-backed DQL state
@@ -132,6 +133,7 @@ const HELP = `
     --open                          Open the preview or served bundle in a browser
     --no-open                       Do not open the browser automatically
     --no-schedules                  For "notebook": do not run App schedules while it is open
+    --yes, -y                       For "notebook": create a project in a folder without one, without asking
     --check                         For "fmt": check-only and exit 1 if changes needed
     --input <path>                  Source path for scaffold-style migration commands
     --out-dir <path>                Output directory for "build"
@@ -172,6 +174,32 @@ const HELP = `
   `;
 
 const COMMAND_HELP: Record<string, string> = {
+  init: `
+  zlens init — Create a ZLens project in a folder
+
+  Usage:
+    zlens init [folder] [--force] [--open]
+
+  Notes:
+    ZLens looks at what the folder holds. A dbt project (here or a level up)
+    makes a dbt project. A DuckDB file and no dbt project makes a Database
+    only project that reads the database's own tables. An empty folder gets a
+    project, and Guided Setup asks where your data lives.
+    --force patches missing folders of an existing project; it never
+    overwrites dql.config.json or your files. --open starts the notebook.
+  `,
+  notebook: `
+  zlens notebook — Open the ZLens workbench in your browser
+
+  Usage:
+    zlens notebook [folder] [--port <n>] [--no-open] [--yes]
+
+  Notes:
+    Opens the project in the folder (or the nearest one above it). In a
+    folder with no ZLens project, it asks "No ZLens project here. Create
+    one? [Y/n]" and creates it the way zlens init would; --yes creates it
+    without asking. Without a terminal it prints the one command to run.
+  `,
   certify: `
   zlens certify — Evaluate local certification rules
 

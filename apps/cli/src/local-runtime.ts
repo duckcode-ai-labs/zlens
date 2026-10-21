@@ -818,7 +818,7 @@ import {
 import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
 import { refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
 import { resolveResultReviewMode } from './result-review-setting.js';
-import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation } from './datasets/table-dataset.js';
+import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableModelStates, type TableModelState } from './datasets/table-dataset.js';
 import {
   discoverWarehouseModel,
   observedJoinsFromQueries,
@@ -14629,8 +14629,45 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         acknowledgedAt: new Date().toISOString(),
       };
       writeUserPrefs(singleUserPrefsPath, prefs);
+      // Setup is finished or closed: the next start does not resume it.
+      rmSync(setupProgressPath(projectRoot), { force: true });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serializeJSON({ requestId, version: runtimeVersion, acknowledged: true }));
+      return;
+    }
+
+    // Guided Setup progress (design D7): the step and answers so far, so a
+    // restart resumes where the person left off. Local state, never in Git;
+    // finishing or closing setup clears it.
+    if (path === '/api/onboarding/progress') {
+      const requestId = apiRequestId('onboarding-progress');
+      const progressPath = setupProgressPath(projectRoot);
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, progress: readSetupProgress(projectRoot) }));
+        return;
+      }
+      if (req.method === 'PUT') {
+        const progress = normalizeSetupProgress(await readJSON(req).catch(() => null));
+        if (!progress) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'SETUP_PROGRESS_INVALID', message: 'Setup progress needs a step from 1 to 4.' })));
+          return;
+        }
+        mkdirSync(dirname(progressPath), { recursive: true });
+        writeFileSync(progressPath, `${JSON.stringify(progress, null, 2)}\n`, 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, progress }));
+        return;
+      }
+      if (req.method === 'DELETE') {
+        rmSync(progressPath, { force: true });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, progress: null }));
+        return;
+      }
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'METHOD_NOT_ALLOWED', message: 'Use GET, PUT or DELETE.' })));
       return;
     }
 
@@ -20281,11 +20318,26 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const active = requireActiveConnection();
         const run = async (sql: string, purpose: 'data' | 'metadata' = 'data') => (await executor.executePositional(sql, [], active, { maxRows: 5_000, maxBytes: 16 * 1024 * 1024, batchSize: 1_000, deadlineMs: 60_000, purpose })).rows as Array<Record<string, unknown>>;
         const listing = await listWarehouseTables({ projectRoot, driver: active.driver, run });
+        // Tables setup drafted, or Modeling models, say so and reuse their checked key (design D7).
+        const modelStates = (() => {
+          try {
+            return tableModelStates({
+              tables: listing.tables,
+              entities: Object.values(projectSnapshot().manifest.modeling?.entities ?? {}),
+              proposals: contextProposalStore.list(),
+            });
+          } catch {
+            return new Map<string, TableModelState>();
+          }
+        })();
         if (req.method === 'GET' && path === '/api/app-datasets/tables') {
           reply(200, {
             ok: true,
             source: listing.source,
-            tables: listing.tables.map(({ columns, ...table }) => ({ ...table, columnCount: columns.length })),
+            tables: listing.tables.map(({ columns, ...table }) => {
+              const modeled = modelStates.get(table.id);
+              return { ...table, columnCount: columns.length, ...(modeled ? { modeled } : {}) };
+            }),
           });
           return;
         }
@@ -20299,7 +20351,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reply(404, { ok: false, error: 'That table is not in this database any more. Refresh the list.' });
           return;
         }
-        const drafted = await draftTableDataset({ table, driver: active.driver, run });
+        const modeledKey = modelStates.get(table.id)?.key;
+        const drafted = await draftTableDataset({ table, driver: active.driver, run, ...(modeledKey ? { modeledKey } : {}) });
         if (path === '/api/app-datasets/tables/draft') {
           reply(200, { ok: true, table: { id: table.id, name: table.name, relation: table.relation }, rows: drafted.rows, proposal: drafted.proposal });
           return;
@@ -40217,6 +40270,57 @@ interface UserPrefs {
     dbtAppliedVersion?: string;
     dbtAppliedAt?: string;
   };
+}
+
+/** Guided Setup progress (design D7), kept in `.dql/local/setup-progress.json`. */
+export interface SetupProgress {
+  version: 1;
+  step: 1 | 2 | 3 | 4;
+  source?: 'dbt' | 'warehouse' | 'both' | 'existing';
+  aiSkipped?: boolean;
+  /** "Draft my models" ran: its plain-words outcome and the proposal Modeling opens. */
+  draft?: { ok: boolean; message: string; proposalId?: string };
+  updatedAt: string;
+}
+
+function setupProgressPath(projectRoot: string): string {
+  return join(projectRoot, '.dql', 'local', 'setup-progress.json');
+}
+
+export function normalizeSetupProgress(raw: unknown): SetupProgress | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const step = Number(value.step);
+  if (!Number.isInteger(step) || step < 1 || step > 4) return null;
+  const source = value.source === 'dbt' || value.source === 'warehouse' || value.source === 'both' || value.source === 'existing' ? value.source : undefined;
+  const draftRaw = value.draft && typeof value.draft === 'object' ? value.draft as Record<string, unknown> : null;
+  const draft = draftRaw && typeof draftRaw.message === 'string'
+    ? {
+      ok: draftRaw.ok === true,
+      message: draftRaw.message.slice(0, 2_000),
+      ...(typeof draftRaw.proposalId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(draftRaw.proposalId) ? { proposalId: draftRaw.proposalId } : {}),
+    }
+    : undefined;
+  return {
+    version: 1,
+    step: step as SetupProgress['step'],
+    ...(source ? { source } : {}),
+    ...(value.aiSkipped === true ? { aiSkipped: true } : {}),
+    ...(draft ? { draft } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function readSetupProgress(projectRoot: string): SetupProgress | null {
+  const path = setupProgressPath(projectRoot);
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    const progress = normalizeSetupProgress(raw);
+    return progress ? { ...progress, updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : progress.updatedAt } : null;
+  } catch {
+    return null;
+  }
 }
 
 function readUserPrefs(userPrefsPath: string): UserPrefs {

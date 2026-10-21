@@ -8,6 +8,56 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Setup and first start
+
+- **Start from any folder.** `zlens notebook <folder>` on a folder with no
+  ZLens project asks **No ZLens project here. Create one? [Y/n]** and creates
+  it. A database file and no dbt project make a **Database only** project
+  with a connection to the file; `dbt_project.yml` makes a dbt project.
+  Without a terminal it prints the one command to run
+  (`npx zlens notebook <folder> --yes`); `--yes` creates without asking.
+- `zlens init` on a folder with only a database file now creates a Database
+  only (`warehouse-first`) project, and no longer suggests rerunning with
+  `--warehouse-first`. An empty folder leaves the choice to Guided Setup.
+  `zlens init --help` and `zlens notebook --help` explain both.
+- **Two plain setup questions.** Guided Setup picks the card from what the
+  folder holds (Database only, dbt project as before, or an existing
+  project whose model is written). Step 2 asks **Which schemas should ZLens
+  read?** and lists the schemas as soon as the connection test passes.
+  Semantic execution adapters, Index mode, the typed schema list, index
+  details and dbt profile import are under a closed **Advanced**; Database
+  only never shows the dbt profiles from your home folder, never says
+  "outside the dbt project", and no generated ids (`LOCAL_88B5…`) are printed.
+- Setup progress is saved in `.dql/local/setup-progress.json`: a restart
+  resumes at the same step with your answers and drafted models. Finishing or
+  closing setup clears it.
+- The connection test no longer races a save on the same DuckDB file, so
+  **Find available databases & schemas** is never left disabled (it once
+  hung a browser journey for four minutes). The footer says **Test passed**
+  after an automatic test too.
+- **Drafted tables are ready to use.** In **Apps → Data**, tables Setup
+  drafted show **Drafted — review to use** with a link to Modeling, and tables
+  the model binds show **Modeled**; both come first. **Check and add** reuses
+  the row key the draft checked, so the check counts one column.
+- New projects no longer get the **Example Customer Rollup** placeholder block
+  (`SELECT 1`); an untouched copy in an older welcome notebook is no longer a
+  block, so it leaves the Data step.
+- In-app **Help** starts from a folder (database file or dbt project), covers
+  Guided Setup and Apps, and has no image placeholders.
+
+### Blocks
+
+- **The SQL block builder saves.** Every edit lands inside the block also
+  when the file opens with the `// dql-format: 1` header or has a comment
+  after its closing brace, so Save draft no longer writes `owner = …` after
+  `}`. SQL typed in the Visual Builder is kept in the draft, so it survives
+  switching to DQL Source and back. Run, Save draft and Certify stay on
+  screen at 1280 px. **Global / cross-domain** stays global instead of coming
+  back as "uncategorized (missing Domain page)".
+- A parse error names the line, column and token of the first problem
+  (`Parse errors in <block-invocation>: line 14, column 3: Unexpected token
+  'owner' …`).
+
 ### Apps
 
 - **Honest when no AI is connected.** With no AI provider, **Build new App**

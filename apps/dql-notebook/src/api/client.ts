@@ -31,6 +31,16 @@ export interface SavedQueryDatasetResult {
   error?: string;
 }
 
+/** Guided Setup progress (design D7), saved by the server in `.dql/local/setup-progress.json`. */
+export interface SetupProgress {
+  version: 1;
+  step: 1 | 2 | 3 | 4;
+  source?: 'dbt' | 'warehouse' | 'both' | 'existing';
+  aiSkipped?: boolean;
+  draft?: { ok: boolean; message: string; proposalId?: string };
+  updatedAt: string;
+}
+
 export interface WarehouseTableSummary {
   id: string;
   name: string;
@@ -39,6 +49,12 @@ export interface WarehouseTableSummary {
   kind: string;
   columnCount: number;
   rowCountEstimate?: number;
+  /**
+   * The table is modeled (an entity in the project's model binds it) or was
+   * drafted by "Draft my models" and waits for review (design D7). Its
+   * checked row key is reused by "Check and add".
+   */
+  modeled?: { state: 'modeled' | 'drafted'; entity: string; domain: string; key?: string; proposalId?: string };
 }
 import type { DiffReport } from '@zlens/core/format';
 import { normalizeDqlArtifactReference, type DqlArtifactReference } from '@zlens/core/artifacts';
@@ -7055,6 +7071,17 @@ export const api = {
 
   async getOnboardingStatus(): Promise<DbtOnboardingStatusResponse> {
     return request<DbtOnboardingStatusResponse>('/api/onboarding/status');
+  },
+
+  /** Guided Setup progress (design D7): where a restart resumes. Null when setup has not started or was finished. */
+  async getSetupProgress(): Promise<SetupProgress | null> {
+    const response = await request<{ progress: SetupProgress | null }>('/api/onboarding/progress');
+    return response.progress ?? null;
+  },
+
+  async saveSetupProgress(progress: Omit<SetupProgress, 'version' | 'updatedAt'>): Promise<SetupProgress> {
+    const response = await request<{ progress: SetupProgress }>('/api/onboarding/progress', { method: 'PUT', body: JSON.stringify(progress) });
+    return response.progress;
   },
 
   async previewDbtOnboarding(payload: DbtOnboardingPreviewRequest): Promise<DbtOnboardingPreviewResponse> {
