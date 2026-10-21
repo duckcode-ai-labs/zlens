@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import { planAppBuildBrief } from './app-builder-orchestrator.js';
+import { deterministicDatasetQuery, planAppBuildBrief } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
-import type { DatasetDescriptor } from '@zlens/core';
+import type { AppBuildRequirement, DatasetDescriptor } from '@zlens/core';
 
 const candidates: AppSourceCatalogRecord[] = [
   source('app:block:sales:revenue', 'Revenue trend', 'certified'),
@@ -341,6 +341,61 @@ describe('App Builder orchestrator', () => {
     expect(brief.navigation).toEqual([{ fromComponentId: 'monthly-revenue', toPageId: 'details' }]);
     expect(brief.crossFilters).toEqual([{ fromComponentId: 'monthly-revenue', fromField: 'customer_id', toComponentId: 'customer-revenue', toField: 'customer_id' }]);
     expect(brief.detailDrills).toEqual([{ pageId: 'details', componentId: 'margin-kpi', fields: ['customer_id'] }]);
+  });
+});
+
+describe('keyword planner on a just-checked table (B13)', () => {
+  // The shape "Check the numbers" writes: every number column is a field and its own total.
+  const sourceId = 'app:block:commerce:order-lines-from-table';
+  const checked: DatasetDescriptor = {
+    ...datasetDescriptor(sourceId),
+    label: 'Order lines from table',
+    grain: { entityIds: ['order_line'], keyFields: ['order_line_id'], keyEvidence: 'proof.order-lines-from-table' },
+    fields: [
+      { kind: 'physical', name: 'cost_amount', qualifiedId: `${sourceId}::field::cost_amount`, type: 'number', role: 'attribute', status: 'approved' },
+      { kind: 'physical', name: 'customer_id', qualifiedId: `${sourceId}::field::customer_id`, type: 'string', role: 'dimension', status: 'approved' },
+      { kind: 'physical', name: 'net_amount', qualifiedId: `${sourceId}::field::net_amount`, type: 'number', role: 'attribute', status: 'approved' },
+      { kind: 'physical', name: 'order_date', qualifiedId: `${sourceId}::field::order_date`, type: 'timestamp', role: 'time', status: 'approved', time: { grains: ['day', 'week', 'month', 'quarter', 'year'], primary: true } },
+      { kind: 'physical', name: 'order_line_id', qualifiedId: `${sourceId}::field::order_line_id`, type: 'string', role: 'key', status: 'approved' },
+      { kind: 'physical', name: 'region', qualifiedId: `${sourceId}::field::region`, type: 'string', role: 'dimension', status: 'approved' },
+      { kind: 'measure', name: 'cost_amount', qualifiedId: `${sourceId}::measure::cost_amount`, aggregation: 'sum', from: 'cost_amount', dependsOn: ['cost_amount'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
+      { kind: 'measure', name: 'net_amount', qualifiedId: `${sourceId}::measure::net_amount`, aggregation: 'sum', from: 'net_amount', dependsOn: ['net_amount'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
+      { kind: 'measure', name: 'order_line_count', qualifiedId: `${sourceId}::measure::order_line_count`, aggregation: 'count_distinct', from: 'order_line_id', dependsOn: ['order_line_id'], additivity: { entities: 'non_additive', time: 'non_additive' }, allowedAggs: ['count_distinct'], status: 'approved' },
+    ],
+    operations: ['filter', 'group', 'rank', 'having', 'trend', 'compare', 'detail'],
+  };
+  const requirement = (question: string, role: AppBuildRequirement['role']): AppBuildRequirement => ({ id: question, question, role, required: true, measures: [], dimensions: [], filters: [] });
+
+  it('picks the measure and the group the question names, and never groups a total by itself', () => {
+    expect(deterministicDatasetQuery(checked, requirement('Top 10 regions by net amount', 'breakdown'), 'breakdown')).toEqual({ dimensions: [{ field: 'region' }], measures: [{ measure: 'net_amount' }] });
+    expect(deterministicDatasetQuery(checked, requirement('Monthly net amount', 'trend'), 'trend')).toEqual({ dimensions: [{ field: 'order_date', timeGrain: 'month' }], measures: [{ measure: 'net_amount' }] });
+    expect(deterministicDatasetQuery(checked, requirement('Total net amount as a KPI', 'kpi'), 'kpi')).toEqual({ dimensions: [], measures: [{ measure: 'net_amount' }] });
+    // With nothing named, the first measure groups by a text category, not by its own column.
+    const plain = deterministicDatasetQuery(checked, undefined, 'evidence');
+    expect(plain).toEqual({ dimensions: [{ field: 'customer_id' }], measures: [{ measure: 'cost_amount' }] });
+  });
+
+  it('builds a tile for every ask from the checked table, without "can\'t answer" notes', async () => {
+    const candidate: AppSourceCatalogRecord = {
+      ...source(sourceId, 'Order lines from table', 'certified'),
+      qualifiedIdentity: 'commerce::block::Order lines from table',
+      capabilities: {
+        measures: ['cost_amount', 'net_amount', 'order_line_count'], dimensions: ['customer_id', 'order_date', 'region'], outputs: ['cost_amount', 'net_amount', 'order_line_count'], filters: ['region'],
+        allowedVisualizations: ['kpi', 'line', 'bar', 'table'], parameters: [], dataset: checked,
+      },
+    };
+    for (const prompt of ['Top 10 regions by net amount', 'Monthly net amount, top 10 regions by net amount, and total net amount as a KPI']) {
+      const brief = await planAppBuildBrief({ prompt, candidates: [candidate], requiredSourceIds: [candidate.sourceId], sourcePolicy: 'governed_only' });
+      expect(brief.planningMode).toBe('deterministic_fallback');
+      expect(brief.warnings.filter((warning) => /can't answer/.test(warning)), brief.warnings.join(' | ')).toEqual([]);
+      const component = brief.components.find((entry) => entry.sourceId === candidate.sourceId);
+      expect(component?.query?.measures).toEqual([{ measure: 'net_amount' }]);
+      expect(component?.requirementIds.length).toBeGreaterThan(0);
+    }
+    const kpi = await planAppBuildBrief({ prompt: 'Total net amount as a KPI', candidates: [candidate], requiredSourceIds: [], sourcePolicy: 'governed_only' });
+    expect(kpi.requirements[0]?.role).toBe('kpi');
+    expect(kpi.components[0]?.query).toEqual({ dimensions: [], measures: [{ measure: 'net_amount' }] });
+    expect(kpi.components[0]?.requirementIds).toEqual([kpi.requirements[0]!.id]);
   });
 });
 

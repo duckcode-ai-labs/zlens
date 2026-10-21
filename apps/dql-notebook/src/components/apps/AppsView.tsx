@@ -132,7 +132,9 @@ interface AppPromptExample {
   prompt: string;
 }
 
-const DEFAULT_PROMPT = 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders.';
+// "Describe with AI" starts empty: its example is the textarea's placeholder,
+// never a value a typed request would be appended to (or named after).
+const DEFAULT_PROMPT = '';
 const ACTIVE_APP_BUILD_STORAGE_KEY = 'dql.apps.active-ai-build.v1';
 const APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX = 'dql.apps.dashboard-filter-values.v1:';
 

@@ -16,7 +16,9 @@ import {
   initialModelSource,
   modelingModeForSource,
   rememberProposalForModeling,
+  setupFinishTarget,
   setupStepTitles,
+  type SetupStartTarget,
   stepOneBlocker,
   databaseOnlyUnavailable,
   stepTwoCopy,
@@ -28,7 +30,7 @@ import {
 } from './setup-model-source';
 
 type SetupState = 'missing' | 'configured' | 'passed';
-type SetupTarget = 'domains' | 'ask' | 'notebook' | 'apps';
+type SetupTarget = SetupStartTarget;
 
 function hasRealConnection(connections: Record<string, unknown>): boolean {
   return Object.values(connections).some((value) => {
@@ -290,7 +292,9 @@ export function SetupOnboarding({
   const nextLabel = step === 1
     ? (continuing ? 'Setting up…' : source === 'existing' ? 'Continue to credentials' : 'Continue to database')
     : step === 2 ? 'Continue to optional AI' : 'Continue to finish';
-  const finishTarget: SetupTarget = drafted ? 'domains' : aiState === 'missing' || aiSkipped ? 'domains' : 'ask';
+  // "Finish setup" goes where the highlighted start card says.
+  const finish = setupFinishTarget({ drafted });
+  const finishTarget: SetupTarget = finish.target;
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Guided Setup" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: t.appBg, color: t.textPrimary, display: 'flex', flexDirection: 'column', fontFamily: t.font }}>
@@ -384,9 +388,9 @@ export function SetupOnboarding({
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 11 }}>
                 {drafted ? (
-                  <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary />
+                  <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary={finishTarget === 'domains'} />
                 ) : null}
-                <StartCard icon={<LayoutDashboard size={17} />} title="Build a dashboard" body="Pick a table from your database and publish a page with live, checked numbers." action="Build an App" onClick={() => finishTo('apps')} t={t} primary={!drafted} />
+                <StartCard icon={<LayoutDashboard size={17} />} title="Build a dashboard" body="Pick a table from your database and publish a page with live, checked numbers." action="Build an App" onClick={() => finishTo('apps')} t={t} primary={finishTarget === 'apps'} />
                 {drafted ? null : (
                   <StartCard icon={<Boxes size={17} />} title="Build your domain" body="Add models, relationships, business terms, and skills." action="Open Modeling" onClick={() => finishTo('domains')} t={t} />
                 )}
@@ -419,7 +423,7 @@ export function SetupOnboarding({
             {nextLabel} <ArrowRight size={13} />
           </button>
         ) : (
-          <button type="button" disabled={acknowledging} onClick={() => finishTo(finishTarget)} style={{ ...primaryButton, opacity: acknowledging ? 0.65 : 1 }}><Sparkles size={13} /> Finish setup</button>
+          <button type="button" disabled={acknowledging} onClick={() => finishTo(finishTarget)} style={{ ...primaryButton, opacity: acknowledging ? 0.65 : 1 }}><Sparkles size={13} /> Finish setup · {finish.action}</button>
         )}
       </footer>
     </div>

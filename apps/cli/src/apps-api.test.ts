@@ -417,6 +417,17 @@ describe('Apps command center API helpers', () => {
     expect(existsSync(join(root, 'apps/unsafe-growth'))).toBe(false);
   });
 
+  it('names a described App from the first line of the description, at most 60 characters (B9)', () => {
+    const root = createProject();
+    const draft = createStoredAppBuildDraft(root, {
+      goal: 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders.\nA page for a sales manager.',
+      authoringMode: 'ai',
+    });
+    expect(draft.name).toBe('A weekly revenue dashboard: revenue by month, the top');
+    expect(draft.name.length).toBeLessThanOrEqual(60);
+    expect(draft.frame.goal).toContain('A page for a sales manager.');
+  });
+
   it('keeps the unified manual draft local until atomic Publish to Project', () => {
     const root = createProject();
     const draft = createStoredAppBuildDraft(root, {

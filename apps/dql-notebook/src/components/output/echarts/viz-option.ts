@@ -577,13 +577,18 @@ function heatmapOption(base: EChartsOption, result: QueryResult, themeMode: Them
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
+const SINGLE_VALUE_CHARTS: ReadonlySet<ChartType> = new Set<ChartType>(['bar', 'line', 'area']);
+
 function seriesMeasures(result: QueryResult, labelCol: string, valueCol: string, chartType: ChartType, config?: CellChartConfig): string[] {
   // Measures on the value shelf are the series, in shelf order.
   if (config?.orientation && config.metrics?.length) {
     const onShelf = config.metrics.filter((metric) => result.columns.includes(metric));
     if (onShelf.length) return onShelf;
   }
-  if (config?.y && result.columns.includes(config.y) && chartType === 'bar') return [config.y];
+  // A chosen "Y / value" field is the one series of a bar, line or area
+  // chart: the author picked one value, so other number columns stay off the
+  // axis. Stacked and grouped bars exist to show several measures together.
+  if (config?.y && result.columns.includes(config.y) && config.y !== labelCol && SINGLE_VALUE_CHARTS.has(chartType)) return [config.y];
   const measures = measureColumns(result).filter((column) => column !== labelCol);
   if (chartType === 'bar' && !config?.style?.stack) return [valueCol];
   const ordered = config?.metrics?.filter((metric) => measures.includes(metric)) ?? [];

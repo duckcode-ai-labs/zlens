@@ -37,7 +37,7 @@ export function DatasetNumbersCheck({
   const groups = proposal.fields.filter((field) => field.role === 'dimension' || (groupByKey && field.role === 'key'));
   return <>
     {proposal.key ? (
-      <p className="table-dataset-row"><Check size={14} aria-hidden="true" /><span>Each row is one <strong>{proposal.key.entity.replace(/_/g, ' ')}</strong>: <code>{proposal.key.column}</code> is filled and different on all {rows.toLocaleString()} rows, so rows can be counted safely.</span></p>
+      <p className="table-dataset-row"><Check size={14} aria-hidden="true" /><span>Each row is one <strong>{proposal.key.timeGrain ?? proposal.key.entity.replace(/_/g, ' ')}</strong>: <code>{proposal.key.column}</code> is filled and different on all {rows.toLocaleString()} rows, so rows can be counted safely.</span></p>
     ) : (
       <p className="table-dataset-error" role="alert">{noKeyMessage}</p>
     )}
@@ -52,11 +52,12 @@ export function DatasetNumbersCheck({
               <Hash size={12} aria-hidden="true" />
               <strong>{measure.label}</strong>
               <span>{measure.reason}</span>
+              {measure.unitNote ? <small className="table-dataset-unit">{measure.unitNote}</small> : null}
             </label>
             {measure.aggregation === 'sum' ? (
               <select aria-label={`Show ${measure.label} as`} value={choice?.format ?? measure.format} disabled={!choice?.include} onChange={(event) => onChoice(measure.name, { format: event.target.value as NumberChoice['format'], ...(event.target.value === 'currency' ? { currency: choice?.currency ?? 'USD' } : {}) })}>
                 <option value="number">Number</option>
-                <option value="currency">Money</option>
+                <option value="currency" disabled={Boolean(measure.minorUnits)}>Money</option>
                 <option value="percent">Percent</option>
               </select>
             ) : null}

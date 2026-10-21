@@ -168,3 +168,34 @@ describe('an axis shared by different units', () => {
     expect(option.yAxis.axisLabel.formatter(60)).toBe('60');
   });
 });
+
+describe('the chosen "Y / value" field', () => {
+  const revenueAndOrders: QueryResult = {
+    columns: ['month', 'gross_revenue', 'order_count'],
+    rows: [
+      { month: '2025-01-01', gross_revenue: 1200, order_count: 30 },
+      { month: '2025-02-01', gross_revenue: 1500, order_count: 41 },
+      { month: '2025-03-01', gross_revenue: 900, order_count: 22 },
+    ],
+    rowCount: 3,
+    executionTime: 1,
+  };
+
+  it.each(['line', 'area', 'bar'] as const)('is the only series of a %s chart', (chartType) => {
+    const built = buildVizOption({ chartType, result: revenueAndOrders, themeMode: 'paper', config: { chart: chartType, x: 'month', y: 'gross_revenue' } })!;
+    expect(series(built.option).map((entry) => entry.name)).toEqual(['Gross Revenue']);
+    expect(series(built.option)[0].data.map((point: any) => (typeof point === 'object' && point ? point.value : point))).toEqual([1200, 1500, 900]);
+  });
+
+  it('leaves every number column on a line chart when no value field is chosen', () => {
+    const built = buildVizOption({ chartType: 'line', result: revenueAndOrders, themeMode: 'paper', config: { chart: 'line', x: 'month' } })!;
+    expect(series(built.option)).toHaveLength(2);
+  });
+
+  it('keeps the measures on the shelves, and every measure of a stacked bar', () => {
+    const shelves = buildVizOption({ chartType: 'line', result: revenueAndOrders, themeMode: 'paper', config: { chart: 'line', x: 'month', y: 'gross_revenue', metrics: ['gross_revenue', 'order_count'], orientation: 'vertical' } })!;
+    expect(series(shelves.option)).toHaveLength(2);
+    const stacked = buildVizOption({ chartType: 'stacked-bar', result: revenueAndOrders, themeMode: 'paper', config: { chart: 'stacked-bar', x: 'month', y: 'gross_revenue' } })!;
+    expect(series(stacked.option)).toHaveLength(2);
+  });
+});

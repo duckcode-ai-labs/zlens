@@ -1417,6 +1417,7 @@ export const APP_STUDIO_V2_STYLES = `
 .table-dataset-number label { flex:1; min-width:0; display:grid; grid-template-columns:auto auto minmax(0,1fr); align-items:center; gap:2px 6px; cursor:pointer; }
 .table-dataset-number label strong { font-size:13px; font-weight:600; }
 .table-dataset-number label span { grid-column:2 / span 2; color:var(--text-secondary); font-size:11px; line-height:1.4; }
+.table-dataset-number label .table-dataset-unit { grid-column:2 / span 2; color:var(--text-primary); font-size:11px; font-weight:600; line-height:1.4; }
 .table-dataset-number select { flex:none; height:28px; padding:0 6px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--text-primary); font-size:12px; }
 .table-dataset-groups { display:grid; gap:4px; }
 .table-dataset-groups p { margin:0; display:flex; flex-wrap:wrap; gap:4px; }

@@ -219,6 +219,23 @@ export type AppBuildDraftOperation =
    */
   | { type: 'clear_preview_receipt'; pageId: string; expectedReceiptId?: string };
 
+/** The longest App name drawn from a description; the author can rename it. */
+export const APP_NAME_FROM_GOAL_MAX = 60;
+
+/**
+ * An App name from what the App is for: the first line of the description,
+ * at most 60 characters, cut at a word where it can be. A whole paragraph is
+ * not a name.
+ */
+export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_FROM_GOAL_MAX): string {
+  const firstLine = String(goal ?? '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  if (firstLine.length <= max) return firstLine;
+  const cut = firstLine.slice(0, max + 1);
+  const atWord = cut.lastIndexOf(' ');
+  const name = (atWord >= Math.floor(max / 2) ? cut.slice(0, atWord) : firstLine.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '');
+  return name;
+}
+
 export function createAppBuildDraft(input: {
   id: string;
   appId: string;
@@ -242,7 +259,7 @@ export function createAppBuildDraft(input: {
     version: 3 as const,
     id: input.id,
     appId: input.appId,
-    name: input.name?.trim() || input.frame.goal.trim() || input.appId,
+    name: input.name?.trim() || appNameFromGoal(input.frame.goal) || input.appId,
     ...(input.baseApp ? { baseApp: input.baseApp } : {}),
     revision: 1,
     authoringMode: input.authoringMode,

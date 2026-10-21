@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appBuildPreviewIntentFingerprint, applyAppBuildDraftOperations, createAppBuildDraft, packDashboardLayoutItems } from './app-build-draft.js';
+import { appBuildPreviewIntentFingerprint, appNameFromGoal, applyAppBuildDraftOperations, createAppBuildDraft, packDashboardLayoutItems } from './app-build-draft.js';
 import { parseDashboardDocument } from './dashboard-document.js';
 
 describe('AppBuildDraft', () => {
@@ -514,5 +514,25 @@ describe('AppBuildDraft', () => {
     expect(() => applyAppBuildDraftOperations(restoredMalformed, restoredMalformed.revision, [{
       type: 'update_tile', pageId: page.id, tileId: 'revenue', patch: { title: 'Revenue' },
     }])).toThrow(/exactly one selected measure/);
+  });
+});
+
+describe('appNameFromGoal', () => {
+  it('names an App from the first line of its description, at most 60 characters', () => {
+    expect(appNameFromGoal('Sales manager review\nMonthly revenue, top 10 customers and total revenue.')).toBe('Sales manager review');
+    expect(appNameFromGoal('\n\n  Weekly   health  \nmore')).toBe('Weekly health');
+    const long = 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders. A page for a sales manager.';
+    const name = appNameFromGoal(long);
+    expect(name.length).toBeLessThanOrEqual(60);
+    expect(name).toBe('A weekly revenue dashboard: revenue by month, the top');
+    expect(appNameFromGoal('x'.repeat(80))).toHaveLength(60);
+    expect(appNameFromGoal('')).toBe('');
+    expect(appNameFromGoal(undefined)).toBe('');
+  });
+
+  it('is the draft name when no name was given; a given name wins', () => {
+    const frame = { goal: 'Sales manager review\nwith a date filter', metrics: [], dimensions: [], filters: [] };
+    expect(createAppBuildDraft({ id: 'd1', appId: 'sales', authoringMode: 'ai', frame }).name).toBe('Sales manager review');
+    expect(createAppBuildDraft({ id: 'd2', appId: 'sales', name: 'Mine', authoringMode: 'ai', frame }).name).toBe('Mine');
   });
 });

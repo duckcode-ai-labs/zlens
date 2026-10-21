@@ -174,6 +174,18 @@ export function draftsFromWarehouse(source: ModelSource | null): boolean {
   return source === 'warehouse' || source === 'both';
 }
 
+/** Where Setup's last step can send you. */
+export type SetupStartTarget = 'domains' | 'ask' | 'notebook' | 'apps';
+
+/**
+ * The start card Setup highlights, and so where "Finish setup" goes: the
+ * highlighted card and the button never disagree. Drafted models go to
+ * Modeling for review first; otherwise Build a dashboard (Apps).
+ */
+export function setupFinishTarget(input: { drafted: boolean }): { target: SetupStartTarget; action: string } {
+  return input.drafted ? { target: 'domains', action: 'Open Modeling' } : { target: 'apps', action: 'Build an App' };
+}
+
 export function setupStepTitles(source: ModelSource | null): string {
   if (source === 'existing') return 'Data model → Credentials and sync → optional AI → Finish';
   return 'Data model → Database → optional AI → Finish';
