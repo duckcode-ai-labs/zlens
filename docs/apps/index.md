@@ -53,11 +53,13 @@ App Studio uses one set of words for data and trust:
 
 | Word | Means |
 |---|---|
-| **Data** | The data an App uses: its list of Datasets, Metrics and saved queries, chosen on **Data for this App** or with **+ Add data…**. |
-| **Dataset** | Data with fields: measures to add up or count, dimensions and time to group by. You build tiles by picking its fields. |
+| **Data** | The data an App uses: tables, saved queries and Metrics, chosen from one list on **Data for this App** or with **+ Add data…**. Everything you add has fields. |
+| **Field** | A measure to add up or count, or a dimension or time to group by. You build tiles by picking fields. |
+| **Table** | A table in your database. It becomes a Dataset after ZLens checks it once (**Check and add**). |
+| **Saved query** | A block. Its result's columns are its fields, with no review step: grouped by its own columns its values show as they are, otherwise numbers add up (**Sum**) and averages are never added up. |
+| **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and writes a row-level definition, for row-safe measures such as distinct counts. |
+| **Dataset** | Data with a row-level definition: a checked table, or a saved query made row-level. |
 | **Metrics** | Measures and dimensions from a semantic model. |
-| **Saved query** | A block without fields. Its result is used as it is. |
-| **Database table** | A table in your database. It becomes a Dataset after ZLens checks it once (**Database tables** in **Add data**). |
 | **Domain** | A label that filters the lists, such as `finance`. It is not a kind of data. |
 | **Certified** | Someone owns the data and checked it. |
 | **Needs review** | Nobody has certified the data yet. A page that uses it cannot publish. |

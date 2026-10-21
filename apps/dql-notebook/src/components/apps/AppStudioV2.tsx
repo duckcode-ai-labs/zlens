@@ -93,6 +93,7 @@ import {
   initialStudioStage,
   planAddDataSource,
   planRemoveDataSource,
+  savedQueryNeedsFields,
   sourceCatalogKindLabel,
   sourceKindLabel,
   trustLabel,
@@ -531,8 +532,10 @@ export function AppStudioV2({
   const [datasetAuthoringSource, setDatasetAuthoringSource] = useState<AppBlockRecommendation | null>(null);
   const [datasetAuthoringProposal, setDatasetAuthoringProposal] = useState<ContextAuthoringProposalV1 | null>(null);
   const [datasetRebindPrompt, setDatasetRebindPrompt] = useState<{ sourceId: string; title: string } | null>(null);
-  /** The saved query "Add fields" is open for (Data pane). */
+  /** The saved query "Make row-level" is open for (Data pane). */
   const [savedQueryFields, setSavedQueryFields] = useState<AppBlockRecommendation | null>(null);
+  /** Saved queries whose result columns are being read as fields, or could not be (design D1). */
+  const [savedQueryFieldReads, setSavedQueryFieldReads] = useState<Record<string, { state: 'reading' } | { state: 'failed'; error: string }>>({});
   const [copilotOpen, setCopilotOpen] = useState(false);
   /** Edit shows the build chrome; View shows the page exactly as a reader sees it. */
   const [studioView, setStudioView] = useState<'edit' | 'view'>('edit');
@@ -1574,13 +1577,24 @@ export function AppStudioV2({
    * `upsert_source` operation; Data that needs review also switches the data
    * rule, only when the author chose "Allow data that needs review & add".
    */
-  const addDataSource = async (sourceId: string, options: { allowReview: boolean }): Promise<boolean> => {
+  const addDataSource = async (sourceId: string, options: { allowReview: boolean; refresh?: boolean }): Promise<boolean> => {
     const current = latestDraftRef.current;
     if (!current) return false;
     setError(null);
     try {
-      const resolved = await api.resolveAppSourceCandidates(current.id, [sourceId], { includeReviewRequired: true });
-      const candidate = resolved.items.find((item) => (item.sourceId ?? item.id) === sourceId);
+      let resolved = await api.resolveAppSourceCandidates(current.id, [sourceId], { includeReviewRequired: true });
+      let candidate = resolved.items.find((item) => (item.sourceId ?? item.id) === sourceId);
+      // A saved query comes with its result's fields (design D1). When they
+      // can't be read it is still added, and shows as it is.
+      if (candidate && datasetTilesEnabled && savedQueryNeedsFields(candidate)) {
+        const fields = await api.readSavedQueryFields(sourceId);
+        if (fields.ok && fields.read) {
+          resolved = await api.resolveAppSourceCandidates(current.id, [sourceId], { includeReviewRequired: true });
+          candidate = resolved.items.find((item) => (item.sourceId ?? item.id) === sourceId) ?? candidate;
+        } else if (!fields.ok) {
+          setSavedQueryFieldReads((reads) => ({ ...reads, [sourceId]: { state: 'failed', error: fields.error ?? 'ZLens could not read its columns.' } }));
+        }
+      }
       const plan = planAddDataSource(current, candidate, options);
       if (!plan.ok) {
         setError(plan.error);
@@ -1589,7 +1603,9 @@ export function AppStudioV2({
       const next = await mutate(plan.operations);
       if (!next) return false;
       if (candidate) setKnownSourceItems((items) => ({ ...items, [sourceId]: candidate }));
-      setSavedMessage(`${candidate ? humanize(candidate.name) : 'Data'} added to this App`);
+      setSavedMessage(options.refresh
+        ? `${candidate ? humanize(candidate.name) : 'Data'} fields are ready`
+        : `${candidate ? humanize(candidate.name) : 'Data'} added to this App`);
       if (stage === 'canvas' && candidate) setChosenDatasetKey(candidate.id);
       return true;
     } catch (cause) {
@@ -1610,8 +1626,31 @@ export function AppStudioV2({
     const inApp = Boolean(current?.sources.some((source) => source.id === sourceId));
     if (inApp && !(await addDataSource(sourceId, { allowReview: false }))) return;
     setSavedMessage(status === 'certified'
-      ? 'Fields added · it is a certified Dataset now'
-      : 'Fields added · it needs review before tiles from it can be published');
+      ? 'Row-level now · certified'
+      : 'Row-level now · it needs review before tiles from it can be published');
+  };
+
+  /**
+   * A saved query in this App without fields yet (an App made before design
+   * D1, or a fresh checkout): read its result columns, then refresh the App's
+   * copy so the Data pane shows them. A failure leaves it usable as it is.
+   */
+  const readSavedQueryFieldsIntoApp = async (item: AppBlockRecommendation) => {
+    const sourceId = item.sourceId ?? item.id;
+    setSavedQueryFieldReads((reads) => ({ ...reads, [sourceId]: { state: 'reading' } }));
+    const response = await api.readSavedQueryFields(sourceId);
+    if (!response.ok) {
+      setSavedQueryFieldReads((reads) => ({ ...reads, [sourceId]: { state: 'failed', error: response.error ?? 'ZLens could not read its columns.' } }));
+      return;
+    }
+    const inApp = Boolean(latestDraftRef.current?.sources.some((source) => source.id === sourceId));
+    if (inApp) await addDataSource(sourceId, { allowReview: false, refresh: true });
+    setCatalogRefreshNonce((current) => current + 1);
+    setSavedQueryFieldReads((reads) => {
+      const next = { ...reads };
+      delete next[sourceId];
+      return next;
+    });
   };
 
   const removeDataSource = async (sourceId: string) => {
@@ -3270,6 +3309,7 @@ export function AppStudioV2({
   };
   const chooseDataset = (item: AppBlockRecommendation) => {
     setChosenDatasetKey(item.id);
+    if (datasetTilesEnabled && savedQueryNeedsFields(item) && !savedQueryFieldReads[item.sourceId ?? item.id]) void readSavedQueryFieldsIntoApp(item);
     setSelectedTileId(null);
     setDraftTile((current) => current && item.capabilities?.dataset ? emptyDraft(item) : null);
   };
@@ -3410,7 +3450,8 @@ export function AppStudioV2({
             onAddContent={(kind) => void addComponent(kind, null)}
             {...(activeDatasetItem && datasetSourceAuthoringModel(activeDatasetItem) ? { onAuthorDataset: openDatasetAuthoring } : {})}
             {...(activeDatasetItem?.sourceId && draft.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === activeDatasetItem.sourceId)) ? { onRefreshBinding: (item: AppBlockRecommendation) => { if (item.sourceId) void refreshDatasetBinding(item.sourceId); } } : {})}
-            {...(datasetTilesEnabled ? { onAddFields: setSavedQueryFields } : {})}
+            {...(datasetTilesEnabled ? { onMakeRowLevel: setSavedQueryFields } : {})}
+            {...(activeAppData && savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] ? { fieldsStatus: savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] } : {})}
             pickerRequest={dataPickerRequest}
           /> : null}
           {panel === 'filters' ? <FiltersPanel draft={draft} activePageId={activePage?.id} catalog={catalog} candidates={filterCandidates} runtimeFilterFields={runtimeFilterFields} previewRunsByPage={previewRunsByPage} previewing={previewing} disabled={busy || previewing} onRunPreview={() => void runPreview()} onSave={(configuration) => void saveFilter(configuration)} onRemove={(id) => void removeFilter(id)} /> : null}

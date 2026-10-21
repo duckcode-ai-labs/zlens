@@ -111,6 +111,12 @@ export interface LocalAppPreviewDatasetBindingEvidence {
     scopeSnapshotId: string;
     scopeSnapshotFingerprint: string;
   };
+  /**
+   * A tile over a saved query's result fields (design D1). It reads the saved
+   * query's complete result, so it has no row-level grain proof; the binding
+   * is its source revision, field contract and observed target.
+   */
+  savedQueryResult?: true;
 }
 export type LocalAppInvestigationIntent =
   | 'diagnose_change'
@@ -1632,7 +1638,8 @@ function parsePreviewDatasetBindings(value: unknown): LocalAppPreviewDatasetBind
       if (!proofFields.every((key) => typeof proof[key] === 'string' && Boolean(String(proof[key]).trim()))) return [];
       grainProof = Object.fromEntries(proofFields.map((key) => [key, String(proof[key])])) as LocalAppPreviewDatasetBindingEvidence['grainProof'];
     }
-    if ((kind === 'block') !== Boolean(grainProof)) return [];
+    const savedQueryResult = record.savedQueryResult === true;
+    if (savedQueryResult ? (kind !== 'block' || grainProof) : (kind === 'block') !== Boolean(grainProof)) return [];
     bindings.push({
       tileId: String(record.tileId),
       kind,
@@ -1644,6 +1651,7 @@ function parsePreviewDatasetBindings(value: unknown): LocalAppPreviewDatasetBind
         ? { target: 'local' }
         : { target: 'connection', ...(typeof target.connectionName === 'string' ? { connectionName: target.connectionName } : {}) },
       ...(grainProof ? { grainProof } : {}),
+      ...(savedQueryResult ? { savedQueryResult: true as const } : {}),
     });
   }
   return bindings;

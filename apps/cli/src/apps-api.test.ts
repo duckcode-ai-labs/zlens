@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -4941,11 +4941,15 @@ describe('Ask App proposals open in App Studio (design D9)', () => {
 
     // Not kept: the draft stays on "Only certified data".
     const second = await propose();
+    // The saved queries Ask kept get their result fields read first (design D1).
+    const readSavedQueryFields = vi.fn(async (_sourceIds: string[]) => undefined);
     const notKept = await openAppAiBuildInStudio(root, second.id, {
       selectedTileIds: second.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id),
       expectedProposalHash: second.proposalHash,
-    });
+    }, { readSavedQueryFields });
     expect(notKept.ok && notKept.draft.sourcePolicy).toBe('governed_only');
+    expect(readSavedQueryFields).toHaveBeenCalledTimes(1);
+    expect(readSavedQueryFields.mock.calls[0]![0]).toEqual(notKept.ok ? notKept.draft.sources.map((source) => source.id) : []);
   });
 
   it('refuses a stale proposal and no longer serves the direct App write route', async () => {

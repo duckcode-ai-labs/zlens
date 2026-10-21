@@ -9,21 +9,44 @@ import {
   openCanvasLabel,
   planAddDataSource,
   planRemoveDataSource,
+  addDataKindOf,
+  canMakeRowLevel,
+  filterAddDataCatalog,
+  savedQueryNeedsFields,
   sourceCatalogKindLabel,
-  splitAddDataCatalog,
+  sourceKindLabel,
+  sourceOriginLabel,
   tilesUsingSource,
   unusedAppDataSources,
   unusedSourcesPublishNote,
 } from './app-data';
-import { draftRevenueQuery, draftWith, marginMetrics, orderLinesDataset, topCustomersQuery } from './app-data.fixtures';
+import { draftRevenueQuery, draftWith, marginMetrics, monthlyRevenueQuery, orderLinesDataset, ordersTableDataset, topCustomersQuery } from './app-data.fixtures';
 
 describe('App data: one list per App (design D1, D3, D4)', () => {
-  it('splits the trust-ordered catalog into Datasets & Metrics and Saved queries, keeping its order', () => {
-    const { datasets, queries } = splitAddDataCatalog([orderLinesDataset, topCustomersQuery, marginMetrics, draftRevenueQuery]);
-    expect(datasets.map((item) => item.name)).toEqual(['order_lines', 'margin']);
-    expect(queries.map((item) => item.name)).toEqual(['top_customers', 'draft_revenue']);
+  it('keeps one trust-ordered list and narrows it with the kind chips (design D1)', () => {
+    const catalog = [ordersTableDataset, orderLinesDataset, monthlyRevenueQuery, topCustomersQuery, marginMetrics, draftRevenueQuery];
+    expect(filterAddDataCatalog(catalog, 'all').map((item) => item.name)).toEqual(['orders', 'order_lines', 'monthly_revenue', 'top_customers', 'margin', 'draft_revenue']);
+    expect(filterAddDataCatalog(catalog, 'tables').map((item) => item.name)).toEqual(['orders']);
+    expect(filterAddDataCatalog(catalog, 'queries').map((item) => item.name)).toEqual(['order_lines', 'monthly_revenue', 'top_customers', 'draft_revenue']);
+    expect(filterAddDataCatalog(catalog, 'metrics').map((item) => item.name)).toEqual(['margin']);
+    expect(catalog.map(addDataKindOf)).toEqual(['tables', 'queries', 'queries', 'queries', 'metrics', 'queries']);
     expect(sourceCatalogKindLabel(marginMetrics)).toBe('Metrics');
     expect(sourceCatalogKindLabel(topCustomersQuery)).toBe('Saved query');
+  });
+
+  it('labels where data comes from: a table, a saved query (with result fields or made row-level) or Metrics', () => {
+    expect(sourceOriginLabel(ordersTableDataset)).toBe('Table');
+    expect(sourceOriginLabel(orderLinesDataset)).toBe('Saved query');
+    expect(sourceOriginLabel(monthlyRevenueQuery)).toBe('Saved query');
+    expect(sourceOriginLabel(topCustomersQuery)).toBe('Saved query');
+    expect(sourceOriginLabel(marginMetrics)).toBe('Metrics');
+    // Result fields keep a saved query a saved query, not a Dataset.
+    expect(sourceCatalogKindLabel(monthlyRevenueQuery)).toBe('Saved query');
+    expect(sourceKindLabel('block', monthlyRevenueQuery.capabilities)).toBe('Saved query');
+    expect(sourceKindLabel('block', orderLinesDataset.capabilities)).toBe('Dataset');
+    // Reading fields applies to a saved query without them; Make row-level to any saved query.
+    expect([topCustomersQuery, monthlyRevenueQuery, orderLinesDataset, marginMetrics].map(savedQueryNeedsFields)).toEqual([true, false, false, false]);
+    expect([topCustomersQuery, monthlyRevenueQuery, orderLinesDataset, marginMetrics].map(canMakeRowLevel)).toEqual([true, true, false, false]);
   });
 
   it('sends the chosen domain chip to the catalog, and none for All', () => {

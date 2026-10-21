@@ -119,6 +119,8 @@ describe('Dataset source authoring proposal model (APP-055)', () => {
 
   it('does not invent a Dataset authoring target for semantic sources or duplicate a measure', () => {
     expect(datasetSourceAuthoringModel({ ...source, capabilities: { ...source.capabilities, dataset: { ...source.capabilities.dataset, kind: 'semantic' } } })).toBeUndefined();
+    // A saved query's result fields (design D1) are read, never authored here.
+    expect(datasetSourceAuthoringModel({ ...source, capabilities: { ...source.capabilities, dataset: { ...source.capabilities.dataset, result: { savedQuery: 'orders', groupBy: [], asIs: [], typesFrom: 'probe' } } } })).toBeUndefined();
     expect(() => datasetAuthoringChangeForMeasure(source, source.capabilities.dataset, {
       name: 'revenue', expression: 'SUM(daily_revenue)', aggregation: 'sum', additivity: 'non_additive', format: 'number',
     })).toThrow('already exists');

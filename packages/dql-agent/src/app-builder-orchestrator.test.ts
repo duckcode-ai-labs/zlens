@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { deterministicDatasetQuery, planAppBuildBrief } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
-import type { AppBuildRequirement, DatasetDescriptor } from '@zlens/core';
+import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
 const candidates: AppSourceCatalogRecord[] = [
   source('app:block:sales:revenue', 'Revenue trend', 'certified'),
@@ -387,7 +387,8 @@ describe('keyword planner on a just-checked table (B13)', () => {
     for (const prompt of ['Top 10 regions by net amount', 'Monthly net amount, top 10 regions by net amount, and total net amount as a KPI']) {
       const brief = await planAppBuildBrief({ prompt, candidates: [candidate], requiredSourceIds: [candidate.sourceId], sourcePolicy: 'governed_only' });
       expect(brief.planningMode).toBe('deterministic_fallback');
-      expect(brief.warnings.filter((warning) => /can't answer/.test(warning)), brief.warnings.join(' | ')).toEqual([]);
+      // It is kept (not dropped with "can't answer this"); the ask is still reported as not covered.
+    expect(brief.warnings.filter((warning) => /can't answer this/.test(warning)), brief.warnings.join(' | ')).toEqual([]);
       const component = brief.components.find((entry) => entry.sourceId === candidate.sourceId);
       expect(component?.query?.measures).toEqual([{ measure: 'net_amount' }]);
       expect(component?.requirementIds.length).toBeGreaterThan(0);
@@ -396,6 +397,37 @@ describe('keyword planner on a just-checked table (B13)', () => {
     expect(kpi.requirements[0]?.role).toBe('kpi');
     expect(kpi.components[0]?.query).toEqual({ dimensions: [], measures: [{ measure: 'net_amount' }] });
     expect(kpi.components[0]?.requirementIds).toEqual([kpi.requirements[0]!.id]);
+  });
+});
+
+describe('keyword planner on a saved query with result fields (design D1)', () => {
+  const sourceId = 'app:block:commerce:monthly-revenue';
+  const result = savedQueryResultDescriptor({
+    sourceId, sourceRevision: 'sha256:monthly', savedQuery: 'monthly_revenue', qualifiedId: 'commerce::block::monthly_revenue',
+    lifecycle: 'certified', certified: true, typesFrom: 'probe',
+    columns: [{ name: 'month', type: 'TIMESTAMP' }, { name: 'gross_revenue', type: 'DOUBLE' }, { name: 'avg_order_value', type: 'DOUBLE' }],
+    groupBy: ['month'],
+  })!;
+  const candidate: AppSourceCatalogRecord = {
+    ...source(sourceId, 'monthly_revenue', 'certified'),
+    capabilities: { measures: ['gross_revenue'], dimensions: ['month'], outputs: ['month', 'gross_revenue', 'avg_order_value'], filters: [], allowedVisualizations: [], parameters: [], dataset: result },
+  };
+
+  it('plans a field tile from its result columns: the trend as it is, the total rolled up', async () => {
+    const brief = await planAppBuildBrief({ prompt: 'Monthly gross revenue trend', candidates: [candidate], requiredSourceIds: [sourceId], sourcePolicy: 'governed_only' });
+    expect(brief.components[0]?.query).toEqual({ dimensions: [{ field: 'month', timeGrain: 'month' }], measures: [{ measure: 'gross_revenue' }] });
+    const kpi = await planAppBuildBrief({ prompt: 'Total gross revenue as a KPI', candidates: [candidate], requiredSourceIds: [sourceId], sourcePolicy: 'governed_only' });
+    expect(kpi.components[0]?.query).toEqual({ dimensions: [], measures: [{ measure: 'gross_revenue' }] });
+  });
+
+  it('keeps showing the saved query as it is when its fields cannot answer, instead of dropping it', async () => {
+    // An average named on its own is never summed into a KPI, and nothing else matches.
+    const averagesOnly = { ...candidate, capabilities: { ...candidate.capabilities, dataset: { ...result, fields: result.fields.filter((field) => field.kind === 'physical' || field.name === 'avg_order_value') } } };
+    const brief = await planAppBuildBrief({ prompt: 'Average order value as a KPI', candidates: [averagesOnly], requiredSourceIds: [sourceId], sourcePolicy: 'governed_only' });
+    expect(brief.components).toEqual([expect.objectContaining({ sourceId })]);
+    expect(brief.components[0]?.query).toBeUndefined();
+    // It is kept, not dropped with "can't answer this"; the ask itself is still reported as not covered.
+    expect(brief.warnings.filter((warning) => /can't answer this/.test(warning)), brief.warnings.join(' | ')).toEqual([]);
   });
 });
 

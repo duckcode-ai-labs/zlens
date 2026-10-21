@@ -268,6 +268,41 @@ describe('LocalAppStorage', () => {
     });
   });
 
+  it('restores the binding of a tile over a saved query result, which has no grain proof (design D1)', () => {
+    const binding = {
+      tileId: 'monthly',
+      kind: 'block' as const,
+      sourceId: 'app:block:commerce:monthly',
+      sourceRevision: 'sha256:source-v1',
+      contractFingerprint: 'sha256:result-contract-v1',
+      targetFingerprint: 'sha256:target-v1',
+      executionTarget: { target: 'local' as const },
+      savedQueryResult: true as const,
+    };
+    const evidence = {
+      runId: 'app_run_saved_query',
+      draftId: 'build-revenue',
+      dashboardId: 'overview',
+      intentFingerprint: 'intent-1',
+      snapshotId: 'snapshot-1',
+      filterFingerprint: 'filters-1',
+      resultFingerprint: 'result-1',
+      personaFingerprint: 'persona-1',
+      successfulTileIds: ['monthly'],
+      semanticApprovalEligibleTileIds: [],
+      datasetBindingEligibleTileIds: ['monthly'],
+      datasetBindings: [binding],
+      createdAt: '2026-10-21T00:00:00.000Z',
+    };
+    store.saveAppPreviewEvidence(evidence);
+    store.close();
+    store = new LocalAppStorage(join(dir, '.dql', 'local', 'apps.sqlite'));
+    expect(store.getAppPreviewEvidence('app_run_saved_query')).toEqual(evidence);
+    // A saved query result binding never carries a grain proof.
+    store.saveAppPreviewEvidence({ ...evidence, runId: 'app_run_forged', datasetBindings: [{ ...binding, grainProof: { id: 'p', sourceSqlFingerprint: 'a', parameterFingerprint: 'b', queryFingerprint: 'c', keyFingerprint: 'd', scopeSnapshotId: 'e', scopeSnapshotFingerprint: 'f' } }] });
+    expect(store.getAppPreviewEvidence('app_run_forged')?.datasetBindings).toEqual([]);
+  });
+
   it('stores private App conversations locally', () => {
     const created = store.createAppConversation({
       appId: 'executive-cockpit',

@@ -47,7 +47,7 @@ test.beforeAll(async () => {
   seedProject(projectDir, { connectorRoot: process.env.ZLENS_E2E_DUCKDB_CONNECTORS });
   server = await startNotebookServer({ projectDir, workDir });
 
-  // One certified Dataset from dim_customers, the way Add data's table tab makes it.
+  // One certified Dataset from dim_customers, the way Add data makes one from a table.
   const listing = await call<{ tables: Array<{ id: string; name: string }> }>('/api/app-datasets/tables');
   const table = listing.tables.find((candidate) => candidate.name === 'dim_customers')!;
   const drafted = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: table.id });

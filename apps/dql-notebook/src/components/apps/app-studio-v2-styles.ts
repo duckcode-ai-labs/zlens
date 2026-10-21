@@ -1064,6 +1064,8 @@ export const APP_STUDIO_V2_STYLES = `
 /* ── Data panel: one Dataset, its fields; click to build ── */
 .data-panel { display:flex; flex-direction:column; gap:10px; }
 .dataset-picker { position:relative; }
+.dataset-picker:has(> .dataset-more) { display:flex; gap:2px; align-items:center; }
+.dataset-picker:has(> .dataset-more) > .dataset-current { flex:1; min-width:0; }
 .dataset-current { width:100%; display:flex; align-items:center; gap:10px; padding:10px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-2); text-align:left; }
 .dataset-current:hover { border-color:var(--border-strong); }
 .dataset-current:disabled { cursor:default; opacity:.7; }
@@ -1097,8 +1099,9 @@ export const APP_STUDIO_V2_STYLES = `
 .data-field .glyph .sigma { color:var(--accent); font-size:13px; font-weight:600; }
 .data-field .glyph .aa { font-size:11px; font-weight:600; }
 .data-field .glyph svg { color:var(--status-warning); }
-.data-field .name { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.data-field .meta { color:var(--text-tertiary); font-family:var(--font-mono, ui-monospace, monospace); font-size:11px; font-weight:400; }
+/* The name keeps its room: the grain list ("month · quarter · year") gives way first. */
+.data-field .name { min-width:0; flex:1 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.data-field .meta { min-width:0; flex:0 1000 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-tertiary); font-family:var(--font-mono, ui-monospace, monospace); font-size:11px; font-weight:400; }
 .data-field .badge { padding:1px 6px; border-radius:4px; background:color-mix(in srgb,var(--status-warning) 12%,var(--bg-2)); color:var(--status-warning); font-size:11px; font-weight:600; }
 .data-field .check { flex:none; }
 .field-empty { margin:6px 2px; color:var(--text-tertiary); font-size:13px; line-height:1.5; }
@@ -1429,7 +1432,7 @@ export const APP_STUDIO_V2_STYLES = `
 .table-dataset-card > footer button { height:32px; padding:0 14px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--text-primary); font-size:13px; font-weight:500; cursor:pointer; }
 .table-dataset-card > footer button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg, #fff); font-weight:600; }
 .table-dataset-card > footer button:disabled { opacity:.5; cursor:not-allowed; }
-/* Add fields to a saved query (design D1). */
+/* Make a saved query row-level (design D1; formerly "Add fields"). */
 .saved-query-fields-notice { margin:0; padding:8px 10px; border:1px solid color-mix(in srgb,var(--status-warning) 40%,var(--border-default)); border-radius:8px; background:color-mix(in srgb,var(--status-warning) 8%,var(--bg-2)); color:var(--text-secondary); font-size:12px; line-height:1.5; }
 .saved-query-fields-notice strong { color:var(--text-primary); }
 .saved-query-fields-card .table-dataset-error { display:grid; gap:8px; }
@@ -1442,10 +1445,13 @@ export const APP_STUDIO_V2_STYLES = `
 .saved-query-fields-done div { display:grid; gap:4px; }
 .saved-query-fields-done strong { font-size:13px; }
 .saved-query-fields-done small { color:var(--text-secondary); font-size:12px; line-height:1.45; }
-.saved-query-add-fields { display:grid; gap:6px; }
-.saved-query-add-fields button { justify-self:start; display:inline-flex; align-items:center; gap:4px; border:1px solid var(--accent); background:var(--accent-dim); color:var(--accent); border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; }
-.saved-query-add-fields button:disabled { opacity:.5; cursor:default; }
-.add-data-action button.add-fields { border-color:color-mix(in srgb,var(--accent) 45%,var(--border-default)); color:var(--accent); background:transparent; }
+.dataset-more { position:relative; display:inline-flex; }
+.dataset-more > button { width:22px; height:28px; border:0; background:transparent; color:var(--text-secondary); border-radius:8px; padding:0; display:grid; place-items:center; }
+.dataset-more > button:hover { color:var(--text-primary); background:var(--bg-2); }
+.dataset-more-menu { position:absolute; right:0; top:calc(100% + 4px); z-index:30; width:260px; display:grid; padding:4px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); box-shadow:0 12px 32px color-mix(in srgb,var(--text-primary) 14%,transparent); }
+.dataset-more-menu button { display:grid; gap:2px; text-align:left; border:0; background:transparent; padding:8px; border-radius:8px; color:var(--text-primary); font-size:12px; }
+.dataset-more-menu button:hover { background:var(--bg-2); }
+.dataset-more-menu small { color:var(--text-secondary); font-size:11px; line-height:1.4; }
 /* Start form: the App's domain. */
 .launch-domain-field { display:grid; gap:6px; }
 .launch-domain-field > span { font-size:14px; font-weight:600; color:var(--text-secondary); }
@@ -1538,6 +1544,18 @@ export const APP_STUDIO_V2_STYLES = `
 .add-data-domains button { border:1px solid var(--border-default); background:var(--bg-1); color:var(--text-secondary); border-radius:999px; padding:4px 10px; font-size:12px; }
 .add-data-domains button:hover { border-color:var(--border-strong); color:var(--text-primary); }
 .add-data-domains button.on { border-color:var(--accent); background:var(--accent-dim); color:var(--text-primary); }
+/* One list (design D1): chips for the kind of data instead of tabs. */
+.add-data-kinds { display:flex; flex-wrap:wrap; gap:4px; padding:2px; border:1px solid var(--border-subtle); border-radius:8px; background:var(--bg-1); justify-self:start; }
+.add-data-kinds button { border:0; background:transparent; color:var(--text-secondary); border-radius:8px; padding:5px 10px; font-size:12px; font-weight:600; display:inline-flex; align-items:center; gap:6px; }
+.add-data-kinds button:hover { color:var(--text-primary); }
+.add-data-kinds button.on { background:var(--bg-3, var(--bg-2)); color:var(--text-primary); box-shadow:0 0 0 1px var(--border-default); }
+.add-data-kinds small { color:var(--text-tertiary); font-size:11px; font-weight:500; }
+.add-data-more-menu { position:relative; display:inline-flex; }
+.add-data-action button.more { padding:5px 6px; }
+.add-data-menu { position:absolute; right:0; top:calc(100% + 4px); z-index:30; width:280px; display:grid; padding:4px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); box-shadow:0 12px 32px color-mix(in srgb,var(--text-primary) 14%,transparent); }
+.add-data-action .add-data-menu button { display:grid; gap:2px; justify-items:start; text-align:left; white-space:normal; border:0; background:transparent; padding:8px; border-radius:8px; }
+.add-data-action .add-data-menu button:hover { background:var(--bg-2); }
+.add-data-menu small { color:var(--text-secondary); font-size:11px; font-weight:400; line-height:1.4; }
 .add-data-rule { margin:0; display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--text-secondary); font-size:12px; }
 .add-data-rule svg { color:var(--status-success); }
 .add-data-rule strong { color:var(--text-primary); font-weight:600; }

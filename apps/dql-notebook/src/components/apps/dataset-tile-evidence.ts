@@ -44,7 +44,9 @@ export function datasetTileNotices(tile: DashboardRunTile | undefined, options: 
       notices.push({
         key: `adaptation:${adaptation.kind}`,
         kind: 'adapted',
-        label: adaptation.kind === 'aggregate_time_rollup' ? 'Rolled up over time' : 'Rolled up above Dataset grain',
+        label: adaptation.kind === 'aggregate_time_rollup'
+          ? 'Rolled up over time'
+          : adaptation.kind === 'saved_query_rollup' ? 'Rolled up from a saved query' : 'Rolled up above Dataset grain',
         detail: adaptation.message,
       });
     }

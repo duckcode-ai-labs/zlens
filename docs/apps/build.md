@@ -95,30 +95,33 @@ publish, and publishing goes through the same checks.
 ## 2. Choose the data
 
 **Data for this App** lists the App's data on the left (**This App's data**)
-and an **Add data** list on the right with three tabs:
+and one **Add data** list on the right. Everything in it has fields:
 
-- **Datasets & Metrics**: data with fields, listed certified first.
-- **Saved queries**: blocks without fields; their result is used as it is,
-  until you **Add fields** (see below).
-- **Database tables**: a table becomes a Dataset after ZLens checks it once.
+- **Table**: a Dataset made from a database table, or a table that is **Not
+  checked yet**. A table becomes a Dataset after ZLens checks it once.
+- **Saved query**: a block. Its fields come from its result, with no review
+  step (see [Fields from a saved query](#fields-from-a-saved-query)).
+- **Metrics**: measures from a semantic model.
 
-Search with **Search Datasets, Metrics and saved queries**, and narrow the list
-with the domain buttons (**All** or one domain). The **Data rule** line shows
-**Only certified data** or **Also allow data that needs review**; **Change**
-switches it.
+The chips **All · Tables · Saved queries · Metrics** narrow the list to one
+kind. Search with **Search tables, saved queries and Metrics**, and narrow it
+by domain (**All domains** or one domain). The **Data rule** line shows **Only
+certified data** or **Also allow data that needs review**; **Change** switches
+it.
 
-Each row shows its type, its trust (**Certified** or **Needs review**), its
-domain and owner. Click a row to see its **Measures**, **Dimensions** and
-**Time**, or a saved query's **Columns**; **Show 10 sample rows** reads a few
-rows of a Dataset.
+Each row shows where it comes from (**Table**, **Saved query** or **Metrics**),
+its trust (**Certified** or **Needs review**), its domain and owner. Click a
+row to see its **Measures**, **Dimensions** and **Time**; **Show 10 sample
+rows** reads a few of its rows.
 
 - Click **Add to App**. The row then says **Added**, with **Remove**.
 - Data marked **Needs review** shows **Allow data that needs review & add**
   while the App allows only certified data.
-- On **Database tables**, click **Check and add**, check the numbers, and click
-  **Certify and use this data**. The new Dataset is added to the App.
-- On **Saved queries**, **Add fields** gives a saved query fields (see
-  [Add fields to a saved query](#add-fields-to-a-saved-query)).
+- On a table that is **Not checked yet**, click **Check and add**, check the
+  numbers, and click **Certify and use this data**. The new Dataset is added
+  to the App.
+- On a saved query, **⋯ → Make row-level** is only needed for row-safe
+  measures (see [Make a saved query row-level](#make-a-saved-query-row-level)).
 
 Click **Open canvas with N sources**, or **Skip, start empty**. You can add
 more later: on the canvas, the **Data** tab's source menu lists **This App's
@@ -127,42 +130,68 @@ data** first, then **+ Add data…**.
 ## 3. Add tiles
 
 The left panel has three tabs: **Data**, **Pages** and **Filters**. On the
-**Data** tab, choose a source from **This App's data**:
+**Data** tab, choose a source from **This App's data** and click a measure or
+a dimension (or drag it onto a shelf). A new tile appears on the page; add
+more fields, then click **Add to page**. A table, a saved query and Metrics
+all work the same way.
 
-- **A Dataset or Metrics**: click a measure or a dimension. A new tile appears
-  on the page; add more fields, then click **Add to page**.
-- **A saved query**: under **Add as**, click **Table**, **Chart** or **KPI**.
-  Saved queries have no fields, so you cannot pick measures and dimensions
-  until you click **Add fields**.
+### Fields from a saved query
 
-### Add fields to a saved query
+A saved query's output columns are its fields, on the same shelves as any
+other data: numbers are **Measures**, text and true/false columns are
+**Dimensions**, and dates are **Time** fields you can group by day, week or
+month (a `month` column by month and longer). **Count of rows** is always
+there. ZLens reads the column names and types once, when you open or add the
+saved query; nothing changes in the saved query and its trust stays its own.
+**Describe with AI** and Ask's **Open in App Studio** read them the same way,
+so the tiles AI proposes from a saved query use its fields too.
 
-A saved query can become a Dataset, so you can build tiles from its
-**Measures** and **Dimensions**:
+A tile over a saved query runs as one query over the saved query's complete
+result:
 
-1. Choose the saved query on the **Data** tab and click **Add fields** (or
-   **Add fields** on its row in **Add data → Saved queries**).
+- **As it is.** When the tile groups by all of the saved query's own grouping
+  columns (for `monthly_revenue`, by **Month** by month), each point is one row
+  of the saved query and its values show as they are.
+- **Rolled up.** Any other tile adds rows up: numbers default to **Sum**, so
+  **Gross Revenue** as a KPI is the total and **Gross Revenue** by quarter adds
+  up three months. The tile says **Rolled up from a saved query**, and its
+  receipt says *Rolled up from the certified result of monthly_revenue*.
+- **Averages can't be added up.** A column named like an average or a ratio
+  (`avg_`, `average`, `pct`, `percent`, `rate`, `ratio`, `_share`, `margin`)
+  shows as it is only at the saved query's own grouping. Rolled up, ZLens
+  refuses to sum it and offers **Min** and **Max** of it instead.
+
+A certified saved query's tiles are **Certified**; a saved query that needs
+review keeps its tiles **Needs review**. A saved query that asks for values
+(parameters) has no fields: under **Add as it is**, click **Table**, **Chart**
+or **KPI** to show its result.
+
+### Make a saved query row-level
+
+Rolling up a saved query's result is right for sums and counts of its rows.
+For row-safe measures, such as a distinct count of customers or an average
+over rows, make it row-level:
+
+1. Choose the saved query on the **Data** tab and click **⋯ → Make row-level**
+   (or **⋯ → Make row-level** on its row in **Add data**).
 2. **Check the numbers** reads the saved query's columns and checks them
    against its rows: *Each row is one …* names the column that is different on
    every row, **Numbers** lists what to add up or count (switch any off, and
    pick **Number**, **Money** or **Percent**), and **Group and filter by** lists
    the rest.
-3. Click **Check and add fields**. ZLens writes the fields into the same saved
-   query file (same name, same place; no copy) and runs the same certification
-   checks as **Certify and use this data**.
-   - Checks pass: the saved query is a **Certified** Dataset.
-   - Checks fail: it keeps its fields and stays **Needs review**.
-4. Click **Use its fields**. The **Data** tab shows its **Measures** and
-   **Dimensions**.
+3. Click **Check and make row-level**. ZLens writes a row-level definition
+   into the same saved query file (same name, same place; no copy) and runs
+   the same certification checks as **Certify and use this data**.
+   - Checks pass: the saved query is **Certified** and row-level.
+   - Checks fail: it is row-level and stays **Needs review**.
+4. Click **Use its fields**.
 
-A certified saved query shows *Adding fields sends this saved query back for
-review.* If its checks pass it is certified again right away. If they fail,
-nothing changes until you click **Send for review and add fields**, which adds
-the fields and leaves it **Needs review**. A saved query that asks for values
-(parameters) cannot get fields yet.
+A certified saved query shows *Making it row-level sends this saved query back
+for review.* If its checks pass it is certified again right away. If they
+fail, nothing changes until you click **Send for review and make row-level**.
 
 The tile shows its rows. Its **Tile settings** panel shows **Data & trust**,
-for example **Certified** and the Dataset or saved query it uses.
+for example **Certified** and the data it uses.
 
 Other ways to add content:
 
@@ -262,8 +291,9 @@ not saved for readers.
 | --- | --- |
 | Dataset | A condition on the Dataset field the filter is mapped to. |
 | Metrics | A condition on a dimension of the metric's model, also when the tile doesn't group by it (a KPI). Text search works with the DQL native compiler; with MetricFlow the tile shows **Not filtered by**. |
-| Saved query | A parameter with the filter's name (`region`, or `period_start` / `period_end` for a range), otherwise a condition on the result column the filter is linked to. |
-| Draft (needs review) | The same as a Saved query tile. Its evidence lists the filters that applied and the ones that didn't. |
+| Saved query (fields) | A condition on the saved query's result column the filter is mapped to, like a Dataset field. Click-to-filter works the same way. |
+| Saved query (as it is) | A parameter with the filter's name (`region`, or `period_start` / `period_end` for a range), otherwise a condition on the result column the filter is linked to. |
+| Draft (needs review) | The same as a Saved query tile shown as it is. Its evidence lists the filters that applied and the ones that didn't. |
 | Text | Never filtered. |
 
 ### Dates

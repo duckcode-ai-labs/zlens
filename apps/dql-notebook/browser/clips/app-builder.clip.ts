@@ -4,7 +4,7 @@ const DATASET = 'Customers';
 
 /**
  * Make the sample's `customers` table a certified Dataset, through the same
- * calls the Add data "Database tables" tab makes (check, then certify). The
+ * calls Add data makes for a database table (check, then certify). The
  * sample ships saved queries but no Dataset, and a Dataset is what the App
  * builder picks fields from.
  */
@@ -53,7 +53,7 @@ clip('app-builder', async ({ page, sample, director }) => {
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
   const browser = page.getByRole('region', { name: 'Add data' });
   const row = browser.locator('article.add-data-row').filter({ hasText: DATASET }).first();
-  await expect(row).toContainText('Dataset · Certified');
+  await expect(row).toContainText('Table · Certified');
   await director.beat(600);
   await director.point(row);
   await director.beat(900);

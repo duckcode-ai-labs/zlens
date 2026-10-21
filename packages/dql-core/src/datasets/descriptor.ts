@@ -112,6 +112,29 @@ export interface DatasetMeasureField {
 
 export type DatasetField = DatasetPhysicalField | DatasetMeasureField;
 
+/**
+ * Fields read from a saved query's result (design D1, "everything you add has
+ * fields"). A saved query (a block with no Dataset definition) is offered on
+ * the same shelves as a Dataset: its output columns are the fields, and tiles
+ * compile as a query over its complete result. Nothing here is a row-level
+ * contract: the result's own rows are the grain, so a tile either shows them
+ * as they are (it groups by every grouping column of the query) or rolls them
+ * up, and the receipt says which.
+ */
+export interface DatasetResultOrigin {
+  /** The saved query whose result rows the fields read (its block name). */
+  savedQuery: string;
+  /**
+   * The saved query's own grouping columns: one result row per combination.
+   * Empty when the query is not a grouped aggregate, so no tile is "as is".
+   */
+  groupBy: string[];
+  /** Measures that only show a value as it is (averages, ratios): they never roll up. */
+  asIs: string[];
+  /** Where the column types came from: the block's declared contract, a run, or a one-row read. */
+  typesFrom: 'contract' | 'run' | 'probe';
+}
+
 export interface DatasetDescriptor {
   version: 1;
   id: string;
@@ -129,6 +152,13 @@ export interface DatasetDescriptor {
   fields: DatasetField[];
   operations: DatasetOperation[];
   execution: { route: DatasetExecutionRoute; adapterId?: string };
+  /** Present only for fields read from a saved query's result (see DatasetResultOrigin). */
+  result?: DatasetResultOrigin;
+}
+
+/** True for the read-only fields of a saved query's result, not a row-level Dataset. */
+export function isSavedQueryResultDataset(descriptor: Pick<DatasetDescriptor, 'result'> | null | undefined): boolean {
+  return Boolean(descriptor?.result);
 }
 
 export function datasetPhysicalFields(descriptor: DatasetDescriptor): DatasetPhysicalField[] {
@@ -187,6 +217,8 @@ export function normalizeDatasetDescriptor(value: unknown): DatasetDescriptor | 
     : [];
   const execution = objectRecord(record.execution);
   const route = enumValue(execution?.route, ['certified', 'semantic', 'governed_sql'] as const);
+  const result = record.result === undefined ? undefined : normalizeDatasetResultOrigin(record.result);
+  if (record.result !== undefined && !result) return undefined;
   if (!id || !kind || !sourceRevision || !snapshotId || !label || !lifecycle || !trust || !contractKind || !contractId || !contractFingerprint || !binding || !grain || !route) return undefined;
   if (fields.length !== (Array.isArray(record.fields) ? record.fields.length : 0)) return undefined;
   if (operations.length !== (Array.isArray(record.operations) ? record.operations.length : 0)) return undefined;
@@ -213,7 +245,16 @@ export function normalizeDatasetDescriptor(value: unknown): DatasetDescriptor | 
     fields,
     operations: Array.from(new Set(operations)),
     execution: { route, adapterId: text(execution?.adapterId) || undefined },
+    ...(result ? { result } : {}),
   };
+}
+
+function normalizeDatasetResultOrigin(value: unknown): DatasetResultOrigin | undefined {
+  const record = objectRecord(value);
+  const savedQuery = text(record?.savedQuery);
+  const typesFrom = enumValue(record?.typesFrom, ['contract', 'run', 'probe'] as const);
+  if (!record || !savedQuery || !typesFrom || !Array.isArray(record.groupBy) || !Array.isArray(record.asIs)) return undefined;
+  return { savedQuery, groupBy: strings(record.groupBy), asIs: strings(record.asIs), typesFrom };
 }
 
 function normalizeDatasetSourceBinding(value: unknown): DatasetSourceBinding | undefined {

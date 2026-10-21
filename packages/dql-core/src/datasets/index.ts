@@ -4,6 +4,7 @@ export {
   datasetMeasures,
   datasetPhysicalField,
   datasetPhysicalFields,
+  isSavedQueryResultDataset,
   normalizeDatasetDescriptor,
 } from './descriptor.js';
 export type {
@@ -22,6 +23,7 @@ export type {
   DatasetMeasureField,
   DatasetOperation,
   DatasetPhysicalField,
+  DatasetResultOrigin,
   DatasetSourceBinding,
   DatasetTrust,
 } from './descriptor.js';
@@ -88,3 +90,14 @@ export {
   wordsFor,
 } from './table-draft.js';
 export type { TableColumnInput, TableColumnKind, TableDatasetField, TableDatasetMeasure, TableDatasetProposal, TableProfile } from './table-draft.js';
+export {
+  NON_ADDITIVE_REASON,
+  SAVED_QUERY_ROW_COUNT,
+  isNonAdditiveColumnName,
+  savedQueryColumnKind,
+  savedQueryGroupByFromOutputs,
+  savedQueryResultDescriptor,
+  savedQueryResultFields,
+  savedQueryResultRollup,
+} from './result-fields.js';
+export type { SavedQueryResultColumn, SavedQueryRollupCheck } from './result-fields.js';

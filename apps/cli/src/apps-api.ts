@@ -97,6 +97,8 @@ interface Ctx {
   projectRoot: string;
   /** Dataset field-query authoring; on unless explicitly `false` (`apps.datasets: false`). */
   datasetsEnabled?: boolean;
+  /** Read saved queries' result columns as fields, once per revision (design D1). */
+  readSavedQueryFields?: (sourceIds: string[]) => Promise<void>;
   /** With a host (RFC 0010): whether the person may open this App; the list shows only those. */
   mayViewApp?: (appId: string) => Promise<boolean>;
   /** HH-14: whether the host keeps needs-review figures from the person asking (the runtime's one decision). */
@@ -304,6 +306,12 @@ export interface AppBuildHooks {
   planAppBuild?: AppBuilderPlannerCompletion;
   /** The App feature gate also applies to AI-authored field-query tiles. */
   datasetsEnabled?: boolean;
+  /**
+   * Read the result columns of these saved queries as fields, once per
+   * revision (design D1), so the planner builds field tiles from them.
+   * Failures are not errors: such a saved query shows its result as it is.
+   */
+  readSavedQueryFields?: (sourceIds: string[]) => Promise<void>;
 }
 
 /**
@@ -885,7 +893,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         selectedBlockIds: body.selectedBlockIds,
         pageId: body.pageId,
         mode: body.mode,
-      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled });
+      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
       writeAppBuildDraftAiProposal(projectRoot, proposal);
       sendJson(res, 201, { ok: true, proposal });
     } catch (err) {
@@ -963,7 +971,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         // A revision answers the same request: same page, same add/replace choice.
         pageId: previous.targetPageId,
         mode: previous.mode ?? 'replace',
-      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled });
+      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
       proposal.defaultSelectedSourceIds = selectedSourceIds.filter((sourceId) => proposal.operations.some((operation) => (
         operation.type === 'upsert_source' && operation.source.id === sourceId
       )));
@@ -1242,7 +1250,10 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
   if (openInStudioMatch && req.method === 'POST') {
     try {
       const body = await readJson<OpenAppAiBuildInStudioInput>(req);
-      const result = await openAppAiBuildInStudio(projectRoot, decodeURIComponent(openInStudioMatch[1]), body);
+      const result = await openAppAiBuildInStudio(projectRoot, decodeURIComponent(openInStudioMatch[1]), body, {
+        datasetsEnabled: ctx.datasetsEnabled,
+        ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}),
+      });
       if (!result.ok) {
         sendJson(res, result.status, { ok: false, error: result.error });
         return true;
@@ -4136,6 +4147,31 @@ function plannerNoteTitle(title: string): string {
 }
 
 /**
+ * Give the plain saved queries among these catalog records their result
+ * fields (design D1) through the runtime's once-per-revision read, then
+ * return the records as the catalog now has them. Bounded by the caller's
+ * candidate list; a read that fails leaves that saved query as it was.
+ */
+async function withSavedQueryResultFields(
+  projectRoot: string,
+  records: AppSourceCatalogRecord[],
+  sourcePolicy: AppBuildDraft['sourcePolicy'],
+  read: AppBuildHooks['readSavedQueryFields'],
+): Promise<AppSourceCatalogRecord[]> {
+  if (!read) return records;
+  const plain = records.filter((record) => record.kind === 'block' && !record.capabilities.dataset && !record.capabilities.semanticModelId);
+  if (plain.length === 0) return records;
+  try {
+    await read(plain.map((record) => record.sourceId));
+  } catch {
+    return records;
+  }
+  const { resolveAppSourceCatalogRecords } = await import('@zlens/agent');
+  const refreshed = new Map(resolveAppSourceCatalogRecords(projectRoot, plain.map((record) => record.sourceId), sourcePolicy).items.map((record) => [record.sourceId, record]));
+  return records.map((record) => refreshed.get(record.sourceId) ?? record);
+}
+
+/**
  * AI is a coauthor of the same local AppBuildDraft used by manual authoring.
  * This adapter reuses the governed planner, compiles its result outside the
  * project, and returns typed operations. It does not mutate the draft or write
@@ -4179,7 +4215,7 @@ export async function proposeAppBuildDraftOperations(
   if (policyBlocked.length) {
     throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before adding ${policyBlocked.map((source) => source.title).join(', ')}.`);
   }
-  const candidates = uniqueAppSourceRecords([
+  let candidates = uniqueAppSourceRecords([
     ...resolvedRequired.items,
     ...shortlistAppSources(projectRoot, prompt, {
     sourcePolicy: draft.sourcePolicy,
@@ -4188,6 +4224,11 @@ export async function proposeAppBuildDraftOperations(
       : undefined,
     }).items,
   ]).slice(0, 12);
+  // Saved queries in the (at most 12) candidates get their result fields
+  // first (design D1), so the planner composes field tiles from them.
+  if (hooks?.datasetsEnabled !== false) {
+    candidates = await withSavedQueryResultFields(projectRoot, candidates, draft.sourcePolicy, hooks?.readSavedQueryFields);
+  }
   const brief = await planAppBuildBrief({
     prompt,
     candidates,
@@ -4291,7 +4332,8 @@ export async function proposeAppBuildDraftOperations(
     const descriptor = source.capabilities.dataset;
     let query: TileQuery | undefined;
     let viz: DashboardGridItem['viz'] = { type: component.view };
-    if (descriptor) {
+    // A saved query's result fields (design D1) without a field query show its result as it is.
+    if (descriptor && (component.query !== undefined || !descriptor.result)) {
       const normalized = normalizeTileQuery(component.query);
       const validation = normalized ? validateTileQuery(descriptor, normalized) : undefined;
       if (!normalized || !tileQueryValidationRuns(validation)) {
@@ -4643,6 +4685,7 @@ export async function openAppAiBuildInStudio(
   projectRoot: string,
   sessionId: string,
   input: OpenAppAiBuildInStudioInput = {},
+  hooks: Pick<AppBuildHooks, 'readSavedQueryFields' | 'datasetsEnabled'> = {},
 ): Promise<OpenAppAiBuildInStudioResult> {
   const session = getAppAiBuildSession(projectRoot, sessionId);
   if (!session) return { ok: false, error: `AI build session "${sessionId}" not found`, status: 404 };
@@ -4678,11 +4721,16 @@ export async function openAppAiBuildInStudio(
     matchAppSourceCatalogRecords,
   } = await import('@zlens/agent');
   await ensureAgentProjectReady(projectRoot);
-  const matched = matchAppSourceCatalogRecords(projectRoot, {
+  const matchedRecords = matchAppSourceCatalogRecords(projectRoot, {
     blockNames: kept.flatMap((tile) => tile.source === 'certified_block' && tile.blockId ? [tile.blockId] : []),
     semanticModels: semanticTiles.flatMap((tile) => tile.semantic!.semanticModelRefs ?? []),
     metrics: semanticTiles.flatMap((tile) => tile.semantic!.metrics ?? []),
   }, 'include_review_required');
+  // The saved queries Ask picked carry their result fields into App Studio (design D1).
+  const matched = hooks.datasetsEnabled === false ? matchedRecords : {
+    ...matchedRecords,
+    items: await withSavedQueryResultFields(projectRoot, matchedRecords.items, 'include_review_required', hooks.readSavedQueryFields),
+  };
   const reviewDataKept = draftSqlTiles.length > 0 || matched.items.some((source) => source.trust !== 'certified');
   const plan = (session.plan ?? {}) as Partial<AppPlan>;
   // Only the questions behind kept Draft SQL are carried. App Studio plans

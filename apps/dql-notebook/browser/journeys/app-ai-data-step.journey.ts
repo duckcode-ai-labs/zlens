@@ -34,7 +34,7 @@ test.beforeAll(async () => {
   server = await startNotebookServer({ projectDir, workDir, env: NO_PROVIDER });
 
   // One certified Dataset from a database table, through the same calls the
-  // Add data "Database tables" tab makes (check, then certify).
+  // Add data list makes for a database table (check, then certify).
   const base = server.baseUrl;
   const listing = await (await fetch(`${base}/api/app-datasets/tables`)).json() as { ok: boolean; tables: Array<{ id: string; name: string }>; error?: string };
   expect(listing.ok, listing.error).toBe(true);

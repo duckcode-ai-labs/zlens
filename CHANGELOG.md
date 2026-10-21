@@ -10,6 +10,34 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Everything you add has fields.** A saved query's result columns are now
+  fields on the same shelves as any other data, with no review step: numbers
+  are Measures, text and true/false columns are Dimensions, dates are Time
+  fields by day, week or month, and Count of rows is always there. Month +
+  Gross Revenue on a monthly saved query is one line; Customer Name +
+  Lifetime Spend is a bar that adds up.
+  - Tiles run as one query over the saved query's complete result. Grouped by
+    the saved query's own columns, values show as they are; any other tile
+    rolls rows up with Sum, says **Rolled up from a saved query**, and its
+    receipt says "Rolled up from the certified result of <name>". A column
+    named like an average or a ratio (`avg_`, `pct`, `rate`, `ratio`,
+    `_share`, `margin`) is never summed: ZLens offers Min and Max instead.
+  - Trust is unchanged: a certified saved query's tiles are Certified, and
+    ones that need review stay Needs review. Page filters and click-to-filter
+    reach these tiles like any Dataset tile, and they publish like one.
+  - The column types are read once per saved query revision (a one-row read
+    through the usual execution path) and kept in `.dql/local`; a fresh
+    checkout reads them again on first use. Existing pages with fixed saved
+    query tiles keep working unchanged.
+  - **Data for this App** is one list: each row says where it comes from
+    (Table · Saved query · Metrics), its trust and domain, and shows its fields
+    when opened. Chips (All · Tables · Saved queries · Metrics) replace the
+    three tabs; tables not checked yet are in the same list.
+  - "Add fields" is now **⋯ → Make row-level**, only needed for row-safe
+    measures such as distinct counts.
+  - **Describe with AI** (the planner and the AI Data step) and Ask's **Open
+    in App Studio** read a saved query's fields the same way, so AI-built tiles
+    use them; a saved query whose fields can't answer is shown as it is.
 - **Sort and Top N on the field menu.** A measure pill's **⋯** menu now has
   **Show top** **5**, **10**, **25**, **All** or another number, next to
   **Ascending** and **Descending**. It writes the same sort and row limit as

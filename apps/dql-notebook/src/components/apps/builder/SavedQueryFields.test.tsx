@@ -5,9 +5,9 @@ import type { SavedQueryDatasetDraft, SavedQueryDatasetResult } from '../../../a
 import { AddDataBrowser } from './AddDataBrowser';
 import { DataPanel } from './DataPanel';
 import { appDataItems, appDataSourceFromCandidate } from './app-data';
-import { draftWith, orderLinesDataset, topCustomersQuery } from './app-data.fixtures';
+import { draftWith, monthlyRevenueQuery, orderLinesDataset, topCustomersQuery } from './app-data.fixtures';
 import {
-  ADD_FIELDS_SENDS_BACK_FOR_REVIEW,
+  MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW,
   SavedQueryFieldsDialog,
   savedQueryFieldsOutcome,
   submitSavedQueryFields,
@@ -46,9 +46,9 @@ function fakeClient(results: SavedQueryDatasetResult[]): SavedQueryFieldsApi & {
   };
 }
 
-describe('Add fields to a saved query (design D1)', () => {
-  const draft = draftWith({ sources: [appDataSourceFromCandidate(orderLinesDataset), appDataSourceFromCandidate(topCustomersQuery)] });
-  const appData = appDataItems(draft.sources, [orderLinesDataset, topCustomersQuery]);
+describe('A saved query has fields; Make row-level is under ⋯ (design D1)', () => {
+  const draft = draftWith({ sources: [appDataSourceFromCandidate(orderLinesDataset), appDataSourceFromCandidate(topCustomersQuery), appDataSourceFromCandidate(monthlyRevenueQuery)] });
+  const appData = appDataItems(draft.sources, [orderLinesDataset, topCustomersQuery, monthlyRevenueQuery]);
   const panel = {
     appData,
     target: { kind: 'none' as const },
@@ -60,36 +60,58 @@ describe('Add fields to a saved query (design D1)', () => {
     onAddContent: vi.fn(),
   };
 
-  it('turns the saved query note in the Data pane into an Add fields button', () => {
-    const onAddFields = vi.fn();
-    const markup = renderToStaticMarkup(<DataPanel {...panel} active={appData[1]!} onAddFields={onAddFields} />);
-    expect(markup).toContain('Saved queries have no fields. Add fields to build tiles by Measures and Dimensions.');
-    expect(markup).toContain('aria-label="Add fields to Top Customers"');
-    // Field tiles off: the note stays, with no button.
-    expect(renderToStaticMarkup(<DataPanel {...panel} active={appData[1]!} />)).not.toContain('Add fields to Top Customers');
-    // A Dataset already has fields: no button.
-    expect(renderToStaticMarkup(<DataPanel {...panel} active={appData[0]!} onAddFields={onAddFields} />)).not.toContain('Add fields to');
+  it('puts a saved query\'s result columns on the same shelves as a Dataset, with Make row-level under ⋯', () => {
+    const onMakeRowLevel = vi.fn();
+    const markup = renderToStaticMarkup(<DataPanel {...panel} active={appData[2]!} onMakeRowLevel={onMakeRowLevel} />);
+    expect(markup).toContain('Saved query · Certified');
+    expect(markup).toContain('<h3>Measures</h3>');
+    expect(markup).toContain('<h3>Time</h3>');
+    expect(markup).toContain('Gross Revenue');
+    expect(markup).toContain('Month');
+    expect(markup).toContain('Count Of Rows');
+    expect(markup).toContain('Grouped by its own columns, values show as they are');
+    expect(markup).toContain('aria-label="More for Monthly Revenue"');
+    expect(markup).not.toContain('Add as it is');
+    expect(markup).not.toContain('Saved queries have no fields');
+    expect(markup).not.toContain('Add fields');
+    // A Dataset that is already row-level has no ⋯ Make row-level.
+    expect(renderToStaticMarkup(<DataPanel {...panel} active={appData[0]!} onMakeRowLevel={onMakeRowLevel} />)).not.toContain('More for Order Lines');
+    // Field tiles off: the saved query is added as it is.
+    const off = renderToStaticMarkup(<DataPanel {...panel} active={appData[2]!} datasetTilesEnabled={false} />);
+    expect(off).toContain('Add as it is');
+    expect(off).not.toContain('<h3>Measures</h3>');
   });
 
-  it('offers Add fields on saved query rows in Add data, not on Datasets or when field tiles are off', () => {
-    const props = { draftId: 'build_1', draft: draftWith(), sourcePolicy: 'governed_only' as const, initialItems: [orderLinesDataset, topCustomersQuery], onAdd: vi.fn(async () => true), onRemove: vi.fn(), onChangePolicy: vi.fn() };
-    expect(renderToStaticMarkup(<AddDataBrowser {...props} initialTab="queries" />)).toContain('aria-label="Add fields to Top Customers"');
-    expect(renderToStaticMarkup(<AddDataBrowser {...props} />)).not.toContain('Add fields to');
-    expect(renderToStaticMarkup(<AddDataBrowser {...props} initialTab="queries" fieldsEnabled={false} />)).not.toContain('Add fields to');
+  it('reads a saved query\'s columns, and adds it as it is only when they can\'t be read', () => {
+    const reading = renderToStaticMarkup(<DataPanel {...panel} active={appData[1]!} fieldsStatus={{ state: 'reading' }} />);
+    expect(reading).toContain('Reading the columns of Top Customers…');
+    expect(reading).not.toContain('Add as it is');
+    const failed = renderToStaticMarkup(<DataPanel {...panel} active={appData[1]!} fieldsStatus={{ state: 'failed', error: 'Top customers asks for values before it runs.' }} />);
+    expect(failed).toContain('ZLens couldn’t read its columns as fields: Top customers asks for values before it runs.');
+    expect(failed).toContain('aria-label="Add Top Customers as Chart"');
+  });
+
+  it('opens Make row-level from a saved query row in the one Add data list', () => {
+    const props = { draftId: 'build_1', draft: draftWith(), sourcePolicy: 'governed_only' as const, initialItems: [orderLinesDataset, topCustomersQuery, monthlyRevenueQuery], initialTables: [], onAdd: vi.fn(async () => true), onRemove: vi.fn(), onChangePolicy: vi.fn() };
+    const markup = renderToStaticMarkup(<AddDataBrowser {...props} />);
+    expect(markup).toContain('aria-label="More for Top Customers"');
+    expect(markup).toContain('aria-label="More for Monthly Revenue"');
+    expect(markup).not.toContain('aria-label="More for Order Lines"');
+    expect(renderToStaticMarkup(<AddDataBrowser {...props} fieldsEnabled={false} />)).not.toContain('More for');
   });
 
   it('shows the Check the numbers step and says a certified saved query goes back for review', () => {
     const markup = renderToStaticMarkup(<SavedQueryFieldsDialog sourceId={topCustomersQuery.sourceId!} name="top_customers" initialDraft={certifiedDraft} client={fakeClient([])} onClose={vi.fn()} onAdded={vi.fn()} />);
     expect(markup).toContain('Check the numbers');
-    expect(markup).toContain('Add fields to Top Customers · 10 rows');
-    expect(markup).toContain(ADD_FIELDS_SENDS_BACK_FOR_REVIEW);
+    expect(markup).toContain('Make Top Customers row-level · 10 rows');
+    expect(markup).toContain(MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW);
     expect(markup).toContain('Each row is one <strong>customer</strong>');
     expect(markup).toContain('Lifetime spend');
     expect(markup).toContain('Group and filter by');
     expect(markup).toContain('Customer name');
-    expect(markup).toContain('Check and add fields');
+    expect(markup).toContain('Check and make row-level');
     const draftQuery = renderToStaticMarkup(<SavedQueryFieldsDialog sourceId="x" name="draft_revenue" initialDraft={{ ...certifiedDraft, sendsBackForReview: false }} client={fakeClient([])} onClose={vi.fn()} onAdded={vi.fn()} />);
-    expect(draftQuery).not.toContain(ADD_FIELDS_SENDS_BACK_FOR_REVIEW);
+    expect(draftQuery).not.toContain(MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW);
   });
 
   it('sends the author’s numbers with the revision it read, and reports a certified Dataset', async () => {
@@ -104,7 +126,7 @@ describe('Add fields to a saved query (design D1)', () => {
         { name: 'lifetime_spend', include: true, format: 'number', currency: 'USD' },
       ],
     });
-    expect(submission).toEqual({ kind: 'added', status: 'certified', sourceId: 'app:block:orders/top_customers', message: 'Top Customers has fields now and is certified: its checks passed.', blockers: [] });
+    expect(submission).toEqual({ kind: 'added', status: 'certified', sourceId: 'app:block:orders/top_customers', message: 'Top Customers is row-level now and certified: its checks passed.', blockers: [] });
   });
 
   it('asks before sending a certified saved query back for review when its check fails', async () => {
@@ -114,10 +136,10 @@ describe('Add fields to a saved query (design D1)', () => {
     ]);
     const input = { sourceId: topCustomersQuery.sourceId!, name: 'Top Customers', draft: certifiedDraft, choices: initialNumberChoices(proposal) };
     const refused = await submitSavedQueryFields(client, input);
-    expect(refused).toEqual({ kind: 'refused', message: 'Top Customers is certified, and with these fields it did not pass its checks, so nothing changed yet.', blockers: ['All tests pass: row_count > 1000000 failed.'] });
+    expect(refused).toEqual({ kind: 'refused', message: 'Top Customers is certified, and made row-level it did not pass its checks, so nothing changed yet.', blockers: ['All tests pass: row_count > 1000000 failed.'] });
     const sent = await submitSavedQueryFields(client, { ...input, allowReview: true });
     expect(client.create).toHaveBeenLastCalledWith(expect.objectContaining({ allowReview: true }));
-    expect(sent).toMatchObject({ kind: 'added', status: 'review', message: 'Top Customers has fields now. It needs review: it did not pass its checks yet.' });
+    expect(sent).toMatchObject({ kind: 'added', status: 'review', message: 'Top Customers is row-level now. It needs review: it did not pass its checks yet.' });
   });
 
   it('says plainly when the server refuses', () => {

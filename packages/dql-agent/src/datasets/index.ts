@@ -45,3 +45,12 @@ export type {
   DriverQueryPlan,
   DriverQueryPlanResult,
 } from './driver-analysis.js';
+
+export {
+  SAVED_QUERY_RESULT_COLUMNS_RELATIVE_PATH,
+  isPlainSavedQueryBlock,
+  loadSavedQueryResultColumns,
+  recordSavedQueryResultColumns,
+  savedQueryResultDescriptorFromManifestBlock,
+} from './result-columns.js';
+export type { SavedQueryResultColumnsEntry } from './result-columns.js';
