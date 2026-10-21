@@ -114,6 +114,13 @@ or 24 (Node 24 LTS recommended).
   (`ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` opts in). `@zlens/cli` declares Node 20,
   22 or 24 in `engines`. Moving to `@duckdb/node-api` is proposed in
   [RFC 0011](docs/rfcs/0011-duckdb-node-api.md).
+- **A DuckDB file written by DuckDB 2.0 says how to fix it.** ZLens reads
+  DuckDB files with DuckDB 1.4, and Python `duckdb` 2.0 (which `dbt-duckdb`
+  now installs) writes files 1.4 can't open. Instead of only DuckDB's "version
+  number 999 … newer version of DuckDB", the connection Test and `zlens
+  doctor` now say the file came from DuckDB 2.x and to rebuild it with
+  `pip install 'duckdb<1.5'` (then rerun dbt), with DuckDB's message
+  underneath. Both samples now pin Python `duckdb` to 1.4.
 
 ## v0.2.1 - 2026-10-16
 
