@@ -6,6 +6,7 @@ import { formatBusinessLabel } from './app-text';
 import { describeDashboardDateRange } from '@zlens/core/apps/filter-dates';
 import { studioFilterValue } from './app-studio-filter-values';
 import { plainSourceText } from './source-names';
+import { filterValueCapHint, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
 
 /**
  * The App dashboard filter row: the controls, their value coercion, and the
@@ -240,13 +241,18 @@ function DashboardFilterInput({
   const column = filter.bindsTo || filter.id;
   const wantsOptions = (filter.type === 'string' || filter.type === 'select' || filter.type === 'multiselect' || filter.type === 'search') && Boolean(sourceBlockId) && !filter.options?.length;
   const [fetchedOptions, setFetchedOptions] = useState<string[] | null>(null);
+  // A Dataset field's first page of values, and how many exist: a capped
+  // list is searched on the server (every value), never only the page.
+  const [datasetList, setDatasetList] = useState<FilterValueList | null>(null);
   const wantsDatasetOptions = (filter.type === 'select' || filter.type === 'multiselect' || filter.type === 'string')
     && Boolean(datasetSource) && !filter.options?.length;
   useEffect(() => {
     if (!wantsDatasetOptions || !datasetSource) return;
     let cancelled = false;
     void api.datasetFieldValues(datasetSource.sourceId, datasetSource.field).then((res) => {
-      if (!cancelled) setFetchedOptions(res.ok ? res.values : []);
+      if (cancelled) return;
+      setFetchedOptions(res.ok ? res.values : []);
+      setDatasetList(res.ok ? { values: res.values, truncated: res.truncated, ...(res.valueCount !== undefined ? { valueCount: res.valueCount } : {}), ...(res.valueCountCapped ? { valueCountCapped: true } : {}) } : null);
     });
     return () => { cancelled = true; };
   }, [datasetSource?.sourceId, datasetSource?.field, wantsDatasetOptions]);
@@ -258,6 +264,18 @@ function DashboardFilterInput({
     });
     return () => { cancelled = true; };
   }, [sourceBlockId, column, wantsOptions]);
+  if (filter.type !== 'multiselect' && datasetSource && datasetList && datasetList.values.length > 0) {
+    return (
+      <SearchableFilterSelect
+        icon={filterIconForDashboardFilter(filter)}
+        label={label}
+        value={typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value)}
+        list={datasetList}
+        source={datasetSource}
+        onChange={onChange}
+      />
+    );
+  }
   if (filter.type !== 'multiselect' && fetchedOptions && fetchedOptions.length > 0) {
     return (
       <FilterSelect
@@ -434,6 +452,56 @@ function FilterSelect({
         {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
       </select>
     </label>
+  );
+}
+
+/**
+ * One value from a long list, with search. The reader's version of the
+ * editor's dropdown: the first page is listed for browsing, and typed text
+ * searches every value of the field when the list is capped.
+ */
+export function SearchableFilterSelect({
+  label,
+  icon,
+  value,
+  list,
+  source,
+  onChange,
+}: {
+  label: string;
+  icon: ReactNode;
+  value: string;
+  list: FilterValueList;
+  source?: FilterValueSource;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const search = useFilterValueSearch(source, list, query);
+  const capHint = filterValueCapHint(list);
+  const choose = (next: string) => { onChange(next); setOpen(false); setQuery(''); };
+  return (
+    <div className={`dql-app-filter-select dql-app-filter-multi dql-app-filter-searchable ${value ? 'is-set' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}>
+      <button type="button" className="dql-app-filter-multi-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${value || 'All'}`} onClick={() => setOpen((current) => !current)}>
+        <span className="dql-app-filter-icon">{icon}</span>
+        <span className="dql-app-filter-multi-label">{label}:</span>
+        <b>{value || 'All'}</b>
+        <ChevronDown size={13} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="dql-app-filter-multi-menu dql-app-filter-search-menu">
+          <input type="search" autoFocus value={query} placeholder={`Search ${label.toLowerCase()}`} aria-label={`Search ${label}`} autoComplete="off" onChange={(event) => setQuery(event.target.value)} />
+          <div role="listbox" aria-label={label}>
+            <button type="button" role="option" aria-selected={!value} className={!value ? 'on' : ''} onClick={() => choose('')}>All</button>
+            {search.values.map((option) => (
+              <button key={option} type="button" role="option" aria-selected={option === value} className={option === value ? 'on' : ''} onClick={() => choose(option)}>{option}</button>
+            ))}
+          </div>
+          {search.values.length === 0 ? <small>{search.searching ? 'Searching all values…' : 'No matching values'}</small> : null}
+          <small className="dql-app-filter-search-hint">{query.trim() ? search.searching ? 'Searching all values…' : search.truncated ? `First ${search.values.length} matches · type more to narrow` : `${search.values.length} ${search.values.length === 1 ? 'match' : 'matches'}` : capHint ?? `${list.values.length} values`}</small>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

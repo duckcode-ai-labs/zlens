@@ -4802,5 +4802,11 @@ export const APP_STYLES = `
 .dql-app-filter-multi-menu label:hover, .dql-app-filter-multi-menu label.on { background: var(--dql-app-control); }
 .dql-app-filter-multi-menu input { accent-color: var(--dql-app-accent); }
 .dql-app-filter-multi-menu button { justify-self: start; margin-top: 4px; border: 0; background: transparent; color: var(--dql-app-accent); font: 600 13px var(--font-ui); cursor: pointer; }
+.dql-app-filter-search-menu { min-width: 240px; max-width: 320px; }
+.dql-app-filter-search-menu input[type="search"] { height: 30px; padding: 0 8px; border: 1px solid var(--dql-app-line); border-radius: 8px; background: var(--dql-app-surface); color: var(--dql-app-ink); font: 13px var(--font-ui); max-width: none; }
+.dql-app-filter-search-menu [role="listbox"] { display: grid; gap: 1px; max-height: 260px; overflow-y: auto; }
+.dql-app-filter-search-menu [role="listbox"] button { justify-self: stretch; margin: 0; height: 28px; padding: 0 8px; border-radius: 8px; text-align: left; color: var(--dql-app-ink); font: 13px var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dql-app-filter-search-menu [role="listbox"] button:hover, .dql-app-filter-search-menu [role="listbox"] button.on { background: var(--dql-app-control); }
+.dql-app-filter-search-menu small { padding: 2px 8px; color: var(--dql-app-muted); font: 12px var(--font-ui); }
 .dql-apps-waterline .dql-kpi-value { font-family: var(--font-ui) !important; font-weight: 600 !important; letter-spacing: -.02em; color: var(--dql-app-ink) !important; }
 `;

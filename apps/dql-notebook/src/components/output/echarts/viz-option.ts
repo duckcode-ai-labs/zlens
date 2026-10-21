@@ -45,6 +45,11 @@ export interface VizOptionOutput {
   /** Series left out because a chart shows at most eight. */
   droppedSeries: number;
   /**
+   * The height the chart needs to label every category (horizontal bars). A
+   * shorter tile scrolls the chart instead of skipping labels.
+   */
+  minHeight?: number;
+  /**
    * The exact result row under a clicked mark: the series (a colour value)
    * as well as the category, a scatter point or a heatmap cell. Falls back to
    * the category's row when a chart has no finer mark.
@@ -245,13 +250,27 @@ function cartesianOption(
   const marks = markLayers(style, categories, labelCol, horizontal, tokens, axisFormat);
   if (seriesOptions[0]) Object.assign(seriesOptions[0], marks);
 
+  // Every bar is named: skipping every other label made a top-25 list look
+  // as if it skipped ranks 2 and 4. Bar categories show all their labels,
+  // truncated (the tooltip has the full name) and, on a crowded vertical axis,
+  // rotated. A time axis may still thin its labels; its order says the rest.
+  const labelEveryBar = !isLine && !timeAxis;
   const categoryAxis = {
     type: 'category' as const,
-    data: categoryLabels,
+    data: labelEveryBar ? categories.map((value) => formatCategoryLabel(value, labelCol, 80)) : categoryLabels,
     ...(horizontal ? { inverse: true } : {}),
     axisLine: { lineStyle: { color: tokens.axis } },
     axisTick: { show: false },
-    axisLabel: { color: tokens.muted, fontSize: 11, hideOverlap: true },
+    axisLabel: labelEveryBar
+      ? {
+          color: tokens.muted,
+          fontSize: 11,
+          interval: 0,
+          hideOverlap: false,
+          formatter: (value: string) => formatCategoryLabel(value, labelCol, horizontal ? 18 : 14),
+          ...(!horizontal && categories.length > 6 ? { rotate: 35 } : {}),
+        }
+      : { color: tokens.muted, fontSize: 11, hideOverlap: true },
   };
   const valueAxis = {
     type: 'value' as const,
@@ -285,8 +304,13 @@ function cartesianOption(
     const entry = series[seriesIndex];
     return colorCol && entry ? rowsByColour.get(entry.name)?.get(category) : rowForCategory.get(category);
   };
-  return { option, categories, rowForCategory, categoryLabels, droppedSeries, rowAt };
+  // Horizontal bars need room for one readable row per category.
+  const minHeight = horizontal && labelEveryBar ? categories.length * BAR_ROW_PX + 32 : undefined;
+  return { option, categories, rowForCategory, categoryLabels, droppedSeries, rowAt, ...(minHeight ? { minHeight } : {}) };
 }
+
+/** The height one labelled horizontal bar needs. */
+const BAR_ROW_PX = 18;
 
 /** Reference lines, target bands and dated notes, drawn on the first series. */
 function markLayers(

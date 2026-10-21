@@ -28,7 +28,7 @@ import { encodingFromQuery } from '@zlens/core/apps/viz-encoding';
 import { PivotTable } from '../PivotTable';
 import { KpiCard, usesKpiCard } from '../KpiCard';
 import { BarCapNote } from './BarCapNote';
-import { barCategoryCap, sortTouched, withDefaultBarSort } from './sort-top-n';
+import { barCategoryCap, sortTouched, withBarCategoryLimit, withDefaultBarSort } from './sort-top-n';
 
 export type DraftTileState = {
   /** Catalog item id of the Dataset the tile is built from. */
@@ -204,10 +204,10 @@ export function DatasetQueryPreview({
   const chartConfig = { ...encodedChartConfig(shelved), chart: visualization === 'single_value' || visualization === 'kpi' ? 'kpi' : visualization.replace(/_/g, '-') } as CellChartConfig;
   // Above 50 categories a bar chart draws the top 25, as the added tile will.
   const barCap = barCategoryCap(shown, { chart: visualization, category: chartConfig.x, value: chartConfig.y, query, showAll: barShowAll });
-  if (!barCap.cappable) return <ChartOutput result={shown} themeMode={themeMode} chartConfig={chartConfig} availableHeight={height} />;
+  if (!barCap.cappable) return <ChartOutput result={shown} themeMode={themeMode} chartConfig={withBarCategoryLimit(chartConfig, barCap)} availableHeight={height} />;
   return <>
     <BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} />
-    <ChartOutput result={barCap.result} themeMode={themeMode} chartConfig={chartConfig} availableHeight={Math.max(96, height - 24)} />
+    <ChartOutput result={barCap.result} themeMode={themeMode} chartConfig={withBarCategoryLimit(chartConfig, barCap)} availableHeight={Math.max(96, height - 24)} />
   </>;
 }
 

@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, Check, ChevronDown, Filter, Plus, Search, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
 import { formatDashboardCalendarDate } from '@zlens/core/apps/filter-dates';
 import type { AppBlockRecommendation, AppStudioBuildDraft, DashboardRunResponse } from '../../../api/client';
-import { defaultStudioFilterType, filterLinkSuggestions, filterPrimarySourceId, filterTileMappingsForField, initialFilterMappingKeys, type StudioFilterCandidate, type StudioFilterLinkSuggestion, type StudioRuntimeFilterFields, type StudioFilterTileMapping } from '../app-studio-filter-candidates';
+import { defaultStudioFilterType, filterLinkSuggestions, filterPrimarySourceId, filterTileMappingsForField, initialFilterMappingKeys, isStudioDateFilterType, studioFilterFieldOverrides, type StudioFilterCandidate, type StudioFilterFieldOverrides, type StudioFilterLinkSuggestion, type StudioFilterMappingOptions, type StudioRuntimeFilterFields, type StudioFilterTileMapping } from '../app-studio-filter-candidates';
 import { humanize, PanelTitle } from './studio-ui';
 import { filterLinkedTileIds } from '../app-studio-filter-values';
 import { plainSourceText, searchMatches, sourceDisplayName } from '../source-names';
@@ -28,7 +28,21 @@ export type StudioFilterConfiguration = {
   selectedMappingKeys: string[];
   /** The Dataset the field was picked from; other Datasets are only suggested (D10). */
   primarySourceId?: string;
+  /**
+   * A date filter's field per Dataset (by source id) where the author mapped
+   * a differently named date field ("Use Ordered At on Order Items").
+   */
+  fieldOverrides?: StudioFilterFieldOverrides;
 };
+
+/** How a filter configuration maps tiles: its date-field choices apply only to a date control. */
+export function studioFilterMappingOptions(configuration: Pick<StudioFilterConfiguration, 'type' | 'fieldOverrides'> | null | undefined): StudioFilterMappingOptions {
+  const dateFilter = isStudioDateFilterType(configuration?.type);
+  return {
+    dateFilter,
+    ...(dateFilter && configuration?.fieldOverrides && Object.keys(configuration.fieldOverrides).length ? { fieldOverrides: configuration.fieldOverrides } : {}),
+  };
+}
 
 /**
  * Whether a filter field matches the typed search. It ignores case, spaces
@@ -91,9 +105,11 @@ export function FiltersPanel({
   }, [draft.pages]);
   const existingIds = new Set(logicalFilters.map((item) => item.filter.id));
   const visibleCandidates = candidates.filter((candidate) => filterCandidateMatches(candidate, fieldQuery));
+  const mappingOptions = studioFilterMappingOptions(configuration);
+  const mappingOptionsKey = JSON.stringify(mappingOptions);
   const mappings = useMemo(
-    () => configuration?.fieldId ? filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources) : [],
-    [catalog, configuration?.fieldId, draft.pages, draft.sources, runtimeFilterFields],
+    () => configuration?.fieldId ? filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources, mappingOptions) : [],
+    [catalog, configuration?.fieldId, draft.pages, draft.sources, runtimeFilterFields, mappingOptionsKey],
   );
   const visibleMappings = configuration?.scope === 'page'
     ? mappings.filter((mapping) => mapping.pageId === activePage?.id)
@@ -136,7 +152,9 @@ export function FiltersPanel({
   };
   const editFilter = (item: { filter: StudioDashboardFilter; pageIds: string[] }) => {
     const fieldId = item.filter.field?.name ?? item.filter.bindsTo ?? item.filter.id;
-    const filterMappings = filterTileMappingsForField(draft.pages, catalog, fieldId, runtimeFilterFields, draft.sources);
+    // A date filter keeps the date fields the author mapped on other Datasets.
+    const fieldOverrides = isStudioDateFilterType(item.filter.type) ? studioFilterFieldOverrides(draft.pages, item.filter.id, fieldId) : {};
+    const filterMappings = filterTileMappingsForField(draft.pages, catalog, fieldId, runtimeFilterFields, draft.sources, studioFilterMappingOptions({ type: item.filter.type, fieldOverrides }));
     const linked = filterMappings.filter((mapping) => {
       const page = draft.pages.find((candidate) => candidate.id === mapping.pageId);
       const pageFilter = page?.filters?.find((filter) => filter.id === item.filter.id);
@@ -162,7 +180,27 @@ export function FiltersPanel({
       required: item.filter.required ?? false,
       selectedMappingKeys: linked.map((mapping) => mapping.key),
       ...(primarySourceId ? { primarySourceId } : {}),
+      ...(Object.keys(fieldOverrides).length ? { fieldOverrides } : {}),
     });
+  };
+  /**
+   * Map a date filter to a tile's own date field ("Use Ordered At on Order
+   * Items"): every tile on that Dataset then takes the filter through it.
+   * Only ever an explicit author choice.
+   */
+  const useDateField = (mapping: StudioFilterTileMapping, field: string) => {
+    if (!configuration || !mapping.sourceId) return;
+    const sourceId = mapping.sourceId;
+    const next = new Set(configuration.selectedMappingKeys);
+    for (const candidate of visibleMappings) if (candidate.sourceId === sourceId) next.add(candidate.key);
+    setConfiguration({ ...configuration, fieldOverrides: { ...(configuration.fieldOverrides ?? {}), [sourceId]: field }, selectedMappingKeys: [...next] });
+  };
+  const clearDateField = (mapping: StudioFilterTileMapping) => {
+    if (!configuration || !mapping.sourceId) return;
+    const sourceId = mapping.sourceId;
+    const { [sourceId]: _removed, ...rest } = configuration.fieldOverrides ?? {};
+    const keys = new Set(visibleMappings.filter((candidate) => candidate.sourceId === sourceId).map((candidate) => candidate.key));
+    setConfiguration({ ...configuration, fieldOverrides: rest, selectedMappingKeys: configuration.selectedMappingKeys.filter((key) => !keys.has(key)) });
   };
   const setAllVisibleMappings = (checked: boolean) => {
     if (!configuration) return;
@@ -227,7 +265,7 @@ export function FiltersPanel({
             const pageMappings = visibleMappings.filter((mapping) => mapping.pageId === page.id);
             if (!pageMappings.length) return null;
             return <section key={page.id}><small>{page.metadata.title}</small>{pageMappings.map((mapping) => (
-              <FilterTileChoice key={mapping.key} mapping={mapping} applies={mapping.supported && selectedMappings.has(mapping.key)} onChoose={(applies) => setMapping(mapping, applies)} />
+              <FilterTileChoice key={mapping.key} mapping={mapping} applies={mapping.supported && selectedMappings.has(mapping.key)} onChoose={(applies) => setMapping(mapping, applies)} onUseDateField={(field) => useDateField(mapping, field)} onClearDateField={() => clearDateField(mapping)} />
             ))}</section>;
           })}</div>
         </fieldset>
@@ -257,14 +295,21 @@ export function FiltersPanel({
  * apply" (a saved exclusion readers see as "Not filtered by …"). A tile that
  * cannot take the field can only be "Does not apply", with the reason shown.
  */
-export function FilterTileChoice({ mapping, applies, onChoose }: {
+export function FilterTileChoice({ mapping, applies, onChoose, onUseDateField, onClearDateField }: {
   mapping: StudioFilterTileMapping;
   applies: boolean;
   onChoose: (applies: boolean) => void;
+  /** Map a date filter to one of this tile's own date fields. */
+  onUseDateField?: (field: string) => void;
+  onClearDateField?: () => void;
 }): JSX.Element {
   const tileName = humanize(mapping.tileTitle);
+  const sourceName = sourceDisplayName(mapping.sourceName);
   return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason ? plainSourceText(mapping.reason) : undefined} data-testid="filter-tile-choice">
-    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceDisplayName(mapping.sourceName)} · ${mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small></span>
+    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}` : mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
+      {!mapping.supported && mapping.dateFieldOptions?.length && onUseDateField ? <span className="filter-date-field-options">{mapping.dateFieldOptions.map((option) => <button key={option.field} type="button" onClick={() => onUseDateField(option.field)}>Use {humanize(option.field)} on {sourceName}</button>)}</span> : null}
+      {mapping.supported && mapping.mappedFrom && onClearDateField ? <button type="button" className="filter-date-field-clear" onClick={onClearDateField}>Don’t use {humanize(mapping.datasetField ?? '')}</button> : null}
+    </span>
     <div className="filter-applies-switch" role="radiogroup" aria-label={`Does this filter apply to ${tileName}?`}>
       <button type="button" role="radio" aria-checked={applies} className={applies ? 'on' : ''} disabled={!mapping.supported} onClick={() => onChoose(true)}><Check size={11} /> Applies</button>
       <button type="button" role="radio" aria-checked={!applies} className={!applies ? 'on' : ''} onClick={() => onChoose(false)}><X size={11} /> Does not apply</button>

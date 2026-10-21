@@ -255,11 +255,12 @@ test('a saved query has fields: Month + Gross Revenue is one line, Customer Name
   expect(barRun).toMatchObject({ status: 'ok', trustState: 'certified', dataset: { validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Rolled up from the certified result of top_customers.' }] } } });
   expect(barRun.result!.rows.map((row) => [row.customer_name, Number(row.lifetime_spend)]).sort()).toEqual([['Alice', 150], ['Bob', 200], ['Carol', 30]]);
 
-  // On the canvas the bar says it was rolled up from the saved query; the line does not.
+  // On the canvas the bar says it was rolled up from the saved query (an info
+  // icon in its header, so the result stays visible); the line does not.
   const barCard = page.locator('.studio-page-grid .studio-component-card').filter({ hasText: 'Lifetime Spend by customer name' });
-  await expect(barCard).toContainText('Rolled up from a saved query', { timeout: 30_000 });
+  await expect(barCard.locator('header .tile-adapted-note')).toHaveAttribute('aria-label', /Rolled up from a saved query/, { timeout: 30_000 });
   const lineCard = page.locator('.studio-page-grid .studio-component-card').filter({ hasText: 'Gross Revenue by month' });
-  await expect(lineCard).not.toContainText('Rolled up');
+  await expect(lineCard.locator('.tile-adapted-note')).toHaveCount(0);
   if (shotsDir) {
     await page.keyboard.press('Escape');
     await dataPane.locator('.dataset-current').click();

@@ -60,6 +60,8 @@ export interface DashboardStoryBuildInput {
   goal: string;
   audience?: string;
   filters: Record<string, unknown>;
+  /** Page filter labels by id, so the story names "Customer Name", not `customer_name`. */
+  filterLabels?: Record<string, string>;
   tiles: DashboardStoryTileResult[];
   eligibleTileIds?: string[];
   driverTileIds?: string[];
@@ -245,44 +247,81 @@ export function buildDeterministicDashboardStory(input: DashboardStoryBuildInput
   // scope. Leave it out of the scope the story claims and name it in the caveat
   // instead, so "these figures use this exact filter scope" is only ever said
   // about filters that actually narrowed the narrated tiles (F6).
-  const reachedFilterIds = new Set(facts.flatMap((fact) => Object.keys(fact.filters ?? {})));
-  const storyFilters = Object.fromEntries(Object.entries(input.filters)
-    .filter(([filterId]) => reachedFilterIds.has(filterId)));
+  const labelOf = (filterId: string) => input.filterLabels?.[filterId]?.trim() || humanize(filterId);
+  // The filters with a value that actually narrowed a fact's tile.
+  const activeScope = (filters: Record<string, unknown> | undefined) => Object.fromEntries(Object.entries(filters ?? {})
+    .filter(([filterId, value]) => Object.prototype.hasOwnProperty.call(input.filters, filterId) && isActiveFilterValue(value)));
+  const reachedFilterIds = new Set(facts.flatMap((fact) => Object.keys(activeScope(fact.filters))));
   const unreachedFilters = Object.entries(input.filters)
     .filter(([filterId, value]) => !reachedFilterIds.has(filterId) && isActiveFilterValue(value))
-    .map(([filterId]) => humanize(filterId));
-  const scopedFacts = facts.filter((fact) => sameDashboardFilterScope(fact.filters ?? {}, storyFilters));
+    .map(([filterId]) => labelOf(filterId));
+  // Tiles narrowed by different filters are described separately, each with
+  // the filters that reached it ("For Month …" and "For Customer Name …"),
+  // instead of requiring every active filter to reach a tile before the story
+  // may describe it. A tile no active filter reached is left out while any
+  // filter is set, so an unfiltered figure is never told as a filtered one.
+  const groups = new Map<string, { scope: Record<string, unknown>; facts: DashboardStoryFact[] }>();
+  for (const fact of facts) {
+    const scope = activeScope(fact.filters);
+    const key = stableFilterKey(scope);
+    const group = groups.get(key) ?? { scope, facts: [] };
+    group.facts.push(fact);
+    groups.set(key, group);
+  }
+  const narratedGroups = [...groups.values()]
+    .filter((group) => reachedFilterIds.size === 0 || Object.keys(group.scope).length > 0)
+    .sort((left, right) => Object.keys(right.scope).length - Object.keys(left.scope).length);
+  const scopedFacts = narratedGroups.flatMap((group) => group.facts);
   const hasScopeExclusions = scopedFacts.length !== facts.length;
   const trustState = scopedFacts.reduce<DashboardDisplayTrustState>(
     (least, fact) => TRUST_ORDER[fact.trustState] < TRUST_ORDER[least] ? fact.trustState : least,
     'certified',
   );
-  const scope = filterScope(storyFilters);
-  const primary = scopedFacts.slice(0, 3);
-  const supporting = scopedFacts.slice(3, 6);
-  // Facts exist, but no tile reflects the selected filters: say so rather than
-  // narrating unfiltered figures as the filtered picture (F6).
-  const onlyOutOfScope = primary.length === 0 && facts.length > 0;
+  const scopeText = (scope: Record<string, unknown>) => {
+    const named = filterScope(scope, labelOf);
+    const missing = [...reachedFilterIds].filter((filterId) => !Object.prototype.hasOwnProperty.call(scope, filterId)).map(labelOf);
+    return missing.length ? `${named} (not filtered by ${missing.join(', ')})` : named;
+  };
+  // The first three facts lead, the next three support, kept per scope.
+  const take = (offset: number, count: number) => {
+    const picked: Array<{ scope: Record<string, unknown>; facts: DashboardStoryFact[] }> = [];
+    let index = 0;
+    for (const group of narratedGroups) {
+      const chosen = group.facts.filter(() => { index += 1; return index > offset && index <= offset + count; });
+      if (chosen.length) picked.push({ scope: group.scope, facts: chosen });
+    }
+    return picked;
+  };
+  const primaryGroups = take(0, 3);
+  const supportingGroups = take(3, 3);
+  const primary = primaryGroups.flatMap((group) => group.facts);
+  const supporting = supportingGroups.flatMap((group) => group.facts);
   const headline = primary.length
     ? `${humanize(input.goal).replace(/[?.!]+$/, '')}: the current picture`
-    : onlyOutOfScope
-      ? `${humanize(input.goal).replace(/[?.!]+$/, '')}: no tile reflects the current filters`
-      : `No result is available yet for ${humanize(input.goal).replace(/[?.!]+$/, '')}`;
+    : `No result is available yet for ${humanize(input.goal).replace(/[?.!]+$/, '')}`;
+  const primarySentences = primaryGroups.map((group) => `For ${scopeText(group.scope)}, the clearest ${group.facts.length === 1 ? 'signal is' : 'signals are'} ${joinFacts(group.facts, rankPhrases)}.`);
   const firstParagraph = primary.length
-    ? `For ${scope}, the clearest signals are ${joinFacts(primary, rankPhrases)}. These figures come from tiles with this exact filter scope, so the summary and visible results stay aligned when filters change.`
-    : onlyOutOfScope
-      ? `None of the tiles on this page is narrowed by ${scope}, so this summary does not present their figures as results for that scope. Check each tile's own scope before using a figure for a decision.`
-      : `The dashboard did not return enough governed evidence to summarize ${scope}. Apply a different filter range or review the unavailable sections before using this view for a decision.`;
+    ? primaryGroups.length === 1 && !scopeText(primaryGroups[0]!.scope).includes('(not filtered by')
+      ? `For ${scopeText(primaryGroups[0]!.scope)}, the clearest signals are ${joinFacts(primary, rankPhrases)}. These figures come from tiles with this exact filter scope, so the summary and visible results stay aligned when filters change.`
+      : `${primarySentences.join(' ')} Each figure is described with the filters that reached its tile.`
+    : `The dashboard did not return enough governed evidence to summarize ${filterScope(activeScope(input.filters), labelOf)}. Apply a different filter range or review the unavailable sections before using this view for a decision.`;
   const driverFacts = scopedFacts.filter((fact) => fact.kind === 'driver');
+  const supportingSentences = supportingGroups.map((group) => `${joinFacts(group.facts, rankPhrases)} add context across the rest of the view.`);
   const secondParagraph = supporting.length
-    ? `${joinFacts(supporting, rankPhrases)} add context across the rest of the view. ${driverFacts.length ? `The supported driver evidence points to ${joinFacts(driverFacts.slice(0, 2), rankPhrases)}.` : 'The current view shows association and ranking, but it does not prove why the pattern occurred.'}`
+    ? `${supportingSentences.join(' ')} ${driverFacts.length ? `The supported driver evidence points to ${joinFacts(driverFacts.slice(0, 2), rankPhrases)}.` : 'The current view shows association and ranking, but it does not prove why the pattern occurred.'}`
     : `The available evidence is concentrated in ${primary.length === 1 ? 'one business signal' : 'a small set of signals'}. Use Research deeper for a validated baseline or driver breakdown before describing the pattern as a cause.`;
   const claims: DashboardStoryClaim[] = [];
-  if (primary.length) claims.push({ text: firstParagraph, factIds: primary.map((fact) => fact.id), kind: 'observation' });
-  if (supporting.length) claims.push({
-    text: secondParagraph,
-    factIds: Array.from(new Set([...supporting, ...(driverFacts.length ? driverFacts.slice(0, 2) : [])].map((fact) => fact.id))),
-    kind: driverFacts.length ? 'driver' : 'observation',
+  // A claim never mixes facts with different filter scopes.
+  if (primaryGroups.length === 1) claims.push({ text: firstParagraph, factIds: primary.map((fact) => fact.id), kind: 'observation' });
+  else primaryGroups.forEach((group, index) => claims.push({ text: primarySentences[index]!, factIds: group.facts.map((fact) => fact.id), kind: 'observation' }));
+  supportingGroups.forEach((group, index) => {
+    const groupKey = stableFilterKey(group.scope);
+    const groupDrivers = driverFacts.filter((fact) => stableFilterKey(activeScope(fact.filters)) === groupKey).slice(0, 2);
+    claims.push({
+      text: supportingGroups.length === 1 ? secondParagraph : supportingSentences[index]!,
+      factIds: Array.from(new Set([...group.facts, ...groupDrivers].map((fact) => fact.id))),
+      kind: groupDrivers.length ? 'driver' : 'observation',
+    });
   });
   return {
     facts,
@@ -310,15 +349,6 @@ export function buildDeterministicDashboardStory(input: DashboardStoryBuildInput
   };
 }
 
-function sameDashboardFilterScope(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
-  const stable = (value: Record<string, unknown>) => JSON.stringify(Object.fromEntries(
-    Object.entries(value)
-      .filter(([, entry]) => entry !== undefined)
-      .sort(([first], [second]) => first.localeCompare(second)),
-  ));
-  return stable(left) === stable(right);
-}
-
 export function validateDashboardStoryBrief(
   story: DashboardStoryBrief,
   facts: DashboardStoryFact[],
@@ -335,7 +365,9 @@ export function validateDashboardStoryBrief(
     for (const number of fact.label.match(/-?\d+(?:\.\d+)?/g) ?? []) allowedNumbers.add(number);
   }
   for (const value of facts.flatMap((fact) => Object.values(fact.filters ?? {}))) {
-    for (const number of String(Array.isArray(value) ? value.join(' ') : value).match(/-?\d+(?:\.\d+)?/g) ?? []) allowedNumbers.add(number);
+    // Filter values appear in prose as written and as formatted ("1 Jan 2025").
+    const written = Array.isArray(value) ? value.join(' ') : value && typeof value === 'object' ? JSON.stringify(value) : String(value);
+    for (const number of `${written} ${formatFilterValue(value)}`.match(/-?\d+(?:\.\d+)?/g) ?? []) allowedNumbers.add(number);
   }
   const prose = [story.headline, ...story.paragraphs, story.implication ?? '', story.caveat ?? ''].join(' ');
   for (const number of prose.match(/-?\d+(?:\.\d+)?/g) ?? []) {
@@ -362,9 +394,21 @@ function joinFacts(facts: DashboardStoryFact[], phrases?: ReadonlyMap<string, st
     .join(facts.length > 2 ? '; ' : ' and ');
 }
 
-/** An empty multi-select is "All", not a filter. */
+/** An empty multi-select is "All", not a filter; so is a date range with neither end. */
 function isActiveFilterValue(value: unknown): boolean {
-  return value !== undefined && value !== null && value !== '' && !(Array.isArray(value) && value.length === 0);
+  if (value === undefined || value === null || value === '' || (Array.isArray(value) && value.length === 0)) return false;
+  if (typeof value === 'object' && !Array.isArray(value) && !(value instanceof Date)) {
+    const entries = Object.entries(value as Record<string, unknown>);
+    const rangeKeys = ['start', 'end', 'from', 'to', 'min', 'max'];
+    if (entries.every(([key]) => rangeKeys.includes(key))) {
+      return entries.some(([, end]) => end !== undefined && end !== null && end !== '');
+    }
+  }
+  return true;
+}
+
+function stableFilterKey(filters: Record<string, unknown>): string {
+  return JSON.stringify(Object.entries(filters).sort(([left], [right]) => left.localeCompare(right)));
 }
 
 function joinNames(names: string[]): string {
@@ -373,10 +417,46 @@ function joinNames(names: string[]): string {
   return `${capitalized.slice(0, -1).join(', ')} and ${capitalized[capitalized.length - 1]}`;
 }
 
-function filterScope(filters: Record<string, unknown>): string {
+function filterScope(filters: Record<string, unknown>, labelOf: (filterId: string) => string = humanize): string {
   const active = Object.entries(filters).filter(([, value]) => isActiveFilterValue(value));
   if (active.length === 0) return 'the current scope';
-  return active.map(([key, value]) => `${humanize(key)} ${Array.isArray(value) ? value.join(' to ') : String(value)}`).join(', ');
+  return active.map(([key, value]) => `${labelOf(key)} ${formatFilterValue(value)}`).join(', ');
+}
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** `2025-03-01` reads "1 Mar 2025"; anything else as written. */
+function formatFilterDate(value: unknown): string {
+  const text = value instanceof Date ? value.toISOString().slice(0, 10) : String(value);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})(?:$|T)/);
+  if (!match) return text;
+  const month = MONTHS[Number(match[2]) - 1];
+  return month ? `${Number(match[3])} ${month} ${match[1]}` : text;
+}
+
+/**
+ * A filter value as a person reads it: a date range "1 Jan 2025 – 30 Jun
+ * 2025" (or "from 1 Mar 2025" / "until 30 Jun 2025"), a list "CA, NY", a
+ * single value as written. Never "[object Object]".
+ */
+export function formatFilterValue(value: unknown): string {
+  if (value instanceof Date) return formatFilterDate(value);
+  if (Array.isArray(value)) {
+    const dates = value.length === 2 && value.every((entry) => typeof entry === 'string' && /^\d{4}-\d{2}-\d{2}/.test(entry));
+    return dates ? `${formatFilterDate(value[0])} – ${formatFilterDate(value[1])}` : value.map((entry) => formatFilterValue(entry)).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const has = (entry: unknown) => entry !== undefined && entry !== null && entry !== '';
+    const start = record.start ?? record.from ?? record.min;
+    const end = record.end ?? record.to ?? record.max;
+    if (has(start) || has(end)) {
+      if (has(start) && has(end)) return `${formatFilterDate(start)} – ${formatFilterDate(end)}`;
+      return has(start) ? `from ${formatFilterDate(start)}` : `until ${formatFilterDate(end)}`;
+    }
+    return Object.entries(record).filter(([, entry]) => has(entry)).map(([key, entry]) => `${humanize(key)} ${formatFilterValue(entry)}`).join(', ');
+  }
+  return String(value);
 }
 
 function humanize(value: string): string {
