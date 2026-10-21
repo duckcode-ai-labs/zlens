@@ -3060,6 +3060,12 @@ const CERTIFICATION_SURFACE_LABELS: Record<string, string> = {
   cli: 'zlens certify',
 };
 
+/** Tests are optional; Certify runs them, and a column test must hold on every row. */
+export const BLOCK_TESTS_HINT = 'Optional. Certify runs them: a declared test must pass, and a column test must hold on every row.';
+
+/** Why a certified block shows Recertify: its source changed after the receipt was written. */
+export const CERTIFIED_SOURCE_CHANGED_LINE = 'Edited after it was certified: this source no longer matches its certification receipt, so Ask treats the block as needing recertification. Open it in the builder and Re-certify.';
+
 /** One line saying who certified this block, when, and how — or that no receipt exists. */
 export function certificationReceiptLine(receipt: BlockStudioMetadata['certification'] | undefined): string {
   if (!receipt) return 'Certified · no certification receipt on file (certified before receipts were recorded, or edited by hand).';
@@ -3137,7 +3143,7 @@ export function BlockDetailView({
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, letterSpacing: '-0.01em' }}>{name}</span>
-              {metadata?.reviewStatus ? <BlockStatusBadge status={metadata.reviewStatus} t={t} /> : null}
+              {metadata?.reviewStatus ? <BlockStatusBadge status={certified && metadata.certificationSourceChanged ? 'pending_recertification' : metadata.reviewStatus} t={t} /> : null}
               {metadata?.reviewStatus === 'deprecated' ? (
                 <BlockReplacementLink info={{ status: metadata.reviewStatus, replacedBy: metadata.replacedBy, deprecatedOn: metadata.deprecatedOn, replacement: metadata.replacement }} t={t} onOpen={onOpenReplacement} />
               ) : null}
@@ -3148,6 +3154,12 @@ export function BlockDetailView({
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
                 {certificationReceiptLine(metadata?.certification)}
+              </div>
+            ) : null}
+            {certified && metadata?.certificationSourceChanged ? (
+              <div data-testid="block-certification-source-changed" role="status" style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 12, color: 'var(--status-warning)', marginTop: 6 }}>
+                <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>{CERTIFIED_SOURCE_CHANGED_LINE}</span>
               </div>
             ) : null}
           </div>
@@ -3550,7 +3562,7 @@ function SemanticBlockBuilder({
       <PanelBox title={`Output fields${outputFields.length ? ` · ${outputFields.length}` : ''}`} hint="What consumers see when this block answers a question." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>{outputFields.length > 0 ? outputFields.map((field) => <span key={field} style={selectionChipStyle(t, true)}>{businessLabel(field)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Select metrics and dimensions to define outputs.</span>}</div>
       </PanelBox>
-      <PanelBox title="Tests" hint="Assertions checked on every run and required for certification." t={t}>
+      <PanelBox title="Tests" hint={BLOCK_TESTS_HINT} t={t}>
         <SourceTextField multiline value={testsBody} onChange={(next) => onChange(setDqlSectionBody(source, 'tests', next))} placeholder={'assert row_count >= 1\nassert total_revenue >= 0'} style={{ ...compactInput, minHeight: 64, resize: 'vertical', fontFamily: t.fontMono }} />
       </PanelBox>
 
@@ -3892,7 +3904,7 @@ function SqlBlockVisualBuilder({
         </div>
       </PanelBox>
       <VisualParameterEditor source={source} kind="custom" onChange={onChange} t={t} />
-      <PanelBox title="Tests" hint="Assertions checked on every run and required for certification." t={t}>
+      <PanelBox title="Tests" hint={BLOCK_TESTS_HINT} t={t}>
         <SourceTextField multiline value={testsBody} onChange={(next) => onChange(setDqlSectionBody(source, 'tests', next))} placeholder={'assert row_count >= 1\nassert revenue >= 0'} style={{ ...input, minHeight: 64, resize: 'vertical', fontFamily: t.fontMono }} />
       </PanelBox>
       <details style={{ padding: '14px 0', color: t.textSecondary, fontFamily: t.font }}>

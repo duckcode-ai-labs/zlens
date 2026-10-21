@@ -243,6 +243,8 @@ import {
   dashboardFilterDoesNotApplyBinding,
   isDashboardDateFilterType,
   resolveDashboardDateFilter,
+  blockCompanionRelativePath as coreBlockCompanionRelativePath,
+  certifiedBlockFileState,
 } from '@zlens/core';
 import {
   dashboardSemanticFiltersForTile,
@@ -260,6 +262,7 @@ import {
   type DatasetDeclarationPatch,
 } from '@zlens/core/datasets/source-authoring.node';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+import { blockTestAssertionName, evaluateBlockTestAssertion } from './block-test-assertions.js';
 import {
   applyCompanionCertification,
   blockSourceStatus,
@@ -25360,6 +25363,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           replacement?: { name: string; path: string } | null;
         }> = [];
         const seen = new Set<string>();
+        let packageRegistry: ReturnType<typeof loadDomainPackageRegistry> | undefined;
+        const companionRegistry = {
+          packageForPath: (filePath: string) => (packageRegistry ??= loadDomainPackageRegistry(projectRoot)).packageForPath(filePath),
+        };
         const scanDir = (dir: string) => {
           if (!existsSync(dir)) return;
           for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -25391,10 +25398,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const llmMatch = /^\s*llmContext\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(source);
                 const replacedByMatch = /^\s*replacedBy\s*=\s*"([^"]+)"/m.exec(source);
                 const deprecatedOnMatch = /^\s*deprecatedOn\s*=\s*"([^"]+)"/m.exec(source);
+                // A certified block edited after its receipt is listed as Ask
+                // sees it: waiting to be certified again.
+                const declaredStatus = statusMatch?.[1] ?? 'draft';
+                const status = declaredStatus === 'certified' && certifiedBlockFileState(projectRoot, relPath, source, companionRegistry).state === 'changed'
+                  ? 'pending_recertification'
+                  : declaredStatus;
                 blocks.push({
                   name: nameMatch?.[1] ?? entry.name.replace('.dql', ''),
                   domain: (domainMatch?.[1] ?? inferBlockStudioPathDomain(projectRoot, relPath)) || 'uncategorized',
-                  status: statusMatch?.[1] ?? 'draft',
+                  status,
                   owner: ownerMatch?.[1] ?? null,
                   tags: parsedTags,
                   path: relPath,
@@ -39514,7 +39527,6 @@ function normalizeNotebookPath(path: string): string {
  * thing. A private block is one nobody else can see yet.
  */
 const PRIVATE_BLOCK_PREFIX = '.dql/local/private/blocks';
-const PRIVATE_BLOCK_COMPANION_PREFIX = '.dql/local/private/semantic-layer/blocks';
 
 function privateBlockDir(projectRoot: string): string {
   return join(projectRoot, '.dql', 'local', 'private', 'blocks');
@@ -40015,6 +40027,8 @@ export function openBlockStudioDocument(
     owner: string;
     tags: string[];
     reviewStatus?: string;
+    /** A certified source edited after its certification receipt was written; Ask treats it as pending recertification. */
+    certificationSourceChanged?: boolean;
     sourceFingerprint: string;
     /** Retired blocks: the block named as the replacement, and the retirement date. */
     replacedBy?: string;
@@ -40054,6 +40068,9 @@ export function openBlockStudioDocument(
     // Who certified this exact source, from the receipt the explicit Certify
     // action wrote. Absent for drafts and for blocks certified before receipts.
     ...(certificationReceipt ? { certification: certificationReceipt } : {}),
+    ...(certificationReceipt && certifiedBlockFileState(projectRoot, normalizedPath, source).state === 'changed'
+      ? { certificationSourceChanged: true }
+      : {}),
     sourceFingerprint: createHash('sha256').update(source).digest('hex'),
     ...blockStudioRetirement(projectRoot, normalizedPath, parsedMetadata),
   };
@@ -41955,9 +41972,16 @@ export function saveBlockStudioArtifacts(
   const previousCompanion = unchangedCertified && !options.certification && previousPath
     ? blockCompanionRelativePath(projectRoot, previousPath)
     : null;
-  const carriedReceipt = previousCompanion && existsSync(join(projectRoot, previousCompanion))
+  const previousReceipt = previousCompanion && existsSync(join(projectRoot, previousCompanion))
     ? readCompanionCertification(readFileSync(join(projectRoot, previousCompanion), 'utf-8'))
     : null;
+  // The unchanged source may gain the metadata Block Studio adds on save, so the
+  // receipt follows it, but only when the file on disk was still the certified
+  // source: a hand edit made before this save must stay visible.
+  const carriedReceipt = previousReceipt && previousAbsolute
+    && certifiedBlockFileState(projectRoot, previousPath!, readFileSync(previousAbsolute, 'utf-8')).state === 'matches'
+    ? { ...previousReceipt, sourceSha256: sourceSha256(source) }
+    : previousReceipt;
   const certification = options.certification && blockSourceStatus(source) === 'certified'
     ? { ...options.certification, sourceSha256: sourceSha256(source) }
     : carriedReceipt ?? undefined;
@@ -42325,35 +42349,7 @@ function inferBlockStudioFolderPath(projectRoot: string, blockPath: string): str
 }
 
 function blockCompanionRelativePath(projectRoot: string, blockPath: string): string | null {
-  const normalized = normalize(blockPath).replace(/^\/+/, '');
-  // The companion of a private block has to be private too, or the block hides
-  // while its YAML announces it in tracked source.
-  if (isPrivateBlockPath(normalized)) {
-    const withoutRoot = normalized.slice(`${PRIVATE_BLOCK_PREFIX}/`.length).replace(/\.dql$/, '.yaml');
-    return `${PRIVATE_BLOCK_COMPANION_PREFIX}/${withoutRoot}`;
-  }
-  if (normalized.startsWith('blocks/')) {
-    const withoutRoot = normalized.slice('blocks/'.length).replace(/\.dql$/, '.yaml');
-    return join('semantic-layer', 'blocks', withoutRoot).replaceAll('\\', '/');
-  }
-  const resolved = domainBlockPathParts(projectRoot, normalized);
-  if (resolved && resolved.subpath.endsWith('.dql')) {
-    const blockPath = resolved.subpath.replace(/\.dql$/, '');
-    const companionBlockPath = blockPath.startsWith('_drafts/')
-      ? join('_drafts', resolved.domain, blockPath.slice('_drafts/'.length))
-      : join(resolved.domain, blockPath);
-    return join('semantic-layer', 'blocks', `${companionBlockPath}.yaml`).replaceAll('\\', '/');
-  }
-  const domainFirst = normalized.match(/^domains\/([^/]+)\/blocks\/(.+)\.dql$/);
-  if (domainFirst) {
-    const domain = domainFirst[1];
-    const blockPath = domainFirst[2];
-    const companionBlockPath = blockPath.startsWith('_drafts/')
-      ? join('_drafts', domain, blockPath.slice('_drafts/'.length))
-      : join(domain, blockPath);
-    return join('semantic-layer', 'blocks', `${companionBlockPath}.yaml`).replaceAll('\\', '/');
-  }
-  return null;
+  return coreBlockCompanionRelativePath(projectRoot, blockPath);
 }
 
 function domainBlockPathParts(
@@ -42714,38 +42710,6 @@ export function ensureBlockStudioPattern(source: string): string {
   return source.replace(/(\bblock\s+"[^"]+"\s*\{)/i, '$1\n  pattern = "custom"');
 }
 
-function compareBlockStudioValues(actual: unknown, operator: string, expected: unknown): boolean {
-  const expectedValue = normalizeBlockStudioExpected(expected);
-  if (operator === '==' || operator === '=') return String(actual) === String(expectedValue);
-  if (operator === '!=') return String(actual) !== String(expectedValue);
-  const actualNumber = Number(actual);
-  const expectedNumber = Number(expectedValue);
-  switch (operator) {
-    case '>': return actualNumber > expectedNumber;
-    case '>=': return actualNumber >= expectedNumber;
-    case '<': return actualNumber < expectedNumber;
-    case '<=': return actualNumber <= expectedNumber;
-    default: return false;
-  }
-}
-
-function normalizeBlockStudioExpected(expected: unknown): unknown {
-  if (expected && typeof expected === 'object' && Object.prototype.hasOwnProperty.call(expected, 'value')) {
-    return (expected as { value: unknown }).value;
-  }
-  if (expected && typeof expected === 'object' && Object.prototype.hasOwnProperty.call(expected, 'name')) {
-    return (expected as { name: unknown }).name;
-  }
-  return expected;
-}
-
-function formatBlockStudioExpected(expected: unknown): string {
-  const normalized = normalizeBlockStudioExpected(expected);
-  if (normalized === null || normalized === undefined) return 'null';
-  if (typeof normalized === 'string' || typeof normalized === 'number' || typeof normalized === 'boolean') return String(normalized);
-  return JSON.stringify(normalized);
-}
-
 type BlockStudioExecutionTest = NonNullable<
   NonNullable<ReturnType<typeof buildExecutionPlan>>['tests']
 >[number];
@@ -42764,30 +42728,13 @@ function evaluateBlockStudioTests(
   let failed = 0;
 
   for (const test of tests) {
-    const name = `assert ${test.field} ${test.operator} ${formatBlockStudioExpected(test.expected)}`;
-    let actual: unknown;
-    if (test.field === 'row_count') {
-      actual = rows.length;
-    } else if (!columns.includes(test.field)) {
-      assertions.push({ name, passed: false, expected: test.expected, error: `Column '${test.field}' not found in results` });
-      failed += 1;
-      continue;
-    } else {
-      actual = rows[0]?.[test.field];
-    }
-
-    const ok = compareBlockStudioValues(actual, test.operator, test.expected);
-    if (ok) {
-      assertions.push({ name, passed: true, actual, expected: test.expected });
+    const name = blockTestAssertionName(test);
+    const outcome = evaluateBlockTestAssertion(test, { rows, columns });
+    if (outcome.passed) {
+      assertions.push({ name, passed: true, actual: outcome.actual, expected: test.expected });
       passed += 1;
     } else {
-      assertions.push({
-        name,
-        passed: false,
-        actual,
-        expected: test.expected,
-        error: `${String(actual)} ${test.operator} ${formatBlockStudioExpected(test.expected)} is false`,
-      });
+      assertions.push({ name, passed: false, actual: outcome.actual, expected: test.expected, error: outcome.error });
       failed += 1;
     }
   }

@@ -38,12 +38,18 @@ GROUP BY 1
 Every block has a status. The two that matter most:
 
 - **Draft**: saved, but nobody has vouched for it yet.
-- **Certified**: a person checked it. Certifying runs the block and its tests
-  and records who certified it and when.
+- **Certified**: a person checked it. Certifying runs the block and any tests
+  it declares (tests are optional), and records who certified it, when, and a
+  fingerprint of the exact source.
 
 **Saving never certifies.** Saving a block, importing SQL, or keeping an AI
-answer always makes a draft. Only a person clicking **Certify** (or running
-`zlens certify --from-draft`) makes a block certified.
+answer always makes a draft. Only a person certifying it makes a block
+certified: **Certify** in Block Studio or on an imported draft, **Certify and
+use this data** for an App Dataset, or `zlens certify --from-draft`.
+
+If a certified block's file is edited afterwards outside ZLens, its source no
+longer matches that fingerprint. ZLens then shows it as **RECERTIFY** and Ask
+stops treating it as certified until someone certifies it again.
 
 See [Save and certify](../blocks/certify.md).
 

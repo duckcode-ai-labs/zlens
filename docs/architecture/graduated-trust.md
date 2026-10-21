@@ -147,6 +147,15 @@ from a table), and `zlens certify --from-draft`. Block Studio shows the receipt
 as *Certified by … · when · via …*. Changing a block's status away from
 certified removes the receipt.
 
+A receipt certifies one exact source. When a certified `.dql` no longer
+matches its receipt's `sourceSha256` (it was edited outside ZLens, since
+saving an edit through ZLens writes a draft), the manifest reports the block
+as `pending_recertification` with a warning, so Ask, Apps, the knowledge graph
+and MCP stop serving it as certified; Block Studio shows **Recertify** with the
+reason, and `zlens verify` / `zlens certify` warn. Re-certifying writes a
+receipt for the new source. A block certified before receipts existed has no
+fingerprint to compare and stays certified.
+
 Certifying is the review, so it also removes the `review-required` lifecycle
 tag that SQL import, AI drafts and notebook research put on a draft (in the
 `.dql` and in the companion YAML). Ask never serves a block that is certified
