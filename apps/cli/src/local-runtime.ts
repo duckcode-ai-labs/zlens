@@ -15593,14 +15593,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const current = modelingModeOf(currentConfig);
         const requested = body.mode === 'hybrid' ? 'hybrid' : 'warehouse-first';
         if (current === 'dbt-first' && requested !== 'hybrid') {
-          throw Object.assign(new Error('This project models dbt. Choose hybrid to add warehouse tables that dbt does not cover.'), { code: 'MODELING_MODE_CONFLICT' });
+          throw Object.assign(new Error("This folder is a dbt project, so ZLens keeps its dbt models. Choose Both (hybrid) to add warehouse tables dbt doesn't cover. For a database-only project, run npx create-zlens-app my-analytics --warehouse <driver> in a new folder."), { code: 'MODELING_MODE_CONFLICT' });
         }
         // A project that already reads its dbt models is not "without dbt":
         // warehouse-first modeling replaces them with the warehouse catalog,
         // which is empty until a sync, and Ask, lineage and blocks lose every
         // table (ZLens 0.1.0 e2e, F3). Only an explicit hybrid choice adds to them.
         if (current === undefined && requested !== 'hybrid' && projectReadsDbtModels(projectRoot, currentConfig)) {
-          throw Object.assign(new Error('This project already reads a dbt project (its dbt manifest is imported). Warehouse-first modeling would replace those dbt models with warehouse tables only. Model it from Settings → Project & dbt, or choose hybrid to add warehouse tables dbt does not cover.'), { code: 'MODELING_MODE_CONFLICT' });
+          throw Object.assign(new Error("This folder already reads a dbt project (its dbt manifest is imported). Database only would replace those dbt models with warehouse tables only. Model it from Settings → Project & dbt, or choose Both (hybrid) to add warehouse tables dbt doesn't cover."), { code: 'MODELING_MODE_CONFLICT' });
         }
         const next = current === 'warehouse-first' || current === 'hybrid' ? current : requested;
         if (next !== current) {

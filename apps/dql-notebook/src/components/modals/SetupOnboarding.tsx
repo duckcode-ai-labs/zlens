@@ -18,6 +18,7 @@ import {
   rememberProposalForModeling,
   setupStepTitles,
   stepOneBlocker,
+  databaseOnlyUnavailable,
   stepTwoCopy,
   synchronizeExistingProject,
   type DraftOutcome,
@@ -189,6 +190,7 @@ export function SetupOnboarding({
     source,
     requiresDbtReapply: requiresUpgradeReapply,
     dbtConfigured: projectState !== 'missing',
+    existing,
   });
   /** Leave step 1: turn on warehouse-first or hybrid modeling when the answer needs it. */
   const continueFromStepOne = async () => {
@@ -333,7 +335,9 @@ export function SetupOnboarding({
               ) : null}
               {source === 'warehouse' ? (
                 <div style={{ border: `1px solid ${t.headerBorder}`, background: t.cellBg, borderRadius: 10, padding: '12px 13px', fontSize: 11.5, color: supportingText, lineHeight: 1.55 }}>
-                  <strong style={{ color: t.textPrimary }}>Next:</strong> connect your database, choose the schemas to model, Apply and synchronize, then Draft my models. You review and certify the drafts in Modeling before Ask relies on them.
+                  {databaseOnlyUnavailable(existing)
+                    ? databaseOnlyUnavailable(existing)
+                    : <><strong style={{ color: t.textPrimary }}>Next:</strong> connect your database, choose the schemas to model, Apply and synchronize, then Draft my models. You review and certify the drafts in Modeling before Ask relies on them.</>}
                 </div>
               ) : null}
               {continueError ? <div role="alert" style={{ color: 'var(--status-error)', fontSize: 11.5, lineHeight: 1.5 }}>{continueError}</div> : null}

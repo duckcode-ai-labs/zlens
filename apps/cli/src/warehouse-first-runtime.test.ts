@@ -52,6 +52,24 @@ describe('warehouse-first modeling in the local runtime', () => {
     expect(JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8')).modeling).toEqual({ mode: 'hybrid' });
   });
 
+  // Setup's "Database only" card on a dbt-first project: the refusal names the
+  // two ways forward instead of an internal mode word.
+  it('refuses Database only for a dbt-first project and says to choose Both or start a new folder', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-first-dbtfirst-'));
+    roots.push(projectRoot);
+    const config = { project: 'jaffle', manifestVersion: 3, modeling: { mode: 'dbt-first' }, connections: { default: { driver: 'sqlite', filepath: ':memory:' } } };
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify(config));
+    const port = await startLocalServer({ rootDir: projectRoot, projectRoot, executor: new QueryExecutor(), preferredPort: 0, captureServer: (created) => { server = created; } });
+    const enabled = await fetch(`http://127.0.0.1:${port}/api/modeling/warehouse/enable`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    expect(enabled.status).toBe(409);
+    const refusal = await enabled.json() as { code: string; message: string };
+    expect(refusal.code).toBe('MODELING_MODE_CONFLICT');
+    expect(refusal.message).toContain('This folder is a dbt project');
+    expect(refusal.message).toContain('Choose Both');
+    expect(refusal.message).toContain('npx create-zlens-app my-analytics --warehouse');
+    expect(JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8'))).toEqual(config);
+  });
+
   it('turns a project without dbt into warehouse-first modeling', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-first-nodbt-'));
     roots.push(projectRoot);

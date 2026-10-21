@@ -46,6 +46,19 @@ export const MODEL_SOURCE_OPTIONS: readonly ModelSourceOption[] = [
 
 export const EXISTING_PROJECT_TITLE = 'Open an existing ZLens project';
 
+/**
+ * Database only would replace a dbt project's models with warehouse tables,
+ * so the runtime refuses it for a folder that already reads dbt
+ * (MODELING_MODE_CONFLICT). Setup says so before anyone picks it.
+ */
+export const DATABASE_ONLY_DBT_PROJECT =
+  "This folder is a dbt project, so ZLens keeps its dbt models. Choose Both to add warehouse tables dbt doesn't cover. For a database-only project, run npx create-zlens-app my-analytics --warehouse <driver> in a new folder.";
+
+/** Why Database only is not available for this folder, or null when it is. */
+export function databaseOnlyUnavailable(existing: ExistingProject | null | undefined): string | null {
+  return existing && existing.mode !== 'warehouse-first' ? DATABASE_ONLY_DBT_PROJECT : null;
+}
+
 /** What this folder's dql.config.json already says about its data model. */
 export interface ExistingProject {
   mode: ModelingMode;
@@ -144,9 +157,14 @@ export function stepOneBlocker(input: {
   source: ModelSource | null;
   requiresDbtReapply: boolean;
   dbtConfigured: boolean;
+  existing?: ExistingProject | null;
 }): string | null {
   if (input.requiresDbtReapply) return `Preview and Reapply the prefilled dbt project first.`;
   if (!input.source) return 'Choose where your data model lives.';
+  if (input.source === 'warehouse') {
+    const unavailable = databaseOnlyUnavailable(input.existing);
+    if (unavailable) return unavailable;
+  }
   if (input.source === 'both' && !input.dbtConfigured) return 'Apply the dbt project first; the next step adds the schemas dbt does not cover.';
   return null;
 }

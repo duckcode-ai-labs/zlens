@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ContextAuthoringProposalV1, DbtOnboardingStatusResponse, WarehouseDiscoveryReport } from '../../api/client';
 import {
+  DATABASE_ONLY_DBT_PROJECT,
+  databaseOnlyUnavailable,
   draftErrorMessage,
   draftOutcome,
   draftsFromWarehouse,
@@ -67,6 +69,22 @@ describe('where the data model lives', () => {
     const existing = existingProjectFromStatus(warehouseProject);
     expect(existing).toMatchObject({ mode: 'warehouse-first', label: 'Database only', warehouseModeling: true });
     expect(initialModelSource({ existing })).toBe('warehouse');
+  });
+
+  it('Database only is unavailable for a folder that already reads dbt, and says to choose Both', () => {
+    const dbtExisting = existingProjectFromStatus(dbtProject);
+    const hybridExisting = existingProjectFromStatus(hybridProject);
+    const warehouseExisting = existingProjectFromStatus(warehouseProject);
+    expect(databaseOnlyUnavailable(null)).toBeNull();
+    expect(databaseOnlyUnavailable(warehouseExisting)).toBeNull();
+    expect(databaseOnlyUnavailable(dbtExisting)).toBe(DATABASE_ONLY_DBT_PROJECT);
+    expect(databaseOnlyUnavailable(hybridExisting)).toBe(DATABASE_ONLY_DBT_PROJECT);
+    expect(DATABASE_ONLY_DBT_PROJECT).toContain('Choose Both');
+    expect(DATABASE_ONLY_DBT_PROJECT).toContain('create-zlens-app my-analytics --warehouse');
+    expect(stepOneBlocker({ source: 'warehouse', requiresDbtReapply: false, dbtConfigured: true, existing: dbtExisting })).toBe(DATABASE_ONLY_DBT_PROJECT);
+    expect(stepOneBlocker({ source: 'warehouse', requiresDbtReapply: false, dbtConfigured: false, existing: warehouseExisting })).toBeNull();
+    // Both stays the way to add warehouse tables to a dbt project.
+    expect(stepOneBlocker({ source: 'both', requiresDbtReapply: false, dbtConfigured: true, existing: dbtExisting })).toBeNull();
   });
 
   it('Both turns on hybrid, only once the dbt project is applied', () => {

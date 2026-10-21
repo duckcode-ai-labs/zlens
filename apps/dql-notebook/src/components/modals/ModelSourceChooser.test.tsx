@@ -51,6 +51,21 @@ describe('Where does your data model live?', () => {
     expect(html).toContain('never their rows');
   });
 
+  it('Database only is disabled for a dbt project and explains why on the card', () => {
+    const dbtProject = existingProjectFromStatus({ dbt: { configured: true, projectDir: '.' }, modeling: { enabled: true, mode: 'dbt-first' } });
+    const html = renderToStaticMarkup(<ModelSourceChooser value="dbt" onChange={noop} existing={dbtProject} t={t} />);
+    expect(radios(html).find((radio) => radio.value === 'warehouse')?.disabled).toBe(true);
+    expect(radios(html).find((radio) => radio.value === 'both')?.disabled).toBe(false);
+    expect(html).toContain('This folder is a dbt project');
+    expect(html).toContain('Choose Both');
+  });
+
+  it('Database only stays available for a Database only project', () => {
+    const html = renderToStaticMarkup(<ModelSourceChooser value="warehouse" onChange={noop} existing={warehouseProject} t={t} />);
+    expect(radios(html).find((radio) => radio.value === 'warehouse')?.disabled).toBe(false);
+    expect(html).not.toContain('This folder is a dbt project');
+  });
+
   it("Both: dbt plus schemas dbt doesn't cover", () => {
     const html = renderToStaticMarkup(<ModelSourceChooser value="both" onChange={noop} existing={null} t={t} />);
     expect(radios(html).find((radio) => radio.checked)?.value).toBe('both');
