@@ -301,6 +301,14 @@ describe('ConversationStore', () => {
     expect(all).toHaveLength(2);
   });
 
+  it("lists only one notebook's Notebook AI conversations when asked", () => {
+    const here = store.createThread({ surface: 'notebook', title: 'Fix this query', notebookPath: 'notebooks/stores.dqlnb' });
+    store.createThread({ surface: 'notebook', title: 'Elsewhere', notebookPath: 'notebooks/other.dqlnb' });
+    store.createThread({ surface: 'ask', title: 'An Ask chat' });
+    expect(store.listThreads({ notebookPath: 'notebooks/stores.dqlnb' }).map((thread) => thread.id)).toEqual([here.id]);
+    expect(store.listThreads()).toHaveLength(3);
+  });
+
   it('permanently deletes a thread, its turns, and its search index entries', () => {
     const thread = store.createThread({ surface: 'ask', title: 'Delete me' });
     store.appendTurn(thread.id, {

@@ -72,7 +72,7 @@ import { DQL_CELL_EXAMPLE, dqlCellHoldsPlainSql, queryCellKindLabel } from '../.
 interface CellProps {
   cell: Cell;
   index: number;
-  onStartResearch?: (cellId: string, prompt?: string, options?: { autoAsk?: boolean }) => void;
+  onStartResearch?: (cellId: string, prompt?: string) => void;
   researchState?: CellResearchState | null;
 }
 

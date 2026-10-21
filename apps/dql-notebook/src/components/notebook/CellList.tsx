@@ -19,7 +19,7 @@ import { NOTEBOOK_CELL_FOCUS_EVENT } from '../../utils/notebook-cell-focus';
 
 interface CellListProps {
   registerCellRef: (id: string, el: HTMLDivElement | null) => void;
-  onStartResearch?: (cellId: string, prompt?: string, options?: { autoAsk?: boolean }) => void;
+  onStartResearch?: (cellId: string, prompt?: string) => void;
   researchRefreshKey?: number;
 }
 

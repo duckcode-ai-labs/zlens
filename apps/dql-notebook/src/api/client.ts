@@ -5377,12 +5377,13 @@ export const api = {
     });
   },
 
-  async listAgentThreads(input?: { limit?: number; archived?: boolean }): Promise<AgentConversationThreadListResponse> {
+  async listAgentThreads(input?: { limit?: number; archived?: boolean; notebookPath?: string }): Promise<AgentConversationThreadListResponse> {
     const params = new URLSearchParams();
     if (typeof input?.limit === 'number' && Number.isFinite(input.limit)) {
       params.set('limit', String(input.limit));
     }
     if (input?.archived) params.set('archived', '1');
+    if (input?.notebookPath) params.set('notebookPath', input.notebookPath);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<AgentConversationThreadListResponse>(`/api/agent/threads${suffix}`);
   },

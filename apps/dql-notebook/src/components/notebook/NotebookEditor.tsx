@@ -6,6 +6,7 @@ import { makeCell, useDispatch, useNotebookStore } from "../../store/NotebookSto
 import { themes } from "../../themes/notebook-theme";
 import {
   api,
+  type AgentConversationThread,
   type DatasetSource,
   type NotebookResearchRun,
 } from "../../api/client";
@@ -71,7 +72,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
   const [aiHistoryOpen, setAiHistoryOpen] = useState(false);
   const [aiSourceCellId, setAiSourceCellId] = useState<string | null>(null);
   const [aiInitialInput, setAiInitialInput] = useState('');
-  const [aiAutoAsk, setAiAutoAsk] = useState<{ text: string; nonce: number } | undefined>(undefined);
   const [aiHistoryRefreshKey, setAiHistoryRefreshKey] = useState(0);
   const [aiHistoryBadge, setAiHistoryBadge] = useState<AiHistoryBadge>(
     EMPTY_AI_HISTORY_BADGE,
@@ -115,7 +115,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
   const openFileForAiHistory = useCallback((file: NotebookFile) => {
     setAiSourceCellId(null);
     setAiInitialInput('');
-    setAiAutoAsk(undefined);
     setAiOpen(true);
     setAiHistoryOpen(true);
     onOpenFile(file);
@@ -155,7 +154,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
       const detail = (event as CustomEvent<{ afterId?: string }>).detail;
       setAiSourceCellId(detail?.afterId ?? null);
       setAiInitialInput('');
-      setAiAutoAsk(undefined);
       setAiHistoryOpen(false);
       setAiOpen(true);
     };
@@ -193,13 +191,9 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
   }, []);
 
   const openAiForCell = useCallback(
-    (cellId: string, prompt?: string, options?: { autoAsk?: boolean }) => {
-      const text = prompt?.trim() ?? "";
+    (cellId: string, prompt?: string) => {
       setAiSourceCellId(cellId);
-      setAiInitialInput(options?.autoAsk ? "" : text);
-      setAiAutoAsk(
-        options?.autoAsk && text ? { text, nonce: Date.now() } : undefined,
-      );
+      setAiInitialInput(prompt?.trim() ?? "");
       setAiHistoryOpen(false);
       setAiOpen(true);
     },
@@ -429,7 +423,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
   const askFromHistory = useCallback((run: NotebookResearchRun) => {
     setAiSourceCellId(run.sourceCellId ?? null);
     setAiInitialInput(run.question);
-    setAiAutoAsk(undefined);
     setAiHistoryOpen(false);
     setAiOpen(true);
   }, []);
@@ -456,7 +449,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
         reason: 'agent-run-open-research',
       });
     }
-    setAiAutoAsk(undefined);
     setAiHistoryRefreshKey(Date.now());
     setAiHistoryOpen(true);
     setAiOpen(true);
@@ -490,7 +482,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
         onToggleAi={() => {
           setAiSourceCellId(null);
           setAiInitialInput('');
-          setAiAutoAsk(undefined);
           setAiOpen((open) => !open);
         }}
         onToggleHistory={() => {
@@ -541,7 +532,6 @@ export function NotebookEditor({ onOpenFile, registerCellRef }: NotebookEditorPr
             sourceCell={aiSourceCell}
             upstreamContext={aiContext}
             initialInput={aiInitialInput}
-            autoAsk={aiAutoAsk}
             historyOpen={aiHistoryOpen}
             historyRefreshKey={aiHistoryRefreshKey}
             onClose={() => setAiOpen(false)}
@@ -710,7 +700,6 @@ function NotebookAiDrawer({
   sourceCell,
   upstreamContext,
   initialInput,
-  autoAsk,
   historyOpen,
   historyRefreshKey,
   onClose,
@@ -727,7 +716,6 @@ function NotebookAiDrawer({
   sourceCell: Cell | null;
   upstreamContext?: string;
   initialInput: string;
-  autoAsk?: { text: string; nonce: number };
   historyOpen: boolean;
   historyRefreshKey: number;
   onClose: () => void;
@@ -758,21 +746,13 @@ function NotebookAiDrawer({
   const scopeHint = sourceCell
     ? 'This cell + dbt, semantic metadata, certified blocks, prior AI history'
     : 'Whole notebook + dbt, semantic metadata, certified blocks, prior AI history';
-  const selectedCellSql = sourceCell?.type === 'sql'
-    ? sourceCell.content.trim()
-    : sourceCell?.type === 'dql'
-      ? extractSqlFromText(sourceCell.content)?.trim()
-      : undefined;
-  const buildContext = selectedCellSql
-    ? { cellSql: selectedCellSql }
-    : undefined;
   const agentRunSelectedObject = sourceCell
     ? { kind: 'cell' as const, id: sourceCell.id, title: sourceCell.name, path: notebookPath }
     : notebookPath
       ? { kind: 'notebook' as const, path: notebookPath, title: state.notebookTitle || 'Notebook' }
       : undefined;
   const agentRunWorkspaceContext = {
-    ...(buildContext ?? {}),
+    ...notebookAiCellContext(sourceCell),
     notebookPath,
     notebookTitle: state.notebookTitle,
     sourceCellId: sourceCell?.id,
@@ -811,6 +791,13 @@ function NotebookAiDrawer({
           notebookPath={notebookPath}
           sourceCellId={sourceCell?.id}
           refreshKey={historyRefreshKey}
+          currentThreadId={agentThread.threadId}
+          onOpenConversation={(id) => {
+            // Remount the panel on that thread so it loads the conversation.
+            agentThread.onThreadIdChange(id);
+            setAiPanelEpoch((value) => value + 1);
+            onToggleHistory();
+          }}
           onAskFromHistory={onAskFromHistory}
         />
       )}
@@ -825,8 +812,7 @@ function NotebookAiDrawer({
           selectedObject={agentRunSelectedObject}
           workspaceContext={agentRunWorkspaceContext}
           initialMode="auto"
-          initialInput={autoAsk ? '' : initialInput}
-          autoRun={autoAsk ? { text: autoAsk.text, mode: 'ask', nonce: autoAsk.nonce } : undefined}
+          initialInput={initialInput}
           threadId={agentThread.threadId}
           onThreadIdChange={agentThread.onThreadIdChange}
           onRunningChange={setAiRunning}
@@ -835,12 +821,8 @@ function NotebookAiDrawer({
           onReplaceDql={sourceCell ? onReplaceDql : undefined}
           answerFirstCards
           insertDqlActionLabel="Add to notebook"
-          replaceDqlActionLabel={sourceCell
-            // The button both replaces AND runs, so it has to say so. Opened
-            // from a cell error it is the repair itself, and naming it that
-            // way is the difference between "a suggestion" and "the fix".
-            ? (autoAsk ? 'Apply fix & run' : 'Replace cell & run')
-            : undefined}
+          // The button both replaces AND runs, so it has to say so.
+          replaceDqlActionLabel={sourceCell ? 'Replace cell & run' : undefined}
           onOpenBlock={(path, name) => { void openBlockInStudio(path, name ?? path); }}
           onOpenResearch={(id, path) => { void onOpenResearch(id, path); }}
         />
@@ -854,34 +836,50 @@ function NotebookAiHistoryPanel({
   notebookPath,
   sourceCellId,
   refreshKey,
+  currentThreadId,
+  onOpenConversation,
   onAskFromHistory,
 }: {
   t: Theme;
   notebookPath?: string;
   sourceCellId?: string;
   refreshKey: number;
+  currentThreadId?: string;
+  onOpenConversation: (threadId: string) => void;
   onAskFromHistory: (run: NotebookResearchRun) => void;
 }) {
+  const [conversations, setConversations] = useState<AgentConversationThread[]>([]);
   const [runs, setRuns] = useState<NotebookResearchRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!notebookPath) {
+      setConversations([]);
       setRuns([]);
       return;
     }
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.listNotebookResearch({
-      path: notebookPath,
-      sourceCellId,
-      sort: 'updated_desc',
-      limit: 12,
-    })
-      .then((page) => {
-        if (!cancelled) setRuns(page.runs);
+    // Notebook AI conversations belong to the whole notebook; saved research
+    // can be narrowed to the cell the panel was opened from.
+    Promise.all([
+      api.listAgentThreads({ notebookPath, limit: 12 })
+        .then((page) => page.threads)
+        // Conversations are best-effort: a missing store must not hide research.
+        .catch(() => [] as AgentConversationThread[]),
+      api.listNotebookResearch({
+        path: notebookPath,
+        sourceCellId,
+        sort: 'updated_desc',
+        limit: 12,
+      }),
+    ])
+      .then(([threads, page]) => {
+        if (cancelled) return;
+        setConversations(threads);
+        setRuns(page.runs);
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -892,7 +890,71 @@ function NotebookAiHistoryPanel({
     return () => {
       cancelled = true;
     };
-  }, [notebookPath, refreshKey, sourceCellId]);
+  }, [currentThreadId, notebookPath, refreshKey, sourceCellId]);
+
+  return (
+    <NotebookAiHistoryList
+      t={t}
+      conversations={conversations}
+      runs={runs}
+      loading={loading}
+      error={error}
+      sourceCellId={sourceCellId}
+      currentThreadId={currentThreadId}
+      onOpenConversation={onOpenConversation}
+      onAskFromHistory={onAskFromHistory}
+    />
+  );
+}
+
+/**
+ * What Notebook AI sends about the cell it was opened from: the cell's query
+ * and, after a failed run, its error. The runtime hands both to the model with
+ * the question, so "Fix this query" has a query to fix.
+ */
+export function notebookAiCellContext(cell: Cell | null): { cellSql?: string; cellError?: string } {
+  if (!cell) return {};
+  const sql = cell.type === 'sql'
+    ? cell.content.trim()
+    : cell.type === 'dql'
+      ? extractSqlFromText(cell.content)?.trim()
+      : undefined;
+  return {
+    ...(sql ? { cellSql: sql } : {}),
+    ...(sql && cell.error ? { cellError: cell.error } : {}),
+  };
+}
+
+/** The AI history list: this notebook's Notebook AI conversations, then its saved research. */
+export function NotebookAiHistoryList({
+  t,
+  conversations,
+  runs,
+  loading,
+  error,
+  sourceCellId,
+  currentThreadId,
+  onOpenConversation,
+  onAskFromHistory,
+}: {
+  t: Theme;
+  conversations: AgentConversationThread[];
+  runs: NotebookResearchRun[];
+  loading: boolean;
+  error: string | null;
+  sourceCellId?: string;
+  currentThreadId?: string;
+  onOpenConversation: (threadId: string) => void;
+  onAskFromHistory: (run: NotebookResearchRun) => void;
+}) {
+  const subheadingStyle: React.CSSProperties = {
+    fontSize: 10,
+    fontWeight: 800,
+    color: t.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: '0.04em',
+    margin: '2px 0 -2px',
+  };
 
   return (
     <div
@@ -913,12 +975,50 @@ function NotebookAiHistoryPanel({
         {loading && <span style={{ fontSize: 11, color: t.textMuted }}>Loading</span>}
       </div>
       {error && <div style={{ fontSize: 11, color: t.error, lineHeight: 1.4 }}>{error}</div>}
-      {!loading && !error && runs.length === 0 && (
+      {!loading && !error && conversations.length === 0 && runs.length === 0 && (
         <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.45 }}>
           No saved AI history for this {sourceCellId ? 'cell' : 'notebook'} yet.
         </div>
       )}
       <div style={{ display: 'grid', gap: 7 }}>
+        {conversations.length > 0 && <div style={subheadingStyle}>Conversations</div>}
+        {conversations.map((thread) => {
+          const current = thread.id === currentThreadId;
+          return (
+            <button
+              key={thread.id}
+              type="button"
+              title={current ? 'This conversation is open' : 'Continue this conversation'}
+              onClick={() => onOpenConversation(thread.id)}
+              style={{
+                border: `1px solid ${current ? t.accent : t.cellBorder}`,
+                background: t.cellBg,
+                color: t.textPrimary,
+                borderRadius: 8,
+                padding: '8px 9px',
+                textAlign: 'left',
+                cursor: 'pointer',
+                display: 'grid',
+                gap: 4,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <span style={{ fontSize: 12, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {thread.title || 'Notebook AI conversation'}
+                </span>
+                {current && (
+                  <span style={{ marginLeft: 'auto', fontSize: 10, color: t.accent, fontWeight: 850 }}>
+                    open
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono }}>
+                {formatHistoryDate(thread.updatedAt)}
+              </div>
+            </button>
+          );
+        })}
+        {conversations.length > 0 && runs.length > 0 && <div style={subheadingStyle}>Research</div>}
         {runs.map((run) => (
           <button
             key={run.id}

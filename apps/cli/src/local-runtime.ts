@@ -6260,6 +6260,31 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const values = raw.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim());
     return values.length > 0 ? [...new Set(values)] : undefined;
   };
+  /**
+   * Notebook AI opened from a cell's Ask AI: "Fix this query" is about that
+   * cell, so the question the model reads carries the cell's SQL and its last
+   * error. Routing and the saved turn keep the question as it was asked; only
+   * the copy handed to the answer pipeline changes.
+   */
+  const withSelectedCellContext = (request: AgentRunRequest): AgentRunRequest => {
+    if (request.selectedObject?.kind !== 'cell') return request;
+    const sql = agentRunWorkspaceValue(request, 'cellSql');
+    if (!sql) return request;
+    const error = agentRunWorkspaceValue(request, 'cellError');
+    const name = agentRunWorkspaceValue(request, 'sourceCellName') ?? request.selectedObject.title;
+    const type = agentRunWorkspaceValue(request, 'sourceCellType') === 'dql' ? 'DQL' : 'SQL';
+    const clip = (value: string, limit: number) => (value.length > limit ? `${value.slice(0, limit)}\n…` : value);
+    const question = [
+      request.question,
+      '',
+      `This question is about the selected notebook ${type} cell${name ? ` "${name}"` : ''}. Its query:`,
+      '```sql',
+      clip(sql, 8_000),
+      '```',
+      ...(error ? [`Its last run failed: ${clip(error, 1_000)}`] : []),
+    ].join('\n');
+    return attachAskTraceObserverV1({ ...request, question }, askTraceObserverForV1(request));
+  };
 
   type AppAutopilotScope = {
     draftId: string;
@@ -7867,7 +7892,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // A question about what the App page shows is answered from that page's own results first.
     const fromAppView = await answerFromAskedAppView(request.runId ?? runId, request, (step) => executionContext.emit({ type: 'executor.started', message: step.title, route: executionContext.route, payload: { askStep: step } }));
     if (fromAppView) return fromAppView;
-    const result = await askPipelineExecutor(executionContext);
+    const cellRequest = withSelectedCellContext(request);
+    const result = await askPipelineExecutor(cellRequest === request ? executionContext : { ...executionContext, request: cellRequest });
     // Then, when the person has knowledge sources, the team documents that
     // explain the question's terms — cited beside the answer, never a figure
     // source and never part of its trust.
@@ -8628,16 +8654,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         request.question,
         datasetWorkspace.list(),
       );
+      const cellRequest = withSelectedCellContext(request);
       const authoringRequest: AgentRunRequest = requestedNotebookDataset
         ? {
-            ...request,
+            ...cellRequest,
             question: [
-              request.question,
+              cellRequest.question,
               '',
               `Notebook SQL fallback contract: ${requestedNotebookDataset.alias} is a local dataset, not a warehouse table. Produce the warehouse-only row-level extraction needed for the requested analysis. Include the warehouse join key that corresponds to the local dataset identifier, plus the requested order/detail columns. Do not return an aggregate certified answer and do not reference ${requestedNotebookDataset.alias} in the warehouse SQL. The UI will stage this bounded result and create the local join cell after confirmation.`,
             ].join('\n'),
           }
-        : request;
+        : cellRequest;
       // P4: route Notebook SQL-cell generation through the SAME tool-rich governed
       // pipeline Ask AI uses (schema-discovery tools P3 + declined-retry P1 + budget
       // recovery P2), instead of the tool-less buildFromPrompt path. A SQL cell only
@@ -18928,10 +18955,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (req.method === 'GET' && path === '/api/agent/threads') {
           const limit = Number(url.searchParams.get('limit') ?? '50');
           const includeArchived = url.searchParams.get('archived') === '1';
+          // Notebook AI's History lists the conversations held in one notebook.
+          const notebookPath = url.searchParams.get('notebookPath') || undefined;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({
-            // A host's own store may not honour ownerId: what it returns is filtered again here.
-            threads: conversationOwnerId() === null ? [] : (await store.listThreads({ limit: Number.isFinite(limit) ? limit : 50, includeArchived, ...(conversationOwnerId() ? { ownerId: conversationOwnerId()! } : {}) })).filter((thread) => conversationVisibleToCaller(thread)),
+            // A host's own store may not honour ownerId or notebookPath: what it returns is filtered again here.
+            threads: conversationOwnerId() === null ? [] : (await store.listThreads({ limit: Number.isFinite(limit) ? limit : 50, includeArchived, ...(conversationOwnerId() ? { ownerId: conversationOwnerId()! } : {}), ...(notebookPath ? { notebookPath } : {}) }))
+              .filter((thread) => conversationVisibleToCaller(thread) && (!notebookPath || thread.notebookPath === notebookPath)),
             // Browser cache identity only. It is an opaque one-way fingerprint
             // and intentionally does not become conversation/trace evidence.
             projectIdentity: conversationProjectIdentity,
