@@ -1731,7 +1731,7 @@ function CellComponentInner({ cell, index, onStartResearch, researchState }: Cel
               }}
             />
             <span
-              title={cell.type === 'dql' ? 'DQL cell — write a governed block (type, owner, description, tests) or use @metric()/@dim() refs' : cell.type === 'sql' ? 'SQL cell — write raw SQL, reference other cells with {{name}}' : undefined}
+              title={cell.type === 'dql' ? 'DQL cell — write a governed block (type, owner, description, tests) or an @block("…") reference' : cell.type === 'sql' ? 'SQL cell — write raw SQL, use @metric()/@dim() refs, reference other cells with {{name}}' : undefined}
               style={{
                 fontSize: 11,
                 fontWeight: 700,

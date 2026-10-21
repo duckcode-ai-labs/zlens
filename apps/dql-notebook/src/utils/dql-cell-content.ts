@@ -20,19 +20,21 @@ export function dqlCellHoldsPlainSql(content: string): boolean {
   return SQL_STATEMENT.test(code);
 }
 
-/** The DQL a new, empty DQL cell can start from. */
-export const DQL_CELL_EXAMPLE = `block "Top customers by revenue" {
-  domain = "sales"
+/**
+ * The DQL a new, empty DQL cell can start from. It runs as-is on the Jaffle
+ * sample project (`dev.orders`, `dev.locations`).
+ */
+export const DQL_CELL_EXAMPLE = `block "orders_by_store" {
+  domain = "commerce"
   type = "custom"
-  description = "Customers ranked by total revenue."
+  description = "Orders taken at each store."
   owner = "analytics"
 
   query = """
-    SELECT customer_name, SUM(amount) AS revenue
-    FROM orders
-    GROUP BY customer_name
-    ORDER BY revenue DESC
-    LIMIT 10
+    SELECT location_name, COUNT(*) AS orders
+    FROM dev.orders JOIN dev.locations USING (location_id)
+    GROUP BY 1
+    ORDER BY 2 DESC
   """
 }
 `;
