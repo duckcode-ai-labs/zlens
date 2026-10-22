@@ -152,3 +152,29 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('2 staging copies of tables listed here hidden');
   });
 });
+
+describe('a table says what became of it (new-user round 3, problem 7)', () => {
+  const madeTables = [
+    { id: 'dev.orders', name: 'orders', schema: 'dev', relation: 'dev.orders', columnCount: 9, datasets: [{ sourceId: 'app:block:commerce/orders', name: 'Orders', state: 'checked' }] },
+    { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7, datasets: [{ sourceId: 'app:block:general/customers', name: 'Customers', state: 'certified' }] },
+    { id: 'dev.items', name: 'order_items', schema: 'dev', relation: 'dev.order_items', columnCount: 5 },
+  ] as unknown as WarehouseTableSummary[];
+
+  it('reads Added · Checked in this App, Certified · Add to App when made elsewhere, and Check and add only when new', () => {
+    const markup = render({
+      initialKind: 'tables',
+      initialTables: madeTables,
+      draft: draftWith({ sources: [appDataSourceFromCandidate(ordersTableDataset)] }),
+    });
+    const row = (name: string) => markup.slice(markup.indexOf(`data-table-id="${name}"`), markup.indexOf('</article>', markup.indexOf(`data-table-id="${name}"`)));
+    expect(row('dev.orders')).toContain('Table · Added · Checked · dev');
+    expect(row('dev.orders')).toContain('data-table-state="added"');
+    expect(row('dev.orders')).not.toContain('Check orders and add it');
+    expect(row('dev.orders')).toContain('In this App as <strong>Orders</strong>');
+    expect(row('dev.customers')).toContain('Table · Certified · dev');
+    expect(row('dev.customers')).toContain('aria-label="Add customers to App as Customers"');
+    expect(row('dev.customers')).not.toContain('Check customers and add it');
+    expect(row('dev.items')).toContain('Table · Not checked yet · dev');
+    expect(row('dev.items')).toContain('aria-label="Check order_items and add it"');
+  });
+});

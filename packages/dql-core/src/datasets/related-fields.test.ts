@@ -6,7 +6,9 @@ import {
   datasetJoinReceiptSentence,
   datasetJoinsTrust,
   datasetJoinsUsed,
+  datasetNameIdentity,
   discoverDatasetJoins,
+  isNameLikeField,
   relatedFieldParts,
   relatedFieldWords,
   withDatasetJoins,
@@ -263,5 +265,49 @@ describe('fields from related tables (D2)', () => {
     expect(withoutDatasetJoins(joined)).toEqual(plain);
     expect(adoptDatasetJoins(plain, joined)).toEqual(joined);
     expect(adoptDatasetJoins(plain, plain)).toBe(plain);
+  });
+});
+
+describe('who a name belongs to (new-user round 3, problem 4)', () => {
+  const joined = () => withDatasetJoins(ordersDescriptor(), discover());
+
+  it('keys a related table name by the join key the Dataset already holds, even two hops away', () => {
+    const descriptor = joined();
+    expect(datasetNameIdentity(descriptor, 'customer__customer_name')).toEqual({ field: 'customer__customer_name', entity: 'customer', key: 'customer_id' });
+    expect(datasetNameIdentity(descriptor, 'customer__region__region_name')).toEqual({ field: 'customer__region__region_name', entity: 'region', key: 'customer__region_id' });
+  });
+
+  it('keys a name of the row by the row key, and a name beside its own id by that id', () => {
+    const customers = ordersDescriptor({
+      label: 'Customers',
+      grain: { entityIds: ['customer'], keyFields: ['customer_id'], keyEvidence: 'proof.customers' },
+      fields: [
+        { kind: 'physical', name: 'customer_id', qualifiedId: 'c::customer_id', type: 'string', role: 'key', status: 'approved' },
+        { kind: 'physical', name: 'name', qualifiedId: 'c::name', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'first_name', qualifiedId: 'c::first_name', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'customer_name', qualifiedId: 'c::customer_name', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'store_id', qualifiedId: 'c::store_id', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'store_name', qualifiedId: 'c::store_name', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'segment_name', qualifiedId: 'c::segment_name', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'customer_type', qualifiedId: 'c::customer_type', type: 'string', role: 'dimension', status: 'approved' },
+      ],
+    });
+    expect(datasetNameIdentity(customers, 'customer_name')?.key).toBe('customer_id');
+    expect(datasetNameIdentity(customers, 'name')).toEqual({ field: 'name', entity: 'customer', key: 'customer_id' });
+    expect(datasetNameIdentity(customers, 'first_name')?.key).toBe('customer_id');
+    expect(datasetNameIdentity(customers, 'store_name')).toEqual({ field: 'store_name', entity: 'store', key: 'store_id' });
+    // A name of something else with no key: told, never guessed.
+    expect(datasetNameIdentity(customers, 'segment_name')).toEqual({ field: 'segment_name', entity: 'segment' });
+    // Not a name at all.
+    expect(datasetNameIdentity(customers, 'customer_type')).toBeUndefined();
+    expect(datasetNameIdentity(customers, 'customer_id')).toBeUndefined();
+  });
+
+  it('leaves summaries and semantic data alone, and knows a name when it sees one', () => {
+    expect(datasetNameIdentity(joined(), 'order_total')).toBeUndefined();
+    expect(datasetNameIdentity(ordersDescriptor({ kind: 'semantic' }), 'customer_name')).toBeUndefined();
+    expect(isNameLikeField({ name: 'customer__customer_name', type: 'string', role: 'dimension' })).toBe(true);
+    expect(isNameLikeField({ name: 'renamed_at', type: 'timestamp', role: 'time' })).toBe(false);
+    expect(isNameLikeField({ name: 'name', type: 'number', role: 'dimension' })).toBe(false);
   });
 });

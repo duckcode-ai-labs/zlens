@@ -407,8 +407,32 @@ describe('App dashboard interaction contract', () => {
     } as any);
 
     expect(insight).toContain('60%');
-    expect(insight).toBe('Jan 2026 reports Margin Rate at 60%.');
+    expect(insight).toBe('Highest month: Jan 2026, 60% margin rate.');
     expect(insight).not.toContain('(55%)');
+  });
+});
+
+describe('tile captions read as a person would say them (new-user round 3, problem 9)', () => {
+  it('names the top row and what it is, and leaves a KPI to its own title', async () => {
+    const { computeTileInsight } = await dashboardHelpers();
+    const top = computeTileInsight({
+      status: 'ok',
+      tileType: 'dataset',
+      result: {
+        columns: ['customer__customer_name', 'lifetime_spend'],
+        columnsMeta: [{ name: 'lifetime_spend', kind: 'currency', currency: 'USD' }],
+        rows: [{ customer__customer_name: 'Maria Lopez', lifetime_spend: 3100 }, { customer__customer_name: 'Bob', lifetime_spend: 900 }],
+        rowCount: 2,
+        executionTime: 1,
+      },
+    } as any, { i: 'top', x: 0, y: 0, w: 6, h: 4, query: { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'lifetime_spend' }] }, viz: { type: 'bar' } } as any);
+    expect(top).toBe('Top customer: Maria Lopez, $3.1K lifetime spend.');
+    const kpi = computeTileInsight({
+      status: 'ok',
+      tileType: 'dataset',
+      result: { columns: ['lifetime_spend'], rows: [{ lifetime_spend: 671425 }], rowCount: 1, executionTime: 1 },
+    } as any, { i: 'kpi', x: 0, y: 0, w: 3, h: 2, title: 'Total revenue', query: { dimensions: [], measures: [{ measure: 'lifetime_spend' }] }, viz: { type: 'single_value' } } as any);
+    expect(kpi).toBeNull();
   });
 });
 

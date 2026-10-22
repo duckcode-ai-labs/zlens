@@ -134,6 +134,8 @@ export interface WarehouseTableSummary {
   modeled?: { state: 'modeled' | 'drafted'; entity: string; domain: string; key?: string; proposalId?: string };
   /** Tables its rows point to through a many-to-one join; their fields come with it (design D2). */
   joins?: string[];
+  /** Datasets "Check and add" already made from it, so it is never added twice (new-user round 3, problem 7). */
+  datasets?: Array<{ sourceId: string; name: string; state: 'certified' | 'checked' | 'draft' }>;
 }
 import type { DiffReport } from '@zlens/core/format';
 import { normalizeDqlArtifactReference, type DqlArtifactReference } from '@zlens/core/artifacts';
@@ -2935,6 +2937,8 @@ export interface DashboardRunResponse {
       unboundFilters?: Array<{ filterId: string; code: string; message: string }>;
       /** C8 outcome the tile ran under; adaptations are disclosed with the result. */
       validation?: { outcome: 'covered' | 'adapted' | 'needs_review' | 'rejected'; adaptations: Array<{ kind: string; message: string }> };
+      /** A name grouped without a key ZLens knows: it may merge namesakes (new-user round 3, problem 4). */
+      nameWarnings?: Array<{ field: string; entity: string; message: string }>;
       grainRuntimeEvidence?: DashboardDatasetGrainRuntimeEvidence;
       /** Joins to related tables the tile used (design D2): who certified each, in plain words. */
       joins?: Array<{ id: string; table: string; trust: 'certified' | 'review_required'; sentence: string }>;
@@ -2968,6 +2972,8 @@ export type DatasetTileQueryPreview =
     trustState?: string;
     /** Joins to related tables the query used (design D2). */
     joins?: Array<{ id: string; table: string; trust: 'certified' | 'review_required'; sentence: string }>;
+    /** A name grouped without a key ZLens knows: it may merge namesakes. */
+    nameWarnings?: Array<{ field: string; entity: string; message: string }>;
   }
   | { ok: false; error?: string; validation?: { outcome: string } };
 
@@ -8937,7 +8943,7 @@ export const api = {
    * own. Its checks passing makes it checked, not certified yet (`checked`);
    * it is never certified here.
    */
-  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; duplicates?: Array<{ name: string; use: 'minor' | 'plain' }> }): Promise<{ ok: boolean; status?: 'checked' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; check?: CertificationByline; error?: string }> {
+  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; duplicates?: Array<{ name: string; use: 'minor' | 'plain' | 'both' }> }): Promise<{ ok: boolean; status?: 'checked' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; check?: CertificationByline; error?: string }> {
     try {
       return await request('/api/app-datasets/tables/create', { method: 'POST', body: JSON.stringify(input) });
     } catch (error) {

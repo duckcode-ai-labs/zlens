@@ -105,8 +105,68 @@ export interface TableDatasetDuplicate {
 /** How two columns of one amount relate on the data: ×100 (two units) or the same number (both in hundredths). */
 export type DuplicateUnitRelation = 'hundredths' | 'same';
 
-/** An answer: use the hundredths column read in dollars (recommended), or the plain column as it is. */
-export interface TableDuplicateChoice { name: string; use: 'minor' | 'plain' }
+/**
+ * An answer: use the hundredths column read in dollars (`minor`), the plain
+ * column as it is (`plain`), or keep both columns (`both`: the plain one as
+ * it is, the hundredths one as a plain number in cents).
+ */
+export interface TableDuplicateChoice { name: string; use: 'minor' | 'plain' | 'both' }
+
+/**
+ * What "OK" means for one pair (new-user round 3, problem 8): when the data
+ * shows the plain column is the same amount in dollars, the dollar column is
+ * used as it is; otherwise (both in cents, or not checked) the cents column
+ * is read in dollars. Either way the copy is hidden.
+ */
+export function defaultDuplicateUse(pair: Pick<TableDatasetDuplicate, 'relation'>): 'minor' | 'plain' {
+  return pair.relation === 'hundredths' ? 'plain' : 'minor';
+}
+
+/** The one question a table's duplicate columns get, and what each answer does. */
+export interface DuplicateColumnsQuestion {
+  question: string;
+  /** What OK does. */
+  ok: string;
+  /** What Show both does. */
+  both: string;
+  okChoices: TableDuplicateChoice[];
+  bothChoices: TableDuplicateChoice[];
+}
+
+/**
+ * One question per table for every column stored twice (new-user round 3,
+ * problem 8), instead of a Yes/No per column whose two answers both gave
+ * dollars: "These columns are stored twice, in dollars and in cents:
+ * Subtotal, Tax paid, Order total. ZLens will use the dollar columns and hide
+ * the cents copies." [OK] [Show both].
+ */
+export function duplicateColumnsQuestion(pairs: ReadonlyArray<TableDatasetDuplicate>): DuplicateColumnsQuestion | undefined {
+  if (!pairs.length) return undefined;
+  const list = (items: string[]) => (items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+  const labels = list(pairs.map((pair) => pair.label));
+  const minor = pairs[0]!.minorUnits;
+  const major = pairs[0]!.major;
+  const sameUnits = pairs.every((pair) => pair.minorUnits === minor);
+  const units = sameUnits ? minor : 'cents or pennies';
+  const majorWord = sameUnits ? major : 'dollars or pounds';
+  const twoUnits = pairs.every((pair) => pair.relation === 'hundredths');
+  const bothInCents = pairs.every((pair) => pair.relation === 'same');
+  const question = twoUnits
+    ? `These columns are stored twice, in ${majorWord} and in ${units}: ${labels}.`
+    : bothInCents
+      ? `These columns are stored twice, both in ${units}: ${labels}.`
+      : `These columns are stored twice: ${labels}, each with a copy in ${units}.`;
+  const ok = twoUnits
+    ? `ZLens will use the ${majorWord.replace(/s$/, '')} columns and hide the ${units} copies.`
+    : `ZLens will read the ${units} columns in ${majorWord} and hide the other copies.`;
+  return {
+    question,
+    ok,
+    both: `Both copies stay: the ${units} columns as plain numbers (as Money they would read 100 times too large).`,
+    okChoices: pairs.map((pair) => ({ name: pair.name, use: defaultDuplicateUse(pair) })),
+    bothChoices: pairs.map((pair) => ({ name: pair.name, use: 'both' as const })),
+  };
+}
 
 /** A column a duplicate answer left out. */
 export interface TableDatasetHiddenColumn { column: string; keptColumn: string; reason: string; relation?: DuplicateUnitRelation }
@@ -362,14 +422,24 @@ export function proposeTableDataset(input: {
   for (const name of keyCandidates) {
     const other = name.replace(/_(id|key|code|uuid|number|no)$/i, '');
     if (other.toLowerCase() === 'id' || other.toLowerCase() === tableStem) continue;
+    // Counting different dates ("Ordered at count") or running numbers
+    // ("Customer order count" from customer_order_number) is rarely a
+    // business number: offered, never ticked (new-user round 3, problem 8).
+    const kind = columns.find((column) => column.name === name)?.kind;
+    const dated = kind === 'date' || kind === 'timestamp';
+    const ordinal = /_(number|no)$/i.test(name);
     add({
       name: `${other.toLowerCase().replace(/[^a-z0-9_]/g, '_')}_count`,
       label: `${wordsFor(other)} count`,
       aggregation: 'count_distinct',
       from: name,
       format: 'number',
-      include: true,
-      reason: `Counts different ${wordsFor(other).toLowerCase()} values; it does not add up across groups.`,
+      include: !dated && !ordinal,
+      reason: dated
+        ? `Counts different ${wordsFor(name).toLowerCase()} dates; that is rarely a number anyone reports, so it starts off.`
+        : ordinal
+          ? `Counts different ${wordsFor(name).toLowerCase()} values, a running number; that is rarely a number anyone reports, so it starts off.`
+          : `Counts different ${wordsFor(other).toLowerCase()} values; it does not add up across groups.`,
     });
   }
   return {
@@ -395,11 +465,11 @@ export function proposeTableDataset(input: {
 export function applyTableDuplicateChoices(proposal: TableDatasetProposal, raw?: unknown): TableDatasetProposal {
   const pairs = proposal.duplicates ?? [];
   if (!pairs.length) return proposal;
-  const answers = new Map<string, 'minor' | 'plain'>();
+  const answers = new Map<string, TableDuplicateChoice['use']>();
   for (const choice of Array.isArray(raw) ? raw : []) {
     if (choice && typeof choice === 'object' && typeof (choice as { name?: unknown }).name === 'string') {
       const use = (choice as { use?: unknown }).use;
-      if (use === 'minor' || use === 'plain') answers.set((choice as { name: string }).name, use);
+      if (use === 'minor' || use === 'plain' || use === 'both') answers.set((choice as { name: string }).name, use);
     }
   }
   let fields = proposal.fields;
@@ -407,7 +477,29 @@ export function applyTableDuplicateChoices(proposal: TableDatasetProposal, raw?:
   const hidden: TableDatasetHiddenColumn[] = [...(proposal.hiddenColumns ?? [])];
   const measureName = (name: string) => name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
   for (const pair of pairs) {
-    if ((answers.get(pair.name) ?? 'minor') === 'minor') {
+    const use = answers.get(pair.name) ?? defaultDuplicateUse(pair);
+    if (use === 'both') {
+      // Both stay: the plain column as it is, the hundredths one under its own name as a plain number.
+      const money = MINOR_UNIT_MONEY[pair.minorUnits];
+      fields = fields.map((field) => (field.name === pair.convertedField
+        ? { name: pair.minorColumn, label: wordsFor(pair.minorColumn), role: 'attribute' as const, type: 'number' as const }
+        : field));
+      measures = measures.map((measure) => {
+        if (measure.from === pair.convertedField) {
+          const { currency: _currency, ...rest } = measure;
+          return { ...rest, name: measureName(pair.minorColumn), label: wordsFor(pair.minorColumn), from: pair.minorColumn, format: 'number' as const, minorUnits: pair.minorUnits, reason: `Adds up ${wordsFor(pair.minorColumn).toLowerCase()} across rows.`, unitNote: `Stored as ${pair.minorUnits}, so it is shown as a plain number: as Money it would read 100 times too large` };
+        }
+        if (measure.from === pair.plainColumn && pair.relation === 'same' && measure.format === 'currency') {
+          return { ...measure, format: 'number' as const, currency: undefined, minorUnits: pair.minorUnits, unitNote: `Stored as ${pair.minorUnits}, so it is shown as a plain number: as Money it would read 100 times too large` };
+        }
+        if (measure.from === pair.plainColumn && pair.relation === 'hundredths' && measure.format !== 'currency') {
+          return { ...measure, format: 'currency' as const, currency: money.currency };
+        }
+        return measure;
+      });
+      continue;
+    }
+    if (use === 'minor') {
       const plainMeasure = measures.find((measure) => measure.from === pair.plainColumn && measure.aggregation === 'sum');
       fields = fields
         .filter((field) => !(field.name === pair.plainColumn && !field.column))
@@ -424,6 +516,13 @@ export function applyTableDuplicateChoices(proposal: TableDatasetProposal, raw?:
     } else {
       fields = fields.filter((field) => field.name !== pair.convertedField);
       measures = measures.filter((measure) => measure.from !== pair.convertedField);
+      // The data showed the plain column is the amount in dollars: it is Money, whatever its name says.
+      if (pair.relation === 'hundredths') {
+        const money = MINOR_UNIT_MONEY[pair.minorUnits];
+        measures = measures.map((measure) => (measure.from === pair.plainColumn && measure.format !== 'currency'
+          ? { ...measure, format: 'currency' as const, currency: money.currency }
+          : measure));
+      }
       // Both columns in cents: the plain one is a number, never Money (it would read 100 times too large).
       if (pair.relation === 'same') {
         measures = measures.map((measure) => (measure.from === pair.plainColumn && measure.format === 'currency'

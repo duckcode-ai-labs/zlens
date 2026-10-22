@@ -1,14 +1,14 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppBlockRecommendation, CertifyReview } from '../../../api/client';
-import { proposeTableDataset, withDuplicateUnitRelations } from '@zlens/core/datasets/table-draft';
+import { applyTableDuplicateChoices, proposeTableDataset, withDuplicateUnitRelations } from '@zlens/core/datasets/table-draft';
 import { allDataCertifiedLabel, appCertificationRollup } from '../app-certification';
 import { AddDataBrowser } from './AddDataBrowser';
 import { CertifyReviewDialog } from './CertifyReviewDialog';
 import { CheckedReceiptNote } from './CertifiedReceiptNote';
 import { DataPanel } from './DataPanel';
 import { readerTileTrust } from '../reader-trust';
-import { DuplicateColumnQuestions } from './TableDatasetDialog';
+import { DuplicateColumnQuestions, duplicateChoicesFor, numberChoicesFor } from './TableDatasetDialog';
 import { orderLinesDataset } from './app-data.fixtures';
 import {
   CHECKED_NEEDS_CERTIFYING,
@@ -98,35 +98,32 @@ describe('Checked, not certified yet (design Q1, T1)', () => {
   });
 });
 
-describe('Duplicate columns, one question (design Q1.4)', () => {
+describe('Duplicate columns, one question per table (design Q1.4, new-user round 3 problem 8)', () => {
   const proposal = proposeTableDataset({
     table: 'orders', relation: 'orders', convertMinorUnits: true,
-    columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'order_total', type: 'DOUBLE' }, { name: 'order_total_cents', type: 'INTEGER' }],
+    columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'subtotal', type: 'DOUBLE' }, { name: 'subtotal_cents', type: 'INTEGER' }, { name: 'order_total', type: 'DOUBLE' }, { name: 'order_total_cents', type: 'INTEGER' }],
+  });
+  const checked = withDuplicateUnitRelations(proposal, { subtotal: 'hundredths', order_total: 'hundredths' });
+
+  it('asks once for every column stored twice, with OK and Show both, never a Yes/No per column', () => {
+    const html = renderToStaticMarkup(<DuplicateColumnQuestions proposal={checked} mode="ok" onMode={vi.fn()} />);
+    expect(html).toContain('These columns are stored twice, in dollars and in cents: Subtotal and Order total.');
+    expect(html).toContain('ZLens will use the dollar columns and hide the cents copies.');
+    expect(html).toContain('aria-pressed="true" class="on">OK</button>');
+    expect(html).toContain('>Show both</button>');
+    expect(html).not.toMatch(/Yes, use|No, use|type="radio"/);
+    expect(html.match(/stored twice/g)).toHaveLength(1);
+    expect(renderToStaticMarkup(<DuplicateColumnQuestions proposal={checked} mode="both" onMode={vi.fn()} />)).toContain('Both copies stay: the cents columns as plain numbers');
+    expect(renderToStaticMarkup(<DuplicateColumnQuestions proposal={{ ...proposal, duplicates: undefined }} mode="ok" onMode={vi.fn()} />)).toBe('');
   });
 
-  it('asks "Use Order total in dollars?" once, with the cents column recommended', () => {
-    const html = renderToStaticMarkup(<DuplicateColumnQuestions proposal={proposal} choices={[]} onChoice={vi.fn()} />);
-    expect(html).toContain('Order total is stored twice: Order total and Order total cents. Use Order total in dollars?');
-    expect(html).toContain('Yes, use Order total in dollars</strong> <em>Recommended</em>');
-    expect(html).toContain('Read from Order total cents ÷ 100, shown as Money. The Order total column is hidden.');
-    expect(html).toContain('No, use the Order total column as it is');
-    // Never "hold the same number" for two units, never a raw column name.
-    expect(html).not.toContain('hold the same number');
-    expect(html).not.toContain('order_total_cents in dollars');
-    expect(html.match(/type="radio"/g)).toHaveLength(2);
-    expect(html).toMatch(/<input type="radio" name="duplicate-order_total" checked=""/);
-    expect(renderToStaticMarkup(<DuplicateColumnQuestions proposal={{ ...proposal, duplicates: undefined }} choices={[]} onChoice={vi.fn()} />)).toBe('');
-  });
-
-  it('says what the check found: the same amount in two units, or the same number twice (new-user round 2, problem 7)', () => {
-    const hundredths = renderToStaticMarkup(<DuplicateColumnQuestions proposal={withDuplicateUnitRelations(proposal, { order_total: 'hundredths' })} choices={[]} onChoice={vi.fn()} />);
-    expect(hundredths).toContain('Order total is stored twice: Order total (dollars) and Order total cents. Use Order total in dollars?');
-    expect(hundredths).toContain('Order total cents is Order total × 100: the same amount in cents.');
-    expect(hundredths).toContain('It is already in dollars. Order total cents is hidden.');
-    const same = renderToStaticMarkup(<DuplicateColumnQuestions proposal={withDuplicateUnitRelations(proposal, { order_total: 'same' })} choices={[]} onChoice={vi.fn()} />);
-    expect(same).toContain('Order total is stored twice, both in cents: Order total and Order total cents. Use Order total in dollars?');
-    expect(same).toContain('Order total and Order total cents hold the same number, in cents.');
-    expect(same).toContain('It stays in cents, shown as a plain number.');
+  it('OK uses the dollar columns; Show both adds the cents copies to the numbers', () => {
+    expect(duplicateChoicesFor(checked, 'ok')).toEqual([{ name: 'subtotal', use: 'plain' }, { name: 'order_total', use: 'plain' }]);
+    expect(duplicateChoicesFor(checked, 'both').every((choice) => choice.use === 'both')).toBe(true);
+    const both = applyTableDuplicateChoices(checked, duplicateChoicesFor(checked, 'both'));
+    const choices = numberChoicesFor(both, [{ name: 'subtotal', include: false, format: 'currency', currency: 'USD' }]);
+    expect(choices.find((choice) => choice.name === 'subtotal')?.include).toBe(false);
+    expect(choices.find((choice) => choice.name === 'subtotal_cents')).toMatchObject({ include: true, format: 'number' });
   });
 });
 

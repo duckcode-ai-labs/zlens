@@ -130,6 +130,8 @@ export function AddDataBrowser({
   // Staging copies of a final table wait behind "Show staging tables" (new-user round 2, Q3).
   const [showStaging, setShowStaging] = useState(false);
   const [checkingTable, setCheckingTable] = useState<WarehouseTableSummary | null>(null);
+  // Datasets made from a table in this visit, before the table list is read again.
+  const [madeFromTables, setMadeFromTables] = useState<Record<string, NonNullable<WarehouseTableSummary['datasets']>>>({});
   // "Check and use" says who checked it and what the check found (design Q1);
   // "I vouch for this — certify" says who certified it (D5).
   const [receiptNotice, setReceiptNotice] = useState<{ name: string; kind: 'checked' | 'certified'; byline: CertificationByline } | null>(null);
@@ -245,7 +247,13 @@ export function AddDataBrowser({
   };
 
   const tableCreated = async (sourceId: string | undefined, name?: string, check?: CertificationByline) => {
+    const table = checkingTable;
     setCheckingTable(null);
+    if (table && sourceId) {
+      setMadeFromTables((current) => ({ ...current, [table.id]: [...(current[table.id] ?? []), { sourceId, name: name ?? table.name, state: 'checked' }] }));
+    }
+    // Read the tables again so each says what became of it.
+    if (!initialTables) setTables(null);
     setReceiptNotice(check ? { name: name ?? '', kind: 'checked', byline: check } : null);
     setQuery('');
     setReloadNonce((current) => current + 1);
@@ -256,6 +264,16 @@ export function AddDataBrowser({
         setHighlightId(sourceId);
         setExpandedId(sourceId);
       }
+    } finally {
+      setAddingId(null);
+    }
+  };
+
+  /** A table already made into a Dataset is added as that Dataset, never checked into a second copy. */
+  const addMadeTable = async (sourceId: string) => {
+    setAddingId(sourceId);
+    try {
+      if (await onAdd(sourceId, { allowReview: false })) setHighlightId(sourceId);
     } finally {
       setAddingId(null);
     }
@@ -338,15 +356,24 @@ export function AddDataBrowser({
       {shownTables.length ? <p className="add-data-hint"><Table2 size={13} aria-hidden="true" /> {TABLE_BECOMES_DATASET_HINT}</p> : null}
       {(kind === 'all' || kind === 'tables') && !domain && draftedTables.length ? <p className="add-data-hint" role="status" aria-label="Drafted models waiting"><Database size={13} aria-hidden="true" /> {draftedTables.length} drafted model{draftedTables.length === 1 ? '' : 's'} waiting for review. <button type="button" className="link" onClick={() => reviewDraftedModels(draftedTables[0]?.modeled?.proposalId)}>Review in Modeling</button></p> : null}
       {(kind === 'all' || kind === 'tables') && !domain && stagingSplit.hidden.length ? <label className="add-data-hint add-data-staging"><input type="checkbox" checked={showStaging} onChange={(event) => setShowStaging(event.target.checked)} /> Show staging tables <small>· {stagingSplit.hidden.length} staging cop{stagingSplit.hidden.length === 1 ? 'y' : 'ies'} of tables listed here {showStaging ? 'shown' : 'hidden'}</small></label> : null}
-      {shownTables.map((table) => <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}`} role="listitem" data-table-id={table.id} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
-        <div className="add-data-summary static">
-          <span className="add-data-mark"><Table2 size={14} /></span>
-          <div><strong>{table.name}</strong><small>{['Table', tableModelLabel(table), table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : '', table.joins?.length ? `joins: ${table.joins.join(', ')}` : ''].filter(Boolean).join(' · ')}</small>
-            {table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
+      {shownTables.map((table) => {
+        // What became of the table (new-user round 3, problem 7): already in this App, made into a Dataset, or not checked yet.
+        const state = tableAppState({ ...table, datasets: [...(table.datasets ?? []), ...(madeFromTables[table.id] ?? []).filter((made) => !(table.datasets ?? []).some((known) => known.sourceId === made.sourceId))] }, draft.sources);
+        return <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}${state.kind === 'added' ? ' added' : ''}`} role="listitem" data-table-id={table.id} data-table-state={state.kind} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
+          <div className="add-data-summary static">
+            <span className="add-data-mark"><Table2 size={14} /></span>
+            <div><strong>{table.name}</strong><small>{['Table', state.label, table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : '', table.joins?.length ? `joins: ${table.joins.join(', ')}` : ''].filter(Boolean).join(' · ')}</small>
+              {state.kind === 'new' && table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
+              {state.kind !== 'new' ? <p>{state.kind === 'added' ? 'In this App' : 'Already checked'} as <strong>{humanize(state.dataset.name)}</strong>.</p> : null}
+            </div>
           </div>
-        </div>
-        <div className="add-data-action"><button type="button" disabled={disabled} onClick={() => setCheckingTable(table)} aria-label={`Check ${table.name} and add it`}><Plus size={13} /> Check and add</button></div>
-      </article>)}
+          <div className="add-data-action">{state.kind === 'added'
+            ? <span className="add-data-added"><Check size={13} /> Added</span>
+            : state.kind === 'made'
+              ? <button type="button" className="primary" disabled={disabled || addingId === state.dataset.sourceId} onClick={() => void addMadeTable(state.dataset.sourceId)} aria-label={`Add ${table.name} to App as ${humanize(state.dataset.name)}`}>{addingId === state.dataset.sourceId ? 'Adding…' : <><Plus size={13} /> Add to App</>}</button>
+              : <button type="button" disabled={disabled} onClick={() => setCheckingTable(table)} aria-label={`Check ${table.name} and add it`}><Plus size={13} /> Check and add</button>}</div>
+        </article>;
+      })}
       {(kind === 'all' || kind === 'tables') && !domain ? <>
         {tablesError ? <p className="add-data-error" role="alert">{tablesError}</p> : null}
         {kind === 'tables' && !tables && !tablesError ? <p className="add-data-muted" role="status">Reading your database…</p> : null}
@@ -500,6 +527,27 @@ export function tableModelLabel(table: Pick<WarehouseTableSummary, 'modeled'>): 
   if (table.modeled?.state === 'modeled') return 'Modeled';
   if (table.modeled?.state === 'drafted') return 'Drafted — review to use';
   return 'Not checked yet';
+}
+
+/**
+ * What became of a database table in this project (new-user round 3,
+ * problem 7): `added` when a Dataset made from it is in this App ("Added ·
+ * Checked"), `made` when one exists but is not in this App ("Checked · Add
+ * to App"), else `new` ("Not checked yet · Check and add").
+ */
+export type TableAppState =
+  | { kind: 'added' | 'made'; label: string; dataset: NonNullable<WarehouseTableSummary['datasets']>[number] }
+  | { kind: 'new'; label: string };
+
+export function tableAppState(table: Pick<WarehouseTableSummary, 'modeled' | 'datasets'>, sources: ReadonlyArray<{ id: string }>): TableAppState {
+  const made = table.datasets ?? [];
+  const word = (state: NonNullable<WarehouseTableSummary['datasets']>[number]['state']) => (state === 'certified' ? 'Certified' : state === 'checked' ? 'Checked' : 'Saved as a draft');
+  const added = made.find((dataset) => sources.some((source) => source.id === dataset.sourceId));
+  if (added) return { kind: 'added', label: `Added · ${word(added.state)}`, dataset: added };
+  const best = [...made].sort((left, right) => rank(left.state) - rank(right.state))[0];
+  if (best) return { kind: 'made', label: word(best.state), dataset: best };
+  return { kind: 'new', label: tableModelLabel(table) };
+  function rank(state: string) { return state === 'certified' ? 0 : state === 'checked' ? 1 : 2; }
 }
 
 function tableModelRank(table: Pick<WarehouseTableSummary, 'modeled'>): number {

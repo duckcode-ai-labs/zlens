@@ -59,6 +59,18 @@ describe('click-a-field tile building', () => {
     expect(autoTileView(back)).toBe('kpi');
   });
 
+  it('a bar of names starts as an explicit Top 10, and keeps a Top N the author chose (new-user round 3)', () => {
+    const customerName = { kind: 'physical', name: 'customer__customer_name', qualifiedId: 'ds.customer_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'customer', column: 'customer_name' } } as DatasetField;
+    const top = toggleFieldInQuery(toggleFieldInQuery(EMPTY_TILE_QUERY, revenue), customerName);
+    expect(top).toMatchObject({ orderBy: [{ alias: 'revenue', direction: 'desc' }], limit: 10 });
+    // Name first, measure second: the same Top 10.
+    expect(toggleFieldInQuery(toggleFieldInQuery(EMPTY_TILE_QUERY, customerName), revenue).limit).toBe(10);
+    // The author's Top 25 survives adding a second measure.
+    expect(toggleFieldInQuery({ ...top, limit: 25 }, orders).limit).toBe(25);
+    // A short list of categories (Region) shows every bar.
+    expect(toggleFieldInQuery(toggleFieldInQuery(EMPTY_TILE_QUERY, revenue), region).limit).toBeUndefined();
+  });
+
   it('drops stale sort, limit, and row-detail settings when fields change', () => {
     const next = toggleFieldInQuery({ ...EMPTY_TILE_QUERY, measures: [{ measure: 'revenue' }], orderBy: [{ alias: 'gone', direction: 'asc' }], limit: 5, detail: true, detailColumns: ['region'] }, orderDate);
     expect(next.orderBy).toBeUndefined();

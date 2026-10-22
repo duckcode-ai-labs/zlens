@@ -194,6 +194,23 @@ describe('Show Me (RFC 0009 step 2)', () => {
     expect(showMeFirstChoice(fromQuery).chart).toBe('bar');
   });
 
+  it('reads a summed column as adding up when the measure shares its name (new-user round 3)', () => {
+    // Customers from a table: `lifetime_spend` is the number column and the sum of it.
+    const descriptor = {
+      fields: [
+        { kind: 'physical', name: 'customer_name', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'lifetime_spend', type: 'number', role: 'attribute', status: 'approved' },
+        { kind: 'measure', name: 'lifetime_spend', aggregation: 'sum', from: 'lifetime_spend', additivity: { entities: 'additive', time: 'additive' }, format: { kind: 'currency', currency: 'USD' }, status: 'approved' },
+      ],
+    } as unknown as DatasetDescriptor;
+    const facts = showMeFactsFromDescriptor(descriptor, { cardinality: () => 4 });
+    const fromQuery = showMeInputFromQuery({ dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'lifetime_spend' }] }, facts);
+    expect(fromQuery.measures[0]).toMatchObject({ additive: true, unit: 'currency:USD' });
+    const pie = showMe(fromQuery).find((entry) => entry.chart === 'pie')!;
+    expect(pie.available).toBe(true);
+    expect(pie.reason).not.toContain('does not add up');
+  });
+
   it('rearranges the shelves for a pick, keeping labels, tooltips and names', () => {
     const current: DashboardVizEncoding = {
       version: 1,

@@ -9,8 +9,8 @@ import { repoRoot, run, startNotebookServer, type NotebookServer } from '../supp
  * Sort and Top N where people look (design D3), plain source names (B7) and
  * a field click after "Add to page" (B14), against the built `zlens notebook`
  * CLI on its own copy of the jaffle-supply-chain fixture with 120 customers:
- * build a bar by customer → it is sorted by spend, highest first, with
- * "Showing top 25 of 120 · Show all" → Top 10 from the measure pill's menu →
+ * build a bar by customer → it starts as Top 10 by spend on the pill → All
+ * shows "Showing top 25 of 120 · Show all" → Top 10 from the measure pill's menu →
  * 10 bars → Add to page → the next field click starts a new tile → the
  * filter field list says "from Customers", never an internal ID.
  *
@@ -107,23 +107,28 @@ test('a bar by customer is sorted by spend and shows the top 25; Top 10 comes fr
   await fields.getByRole('button', { name: /Customer Name/ }).first().click();
   const draft = page.locator('.studio-draft-slot, .draft-tile-card').first();
   const note = page.locator('.bar-cap-note');
-  await expect(note).toContainText(`Showing top 25 of ${CUSTOMERS}`, { timeout: 60_000 });
-  await expect(note.getByRole('button', { name: 'Show all' })).toBeVisible();
-
-  // Sorted by spend, highest first: the default for a new bar chart.
+  // A bar of names starts as an explicit Top 10 by spend, highest first, on
+  // the pill (new-user round 3, problem 9), never a silent cut.
+  await expect(draft.getByText(/Live · 10 rows/)).toBeVisible({ timeout: 60_000 });
+  await expect(note).toHaveCount(0);
   const pillMenu = page.getByRole('button', { name: 'Options for Lifetime Spend on Columns' });
-  // The pill says how the tile is sorted, one click from changing it.
-  await expect(page.getByRole('button', { name: 'Sorted ↓ by Lifetime Spend: change sort and top' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Top 10 by Lifetime Spend: change sort and top' })).toHaveText('Top 10 ▾');
   await pillMenu.click();
   // Sort & top comes first in the pill's menu.
   await expect(page.locator('.shelf-menu .shelf-menu-group').first()).toHaveAttribute('aria-label', 'Sort');
   await expect(page.locator('.shelf-menu .shelf-menu-label').first()).toHaveText('Sort & top');
   await expect(page.getByRole('menuitemradio', { name: 'Sort descending by Lifetime Spend' })).toHaveAttribute('aria-checked', 'true');
-  await expect(page.getByRole('menuitemradio', { name: 'Show top 10 by Lifetime Spend' })).toHaveAttribute('aria-checked', 'false');
+  await expect(page.getByRole('menuitemradio', { name: 'Show top 10 by Lifetime Spend' })).toHaveAttribute('aria-checked', 'true');
   if (shotsDir) {
     mkdirSync(shotsDir, { recursive: true });
     await page.screenshot({ path: join(shotsDir, '14-topn-pill.png') });
   }
+
+  // All: every customer, sorted by spend, drawn as the top 25 with "Show all".
+  await page.getByRole('menuitemradio', { name: 'All', exact: true }).click();
+  await expect(note).toContainText(`Showing top 25 of ${CUSTOMERS}`, { timeout: 60_000 });
+  // The pill says how the tile is sorted, one click from changing it.
+  await expect(page.getByRole('button', { name: 'Sorted ↓ by Lifetime Spend: change sort and top' })).toBeVisible();
 
   // "Show all" draws every customer; "Top 25" brings the cap back.
   await page.keyboard.press('Escape');

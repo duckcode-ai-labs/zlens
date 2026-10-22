@@ -6,6 +6,7 @@ import { formatBusinessLabel } from './app-text';
 import { describeDashboardDateRange } from '@zlens/core/apps/filter-dates';
 import { studioFilterValue } from './app-studio-filter-values';
 import { plainSourceText } from './source-names';
+import { DateRangePresetSelect, filterTimezone } from './date-range-presets';
 import { filterValueCapHint, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
 
 /**
@@ -344,6 +345,9 @@ function DashboardFilterInput({
     return (
       <label className="dql-app-filter-select dql-app-filter-range" title={filter.bindsTo ? `${label} -> ${filter.bindsTo}` : label} aria-label={label}>
         <span className="dql-app-filter-icon">{filterIconForDashboardFilter(filter)}</span>
+        {/* The reader sees which date this is (new-user round 3, problem 9). */}
+        <span className="dql-app-filter-label">{label}</span>
+        <DateRangePresetSelect label={label} value={value} timezone={filterTimezone(filter)} className="dql-app-filter-presets" onChange={(next) => (next ? emit(next.start, next.end) : emit('', ''))} />
         <input type="date" value={start} aria-label={`${label} from`} onChange={(event) => emit(event.target.value, end)} />
         <span className="dql-app-filter-range-sep">–</span>
         <input type="date" value={end} aria-label={`${label} to`} onChange={(event) => emit(start, event.target.value)} />

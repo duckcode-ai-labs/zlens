@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
-  Activity, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, Database, FileText, Filter,
+  Activity, AlertTriangle, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, Database, FileText, Filter,
   Gauge, Heading, Info, LayoutDashboard, LayoutGrid, LineChart, Monitor, MoreHorizontal, PanelRight,
   Play, Plus, Redo2, ScatterChart, Search, Settings2, ShieldCheck, Smartphone, Sparkles, Table2,
   Trash2, Type, Undo2, Upload, X,
@@ -129,6 +129,7 @@ import { useMarkInteractions } from './useMarkInteractions';
 import { numberReceiptInfo } from './NumberReceipt';
 import type { MarkPointer } from '../output/echarts/EChartsChart';
 import { ShowMePanel, currentShowMeChart, tileShowMe } from './builder/ShowMe';
+import { DateRangePresetSelect, filterTimezone } from './date-range-presets';
 import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, studioFilterMappingOptions, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
 import { studioDateControlHint, studioFilterRunPlan, studioFilterValue } from './app-studio-filter-values';
 import { DatasetInteractionInspector, DatasetTileQueryInspector } from './builder/InteractionLayer';
@@ -3754,6 +3755,8 @@ export function AppStudioV2({
                       {studioTileFilterNotices({ page: activePage, tile, run: previewRun?.tiles.find((item) => item.tileId === tile.i), values: previewVariables, mode: editing ? 'edit' : 'preview' })
                         .filter((notice) => !offered.has(notice.filterId))
                         .map((notice) => <div key={notice.key} className="tile-filter-notice" role="note" title={`${notice.label}. ${notice.detail}`}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
+                      {/* A name grouped without a key may merge namesakes (new-user round 3, problem 4). */}
+                      {(previewRun?.tiles.find((item) => item.tileId === tile.i)?.dataset?.nameWarnings ?? []).map((warning) => <div key={`names:${warning.field}`} className="tile-filter-notice tile-name-warning" role="note" data-testid="tile-name-warning" title={warning.message}><AlertTriangle size={11} /><span><strong>Names may repeat</strong> · {warning.message}</span></div>)}
                     </>;
                   })() : null}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
@@ -4813,7 +4816,7 @@ function StudioFilterControl({
     // No min/max: a reader may pick any day, and the run's own dates are only a hint.
     // A one-sided range says so on the control itself ("From 1 Mar 2025").
     const oneSided = Boolean(range.start) !== Boolean(range.end);
-    return <label className={`studio-filter range ${hint.empty ? 'empty' : ''} ${oneSided ? 'one-sided' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" aria-label={`${label} start`} value={range.start ?? ''} onChange={(event) => onChange({ ...range, start: event.target.value })} /><i>–</i><input type="date" aria-label={`${label} end`} value={range.end ?? ''} onChange={(event) => onChange({ ...range, end: event.target.value })} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
+    return <label className={`studio-filter range ${hint.empty ? 'empty' : ''} ${oneSided ? 'one-sided' : ''}`} aria-busy={applying}><span>{label}</span><DateRangePresetSelect label={label} value={value} timezone={filterTimezone(filter)} onChange={(next) => onChange(next ?? {})} /><input type="date" aria-label={`${label} start`} value={range.start ?? ''} onChange={(event) => onChange({ ...range, start: event.target.value })} /><i>–</i><input type="date" aria-label={`${label} end`} value={range.end ?? ''} onChange={(event) => onChange({ ...range, end: event.target.value })} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
   }
   if (filter.type === 'boolean') {
     return <label className="studio-filter boolean" aria-busy={applying}><input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} /><span>{label}</span></label>;

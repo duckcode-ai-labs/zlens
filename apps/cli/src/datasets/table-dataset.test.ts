@@ -265,14 +265,15 @@ describe('start from a table', () => {
       const dupCreated = await call(base, '/api/app-datasets/tables/create', { tableId: dupOrders.id, name: 'Dup orders', domain: 'commerce' });
       expect(dupCreated.status, dupCreated.text).toBe(201);
       const dupSource = readFileSync(join(projectRoot, dupCreated.body.path), 'utf-8');
-      expect(dupSource).toContain('"order_total_cents" / 100.0 AS "order_total"');
-      expect(dupSource).toContain('/* Hidden duplicate columns: order_total (order_total_cents is used) */');
-      expect(dupSource).toContain('order_total is hidden (order_total_cents holds the same amount)');
+      // No answer means OK (new-user round 3, problem 8): the rows showed order_total is the dollars, so it is used as it is.
+      expect(dupSource).not.toContain('"order_total_cents" / 100.0');
+      expect(dupSource).toContain('/* Hidden duplicate columns: order_total_cents (order_total is used) */');
+      expect(dupSource).toContain('order_total_cents is hidden (order_total holds the same amount)');
       const dupTotal = await call(base, '/api/app-datasets/run', { sourceId: dupCreated.body.sourceId, query: { dimensions: [], measures: [{ measure: 'order_total' }] } });
       expect(dupTotal.status, dupTotal.text).toBe(200);
       expect(Number(dupTotal.body.result.rows[0].order_total)).toBeCloseTo(26.99, 6);
       const dupReview = await call(base, `/api/app-datasets/certify-review?sourceId=${encodeURIComponent(dupCreated.body.sourceId)}`);
-      expect(dupReview.body.review.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total', keptColumn: 'order_total_cents' })]);
+      expect(dupReview.body.review.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total_cents', keptColumn: 'order_total' })]);
 
       // B13: the keyword planner (no AI) proposes tiles from a table checked a moment ago.
       const orderLines = tables.body.tables.find((table: { name: string }) => table.name === 'order_lines');

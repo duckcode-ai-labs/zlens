@@ -15,6 +15,7 @@ import {
   sortTouched,
   topNFor,
   withDefaultBarSort,
+  measureSortChip,
   withSort,
   withTopN,
 } from './sort-top-n';
@@ -122,6 +123,15 @@ describe('bar charts sort by their measure and show the top 25 above 50 categori
     expect(withDefaultBarSort(byMonth, 'bar')).toBe(byMonth);
     const sorted = withSort(byCustomer, 'customer_name', 'asc');
     expect(withDefaultBarSort(sorted, 'bar')).toBe(sorted);
+  });
+
+  it('starts a bar of names as an explicit Top 10, which the pill shows (new-user round 3)', () => {
+    const top = withDefaultBarSort(byCustomer, 'bar');
+    expect(top.limit).toBe(10);
+    expect(measureSortChip(top, { measure: 'lifetime_spend' })).toEqual({ label: 'Top 10' });
+    // A short list of categories shows every bar.
+    const byType: TileQuery = { dimensions: [{ field: 'customer_type' }], measures: [{ measure: 'lifetime_spend' }] };
+    expect(withDefaultBarSort(byType, 'bar').limit).toBeUndefined();
   });
 
   it('applies to a new tile only until the author chooses a sort or Top N', () => {

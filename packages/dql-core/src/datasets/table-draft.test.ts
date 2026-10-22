@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
+import { applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, duplicateColumnsQuestion, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -230,7 +230,9 @@ describe('the checks a certification receipt lists (D5)', () => {
       recommended: { title: 'Yes, use Subtotal in dollars' },
       alternative: { title: 'No, use the Subtotal column as it is', detail: 'It is already in dollars. Subtotal cents is hidden.' },
     });
-    expect(applyTableDuplicateChoices(hundredths).hiddenColumns).toEqual([{ column: 'subtotal', keptColumn: 'subtotal_cents', relation: 'hundredths', reason: 'Subtotal uses subtotal_cents, shown in dollars; subtotal is the same amount in dollars, so it is hidden.' }]);
+    // No answer means OK (new-user round 3): the data showed subtotal is the dollars, so it is used and the cents copy hidden.
+    expect(applyTableDuplicateChoices(hundredths).hiddenColumns).toEqual([{ column: 'subtotal_cents', keptColumn: 'subtotal', relation: 'hundredths', reason: 'Subtotal uses subtotal as it is; subtotal_cents is the same amount in cents, so it is hidden.' }]);
+    expect(applyTableDuplicateChoices(hundredths, [{ name: 'subtotal', use: 'minor' }]).hiddenColumns).toEqual([{ column: 'subtotal', keptColumn: 'subtotal_cents', relation: 'hundredths', reason: 'Subtotal uses subtotal_cents, shown in dollars; subtotal is the same amount in dollars, so it is hidden.' }]);
 
     // Both in cents: kept as is, the plain column is a number, never Money 100 times too large.
     const same = withDuplicateUnitRelations(raw, { subtotal: 'same' });
@@ -240,5 +242,56 @@ describe('the checks a certification receipt lists (D5)', () => {
     expect(keptPlain.hiddenColumns![0]!.reason).toBe('Subtotal uses subtotal as it is; subtotal_cents holds the same number, so it is hidden.');
     // Nothing to say when nothing was checked.
     expect(withDuplicateUnitRelations(raw, {}).duplicates![0]!.relation).toBeUndefined();
+  });
+
+  it('asks once per table, OK uses the dollar columns, Show both keeps the cents copies as plain numbers (new-user round 3, problem 8)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: 'orders',
+      columns: [
+        { name: 'order_id', type: 'VARCHAR' }, { name: 'ordered_at', type: 'TIMESTAMP' },
+        { name: 'subtotal', type: 'DOUBLE' }, { name: 'subtotal_cents', type: 'INTEGER' },
+        { name: 'tax_paid', type: 'DOUBLE' }, { name: 'tax_paid_cents', type: 'INTEGER' },
+        { name: 'order_total', type: 'DOUBLE' }, { name: 'order_total_cents', type: 'INTEGER' },
+      ],
+      convertMinorUnits: true,
+    });
+    const checked = withDuplicateUnitRelations(raw, { subtotal: 'hundredths', tax_paid: 'hundredths', order_total: 'hundredths' });
+    const asked = duplicateColumnsQuestion(checked.duplicates!)!;
+    expect(asked.question).toBe('These columns are stored twice, in dollars and in cents: Subtotal, Tax paid and Order total.');
+    expect(asked.ok).toBe('ZLens will use the dollar columns and hide the cents copies.');
+    expect(asked.okChoices).toEqual([{ name: 'subtotal', use: 'plain' }, { name: 'tax_paid', use: 'plain' }, { name: 'order_total', use: 'plain' }]);
+
+    const ok = applyTableDuplicateChoices(checked, asked.okChoices);
+    expect(ok.fields.filter((field) => field.type === 'number').map((field) => [field.name, field.column ?? null])).toEqual([['subtotal', null], ['tax_paid', null], ['order_total', null]]);
+    expect(ok.measures.filter((measure) => measure.aggregation === 'sum').map((measure) => [measure.name, measure.format])).toEqual([['subtotal', 'currency'], ['tax_paid', 'currency'], ['order_total', 'currency']]);
+    expect(ok.hiddenColumns?.map((entry) => entry.column)).toEqual(['subtotal_cents', 'tax_paid_cents', 'order_total_cents']);
+
+    const both = applyTableDuplicateChoices(checked, asked.bothChoices);
+    expect(both.fields.filter((field) => field.type === 'number').map((field) => [field.name, field.column ?? null, field.divideBy ?? null])).toEqual([
+      ['subtotal', null, null], ['subtotal_cents', null, null], ['tax_paid', null, null], ['tax_paid_cents', null, null], ['order_total', null, null], ['order_total_cents', null, null],
+    ]);
+    expect(both.measures.find((measure) => measure.name === 'subtotal_cents')).toMatchObject({ from: 'subtotal_cents', format: 'number', minorUnits: 'cents' });
+    expect(both.measures.find((measure) => measure.name === 'subtotal')).toMatchObject({ format: 'currency' });
+    expect(both.hiddenColumns ?? []).toEqual([]);
+
+    // Not checked on the rows: OK reads the cents in dollars, and says so.
+    const unchecked = duplicateColumnsQuestion(raw.duplicates!)!;
+    expect(unchecked.question).toBe('These columns are stored twice: Subtotal, Tax paid and Order total, each with a copy in cents.');
+    expect(unchecked.ok).toBe('ZLens will read the cents columns in dollars and hide the other copies.');
+    expect(unchecked.okChoices.every((choice) => choice.use === 'minor')).toBe(true);
+    expect(duplicateColumnsQuestion([])).toBeUndefined();
+  });
+
+  it('never ticks counts of dates or running numbers by default (new-user round 3, problem 8)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: 'orders',
+      columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'customer_id', type: 'VARCHAR' }, { name: 'customer_order_number', type: 'INTEGER' }, { name: 'ordered_at', type: 'DATE' }, { name: 'order_total', type: 'DOUBLE' }],
+    });
+    const profiled = applyTableProfile(raw, { rows: 4, columns: { order_id: { distinct: 4, nonNull: 4 }, customer_id: { distinct: 2, nonNull: 4 }, customer_order_number: { distinct: 3, nonNull: 4 }, ordered_at: { distinct: 3, nonNull: 4 } } }, 'orders');
+    const ticked = Object.fromEntries(profiled.measures.map((measure) => [measure.label, measure.include]));
+    expect(ticked).toMatchObject({ 'Order count': true, 'Customer count': true, 'Order total': true, 'Customer order count': false, 'Ordered at count': false });
+    expect(profiled.measures.find((measure) => measure.label === 'Ordered at count')?.reason).toContain('starts off');
   });
 });
