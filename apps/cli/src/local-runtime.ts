@@ -100,6 +100,7 @@ import {
   normalizeDqlArtifactReference,
   applyAppBuildDraftOperations,
   appBuildPreviewIntentFingerprint,
+  APP_SOURCE_POLICY,
   serializeMetricDefinitionToYaml,
   resolveSemanticLayerAsync,
   resolveRepoSource,
@@ -964,6 +965,14 @@ export interface ProjectConfig {
    */
   apps?: {
     datasets?: boolean;
+    /**
+     * Require every App tile to be certified before an App is published
+     * (T3). Off by default in the open-source edition: publishing is never
+     * blocked by trust, and readers see "Not certified yet" on tiles nobody
+     * certified. Read fresh at each publish (`readAppsPublishSettings`). An
+     * Enterprise host turns it on through its admin policy.
+     */
+    requireCertifiedToPublish?: boolean;
     /**
      * Default-off local delivery cache for complete Dataset results. It is
      * deliberately separate from semantic preparation and App persistence.
@@ -6484,7 +6493,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!page || !tile || !tile.sourceId || !tile.query) {
       throw new Error('APP_AUTOPILOT_DATASET_TILE_REQUIRED: select one saved Dataset tile before asking App Autopilot to make a change.');
     }
-    const resolved = resolveAppSourceCatalogRecords(projectRoot, [tile.sourceId], draft.sourcePolicy);
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [tile.sourceId], APP_SOURCE_POLICY);
     const source = resolved.items.find((candidate) => candidate.sourceId === tile.sourceId);
     const dataset = source?.capabilities.dataset;
     if (!source || !dataset || resolved.missingSourceIds.length > 0) {
@@ -6508,7 +6517,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         revision: draft.revision,
         title: draft.name,
         goal: draft.frame.goal,
-        sourcePolicy: draft.sourcePolicy,
         openReviewTasks: draft.reviewTasks.filter((task) => task.status === 'open').map((task) => task.message).slice(0, 8),
       },
       page: {
@@ -6678,7 +6686,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       try {
         await ensureMetadataCatalogFresh(projectRoot, { manifest: currentSnapshot.manifest, semanticLayer });
-        const currentSources = resolveAppSourceCatalogRecords(projectRoot, [heldSource.sourceId], currentDraft.sourcePolicy);
+        const currentSources = resolveAppSourceCatalogRecords(projectRoot, [heldSource.sourceId], APP_SOURCE_POLICY);
         const currentSource = currentSources.items[0];
         const descriptor = currentSource?.capabilities.dataset;
         if (!currentSource || !descriptor || currentSources.missingSourceIds.length > 0
@@ -13745,7 +13753,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (currentPersonaFingerprint !== execution.personaPolicyFingerprint) {
       return refuse('DATASET_TILE_SAVE_POLICY_STALE', 'The active App persona changed after this Dataset result ran. Run the current tile again before saving it.');
     }
-    const storedAuthorityErrors = datasetDraftStoredAuthorityErrors(dashboard, draft.sources, draft.sourcePolicy);
+    const storedAuthorityErrors = datasetDraftStoredAuthorityErrors(dashboard, draft.sources, APP_SOURCE_POLICY);
     if (storedAuthorityErrors.has(execution.sourceId)) {
       return refuse('DATASET_TILE_SAVE_SOURCE_REPAIR_REQUIRED', storedAuthorityErrors.get(execution.sourceId)!);
     }
@@ -13766,7 +13774,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
     try {
       await ensureMetadataCatalogFresh(projectRoot, { manifest: currentSnapshot.manifest, semanticLayer });
-      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], draft.sourcePolicy);
+      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], APP_SOURCE_POLICY);
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0
@@ -13898,9 +13906,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!run.intentFingerprint || run.intentFingerprint !== currentIntent) {
       return refuse('DATASET_TILE_REPLACE_INTENT_STALE', 'The App page content changed after this result ran. Run the current tile again before replacing it.');
     }
-    if (draft.sourcePolicy !== 'include_review_required' && input.enableReviewRequired !== true) {
-      return refuse('DATASET_TILE_REPLACE_REVIEW_POLICY_REQUIRED', 'Replacing this tile uses a review-required saved query. Choose the explicit review-required replacement action to keep that source policy visible.');
-    }
 
     let blockSource: string;
     let blockSourceRevision: string;
@@ -13937,7 +13942,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (personaFingerprint !== execution.personaPolicyFingerprint) {
       return refuse('DATASET_TILE_REPLACE_POLICY_STALE', 'The active App persona changed after this Dataset result ran. Run the current tile again before replacing it.');
     }
-    if (datasetDraftStoredAuthorityErrors(dashboard, draft.sources, draft.sourcePolicy).has(execution.sourceId)) {
+    if (datasetDraftStoredAuthorityErrors(dashboard, draft.sources, APP_SOURCE_POLICY).has(execution.sourceId)) {
       return refuse('DATASET_TILE_REPLACE_SOURCE_REPAIR_REQUIRED', 'The selected Dataset source needs repair before this tile can be replaced.');
     }
     const binding = dashboard.datasets?.find((candidate) => candidate.sourceId === execution.sourceId && candidate.sourceRevision === execution.sourceRevision);
@@ -13950,7 +13955,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
     try {
       await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
-      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], draft.sourcePolicy);
+      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], APP_SOURCE_POLICY);
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0 || source.sourceRevision !== execution.sourceRevision
@@ -14086,9 +14091,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         layout: { ...dashboard.layout, items: dashboard.layout.items.map((item) => item.i === tile.i ? replacementTile : item) },
       };
       const operations: AppBuildDraftOperation[] = [];
-      if (draft.sourcePolicy !== 'include_review_required') {
-        operations.push({ type: 'set_source_policy', sourcePolicy: 'include_review_required' });
-      }
       operations.push({ type: 'upsert_source', source: reviewSource });
       operations.push({ type: 'upsert_page', page: replacementPage });
       operations.push({
@@ -14174,17 +14176,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     } catch (error) {
       return refuse('SEMANTIC_TILE_CONVERSION_SOURCE_STALE', `ZLens could not refresh the governed source catalog: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], draft.sourcePolicy);
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], APP_SOURCE_POLICY);
     const source = resolved.items[0];
     const descriptor = source?.capabilities.dataset;
     if (!source || !descriptor || resolved.missingSourceIds.length > 0 || source.kind !== 'semantic') {
       return refuse('SEMANTIC_TILE_CONVERSION_SOURCE_STALE', 'The legacy semantic tile no longer resolves to one current governed semantic Dataset source. Refresh or keep the original tile.');
     }
     if (!source.eligibility.localPreview) {
-      return refuse('APP_BUILD_REVIEW_POLICY_REQUIRED', 'The current governed semantic source is not eligible for this local preview under the App source policy.');
-    }
-    if (draft.sourcePolicy === 'governed_only' && (source.lifecycle !== 'certified' || source.trust !== 'certified')) {
-      return refuse('APP_BUILD_REVIEW_POLICY_REQUIRED', 'This conversion keeps the source review-required. Enable review-required sources explicitly or select a certified source.');
+      return refuse('APP_BUILD_DATASET_RETIRED', 'The current semantic source is retired. Keep the original tile or choose current data.');
     }
     const semanticModelName = tile.semantic.semanticModelRefs.length === 1
       ? tile.semantic.semanticModelRefs[0]!.trim()
@@ -14267,15 +14266,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const latestTile = latestDashboard?.layout.items.find((item) => item.i === input.tileId);
       if (!latestDraft || latestDraft.revision !== draft.revision || latestDraft.proposalHash !== draft.proposalHash
         || !latestTile?.semantic || fingerprintDashboardRuntimeState(latestTile.semantic) !== fingerprintDashboardRuntimeState(legacySemantic)) return undefined;
-      const latestResolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], latestDraft.sourcePolicy);
+      const latestResolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], APP_SOURCE_POLICY);
       const latestSource = latestResolved.items[0];
       const latestDescriptor = latestSource?.capabilities.dataset;
       if (!latestSource || !latestDescriptor || latestResolved.missingSourceIds.length > 0
         || latestSource.kind !== 'semantic' || latestSource.sourceRevision !== source.sourceRevision
         || latestSource.snapshotId !== source.snapshotId
         || latestDescriptor.contractRef.fingerprint !== descriptor.contractRef.fingerprint
-        || !latestSource.eligibility.localPreview
-        || (latestDraft.sourcePolicy === 'governed_only' && (latestSource.lifecycle !== 'certified' || latestSource.trust !== 'certified'))) return undefined;
+        || !latestSource.eligibility.localPreview) return undefined;
       const latestPersona = activePersonaPolicyFingerprint();
       return {
         datasetId: source.sourceId,
@@ -21538,9 +21536,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // then exact source ids are resolved once for all four workers.
             // A catalog discovery state is never treated as target authority.
             await ensureMetadataCatalogFresh(projectRoot, { manifest, semanticLayer });
-            const sourcePolicy: AppBuildSourcePolicy = loadedDraftDashboard
-              ? loaded.draftSourcePolicy
-              : 'governed_only';
+            // Draft or published, an App runs certified and not-certified
+            // data alike (T3); each tile's trust is labelled from the run.
+            const sourcePolicy: AppBuildSourcePolicy = APP_SOURCE_POLICY;
             let resolvedSources = resolveAppSourceCatalogRecords(
               projectRoot,
               datasetSourceIds,
@@ -22611,7 +22609,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   // A join this run did not read (no filter value picked) says so.
                   sentence: tileJoins.some((used) => used.id === join.id)
                     ? datasetJoinReceiptSentence(join, trustJoins)
-                    : `A page filter can join it to ${join.table} on ${join.keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(' and ')}${join.trust === 'certified' ? '' : '; the join is not certified yet, so it needs review'}`,
+                    : `A page filter can join it to ${join.table} on ${join.keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(' and ')}${join.trust === 'certified' ? '' : '; the join is not certified yet'}`,
                 }));
                 const executionSourceSql = aggregateScope?.preparedSourceSql ?? sourceSql;
                 const executionSourceSqlParams = aggregateScope?.sourceSqlParams ?? blockPlan?.sqlParams;
@@ -24644,7 +24642,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // current persisted draft, not from a browser value or from a
             // successful SQL result. Publication follows the stricter branch
             // below and never treats this local policy as a trust upgrade.
-            let currentDraftSourcePolicy: AppBuildSourcePolicy | undefined;
             if (purpose === 'local_preview') {
               const storage = new LocalAppStorage(defaultLocalAppsDbPath(projectRoot), { owner: currentRecordOwner() });
               try {
@@ -24655,7 +24652,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 if (appBuildPreviewIntentFingerprint(currentDraft, dashboardId) !== intentFingerprint) {
                   return { ok: false, error: 'The App preview receipt was produced by different draft content. Run the current draft again.' };
                 }
-                currentDraftSourcePolicy = currentDraft.sourcePolicy;
               } finally {
                 storage.close();
               }
@@ -24702,42 +24698,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     || descriptor.contractRef.fingerprint !== record.contractFingerprint) {
                     return { ok: false, error: `Dataset tile ${record.tileId} changed source, revision, or field contract after its preview. Refresh the Dataset and run the draft again.` };
                   }
-                  if (purpose === 'project_publish') {
-                    // A settled result is never a trust upgrade. Publishing
-                    // must re-check current catalog lifecycle and explicit
-                    // project-publish eligibility even when id, revision, and
-                    // contract happen to remain unchanged after a review-state
-                    // downgrade.
-                    if (source.lifecycle !== 'certified'
-                      || source.trust !== 'certified'
-                      || !source.eligibility.projectPublish) {
-                      return {
-                        ok: false,
-                        error: `Dataset tile ${record.tileId} is currently ${source.lifecycle} and is not eligible for Project publication. Refresh the governed source and run the draft again after certification.`,
-                      };
-                    }
-                  } else {
-                    // Local review preview is allowed only when the *current
-                    // persisted* draft explicitly opted into review-required
-                    // sources and the canonical catalog says that exact
-                    // source remains locally executable. It never changes
-                    // the receipt's truthful review lifecycle or grants
-                    // publication eligibility.
-                    if (!source.eligibility.localPreview) {
-                      return {
-                        ok: false,
-                        error: `Dataset tile ${record.tileId} is currently ${source.lifecycle} and is not eligible for this local preview policy. Enable review-required sources or select a certified Dataset.`,
-                      };
-                    }
-                    // Checked · Needs certifying (design Q1) previews under any data rule.
-                    if ((source.lifecycle !== 'certified' || source.trust !== 'certified')
-                      && currentDraftSourcePolicy !== 'include_review_required'
-                      && !source.check) {
-                      return {
-                        ok: false,
-                        error: `Dataset tile ${record.tileId} is currently ${source.lifecycle}. Enable review-required sources explicitly before saving its local preview evidence.`,
-                      };
-                    }
+                  // A settled result is never a trust upgrade: the receipt keeps
+                  // the source's own lifecycle, and readers see "Not certified
+                  // yet" on tiles nobody certified. There is no per-App data
+                  // rule (T3); whether the project requires certified data to
+                  // publish is checked once, per tile, by the publish check.
+                  // A retired source is never executable.
+                  if (!source.eligibility.localPreview) {
+                    return {
+                      ok: false,
+                      error: `Dataset tile ${record.tileId} uses ${source.title}, which is ${source.lifecycle}. Replace it with current data and run the draft again.`,
+                    };
                   }
                   // Connection targets are always re-derived from the current
                   // server configuration. Do not reconnect to the historical
@@ -32560,7 +32531,8 @@ function loadAppBuildDraftDashboard(
       // explicit, previously approved capability that the later live-catalog
       // resolution may validate. A restore placeholder remains repair-only.
       draftSources: draft.sources,
-      draftSourcePolicy: draft.sourcePolicy,
+      // The per-App data rule is gone (T3): every draft previews alike.
+      draftSourcePolicy: APP_SOURCE_POLICY,
     };
   } finally {
     storage.close();
@@ -32573,14 +32545,13 @@ function loadAppBuildDraftDashboard(
  * capability; the persisted source registry establishes that the author chose
  * and approved this exact source/revision/contract for this editable draft.
  *
- * This deliberately permits a real review-required source when the local
- * draft opted into `include_review_required`. Publication is stricter and is
- * separately verified against current catalog lifecycle and eligibility.
+ * Data nobody certified runs like any other (T3); its tiles read "Not
+ * certified yet". `_sourcePolicy` is kept for call compatibility and ignored.
  */
 function datasetDraftStoredAuthorityErrors(
   dashboard: DashboardDocument,
   sources: AppBuildDraftSource[],
-  sourcePolicy: AppBuildSourcePolicy,
+  _sourcePolicy: AppBuildSourcePolicy,
 ): Map<string, string> {
   const errors = new Map<string, string>();
   const sourceById = new Map(sources.map((source) => [source.id, source]));
@@ -32610,15 +32581,6 @@ function datasetDraftStoredAuthorityErrors(
         `APP_BUILD_DATASET_SOURCE_REPAIR_REQUIRED: ${item.title || item.i} does not have a matching stored Dataset revision and field contract. Refresh or reselect this Dataset before running it.`,
       );
       continue;
-    }
-    // Checked · Needs certifying (design Q1) runs under "Only certified data"; it never publishes until certified.
-    if (sourcePolicy === 'governed_only'
-      && (source.lifecycle !== 'certified' || source.trustState !== 'certified')
-      && !source.checked) {
-      errors.set(
-        item.sourceId,
-        `APP_BUILD_REVIEW_POLICY_REQUIRED: ${item.title || item.i} uses a ${source.lifecycle ?? 'unknown'} Dataset source. Enable review-required sources or select a certified Dataset before running it.`,
-      );
     }
   }
   return errors;

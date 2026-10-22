@@ -6,7 +6,7 @@ import { DatasetNumbersCheck, initialNumberChoices, type NumberChoice } from './
 import { humanize, messageOf } from './studio-ui';
 
 /** Shown before the author confirms, when the saved query is certified. */
-export const MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW = 'Making it row-level sends this saved query back for review.';
+export const MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW = 'Making it row-level means this saved query is not certified until someone certifies it again.';
 
 export type SavedQueryFieldsApi = {
   draft: (sourceId: string) => Promise<SavedQueryDatasetDraft>;
@@ -20,12 +20,12 @@ const defaultApi: SavedQueryFieldsApi = {
 
 /** What the dialog says once the server answered a create. */
 export function savedQueryFieldsOutcome(result: SavedQueryDatasetResult, name: string): { kind: 'checked' | 'review' | 'refused' | 'error'; message: string } {
-  // Checks passing never certify (design Q1): it is Checked · Needs certifying.
+  // Checks passing never certify (design Q1): it is checked, not certified yet.
   if (result.ok && result.status === 'checked') {
-    return { kind: 'checked', message: `${name} is row-level now and checked: it needs certifying before you publish.` };
+    return { kind: 'checked', message: `${name} is row-level now and checked. It is not certified yet: certify it when you are ready.` };
   }
   if (result.ok) {
-    return { kind: 'review', message: `${name} is row-level now. It needs review: it did not pass its checks yet.` };
+    return { kind: 'review', message: `${name} is row-level now. It is not certified yet: it did not pass its checks yet.` };
   }
   if (result.code === 'SAVED_QUERY_REVIEW_REQUIRED') {
     return { kind: 'refused', message: `${name} is certified, and made row-level it did not pass its checks, so nothing changed yet.` };
@@ -69,8 +69,8 @@ export async function submitSavedQueryFields(client: SavedQueryFieldsApi, input:
  * as "Start from a table", for an existing saved query: ZLens reads its
  * columns, checks what one row is against its rows, and writes the fields
  * onto the same saved query file. The same checks as the table path then
- * run: when they pass it is Checked · Needs certifying (design Q1), certified
- * on purpose later; when they do not, it stays Needs review. A certified saved
+ * run: when they pass it is checked, not certified yet (design Q1), certified
+ * on purpose later; when they do not, it stays not certified yet. A certified saved
  * query goes back for review, and is only changed after a failed check if the
  * author sends it.
  */
@@ -166,14 +166,14 @@ export function SavedQueryFieldsDialog({
               {done.status === 'checked' ? <SearchCheck size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
               <div>
                 <strong>{done.message}</strong>
-                <small>Its row-level Measures and Dimensions are in the Data pane.{done.blockers.length ? ` Why it needs review: ${done.blockers.join(' ')}` : ''}</small>
+                <small>Its row-level Measures and Dimensions are in the Data pane.{done.blockers.length ? ` Why it is not certified yet: ${done.blockers.join(' ')}` : ''}</small>
               </div>
             </div>
           ) : null}
           {done?.status === 'checked' && done.check ? <CheckedReceiptNote check={done.check} /> : null}
           {!done && proposal ? (
             <>
-              {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its checks right away: if they pass, it is checked and needs certifying again before you publish.</p> : null}
+              {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its checks right away: if they pass, it is checked, and not certified again until someone certifies it.</p> : null}
               <DatasetNumbersCheck proposal={proposal} rows={draft?.rows ?? 0} choices={choices} onChoice={setChoice} groupByKey noKeyMessage={`No column in ${label} is filled and different on every row, so ZLens cannot count its rows safely. Add an id column to the saved query first.`} />
               {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
               {refusal ? <div className="table-dataset-error" role="alert">

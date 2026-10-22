@@ -1,5 +1,5 @@
 import type { DashboardDocumentResponse, DashboardRunResponse } from '../../api/client';
-import { appTrustSummary, certifiedByLabel, tileTrustCountText, type AppTrustState, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
+import { ALL_TILES_CERTIFIED, NOT_CERTIFIED_YET, appTrustSummary, tileTrustCountText, type AppTrustState, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
 
 type DashboardLayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
 type RunTile = DashboardRunResponse['tiles'][number];
@@ -16,12 +16,18 @@ export interface AppCertificationRollup {
 }
 
 /**
- * "All data certified" with who and when (D5): "All data certified by
- * Kranthi · 21 Oct", or "All data certified · 21 Oct" with no person recorded.
+ * The App header's words when every tile is certified (T2): the same count
+ * text the Apps card, the publish dialog and the stored file use — "All
+ * tiles certified". Who certified each tile is on the tile itself ("Certified
+ * by Kranthi · 21 Oct"), never a separate App-level badge.
  */
-export function allDataCertifiedLabel(byline: string | undefined): string {
-  if (!byline || byline === 'Certified') return 'All data certified';
-  return `All data ${byline.charAt(0).toLowerCase()}${byline.slice(1)}`;
+export function allDataCertifiedLabel(_byline?: string): string {
+  return ALL_TILES_CERTIFIED;
+}
+
+/** "1 unpublished change", "3 unpublished changes": an App's pending edits (a lifecycle, not a trust word). */
+export function unpublishedChangesText(count: number): string {
+  return `${count} unpublished ${count === 1 ? 'change' : 'changes'}`;
 }
 
 /**
@@ -54,33 +60,31 @@ export function appCertificationRollup(
     state: summary.state,
     ...(summary.byline ? { byline: summary.byline } : {}),
     label: summary.state === 'certified'
-      ? allDataCertifiedLabel(summary.byline)
+      ? ALL_TILES_CERTIFIED
       : summary.total === 0 || summary.state === 'pending'
       ? summary.label
       : draftCount > 0 && summary.certified === summary.total
-        ? `${summary.text} · ${draftCount} draft pending`
+        ? `${summary.text} · ${unpublishedChangesText(draftCount)}`
         : summary.text,
   };
 }
 
 /**
- * The App library card's label. It is the App's lifecycle (draft, in review,
- * certified), worded so it cannot be read as data trust, which is shown per
- * tile inside the App.
+ * The App library card's label when no tile count is known (an App
+ * published before tile counts were recorded). Trust lives at the tile (T2),
+ * so the card never says "App certified": it says "All tiles certified" for
+ * an App published as certified, "Not certified yet" otherwise, and
+ * "Retired" for a deprecated App.
  */
 export function appLifecycleLabel(
   lifecycle: string | undefined,
   certified: boolean,
   draftCount: number,
-  certifier?: { by?: string; at?: string },
+  _certifier?: { by?: string; at?: string },
 ): string {
-  if (certified) {
-    // "App certified by Kranthi · 21 Oct" when ZLens recorded who and when (D5).
-    const byline = certifier && (certifier.by || certifier.at) ? certifiedByLabel({ name: certifier.by, at: certifier.at }) : '';
-    return byline && byline !== 'Certified' ? `App ${byline.charAt(0).toLowerCase()}${byline.slice(1)}` : 'App certified';
-  }
-  const stage = lifecycle === 'review' ? 'App in review' : lifecycle === 'deprecated' ? 'App deprecated' : 'App draft';
-  return draftCount > 0 ? `${stage} · ${draftCount} change${draftCount === 1 ? '' : 's'} pending` : stage;
+  const pending = draftCount > 0 ? ` · ${unpublishedChangesText(draftCount)}` : '';
+  if (lifecycle === 'deprecated') return `Retired${pending}`;
+  return `${certified ? ALL_TILES_CERTIFIED : NOT_CERTIFIED_YET}${pending}`;
 }
 
 /** Tile trust from an App page's settled run in this session. */
@@ -90,13 +94,11 @@ export interface AppRunTrust {
 }
 
 /**
- * The library card's seal. It reads the App's lifecycle, but never contradicts
- * the App itself (B6): it says "App certified" only when every data tile was
- * certified. The tile trust recorded at publish (`tileTrust` in
- * `dql.app.json`, the same answer the App header gives) decides it after a
+ * The library card's seal (T2): the App header's own words, from the same
+ * count — "All tiles certified" or "3 of 4 tiles certified". The tile trust
+ * recorded at publish (`tileTrust` in `dql.app.json`) decides it after a
  * reload; a settled run of one of its pages in this session that found tiles
- * not certified says so too. Either way the card shows the App header's own
- * words: "3 of 4 tiles certified".
+ * not certified says so too.
  */
 export function appCardSeal(input: {
   lifecycle: string | undefined;
@@ -110,14 +112,15 @@ export function appCardSeal(input: {
   certifiedAt?: string;
 }): { certified: boolean; label: string } {
   const lifecycleCertified = input.certification === 'certified' || input.lifecycle === 'certified';
-  const pending = input.draftCount > 0 ? ` · ${input.draftCount} change${input.draftCount === 1 ? '' : 's'} pending` : '';
+  const pending = input.draftCount > 0 ? ` · ${unpublishedChangesText(input.draftCount)}` : '';
   const run = input.runTrust;
   if (run && run.total > 0 && run.certified < run.total && (lifecycleCertified || input.publishedTrust)) {
     return { certified: false, label: `${tileTrustCountText(run.certified, run.total)}${pending}` };
   }
   const published = input.publishedTrust;
-  if (published && published.total > 0 && published.certified < published.total) {
-    return { certified: false, label: `${tileTrustCountText(published.certified, published.total)}${pending}` };
+  if (published && published.total > 0) {
+    const all = published.certified >= published.total;
+    return { certified: all, label: `${tileTrustCountText(published.certified, published.total)}${pending}` };
   }
   return {
     certified: lifecycleCertified,

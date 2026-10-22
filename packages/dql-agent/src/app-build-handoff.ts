@@ -37,18 +37,18 @@ export interface AppBuildHandoffInput {
   audience?: string;
   /** The data AI picked. App Studio requires these when it plans pages. */
   sources: AppSourceCatalogRecord[];
-  /** "Only certified data" unless review data was explicitly included. */
+  /** @deprecated Ignored (T3): there is no per-App data rule; certified data comes first. */
   sourcePolicy?: AppBuildSourcePolicy;
   /** Questions with no certified data yet, AI-written SQL included. */
   gaps?: AppBuildHandoffGap[];
 }
 
-/** A picked source in the App Studio words: Dataset, Metrics or Saved query; Certified or Needs review. */
+/** A picked source in the App Studio words: Dataset, Metrics or Saved query; Certified or Not certified yet. */
 export interface AppBuildHandoffSourceSummary {
   sourceId: string;
   title: string;
   kind: 'Dataset' | 'Metrics' | 'Saved query';
-  trust: 'Certified' | 'Needs review';
+  trust: 'Certified' | 'Not certified yet';
   domain?: string;
   reason: string;
 }
@@ -66,7 +66,7 @@ export function appBuildHandoffSourceSummary(source: AppSourceCatalogRecord, rea
     sourceId: source.sourceId,
     title: source.title,
     kind: appBuildHandoffSourceKind(source),
-    trust: source.trust === 'certified' ? 'Certified' : 'Needs review',
+    trust: source.trust === 'certified' ? 'Certified' : 'Not certified yet',
     ...(source.domain ? { domain: source.domain } : {}),
     reason,
   };
@@ -106,15 +106,17 @@ export function createAppBuildHandoffDraft(
   const goal = input.goal.trim();
   if (!goal) throw new Error('An App build needs a description of what the App is for.');
   const name = (input.name?.trim() || appNameFromGoal(goal)).slice(0, 120);
-  const sourcePolicy: AppBuildSourcePolicy = input.sourcePolicy ?? 'governed_only';
   const seen = new Set<string>();
+  // Certified data first; data nobody certified is kept and reads "Not certified yet" (T3).
   const sources = input.sources
     .filter((source) => {
       if (seen.has(source.sourceId)) return false;
       seen.add(source.sourceId);
-      // "Only certified data" never carries data that needs review.
-      return sourcePolicy === 'include_review_required' || source.trust === 'certified';
+      return true;
     })
+    .map((source, index) => ({ source, index }))
+    .sort((left, right) => Number(left.source.trust !== 'certified') - Number(right.source.trust !== 'certified') || left.index - right.index)
+    .map((entry) => entry.source)
     .slice(0, APP_BUILD_HANDOFF_SOURCE_LIMIT)
     .map(appDraftSourceFromCatalogRecord);
   const questions = new Set<string>();
@@ -147,7 +149,6 @@ export function createAppBuildHandoffDraft(
     name,
     authoringMode: 'ai',
     template: 'blank',
-    sourcePolicy,
     frame: {
       goal,
       audience,

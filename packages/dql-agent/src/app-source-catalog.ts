@@ -335,12 +335,11 @@ export function matchAppSourceCatalogRecords(
 /**
  * Return a bounded candidate-card set for one App-specific planning call.
  *
- * "Only certified data" (`governed_only`) bounds what the planner sees: the
- * shortlist then holds certified sources, and data checked but not
- * certified yet (design Q1), which publishing still blocks until certified. Sources the author requires
- * explicitly are resolved separately and keep their own policy check.
- * Within the prompt matches, and then within the fill-up rows, sources are
- * trust-ordered (see `rankAppSourcesByTrust`).
+ * Certified data comes first, but data nobody certified is never excluded
+ * (T3: there is no per-App data rule; readers see "Not certified yet" on its
+ * tiles). A legacy `governed_only` caller still gets certified and checked
+ * data only. Within the prompt matches, and then within the fill-up rows,
+ * sources are trust-ordered (see `rankAppSourcesByTrust`).
  */
 export function shortlistAppSources(
   projectRoot: string,
@@ -348,7 +347,7 @@ export function shortlistAppSources(
   options: { sourcePolicy?: AppBuildSourcePolicy; limit?: number; domains?: string[] } = {},
 ): AppSourceCatalogPage {
   const limit = Math.min(12, Math.max(8, Math.floor(options.limit ?? 12)));
-  const certifiedOnly = (options.sourcePolicy ?? 'governed_only') === 'governed_only';
+  const certifiedOnly = options.sourcePolicy === 'governed_only';
   // Over-fetch when review-required rows are dropped so the shortlist still fills.
   const fetchLimit = certifiedOnly ? 100 : limit;
   // Checked data (design Q1: checked, not certified yet) is usable while an App is built; it blocks publishing until certified.

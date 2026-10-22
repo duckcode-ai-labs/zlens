@@ -203,8 +203,11 @@ describe('App Studio AI plan review (AGT-025, UI-022)', () => {
       .toBe('select_existing');
     expect(appStudioProposalSourceAddMode({ alreadyProposed: true, reviewRequired: true, sourcePolicy: 'include_review_required' }))
       .toBe('select_existing');
+    // No per-App data rule (T3): an old App's "Only certified data" never adds a step.
     expect(appStudioProposalSourceAddMode({ alreadyProposed: true, reviewRequired: true, sourcePolicy: 'governed_only' }))
-      .toBe('enable_review_and_replan');
+      .toBe('select_existing');
+    expect(appStudioProposalSourceAddMode({ alreadyProposed: false, reviewRequired: true }))
+      .toBe('replan');
     expect(appStudioProposalSourceAddMode({ alreadyProposed: false, reviewRequired: false, sourcePolicy: 'governed_only' }))
       .toBe('replan');
   });

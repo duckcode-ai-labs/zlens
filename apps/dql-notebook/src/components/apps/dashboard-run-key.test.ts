@@ -113,9 +113,9 @@ describe('a reader is never left on a stale page', () => {
 });
 
 describe('the Apps card and the App read trust from the same result', () => {
-  it('a certified App whose run found every tile certified says "App certified"', () => {
+  it('a certified App whose run found every tile certified says "All tiles certified" (T2)', () => {
     expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, runTrust: { certified: 3, total: 3 } }))
-      .toEqual({ certified: true, label: 'App certified' });
+      .toEqual({ certified: true, label: 'All tiles certified' });
   });
 
   it('never says "App certified" while the App\'s run says otherwise', () => {
@@ -123,11 +123,15 @@ describe('the Apps card and the App read trust from the same result', () => {
       .toEqual({ certified: false, label: '0 of 3 tiles certified' });
   });
 
-  it('with no run yet, it shows the lifecycle', () => {
+  it('with no run yet, it reads the stored count, else the two words (T2)', () => {
     expect(appCardSeal({ lifecycle: 'certified', certification: undefined, draftCount: 0, runTrust: null }))
-      .toEqual({ certified: true, label: 'App certified' });
+      .toEqual({ certified: true, label: 'All tiles certified' });
     expect(appCardSeal({ lifecycle: 'review', certification: undefined, draftCount: 1 }))
-      .toEqual({ certified: false, label: 'App in review · 1 change pending' });
+      .toEqual({ certified: false, label: 'Not certified yet · 1 unpublished change' });
+    expect(appCardSeal({ lifecycle: 'review', certification: undefined, draftCount: 0, publishedTrust: { certified: 3, total: 4 } }))
+      .toEqual({ certified: false, label: '3 of 4 tiles certified' });
+    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, publishedTrust: { certified: 4, total: 4 } }))
+      .toEqual({ certified: true, label: 'All tiles certified' });
   });
 
   it('adds up the pages a person opened', () => {

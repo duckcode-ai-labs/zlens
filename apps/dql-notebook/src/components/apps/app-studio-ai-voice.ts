@@ -174,7 +174,7 @@ export interface AppStudioAskWords {
   /** The publish review's action for an unanswered question. */
   revise: string;
   /** The page tab's help line. */
-  pageHelp: (governedOnly: boolean) => string;
+  pageHelp: () => string;
 }
 
 export function appStudioAskWords(voice: AppStudioPlannerVoice): AppStudioAskWords {
@@ -199,6 +199,6 @@ export function appStudioAskWords(voice: AppStudioPlannerVoice): AppStudioAskWor
     draftPage: 'Draft with AI',
     buildOrRevise: 'Ask AI to build or revise this page',
     revise: 'Revise with AI',
-    pageHelp: (governedOnly) => `${governedOnly ? 'AI plans tiles from certified tables, Metrics and saved queries only.' : 'AI plans tiles from tables, Metrics and saved queries, including data that needs review.'} New tiles are added below what is already here, and you keep or skip each one before anything changes.`,
+    pageHelp: () => 'AI plans tiles from tables, Metrics and saved queries, certified first. New tiles are added below what is already here, and you keep or skip each one before anything changes.',
   };
 }

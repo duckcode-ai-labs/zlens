@@ -770,6 +770,9 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-readiness-card > footer button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg); }
 .studio-readiness-card > footer button:disabled { opacity:.5; cursor:default; }
 .readiness-footer-hint { flex:1; color:var(--text-tertiary); font-size:13px; text-align:right; }
+.readiness-publish { flex:1; display:flex; align-items:center; justify-content:flex-end; gap:12px; min-width:0; }
+.readiness-readers-note { color:var(--text-secondary); font-size:12px; text-align:right; }
+.readiness-trust-count { margin:2px 0 0; color:var(--text-secondary); font-size:13px; }
 .studio-delete-card { width:min(420px,100%); border:1px solid var(--border-default); background:var(--bg-2); border-radius:12px; padding:24px; box-shadow:0 24px 80px color-mix(in srgb,var(--text-primary) 18%,transparent); }
 .studio-delete-card .delete-mark { width:40px; height:40px; border-radius:12px; display:flex; align-items:center; justify-content:center; color:var(--status-error); background:color-mix(in srgb,var(--status-error) 9%,var(--bg-2)); }
 .studio-delete-card h2 { margin:15px 0 7px; font-size:20px; }
@@ -1495,6 +1498,8 @@ export const APP_STUDIO_V2_STYLES = `
 .readiness-uncertified-list li small { color:var(--text-secondary); font-size:11px; }
 .readiness-uncertified-list li button { flex:none; height:28px; padding:0 10px; border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:var(--accent-fg, #fff); font-size:12px; font-weight:600; cursor:pointer; }
 .readiness-uncertified-list li button.secondary { border-color:var(--border-default); background:var(--bg-2); color:var(--text-primary); }
+.readiness-uncertified-actions { display:flex; flex-wrap:wrap; gap:6px; justify-content:flex-end; }
+.readiness-uncertified-list li button:not(.primary) { border-color:var(--border-default); background:var(--bg-2); color:var(--text-primary); display:inline-flex; align-items:center; gap:4px; }
 .studio-reader-parts { display:grid; gap:10px; margin:0 0 12px; }
 .studio-summary-pending { display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 12px; border:1px dashed var(--border-default); border-radius:8px; color:var(--text-secondary); font-size:12px; }
 .studio-summary-pending button { margin-left:auto; height:26px; padding:0 10px; border:1px solid var(--border-default); border-radius:4px; background:var(--bg-2); color:var(--text-primary); font:600 12px var(--font-ui, inherit); cursor:pointer; }

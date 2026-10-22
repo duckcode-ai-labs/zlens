@@ -10,11 +10,12 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
  * `zlens notebook` CLI on the jaffle-supply-chain fixture:
  *
  * a new manual App → Add data → "Check and use" on a database table (it is
- * Checked · Needs certifying, never certified) → a tile from one of its
- * measures works right away under "Only certified data" → Publish says
- * "1 table not certified yet" → the short review (what one row is, the row
- * key checked again, number formats) → "I vouch for this — certify" → Ready
- * to publish → published, and the header reads "All data certified by you".
+ * checked, Not certified yet, never certified) → a tile from one of its
+ * measures works right away → Publish is ready and lists the tile not
+ * certified yet with "Certify now (recommended)" (T3) → the short review
+ * (what one row is, the row key checked again, number formats) → "I vouch
+ * for this — certify" → All checks passed → published: "All tiles certified",
+ * and the tile reads "Certified by you".
  *
  * It starts its own server on its own copy of the fixture: the Dataset and App
  * it adds would change what the shared server's journeys count.
@@ -54,7 +55,7 @@ test.afterAll(async () => {
   if (workDir) rmSync(workDir, { recursive: true, force: true });
 });
 
-test('checking a table does not certify it; certifying is a short review at publish, then "All data certified by you"', async ({ page }) => {
+test('checking a table does not certify it; certifying is a short review from the publish dialog, then "Certified by you"', async ({ page }) => {
   test.setTimeout(240_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(server!.baseUrl);
@@ -83,17 +84,17 @@ test('checking a table does not certify it; certifying is a short review at publ
   await expect(check.getByRole('button', { name: /Certify/ })).toHaveCount(0);
   await check.getByRole('button', { name: 'Check and use' }).click();
   await expect(check).toBeHidden({ timeout: 60_000 });
-  await expect(browser.getByRole('status').filter({ hasText: 'Customers · Checked · Needs certifying' })).toBeVisible({ timeout: 30_000 });
-  await expect(browser.getByRole('status').filter({ hasText: /Checked by you · \d{1,2} [A-Z][a-z]{2}\. Build tiles now; certify it before you publish\./ })).toBeVisible();
-  // Under "Only certified data" it was added without changing the data rule.
-  await expect(browser.getByText('Data rule: Only certified data')).toBeVisible();
+  await expect(browser.getByRole('status').filter({ hasText: 'Customers · Not certified yet' })).toBeVisible({ timeout: 30_000 });
+  await expect(browser.getByRole('status').filter({ hasText: /Checked by you · \d{1,2} [A-Z][a-z]{2}, not certified yet\. Build tiles now; certify it when you are ready\./ })).toBeVisible();
+  // There is no per-App data rule to show or change (T3).
+  await expect(page.getByText(/Data rule|Only certified data|data that needs review/)).toHaveCount(0);
   await expect(browser.getByRole('button', { name: 'Remove Customers from this App' })).toBeVisible({ timeout: 30_000 });
   await page.getByRole('button', { name: /Open Studio with 1 source/ }).click();
 
   // The Data pane says what it is; a tile from one of its measures works right away.
   const dataPane = page.locator('.data-panel');
   await expect(dataPane.locator('.dataset-current')).toContainText('Customers');
-  await expect(dataPane.locator('.dataset-current')).toContainText('Table · Checked · Needs certifying');
+  await expect(dataPane.locator('.dataset-current')).toContainText('Table · Not certified yet');
   await dataPane.locator('button.data-field').filter({ hasText: 'Lifetime Spend' }).click();
   await expect(page.locator('article.draft-tile')).toBeVisible();
   await page.getByRole('button', { name: 'Add to page' }).click();
@@ -101,14 +102,16 @@ test('checking a table does not certify it; certifying is a short review at publ
   const card = page.locator('.studio-page-grid .studio-component-card').filter({ hasText: 'Lifetime Spend' }).first();
   await expect(card.locator('.dql-kpi-value')).toHaveText('$380.00', { timeout: 60_000 });
 
-  // Publish: "Only certified data" holds it until the table is certified on purpose.
+  // Publish is ready (T3); the tile not certified yet is listed with Certify now.
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
-  const notCertified = page.getByRole('region', { name: '1 table not certified yet' });
-  await expect(notCertified).toBeVisible({ timeout: 90_000 });
-  await expect(notCertified).toContainText('Customers');
-  await expect(notCertified).toContainText('Table · Checked · Needs certifying');
-  await expect(page.getByText('Ready to publish')).toHaveCount(0);
-  await notCertified.getByRole('button', { name: 'Review and certify Customers' }).click();
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready).toBeVisible({ timeout: 90_000 });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('0 of 1 tile certified');
+  const notCertified = ready.getByRole('region', { name: '1 tile not certified yet' });
+  await expect(notCertified).toContainText('Lifetime Spend');
+  await expect(notCertified).toContainText('Checked, not certified yet. Data: Customers.');
+  await expect(ready.getByText('Readers will see \u2018Not certified yet\u2019 on 1 tile.')).toBeVisible();
+  await notCertified.getByRole('button', { name: 'Certify now: Customers' }).click();
 
   // The short review: what one row is, the key checked again now, number formats.
   const review = page.getByRole('dialog', { name: 'Certify Customers' });
@@ -124,13 +127,13 @@ test('checking a table does not certify it; certifying is a short review at publ
   await review.getByRole('button', { name: 'I vouch for this — certify' }).click();
   await expect(review).toBeHidden({ timeout: 60_000 });
 
-  // Certified: the page runs again and the check is ready.
-  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
-  await expect(ready).toBeVisible({ timeout: 120_000 });
-  await ready.getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  // Certified: the page runs again and every check passes.
+  await expect(ready.getByText('All checks passed')).toBeVisible({ timeout: 120_000 });
+  await ready.getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=/, { timeout: 60_000 });
 
-  // The reader's side: certified by you, with the date.
-  await expect(page.getByText(/^All data certified by you · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText('All 1 tile certified')).toBeVisible();
+  // The reader's side: one count, and the tile says certified by you, with the date.
+  await expect(page.locator('.dql-trust-summary')).toHaveText('All tiles certified', { timeout: 60_000 });
+  await expect(page.locator('.dql-app-view-topbar .dql-app-seal').first()).toHaveText('All tiles certified');
+  await expect(page.locator('.dql-trust-badge.certified').filter({ hasText: /^Certified by you · \d{1,2} [A-Z][a-z]{2}/ }).first()).toBeVisible();
 });

@@ -5271,8 +5271,8 @@ function addManifestBlockSourceObjects(
     const lifecycle = dataset.descriptor?.lifecycle ?? normalizeBlockSourceLifecycle(block.status);
     // "Check and use" (design Q1): a row-level Dataset ZLens checked that
     // nobody certified yet carries its check record, while its source is the
-    // one that was checked. It previews under "Only certified data"; it never
-    // publishes until someone certifies it.
+    // one that was checked. Its tiles read "Not certified yet" until someone
+    // certifies it.
     const check = dataset.descriptor && lifecycle !== 'certified' && lifecycle !== 'deprecated'
       ? currentBlockFileCheck(projectRoot, block.filePath)
       : null;

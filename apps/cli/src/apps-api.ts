@@ -45,10 +45,14 @@ import {
   applyAppBuildDraftOperations,
   packDashboardLayoutItems,
   appSourceIdsUsedByTiles,
-  appTilesNeedingJoinReview,
   appTrustAnswer,
+  appsPublishSettings,
+  isTrustReminderTaskId,
+  notCertifiedTiles,
   publishedAppTileTrust,
-  tileJoinReviewSentence,
+  requireCertifiedToPublishMessage,
+  APP_SOURCE_POLICY,
+  type AppsPublishSettings,
   type AppDocument,
   type BlockParameterDefinition,
   type DashboardDisplayMetadata,
@@ -432,6 +436,13 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
 
   // ── Apps ────────────────────────────────────────────────────────────────
 
+  // Project settings that decide publishing (T3), read fresh from
+  // dql.config.json so a change applies to the next publish.
+  if (req.method === 'GET' && path === '/api/apps/settings') {
+    sendJson(res, 200, { ok: true, ...readAppsPublishSettings(projectRoot) });
+    return true;
+  }
+
   if (req.method === 'POST' && path === '/api/app-builds') {
     try {
       const body = await readJson<{
@@ -505,7 +516,8 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         limit: Number(ctx.url.searchParams.get('limit')) || 50,
         lifecycles: lifecycles.length ? lifecycles : undefined,
         domains: domains.length ? domains : undefined,
-        sourcePolicy: current.sourcePolicy,
+        // No per-App data rule (T3): certified and not-certified data are both listed, certified first.
+        sourcePolicy: APP_SOURCE_POLICY,
         includeDeprecated: ctx.url.searchParams.get('includeDeprecated') === 'true',
       });
       sendJson(res, 200, {
@@ -538,13 +550,11 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       }
       const { ensureAgentProjectReady, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
       await ensureAgentProjectReady(projectRoot);
-      // Reading a review-required candidate lets Studio present a deliberate
-      // local-policy choice after a source revision changes. It never alters
-      // the draft policy or grants execution/publication eligibility.
+      // No per-App data rule (T3): every source resolves; trust is shown per tile.
       const result = resolveAppSourceCatalogRecords(
         projectRoot,
         body.sourceIds ?? [],
-        body.includeReviewRequired === true ? 'include_review_required' : current.sourcePolicy,
+        APP_SOURCE_POLICY,
       );
       sendJson(res, 200, { ok: true, ...result, items: withCertificationBylines(projectRoot, result.items) });
     } catch (err) {
@@ -1006,10 +1016,6 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         sendJson(res, 409, { ok: false, error: 'APP_BUILD_PROPOSAL_CONFLICT: refresh before generating a gap.' });
         return true;
       }
-      if (current.sourcePolicy !== 'include_review_required') {
-        sendJson(res, 409, { ok: false, error: 'APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before generating a gap.' });
-        return true;
-      }
       const requirementOperation = previous.operations.find((operation) => operation.type === 'set_requirements');
       const requirement = requirementOperation?.type === 'set_requirements'
         ? requirementOperation.requirements.find((candidate) => candidate.id === cleanString(body.requirementId))
@@ -1064,7 +1070,8 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       });
       return true;
     }
-    const next = markStoredAppBuildDraftPreflighted(projectRoot, current);
+    // The request check above already judged tile trust against the current catalog.
+    const next = markStoredAppBuildDraftPreflighted(projectRoot, current, { trust: false });
     sendJson(res, 200, { ok: true, draft: next, errors: [] });
     return true;
   }
@@ -1099,11 +1106,12 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       // this same request so they cannot enter a client-side recheck loop.
       const prepared = hasCurrentAppBuildPreflightReceipt(current)
         ? current
-        : markStoredAppBuildDraftPreflighted(projectRoot, current);
+        : markStoredAppBuildDraftPreflighted(projectRoot, current, { trust: false });
       // The App's trust is worked out against the current model's joins.
       const records = await resolveCurrentDatasetSourceRecords(projectRoot, datasetDraftSourceIds(prepared), ctx.resolveDatasetSourceAuthority).catch(() => new Map<string, AppSourceCatalogRecord>());
       const result = publishStoredAppBuildDraft(projectRoot, prepared, {
         descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? undefined,
+        recordFor: (sourceId) => records.get(sourceId),
       });
       await refreshGeneratedMetadata(projectRoot);
       sendJson(res, 201, { ...result, compatibilityRoute: buildMatch[2] === 'commit' });
@@ -3585,41 +3593,12 @@ async function datasetDraftCurrentAuthorityErrors(
       errors.push(authorityIssue);
       continue;
     }
-    // `resolveCurrentDatasetSourceRecords` deliberately discovers review
-    // candidates so a stale App can explain and repair itself. Discovery is
-    // not an opt-in: the resulting draft must carry the explicit local review
-    // policy before a review-required Dataset can be previewed.
-    // Data ZLens checked that nobody certified yet (design Q1) previews under
-    // any data rule; it never publishes until it is certified (below).
-    if ((source!.lifecycle !== 'certified' || source!.trust !== 'certified')
-      && draft.sourcePolicy !== 'include_review_required'
-      && !source!.check) {
-      errors.push(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${reference.tile.title || reference.tile.i} uses a ${source!.lifecycle} Dataset source. Enable review-required sources explicitly before local preview.`);
-      continue;
-    }
+    // There is no per-App data rule (T3): certified and not-certified data
+    // both preview and publish, and readers see "Not certified yet" on the
+    // tiles nobody certified. Only a retired (deprecated) source is refused.
     if (!source!.eligibility.localPreview) {
-      errors.push(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and is not eligible for this local preview policy.`);
+      errors.push(`APP_BUILD_DATASET_RETIRED: ${reference.tile.title || reference.tile.i} uses ${source!.title}, which is ${source!.lifecycle}. Replace it with current data.`);
       continue;
-    }
-    if (purpose === 'project_publish'
-      && (source!.lifecycle !== 'certified'
-        || source!.trust !== 'certified'
-        || !source!.eligibility.projectPublish)) {
-      errors.push(source!.check
-        ? `APP_BUILD_DATASET_NOT_CERTIFIED: ${reference.tile.title || reference.tile.i} uses ${source!.title}, which is checked but not certified yet. Certify it before publishing.`
-        : `APP_BUILD_DATASET_PUBLICATION_INELIGIBLE: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and cannot be published until its governed Dataset source is certified and eligible.`);
-    }
-  }
-  // "Only certified data" is about every tile, not only every source: a tile
-  // that reads a field through a join nobody certified yet is Needs review
-  // (design D2) and does not publish under that rule. The joins come from the
-  // current model, so a join certified since the last run passes.
-  if (purpose === 'project_publish' && draft.sourcePolicy !== 'include_review_required') {
-    for (const item of appTilesNeedingJoinReview({
-      pages: draft.pages,
-      descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? storedById.get(sourceId)?.capabilities?.dataset,
-    })) {
-      errors.push(`APP_BUILD_TILE_NEEDS_REVIEW: ${item.pageId}/${item.tileId}: ${tileJoinReviewSentence(item)} This App uses only certified data: certify the join in Modeling, remove the related field, or allow data that needs review.`);
     }
   }
   return Array.from(new Set(errors));
@@ -4297,7 +4276,7 @@ function plannerNoteTitle(title: string): string {
 async function withSavedQueryResultFields(
   projectRoot: string,
   records: AppSourceCatalogRecord[],
-  sourcePolicy: AppBuildDraft['sourcePolicy'],
+  sourcePolicy: AppBuildSourcePolicy,
   read: AppBuildHooks['readSavedQueryFields'],
 ): Promise<AppSourceCatalogRecord[]> {
   if (!read) return records;
@@ -4348,19 +4327,20 @@ export async function proposeAppBuildDraftOperations(
     throw new Error('APP_BUILD_SOURCE_LIMIT: at most 12 required App sources can be planned at once.');
   }
   const resolvedRequired = requestedIds.length
-    ? resolveAppSourceCatalogRecords(projectRoot, requestedIds, draft.sourcePolicy)
+    ? resolveAppSourceCatalogRecords(projectRoot, requestedIds, APP_SOURCE_POLICY)
     : { items: [] as AppSourceCatalogRecord[], missingSourceIds: [] as string[] };
   if (resolvedRequired.missingSourceIds.length) {
     throw new Error(`APP_BUILD_SOURCE_DRIFT: these exact App sources no longer resolve: ${resolvedRequired.missingSourceIds.join(', ')}`);
   }
   const policyBlocked = resolvedRequired.items.filter((source) => !source.eligibility.localPreview);
   if (policyBlocked.length) {
-    throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before adding ${policyBlocked.map((source) => source.title).join(', ')}.`);
+    throw new Error(`APP_BUILD_DATASET_RETIRED: choose current data instead of ${policyBlocked.map((source) => source.title).join(', ')}.`);
   }
   let candidates = uniqueAppSourceRecords([
     ...resolvedRequired.items,
+    // Certified data first, never only certified data (T3).
     ...shortlistAppSources(projectRoot, prompt, {
-    sourcePolicy: draft.sourcePolicy,
+    sourcePolicy: APP_SOURCE_POLICY,
     domains: initialPage.metadata.domain && initialPage.metadata.domain !== 'general'
       ? [initialPage.metadata.domain]
       : undefined,
@@ -4369,13 +4349,13 @@ export async function proposeAppBuildDraftOperations(
   // Saved queries in the (at most 12) candidates get their result fields
   // first (design D1), so the planner composes field tiles from them.
   if (hooks?.datasetsEnabled !== false) {
-    candidates = await withSavedQueryResultFields(projectRoot, candidates, draft.sourcePolicy, hooks?.readSavedQueryFields);
+    candidates = await withSavedQueryResultFields(projectRoot, candidates, APP_SOURCE_POLICY, hooks?.readSavedQueryFields);
   }
   const brief = await planAppBuildBrief({
     prompt,
     candidates,
     requiredSourceIds: resolvedRequired.items.map((source) => source.sourceId),
-    sourcePolicy: draft.sourcePolicy,
+    sourcePolicy: APP_SOURCE_POLICY,
     domain: initialPage.metadata.domain,
     audience: draft.frame.audience,
     complete: hooks?.planAppBuild,
@@ -4740,21 +4720,9 @@ export async function proposeAppBuildDraftOperations(
     };
   });
   const clarifications = brief.frame.clarificationQuestions ?? [];
-  const reviewTasks: AppBuildDraftOperation[] = plannedSources
-    .filter((source) => source.lifecycle !== 'certified')
-    .map((source) => {
-      const firstComponent = emittedComponents.find((component) => component.sourceId === source.sourceId);
-      return {
-      type: 'set_review_task',
-      task: {
-        id: `review-source-${createHash('sha256').update(source.sourceId).digest('hex').slice(0, 12)}`,
-        message: `${source.title} needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.`,
-        status: 'open',
-        sourceId: source.sourceId,
-        pageId: firstComponent ? componentPageIdById.get(firstComponent.id) ?? initialPage.id : initialPage.id,
-      },
-      };
-    });
+  // Data nobody certified yet opens no review task (T3): its tiles read
+  // "Not certified yet", and the publish dialog offers to certify it.
+  const reviewTasks: AppBuildDraftOperation[] = [];
   // Add mode keeps the App's goal and earlier requirements; new requirement
   // ids that collide with existing ones are renamed rather than overwriting.
   const { frame: proposedFrame, requirements: proposedRequirements, coverage: proposedCoverage } = mode === 'add'
@@ -4835,9 +4803,8 @@ export type OpenAppAiBuildInStudioResult =
  * (App Studio requires them when it plans pages), and the question behind any
  * kept AI-written SQL tile is listed under "Not covered yet". App Studio
  * plans again from the goal, so it finds the other gaps itself.
- * The draft uses "Only certified data" unless the author kept data that needs
- * review. App Studio then opens it at the AI Data step and publishing goes
- * through the publish checks.
+ * App Studio then opens it at the AI Data step and publishing goes through
+ * the publish checks; data nobody certified reads "Not certified yet".
  */
 export async function openAppAiBuildInStudio(
   projectRoot: string,
@@ -4867,10 +4834,8 @@ export async function openAppAiBuildInStudio(
     ?? proposal.tiles.filter((tile) => tile.selectedByDefault && !tile.error).map((tile) => tile.id));
   const kept = proposal.tiles.filter((tile) => !tile.error && selected.has(tile.id));
   const semanticTiles = kept.filter((tile) => tile.source === 'semantic_query' && tile.semantic);
-  // AI-written SQL is never written as an App tile. The draft model keeps
-  // data that needs review only under "Data that needs review", so the
-  // question goes to "Not covered yet", where App Studio can generate a
-  // draft that needs review on request.
+  // AI-written SQL is never written as an App tile: the question goes to
+  // "Not covered yet", where App Studio can generate draft DQL on request.
   const draftSqlTiles = kept.filter((tile) => tile.source === 'ai_generated');
   const {
     appBuildHandoffSourceSummary,
@@ -4889,13 +4854,12 @@ export async function openAppAiBuildInStudio(
     ...matchedRecords,
     items: await withSavedQueryResultFields(projectRoot, matchedRecords.items, 'include_review_required', hooks.readSavedQueryFields),
   };
-  const reviewDataKept = draftSqlTiles.length > 0 || matched.items.some((source) => source.trust !== 'certified');
   const plan = (session.plan ?? {}) as Partial<AppPlan>;
   // Only the questions behind kept Draft SQL are carried. App Studio plans
   // again from the same goal over its own catalog and finds the other gaps.
   const gaps = draftSqlTiles.map((tile) => ({
     question: cleanString(tile.question) || tile.title,
-    reason: 'Ask wrote SQL for this question. Draft SQL is not added to an App; generate a draft that needs review in App Studio instead.',
+    reason: 'Ask wrote SQL for this question. Draft SQL is not added to an App; generate draft DQL for it in App Studio instead.',
   }));
   let draft: AppBuildDraft;
   try {
@@ -4905,7 +4869,6 @@ export async function openAppAiBuildInStudio(
       domain: session.inputs.domain || cleanString(plan.domain) || undefined,
       audience: cleanString(input.audience) || session.inputs.audience || proposal.buildFrame.audience,
       sources: matched.items,
-      sourcePolicy: reviewDataKept ? 'include_review_required' : 'governed_only',
       gaps,
     });
   } catch (error) {
@@ -5853,7 +5816,7 @@ export function promoteAppForStakeholders(
 export interface AppPublicationReadiness {
   ready: boolean;
   governedTiles: number;
-  blockers: Array<{ dashboardId: string; tileId: string; code: 'exploratory_source' | 'semantic_review' | 'semantic_preflight' | 'block_not_certified' | 'block_source_unversioned' | 'block_source_changed' | 'filter_not_preflighted' | 'dataset_binding_missing'; message: string }>;
+  blockers: Array<{ dashboardId: string; tileId: string; code: 'exploratory_source' | 'semantic_review' | 'semantic_preflight' | 'block_not_certified' | 'block_missing' | 'block_source_unversioned' | 'block_source_changed' | 'filter_not_preflighted' | 'dataset_binding_missing'; message: string }>;
 }
 
 export function approveAppSemanticTiles(
@@ -5910,9 +5873,11 @@ export function approveAppSemanticTiles(
 function appPublicationReadiness(
   projectRoot: string,
   dashboards: DashboardDocument[],
-  options: { settledPageIds?: Set<string> } = {},
+  options: { settledPageIds?: Set<string>; settings?: AppsPublishSettings } = {},
 ): AppPublicationReadiness {
   const blockers: AppPublicationReadiness['blockers'] = [];
+  // A saved query nobody certified blocks only when the project requires certified data (T3).
+  const requireCertified = (options.settings ?? readAppsPublishSettings(projectRoot)).requireCertifiedToPublish;
   let governedTiles = 0;
   const blocks = collectBlockCandidates(projectRoot, { preserveDuplicates: true });
   for (const dashboard of dashboards) {
@@ -5939,26 +5904,33 @@ function appPublicationReadiness(
             code: 'block_not_certified',
             message: `${dashboard.id}/${item.i} uses retired saved query ${block.name}${replacement ? `, replaced by ${replacement.name}` : ''}; it no longer resolves to a certified saved query.`,
           });
-        } else if (!block || block.status !== 'certified') {
+        } else if (!block) {
+          blockers.push({
+            dashboardId: dashboard.id,
+            tileId: item.i,
+            code: 'block_missing',
+            message: `${dashboard.id}/${item.i} no longer resolves to a saved query in the project.`,
+          });
+        } else if (block.status !== 'certified' && requireCertified) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_not_certified',
-            message: `${dashboard.id}/${item.i} no longer resolves to a certified saved query.`,
+            message: `${dashboard.id}/${item.i} uses a saved query that is not certified yet, and this project requires certified data to publish.`,
           });
         } else if (!boundRevision) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_source_unversioned',
-            message: `${dashboard.id}/${item.i} has no bound source revision; refresh the certified saved query before publication.`,
+            message: `${dashboard.id}/${item.i} has no bound source revision; refresh the saved query before publication.`,
           });
         } else if (boundRevision !== block.fingerprint) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_source_changed',
-            message: `${dashboard.id}/${item.i} changed after it was selected; review the current certified saved query before publication.`,
+            message: `${dashboard.id}/${item.i} changed after it was selected; refresh the saved query before publication.`,
           });
         }
       }
@@ -6952,13 +6924,6 @@ async function composeStoredAppBuildDraft(
     )));
     const missing = Array.from(selected).filter((sourceId) => !available.has(sourceId));
     if (missing.length) throw new Error(`APP_BUILD_SOURCE_NOT_IN_PROPOSAL: ${missing.join(', ')}`);
-    for (const sourceId of selected) {
-      const source = available.get(sourceId)!;
-      // Checked data (design Q1) may be added under "Only certified data"; publishing still needs it certified.
-      if (current.sourcePolicy === 'governed_only' && source.trustState !== 'certified' && !(source.checked && source.capabilities?.dataset)) {
-        throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before adding ${source.qualifiedIdentity ?? source.sourceRef}.`);
-      }
-    }
     const rejected = new Set(unique((request.rejectedTileIds ?? []).map(cleanString).filter(Boolean)));
     if (proposal.proposedTileIds) {
       const unknown = Array.from(rejected).filter((tileId) => !proposal.proposedTileIds!.includes(tileId));
@@ -6999,13 +6964,11 @@ async function composeStoredAppBuildDraft(
   if (selections.length > 100) throw new Error('APP_BUILD_SOURCE_LIMIT: at most 100 components can be composed at once.');
   const { ensureAgentProjectReady, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
   await ensureAgentProjectReady(projectRoot);
-  const effectiveSourcePolicy = request.enableReviewRequired === true
-    ? 'include_review_required'
-    : current.sourcePolicy;
+  // No per-App data rule (T3): certified and not-certified data are both addable.
   const resolved = resolveAppSourceCatalogRecords(
     projectRoot,
     selections.map((selection) => selection.sourceId),
-    effectiveSourcePolicy,
+    APP_SOURCE_POLICY,
   );
   if (resolved.missingSourceIds.length) {
     throw new Error(`APP_BUILD_SOURCE_DRIFT: these sources no longer resolve: ${resolved.missingSourceIds.join(', ')}`);
@@ -7015,10 +6978,7 @@ async function composeStoredAppBuildDraft(
   // it through one existing `upsert_page` operation. This keeps the dataset
   // registry and its query tiles atomic inside the local draft revision.
   const workingPages = new Map(current.pages.map((page) => [page.id, structuredClone(page)]));
-  const operations: AppBuildDraftOperation[] = request.enableReviewRequired === true
-    && current.sourcePolicy !== 'include_review_required'
-    ? [{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }]
-    : [];
+  const operations: AppBuildDraftOperation[] = [];
   const pageIds = new Set<string>();
   const tileIds: string[] = [];
   const coverageAdditions = new Map<string, { sourceIds: string[]; componentIds: string[] }>();
@@ -7026,7 +6986,7 @@ async function composeStoredAppBuildDraft(
     const source = byId.get(selection.sourceId);
     if (!source) throw new Error(`APP_BUILD_SOURCE_DRIFT: ${selection.sourceId} no longer resolves.`);
     if (!source.eligibility.localPreview) {
-      throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${source.title} is ${source.lifecycle}; enable review-required sources to add it locally.`);
+      throw new Error(`APP_BUILD_DATASET_RETIRED: ${source.title} is ${source.lifecycle}; choose current data instead.`);
     }
     const selectedPage = current.pages.find((candidate) => candidate.id === cleanString(selection.pageId)) ?? current.pages[0];
     const page = selectedPage ? workingPages.get(selectedPage.id) : undefined;
@@ -7099,19 +7059,6 @@ async function composeStoredAppBuildDraft(
     pageItems.push(tile);
     workingPages.set(page.id, page);
     operations.push({ type: 'upsert_source', source: appDraftSourceFromCatalog(source) });
-    if (!certified) {
-      operations.push({
-        type: 'set_review_task',
-        task: {
-          id: `review-source-${createHash('sha256').update(source.sourceId).digest('hex').slice(0, 12)}`,
-          message: `${source.title} needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.`,
-          status: 'open',
-          sourceId: source.sourceId,
-          pageId: page.id,
-          tileId,
-        },
-      });
-    }
     pageIds.add(page.id);
     tileIds.push(tileId);
     for (const requirement of current.requirements) {
@@ -7457,7 +7404,7 @@ function rehydratePublishedAppSources(
   let catalogError = options.datasetCatalogError;
   if (datasetReferencesBySourceId.size > 0 && options.resolvePublishedDatasetSources && !catalogError) {
     try {
-      resolution = options.resolvePublishedDatasetSources(Array.from(datasetReferencesBySourceId.keys()), sourcePolicy);
+      resolution = options.resolvePublishedDatasetSources(Array.from(datasetReferencesBySourceId.keys()), APP_SOURCE_POLICY);
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
     }
@@ -7476,16 +7423,8 @@ function rehydratePublishedAppSources(
       }
       continue;
     }
-    if (source!.trust !== 'certified') {
-      requiresReviewPolicy = true;
-      for (const reference of references) {
-        const task = publishedDatasetReviewTask(
-          reference,
-          `${source!.title} is currently ${source!.lifecycle}. Resolve its governed review state before Project publication.`,
-        );
-        reviewTasks.set(task.id, task);
-      }
-    }
+    // Data nobody certified reopens as it is (T3): its tiles read "Not
+    // certified yet" and the App can be published again without a task.
   }
   const normalizedPages = pages.map((page) => ({
     ...page,
@@ -7570,7 +7509,9 @@ function rehydratePublishedAppSources(
             tileId: tile.i,
           });
         }
-        if (!certified) {
+        // A saved query nobody certified is not a task (T3); one with no
+        // published revision cannot be checked and must be refreshed.
+        if (tile.block && !sourceRevision) {
           requiresReviewPolicy = true;
           reviewTasks.set(`published-source-${sourceId}`, {
             id: `published-source-${createHash('sha256').update(sourceId).digest('hex').slice(0, 12)}`,
@@ -7624,9 +7565,10 @@ export function createStoredAppBuildDraft(
       .filter((page): page is DashboardDocument => Boolean(page))
     : [];
   const template = input.template ?? 'blank';
+  // An older client's data rule is ignored (T3).
   const published = rehydratePublishedAppSources(
     basePages,
-    input.sourcePolicy ?? 'governed_only',
+    APP_SOURCE_POLICY,
     options,
   );
   const pages = published.pages.length ? published.pages : [applyAppStudioTemplate(blankPage, template, name)];
@@ -7637,7 +7579,6 @@ export function createStoredAppBuildDraft(
     ...(base ? { baseApp: { appId: base.app.id, fingerprint: fingerprintAppDirectory(base.appDir) } } : {}),
     authoringMode: input.authoringMode === 'manual' ? 'manual' : 'ai',
     template,
-    sourcePolicy: published.requiresReviewPolicy ? 'include_review_required' : input.sourcePolicy,
     frame: {
       goal: cleanString(input.goal) || `Create ${name}`,
       audience: cleanString(input.audience) || base?.app.audience || 'stakeholders',
@@ -7885,9 +7826,6 @@ export function addAskResultToAppBuildDraft(
     const fingerprint = `sha256:${createHash('sha256').update(source).digest('hex')}`;
     artifactPath = join(projectRoot, '.dql', 'local', 'app-builds', draft.id, sourceRef);
     operations.push(
-      ...(draft.sourcePolicy === 'include_review_required'
-        ? []
-        : [{ type: 'set_source_policy' as const, sourcePolicy: 'include_review_required' as const }]),
       {
         type: 'upsert_source',
         source: {
@@ -7931,9 +7869,6 @@ export function addAskResultToAppBuildDraft(
   } else {
     const sourceId = `text:ask-${identity}`;
     operations.push(
-      ...(draft.sourcePolicy === 'include_review_required'
-        ? []
-        : [{ type: 'set_source_policy' as const, sourcePolicy: 'include_review_required' as const }]),
       { type: 'upsert_source', source: { id: sourceId, kind: 'text', sourceRef: `ask:${identity}`, trustState: 'review_required', reviewStatus: 'required' } },
       { type: 'set_review_task', task: { id: `review-ask-${identity}`, message: `Review the Ask narrative ${title} before publication.`, status: 'open', sourceId, pageId: page.id, tileId } },
     );
@@ -8293,7 +8228,20 @@ function restoreStoredAppBuildDraft(
   return { ok: true, id: payload.draft.id, restoredPath: '.dql/local/apps.sqlite', draft: payload.draft };
 }
 
-export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuildDraft): string[] {
+/** Current evidence for the tile trust check: the current catalog and model, when the caller resolved them. */
+type AppBuildTrustEvidence = {
+  descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
+  recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
+};
+
+export function preflightStoredAppBuildDraft(
+  projectRoot: string,
+  draft: AppBuildDraft,
+  options: {
+    /** Current evidence for the project's require-certified check; `false` when the caller runs it against the current catalog itself. */
+    trust?: AppBuildTrustEvidence | false;
+  } = {},
+): string[] {
   const errors: string[] = [];
   const blocks = collectBlockCandidates(projectRoot);
   if (draft.state === 'clarification_required') errors.push('Resolve required Build Frame clarifications before publication.');
@@ -8330,8 +8278,9 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
       const boundRevision = source.sourceRevision ?? source.sourceFingerprint;
       if (!block) errors.push(`Source ${source.id} no longer resolves at ${source.sourceRef}.`);
       if (block && canonicalAppBlockSourceId(block) !== source.id && source.kind === 'block') errors.push(`Source ${source.id} no longer matches its qualified path identity.`);
-      if (!block || block.status !== 'certified' || lifecycle !== 'certified' || source.trustState !== 'certified') {
-        errors.push(`Source ${source.qualifiedIdentity ?? source.id} is ${lifecycle ?? 'unknown'} and cannot be published to the Project.`);
+      // A saved query nobody certified publishes (T3); one that is gone cannot.
+      if (block?.status === 'deprecated') {
+        errors.push(`Source ${source.qualifiedIdentity ?? source.id} is retired and cannot be published to the Project. Replace it with current data.`);
       }
       if (block && !boundRevision) {
         errors.push(`Source ${source.qualifiedIdentity ?? source.id} has no bound source revision; refresh it before Project publication.`);
@@ -8341,8 +8290,8 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     }
     if (source.kind === 'governed_semantic' || source.kind === 'semantic_query') {
       if (source.capabilities?.dataset) {
-        if (source.lifecycle !== 'certified' || source.trustState !== 'certified') {
-          errors.push(`Dataset source ${source.qualifiedIdentity ?? source.id} is ${source.lifecycle ?? 'unknown'} and cannot be published to the Project.`);
+        if (source.lifecycle === 'deprecated') {
+          errors.push(`Dataset source ${source.qualifiedIdentity ?? source.id} is retired and cannot be published to the Project.`);
         }
         if (!source.sourceRevision) {
           errors.push(`Dataset source ${source.qualifiedIdentity ?? source.id} has no bound semantic source revision; refresh it before Project publication.`);
@@ -8351,11 +8300,10 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
         errors.push(`Source ${source.id} requires snapshot-bound semantic approval before Project publication.`);
       }
     }
-    if ((source.kind === 'block' && source.trustState !== 'certified') || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') {
-      errors.push(`Source ${source.id} is review-required and cannot be published to the Project.`);
-    }
-    if (((source.kind === 'block' && source.trustState !== 'certified' && !(source.checked && source.capabilities?.dataset)) || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') && draft.sourcePolicy !== 'include_review_required') {
-      errors.push(`Source ${source.id} requires include_review_required policy.`);
+    // App-scoped draft DQL lives only on this machine, so it cannot publish
+    // (it is not a trust rule: a saved query nobody certified publishes).
+    if (source.kind === 'review_dql' || source.kind === 'exploratory_sql') {
+      errors.push(`Source ${source.id} is local draft analysis and cannot be published to the Project.`);
     }
   }
   for (const page of draft.pages) {
@@ -8381,8 +8329,8 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
       if (source.sourceRevision !== tile.sourceRevision) {
         errors.push(`${page.id}/${tile.i} changed Dataset source revision after the tile was authored.`);
       }
-      if (source.lifecycle !== 'certified' || source.trustState !== 'certified') {
-        errors.push(`${page.id}/${tile.i} uses a ${source.lifecycle ?? 'unknown'} Dataset source and cannot be published to the Project.`);
+      if (source.lifecycle === 'deprecated') {
+        errors.push(`${page.id}/${tile.i} uses a retired Dataset source and cannot be published to the Project.`);
       }
       const validation = validateTileQuery(dataset, tile.query);
       if (!tileQueryValidationRuns(validation)) {
@@ -8394,8 +8342,8 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
       }
       if (source.kind === 'block' || source.kind === 'certified_block') {
         const block = blocks.find((candidate) => candidate.path === source.executionRef || candidate.path === source.sourceRef);
-        if (!block || block.status !== 'certified' || block.fingerprint !== source.sourceRevision) {
-          errors.push(`${page.id}/${tile.i} does not resolve to its current certified saved query.`);
+        if (!block || block.fingerprint !== source.sourceRevision) {
+          errors.push(`${page.id}/${tile.i} does not resolve to its current saved query.`);
         }
       } else if (source.kind === 'governed_semantic' || source.kind === 'semantic_query') {
         if (dataset.kind !== 'semantic' || Object.keys(source.capabilities?.metricCapabilities ?? {}).length === 0) {
@@ -8407,8 +8355,16 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     }
   }
   const settledPageIds = new Set(receipts.filter((receipt) => receipt.revision === draft.revision).map((receipt) => receipt.pageId));
-  const readiness = appPublicationReadiness(projectRoot, draft.pages, { settledPageIds });
+  const settings = readAppsPublishSettings(projectRoot);
+  // Trust is reported once, per tile, below; readiness reports the rest.
+  const readiness = appPublicationReadiness(projectRoot, draft.pages, { settledPageIds, settings: { requireCertifiedToPublish: false } });
   errors.push(...readiness.blockers.map((blocker) => blocker.message));
+  // The project may require every tile to be certified (T3). The HTTP route
+  // repeats this against the current model; this keeps direct callers honest.
+  if (settings.requireCertifiedToPublish && options.trust !== false) {
+    const tiles = notCertifiedTiles(appBuildDraftTrust(draft, { ...(options.trust || {}), blocks }));
+    if (tiles.length) errors.push(requireCertifiedToPublishMessage(tiles));
+  }
   return Array.from(new Set(errors));
 }
 
@@ -8419,7 +8375,8 @@ async function preflightAppBuildRequestErrors(
   resolver?: Ctx['resolveDatasetSourceAuthority'],
   figuresDependOnReader?: Ctx['figuresDependOnReader'],
 ): Promise<string[]> {
-  const errors = preflightStoredAppBuildDraft(projectRoot, draft);
+  // The tile trust check runs once, below, against the current catalog.
+  const errors = preflightStoredAppBuildDraft(projectRoot, draft, { trust: false });
   // An Ask answer's text with its author's figures is not published where they depend on who is looking.
   for (const tile of await staticAnswerTilesShownToOthers(draft.pages, figuresDependOnReader)) {
     errors.push(`${tile.pageId}/${tile.tileId}: ${ANSWER_FIGURES_DEPEND_ON_READER}`);
@@ -8429,6 +8386,20 @@ async function preflightAppBuildRequestErrors(
   // downgraded after an earlier run cannot publish through a forged source
   // card, a removed review task, or an otherwise matching old receipt.
   errors.push(...await datasetDraftCurrentAuthorityErrors(projectRoot, draft, 'project_publish', resolver));
+  // When the project requires certified data (apps.requireCertifiedToPublish),
+  // every tile — its data, every join it can reach, its calculations' inputs —
+  // must be certified, judged against the current catalog, model and saved
+  // queries. One plain message, whatever kind of tile.
+  if (readAppsPublishSettings(projectRoot).requireCertifiedToPublish) {
+    const records = await resolveCurrentDatasetSourceRecords(projectRoot, datasetDraftSourceIds(draft), resolver)
+      .catch(() => new Map<string, AppSourceCatalogRecord>());
+    const tiles = notCertifiedTiles(appBuildDraftTrust(draft, {
+      descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? undefined,
+      recordFor: (sourceId) => records.get(sourceId),
+      blocks: collectBlockCandidates(projectRoot),
+    }));
+    if (tiles.length) errors.push(requireCertifiedToPublishMessage(tiles));
+  }
   const analysisPages = draft.pages
     .map((page) => ({
       pageId: page.id,
@@ -8534,6 +8505,8 @@ function appBuildRequirementBlocksPublication(draft: AppBuildDraft, requirement:
 
 function appBuildReviewTaskBlocksPublication(draft: AppBuildDraft, task: AppBuildDraft['reviewTasks'][number]): boolean {
   if (task.status !== 'open') return false;
+  // "X needs certifying" reminders from older drafts: trust is per tile now (T3).
+  if (isTrustReminderTaskId(task.id)) return false;
   if (task.sourceId && appSourceIdsUsedByTiles(draft).has(task.sourceId)) return true;
   if (task.tileId && draft.pages.some((page) => page.layout.items.some((tile) => tile.i === task.tileId))) return true;
   if (task.pageId && draft.pages.some((page) => page.id === task.pageId)) return true;
@@ -8556,8 +8529,12 @@ function hasCurrentAppBuildPreflightReceipt(draft: AppBuildDraft): boolean {
     && draft.preflightReceipt.sourceFingerprint === appBuildSourceFingerprint(draft));
 }
 
-export function markStoredAppBuildDraftPreflighted(projectRoot: string, draft: AppBuildDraft): AppBuildDraft {
-  const errors = preflightStoredAppBuildDraft(projectRoot, draft);
+export function markStoredAppBuildDraftPreflighted(
+  projectRoot: string,
+  draft: AppBuildDraft,
+  options: Parameters<typeof preflightStoredAppBuildDraft>[2] = {},
+): AppBuildDraft {
+  const errors = preflightStoredAppBuildDraft(projectRoot, draft, options);
   if (errors.length) throw new Error(`App Build preflight failed: ${errors.join(' ')}`);
   const now = new Date().toISOString();
   const next: AppBuildDraft = {
@@ -8644,25 +8621,50 @@ export function appDescriptionFor(projectRoot: string, draft: Pick<AppBuildDraft
 }
 
 /**
- * The App's trust at publish (B6): the same answer the publish check, the
+ * The App's trust at publish (B6, T2): the same answer the publish check, the
  * editor, the App header and the Apps card give — every tile's source, every
- * join it can run through (filters included), its calculations, and whether
- * data that needs review was allowed. `descriptorFor` gives the current
- * model's Dataset (joins certified since the draft stored its card count).
+ * join it can run through (filters included) and its calculations' inputs.
+ * `descriptorFor` gives the current model's Dataset (joins certified since
+ * the draft stored its card count); `recordFor` the current catalog record
+ * (data certified since the card was stored); `blocks` the project's saved
+ * queries as they are now.
  */
 export function appBuildDraftTrust(
   draft: AppBuildDraft,
-  descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined,
+  current: {
+    descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
+    recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
+    blocks?: ReadonlyArray<{ id?: string; name?: string; path?: string; status?: string; fingerprint?: string }>;
+  } | ((sourceId: string) => DatasetDescriptor | undefined) = {},
 ): ReturnType<typeof appTrustAnswer> {
+  const options = typeof current === 'function' ? { descriptorFor: current } : current;
   const sources = new Map(draft.sources.map((source) => [source.id, source]));
   return appTrustAnswer({
     pages: draft.pages,
-    sourcePolicy: draft.sourcePolicy,
     sourceFor: (sourceId) => {
       const source = sources.get(sourceId);
       if (!source) return undefined;
-      const current = descriptorFor?.(sourceId);
-      return current ? { ...source, capabilities: { ...(source.capabilities ?? {}), dataset: current } } : source;
+      let next: AppBuildDraftSource = source;
+      const record = options.recordFor?.(sourceId);
+      if (record) {
+        const certified = record.lifecycle === 'certified' && record.trust === 'certified';
+        next = {
+          ...next,
+          lifecycle: record.lifecycle,
+          trustState: certified ? 'certified' : 'review_required',
+          reviewStatus: certified ? 'not_required' : next.reviewStatus === 'approved' ? 'approved' : 'required',
+          checked: Boolean(record.check),
+        };
+      } else if (options.blocks && (source.kind === 'block' || source.kind === 'certified_block') && !source.capabilities?.dataset) {
+        const block = options.blocks.find((candidate) => candidate.path === source.sourceRef || candidate.path === source.executionRef || candidate.id === source.sourceRef || candidate.name === source.sourceRef);
+        if (block) {
+          const revision = source.sourceRevision ?? source.sourceFingerprint;
+          const certified = block.status === 'certified' && (!revision || revision === block.fingerprint);
+          next = { ...next, lifecycle: certified ? 'certified' : next.lifecycle === 'certified' ? 'review' : next.lifecycle, trustState: certified ? 'certified' : 'review_required' };
+        }
+      }
+      const dataset = options.descriptorFor?.(sourceId);
+      return dataset ? { ...next, capabilities: { ...(next.capabilities ?? {}), dataset } } : next;
     },
   });
 }
@@ -8670,9 +8672,12 @@ export function appBuildDraftTrust(
 export function publishStoredAppBuildDraft(
   projectRoot: string,
   draft: AppBuildDraft,
-  options: { descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined } = {},
+  options: {
+    descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
+    recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
+  } = {},
 ): { ok: true; app: ReturnType<typeof collectAppsList>[number]; draft: AppBuildDraft; paths: string[] } {
-  const errors = preflightStoredAppBuildDraft(projectRoot, draft);
+  const errors = preflightStoredAppBuildDraft(projectRoot, draft, { trust: { descriptorFor: options.descriptorFor, recordFor: options.recordFor } });
   if (errors.length) throw new Error(`App Build preflight failed: ${errors.join(' ')}`);
   if (!hasCurrentAppBuildPreflightReceipt(draft)) {
     throw new Error('App Build Draft needs a current preflight receipt before publication.');
@@ -8698,10 +8703,10 @@ export function publishStoredAppBuildDraft(
     || ((source.kind === 'governed_semantic' || source.kind === 'semantic_query')
       && !source.capabilities?.dataset
       && source.reviewStatus !== 'approved'));
-  // Certified only when every data tile is certified (B6): a tile on an
-  // uncertified join, allowed with "Allow data that needs review", keeps the
-  // App from reading "App certified" while its header says "3 of 4".
-  const trust = appBuildDraftTrust(draft, options.descriptorFor);
+  // Certified only when every data tile is certified (B6, T2): a tile on a
+  // join nobody certified keeps the App from reading certified while its
+  // header says "3 of 4 tiles certified".
+  const trust = appBuildDraftTrust(draft, { descriptorFor: options.descriptorFor, recordFor: options.recordFor, blocks: collectBlockCandidates(projectRoot) });
   const lifecycle = hasCertifiedAnalysis && !hasReviewRequiredSource && trust.allCertified ? 'certified' as const : 'review' as const;
   const app: AppDocument = {
     version: 1,
@@ -9436,7 +9441,6 @@ function createAppPackageViaBuildDraft(
     audience: cleanString(input.audience),
     domain,
     authoringMode: 'manual',
-    sourcePolicy: 'governed_only',
   });
   const items = buildDashboardItems(projectRoot, selectedBlocks);
   const page = {
@@ -12755,3 +12759,18 @@ export const __test__ = {
 // reference unused parseAppDocument/readFileSync to keep import stable for forward use
 void parseAppDocument;
 void readFileSync;
+
+/**
+ * The project's App publish settings (T3), read fresh from `dql.config.json`
+ * on every call so a change applies to the next publish without a restart.
+ * Open source: off unless `apps.requireCertifiedToPublish` is `true`. An
+ * Enterprise host turns it on by writing that setting through its admin policy
+ * (or by overriding this read); there is no per-App rule.
+ */
+export function readAppsPublishSettings(projectRoot: string): AppsPublishSettings {
+  try {
+    return appsPublishSettings(JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8')));
+  } catch {
+    return appsPublishSettings(undefined);
+  }
+}

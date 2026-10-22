@@ -241,7 +241,7 @@ export function TileQueryEditor({
             return <label key={measure.qualifiedId} className={suggested ? 'is-suggested' : undefined} title={suggested ? 'Suggested by ZLens and not yet reviewed. Approve it in the field definition to use it.' : undefined}>
               <input type="checkbox" checked={selectedMeasures.has(measure.name) || selectedMeasures.has(measure.qualifiedId)} disabled={disabled || suggested} onChange={() => toggleMeasure(measure)} />
               <span><strong>{humanize(measure.name)}</strong><small>{measure.aggregation.replace(/_/g, ' ')}{measure.format?.kind ? ` · ${measure.format.kind}` : ''}</small></span>
-              {suggested ? <em className="dataset-field-badge">Suggested · needs review</em> : null}
+              {suggested ? <em className="dataset-field-badge">Suggested · not certified yet</em> : null}
             </label>;
           })}
         </div>
@@ -251,7 +251,7 @@ export function TileQueryEditor({
       <div className="dataset-editor-row">
         <label><span>Group by</span><select value={grouped?.name ?? ''} disabled={disabled} onChange={(event) => changeGroup(event.target.value)}>
           <option value="">No grouping</option>
-          {fields.groupable.map((field) => <option key={field.qualifiedId} value={field.name} disabled={field.status !== 'approved' || (Boolean(query.comparison) && field.name === query.comparison?.timeField)}>{humanize(field.name)}{field.status !== 'approved' ? ' (suggested, needs review)' : ''}</option>)}
+          {fields.groupable.map((field) => <option key={field.qualifiedId} value={field.name} disabled={field.status !== 'approved' || (Boolean(query.comparison) && field.name === query.comparison?.timeField)}>{humanize(field.name)}{field.status !== 'approved' ? ' (suggested, not certified yet)' : ''}</option>)}
         </select></label>
         {grouped?.role === 'time' ? <label><span>Time grain</span><select value={groupDimension?.timeGrain ?? grouped.time?.grains[0] ?? ''} disabled={disabled} onChange={(event) => changeGrain(event.target.value)}>
           {(grouped.time?.grains ?? []).map((grain) => <option key={grain} value={grain}>{humanize(grain)}</option>)}

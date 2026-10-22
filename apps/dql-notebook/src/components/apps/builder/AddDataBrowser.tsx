@@ -27,7 +27,7 @@ import {
   addDataCatalogRequest,
   addDataDomainChips,
   addDataKindOf,
-  addNeedsReviewChoice,
+  dataTrustDetail,
   canCertifyAppData,
   canMakeRowLevel,
   dataTrustLabel,
@@ -52,7 +52,8 @@ export interface AddDataBrowserProps {
   draftId: string;
   /** The App's data (draft sources) and pages, to mark rows Added and count the tiles that use one. */
   draft: Pick<AppStudioBuildDraft, 'sources' | 'pages'>;
-  sourcePolicy: SourcePolicy;
+  /** @deprecated Ignored: there is no per-App data rule (T3). */
+  sourcePolicy?: SourcePolicy;
   /** The App's domain; the domain chips start on it. */
   appDomain?: string;
   /** The project's domains from the Domains page. */
@@ -71,7 +72,8 @@ export interface AddDataBrowserProps {
   /** Connect one source to the App. Resolves to false when it was not added. */
   onAdd: (sourceId: string, options: { allowReview: boolean }) => Promise<boolean>;
   onRemove: (sourceId: string) => void;
-  onChangePolicy: (policy: SourcePolicy) => void;
+  /** @deprecated Ignored: there is no per-App data rule (T3). */
+  onChangePolicy?: (policy: SourcePolicy) => void;
   /** Field-based tiles are on: saved queries show fields and can be made row-level (default on). */
   fieldsEnabled?: boolean;
   /** A saved query was made row-level; the App refreshes its copy when the saved query is already in it. */
@@ -85,6 +87,8 @@ export interface AddDataBrowserProps {
  * an App can use. Each row says where it comes from (a table, a saved query or
  * Metrics), whether it is certified, its domain, and shows its fields when
  * opened; a saved query's fields come from its result, with no review step.
+ * Certified data comes first; data nobody certified is listed after it and
+ * added the same way, reading "Not certified yet" (T3: no per-App data rule).
  * Chips narrow the list to one kind. A database table becomes a Dataset after
  * ZLens checks it once. Used as the Data step before the canvas and as the
  * canvas **+ Add data** dialog.
@@ -92,7 +96,6 @@ export interface AddDataBrowserProps {
 export function AddDataBrowser({
   draftId,
   draft,
-  sourcePolicy,
   appDomain,
   domainOptions = [],
   disabled = false,
@@ -104,7 +107,6 @@ export function AddDataBrowser({
   readFields,
   onAdd,
   onRemove,
-  onChangePolicy,
   fieldsEnabled = true,
   onFieldsAdded,
   onCertified,
@@ -160,7 +162,7 @@ export function AddDataBrowser({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [query, domain, sourcePolicy, reloadNonce]);
+  }, [query, domain, reloadNonce]);
 
   useEffect(() => {
     if (tables) return undefined;
@@ -300,16 +302,14 @@ export function AddDataBrowser({
       </div>
       {receiptNotice?.kind === 'checked' ? <CheckedReceiptNote name={receiptNotice.name} check={receiptNotice.byline} /> : null}
       {receiptNotice?.kind === 'certified' ? <CertifiedReceiptNote name={receiptNotice.name} certification={receiptNotice.byline} /> : null}
-      <p className="add-data-rule"><ShieldCheck size={13} aria-hidden="true" /><span>Data rule: <strong>{sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allow data that needs review'}</strong></span><button type="button" className="link" disabled={disabled} onClick={() => onChangePolicy(sourcePolicy === 'governed_only' ? 'include_review_required' : 'governed_only')}>Change</button></p>
     </div>
 
     <div className="add-data-list" role="list" aria-label="Data you can add">
       {noCertifiedData ? <div className="add-data-empty" role="status">
         <Database size={18} aria-hidden="true" />
-        <div><strong>No certified data yet.</strong><p>Start from a database table, or allow data that needs review.</p></div>
+        <div><strong>No certified data yet.</strong><p>Start from a database table, or add data below: tiles on data nobody certified read “Not certified yet”.</p></div>
         <span className="add-data-empty-actions">
           <button type="button" className="primary" onClick={() => setKind('tables')}><Table2 size={13} /> Start from a database table</button>
-          {sourcePolicy === 'governed_only' ? <button type="button" disabled={disabled} onClick={() => onChangePolicy('include_review_required')}>Allow data that needs review</button> : null}
         </span>
       </div> : null}
       {loading && !rows.length ? <p className="add-data-muted" role="status">Finding data…</p> : null}
@@ -320,7 +320,6 @@ export function AddDataBrowser({
           key={item.id}
           item={item}
           draft={draft}
-          sourcePolicy={sourcePolicy}
           disabled={disabled}
           expanded={expandedId === sourceId}
           highlighted={highlightId === sourceId}
@@ -381,7 +380,6 @@ export function AddDataBrowser({
 function AddDataRow({
   item,
   draft,
-  sourcePolicy,
   disabled,
   expanded,
   highlighted,
@@ -397,7 +395,6 @@ function AddDataRow({
 }: {
   item: AppBlockRecommendation;
   draft: Pick<AppStudioBuildDraft, 'sources' | 'pages'>;
-  sourcePolicy: SourcePolicy;
   disabled: boolean;
   expanded: boolean;
   highlighted: boolean;
@@ -416,21 +413,21 @@ function AddDataRow({
 }): JSX.Element {
   const sourceId = item.sourceId ?? item.id;
   const added = isAddedToApp(draft.sources, item);
-  const reviewChoice = addNeedsReviewChoice(item, sourcePolicy);
   const certified = !needsReview(item);
+  const trustDetail = dataTrustDetail(item);
   const origin = sourceOriginLabel(item);
   const [menuOpen, setMenuOpen] = useState(false);
   const meta = [origin, dataTrustLabel(item), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.ownerName ?? item.owner ?? ''].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-      <div><strong title={item.name}>{humanize(item.name)}{sameNameOrigin ? <em className="same-name-origin"> · {sameNameOrigin}</em> : null}</strong><small>{meta}</small>{item.description ? <p>{item.description}</p> : null}</div>
+      <div><strong title={item.name}>{humanize(item.name)}{sameNameOrigin ? <em className="same-name-origin"> · {sameNameOrigin}</em> : null}</strong><small {...(trustDetail ? { title: trustDetail } : {})}>{meta}</small>{item.description ? <p>{item.description}</p> : null}</div>
       <ChevronDown size={14} className="chevron" aria-hidden="true" />
     </button>
     <div className="add-data-action">
       {added
         ? <><span className="add-data-added"><Check size={13} /> Added</span><RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={disabled} onRemove={onRemove} /></>
-        : <button type="button" className={reviewChoice ? 'review' : 'primary'} disabled={disabled || adding} onClick={() => onAdd(reviewChoice)} aria-label={`${reviewChoice ? 'Allow data that needs review and add' : 'Add to App'}: ${humanize(item.name)}`}>{adding ? 'Adding…' : reviewChoice ? 'Allow data that needs review & add' : <><Plus size={13} /> Add to App</>}</button>}
+        : <button type="button" className="primary" disabled={disabled || adding} onClick={() => onAdd(false)} aria-label={`Add to App: ${humanize(item.name)}`}>{adding ? 'Adding…' : <><Plus size={13} /> Add to App</>}</button>}
       {onMakeRowLevel || onCertify ? <span className="add-data-more-menu">
         <button type="button" className="more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`More for ${humanize(item.name)}`} disabled={disabled} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {menuOpen ? <span className="add-data-menu" role="menu" aria-label={`More for ${humanize(item.name)}`}>
@@ -476,8 +473,8 @@ function AddDataDetail({ item, fieldsEnabled, fieldRead }: { item: AppBlockRecom
       {groups.measures.length ? <section><h4>Measures</h4><p>{groups.measures.map((field) => <span key={field.name} className="chip"><span className="sigma" aria-hidden="true">Σ</span> {humanize(field.name)}</span>)}</p></section> : null}
       {groups.time.length ? <section><h4>Time</h4><p>{groups.time.map((field) => <span key={field.name} className="chip"><CalendarDays size={11} aria-hidden="true" /> {humanize(field.name)}</span>)}</p></section> : null}
       {groups.dimensions.length ? <section><h4>Dimensions</h4><p>{groups.dimensions.map((field) => <span key={field.name} className="chip">{field.kind === 'physical' && field.role === 'key' ? <Hash size={11} aria-hidden="true" /> : null} {humanize(field.name)}</span>)}</p></section> : null}
-      {groups.review.length ? <section><h4>Needs review</h4><p>{groups.review.map((field) => <span key={field.name} className="chip muted">{humanize(field.name)}</span>)}</p></section> : null}
-      {groups.related.length ? <section><h4>From related tables</h4><p>{groups.related.map((group) => <span key={group.join.id} className={`chip${group.review ? ' muted' : ''}`} title={group.join.sentence}>{group.path} · {group.fields.length} {group.fields.length === 1 ? 'field' : 'fields'}{group.review ? ' · needs review' : ''}</span>)}</p></section> : null}
+      {groups.review.length ? <section><h4>Suggested, not certified yet</h4><p>{groups.review.map((field) => <span key={field.name} className="chip muted">{humanize(field.name)}</span>)}</p></section> : null}
+      {groups.related.length ? <section><h4>From related tables</h4><p>{groups.related.map((group) => <span key={group.join.id} className={`chip${group.review ? ' muted' : ''}`} title={group.join.sentence}>{group.path} · {group.fields.length} {group.fields.length === 1 ? 'field' : 'fields'}{group.review ? ' · join not certified yet' : ''}</span>)}</p></section> : null}
       {descriptor?.result ? <small className="add-data-muted">{SAVED_QUERY_FIELDS_NOTE}</small> : null}
     </div> : <div className="add-data-fields">
       <section><h4>Columns</h4><p>{outputs.length ? outputs.map((column) => <span key={column} className="chip">{humanize(column)}</span>) : <small>No columns listed yet.</small>}</p></section>

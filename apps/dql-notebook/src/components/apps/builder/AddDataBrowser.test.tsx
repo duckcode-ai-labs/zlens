@@ -36,7 +36,8 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('Saved query · Certified · Commerce · analytics@example.com');
     expect(markup).toContain('Metrics · Certified · Finance');
     expect(markup).toContain('Saved query · Certified · Orders');
-    expect(markup).toContain('Saved query · Needs review · Growth');
+    expect(markup).toContain('Saved query · Not certified yet · Growth');
+    expect(markup).not.toMatch(/Needs review|data rule/i);
     // A database table not checked yet is in the same list and goes through the check.
     expect(markup).toContain('Table · Not checked yet · dev · 7 columns · ~935 rows');
     expect(markup).toContain('aria-label="Check customers and add it"');
@@ -61,14 +62,14 @@ describe('Add data browser: one list (design D1)', () => {
     expect(render({ appDomain: 'commerce' })).not.toContain('Check customers and add');
   });
 
-  it('starts the domain chips on the App domain and shows the data rule with a way to change it', () => {
+  it('starts the domain chips on the App domain and shows no per-App data rule (T3)', () => {
     const markup = render({ appDomain: 'commerce', domainOptions: [{ value: 'finance', label: 'Finance' }] });
     expect(markup).toMatch(/<button type="button" aria-pressed="false" class="">All domains<\/button>/);
     expect(markup).toMatch(/aria-pressed="true" class="on">commerce<\/button>/);
     expect(markup).toContain('>Finance</button>');
-    expect(markup).toContain('Data rule: <strong>Only certified data</strong>');
-    expect(markup).toContain('>Change</button>');
-    expect(render({ sourcePolicy: 'include_review_required' })).toContain('Also allow data that needs review');
+    expect(markup).not.toContain('Data rule');
+    expect(markup).not.toContain('Only certified data');
+    expect(render({ sourcePolicy: 'include_review_required' })).not.toContain('data that needs review');
   });
 
   it('marks data already in the App Added with Remove, and offers Add to App on the rest', () => {
@@ -78,14 +79,14 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('aria-label="Add to App: Margin"');
   });
 
-  it('asks before adding data that needs review while only certified data is allowed', () => {
-    const governed = render();
-    expect(governed).toContain('Allow data that needs review &amp; add');
-    expect(governed).toContain('aria-label="Allow data that needs review and add: Draft Revenue"');
-    expect(governed).toContain('aria-label="Add to App: Top Customers"');
-    const allowed = render({ sourcePolicy: 'include_review_required' });
-    expect(allowed).not.toContain('Allow data that needs review &amp; add');
-    expect(allowed).toContain('aria-label="Add to App: Draft Revenue"');
+  it('adds data nobody certified with the same Add to App, after the certified data (T3)', () => {
+    for (const sourcePolicy of ['governed_only', 'include_review_required'] as const) {
+      const markup = render({ sourcePolicy });
+      expect(markup).not.toContain('Allow data that needs review');
+      expect(markup).toContain('aria-label="Add to App: Draft Revenue"');
+      expect(markup).toContain('aria-label="Add to App: Top Customers"');
+      expect(markup.indexOf('Top Customers')).toBeLessThan(markup.indexOf('Draft Revenue'));
+    }
   });
 
   it('puts Make row-level under ⋯ on saved queries only, with no Add fields button or no-fields note', () => {
@@ -102,9 +103,10 @@ describe('Add data browser: one list (design D1)', () => {
   it('says what to do when there is no certified data yet', () => {
     const markup = render({ initialItems: [draftRevenueQuery] });
     expect(markup).toContain('No certified data yet.');
-    expect(markup).toContain('Start from a database table, or allow data that needs review.');
+    expect(markup).toContain('Start from a database table, or add data below');
     expect(markup).toContain('Start from a database table</button>');
-    expect(markup).toContain('>Allow data that needs review</button>');
+    expect(markup).not.toContain('Allow data that needs review');
+    expect(markup).toContain('aria-label="Add to App: Draft Revenue"');
   });
   it('marks tables setup drafted or Modeling models, lists them first, and links drafts to Modeling (D7)', () => {
     const modeledTables = [

@@ -1044,7 +1044,9 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       });
       expect(created.status, created.text).toBe(201);
       let draft = created.body.draft;
-      expect(draft).toMatchObject({ version: 3, state: 'local_draft', sourcePolicy: 'governed_only' });
+      expect(draft).toMatchObject({ version: 3, state: 'local_draft' });
+      // An older client's data rule is ignored: new Apps store none (T3).
+      expect(draft).not.toHaveProperty('sourcePolicy');
 
       const sourceCandidates = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/source-candidates?domain=commerce&limit=50`, 'GET');
       expect(sourceCandidates.status, sourceCandidates.text).toBe(200);
@@ -2382,7 +2384,7 @@ describe('Dataset App Builder real DuckDB pilot', () => {
         block: { ref: saved.body.path }, sourceClass: 'exploratory_analysis', trustState: 'review_required', reviewStatus: 'review_required',
       });
       expect(replacementTile).not.toHaveProperty('query');
-      expect(draft.sourcePolicy).toBe('include_review_required');
+      expect(draft).not.toHaveProperty('sourcePolicy');
       expect(draft.sources).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: source.sourceId, trustState: 'certified' }),
         expect.objectContaining({ kind: 'review_block', sourceRef: saved.body.path, trustState: 'review_required' }),
@@ -2395,7 +2397,6 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       try {
         expect(persisted.getAppBuildDraft(draft.id)).toMatchObject({
           revision: draft.revision,
-          sourcePolicy: 'include_review_required',
           pages: [expect.objectContaining({ id: page.id })],
         });
       } finally {

@@ -36,7 +36,8 @@ export interface DataStepAiProps {
   voice?: AppStudioPlannerVoice;
   /** Opens the AI provider settings; shown with keyword suggestions. */
   onConnectAi?: () => void;
-  sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
+  /** @deprecated Ignored: there is no per-App data rule (T3). */
+  sourcePolicy?: AppStudioBuildDraft['sourcePolicy'];
   busy: boolean;
   /** The picked sources, so the Add data browser marks them Added. */
   pickedSources: AppStudioBuildDraft['sources'];
@@ -117,7 +118,7 @@ export function DataStep({
         </ul> : <div className="data-step-empty"><Database size={18} aria-hidden="true" /><p><strong>No data yet</strong><small>Add a table, a saved query or Metrics from the list. Everything you add has fields.</small></p></div>}
       </aside>
       <div className="data-step-browser">
-        <AddDataBrowser {...browser} draftId={draft.id} draft={draft} sourcePolicy={draft.sourcePolicy} />
+        <AddDataBrowser {...browser} draftId={draft.id} draft={draft} />
       </div>
     </div>
     <footer className="data-step-footer">
@@ -149,9 +150,7 @@ function AiDataStep({
   const words = appStudioPlannerWords(voice);
   const running = ai.status === 'running';
   const locked = ai.busy || running;
-  const reviewAllowed = ai.sourcePolicy === 'include_review_required';
   const pickRow = (pick: AppStudioAiPick, picked: boolean) => {
-    const blockedByPolicy = !pick.certified && !reviewAllowed;
     return <li key={pick.id} className={picked ? 'ai-pick' : 'ai-suggestion'}>
       <span className={`add-data-mark ${pick.certified ? 'certified' : 'review'}`}>{pick.certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
       <p>
@@ -162,7 +161,7 @@ function AiDataStep({
       </p>
       {picked
         ? <button type="button" className="remove" disabled={locked} onClick={() => ai.onRemovePick(pick.id)} aria-label={`Remove ${pick.label} from ${words.removeFrom}`}><X size={12} /> Remove</button>
-        : <button type="button" className="remove" disabled={locked} onClick={() => ai.onAddBack(pick.id, blockedByPolicy)} aria-label={`${blockedByPolicy ? 'Allow data that needs review and add back' : 'Add back'} ${pick.label}`}><Plus size={12} /> {blockedByPolicy ? 'Allow data that needs review & add' : 'Add back'}</button>}
+        : <button type="button" className="remove" disabled={locked} onClick={() => ai.onAddBack(pick.id, false)} aria-label={`Add back ${pick.label}`}><Plus size={12} /> Add back</button>}
     </li>;
   };
   const activityLabel = ai.activitySteps[ai.activityIndex] ?? ai.activitySteps[0] ?? '';
@@ -217,7 +216,7 @@ function AiDataStep({
             <header><strong>Not covered yet</strong><small>{model.uncovered.length} {model.uncovered.length === 1 ? (voice === 'keywords' ? 'note' : 'gap') : (voice === 'keywords' ? 'notes' : 'gaps')}</small></header>
             {/* Keyword suggestions only note what they did not match (design D4): never publish blockers. */}
             {voice === 'keywords' ? <p className="data-step-not-covered-note">No suggested source matched these parts of your request. They are notes, not publish blockers: add tiles for them yourself, or leave them out.</p> : null}
-            {model.uncovered.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => ai.onGenerateGap(requirement.id)} disabled={locked || !reviewAllowed}>{reviewAllowed ? 'Generate draft DQL that needs review' : 'Allow data that needs review to generate'}</button></div>)}
+            {model.uncovered.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => ai.onGenerateGap(requirement.id)} disabled={locked}>Generate draft DQL</button></div>)}
           </section> : null}
           {model.clarifications.length ? <section className="studio-ai-questions" aria-label="AI needs one more decision">
             <header><strong>AI needs one more decision</strong><small>{model.clarifications.length} required</small></header>
@@ -227,7 +226,7 @@ function AiDataStep({
         </>}
       </aside>
       <div className="data-step-browser">
-        <AddDataBrowser {...browser} disabled={browser.disabled || locked || !model} draftId={draft.id} draft={{ sources: ai.pickedSources, pages: [] }} sourcePolicy={ai.sourcePolicy} />
+        <AddDataBrowser {...browser} disabled={browser.disabled || locked || !model} draftId={draft.id} draft={{ sources: ai.pickedSources, pages: [] }} />
       </div>
     </div>
     <footer className="data-step-footer">

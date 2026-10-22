@@ -30,7 +30,7 @@ function FieldOptions({ fields, data }: { fields: readonly QuickField[]; data: r
   const groups: Array<{ label: string; fields: QuickField[] }> = [];
   for (const field of fields) {
     const owner = quickDataOf(data, field.key);
-    const label = `${field.group}${owner && !owner.certified ? ' · Needs review' : field.review ? ' · Needs review' : ''}`;
+    const label = `${field.group}${owner && !owner.certified ? ' · Not certified yet' : field.review ? ' · Not certified yet' : ''}`;
     let group = groups.find((candidate) => candidate.label === label);
     if (!group) {
       group = { label, fields: [] };

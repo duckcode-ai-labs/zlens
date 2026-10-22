@@ -190,15 +190,17 @@ async function buildDqlAppOnce(
     }
     picks = matched.items.map((source) => ({ source, reason: 'You named this block.' }));
   } else {
+    // Certified data first, never only certified data (T3): readers see
+    // "Not certified yet" on tiles nobody certified.
     const candidates = shortlistAppSources(ctx.projectRoot, prompt, {
-      sourcePolicy: 'governed_only',
+      sourcePolicy: 'include_review_required',
       ...(domain ? { domains: [domain] } : {}),
     }).items;
     const brief = await planAppBuildBrief({
       prompt,
       candidates,
       requiredSourceIds: [],
-      sourcePolicy: 'governed_only',
+      sourcePolicy: 'include_review_required',
       ...(domain ? { domain } : {}),
     });
     const byId = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
@@ -222,7 +224,6 @@ async function buildDqlAppOnce(
     name,
     ...(domain ? { domain } : {}),
     sources: picks.map((pick) => pick.source),
-    sourcePolicy: 'governed_only',
   });
   const nothingPicked = sources.length === 0
     ? ['No certified data matched this request. App Studio shows what AI finds and lists what is not covered yet.']
@@ -234,7 +235,7 @@ async function buildDqlAppOnce(
       appId: draft.appId,
       name: draft.name,
       domain: domain ?? null,
-      sourcePolicy: 'Only certified data',
+      sourcePolicy: 'Certified data first',
       sources,
       notCoveredYet: notCoveredYet.map((gap) => gap.question),
       warnings: nothingPicked,
@@ -256,7 +257,7 @@ async function buildDqlAppOnce(
     appId: draft.appId,
     name: draft.name,
     domain: domain ?? null,
-    sourcePolicy: 'Only certified data',
+    sourcePolicy: 'Certified data first',
     openPath,
     ...(notebook ? { openUrl: `${notebook}${openPath}` } : {}),
     sources,

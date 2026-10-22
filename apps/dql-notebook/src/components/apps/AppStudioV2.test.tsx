@@ -217,13 +217,14 @@ describe('Studio Dataset source authoring (APP-055)', () => {
     expect(markup).toContain('does not change this App’s data');
   });
 
-  it('makes review-preview opt-in explicit before refreshing a changed Dataset binding', async () => {
+  it('asks before refreshing a changed Dataset binding, and says it does not certify the data', async () => {
     const DatasetSourceRebindReviewDialog = await datasetSourceRebindReviewDialog();
     const markup = renderToStaticMarkup(
       <DatasetSourceRebindReviewDialog title="Order lines Dataset" disabled={false} onCancel={() => undefined} onConfirm={() => undefined} />,
     );
-    expect(markup).toContain('Allow data that needs review &amp; refresh');
-    expect(markup).toContain('Project publication stays blocked');
+    expect(markup).toContain('Refresh data');
+    expect(markup).toContain('not certified yet');
+    expect(markup).not.toMatch(/needs review/i);
     expect(markup).toContain('does not certify the data');
   });
 });
@@ -716,7 +717,7 @@ describe('Publish leaves out data no tile uses (design D4)', () => {
   });
 });
 
-describe('Publish counts tiles that need review under "Only certified data" (design D2)', () => {
+describe('Publish lists tiles on a join nobody certified, and never blocks on them by default (design D2, T3)', () => {
   const sourceId = 'app:block:commerce:orders';
   const draftWith = (sourcePolicy: 'governed_only' | 'include_review_required') => ({
     version: 3, id: 'build_1', appId: 'orders-app', name: 'Orders', revision: 2, proposalHash: 'hash',
@@ -741,9 +742,10 @@ describe('Publish counts tiles that need review under "Only certified data" (des
     previewReceipts: [{ id: 'run', pageId: 'overview', revision: 2, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'x', createdAt: '' }],
     reviewTasks: [], createdAt: '', updatedAt: '',
   }) as never;
-  const dialog = (draft: never) => renderToStaticMarkup(
+  const dialog = (draft: never, requireCertifiedToPublish = false) => renderToStaticMarkup(
     <studio.PublishReadinessDialog
       draft={draft}
+      requireCertifiedToPublish={requireCertifiedToPublish}
       serverIssues={[]}
       busy={false}
       previewRun={null}
@@ -763,25 +765,30 @@ describe('Publish counts tiles that need review under "Only certified data" (des
     />,
   );
 
-  it('never says every check passed while a tile uses an uncertified join, and offers the three fixes', () => {
-    const markup = dialog(draftWith('governed_only'));
-    expect(markup).not.toContain('Every check passed');
-    expect(markup).not.toContain('Ready to publish');
-    expect(markup).toContain('1 fix before publishing');
-    expect(markup).toContain('Revenue by location uses the join to Location, which is not certified yet.');
-    expect(markup).toContain('Certify the join in Modeling');
-    expect(markup).toContain('Remove the related field');
-    expect(markup).toContain('Allow data that needs review');
+  it('is ready with the tile listed, its join actions, and what readers will see — whatever an old App\'s data rule said', () => {
+    for (const sourcePolicy of ['governed_only', 'include_review_required'] as const) {
+      const markup = dialog(draftWith(sourcePolicy));
+      expect(markup).toContain('Ready to publish');
+      expect(markup).toContain('0 of 1 tile certified');
+      expect(markup).toContain('aria-label="1 tile not certified yet"');
+      expect(markup).toContain('Revenue by location');
+      expect(markup).toContain('Uses a join nobody has certified.');
+      expect(markup).toContain('Certify the join (recommended)');
+      expect(markup).toContain('Remove the related field');
+      expect(markup).toContain('Readers will see \u2018Not certified yet\u2019 on 1 tile.');
+      expect(markup).toMatch(/<button type="button" class="primary">Publish<\/button>/);
+      expect(markup).not.toContain('All checks passed');
+      expect(markup).not.toMatch(/needs review|Allow data|data rule|Only certified data/i);
+    }
   });
 
-  it('is ready once data that needs review is allowed, and says so instead of "every check passed" (B6)', () => {
-    const markup = dialog(draftWith('include_review_required'));
-    expect(markup).toContain('Ready to publish');
-    expect(markup).not.toContain('Tile needs review');
-    expect(markup).toContain('Ready to publish · 1 tile needs review (allowed)');
-    expect(markup).toContain('the App reads “0 of 1 tile certified”');
-    expect(markup).not.toContain('Every check passed');
-    expect(markup).not.toContain('All checks passed');
+  it('holds publishing with one plain sentence when the project requires certified data', () => {
+    const markup = dialog(draftWith('include_review_required'), true);
+    expect(markup).not.toContain('Ready to publish');
+    expect(markup).toContain('1 fix before publishing');
+    expect(markup).toContain('This project requires every tile to be certified before an App is published.');
+    expect(markup).toContain('Certify the join (recommended)');
+    expect(markup).not.toMatch(/>Publish<\/button>/);
   });
 });
 
@@ -828,22 +835,22 @@ describe('Certify at publish (design Q1)', () => {
     />,
   );
 
-  it('lists data that is not certified yet, each with a short review, and holds publishing under "Only certified data"', () => {
+  it('lists each tile not certified yet with "Certify now (recommended)", and still publishes (T3)', () => {
     const markup = dialog(draftWith([checkedTable]));
-    expect(markup).toContain('1 table not certified yet');
-    expect(markup).toContain('This App uses only certified data.');
-    expect(markup).toContain('Orders</strong><small>Table · Checked · Needs certifying');
-    expect(markup).toContain('aria-label="Review and certify Orders"');
-    expect(markup).not.toContain('Ready to publish');
-    // The server says the same thing; it is listed once, not again as a separate fix.
+    expect(markup).toContain('Ready to publish');
+    expect(markup).toContain('aria-label="2 tiles not certified yet"');
+    expect(markup).toContain('Checked, not certified yet. Data: Orders.');
+    expect(markup).toContain('aria-label="Certify now: Orders"');
+    expect(markup).toContain('Certify now (recommended)');
+    expect(markup).toContain('Readers will see \u2018Not certified yet\u2019 on 2 tiles.');
+    // The server's old message about the same data is listed once, not again as a separate fix.
     expect(markup).not.toContain('Complete governed validation');
-    expect(markup).toContain('1 fix before publishing');
+    expect(markup).not.toMatch(/fix before publishing|Only certified data|Needs certifying|Checked ·/);
   });
 
-  it('lists uncertified saved queries too, and words a mix plainly', () => {
+  it('a saved query not certified yet gets its own Certify now (it opens the saved query, for now)', () => {
     const markup = dialog(draftWith([checkedTable, savedQuery]));
-    expect(markup).toContain('1 table and 1 saved query not certified yet');
-    expect(markup).toContain('Top Customers</strong><small>Saved query · Needs review');
+    expect(markup).toContain('aria-label="Certify now: Top Customers"');
     expect(markup).not.toContain('Local analysis cannot publish');
   });
 
@@ -871,7 +878,10 @@ describe('Certify at publish (design Q1)', () => {
       />,
     );
     expect(markup).toContain('Ready to publish');
-    expect(markup).not.toContain('not certified yet');
+    expect(markup).toContain('1 of 2 tiles certified');
+    // Only the saved query, whose card is not in this App's data, is still listed.
+    expect(markup).not.toContain('aria-label="Not certified yet: Orders"');
+    expect(markup).toContain('aria-label="Not certified yet: Top"');
   });
 });
 

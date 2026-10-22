@@ -7,6 +7,7 @@ import { AddDataBrowser } from './AddDataBrowser';
 import { CertifyReviewDialog } from './CertifyReviewDialog';
 import { CheckedReceiptNote } from './CertifiedReceiptNote';
 import { DataPanel } from './DataPanel';
+import { readerTileTrust } from '../reader-trust';
 import { DuplicateColumnQuestions } from './TableDatasetDialog';
 import { orderLinesDataset } from './app-data.fixtures';
 import {
@@ -15,6 +16,7 @@ import {
   appDataSourceFromCandidate,
   canCertifyAppData,
   checkedByLabel,
+  dataTrustDetail,
   dataTrustLabel,
   isCheckedNeedsCertifying,
   planAddDataSource,
@@ -35,20 +37,25 @@ const checkedOrders = {
 } as unknown as AppBlockRecommendation;
 const reviewOrders = { ...checkedOrders, check: undefined } as unknown as AppBlockRecommendation;
 
-describe('Checked · Needs certifying (design Q1)', () => {
-  it('names checked data apart from certified data and plain data that needs review', () => {
+describe('Checked, not certified yet (design Q1, T1)', () => {
+  it('says Not certified yet for checked data and for data nobody checked; being checked is detail (T1)', () => {
     expect(isCheckedNeedsCertifying(checkedOrders)).toBe(true);
     expect(isCheckedNeedsCertifying(reviewOrders)).toBe(false);
     expect(isCheckedNeedsCertifying(orderLinesDataset)).toBe(false);
-    expect(dataTrustLabel(checkedOrders)).toBe(CHECKED_NEEDS_CERTIFYING);
-    expect(dataTrustLabel(reviewOrders)).toBe('Needs review');
+    expect(dataTrustLabel(checkedOrders)).toBe('Not certified yet');
+    expect(CHECKED_NEEDS_CERTIFYING).toBe('Not certified yet');
+    expect(dataTrustLabel(reviewOrders)).toBe('Not certified yet');
+    expect(dataTrustDetail(checkedOrders)).toBe('Checked by you, not certified yet.');
+    expect(dataTrustDetail(reviewOrders)).toBe('Nobody has certified it yet.');
+    expect(dataTrustDetail(orderLinesDataset)).toBeUndefined();
     expect(checkedByLabel(checkedOrders.check)).toMatch(/^Checked by you · \d{1,2} [A-Z][a-z]{2}$/);
     expect(checkedByLabel({ by: 'maria@acme.com', at: today })).toMatch(/^Checked by Maria · /);
   });
 
-  it('adds checked data under "Only certified data" without changing the data rule; tiles work right away', () => {
+  it('adds checked data and data nobody checked the same way, with no data rule (T3); tiles work right away', () => {
     expect(addNeedsReviewChoice(checkedOrders, 'governed_only')).toBe(false);
-    expect(addNeedsReviewChoice(reviewOrders, 'governed_only')).toBe(true);
+    expect(addNeedsReviewChoice(reviewOrders, 'governed_only')).toBe(false);
+    expect(planAddDataSource({ sourcePolicy: 'governed_only' }, reviewOrders)).toMatchObject({ ok: true, operations: [{ type: 'upsert_source' }] });
     const plan = planAddDataSource({ sourcePolicy: 'governed_only' }, checkedOrders);
     expect(plan).toEqual({ ok: true, operations: [{ type: 'upsert_source', source: expect.objectContaining({ id: 'app:block:shop/orders', checked: true, trustState: 'review_required' }) }] });
     expect(appDataSourceFromCandidate(orderLinesDataset).checked).toBeUndefined();
@@ -62,19 +69,20 @@ describe('Checked · Needs certifying (design Q1)', () => {
     expect(canCertifyAppData(savedQuery)).toBe(false);
   });
 
-  it('says what "Check and use" left behind: checked, by whom, and certify before publishing', () => {
+  it('says what "Check and use" left behind: checked, by whom, and not certified yet', () => {
     const html = renderToStaticMarkup(<CheckedReceiptNote name="Orders" check={checkedOrders.check!} />);
-    expect(html).toContain('Orders · Checked · Needs certifying');
-    expect(html).toMatch(/Checked by you · \d{1,2} [A-Z][a-z]{2}\. Build tiles now; certify it before you publish\./);
+    expect(html).toContain('Orders · Not certified yet');
+    expect(html).toMatch(/Checked by you · \d{1,2} [A-Z][a-z]{2}, not certified yet\. Build tiles now; certify it when you are ready\./);
     expect(html).toContain('<li>Row key: each row is one order (order_id is filled and different on all 3 rows)</li>');
     expect(html).not.toContain('Certified by');
   });
 
   it('shows the trust word on Add data rows and offers Certify… under ⋯', () => {
     const html = renderToStaticMarkup(<AddDataBrowser draftId="build_1" draft={{ sources: [], pages: [] }} sourcePolicy="governed_only" initialItems={[checkedOrders]} initialTables={[]} onAdd={vi.fn(async () => true)} onRemove={vi.fn()} onChangePolicy={vi.fn()} />);
-    expect(html).toContain('Table · Checked · Needs certifying');
+    expect(html).toContain('Table · Not certified yet');
+    expect(html).toContain('title="Checked by you, not certified yet."');
     expect(html).toContain('aria-label="More for Orders"');
-    // Checked data adds with the plain button: the data rule stays "Only certified data".
+    // Checked data adds with the plain button.
     expect(html).toContain('aria-label="Add to App: Orders"');
     expect(html).not.toContain('Allow data that needs review &amp; add');
   });
@@ -83,7 +91,7 @@ describe('Checked · Needs certifying (design Q1)', () => {
     const html = renderToStaticMarkup(
       <DataPanel appData={[checkedOrders]} active={checkedOrders} target={{ kind: 'none' }} disabled={false} onChoose={vi.fn()} onPickField={vi.fn()} onAddData={vi.fn()} onAddSavedQuery={vi.fn()} onAddContent={vi.fn()} onCertify={vi.fn()} />,
     );
-    expect(html).toContain('Table · Checked · Needs certifying');
+    expect(html).toContain('Table · Not certified yet');
     expect(html).toContain('aria-label="More for Orders"');
   });
 });
@@ -158,15 +166,18 @@ describe('The short review before certifying (design Q1)', () => {
 });
 
 describe('Who certified, from the reader\'s side (design Q1)', () => {
-  it('says "All data certified by you" when the reader certified it, and names anyone else', () => {
-    expect(allDataCertifiedLabel('Certified by you · 22 Oct')).toBe('All data certified by you · 22 Oct');
+  it('the header says the count; who certified it is on the tile, by you or by name (T2)', () => {
+    expect(allDataCertifiedLabel('Certified by you · 22 Oct')).toBe('All tiles certified');
     const item = { i: 'kpi', query: {} } as never;
     const tile = (certification: Record<string, unknown>) => ({ tileId: 'kpi', status: 'ok', dataset: { trust: 'certified' }, certification });
-    expect(appCertificationRollup([item], 0, [tile({ by: 'kranthi@example.test', name: 'Kranthi', at: today, byYou: true })] as never).label).toMatch(/^All data certified by you · /);
-    expect(appCertificationRollup([item], 0, [tile({ by: 'maria@example.test', name: 'Maria', at: today })] as never).label).toMatch(/^All data certified by Maria · /);
+    const mine = appCertificationRollup([item], 0, [tile({ by: 'kranthi@example.test', name: 'Kranthi', at: today, byYou: true })] as never);
+    expect(mine.label).toBe('All tiles certified');
+    expect(mine.byline).toMatch(/^Certified by you · /);
+    expect(appCertificationRollup([item], 0, [tile({ by: 'maria@example.test', name: 'Maria', at: today })] as never).byline).toMatch(/^Certified by Maria · /);
+    expect(readerTileTrust(item, tile({ by: 'maria@example.test', name: 'Maria', at: today }) as never)?.byline).toMatch(/^Certified by Maria · /);
   });
 
-  it('says a checked tile needs certifying, not just review', () => {
+  it('counts a checked tile as not certified', () => {
     const item = { i: 'kpi', query: {} } as never;
     const rollup = appCertificationRollup([item], 0, [{ tileId: 'kpi', status: 'ok', dataset: { trust: 'review_required', checked: true } }] as never);
     expect(rollup.allCertified).toBe(false);

@@ -60,7 +60,7 @@ describe('fields from related tables in the Data pane (D2)', () => {
     expect(markup).toContain('Orders → Customer');
     expect(markup).toContain('Orders → Customer → Region');
     expect(markup).toContain('Location Name');
-    expect(markup).toMatch(/Orders → Location<span class="badge">Needs review<\/span>/);
+    expect(markup).toMatch(/Orders → Location<span class="badge" title="Uses a join nobody has certified.">Not certified yet<\/span>/);
     expect(markup).toContain('Order items per order: add it from Order items.');
     // A related field of a drafted join is usable (not locked); its tile is marked Needs review.
     expect(markup).not.toMatch(/disabled=""[^>]*>[^<]*<span class="glyph"><span class="aa">Aa<\/span><\/span><span class="name">Location Name/);

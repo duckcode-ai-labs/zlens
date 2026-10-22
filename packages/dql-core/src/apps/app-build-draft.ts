@@ -10,7 +10,21 @@ import type { DatasetDescriptor } from '../datasets/descriptor.js';
 import type { MetricCapabilityContract } from '../contracts/analytical.js';
 
 export type AppBuildAuthoringMode = 'ai' | 'manual';
+/**
+ * @deprecated The per-App data rule ("Only certified data" / "Also allow data
+ * that needs review") is gone (T3). Old drafts keep the stored value; it is
+ * read and ignored. Every App can use every source, and trust is shown per
+ * tile. Publishing is gated only by the project setting
+ * `apps.requireCertifiedToPublish`.
+ */
 export type AppBuildSourcePolicy = 'governed_only' | 'include_review_required';
+
+/**
+ * The source policy every catalog lookup for an App uses since the per-App
+ * rule is gone (T3): certified and not-certified sources are both usable,
+ * certified first. Deprecated sources stay out.
+ */
+export const APP_SOURCE_POLICY: AppBuildSourcePolicy = 'include_review_required';
 export type AppBuildTemplateId = 'executive_brief' | 'operational_dashboard' | 'investigation' | 'blank';
 
 export interface AppBuildClarification {
@@ -118,10 +132,9 @@ export type AppBuildDraftSource = {
   trustState: 'certified' | 'review_required' | 'draft_ready';
   reviewStatus: 'not_required' | 'required' | 'approved';
   /**
-   * Checked · Needs certifying (design Q1): a field Dataset ZLens checked
+   * Checked, not certified yet (design Q1): a field Dataset ZLens checked
    * that nobody certified yet. The App API sets it from the current catalog,
-   * never from a browser. Tiles may use it under "Only certified data"; it
-   * still never publishes until it is certified.
+   * never from a browser. Readers see "Not certified yet" on its tiles.
    */
   checked?: boolean;
 };
@@ -174,7 +187,8 @@ export interface AppBuildDraft {
   proposalHash: string;
   authoringMode: AppBuildAuthoringMode;
   template: AppBuildTemplateId;
-  sourcePolicy: AppBuildSourcePolicy;
+  /** @deprecated Read and ignored (T3); never written for new Apps. */
+  sourcePolicy?: AppBuildSourcePolicy;
   state: 'local_draft' | 'clarification_required' | 'preflight_ready' | 'project_published';
   frame: AppBuildFrame;
   requirements: AppBuildRequirement[];
@@ -196,6 +210,7 @@ export type AppBuildDraftOperation =
   | { type: 'set_name'; name: string }
   | { type: 'set_template'; template: AppBuildTemplateId }
   | { type: 'set_frame'; frame: AppBuildFrame }
+  /** @deprecated Accepted from older clients and ignored (T3). */
   | { type: 'set_source_policy'; sourcePolicy: AppBuildSourcePolicy }
   | { type: 'set_requirements'; requirements: AppBuildRequirement[]; coverage?: AppBuildRequirementCoverage[] }
   | { type: 'set_coverage'; coverage: AppBuildRequirementCoverage[] }
@@ -250,6 +265,7 @@ export function createAppBuildDraft(input: {
   baseApp?: AppBuildDraft['baseApp'];
   authoringMode: AppBuildAuthoringMode;
   template?: AppBuildTemplateId;
+  /** @deprecated Ignored (T3): new Apps have no per-App data rule. */
   sourcePolicy?: AppBuildSourcePolicy;
   frame: AppBuildFrame;
   requirements?: AppBuildRequirement[];
@@ -271,7 +287,6 @@ export function createAppBuildDraft(input: {
     revision: 1,
     authoringMode: input.authoringMode,
     template: input.template ?? 'blank',
-    sourcePolicy: input.sourcePolicy ?? 'governed_only',
     state: needsClarification ? 'clarification_required' as const : 'local_draft' as const,
     frame: input.frame,
     requirements: input.requirements ?? [],
@@ -461,7 +476,8 @@ function applyOperation(draft: AppBuildDraft, operation: AppBuildDraftOperation)
     }
     case 'set_template': return { ...draft, template: operation.template };
     case 'set_frame': return { ...draft, frame: operation.frame };
-    case 'set_source_policy': return { ...draft, sourcePolicy: operation.sourcePolicy };
+    // The per-App data rule is gone (T3): an older client's change is ignored.
+    case 'set_source_policy': return draft;
     case 'set_requirements': return { ...draft, requirements: operation.requirements, coverage: operation.coverage ?? draft.coverage };
     case 'set_coverage': return { ...draft, coverage: operation.coverage };
     case 'upsert_source': return { ...draft, sources: upsertById(draft.sources, operation.source) };
@@ -761,14 +777,6 @@ function assertAppBuildDraftPolicy(draft: Omit<AppBuildDraft, 'proposalHash'> | 
         }
       }
     }
-  }
-  if (draft.sourcePolicy === 'governed_only') {
-    const reviewSource = draft.sources.find((source) =>
-      (source.kind === 'block' && source.trustState !== 'certified' && !(source.checked && source.capabilities?.dataset))
-      || source.kind === 'review_block'
-      || source.kind === 'review_dql'
-      || source.kind === 'exploratory_sql');
-    if (reviewSource) throw new Error(`Source ${reviewSource.id} requires include_review_required policy`);
   }
 }
 

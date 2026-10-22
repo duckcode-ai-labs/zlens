@@ -66,10 +66,10 @@ describe('calculations in Studio (RFC 0009 step 3)', () => {
     expect(overFormula.options.find((option) => option.kind === 'moving_average')?.refusal).toContain('would average ratios');
   });
 
-  it('reads a calculated tile as Governed and shows its formulas on the receipt', () => {
+  it('reads a calculated tile over certified data as Certified (T2) and shows its formulas on the receipt', () => {
     const item = { i: 't1', title: 'Revenue', query, viz: { type: 'line' } } as never;
     const tile = { tileId: 't1', status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'covered' } } } as never;
-    expect(readerTileTrust(item, tile)).toMatchObject({ state: 'governed' });
+    expect(readerTileTrust(item, tile)).toMatchObject({ state: 'certified', label: 'Certified' });
     expect(readerTileTrust({ ...(item as object), query: { ...query, calculations: undefined } } as never, tile)).toMatchObject({ state: 'certified' });
     const rows = readerTileReceipt(item, tile, null, undefined);
     expect(rows.find((row) => row.label === 'Calculations')?.value).toBe('Average order value = revenue / order_count · Running total of revenue');

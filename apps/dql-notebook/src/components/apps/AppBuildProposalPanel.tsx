@@ -27,7 +27,7 @@ export function unbuildableSelectedTiles(proposal: AppBuildProposal, selected: S
       id: tile.id,
       title: tile.title,
       reason: tile.sql
-        ? 'Draft SQL is not added to an App. App Studio lists this question under Not covered yet, where you can generate a draft that needs review.'
+        ? 'Draft SQL is not added to an App. App Studio lists this question under Not covered yet, where you can generate draft DQL for it.'
         : 'No query was written for it, so it has nothing to show. App Studio lists it under Not covered yet.',
     });
   }
@@ -220,12 +220,12 @@ function ProposalTileRow({
             </span>
           ) : semantic ? (
             <span style={badgeStyle(t.accent)}>
-              <Sparkles size={10} /> Metrics · Needs review
+              <Sparkles size={10} /> Metrics · Not certified yet
             </span>
           ) : (
             <span style={badgeStyle(t.warning)}>
               {tile.repair?.status === 'repaired' ? <Wrench size={10} /> : <Sparkles size={10} />}
-              {tile.repair?.status === 'repaired' ? 'Draft SQL · repaired · Needs review' : 'Draft SQL · Needs review'}
+              {tile.repair?.status === 'repaired' ? 'Draft SQL · repaired · Not certified yet' : 'Draft SQL · Not certified yet'}
             </span>
           )}
         </div>

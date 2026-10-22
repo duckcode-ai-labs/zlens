@@ -46,14 +46,14 @@ export type AppStudioSourceActionStatus = 'idle' | 'adding' | 'added' | 'error';
 export function appStudioSourceActionLabel(input: {
   view: string;
   status: AppStudioSourceActionStatus;
-  reviewRequired: boolean;
+  /** @deprecated Ignored (T3): data nobody certified is added like any other. */
+  reviewRequired?: boolean;
   alreadyUsed: boolean;
   pageTitle?: string;
 }): string {
   if (input.status === 'adding') return 'Adding…';
   if (input.status === 'added') return `Added to ${input.pageTitle?.trim() || 'Overview'}`;
   if (input.status === 'error') return `Try add ${input.view}`;
-  if (input.reviewRequired) return `Allow data that needs review & add ${input.view}`;
   if (input.alreadyUsed) return `Add another ${input.view}`;
   return `Add ${input.view}`;
 }

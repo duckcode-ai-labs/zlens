@@ -25,8 +25,10 @@ import {
   tilePatchWithoutRelatedFields,
   tileUsesLegacySemanticApproval,
   unresolvedPublicationRequirements,
+  uncertifiedPublicationSources,
+  notCertifiedPublicationTiles,
 } from './app-studio-publish-readiness';
-import { publishReadyLine } from '@zlens/core/apps/app-trust';
+import { publishReadyLine, readersWillSeeText } from '@zlens/core/apps/app-trust';
 
 function coreDashboardDocument(page: AppStudioBuildDraft['pages'][number]) {
   const parsed = parseDashboardDocument(JSON.stringify(page), '<readiness-test.dqld>');
@@ -159,7 +161,7 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
     });
   });
 
-  it('keeps canonical draft block sources local-only (PRD-007)', () => {
+  it('a saved query nobody certified is a tile Not certified yet, never a blocker (PRD-007, T3)', () => {
     const draft = draftFixture();
     draft.sources = [{
       id: 'source:draft-orders',
@@ -170,8 +172,9 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
       reviewStatus: 'required',
     }];
     draft.pages[0]!.layout.items[0]!.block = { blockId: 'orders_by_region' };
-    expect(publicationBlockingSources(draft).map((source) => source.id)).toEqual(['source:draft-orders']);
-    expect(localPublicationSteps(draft).map((step) => step.id)).toContain('sources');
+    expect(publicationBlockingSources(draft).map((source) => source.id)).toEqual([]);
+    expect(localPublicationSteps(draft).map((step) => step.id)).not.toContain('sources');
+    expect(uncertifiedPublicationSources(draft.sources).map((source) => source.id)).toEqual(['source:draft-orders']);
   });
 
   it('never blocks publishing on connected data no tile uses; Publish leaves it out (design D4)', () => {
@@ -282,7 +285,8 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
 
     expect(isDatasetBackedAppSource(certifiedDataset)).toBe(true);
     expect(legacySemanticSourcesNeedingApproval(draft).map((source) => source.id)).toEqual([legacySemantic.id]);
-    expect(publicationBlockingSources(draft).map((source) => source.id)).toEqual([legacySemantic.id, reviewDataset.id]);
+    // A Metrics Dataset nobody certified is not a blocker (T3): its tile reads Not certified yet.
+    expect(publicationBlockingSources(draft).map((source) => source.id)).toEqual([legacySemantic.id]);
     expect(tileUsesLegacySemanticApproval(draft, legacyTile)).toBe(true);
     expect(tileUsesLegacySemanticApproval(draft, datasetTile)).toBe(false);
   });
@@ -526,14 +530,17 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
       'Source sales.revenue changed after selection.',
       'overview/orders no longer resolves to a certified block.',
     ];
-    // Two questions, one review task, one source and two server messages; the
-    // page Publish runs itself is listed but is not a fix (B6).
-    expect(publicationBlockerCount(draft, issues)).toBe(6);
+    // Two questions, one review task and two server messages; the page Publish
+    // runs itself is listed but is not a fix (B6), and data nobody certified is
+    // not a fix either (T3).
+    expect(publicationBlockerCount(draft, issues)).toBe(5);
     const readiness = publicationReadiness(draft, issues);
     expect(readiness.previewPages).toHaveLength(1);
     expect(readiness.fixCount).toBe(readiness.requirements.length + readiness.clarifications.length + readiness.tasks.length
-      + readiness.uncertifiedSources.length + readiness.datasetSources.length + readiness.reviewTiles.length + readiness.serverIssues.length
+      + readiness.serverIssues.length
       + (readiness.semanticTiles.length ? 1 : 0) + (readiness.localOnlySources.length ? 1 : 0));
+    // The project requires certified data: the tiles not certified yet are one more fix.
+    expect(publicationBlockerCount(draft, issues, {}, { requireCertifiedToPublish: true })).toBe(6);
   });
 });
 
@@ -563,10 +570,18 @@ describe('an honest fix count (B6)', () => {
   it('the button and the dialog count the same list, and one root cause is one row', () => {
     const draft = uncertifiedOrdersDraft();
     const before = publicationReadiness(draft);
-    // Orders needs certifying: one row. Its review task says the same thing, so it is not repeated.
+    // Orders is not certified yet: its three tiles are listed with "Certify now", and nothing blocks (T3).
     expect(before.uncertifiedSources.map((source) => source.id)).toEqual(['app:block:general:orders']);
+    expect(before.notCertified.map((tile) => [tile.tileId, tile.action.kind])).toEqual([['orders-kpi', 'source'], ['orders-trend', 'source'], ['top-customers', 'source']]);
+    // Its old "needs certifying" reminder is not a task to resolve.
     expect(before.tasks).toEqual([]);
-    expect(before.fixCount).toBe(1);
+    expect(before.fixCount).toBe(0);
+    expect(before.ready).toBe(true);
+    // Required by the project: one fix for all three tiles.
+    const required = publicationReadiness(draft, [], {}, { requireCertifiedToPublish: true });
+    expect(required.requireCertified).toBe(true);
+    expect(required.fixCount).toBe(1);
+    expect(required.ready).toBe(false);
     // What the server says about the same source and its three tiles adds no rows.
     const serverIssues = [
       'Dataset tile orders-kpi is currently review and is not eligible for Project publication. Refresh the governed source and run the draft again after certification.',
@@ -580,6 +595,11 @@ describe('an honest fix count (B6)', () => {
     expect(after.serverIssues).toEqual([]);
     expect(after.fixCount).toBe(before.fixCount);
     expect(publicationBlockerCount(draft, serverIssues)).toBe(after.fixCount);
+    // The server's one require-certified message turns the requirement on, as one fix.
+    const fromServer = publicationReadiness(draft, ['APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: orders-kpi.']);
+    expect(fromServer.requireCertified).toBe(true);
+    expect(fromServer.serverIssues).toEqual([]);
+    expect(fromServer.fixCount).toBe(1);
   });
 
   it('says what to do in plain words, with the server\'s own words under Technical details', () => {
@@ -588,21 +608,24 @@ describe('an honest fix count (B6)', () => {
     expect(unknown!.detail).not.toContain('overview/margin');
     expect(JSON.stringify(publicationIssueSummaries(['Dataset tile x is currently review and is not eligible.', 'overview/y something odd']))).not.toContain('Complete governed validation');
     expect(plainReviewTaskMessage('Orders is review and must be certified, replaced, or removed before Project publication.'))
-      .toBe('Orders needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.');
+      .toBe('Orders is not certified yet: certify it, replace it, or remove the tiles that use it.');
     expect(plainReviewTaskMessage('Validate revenue grain.')).toBe('Validate revenue grain.');
   });
 
-  it('a tile on an uncertified join is one row under "Only certified data"; allowed, it is named, never "every check passed"', () => {
-    const governed = publicationReadiness(joinedDraftFixture());
-    expect(governed.reviewTiles).toHaveLength(1);
-    expect(governed.fixCount).toBe(1);
-    // The server's copy of the same tile check adds nothing.
-    expect(publicationReadiness(joinedDraftFixture(), ['APP_BUILD_TILE_NEEDS_REVIEW: overview/by_location: Revenue by location uses the join to Location, which is not certified yet.']).fixCount).toBe(1);
-    const allowed = publicationReadiness({ ...joinedDraftFixture(), sourcePolicy: 'include_review_required' });
-    expect(allowed.ready).toBe(true);
-    expect(allowed.trust.reviewAllowed).toBe(1);
-    expect(allowed.trust.label).toBe('1 of 2 tiles certified');
-    expect(publishReadyLine(allowed.trust)).toEqual({ detail: '1 tile needs review (allowed)', allPassed: false });
+  it('a tile on a join nobody certified is listed with its join action, never a fix, and never "every check passed" (T3)', () => {
+    for (const sourcePolicy of [undefined, 'governed_only', 'include_review_required'] as const) {
+      const readiness = publicationReadiness({ ...joinedDraftFixture(), ...(sourcePolicy ? { sourcePolicy } : {}) });
+      expect(readiness.reviewTiles).toHaveLength(1);
+      expect(readiness.notCertified.map((tile) => [tile.tileId, tile.action.kind, tile.detail])).toEqual([['by_location', 'join', 'Uses a join nobody has certified.']]);
+      expect(readiness.fixCount).toBe(0);
+      expect(readiness.ready).toBe(true);
+      expect(readiness.trust.label).toBe('1 of 2 tiles certified');
+      expect(readiness.trust.notCertified).toBe(1);
+      expect(publishReadyLine(readiness.trust)).toEqual({ detail: '1 of 2 tiles certified', allPassed: false });
+      expect(readersWillSeeText(readiness.trust.notCertified)).toBe('Readers will see \u2018Not certified yet\u2019 on 1 tile.');
+    }
+    // An old server's tile check adds nothing.
+    expect(publicationReadiness(joinedDraftFixture(), ['APP_BUILD_TILE_NEEDS_REVIEW: overview/by_location: Revenue by location uses the join to Location, which is not certified yet.']).fixCount).toBe(0);
   });
 
   it('the editor\'s tile trust is the publish check\'s answer', () => {
@@ -661,22 +684,20 @@ function joinedDraftFixture(joinTrust: 'certified' | 'review_required' = 'review
   return draft;
 }
 
-describe('tiles that need review count in the publish check (design D2)', () => {
-  it('blocks a tile that reads a field through an uncertified join under "Only certified data"', () => {
+describe('tiles on a join nobody certified in the publish check (design D2, T3)', () => {
+  it('lists a tile that reads a field through a join nobody certified, without blocking', () => {
     const draft = joinedDraftFixture();
-    // The source itself is certified: the source check alone said "ready".
     expect(publicationBlockingSources(draft)).toEqual([]);
     const tiles = publicationTilesNeedingReview(draft);
     expect(tiles.map((item) => [item.pageId, item.tileId, item.relatedFields])).toEqual([['overview', 'by_location', ['location__location_name']]]);
-    expect(localPublicationSteps(draft).map((step) => step.id)).toEqual(['sources']);
-    expect(publicationBlockerCount(draft)).toBe(1);
+    expect(localPublicationSteps(draft)).toEqual([]);
+    expect(publicationBlockerCount(draft)).toBe(0);
+    expect(publicationBlockerCount(draft, [], {}, { requireCertifiedToPublish: true })).toBe(1);
   });
 
-  it('lets it publish after allowing data that needs review, or once the join is certified', () => {
-    const allowed = { ...joinedDraftFixture(), sourcePolicy: 'include_review_required' as const };
-    expect(publicationTilesNeedingReview(allowed)).toEqual([]);
-    expect(localPublicationSteps(allowed)).toEqual([]);
+  it('the tile is certified once the join is certified', () => {
     expect(publicationTilesNeedingReview(joinedDraftFixture('certified'))).toEqual([]);
+    expect(notCertifiedPublicationTiles(joinedDraftFixture('certified'), draftTrust(joinedDraftFixture('certified')))).toEqual([]);
     // A settled run is the current evidence: the join was certified since the source was saved.
     const draft = joinedDraftFixture();
     const run = { tiles: [{ tileId: 'by_location', status: 'ok', dataset: { joins: [{ id: 'location', table: 'locations', trust: 'certified', sentence: '' }] } }] } as unknown as DashboardRunResponse;
@@ -696,14 +717,10 @@ describe('tiles that need review count in the publish check (design D2)', () => 
     expect(publicationTilesNeedingReview(after)).toEqual([]);
   });
 
-  it('reads the server tile check in plain words with the same fix', () => {
+  it('leaves the tile checks to the not-certified list: neither an old server message nor the require-certified one is a separate row', () => {
     expect(publicationIssueSummaries([
-      'APP_BUILD_TILE_NEEDS_REVIEW: overview/by_location: Revenue by location uses the join to Location, which is not certified yet. This App uses only certified data: certify the join in Modeling, remove the related field, or allow data that needs review.',
-    ])).toEqual([expect.objectContaining({
-      id: 'tile-review:overview/by_location',
-      title: 'A tile needs review',
-      action: 'tile_review',
-      detail: expect.stringMatching(/^Revenue by location uses the join to Location/),
-    })]);
+      'APP_BUILD_TILE_NEEDS_REVIEW: overview/by_location: Revenue by location uses the join to Location, which is not certified yet.',
+      'APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Revenue by location.',
+    ])).toEqual([]);
   });
 });

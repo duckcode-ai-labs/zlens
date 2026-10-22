@@ -226,7 +226,7 @@ describe('fields from related tables (D2)', () => {
     const { joins } = discover();
     expect(datasetJoinReceiptSentence(joins[0]!, joins)).toBe('Joined to customers on customer_id (each order has one customer — checked)');
     expect(datasetJoinReceiptSentence(joins[2]!, joins)).toBe('Joined to regions through customers on region_id (each customer has one region — checked)');
-    expect(datasetJoinReceiptSentence(joins[1]!, joins)).toBe('Joined to locations on location_id (each order has one location — checked; the join is not certified yet, so it needs review)');
+    expect(datasetJoinReceiptSentence(joins[1]!, joins)).toBe('Joined to locations on location_id (each order has one location — checked; the join is not certified yet)');
   });
 
   it('names related fields in words', () => {

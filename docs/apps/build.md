@@ -15,8 +15,8 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
    **Describe with AI**; without one it opens on **Quick start**.
 3. Choose how to start:
     - **Describe with AI** (AI provider connected): answer **What decision
-      should this App support?** AI picks certified data and drafts a first
-      version. You check the data it chose and every tile before anything is
+      should this App support?** AI picks data, certified first, and drafts a
+      first version. You check the data it chose and every tile before anything is
       applied.
     - **Quick start** (no AI provider): answer **What should this App be
       called?**, or leave it empty and the App is named after its Domain, such
@@ -32,10 +32,7 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
    other than Blank puts one intro at the top of the page for you to edit (its
    wording differs by layout); you add the tiles. Starting manually, the button
    then reads **Open Studio with an intro**.
-6. Leave **Only certified data** on. **Also let me try data that needs review**
-   is useful while exploring, but a page that uses such data cannot publish
-   until the data is certified.
-7. Click **Generate editable App** (AI), **Choose data** (Quick start) or
+6. Click **Generate editable App** (AI), **Choose data** (Quick start) or
    **Open blank Studio** (manual).
 
 The App is a private draft; the header says **Unpublished changes (only you
@@ -43,8 +40,9 @@ can see them)**. Every way opens on the Data step first: by hand and with
 Quick start it is **Data for this App**; with AI it shows the data AI picked
 (see below).
 
-You can change the data rule later in the App's settings: **Data rule** is
-**Only certified data** or **Also allow data that needs review**.
+There is no data rule to choose: every App can use any data, certified first,
+and each tile says whether it is certified (see
+[Publish and trust](#7-publish)).
 
 ### Build with AI: describe, check the data, build pages, review tiles
 
@@ -66,14 +64,15 @@ you say so.
       what you asked.* or *Journey Customers can't answer this with its
       approved fields yet.*
     - **Not covered yet** lists the parts of your request no data answers.
-      **Generate draft DQL that needs review** drafts data for one of
-      them; it needs **Also allow data that needs review**.
+      **Generate draft DQL** drafts data for one of them; the draft is
+      **Not certified yet**.
     - If AI needs a choice from you, **AI needs one more decision** asks it;
       answer it, or click **Re-run proposal**.
     - The **Add data** list on the right works as for a manual App. **Add to
       App** makes AI plan again with that data, and the progress shows while
       it does.
-    - With **Only certified data**, AI is given certified data only.
+    - AI is given certified data first; data nobody certified is offered
+      too, and its tiles read **Not certified yet**.
 3. **Build pages.** Click **Build pages with N sources**. **Discard** drops
    AI's picks and leaves you on **Data for this App** to pick data yourself.
 4. **Review the tiles.** The page shows the proposed tiles, and the
@@ -131,14 +130,13 @@ so you check the data first. Nothing is written to your project until you
 publish, and publishing goes through the same checks.
 
 - **Ask.** When you ask for an App, Ask shows a **Build Brief**: its tiles
-  with their trust (**Certified**, **Metrics · Needs review**, **Draft SQL ·
-  Needs review**) and **Not covered yet**. Untick what you don't want and
+  with their trust (**Certified**, **Metrics · Not certified yet**, **Draft
+  SQL · Not certified yet**) and **Not covered yet**. Untick what you don't want and
   click **Open in App Studio**. The data behind the tiles you kept becomes the
   App's data, and App Studio opens at **AI picked N sources**. Ask's SQL is
   never added as a tile: its question is listed under **Not covered yet**.
-  The App uses **Only certified data** unless you kept data that needs review.
 - **An MCP client** (Claude Code, Codex, Cursor). `build_dql_app` picks
-  certified data for your description and returns a link to the draft, for
+  data for your description, certified first, and returns a link to the draft, for
   example `http://127.0.0.1:3474/?appDraft=build_…`. Open it to continue in
   App Studio. The draft is also listed in **Apps** under **Drafts**.
 
@@ -155,28 +153,25 @@ and one **Add data** list on the right. Everything in it has fields:
 
 The chips **All · Tables · Saved queries · Metrics** narrow the list to one
 kind. Search with **Search tables, saved queries and Metrics**, and narrow it
-by domain (**All domains** or one domain). The **Data rule** line shows **Only
-certified data** or **Also allow data that needs review**; **Change** switches
-it.
+by domain (**All domains** or one domain). Certified data is listed first.
 
 Each row shows where it comes from (**Table**, **Saved query** or **Metrics**),
-its trust (**Certified by** *name* **·** *date*, **Checked · Needs certifying**,
-or **Needs review**), its
-domain and owner. Click a
+its trust in two words (**Certified by** *name* **·** *date*, or **Not
+certified yet**; hover for why, such as *Checked by you, not certified yet*),
+its domain and owner. Click a
 row to see its **Measures**, **Dimensions** and **Time**; **Show 10 sample
 rows** reads a few of its rows.
 
-- Click **Add to App**. The row then says **Added**, with **Remove**.
-- Data marked **Needs review** shows **Allow data that needs review & add**
-  while the App allows only certified data.
+- Click **Add to App**. The row then says **Added**, with **Remove**. Data
+  that is **Not certified yet** is added the same way; its tiles say so.
 - On a table that is **Not checked yet**, click **Check and add**, check the
   numbers, and click **Check and use**. ZLens runs the same checks as
   certifying (it compiles and runs, what one row is, how each number is shown:
-  money stored as cents is shown in dollars). The table is added as
-  **Checked · Needs certifying**, for example **Orders · Checked · Needs
-  certifying** with **Checked by you · 22 Oct** and what the check found. You
-  can build tiles from it right away, under either data rule. Checking is not
-  certifying: see [Check vs certify](#check-vs-certify).
+  money stored as cents is shown in dollars). The table is added as **Not
+  certified yet**, for example **Orders · Not certified yet** with **Checked
+  by you · 22 Oct, not certified yet** and what the check found. You can build
+  tiles from it right away. Checking is not certifying: see
+  [Check vs certify](#check-vs-certify).
 - When a table has the same number twice, such as `order_total` and
   `order_total_cents`, the check asks one question: **Use Order total in
   dollars?** **Yes** (recommended) reads `order_total_cents` in dollars as
@@ -227,8 +222,8 @@ result:
   shows as it is only at the saved query's own grouping. Rolled up, ZLens
   refuses to sum it and offers **Min** and **Max** of it instead.
 
-A certified saved query's tiles are **Certified**; a saved query that needs
-review keeps its tiles **Needs review**. A saved query that asks for values
+A certified saved query's tiles are **Certified**; a saved query nobody
+certified keeps its tiles **Not certified yet**. A saved query that asks for values
 (parameters) has no fields: under **Add as it is**, click **Table**, **Chart**
 or **KPI** to show its result.
 
@@ -248,15 +243,15 @@ over rows, make it row-level:
 3. Click **Check and make row-level**. ZLens writes a row-level definition
    into the same saved query file (same name, same place; no copy) and runs
    the same checks as **Check and use**.
-   - Checks pass: the saved query is row-level and **Checked · Needs
-     certifying**. Certify it before you publish, like a table.
-   - Checks fail: it is row-level and stays **Needs review**.
+   - Checks pass: the saved query is row-level, checked, and **Not certified
+     yet**. Certify it when you are ready, like a table.
+   - Checks fail: it is row-level and stays **Not certified yet**.
 4. Click **Use its fields**.
 
-A certified saved query shows *Making it row-level sends this saved query back
-for review.* If its checks pass it is checked and needs certifying again. If
-they fail, nothing changes until you click **Send for review and make
-row-level**.
+A certified saved query shows *Making it row-level means this saved query is
+not certified until someone certifies it again.* If its checks pass it is
+checked and not certified again until someone certifies it. If they fail,
+nothing changes until you click **Send for review and make row-level**.
 
 The tile shows its rows. Its **Tile settings** panel shows **Data & trust**,
 for example **Certified by Kranthi · 21 Oct**, the checks that passed, the
@@ -329,9 +324,10 @@ says which tables it reaches, for example *joins: customers, locations*.
   Orders*. Add **Orders** to the App and use its fields.
 - **Trust.** A join that is certified (in Modeling) keeps the tile's trust. A
   join that was only drafted, for example by **Draft my models** in setup,
-  shows **Needs review** on its group, and a tile that uses it is **Needs
-  review**, like any data nobody has certified yet. Certify the join in
-  **Modeling** to change that.
+  shows **Not certified yet** on its group, and a tile that uses it is **Not
+  certified yet** (its receipt says *Uses a join nobody has certified*), like
+  any data nobody has certified yet. Certify the join in **Modeling**, or from
+  the publish dialog, to change that.
 - **Receipt.** A tile's receipt lists each join it used, for example *Joined to
   customers on customer_id (each order has one customer — checked)*.
 
@@ -425,7 +421,7 @@ not saved for readers.
 | Metrics | A condition on a dimension of the metric's model, also when the tile doesn't group by it (a KPI). Text search works with the DQL native compiler; with MetricFlow the tile shows **Not filtered by**. |
 | Saved query (fields) | A condition on the saved query's result column the filter is mapped to, like a table field. Click-to-filter works the same way. |
 | Saved query (as it is) | A parameter with the filter's name (`region`, or `period_start` / `period_end` for a range), otherwise a condition on the result column the filter is linked to. |
-| Draft (needs review) | The same as a Saved query tile shown as it is. Its evidence lists the filters that applied and the ones that didn't. |
+| Draft DQL (not certified yet) | The same as a Saved query tile shown as it is. Its evidence lists the filters that applied and the ones that didn't. |
 | Text | Never filtered. |
 
 ### Dates
@@ -474,46 +470,71 @@ or **Date**.
 
 ## 7. Publish
 
+Trust lives at one level, the tile, and has two words: a tile is **Certified
+by** *name* **·** *date* (or **by you**) or **Not certified yet**. A tile is
+certified only when everything it can use is certified: its data, every join
+it can reach (also through a filter) and, for a calculation, every input.
+Why a tile is not certified is detail in its receipt, for example *Checked by
+you, not certified yet*, *Changed since it was certified on 22 Oct* or *Uses a
+join nobody has certified*.
+
 1. Click **Publish**.
-2. ZLens checks the App. If something blocks publishing, the dialog lists
-   **N fixes before publishing**, such as a page that has not run, a tile that
-   needs review, data that is not certified yet, or a filter that is not wired
-   to any tile. Each fix has a button.
-3. Data nobody certified yet is listed as, for example, **2 tables not
-   certified yet**. Click **Review and certify** on each one (see
-   [Check vs certify](#check-vs-certify)). A published App shows certified data
-   only, under either data rule.
-4. When the dialog says **Ready to publish** and **All checks passed**, click
-   **Publish to Project**.
+2. ZLens checks the App. The dialog's title says **Ready to publish**, or
+   **N fixes before publishing** when something must change first, such as a
+   page that has not run, a filter that is not wired to any tile, or local
+   draft analysis that cannot leave this machine. Each fix has a button.
+3. Under the title is the App's one count, for example **3 of 4 tiles
+   certified** (or **All tiles certified**). It is the same count the App
+   header, the Apps card and the published `dql.app.json` show.
+4. Tiles that are not certified yet are listed, for example **1 tile not
+   certified yet**: **Order total**, *Checked, not certified yet. Data:
+   Orders.*, with **Certify now (recommended)**. For a table it opens the
+   short certify review (see [Check vs certify](#check-vs-certify)); for a
+   saved query it opens the saved query in Block Studio; for a join it opens
+   Modeling. Certifying is recommended, never required by default.
+5. Click **Publish**. Next to it the dialog says what readers will see, for
+   example **Readers will see 'Not certified yet' on 1 tile.** When every tile
+   is certified it says **All checks passed**.
+
+Publishing is never blocked by trust unless the project requires it: set
+`apps.requireCertifiedToPublish: true` in `dql.config.json` (see
+[project config](../reference/file-formats.md#dqlconfigjson-project-config)).
+Then the dialog says **This project requires every tile to be certified
+before an App is published.**, lists the same tiles with their certify
+actions, and shows no **Publish** button until they are certified; the server
+refuses too. The setting is read at every publish, so a change applies
+without a restart. There is no per-App rule: Apps made before this change keep
+their old "data rule" in their files, and it is ignored.
 
 Data in **This App's data** that no tile uses does not block publishing. It is
 not saved with the App, and the dialog says so, for example **1 data source not
 used by any tile will not be saved with the App.**
 
 Publishing writes the App as files in your project. Nothing is committed for
-you. The App opens in view mode, and its badge shows its trust and who
-certified the data, from the reader's side: **All data certified by you ·
-22 Oct** when you certified it, **All data certified by Kranthi · 22 Oct** for
-anyone else.
+you. The App opens in view mode. Its header and trust line say the count
+(**3 of 4 tiles certified**); each certified tile says who certified it, from
+the reader's side (**Certified by you · 22 Oct**, **Certified by Kranthi ·
+22 Oct**), and the others say **Not certified yet**.
 
 ### Check vs certify
 
 - **Check** is what **Check and use** (and **Make row-level**) does: ZLens
   checks the data compiles and runs, what one row is, and how each number is
-  shown. The data is **Checked · Needs certifying**. Tiles use it while you
-  build the App; it does not publish.
+  shown. The data stays **Not certified yet** (its receipt says *Checked by
+  you, not certified yet*). Tiles use it right away.
 - **Certify** is a person vouching for the data, on purpose. Open it from the
-  publish check (**Review and certify**) or from the data's **⋯ → Certify…**
-  (in the **Data** tab or **Add data**). A short review shows what one row is,
-  the row key checked again against all rows, the number formats (cents shown
-  in dollars), the joins it uses and any columns hidden as duplicates. Click
-  **I vouch for this — certify**. ZLens records who certified it, when, and
-  the checks that passed, in the data's file.
+  publish dialog (**Certify now (recommended)**) or from the data's **⋯ →
+  Certify…** (in the **Data** tab or **Add data**). A short review shows what
+  one row is, the row key checked again against all rows, the number formats
+  (cents shown in dollars), the joins it uses and any columns hidden as
+  duplicates. Click **I vouch for this — certify**. ZLens records who
+  certified it, when, and the checks that passed, in the data's file.
 - A saved query without a row-level definition is certified in Block Studio
   (**Certify** there, where its tests run); the review offers **Open in Block
-  Studio**. Metrics are governed in your semantic model.
-- With a host, certifying needs the steward role, as before. Data certified
-  before this change stays certified.
+  Studio**. Metrics are certified in your semantic model.
+- With a host, certifying needs the steward role, as before, and the host's
+  admin policy can turn on `apps.requireCertifiedToPublish` for the project.
+  Data certified before this change stays certified.
 
 ```text
 apps/customer-overview/

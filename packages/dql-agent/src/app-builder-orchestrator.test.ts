@@ -254,7 +254,7 @@ describe('App Builder orchestrator', () => {
     });
     const byId = new Map(brief.components.map((component) => [component.sourceId, component.rationale]));
     expect(byId.get(topCustomers.sourceId)).toBe('Its name, description and fields match “customers”, “value” · Certified saved query');
-    expect(byId.get(candidates[1].sourceId)).toBe('One of the closest matches in the data you can use · Saved query · Needs review');
+    expect(byId.get(candidates[1].sourceId)).toBe('One of the closest matches in the data you can use · Saved query · Not certified yet');
   });
 
   it('AGT-026 plans several source-bound Dataset tiles, falls back from invented query authority, and keeps coverage query-specific', async () => {
