@@ -8,6 +8,43 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Trust: one answer on every screen
+
+- **One trust answer for an App.** The publish check, the editor's tile dots
+  and Data & trust panel, the App header, the reader's trust line, the Apps
+  card and the `dql.app.json` written at publish now read the same answer
+  (`appTrustAnswer` in `@zlens/core/apps/app-trust`): every tile's source,
+  every join it can run through (its own fields, and page filters that reach
+  it through a related field), its calculations, and whether data that needs
+  review was allowed. An App is published as certified only when every data
+  tile is; `dql.app.json` records `tileTrust: { certified, total }` and the
+  Apps card shows the App header's words ("1 of 3 tiles certified"), after a
+  reload too, never "App certified" over a tile that needs review.
+- **Ready, with review data allowed, says so.** After **Allow data that needs
+  review** the publish dialog reads "Ready to publish · 2 tiles need review
+  (allowed)" and what the App will say; "All checks passed" / "Every check
+  passed" only appear when every tile is certified.
+- **A reader's filter no longer changes trust.** A tile a page filter reaches
+  through a join nobody certified is Needs review whether or not a value is
+  picked, so picking a customer no longer flips "3 of 4" to "1 of 4". The run
+  receipt says "A page filter can join it to customers on customer_id; the
+  join is not certified yet" for a join the run did not read.
+- **"Certified by you" means you.** Only your own identity (git `user.email`,
+  `$USER@local`, or the host's signed-in person) makes a certification "by
+  you"; the project's `identity.owner` (a sample's "analytics@jaffle.shop")
+  no longer does, and is no longer shown under your name. New certifications
+  and checks record your identity, not the project owner. A team mailbox is
+  named with its domain: "Certified by Analytics (jaffle.shop)".
+- **An honest fix count.** The Publish button and the publish dialog count
+  one list, so "5 fixes" no longer opens "9 fixes": a review task or a server
+  message about data or a tile already listed is not repeated, and the page
+  Publish runs itself is not counted. Plain words replace "Scoped review",
+  "Orders is review" ("Orders needs certifying before this App is
+  published…") and "Complete governed validation" ("Run the page once to
+  check it", with the server's words under **Technical details**).
+- **A checked draft join reads Draft** in Modeling, the level its editor
+  opens on, instead of "Validated".
+
 ### Trust: checking is not certifying
 
 - **Adding a table no longer certifies it.** **Check and add** runs the same

@@ -67,6 +67,10 @@
       "types": "./dist/apps/app-tile-join-trust.d.ts",
       "import": "./dist/apps/app-tile-join-trust.js"
     },
+    "./apps/app-trust": {
+      "types": "./dist/apps/app-trust.d.ts",
+      "import": "./dist/apps/app-trust.js"
+    },
     "./apps/viz-encoding": {
       "types": "./dist/apps/viz-encoding.d.ts",
       "import": "./dist/apps/viz-encoding.js"

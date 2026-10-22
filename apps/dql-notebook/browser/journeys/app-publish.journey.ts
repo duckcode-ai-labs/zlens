@@ -128,7 +128,11 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await review.getByRole('button', { name: 'I vouch for this — certify' }).click();
   await expect(review).toBeHidden({ timeout: 60_000 });
   await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 90_000 });
-  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  // B6: every tile is certified, so — and only so — the dialog says every check passed.
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready.getByText('All checks passed')).toBeVisible();
+  await expect(ready.getByText(/needs? review \(allowed\)/)).toHaveCount(0);
+  await ready.getByRole('button', { name: 'Publish to Project', exact: true }).click();
   await expect(page).toHaveURL(/app=sales-review/, { timeout: 60_000 });
 
   // No reload: the page publishing opened shows the published App's results.

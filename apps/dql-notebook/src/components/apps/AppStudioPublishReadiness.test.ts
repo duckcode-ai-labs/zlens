@@ -15,14 +15,18 @@ import {
   localPublicationSteps,
   pagesNeedingSettledPreview,
   planLegacySemanticApproval,
+  draftTrust,
+  plainReviewTaskMessage,
   publicationBlockerCount,
   publicationBlockingSources,
   publicationIssueSummaries,
+  publicationReadiness,
   publicationTilesNeedingReview,
   tilePatchWithoutRelatedFields,
   tileUsesLegacySemanticApproval,
   unresolvedPublicationRequirements,
 } from './app-studio-publish-readiness';
+import { publishReadyLine } from '@zlens/core/apps/app-trust';
 
 function coreDashboardDocument(page: AppStudioBuildDraft['pages'][number]) {
   const parsed = parseDashboardDocument(JSON.stringify(page), '<readiness-test.dqld>');
@@ -518,10 +522,94 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
     }];
     draft.pages[0]!.layout.items[0]!.block = { blockId: 'orders_by_region' };
 
-    expect(publicationBlockerCount(draft, [
+    const issues = [
       'Source sales.revenue changed after selection.',
       'overview/orders no longer resolves to a certified block.',
-    ])).toBe(7);
+    ];
+    // Two questions, one review task, one source and two server messages; the
+    // page Publish runs itself is listed but is not a fix (B6).
+    expect(publicationBlockerCount(draft, issues)).toBe(6);
+    const readiness = publicationReadiness(draft, issues);
+    expect(readiness.previewPages).toHaveLength(1);
+    expect(readiness.fixCount).toBe(readiness.requirements.length + readiness.clarifications.length + readiness.tasks.length
+      + readiness.uncertifiedSources.length + readiness.datasetSources.length + readiness.reviewTiles.length + readiness.serverIssues.length
+      + (readiness.semanticTiles.length ? 1 : 0) + (readiness.localOnlySources.length ? 1 : 0));
+  });
+});
+
+/** The reviewer's App: Orders (not certified yet) behind three tiles, as "5 fixes" opened "9 fixes". */
+function uncertifiedOrdersDraft(): AppStudioBuildDraft {
+  const draft = draftFixture();
+  const sourceId = 'app:block:general:orders';
+  draft.requirements = [];
+  draft.coverage = [];
+  draft.sources = [{ id: sourceId, kind: 'block', sourceRef: 'orders', qualifiedIdentity: 'general::block::orders', lifecycle: 'review', trustState: 'review_required', reviewStatus: 'required', checked: true, capabilities: { dataset: { kind: 'block', label: 'Orders', trust: 'review_required', fields: [] } as never } as never }];
+  draft.reviewTasks = [{ id: 'review-source-orders', message: 'Orders is review and must be certified, replaced, or removed before Project publication.', status: 'open', sourceId, pageId: 'overview' }];
+  draft.pages = [{
+    version: 3,
+    id: 'overview',
+    metadata: { title: 'Overview' },
+    datasets: [{ id: 'orders_ds', sourceId, sourceRevision: 'sha256:orders', snapshotId: 's', contractFingerprint: 'c' }],
+    layout: { kind: 'grid', cols: 12, rowHeight: 80, items: ['orders-kpi', 'orders-trend', 'top-customers'].map((i, index) => ({
+      i, x: index * 4, y: 0, w: 4, h: 3, title: i, sourceId, sourceRevision: 'sha256:orders',
+      query: { dimensions: [], measures: [{ measure: 'order_total' }], respectsGlobalFilters: true }, viz: { type: 'single_value' },
+    })) },
+  }] as never;
+  draft.previewReceipts = [{ id: 'run-1', pageId: 'overview', revision: draft.revision, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'r', createdAt: draft.updatedAt }];
+  return draft;
+}
+
+describe('an honest fix count (B6)', () => {
+  it('the button and the dialog count the same list, and one root cause is one row', () => {
+    const draft = uncertifiedOrdersDraft();
+    const before = publicationReadiness(draft);
+    // Orders needs certifying: one row. Its review task says the same thing, so it is not repeated.
+    expect(before.uncertifiedSources.map((source) => source.id)).toEqual(['app:block:general:orders']);
+    expect(before.tasks).toEqual([]);
+    expect(before.fixCount).toBe(1);
+    // What the server says about the same source and its three tiles adds no rows.
+    const serverIssues = [
+      'Dataset tile orders-kpi is currently review and is not eligible for Project publication. Refresh the governed source and run the draft again after certification.',
+      'overview/orders-kpi does not resolve to its current certified saved query.',
+      'overview/orders-trend does not resolve to its current certified saved query.',
+      'overview/top-customers does not resolve to its current certified saved query.',
+      'overview/orders-kpi uses a review Dataset source and cannot be published to the Project.',
+      'Source app:block:general:orders is review and cannot be published to the Project.',
+    ];
+    const after = publicationReadiness(draft, serverIssues);
+    expect(after.serverIssues).toEqual([]);
+    expect(after.fixCount).toBe(before.fixCount);
+    expect(publicationBlockerCount(draft, serverIssues)).toBe(after.fixCount);
+  });
+
+  it('says what to do in plain words, with the server\'s own words under Technical details', () => {
+    const [unknown] = publicationIssueSummaries(['overview/margin has a Dataset field selection that is not fully covered by its approved contract.']);
+    expect(unknown).toMatchObject({ title: 'Run the page once to check it', action: 'preview', technical: expect.stringContaining('overview/margin') });
+    expect(unknown!.detail).not.toContain('overview/margin');
+    expect(JSON.stringify(publicationIssueSummaries(['Dataset tile x is currently review and is not eligible.', 'overview/y something odd']))).not.toContain('Complete governed validation');
+    expect(plainReviewTaskMessage('Orders is review and must be certified, replaced, or removed before Project publication.'))
+      .toBe('Orders needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.');
+    expect(plainReviewTaskMessage('Validate revenue grain.')).toBe('Validate revenue grain.');
+  });
+
+  it('a tile on an uncertified join is one row under "Only certified data"; allowed, it is named, never "every check passed"', () => {
+    const governed = publicationReadiness(joinedDraftFixture());
+    expect(governed.reviewTiles).toHaveLength(1);
+    expect(governed.fixCount).toBe(1);
+    // The server's copy of the same tile check adds nothing.
+    expect(publicationReadiness(joinedDraftFixture(), ['APP_BUILD_TILE_NEEDS_REVIEW: overview/by_location: Revenue by location uses the join to Location, which is not certified yet.']).fixCount).toBe(1);
+    const allowed = publicationReadiness({ ...joinedDraftFixture(), sourcePolicy: 'include_review_required' });
+    expect(allowed.ready).toBe(true);
+    expect(allowed.trust.reviewAllowed).toBe(1);
+    expect(allowed.trust.label).toBe('1 of 2 tiles certified');
+    expect(publishReadyLine(allowed.trust)).toEqual({ detail: '1 tile needs review (allowed)', allPassed: false });
+  });
+
+  it('the editor\'s tile trust is the publish check\'s answer', () => {
+    const draft = joinedDraftFixture();
+    const trust = draftTrust(draft);
+    expect(trust.tiles.map((tile) => [tile.tileId, tile.trust.state])).toEqual([['by_location', 'review'], ['total', 'certified']]);
+    expect(publicationTilesNeedingReview(draft).map((item) => item.tileId)).toEqual(trust.tiles.filter((tile) => tile.trust.state === 'review').map((tile) => tile.tileId));
   });
 });
 

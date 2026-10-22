@@ -337,13 +337,7 @@ export function gitUserName(projectRoot: string): string | undefined {
   return run(['config', 'user.name']) ?? run(['config', '--global', 'user.name']);
 }
 
-/**
- * The identities that mean "the person at this machine" in a local project:
- * the owner the project records (dql.config identity.owner, or the local
- * owner cache), git user.email, `$USER@local`, and the generic local owners.
- * Lower-cased; empty under a host, where each record names its own person.
- */
-export function localPersonAliases(projectRoot: string, recordedOwner?: string): Set<string> {
+function gitConfig(projectRoot: string, key: string): string | undefined {
   const run = (args: string[]): string | undefined => {
     try {
       const out = execFileSync('git', args, { cwd: projectRoot, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
@@ -352,23 +346,57 @@ export function localPersonAliases(projectRoot: string, recordedOwner?: string):
       return undefined;
     }
   };
-  const read = (path: string[]): string | undefined => {
-    try {
-      const raw = readFileSync(join(projectRoot, ...path), 'utf-8');
-      return path[path.length - 1] === 'dql.config.json'
-        ? (() => { const owner = (JSON.parse(raw) as { identity?: { owner?: unknown } }).identity?.owner; return typeof owner === 'string' ? owner : undefined; })()
-        : raw.trim();
-    } catch {
-      return undefined;
-    }
-  };
+  return run(['config', key]) ?? run(['config', '--global', key]);
+}
+
+/**
+ * The identity a certification or a check made at this machine records: the
+ * person's own git `user.email`, else `$USER@local`. Never the project's
+ * `identity.owner` (B6): a sample project ships an owner of its own
+ * ("analytics@jaffle.shop"), and recording it would put someone else's name
+ * on the person's certification. Under a host the signed-in person is used
+ * instead (the caller checks that first).
+ */
+export function localPersonIdentity(projectRoot: string): string {
+  const user = process.env.USER?.trim() || process.env.USERNAME?.trim();
+  return gitConfig(projectRoot, 'user.email') ?? (user ? `${user}@local` : 'local');
+}
+
+/** Identities that name no person: a record written before ZLens knew who did it. */
+const ANONYMOUS_IDENTITIES = new Set(['local', 'owner@local', 'guest@local', 'analyst@local', 'unknown', 'anonymous']);
+
+/**
+ * The person's own identities at this machine: git `user.email` and
+ * `$USER@local`. Only these make a record "by you" (B6) — never the project's
+ * `identity.owner`, which a shared or sample project sets to someone else.
+ * Lower-cased.
+ */
+export function localPersonSelf(projectRoot: string): Set<string> {
   const user = process.env.USER?.trim() || process.env.USERNAME?.trim();
   return new Set([
-    recordedOwner,
-    read(['dql.config.json']),
-    read(['.dql', 'local', 'owner']),
-    run(['config', 'user.email']) ?? run(['config', '--global', 'user.email']),
+    gitConfig(projectRoot, 'user.email'),
     user ? `${user}@local` : undefined,
+  ].filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim().toLowerCase()));
+}
+
+/**
+ * The identities that read as this machine's person by their display name
+ * (one person, one name): their own identities, the local owner cache, and
+ * the generic local owners. Lower-cased; empty under a host, where each record
+ * names its own person. The project's `identity.owner` is not one of them
+ * (B6): in a sample project it is someone else.
+ */
+export function localPersonAliases(projectRoot: string, recordedOwner?: string): Set<string> {
+  let cachedOwner: string | undefined;
+  try {
+    cachedOwner = readFileSync(join(projectRoot, '.dql', 'local', 'owner'), 'utf-8').trim() || undefined;
+  } catch {
+    cachedOwner = undefined;
+  }
+  return new Set([
+    recordedOwner,
+    cachedOwner,
+    ...localPersonSelf(projectRoot),
     'owner@local', 'guest@local', 'analyst@local', 'local',
   ].filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim().toLowerCase()));
 }
@@ -400,16 +428,19 @@ export interface CertificationByline {
 }
 
 /**
- * Whether a recorded identity is the person viewing, by the same rule that
- * names people everywhere (`personDisplayName`): one of their identities.
+ * Whether a recorded identity is the person viewing: one of their own
+ * identities (git user.email, `$USER@local`, or the host's signed-in person),
+ * never the project's configured owner or a placeholder (B6).
  */
-export function isViewer(identity: string | null | undefined, person: { aliases: ReadonlySet<string> }): boolean {
+export function isViewer(identity: string | null | undefined, person: { aliases: ReadonlySet<string>; self?: ReadonlySet<string> }): boolean {
   const value = identity?.trim().toLowerCase();
-  return Boolean(value && person.aliases.has(value));
+  // A placeholder names nobody, so it is nobody's "you" (B6).
+  if (!value || ANONYMOUS_IDENTITIES.has(value)) return false;
+  return (person.self ?? person.aliases).has(value);
 }
 
 /** A byline as the viewer reads it: `byYou` when they are the person it names. */
-export function bylineForViewer<Byline extends CertificationByline>(byline: Byline, person: { aliases: ReadonlySet<string> }): Byline {
+export function bylineForViewer<Byline extends CertificationByline>(byline: Byline, person: { aliases: ReadonlySet<string>; self?: ReadonlySet<string> }): Byline {
   return isViewer(byline.by, person) ? { ...byline, byYou: true } : byline;
 }
 

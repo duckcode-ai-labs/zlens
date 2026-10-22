@@ -167,7 +167,9 @@ export {
 } from './app-build-draft.js';
 export { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from './app-data-sources.js';
 export type { AppDataSourceLike, AppDataTileLike, AppDataDraftLike } from './app-data-sources.js';
-export { appTilesNeedingJoinReview, tileJoinReviewSentence } from './app-tile-join-trust.js';
+export { appTilesNeedingJoinReview, tileJoinReviewSentence, tileJoinsReachable } from './app-tile-join-trust.js';
+export { appTileTrustFor, appTrustAnswer, publishReadyLine, publishedAppTileTrust, publishedTileTrustText, tilesNeedReviewText } from './app-trust.js';
+export type { AppTileTrust, AppTrustAnswer, AppTrustInput, AppTrustPageLike, AppTrustSourceLike, AppTrustTileLike, PublishedAppTileTrust } from './app-trust.js';
 export type { AppTileNeedingJoinReview, JoinTrustPageLike, JoinTrustTileLike } from './app-tile-join-trust.js';
 export type {
   AppBuildDraft,
@@ -252,7 +254,7 @@ export {
   insertCanvasNodes, moveCanvasNode, parseCanvasHtml, rebindCanvasValue, removeCanvasNode, replaceCanvasNode, serializeCanvasNodes,
 } from './canvas-page.js';
 export type { CanvasIssue, CanvasNode, CanvasPath, CanvasPieceKind, CheckedCanvas } from './canvas-page.js';
-export { CHECKED_NEEDS_CERTIFYING_LABEL, READER_TRUST_LABELS, appTrustSummary, certifiedByAcross, certifiedByLabel, certifiedDateLabel, certifierDisplayName, isDataTileForTrust, plainCertificationChecks, readerTileTrust, readerTrustCounts, readerTrustSummary } from './reader-trust.js';
+export { CHECKED_NEEDS_CERTIFYING_LABEL, READER_TRUST_LABELS, appTrustSummary, certifiedByAcross, certifiedByLabel, certifiedDateLabel, certifierDisplayName, isDataTileForTrust, plainCertificationChecks, readerTileTrust, readerTrustCounts, readerTrustSummary, tileTrustCountText } from './reader-trust.js';
 export type { AppTrustState, AppTrustSummary, CertificationByline, ReaderTrust, ReaderTrustItem, ReaderTrustState, ReaderTrustTile } from './reader-trust.js';
 export { evaluateMonitors, readAppMonitors, MAX_MONITORS_PER_SCHEDULE } from './monitors.js';
 export type { AppMonitor, AppMonitorCondition, MonitorEvaluation, MonitorPreviousValue, MonitorStatus } from './monitors.js';

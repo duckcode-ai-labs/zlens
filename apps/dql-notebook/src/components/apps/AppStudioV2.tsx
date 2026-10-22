@@ -53,7 +53,7 @@ import { StoryEditor } from './builder/StoryEditor';
 import { CanvasEditor } from './builder/CanvasEditor';
 import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
 import { ReaderPreviewParts } from './ReaderPreviewParts';
-import { certifiedByLabel, plainCertificationChecks } from './reader-trust';
+import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
 import { SAVED_UNPUBLISHED, UNPUBLISHED_CHANGES, previewSettledWords, rowCountWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
@@ -214,17 +214,18 @@ import {
   localPublicationSteps,
   pagesNeedingSettledPreview,
   planLegacySemanticApproval,
-  publicationBlockerCount,
+  draftTrust,
+  plainReviewTaskMessage,
   publicationBlockingSources,
-  publicationIssueSummaries,
+  publicationReadiness,
   publicationTileKey,
-  publicationTilesNeedingReview,
   notCertifiedYetTitle,
   tilePatchWithoutRelatedFields,
   uncertifiedPublicationSources,
   unresolvedPublicationRequirements,
 } from './app-studio-publish-readiness';
 import { tileJoinReviewSentence, type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
+import { appTileTrustFor, publishReadyLine } from '@zlens/core/apps/app-trust';
 import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
 import { rememberProposalForModeling } from '../modals/setup-model-source';
 import { useDispatch } from '../../store/NotebookStore';
@@ -946,11 +947,15 @@ export function AppStudioV2({
   useEffect(() => {
     if (!proposal && !autopilotReview) setProposalPageId(null);
   }, [proposal, autopilotReview]);
-  // Pages that only need a fresh run are run by Publish itself, so they are not fixes for the author.
+  // The same list the publish dialog shows (B6). Pages that only need a
+  // fresh run are run by Publish itself, so they are not counted as fixes.
   const publishStepCount = useMemo(
-    () => draft ? publicationBlockerCount(draft, publishIssues, previewRunsByPage) - pagesNeedingSettledPreview(draft).length : 0,
+    () => draft ? publicationReadiness(draft, publishIssues, previewRunsByPage).fixCount : 0,
     [draft, previewRunsByPage, publishIssues],
   );
+  // Each tile's trust from the same answer Publish uses (B6): the editor's dot
+  // never says certified while Publish says the tile needs review.
+  const studioTrust = useMemo(() => draft ? draftTrust(draft, previewRunsByPage) : null, [draft, previewRunsByPage]);
 
   useEffect(() => {
     setSelectedProposalSourceIds(new Set(proposal?.defaultSelectedSourceIds ?? proposalSummary?.sources.map((source) => source.id) ?? []));
@@ -3760,7 +3765,12 @@ export function AppStudioV2({
                     <strong title={tile.title || humanize(tile.i)}>{tile.title || humanize(tile.i)}</strong>
                     {/* "Rolled up from a saved query" sits behind an icon, never over the value. */}
                     <TileAdaptedNote run={previewRun?.tiles.find((item) => item.tileId === tile.i)} />
-                    <span className={`trust-dot ${tile.trustState ?? 'draft_ready'}`} title={tile.trustState === 'certified' ? 'Certified source' : tile.trustState === 'review_required' ? 'Needs review before publishing' : 'Draft'} />
+                    {(() => {
+                      const trust = studioTrust && activePage ? appTileTrustFor(studioTrust, activePage.id, tile.i)?.trust : undefined;
+                      if (!trust) return tile.text ? null : <span className={`trust-dot ${tile.trustState ?? 'draft_ready'}`} title={tile.trustState === 'certified' ? 'Certified' : tile.trustState === 'review_required' ? 'Needs review' : 'Draft'} />;
+                      const tone = trust.state === 'certified' ? 'certified' : trust.state === 'governed' ? 'governed' : 'review_required';
+                      return <span className={`trust-dot ${tone}`} data-trust={trust.state} role="img" aria-label={trust.label} title={`${trust.label}: ${trust.detail}`} />;
+                    })()}
                     <div className={`tile-tools ${tileMenuId === tile.i ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
                       {editing && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
                       {tile.query ? <button type="button" className={`studio-tile-dql-toggle ${dqlTileId === tile.i ? 'on' : ''}`} aria-pressed={dqlTileId === tile.i} aria-label="View DQL" title="View DQL" onClick={() => setDqlTileId((current) => current === tile.i ? null : tile.i)}><Code2 size={13} /></button> : null}
@@ -3994,6 +4004,7 @@ export function AppStudioV2({
             key={selectedTile.i}
             tile={selectedTile}
             run={previewRun?.tiles.find((item) => item.tileId === selectedTile.i)}
+            {...(studioTrust ? (() => { const entry = appTileTrustFor(studioTrust, activePage.id, selectedTile.i); return entry ? { trust: entry.trust } : {}; })() : {})}
             pageId={activePage.id}
             page={activePage}
             pages={draft.pages}
@@ -4263,42 +4274,25 @@ export function PublishReadinessDialog({
   onApproveSemantic: () => void;
   onRemoveLocalAnalysis: () => void;
 }): JSX.Element {
-  const requirements = unresolvedPublicationRequirements(draft);
-  const clarifications = (draft.frame.clarificationQuestions ?? []).filter((question) => question.required && !question.answerId);
-  const tasks = blockingPublicationReviewTasks(draft);
-  const previewPages = pagesNeedingSettledPreview(draft);
-  const sources = publicationBlockingSources(draft);
-  const semanticTiles = legacySemanticTilesNeedingApproval(draft);
-  // Data nobody certified yet (design Q1): tables and saved queries. Each
-  // opens a short review; "Only certified data" holds publishing until done.
-  const uncertifiedSources = uncertifiedPublicationSources(sources);
-  const uncertifiedIds = new Set(uncertifiedSources.map((source) => source.id));
-  const datasetSources = sources.filter((source) => isDatasetBackedAppSource(source) && !uncertifiedIds.has(source.id));
-  const localOnlySources = sources.filter((source) => !isDatasetBackedAppSource(source)
-    && !uncertifiedIds.has(source.id)
-    && source.kind !== 'governed_semantic'
-    && source.kind !== 'semantic_query');
+  // One list for the button and this dialog (B6): the count is its length.
+  const readiness = publicationReadiness(draft, serverIssues, previewRunsByPage);
+  const { requirements, clarifications, tasks, previewPages, semanticTiles, uncertifiedSources, datasetSources, localOnlySources } = readiness;
   // Tiles marked Needs review (a join nobody certified yet) count under
   // "Only certified data": never "Every check passed" while one remains.
-  const reviewTiles = publicationTilesNeedingReview(draft, previewRunsByPage);
-  const reviewTileKeys = new Set(reviewTiles.map((item) => `tile-review:${publicationTileKey(item)}`));
-  const remainingIssues = publicationIssueSummaries(serverIssues).filter((issue) => !reviewTileKeys.has(issue.id));
+  const reviewTiles = readiness.reviewTiles;
+  const remainingIssues = readiness.serverIssues;
   const unusedNote = unusedSourcesPublishNote(unusedAppDataSources(draft).length);
-  const ready = requirements.length === 0
-    && clarifications.length === 0
-    && tasks.length === 0
-    && previewPages.length === 0
-    && sources.length === 0
-    && semanticTiles.length === 0
-    && reviewTiles.length === 0
-    && remainingIssues.length === 0;
-  const blockerCount = publicationBlockerCount(draft, serverIssues, previewRunsByPage);
+  const ready = readiness.ready;
+  const blockerCount = readiness.fixCount;
+  // Ready with data that needs review allowed says so: never "All checks passed" (B6).
+  const readyLine = publishReadyLine(readiness.trust);
+  const title = ready ? 'Ready to publish' : blockerCount > 0 ? `${blockerCount} ${blockerCount === 1 ? 'fix' : 'fixes'} before publishing` : 'Run the page once to check it';
 
   return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="publish-readiness-title">
     <section className="studio-readiness-card">
       <header>
         <span className={ready ? 'ready' : ''}>{ready ? <Check size={19} /> : <ShieldCheck size={19} />}</span>
-        <div><h2 id="publish-readiness-title">{ready ? 'Ready to publish' : `${blockerCount} ${blockerCount === 1 ? 'fix' : 'fixes'} before publishing`}</h2><p>{ready ? 'Every check passed.' : 'Finish the items below; this review updates as you go.'}</p></div>
+        <div><h2 id="publish-readiness-title">{title}</h2><p>{ready ? readyLine.detail : 'Finish the items below; this review updates as you go.'}</p></div>
         <button type="button" className="icon" onClick={onClose} aria-label="Close publish checklist"><X size={16} /></button>
       </header>
       <div className="readiness-body">
@@ -4312,11 +4306,11 @@ export function PublishReadinessDialog({
         </section>)}
         {tasks.map((task) => <section className="readiness-item" key={task.id}>
           <span className="step-mark"><FileText size={15} /></span>
-          <div><strong>Scoped review</strong><p>{task.message}</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onResolveTask(task)} disabled={busy}><Check size={13} /> Mark resolved</button></div></div>
+          <div><strong>Check before publishing</strong><p>{plainReviewTaskMessage(task.message)}</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onResolveTask(task)} disabled={busy}><Check size={13} /> Mark resolved</button></div></div>
         </section>)}
         {previewPages.map((page) => <section className="readiness-item" key={page.id}>
           <span className="step-mark"><Play size={15} /></span>
-          <div><strong>Run {page.metadata.title || page.id}</strong><p>Settle the current data, filters, and tile results before publishing this page.</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onRunPreview(page.id)} disabled={busy}><Play size={13} /> {busy ? 'Running…' : 'Run preview'}</button></div></div>
+          <div><strong>Run {page.metadata.title || page.id} once to check it</strong><p>ZLens runs the page with its current data and filters before publishing it.</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onRunPreview(page.id)} disabled={busy}><Play size={13} /> {busy ? 'Running…' : 'Run preview'}</button></div></div>
         </section>)}
         {semanticTiles.length ? <section className="readiness-item">
           <span className="step-mark"><ShieldCheck size={15} /></span>
@@ -4335,10 +4329,10 @@ export function PublishReadinessDialog({
             })}</ul>
           </div>
         </section> : null}
-        {datasetSources.length ? <section className="readiness-item warning">
+        {datasetSources.map((source) => <section className="readiness-item warning" key={source.id}>
           <span className="step-mark"><ShieldCheck size={15} /></span>
-          <div><strong>Data needs review</strong><p>{datasetSources.map((source) => humanize(source.sourceRef)).join(', ')}</p><small>Publishing follows the current source lifecycle and contract. Running a preview does not certify it.</small><div className="readiness-actions"><button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Review data source</button></div></div>
-        </section> : null}
+          <div><strong>{humanize(sourceName?.(source) ?? source.capabilities?.dataset?.label ?? source.sourceRef)} needs certifying</strong><small>Running the page does not certify it. Certify it, or replace it with certified data.</small><div className="readiness-actions"><button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Review data source</button></div></div>
+        </section>)}
         {reviewTiles.map((item) => <section className="readiness-item warning" key={publicationTileKey(item)} aria-label={`Needs review: ${item.tileTitle || item.tileId}`}>
           <span className="step-mark"><ShieldCheck size={15} /></span>
           <div><strong>Tile needs review</strong><p>{tileJoinReviewSentence(item)}</p><small>{item.filterIds.length && !item.relatedFields.length
@@ -4356,10 +4350,10 @@ export function PublishReadinessDialog({
         </section> : null}
         {remainingIssues.map((issue) => <section className="readiness-item" key={issue.id}>
           <span className="step-mark"><Settings2 size={15} /></span>
-          <div><strong>{issue.title}</strong><p>{issue.detail}</p><div className="readiness-actions">{issue.action === 'tile_review' ? <><button type="button" className="primary" onClick={() => onCertifyJoin(undefined)} disabled={busy}><ShieldCheck size={13} /> Certify the join in Modeling</button><button type="button" onClick={onAllowReviewData} disabled={busy}>Allow data that needs review</button></> : issue.action === 'filters' ? <button type="button" className="primary" onClick={onOpenFilters}><Filter size={13} /> Open Filters</button> : issue.action === 'refresh_sources' ? <button type="button" className="primary" onClick={onRefreshSources} disabled={busy}><ShieldCheck size={13} /> Accept current certified source</button> : issue.action === 'preview' ? <button type="button" className="primary" onClick={onRunAllPreviews} disabled={busy}><Play size={13} /> {busy ? 'Refreshing previews…' : 'Refresh all page previews'}</button> : <button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace or remove source</button>}</div></div>
+          <div><strong>{issue.title}</strong><p>{issue.detail}</p>{issue.technical ? <details className="readiness-technical"><summary>Technical details</summary><code>{issue.technical}</code></details> : null}<div className="readiness-actions">{issue.action === 'tile_review' ? <><button type="button" className="primary" onClick={() => onCertifyJoin(undefined)} disabled={busy}><ShieldCheck size={13} /> Certify the join in Modeling</button><button type="button" onClick={onAllowReviewData} disabled={busy}>Allow data that needs review</button></> : issue.action === 'filters' ? <button type="button" className="primary" onClick={onOpenFilters}><Filter size={13} /> Open Filters</button> : issue.action === 'refresh_sources' ? <button type="button" className="primary" onClick={onRefreshSources} disabled={busy}><ShieldCheck size={13} /> Accept current certified source</button> : issue.action === 'preview' ? <button type="button" className="primary" onClick={onRunAllPreviews} disabled={busy}><Play size={13} /> {busy ? 'Refreshing previews…' : 'Refresh all page previews'}</button> : <button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace or remove source</button>}</div></div>
         </section>)}
         {unusedNote ? <p className="readiness-unused-note" role="note"><Blocks size={14} /> {unusedNote}</p> : null}
-        {ready ? <div className="readiness-ready"><Check size={18} /><div><strong>All checks passed</strong><span>{publishSavesAsFilesSentence(inGitRepo)}</span></div></div> : null}
+        {ready ? <div className={`readiness-ready ${readyLine.allPassed ? '' : 'with-review'}`}><Check size={18} /><div><strong>{readyLine.allPassed ? 'All checks passed' : `Ready to publish · ${readyLine.detail}`}</strong>{readyLine.allPassed ? null : <span>Readers see {readiness.trust.reviewAllowed === 1 ? 'that tile' : 'those tiles'} marked Needs review, and the App reads “{readiness.trust.label}”.</span>}<span>{publishSavesAsFilesSentence(inGitRepo)}</span></div></div> : null}
       </div>
       <footer><button type="button" onClick={onClose} disabled={busy}>Back to editing</button>{ready ? <button type="button" className="primary" onClick={onRetry} disabled={busy}>{busy ? 'Publishing…' : 'Publish to Project'}</button> : <span className="readiness-footer-hint">Choose a fix above. This review updates as you work.</span>}</footer>
     </section>
@@ -4572,7 +4566,7 @@ function BuildFrameInspector({ draft, prompt, previewRun, askLabel = 'Ask AI to 
   return <div className="inspector-body"><section><label>Business decision</label><textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} rows={5} /></section><section><label>Data rule</label><select value={draft.sourcePolicy} onChange={(event) => onSourcePolicy(event.target.value as AppStudioBuildDraft['sourcePolicy'])}><option value="governed_only">Only certified data</option><option value="include_review_required">Also allow data that needs review</option></select><small className="field-help">Data that needs review stays local and saved queries Project publication until it is replaced or certified.</small></section><section className="frame-facts"><label>Build Frame</label><div><span>Audience</span><strong>{draft.frame.audience || 'Stakeholders'}</strong></div><div><span>Metrics</span><strong>{draft.frame.metrics.join(', ') || 'Needs clarification'}</strong></div><div><span>Dimensions</span><strong>{draft.frame.dimensions.join(', ') || 'Automatic'}</strong></div><div><span>Data rule</span><strong>{draft.sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allows data that needs review'}</strong></div></section>{semanticNeedsApproval ? <section><label>Semantic review</label><button type="button" className="review-action" onClick={onApproveSemantic} disabled={!previewRun}><ShieldCheck size={14} /> {previewRun ? 'Approve this settled result' : 'Run preview to approve'}</button></section> : null}{openTasks.length ? <section className="review-task-list"><label>Review tasks</label>{openTasks.map((task) => <div key={task.id}><span>{task.message}</span><button type="button" onClick={() => onResolveTask(task)}><Check size={12} /> Resolve</button></div>)}</section> : null}<button type="button" className="ask-ai" onClick={onAskAi}><Bot size={16} /> {askLabel}</button><section className="trust-summary"><ShieldCheck size={17} /><div><strong>Nothing publishes silently</strong><p>AI changes are typed diffs. Project publication revalidates live source trust and filter bindings.</p></div></section></div>;
 }
 
-export function ComponentInspector({ initialTab = 'data', tile, run, pageId, page, pages, sources, dataset, disabled, onOpenSources, onSaveDatasetTileAsBlock, savingDatasetTileAsBlock, savedDatasetReviewDraft, onReplaceDatasetTileWithBlock = () => undefined, replacingDatasetTileWithBlock = false, onPreviewLegacySemanticConversion = () => undefined, previewingLegacySemanticConversion = false, semanticTileConversionPreview, onAcceptLegacySemanticConversion = () => undefined, acceptingLegacySemanticConversion = false, onRefreshDatasetTile, onUpdate, onUpdateInteractions, onDelete }: { initialTab?: 'data' | 'visual' | 'interactions'; tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]; run?: DashboardRunResponse['tiles'][number]; pageId: string; page: AppStudioBuildDraft['pages'][number]; pages: AppStudioBuildDraft['pages']; sources: AppStudioBuildDraft['sources']; dataset?: DatasetDescriptor; disabled: boolean; onOpenSources: () => void; onSaveDatasetTileAsBlock: () => void; savingDatasetTileAsBlock: boolean; savedDatasetReviewDraft?: Extract<DatasetTileSaveAsBlockResponse, { ok: true }>; onReplaceDatasetTileWithBlock?: () => void; replacingDatasetTileWithBlock?: boolean; onPreviewLegacySemanticConversion?: () => void; previewingLegacySemanticConversion?: boolean; semanticTileConversionPreview?: Extract<SemanticTileConversionPreviewResponse, { ok: true }>; onAcceptLegacySemanticConversion?: () => void; acceptingLegacySemanticConversion?: boolean; onRefreshDatasetTile: () => void; onUpdate: (patch: Partial<typeof tile>) => void; onUpdateInteractions: (interactions: AppStudioBuildDraft['pages'][number]['interactions']) => void; onDelete: () => void }): JSX.Element {
+export function ComponentInspector({ initialTab = 'data', tile, run, trust, pageId, page, pages, sources, dataset, disabled, onOpenSources, onSaveDatasetTileAsBlock, savingDatasetTileAsBlock, savedDatasetReviewDraft, onReplaceDatasetTileWithBlock = () => undefined, replacingDatasetTileWithBlock = false, onPreviewLegacySemanticConversion = () => undefined, previewingLegacySemanticConversion = false, semanticTileConversionPreview, onAcceptLegacySemanticConversion = () => undefined, acceptingLegacySemanticConversion = false, onRefreshDatasetTile, onUpdate, onUpdateInteractions, onDelete }: { initialTab?: 'data' | 'visual' | 'interactions'; tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]; run?: DashboardRunResponse['tiles'][number]; /** The tile's trust from the App's one trust answer (B6). */ trust?: ReaderTrust; pageId: string; page: AppStudioBuildDraft['pages'][number]; pages: AppStudioBuildDraft['pages']; sources: AppStudioBuildDraft['sources']; dataset?: DatasetDescriptor; disabled: boolean; onOpenSources: () => void; onSaveDatasetTileAsBlock: () => void; savingDatasetTileAsBlock: boolean; savedDatasetReviewDraft?: Extract<DatasetTileSaveAsBlockResponse, { ok: true }>; onReplaceDatasetTileWithBlock?: () => void; replacingDatasetTileWithBlock?: boolean; onPreviewLegacySemanticConversion?: () => void; previewingLegacySemanticConversion?: boolean; semanticTileConversionPreview?: Extract<SemanticTileConversionPreviewResponse, { ok: true }>; onAcceptLegacySemanticConversion?: () => void; acceptingLegacySemanticConversion?: boolean; onRefreshDatasetTile: () => void; onUpdate: (patch: Partial<typeof tile>) => void; onUpdateInteractions: (interactions: AppStudioBuildDraft['pages'][number]['interactions']) => void; onDelete: () => void }): JSX.Element {
   const [title, setTitle] = useState(tile.title ?? '');
   const [markdown, setMarkdown] = useState(tile.text?.markdown ?? '');
   const [description, setDescription] = useState(tile.description ?? '');
@@ -4659,7 +4653,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     </> : null}
     {dataTile && tab === 'data' ? <>
     {tile.query && dataset && tileEncoding ? <DatasetTileQueryInspector descriptor={dataset} query={tile.query} visualization={tile.viz.type} encoding={tileEncoding} disabled={disabled} onChange={updateDatasetQuery} onShelves={updateShelves} onOpenSources={onOpenSources} result={run?.status === 'ok' ? run.result : undefined} /> : null}
-    <section className="data-trust"><label>Data & trust</label><div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : tile.trustState === 'certified' && run?.certification ? certifiedByLabel(run.certification) : trustLabel(tile.trustState)}</strong></div>{!calculatedTrust && tile.trustState === 'certified' && plainCertificationChecks(run?.certification?.checks).length ? <small>Checks passed: {plainCertificationChecks(run?.certification?.checks).join(' · ')}</small> : null}{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Data'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Needs review: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? rowCountWords(run.result?.rowCount ?? run.result?.rows.length ?? 0) : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable saved query</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new saved query is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
+    <section className="data-trust"><label>Data & trust</label>{trust ? <div><span className={`trust-dot ${trust.state === 'certified' ? 'certified' : trust.state === 'governed' ? 'governed' : 'review_required'}`} /><strong>{trust.state === 'certified' ? (run?.certification ? certifiedByLabel(run.certification) : trust.byline ?? trust.label) : trust.label}</strong></div> : <div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : tile.trustState === 'certified' && run?.certification ? certifiedByLabel(run.certification) : trustLabel(tile.trustState)}</strong></div>}{trust && trust.state !== 'certified' ? <small>{trust.detail}</small> : null}{!calculatedTrust && tile.trustState === 'certified' && plainCertificationChecks(run?.certification?.checks).length ? <small>Checks passed: {plainCertificationChecks(run?.certification?.checks).join(' · ')}</small> : null}{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Data'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Needs review: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? rowCountWords(run.result?.rowCount ?? run.result?.rows.length ?? 0) : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable saved query</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new saved query is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
     {tile.semantic && !tile.query ? <section className="dataset-reusable-block"><strong>Convert to a field query</strong><p>Preview an exact field-query mapping for this legacy semantic tile. ZLens runs both paths in one fresh read scope before it can apply the change. The original semantic payload is retained as provenance; this does not certify the source.</p><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onPreviewLegacySemanticConversion}>{previewingLegacySemanticConversion ? 'Proving conversion…' : 'Preview Dataset conversion'}</button>{semanticTileConversionPreview ? <div className="dataset-review-replacement"><small>Mapped source: {semanticTileConversionPreview.candidate.sourceId}</small><small>Mapped query: {semanticTileConversionPreview.candidate.query.measures.map((measure) => measure.measure).join(', ')}{semanticTileConversionPreview.candidate.query.dimensions.length ? ` by ${semanticTileConversionPreview.candidate.query.dimensions.map((dimension) => dimension.field).join(', ')}` : ''}</small><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onAcceptLegacySemanticConversion}>{acceptingLegacySemanticConversion ? 'Rechecking and applying…' : 'Apply Dataset conversion'}</button></div> : <small>Preview first. Unsupported bindings, source drift, or an incomplete comparison stay with the original semantic tile.</small>}</section> : null}
     </> : null}
     {dataTile && tab === 'visual' ? <>

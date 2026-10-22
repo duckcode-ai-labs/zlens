@@ -237,6 +237,8 @@ export interface AppSummary {
   /** Who published the App as certified, and when (D5). */
   certifiedBy?: string;
   certifiedAt?: string;
+  /** How many data tiles were certified when the App was published (B6). */
+  tileTrust?: { certified: number; total: number };
   /** When the App's document or pages last changed. */
   updatedAt?: string;
   status?: 'ready' | 'empty' | 'review';

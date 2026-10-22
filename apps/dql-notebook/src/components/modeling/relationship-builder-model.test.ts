@@ -53,6 +53,9 @@ describe('relationship status and ids', () => {
     expect(relationshipStatusView({ status: 'certified', automaticJoinAllowed: false }).label).toBe('Needs recheck');
     expect(relationshipStatusView({ status: 'reviewed', automaticJoinAllowed: false, validation: evidence() }).label).toBe('Validated');
     expect(relationshipStatusView({ status: 'draft', automaticJoinAllowed: false }).label).toBe('Draft');
+    // A checked draft reads Draft, the level the editor opens on, never Validated (B6).
+    expect(relationshipStatusView({ status: 'draft', automaticJoinAllowed: false, validation: evidence() }).label).toBe('Draft');
+    expect(levelOfRelationship({ status: 'draft', validation: evidence() })).toBe('draft');
     expect(relationshipStatusView({ status: 'deprecated', automaticJoinAllowed: false }).label).toBe('Retired');
   });
 

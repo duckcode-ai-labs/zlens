@@ -1433,7 +1433,7 @@ function AppCard({
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const draftCount = app.drafts?.length ?? 0;
-  const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust, certifiedBy: app.certifiedBy, certifiedAt: app.certifiedAt });
+  const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust, publishedTrust: app.tileTrust, certifiedBy: app.certifiedBy, certifiedAt: app.certifiedAt });
   const certified = seal.certified;
   const researchCount = app.investigations ?? 0;
   const aiPinCount = app.aiPins ?? 0;

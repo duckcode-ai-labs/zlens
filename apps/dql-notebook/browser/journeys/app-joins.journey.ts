@@ -213,9 +213,15 @@ test('"Only certified data" blocks publishing a tile that uses an uncertified jo
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${server!.baseUrl}/?appDraft=${draftId}`);
   await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
-  await page.getByRole('button', { name: /^Review and publish to Project/ }).click();
+  // B6: the count on the Publish button is the count the dialog opens with.
+  const publishButton = page.getByRole('button', { name: /^Review and publish to Project/ });
+  await expect(publishButton).toHaveAttribute('aria-label', /, \d+ fix/, { timeout: 30_000 });
+  const buttonCount = Number((await publishButton.getAttribute('aria-label'))?.match(/, (\d+) fix/)?.[1]);
+  await publishButton.click();
   const review = page.getByRole('dialog', { name: /fix(es)? before publishing/ });
   await expect(review).toBeVisible({ timeout: 60_000 });
+  await expect(review.getByRole('heading', { name: `${buttonCount} ${buttonCount === 1 ? 'fix' : 'fixes'} before publishing` })).toBeVisible({ timeout: 30_000 });
+  await expect(review.getByText(/Complete governed validation|Scoped review| is review /)).toHaveCount(0);
   // The source is certified; the tile is not: it never says every check passed.
   await expect(review.getByText('Every check passed')).toHaveCount(0);
   await expect(review.getByText('Ready to publish')).toHaveCount(0);
@@ -231,6 +237,39 @@ test('"Only certified data" blocks publishing a tile that uses an uncertified jo
   await expect(review.getByRole('region', { name: /^Needs review:/ })).toHaveCount(0, { timeout: 30_000 });
   const runFirst = review.getByRole('button', { name: 'Run preview' });
   if (await runFirst.count()) await runFirst.first().click();
-  await expect(page.getByRole('dialog', { name: 'Ready to publish' })).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole('dialog', { name: 'Ready to publish' }).getByText('Every check passed.')).toBeVisible();
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready).toBeVisible({ timeout: 60_000 });
+  // B6: allowed is named, never "every check passed": Revenue by store and the
+  // Orders trend (the Customer filter reaches it) need review; Customers by name is certified.
+  await expect(ready.getByText('Ready to publish · 2 tiles need review (allowed)')).toBeVisible();
+  await expect(ready.getByText(/Every check passed|All checks passed/)).toHaveCount(0);
+  await expect(ready).toContainText('the App reads “1 of 3 tiles certified”');
+  await ready.getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await expect(page).toHaveURL(/app=store-review/, { timeout: 60_000 });
+
+  // The App header says the same as the dialog.
+  await expect(page.getByText('1 of 3 tiles certified').first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/All data certified/)).toHaveCount(0);
+
+  // A reader picks a customer: trust is the page's, not the filter value's, so the count holds.
+  await page.goto(`${server!.baseUrl}/?app=store-review&page=overview`);
+  await expect(page.getByText('1 of 3 tiles certified').first()).toBeVisible({ timeout: 60_000 });
+  const customer = page.getByRole('button', { name: /^Customer Name: / });
+  await expect(customer).toBeVisible({ timeout: 60_000 });
+  const picked = page.waitForResponse((response) => /\/api\/apps\/[^/]+\/dashboards\/[^/]+\/run$/.test(new URL(response.url()).pathname)
+    && (JSON.parse(response.request().postData() ?? '{}') as RunRequest).variables?.customer_name === 'Ann');
+  await customer.click();
+  await page.getByRole('option', { name: 'Ann', exact: true }).click();
+  await picked;
+  await expect(page.getByRole('button', { name: /^Customer Name: / })).toHaveAccessibleName('Customer Name: Ann', { timeout: 30_000 });
+  await expect(page.getByText('1 of 3 tiles certified').first()).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText(/[02] of 3 tiles certified/)).toHaveCount(0);
+
+  // The Apps card agrees, after a reload too: never "App certified" over a tile that needs review.
+  await page.goto(server!.baseUrl);
+  await page.getByRole('button', { name: 'Apps', exact: true }).first().click();
+  const card = page.locator('article.dql-app-card').filter({ hasText: 'Store Review' });
+  await expect(card).toBeVisible({ timeout: 30_000 });
+  await expect(card.getByText('1 of 3 tiles certified')).toBeVisible();
+  await expect(card.getByText(/App certified/)).toHaveCount(0);
 });

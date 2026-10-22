@@ -24,6 +24,7 @@ import {
   generateAppPackage,
   getAppAiBuildSession,
   handleAppsApi,
+  appBuildDraftTrust,
   markStoredAppBuildDraftPreflighted,
   publishStoredAppBuildDraft,
   promoteAppForStakeholders,
@@ -2390,6 +2391,60 @@ describe('Apps command center API helpers', () => {
       name: 'Any App', goal: 'Anything', authoringMode: 'manual', sourcePolicy: 'governed_only',
     });
     expect((unscoped.payload as any).draft.pages[0].metadata.domain).toBe('general');
+  });
+
+  it('records the App\'s tile trust at publish, and is certified only when every tile is — joins from the current model included (B6)', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const publishWith = async (appId: string, sourcePolicy: 'governed_only' | 'include_review_required', descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined) => {
+      const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+        appId, name: appId, goal: 'Revenue by region', authoringMode: 'manual', sourcePolicy, domain: 'commerce',
+      });
+      const draft = (created.payload as any).draft;
+      const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100`, 'GET', {});
+      const dataset = ((catalog.payload as any).items as any[]).find((item) => item.capabilities?.dataset);
+      const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+        mode: 'manual', expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+        selections: [{ sourceId: dataset.sourceId, pageId: 'overview', view: 'chart', title: 'Revenue by region', query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] } }],
+      });
+      expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
+      const composedDraft = (composed.payload as any).draft as AppBuildDraft;
+      // A settled preview of the page, as the Studio records before Publish.
+      const settled: AppBuildDraft = { ...composedDraft, previewReceipts: [{ id: 'run-1', pageId: 'overview', revision: composedDraft.revision, snapshotId: 'snapshot', filterFingerprint: 'filters', resultFingerprint: 'results', createdAt: composedDraft.updatedAt }] };
+      const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+      try {
+        storage.saveAppBuildDraft(settled);
+      } finally {
+        storage.close();
+      }
+      expect(preflightStoredAppBuildDraft(root, settled)).toEqual([]);
+      publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, settled), { descriptorFor });
+      return { dataset, settled, written: JSON.parse(readFileSync(join(root, `apps/${appId}/dql.app.json`), 'utf-8')) };
+    };
+
+    // Every tile certified: the App is certified and records 1 of 1.
+    const all = await publishWith('all-certified', 'governed_only');
+    expect(all.written).toMatchObject({ lifecycle: 'certified', tileTrust: { certified: 1, total: 1 } });
+    expect(__test__.collectAppsList(root).find((entry) => entry.id === 'all-certified')).toMatchObject({ certification: 'certified', tileTrust: { certified: 1, total: 1 } });
+
+    // The current model reads Region through a join nobody certified, allowed
+    // with "Allow data that needs review": the App is not certified.
+    const withReviewJoin = (descriptor: DatasetDescriptor): DatasetDescriptor => ({
+      ...descriptor,
+      fields: descriptor.fields.map((field) => (field.name === 'region' ? { ...field, related: { join: 'region', column: 'region' } } as typeof field : field)),
+      joins: [{ id: 'region', label: 'Region', table: 'regions', relation: 'main.regions', keys: [{ from: 'region', to: 'region' }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: 'proposal:rel', uniqueness: 'current', sentence: 'each order line has one region' }],
+    });
+    const allowed = await publishWith('review-allowed', 'include_review_required', (sourceId) => {
+      const stored = all.settled.sources.find((source) => source.id === sourceId)?.capabilities?.dataset as DatasetDescriptor | undefined;
+      return stored ? withReviewJoin(stored) : undefined;
+    });
+    expect(allowed.written.lifecycle).toBe('review');
+    expect(allowed.written.certifiedBy).toBeUndefined();
+    expect(allowed.written.tileTrust).toEqual({ certified: 0, total: 1 });
+    expect(__test__.collectAppsList(root).find((entry) => entry.id === 'review-allowed')).toMatchObject({ certification: 'uncertified', tileTrust: { certified: 0, total: 1 } });
+    // The same answer the Studio and the App header give.
+    const trust = appBuildDraftTrust(allowed.settled, (sourceId) => withReviewJoin(allowed.settled.sources.find((source) => source.id === sourceId)!.capabilities!.dataset as DatasetDescriptor));
+    expect([trust.label, trust.reviewAllowed]).toEqual(['0 of 1 tile certified', 1]);
   });
 
   it('PR3 connects data before any tile; data no tile uses never blocks Publish and is not written (design D4)', async () => {

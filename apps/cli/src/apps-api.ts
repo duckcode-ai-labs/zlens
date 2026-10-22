@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hostActor, hostActorDisplayName } from './host/request-context.js';
-import { blockCertificationByline, bylineForViewer, gitUserName, localPersonAliases, personDisplayName, type CertificationByline } from './certification-receipt.js';
+import { blockCertificationByline, bylineForViewer, gitUserName, localPersonAliases, localPersonSelf, personDisplayName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -46,6 +46,8 @@ import {
   packDashboardLayoutItems,
   appSourceIdsUsedByTiles,
   appTilesNeedingJoinReview,
+  appTrustAnswer,
+  publishedAppTileTrust,
   tileJoinReviewSentence,
   type AppDocument,
   type BlockParameterDefinition,
@@ -1098,7 +1100,11 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       const prepared = hasCurrentAppBuildPreflightReceipt(current)
         ? current
         : markStoredAppBuildDraftPreflighted(projectRoot, current);
-      const result = publishStoredAppBuildDraft(projectRoot, prepared);
+      // The App's trust is worked out against the current model's joins.
+      const records = await resolveCurrentDatasetSourceRecords(projectRoot, datasetDraftSourceIds(prepared), ctx.resolveDatasetSourceAuthority).catch(() => new Map<string, AppSourceCatalogRecord>());
+      const result = publishStoredAppBuildDraft(projectRoot, prepared, {
+        descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? undefined,
+      });
       await refreshGeneratedMetadata(projectRoot);
       sendJson(res, 201, { ...result, compatibilityRoute: buildMatch[2] === 'commit' });
     } catch (err) {
@@ -2053,6 +2059,8 @@ type AppListEntry = {
   /** Who published the App as certified, and when (D5). */
   certifiedBy?: string;
   certifiedAt?: string;
+  /** How many data tiles were certified at publish (B6): the card never says "App certified" over them. */
+  tileTrust?: { certified: number; total: number };
   /** When the App's document or pages last changed. */
   updatedAt?: string;
   status?: 'ready' | 'empty' | 'review';
@@ -2100,13 +2108,18 @@ function withCertificationBylines<Item extends { trust?: string; kind?: string; 
  * person, else git user.name with every local spelling of their identity.
  * Read once a minute (git is asked at most that often).
  */
-const localPersonCache = new Map<string, { at: number; person: { name?: string; aliases: ReadonlySet<string> } }>();
-export function thisPerson(projectRoot: string): { name?: string; aliases: ReadonlySet<string> } {
+const localPersonCache = new Map<string, { at: number; person: { name?: string; aliases: ReadonlySet<string>; self: ReadonlySet<string> } }>();
+export function thisPerson(projectRoot: string): { name?: string; aliases: ReadonlySet<string>; self: ReadonlySet<string> } {
   const actor = hostActor();
-  if (actor) return { name: hostActorDisplayName() ?? actor, aliases: new Set([actor.toLowerCase()]) };
+  if (actor) {
+    const own = new Set([actor.toLowerCase()]);
+    return { name: hostActorDisplayName() ?? actor, aliases: own, self: own };
+  }
   const cached = localPersonCache.get(projectRoot);
   if (cached && Date.now() - cached.at < 60_000) return cached.person;
-  const person = { name: gitUserName(projectRoot), aliases: localPersonAliases(projectRoot) };
+  // `aliases` name this person by one display name; only `self` (their own
+  // git email and $USER@local) makes a certification "by you" (B6).
+  const person = { name: gitUserName(projectRoot), aliases: localPersonAliases(projectRoot), self: localPersonSelf(projectRoot) };
   localPersonCache.set(projectRoot, { at: Date.now(), person });
   return person;
 }
@@ -2169,6 +2182,7 @@ function collectAppsList(projectRoot: string): AppListEntry[] {
       certification: document.lifecycle === 'certified' ? 'certified' : 'uncertified',
       ...(document.certifiedBy ? { certifiedBy: document.certifiedBy } : {}),
       ...(document.certifiedAt ? { certifiedAt: document.certifiedAt } : {}),
+      ...(document.tileTrust ? { tileTrust: document.tileTrust } : {}),
       ...(updatedAt ? { updatedAt } : {}),
       status: document.lifecycle === 'review' ? 'review' : dashboards.length > 0 ? 'ready' : 'empty',
       storage: document.visibility === 'private' ? 'mine' : document.visibility === 'template' ? 'template' : 'shared',
@@ -4734,7 +4748,7 @@ export async function proposeAppBuildDraftOperations(
       type: 'set_review_task',
       task: {
         id: `review-source-${createHash('sha256').update(source.sourceId).digest('hex').slice(0, 12)}`,
-        message: `${source.title} is ${source.lifecycle} and must be certified, replaced, or removed before Project publication.`,
+        message: `${source.title} needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.`,
         status: 'open',
         sourceId: source.sourceId,
         pageId: firstComponent ? componentPageIdById.get(firstComponent.id) ?? initialPage.id : initialPage.id,
@@ -7090,7 +7104,7 @@ async function composeStoredAppBuildDraft(
         type: 'set_review_task',
         task: {
           id: `review-source-${createHash('sha256').update(source.sourceId).digest('hex').slice(0, 12)}`,
-          message: `${source.title} is ${source.lifecycle} and must be certified, replaced, or removed before Project publication.`,
+          message: `${source.title} needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.`,
           status: 'open',
           sourceId: source.sourceId,
           pageId: page.id,
@@ -8584,6 +8598,8 @@ const DRAFT_OWNED_APP_FIELDS = new Set([
   'usesDomains', 'requiredExports', 'domain', 'audience', 'lifecycle', 'homepage',
   // Recorded on every publish as certified, and dropped when it is not.
   'certifiedBy', 'certifiedAt',
+  // The tile trust worked out at this publish (B6).
+  'tileTrust',
 ]);
 
 function mergeRepublishedAppDocument(appDir: string, generated: AppDocument): AppDocument {
@@ -8606,9 +8622,34 @@ function mergeRepublishedAppDocument(appDir: string, generated: AppDocument): Ap
   return merged as unknown as AppDocument;
 }
 
+/**
+ * The App's trust at publish (B6): the same answer the publish check, the
+ * editor, the App header and the Apps card give — every tile's source, every
+ * join it can run through (filters included), its calculations, and whether
+ * data that needs review was allowed. `descriptorFor` gives the current
+ * model's Dataset (joins certified since the draft stored its card count).
+ */
+export function appBuildDraftTrust(
+  draft: AppBuildDraft,
+  descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined,
+): ReturnType<typeof appTrustAnswer> {
+  const sources = new Map(draft.sources.map((source) => [source.id, source]));
+  return appTrustAnswer({
+    pages: draft.pages,
+    sourcePolicy: draft.sourcePolicy,
+    sourceFor: (sourceId) => {
+      const source = sources.get(sourceId);
+      if (!source) return undefined;
+      const current = descriptorFor?.(sourceId);
+      return current ? { ...source, capabilities: { ...(source.capabilities ?? {}), dataset: current } } : source;
+    },
+  });
+}
+
 export function publishStoredAppBuildDraft(
   projectRoot: string,
   draft: AppBuildDraft,
+  options: { descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined } = {},
 ): { ok: true; app: ReturnType<typeof collectAppsList>[number]; draft: AppBuildDraft; paths: string[] } {
   const errors = preflightStoredAppBuildDraft(projectRoot, draft);
   if (errors.length) throw new Error(`App Build preflight failed: ${errors.join(' ')}`);
@@ -8636,7 +8677,11 @@ export function publishStoredAppBuildDraft(
     || ((source.kind === 'governed_semantic' || source.kind === 'semantic_query')
       && !source.capabilities?.dataset
       && source.reviewStatus !== 'approved'));
-  const lifecycle = hasCertifiedAnalysis && !hasReviewRequiredSource ? 'certified' as const : 'review' as const;
+  // Certified only when every data tile is certified (B6): a tile on an
+  // uncertified join, allowed with "Allow data that needs review", keeps the
+  // App from reading "App certified" while its header says "3 of 4".
+  const trust = appBuildDraftTrust(draft, options.descriptorFor);
+  const lifecycle = hasCertifiedAnalysis && !hasReviewRequiredSource && trust.allCertified ? 'certified' as const : 'review' as const;
   const app: AppDocument = {
     version: 1,
     id: draft.appId,
@@ -8652,6 +8697,7 @@ export function publishStoredAppBuildDraft(
     lifecycle,
     // Who published it as certified, and when: the card says "App certified by <name> · <date>".
     ...(lifecycle === 'certified' ? { certifiedBy: appCertifierName(projectRoot, owner), certifiedAt: new Date().toISOString() } : {}),
+    ...(trust.total > 0 ? { tileTrust: publishedAppTileTrust(trust) } : {}),
     owners: [owner],
     members: [{ userId: owner, displayName: owner, roles: ['owner', 'analyst'] }],
     roles: [

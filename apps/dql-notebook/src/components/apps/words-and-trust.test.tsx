@@ -62,6 +62,22 @@ describe('Certified by <name> · <date> (D5)', () => {
     expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0 }).label).toBe('App certified');
   });
 
+  it('the Apps card, the App header and the publish check say the same thing after "Allow data that needs review" (B6)', () => {
+    // Recorded at publish: 3 of 4 tiles certified, so the card never says "App certified", even after a reload.
+    const card = appCardSeal({ lifecycle: 'review', certification: 'uncertified', draftCount: 0, publishedTrust: { certified: 3, total: 4 } });
+    expect(card).toEqual({ certified: false, label: '3 of 4 tiles certified' });
+    // An App certified before this was recorded still yields to the stored or run count.
+    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, publishedTrust: { certified: 3, total: 4 } }).certified).toBe(false);
+    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, publishedTrust: { certified: 4, total: 4 }, certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' }).label).toMatch(/^App certified by Maria/);
+    // The App header's words for the same tiles.
+    const reviewTile = { ...certifiedTile(), dataset: { ...certifiedTile().dataset, joins: [{ trust: 'review_required' }] } };
+    const items = [item, { ...(item as object), i: 'b' }, { ...(item as object), i: 'c' }, { ...(item as object), i: 'd' }] as never;
+    const header = appCertificationRollup(items, 0, [
+      certifiedTile(), { ...certifiedTile(), tileId: 'b' }, { ...certifiedTile(), tileId: 'c' }, { ...reviewTile, tileId: 'd' },
+    ] as never);
+    expect(header.label).toBe(card.label);
+  });
+
   it('shows the result of "I vouch for this — certify" with who, when and the checks', () => {
     const html = renderToStaticMarkup(<CertifiedReceiptNote name="Orders" certification={{ by: 'maria@acme.com', at: today, checks: ['Number formats: Subtotal: shown in dollars (stored as cents)', 'tests'] }} />);
     expect(html).toMatch(/Orders · Certified by Maria · \d{1,2} [A-Z][a-z]{2}/);

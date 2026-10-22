@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -30,6 +30,22 @@ test.beforeAll(async () => {
   workDir = mkdtempSync(join(tmpdir(), 'dql-browser-certify-'));
   const projectDir = join(workDir, 'project');
   seedProject(projectDir, { connectorRoot: process.env.ZLENS_E2E_DUCKDB_CONNECTORS });
+  // A sample project, as the dbt sample ships (B6): its configured owner is a
+  // team, and its certified saved query was certified by that team, not by
+  // whoever opens the sample.
+  const configPath = join(projectDir, 'dql.config.json');
+  writeFileSync(configPath, `${JSON.stringify({ ...JSON.parse(readFileSync(configPath, 'utf8')), identity: { owner: 'analytics@jaffle.shop' } }, null, 2)}\n`);
+  mkdirSync(join(projectDir, 'semantic-layer', 'blocks'), { recursive: true });
+  writeFileSync(join(projectDir, 'semantic-layer', 'blocks', 'top_customers.yaml'), [
+    'name: top_customers',
+    'block: top_customers',
+    'certification:',
+    '  certifiedBy: analytics@jaffle.shop',
+    "  certifiedAt: '2026-10-16T12:00:00.000Z'",
+    '  via: cli',
+    '  rules: oss',
+    '',
+  ].join('\n'));
   server = await startNotebookServer({ projectDir, workDir });
 });
 
@@ -49,8 +65,13 @@ test('checking a table does not certify it; certifying is a short review at publ
   await page.getByRole('button', { name: /Open blank Studio/ }).click();
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
 
-  // Add data → Check and add on a table nobody checked yet.
   const browser = page.getByRole('region', { name: 'Add data' });
+  // The sample's certified saved query names the team that certified it, never "you" (B6).
+  const sampleQuery = browser.locator('article.add-data-row').filter({ hasText: 'Top Customers' }).first();
+  await expect(sampleQuery).toContainText(/Certified by Analytics \(jaffle\.shop\) · 16 Oct( 2026)?/, { timeout: 30_000 });
+  await expect(sampleQuery).not.toContainText('Certified by you');
+
+  // Add data → Check and add on a table nobody checked yet.
   await browser.getByRole('group', { name: 'Kind of data' }).getByRole('button', { name: /^Tables/ }).click();
   const tableRow = browser.locator('article.add-data-row.table').filter({ hasText: 'dim_customers' }).first();
   await expect(tableRow).toContainText('Not checked yet', { timeout: 30_000 });
