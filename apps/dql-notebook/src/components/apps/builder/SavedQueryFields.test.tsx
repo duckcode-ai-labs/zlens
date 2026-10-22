@@ -114,8 +114,8 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
     expect(draftQuery).not.toContain(MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW);
   });
 
-  it('sends the author’s numbers with the revision it read, and reports a certified Dataset', async () => {
-    const client = fakeClient([{ ok: true, status: 'certified', previousStatus: 'certified', sourceId: 'app:block:orders/top_customers', blockers: [], keyChecked: true }]);
+  it('sends the author’s numbers with the revision it read, and reports a checked Dataset that needs certifying (design Q1)', async () => {
+    const client = fakeClient([{ ok: true, status: 'checked', previousStatus: 'certified', sourceId: 'app:block:orders/top_customers', blockers: [], keyChecked: true }]);
     const choices = initialNumberChoices(proposal).map((choice) => choice.name === 'lifetime_spend' ? { ...choice, format: 'number' as const } : choice);
     const submission = await submitSavedQueryFields(client, { sourceId: topCustomersQuery.sourceId!, name: 'Top Customers', draft: certifiedDraft, choices });
     expect(client.create).toHaveBeenCalledWith({
@@ -126,7 +126,7 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
         { name: 'lifetime_spend', include: true, format: 'number', currency: 'USD' },
       ],
     });
-    expect(submission).toEqual({ kind: 'added', status: 'certified', sourceId: 'app:block:orders/top_customers', message: 'Top Customers is row-level now and certified: its checks passed.', blockers: [] });
+    expect(submission).toEqual({ kind: 'added', status: 'checked', sourceId: 'app:block:orders/top_customers', message: 'Top Customers is row-level now and checked: it needs certifying before you publish.', blockers: [] });
   });
 
   it('asks before sending a certified saved query back for review when its check fails', async () => {

@@ -76,13 +76,14 @@ App Studio uses one small set of words:
 | **Field** | A measure to add up or count, or a dimension or time to group by. You build tiles by picking fields. |
 | **Filter** | A control above the tiles that narrows what the page shows, such as a region or a date range. |
 | **Domain** | A Domain groups data by business area, like Sales or Finance. It filters the lists; it is not a kind of data. |
-| **Table** | A table in your database. ZLens checks it once (**Check and add**) before you use it. |
+| **Table** | A table in your database. ZLens checks it once (**Check and add** → **Check and use**) before you use it. |
+| **Checked · Needs certifying** | ZLens checked the data (it runs, what one row is, number formats) and you can build tiles from it, but nobody has certified it yet. It is certified on purpose before the App is published. |
 | **Saved query** | A reusable, reviewed query. Files and the CLI call it a block (a `.dql` block file). Its result's columns are its fields, with no review step: grouped by its own columns its values show as they are, otherwise numbers add up (**Sum**) and averages are never added up. |
 | **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and records it, for row-safe measures such as distinct counts. |
 | **Related table** | A table that checked data points to through a many-to-one join (each order has one customer). Its fields show under the data as **Orders → Customer**, and totals stay the same. |
 | **Metrics** | Measures and dimensions from a semantic model. |
-| **Certified** | Someone owns the data and checked it. ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. |
-| **Certified by** | The person who certified the data: the signed-in person with a host, otherwise your git `user.name`. Older data shows **Certified · date** or **Certified**. |
+| **Certified** | A person reviewed the data and vouched for it (**I vouch for this — certify**, or **Certify** in Block Studio). ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. |
+| **Certified by** | The person who certified the data: the signed-in person with a host, otherwise your git `user.name`. You read **Certified by you** for data you certified. Older data shows **Certified · date** or **Certified**. |
 | **Unpublished changes** | Changes to an App that only you can see until you publish. |
 | **Summary** | A short auto-written paragraph about a page's numbers. Off unless the author adds it. |
 | **Technical details** | Ids, hashes and fingerprints, kept out of the way under a toggle that starts closed. |

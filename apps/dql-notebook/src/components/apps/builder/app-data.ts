@@ -7,6 +7,7 @@ import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { datasetPhysicalField } from '@zlens/core/datasets/descriptor';
 import { tileQueryValidationRuns, validateTileQuery, type TileQuery } from '@zlens/core/apps/tile-query';
 import { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from '@zlens/core/apps/app-data-sources';
+import { certifiedByLabel, certifiedDateLabel, certifierDisplayName } from '@zlens/core/apps/reader-trust';
 
 /**
  * The App's data (design D1, D3, D4): one list of data sources per App, kept
@@ -24,7 +25,10 @@ export const FIELD_TILES_OFF_MESSAGE = 'Field-based tiles are turned off for thi
 /** Said once, where Domain first appears (the Start form; a tooltip in Add data). */
 export const DOMAIN_EXPLANATION = 'A Domain groups data by business area, like Sales or Finance.';
 
-export const TABLE_BECOMES_DATASET_HINT = 'ZLens checks a table once before Apps use it.';
+export const TABLE_BECOMES_DATASET_HINT = 'ZLens checks a table once before Apps use it. You certify it when you publish.';
+
+/** Data ZLens checked that nobody certified yet (design Q1). */
+export const CHECKED_NEEDS_CERTIFYING = 'Checked · Needs certifying';
 
 /** What "Make row-level" is for, next to the action (design D1). */
 export const MAKE_ROW_LEVEL_HINT = 'Only needed for row-safe measures, like distinct counts or averages over rows. ZLens checks what one row is and may send the saved query back for review.';
@@ -155,9 +159,44 @@ export function needsReview(item: Pick<AppBlockRecommendation, 'trust' | 'status
   return trust !== 'certified' || (item.lifecycle !== undefined && item.lifecycle !== 'certified');
 }
 
-/** Needs review while the App allows only certified data: adding it also changes the data rule. */
+/**
+ * Checked · Needs certifying (design Q1): ZLens checked it ("Check and use")
+ * and nobody certified it yet. Tiles can use it under any data rule; it is
+ * certified on purpose before the App is published.
+ */
+export function isCheckedNeedsCertifying(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'check'>): boolean {
+  return needsReview(item) && Boolean(item.check);
+}
+
+/** "Checked by you · 22 Oct", "Checked by Maria · 22 Oct". */
+export function checkedByLabel(check: AppBlockRecommendation['check'], now: Date = new Date()): string {
+  const who = check?.byYou ? 'you' : certifierDisplayName(check?.by, check?.name);
+  const when = certifiedDateLabel(check?.at, now);
+  return [who ? `Checked by ${who}` : 'Checked', when].filter(Boolean).join(' · ');
+}
+
+/** The one trust phrase a Data row shows: who certified it, Checked · Needs certifying, or Needs review. */
+export function dataTrustLabel(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'check' | 'certification'>): string {
+  if (!needsReview(item)) return certifiedByLabel(item.certification);
+  return isCheckedNeedsCertifying(item) ? CHECKED_NEEDS_CERTIFYING : trustLabel('review');
+}
+
+/**
+ * Data "I vouch for this — certify" applies to (design Q1): a row-level
+ * Dataset (from a table, or a saved query made row-level) nobody certified
+ * yet. A saved query certifies in Block Studio; Metrics in the model.
+ */
+export function canCertifyAppData(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'capabilities' | 'kind'>): boolean {
+  const dataset = item.capabilities?.dataset;
+  return needsReview(item)
+    && item.lifecycle !== 'deprecated'
+    && item.kind !== 'semantic'
+    && Boolean(dataset && dataset.kind !== 'semantic' && !dataset.result);
+}
+
+/** Needs review while the App allows only certified data: adding it also changes the data rule. Checked data does not. */
 export function addNeedsReviewChoice(item: AppBlockRecommendation, sourcePolicy: AppStudioBuildDraft['sourcePolicy']): boolean {
-  return sourcePolicy === 'governed_only' && needsReview(item);
+  return sourcePolicy === 'governed_only' && needsReview(item) && !isCheckedNeedsCertifying(item);
 }
 
 export function isAddedToApp(sources: readonly DraftSource[], item: Pick<AppBlockRecommendation, 'id' | 'sourceId'>): boolean {
@@ -189,6 +228,7 @@ export function appDataSourceFromCandidate(candidate: AppBlockRecommendation): D
     ...(candidate.capabilities ? { capabilities: candidate.capabilities } : {}),
     trustState: certified ? 'certified' : 'review_required',
     reviewStatus: certified ? 'not_required' : 'required',
+    ...(isCheckedNeedsCertifying(candidate) ? { checked: true } : {}),
   };
 }
 
@@ -296,6 +336,7 @@ export function appDataItems(sources: readonly DraftSource[], known: readonly Ap
     lastModified: '',
     description: '',
     ...(source.capabilities ? { capabilities: source.capabilities, chartType: source.capabilities.chartType } : {}),
+    ...(source.checked && source.trustState !== 'certified' ? { check: {} } : {}),
     score: 0,
     reasons: [],
   });

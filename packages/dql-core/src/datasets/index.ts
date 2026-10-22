@@ -82,6 +82,7 @@ export type {
   DatasetAggregateComponentRequirements,
 } from './component-proof.js';
 export {
+  applyTableDuplicateChoices,
   applyTableProfile,
   proposeTableDataset,
   renderTableDatasetBlock,
@@ -109,7 +110,7 @@ export {
   withoutDatasetJoins,
 } from './related-fields.js';
 export type { DiscoveredDatasetJoins, RelatedRelationshipEdge } from './related-fields.js';
-export type { TableColumnInput, TableColumnKind, TableDatasetField, TableDatasetMeasure, TableDatasetProposal, TableProfile } from './table-draft.js';
+export type { TableColumnInput, TableColumnKind, TableDatasetDuplicate, TableDatasetField, TableDatasetHiddenColumn, TableDatasetMeasure, TableDatasetProposal, TableDuplicateChoice, TableProfile } from './table-draft.js';
 export {
   NON_ADDITIVE_REASON,
   SAVED_QUERY_ROW_COUNT,

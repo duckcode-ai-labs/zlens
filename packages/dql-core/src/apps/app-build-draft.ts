@@ -117,6 +117,13 @@ export type AppBuildDraftSource = {
   capabilities?: AppBuildSourceCapabilities;
   trustState: 'certified' | 'review_required' | 'draft_ready';
   reviewStatus: 'not_required' | 'required' | 'approved';
+  /**
+   * Checked · Needs certifying (design Q1): a field Dataset ZLens checked
+   * that nobody certified yet. The App API sets it from the current catalog,
+   * never from a browser. Tiles may use it under "Only certified data"; it
+   * still never publishes until it is certified.
+   */
+  checked?: boolean;
 };
 
 export interface AppBuildReviewTask {
@@ -757,7 +764,7 @@ function assertAppBuildDraftPolicy(draft: Omit<AppBuildDraft, 'proposalHash'> | 
   }
   if (draft.sourcePolicy === 'governed_only') {
     const reviewSource = draft.sources.find((source) =>
-      (source.kind === 'block' && source.trustState !== 'certified')
+      (source.kind === 'block' && source.trustState !== 'certified' && !(source.checked && source.capabilities?.dataset))
       || source.kind === 'review_block'
       || source.kind === 'review_dql'
       || source.kind === 'exploratory_sql');

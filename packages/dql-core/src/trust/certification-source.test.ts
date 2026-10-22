@@ -7,6 +7,9 @@ import {
   certifiedBlockFileState,
   certifiedSourceSha256,
   certifiedSourceState,
+  currentBlockFileCheck,
+  currentCheckForSource,
+  readCompanionCheck,
 } from './certification-source.js';
 
 const roots: string[] = [];
@@ -58,5 +61,31 @@ describe('blockCompanionRelativePath', () => {
       companionPath: 'semantic-layer/blocks/commerce/revenue.yaml',
     });
     expect(certifiedBlockFileState(root, 'domains/commerce/blocks/other.dql', source).state).toBe('no_receipt');
+  });
+});
+
+describe('check records (design Q1: Checked · Needs certifying)', () => {
+  const source = 'block "Orders" {\n  status = "review"\n}\n';
+  const companion = (sha: string) => `name: Orders\nreviewStatus: review\ncheck:\n  checkedBy: kranthi@example.test\n  checkedByName: Kranthi\n  checkedAt: '2026-10-22T09:00:00.000Z'\n  sourceSha256: ${sha}\n  checks:\n    - 'Row key: each row is one order'\n  hiddenColumns:\n    - column: order_total\n      keptColumn: order_total_cents\n      reason: same number\n`;
+
+  it('reads a check record and trusts it only for the source it checked', () => {
+    const yaml = companion(certifiedSourceSha256(source));
+    expect(readCompanionCheck(yaml)).toMatchObject({ checkedBy: 'kranthi@example.test', checkedByName: 'Kranthi', checks: ['Row key: each row is one order'], hiddenColumns: [{ column: 'order_total', keptColumn: 'order_total_cents', reason: 'same number' }] });
+    expect(currentCheckForSource(source, yaml)).not.toBeNull();
+    expect(currentCheckForSource(source.replace('review', 'draft'), yaml)).toBeNull();
+    expect(readCompanionCheck('name: Orders\n')).toBeNull();
+    expect(readCompanionCheck(companion('not-a-sha'))).toBeNull();
+  });
+
+  it('finds a block file\'s current check through its companion YAML', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-check-record-'));
+    roots.push(root);
+    mkdirSync(join(root, 'blocks'), { recursive: true });
+    mkdirSync(join(root, 'semantic-layer', 'blocks'), { recursive: true });
+    writeFileSync(join(root, 'blocks', 'orders.dql'), source);
+    writeFileSync(join(root, 'semantic-layer', 'blocks', 'orders.yaml'), companion(certifiedSourceSha256(source)));
+    expect(currentBlockFileCheck(root, 'blocks/orders.dql')?.checkedBy).toBe('kranthi@example.test');
+    writeFileSync(join(root, 'blocks', 'orders.dql'), `${source}// edited\n`);
+    expect(currentBlockFileCheck(root, 'blocks/orders.dql')).toBeNull();
   });
 });

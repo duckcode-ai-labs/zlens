@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { certifiedByLabel } from '../reader-trust';
 import { CalendarDays, Check, ChevronDown, Database, FileText, Hash, MoreHorizontal, Plus, Search, ShieldCheck, Table2, X } from 'lucide-react';
 import {
   api,
@@ -9,7 +8,8 @@ import {
   type CertificationByline,
   type WarehouseTableSummary,
 } from '../../../api/client';
-import { CertifiedReceiptNote } from './CertifiedReceiptNote';
+import { CertifiedReceiptNote, CheckedReceiptNote } from './CertifiedReceiptNote';
+import { CertifyReviewDialog } from './CertifyReviewDialog';
 import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { groupDatasetFields } from './field-query';
 import { humanize, messageOf } from './studio-ui';
@@ -28,7 +28,9 @@ import {
   addDataDomainChips,
   addDataKindOf,
   addNeedsReviewChoice,
+  canCertifyAppData,
   canMakeRowLevel,
+  dataTrustLabel,
   datasetSampleQuery,
   filterAddDataCatalog,
   isAddedToApp,
@@ -37,7 +39,6 @@ import {
   DOMAIN_EXPLANATION,
   sourceOriginLabel,
   tilesUsingSource,
-  trustLabel,
   type AddDataKind,
 } from './app-data';
 
@@ -74,7 +75,9 @@ export interface AddDataBrowserProps {
   /** Field-based tiles are on: saved queries show fields and can be made row-level (default on). */
   fieldsEnabled?: boolean;
   /** A saved query was made row-level; the App refreshes its copy when the saved query is already in it. */
-  onFieldsAdded?: (sourceId: string, status: 'certified' | 'review' | 'draft') => void;
+  onFieldsAdded?: (sourceId: string, status: 'checked' | 'review' | 'draft') => void;
+  /** Data was certified on purpose from its ⋯ menu (design Q1); the App refreshes its copy. */
+  onCertified?: (sourceId: string) => void;
 }
 
 /**
@@ -104,6 +107,7 @@ export function AddDataBrowser({
   onChangePolicy,
   fieldsEnabled = true,
   onFieldsAdded,
+  onCertified,
 }: AddDataBrowserProps): JSX.Element {
   const dispatch = useDispatch();
   const [kind, setKind] = useState<AddDataKind>(initialKind);
@@ -124,8 +128,10 @@ export function AddDataBrowser({
   // Staging copies of a final table wait behind "Show staging tables" (new-user round 2, Q3).
   const [showStaging, setShowStaging] = useState(false);
   const [checkingTable, setCheckingTable] = useState<WarehouseTableSummary | null>(null);
-  // "Certify and use this data" says who certified it and which checks passed (D5).
-  const [certifiedNotice, setCertifiedNotice] = useState<{ name: string; certification: CertificationByline } | null>(null);
+  // "Check and use" says who checked it and what the check found (design Q1);
+  // "I vouch for this — certify" says who certified it (D5).
+  const [receiptNotice, setReceiptNotice] = useState<{ name: string; kind: 'checked' | 'certified'; byline: CertificationByline } | null>(null);
+  const [certifyFor, setCertifyFor] = useState<AppBlockRecommendation | null>(null);
   const [rowLevelFor, setRowLevelFor] = useState<AppBlockRecommendation | null>(null);
   /** Saved queries whose result columns are being read, or could not be. */
   const [fieldReads, setFieldReads] = useState<Record<string, { state: 'reading' } | { state: 'failed'; error: string }>>({});
@@ -236,9 +242,9 @@ export function AddDataBrowser({
     }).catch((cause) => setFieldReads((current) => ({ ...current, [sourceId]: { state: 'failed', error: messageOf(cause) } })));
   };
 
-  const tableCreated = async (sourceId: string | undefined, name?: string, certification?: CertificationByline) => {
+  const tableCreated = async (sourceId: string | undefined, name?: string, check?: CertificationByline) => {
     setCheckingTable(null);
-    setCertifiedNotice(certification ? { name: name ?? '', certification } : null);
+    setReceiptNotice(check ? { name: name ?? '', kind: 'checked', byline: check } : null);
     setQuery('');
     setReloadNonce((current) => current + 1);
     if (!sourceId) return;
@@ -253,7 +259,16 @@ export function AddDataBrowser({
     }
   };
 
-  const madeRowLevel = (sourceId: string, status: 'certified' | 'review' | 'draft') => {
+  const certified = (sourceId: string, certification: CertificationByline | undefined) => {
+    const item = certifyFor;
+    setCertifyFor(null);
+    setReceiptNotice(certification ? { name: item ? humanize(item.name) : '', kind: 'certified', byline: certification } : null);
+    setReloadNonce((current) => current + 1);
+    setHighlightId(sourceId);
+    onCertified?.(sourceId);
+  };
+
+  const madeRowLevel = (sourceId: string, status: 'checked' | 'review' | 'draft') => {
     setRowLevelFor(null);
     setQuery('');
     setReloadNonce((current) => current + 1);
@@ -283,7 +298,8 @@ export function AddDataBrowser({
         <button type="button" aria-pressed={domain === ''} className={domain === '' ? 'on' : ''} onClick={() => setDomain('')}>All domains</button>
         {chips.map((chip) => <button key={chip.value} type="button" aria-pressed={domain === chip.value} className={domain === chip.value ? 'on' : ''} onClick={() => setDomain(chip.value)}>{chip.label}</button>)}
       </div>
-      {certifiedNotice ? <CertifiedReceiptNote name={certifiedNotice.name} certification={certifiedNotice.certification} /> : null}
+      {receiptNotice?.kind === 'checked' ? <CheckedReceiptNote name={receiptNotice.name} check={receiptNotice.byline} /> : null}
+      {receiptNotice?.kind === 'certified' ? <CertifiedReceiptNote name={receiptNotice.name} certification={receiptNotice.byline} /> : null}
       <p className="add-data-rule"><ShieldCheck size={13} aria-hidden="true" /><span>Data rule: <strong>{sourcePolicy === 'governed_only' ? 'Only certified data' : 'Also allow data that needs review'}</strong></span><button type="button" className="link" disabled={disabled} onClick={() => onChangePolicy(sourcePolicy === 'governed_only' ? 'include_review_required' : 'governed_only')}>Change</button></p>
     </div>
 
@@ -316,6 +332,7 @@ export function AddDataBrowser({
           onRemove={() => onRemove(sourceId)}
           sameNameOrigin={sameNames.get(item.id)}
           {...(fieldsEnabled && canMakeRowLevel(item) ? { onMakeRowLevel: () => setRowLevelFor(item) } : {})}
+          {...(canCertifyAppData(item) ? { onCertify: () => setCertifyFor(item) } : {})}
         />;
       })}
       {nextCursor && kind !== 'tables' ? <button type="button" className="add-data-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Show more'}</button> : null}
@@ -346,6 +363,12 @@ export function AddDataBrowser({
       onClose={() => setCheckingTable(null)}
       onCreated={(sourceId, name, certification) => void tableCreated(sourceId, name, certification)}
     /> : null}
+    {certifyFor ? <CertifyReviewDialog
+      sourceId={certifyFor.sourceId ?? certifyFor.id}
+      name={certifyFor.name}
+      onClose={() => setCertifyFor(null)}
+      onCertified={certified}
+    /> : null}
     {rowLevelFor ? <SavedQueryFieldsDialog
       sourceId={rowLevelFor.sourceId ?? rowLevelFor.id}
       name={rowLevelFor.name}
@@ -369,6 +392,7 @@ function AddDataRow({
   onAdd,
   onRemove,
   onMakeRowLevel,
+  onCertify,
   sameNameOrigin,
 }: {
   item: AppBlockRecommendation;
@@ -385,6 +409,8 @@ function AddDataRow({
   onRemove: () => void;
   /** A saved query: open "Make row-level". */
   onMakeRowLevel?: () => void;
+  /** Data nobody certified yet: open the short review before "I vouch for this — certify" (design Q1). */
+  onCertify?: () => void;
   /** Told apart from another item with the same name ("Table" or "Metrics"). */
   sameNameOrigin?: string;
 }): JSX.Element {
@@ -394,7 +420,7 @@ function AddDataRow({
   const certified = !needsReview(item);
   const origin = sourceOriginLabel(item);
   const [menuOpen, setMenuOpen] = useState(false);
-  const meta = [origin, certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.ownerName ?? item.owner ?? ''].filter(Boolean).join(' · ');
+  const meta = [origin, dataTrustLabel(item), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.ownerName ?? item.owner ?? ''].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
@@ -405,10 +431,11 @@ function AddDataRow({
       {added
         ? <><span className="add-data-added"><Check size={13} /> Added</span><RemoveDataButton name={humanize(item.name)} tileCount={tilesUsingSource(draft, sourceId).length} disabled={disabled} onRemove={onRemove} /></>
         : <button type="button" className={reviewChoice ? 'review' : 'primary'} disabled={disabled || adding} onClick={() => onAdd(reviewChoice)} aria-label={`${reviewChoice ? 'Allow data that needs review and add' : 'Add to App'}: ${humanize(item.name)}`}>{adding ? 'Adding…' : reviewChoice ? 'Allow data that needs review & add' : <><Plus size={13} /> Add to App</>}</button>}
-      {onMakeRowLevel ? <span className="add-data-more-menu">
+      {onMakeRowLevel || onCertify ? <span className="add-data-more-menu">
         <button type="button" className="more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`More for ${humanize(item.name)}`} disabled={disabled} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {menuOpen ? <span className="add-data-menu" role="menu" aria-label={`More for ${humanize(item.name)}`}>
-          <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onMakeRowLevel(); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button>
+          {onCertify ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onCertify(); }}><strong>Certify…</strong><small>A short review, then “I vouch for this — certify”.</small></button> : null}
+          {onMakeRowLevel ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onMakeRowLevel(); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button> : null}
         </span> : null}
       </span> : null}
     </div>

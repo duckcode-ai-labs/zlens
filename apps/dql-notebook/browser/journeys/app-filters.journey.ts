@@ -76,13 +76,15 @@ test.beforeAll(async () => {
   const listing = await call<{ tables: Array<{ id: string; name: string }> }>('/api/app-datasets/tables');
   const table = listing.tables.find((candidate) => candidate.name === 'dim_customers')!;
   const drafted = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: table.id });
-  const created = await call<{ status: string }>('/api/app-datasets/tables/create', {
+  const created = await call<{ status: string; sourceId: string }>('/api/app-datasets/tables/create', {
     tableId: table.id,
     name: 'Customers',
     domain: 'orders',
     measures: drafted.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
   });
-  expect(created.status).toBe('certified');
+  // "Check and use", then "I vouch for this — certify" (design Q1).
+  expect(created.status).toBe('checked');
+  expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: created.sourceId })).status).toBe('certified');
 
   // A manual App with a Dataset tile and a Saved query tile on one page.
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
@@ -105,13 +107,15 @@ test.beforeAll(async () => {
   // App that lists items by day next to the same Saved query tile.
   const itemsTable = listing.tables.find((candidate) => candidate.name === 'order_items')!;
   const itemsDraft = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: itemsTable.id });
-  const itemsCreated = await call<{ status: string }>('/api/app-datasets/tables/create', {
+  const itemsCreated = await call<{ status: string; sourceId: string }>('/api/app-datasets/tables/create', {
     tableId: itemsTable.id,
     name: 'Order items',
     domain: 'orders',
     measures: itemsDraft.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
   });
-  expect(itemsCreated.status).toBe('certified');
+  // "Check and use", then "I vouch for this — certify" (design Q1).
+  expect(itemsCreated.status).toBe('checked');
+  expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: itemsCreated.sourceId })).status).toBe('certified');
   const itemsApp = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
     name: 'Item Review', goal: 'Review order items', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
   });
@@ -132,13 +136,15 @@ test.beforeAll(async () => {
   // Contacts (261 names) next to Order items, in a third App.
   const contactsTable = listing.tables.find((candidate) => candidate.name === 'crm_contacts')!;
   const contactsDraft = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string; from?: string }> } }>('/api/app-datasets/tables/draft', { tableId: contactsTable.id });
-  const contactsCreated = await call<{ status: string }>('/api/app-datasets/tables/create', {
+  const contactsCreated = await call<{ status: string; sourceId: string }>('/api/app-datasets/tables/create', {
     tableId: contactsTable.id,
     name: 'Contacts',
     domain: 'orders',
     measures: contactsDraft.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
   });
-  expect(contactsCreated.status).toBe('certified');
+  // "Check and use", then "I vouch for this — certify" (design Q1).
+  expect(contactsCreated.status).toBe('checked');
+  expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: contactsCreated.sourceId })).status).toBe('certified');
   const contactsApp = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
     name: 'Contact Review', goal: 'Review contacts', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
   });

@@ -237,6 +237,10 @@ import {
   renderTableDatasetBlock,
   tableDatasetDeclaration,
   tableDatasetCheckSentences,
+  currentBlockFileCheck,
+  isSavedQueryResultDataset,
+  wordsFor,
+  type BlockCheckRecord,
   resolveBlockReplacement,
   groupingIdentityGapOfSql,
   detectResultOrdering,
@@ -273,10 +277,14 @@ import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 import { blockTestAssertionName, evaluateBlockTestAssertion } from './block-test-assertions.js';
 import {
   applyCompanionCertification,
+  applyCompanionCheck,
   blockCertificationByline,
   blockSourceStatus,
   buildCertificationReceipt,
+  buildCheckRecord,
+  bylineForViewer,
   certificationByline,
+  checkByline,
   gitUserName,
   buildDeprecationRecord,
   demoteCertifiedSource,
@@ -646,6 +654,7 @@ import {
   type SemanticTileConversionPreviewRequest,
   type SemanticTileConversionPreviewResponse,
   setAppAudience,
+  thisPerson,
 } from './apps-api.js';
 import { listStoryEditions, recordStoryEdition, storyEditionScope } from './story/story-editions.js';
 import { editionFingerprint, followsPage, homePersonKey, movedOnPage, pageFiguresFrom, readHomeState, readPublishedEdition, recordPageVisit, recordPublishedEdition, setLocalFollow } from './home/home-state.js';
@@ -13165,6 +13174,34 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   });
 
   /**
+   * "Check and use" (design Q1): the block passed the same checks as Certify,
+   * so it becomes `review` with a `check:` record beside it in the companion
+   * YAML — who checked it, when, what the check found, for exactly this
+   * source. That is **Checked · Needs certifying**, never certified.
+   */
+  const recordBlockCheck = (blockPath: string, input: { checks: string[]; verdict?: Awaited<ReturnType<typeof certifyBlockStudioSource>>; hiddenColumns?: BlockCheckRecord['hiddenColumns'] }): BlockCheckRecord | null => {
+    setBlockStudioStatus(projectRoot, blockPath, 'review');
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath);
+    if (!companionPath) return null;
+    const source = readFileSync(join(projectRoot, blockPath), 'utf-8');
+    // A hand-written saved query may have no companion YAML yet: the check needs one to live in.
+    if (!existsSync(join(projectRoot, companionPath))) {
+      const meta = parseBlockSourceMetadata(source);
+      mkdirSync(dirname(join(projectRoot, companionPath)), { recursive: true });
+      writeFileSync(join(projectRoot, companionPath), dumpYaml({ name: meta.name, block: meta.name, ...(meta.domain ? { domain: meta.domain } : {}), reviewStatus: 'review' }, { lineWidth: 200, noRefs: true }), 'utf-8');
+    }
+    const record = buildCheckRecord({
+      source,
+      checkedBy: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false })) ?? parseBlockSourceMetadata(source).owner,
+      checkedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
+      checks: [...input.checks, ...(input.verdict ? passedCheckNames(input.verdict.checklist) : [])],
+      ...(input.hiddenColumns?.length ? { hiddenColumns: input.hiddenColumns } : {}),
+    });
+    writeFileSync(join(projectRoot, companionPath), applyCompanionCheck(readFileSync(join(projectRoot, companionPath), 'utf-8'), record), 'utf-8');
+    return record;
+  };
+
+  /**
    * Execute one already-resolved complete-source grain probe and retain only
    * its target-bound local evidence. Both the explicit source-validation API
    * and a field-tile run use this exact producer: a missing local file is not
@@ -20518,7 +20555,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reply(200, { ok: true, table: { id: table.id, name: table.name, relation: table.relation }, rows: drafted.rows, proposal: drafted.proposal });
           return;
         }
-        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures);
+        // The duplicate-column answers first (design Q1.4), then the number choices.
+        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures, body.duplicates);
         if (!proposal.key) {
           reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${table.name} is filled and different on every row, so ZLens cannot count its rows safely. Choose a table with an id column.` });
           return;
@@ -20533,19 +20571,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           domain,
           owner,
           content: source,
-          description: `${proposal.name} from ${table.name}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.`,
+          // A duplicate-column answer (design Q1.4) is said in the description too.
+          description: `${proposal.name} from ${table.name}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.${(proposal.hiddenColumns ?? []).map((entry) => ` ${entry.column} is hidden (${entry.keptColumn} holds the same number).`).join('')}`,
           tags: ['app-datasets', 'from-table'],
           gitMetadata: readGitMetadata(projectRoot),
         });
-        // This route is the explicit "Certify and use this data" action of the
-        // App table-to-Dataset dialog (a host gates it as `dataset.certify`):
-        // the block is written as a draft, the same certification rules as
-        // Block Studio's Certify run against it, and only a pass certifies it,
-        // with a receipt naming who certified. Its row identity is checked
-        // against the complete table before any tile trusts it.
-        let status: 'certified' | 'draft' = 'draft';
+        // "Check and use" (design Q1): the block is written as a draft and the
+        // same rules as Block Studio's Certify run against it (it compiles,
+        // runs, has an owner). A pass makes it **Checked · Needs certifying**:
+        // `review`, with a check record naming who checked it and what the
+        // check found. It is never certified here: certifying is its own
+        // deliberate step ("I vouch for this — certify"), at publish or from
+        // the Data list. Its row identity is checked against the complete
+        // table before any tile trusts it.
+        let status: 'checked' | 'draft' = 'draft';
         let blockers: string[] = [];
-        let receipt: CertificationReceipt | null = null;
+        let check: BlockCheckRecord | null = null;
         try {
           const saved = readFileSync(join(projectRoot, created.path), 'utf-8');
           // With a host, the host decides whether every enterprise gate applies (as for Block Studio).
@@ -20553,9 +20594,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const verdict = await certifyBlockStudioSource(saved, created.path, { enterprise });
           blockers = Array.from(new Set(verdict.checklist.blockers));
           if (verdict.certification.certified && blockers.length === 0) {
-            receipt = explicitCertificationReceipt({ source: saved, via: 'app-dataset', enterprise, verdict, extraChecks: tableDatasetCheckSentences(proposal, drafted.rows) });
-            setBlockStudioStatus(projectRoot, created.path, 'certified', receipt);
-            status = 'certified';
+            check = recordBlockCheck(created.path, { checks: tableDatasetCheckSentences(proposal, drafted.rows), verdict, ...(proposal.hiddenColumns?.length ? { hiddenColumns: proposal.hiddenColumns } : {}) });
+            status = 'checked';
           }
         } catch (error) {
           blockers = [error instanceof Error ? error.message : String(error)];
@@ -20564,7 +20604,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const found = queryAppSourceCatalog(projectRoot, { query: blockName, sourcePolicy: 'include_review_required', limit: 50 })
           .items.find((item) => item.sourcePath === created.path);
         let keyChecked = false;
-        if (found && status === 'certified') {
+        if (found && status === 'checked') {
           try {
             await validateDatasetSourceGrain({ sourceId: found.sourceId });
             keyChecked = true;
@@ -20579,8 +20619,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           blockers,
           keyChecked,
           ...(found ? { sourceId: found.sourceId } : {}),
-          // Who certified it and the checks that passed, for "Certified by <name> · <date>".
-          ...(receipt ? { certification: certificationByline(receipt) } : {}),
+          // Who checked it and what the check found, for "Checked by you · <date>".
+          ...(check ? { check: bylineForViewer(checkByline(check), thisPerson(projectRoot)) } : {}),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -20726,7 +20766,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           });
           return;
         }
-        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures);
+        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures, body.duplicates);
         if (!proposal.key) {
           reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${source.title} is filled and different on every row, so ZLens cannot count its rows safely.` });
           return;
@@ -20742,8 +20782,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           measures: declaration.measures,
           status: pendingStatus,
         });
-        // The same check as "Certify and use this data" (and Block Studio's
-        // Certify), run on the new source before anything is written.
+        // The same check as "Check and use" (and Block Studio's Certify), run
+        // on the new source before anything is written. A pass makes it
+        // Checked · Needs certifying, never certified (design Q1).
         const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
         let blockers: string[] = [];
         let passed = false;
@@ -20766,12 +20807,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
         writeFileSync(absolute, after, 'utf-8');
-        let status: 'certified' | 'review' | 'draft' = pendingStatus;
-        let receipt: CertificationReceipt | null = null;
+        let status: 'checked' | 'review' | 'draft' = pendingStatus;
+        let check: BlockCheckRecord | null = null;
         if (passed && verdict) {
-          receipt = explicitCertificationReceipt({ source: after, via: 'app-dataset', enterprise, verdict, extraChecks: tableDatasetCheckSentences(proposal, drafted.rows) });
-          setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
-          status = 'certified';
+          check = recordBlockCheck(blockPath, { checks: tableDatasetCheckSentences(proposal, drafted.rows), verdict });
+          status = 'checked';
         } else {
           // Drops a certification receipt the companion file may still hold.
           setBlockStudioStatus(projectRoot, blockPath, pendingStatus);
@@ -20780,7 +20820,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const found = queryAppSourceCatalog(projectRoot, { query: block.name, sourcePolicy: 'include_review_required', limit: 50 })
           .items.find((item) => normalize(item.sourcePath).replace(/^\/+/, '') === blockPath);
         let keyChecked = false;
-        if (found && status === 'certified') {
+        if (found && status === 'checked') {
           try {
             await validateDatasetSourceGrain({ sourceId: found.sourceId });
             keyChecked = true;
@@ -20788,11 +20828,179 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // The first tile run checks it again; a failed check keeps the Dataset out of tiles.
           }
         }
-        reply(200, { ok: true, path: blockPath, previousStatus, status, blockers, keyChecked, sourceId: found?.sourceId ?? source.sourceId, ...(receipt ? { certification: certificationByline(receipt) } : {}) });
+        reply(200, { ok: true, path: blockPath, previousStatus, status, blockers, keyChecked, sourceId: found?.sourceId ?? source.sourceId, ...(check ? { check: bylineForViewer(checkByline(check), thisPerson(projectRoot)) } : {}) });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const code = error instanceof TableDatasetError || error instanceof DatasetDeclarationPatchError ? error.code : undefined;
         reply(code ? 409 : 400, { ok: false, ...(code ? { code } : {}), error: message });
+      }
+      return;
+    }
+
+    // Certify on purpose (design Q1). "Check and use" leaves data Checked ·
+    // Needs certifying; certifying is a separate, deliberate step: a short
+    // review (what one row is, the row key check run again now, number
+    // formats, joins used, columns hidden as duplicates), then "I vouch for
+    // this — certify". The same certification rules as Block Studio's
+    // Certify run against the file, and a host gates the POST as
+    // `dataset.certify` (route-actions), so a steward rule stays a steward
+    // rule. A saved query without a row-level Dataset definition keeps its
+    // own Certify in Block Studio; Metrics come from the semantic model.
+    if (path === '/api/app-datasets/certify-review' || path === '/api/app-datasets/certify') {
+      const reply = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      const reviewing = path === '/api/app-datasets/certify-review';
+      if (reviewing ? req.method !== 'GET' : req.method !== 'POST') {
+        reply(405, { ok: false, error: reviewing ? 'Use GET.' : 'Use POST.' });
+        return;
+      }
+      try {
+        const body = reviewing ? {} as Record<string, unknown> : await readJSON(req) as Record<string, unknown>;
+        const sourceId = (reviewing ? url.searchParams.get('sourceId') ?? '' : typeof body.sourceId === 'string' ? body.sourceId : '').trim();
+        if (!sourceId) {
+          reply(400, { ok: false, code: 'DATASET_SOURCE_REQUIRED', error: 'Choose the data to certify.' });
+          return;
+        }
+        const snapshot = projectSnapshot();
+        await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+        const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
+        const source = resolved.items[0];
+        if (!source || resolved.missingSourceIds.length > 0) {
+          reply(404, { ok: false, code: 'DATASET_SOURCE_NOT_FOUND', error: 'That data is not in this project any more. Refresh the list.' });
+          return;
+        }
+        const person = thisPerson(projectRoot);
+        const descriptor = source.capabilities.dataset;
+        const kind: 'dataset' | 'saved_query' | 'metrics' = source.kind === 'semantic' || descriptor?.kind === 'semantic' || source.capabilities.semanticModelId
+          ? 'metrics'
+          : !descriptor || isSavedQueryResultDataset(descriptor) ? 'saved_query' : 'dataset';
+        const certified = source.lifecycle === 'certified' && source.trust === 'certified';
+        const blockPath = normalize(source.sourcePath || source.executionRef).replace(/^\/+/, '');
+        const check = source.check ?? (kind === 'dataset' && isBlockStudioBlockPath(blockPath) ? (() => {
+          const record = currentBlockFileCheck(projectRoot, blockPath);
+          return record ? { by: record.checkedBy, ...(record.checkedByName ? { name: record.checkedByName } : {}), at: record.checkedAt, ...(record.checks ? { checks: record.checks } : {}), ...(record.hiddenColumns ? { hiddenColumns: record.hiddenColumns } : {}) } : undefined;
+        })() : undefined);
+        // The row key, checked again against the complete data now.
+        const runKeyCheck = async (): Promise<{ ok: true; sentence: string } | { ok: false; error: string } | undefined> => {
+          if (kind !== 'dataset' || !descriptor) return undefined;
+          const keys = descriptor.grain.keyFields.join(', ');
+          try {
+            await validateDatasetSourceGrain({ sourceId: source.sourceId, sourceRevision: source.sourceRevision });
+            return { ok: true, sentence: `${keys || 'The row key'} is filled and different on every row, checked just now.` };
+          } catch (error) {
+            return { ok: false, error: `${keys || 'The row key'} did not pass its check: ${error instanceof Error ? error.message.replace(/^[A-Z_]+:\s*/, '') : String(error)}` };
+          }
+        };
+        if (reviewing) {
+          const grain = descriptor?.grain;
+          const entity = grain?.timeGrain ?? (grain?.entityIds[0] ?? '').split(/[.:]/).pop()?.replace(/_/g, ' ');
+          const keyCheck = await runKeyCheck();
+          const formatNotes = (check?.checks ?? [])
+            .filter((line) => line.startsWith('Number formats: '))
+            .flatMap((line) => line.slice('Number formats: '.length).split('; '));
+          reply(200, {
+            ok: true,
+            review: {
+              sourceId: source.sourceId,
+              sourceRevision: source.sourceRevision,
+              name: source.title,
+              kind,
+              origin: source.tags.includes('from-table') ? 'table' : kind === 'metrics' ? 'metrics' : 'saved_query',
+              lifecycle: source.lifecycle,
+              certified,
+              ...(certified && source.sourcePath ? (() => { const byline = blockCertificationByline(projectRoot, source.sourcePath); return byline ? { certification: bylineForViewer(byline, person) } : {}; })() : {}),
+              ...(check ? { check: bylineForViewer(check, person) } : {}),
+              ...(grain && kind === 'dataset' ? { row: `Each row is one ${entity || 'row'}${grain.keyFields.length ? ` (${grain.keyFields.join(', ')})` : ''}.` } : {}),
+              ...(keyCheck ? { keyCheck } : {}),
+              numbers: (descriptor?.fields ?? []).flatMap((field) => {
+                if (field.kind !== 'measure' || field.status !== 'approved') return [];
+                const format = field.format?.kind === 'currency' ? `Money${field.format.currency ? ` (${field.format.currency})` : ''}` : field.format?.kind === 'percent' ? 'Percent' : 'Number';
+                const label = wordsFor(field.name);
+                const note = formatNotes.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`))?.slice(label.length + 1).trim();
+                // Only notes that add something ("shown in dollars (stored as cents)"), not the format again.
+                const useful = note && !/^(money|a number|a percent)$/i.test(note) ? note : undefined;
+                return [{ name: field.name, label, format, aggregation: field.aggregation, ...(useful ? { note: useful } : {}) }];
+              }),
+              joins: (descriptor?.joins ?? []).map((join) => ({ label: join.label, sentence: join.sentence, trust: join.trust })),
+              hiddenColumns: check?.hiddenColumns ?? [],
+              checks: check?.checks ?? [],
+              canVouch: kind === 'dataset' && !certified && source.lifecycle !== 'deprecated',
+              ...(kind === 'saved_query' && isBlockStudioBlockPath(blockPath) ? { blockStudioPath: blockPath } : {}),
+            },
+          });
+          return;
+        }
+        if (kind !== 'dataset') {
+          reply(409, {
+            ok: false,
+            code: kind === 'metrics' ? 'METRICS_CERTIFIED_IN_MODEL' : 'SAVED_QUERY_CERTIFIES_IN_BLOCK_STUDIO',
+            error: kind === 'metrics'
+              ? `${source.title} comes from the semantic model; it is governed there.`
+              : `${source.title} is a saved query: certify it in Block Studio.`,
+          });
+          return;
+        }
+        if (certified) {
+          reply(409, { ok: false, code: 'ALREADY_CERTIFIED', error: `${source.title} is already certified.` });
+          return;
+        }
+        if (source.lifecycle === 'deprecated') {
+          reply(409, { ok: false, code: 'SOURCE_DEPRECATED', error: `${source.title} is retired, so it cannot be certified.` });
+          return;
+        }
+        const requestedRevision = typeof body.sourceRevision === 'string' ? body.sourceRevision.trim() : '';
+        if (requestedRevision && requestedRevision !== source.sourceRevision) {
+          reply(409, { ok: false, code: 'SOURCE_CHANGED', error: `${source.title} changed after you opened the review. Close it and review again.` });
+          return;
+        }
+        const absolute = isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
+        if (!absolute || !existsSync(absolute)) {
+          reply(409, { ok: false, code: 'SOURCE_NOT_A_BLOCK', error: `${source.title} is not a file ZLens can certify.` });
+          return;
+        }
+        const keyCheck = await runKeyCheck();
+        if (keyCheck && !keyCheck.ok) {
+          reply(422, { ok: false, code: 'DATASET_KEY_CHECK_FAILED', blockers: [keyCheck.error], error: keyCheck.error });
+          return;
+        }
+        const blockSource = readFileSync(absolute, 'utf-8');
+        const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+        const verdict = await certifyBlockStudioSource(blockSource, blockPath, { enterprise });
+        const blockers = Array.from(new Set(verdict.checklist.blockers));
+        if (!verdict.certification.certified || blockers.length > 0) {
+          reply(422, { ok: false, code: 'CERTIFICATION_CHECKS_FAILED', blockers, error: `${source.title} did not pass its certification checks. ${blockers.join(' ')}`.trim() });
+          return;
+        }
+        const certifiedSource = setBlockStudioStatusInSource(blockSource, 'certified');
+        const plainChecks = (check?.checks ?? []).filter((line) => /\s/.test(line));
+        const receipt = explicitCertificationReceipt({
+          source: certifiedSource,
+          via: 'app-dataset',
+          enterprise,
+          verdict,
+          extraChecks: [...plainChecks.filter((line) => !line.startsWith('Row key: ')), ...(keyCheck?.ok ? [`Row key: ${keyCheck.sentence}`] : plainChecks.filter((line) => line.startsWith('Row key: ')))],
+        });
+        setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
+        // The check record has done its job: the receipt now says who vouched and what passed.
+        const companionPath = blockCompanionRelativePath(projectRoot, blockPath);
+        if (companionPath && existsSync(join(projectRoot, companionPath))) {
+          writeFileSync(join(projectRoot, companionPath), applyCompanionCheck(readFileSync(join(projectRoot, companionPath), 'utf-8'), null), 'utf-8');
+        }
+        await refreshLocalMetadataCatalog(projectRoot);
+        const after = resolveAppSourceCatalogRecords(projectRoot, [source.sourceId], 'include_review_required').items[0];
+        reply(200, {
+          ok: true,
+          status: 'certified',
+          sourceId: source.sourceId,
+          ...(after ? { sourceRevision: after.sourceRevision } : {}),
+          path: blockPath,
+          certification: bylineForViewer(certificationByline(receipt), person),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reply(400, { ok: false, error: message });
       }
       return;
     }
@@ -23410,15 +23618,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // Who certified each certified tile's source, and when (D5): every
         // surface shows "Certified by <name> · <date>" from the receipt the
         // explicit Certify action wrote. Old certifications carry `{}`.
+        const viewer = thisPerson(projectRoot);
         for (const tile of tiles) {
           if (tile.status !== 'ok') continue;
           const datasetSourceId = typeof tile.dataset?.sourceId === 'string' ? tile.dataset.sourceId : undefined;
+          // Checked · Needs certifying (design Q1): the tile says so, not just "Needs review".
+          if (tile.dataset && tile.dataset.trust !== 'certified' && datasetSourceId && datasetSourceById.get(datasetSourceId)?.check) {
+            tile.dataset.checked = true;
+          }
           const certifiedPath = tile.dataset
             ? (tile.dataset.trust === 'certified' && datasetSourceId ? datasetSourceById.get(datasetSourceId)?.sourcePath : undefined)
             : tile.certificationStatus === 'certified' && typeof tile.blockPath === 'string' ? tile.blockPath : undefined;
           if (!certifiedPath) continue;
           const certification = blockCertificationByline(projectRoot, certifiedPath);
-          if (certification) tile.certification = certification;
+          // "Certified by you" when the person reading certified it (design Q1).
+          if (certification) tile.certification = bylineForViewer(certification, viewer);
         }
         tiles.sort((left, right) => (tileOrder.get(left.tileId) ?? 0) - (tileOrder.get(right.tileId) ?? 0));
         localApps.current?.close();
@@ -24459,8 +24673,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                         error: `Dataset tile ${record.tileId} is currently ${source.lifecycle} and is not eligible for this local preview policy. Enable review-required sources or select a certified Dataset.`,
                       };
                     }
+                    // Checked · Needs certifying (design Q1) previews under any data rule.
                     if ((source.lifecycle !== 'certified' || source.trust !== 'certified')
-                      && currentDraftSourcePolicy !== 'include_review_required') {
+                      && currentDraftSourcePolicy !== 'include_review_required'
+                      && !source.check) {
                       return {
                         ok: false,
                         error: `Dataset tile ${record.tileId} is currently ${source.lifecycle}. Enable review-required sources explicitly before saving its local preview evidence.`,
@@ -32339,8 +32555,10 @@ function datasetDraftStoredAuthorityErrors(
       );
       continue;
     }
+    // Checked · Needs certifying (design Q1) runs under "Only certified data"; it never publishes until certified.
     if (sourcePolicy === 'governed_only'
-      && (source.lifecycle !== 'certified' || source.trustState !== 'certified')) {
+      && (source.lifecycle !== 'certified' || source.trustState !== 'certified')
+      && !source.checked) {
       errors.set(
         item.sourceId,
         `APP_BUILD_REVIEW_POLICY_REQUIRED: ${item.title || item.i} uses a ${source.lifecycle ?? 'unknown'} Dataset source. Enable review-required sources or select a certified Dataset before running it.`,

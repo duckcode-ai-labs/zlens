@@ -113,16 +113,14 @@ function actionFor(method: string, path: string): DqlAction {
 
   // Trust decisions. Every route that can leave something certified is a
   // certification: the Block Studio job route, the older synchronous route,
-  // the explicit "Certify and use this data" Dataset-from-a-table action, its
-  // "Add fields" twin for a saved query (it certifies when the check passes), and
-  // approving a semantic tile on an App page. Saving (a notebook cell, an
-  // Ask answer, an imported candidate) only ever writes a draft, so it is
-  // authoring, not certification.
+  // "I vouch for this — certify" on App data (`/api/app-datasets/certify`,
+  // design Q1), and approving a semantic tile on an App page. Saving (a
+  // notebook cell, an Ask answer, an imported candidate) only ever writes a
+  // draft, and "Check and use" on a table or a saved query only leaves it
+  // Checked · Needs certifying, so they are authoring, not certification.
   if (!read && (
     /\/certify(\/|$)/.test(path)
     || /^\/api\/block-studio\/certifications(\/|$)/.test(path)
-    || path === '/api/app-datasets/tables/create'
-    || path === '/api/app-datasets/saved-queries/create'
     || /^\/api\/apps\/[^/]+\/dashboards\/[^/]+\/approve-semantic$/.test(path)
   )) return 'dataset.certify';
   if (!read && /^\/api\/agent\/hints\/[^/]+(\/(review|lifecycle))?$/.test(path)) return 'hint.review';
@@ -181,6 +179,8 @@ function actionFor(method: string, path: string): DqlAction {
   if (!read && (path === '/api/app-datasets/run' || path === '/api/app-datasets/field-values')) return 'app.view';
   if (!read && path === '/api/app-datasets/enable') return 'settings.manage';
   if (!read && (path === '/api/app-datasets/tables/draft' || path === '/api/app-datasets/saved-queries/draft')) return 'dataset.author';
+  // "Check and use" writes a checked Dataset that still needs certifying: authoring (design Q1).
+  if (!read && (path === '/api/app-datasets/tables/create' || path === '/api/app-datasets/saved-queries/create')) return 'dataset.author';
   // Reading a saved query's result columns as fields (design D1) is part of building an App: it changes no block.
   if (!read && path === '/api/app-datasets/saved-queries/fields') return 'app.author';
   if (!read && AUTHORING_FAMILIES.some((family) => under(path, family))) return 'dataset.author';

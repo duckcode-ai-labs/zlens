@@ -114,18 +114,23 @@ describe('add fields to a saved query', () => {
         measures: [{ name: 'line_count', include: false, format: 'number' }],
       });
       expect(created.status, created.text).toBe(200);
-      expect(created.body).toMatchObject({ ok: true, previousStatus: 'certified', status: 'certified', keyChecked: true, path: 'domains/commerce/blocks/region-revenue.dql', sourceId: regionRevenue.sourceId });
+      // Made row-level, it passed its checks: Checked · Needs certifying, never certified on its own (design Q1).
+      expect(created.body).toMatchObject({ ok: true, previousStatus: 'certified', status: 'checked', keyChecked: true, path: 'domains/commerce/blocks/region-revenue.dql', sourceId: regionRevenue.sourceId, check: { byYou: true } });
       expect(readdirSync(blocksDir).sort()).toEqual(filesBefore);
       const written = readFileSync(join(blocksDir, 'region-revenue.dql'), 'utf-8');
       expect(written).toContain('block "Region revenue" {');
-      expect(written).toContain('status = "certified"');
+      expect(written).toContain('status = "review"');
       expect(written).toContain('keys = ["region"]');
       expect(written).toMatch(/net_amount \{ agg = "sum"/);
       expect(written).not.toMatch(/line_count \{ agg/);
       expect(written).toContain('GROUP BY region');
       const relisted = await call(base, `/api/app-builds/${encodeURIComponent(app.body.draft.id)}/source-candidates?limit=50`);
       const withFields = relisted.body.items.find((item: { sourceId: string }) => item.sourceId === regionRevenue.sourceId);
-      expect(withFields).toMatchObject({ lifecycle: 'certified', trust: 'certified' });
+      expect(withFields).toMatchObject({ lifecycle: 'review', trust: 'review_required', check: { byYou: true } });
+      // A row-level saved query is a Dataset now, so "I vouch for this — certify" certifies it.
+      const vouched = await call(base, '/api/app-datasets/certify', { sourceId: regionRevenue.sourceId });
+      expect(vouched.status, vouched.text).toBe(200);
+      expect(readFileSync(join(blocksDir, 'region-revenue.dql'), 'utf-8')).toContain('status = "certified"');
       expect(withFields.capabilities.dataset.fields.filter((field: { kind: string }) => field.kind === 'measure').map((field: { name: string }) => field.name))
         .toEqual(expect.arrayContaining(['net_amount']));
       const twice = await call(base, '/api/app-datasets/saved-queries/draft', { sourceId: regionRevenue.sourceId });
@@ -205,7 +210,7 @@ describe('add fields to a saved query', () => {
       expect(draft.body.proposal.fields.find((field: { name: string }) => field.name === 'month')).toMatchObject({ role: 'time', grains: ['month', 'quarter', 'year'] });
       const created = await call(base, '/api/app-datasets/saved-queries/create', { sourceId: monthly.sourceId, sourceRevision: draft.body.source.sourceRevision });
       expect(created.status, created.text).toBe(200);
-      expect(created.body).toMatchObject({ ok: true, previousStatus: 'certified', status: 'certified', keyChecked: true });
+      expect(created.body).toMatchObject({ ok: true, previousStatus: 'certified', status: 'checked', keyChecked: true });
       const written = readFileSync(join(blocksDir, 'monthly-revenue.dql'), 'utf-8');
       expect(written).toContain('keys = ["month"]');
       expect(written).toContain('timeBucketBy = "month"');

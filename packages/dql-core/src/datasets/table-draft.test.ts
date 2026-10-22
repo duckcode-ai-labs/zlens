@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyTableProfile, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration } from './table-draft.js';
+import { applyTableDuplicateChoices, applyTableProfile, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -177,5 +177,40 @@ describe('the checks a certification receipt lists (D5)', () => {
     expect(tableDatasetCheckSentences(plain, 3)[1]).toContain('Subtotal cents: a plain number (stored as cents)');
     const withoutKey = { ...plain, key: undefined, measures: plain.measures.map((measure) => ({ ...measure, include: false })) };
     expect(tableDatasetCheckSentences(withoutKey, 3)).toEqual([]);
+  });
+
+  it('asks one question when a table has the same number twice, and hides the other column (design Q1.4)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: '"main"."orders"',
+      columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'order_total', type: 'DOUBLE' }, { name: 'order_total_cents', type: 'INTEGER' }, { name: 'tax_pennies', type: 'INTEGER' }],
+      convertMinorUnits: true,
+    });
+    expect(raw.duplicates).toEqual([expect.objectContaining({ name: 'order_total', question: 'Use Order total in dollars?', plainColumn: 'order_total', minorColumn: 'order_total_cents', convertedField: 'order_total_dollars' })]);
+    // A cents column with no twin is not a question.
+    expect(raw.duplicates).toHaveLength(1);
+    const profiled = applyTableProfile(raw, { rows: 3, columns: { order_id: { distinct: 3, nonNull: 3 } } }, 'orders');
+
+    // Recommended (no answer given): the cents column, read in dollars, under the plain name.
+    const recommended = applyTableDuplicateChoices(profiled);
+    expect(recommended.duplicates).toBeUndefined();
+    expect(recommended.fields.filter((field) => field.name.startsWith('order_total')).map((field) => [field.name, field.column, field.divideBy])).toEqual([['order_total', 'order_total_cents', 100]]);
+    expect(recommended.measures.filter((measure) => measure.from.startsWith('order_total')).map((measure) => [measure.name, measure.label, measure.format])).toEqual([['order_total', 'Order total', 'currency']]);
+    expect(recommended.hiddenColumns).toEqual([{ column: 'order_total', keptColumn: 'order_total_cents', reason: 'Order total uses order_total_cents, shown in dollars; order_total holds the same number, so it is hidden.' }]);
+    // Applying again changes nothing.
+    expect(applyTableDuplicateChoices(recommended)).toBe(recommended);
+    const block = renderTableDatasetBlock({ proposal: recommended, blockName: 'Orders', domain: 'commerce', owner: 'a@example.test', columnSql: (name) => `"${name}"` });
+    expect(block).toContain('"order_total_cents" / 100.0 AS "order_total"');
+    expect(block).not.toContain('SELECT "order_id", "order_total",');
+    expect(block).toContain('/* Hidden duplicate columns: order_total (order_total_cents is used) */');
+    expect(block).toContain('order_total is hidden (order_total_cents holds the same number).');
+    expect(new Parser(block).parse().statements).toHaveLength(1);
+    expect(tableDatasetCheckSentences(recommended, 3)).toContain('Duplicate column: Order total uses order_total_cents, shown in dollars; order_total holds the same number, so it is hidden.');
+
+    // The other answer: the plain column as it is.
+    const plain = applyTableDuplicateChoices(profiled, [{ name: 'order_total', use: 'plain' }]);
+    expect(plain.fields.filter((field) => field.name.startsWith('order_total')).map((field) => [field.name, field.column])).toEqual([['order_total', undefined]]);
+    expect(plain.measures.some((measure) => measure.from === 'order_total_dollars')).toBe(false);
+    expect(plain.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total_cents', keptColumn: 'order_total' })]);
   });
 });

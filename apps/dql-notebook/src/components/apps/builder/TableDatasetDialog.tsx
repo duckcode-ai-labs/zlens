@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, CalendarDays, Hash, Search, Table2, X } from 'lucide-react';
-import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
+import { Check, CalendarDays, Copy, Hash, Search, Table2, X } from 'lucide-react';
+import { applyTableDuplicateChoices, type TableDatasetProposal, type TableDuplicateChoice } from '@zlens/core/datasets/table-draft';
 import { api, type CertificationByline, type WarehouseTableSummary } from '../../../api/client';
 import { messageOf } from './studio-ui';
 
@@ -78,12 +78,51 @@ export function DatasetNumbersCheck({
 }
 
 /**
+ * One question per pair of columns that hold the same number in different
+ * units (design Q1.4): "Use Order total in dollars?" The recommended answer
+ * (the column whose name says its unit, read in dollars) is chosen first;
+ * the other column is hidden from the fields.
+ */
+export function DuplicateColumnQuestions({
+  proposal,
+  choices,
+  onChoice,
+}: {
+  proposal: TableDatasetProposal;
+  choices: TableDuplicateChoice[];
+  onChoice: (name: string, use: TableDuplicateChoice['use']) => void;
+}): JSX.Element | null {
+  const pairs = proposal.duplicates ?? [];
+  if (!pairs.length) return null;
+  return <>
+    {pairs.map((pair) => {
+      const use = choices.find((choice) => choice.name === pair.name)?.use ?? 'minor';
+      return (
+        <fieldset key={pair.name} className="table-dataset-duplicate" aria-label={pair.question}>
+          <legend><Copy size={12} aria-hidden="true" /> {pair.question}</legend>
+          <p className="table-dataset-muted"><code>{pair.plainColumn}</code> and <code>{pair.minorColumn}</code> hold the same number. ZLens keeps one and hides the other.</p>
+          <label>
+            <input type="radio" name={`duplicate-${pair.name}`} checked={use === 'minor'} onChange={() => onChoice(pair.name, 'minor')} />
+            <span><strong>Yes, use {pair.minorColumn} in {pair.major}</strong> <em>Recommended</em><small>Its name says it is stored in {pair.minorUnits}. {pair.plainColumn} is hidden.</small></span>
+          </label>
+          <label>
+            <input type="radio" name={`duplicate-${pair.name}`} checked={use === 'plain'} onChange={() => onChoice(pair.name, 'plain')} />
+            <span><strong>No, use {pair.plainColumn} as it is</strong><small>{pair.minorColumn} is hidden.</small></span>
+          </label>
+        </fieldset>
+      );
+    })}
+  </>;
+}
+
+/**
  * Start from a table (RFC 0009, "15-minute first page"). Pick a table; DQL
  * proposes what it can add up and count and what one row is, checked
- * against the table; "Certify and use this data" saves it as a Dataset the
- * author owns and certifies it, explicitly, through the same certification
- * rules as Block Studio's Certify (compiles, runs, owner). The server records
- * who certified it. No dbt, no modeling vocabulary: numbers, groupings and dates.
+ * against the table; "Check and use" saves it as a Dataset the author owns
+ * after the same checks as Block Studio's Certify (compiles, runs, owner).
+ * It is **Checked · Needs certifying**, never certified here (design Q1):
+ * tiles work right away, and someone certifies it on purpose before the App
+ * is published. No dbt, no modeling vocabulary: numbers, groupings and dates.
  */
 export function TableDatasetDialog({
   domain,
@@ -96,8 +135,8 @@ export function TableDatasetDialog({
   /** A table already chosen in the Add data browser: open straight on its check. */
   initialTable?: WarehouseTableSummary;
   onClose: () => void;
-  /** Who certified it and the checks that passed come back with it (D5). */
-  onCreated: (sourceId: string | undefined, name: string, certification?: CertificationByline) => void;
+  /** Who checked it and what the check found come back with it (design Q1). */
+  onCreated: (sourceId: string | undefined, name: string, check?: CertificationByline) => void;
 }): JSX.Element {
   const [tables, setTables] = useState<WarehouseTableSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
@@ -107,6 +146,7 @@ export function TableDatasetDialog({
   const [checking, setChecking] = useState(false);
   const [name, setName] = useState('');
   const [choices, setChoices] = useState<Choice[]>([]);
+  const [duplicateChoices, setDuplicateChoices] = useState<TableDuplicateChoice[]>([]);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -143,7 +183,9 @@ export function TableDatasetDialog({
       }
       setDraft({ proposal: response.proposal, rows: response.rows ?? 0 });
       setName(response.proposal.name);
-      setChoices(initialNumberChoices(response.proposal));
+      setDuplicateChoices([]);
+      // Number choices are keyed by the kept field's name, which is the same for either duplicate answer.
+      setChoices(initialNumberChoices(applyTableDuplicateChoices(response.proposal)));
     });
   };
   useEffect(() => {
@@ -156,25 +198,28 @@ export function TableDatasetDialog({
     if (!picked || !draft) return;
     setSaving(true);
     setError(null);
-    void api.createTableDataset({ tableId: picked.id, name: name.trim() || draft.proposal.name, ...(domain ? { domain } : {}), measures: choices }).then((response) => {
+    const duplicates = (draft.proposal.duplicates ?? []).map((pair) => ({ name: pair.name, use: duplicateChoices.find((choice) => choice.name === pair.name)?.use ?? 'minor' as const }));
+    void api.createTableDataset({ tableId: picked.id, name: name.trim() || draft.proposal.name, ...(domain ? { domain } : {}), measures: choices, ...(duplicates.length ? { duplicates } : {}) }).then((response) => {
       setSaving(false);
       if (!response.ok) {
         setError(response.error ?? 'ZLens could not save this data.');
         return;
       }
-      if (response.status !== 'certified') {
-        setError(`Saved as a draft, not certified: it did not pass its checks yet. ${(response.blockers ?? []).join(' ') || 'Run it once to see why.'}`);
+      if (response.status !== 'checked') {
+        setError(`Saved as a draft: it did not pass its checks yet. ${(response.blockers ?? []).join(' ') || 'Run it once to see why.'}`);
         return;
       }
-      onCreated(response.sourceId, name.trim() || draft.proposal.name, response.certification);
+      onCreated(response.sourceId, name.trim() || draft.proposal.name, response.check);
     }).catch((cause) => {
       setSaving(false);
       setError(messageOf(cause));
     });
   };
 
-  const proposal = draft?.proposal;
+  // What the check shows follows the duplicate answers (design Q1.4).
+  const proposal = useMemo(() => (draft ? applyTableDuplicateChoices(draft.proposal, duplicateChoices) : undefined), [draft, duplicateChoices]);
   const keptCount = choices.filter((choice) => choice.include).length;
+  const chooseDuplicate = (pairName: string, use: TableDuplicateChoice['use']) => setDuplicateChoices((current) => [...current.filter((choice) => choice.name !== pairName), { name: pairName, use }]);
 
   return (
     <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="table-dataset-title">
@@ -216,6 +261,7 @@ export function TableDatasetDialog({
               <span>Name</span>
               <input id="table-dataset-name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
             </label>
+            {draft ? <DuplicateColumnQuestions proposal={draft.proposal} choices={duplicateChoices} onChoice={chooseDuplicate} /> : null}
             <DatasetNumbersCheck proposal={proposal} rows={draft!.rows} choices={choices} onChoice={setChoice} noKeyMessage="No column is filled and different on every row, so ZLens cannot count this table's rows safely. Choose a table with an id column." />
             {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
             {error ? <p className="table-dataset-error" role="alert">{error}</p> : null}
@@ -224,9 +270,9 @@ export function TableDatasetDialog({
 
         <footer>
           {proposal ? <button type="button" onClick={() => { setDraft(null); setPicked(null); setError(null); }} disabled={saving}>Back</button> : <span />}
-          {proposal ? <small>You will own and certify this data: ZLens saves it as a file in your project, checks it compiles and runs, and records you as the person who certified it.</small> : null}
+          {proposal ? <small>ZLens saves it as a file in your project and checks it compiles and runs. You can build tiles right away; it is <strong>Checked · Needs certifying</strong> until someone certifies it, before you publish.</small> : null}
           {proposal ? (
-            <button type="button" className="primary" disabled={saving || !proposal.key || keptCount === 0} onClick={save}>{saving ? 'Certifying…' : 'Certify and use this data'}</button>
+            <button type="button" className="primary" disabled={saving || !proposal.key || keptCount === 0} onClick={save}>{saving ? 'Checking…' : 'Check and use'}</button>
           ) : null}
         </footer>
       </section>

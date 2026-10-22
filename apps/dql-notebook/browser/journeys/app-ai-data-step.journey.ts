@@ -78,19 +78,21 @@ test.beforeAll(async () => {
   }
   server = await startNotebookServer({ projectDir, workDir, env: NO_PROVIDER });
 
-  // Orders and Customers become certified data through the calls Add data's "Check and add" makes.
+  // Orders and Customers become certified data through the calls Add data's "Check and use" and
+  // "I vouch for this — certify" make (design Q1: checking alone leaves data Checked · Needs certifying).
   const listing = await call<{ ok: boolean; tables: Array<{ id: string; name: string }> }>('/api/app-datasets/tables');
   for (const [table, name] of [['orders', 'Orders'], ['dim_customers', 'Customers']] as const) {
     const found = listing.tables.find((candidate) => candidate.name === table);
     expect(found, JSON.stringify(listing.tables.map((candidate) => candidate.name))).toBeDefined();
     const drafted = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: found!.id });
-    const created = await call<{ status: string; blockers?: string[] }>('/api/app-datasets/tables/create', {
+    const created = await call<{ status: string; sourceId: string; blockers?: string[] }>('/api/app-datasets/tables/create', {
       tableId: found!.id,
       name,
       domain: 'sales',
       measures: drafted.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
     });
-    expect(created.status, (created.blockers ?? []).join(' ')).toBe('certified');
+    expect(created.status, (created.blockers ?? []).join(' ')).toBe('checked');
+    expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: created.sourceId })).status).toBe('certified');
   }
 });
 

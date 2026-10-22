@@ -62,7 +62,7 @@ describe('Certified by <name> · <date> (D5)', () => {
     expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0 }).label).toBe('App certified');
   });
 
-  it('shows the result of "Certify and use this data" with who, when and the checks', () => {
+  it('shows the result of "I vouch for this — certify" with who, when and the checks', () => {
     const html = renderToStaticMarkup(<CertifiedReceiptNote name="Orders" certification={{ by: 'maria@acme.com', at: today, checks: ['Number formats: Subtotal: shown in dollars (stored as cents)', 'tests'] }} />);
     expect(html).toMatch(/Orders · Certified by Maria · \d{1,2} [A-Z][a-z]{2}/);
     expect(html).toContain('<li>Number formats: Subtotal: shown in dollars (stored as cents)</li>');

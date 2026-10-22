@@ -106,9 +106,14 @@ test.beforeAll(async () => {
       domain: 'customers',
       measures: drafted.proposal!.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
     }),
-  })).json() as { ok: boolean; status?: string; error?: string; blockers?: string[] };
+  })).json() as { ok: boolean; status?: string; sourceId?: string; error?: string; blockers?: string[] };
   expect(created.ok, created.error).toBe(true);
-  expect(created.status, (created.blockers ?? []).join(' ')).toBe('certified');
+  // "Check and use" leaves it Checked · Needs certifying; certifying is its own step (design Q1).
+  expect(created.status, (created.blockers ?? []).join(' ')).toBe('checked');
+  const certified = await (await fetch(`${base}/api/app-datasets/certify`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: created.sourceId }),
+  })).json() as { ok: boolean; status?: string; error?: string };
+  expect(certified.status, certified.error).toBe('certified');
 });
 
 test.afterAll(async () => {

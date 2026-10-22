@@ -160,7 +160,8 @@ certified data** or **Also allow data that needs review**; **Change** switches
 it.
 
 Each row shows where it comes from (**Table**, **Saved query** or **Metrics**),
-its trust (**Certified by** *name* **·** *date*, or **Needs review**), its
+its trust (**Certified by** *name* **·** *date*, **Checked · Needs certifying**,
+or **Needs review**), its
 domain and owner. Click a
 row to see its **Measures**, **Dimensions** and **Time**; **Show 10 sample
 rows** reads a few of its rows.
@@ -169,13 +170,18 @@ rows** reads a few of its rows.
 - Data marked **Needs review** shows **Allow data that needs review & add**
   while the App allows only certified data.
 - On a table that is **Not checked yet**, click **Check and add**, check the
-  numbers, and click **Certify and use this data**. The table is added
-  to the App, and the list says who certified it and when, for example
-  **Orders · Certified by Kranthi · 21 Oct**, with the **Checks passed**: what
-  one row is (the row key), how each number is shown (money stored as cents is
-  shown in dollars), and its tests. You are recorded as the person who
-  certified it: the signed-in person with a host, otherwise your git
-  `user.name`.
+  numbers, and click **Check and use**. ZLens runs the same checks as
+  certifying (it compiles and runs, what one row is, how each number is shown:
+  money stored as cents is shown in dollars). The table is added as
+  **Checked · Needs certifying**, for example **Orders · Checked · Needs
+  certifying** with **Checked by you · 22 Oct** and what the check found. You
+  can build tiles from it right away, under either data rule. Checking is not
+  certifying: see [Check vs certify](#check-vs-certify).
+- When a table has the same number twice, such as `order_total` and
+  `order_total_cents`, the check asks one question: **Use Order total in
+  dollars?** **Yes** (recommended) reads `order_total_cents` in dollars as
+  **Order total**; **No** uses `order_total` as it is. The other column is
+  hidden from the fields, and the choice is kept in the data's definition.
 - Tables your model already uses say **Modeled**, and tables Guided Setup's
   **Draft my models** drafted say **Drafted — review to use**, with
   **Review in Modeling**. Both are listed first, and **Check and add** reuses
@@ -241,14 +247,16 @@ over rows, make it row-level:
    the rest.
 3. Click **Check and make row-level**. ZLens writes a row-level definition
    into the same saved query file (same name, same place; no copy) and runs
-   the same certification checks as **Certify and use this data**.
-   - Checks pass: the saved query is **Certified** and row-level.
+   the same checks as **Check and use**.
+   - Checks pass: the saved query is row-level and **Checked · Needs
+     certifying**. Certify it before you publish, like a table.
    - Checks fail: it is row-level and stays **Needs review**.
 4. Click **Use its fields**.
 
 A certified saved query shows *Making it row-level sends this saved query back
-for review.* If its checks pass it is certified again right away. If they
-fail, nothing changes until you click **Send for review and make row-level**.
+for review.* If its checks pass it is checked and needs certifying again. If
+they fail, nothing changes until you click **Send for review and make
+row-level**.
 
 The tile shows its rows. Its **Tile settings** panel shows **Data & trust**,
 for example **Certified by Kranthi · 21 Oct**, the checks that passed, the
@@ -469,9 +477,13 @@ or **Date**.
 1. Click **Publish**.
 2. ZLens checks the App. If something blocks publishing, the dialog lists
    **N fixes before publishing**, such as a page that has not run, a tile that
-   needs review, or a filter that is not wired to any tile. Each fix has a
-   button.
-3. When the dialog says **Ready to publish** and **All checks passed**, click
+   needs review, data that is not certified yet, or a filter that is not wired
+   to any tile. Each fix has a button.
+3. Data nobody certified yet is listed as, for example, **2 tables not
+   certified yet**. Click **Review and certify** on each one (see
+   [Check vs certify](#check-vs-certify)). A published App shows certified data
+   only, under either data rule.
+4. When the dialog says **Ready to publish** and **All checks passed**, click
    **Publish to Project**.
 
 Data in **This App's data** that no tile uses does not block publishing. It is
@@ -479,8 +491,29 @@ not saved with the App, and the dialog says so, for example **1 data source not
 used by any tile will not be saved with the App.**
 
 Publishing writes the App as files in your project. Nothing is committed for
-you. The App opens in view mode, and its badge shows its trust, for example
-**All data certified**.
+you. The App opens in view mode, and its badge shows its trust and who
+certified the data, from the reader's side: **All data certified by you ·
+22 Oct** when you certified it, **All data certified by Kranthi · 22 Oct** for
+anyone else.
+
+### Check vs certify
+
+- **Check** is what **Check and use** (and **Make row-level**) does: ZLens
+  checks the data compiles and runs, what one row is, and how each number is
+  shown. The data is **Checked · Needs certifying**. Tiles use it while you
+  build the App; it does not publish.
+- **Certify** is a person vouching for the data, on purpose. Open it from the
+  publish check (**Review and certify**) or from the data's **⋯ → Certify…**
+  (in the **Data** tab or **Add data**). A short review shows what one row is,
+  the row key checked again against all rows, the number formats (cents shown
+  in dollars), the joins it uses and any columns hidden as duplicates. Click
+  **I vouch for this — certify**. ZLens records who certified it, when, and
+  the checks that passed, in the data's file.
+- A saved query without a row-level definition is certified in Block Studio
+  (**Certify** there, where its tests run); the review offers **Open in Block
+  Studio**. Metrics are governed in your semantic model.
+- With a host, certifying needs the steward role, as before. Data certified
+  before this change stays certified.
 
 ```text
 apps/customer-overview/

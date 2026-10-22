@@ -22,6 +22,19 @@ export interface AppSourceEligibility {
   reasonCodes: string[];
 }
 
+/**
+ * "Checked · Needs certifying" (design Q1): ZLens checked this Dataset (it
+ * compiles and runs, what one row is, number formats) and someone added it,
+ * but nobody vouched for it yet. Who checked it and what the check found.
+ */
+export interface AppSourceCheck {
+  by: string;
+  name?: string;
+  at: string;
+  checks?: string[];
+  hiddenColumns?: Array<{ column: string; keptColumn: string; reason: string }>;
+}
+
 export interface AppSourceCatalogRecord {
   sourceId: string;
   qualifiedIdentity: string;
@@ -41,6 +54,8 @@ export interface AppSourceCatalogRecord {
   tags: string[];
   capabilities: AppBuildSourceCapabilities;
   eligibility: AppSourceEligibility;
+  /** Present while a Dataset is Checked · Needs certifying. */
+  check?: AppSourceCheck;
   score?: number;
   reasons: string[];
 }
@@ -321,7 +336,8 @@ export function matchAppSourceCatalogRecords(
  * Return a bounded candidate-card set for one App-specific planning call.
  *
  * "Only certified data" (`governed_only`) bounds what the planner sees: the
- * shortlist then holds certified sources only. Sources the author requires
+ * shortlist then holds certified sources, and data checked but not
+ * certified yet (design Q1), which publishing still blocks until certified. Sources the author requires
  * explicitly are resolved separately and keep their own policy check.
  * Within the prompt matches, and then within the fill-up rows, sources are
  * trust-ordered (see `rankAppSourcesByTrust`).
@@ -335,7 +351,8 @@ export function shortlistAppSources(
   const certifiedOnly = (options.sourcePolicy ?? 'governed_only') === 'governed_only';
   // Over-fetch when review-required rows are dropped so the shortlist still fills.
   const fetchLimit = certifiedOnly ? 100 : limit;
-  const allowed = (item: AppSourceCatalogRecord) => !certifiedOnly || item.trust === 'certified';
+  // Checked data (design Q1: checked, not certified yet) is usable while an App is built; it blocks publishing until certified.
+  const allowed = (item: AppSourceCatalogRecord) => !certifiedOnly || item.trust === 'certified' || Boolean(item.check);
   const primary = queryAppSourceCatalog(projectRoot, {
     query: prompt,
     limit: fetchLimit,
@@ -395,16 +412,21 @@ function appSourceFromMetadata(
   const lifecycle = appSourceLifecycle(object.status);
   const dataset = normalizeDatasetDescriptor(payload.dataset);
   const certified = dataset ? dataset.trust === 'certified' : lifecycle === 'certified';
-  const policyAllowsPreview = certified || sourcePolicy === 'include_review_required';
   const deprecated = lifecycle === 'deprecated';
+  const check = !certified && !deprecated && dataset ? sourceCheckFromPayload(payload.check) : undefined;
+  // Checked data works in tiles while an App is edited under any data rule;
+  // publishing still needs it certified (design Q1).
+  const policyAllowsPreview = certified || Boolean(check) || sourcePolicy === 'include_review_required';
   const bindingRequired = dataset?.binding.state === 'target_required';
   const reasonCodes = deprecated
     ? ['SOURCE_DEPRECATED']
     : certified
       ? []
-      : sourcePolicy === 'governed_only'
-        ? ['ENABLE_REVIEW_REQUIRED_SOURCES']
-        : ['REVIEW_REQUIRED_SOURCE'];
+      : check
+        ? ['CHECKED_NEEDS_CERTIFYING']
+        : sourcePolicy === 'governed_only'
+          ? ['ENABLE_REVIEW_REQUIRED_SOURCES']
+          : ['REVIEW_REQUIRED_SOURCE'];
   if (bindingRequired) reasonCodes.push('CONNECT_SOURCE_TO_VERIFY');
   const sourcePath = stringValue(object.sourcePath) ?? stringValue(payload.executionRef) ?? '';
   const metricCapabilities = metricCapabilitiesFromPayload(payload.metricCapabilitiesById ?? payload.metricCapabilities);
@@ -461,8 +483,33 @@ function appSourceFromMetadata(
       projectPublish: !deprecated && certified,
       reasonCodes,
     },
+    ...(check ? { check } : {}),
     score: object.score,
     reasons: object.snippet ? [object.snippet] : [],
+  };
+}
+
+function sourceCheckFromPayload(value: unknown): AppSourceCheck | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const by = stringValue(record.by);
+  const at = stringValue(record.at);
+  if (!by || !at) return undefined;
+  const hidden = Array.isArray(record.hiddenColumns)
+    ? record.hiddenColumns.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const item = entry as Record<string, unknown>;
+      const column = stringValue(item.column);
+      const keptColumn = stringValue(item.keptColumn);
+      return column && keptColumn ? [{ column, keptColumn, reason: stringValue(item.reason) ?? '' }] : [];
+    })
+    : [];
+  return {
+    by,
+    ...(stringValue(record.name) ? { name: stringValue(record.name) } : {}),
+    at,
+    ...(stringArray(record.checks).length ? { checks: stringArray(record.checks) } : {}),
+    ...(hidden.length ? { hiddenColumns: hidden } : {}),
   };
 }
 

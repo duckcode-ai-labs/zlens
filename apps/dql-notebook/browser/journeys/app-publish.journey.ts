@@ -9,10 +9,12 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
  * B1: a just-published App opens on its results, against the built
  * `zlens notebook` CLI on the jaffle-supply-chain fixture.
  *
- * A page with three tiles (a chart and a KPI from a certified Dataset, and a
+ * A page with three tiles (a chart and a KPI from a checked Dataset, and a
  * certified Saved query) and a Customer Name filter → Review and publish →
- * Publish to Project → the reader shows real numbers and "All 3 tiles
- * certified" with NO reload, never "superseded", after exactly one page run.
+ * "1 table not certified yet" → Review and certify → "I vouch for this —
+ * certify" (design Q1) → Publish to Project → the reader shows real numbers
+ * and "All 3 tiles certified" with NO reload, never "superseded", after
+ * exactly one page run, and the header says the data was certified by you.
  * Back on the Apps list, the card agrees with the App.
  *
  * The bug: opening a page with filters ran it twice (before and after the
@@ -46,7 +48,7 @@ test.beforeAll(async () => {
   seedProject(projectDir, { connectorRoot: process.env.ZLENS_E2E_DUCKDB_CONNECTORS });
   server = await startNotebookServer({ projectDir, workDir });
 
-  // One certified Dataset from dim_customers, the way Add data makes one from a table.
+  // One checked Dataset from dim_customers, the way Add data's "Check and use" makes one from a table.
   const listing = await call<{ tables: Array<{ id: string; name: string }> }>('/api/app-datasets/tables');
   const table = listing.tables.find((candidate) => candidate.name === 'dim_customers')!;
   const drafted = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: table.id });
@@ -56,7 +58,8 @@ test.beforeAll(async () => {
     domain: 'orders',
     measures: drafted.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
   });
-  expect(created.status).toBe('certified');
+  // Checked · Needs certifying: it is certified on purpose at publish (design Q1).
+  expect(created.status).toBe('checked');
 
   // A manual App with three tiles on one page.
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
@@ -115,7 +118,16 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   });
 
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
-  await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 60_000 });
+  // Design Q1: "Only certified data" holds publishing until the table is certified on purpose.
+  const notCertified = page.getByRole('region', { name: '1 table not certified yet' });
+  await expect(notCertified).toBeVisible({ timeout: 60_000 });
+  await expect(notCertified).toContainText('Checked · Needs certifying');
+  await notCertified.getByRole('button', { name: 'Review and certify Customers' }).click();
+  const review = page.getByRole('dialog', { name: 'Certify Customers' });
+  await expect(review.getByText(/is filled and different on every row, checked just now/)).toBeVisible({ timeout: 60_000 });
+  await review.getByRole('button', { name: 'I vouch for this — certify' }).click();
+  await expect(review).toBeHidden({ timeout: 60_000 });
+  await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 90_000 });
   await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish to Project', exact: true }).click();
   await expect(page).toHaveURL(/app=sales-review/, { timeout: 60_000 });
 
@@ -126,8 +138,8 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await expect(page.getByText('No result.')).toHaveCount(0);
   await expect(page.getByText(/superseded/i)).toHaveCount(0);
   await expect(page.getByText(/\d+ of 3 tiles certified/i)).toHaveCount(0);
-  // D5: the header says who certified the data and when.
-  await expect(page.getByText(/^All data certified( by .+)? · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible();
+  // D5 and design Q1: the header says who certified the data, from the reader's side, and when.
+  await expect(page.getByText(/^All data certified by you · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible();
   // Publishing ran the page once, and that run is the one on screen.
   expect(readerRuns).toHaveLength(1);
   expect(readerResponses.some((response) => response.stale)).toBe(false);

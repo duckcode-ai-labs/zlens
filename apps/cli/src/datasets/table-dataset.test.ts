@@ -78,7 +78,30 @@ describe('start from a table', () => {
     expect(drafted.proposal.measures.map((measure) => measure.name)).toEqual(plain.proposal.measures.map((measure) => measure.name));
   });
 
-  duckDbIt('lists tables, drafts a checked Dataset, saves it certified, and App Studio lists it', async () => {
+  it('applies the duplicate-column answer before the number choices (design Q1.4)', () => {
+    const proposal = {
+      name: 'Orders', relation: 'orders', keyCandidates: [],
+      fields: [
+        { name: 'order_total', label: 'Order total', role: 'attribute' as const, type: 'number' as const },
+        { name: 'order_total_dollars', label: 'Order total dollars', role: 'attribute' as const, type: 'number' as const, column: 'order_total_cents', divideBy: 100 as const },
+      ],
+      measures: [
+        { name: 'order_total', label: 'Order total', aggregation: 'sum' as const, from: 'order_total', format: 'currency' as const, currency: 'USD', include: true, reason: '' },
+        { name: 'order_total_dollars', label: 'Order total dollars', aggregation: 'sum' as const, from: 'order_total_dollars', format: 'currency' as const, currency: 'USD', include: true, reason: '' },
+      ],
+      duplicates: [{ name: 'order_total', label: 'Order total', plainColumn: 'order_total', minorColumn: 'order_total_cents', minorUnits: 'cents' as const, major: 'dollars' as const, convertedField: 'order_total_dollars', question: 'Use Order total in dollars?' }],
+    };
+    const recommended = applyTableDatasetChoices(proposal, [{ name: 'order_total', format: 'number' }]);
+    expect(recommended.fields.map((field) => [field.name, field.column])).toEqual([['order_total', 'order_total_cents']]);
+    expect(recommended.measures).toEqual([expect.objectContaining({ name: 'order_total', from: 'order_total', format: 'number' })]);
+    expect(recommended.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total', keptColumn: 'order_total_cents' })]);
+    const plain = applyTableDatasetChoices(proposal, [], [{ name: 'order_total', use: 'plain' }]);
+    expect(plain.fields.map((field) => field.name)).toEqual(['order_total']);
+    expect(plain.fields[0]!.column).toBeUndefined();
+    expect(plain.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total_cents', keptColumn: 'order_total' })]);
+  });
+
+  duckDbIt('lists tables, drafts a checked Dataset, saves it Checked · Needs certifying, certifies it on purpose, and App Studio lists it', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-table-dataset-'));
     const databasePath = join(projectRoot, 'app-datasets-pilot.duckdb');
     const connection: ConnectionConfig = { driver: 'duckdb', filepath: databasePath, moduleSearchPaths: [connectorRoot!] };
@@ -111,27 +134,61 @@ describe('start from a table', () => {
         measures: [{ name: 'cost_amount', include: false, format: 'currency' }],
       });
       expect(created.status, created.text).toBe(201);
-      expect(created.body).toMatchObject({ ok: true, status: 'certified', keyChecked: true });
+      // Design Q1: checking a table no longer certifies it.
+      expect(created.body).toMatchObject({ ok: true, status: 'checked', keyChecked: true });
+      expect(created.body.certification).toBeUndefined();
       expect(created.body.sourceId).toEqual(expect.any(String));
-      // D5: who certified it and when, and the checks that passed, in plain words.
-      expect(created.body.certification).toMatchObject({ by: expect.any(String), at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
-      expect(created.body.certification.checks).toEqual(expect.arrayContaining([
+      // Who checked it and what the check found, in plain words; the person here is "you".
+      expect(created.body.check).toMatchObject({ by: expect.any(String), at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/), byYou: true });
+      expect(created.body.check.checks).toEqual(expect.arrayContaining([
         expect.stringMatching(/^Row key: each row is one order line \(order_line_id is filled and different on all [\d,]+ rows\)$/),
         expect.stringMatching(/^Number formats: .*Net amount: money/),
         'run',
       ]));
       const source = readFileSync(join(projectRoot, created.body.path), 'utf-8');
-      expect(source).toContain('status = "certified"');
+      expect(source).toContain('status = "review"');
+      expect(source).not.toContain('status = "certified"');
       expect(source).toContain('keys = ["order_line_id"]');
       expect(source).not.toMatch(/cost_amount \{ agg/);
 
       const app = await call(base, '/api/app-builds', { name: 'First page', goal: 'Revenue by region', domain: 'commerce', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank' });
       expect(app.status, app.text).toBe(201);
+      const listedChecked = (await call(base, `/api/app-builds/${encodeURIComponent(app.body.draft.id)}/source-candidates?limit=50`)).body.items
+        .find((item: { sourceId: string }) => item.sourceId === created.body.sourceId);
+      // Checked · Needs certifying: tiles can use it under "Only certified data"; it cannot publish yet.
+      expect(listedChecked).toMatchObject({ lifecycle: 'review', trust: 'review_required', check: { byYou: true }, eligibility: { localPreview: true, projectPublish: false, reasonCodes: expect.arrayContaining(['CHECKED_NEEDS_CERTIFYING']) } });
+
+      // The short review before certifying: what one row is, the key check run again, formats, hidden duplicates.
+      const review = await call(base, `/api/app-datasets/certify-review?sourceId=${encodeURIComponent(created.body.sourceId)}`);
+      expect(review.status, review.text).toBe(200);
+      expect(review.body.review).toMatchObject({ kind: 'dataset', origin: 'table', certified: false, canVouch: true, row: 'Each row is one order line (order_line_id).', keyCheck: { ok: true } });
+      expect(review.body.review.numbers.map((number: { label: string; format: string }) => `${number.label}: ${number.format}`)).toEqual(expect.arrayContaining(['Net amount: Money (USD)']));
+
+      // "I vouch for this — certify": the receipt records who, when and which checks passed.
+      const stale = await call(base, '/api/app-datasets/certify', { sourceId: created.body.sourceId, sourceRevision: 'sha256:old' });
+      expect(stale.status).toBe(409);
+      const certified = await call(base, '/api/app-datasets/certify', { sourceId: created.body.sourceId, sourceRevision: review.body.review.sourceRevision });
+      expect(certified.status, certified.text).toBe(200);
+      expect(certified.body).toMatchObject({ ok: true, status: 'certified', certification: { by: created.body.check.by, byYou: true, at: expect.stringMatching(/^\d{4}-/) } });
+      expect(certified.body.certification.checks).toEqual(expect.arrayContaining([
+        expect.stringMatching(/^Row key: order_line_id is filled and different on every row, checked just now\.$/),
+        expect.stringMatching(/^Number formats: .*Net amount: money/),
+        'run',
+      ]));
+      expect(readFileSync(join(projectRoot, created.body.path), 'utf-8')).toContain('status = "certified"');
+      const companion = readFileSync(join(projectRoot, 'semantic-layer', 'blocks', 'commerce', 'order-lines-from-table.yaml'), 'utf-8');
+      expect(companion).toContain('reviewStatus: certified');
+      expect(companion).toContain('via: app-dataset');
+      expect(companion).not.toMatch(/^check:/m);
+      const again1 = await call(base, '/api/app-datasets/certify', { sourceId: created.body.sourceId });
+      expect(again1.status).toBe(409);
+
       const candidates = await call(base, `/api/app-builds/${encodeURIComponent(app.body.draft.id)}/source-candidates?limit=50`);
       const listed = candidates.body.items.find((item: { sourceId: string }) => item.sourceId === created.body.sourceId);
       expect(listed).toMatchObject({ lifecycle: 'certified', trust: 'certified' });
-      // The Data list names who certified it and when (D5).
-      expect(listed.certification).toMatchObject({ by: created.body.certification.by, at: created.body.certification.at });
+      expect(listed.check).toBeUndefined();
+      // The Data list names who certified it and when, and that it was you (D5, design Q1).
+      expect(listed.certification).toMatchObject({ by: certified.body.certification.by, at: certified.body.certification.at, byYou: true });
       expect(listed.capabilities.dataset.fields.filter((field: { kind: string }) => field.kind === 'measure').map((field: { name: string }) => field.name).sort())
         .toEqual(['customer_count', 'margin_amount', 'net_amount', 'order_count', 'order_line_count']);
 
@@ -165,6 +222,12 @@ describe('start from a table', () => {
         "  ('O-3', TIMESTAMP '2026-02-02 12:00:00', 12000, 960, 12960)",
         ') AS t(order_id, ordered_at, subtotal_cents, tax_paid_cents, order_total_cents)',
       ].join('\n'), [], connection);
+      await executor.executePositional([
+        'CREATE TABLE main.dup_orders AS SELECT * FROM (VALUES',
+        "  ('D-1', 21.59, 2159),",
+        "  ('D-2', 5.40, 540)",
+        ') AS t(order_id, order_total, order_total_cents)',
+      ].join('\n'), [], connection);
       const port = await startLocalServer({ rootDir: projectRoot, projectRoot, executor, connection, preferredPort: 0, captureServer: (created) => { server = created; } });
       const base = `http://127.0.0.1:${port}`;
       const tables = await call(base, '/api/app-datasets/tables');
@@ -178,9 +241,9 @@ describe('start from a table', () => {
       expect(subtotal).toMatchObject({ format: 'currency', currency: 'USD', unitNote: 'Shown in dollars (stored as cents)' });
       const created = await call(base, '/api/app-datasets/tables/create', { tableId: shopOrders.id, name: 'Shop orders', domain: 'commerce' });
       expect(created.status, created.text).toBe(201);
-      expect(created.body).toMatchObject({ ok: true, status: 'certified', keyChecked: true });
-      // The receipt says the cents were shown in dollars (D5, B11).
-      expect(created.body.certification.checks.find((check: string) => check.startsWith('Number formats:'))).toContain('Subtotal: shown in dollars (stored as cents)');
+      expect(created.body).toMatchObject({ ok: true, status: 'checked', keyChecked: true });
+      // The check record says the cents were shown in dollars (D5, B11).
+      expect(created.body.check.checks.find((check: string) => check.startsWith('Number formats:'))).toContain('Subtotal: shown in dollars (stored as cents)');
       const source = readFileSync(join(projectRoot, created.body.path), 'utf-8');
       expect(source).toContain('"subtotal_cents" / 100.0 AS "subtotal"');
       // A tile, a KPI and a filter all read the same dollars.
@@ -192,6 +255,23 @@ describe('start from a table', () => {
       const filtered = await call(base, '/api/app-datasets/run', { sourceId: created.body.sourceId, query: { dimensions: [{ field: 'order_id' }], measures: [{ measure: 'subtotal' }], filters: [{ field: 'subtotal', op: 'gt', values: [100] }] } });
       expect(filtered.status, filtered.text).toBe(200);
       expect(filtered.body.result.rows.map((row: { order_id: string }) => row.order_id)).toEqual(['O-3']);
+
+      // Design Q1.4: order_total beside order_total_cents is one question, not two numbers.
+      const dupOrders = tables.body.tables.find((table: { name: string }) => table.name === 'dup_orders');
+      const dupDraft = await call(base, '/api/app-datasets/tables/draft', { tableId: dupOrders.id });
+      expect(dupDraft.status, dupDraft.text).toBe(200);
+      expect(dupDraft.body.proposal.duplicates).toEqual([expect.objectContaining({ question: 'Use Order total in dollars?', plainColumn: 'order_total', minorColumn: 'order_total_cents' })]);
+      const dupCreated = await call(base, '/api/app-datasets/tables/create', { tableId: dupOrders.id, name: 'Dup orders', domain: 'commerce' });
+      expect(dupCreated.status, dupCreated.text).toBe(201);
+      const dupSource = readFileSync(join(projectRoot, dupCreated.body.path), 'utf-8');
+      expect(dupSource).toContain('"order_total_cents" / 100.0 AS "order_total"');
+      expect(dupSource).toContain('/* Hidden duplicate columns: order_total (order_total_cents is used) */');
+      expect(dupSource).toContain('order_total is hidden (order_total_cents holds the same number)');
+      const dupTotal = await call(base, '/api/app-datasets/run', { sourceId: dupCreated.body.sourceId, query: { dimensions: [], measures: [{ measure: 'order_total' }] } });
+      expect(dupTotal.status, dupTotal.text).toBe(200);
+      expect(Number(dupTotal.body.result.rows[0].order_total)).toBeCloseTo(26.99, 6);
+      const dupReview = await call(base, `/api/app-datasets/certify-review?sourceId=${encodeURIComponent(dupCreated.body.sourceId)}`);
+      expect(dupReview.body.review.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total', keptColumn: 'order_total_cents' })]);
 
       // B13: the keyword planner (no AI) proposes tiles from a table checked a moment ago.
       const orderLines = tables.body.tables.find((table: { name: string }) => table.name === 'order_lines');

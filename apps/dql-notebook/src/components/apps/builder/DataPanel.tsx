@@ -8,8 +8,7 @@ import { humanize } from './studio-ui';
 import { writeFieldDrag } from './ShelfEditor';
 import { appDataSameNameOrigins } from './app-data-names';
 import { SUMMARY_OPTION } from '../reader-page-structure';
-import { certifiedByLabel } from '../reader-trust';
-import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canMakeRowLevel, needsReview, sourceOriginLabel, trustLabel } from './app-data';
+import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canCertifyAppData, canMakeRowLevel, dataTrustLabel, needsReview, sourceOriginLabel } from './app-data';
 
 export type DataPanelTarget =
   | { kind: 'none' }
@@ -39,6 +38,7 @@ export function DataPanel({
   onAuthorDataset,
   onRefreshBinding,
   onMakeRowLevel,
+  onCertify,
   fieldsStatus,
   pickerRequest = 0,
   defaultPickerOpen = false,
@@ -67,6 +67,8 @@ export function DataPanel({
   onRefreshBinding?: (item: AppBlockRecommendation) => void;
   /** Make the chosen saved query row-level (formerly "Add fields"). Absent when field tiles are off. */
   onMakeRowLevel?: (item: AppBlockRecommendation) => void;
+  /** Open the short review before "I vouch for this — certify" (design Q1). */
+  onCertify?: (item: AppBlockRecommendation) => void;
   /** Reading the chosen saved query's result columns as fields, or why that failed. */
   fieldsStatus?: { state: 'reading' } | { state: 'failed'; error: string };
   /** Changing this number opens the switcher (tile settings "Choose another Dataset"). */
@@ -85,6 +87,7 @@ export function DataPanel({
   const savedQuery = active && (!descriptor || (resultFields && !datasetTilesEnabled)) ? active : null;
   const groups = descriptor && datasetTilesEnabled ? groupDatasetFields(descriptor, search) : null;
   const rowLevel = active && onMakeRowLevel && canMakeRowLevel(active) ? onMakeRowLevel : undefined;
+  const certify = active && onCertify && canCertifyAppData(active) ? onCertify : undefined;
   const used = queryFieldNames(target.kind === 'none' ? undefined : target.query);
   const fieldRow = (field: DatasetField, meta: string, glyph: JSX.Element, locked = false, options: { label?: string; review?: boolean } = {}) => {
     const on = used.has(field.name.toLowerCase());
@@ -115,22 +118,22 @@ export function DataPanel({
         <span className="dataset-icon"><TableGlyph /></span>
         <span className="dataset-text">
           <strong>{active ? humanize(active.name) : appData.length ? 'Choose your data' : 'No data yet'}{active && sameNames.get(active.id) ? <em className="same-name-origin"> · {sameNames.get(active.id)}</em> : null}</strong>
-          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceOriginLabel(active)} · {activeCertified ? certifiedByLabel(active.certification) : trustLabel('review')}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
+          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceOriginLabel(active)} · {dataTrustLabel(active)}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
         </span>
         <ChevronDown size={14} />
       </button>
-      {rowLevel && active ? <span className="dataset-more">
+      {(rowLevel || certify) && active ? <span className="dataset-more">
         <button type="button" aria-haspopup="menu" aria-expanded={moreOpen} aria-label={`More for ${humanize(active.name)}`} disabled={disabled} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {moreOpen ? <span className="dataset-more-menu" role="menu" aria-label={`More for ${humanize(active.name)}`}>
-          <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); rowLevel(active); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button>
+          {certify ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); certify(active); }}><strong>Certify…</strong><small>A short review, then “I vouch for this — certify”.</small></button> : null}
+          {rowLevel ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); rowLevel(active); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button> : null}
         </span> : null}
       </span> : null}
       {pickerOpen ? <div className="dataset-menu" role="menu" aria-label="This App's data">
         <small className="dataset-menu-label">This App's data</small>
         {appData.map((item) => {
-          const certified = !needsReview(item);
           return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === active?.id} className={item.id === active?.id ? 'on' : ''} onClick={() => { onChoose(item); setPickerOpen(false); setSearch(''); }}>
-            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceOriginLabel(item)} · {certified ? certifiedByLabel(item.certification) : trustLabel('review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
+            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceOriginLabel(item)} · {dataTrustLabel(item)}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
             {item.id === active?.id ? <Check size={13} /> : null}
           </button>;
         })}

@@ -46,6 +46,7 @@ import {
   type DatasetDescriptor,
   normalizeMetricCapabilityContract,
   type MetricCapabilityContract,
+  currentBlockFileCheck,
 } from "@zlens/core";
 import { buildKGFromManifest, buildKGFromSemanticLayer, declaredDomainIds } from "../kg/build.js";
 import type { KGEdge, KGNode } from "../kg/types.js";
@@ -5268,6 +5269,13 @@ function addManifestBlockSourceObjects(
       ? { proofState: 'not_a_dataset' as const }
       : datasetDescriptorFromManifestBlock({ block, sourceId, sourceRevision, proofs: datasetProofs });
     const lifecycle = dataset.descriptor?.lifecycle ?? normalizeBlockSourceLifecycle(block.status);
+    // "Check and use" (design Q1): a row-level Dataset ZLens checked that
+    // nobody certified yet carries its check record, while its source is the
+    // one that was checked. It previews under "Only certified data"; it never
+    // publishes until someone certifies it.
+    const check = dataset.descriptor && lifecycle !== 'certified' && lifecycle !== 'deprecated'
+      ? currentBlockFileCheck(projectRoot, block.filePath)
+      : null;
     // A saved query (no Dataset definition) offers its result columns as
     // fields once their types are known (design D1). Its trust is its own.
     const resultDescriptor = dataset.descriptor || block.blockType === 'semantic'
@@ -5345,6 +5353,15 @@ function addManifestBlockSourceObjects(
         })),
         dataState: block.dataState,
         dataStateDetail: block.dataStateDetail,
+        check: check
+          ? compactObject({
+            by: check.checkedBy,
+            name: check.checkedByName,
+            at: check.checkedAt,
+            checks: check.checks,
+            hiddenColumns: check.hiddenColumns,
+          })
+          : undefined,
       }),
     });
   }

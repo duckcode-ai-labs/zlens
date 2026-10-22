@@ -8,6 +8,38 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Trust: checking is not certifying
+
+- **Adding a table no longer certifies it.** **Check and add** runs the same
+  checks as before and adds the table as **Checked · Needs certifying**; its
+  main button is **Check and use** (there is no "Certify and use this data").
+  Tiles work right away, under "Only certified data" too. **Make row-level**
+  on a saved query does the same. The block is written `status = "review"`
+  with a `check:` record (who, when, what was found, for exactly that source)
+  in its companion YAML.
+- **Certify on purpose, at publish.** The publish check lists data that is
+  not certified yet ("2 tables not certified yet"); each opens a short review
+  — what one row is, the row key checked again, number formats (cents in
+  dollars), joins used, columns hidden as duplicates — and one button, **I
+  vouch for this — certify**. The same review is under the data's **⋯ →
+  Certify…**. Saved queries keep their own **Certify** in Block Studio and are
+  listed too. "Only certified data" still blocks publishing until it is done,
+  and the server's preflight and publish refuse uncertified data
+  (`APP_BUILD_DATASET_NOT_CERTIFIED`). New route: `POST /api/app-datasets/certify`
+  (gated as `dataset.certify` with a host, so steward rules are unchanged);
+  `GET /api/app-datasets/certify-review`. `tables/create` and
+  `saved-queries/create` are authoring (`dataset.author`) now and answer
+  `status: "checked"` with `check` instead of `certification`.
+- **Who certified, from the reader's side.** "Certified by you · 22 Oct" when
+  you certified it, "Certified by Kranthi · 22 Oct" for anyone else, and the
+  App header reads "All data certified by you". A checked tile says **Needs
+  certifying**.
+- **Duplicate columns, one question.** When a table has `order_total` and
+  `order_total_cents`, the check asks once, "Use Order total in dollars?"
+  (recommended), and hides the other column; the choice is kept in the
+  Dataset's definition.
+- Data certified before this change stays certified.
+
 ### Wording
 
 - **Blocks are now called Saved queries** everywhere people read: the left

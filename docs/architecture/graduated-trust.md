@@ -142,8 +142,8 @@ certification:
 ```
 
 The explicit Certify actions are Block Studio's **Certify**, the import
-candidate's **Certify**, App Studio's **Certify and use this data** (a Dataset
-from a table), and `zlens certify --from-draft`. Block Studio shows the receipt
+candidate's **Certify**, App Studio's **I vouch for this — certify** (a Dataset
+from a table, after **Check and use** left it Checked · Needs certifying), and `zlens certify --from-draft`. Block Studio shows the receipt
 as *Certified by … · when · via …*. Changing a block's status away from
 certified removes the receipt.
 

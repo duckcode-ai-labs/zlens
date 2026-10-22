@@ -98,10 +98,13 @@ describe('fields from related tables on DuckDB (D2)', () => {
 
       const created = await call('/api/app-datasets/tables/create', { tableId: ordersTable.id, name: 'Orders', domain: 'shop' });
       expect(created.status, created.text).toBe(201);
-      expect(created.body.status).toBe('certified');
+      // Checking a table leaves it Checked · Needs certifying; certifying is its own step (design Q1).
+      expect(created.body.status).toBe('checked');
+      expect((await call('/api/app-datasets/certify', { sourceId: created.body.sourceId })).body.status).toBe('certified');
       const customersTable = tables.body.tables.find((table: Json) => table.name === 'customers');
       const customersCreated = await call('/api/app-datasets/tables/create', { tableId: customersTable.id, name: 'Customers', domain: 'shop' });
       expect(customersCreated.status, customersCreated.text).toBe(201);
+      expect((await call('/api/app-datasets/certify', { sourceId: customersCreated.body.sourceId })).body.status).toBe('certified');
 
       // The Data pane: Orders shows its related tables' fields; Customers says why it does not show orders.
       const app = await call('/api/app-builds', { name: 'Sales', goal: 'Sales by store', domain: 'shop', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank' });

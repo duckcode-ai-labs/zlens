@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blockCompanionRelativePath, certifiedSourceSha256 } from '@zlens/core';
+import { blockCompanionRelativePath, certifiedSourceSha256, type BlockCheckRecord } from '@zlens/core';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 /**
@@ -395,6 +395,64 @@ export interface CertificationByline {
   at?: string;
   /** Checks that passed, by checklist name or as plain sentences. */
   checks?: string[];
+  /** The person viewing is the person recorded: "Certified by you" (design Q1). */
+  byYou?: boolean;
+}
+
+/**
+ * Whether a recorded identity is the person viewing, by the same rule that
+ * names people everywhere (`personDisplayName`): one of their identities.
+ */
+export function isViewer(identity: string | null | undefined, person: { aliases: ReadonlySet<string> }): boolean {
+  const value = identity?.trim().toLowerCase();
+  return Boolean(value && person.aliases.has(value));
+}
+
+/** A byline as the viewer reads it: `byYou` when they are the person it names. */
+export function bylineForViewer<Byline extends CertificationByline>(byline: Byline, person: { aliases: ReadonlySet<string> }): Byline {
+  return isViewer(byline.by, person) ? { ...byline, byYou: true } : byline;
+}
+
+/**
+ * The record "Check and use" writes (design Q1): who checked the data, when,
+ * what the check found, for exactly which source. It is not a certification.
+ */
+export function buildCheckRecord(input: {
+  source: string;
+  checkedBy: string | undefined | null;
+  checkedByName?: string | undefined | null;
+  checks?: string[];
+  hiddenColumns?: BlockCheckRecord['hiddenColumns'];
+  now?: Date;
+}): BlockCheckRecord {
+  const checkedBy = input.checkedBy?.trim() || 'local';
+  const checkedByName = input.checkedByName?.replace(/[\r\n]/g, ' ').trim();
+  return {
+    checkedBy,
+    ...(checkedByName && checkedByName !== checkedBy ? { checkedByName } : {}),
+    checkedAt: (input.now ?? new Date()).toISOString(),
+    sourceSha256: sourceSha256(input.source),
+    ...(input.checks?.length ? { checks: Array.from(new Set(input.checks)) } : {}),
+    ...(input.hiddenColumns?.length ? { hiddenColumns: input.hiddenColumns } : {}),
+  };
+}
+
+/** The companion YAML with its `check:` record replaced (or removed, with null). */
+export function applyCompanionCheck(companion: string, check: BlockCheckRecord | null): string {
+  let next = removeTopLevelKey(companion, 'check').trimEnd();
+  next += '\n';
+  if (check) next += dumpYaml({ check }, { lineWidth: 200, noRefs: true });
+  return next.endsWith('\n') ? next : `${next}\n`;
+}
+
+/** Who checked a check record and when, for "Checked by you · 22 Oct". */
+export function checkByline(check: Pick<BlockCheckRecord, 'checkedBy' | 'checkedByName' | 'checkedAt' | 'checks'>): CertificationByline {
+  return {
+    by: check.checkedBy,
+    ...(check.checkedByName ? { name: check.checkedByName } : {}),
+    at: check.checkedAt,
+    ...(check.checks?.length ? { checks: check.checks } : {}),
+  };
 }
 
 /** The byline of a receipt, for the browser. */

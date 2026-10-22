@@ -81,4 +81,21 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
     // With no receipt recorded anywhere there is nothing to add to the count.
     expect(appTrustSummary(items, tiles.map(({ certification: _c, ...tile }) => tile)).byline).toBeUndefined();
   });
+
+  it('says "by you" when the reader certified it, and names everyone else (design Q1)', () => {
+    const now = new Date('2026-10-22T12:00:00Z');
+    expect(certifiedByLabel({ by: 'kranthi@example.test', name: 'Kranthi', at: '2026-10-22T09:00:00Z', byYou: true }, now)).toBe('Certified by you · 22 Oct');
+    expect(certifiedByLabel({ by: 'maria@example.test', name: 'Maria', at: '2026-10-22T09:00:00Z' }, now)).toBe('Certified by Maria · 22 Oct');
+    expect(certifiedByAcross([{ name: 'Kranthi', byYou: true, at: '2026-10-21T09:00:00Z' }, { name: 'Kranthi', byYou: true, at: '2026-10-22T09:00:00Z' }], now)).toBe('Certified by you · 22 Oct');
+    expect(certifiedByAcross([{ name: 'Maria', at: '2026-10-21T09:00:00Z' }, { name: 'Kranthi', byYou: true, at: '2026-10-22T09:00:00Z' }], now)).toBe('Certified by you and Maria · 22 Oct');
+    const summary = appTrustSummary([{ i: 'a', query: {} }], new Map([['a', { status: 'ok', dataset: { trust: 'certified' }, certification: { name: 'Kranthi', byYou: true, at: '2026-10-22T09:00:00Z' } }]]));
+    expect(summary.byline).toMatch(/^Certified by you · 22 Oct/);
+  });
+
+  it('labels checked data that nobody certified yet "Needs certifying" (design Q1)', () => {
+    const checked = readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'review_required', checked: true } });
+    expect(checked).toMatchObject({ state: 'review', label: 'Needs certifying' });
+    expect(checked?.detail).toContain('nobody has certified it yet');
+    expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'review_required' } })).toMatchObject({ state: 'review', label: 'Needs review' });
+  });
 });

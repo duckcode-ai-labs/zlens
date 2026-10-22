@@ -1209,6 +1209,119 @@ describe('Apps command center API helpers', () => {
     expect((rejectedPreview.payload as { error: string }).error).toContain('requires include_review_required policy');
   });
 
+  it('previews a checked Dataset under "Only certified data" and refuses to publish it until it is certified (design Q1)', async () => {
+    const root = createProject();
+    const sourceId = 'app:block:commerce:checked-orders';
+    const sourceRevision = 'sha256:checked-orders-source';
+    const contractFingerprint = 'sha256:checked-orders-contract';
+    const checkedDataset: DatasetDescriptor = {
+      ...publishedDatasetDescriptor(sourceId, 'block', sourceRevision, contractFingerprint),
+      lifecycle: 'review',
+      trust: 'review_required',
+    };
+    const checkedCatalog: AppSourceCatalogRecord = {
+      ...publishedDatasetCatalogRecord(sourceId, 'block', sourceRevision, checkedDataset),
+      lifecycle: 'review',
+      trust: 'review_required',
+      eligibility: { discoverable: true, localPreview: true, projectPublish: false, reasonCodes: ['CHECKED_NEEDS_CERTIFYING'] },
+      check: { by: 'kranthi@example.test', name: 'Kranthi', at: '2026-10-22T09:00:00.000Z', checks: ['Row key: each row is one order'] },
+    };
+    // The same Dataset without a check record: plain "needs review" data.
+    const uncheckedCatalog: AppSourceCatalogRecord = { ...checkedCatalog, eligibility: { ...checkedCatalog.eligibility, localPreview: false, reasonCodes: ['ENABLE_REVIEW_REQUIRED_SOURCES'] } };
+    delete (uncheckedCatalog as { check?: unknown }).check;
+    const base = publishedDatasetPage({
+      id: 'overview',
+      title: 'Checked orders',
+      sourceId,
+      sourceRevision,
+      contractFingerprint,
+      tileId: 'checked-revenue',
+      tileTitle: 'Checked revenue',
+      query: { dimensions: [], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true },
+      viz: 'kpi',
+    });
+    const page: DashboardDocument = {
+      ...base,
+      layout: {
+        ...base.layout,
+        items: base.layout.items.map((tile) => ({
+          ...tile,
+          sourceClass: 'exploratory_analysis',
+          trustState: 'review_required',
+          reviewStatus: 'review_required',
+          review: { status: 'required', sourceFingerprint: sourceRevision },
+        })),
+      },
+    };
+    const initial = createStoredAppBuildDraft(root, {
+      name: 'Checked data',
+      goal: 'Build with checked data, certify before publishing.',
+      authoringMode: 'manual',
+      sourcePolicy: 'governed_only',
+      template: 'blank',
+    });
+    const draft: AppBuildDraft = {
+      ...initial,
+      sources: [{ ...publishedDatasetDraftSource(checkedCatalog), checked: true }],
+      pages: [page],
+    };
+    const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+    try {
+      storage.saveAppBuildDraft(draft);
+    } finally {
+      storage.close();
+    }
+    let current = checkedCatalog;
+    const sourceAuthority = async () => [current];
+    const verifyPreview = async (input: { purpose: 'local_preview' | 'project_publish'; intentFingerprint: string }) => ({
+      ok: true as const,
+      snapshotId: 'snapshot-checked',
+      filterFingerprint: 'filters-checked',
+      resultFingerprint: 'results-checked',
+      intentFingerprint: input.intentFingerprint,
+    });
+    const receipt = {
+      id: 'checked-local-preview',
+      pageId: page.id,
+      revision: draft.revision,
+      snapshotId: 'snapshot-checked',
+      filterFingerprint: 'filters-checked',
+      resultFingerprint: 'results-checked',
+      createdAt: '2026-10-22T09:05:00.000Z',
+    };
+    // Tiles work right away: the preview is accepted under "Only certified data".
+    const savedPreview = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: draft.revision,
+      operations: [{ type: 'set_preview_receipt', receipt }],
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(savedPreview, JSON.stringify(savedPreview.payload)).toMatchObject({ handled: true, status: 200 });
+    const saved = (savedPreview.payload as { draft: AppBuildDraft }).draft;
+    expect(saved.sourcePolicy).toBe('governed_only');
+    expect(saved.sources).toEqual([expect.objectContaining({ id: sourceId, checked: true, trustState: 'review_required' })]);
+
+    // Publishing is refused, saying what to do.
+    const preflight = await invokeAppsApi(root, `/api/app-builds/${draft.id}/preflight`, 'POST', {
+      expectedRevision: saved.revision,
+      proposalHash: saved.proposalHash,
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(preflight).toMatchObject({ handled: true, status: 400 });
+    expect((preflight.payload as { errors: string[] }).errors.join('\n')).toMatch(/APP_BUILD_DATASET_NOT_CERTIFIED: Checked revenue uses block orders, which is checked but not certified yet\. Certify it before publishing\./);
+    const publish = await invokeAppsApi(root, `/api/app-builds/${draft.id}/publish-to-project`, 'POST', {
+      expectedRevision: saved.revision,
+      proposalHash: saved.proposalHash,
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(publish.status).not.toBe(200);
+    expect(publish.status).not.toBe(201);
+
+    // Data nobody checked stays out of a governed-only preview, as before.
+    current = uncheckedCatalog;
+    const rejected = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: saved.revision,
+      operations: [{ type: 'set_preview_receipt', receipt: { ...receipt, id: 'unchecked-preview', revision: saved.revision } }],
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(rejected).toMatchObject({ handled: true, status: 400 });
+  });
+
   it('refuses a client-issued preview receipt invalidation', async () => {
     const root = createProject();
     const draft = createStoredAppBuildDraft(root, {
