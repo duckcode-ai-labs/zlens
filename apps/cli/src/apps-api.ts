@@ -45,6 +45,8 @@ import {
   applyAppBuildDraftOperations,
   packDashboardLayoutItems,
   appSourceIdsUsedByTiles,
+  appTilesNeedingJoinReview,
+  tileJoinReviewSentence,
   type AppDocument,
   type BlockParameterDefinition,
   type DashboardDisplayMetadata,
@@ -3556,6 +3558,18 @@ async function datasetDraftCurrentAuthorityErrors(
         || source!.trust !== 'certified'
         || !source!.eligibility.projectPublish)) {
       errors.push(`APP_BUILD_DATASET_PUBLICATION_INELIGIBLE: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and cannot be published until its governed Dataset source is certified and eligible.`);
+    }
+  }
+  // "Only certified data" is about every tile, not only every source: a tile
+  // that reads a field through a join nobody certified yet is Needs review
+  // (design D2) and does not publish under that rule. The joins come from the
+  // current model, so a join certified since the last run passes.
+  if (purpose === 'project_publish' && draft.sourcePolicy !== 'include_review_required') {
+    for (const item of appTilesNeedingJoinReview({
+      pages: draft.pages,
+      descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? storedById.get(sourceId)?.capabilities?.dataset,
+    })) {
+      errors.push(`APP_BUILD_TILE_NEEDS_REVIEW: ${item.pageId}/${item.tileId}: ${tileJoinReviewSentence(item)} This App uses only certified data: certify the join in Modeling, remove the related field, or allow data that needs review.`);
     }
   }
   return Array.from(new Set(errors));

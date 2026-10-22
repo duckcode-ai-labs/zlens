@@ -960,6 +960,93 @@ describe('Apps command center API helpers', () => {
     }
   });
 
+  it('refuses to publish a tile that reads a field through an uncertified join under "Only certified data"', async () => {
+    const root = createProject();
+    const sourceId = 'app:block:commerce:orders-with-location';
+    const sourceRevision = 'sha256:orders-with-location';
+    const contractFingerprint = 'sha256:orders-with-location-contract';
+    const withJoin = (trust: 'certified' | 'review_required'): DatasetDescriptor => {
+      const base = publishedDatasetDescriptor(sourceId, 'block', sourceRevision, contractFingerprint);
+      return {
+        ...base,
+        fields: [
+          ...base.fields,
+          { kind: 'physical', name: 'location__location_name', qualifiedId: `${sourceId}:location__location_name`, type: 'string', role: 'dimension', status: 'approved', related: { join: 'location', column: 'location_name' } },
+        ],
+        joins: [{
+          id: 'location',
+          label: 'Location',
+          table: 'locations',
+          relation: 'main.locations',
+          keys: [{ from: 'location_id', to: 'location_id' }],
+          cardinality: 'many_to_one',
+          trust,
+          origin: 'drafted',
+          relationshipId: 'proposal_setup:rel_orders_locations',
+          uniqueness: 'current',
+          sentence: 'each order has one location',
+        }],
+      };
+    };
+    const draftedCatalog = publishedDatasetCatalogRecord(sourceId, 'block', sourceRevision, withJoin('review_required'));
+    const certifiedCatalog = publishedDatasetCatalogRecord(sourceId, 'block', sourceRevision, withJoin('certified'));
+    const page = publishedDatasetPage({
+      id: 'overview',
+      title: 'Orders',
+      sourceId,
+      sourceRevision,
+      contractFingerprint,
+      tileId: 'revenue-by-location',
+      tileTitle: 'Revenue by location',
+      query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true },
+      viz: 'bar',
+    });
+    const saveDraft = (sourcePolicy: 'governed_only' | 'include_review_required') => {
+      const initial = createStoredAppBuildDraft(root, {
+        name: `Joined orders ${sourcePolicy}`,
+        goal: 'Revenue by location.',
+        authoringMode: 'manual',
+        sourcePolicy,
+        template: 'blank',
+      });
+      const draft: AppBuildDraft = { ...initial, sources: [publishedDatasetDraftSource(draftedCatalog)], pages: [page] };
+      const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+      try {
+        storage.saveAppBuildDraft(draft);
+      } finally {
+        storage.close();
+      }
+      return draft;
+    };
+    const preflight = async (draft: AppBuildDraft, catalog: AppSourceCatalogRecord, route = 'preflight') => {
+      const response = await invokeAppsApi(root, `/api/app-builds/${draft.id}/${route}`, 'POST', {
+        expectedRevision: draft.revision,
+        proposalHash: draft.proposalHash,
+      }, { resolveDatasetSourceAuthority: async () => [catalog] });
+      return { status: response.status, errors: ((response.payload as { errors?: string[]; error?: string }).errors ?? []) };
+    };
+
+    const governed = saveDraft('governed_only');
+    const refused = await preflight(governed, draftedCatalog);
+    expect(refused.status).toBe(400);
+    const tileErrors = refused.errors.filter((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'));
+    expect(tileErrors).toEqual([
+      'APP_BUILD_TILE_NEEDS_REVIEW: overview/revenue-by-location: Revenue by location uses the join to Location, which is not certified yet. This App uses only certified data: certify the join in Modeling, remove the related field, or allow data that needs review.',
+    ]);
+    // Publish repeats the same check; it never publishes past it.
+    const publishRefused = await preflight(governed, draftedCatalog, 'publish-to-project');
+    expect(publishRefused.status).toBe(400);
+    expect(publishRefused.errors.some((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'))).toBe(true);
+
+    // Certified in Modeling since: the current model decides, so it passes this check.
+    const afterCertify = await preflight(governed, certifiedCatalog);
+    expect(afterCertify.errors.some((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'))).toBe(false);
+
+    // "Also allow data that needs review": the tile publishes as Needs review.
+    const allowed = await preflight(saveDraft('include_review_required'), draftedCatalog);
+    expect(allowed.errors.some((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'))).toBe(false);
+  });
+
   it('allows opted-in review Dataset preview evidence but refuses governed-only preview and Project publication (APP-058)', async () => {
     const root = createProject();
     const sourceId = 'app:block:commerce:review-orders';

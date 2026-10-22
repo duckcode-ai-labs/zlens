@@ -299,7 +299,9 @@ function DashboardFilterInput({
     );
   }
   if (filter.type === 'multiselect') {
-    const selected = Array.isArray(value) ? value.map(String) : [];
+    // A single name is still a selection: showing "All" for it would hide a
+    // filter that narrows the tiles.
+    const selected = Array.isArray(value) ? value.map(String) : typeof value === 'string' && value ? [value] : [];
     const options = (filter.options ?? fetchedOptions ?? []).map(String);
     return <MultiSelectFilterChip label={label} icon={filterIconForDashboardFilter(filter)} options={options} selected={selected} onChange={onChange} />;
   }

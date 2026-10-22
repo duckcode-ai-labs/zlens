@@ -8,6 +8,8 @@ import {
   type ReaderTrustItem,
   type ReaderTrustTile,
 } from '@zlens/core/apps/reader-trust';
+import { formatBusinessLabel } from './app-text';
+import { formatDashboardFilterValue } from './dashboard-filter-words';
 
 /**
  * The reader's trust vocabulary lives in dql-core (RFC 0008 step 6, shared
@@ -102,7 +104,7 @@ export function readerTileReceipt(
   push('Calculations', calculationWords(item.query as TileQuery | undefined).join(' · ') || undefined);
   const applied = tile?.filters?.applied ?? [];
   push('Filters', applied.length
-    ? applied.map((filter) => `${filter.field ?? filter.filter ?? 'filter'} ${filter.op && filter.op !== '=' && filter.op !== 'in' ? `${filter.op} ` : ''}${formatFilterValue(filter.values)}`).join(' · ')
+    ? applied.map((filter) => `${formatBusinessLabel(filter.field ?? filter.filter ?? 'filter')} ${filterOperatorWords(filter.op)}${formatFilterValue(filter.values, filter.op)}`).join(' · ')
     : 'None applied');
   const rowCount = tile?.result?.rowCount ?? tile?.result?.rows?.length;
   push('Rows', rowCount !== undefined ? rowCount.toLocaleString() : undefined);
@@ -125,8 +127,21 @@ function calculationWords(query: TileQuery | undefined): string[] {
   });
 }
 
-function formatFilterValue(value: unknown): string {
-  if (Array.isArray(value)) return value.map(String).join(', ');
-  if (value && typeof value === 'object') return JSON.stringify(value);
-  return String(value ?? 'any');
+const OPERATOR_WORDS: Record<string, string> = {
+  gte: 'from ', '>=': 'from ', lte: 'until ', '<=': 'until ', gt: 'after ', '>': 'after ', lt: 'before ', '<': 'before ',
+  neq: 'not ', '!=': 'not ', not_in: 'not ', contains: 'contains ',
+};
+
+/** `gte` reads "from", `lt` "before"; equality and lists read as the value alone. */
+function filterOperatorWords(op: string | undefined): string {
+  if (!op || ['=', 'eq', 'in', 'between'].includes(op)) return '';
+  return OPERATOR_WORDS[op] ?? `${op} `;
+}
+
+function formatFilterValue(value: unknown, op?: string): string {
+  // A closed range applied as `between [start, end]` reads as one range.
+  if (Array.isArray(value) && value.length === 2 && /^between$/i.test(op ?? '')) {
+    return formatDashboardFilterValue({ start: value[0], end: value[1] }) ?? 'any';
+  }
+  return formatDashboardFilterValue(value) ?? 'any';
 }

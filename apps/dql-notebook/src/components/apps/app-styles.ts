@@ -4707,6 +4707,7 @@ export const APP_STYLES = `
 .dql-app-filter-row .dql-app-filter-select span { font: 500 13px var(--font-ui); text-transform: none; color: var(--dql-app-muted); }
 .dql-app-filter-row .dql-app-filter-select select, .dql-app-filter-row .dql-app-filter-select input { font: 600 13px var(--font-ui); max-width: 160px; }
 .dql-app-filter-reset { height: 32px; padding: 0 8px; border: 0; background: transparent; color: var(--dql-app-accent); font: 600 13px var(--font-ui); cursor: pointer; }
+.dql-app-filter-remembered { display: inline-flex; align-items: center; height: 32px; color: var(--text-secondary); font: 500 12px var(--font-ui); }
 /* RFC 0008 step 6: trust labels, receipts and the Trust Lens in the reader. */
 .dql-trust-anchor { position: relative; display: inline-flex; }
 .dql-trust-badge { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid var(--dql-app-line-2); border-radius: 999px; background: var(--dql-app-surface); color: var(--dql-app-ink); font: 500 11px var(--font-ui); font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; }

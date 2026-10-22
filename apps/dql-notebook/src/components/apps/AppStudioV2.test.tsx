@@ -716,6 +716,71 @@ describe('Publish leaves out data no tile uses (design D4)', () => {
   });
 });
 
+describe('Publish counts tiles that need review under "Only certified data" (design D2)', () => {
+  const sourceId = 'app:block:commerce:orders';
+  const draftWith = (sourcePolicy: 'governed_only' | 'include_review_required') => ({
+    version: 3, id: 'build_1', appId: 'orders-app', name: 'Orders', revision: 2, proposalHash: 'hash',
+    authoringMode: 'manual', template: 'blank', sourcePolicy, state: 'local_draft',
+    frame: { goal: 'Orders', metrics: [], dimensions: [], filters: [] }, requirements: [], coverage: [],
+    sources: [{
+      id: sourceId, kind: 'block', sourceRef: 'orders', lifecycle: 'certified', trustState: 'certified', reviewStatus: 'not_required',
+      capabilities: { dataset: {
+        kind: 'block', trust: 'certified',
+        fields: [{ kind: 'physical', name: 'location__location_name', qualifiedId: 'o:location__location_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'location', column: 'location_name' } }],
+        joins: [{ id: 'location', label: 'Location', table: 'locations', relation: 'main.locations', keys: [{ from: 'location_id', to: 'location_id' }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: 'proposal_setup:rel_2', uniqueness: 'current', sentence: 'each order has one location' }],
+      } },
+    }],
+    pages: [{
+      version: 3, id: 'overview', metadata: { title: 'Overview' },
+      datasets: [{ id: 'orders_ds', sourceId, sourceRevision: 'r', snapshotId: 's', contractFingerprint: 'c' }],
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [{
+        i: 'by_location', x: 0, y: 0, w: 6, h: 4, title: 'Revenue by location', sourceId, sourceRevision: 'r',
+        query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true }, viz: { type: 'bar' },
+      }] },
+    }],
+    previewReceipts: [{ id: 'run', pageId: 'overview', revision: 2, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'x', createdAt: '' }],
+    reviewTasks: [], createdAt: '', updatedAt: '',
+  }) as never;
+  const dialog = (draft: never) => renderToStaticMarkup(
+    <studio.PublishReadinessDialog
+      draft={draft}
+      serverIssues={[]}
+      busy={false}
+      previewRun={null}
+      onClose={vi.fn()}
+      onRetry={vi.fn()}
+      onRunPreview={vi.fn()}
+      onRunAllPreviews={vi.fn()}
+      onRemoveRequirement={vi.fn()}
+      onReviseRequirement={vi.fn()}
+      onAnswerQuestion={vi.fn()}
+      onResolveTask={vi.fn()}
+      onOpenSources={vi.fn()}
+      onOpenFilters={vi.fn()}
+      onRefreshSources={vi.fn()}
+      onApproveSemantic={vi.fn()}
+      onRemoveLocalAnalysis={vi.fn()}
+    />,
+  );
+
+  it('never says every check passed while a tile uses an uncertified join, and offers the three fixes', () => {
+    const markup = dialog(draftWith('governed_only'));
+    expect(markup).not.toContain('Every check passed');
+    expect(markup).not.toContain('Ready to publish');
+    expect(markup).toContain('1 fix before publishing');
+    expect(markup).toContain('Revenue by location uses the join to Location, which is not certified yet.');
+    expect(markup).toContain('Certify the join in Modeling');
+    expect(markup).toContain('Remove the related field');
+    expect(markup).toContain('Allow data that needs review');
+  });
+
+  it('is ready once data that needs review is allowed', () => {
+    const markup = dialog(draftWith('include_review_required'));
+    expect(markup).toContain('Ready to publish');
+    expect(markup).not.toContain('Tile needs review');
+  });
+});
+
 describe('tile settings row count (B14)', () => {
   it('says how many rows the tile holds when it holds only the first rows', () => {
     expect(studio.liveRowsLabel(935, 500)).toBe('Live · 935 rows · first 500 loaded');

@@ -167,6 +167,8 @@ export {
 } from './app-build-draft.js';
 export { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from './app-data-sources.js';
 export type { AppDataSourceLike, AppDataTileLike, AppDataDraftLike } from './app-data-sources.js';
+export { appTilesNeedingJoinReview, tileJoinReviewSentence } from './app-tile-join-trust.js';
+export type { AppTileNeedingJoinReview, JoinTrustPageLike, JoinTrustTileLike } from './app-tile-join-trust.js';
 export type {
   AppBuildDraft,
   AppBuildFrame,

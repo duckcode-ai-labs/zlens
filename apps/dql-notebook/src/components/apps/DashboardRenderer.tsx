@@ -100,6 +100,7 @@ import { PivotTable } from './PivotTable';
 import { dashboardPageRevision, dashboardRunKey, shouldRerunStaleDashboardRun } from './dashboard-run-key';
 import { KpiCard, usesKpiCard } from './KpiCard';
 import { plainSourceText } from './source-names';
+import { dataSourceCountWords, describeDashboardFilterValues, formatDashboardFilterValue, runDataSourceCount } from './dashboard-filter-words';
 import { BarCapNote } from './builder/BarCapNote';
 import { barCategoryCap, withBarCategoryLimit } from './builder/sort-top-n';
 
@@ -393,8 +394,8 @@ export function DashboardRenderer({
   // The auto-written Summary is off unless the page's author added it (D6).
   const summaryAdded = pageShowsSummary(dashboard.metadata);
   const dashboardStory = useMemo(
-    () => (editable || !summaryAdded || storySections || run?.partial || run?.incomplete ? null : buildDashboardStory(visibleItems, tileResults, runVariables)),
-    [editable, summaryAdded, run?.incomplete, run?.partial, runVariables, storySections, tileResults, visibleItems],
+    () => (editable || !summaryAdded || storySections || run?.partial || run?.incomplete ? null : buildDashboardStory(visibleItems, tileResults, runVariables, dashboard.filters)),
+    [dashboard.filters, editable, summaryAdded, run?.incomplete, run?.partial, runVariables, storySections, tileResults, visibleItems],
   );
   useEffect(() => {
     if (editable) return;
@@ -1258,7 +1259,7 @@ export function DashboardRenderer({
               title="Remove this result-mark filter"
               style={{ ...generatedMetaPillStyle, cursor: 'pointer' }}
             >
-              <Filter size={10} /> {formatGenUiLabel(filter.field)}: {filter.exclude ? 'not ' : ''}{filter.values.map((value) => String(value)).join(', ')} <X size={10} />
+              <Filter size={10} /> {formatGenUiLabel(filter.field)}: {filter.exclude ? 'not ' : ''}{filter.values.map((value) => formatDashboardFilterValue(value) ?? '(blank)').join(', ')} <X size={10} />
             </button>
           ))}
           <button type="button" onClick={clearDatasetMarks} style={toolbarButtonStyle(false)}>Reset marks</button>
@@ -1509,7 +1510,7 @@ export function DashboardRenderer({
           {visibleItems.map((item) => renderGridTile(item))}
         </div>
       )}
-      {!editable && run ? <ReviewAppendix run={run} variables={runVariables} ranAtMs={Object.values(tileRanAt).reduce<number | undefined>((latest, at) => (latest === undefined || at > latest ? at : latest), undefined)} /> : null}
+      {!editable && run ? <ReviewAppendix run={run} variables={runVariables} filters={dashboard.filters} ranAtMs={Object.values(tileRanAt).reduce<number | undefined>((latest, at) => (latest === undefined || at > latest ? at : latest), undefined)} /> : null}
       </div>
 
       {lineageOpen && !onOpenLineageNode && (
@@ -2612,21 +2613,24 @@ export function appendixTrustWords(trustState: string | undefined): string {
 export function ReviewAppendix({
   run,
   variables,
+  filters,
   ranAtMs,
 }: {
   run: DashboardRunResponse;
   variables: Record<string, unknown>;
+  /** The page's declared filters, so each reads by its label. */
+  filters?: DashboardDocumentResponse['dashboard']['filters'];
   /** When this run settled, for "Last refreshed". */
   ranAtMs?: number;
 }): JSX.Element {
   const issues = run.tiles.filter((tile) => tile.status !== 'ok');
-  const activeFilters = Object.entries(variables).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  const activeFilters = describeDashboardFilterValues(variables, filters);
   return (
     <details style={reviewAppendixStyle} aria-label="Evidence and review appendix">
       <summary style={reviewAppendixSummaryStyle}>
         Evidence & review appendix
         <span style={{ opacity: 0.62, fontWeight: 600 }}>
-          {run.story.evidenceRefs.length} sources · {issues.length ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : 'all visible sources ran'}
+          {dataSourceCountWords(runDataSourceCount(run.tiles))} · {issues.length ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : 'all visible sources ran'}
         </span>
       </summary>
       <div style={{ display: 'grid', gap: 12, padding: '0 16px 16px' }}>
@@ -2636,7 +2640,7 @@ export function ReviewAppendix({
         <div style={reviewAppendixGridStyle}>
           {ranAtMs !== undefined ? <div><strong>Last refreshed</strong><br /><span>{new Date(ranAtMs).toLocaleString()}</span></div> : null}
           <div><strong>Trust</strong><br /><span>{appendixTrustWords(run.story.trustState)}</span></div>
-          <div><strong>Filters</strong><br /><span>{activeFilters.length ? activeFilters.map(([key, value]) => `${key}: ${String(value)}`).join(' · ') : 'No filters'}</span></div>
+          <div><strong>Filters</strong><br /><span>{activeFilters.length ? activeFilters.map((filter) => `${filter.label}: ${filter.value}`).join(' · ') : 'No filters'}</span></div>
         </div>
         {issues.length ? (
           <div>

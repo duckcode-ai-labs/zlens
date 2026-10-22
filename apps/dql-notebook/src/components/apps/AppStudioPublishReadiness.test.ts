@@ -18,6 +18,8 @@ import {
   publicationBlockerCount,
   publicationBlockingSources,
   publicationIssueSummaries,
+  publicationTilesNeedingReview,
+  tilePatchWithoutRelatedFields,
   tileUsesLegacySemanticApproval,
   unresolvedPublicationRequirements,
 } from './app-studio-publish-readiness';
@@ -520,5 +522,100 @@ describe('App Studio publication readiness (API-013, UI-022)', () => {
       'Source sales.revenue changed after selection.',
       'overview/orders no longer resolves to a certified block.',
     ])).toBe(7);
+  });
+});
+
+/** A certified Orders Dataset that reaches Location through a join drafted in setup (not certified). */
+function joinedDraftFixture(joinTrust: 'certified' | 'review_required' = 'review_required'): AppStudioBuildDraft {
+  const draft = draftFixture();
+  const sourceId = 'app:block:commerce:orders';
+  draft.requirements = [];
+  draft.coverage = [];
+  draft.reviewTasks = [];
+  draft.sources = [{
+    id: sourceId,
+    kind: 'block',
+    sourceRef: 'orders',
+    lifecycle: 'certified',
+    trustState: 'certified',
+    reviewStatus: 'not_required',
+    capabilities: {
+      dataset: {
+        kind: 'block',
+        trust: 'certified',
+        fields: [
+          { kind: 'physical', name: 'order_id', qualifiedId: 'o:order_id', type: 'string', role: 'key', status: 'approved' },
+          { kind: 'physical', name: 'location__location_name', qualifiedId: 'o:location__location_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'location', column: 'location_name' } },
+        ],
+        joins: [{
+          id: 'location', label: 'Location', table: 'locations', relation: 'main.locations',
+          keys: [{ from: 'location_id', to: 'location_id' }], cardinality: 'many_to_one', trust: joinTrust,
+          origin: 'drafted', relationshipId: 'proposal_setup:rel_2', uniqueness: 'current', sentence: 'each order has one location',
+        }],
+      } as never,
+    } as never,
+  }];
+  draft.pages = [{
+    version: 3,
+    id: 'overview',
+    metadata: { title: 'Overview' },
+    datasets: [{ id: 'orders_ds', sourceId, sourceRevision: 'sha256:orders', snapshotId: 's', contractFingerprint: 'c' }],
+    layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [
+      {
+        i: 'by_location', x: 0, y: 0, w: 6, h: 4, title: 'Revenue by location', sourceId, sourceRevision: 'sha256:orders',
+        query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'revenue' }], orderBy: [{ alias: 'revenue', direction: 'desc' }], respectsGlobalFilters: true },
+        viz: { type: 'bar', encoding: { columns: [{ dimension: 'location__location_name' }], rows: [{ measure: 'revenue' }] } as never },
+      },
+      { i: 'total', x: 6, y: 0, w: 3, h: 2, title: 'Revenue', sourceId, sourceRevision: 'sha256:orders', query: { dimensions: [], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true }, viz: { type: 'single_value' } },
+    ] },
+  }] as never;
+  draft.previewReceipts = [{ id: 'run-1', pageId: 'overview', revision: draft.revision, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'r', createdAt: draft.updatedAt }];
+  return draft;
+}
+
+describe('tiles that need review count in the publish check (design D2)', () => {
+  it('blocks a tile that reads a field through an uncertified join under "Only certified data"', () => {
+    const draft = joinedDraftFixture();
+    // The source itself is certified: the source check alone said "ready".
+    expect(publicationBlockingSources(draft)).toEqual([]);
+    const tiles = publicationTilesNeedingReview(draft);
+    expect(tiles.map((item) => [item.pageId, item.tileId, item.relatedFields])).toEqual([['overview', 'by_location', ['location__location_name']]]);
+    expect(localPublicationSteps(draft).map((step) => step.id)).toEqual(['sources']);
+    expect(publicationBlockerCount(draft)).toBe(1);
+  });
+
+  it('lets it publish after allowing data that needs review, or once the join is certified', () => {
+    const allowed = { ...joinedDraftFixture(), sourcePolicy: 'include_review_required' as const };
+    expect(publicationTilesNeedingReview(allowed)).toEqual([]);
+    expect(localPublicationSteps(allowed)).toEqual([]);
+    expect(publicationTilesNeedingReview(joinedDraftFixture('certified'))).toEqual([]);
+    // A settled run is the current evidence: the join was certified since the source was saved.
+    const draft = joinedDraftFixture();
+    const run = { tiles: [{ tileId: 'by_location', status: 'ok', dataset: { joins: [{ id: 'location', table: 'locations', trust: 'certified', sentence: '' }] } }] } as unknown as DashboardRunResponse;
+    expect(publicationTilesNeedingReview(draft, { overview: run })).toEqual([]);
+    const stillDrafted = { tiles: [{ tileId: 'by_location', status: 'ok', dataset: { joins: [{ id: 'location', table: 'locations', trust: 'review_required', sentence: '' }] } }] } as unknown as DashboardRunResponse;
+    expect(publicationTilesNeedingReview(draft, { overview: stillDrafted })).toHaveLength(1);
+  });
+
+  it('removes the related field from the tile: query, sort and chart shelves', () => {
+    const tile = joinedDraftFixture().pages[0]!.layout.items[0]!;
+    const patch = tilePatchWithoutRelatedFields(tile, ['location__location_name'])!;
+    expect(patch.query).toMatchObject({ dimensions: [], measures: [{ measure: 'revenue' }], orderBy: [{ alias: 'revenue', direction: 'desc' }] });
+    expect(JSON.stringify(patch.viz?.encoding)).not.toContain('location__location_name');
+    expect(patch.viz?.type).toBe('single_value');
+    const after = joinedDraftFixture();
+    after.pages[0]!.layout.items[0] = { ...tile, ...patch };
+    expect(publicationTilesNeedingReview(after)).toEqual([]);
+  });
+
+  it('reads the server tile check in plain words with the same fix', () => {
+    expect(publicationIssueSummaries([
+      'APP_BUILD_TILE_NEEDS_REVIEW: overview/by_location: Revenue by location uses the join to Location, which is not certified yet. This App uses only certified data: certify the join in Modeling, remove the related field, or allow data that needs review.',
+    ])).toEqual([expect.objectContaining({
+      id: 'tile-review:overview/by_location',
+      title: 'A tile needs review',
+      action: 'tile_review',
+      detail: expect.stringMatching(/^Revenue by location uses the join to Location/),
+    })]);
   });
 });

@@ -57,8 +57,19 @@ describe('reader trust (RFC 0008 step 6)', () => {
       undefined,
     );
     expect(rows.map((row) => row.label)).toEqual(['Source', 'Source file', 'Owner', 'Filters', 'Rows', 'Result fingerprint', 'Snapshot', 'Run']);
-    expect(rows.find((row) => row.label === 'Filters')?.value).toBe('region EU, US');
+    expect(rows.find((row) => row.label === 'Filters')?.value).toBe('Region EU, US');
     expect(rows.find((row) => row.label === 'Result fingerprint')).toMatchObject({ value: 'sha256:abcde…', code: true });
     expect(readerTileReceipt(item(), tile({}), null, undefined).find((row) => row.label === 'Filters')?.value).toBe('None applied');
+  });
+
+  it('writes applied date filters in words, never as raw operators or JSON', () => {
+    const receipt = (applied: unknown[]) => readerTileReceipt(item(), tile({ filters: { applied } } as never), null, undefined)
+      .find((row) => row.label === 'Filters')?.value;
+    expect(receipt([{ field: 'ordered_at', op: 'between', values: ['2025-01-01', '2025-06-30'] }])).toBe('Ordered At 1 Jan 2025 – 30 Jun 2025');
+    expect(receipt([
+      { field: 'ordered_at', op: 'gte', values: ['2025-01-01'] },
+      { field: 'ordered_at', op: 'lt', values: ['2025-07-01T00:00:00'] },
+    ])).toBe('Ordered At from 1 Jan 2025 · Ordered At before 1 Jul 2025');
+    expect(receipt([{ field: 'customer_name', op: 'in', values: ['Angela Moyer'] }])).toBe('Customer Name Angela Moyer');
   });
 });
