@@ -1102,6 +1102,8 @@ export const APP_STUDIO_V2_STYLES = `
 .field-search input { min-width:0; flex:1; border:0; outline:0; background:transparent; color:var(--text-primary); font-size:13px; }
 .field-search button { width:22px; height:22px; border:0; border-radius:4px; background:transparent; color:var(--text-tertiary); display:grid; place-items:center; padding:0; }
 .field-target { margin:0; padding:8px 10px; border-radius:8px; background:var(--accent-dim); color:var(--text-secondary); font-size:13px; line-height:1.45; }
+/* A fixed two-line box: the field list under it keeps its place when the text changes. */
+.field-target { box-sizing:border-box; flex:none; height:calc(2.9em + 16px); overflow:hidden; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
 .field-target strong { color:var(--text-primary); font-weight:600; }
 .field-groups { display:grid; gap:4px; }
 .field-groups section { display:grid; gap:1px; }
@@ -1337,6 +1339,8 @@ export const APP_STUDIO_V2_STYLES = `
 .shelf-pill > button { width:20px; height:20px; display:grid; place-items:center; padding:0; border:0; border-radius:999px; background:transparent; color:inherit; cursor:pointer; }
 .shelf-pill > button:hover, .shelf-pill > button[aria-expanded="true"] { background:color-mix(in srgb,currentColor 12%,transparent); }
 .shelf-pill > button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+/* "Top 10 ▾" on a measure pill: the tile's Top N or sort, one click from changing it. */
+.shelf-pill > button.shelf-pill-sort { width:auto; height:18px; padding:0 6px; margin-left:2px; border-radius:999px; background:var(--accent-dim); color:var(--accent); font-size:11px; font-weight:600; white-space:nowrap; }
 .shelf-empty { padding:3px 6px; color:var(--text-tertiary); font-size:12px; }
 .shelf-marks { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; padding:8px; border:1px solid var(--border-subtle); border-radius:8px; }
 .shelf.mark { grid-template-columns:minmax(0,1fr); gap:2px; }
@@ -1693,6 +1697,13 @@ export const APP_STUDIO_V2_STYLES = `
    pushes a KPI's value or a chart out of a tile at its default size. */
 .tile-filter-notice { flex:none; padding:3px 8px; margin-top:4px; font-size:12px; white-space:nowrap; overflow:hidden; }
 .tile-filter-notice > span { overflow:hidden; text-overflow:ellipsis; overflow-wrap:normal; }
+/* A new tile's one-click filter offer: the sentence, then Apply and Not now. */
+.tile-filter-notice.tile-filter-offer { background:var(--accent-dim); color:var(--text-primary); }
+.tile-filter-notice.tile-filter-offer svg { color:var(--accent); }
+.tile-filter-notice.tile-filter-offer > span { flex:1 1 auto; }
+.tile-filter-notice.tile-filter-offer button { flex:none; padding:1px 8px; border-radius:4px; border:1px solid var(--accent); background:var(--accent); color:var(--accent-fg); font-size:12px; cursor:pointer; }
+.tile-filter-notice.tile-filter-offer button.quiet { border-color:transparent; background:transparent; color:var(--text-secondary); }
+.tile-filter-notice.tile-filter-offer button:disabled { opacity:.6; cursor:default; }
 /* "Rolled up from a saved query" lives behind this icon in the header. */
 .tile-adapted-note { flex:none; display:inline-flex; align-items:center; color:var(--text-tertiary); cursor:help; border-radius:4px; }
 .tile-adapted-note:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
@@ -1704,6 +1715,11 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-component-card.selected .dataset-link-hint.hover-only { display:flex; }
 /* Long text stays inside its card when the canvas narrows. */
 .studio-component-card .live-component-preview, .studio-component-card .tile-text { overflow:hidden; overflow-wrap:anywhere; }
+/* A text tile's heading is its own line above the sentence, as readers see it. */
+.tile-text .tile-text-title, .tile-heading .tile-text-title { display:block; margin:0 0 4px; color:var(--text-primary); font-weight:600; }
+.tile-text .tile-text-title { font-size:16px; }
+.tile-text p, .tile-heading p { margin:0 0 6px; }
+.tile-text p:last-child, .tile-heading p:last-child { margin-bottom:0; }
 /* Charts follow the tile's width when panels open and close. */
 .live-component-preview, .live-component-body, .studio-tile-preview-interactions { min-width:0; }
 .live-component-body { overflow:hidden; }

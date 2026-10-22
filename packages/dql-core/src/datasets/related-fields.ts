@@ -113,6 +113,51 @@ function edgeRank(edge: RelatedRelationshipEdge): number {
   return (edge.certified ? 0 : 4) + (edge.origin === 'model' ? 0 : edge.origin === 'drafted' ? 1 : 2);
 }
 
+/** A staging or raw copy of a table ("stg_customers"), which a mart of the same rows supersedes. */
+const STAGING_TABLE = /^(stg|staging|raw|base|src|source)_/i;
+
+/**
+ * The relationships with lesser copies left out: one foreign key ("each
+ * order's customer_id") is followed to one table. A dbt project often has a
+ * `relationships` test from orders.customer_id to stg_customers while its
+ * semantic model joins the same column to customers; both are true, but two
+ * Customer joins make every Customer field ambiguous (a Customer Name filter
+ * could not reach Orders). For each foreign key, a relationship to another
+ * table is dropped when a better-ranked one exists (a certified model join
+ * over a dbt test), or an equally ranked one whose table is not a staging
+ * copy. Joins of one key to two equally good tables are both kept.
+ */
+export function withoutSupersededEdges(edges: RelatedRelationshipEdge[]): RelatedRelationshipEdge[] {
+  const foreignKey = (edge: RelatedRelationshipEdge): { key: string; target: string; targetTable: string } | undefined => {
+    const keys = (side: 'from' | 'to') => edge.keys.map((pair) => pair[side].toLowerCase()).sort().join(',');
+    if (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') {
+      return { key: `${bareRelation(edge.fromRelation)}|${keys('from')}`, target: bareRelation(edge.toRelation), targetTable: edge.toTable };
+    }
+    if (edge.cardinality === 'one_to_many') {
+      return { key: `${bareRelation(edge.toRelation)}|${keys('to')}`, target: bareRelation(edge.fromRelation), targetTable: edge.fromTable };
+    }
+    return undefined;
+  };
+  const groups = new Map<string, Array<{ edge: RelatedRelationshipEdge; target: string; staging: boolean }>>();
+  for (const edge of edges) {
+    const fk = foreignKey(edge);
+    if (!fk || edge.evidence?.failed) continue;
+    const staging = STAGING_TABLE.test(fk.targetTable) || STAGING_TABLE.test(fk.target.split('.').pop() ?? '');
+    groups.set(fk.key, [...(groups.get(fk.key) ?? []), { edge, target: fk.target, staging }]);
+  }
+  const dropped = new Set<RelatedRelationshipEdge>();
+  for (const group of groups.values()) {
+    for (const candidate of group) {
+      const better = group.some((other) => other.target !== candidate.target && (
+        edgeRank(other.edge) < edgeRank(candidate.edge)
+        || (edgeRank(other.edge) === edgeRank(candidate.edge) && candidate.staging && !other.staging)
+      ));
+      if (better) dropped.add(candidate.edge);
+    }
+  }
+  return dropped.size ? edges.filter((edge) => !dropped.has(edge)) : edges;
+}
+
 /** Many-to-one or one-to-one, safe by its evidence (or rechecked before use), and not a failed check. */
 function followable(step: DirectedEdge): boolean {
   if (step.cardinality !== 'many_to_one' && step.cardinality !== 'one_to_one') return false;
@@ -155,7 +200,7 @@ export function discoverDatasetJoins(input: {
   if (!base) return empty;
   const maxHops = Math.max(1, Math.min(2, input.maxHops ?? 2));
   const maxColumns = input.maxColumnsPerTable ?? DEFAULT_MAX_COLUMNS;
-  const steps = directed(input.edges);
+  const steps = directed(withoutSupersededEdges(input.edges));
   const ownColumns = new Set(descriptor.fields.filter((field) => field.kind === 'physical' && !field.related).map((field) => field.name.toLowerCase()));
   const takenNames = new Set(descriptor.fields.map((field) => field.name.toLowerCase()));
   const baseEntity = (descriptor.grain.entityIds[0] ?? '').split('::').pop()?.replace(/_/g, ' ').trim().toLowerCase() || 'row';
@@ -371,7 +416,11 @@ export function datasetFieldForFilter(descriptor: DatasetDescriptor, fieldId: st
   const own = approved.find((field) => !field.related && (normalize(field.name) === wanted || normalize(field.qualifiedId) === wanted));
   if (own) return { field: own };
   const exact = approved.find((field) => field.related && normalize(field.name) === wanted);
-  const related = exact ? [exact] : approved.filter((field) => field.related && normalize(field.related.column) === wantedColumn);
+  const byColumn = approved.filter((field) => field.related && normalize(field.related.column) === wantedColumn);
+  // The nearest table wins: Orders → Customer → Customer Name before Orders → Location → Region → … of the same name.
+  const parentOf = (field: DatasetPhysicalField) => descriptor.joins?.find((join) => join.id === field.related!.join)?.parent;
+  const direct = byColumn.filter((field) => !parentOf(field));
+  const related = exact ? [exact] : direct.length === 1 ? direct : byColumn;
   if (related.length !== 1) {
     // A related field's own name finds the Dataset's column of that name ("customer__customer_name" → customer_name).
     const ownByColumn = approved.filter((field) => !field.related && normalize(field.name) === wantedColumn);

@@ -110,7 +110,12 @@ test('a bar by customer is sorted by spend and shows the top 25; Top 10 comes fr
 
   // Sorted by spend, highest first: the default for a new bar chart.
   const pillMenu = page.getByRole('button', { name: 'Options for Lifetime Spend on Columns' });
+  // The pill says how the tile is sorted, one click from changing it.
+  await expect(page.getByRole('button', { name: 'Sorted ↓ by Lifetime Spend: change sort and top' })).toBeVisible();
   await pillMenu.click();
+  // Sort & top comes first in the pill's menu.
+  await expect(page.locator('.shelf-menu .shelf-menu-group').first()).toHaveAttribute('aria-label', 'Sort');
+  await expect(page.locator('.shelf-menu .shelf-menu-label').first()).toHaveText('Sort & top');
   await expect(page.getByRole('menuitemradio', { name: 'Sort descending by Lifetime Spend' })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByRole('menuitemradio', { name: 'Show top 10 by Lifetime Spend' })).toHaveAttribute('aria-checked', 'false');
   if (shotsDir) {
@@ -130,6 +135,12 @@ test('a bar by customer is sorted by spend and shows the top 25; Top 10 comes fr
   await page.getByRole('menuitemradio', { name: 'Show top 10 by Lifetime Spend' }).click();
   await expect(draft.getByText(/Live · 10 rows/)).toBeVisible({ timeout: 60_000 });
   await expect(note).toHaveCount(0);
+  // "Top 10 ▾" on the pill opens the same menu.
+  const topChip = page.getByRole('button', { name: 'Top 10 by Lifetime Spend: change sort and top' });
+  await expect(topChip).toHaveText('Top 10 ▾');
+  await topChip.click();
+  await expect(page.getByRole('menuitemradio', { name: 'Show top 10 by Lifetime Spend' })).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('Escape');
   // "Filters, sort and more" shows the same choice.
   await page.locator('.studio-right summary').filter({ hasText: 'Filters, sort and more' }).click();
   await expect(page.locator('.studio-right .dataset-sort-row input[type="number"]')).toHaveValue('10');

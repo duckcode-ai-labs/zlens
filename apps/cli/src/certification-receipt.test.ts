@@ -9,6 +9,8 @@ import {
   buildCertificationReceipt,
   certificationByline,
   gitUserName,
+  localPersonAliases,
+  personDisplayName,
   readCompanionCertification,
 } from './certification-receipt.js';
 
@@ -74,5 +76,28 @@ describe('certification receipts record the certifier (D5)', () => {
     execFileSync('git', ['init', '-q'], { cwd: root });
     execFileSync('git', ['config', 'user.name', 'Kranthi K'], { cwd: root });
     expect(gitUserName(root)).toBe('Kranthi K');
+  });
+});
+
+describe('one name for one person (phase-4 review: git name, noreply email and "Kranthi@local")', () => {
+  it('reads every local spelling of this person as their display name, and anyone else as recorded', () => {
+    const root = project();
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['config', 'user.email', '232610070+someone@users.noreply.github.com'], { cwd: root });
+    writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ identity: { owner: 'analytics@jaffle.shop' } }));
+    const previousUser = process.env.USER;
+    process.env.USER = 'Kranthi';
+    try {
+      const person = { name: 'DuckCode AI Labs', aliases: localPersonAliases(root) };
+      expect(personDisplayName('analytics@jaffle.shop', person)).toBe('DuckCode AI Labs');
+      expect(personDisplayName('232610070+someone@users.noreply.github.com', person)).toBe('DuckCode AI Labs');
+      expect(personDisplayName('Kranthi@local', person)).toBe('DuckCode AI Labs');
+      expect(personDisplayName('maria@acme.com', person)).toBe('maria@acme.com');
+      expect(personDisplayName('', person)).toBeUndefined();
+      // Without a display name, the identity stays as recorded.
+      expect(personDisplayName('Kranthi@local', { aliases: person.aliases })).toBe('Kranthi@local');
+    } finally {
+      if (previousUser === undefined) delete process.env.USER; else process.env.USER = previousUser;
+    }
   });
 });

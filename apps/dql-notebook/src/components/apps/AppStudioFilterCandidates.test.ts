@@ -9,6 +9,8 @@ import {
   filterPrimarySourceId,
   filterTileMappingsForField,
   initialFilterMappingKeys,
+  tileFilterOfferOperations,
+  tileFilterOffers,
   type StudioFilterTileMapping,
 } from './app-studio-filter-candidates';
 
@@ -350,5 +352,100 @@ describe('App Studio filter discovery (UI-022)', () => {
     expect([...initial]).toEqual(['overview:people']);
     expect(filterLinkSuggestions(mappings, primary, sources)).toEqual([{ sourceId: 'orders', datasetName: 'Orders', field: 'customer__customer_name', via: 'Customer', mappingKeys: ['overview:trend'], tileCount: 1 }]);
     expect(datasetFilterBindingsForSelection(mappings, new Set([...initial, 'overview:trend'])).ds_orders).toEqual({ field: 'customer__customer_name', tileIds: ['trend'] });
+  });
+});
+
+
+/** A shop page: Customers (its own Customer Name, main date First Ordered At) and Orders (main date Ordered At, Customer Name via its Customer join). */
+function joinedShop(extraItems: unknown[] = [], filters: unknown[] = []) {
+  const own = (name: string, type = 'string', primary = false) => ({ kind: 'physical', name, qualifiedId: name, type, role: type === 'timestamp' ? 'time' : 'dimension', status: 'approved', ...(type === 'timestamp' ? { time: { grains: ['month'], ...(primary ? { primary: true } : {}) } } : {}) });
+  const customers = {
+    id: 'customers', kind: 'governed_block', sourceRef: 'customers', qualifiedIdentity: 'shop::block::Customers::abc', sourceRevision: 'rev-customers', trustState: 'certified', reviewStatus: 'approved',
+    capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: {
+      id: 'dataset.customers', kind: 'block', label: 'Customers', operations: ['group'],
+      fields: [{ name: 'customer_count', kind: 'measure', status: 'approved', aggregation: 'count_distinct' }, own('customer_id'), own('customer_name'), own('last_ordered_at', 'timestamp'), own('first_ordered_at', 'timestamp', true)],
+    } },
+  };
+  const orders = {
+    id: 'orders', kind: 'governed_block', sourceRef: 'orders', qualifiedIdentity: 'shop::block::Orders::def', sourceRevision: 'rev-orders', trustState: 'certified', reviewStatus: 'approved',
+    capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: {
+      id: 'dataset.orders', kind: 'block', label: 'Orders', operations: ['group', 'trend'],
+      fields: [
+        { name: 'order_total', kind: 'measure', status: 'approved', aggregation: 'sum' },
+        own('customer_id'),
+        own('ordered_at', 'timestamp', true),
+        { ...own('customer__customer_name'), related: { join: 'customer', column: 'customer_name' } },
+        { ...own('customer__first_ordered_at', 'timestamp'), related: { join: 'customer', column: 'first_ordered_at' } },
+      ],
+      joins: [{ id: 'customer', label: 'Customer', table: 'customers', relation: '"main"."customers"', keys: [{ from: 'customer_id', to: 'customer_id' }], cardinality: 'many_to_one', trust: 'certified', origin: 'model', relationshipId: 'r', uniqueness: 'current', sentence: 'each order has one customer' }],
+    } },
+  };
+  const sources = [customers, orders] as unknown as AppStudioBuildDraft['sources'];
+  const pages = [{
+    version: 3,
+    id: 'overview',
+    metadata: { title: 'Overview' },
+    datasets: sources.map((source) => ({ id: `ds_${source.id}`, sourceId: source.id, sourceRevision: `rev-${source.id}`, snapshotId: 's', contractFingerprint: 'f' })),
+    filters,
+    layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [
+      { i: 'people', title: 'Customers', x: 6, y: 0, w: 6, h: 3, sourceId: 'customers', sourceRevision: 'rev-customers', query: { measures: [{ measure: 'customer_count' }], dimensions: [{ field: 'customer_name' }] }, viz: { type: 'bar' } },
+      { i: 'trend', title: 'Orders trend', x: 0, y: 0, w: 6, h: 3, sourceId: 'orders', sourceRevision: 'rev-orders', query: { measures: [{ measure: 'order_total' }], dimensions: [{ field: 'ordered_at', timeGrain: 'month' }] }, viz: { type: 'line' } },
+      ...extraItems,
+    ] },
+  }] as unknown as AppStudioBuildDraft['pages'];
+  return { sources, pages };
+}
+
+const customerNameFilter = {
+  id: 'customer_name', label: 'Customer Name', type: 'multiselect', bindsTo: 'customer_name', field: { name: 'customer_name' }, scope: { app: true },
+  datasetBindings: { ds_customers: { field: 'customer_name', tileIds: ['people'] } },
+};
+
+describe('new tiles and existing filters (phase-4 review, problem 7)', () => {
+  it('offers a page filter to a tile that can take it, through its join, and never links it on its own', () => {
+    const revenue = { i: 'revenue', title: 'Revenue', x: 0, y: 3, w: 3, h: 2, sourceId: 'orders', sourceRevision: 'rev-orders', query: { measures: [{ measure: 'order_total' }], dimensions: [] }, viz: { type: 'kpi' } };
+    const { sources, pages } = joinedShop([revenue], [customerNameFilter]);
+    const offers = tileFilterOffers({ pages, pageId: 'overview', tileId: 'revenue', catalog: [], boundSources: sources });
+    expect(offers.map((offer) => [offer.filterId, offer.filterLabel, offer.via, offer.mapping.datasetField])).toEqual([['customer_name', 'Customer Name', 'Customer', 'customer__customer_name']]);
+    // The tile already in the filter's binding is not offered again.
+    expect(tileFilterOffers({ pages, pageId: 'overview', tileId: 'people', catalog: [], boundSources: sources })).toEqual([]);
+
+    // Apply: the Orders binding is added for that tile only.
+    const operations = tileFilterOfferOperations(pages[0]!, offers[0]!);
+    expect(operations).toHaveLength(1);
+    const setFilter = operations[0] as { type: string; filter: { datasetBindings: Record<string, { field: string; tileIds?: string[] }> } };
+    expect(setFilter.type).toBe('set_filter');
+    expect(setFilter.filter.datasetBindings).toEqual({
+      ds_customers: { field: 'customer_name', tileIds: ['people'] },
+      ds_orders: { field: 'customer__customer_name', tileIds: ['revenue'] },
+    });
+    // After applying, the tile takes the filter and the offer is gone.
+    const applied = [{ ...pages[0]!, filters: [setFilter.filter] }] as unknown as AppStudioBuildDraft['pages'];
+    expect(tileFilterOffers({ pages: applied, pageId: 'overview', tileId: 'revenue', catalog: [], boundSources: sources })).toEqual([]);
+  });
+
+  it('joins an existing Dataset binding and clears an earlier "Does not apply"', () => {
+    const revenue = { i: 'revenue', title: 'Revenue', x: 0, y: 3, w: 3, h: 2, sourceId: 'orders', sourceRevision: 'rev-orders', query: { measures: [{ measure: 'order_total' }], dimensions: [] }, viz: { type: 'kpi' }, filterBindings: [{ filter: 'customer_name', capability: 'unsupported', unsupportedReason: 'x' }] };
+    const filter = { ...customerNameFilter, datasetBindings: { ...customerNameFilter.datasetBindings, ds_orders: { field: 'customer__customer_name', tileIds: ['trend'] } } };
+    const { sources, pages } = joinedShop([revenue], [filter]);
+    const [offer] = tileFilterOffers({ pages, pageId: 'overview', tileId: 'revenue', catalog: [], boundSources: sources });
+    const operations = tileFilterOfferOperations(pages[0]!, offer!);
+    expect((operations[0] as { filter: { datasetBindings: Record<string, unknown> } }).filter.datasetBindings.ds_orders).toEqual({ field: 'customer__customer_name', tileIds: ['revenue', 'trend'] });
+    expect(operations[1]).toEqual({ type: 'update_tile', pageId: 'overview', tileId: 'revenue', patch: { filterBindings: [] } });
+  });
+
+  it('ranks a tile\'s own main date first: Ordered At before a customer\'s First Ordered At that reaches more tiles through a join', () => {
+    const { sources, pages } = joinedShop([
+      { i: 'trend2', title: 'Orders by week', x: 0, y: 3, w: 6, h: 3, sourceId: 'orders', sourceRevision: 'rev-orders', query: { measures: [{ measure: 'order_total' }], dimensions: [{ field: 'ordered_at', timeGrain: 'week' }] }, viz: { type: 'line' } },
+    ]);
+    const dates = discoverAppFilterCandidates(pages, [], {}, sources).filter((candidate) => /ordered_at$/.test(candidate.id));
+    expect(dates.map((candidate) => [candidate.id, candidate.affectedTileCount, candidate.viaJoinCount ?? 0, candidate.mainDateTileCount ?? 0])).toEqual([
+      ['ordered_at', 2, 0, 2],
+      ['first_ordered_at', 3, 2, 1],
+      ['last_ordered_at', 1, 0, 0],
+    ]);
+    // A tile without the filter's field offers its own main date first.
+    const mapping = filterTileMappingsForField(pages, [], 'ordered_at', {}, sources, { dateFilter: true }).find((item) => item.tileId === 'people');
+    expect(mapping?.dateFieldOptions?.map((option) => option.field)).toEqual(['first_ordered_at', 'last_ordered_at']);
   });
 });

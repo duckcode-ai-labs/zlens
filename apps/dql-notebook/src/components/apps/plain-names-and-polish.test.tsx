@@ -177,6 +177,10 @@ describe('smaller editor fixes (B14)', () => {
   it('a KPI figure shrinks to fit its tile instead of reading "$2,880.…"', () => {
     expect(kpiValueFontSize('$2,880.40', 120)).toBeLessThan(24);
     expect(kpiValueFontSize('$2,880.40', 120)! * 0.62 * '$2,880.40'.length).toBeLessThanOrEqual(120 - 16);
+    // A pill above the KPI leaves a 42px body: the figure fits it, with no scrollbar.
+    expect(kpiValueFontSize('$671.4K', 400, 42)! * 1.1).toBeLessThanOrEqual(42 - 6);
+    expect(kpiValueFontSize('$671.4K', 400, 200)).toBe(40);
+    expect(kpiValueFontSize('$671.4K')).toBeUndefined();
     expect(kpiValueFontSize('$2.9K', 600)).toBe(40);
     expect(kpiValueFontSize('$2.9K')).toBeUndefined();
   });

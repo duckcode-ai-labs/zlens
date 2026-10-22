@@ -294,6 +294,12 @@ export function selectResultMeasures(input: ResultMeasureInput): ResultMeasureSe
       ordering = { ...ordering, kind: 'limited' };
     }
   }
+  if (!rankColumn && ordering?.kind === 'complete' && ordering.orderColumn) {
+    // Every row, sorted on a measure: that measure is the one shown first, so a
+    // caption names it (and its leader), never another numeric column.
+    const orderMeasure = measures.find((column) => normalize(column) === normalize(ordering!.orderColumn!));
+    if (orderMeasure) primary = orderMeasure;
+  }
   const ranked = ordering?.kind === 'top_n';
   return {
     measures,
@@ -381,7 +387,10 @@ export function detectResultOrdering(source: ResultSourceHint): ResultOrdering |
   }
   if (sql) {
     if (/\blimit\b/i.test(sql) && hasOuterLimit(sql)) return { kind: 'limited', reason: 'limit' };
-    return { kind: 'complete', reason: 'sql' };
+    // Every row, sorted: the column it is sorted by is what a caption talks about
+    // (a table "ORDER BY lifetime_spend DESC" is led by the biggest spender).
+    const sorted = outerOrderItem(sql);
+    return { kind: 'complete', reason: 'sql', ...(sorted?.column ? { orderColumn: sorted.column } : {}), ...(sorted?.direction ? { direction: sorted.direction } : {}) };
   }
   return undefined;
 }
@@ -414,6 +423,17 @@ function hasOuterLimit(sql: string): boolean {
   return new RegExp(String.raw`\blimit\s+${LIMIT_VALUE}`, 'i').test(outer)
     || /\bfetch\s+(?:first|next)\b/i.test(outer)
     || /^\s*select\s+(?:distinct\s+)?top\s+/i.test(outer);
+}
+
+/** The outer query's first ORDER BY item, when it is a bare column, with its direction. */
+function outerOrderItem(sql: string): { column?: string; direction?: 'asc' | 'desc' } | undefined {
+  const outer = outerLevel(sql.replace(/\$\{[^}]*\}/g, (match) => match.replace(/[()]/g, ' ')));
+  const orderAt = outer.search(/\border\s+by\b/i);
+  if (orderAt < 0) return undefined;
+  const firstItem = sql.slice(orderAt).replace(/^order\s+by\s+/i, '').split(/,|\blimit\b|\bfetch\b|\boffset\b|;/i)[0]!.trim();
+  const itemMatch = firstItem.match(/^("[^"]+"|`[^`]+`|[A-Za-z_][\w$]*(?:\.[A-Za-z_][\w$]*)*)\s*(asc|desc)?\s*(?:nulls\s+(?:first|last))?$/i);
+  if (!itemMatch) return undefined;
+  return { column: itemMatch[1]!.replace(/^["`]|["`]$/g, '').split('.').pop(), direction: itemMatch[2]?.toLowerCase() === 'desc' ? 'desc' : 'asc' };
 }
 
 function outerOrderLimit(sql: string): ResultOrdering | undefined {

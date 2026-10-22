@@ -1,5 +1,6 @@
 import { tileQueryOutputAliases, type TileQuery } from '@zlens/core/apps/tile-query';
 import type { QueryResult } from '../../../store/types';
+import type { ShelfFieldRef } from '@zlens/core/apps/viz-encoding';
 
 /**
  * Sort and Top N live in one place: the tile query's `orderBy` and `limit`.
@@ -43,6 +44,22 @@ export function topNFor(query: TileQuery, alias: string): number | null {
   const primary = query.orderBy?.[0];
   if (typeof query.limit !== 'number' || !primary || primary.direction !== 'desc') return null;
   return primary.alias.toLowerCase() === alias.toLowerCase() ? query.limit : null;
+}
+
+/**
+ * What a measure pill says about its tile's sort: "Top 10" when the tile shows
+ * the top N by this measure, "Sorted ↓"/"Sorted ↑" when it is only sorted by
+ * it, nothing otherwise.
+ */
+export function measureSortChip(query: TileQuery, ref: ShelfFieldRef): { label: string } | null {
+  if (!('measure' in ref)) return null;
+  const name = ref.measure;
+  const alias = query.measures.find((entry) => entry.measure.toLowerCase() === name.toLowerCase())?.alias ?? name;
+  const top = canShowTopN(query) ? topNFor(query, alias) : null;
+  if (top !== null) return { label: `Top ${top}` };
+  const primary = query.orderBy?.[0];
+  if (primary && primary.alias.toLowerCase() === alias.toLowerCase()) return { label: primary.direction === 'desc' ? 'Sorted ↓' : 'Sorted ↑' };
+  return null;
 }
 
 /** Top N needs something to rank: a category (not a date) and no period comparison or row detail. */

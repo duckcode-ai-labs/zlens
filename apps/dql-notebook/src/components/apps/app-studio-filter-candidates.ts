@@ -1,6 +1,6 @@
-import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../api/client';
+import type { AppBlockRecommendation, AppStudioBuildDraft, AppStudioDraftOperation } from '../../api/client';
 import { DASHBOARD_FILTER_DOES_NOT_APPLY_REASON } from '@zlens/core/apps/filter-reach';
-import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
+import type { DatasetJoin, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
 import { datasetFieldForFilter, relatedFieldParts } from '@zlens/core/datasets/related-fields';
 import { missingFieldReason, sourceDisplayName } from './source-names';
 
@@ -85,6 +85,10 @@ export type StudioFilterCandidate = {
   sourceNames: string[];
   affectedTileCount: number;
   pageCount: number;
+  /** How many of those tiles reach the field only through a join ("2 via a join"). */
+  viaJoinCount?: number;
+  /** How many of those tiles use it as their Dataset's own main date (Orders → Ordered At). */
+  mainDateTileCount?: number;
 };
 
 export type StudioRuntimeFilterFields = Record<string, Record<string, Array<{
@@ -286,17 +290,31 @@ export function discoverAppFilterCandidates(
     if (parts && plainIds.has(parts.column.toLowerCase())) fieldIds.delete(id);
   }
   return [...fieldIds]
-    .map((id) => {
+    .map((id): StudioFilterCandidate => {
       const mappings = filterTileMappingsForField(pages, catalog, id, runtimeFields, boundSources).filter((mapping) => mapping.supported);
+      const viaJoinCount = mappings.filter((mapping) => mapping.via).length;
+      const mainDateTileCount = mappings.filter((mapping) => !mapping.via && mappingIsMainDate(mapping, boundSources)).length;
       return {
         id,
         sourceNames: [...new Set(mappings.map((mapping) => mapping.sourceName))].sort(),
         affectedTileCount: mappings.length,
         pageCount: new Set(mappings.map((mapping) => mapping.pageId)).size,
+        ...(viaJoinCount ? { viaJoinCount } : {}),
+        ...(mainDateTileCount ? { mainDateTileCount } : {}),
       };
     })
     .filter((candidate) => candidate.affectedTileCount > 0)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    // A tile's own main date comes first (Orders → Ordered At), never a related
+    // table's date that reaches more tiles through a join (a customer's first order).
+    .sort((left, right) => {
+      const main = (right.mainDateTileCount ?? 0) - (left.mainDateTileCount ?? 0);
+      if (main) return main;
+      if (left.mainDateTileCount && right.mainDateTileCount) {
+        const via = (left.viaJoinCount ?? 0) - (right.viaJoinCount ?? 0);
+        if (via) return via;
+      }
+      return left.id.localeCompare(right.id);
+    });
 }
 
 export function discoverPageFilterCandidates(
@@ -491,6 +509,14 @@ function overriddenDatasetMappingForTile(
     : null;
 }
 
+/** Whether a mapping's field is its Dataset's own main date field (the time field marked primary). */
+function mappingIsMainDate(mapping: StudioFilterTileMapping, boundSources: AppStudioBuildDraft['sources']): boolean {
+  if (!mapping.datasetField || !mapping.sourceId) return false;
+  const descriptor = boundSources.find((source) => source.id === mapping.sourceId)?.capabilities?.dataset;
+  const field = descriptor?.fields.find((candidate) => candidate.kind === 'physical' && !candidate.related && candidate.name === mapping.datasetField);
+  return Boolean(field && field.kind === 'physical' && field.time?.primary);
+}
+
 /** A tile's approved date and time fields, for mapping a date filter by hand. */
 function datasetDateFieldsForTile(
   page: StudioPage,
@@ -499,11 +525,15 @@ function datasetDateFieldsForTile(
 ): Array<{ field: string; type: string }> {
   const dataset = tileDataset(page, tile, boundSources);
   if (!dataset) return [];
-  return dataset.descriptor.fields.flatMap((field) => field.kind === 'physical'
-    && field.status === 'approved'
-    && (field.type === 'date' || field.type === 'timestamp' || field.role === 'time')
-    ? [{ field: field.name, type: field.type }]
-    : []);
+  // The Dataset's own main date first, then its other own dates, then dates of related tables.
+  const rank = (field: DatasetPhysicalField) => (field.time?.primary ? 0 : 1) + (field.related ? 2 : 0);
+  return dataset.descriptor.fields
+    .filter((field): field is DatasetPhysicalField => field.kind === 'physical'
+      && field.status === 'approved'
+      && (field.type === 'date' || field.type === 'timestamp' || field.role === 'time'))
+    .map((field, index) => ({ field, index }))
+    .sort((left, right) => rank(left.field) - rank(right.field) || left.index - right.index)
+    .map(({ field }) => ({ field: field.name, type: field.type }));
 }
 
 function normalizeFieldId(value: string): string {
@@ -524,4 +554,122 @@ function sourceNameForTile(
   if (tile.semantic) return sourceDisplayName(tile.semantic.id);
   if (tile.draftAnalysis) return sourceDisplayName(tile.draftAnalysis.ref);
   return tile.title || tile.i;
+}
+
+/**
+ * A page filter a tile just added to the page can take: its field (or a
+ * checked join to it) is on the tile's data, but nothing linked it. The tile
+ * stays "Not filtered by …" until the author says Apply; this is only the
+ * one-click offer ("Customer Name filter can apply to this tile — Apply").
+ */
+export type StudioTileFilterOffer = {
+  filterId: string;
+  filterLabel: string;
+  pageId: string;
+  tileId: string;
+  /** The join the filter reaches the tile through ("Customer"), when it is not the tile's own field. */
+  via?: string;
+  mapping: StudioFilterTileMapping;
+};
+
+/** The page filters a tile can take but is not linked to. */
+export function tileFilterOffers(input: {
+  pages: StudioPage[];
+  pageId: string;
+  tileId: string;
+  catalog: AppBlockRecommendation[];
+  runtimeFields?: StudioRuntimeFilterFields;
+  boundSources?: AppStudioBuildDraft['sources'];
+}): StudioTileFilterOffer[] {
+  const page = input.pages.find((candidate) => candidate.id === input.pageId);
+  const tile = page?.layout.items.find((candidate) => candidate.i === input.tileId);
+  if (!page || !tile) return [];
+  const offers: StudioTileFilterOffer[] = [];
+  for (const filter of page.filters ?? []) {
+    if (studioTileTakesFilter(page, tile, filter.id)) continue;
+    const fieldId = filter.field?.name ?? filter.bindsTo ?? filter.id;
+    const dateFilter = isStudioDateFilterType(filter.type);
+    const fieldOverrides = dateFilter ? studioFilterFieldOverrides(input.pages, filter.id, fieldId) : {};
+    const mapping = filterTileMappingsForField([page], input.catalog, fieldId, input.runtimeFields, input.boundSources, {
+      dateFilter,
+      ...(Object.keys(fieldOverrides).length ? { fieldOverrides } : {}),
+    }).find((candidate) => candidate.tileId === tile.i);
+    if (!mapping?.supported) continue;
+    offers.push({
+      filterId: filter.id,
+      filterLabel: filter.label?.trim() || filter.id.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+      pageId: page.id,
+      tileId: tile.i,
+      ...(mapping.via ? { via: mapping.via } : {}),
+      mapping,
+    });
+  }
+  return offers;
+}
+
+/** Whether a tile already takes a page filter (a Dataset binding that includes it, or a field link). */
+function studioTileTakesFilter(page: StudioPage, tile: StudioTile, filterId: string): boolean {
+  const filter = page.filters?.find((candidate) => candidate.id === filterId);
+  if (!filter) return false;
+  if (filter.scope?.tileIds && !filter.scope.tileIds.includes(tile.i)) return false;
+  if ((tile.query || tile.driver) && tile.sourceId && tile.sourceRevision) {
+    return Boolean(page.datasets?.some((dataset) => {
+      if (dataset.sourceId !== tile.sourceId || dataset.sourceRevision !== tile.sourceRevision) return false;
+      const binding = filter.datasetBindings?.[dataset.id];
+      return Boolean(binding && (!binding.tileIds || binding.tileIds.includes(tile.i)));
+    }));
+  }
+  if (tile.parameterBindings?.some((binding) => binding.filter === filterId)) return true;
+  return tile.filterBindings?.some((binding) => binding.filter === filterId && binding.capability !== 'unsupported') ?? false;
+}
+
+/**
+ * The edits that link one tile to a page filter after the author accepted
+ * the offer: a Dataset tile joins the filter's binding for its Dataset (the
+ * field the binding already uses, else the tile's own or related field); any
+ * other tile gets a field link. An earlier "Does not apply" on the tile is
+ * replaced.
+ */
+export function tileFilterOfferOperations(page: StudioPage, offer: StudioTileFilterOffer): AppStudioDraftOperation[] {
+  const filter = page.filters?.find((candidate) => candidate.id === offer.filterId);
+  const tile = page.layout.items.find((candidate) => candidate.i === offer.tileId);
+  if (!filter || !tile || !offer.mapping.supported) return [];
+  const operations: AppStudioDraftOperation[] = [];
+  const scope = filter.scope?.tileIds && !filter.scope.tileIds.includes(tile.i)
+    ? { ...filter.scope, tileIds: [...filter.scope.tileIds, tile.i].sort() }
+    : filter.scope;
+  if (offer.mapping.datasetId && offer.mapping.datasetField) {
+    const current = filter.datasetBindings?.[offer.mapping.datasetId];
+    const binding = current
+      ? { ...current, ...(current.tileIds ? { tileIds: [...new Set([...current.tileIds, tile.i])].sort() } : {}) }
+      : { field: offer.mapping.datasetField, tileIds: [tile.i] };
+    operations.push({
+      type: 'set_filter',
+      pageId: page.id,
+      filter: { ...filter, ...(scope ? { scope } : {}), datasetBindings: { ...(filter.datasetBindings ?? {}), [offer.mapping.datasetId]: binding } },
+    });
+    const rest = (tile.filterBindings ?? []).filter((item) => item.filter !== filter.id);
+    if (rest.length !== (tile.filterBindings ?? []).length) {
+      operations.push({ type: 'update_tile', pageId: page.id, tileId: tile.i, patch: { filterBindings: rest } });
+    }
+    return operations;
+  }
+  if (scope !== filter.scope) operations.push({ type: 'set_filter', pageId: page.id, filter: { ...filter, scope } });
+  operations.push({
+    type: 'update_tile',
+    pageId: page.id,
+    tileId: tile.i,
+    patch: {
+      filterBindings: studioTileFilterBindings({
+        tile,
+        filterId: filter.id,
+        fieldId: filter.field?.name ?? filter.bindsTo ?? filter.id,
+        required: filter.required ?? false,
+        filterOnPage: true,
+        applies: true,
+        mapping: offer.mapping,
+      }),
+    },
+  });
+  return operations;
 }

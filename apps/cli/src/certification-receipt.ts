@@ -337,6 +337,54 @@ export function gitUserName(projectRoot: string): string | undefined {
   return run(['config', 'user.name']) ?? run(['config', '--global', 'user.name']);
 }
 
+/**
+ * The identities that mean "the person at this machine" in a local project:
+ * the owner the project records (dql.config identity.owner, or the local
+ * owner cache), git user.email, `$USER@local`, and the generic local owners.
+ * Lower-cased; empty under a host, where each record names its own person.
+ */
+export function localPersonAliases(projectRoot: string, recordedOwner?: string): Set<string> {
+  const run = (args: string[]): string | undefined => {
+    try {
+      const out = execFileSync('git', args, { cwd: projectRoot, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+      return out || undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const read = (path: string[]): string | undefined => {
+    try {
+      const raw = readFileSync(join(projectRoot, ...path), 'utf-8');
+      return path[path.length - 1] === 'dql.config.json'
+        ? (() => { const owner = (JSON.parse(raw) as { identity?: { owner?: unknown } }).identity?.owner; return typeof owner === 'string' ? owner : undefined; })()
+        : raw.trim();
+    } catch {
+      return undefined;
+    }
+  };
+  const user = process.env.USER?.trim() || process.env.USERNAME?.trim();
+  return new Set([
+    recordedOwner,
+    read(['dql.config.json']),
+    read(['.dql', 'local', 'owner']),
+    run(['config', 'user.email']) ?? run(['config', '--global', 'user.email']),
+    user ? `${user}@local` : undefined,
+    'owner@local', 'guest@local', 'analyst@local', 'local',
+  ].filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim().toLowerCase()));
+}
+
+/**
+ * One name for one person on every App surface (the same rule as "Certified
+ * by", D5): an identity that is this machine's person reads as their display
+ * name (git user.name), never as three spellings (git name, a noreply email,
+ * "Kranthi@local"). Someone else's identity is shown as recorded.
+ */
+export function personDisplayName(identity: string | null | undefined, person: { name?: string; aliases: ReadonlySet<string> }): string | undefined {
+  const value = identity?.trim();
+  if (!value) return undefined;
+  return person.name && person.aliases.has(value.toLowerCase()) ? person.name : value;
+}
+
 /** Who certified a block and when, as every App surface shows it (D5). */
 export interface CertificationByline {
   /** The recorded identity ("local" when none was known). */

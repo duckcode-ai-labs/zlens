@@ -384,7 +384,7 @@ function AddDataRow({
   const certified = !needsReview(item);
   const origin = sourceOriginLabel(item);
   const [menuOpen, setMenuOpen] = useState(false);
-  const meta = [origin, certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.owner ?? ''].filter(Boolean).join(' · ');
+  const meta = [origin, certified ? certifiedByLabel(item.certification) : trustLabel('review'), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', item.ownerName ?? item.owner ?? ''].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
       <span className={`add-data-mark ${certified ? 'certified' : 'review'}`}>{certified ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>

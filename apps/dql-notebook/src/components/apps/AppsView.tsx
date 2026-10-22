@@ -1230,6 +1230,8 @@ function AppLibrarySurface({
       draft.authoringMode,
     ].join(' ').toLowerCase().includes(needle))
     : [];
+  // A published App with unpublished changes is one card, not two of the same name.
+  const { standaloneDrafts, draftByAppId } = mergeDraftsIntoAppCards(visibleDrafts, apps);
   const hasResults = visibleDrafts.length > 0 || apps.length > 0;
   // Under a host (RFC 0010 HH-9), people who may not author Apps read them.
   const hostUi = useHostUi();
@@ -1303,7 +1305,7 @@ function AppLibrarySurface({
         <EmptyPanel title="No Apps match this view." detail={words.emptyDetail} />
       ) : (
         <div className="dql-apps-grid" aria-label="App library">
-          {visibleDrafts.map((draft) => (
+          {standaloneDrafts.map((draft) => (
             <AppDraftCard key={draft.id} draft={draft} onOpen={() => onContinueDraft(draft)} />
           ))}
           {apps.map((app) => (
@@ -1317,6 +1319,7 @@ function AppLibrarySurface({
               onDelete={canAuthor ? () => onDeleteApp(app) : undefined}
               reader={reader}
               runTrust={appRunTrustAcrossPages(runTrustByApp?.[app.id])}
+              {...(!reader && draftByAppId.get(app.id) ? { pendingDraft: draftByAppId.get(app.id)!, onContinueDraft: () => onContinueDraft(draftByAppId.get(app.id)!) } : {})}
             />
           ))}
         </div>
@@ -1338,6 +1341,26 @@ export function appCardSignals(input: { draftCount: number; researchCount: numbe
   if (input.researchCount > 0) out.push(`${input.researchCount} ${input.researchCount === 1 ? 'analysis' : 'analyses'}`);
   if (input.aiPinCount > 0) out.push(`${input.aiPinCount} saved insight${input.aiPinCount === 1 ? '' : 's'}`);
   return out;
+}
+
+/**
+ * Drafts of an App that is already in the library ride on that App's card
+ * ("Unpublished changes · Continue editing"); a draft of a new App keeps its
+ * own card. Newest draft wins when one App has several.
+ */
+export function mergeDraftsIntoAppCards<D extends Pick<AppStudioBuildDraft, 'id' | 'appId' | 'updatedAt'>>(
+  drafts: D[],
+  apps: Array<Pick<AppSummary, 'id'>>,
+): { standaloneDrafts: D[]; draftByAppId: Map<string, D> } {
+  const listed = new Set(apps.map((app) => app.id));
+  const draftByAppId = new Map<string, D>();
+  const standaloneDrafts: D[] = [];
+  for (const draft of drafts) {
+    if (!draft.appId || !listed.has(draft.appId)) { standaloneDrafts.push(draft); continue; }
+    const current = draftByAppId.get(draft.appId);
+    if (!current || Date.parse(draft.updatedAt ?? '') > Date.parse(current.updatedAt ?? '')) draftByAppId.set(draft.appId, draft);
+  }
+  return { standaloneDrafts, draftByAppId };
 }
 
 function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: () => void }) {
@@ -1378,8 +1401,13 @@ function AppCard({
   onDelete,
   reader = false,
   runTrust,
+  pendingDraft,
+  onContinueDraft,
 }: {
   app: AppSummary;
+  /** This App's unpublished draft, shown on this card instead of a second card of the same name. */
+  pendingDraft?: AppStudioBuildDraft;
+  onContinueDraft?: () => void;
   favorite: boolean;
   onToggleFavorite: () => void;
   onOpen: () => void;
@@ -1440,7 +1468,8 @@ function AppCard({
           <MiniMetric label="Pages" value={String(app.dashboards.length)} />
           <MiniMetric label="Updated" value={appCardUpdated(app.updatedAt)} />
         </div>
-        {signals.length ? <div className="dql-app-card-signals">
+        {signals.length || pendingDraft ? <div className="dql-app-card-signals">
+          {pendingDraft ? <span className="dql-app-card-pending" title={`Draft updated ${appCardUpdated(pendingDraft.updatedAt)}. Readers still see the published App.`}><ShieldCheck size={13} /> {UNPUBLISHED_CHANGES}</span> : null}
           {signals.map((signal) => <span key={signal}>{signal.includes('analys') ? <Search size={13} /> : <Sparkles size={13} />} {signal}</span>)}
         </div> : null}
       </div>
@@ -1449,7 +1478,11 @@ function AppCard({
         <button type="button" className="dql-app-card-act" onClick={onOpen} title="View app" aria-label={`View ${app.name}`}>
           <Eye size={12} /> View
         </button>
-        {onEdit ? (
+        {pendingDraft && onContinueDraft ? (
+          <button type="button" className="dql-app-card-act primary" onClick={onContinueDraft} title="Open the unpublished draft" aria-label={`Continue editing ${app.name}`}>
+            <Pencil size={12} /> Continue editing
+          </button>
+        ) : onEdit ? (
           <button type="button" className="dql-app-card-act" onClick={onEdit} title="Edit app" aria-label={`Edit ${app.name}`}>
             <Pencil size={12} /> Edit
           </button>
@@ -3080,7 +3113,7 @@ function libraryCounts(apps: AppSummary[], drafts: AppStudioBuildDraft[], favori
 }
 
 function primaryOwner(app: AppSummary): string {
-  return app.owners?.[0] ?? 'owner@local';
+  return app.ownerName ?? app.owners?.[0] ?? 'owner@local';
 }
 
 function shortHash(value: string): string {

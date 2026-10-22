@@ -5,6 +5,7 @@ import {
   collectDbtRelationshipTests,
   discoverDatasetJoins,
   withDatasetJoins,
+  withoutSupersededEdges,
   type DatasetDescriptor,
   type DatasetJoin,
   type DQLManifest,
@@ -245,6 +246,22 @@ export function relationSql(relation: string, quote: (identifier: string) => str
 }
 
 /**
+ * A table reference as the relationships name it. The warehouse listing says
+ * "dev.orders" where a dbt manifest says "jaffle_shop"."dev"."orders": a
+ * reference with fewer parts matches the one known relation it ends with,
+ * never two.
+ */
+export function relationResolver(context: Pick<RelatedTablesContext, 'edges'>): (reference: string) => string | undefined {
+  const relations = new Set(context.edges.flatMap((edge) => [bareRelation(edge.fromRelation), bareRelation(edge.toRelation)]));
+  return (reference: string) => {
+    const bare = bareRelation(reference);
+    if (relations.has(bare)) return bare;
+    const matches = [...relations].filter((relation) => relation.endsWith(`.${bare}`));
+    return matches.length === 1 ? matches[0] : undefined;
+  };
+}
+
+/**
  * The descriptor with the related fields of the tables its base table
  * reaches through checked many-to-one joins; the same descriptor when it
  * reads no single table or the model knows no such join.
@@ -257,14 +274,7 @@ export function decorateDatasetDescriptor(input: {
 }): DatasetDescriptor {
   const { descriptor, context } = input;
   if (descriptor.kind !== 'block' || descriptor.result || descriptor.grain.aggregate || !context.edges.length) return descriptor;
-  const relations = new Set(context.edges.flatMap((edge) => [bareRelation(edge.fromRelation), bareRelation(edge.toRelation)]));
-  const resolve = (reference: string): string | undefined => {
-    const bare = bareRelation(reference);
-    if (relations.has(bare)) return bare;
-    // A schema-less name matches one known relation of that name, never two.
-    const matches = [...relations].filter((relation) => relation.endsWith(`.${bare}`));
-    return matches.length === 1 ? matches[0] : undefined;
-  };
+  const resolve = relationResolver(context);
   const reference = datasetBaseRelation(input.block, (candidate) => Boolean(resolve(candidate)));
   const base = reference ? resolve(reference) : undefined;
   if (!base) return descriptor;
@@ -323,9 +333,11 @@ export function readDbtArtifacts(provenance: DQLManifest['dbtProvenance']): { ma
  * customer), by name, for the Add data list ("joins customers, locations").
  */
 export function joinableTables(context: RelatedTablesContext, relation: string): string[] {
-  const base = bareRelation(relation);
+  // "dev.orders" from the warehouse listing is "jaffle_shop"."dev"."orders" in a dbt project's relationships.
+  const base = relationResolver(context)(relation) ?? bareRelation(relation);
   const names = new Set<string>();
-  for (const edge of context.edges) {
+  // One table per foreign key, as the field list follows it (orders.customer_id → customers, not also stg_customers).
+  for (const edge of withoutSupersededEdges(context.edges)) {
     if (edge.evidence?.failed) continue;
     const forward = bareRelation(edge.fromRelation) === base && (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') && edge.evidence?.toUnique !== false;
     const backward = bareRelation(edge.toRelation) === base && (edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one') && edge.evidence?.fromUnique !== false;

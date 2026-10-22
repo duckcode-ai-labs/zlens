@@ -60,6 +60,53 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Filters follow dbt relationships.** In a dbt project, a Customer Name
+  filter reaches the Orders tiles "via Customer", as in a database-only
+  project. The jaffle-shop sample has a dbt `relationships` test from
+  `orders.customer_id` to `stg_customers`, while its semantic model joins
+  the same column to `customers`; Orders followed both, so its field
+  list showed "Customer · 8 fields" and "Customer · 1 field", and Customer
+  Name was ambiguous ("Orders has no Customer Name field"). Each foreign key
+  is now followed to one table: a certified or model join wins over a dbt
+  test, and a mart over its staging copy. **Add data** also lists a dbt
+  project's joins ("joins customers, locations"), which it missed when the
+  warehouse named the table without its database.
+- **New tiles can join existing filters.** A tile added after a filter says
+  **Customer Name filter can apply to this tile** with **Apply** and **Not
+  now** when it has the field or reaches it through a join. Nothing links on
+  its own.
+- **Dates rank by the tile's own main date.** In the filter field list a
+  Dataset's main date comes first (Orders → **Ordered At**), and counts say
+  how many tiles a field reaches only through a join, so a customer's
+  **First Ordered At** no longer looks like the best date for Orders. A tile
+  without the filter's date offers its own main date first.
+- **Steadier editor.** The Data pane's field list no longer moves down a line
+  when a new tile starts (a click meant for Customer Name landed on Customer
+  Id). A measure pill shows **Top 10 ▾** or **Sorted ↓**, and **Sort & top**
+  is first in its menu. A KPI's figure fits its tile when a **Not filtered
+  by** pill sits above it (no scrollbar), and bar-chart value ticks never run
+  together (`$500`, `$1K`, `$1.5K`, not `$500.0$1.0K`).
+- Readers no longer see a tile's source id or **text** under a text tile's
+  title. A text tile's heading is its own line in the editor ("Sales Manager
+  Overview" above the sentence). Starting layouts say what they make (an
+  intro to edit; you add the tiles), and the manual button reads **Open
+  Studio with an intro** unless the layout is Blank. The intro tile is named
+  **Intro**.
+- **Plainer copy and state.** A value list counts the field's values ("Type
+  to search all 930 values", not the first run's 500 rows), and a search
+  under it says "4 matches", not "200+ available values". The filter field
+  search starts empty for each new filter. Publish says the App is saved as
+  files in your project folder, and mentions git only in a git repository. A
+  published App with an unpublished draft is one card (**Unpublished
+  changes**, **View**, **Continue editing**), not two of the same name. Apps
+  cards and the Data list show this machine's person by one name (the
+  "Certified by" name: git `user.name`), not a noreply email or
+  `name@local`.
+- A table's caption talks about the measure it is sorted by: the sample's
+  "Customer lifetime profiles" (sorted by spend) said "Melissa Lopez leads
+  Count Lifetime Orders at 231", naming someone not in view; it now names the
+  top spender.
+
 - **Fields from related tables (design D2).** A table Dataset now shows the
   fields of the tables its rows point to through a checked many-to-one join:
   under **Orders**, **Orders → Customer → Customer Name** and **Orders →
