@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ContextAuthoringProposalV1, DbtOnboardingStatusResponse, WarehouseDiscoveryReport } from '../../api/client';
 import {
+  MODEL_SOURCE_OPTIONS,
+  ROWS_PRIVACY,
+  ROWS_PRIVACY_SHORT,
+  rowsPrivacy,
+  VALUE_PROFILES_ON,
   setupFinishTarget,
   DATABASE_ONLY_DBT_PROJECT,
   databaseOnlyUnavailable,
@@ -137,11 +142,39 @@ describe('Draft my models', () => {
     expect(outcome).toEqual({
       ok: true,
       proposalId: 'proposal-1',
-      message: 'Drafted 2 models and 1 join from 6 tables, each join checked on the data. Nothing is saved until you review and certify them in Modeling.',
+      message: 'Drafted 2 models and 1 join from 6 tables, each join checked on the data.',
+      domain: 'main',
     });
     const storage = { setItem: vi.fn() };
     rememberProposalForModeling('proposal-1', storage);
     expect(storage.setItem).toHaveBeenCalledWith(PROPOSAL_HANDOFF_KEY, 'proposal-1');
+  });
+
+  it('names the new Domain and the staging copies it left out (new-user round 2, Q3)', () => {
+    const outcome = draftOutcome({
+      report: report({
+        domains: [{ id: 'sales', name: 'Sales', existing: true }, { id: 'jaffle_shop', name: 'Jaffle shop', existing: false }],
+        stagingHidden: [{ relation: 'dev.stg_customers', finalRelation: 'dev.customers' }],
+      }),
+      proposal: { id: 'proposal-2' } as ContextAuthoringProposalV1,
+    });
+    expect(outcome).toMatchObject({ domain: 'Jaffle shop', stagingHidden: [{ relation: 'dev.stg_customers', finalRelation: 'dev.customers' }] });
+  });
+
+  it('says honestly what ZLens does with rows, and never "never their rows"', () => {
+    expect(ROWS_PRIVACY).toBe('ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. Nothing is sent anywhere unless you turn on value profiles for AI answers.');
+    expect(stepTwoCopy('warehouse', null).description).toContain(ROWS_PRIVACY);
+    expect(ROWS_PRIVACY_SHORT).toBe('Reads structure and counts rows to check keys; sample rows stay on this computer. Nothing is sent unless you turn on value profiles.');
+    expect(rowsPrivacy()).toBe(ROWS_PRIVACY);
+    expect(rowsPrivacy(false, true)).toBe(ROWS_PRIVACY_SHORT);
+  });
+
+  it('says what is sent when value profiles are on', () => {
+    expect(rowsPrivacy(true)).toBe('ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. Value profiles are on: a few column values are sent to your AI provider.');
+    expect(rowsPrivacy(true, true)).toBe('Reads structure and counts rows to check keys; sample rows stay on this computer. Value profiles are on: a few column values are sent to your AI provider.');
+    expect(stepTwoCopy('warehouse', null, true).description).toContain(VALUE_PROFILES_ON);
+    expect(stepTwoCopy('warehouse', null, true).description).not.toContain('Nothing is sent');
+    for (const option of MODEL_SOURCE_OPTIONS) expect(option.body).not.toMatch(/never (their )?rows/);
   });
 
   it('says when there is nothing new to draft', () => {

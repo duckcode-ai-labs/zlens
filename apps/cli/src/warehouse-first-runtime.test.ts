@@ -236,15 +236,19 @@ describe('warehouse-first modeling in the local runtime', () => {
       return await response.json() as { warehouseCatalog?: { relations?: number; valueProfile?: unknown } };
     };
     const profilePath = join(projectRoot, '.dql', 'cache', 'value-profile.json');
+    // Setup's rows sentence says when values reach the AI provider (new-user round 2, Q3).
+    const valueProfileOn = async () => ((await (await fetch(`http://127.0.0.1:${port}/api/connections`)).json()) as { valueProfile?: boolean }).valueProfile;
 
     // The default: metadata only, no value read.
     const plain = await sync();
     expect(plain.warehouseCatalog?.relations).toBe(1);
     expect(plain.warehouseCatalog?.valueProfile).toBeUndefined();
     expect(existsSync(profilePath)).toBe(false);
+    expect(await valueProfileOn()).toBe(false);
 
     // Opted in: the values of non-sensitive columns, never the email.
     config({ valueProfile: { mode: 'sampled' } });
+    expect(await valueProfileOn()).toBe(true);
     const profiled = await sync();
     expect(profiled.warehouseCatalog?.valueProfile).toMatchObject({ relations: 1, skippedSensitive: 2 });
     const profile = JSON.parse(readFileSync(profilePath, 'utf-8'));
@@ -257,6 +261,7 @@ describe('warehouse-first modeling in the local runtime', () => {
     config({ valueProfile: { mode: 'off' } });
     await sync();
     expect(existsSync(profilePath)).toBe(false);
+    expect(await valueProfileOn()).toBe(false);
   });
 
   it('drafts the map from the warehouse for review, and adds only the drafts a person keeps', async () => {
@@ -346,6 +351,87 @@ describe('warehouse-first modeling in the local runtime', () => {
     const layer = await (await fetch(`http://127.0.0.1:${port}/api/semantic-layer`)).json() as any;
     expect(JSON.stringify(layer)).toContain('units_sold');
     expect(readFileSync(join(projectRoot, 'semantic-layer', 'metrics', 'units_sold.yaml'), 'utf-8')).toContain("description: 'Quantity: every order line'");
+    await executor.disconnect();
+  }, 60_000);
+  // New-user round 2, Q3: a database-only first run in plain words.
+  it('drafts one Domain named after the database file, without staging copies, with one grouped note, and keeps the draft until it is saved or discarded', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-first-run-'));
+    roots.push(projectRoot);
+    const db = new Database(join(projectRoot, 'jaffle_shop.sqlite'));
+    db.exec(`
+      CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE stg_customers (customer_id INTEGER, name TEXT);
+      CREATE TABLE orders (order_id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(customer_id));
+      CREATE TABLE stg_orders (order_id INTEGER, customer_id INTEGER);
+      CREATE TABLE stg_payments (payment_id INTEGER, order_id INTEGER);
+      INSERT INTO customers VALUES (1, 'Ann');
+      INSERT INTO orders VALUES (10, 1);
+    `);
+    db.close();
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
+      project: 'shop', manifestVersion: 3, modeling: { mode: 'warehouse-first' },
+      connections: { default: { driver: 'sqlite', filepath: './jaffle_shop.sqlite' } },
+    }));
+    const executor = new QueryExecutor();
+    const port = await startLocalServer({ rootDir: projectRoot, projectRoot, executor, preferredPort: 0, captureServer: (created) => { server = created; } });
+    const base = `http://127.0.0.1:${port}`;
+    const post = async (path: string, body: unknown) => {
+      const response = await fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    const waiting = async () => ((await (await fetch(`${base}/api/modeling/warehouse/drafts`)).json()) as any).waiting;
+    await fetch(`${base}/api/connections/default/metadata-sync`, { method: 'POST' });
+    expect(await waiting()).toBeNull();
+
+    const drafted = await post('/api/modeling/warehouse/discover/proposal', { validate: true });
+    expect(drafted.status).toBe(201);
+    const { report, proposal } = drafted.body;
+    // Named after the file, not the schema "main", and editable later.
+    expect(report.domains).toEqual([{ id: 'jaffle_shop', name: 'Jaffle shop', existing: false }]);
+    const domainOperation = proposal.operations.find((operation: any) => operation.change?.operation === 'upsert_domain');
+    expect(domainOperation.change.value).toMatchObject({ id: 'jaffle_shop', name: 'Jaffle shop' });
+    // stg_customers and stg_orders copy a final table; stg_payments is the only copy of payments.
+    expect(report.stagingHidden).toEqual([
+      { relation: 'main.stg_customers', finalRelation: 'main.customers' },
+      { relation: 'main.stg_orders', finalRelation: 'main.orders' },
+    ]);
+    const bound = proposal.operations.filter((operation: any) => operation.change?.operation === 'upsert_entity').map((operation: any) => operation.change.value.dbtModel).sort();
+    expect(bound).toEqual(['warehouse.main.customers', 'warehouse.main.orders', 'warehouse.main.stg_payments']);
+    // One plain note for the three tables placed in the default area, with each operation kept for the details.
+    const notes = proposal.diagnostics.filter((item: any) => item.code === 'MODEL_AREA_DEFAULTED');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatchObject({ severity: 'info', message: '3 tables placed in the default area. You can rename or move them later.' });
+    expect(notes[0].operationIds).toHaveLength(3);
+
+    // Kept automatically: the draft waits, across reloads, until saved or discarded.
+    expect(await waiting()).toMatchObject({ proposalId: proposal.id, models: 3, domains: ['Jaffle shop'], stale: false });
+
+    // "Show staging tables" drafts them too, under a name the person chose, and replaces the first draft.
+    const withStaging = await post('/api/modeling/warehouse/discover/proposal', { includeStaging: true, domain: 'Jaffle Shop Sales' });
+    expect(withStaging.body.report.stagingHidden).toBeUndefined();
+    expect(withStaging.body.report.domains).toEqual([{ id: 'jaffle_shop_sales', name: 'Jaffle Shop Sales', existing: false }]);
+    expect(withStaging.body.proposal.operations.filter((operation: any) => operation.change?.operation === 'upsert_entity')).toHaveLength(5);
+    expect(await waiting()).toMatchObject({ proposalId: withStaging.body.proposal.id, models: 5 });
+    const first = await (await fetch(`${base}/api/context-proposals/${proposal.id}`)).json() as any;
+    expect(first.proposal).toMatchObject({ status: 'discarded', supersededBy: withStaging.body.proposal.id });
+
+    // Discard: nothing waits, nothing was written.
+    const discarded = await post(`/api/context-proposals/${withStaging.body.proposal.id}/discard`, {});
+    expect(discarded.status).toBe(200);
+    expect(discarded.body.proposal.status).toBe('discarded');
+    expect(await waiting()).toBeNull();
+    expect(existsSync(join(projectRoot, 'domains', 'jaffle_shop_sales'))).toBe(false);
+    expect((await post('/api/context-proposals/missing-id/discard', {})).status).toBe(404);
+
+    // Save: the saved draft and its older copies stop waiting.
+    const again = await post('/api/modeling/warehouse/discover/proposal', { validate: true });
+    const committed = await post(`/api/context-proposals/${encodeURIComponent(again.body.proposal.id)}/commit`, { expectedProposalHash: again.body.proposal.proposalHash, idempotencyKey: 'first-run-draft' });
+    expect(committed.status).toBe(200);
+    expect(await waiting()).toBeNull();
+    const modeling = await (await fetch(`${base}/api/modeling/dbt-first`)).json() as any;
+    expect(modeling.modeling.packages.jaffle_shop).toMatchObject({ filePath: 'domains/jaffle-shop/domain.dql' });
+    expect(readFileSync(join(projectRoot, 'domains', 'jaffle-shop', 'domain.dql'), 'utf-8')).toContain('Jaffle shop');
+    expect(Object.keys(modeling.modeling.entities).sort()).toEqual(['jaffle_shop::entity::customer', 'jaffle_shop::entity::order', 'jaffle_shop::entity::payment']);
     await executor.disconnect();
   }, 60_000);
 });

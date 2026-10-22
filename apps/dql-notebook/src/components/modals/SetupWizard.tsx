@@ -541,7 +541,7 @@ export function SetupWizard({ detectedProvider, onClose, onImported }: SetupWiza
                 border: `1px solid ${t.cellBorder}`, fontSize: 12, color: t.textMuted, fontFamily: t.font, lineHeight: 1.5,
               }}>
                 Your semantic definitions are now available in the Semantic Layer browser.
-                Use the Guided Builder or drag metrics into your editor to start creating blocks.
+                Use the Guided Builder or drag metrics into your editor to start creating saved queries.
               </div>
             </div>
           )}

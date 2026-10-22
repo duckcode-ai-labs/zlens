@@ -16,6 +16,8 @@ import {
 } from '../../api/client';
 import { PanelFrame } from '@zlens/ui';
 import { DriverLogo } from './DriverLogo';
+import { isStagingSchema, splitStagingSchemas } from '@zlens/core/staging-tables';
+import { rowsPrivacy } from '../modals/setup-model-source';
 import {
   CONNECTOR_SCHEMAS,
   CONNECTOR_SCHEMA_BY_DRIVER,
@@ -52,6 +54,8 @@ export interface ConnectionInfo {
   /** The modeling catalog of warehouse-first and hybrid projects (RFC 0007). */
   warehouseCatalog?: WarehouseCatalogSummary;
   modelingMode?: string;
+  /** Value profiles are on: a few column values reach the AI provider. */
+  valueProfile?: boolean;
 }
 
 interface ConnectorInstallStatus {
@@ -207,6 +211,8 @@ export function ConnectionPanel({
   const [metadataSyncing, setMetadataSyncing] = useState(false);
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null);
   const [metadataDiscovery, setMetadataDiscovery] = useState<WarehouseMetadataDiscovery | null>(null);
+  // Staging and raw schemas wait behind "Show staging tables" (new-user round 2, Q3).
+  const [showStagingSchemas, setShowStagingSchemas] = useState(false);
   const [metadataDiscovering, setMetadataDiscovering] = useState(false);
   // Only the latest connection test may set the result: an older, slower test
   // (or one racing a save on a DuckDB file) never overrides a newer one.
@@ -420,11 +426,13 @@ export function ConnectionPanel({
       });
       applyMetadataResponse(response);
       onMetadataSynced?.(response);
-      setMetadataMessage(
-        `Ready · ${response.status.relationCount.toLocaleString()} relations · `
-        + `${response.status.columnCount.toLocaleString()} columns · `
-        + `${response.status.queryCount ?? 0} metadata queries`
-        + warehouseCatalogMessage(response.warehouseCatalog),
+      setMetadataMessage(isSetup
+        ? `Read ${response.status.relationCount.toLocaleString()} table${response.status.relationCount === 1 ? '' : 's'} (${response.status.columnCount.toLocaleString()} columns).`
+          + warehouseCatalogMessage(response.warehouseCatalog)
+        : `Ready · ${response.status.relationCount.toLocaleString()} relations · `
+          + `${response.status.columnCount.toLocaleString()} columns · `
+          + `${response.status.queryCount ?? 0} metadata queries`
+          + warehouseCatalogMessage(response.warehouseCatalog),
       );
     } catch (error) {
       setMetadataMessage(error instanceof Error ? error.message : String(error));
@@ -1172,7 +1180,7 @@ export function ConnectionPanel({
         <div style={{ fontSize: 14, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>{setupSchemaQuestion ? 'Which schemas should ZLens read?' : 'Metadata scope'}</div>
         <div style={{ fontSize: 11.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
           {setupSchemaQuestion
-            ? 'Tick the schemas that hold your tables. ZLens reads their tables, columns, keys and comments — never their rows.'
+            ? `Tick the schemas that hold your tables. ${rowsPrivacy(info?.valueProfile)}`
             : 'ZLens synchronizes this authorized scope into local SQLite. Warm Ask, Notebook, and Saved queries searches use that index instead of scanning the warehouse.'}
         </div>
       </div>
@@ -1181,7 +1189,7 @@ export function ConnectionPanel({
           {warehouseFirst ? (
             <>
               <strong style={{ color: t.textPrimary }}>Choose the schemas to model.</strong>
-              {' '}ZLens reads their tables, columns, declared keys and comments — never their rows — for Ask and Modeling.
+              {' '}{rowsPrivacy(info?.valueProfile)}
             </>
           ) : (
             <>
@@ -1209,13 +1217,18 @@ export function ConnectionPanel({
                   {' · '}{additionalDiscoveredSchemaCount(metadataDiscovery).toLocaleString()} additional schema(s) available</>}
               {setupSchemaQuestion ? null : <>{' · '}{metadataDiscovery.queryCount.toLocaleString()} discovery query(s)</>}
             </div>
-            {metadataDiscovery.scopes.map((scope) => (
+            {metadataDiscovery.scopes.map((scope) => {
+              const { shown: shownSchemas } = splitStagingSchemas(scope.schemas, {
+                show: showStagingSchemas,
+                keep: (schema) => schema.inDbtProject || metadataScopeIncludes(selectedAdditionalMetadataScopes, scope.catalogOrDatabase, schema.name),
+              });
+              return (
               <div key={scope.catalogOrDatabase} style={{ borderTop: `1px solid ${t.cellBorder}`, paddingTop: 7 }}>
                 <div style={{ fontSize: 10.5, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, marginBottom: 5 }}>
                   {scope.catalogOrDatabase}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 5 }}>
-                  {scope.schemas.map((schema) => {
+                  {shownSchemas.map((schema) => {
                     const selected = metadataScopeIncludes(
                       selectedAdditionalMetadataScopes,
                       scope.catalogOrDatabase,
@@ -1248,7 +1261,19 @@ export function ConnectionPanel({
                   })}
                 </div>
               </div>
-            ))}
+              );
+            })}
+            {(() => {
+              const staging = metadataDiscovery.scopes.flatMap((scope) => scope.schemas.filter((schema) => isStagingSchema(schema.name) && scope.schemas.some((other) => !isStagingSchema(other.name))).map((schema) => schema.name));
+              if (!staging.length) return null;
+              const names = [...new Set(staging)].join(', ');
+              return (
+                <label style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, color: t.textSecondary, fontFamily: t.font, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={showStagingSchemas} onChange={(event) => setShowStagingSchemas(event.target.checked)} />
+                  <span>Show staging tables <span style={{ color: t.textMuted }}>· {names} hold{staging.length === 1 ? 's' : ''} staging or raw copies</span></span>
+                </label>
+              );
+            })()}
             {metadataDiscovery.truncated ? (
               <div style={{ fontSize: 10.5, color: 'var(--status-warning)', fontFamily: t.font }}>
                 Discovery reached its safety limit. Narrow the connection role or enter another known database/schema manually.

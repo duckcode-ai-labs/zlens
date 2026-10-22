@@ -129,7 +129,8 @@ Warehouse sync and discovery flags (see
 | `zlens sync warehouse` | `agent.valueProfile.mode: "sampled"` in `dql.config.json` | Also read a few example values and the range of each column for Ask's SQL drafter (off by default; the values reach your AI provider). See [value profile](../get-started/no-dbt.md#optional-show-the-drafter-what-the-columns-hold) |
 | `zlens model discover`, `apply-discovery` | `--validate` | Check each drafted join and candidate key on the warehouse (aggregate queries only) and propose the cardinality seen |
 | `zlens model discover`, `apply-discovery` | `--query-history` | Also count joins in recent warehouse queries (Snowflake, PostgreSQL, Databricks, BigQuery); only join pairs and counts are kept |
-| `zlens model discover`, `apply-discovery` | `--domain <id>` | From the warehouse: put every drafted entity into this domain (default: one domain per schema). From dbt: the discovered domain to apply |
+| `zlens model discover`, `apply-discovery` | `--include-staging` | Also draft staging copies (`stg_*` tables, or tables in a `staging`, `stg` or `raw` schema) that a final table already holds; they are left out by default |
+| `zlens model discover`, `apply-discovery` | `--domain <id>` | From the warehouse: put every drafted entity into this domain (default: one domain named after the database file or catalog, such as `jaffle_shop`, for schemas named for a layer or environment like `dev`, `main` or `public`; a schema named for a business area, such as `sales`, gets its own). From dbt: the discovered domain to apply |
 | `zlens model discover`, `apply-discovery` | `--source warehouse\|dbt` | In a hybrid project, choose what to draft from (default: dbt when a dbt manifest exists) |
 
 ```bash

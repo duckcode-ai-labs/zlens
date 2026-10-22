@@ -123,5 +123,26 @@ describe('Add data browser: one list (design D1)', () => {
     expect(order[0]).toBeLessThan(order[1]!);
     expect(order[1]).toBeLessThan(order[2]!);
     expect(markup).toContain('aria-label="Check orders and add it"');
+    // Drafts are kept: the list says how many wait for review.
+    expect(markup).toContain('1 drafted model waiting for review.');
+  });
+
+  it('hides staging copies of a listed table behind Show staging tables (new-user round 2, Q3)', () => {
+    const layered = [
+      { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7 },
+      { id: 'dev.stg_customers', name: 'stg_customers', schema: 'dev', relation: 'dev.stg_customers', columnCount: 7 },
+      { id: 'raw.orders', name: 'orders', schema: 'raw', relation: 'raw.orders', columnCount: 5 },
+      { id: 'dev.orders', name: 'orders', schema: 'dev', relation: 'dev.orders', columnCount: 9 },
+      // The only copy of payments stays.
+      { id: 'dev.stg_payments', name: 'stg_payments', schema: 'dev', relation: 'dev.stg_payments', columnCount: 4 },
+    ] as unknown as WarehouseTableSummary[];
+    const markup = render({ initialItems: [], initialTables: layered, initialKind: 'tables' });
+    expect(markup).toContain('data-table-id="dev.customers"');
+    expect(markup).toContain('data-table-id="dev.orders"');
+    expect(markup).toContain('data-table-id="dev.stg_payments"');
+    expect(markup).not.toContain('data-table-id="dev.stg_customers"');
+    expect(markup).not.toContain('data-table-id="raw.orders"');
+    expect(markup).toContain('Show staging tables');
+    expect(markup).toContain('2 staging copies of tables listed here hidden');
   });
 });

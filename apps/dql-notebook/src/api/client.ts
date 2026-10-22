@@ -533,6 +533,20 @@ export interface WarehouseDiscoveryReport {
   existingRelationships: number;
   validated: boolean;
   queryHistory?: { statements: number; joins: number } | { error: string };
+  /** Staging copies left out because a final table holds the same thing; drafted with "Show staging tables". */
+  stagingHidden?: Array<{ relation: string; finalRelation: string }>;
+}
+
+/** The newest "Draft my models" proposal that waits for review (drafts are kept until saved or discarded). */
+export interface WaitingWarehouseDrafts {
+  proposalId: string;
+  createdAt: string;
+  models: number;
+  joins: number;
+  /** Names of the Domains the drafts create ("Jaffle shop"). */
+  domains: string[];
+  /** The project changed since drafting; Modeling refreshes it on save. */
+  stale: boolean;
 }
 
 export interface DomainWorkspaceSummary {
@@ -4817,6 +4831,8 @@ export interface ConnectionsResponse {
   metadataStatus?: WarehouseMetadataStatus;
   /** The environment variables the default connection reads (`${NAME}`), by name, and whether each is set. */
   environmentReferences?: Array<{ name: string; set: boolean }>;
+  /** Value profiles are on (`agent.valueProfile.mode: "sampled"`): a few column values reach the AI provider. */
+  valueProfile?: boolean;
 }
 
 export interface ConnectionMetadataScopeV1 {
@@ -4882,7 +4898,7 @@ export interface WarehouseMetadataDiscovery {
 
 export type ContextAuthoringOrigin = 'manual' | 'yaml_import' | 'dbt_discovery' | 'warehouse_discovery' | 'ai' | 'correction';
 export interface ContextAuthoringPatchV1 { path: string; before: string; after: string; changed: boolean; owner: 'dql' | 'dbt'; operationId: string }
-export interface ContextAuthoringDiagnosticV1 { code: string; severity: 'info' | 'warning' | 'blocking'; message: string; operationId?: string }
+export interface ContextAuthoringDiagnosticV1 { code: string; severity: 'info' | 'warning' | 'blocking'; message: string; operationId?: string; operationIds?: string[] }
 /** Browser transport shape for a source-owned Dataset declaration patch. */
 export interface DatasetAuthoringChange {
   targetQualifiedId: string;
@@ -4918,7 +4934,7 @@ export interface ContextAuthoringProposalV1 {
   version: 1;
   id: string;
   origin: ContextAuthoringOrigin;
-  status: 'proposed' | 'committed' | 'conflicted';
+  status: 'proposed' | 'committed' | 'conflicted' | 'discarded';
   trustState: 'review_required';
   createdAt: string;
   baseSnapshotId: string;
@@ -4933,6 +4949,8 @@ export interface ContextAuthoringProposalV1 {
   revision?: number;
   committedAt?: string;
   committedSnapshotId?: string;
+  discardedAt?: string;
+  supersededBy?: string;
 }
 export interface ModelingImportCandidate {
   id: string;
@@ -5037,8 +5055,20 @@ export const api = {
    * warehouse, as a reviewable proposal. `proposal` is null when there is
    * nothing new to draft.
    */
-  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
+  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
     return request('/api/modeling/warehouse/discover/proposal', { method: 'POST', body: JSON.stringify({ validate: true, ...input }) });
+  },
+
+  /** The drafted models that wait for review, or null. */
+  async getWaitingWarehouseDrafts(): Promise<WaitingWarehouseDrafts | null> {
+    const response = await request<{ waiting: WaitingWarehouseDrafts | null }>('/api/modeling/warehouse/drafts');
+    return response.waiting ?? null;
+  },
+
+  /** Turn drafts down: nothing in the project changes, and they stop waiting for review. */
+  async discardContextProposal(id: string): Promise<ContextAuthoringProposalV1> {
+    const response = await request<{ proposal: ContextAuthoringProposalV1 }>(`/api/context-proposals/${encodeURIComponent(id)}/discard`, { method: 'POST', body: '{}' });
+    return response.proposal;
   },
 
   async getDbtModelingNode(uniqueId: string): Promise<DbtNodeAuthoringDetail> {

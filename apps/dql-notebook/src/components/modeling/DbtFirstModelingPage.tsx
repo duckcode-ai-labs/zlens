@@ -3,7 +3,7 @@ import { Blocks, BookOpen, Boxes, CheckCircle2, Columns3, Download, EyeOff, File
 import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
 import type { DbtMetricAuthoringInput, DbtMetricPatchPreview, DbtNodeAuthoringDetail, DbtSourceAuthoringInput, DbtSourcePatchPreview, ManifestModelArea, ManifestModelEntity, ManifestModelRelationship, ModelingAuthoringChange, ModelingChangePreview } from '@zlens/core';
 import { hostAllows, hostReadOnly, readOnlyReason, useHostUi, type HostUiState } from '../../host/host-ui';
-import { api, type AgentRunArtifact, type ContextAuthoringProposalV1, type DbtFirstModelingResponse } from '../../api/client';
+import { api, type AgentRunArtifact, type ContextAuthoringProposalV1, type DbtFirstModelingResponse, type WaitingWarehouseDrafts } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
 import type { NotebookFile } from '../../store/types';
 import { themes, type ThemeMode } from '../../themes/notebook-theme';
@@ -17,6 +17,7 @@ import { AskImpactDrawer } from './AskImpactDrawer';
 import { DomainModelingCanvas, type ColumnDisplayMode, type DiagramDensity, type DiagramLayoutMode, type ModelingViewMode, type RelationshipDraft } from './DomainModelingCanvas';
 import { UnifiedAgentRunPanel, usePersistedAgentThreadId } from '../agent/UnifiedAgentRunPanel';
 import { ContextProposalReviewDrawer } from './ContextProposalReviewDrawer';
+import { stagingLeftOutSentence, waitingDraftsSentence } from './proposal-review-words';
 import { AddModelsDrawer, ModelingYamlImportDrawer } from './ModelingStartDrawers';
 import { DOMAIN_STUDIO_LOCATION_KEY, DOMAIN_STUDIO_NAVIGATION, domainEntityRecords, domainPackageTree, domainStudioLocationHref, entityKindColor, isDescriptiveOnlyChange, modelingThreadScope, resolveDomainStudioLocation, type DomainStudioSection } from './domain-studio-model';
 import { domainStudioUnavailableState, type DomainStudioUnavailableState } from './domain-studio-readiness';
@@ -200,6 +201,39 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [draftingFromWarehouse, setDraftingFromWarehouse] = useState(false);
+  // Drafts are kept automatically (new-user round 2, Q3): what "Draft my
+  // models" drafted waits on the server until it is saved or discarded, so a
+  // fresh browser, a reload or leaving without Save loses nothing.
+  const [waitingDrafts, setWaitingDrafts] = useState<WaitingWarehouseDrafts | null>(null);
+  const [stagingLeftOut, setStagingLeftOut] = useState<Array<{ relation: string; finalRelation: string }> | null>(null);
+  const draftsMode = data?.modeling.mode;
+  const loadWaitingDrafts = useCallback(async () => {
+    if (draftsMode !== 'warehouse-first' && draftsMode !== 'hybrid') {
+      setWaitingDrafts(null);
+      return;
+    }
+    setWaitingDrafts(await api.getWaitingWarehouseDrafts().catch(() => null));
+  }, [draftsMode]);
+  useEffect(() => { void loadWaitingDrafts(); }, [loadWaitingDrafts]);
+  const reviewWaitingDrafts = async () => {
+    if (!waitingDrafts) return;
+    try {
+      setProposal(await api.getContextProposal(waitingDrafts.proposalId));
+      setTab('diagram');
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+  };
+  const discardWaitingDrafts = async () => {
+    if (!waitingDrafts) return;
+    try {
+      await api.discardContextProposal(waitingDrafts.proposalId);
+      setStagingLeftOut(null);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    }
+    await loadWaitingDrafts();
+  };
   // Opt-in: learn joins from recent query history as well (RFC 0007).
   const [draftWithQueryHistory, setDraftWithQueryHistory] = useState(false);
   const [metricDrawerOpen, setMetricDrawerOpenState] = useState(false);
@@ -210,13 +244,15 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
    * RFC 0007: draft domains, models and joins from the warehouse catalog,
    * checked on the warehouse, and open them in the ordinary review drawer.
    */
-  const draftFromWarehouse = async () => {
+  const draftFromWarehouse = async (options: { includeStaging?: boolean } = {}) => {
     setDraftingFromWarehouse(true);
     setNotice(null);
     try {
-      const result = await api.draftWarehouseModel({ expectedSnapshotId: data?.snapshotId, queryHistory: draftWithQueryHistory });
+      const result = await api.draftWarehouseModel({ expectedSnapshotId: data?.snapshotId, queryHistory: draftWithQueryHistory, ...(options.includeStaging ? { includeStaging: true } : {}) });
       const history = result.report.queryHistory;
       if (history && 'error' in history) setNotice(history.error);
+      setStagingLeftOut(result.report.stagingHidden?.length ? result.report.stagingHidden : null);
+      void loadWaitingDrafts();
       if (result.proposal) setProposal(result.proposal);
       else setNotice(`Nothing new to draft: the ${result.report.relations} table${result.report.relations === 1 ? '' : 's'} in the warehouse catalog and their joins are already modeled.`);
     } catch (error) {
@@ -488,6 +524,20 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
           {inspectorOpen ? <PanelRightClose size={14} /> : <PanelRightOpen size={14} />}
         </button>}
       </nav>
+      {waitingDrafts && proposal?.id !== waitingDrafts.proposalId ? (
+        <div role="status" aria-label="Drafted models waiting for review" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderBottom: `1px solid ${t.headerBorder}`, background: 'var(--accent-dim)', fontSize: 11.5, color: t.textPrimary }}>
+          <span style={{ flex: 1 }}>{waitingDraftsSentence(waitingDrafts)}</span>
+          {!readOnly && <Button t={t} onClick={() => void reviewWaitingDrafts()}>Review drafts</Button>}
+          {!readOnly && <Button t={t} onClick={() => void discardWaitingDrafts()}>Discard</Button>}
+        </div>
+      ) : null}
+      {stagingLeftOut && !readOnly ? (
+        <div role="status" aria-label="Staging tables left out" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderBottom: `1px solid ${t.headerBorder}`, background: t.headerBg, fontSize: 11.5, color: t.textSecondary }}>
+          <span style={{ flex: 1 }}>{stagingLeftOutSentence(stagingLeftOut)}</span>
+          <Button t={t} onClick={() => { setStagingLeftOut(null); void draftFromWarehouse({ includeStaging: true }); }} disabled={draftingFromWarehouse}>Show staging tables</Button>
+          <IconButton t={t} title="Dismiss" onClick={() => setStagingLeftOut(null)}><XCircle size={14} /></IconButton>
+        </div>
+      ) : null}
       {notice ? (
         <div role="status" style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 14px', borderBottom: `1px solid ${t.headerBorder}`, background: 'var(--accent-dim)', fontSize: 11.5, color: t.textPrimary }}>
           <span style={{ flex: 1 }}>{notice}</span>
@@ -680,7 +730,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
           domain={selectedDomain}
           t={t}
           onClose={() => setMetricDrawerOpen(false)}
-          onSaved={(path) => { setMetricDrawerOpen(false); setNotice(`Metric saved to ${path}. Ask and Blocks can use it now.`); }}
+          onSaved={(path) => { setMetricDrawerOpen(false); setNotice(`Metric saved to ${path}. Ask and saved queries can use it now.`); }}
         />
       ) : null}
       {dbtMetricOpen ? (
@@ -699,9 +749,12 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
         <ContextProposalReviewDrawer
           proposal={proposal}
           theme={t}
-          onClose={() => { setProposal(null); setPendingRelationshipFrom(null); }}
+          onClose={() => { setProposal(null); setPendingRelationshipFrom(null); void loadWaitingDrafts(); }}
+          onDiscarded={() => { setProposal(null); setPendingRelationshipFrom(null); setStagingLeftOut(null); void loadWaitingDrafts(); }}
           onCommitted={() => {
             setProposal(null);
+            setStagingLeftOut(null);
+            void loadWaitingDrafts();
             void refresh().then(() => {
               if (!pendingRelationshipFrom) return;
               setEditor({ kind: 'relationship', draft: pendingRelationshipFrom });
@@ -1375,10 +1428,10 @@ function DomainBlocksPanel({ data, domain, t }: { data: DbtFirstModelingResponse
   return (
     <ScrollPanel>
       <PanelHeader
-        title="Blocks"
+        title="Saved queries"
         detail={domain
-          ? `Reusable blocks owned by ${domain}. Select one to open the exact source in Block Studio.`
-          : 'All reusable blocks grouped across all domains. Select one to open the exact source in Block Studio.'}
+          ? `Saved queries owned by ${domain}. Select one to open its source in Saved queries.`
+          : 'All saved queries, grouped across all domains. Select one to open its source in Saved queries.'}
         t={t}
       />
       {openError ? <Message text={openError} t={t} /> : null}
@@ -1393,7 +1446,7 @@ function DomainBlocksPanel({ data, domain, t }: { data: DbtFirstModelingResponse
                 key={path}
                 type="button"
                 onClick={() => void openBlock(path)}
-                aria-label={`Open block ${name}`}
+                aria-label={`Open saved query ${name}`}
                 style={{ ...overviewCard(t), width: '100%', textAlign: 'left', cursor: 'pointer' }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -1408,7 +1461,7 @@ function DomainBlocksPanel({ data, domain, t }: { data: DbtFirstModelingResponse
           })}
         </div>
       ) : (
-        <Blank title="No domain blocks yet" detail="Create a block in Block Studio and assign this domain to make it appear here." t={t} />
+        <Blank title="No saved queries in this domain yet" detail="Save a query in Saved queries and assign this domain to make it appear here." t={t} />
       )}
     </ScrollPanel>
   );
@@ -1852,7 +1905,7 @@ function StudioSummary({ data, domainEntities, domainRelationships, t, onSelectR
         </button>
       )) : <p style={{ color: t.textMuted, fontSize: 10.5, margin: 0 }}>Drag between two column handles to create the first relationship.</p>}
       <div style={heading}>Ownership boundary</div>
-      <p style={{ color: t.textSecondary, fontSize: 11, lineHeight: 1.55, margin: 0 }}>dbt owns tables, columns, descriptions, tests, and metrics. DQL owns domain membership, analytical identity, safe relationship proof, contracts, certified blocks, and agent policy. Shared apps and notebooks reference this domain without moving inside it.</p>
+      <p style={{ color: t.textSecondary, fontSize: 11, lineHeight: 1.55, margin: 0 }}>dbt owns tables, columns, descriptions, tests, and metrics. DQL owns domain membership, analytical identity, safe relationship proof, contracts, certified saved queries, and agent policy. Shared apps and notebooks reference this domain without moving inside it.</p>
     </Inspector>
   );
 }
@@ -2403,7 +2456,7 @@ function NewMetricDrawer({ data, domain, t, onClose, onSaved }: { data: DbtFirst
           <b style={{ flex: 1, fontSize: 15 }}>New metric</b>
           <IconButton t={t} title="Close" onClick={onClose}><XCircle size={15} /></IconButton>
         </div>
-        <Message text="A metric aggregates one column of one table. It is saved to semantic-layer/metrics as a reviewable file, and Ask and Blocks can use it as soon as it is saved." t={t} />
+        <Message text="A metric aggregates one column of one table. It is saved to semantic-layer/metrics as a reviewable file, and Ask and saved queries can use it as soon as it is saved." t={t} />
         <Field label="Table">
           <Select value={nodeId} onChange={setNodeId} values={tables.map((node) => node.uniqueId)} labels={Object.fromEntries(tables.map((node) => [node.uniqueId, node.relation ?? node.name]))} t={t} />
         </Field>

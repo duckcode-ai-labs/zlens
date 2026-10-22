@@ -18,6 +18,27 @@ import type {
  */
 export type ModelSource = 'dbt' | 'warehouse' | 'both' | 'existing';
 
+/**
+ * What ZLens does with a database's rows, said honestly (new-user round 2,
+ * Q3). It reads structure, counts rows to check keys, and shows sample rows
+ * to the person on this computer. Nothing leaves the computer unless the
+ * project turns on value profiles, which send a few column values to the AI
+ * provider for its answers.
+ */
+export const ROWS_PRIVACY = 'ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. Nothing is sent anywhere unless you turn on value profiles for AI answers.';
+/** The same meaning where space is tight. */
+export const ROWS_PRIVACY_SHORT = 'Reads structure and counts rows to check keys; sample rows stay on this computer. Nothing is sent unless you turn on value profiles.';
+/** Said instead of "nothing is sent" when the project has value profiles on. */
+export const VALUE_PROFILES_ON = 'Value profiles are on: a few column values are sent to your AI provider.';
+
+/** The rows sentence for this project: with value profiles on, it says what is sent. */
+export function rowsPrivacy(valueProfileOn = false, short = false): string {
+  if (!valueProfileOn) return short ? ROWS_PRIVACY_SHORT : ROWS_PRIVACY;
+  return short
+    ? `Reads structure and counts rows to check keys; sample rows stay on this computer. ${VALUE_PROFILES_ON}`
+    : `ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. ${VALUE_PROFILES_ON}`;
+}
+
 export type ModelingMode = 'dbt-first' | 'warehouse-first' | 'hybrid';
 
 export interface ModelSourceOption {
@@ -35,7 +56,7 @@ export const MODEL_SOURCE_OPTIONS: readonly ModelSourceOption[] = [
   {
     id: 'warehouse',
     title: 'Database only',
-    body: "No dbt? ZLens reads your tables' columns, keys and comments — never their rows — and drafts models and joins for you to review.",
+    body: `No dbt? ZLens drafts models and joins from your tables for you to review. ${ROWS_PRIVACY}`,
   },
   {
     id: 'both',
@@ -199,7 +220,7 @@ export function setupStepTitles(source: ModelSource | null): string {
   return 'Data model → Database → optional AI → Finish';
 }
 
-export function stepTwoCopy(source: ModelSource | null, existing: ExistingProject | null): { title: string; description: string } {
+export function stepTwoCopy(source: ModelSource | null, existing: ExistingProject | null, valueProfileOn = false): { title: string; description: string } {
   if (source === 'existing') {
     return {
       title: 'Connect and synchronize',
@@ -209,7 +230,7 @@ export function stepTwoCopy(source: ModelSource | null, existing: ExistingProjec
   if (source === 'warehouse') {
     return {
       title: 'Connect your database',
-      description: "Connect and test the database, choose the schemas to model, then Apply and synchronize. ZLens reads their tables, columns, keys and comments — never their rows. Then Draft my models.",
+      description: `Connect and test the database, choose the schemas to model, then Apply and synchronize. Then Draft my models. ${rowsPrivacy(valueProfileOn)}`,
     };
   }
   if (source === 'both') {
@@ -233,6 +254,10 @@ export interface DraftOutcome {
   ok: boolean;
   message: string;
   proposalId?: string;
+  /** The Domain the drafts go in ("Jaffle shop"), when one is new. */
+  domain?: string;
+  /** Staging copies left out ("Show staging tables" drafts them too). */
+  stagingHidden?: Array<{ relation: string; finalRelation: string }>;
 }
 
 /** Plain words for what `Draft my models` found (`zlens model discover --validate`). */
@@ -247,10 +272,13 @@ export function draftOutcome(result: { report: WarehouseDiscoveryReport; proposa
       message: `Nothing new to draft: the ${plural(report.relations, 'table')} in the warehouse catalog and their joins are already modeled.`,
     };
   }
+  const domain = report.domains.find((item) => !item.existing)?.name ?? report.domains[0]?.name;
   return {
     ok: true,
     proposalId: proposal.id,
-    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}. Nothing is saved until you review and certify them in Modeling.`,
+    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}.`,
+    ...(domain ? { domain } : {}),
+    ...(report.stagingHidden?.length ? { stagingHidden: report.stagingHidden } : {}),
   };
 }
 

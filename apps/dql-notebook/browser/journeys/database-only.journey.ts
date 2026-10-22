@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
@@ -12,6 +12,13 @@ import { cliEntry, installDuckdbConnector, repoRoot, run, startNotebookServer, t
  * the person ticks one, Apply and synchronize, Draft my models, and lands in
  * Modeling's review. A reload on the way resumes at the same step, and the
  * drafted tables show as drafted in Apps.
+ *
+ * New-user round 2, Q3: the database file is jaffle_shop.duckdb and its dev
+ * schema holds staging copies (stg_customers, stg_orders) beside the final
+ * tables, plus a raw schema. Setup hides the raw schema and the staging copies
+ * behind "Show staging tables", names the Domain "Jaffle shop" (not "dev"),
+ * says honestly what it does with rows, keeps the drafts across a reload, and
+ * Modeling shows one grouped note instead of a line per table.
  *
  * It starts its own server (the shared one is a dbt fixture) and leaves the
  * first-run Guided Setup open, as a new user sees it.
@@ -31,7 +38,14 @@ test.beforeAll(async () => {
   const shared = process.env.ZLENS_E2E_DUCKDB_CONNECTORS;
   if (shared && existsSync(shared)) cpSync(shared, connectorRoot, { recursive: true });
   else installDuckdbConnector(projectDir);
-  run('node', [join(repoRoot, 'scripts/seed-eval-warehouse.mjs'), '--connector-root', connectorRoot, '--out', join(projectDir, 'warehouse.duckdb'), '--schema', 'dev']);
+  // The eval seed, plus staging copies of two final tables and a raw schema.
+  const seed = JSON.parse(readFileSync(join(repoRoot, 'apps/cli/test/fixtures/jaffle-supply-chain/seeds/seed.json'), 'utf8')) as { tables: Record<string, unknown> };
+  seed.tables.stg_customers = seed.tables.dim_customers;
+  seed.tables.stg_orders = seed.tables.fct_orders;
+  seed.tables['raw.raw_customers'] = seed.tables.dim_customers;
+  const seedPath = join(workDir, 'seed.json');
+  writeFileSync(seedPath, JSON.stringify(seed));
+  run('node', [join(repoRoot, 'scripts/seed-eval-warehouse.mjs'), '--connector-root', connectorRoot, '--seed', seedPath, '--out', join(projectDir, 'jaffle_shop.duckdb'), '--schema', 'dev']);
   expect(existsSync(join(projectDir, 'dql.config.json'))).toBe(false);
   server = await startNotebookServer({ projectDir, workDir, acknowledgeSetup: false, args: ['--yes'] });
 });
@@ -48,7 +62,7 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   expect(config.modeling?.mode).toBe('warehouse-first');
   expect(config.manifestVersion).toBe(3);
   expect(config.dbt).toBeUndefined();
-  expect(config.connections?.default).toEqual({ driver: 'duckdb', filepath: 'warehouse.duckdb' });
+  expect(config.connections?.default).toEqual({ driver: 'duckdb', filepath: 'jaffle_shop.duckdb' });
   expect(readFileSync(join(projectDir, 'notebooks', 'welcome.dqlnb'), 'utf8')).not.toContain('Example Customer Rollup');
 
   await page.goto(server!.baseUrl);
@@ -64,6 +78,11 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await next.click();
 
   await expect(setup.getByRole('heading', { name: 'Connect your database' })).toBeVisible();
+  // Honest wording about rows, and never "never their rows".
+  await expect(setup.getByText(/ZLens reads table structure and counts rows to check keys\. Sample rows are shown only to you, on this computer\. Nothing is sent anywhere unless you turn on value profiles for AI answers\./).first()).toBeVisible();
+  // Value profiles are off in this project, so nothing says values are sent.
+  await expect(setup.getByText('Value profiles are on')).toHaveCount(0);
+  await expect(setup.getByText(/never (their )?rows/)).toHaveCount(0);
   // Drafting waits for the synchronized catalog.
   const draft = setup.getByRole('region', { name: 'Draft my models' });
   await expect(draft.getByRole('button', { name: 'Draft my models' })).toBeDisabled();
@@ -76,18 +95,38 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await expect(setup.getByText(/outside the dbt project/)).toHaveCount(0);
   const devSchema = setup.getByRole('checkbox', { name: /^dev/ });
   await expect(devSchema).toBeVisible({ timeout: 60_000 });
+  // The raw schema waits behind "Show staging tables".
+  const showStagingSchemas = setup.getByRole('checkbox', { name: /Show staging tables/ });
+  await expect(setup.getByRole('checkbox', { name: /^raw/ })).toHaveCount(0);
+  await showStagingSchemas.check();
+  await expect(setup.getByRole('checkbox', { name: /^raw/ })).toBeVisible();
+  await showStagingSchemas.uncheck();
+  await expect(setup.getByRole('checkbox', { name: /^raw/ })).toHaveCount(0);
   await devSchema.check();
   await setup.getByRole('button', { name: 'Apply and synchronize' }).click();
   await expect(setup.getByText(/Modeling catalog · \d+ tables and views/).first()).toBeVisible({ timeout: 90_000 });
   await expect(setup.getByText(/LOCAL_[0-9A-F]{8}/)).toHaveCount(0);
 
   await draft.getByRole('button', { name: 'Draft my models' }).click();
-  await expect(draft.getByRole('status')).toContainText(/Drafted \d+ models? and \d+ joins? from \d+ tables?/, { timeout: 120_000 });
+  await expect(draft.getByRole('status')).toContainText(/Drafted 4 models and \d+ joins? from 6 tables/, { timeout: 120_000 });
+  // The staging copies are left out; the Domain is named after the file, not the schema.
+  await expect(draft.getByText('Left out 2 staging tables (stg_customers, stg_orders): a final table holds the same data.')).toBeVisible();
+  await expect(draft.getByLabel('Domain name')).toContainText('Your tables go in the Domain Jaffle shop, named after your database.');
+  await expect(draft.getByText(/Domain dev\b/)).toHaveCount(0);
+  // "Show staging tables" drafts them too, and back.
+  const showStaging = draft.getByRole('checkbox', { name: 'Show staging tables' });
+  await showStaging.check();
+  await expect(draft.getByRole('status')).toContainText(/Drafted 6 models/, { timeout: 120_000 });
+  await expect(draft.getByText('Staging tables are drafted too.')).toBeVisible();
+  await showStaging.uncheck();
+  await expect(draft.getByRole('status')).toContainText(/Drafted 4 models/, { timeout: 120_000 });
+  await expect(draft.getByLabel('Drafts waiting')).toHaveText('4 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
 
-  // A restart resumes at the same step, with the drafted models.
+  // A restart resumes at the same step, with the drafted models kept.
   await page.reload();
   await expect(setup.getByRole('heading', { name: 'Connect your database' })).toBeVisible({ timeout: 60_000 });
   await expect(draft.getByRole('status')).toContainText(/Drafted \d+ models?/);
+  await expect(draft.getByLabel('Drafts waiting')).toHaveText('4 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
 
   // Apps lists the drafted tables as drafted, with the key setup checked.
   const tables = await (await page.request.get(`${server!.baseUrl}/api/app-datasets/tables`)).json() as { tables: Array<{ name: string; modeled?: { state: string; key?: string } }> };
@@ -104,8 +143,32 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await expect(setup).toBeHidden({ timeout: 30_000 });
 
   // Modeling opens the drafted models for review; nothing is written until saved.
-  await expect(page.getByText('Review exact proposal')).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(/warehouse discovery/).first()).toBeVisible();
+  const review = page.getByRole('dialog', { name: 'Review context proposal' });
+  await expect(review.getByText('Review the models ZLens drafted')).toBeVisible({ timeout: 60_000 });
+  await expect(review.getByText('Drafted from your database · needs review')).toBeVisible();
+  // One plain line for the tables placed in the default area; codes and ids only under Technical details.
+  await expect(review.getByRole('listitem').filter({ hasText: 'tables placed in the default area' })).toHaveCount(1);
+  await expect(review.getByText('4 tables placed in the default area. You can rename or move them later.', { exact: true })).toBeVisible();
+  await expect(review.getByText(/MODEL_AREA_DEFAULTED/)).toBeHidden();
+  await expect(review.getByText(/scope:domain:/)).toBeHidden();
+  await expect(review.getByText('Create the Domain Jaffle shop')).toBeVisible();
+  await expect(review.getByText(/stg_customers/)).toHaveCount(0);
   // Finishing cleared the saved progress: the next start does not resume setup.
   expect(existsSync(join(projectDir, '.dql', 'local', 'setup-progress.json'))).toBe(false);
+
+  // Leaving without Save keeps the drafts, across a reload.
+  await review.getByRole('button', { name: 'Keep for later' }).click();
+  await expect(review).toBeHidden();
+  const waiting = page.getByRole('status', { name: 'Drafted models waiting for review' });
+  await expect(waiting).toContainText('4 drafted models waiting for review in Jaffle shop.');
+  await page.reload();
+  await expect(waiting).toContainText('4 drafted models waiting for review in Jaffle shop.', { timeout: 60_000 });
+
+  // Review them again and save: nothing waits any more.
+  await waiting.getByRole('button', { name: 'Review drafts' }).click();
+  await expect(review.getByText('Review the models ZLens drafted')).toBeVisible();
+  await review.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(review).toBeHidden({ timeout: 60_000 });
+  await expect(waiting).toBeHidden();
+  expect(readFileSync(join(projectDir, 'domains', 'jaffle-shop', 'domain.dql'), 'utf8')).toContain('Jaffle shop');
 });

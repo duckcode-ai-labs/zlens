@@ -1,26 +1,34 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CheckCircle2, FileDiff, Loader2, RefreshCw, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, FileDiff, Loader2, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
 import { api, type ContextAuthoringProposalV1 } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
+import { describeProposalOperation, groupProposalDiagnostics, proposalOriginWords, proposalReviewTitle, proposalScopeNames } from './proposal-review-words';
 
 export function ContextProposalReviewDrawer({
   proposal,
   theme,
   onClose,
   onCommitted,
+  onDiscarded,
 }: {
   proposal: ContextAuthoringProposalV1;
   theme: Theme;
   onClose: () => void;
   onCommitted: (proposal: ContextAuthoringProposalV1) => void;
+  /** Drafts from the database can be turned down; without this, closing keeps them for later. */
+  onDiscarded?: (proposal: ContextAuthoringProposalV1) => void;
 }): JSX.Element {
   const [current, setCurrent] = useState(proposal);
   const [selected, setSelected] = useState(() => proposal.operations.map((operation) => operation.id));
-  const [busy, setBusy] = useState<'preview' | 'rebase' | 'commit' | null>(null);
+  const [busy, setBusy] = useState<'preview' | 'rebase' | 'commit' | 'discard' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rebaseAvailable, setRebaseAvailable] = useState(false);
   const blocking = current.diagnostics.filter((diagnostic) => diagnostic.severity === 'blocking');
   const patchesByOperation = useMemo(() => new Map(current.operations.map((operation) => [operation.id, current.patches.filter((patch) => patch.operationId === operation.id)])), [current]);
+  const notes = useMemo(() => groupProposalDiagnostics(current.diagnostics, current.origin), [current]);
+  const scopeNames = useMemo(() => proposalScopeNames(current), [current]);
+  // Drafts from the database wait until they are saved or discarded (new-user round 2, Q3).
+  const keptDrafts = current.origin === 'warehouse_discovery' && current.status === 'proposed';
 
   /**
    * Reviewing a large import means toggling many checkboxes in a row. Each
@@ -72,6 +80,19 @@ export function ContextProposalReviewDrawer({
     }
   };
 
+  const discard = async () => {
+    setBusy('discard');
+    setError(null);
+    try {
+      const discarded = await api.discardContextProposal(current.id);
+      onDiscarded?.(discarded);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const rebase = async () => {
     setBusy('rebase');
     setError(null);
@@ -93,8 +114,8 @@ export function ContextProposalReviewDrawer({
         <header style={{ minHeight: 58, padding: '0 18px', borderBottom: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 10 }}>
           <span style={{ width: 30, height: 30, borderRadius: 8, background: 'var(--accent-dim)', color: theme.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}><FileDiff size={16} /></span>
           <div style={{ flex: 1 }}>
-            <strong style={{ fontSize: 14 }}>Review exact proposal</strong>
-            <div style={{ marginTop: 2, fontSize: 10.5, color: theme.textMuted }}>{current.origin.replace(/_/g, ' ')} · immutable revision · {current.trustState.replace(/_/g, ' ')}</div>
+            <strong style={{ fontSize: 14 }}>{proposalReviewTitle(current.origin)}</strong>
+            <div style={{ marginTop: 2, fontSize: 10.5, color: theme.textMuted }}>{proposalOriginWords(current.origin)} · needs review</div>
           </div>
           <button type="button" aria-label="Close proposal" disabled={Boolean(busy)} onClick={onClose} style={iconButton(theme)}><X size={15} /></button>
         </header>
@@ -108,15 +129,19 @@ export function ContextProposalReviewDrawer({
           </div>
           <div style={{ padding: '10px 12px', border: '1px solid var(--border-subtle)', borderRadius: 9, background: 'var(--bg-1)', color: theme.textSecondary, fontSize: 11, lineHeight: 1.5, marginBottom: 14 }}>
             <ShieldCheck size={14} style={{ verticalAlign: -3, marginRight: 7, color: theme.accent }} />
-            Nothing below has changed source. Saving compiles the complete candidate and writes every selected patch together or writes nothing.
+            {keptDrafts
+              ? 'Nothing is saved yet. These drafts are kept until you save or discard them, so you can close this and come back. Save writes every ticked change together, or nothing.'
+              : 'Nothing is saved yet. Save writes every ticked change together, or nothing.'}
           </div>
 
-          {current.diagnostics.map((diagnostic, index) => (
-            <div key={`${diagnostic.code}-${index}`} style={{ display: 'flex', gap: 8, padding: '8px 10px', marginBottom: 6, borderRadius: 7, background: diagnostic.severity === 'blocking' ? 'var(--status-error-bg, rgba(180,50,50,.1))' : 'var(--bg-1)', color: diagnostic.severity === 'blocking' ? 'var(--status-error, #c45555)' : theme.textSecondary, fontSize: 10.5 }}>
-              {diagnostic.severity === 'blocking' ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
-              <span><b>{diagnostic.code}</b> · {diagnostic.message}</span>
-            </div>
-          ))}
+          <div role="list" aria-label="Notes">
+            {notes.map((note) => (
+              <div key={note.key} role="listitem" style={{ display: 'flex', gap: 8, padding: '8px 10px', marginBottom: 6, borderRadius: 7, background: note.severity === 'blocking' ? 'var(--status-error-bg, rgba(180,50,50,.1))' : 'var(--bg-1)', color: note.severity === 'blocking' ? 'var(--status-error, #c45555)' : theme.textSecondary, fontSize: 10.5 }}>
+                {note.severity === 'blocking' ? <AlertTriangle size={13} /> : <CheckCircle2 size={13} />}
+                <span>{note.summary}</span>
+              </div>
+            ))}
+          </div>
 
           <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
             {current.operations.map((operation) => {
@@ -126,14 +151,12 @@ export function ContextProposalReviewDrawer({
                   <label style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '11px 12px', cursor: busy ? 'wait' : 'pointer' }}>
                     <input type="checkbox" checked={selected.includes(operation.id)} disabled={Boolean(busy)} onChange={(event) => updateSelection(operation.id, event.target.checked)} />
                     <span style={{ flex: 1, minWidth: 0 }}>
-                      <b style={{ display: 'block', fontSize: 11.5 }}>{describeOperation(operation)}</b>
-                      <code style={{ display: 'block', marginTop: 3, color: theme.textMuted, fontSize: 9.5, overflowWrap: 'anywhere' }}>{operation.id}</code>
+                      <b style={{ display: 'block', fontSize: 11.5 }}>{describeProposalOperation(operation, scopeNames)}</b>
                     </span>
-                    <span style={{ fontSize: 10, color: theme.textMuted }}>{patches.length} patch{patches.length === 1 ? '' : 'es'}</span>
                   </label>
-                  {patches.map((patch) => (
+                  {patches.filter((patch) => patch.changed).map((patch) => (
                     <details key={`${patch.operationId}-${patch.path}`} style={{ borderTop: '1px solid var(--border-subtle)' }}>
-                      <summary style={{ padding: '8px 12px', cursor: 'pointer', color: theme.textSecondary, fontSize: 10.5 }}><code>{patch.path}</code></summary>
+                      <summary style={{ padding: '8px 12px', cursor: 'pointer', color: theme.textSecondary, fontSize: 10.5 }}>File change · <code>{patch.path}</code></summary>
                       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1, background: 'var(--border-subtle)' }}>
                         <Patch title="Before" value={patch.before} theme={theme} />
                         <Patch title="After" value={patch.after} theme={theme} />
@@ -145,62 +168,45 @@ export function ContextProposalReviewDrawer({
             })}
           </div>
           {error ? <div role="alert" style={{ color: 'var(--status-error, #c45555)', fontSize: 11, marginTop: 12 }}>{error}</div> : null}
+
+          <details aria-label="Technical details" style={{ marginTop: 16, border: '1px solid var(--border-subtle)', borderRadius: 9, background: 'var(--bg-1)' }}>
+            <summary style={{ padding: '8px 12px', cursor: 'pointer', color: theme.textSecondary, fontSize: 10.5 }}>Technical details</summary>
+            <div style={{ padding: '4px 12px 12px', fontSize: 10, color: theme.textMuted, lineHeight: 1.55, display: 'grid', gap: 8 }}>
+              <div>Proposal <code>{current.proposalHash.slice(0, 12)}</code> · {current.origin} · revision {current.revision ?? 1} · {current.trustState}</div>
+              {current.diagnostics.length ? (
+                <ul aria-label="Notes as written" style={{ margin: 0, paddingLeft: 16 }}>
+                  {current.diagnostics.map((diagnostic, index) => (
+                    <li key={`${diagnostic.code}-${index}`}>
+                      <code>{diagnostic.code}</code> · {diagnostic.message}
+                      {(diagnostic.operationIds ?? (diagnostic.operationId ? [diagnostic.operationId] : [])).length
+                        ? <> · <code style={{ overflowWrap: 'anywhere' }}>{(diagnostic.operationIds ?? [diagnostic.operationId!]).join(', ')}</code></>
+                        : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+              <ul aria-label="Changes by id" style={{ margin: 0, paddingLeft: 16 }}>
+                {current.operations.map((operation) => {
+                  const count = (patchesByOperation.get(operation.id) ?? []).length;
+                  return <li key={operation.id}><code style={{ overflowWrap: 'anywhere' }}>{operation.id}</code> · {count} patch{count === 1 ? '' : 'es'}</li>;
+                })}
+              </ul>
+            </div>
+          </details>
         </div>
 
         <footer style={{ padding: '12px 18px', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 9 }}>
-          <span style={{ flex: 1, fontSize: 10.5, color: theme.textMuted }}>Proposal <code>{current.proposalHash.slice(0, 12)}</code></span>
+          <span style={{ flex: 1, fontSize: 10.5, color: theme.textMuted }}>{selected.length} of {current.operations.length} change{current.operations.length === 1 ? '' : 's'} ticked</span>
           {rebaseAvailable ? <button type="button" onClick={() => void rebase()} disabled={Boolean(busy)} style={secondaryButton(theme)}><RefreshCw size={13} /> Rebase proposal</button> : null}
-          <button type="button" onClick={onClose} disabled={Boolean(busy)} style={secondaryButton(theme)}>Cancel</button>
+          {keptDrafts && onDiscarded ? <button type="button" onClick={() => void discard()} disabled={Boolean(busy)} style={secondaryButton(theme)}><Trash2 size={13} /> {busy === 'discard' ? 'Discarding…' : 'Discard drafts'}</button> : null}
+          <button type="button" onClick={onClose} disabled={Boolean(busy)} style={secondaryButton(theme)}>{keptDrafts ? 'Keep for later' : 'Cancel'}</button>
           <button type="button" onClick={() => void commit()} disabled={Boolean(busy) || selected.length === 0 || blocking.length > 0} style={{ ...primaryButton(theme), opacity: busy || selected.length === 0 || blocking.length ? .55 : 1 }}>
-            {busy ? <Loader2 size={13} /> : <ShieldCheck size={13} />} {busy === 'preview' ? 'Repreviewing…' : busy === 'commit' ? 'Saving…' : 'Save'}
+            {busy ? <Loader2 size={13} /> : <ShieldCheck size={13} />} {busy === 'preview' ? 'Updating…' : busy === 'commit' ? 'Saving…' : 'Save'}
           </button>
         </footer>
       </aside>
     </div>
   );
-}
-
-/**
- * A one-line, plain-language summary of what an operation does.
- *
- * The exact source patch is still one click away, but leading with
- * "Bind fct_orders as Order in commerce / core" is what makes a 40-model import
- * reviewable; a list of operation ids is not.
- */
-function describeOperation(operation: ContextAuthoringProposalV1['operations'][number]): string {
-  if (operation.kind === 'skill_change') {
-    return `${operation.operation === 'create' ? 'Create' : operation.operation === 'move' ? 'Move' : 'Update'} skill ${operation.value.id}`;
-  }
-  if (operation.kind === 'dbt_source_change') return 'Patch dbt source';
-  if (operation.kind === 'dataset_change') {
-    return `Update Dataset definition ${operation.change.targetPath}`;
-  }
-  if (operation.kind === 'dataset_draft') {
-    return `Create review-required Dataset draft ${operation.change.domain}/${operation.change.slug}`;
-  }
-  const change = operation.change;
-  const scope = (domain?: string, areaId?: string) => [domain, areaId].filter(Boolean).join(' / ');
-  switch (change.operation) {
-    case 'upsert_domain': return `Create domain ${change.value.id}`;
-    case 'upsert_area': return `Create subject area ${change.value.name || change.value.id} in ${change.value.domain}`;
-    case 'upsert_entity':
-      return `Bind ${change.value.dbtModel.split('.').at(-1)} as ${change.value.businessName || change.value.id} in ${scope(change.value.domain, change.value.areaId)}`;
-    case 'upsert_relationship': {
-      const keys = change.value.keys.map((key) => `${key.from} = ${key.to}`).join(' and ');
-      const name = (ref: string) => ref.split('::').pop() ?? ref;
-      // The level the relationship is saved at, as the Modeling page names it.
-      const level = change.value.status === 'certified'
-        ? 'certified'
-        : change.value.status === 'deprecated'
-          ? 'retired'
-          : change.value.status !== 'draft' && change.value.validation?.status === 'passed' ? 'validated' : 'draft';
-      return `Connect ${name(change.value.from)} to ${name(change.value.to)} on ${keys} (${change.value.cardinality.replace(/_/g, ' ')}, saved as ${level})`;
-    }
-    case 'remove_entity': return `Remove model ${change.value.id}`;
-    case 'remove_relationship': return `Remove relationship ${change.value.id}`;
-    case 'remove_area': return `Remove subject area ${change.value.id}`;
-    default: return change.operation.replace(/_/g, ' ');
-  }
 }
 
 function Summary({ label, value, theme }: { label: string; value: number; theme: Theme }) {
