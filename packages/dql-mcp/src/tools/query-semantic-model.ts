@@ -16,6 +16,7 @@ import type { DQLContext } from '../context.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
 import { readEnv } from '@zlens/core';
 import { fetchRuntime, runtimeUnreachableMessage } from '../runtime-fetch.js';
+import { findCertifiedBlockCoverage, type CertifiedCoverageResult } from './certified-coverage.js';
 
 export const querySemanticModelInput = zodInputShapeForTool('query_semantic_model');
 
@@ -104,8 +105,12 @@ export async function querySemanticModel(
       ...(args.orderBy?.length ? { orderBy: args.orderBy } : {}),
       ...(args.limit ? { limit: args.limit } : {}),
     };
+    const certified = await findCertifiedBlockCoverage(ctx, {
+      question: args.question?.trim() || undefined,
+      members: { metrics: explicitMetrics, dimensions: args.dimensions ?? [], timeDimension: args.timeDimension, filters: args.filters },
+    });
     const draftBlock = saveSemanticDraft(ctx.projectRoot, {
-      saveDraft: args.saveDraft,
+      saveDraft: args.saveDraft ?? (certified.block ? false : undefined),
       name: artifactName,
       question: args.question ?? explicitMetrics.join(', '),
       domain,
@@ -119,8 +124,9 @@ export async function querySemanticModel(
       serverUrl: args.serverUrl,
       rowLimit: args.rowLimit,
     });
-    const trust = semanticCompileTrustStatus(draftBlock, preview.error);
+    const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified);
     return {
+      ...certifiedCoverageFields(certified),
       matched: true,
       uncertified: true,
       reviewStatus: 'draft_ready',
@@ -160,8 +166,15 @@ export async function querySemanticModel(
     driver: args.driver,
     tableMapping: args.tableMapping,
   });
+  const certified = await findCertifiedBlockCoverage(ctx, {
+    question,
+    members: result
+      ? { metrics: result.metrics, dimensions: result.dimensions, timeDimension: result.timeDimension, filters: result.filters }
+      : { metrics: [], dimensions: [] },
+  });
   if (!result) {
     return {
+      ...certifiedCoverageFields(certified),
       matched: false,
       reason: 'No compatible semantic metric/dimension/time-grain selection was found for the question.',
       available,
@@ -169,7 +182,7 @@ export async function querySemanticModel(
   }
 
   const draftBlock = saveSemanticDraft(ctx.projectRoot, {
-    saveDraft: args.saveDraft,
+    saveDraft: args.saveDraft ?? (certified.block ? false : undefined),
     name: result.dqlArtifact.name ?? result.metric,
     question,
     domain: layer.listMetrics().find((metric) => metric.name === result.metric)?.domain,
@@ -183,9 +196,10 @@ export async function querySemanticModel(
     serverUrl: args.serverUrl,
     rowLimit: args.rowLimit,
   });
-  const trust = semanticCompileTrustStatus(draftBlock, preview.error);
+  const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified);
 
   return {
+    ...certifiedCoverageFields(certified),
     matched: true,
     uncertified: true,
     reviewStatus: 'draft_ready',
@@ -210,7 +224,25 @@ export async function querySemanticModel(
   };
 }
 
-function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionError?: string) {
+/**
+ * Leads the result, so an agent reads it before the compiled draft: the
+ * certified block that answers this, or what the certified check found.
+ */
+function certifiedCoverageFields(certified: CertifiedCoverageResult) {
+  if (certified.block) {
+    return {
+      certifiedBlock: certified.block,
+      nextTool: 'query_via_block' as const,
+      recommendedAction: `Certified block "${certified.block.name}"${certified.block.grain ? ` (${certified.block.grain})` : ''} answers this. Call query_via_block with { name: "${certified.block.name}" } and answer from it. This semantic compile is an uncertified draft; do not say that no certified block exists.`,
+    };
+  }
+  return {
+    certifiedCheck: { checked: certified.checked, ...(certified.route ? { askDqlRoute: certified.route } : {}) },
+    ...(certified.checked ? {} : { recommendedAction: 'Certified blocks were not checked for this request. Call ask_dql with the user\'s question before answering from this draft.' }),
+  };
+}
+
+function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionError?: string, certified?: CertifiedCoverageResult) {
   return {
     label: 'AI-generated semantic compile',
     uncertified: true,
@@ -220,12 +252,20 @@ function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionE
     draftPath: draftBlock?.path,
     promotionPath: draftBlock ? 'zlens certify --from-draft' : undefined,
     caveats: [
-      'No certified block exactly answered this question.',
+      certifiedCaveat(certified),
       'Semantic-layer members were compiled deterministically, but the generated DQL artifact must be reviewed before certification.',
       'semantic_draft_review_required',
       ...(executionError ? [`Execution caveat: ${executionError}`] : []),
     ],
   };
+}
+
+function certifiedCaveat(certified: CertifiedCoverageResult | undefined): string {
+  if (certified?.block) {
+    return `Certified block "${certified.block.name}" answers this; use query_via_block for the certified answer.`;
+  }
+  if (certified?.checked) return 'No certified block exactly answered this question.';
+  return 'Certified blocks were not checked; ask_dql decides whether a certified block answers the question.';
 }
 
 async function previewSemanticQuery(

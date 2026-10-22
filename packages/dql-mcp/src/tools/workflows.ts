@@ -309,13 +309,26 @@ export async function inspectDqlProject(
   const dashboards = Object.values(manifest.dashboards ?? {});
   const apps = Object.values(manifest.apps ?? {});
   const knowledgeGraph = manifest.knowledgeGraph;
+  const certifiedBlocks = blocks.filter((block) => block.status === 'certified');
   return {
     projectRoot: ctx.projectRoot,
     blocks: {
       total: blocks.length,
-      certified: blocks.filter((block) => block.status === 'certified').length,
-      draft: blocks.filter((block) => block.status !== 'certified').length,
+      certified: certifiedBlocks.length,
+      draft: blocks.length - certifiedBlocks.length,
     },
+    // The certified answers come first: a client with no agent guide file
+    // (Claude Desktop) sees them before the semantic layer or the warehouse.
+    certifiedBlocks: certifiedBlocks.slice(0, INSPECT_CERTIFIED_BLOCK_LIMIT).map((block) => ({
+      name: block.name,
+      domain: block.domain ?? null,
+      grain: block.grain ?? null,
+      description: block.description ?? null,
+    })),
+    ...(certifiedBlocks.length > INSPECT_CERTIFIED_BLOCK_LIMIT
+      ? { certifiedBlocksTruncated: `${certifiedBlocks.length - INSPECT_CERTIFIED_BLOCK_LIMIT} more; search_blocks finds them.` }
+      : {}),
+    nextTool: 'ask_dql',
     apps: apps.length,
     dashboards: dashboards.length,
     semantic: {
@@ -341,9 +354,13 @@ export async function inspectDqlProject(
     } : undefined,
     index,
     catalog,
-    recommendedNextStep: 'Use ask_dql before writing SQL, then query_via_block or query_via_metadata based on the returned route.',
+    recommendedNextStep: certifiedBlocks.length > 0
+      ? 'Call ask_dql with the user\'s question next, before query_semantic_model, list_datasets or any SQL. When one of the certifiedBlocks answers it at its grain, ask_dql returns route "certified" and nextTool query_via_block; answer from that block.'
+      : 'Call ask_dql with the user\'s question next, before writing SQL, then query_via_block or query_via_metadata based on the returned route.',
   };
 }
+
+const INSPECT_CERTIFIED_BLOCK_LIMIT = 50;
 
 export const buildDqlBlockInput = zodInputShapeForTool('build_dql_block');
 

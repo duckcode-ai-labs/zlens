@@ -73,9 +73,15 @@ interface McpToolRegistration {
 
 const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'ZLens is a governed analytics MCP server. Start each session with ' +
-  '`inspect_dql_project`; route every analytics question through `ask_dql` ' +
-  'before writing SQL. It returns the safe route, trust label, certified ' +
-  'candidate when available, allowed SQL context, and next tool.\n' +
+  '`inspect_dql_project`; it lists the certified blocks and their grains.\n' +
+  'Answer order for every analytics question, always:\n' +
+  '1. Call `ask_dql` first, before `query_semantic_model`, `list_datasets`, or any SQL. ' +
+  'It returns the safe route, trust label, certified candidate when available, ' +
+  'allowed SQL context, and next tool.\n' +
+  '2. If it returns route `certified`, call `query_via_block` with that block and answer from it.\n' +
+  '3. Only when `ask_dql` returns no certified block, use the semantic layer or ' +
+  'the generated paths below. Never tell the user that no certified block answers ' +
+  'a question unless `ask_dql` said so.\n' +
   'Two ways to answer: `answer_question` runs ZLens\'s FULL governed cascade and ' +
   'returns the executed answer + rows + canonical trust label + a reviewable ' +
   'draft — use it when you want ZLens to generate for you (same engine + trust ' +
@@ -90,10 +96,12 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'plan. Call `explain_relationship_proof` when the user needs the cardinality, ' +
   'fanout, export/import, warehouse evidence, owner, or stale-state rationale. ' +
   'A dbt dependency edge or an inferred key suggestion never authorizes a join.\n' +
-  'Semantic compile: when the semantic layer contains the requested metric, ' +
-  'dimension, or time grain, use `query_semantic_model` before deep dbt or ' +
-  'warehouse search. Return the DQL semantic artifact, draft path when present, and generated SQL as ' +
-  'reviewable context unless it is backed by a certified block.\n' +
+  'Semantic compile, only after `ask_dql` returned no certified block: when the ' +
+  'semantic layer contains the requested metric, dimension, or time grain, use ' +
+  '`query_semantic_model` before deep dbt or warehouse search. If its result names ' +
+  'a `certifiedBlock`, call `query_via_block` with that block instead. Otherwise return ' +
+  'the DQL semantic artifact, draft path when present, and generated SQL as ' +
+  'reviewable context, labelled uncertified.\n' +
   'Tier 1 certified: for an exact saved block or direct KPI, use ' +
   '`search_blocks`/`get_block` for discovery and `query_via_block` only when ' +
   'a certified block grain exactly answers the question.\n' +
@@ -121,7 +129,8 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'output is grounding evidence, never join authorization.\n' +
   'Tier 3 missing context: if metadata does not identify a safe table, metric, ' +
   'dimension, or grain, refuse and ask for what is missing.\n' +
-  'App Datasets: use `list_datasets` and `describe_dataset` to discover current ' +
+  'App Datasets (for App tiles; analytics questions still start with `ask_dql`): ' +
+  'use `list_datasets` and `describe_dataset` to discover current ' +
   'approved Dataset capability, then `preview_tile_query` or `query_dataset` with ' +
   'a typed TileQuery. These tools accept no SQL and execute through the same local ' +
   'governed Dataset runtime as App Builder; their results are ephemeral and cannot ' +

@@ -44,6 +44,20 @@ describe('ZLens MCP server instructions', () => {
     expect(DQL_MCP_INSTRUCTIONS).toContain('suggest_block');
   });
 
+  it('put ask_dql first and the semantic layer only after it (Claude Desktop has no guide file)', () => {
+    // A Claude Desktop recording skipped ask_dql for query_semantic_model and
+    // said no certified block existed while monthly_revenue was certified.
+    const askFirst = DQL_MCP_INSTRUCTIONS.indexOf('1. Call `ask_dql` first');
+    expect(askFirst).toBeGreaterThan(-1);
+    expect(askFirst).toBeLessThan(DQL_MCP_INSTRUCTIONS.indexOf('`query_semantic_model` before deep dbt'));
+    expect(DQL_MCP_INSTRUCTIONS).toContain('before `query_semantic_model`, `list_datasets`, or any SQL');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('2. If it returns route `certified`, call `query_via_block`');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('Semantic compile, only after `ask_dql` returned no certified block');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('If its result names a `certifiedBlock`, call `query_via_block`');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('Never tell the user that no certified block answers a question unless `ask_dql` said so');
+    expect(DQL_MCP_INSTRUCTIONS).not.toMatch(/use `query_semantic_model` before deep dbt or warehouse search\. Return/);
+  });
+
   it('name only tools the profile serves (agents were sent to tools they could not see)', () => {
     for (const profile of ['agentic', 'full'] as const) {
       const served = new Set(__test__.buildMcpToolRegistrations({} as DQLContext, profile).map((tool) => tool.name));
