@@ -11,9 +11,12 @@ The workbench opens on **Apps**.
 ## Open an App
 
 1. In the left rail, click **Apps**.
-2. The library lists your Apps. Use the tabs (**All**, **Local drafts**,
+2. The library lists your Apps. Use the tabs (**All**, **Not published yet**,
    **Private**, **Shared**, **Favourites**) or **Search apps, domains,
-   owners...** to find one.
+   owners...** to find one. A new App you have not published says **Not
+   published yet** and only you can see it; a published App you are editing
+   says **Unpublished changes (only you can see them)** on its card. The
+   counts next to the tabs count these same cards.
 3. Click **View** on the App's card.
 
 Each card shows how many **Pages** the App has, when it was last

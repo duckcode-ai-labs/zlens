@@ -77,7 +77,7 @@ test('checking a table does not certify it; certifying is a short review from th
   // Add data → Check and add on a table nobody checked yet.
   await browser.getByRole('group', { name: 'Kind of data' }).getByRole('button', { name: /^Tables/ }).click();
   const tableRow = browser.locator('article.add-data-row.table').filter({ hasText: 'dim_customers' }).first();
-  await expect(tableRow).toContainText('Not checked yet', { timeout: 30_000 });
+  await expect(tableRow).toContainText('Not certified yet', { timeout: 30_000 });
   await tableRow.getByRole('button', { name: 'Check dim_customers and add it' }).click();
   const check = page.getByRole('dialog', { name: 'Check the numbers' });
   await expect(check.getByText(/Each row is one/)).toBeVisible({ timeout: 60_000 });

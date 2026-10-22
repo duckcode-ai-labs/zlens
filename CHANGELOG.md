@@ -62,6 +62,107 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   and removes exit code 2, which no command returns. The troubleshooting
   section on CI is rewritten to match.
 
+### New Apps show after Back, no AI controls without AI, two trust words, steadier canvas
+
+Round-3 new-user review, problems 1, 5, 6 and 10.
+
+- **Back to Apps lists the new App at once.** Back from App Studio puts the
+  draft you just left on the Apps list straight away and reads the list again
+  (it used to show the list from before the App existed until a reload);
+  deleting an App re-reads the drafts too.
+- **One wording for Apps nobody else can see yet.** A new App says **Not
+  published yet** (Studio header: *Not published yet (only you can see it)*;
+  card: **Only you**, **Not published yet**); a published App you are editing
+  says **Unpublished changes (only you can see them)**, and right after you
+  open it **No changes yet · readers see the published App**. "Local draft"
+  and "Private draft" are gone; the library tab is **Not published yet** and
+  its counters count the cards it shows (a published App's draft is not
+  counted as a second App).
+- **Two trust words in the Data list.** A database table reads **Not
+  certified yet**, with **drafted — review in Modeling** when setup drafted it;
+  "Modeled", "Drafted — review to use" and "Not checked yet" are gone (how the
+  model knows the table is in the tooltip). "Governed" no longer appears in
+  App page text (stories, custom layouts, driver and explore notes).
+- **No AI controls without an AI provider.** Tiles have no **Edit with AI** /
+  **Change with AI** / **Ask about this tile**, and block tiles in the reader
+  no **Ask AI**; Quick tiles and Tile settings stay. The reader's Ask box (and
+  its Preview) says *Ask needs an AI provider. The owner can connect one in
+  Settings.* A run refused because no model is configured is marked
+  `providerMissing` and headed **Ask needs an AI provider** · **Not
+  answered**; any other refusal reads **No answer** · **Refused**. Neither is
+  ever called "AI-generated".
+- **Steadier canvas.** A new tile's preview never draws the previous query's
+  result as the new chart (a KPI's total drawn as a one-row trend); it shows
+  *Running…* until the matching result arrives, and runs sooner after a click.
+  **Add to page** clears the tile at once, so a field clicked right after
+  starts the next tile instead of changing this one. Field clicks on a saved
+  tile and adds queue behind earlier saves and work from the newest draft.
+  The tile being built and a tile just added are scrolled into view. Tile
+  charts redraw only when their own data changes (no long tasks on a field
+  click at 6x CPU throttling, down from 75–125 ms).
+- **Filters re-run only the tiles they reach.** Applying a filter offer to a
+  new tile re-runs that tile; the rest keep their results. In the reader, a
+  filter change re-runs only the tiles linked to the filters that changed
+  (pages with a Summary still run whole); tiles that did not run say *Not
+  filtered by …* for the new value. Asking about the App or a chart after such
+  a change runs the whole page once first, so Ask reads every tile's result.
+- Setup's status reads *Indexed N items from your project for search* instead
+  of "governed objects".
+
+### No customers merged by name, the order date first, honest table states, one cents question, date presets
+
+New-user review, round 3 (problems 2, 4, 7, 8, 9 and the Show Me "does not add
+up" explanation).
+
+- **Names group by their key.** A tile grouped by a name (Customer Name)
+  groups by the key of what the name belongs to and shows the name, so two
+  customers called Maria Lopez stay two bars, told apart by their key only
+  when they share a name ("Maria Lopez (#1043)"). A related table's name uses
+  the join's own key column (Orders → Customer Name groups by
+  `orders.customer_id`); a name of the row uses the row key; `store_name`
+  beside `store_id` uses that id. Quick start's Top list, field clicks and Show
+  Me all compile through it. Clicking a bar told apart by its key (Keep only,
+  Exclude, cross-filter) filters that one key; a filter's value list still
+  reads plain names. A name whose key ZLens does not know carries a **Names may
+  repeat** notice on the tile ("Store Name may not be unique: …"; run
+  responses add `dataset.nameWarnings`). Period comparisons keep grouping by
+  the name alone.
+- **The order date first.** The filter field list ranks the date of the rows
+  the tiles count first (the date a trend groups by, a Dataset's own main
+  date), then other own dates, then a related table's dates, labelled by their
+  table (**Customer · First Ordered At**, "the customer's date"), however many
+  tiles a join lets them reach. A tile without the filter's date no longer
+  offers one-click **Use First Ordered At on Customers**: a picker offers other
+  dates as **Different meaning: the customer's First Ordered At**, and a mapped
+  tile says "uses First Ordered At, a different date".
+- **Added tables say so.** `GET /api/app-datasets/tables` lists the Datasets
+  made from each table (`datasets: [{ sourceId, name, state }]`). Add data
+  shows **Not certified yet · added** (or **Certified · added**) for a table in
+  this App, **Not certified yet** with **Add to App** for one made elsewhere (added as that Dataset, never checked
+  into a second copy), and **Check and add** only for a table not made into a
+  Dataset yet. Check and add opens straight on the check, without flashing the
+  table list.
+- **One cents question per table.** "These columns are stored twice, in
+  dollars and in cents: Subtotal, Tax paid and Order total. ZLens will use the
+  dollar columns and hide the cents copies." **[OK] [Show both]** replaces a
+  Yes/No per column whose answers both gave dollars. OK uses the dollar column
+  when the rows show it is the same amount (else reads the cents in dollars);
+  Show both keeps the cents copies as plain numbers. Counts of dates
+  ("Ordered at count") and of running numbers ("Customer order count") are
+  offered but no longer ticked.
+- **Date presets and labels.** Date range controls in Studio and the reader
+  offer **Last 7 days, Last 30 days, This month, This quarter, This year,
+  Custom**; the reader's date control shows its name. A new bar of names (930
+  customers) starts as an explicit **Top 10** on the measure pill. Tile
+  captions read "Top customer: Maria Lopez, $3.1K lifetime spend" and "Highest
+  month: Aug 2025, $94.2K order total"; a KPI no longer repeats its number
+  under the raw field name.
+- **Show Me's "does not add up" fixed.** A table's measure shares its column's
+  name (`lifetime_spend` is the column and its sum); Show Me read the column
+  and called a summed amount non-additive ("Lifetime Spend does not add up
+  across Customer Name"). It now reads the measure. Its value count uses the
+  result's full row count (930), not the rows loaded (500).
+
 ### Certify tables, saved queries and joins without leaving the publish dialog
 
 Trust and publishing design, phase 2 (T4).

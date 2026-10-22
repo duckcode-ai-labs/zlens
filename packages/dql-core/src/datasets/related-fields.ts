@@ -452,3 +452,81 @@ export function datasetFieldForFilter(descriptor: DatasetDescriptor, fieldId: st
   const field = related[0]!;
   return { field, join: descriptor.joins?.find((join) => join.id === field.related!.join) };
 }
+
+/**
+ * Who a name belongs to (new-user round 3, problem 4). Customer Name has 930
+ * values for 935 customers: grouping by the name alone silently merges two
+ * different people called "Stephanie Williams" into one bar. When the name
+ * belongs to something with a key ZLens knows, tiles group by that key and
+ * show the name; a name two keys share is told apart by its key
+ * ("Maria Lopez (#1043)").
+ *
+ * - A related table's name ("customer__customer_name") belongs to the row the
+ *   join reaches: its key is the join's own key column on the parent side
+ *   (orders.customer_id), so no extra join is needed.
+ * - A name of the Dataset's own table belongs to the thing its words name:
+ *   "customer_name" beside a "customer_id" column belongs to that customer;
+ *   a bare "name" (or "customer_name" on a Customers table) belongs to the
+ *   row itself, keyed by the Dataset's row key.
+ *
+ * `key` is absent when the name belongs to something whose key is not known:
+ * the tile then says the name may repeat. Undefined for a field that is not
+ * a name. Pure: the compiler groups by the key, the UI only words it.
+ */
+export interface DatasetNameIdentity {
+  /** The name field. */
+  field: string;
+  /** What one name stands for, singular, in lower-case words: "customer". */
+  entity: string;
+  /** The Dataset field holding that thing's key, when known. */
+  key?: string;
+}
+
+const NAME_COLUMN = /^(?:(.+?)_)?(name)$/i;
+/** "first_name", "full_name": a person's name parts belong to the row itself. */
+const NAME_PART_STEMS = new Set(['first', 'last', 'full', 'display', 'given', 'family', 'middle', 'nick', 'short', 'long']);
+const ENTITY_KEY_SUFFIXES = ['id', 'key', 'uuid'];
+
+/** Whether a field is a name a person reads ("customer_name", "name"), not a code, type or date. */
+export function isNameLikeField(field: Pick<DatasetPhysicalField, 'name' | 'type' | 'role'> & { related?: DatasetPhysicalField['related'] }): boolean {
+  if (field.type !== 'string' || field.role === 'key' || field.role === 'time') return false;
+  const column = field.related?.column ?? relatedFieldParts(field.name)?.column ?? field.name;
+  return NAME_COLUMN.test(column);
+}
+
+export function datasetNameIdentity(descriptor: DatasetDescriptor, fieldName: string): DatasetNameIdentity | undefined {
+  const normalized = fieldName.trim().toLowerCase();
+  const physical = descriptor.fields.filter((candidate): candidate is DatasetPhysicalField => candidate.kind === 'physical');
+  const field = physical.find((candidate) => candidate.name.toLowerCase() === normalized || candidate.qualifiedId.toLowerCase() === normalized);
+  if (!field || !isNameLikeField(field)) return undefined;
+  // A summary's rows are periods or groups already; it has no person to tell apart.
+  if (descriptor.kind !== 'block' || descriptor.grain.aggregate) return undefined;
+  const usable = (name: string | undefined) => {
+    if (!name) return undefined;
+    const found = physical.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+    return found && found.status === 'approved' && found.name !== field.name ? found.name : undefined;
+  };
+  if (field.related) {
+    const join = descriptor.joins?.find((candidate) => candidate.id === field.related!.join);
+    if (!join) return undefined;
+    const entity = singularWords(join.table);
+    if (join.keys.length !== 1) return { field: field.name, entity };
+    const from = join.keys[0]!.from;
+    const key = join.parent ? usable(`${join.parent}__${from}`) : usable(from);
+    return { field: field.name, entity, ...(key ? { key } : {}) };
+  }
+  const rowEntity = (descriptor.grain.entityIds[0] ?? '').split('::').pop()?.replace(/_/g, ' ').trim().toLowerCase() ?? '';
+  const rowKey = descriptor.grain.keyFields.length === 1 ? usable(descriptor.grain.keyFields[0]) : undefined;
+  const stem = (NAME_COLUMN.exec(field.name)?.[1] ?? '').toLowerCase();
+  if (!stem || NAME_PART_STEMS.has(stem)) {
+    // A bare "name" is the row's own name.
+    if (!rowEntity) return undefined;
+    return { field: field.name, entity: singularWords(rowEntity), ...(rowKey ? { key: rowKey } : {}) };
+  }
+  const entity = singularWords(stem);
+  const sibling = ENTITY_KEY_SUFFIXES.map((suffix) => usable(`${stem}_${suffix}`)).find(Boolean);
+  if (sibling) return { field: field.name, entity, key: sibling };
+  // "customer_name" on a Customers table (one row per customer) is the row's own name.
+  if (rowEntity && singularWords(rowEntity) === entity) return { field: field.name, entity, ...(rowKey ? { key: rowKey } : {}) };
+  return { field: field.name, entity };
+}

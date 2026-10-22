@@ -16,6 +16,7 @@ import {
   validateTileQuery,
   checkTileCalculations,
   datasetJoinsUsed,
+  datasetNameIdentity,
   datasetRelatedFieldsUsed,
   type DatasetDescriptor,
   type DatasetJoin,
@@ -67,6 +68,14 @@ export interface CompiledDatasetTileQuery {
   validation: Pick<TileQueryValidation, 'outcome' | 'adaptations'>;
   /** Joins to related tables the SQL uses (design D2), parents first; empty for the Dataset's own fields. */
   joins: DatasetJoin[];
+  /**
+   * Names grouped by their key (new-user round 3, problem 4): Customer Name
+   * grouped by customer_id, so two customers who share a name stay two rows,
+   * told apart as "Maria Lopez (#1043)". Empty when the tile groups by no name.
+   */
+  nameKeys: Array<{ field: string; key: string; alias: string }>;
+  /** A name the tile groups by whose key ZLens does not know: it may merge namesakes. */
+  nameWarnings: Array<{ field: string; entity: string; message: string }>;
 }
 
 /**
@@ -98,6 +107,12 @@ export function compileDatasetTileQuery(input: {
    * opting an already-aggregated source out of the runtime proof gate.
    */
   aggregateSourceDetected?: boolean;
+  /**
+   * Group a name by its key (default on). A period comparison turns it off:
+   * it matches rows of separate period queries by their labels, and a name
+   * told apart in one period but not another would no longer match.
+   */
+  groupNamesByKey?: boolean;
   driver: ConnectionConfig['driver'] | string;
 }): CompiledDatasetTileQuery {
   if (!supportedTileDialect(input.driver)) {
@@ -146,9 +161,21 @@ export function compileDatasetTileQuery(input: {
   // are added, each a LEFT JOIN on a key the related table holds once, so
   // the Dataset's rows are never multiplied. A tile on the Dataset's own
   // fields compiles exactly as before.
-  const joins = datasetJoinsUsed(input.descriptor, effectiveQuery);
+  // A name groups by its key (Customer Name by customer_id), so namesakes are
+  // never merged. The key reads the join's own key column, so it adds no join.
+  const nameIdentities = input.query.detail || input.query.comparison || input.groupNamesByKey === false
+    ? []
+    : input.query.dimensions.flatMap((selection) => {
+      if (selection.timeGrain) return [];
+      const identity = datasetNameIdentity(input.descriptor, selection.field);
+      return identity ? [{ selection, identity }] : [];
+    });
+  const keyedQuery: TileQuery = nameIdentities.some((entry) => entry.identity.key)
+    ? { ...effectiveQuery, dimensions: [...effectiveQuery.dimensions, ...nameIdentities.flatMap((entry) => (entry.identity.key ? [{ field: entry.identity.key }] : []))] }
+    : effectiveQuery;
+  const joins = datasetJoinsUsed(input.descriptor, keyedQuery);
   const sourceSql = joins.length
-    ? joinedDatasetSourceSql(ownSourceSql, joins, datasetRelatedFieldsUsed(input.descriptor, effectiveQuery), input.driver, dialect.quoteIdentifier.bind(dialect))
+    ? joinedDatasetSourceSql(ownSourceSql, joins, datasetRelatedFieldsUsed(input.descriptor, keyedQuery), input.driver, dialect.quoteIdentifier.bind(dialect))
     : ownSourceSql;
   const sourceParams = [...(input.sourceSqlParams ?? [])];
   const variables: Record<string, unknown> = { ...(input.sourceVariables ?? {}) };
@@ -170,6 +197,28 @@ export function compileDatasetTileQuery(input: {
     return column(field.name);
   };
 
+  /**
+   * A bar told apart by its key ("Maria Lopez (#1043)") filters to that one
+   * customer when clicked (Keep only, Exclude, a cross-filter): the name and
+   * the key, never a name no row has. Other values filter by the name.
+   */
+  const keyedNameFilter = (filter: TileQueryFilter, expression: string): string | undefined => {
+    if (!['eq', 'neq', 'in', 'not_in'].includes(filter.op) || input.groupNamesByKey === false) return undefined;
+    const identity = datasetNameIdentity(input.descriptor, filter.field);
+    if (!identity?.key) return undefined;
+    const values = filter.values ?? [];
+    const parsed = values.map((value) => (typeof value === 'string' ? /^(.*) \(#([^()]+)\)$/.exec(value) : null));
+    if (!parsed.some(Boolean)) return undefined;
+    const keyExpression = physicalExpression(identity.key);
+    const text = (value: string) => `CAST(${value} AS ${input.driver === 'bigquery' ? 'STRING' : 'VARCHAR'})`;
+    const parts = values.map((value, index) => {
+      const match = parsed[index];
+      if (!match) return `${expression} = ${addBoundValue(value, filter.field)}`;
+      return `(${expression} = ${addBoundValue(match[1], filter.field)} AND ${text(keyExpression)} = ${addBoundValue(match[2], filter.field)})`;
+    });
+    const any = `(${parts.join(' OR ')})`;
+    return filter.op === 'neq' || filter.op === 'not_in' ? `NOT ${any}` : any;
+  };
   const whereFilters = effectiveQuery.filters ?? [];
   const havingFilters = effectiveQuery.having ?? [];
   const whereClauses = whereFilters.map((filter) => {
@@ -178,7 +227,8 @@ export function compileDatasetTileQuery(input: {
       throw new TileQueryCompilationError('DATASET_FIELD_DRIFT', `Dataset filter field ${filter.field} no longer resolves.`);
     }
     const expression = physicalExpression(filter.field);
-    const clause = compileFilter(filter, expression, dialect.ilike.bind(dialect), addBoundValue, field.type, input.driver);
+    const keyed = keyedNameFilter(filter, expression);
+    const clause = keyed ?? compileFilter(filter, expression, dialect.ilike.bind(dialect), addBoundValue, field.type, input.driver);
     appliedFilters.push({ field: filter.field, op: filter.op, values: [...(filter.values ?? [])], placement: 'where' });
     return clause;
   });
@@ -225,6 +275,8 @@ export function compileDatasetTileQuery(input: {
     })), input.query, appliedFilters, validation, joins);
   }
 
+  const nameKeys: CompiledDatasetTileQuery['nameKeys'] = [];
+  const nameWarnings: CompiledDatasetTileQuery['nameWarnings'] = [];
   const dimensions = input.query.dimensions.map((selection) => {
     const field = datasetPhysicalField(input.descriptor, selection.field);
     if (!field) throw new TileQueryCompilationError('DATASET_FIELD_DRIFT', `Dataset field ${selection.field} no longer resolves.`);
@@ -237,7 +289,20 @@ export function compileDatasetTileQuery(input: {
     const expression = selection.timeGrain
       ? truncateToGrain(selection.timeGrain, column(field.name), field.type, input.driver, dialect)
       : column(field.name);
-    return { alias, expression, field, timeGrain: selection.timeGrain };
+    const identity = nameIdentities.find((entry) => entry.selection === selection)?.identity;
+    if (identity && !identity.key) {
+      nameWarnings.push({ field: field.name, entity: identity.entity, message: nameWarning(field.name, identity.entity) });
+    }
+    if (!identity?.key) return { alias, expression, groupBy: [expression], select: expression, field, timeGrain: selection.timeGrain };
+    const keyExpression = physicalExpression(identity.key);
+    nameKeys.push({ field: field.name, key: identity.key, alias });
+    // Grouped by the key and the name; a name two keys share shows its key.
+    // MIN/MAX over the name (not COUNT DISTINCT, which PostgreSQL has no
+    // window form of) also holds when the tile groups by another field too.
+    const text = (value: string) => `CAST(${value} AS ${input.driver === 'bigquery' ? 'STRING' : 'VARCHAR'})`;
+    const shared = `MIN(${keyExpression}) OVER (PARTITION BY ${expression}) <> MAX(${keyExpression}) OVER (PARTITION BY ${expression})`;
+    const select = `CASE WHEN ${shared} THEN ${text(expression)} || ' (#' || ${text(keyExpression)} || ')' ELSE ${expression} END`;
+    return { alias, expression, groupBy: [expression, keyExpression], select, field, timeGrain: selection.timeGrain };
   });
   const measures = input.query.measures.map((selection) => {
     const measure = datasetMeasureField(input.descriptor, selection.measure);
@@ -262,7 +327,7 @@ export function compileDatasetTileQuery(input: {
     }));
   const quickCalculations = calculations.filter((entry) => entry.calculation.quick);
   const aliasExpressions = new Map<string, string>([
-    ...dimensions.map((dimension): [string, string] => [dimension.alias.toLowerCase(), dimension.expression]),
+    ...dimensions.map((dimension): [string, string] => [dimension.alias.toLowerCase(), dimension.select]),
     ...measures.map((measure): [string, string] => [measure.alias.toLowerCase(), measure.expression]),
     ...calculations.map((entry): [string, string] => [entry.alias.toLowerCase(), entry.alias]),
   ]);
@@ -298,7 +363,7 @@ export function compileDatasetTileQuery(input: {
     }))]
     : undefined;
   const selectColumns = [
-    ...dimensions.map((dimension) => `${dimension.expression} AS ${quote(dimension.alias)}`),
+    ...dimensions.map((dimension) => `${dimension.select} AS ${quote(dimension.alias)}`),
     ...measures.map((measure) => `${measure.expression} AS ${quote(measure.alias)}`),
     ...calculatedMeasures.map((entry) => `${entry.expression} AS ${quote(entry.alias)}`),
     ...(rollups ? dimensions.map((dimension) => `GROUPING(${dimension.expression}) AS ${quote(`__total_${dimension.alias}`)}`) : []),
@@ -326,8 +391,8 @@ export function compileDatasetTileQuery(input: {
     'FROM ds',
     ...(whereClauses.length ? [`WHERE ${whereClauses.join(' AND ')}`] : []),
     ...(groupingSets
-      ? [`GROUP BY GROUPING SETS (${groupingSets.map((set) => `(${set.map((dimension) => dimension.expression).join(', ')})`).join(', ')})`]
-      : dimensions.length ? [`GROUP BY ${dimensions.map((dimension) => dimension.expression).join(', ')}`] : []),
+      ? [`GROUP BY GROUPING SETS (${groupingSets.map((set) => `(${set.flatMap((dimension) => dimension.groupBy).join(', ')})`).join(', ')})`]
+      : dimensions.length ? [`GROUP BY ${dimensions.flatMap((dimension) => dimension.groupBy).join(', ')}`] : []),
     ...(havingClauses.length ? [`HAVING ${havingClauses.join(' AND ')}`] : []),
   ];
   const tail = [
@@ -390,7 +455,14 @@ export function compileDatasetTileQuery(input: {
       ref: `total:${dimension.alias}`,
       type: 'number' as const,
     })) : []),
-  ], input.query, appliedFilters, validation, joins);
+  ], input.query, appliedFilters, validation, joins, { nameKeys, nameWarnings });
+}
+
+/** "Customer Name may not be unique: …" — a name grouped without a key. */
+export function nameWarning(field: string, entity: string): string {
+  const label = field.replace(/^.*__/, '').replace(/_/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+  const many = entity.endsWith('s') ? entity : entity.endsWith('y') && !/[aeiou]y$/.test(entity) ? `${entity.slice(0, -1)}ies` : `${entity}s`;
+  return `${label} may not be unique: different ${many} with the same name are shown as one, and this data has no ${entity} key to tell them apart.`;
 }
 
 const SAFE_RELATION = /^(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)(?:\.(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][A-Za-z0-9_$]*)){0,2}$/;
@@ -600,10 +672,13 @@ function compiledResult(
   appliedFilters: CompiledDatasetTileQuery['appliedFilters'],
   validation: TileQueryValidation,
   joins: DatasetJoin[] = [],
+  names: Pick<CompiledDatasetTileQuery, 'nameKeys' | 'nameWarnings'> = { nameKeys: [], nameWarnings: [] },
 ): CompiledDatasetTileQuery {
   return {
     validation: { outcome: validation.outcome, adaptations: validation.adaptations },
     joins,
+    nameKeys: names.nameKeys,
+    nameWarnings: names.nameWarnings,
     sql,
     sqlParams,
     variables,

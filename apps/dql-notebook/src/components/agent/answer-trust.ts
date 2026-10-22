@@ -47,8 +47,38 @@ export function answerSourceOf(run: RunTrust): AnswerSource | undefined {
   return undefined;
 }
 
+/** The heading of a run that stopped because no AI provider is connected (round 3). */
+export const ASK_NEEDS_AI_PROVIDER_HEADING = 'Ask needs an AI provider';
+
+const NO_MODEL_MESSAGE = /\bNo AI model is configured\b/i;
+
+/**
+ * Whether a run stopped because no AI provider is connected: no model ran,
+ * so nothing about it is "AI-generated". The server marks it
+ * (`providerMissing`); older runs are known by the server's own sentence.
+ */
+export function askNeedsAiProvider(run: Pick<AgentRun, 'artifacts'> & { summary?: string; answer?: string }): boolean {
+  for (const artifact of run.artifacts ?? []) {
+    const payload = recordOf(artifact.payload);
+    if (!payload) continue;
+    if (payload.providerMissing === true) return true;
+    for (const key of ['text', 'answer', 'executionError'] as const) {
+      const value = payload[key];
+      if (typeof value === 'string' && NO_MODEL_MESSAGE.test(value)) return true;
+    }
+  }
+  return [run.summary, run.answer].some((value) => typeof value === 'string' && NO_MODEL_MESSAGE.test(value));
+}
+
+/** A run that gave no answer (refused or blocked): never headed as an answer of any kind. */
+function isRefusedRun(run: RunTrust & { status?: string }): boolean {
+  return run.trustState === 'blocked' || run.status === 'blocked';
+}
+
 /** The heading of an answered run. */
-export function answerTrustHeading(run: RunTrust): string {
+export function answerTrustHeading(run: RunTrust & { status?: string; summary?: string; answer?: string }): string {
+  // A refusal is not an answer: it is never "AI-generated", least of all when no model ran.
+  if (isRefusedRun(run)) return askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : 'No answer';
   const source = answerSourceOf(run);
   if (run.trustState === 'certified') return 'Certified answer';
   if (source === 'app_view') return run.trustState === 'governed' ? 'Governed answer from this App' : 'Answer from this App · needs review';
@@ -59,7 +89,8 @@ export function answerTrustHeading(run: RunTrust): string {
 }
 
 /** The badge beside the heading: the same decision in one or two words. */
-export function answerTrustBadge(run: RunTrust): string {
+export function answerTrustBadge(run: RunTrust & { status?: string; summary?: string; answer?: string }): string {
+  if (isRefusedRun(run)) return askNeedsAiProvider(run) ? 'Not answered' : 'Refused';
   if (run.trustState === 'certified') return 'Certified';
   if (run.trustState === 'governed' || run.trustState === 'grounded') return 'Governed';
   const source = answerSourceOf(run);

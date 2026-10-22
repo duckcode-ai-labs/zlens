@@ -73,7 +73,7 @@ import {
 import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme';
 import { controlStyle } from '../../themes/control-tokens';
 import { AskComposerOptions } from './AskComposerOptions';
-import { answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading } from './answer-trust';
+import { ASK_NEEDS_AI_PROVIDER_HEADING, answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading, askNeedsAiProvider } from './answer-trust';
 import { StructuredAnswerText } from './AgentAnswerCard';
 import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
 import { openAppProposalInStudio } from '../apps/app-studio-handoff';
@@ -3137,7 +3137,7 @@ function AskRunCard(props: AskRunCardProps) {
   const outcomeLabel = cancelled
     ? 'Stopped by user'
     : blocked
-    ? (askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query')
+    ? (askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query')
     : needsClarification
       ? 'Needs clarification'
       : !certified && !readFromAppView(run) && run.artifacts.some((artifact) => artifact.kind === 'research_run' && investigationReportOf(payloadOf(artifact)))
@@ -5734,6 +5734,8 @@ function isExploratoryDbtRun(run: AgentRun): boolean {
 
 export function simpleRunTitle(run: AgentRun): string {
   if (run.status === 'cancelled' || run.stopReason === 'cancelled' || run.route === 'cancelled') return 'Stopped by user';
+  // No model ran: say what Ask needs, never "AI-generated answer" (round 3).
+  if (askNeedsAiProvider(run)) return ASK_NEEDS_AI_PROVIDER_HEADING;
   if (run.trustState === 'certified' || readFromAppView(run)) return answerTrustHeading(run);
   if (run.route === 'dql_block_draft') return 'Draft saved query';
   if (isExploratoryDbtRun(run)) return 'Exploratory DBT-grounded answer';
@@ -6454,8 +6456,7 @@ function TrustBadge({ run, t }: { run: AgentRun; t: Theme }) {
       // it "Needs input" told people to supply something that was never named.
       : run.status === 'needs_clarification'
         ? 'Needs input'
-      : run.trustState === 'blocked'
-        ? 'Refused'
+        // A refusal reads "Refused", or "Not answered" when no model ran (answerTrustBadge).
         : answerTrustBadge(run);
   return (
     <span style={{ border: `1px solid ${color}55`, color, background: `${color}12`, borderRadius: 999, padding: '3px 7px', fontSize: 10, fontWeight: 850 }}>
@@ -7552,6 +7553,10 @@ const ASK_FAILURE_PRESENTATION: Record<string, { title: string; hint: string }> 
     title: 'One detail is missing',
     hint: 'Answer the question above and ZLens will continue.',
   },
+  provider_missing: {
+    title: ASK_NEEDS_AI_PROVIDER_HEADING,
+    hint: 'No AI model ran. The owner can connect one in Settings; everything else in ZLens works without AI.',
+  },
   provider: {
     title: 'The AI provider failed',
     hint: 'Nothing was run. Retry, or check the provider in Settings.',
@@ -7611,6 +7616,7 @@ function askFailureOrigin(run: AgentRun): string {
   if (run.status === 'cancelled' || run.stopReason === 'cancelled' || run.route === 'cancelled' || run.diagnosticReceipt?.failure?.code === 'RUN_CANCELLED') {
     return 'cancel';
   }
+  if (askNeedsAiProvider(run)) return 'provider_missing';
   // V4 is the canonical receipt for terminal Ask incidents. It must win over
   // a legacy compatibility refusal code carried in an answer artifact: after
   // `sql.execute`, this is no longer a retrieval/grounding problem.

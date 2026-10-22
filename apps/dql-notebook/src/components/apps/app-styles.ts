@@ -1748,6 +1748,17 @@ export const APP_STYLES = `
   width: 64px;
 }
 
+.dql-app-filter-select .dql-app-filter-label {
+  color: var(--dql-app-muted, var(--dql-app-faint));
+  font: 600 12px var(--font-ui);
+  white-space: nowrap;
+}
+
+.dql-app-filter-select select.dql-app-filter-presets {
+  max-width: 120px;
+  color: var(--dql-app-ink);
+}
+
 .dql-app-filter-select .dql-app-filter-range-note {
   color: var(--dql-app-ink);
   font: 600 12px var(--font-ui);

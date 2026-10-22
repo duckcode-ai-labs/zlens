@@ -35,8 +35,11 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 6. Click **Generate editable App** (AI), **Choose data** (Quick start) or
    **Open blank Studio** (manual).
 
-The App is a private draft; the header says **Unpublished changes (only you
-can see them)**. Every way opens on the Data step first: by hand and with
+Until you publish it, only you can see the App; the header says **Not
+published yet (only you can see it)**. Editing an App you already published,
+it says **No changes yet · readers see the published App**, then
+**Unpublished changes (only you can see them)** once you change something.
+**Back to Apps** lists the App straight away. Every way opens on the Data step first: by hand and with
 Quick start it is **Data for this App**; with AI it shows the data AI picked
 (see below).
 
@@ -112,8 +115,10 @@ three quick choices instead, and you get exactly the tiles you pick.
 In the Studio, the toolbar's **Quick tiles** (instead of **Ask AI**) opens the
 same choices for the page that is open, with **Add N tiles to page**; so do
 **Add quick tiles** on an empty page, in the App settings and in the publish
-review. What only an AI can do says **Connect an AI provider** instead:
-changing one tile (**Edit with AI**) and **Design layout with AI**. With an AI
+review. What only an AI can do is not shown without an AI provider: tiles
+have no **Edit with AI** or **Change with AI**, and readers' **Ask about …**
+box says *Ask needs an AI provider. The owner can connect one in Settings.*
+**Design layout with AI** says **Connect an AI provider**. With an AI
 provider connected, all of these work as described above.
 
 A draft made earlier with keyword suggestions still says **Suggested from
@@ -164,7 +169,7 @@ rows** reads a few of its rows.
 
 - Click **Add to App**. The row then says **Added**, with **Remove**. Data
   that is **Not certified yet** is added the same way; its tiles say so.
-- On a table that is **Not checked yet**, click **Check and add**, check the
+- On a database table (it says **Not certified yet**), click **Check and add**, check the
   numbers, and click **Check and use**. ZLens runs the same checks as
   certifying (it compiles and runs, what one row is, how each number is shown:
   money stored as cents is shown in dollars). The table is added as **Not
@@ -177,10 +182,11 @@ rows** reads a few of its rows.
   dollars?** **Yes** (recommended) reads `order_total_cents` in dollars as
   **Order total**; **No** uses `order_total` as it is. The other column is
   hidden from the fields, and the choice is kept in the data's definition.
-- Tables your model already uses say **Modeled**, and tables Guided Setup's
-  **Draft my models** drafted say **Drafted — review to use**, with
-  **Review in Modeling**. Both are listed first, and **Check and add** reuses
-  the row key the model checked, so the check counts one column.
+- Data says only **Certified** or **Not certified yet**. Tables Guided
+  Setup's **Draft my models** drafted add **drafted — review in Modeling**,
+  with **Review in Modeling**; tables your model already uses are listed first
+  too (hover for why). Either way **Check and add** reuses the row key the
+  model checked, so the check counts one column.
 - On a saved query, **⋯ → Make row-level** is only needed for row-safe
   measures (see [Make a saved query row-level](#make-a-saved-query-row-level)).
 
@@ -345,8 +351,11 @@ follow joins.
 - Add a page with **+** next to the page tabs, or **New page** on the
   **Pages** tab.
 - Use **Undo** and **Redo** freely.
-- A tile's **⋯** menu has **View DQL and SQL**, **Change with AI**,
-  **Tile settings**, **Duplicate** and **Remove tile**.
+- A tile's **⋯** menu has **View DQL and SQL**, **Change with AI** (with an
+  AI provider), **Tile settings**, **Duplicate** and **Remove tile**.
+- A new tile is scrolled into view where it lands, and clicks on fields wait
+  for the tile being added, so they start the next tile instead of changing
+  this one.
 
 ## 5. Add filters
 

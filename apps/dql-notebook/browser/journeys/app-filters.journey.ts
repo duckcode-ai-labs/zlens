@@ -348,7 +348,8 @@ test('the editor marks unlinked tiles, finds a value past the first 200, and map
   await page.locator('.filter-field-results button').filter({ hasText: 'Ordered At' }).first().click();
   const contactsChoice = page.getByRole('radiogroup', { name: 'Does this filter apply to Spend By Contact?' });
   await expect(contactsChoice.getByRole('radio', { name: 'Applies' })).toBeDisabled();
-  await page.getByRole('button', { name: 'Use Signed Up On on Contacts' }).click();
+  // A different date is picked by its meaning, never swapped in one click (new-user round 3, problem 2).
+  await page.getByRole('combobox', { name: 'Use a different date on Contacts' }).selectOption({ label: 'Different meaning: the contact’s Signed Up On' });
   await expect(contactsChoice.getByRole('radio', { name: 'Applies' })).toHaveAttribute('aria-checked', 'true');
   await expect(page.getByText('Applies to 2 of 2 tiles')).toBeVisible();
   await page.getByRole('button', { name: 'Create filter' }).click();

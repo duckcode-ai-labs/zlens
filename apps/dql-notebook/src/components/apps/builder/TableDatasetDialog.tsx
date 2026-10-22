@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, CalendarDays, Copy, Hash, Search, Table2, X } from 'lucide-react';
-import { applyTableDuplicateChoices, duplicateColumnWords, type TableDatasetProposal, type TableDuplicateChoice } from '@zlens/core/datasets/table-draft';
+import { applyTableDuplicateChoices, duplicateColumnsQuestion, type TableDatasetProposal, type TableDuplicateChoice } from '@zlens/core/datasets/table-draft';
 import { api, type CertificationByline, type WarehouseTableSummary } from '../../../api/client';
 import { messageOf } from './studio-ui';
 
@@ -78,43 +78,48 @@ export function DatasetNumbersCheck({
 }
 
 /**
- * One question per pair of columns that hold the same number in different
- * units (design Q1.4): "Use Order total in dollars?" The recommended answer
- * (the column whose name says its unit, read in dollars) is chosen first;
- * the other column is hidden from the fields.
+ * One question per table for every column stored twice (new-user round 3,
+ * problem 8): "These columns are stored twice, in dollars and in cents:
+ * Subtotal, Tax paid and Order total. ZLens will use the dollar columns and
+ * hide the cents copies." [OK] [Show both]. OK is chosen first; Show both
+ * keeps the cents copies as plain numbers.
  */
 export function DuplicateColumnQuestions({
   proposal,
-  choices,
-  onChoice,
+  mode,
+  onMode,
 }: {
   proposal: TableDatasetProposal;
-  choices: TableDuplicateChoice[];
-  onChoice: (name: string, use: TableDuplicateChoice['use']) => void;
+  mode: DuplicateMode;
+  onMode: (mode: DuplicateMode) => void;
 }): JSX.Element | null {
-  const pairs = proposal.duplicates ?? [];
-  if (!pairs.length) return null;
-  return <>
-    {pairs.map((pair) => {
-      const use = choices.find((choice) => choice.name === pair.name)?.use ?? 'minor';
-      // Worded for what the check found (new-user round 2, problem 7): "Subtotal is stored twice: Subtotal (dollars) and Subtotal cents."
-      const words = duplicateColumnWords(pair);
-      return (
-        <fieldset key={pair.name} className="table-dataset-duplicate" aria-label={words.question}>
-          <legend><Copy size={12} aria-hidden="true" /> {words.question}</legend>
-          <p className="table-dataset-muted">{words.detail}</p>
-          <label>
-            <input type="radio" name={`duplicate-${pair.name}`} checked={use === 'minor'} onChange={() => onChoice(pair.name, 'minor')} />
-            <span><strong>{words.recommended.title}</strong> <em>Recommended</em><small>{words.recommended.detail}</small></span>
-          </label>
-          <label>
-            <input type="radio" name={`duplicate-${pair.name}`} checked={use === 'plain'} onChange={() => onChoice(pair.name, 'plain')} />
-            <span><strong>{words.alternative.title}</strong><small>{words.alternative.detail}</small></span>
-          </label>
-        </fieldset>
-      );
-    })}
-  </>;
+  const asked = duplicateColumnsQuestion(proposal.duplicates ?? []);
+  if (!asked) return null;
+  return (
+    <section className="table-dataset-duplicate" role="group" aria-label="Duplicate columns">
+      <p><Copy size={12} aria-hidden="true" /> <strong>{asked.question}</strong> {mode === 'ok' ? asked.ok : asked.both}</p>
+      <span className="table-dataset-duplicate-actions">
+        <button type="button" aria-pressed={mode === 'ok'} className={mode === 'ok' ? 'on' : ''} onClick={() => onMode('ok')}>OK</button>
+        <button type="button" aria-pressed={mode === 'both'} className={mode === 'both' ? 'on' : ''} onClick={() => onMode('both')}>Show both</button>
+      </span>
+    </section>
+  );
+}
+
+/** The answer to the one duplicate-columns question. */
+export type DuplicateMode = 'ok' | 'both';
+
+/** The per-pair choices an answer stands for. */
+export function duplicateChoicesFor(proposal: TableDatasetProposal, mode: DuplicateMode): TableDuplicateChoice[] {
+  const asked = duplicateColumnsQuestion(proposal.duplicates ?? []);
+  if (!asked) return [];
+  return mode === 'both' ? asked.bothChoices : asked.okChoices;
+}
+
+/** Number choices for every measure a proposal now has: kept ones as chosen, new ones as proposed. */
+export function numberChoicesFor(proposal: TableDatasetProposal, choices: NumberChoice[]): NumberChoice[] {
+  return proposal.measures.map((measure) => choices.find((choice) => choice.name === measure.name)
+    ?? { name: measure.name, include: measure.include, format: measure.format, ...(measure.currency ? { currency: measure.currency } : {}) });
 }
 
 /**
@@ -143,12 +148,13 @@ export function TableDatasetDialog({
   const [tables, setTables] = useState<WarehouseTableSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
-  const [picked, setPicked] = useState<WarehouseTableSummary | null>(null);
+  const [picked, setPicked] = useState<WarehouseTableSummary | null>(initialTable ?? null);
   const [draft, setDraft] = useState<{ proposal: TableDatasetProposal; rows: number } | null>(null);
-  const [checking, setChecking] = useState(false);
+  // A table picked in the Add data list opens straight on its check, never on the table list (new-user round 3).
+  const [checking, setChecking] = useState(Boolean(initialTable));
   const [name, setName] = useState('');
   const [choices, setChoices] = useState<Choice[]>([]);
-  const [duplicateChoices, setDuplicateChoices] = useState<TableDuplicateChoice[]>([]);
+  const [duplicateMode, setDuplicateMode] = useState<DuplicateMode>('ok');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -185,9 +191,9 @@ export function TableDatasetDialog({
       }
       setDraft({ proposal: response.proposal, rows: response.rows ?? 0 });
       setName(response.proposal.name);
-      setDuplicateChoices([]);
-      // Number choices are keyed by the kept field's name, which is the same for either duplicate answer.
-      setChoices(initialNumberChoices(applyTableDuplicateChoices(response.proposal)));
+      setDuplicateMode('ok');
+      // Number choices are keyed by the kept field's name, the same for either answer; Show both adds the cents copies.
+      setChoices(initialNumberChoices(applyTableDuplicateChoices(response.proposal, duplicateChoicesFor(response.proposal, 'ok'))));
     });
   };
   useEffect(() => {
@@ -195,13 +201,16 @@ export function TableDatasetDialog({
     // Only the table the dialog opened with; later picks come from the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTable?.id]);
-  const setChoice = (measure: string, patch: Partial<Choice>) => setChoices((current) => current.map((choice) => (choice.name === measure ? { ...choice, ...patch } : choice)));
+  const setChoice = (measure: string, patch: Partial<Choice>) => setChoices((current) => {
+    const all = proposal ? numberChoicesFor(proposal, current) : current;
+    return all.map((choice) => (choice.name === measure ? { ...choice, ...patch } : choice));
+  });
   const save = () => {
     if (!picked || !draft) return;
     setSaving(true);
     setError(null);
-    const duplicates = (draft.proposal.duplicates ?? []).map((pair) => ({ name: pair.name, use: duplicateChoices.find((choice) => choice.name === pair.name)?.use ?? 'minor' as const }));
-    void api.createTableDataset({ tableId: picked.id, name: name.trim() || draft.proposal.name, ...(domain ? { domain } : {}), measures: choices, ...(duplicates.length ? { duplicates } : {}) }).then((response) => {
+    const duplicates = duplicateChoicesFor(draft.proposal, duplicateMode);
+    void api.createTableDataset({ tableId: picked.id, name: name.trim() || draft.proposal.name, ...(domain ? { domain } : {}), measures: proposal ? numberChoicesFor(proposal, choices) : choices, ...(duplicates.length ? { duplicates } : {}) }).then((response) => {
       setSaving(false);
       if (!response.ok) {
         setError(response.error ?? 'ZLens could not save this data.');
@@ -218,10 +227,11 @@ export function TableDatasetDialog({
     });
   };
 
-  // What the check shows follows the duplicate answers (design Q1.4).
-  const proposal = useMemo(() => (draft ? applyTableDuplicateChoices(draft.proposal, duplicateChoices) : undefined), [draft, duplicateChoices]);
-  const keptCount = choices.filter((choice) => choice.include).length;
-  const chooseDuplicate = (pairName: string, use: TableDuplicateChoice['use']) => setDuplicateChoices((current) => [...current.filter((choice) => choice.name !== pairName), { name: pairName, use }]);
+  // What the check shows follows the duplicate answer (design Q1.4, new-user round 3).
+  const proposal = useMemo(() => (draft ? applyTableDuplicateChoices(draft.proposal, duplicateChoicesFor(draft.proposal, duplicateMode)) : undefined), [draft, duplicateMode]);
+  const shownChoices = proposal ? numberChoicesFor(proposal, choices) : choices;
+  const keptCount = shownChoices.filter((choice) => choice.include).length;
+  const openedOnTable = Boolean(initialTable && picked?.id === initialTable.id && !draft);
 
   return (
     <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="table-dataset-title">
@@ -229,13 +239,18 @@ export function TableDatasetDialog({
         <header>
           <span className="table-dataset-icon"><Table2 size={17} aria-hidden="true" /></span>
           <div>
-            <h2 id="table-dataset-title">{proposal ? 'Check the numbers' : 'Start from a table'}</h2>
-            <p>{proposal ? `From ${picked?.schema ? `${picked.schema}.` : ''}${picked?.name} · ${draft!.rows.toLocaleString()} rows` : 'Pick a table from your database. ZLens suggests what to add up, count and group by.'}</p>
+            <h2 id="table-dataset-title">{proposal || openedOnTable ? 'Check the numbers' : 'Start from a table'}</h2>
+            <p>{proposal ? `From ${picked?.schema ? `${picked.schema}.` : ''}${picked?.name} · ${draft!.rows.toLocaleString()} rows` : openedOnTable ? `Checking ${picked?.name ?? ''}…` : 'Pick a table from your database. ZLens suggests what to add up, count and group by.'}</p>
           </div>
           <button type="button" className="icon" onClick={onClose} disabled={saving} aria-label="Close"><X size={15} /></button>
         </header>
 
-        {!proposal ? (
+        {!proposal && openedOnTable ? (
+          <div className="table-dataset-body">
+            {checking ? <p className="table-dataset-muted" role="status">Reading {picked?.name} to see what one row is and which numbers to add up…</p> : null}
+            {error ? <p className="table-dataset-error" role="alert">{error}</p> : null}
+          </div>
+        ) : !proposal ? (
           <div className="table-dataset-body">
             <label className="field-search">
               <Search size={14} aria-hidden="true" />
@@ -263,8 +278,8 @@ export function TableDatasetDialog({
               <span>Name</span>
               <input id="table-dataset-name" value={name} maxLength={80} onChange={(event) => setName(event.target.value)} />
             </label>
-            {draft ? <DuplicateColumnQuestions proposal={draft.proposal} choices={duplicateChoices} onChoice={chooseDuplicate} /> : null}
-            <DatasetNumbersCheck proposal={proposal} rows={draft!.rows} choices={choices} onChoice={setChoice} noKeyMessage="No column is filled and different on every row, so ZLens cannot count this table's rows safely. Choose a table with an id column." />
+            {draft ? <DuplicateColumnQuestions proposal={draft.proposal} mode={duplicateMode} onMode={setDuplicateMode} /> : null}
+            <DatasetNumbersCheck proposal={proposal} rows={draft!.rows} choices={shownChoices} onChoice={setChoice} noKeyMessage="No column is filled and different on every row, so ZLens cannot count this table's rows safely. Choose a table with an id column." />
             {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
             {error ? <p className="table-dataset-error" role="alert">{error}</p> : null}
           </div>

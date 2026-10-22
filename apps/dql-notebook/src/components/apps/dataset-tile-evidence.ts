@@ -19,7 +19,7 @@ export type DatasetEvidenceRow = { label: string; value: string };
  */
 export type DatasetTileNotice = {
   key: string;
-  kind: 'excluded' | 'not_linked' | 'adapted';
+  kind: 'excluded' | 'not_linked' | 'adapted' | 'names';
   label: string;
   detail: string;
 };
@@ -39,6 +39,10 @@ export function datasetTileNotices(tile: DashboardRunTile | undefined, options: 
     for (const entry of tile?.filterReport?.notApplied ?? []) {
       notices.push({ key: `${entry.filter}:${entry.code}`, kind: 'not_linked', label: `Not filtered by ${nameOf(entry.filter)}`, detail: plainSourceText(entry.reason) });
     }
+  }
+  // A name grouped without a key may merge namesakes (new-user round 3, problem 4).
+  for (const warning of tile?.dataset?.nameWarnings ?? []) {
+    notices.push({ key: `names:${warning.field}`, kind: 'names', label: 'Names may repeat', detail: warning.message });
   }
   if (tile?.dataset?.validation?.outcome === 'adapted') {
     for (const adaptation of tile.dataset.validation.adaptations) {

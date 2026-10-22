@@ -89,6 +89,18 @@ export type StudioFilterCandidate = {
   viaJoinCount?: number;
   /** How many of those tiles use it as their Dataset's own main date (Orders → Ordered At). */
   mainDateTileCount?: number;
+  /** How many tiles group by it as their own date (the trend's Ordered At by month). */
+  groupedTileCount?: number;
+  /** A date or time field. */
+  date?: boolean;
+  /**
+   * The related table a date belongs to, when another Dataset reaches it
+   * through a join ("Customer"): a customer's first order date is not the
+   * order's date, so the list says whose date it is (new-user round 3).
+   */
+  relatedTable?: string;
+  /** How the field list names it: "Customer · First Ordered At" for a related table's date. */
+  label?: string;
 };
 
 export type StudioRuntimeFilterFields = Record<string, Record<string, Array<{
@@ -289,11 +301,19 @@ export function discoverAppFilterCandidates(
     const parts = relatedFieldParts(id);
     if (parts && plainIds.has(parts.column.toLowerCase())) fieldIds.delete(id);
   }
+  const tiles = new Map(pages.flatMap((page) => page.layout.items.map((tile) => [`${page.id}:${tile.i}`, tile] as const)));
   return [...fieldIds]
     .map((id): StudioFilterCandidate => {
       const mappings = filterTileMappingsForField(pages, catalog, id, runtimeFields, boundSources).filter((mapping) => mapping.supported);
       const viaJoinCount = mappings.filter((mapping) => mapping.via).length;
       const mainDateTileCount = mappings.filter((mapping) => !mapping.via && mappingIsMainDate(mapping, boundSources)).length;
+      const date = mappings.some((mapping) => mapping.datasetFieldType === 'date' || mapping.datasetFieldType === 'timestamp');
+      // Tiles that group by it as their own date: the trend of Orders by month of Ordered At.
+      const groupedTileCount = mappings.filter((mapping) => !mapping.via && mapping.datasetField
+        && tiles.get(`${mapping.pageId}:${mapping.tileId}`)?.query?.dimensions.some((dimension) => dimension.timeGrain && dimension.field.toLowerCase() === mapping.datasetField!.toLowerCase())).length;
+      // A date another Dataset reaches through a join belongs to that related table (a customer's first order).
+      const via = mappings.find((mapping) => mapping.via)?.via;
+      const relatedTable = date && via ? via.split(' → ').pop() : undefined;
       return {
         id,
         sourceNames: [...new Set(mappings.map((mapping) => mapping.sourceName))].sort(),
@@ -301,20 +321,32 @@ export function discoverAppFilterCandidates(
         pageCount: new Set(mappings.map((mapping) => mapping.pageId)).size,
         ...(viaJoinCount ? { viaJoinCount } : {}),
         ...(mainDateTileCount ? { mainDateTileCount } : {}),
+        ...(groupedTileCount ? { groupedTileCount } : {}),
+        ...(date ? { date: true } : {}),
+        ...(relatedTable ? { relatedTable, label: `${relatedTable} · ${humanizeFieldId(id)}` } : {}),
       };
     })
     .filter((candidate) => candidate.affectedTileCount > 0)
-    // A tile's own main date comes first (Orders → Ordered At), never a related
-    // table's date that reaches more tiles through a join (a customer's first order).
-    .sort((left, right) => {
-      const main = (right.mainDateTileCount ?? 0) - (left.mainDateTileCount ?? 0);
-      if (main) return main;
-      if (left.mainDateTileCount && right.mainDateTileCount) {
-        const via = (left.viaJoinCount ?? 0) - (right.viaJoinCount ?? 0);
-        if (via) return via;
-      }
-      return left.id.localeCompare(right.id);
-    });
+    // New-user round 3, problem 2: the date of the rows the tiles count comes
+    // first (Orders → Ordered At, the date the trend groups by), then other
+    // dates of a Dataset's own rows, then a related table's dates labelled
+    // with their table ("Customer · First Ordered At"), however many tiles a
+    // join lets them reach; other fields after, by name.
+    .sort((left, right) => candidateRank(left) - candidateRank(right)
+      || (right.groupedTileCount ?? 0) - (left.groupedTileCount ?? 0)
+      || (right.mainDateTileCount ?? 0) - (left.mainDateTileCount ?? 0)
+      || left.id.localeCompare(right.id));
+}
+
+function candidateRank(candidate: StudioFilterCandidate): number {
+  if (!candidate.date) return 3;
+  if (candidate.relatedTable) return 2;
+  return candidate.groupedTileCount || candidate.mainDateTileCount ? 0 : 1;
+}
+
+function humanizeFieldId(id: string): string {
+  const column = relatedFieldParts(id)?.column ?? id;
+  return column.replace(/[_-]+/g, ' ').trim().replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function discoverPageFilterCandidates(

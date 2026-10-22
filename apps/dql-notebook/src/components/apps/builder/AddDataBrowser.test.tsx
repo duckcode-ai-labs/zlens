@@ -39,7 +39,7 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('Saved query · Not certified yet · Growth');
     expect(markup).not.toMatch(/Needs review|data rule/i);
     // A database table not checked yet is in the same list and goes through the check.
-    expect(markup).toContain('Table · Not checked yet · dev · 7 columns · ~935 rows');
+    expect(markup).toContain('Table · Not certified yet · dev · 7 columns · ~935 rows');
     expect(markup).toContain('aria-label="Check customers and add it"');
     expect(markup).toContain('ZLens checks a table once before Apps use it.');
     // In the catalog's trust order, tables not checked yet last.
@@ -119,11 +119,11 @@ describe('Add data browser: one list (design D1)', () => {
       { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7, modeled: { state: 'modeled', entity: 'Customers', domain: 'dev', key: 'customer_id' } },
     ] as unknown as WarehouseTableSummary[];
     const markup = render({ initialItems: [], initialTables: modeledTables, initialKind: 'tables' });
-    expect(markup).toContain('Table · Modeled · dev · 7 columns');
-    expect(markup).toContain('Table · Drafted — review to use · dev · 9 columns');
+    expect(markup).toContain('Table · Not certified yet · dev · 7 columns');
+    expect(markup).toContain('Table · Not certified yet · drafted — review in Modeling · dev · 9 columns');
     expect(markup).toContain('Drafted in setup with its row key (order_id) and joins.');
     expect(markup).toContain('>Review in Modeling</button>');
-    expect(markup).toContain('Table · Not checked yet · dev · 4 columns');
+    expect(markup).toContain('Table · Not certified yet · dev · 4 columns');
     // Modeled first, then drafted, then the rest; each still goes through Check and add.
     const order = ['>customers<', '>orders<', '>payments<'].map((name) => markup.indexOf(name));
     expect(order[0]).toBeLessThan(order[1]!);
@@ -150,5 +150,31 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).not.toContain('data-table-id="raw.orders"');
     expect(markup).toContain('Show staging tables');
     expect(markup).toContain('2 staging copies of tables listed here hidden');
+  });
+});
+
+describe('a table says what became of it (new-user round 3, problem 7)', () => {
+  const madeTables = [
+    { id: 'dev.orders', name: 'orders', schema: 'dev', relation: 'dev.orders', columnCount: 9, datasets: [{ sourceId: 'app:block:commerce/orders', name: 'Orders', state: 'checked' }] },
+    { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7, datasets: [{ sourceId: 'app:block:general/customers', name: 'Customers', state: 'certified' }] },
+    { id: 'dev.items', name: 'order_items', schema: 'dev', relation: 'dev.order_items', columnCount: 5 },
+  ] as unknown as WarehouseTableSummary[];
+
+  it('reads Not certified yet · added in this App, Certified · Add to App when made elsewhere, and Check and add only when new', () => {
+    const markup = render({
+      initialKind: 'tables',
+      initialTables: madeTables,
+      draft: draftWith({ sources: [appDataSourceFromCandidate(ordersTableDataset)] }),
+    });
+    const row = (name: string) => markup.slice(markup.indexOf(`data-table-id="${name}"`), markup.indexOf('</article>', markup.indexOf(`data-table-id="${name}"`)));
+    expect(row('dev.orders')).toContain('Table · Not certified yet · added · dev');
+    expect(row('dev.orders')).toContain('data-table-state="added"');
+    expect(row('dev.orders')).not.toContain('Check orders and add it');
+    expect(row('dev.orders')).toContain('In this App as <strong>Orders</strong>');
+    expect(row('dev.customers')).toContain('Table · Certified · dev');
+    expect(row('dev.customers')).toContain('aria-label="Add customers to App as Customers"');
+    expect(row('dev.customers')).not.toContain('Check customers and add it');
+    expect(row('dev.items')).toContain('Table · Not certified yet · dev');
+    expect(row('dev.items')).toContain('aria-label="Check order_items and add it"');
   });
 });

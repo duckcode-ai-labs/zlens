@@ -302,3 +302,49 @@ export function calendarDateBoundaryInTimezone(date: string, timezone: string): 
   }
   return new Date(instant).toISOString();
 }
+
+/**
+ * The quick choices of a date range control (new-user round 3, problem 9),
+ * as every Tableau and Power BI user expects them. Each fills the range with
+ * calendar dates ending today, in the filter's timezone.
+ */
+export const DATE_RANGE_PRESETS = [
+  { id: 'last_7_days', label: 'Last 7 days' },
+  { id: 'last_30_days', label: 'Last 30 days' },
+  { id: 'month_to_date', label: 'This month' },
+  { id: 'quarter_to_date', label: 'This quarter' },
+  { id: 'year_to_date', label: 'This year' },
+] as const;
+
+export type DateRangePresetId = typeof DATE_RANGE_PRESETS[number]['id'];
+
+/** The range a preset stands for today: `{ start, end }`, both inclusive calendar dates. */
+export function dateRangePresetValue(preset: string, today: string): { start: string; end: string } | undefined {
+  if (!DATE_RANGE_PRESETS.some((entry) => entry.id === preset) || !isCalendarDate(today)) return undefined;
+  return resolveRelativeDateRange(preset, today);
+}
+
+/**
+ * Which quick choice a range is today: a preset id, `custom` for any other
+ * range, or `''` when nothing is chosen.
+ */
+export function matchingDateRangePreset(value: unknown, today: string): DateRangePresetId | 'custom' | '' {
+  const ends = value && typeof value === 'object' && !Array.isArray(value) ? value as { start?: unknown; end?: unknown } : {};
+  const start = typeof ends.start === 'string' ? ends.start.trim() : '';
+  const end = typeof ends.end === 'string' ? ends.end.trim() : '';
+  if (!start && !end) return '';
+  const match = DATE_RANGE_PRESETS.find((preset) => {
+    const range = dateRangePresetValue(preset.id, today);
+    return range && range.start === start && range.end === end;
+  });
+  return match?.id ?? 'custom';
+}
+
+/** Today's calendar date in a filter's timezone, else in the reader's own. */
+export function todayForDateFilter(timezone: string | undefined, now: Date = new Date()): string {
+  try {
+    return calendarDateInTimezone(now, timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  } catch {
+    return now.toISOString().slice(0, 10);
+  }
+}

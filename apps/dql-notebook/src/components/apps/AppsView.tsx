@@ -52,7 +52,7 @@ import {
 } from '../../api/client';
 import { isViewerLink } from '../../api/server-auth';
 import { hostAllows, hostReader, useHostPage, useHostUi } from '../../host/host-ui';
-import { appLibraryWords, type LibraryFilter } from './app-library-words';
+import { appLibraryWords, withDraftListed, type LibraryFilter } from './app-library-words';
 import type { AppSummary, AppWorkspaceExperience, AppWorkspaceSection } from '../../store/types';
 import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
@@ -94,7 +94,7 @@ import {
 } from './dashboard-filters';
 import { semanticApprovalState } from './app-semantic-approval';
 import { relativeAge } from './reader-trust';
-import { UNPUBLISHED_CHANGES } from './app-studio-words';
+import { NOT_PUBLISHED_YET, NOT_PUBLISHED_YET_ONLY_YOU, UNPUBLISHED_CHANGES } from './app-studio-words';
 import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, unpublishedChangesText, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
@@ -923,6 +923,7 @@ export function AppsView(): JSX.Element {
       setDeleteTarget(null);
       setSurface('library');
       await queryClient.invalidateQueries({ queryKey: ['apps'] });
+      void queryClient.invalidateQueries({ queryKey: ['app-builds'] });
       setDeleteUndo({ appName: deleteTarget.name, recoveryId: deleted.recoveryId });
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : String(error));
@@ -945,14 +946,21 @@ export function AppsView(): JSX.Element {
     }
   };
 
-  const returnToAppLibrary = useCallback(() => {
+  // Back to Apps always shows the library as it is now (round 3): the draft
+  // just left is listed at once, then the drafts and Apps are read again.
+  const returnToAppLibrary = useCallback((draft?: AppStudioBuildDraft | null) => {
     dispatch({ type: 'CLOSE_APP' });
     setAppDoc(null);
     setDashboardDoc(null);
     setBuilderExistingAppId(null);
     setBuilderDraftId(null);
     setSurface('library');
-  }, [dispatch]);
+    if (draft) {
+      queryClient.setQueryData<{ ok: true; drafts: AppStudioBuildDraft[] }>(['app-builds'], (current) => withDraftListed(current, draft));
+    }
+    void queryClient.invalidateQueries({ queryKey: ['app-builds'] });
+    void queryClient.invalidateQueries({ queryKey: ['apps'] });
+  }, [dispatch, queryClient]);
 
   return (
     <div className={`dql-apps-waterline dql-apps-theme-${appTheme}`}>
@@ -1044,7 +1052,8 @@ export function AppsView(): JSX.Element {
           dashboardFiltersRemembered={dashboardFiltersRemembered}
           themeMode={state.themeMode}
           variables={dashboardVariables}
-          onBack={returnToAppLibrary}
+          aiConnected={aiConnected}
+          onBack={() => returnToAppLibrary()}
           onRetryDashboardLoad={retryWorkspaceLoad}
           onExperienceChange={(nextExperience) => {
             if (nextExperience === 'build') {
@@ -1190,7 +1199,9 @@ function AppLibrarySurface({
   onOpenApp: (app: AppSummary, experience?: AppExperience) => void;
   onDeleteApp: (app: AppSummary) => void;
 }) {
-  const counts = libraryCounts(allApps, localDrafts, favorites);
+  // The counters count what the cards show (round 3): a draft of a listed App
+  // rides on that App's card, so only new Apps count as "Not published yet".
+  const counts = libraryCounts(allApps, mergeDraftsIntoAppCards(localDrafts, allApps).standaloneDrafts, favorites);
   // Start manually until the settings answer (design D4); then Describe with
   // AI with a provider, or Quick start without one (round-2 Q2), unless the
   // author already picked a tab.
@@ -1242,9 +1253,11 @@ function AppLibrarySurface({
       draft.authoringMode,
     ].join(' ').toLowerCase().includes(needle))
     : [];
-  // A published App with unpublished changes is one card, not two of the same name.
-  const { standaloneDrafts, draftByAppId } = mergeDraftsIntoAppCards(visibleDrafts, apps);
-  const hasResults = visibleDrafts.length > 0 || apps.length > 0;
+  // A published App with unpublished changes is one card, not two of the same
+  // name; under "Not published yet" its draft is not shown as a new App.
+  const { standaloneDrafts } = mergeDraftsIntoAppCards(visibleDrafts, allApps);
+  const { draftByAppId } = mergeDraftsIntoAppCards(visibleDrafts, apps);
+  const hasResults = standaloneDrafts.length > 0 || apps.length > 0;
   // Under a host (RFC 0010 HH-9), people who may not author Apps read them.
   const hostUi = useHostUi();
   const canAuthor = hostAllows(hostUi, 'app.author');
@@ -1293,7 +1306,7 @@ function AppLibrarySurface({
           ) : null}
           {words.localCounts ? (
             <>
-              <span><strong>{localDrafts.length}</strong> local draft{localDrafts.length === 1 ? '' : 's'}</span>
+              <span><strong>{counts.drafts}</strong> not published yet</span>
               <span><strong>{counts.private}</strong> private</span>
               <span><strong>{counts.shared}</strong> shared</span>
             </>
@@ -1383,14 +1396,17 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
   // Open checks only: "needs certifying" reminders older drafts kept are not checks (T3).
   const openChecks = draft.reviewTasks.some((task) => task.status === 'open' && !isTrustReminderTaskId(task.id));
   const domain = draft.pages[0]?.metadata.domain || 'Local workspace';
+  // One wording (round 3): a new App is "Not published yet"; a draft of a
+  // published App has "Unpublished changes (only you can see them)".
+  const ofPublishedApp = Boolean(draft.baseApp);
   return (
     <article className="dql-app-card dql-app-draft-card">
       <div className="dql-app-card-body" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(); }}>
         <div className="dql-app-card-top">
-          <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private"><ShieldCheck size={12} /> Private draft</span></div>
+          <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private" title="Only you can see it until you publish it"><ShieldCheck size={12} /> Only you</span></div>
           <span className="dql-app-draft-mark"><LayoutDashboard size={15} /></span>
         </div>
-        <StatusSeal tone={openChecks ? 'draft' : 'agentic'}>{openChecks ? 'Checks to finish' : 'Unpublished'}</StatusSeal>
+        <StatusSeal tone={openChecks ? 'draft' : 'agentic'}>{openChecks ? 'Checks to finish' : ofPublishedApp ? 'Unpublished changes' : NOT_PUBLISHED_YET}</StatusSeal>
         <h3>{draft.name}</h3>
         <p>{cleanStakeholderCopy(draft.frame.goal || 'A private App draft ready to shape in Studio.')}</p>
         <div className="dql-app-card-mini">
@@ -1398,7 +1414,7 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
           <MiniMetric label="Updated" value={appCardUpdated(draft.updatedAt)} />
         </div>
         <div className="dql-app-card-signals">
-          <span><ShieldCheck size={13} /> {UNPUBLISHED_CHANGES}</span>
+          <span><ShieldCheck size={13} /> {ofPublishedApp ? UNPUBLISHED_CHANGES : NOT_PUBLISHED_YET_ONLY_YOU}</span>
         </div>
       </div>
       <div className="dql-app-card-depth">
@@ -1615,7 +1631,10 @@ function AppWorkspaceSurface({
   onInvestigationsChanged,
   onOpenLineageNode,
   onPageRunTrust,
+  aiConnected,
 }: {
+  /** `false` when no AI provider is connected: no Ask box or "Ask AI" on tiles (round 3). */
+  aiConnected?: boolean;
   /** Matching local-library entry; its presence is required for writes. */
   app: AppSummary | null;
   /** Server-resolved identity from the current persisted dashboard. */
@@ -1884,11 +1903,18 @@ function AppWorkspaceSurface({
   // "Ask about this App" (HH-16): the whole App, its domain and the filters on
   // screen, through the governed Ask loop (the server scopes it; see
   // app-copilot-scope). Readers ask in the global rail; authors in App AI.
-  const handleAskApp = useCallback((question: string) => {
+  const handleAskApp = useCallback(async (question: string) => {
     if (isEditable) {
       onExplainChange(true);
       setAskSeed({ text: question, nonce: Date.now() });
       return;
+    }
+    // After a filter change re-ran only the linked tiles, the whole page runs
+    // once so Ask reads every tile's current result (round 3).
+    let pageRunId = currentPageRunId;
+    if (!pageRunId && dashboardRun?.partial && ensureSettledRunRef.current) {
+      const full = await ensureSettledRunRef.current();
+      if (full && !full.partial && !full.stale) pageRunId = full.runId;
     }
     const appTitle = tidyTitle(workspaceAppName) || 'this App';
     dispatch({
@@ -1906,13 +1932,16 @@ function AppWorkspaceSurface({
           dashboardTitle: dashboardDoc?.dashboard.metadata.title,
           dashboardFilters: variables,
           // The page run on screen: the server answers from its own evidence of it, never from browser rows.
-          ...(currentPageRunId ? { dashboardRunId: currentPageRunId } : {}),
+          ...(pageRunId ? { dashboardRunId: pageRunId } : {}),
         },
         suggestedQuestions: (dashboardDoc?.app as { copilot?: { suggestedQuestions?: string[] } } | undefined)?.copilot?.suggestedQuestions,
       },
       autoRun: { text: question, mode: 'ask' },
     });
-  }, [dispatch, isEditable, onExplainChange, workspaceAppId, workspaceAppName, dashboardDoc, variables, currentPageRunId]);
+  }, [dispatch, isEditable, onExplainChange, workspaceAppId, workspaceAppName, dashboardDoc, variables, currentPageRunId, dashboardRun?.partial]);
+  // A whole-page run on demand (DashboardRenderer hands it over).
+  const ensureSettledRunRef = useRef<(() => Promise<DashboardRunResponse | null>) | null>(null);
+  const registerSettledRun = useCallback((ensure: () => Promise<DashboardRunResponse | null>) => { ensureSettledRunRef.current = ensure; }, []);
   const askAboutAppFilters = useMemo(() => [
     // The same words as the filter row and the appendix: a date range reads
     // "1 Jan 2025 – 30 Jun 2025", never disappears for being an object.
@@ -2380,9 +2409,11 @@ function AppWorkspaceSurface({
                       dashboardId: dashboardDoc.dashboard.id,
                       pageTitle: dashboardDoc.dashboard.metadata.title,
                       filters: askAboutAppFilters,
-                      resultsReady: Boolean(currentPageRunId),
+                      // A partial re-run after a filter change still has every tile's result on screen.
+                      resultsReady: Boolean(currentPageRunId || (dashboardRun?.partial && !dashboardRun.stale && dashboardRun.dashboardId === dashboardDoc.dashboard.id)),
                     }}
-                    onAsk={handleAskApp}
+                    onAsk={(question) => void handleAskApp(question)}
+                    {...(aiConnected !== undefined ? { aiConnected } : {})}
                   />
                 )}
                 <DashboardRenderer
@@ -2394,8 +2425,9 @@ function AppWorkspaceSurface({
                   viewerFilters={viewerFilters}
                   selectedBlockId={selectedBlockId}
                   onBlockFocus={setSelectedBlockId}
-                  onAskBlock={handleAskBlock}
+                  {...(aiConnected === false ? {} : { onAskBlock: handleAskBlock })}
                   onAskChart={handleAskChart}
+                  onSettledRunProvider={registerSettledRun}
                   onOpenLineageNode={onOpenLineageNode}
                   copilotOpen={explainOpen}
                   onCopilotChange={onExplainChange}
@@ -3112,13 +3144,14 @@ export function DatasetChartAnswerPanel({
   );
 }
 
-function isSharedProjectApp(app: AppSummary): boolean {
+function isSharedProjectApp(app: Pick<AppSummary, 'publicationIntent' | 'visibility' | 'storage'>): boolean {
   if (app.publicationIntent) return app.publicationIntent === 'shared_project';
   if (app.visibility) return app.visibility === 'shared';
   return (app.storage ?? 'shared') === 'shared';
 }
 
-function libraryCounts(apps: AppSummary[], drafts: AppStudioBuildDraft[], favorites: Set<string>): Record<LibraryFilter, number> {
+/** The library tab counts: `drafts` are the new Apps not published yet, the cards the library shows for them. */
+export function libraryCounts(apps: Array<Pick<AppSummary, 'id' | 'publicationIntent' | 'visibility' | 'storage'>>, drafts: unknown[], favorites: Set<string>): Record<LibraryFilter, number> {
   const shared = apps.filter(isSharedProjectApp).length;
   return {
     all: apps.length + drafts.length,

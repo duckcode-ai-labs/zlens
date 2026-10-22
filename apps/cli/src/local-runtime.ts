@@ -847,7 +847,7 @@ import {
 import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
 import { refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
 import { resolveResultReviewMode } from './result-review-setting.js';
-import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableModelStates, type TableModelState } from './datasets/table-dataset.js';
+import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import {
   discoverWarehouseModel,
   observedJoinsFromQueries,
@@ -5656,7 +5656,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             status: 'completed',
             stage: 'ready',
             progress: 100,
-            message: `Ready. Indexed ${prepared.nodes.toLocaleString()} governed objects for fast search.`,
+            message: `Ready. Indexed ${prepared.nodes.toLocaleString()} items from your project for search.`,
             updatedAt: completedAt,
             phases: current.phases.map((phase) => phase.id === 'search_index'
               ? { ...phase, status: 'completed', durationMs: indexDurationMs }
@@ -20850,6 +20850,26 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           }
         })();
         if (req.method === 'GET' && path === '/api/app-datasets/tables') {
+          // Datasets already made from each table (new-user round 3, problem 7).
+          const datasets = (() => {
+            try {
+              const sources: Parameters<typeof tableDatasetLinks>[0]['sources'] = [];
+              let cursor: string | undefined;
+              for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+                const page = queryAppSourceCatalog(projectRoot, { kinds: ['block'], sourcePolicy: 'include_review_required', limit: 100, ...(cursor ? { cursor } : {}) });
+                sources.push(...page.items.map((item) => ({ sourceId: item.sourceId, name: item.title || item.name, tags: item.tags, trust: item.trust, lifecycle: item.lifecycle, ...(item.check ? { check: item.check } : {}), sourcePath: item.sourcePath })));
+                cursor = page.nextCursor;
+                if (!cursor) break;
+              }
+              return tableDatasetLinks({
+                tables: listing.tables,
+                sources,
+                readSource: (sourcePath) => { try { return readFileSync(join(projectRoot, sourcePath), 'utf-8'); } catch { return undefined; } },
+              });
+            } catch {
+              return new Map<string, TableDatasetLink[]>();
+            }
+          })();
           reply(200, {
             ok: true,
             source: listing.source,
@@ -20857,7 +20877,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               const modeled = modelStates.get(table.id);
               // The tables its rows point to (design D2): their fields come with it.
               const joins = (() => { try { return joinableTables(currentRelatedTables().context, table.relation); } catch { return []; } })();
-              return { ...table, columnCount: columns.length, ...(modeled ? { modeled } : {}), ...(joins.length ? { joins } : {}) };
+              const made = datasets.get(table.id) ?? [];
+              return { ...table, columnCount: columns.length, ...(modeled ? { modeled } : {}), ...(joins.length ? { joins } : {}), ...(made.length ? { datasets: made } : {}) };
             }),
           });
           return;
@@ -22532,6 +22553,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   sourceVariables: blockPlan?.variables,
                   filters: filterResolution.filters,
                   parameters: datasetSourceParameters,
+                  // A filter's value list reads the names themselves, never "Maria Lopez (#1043)".
+                  groupNamesByKey: !datasetFieldValuesRun,
                   driver: datasetTargetConnection.driver,
                 });
                 const boundValues: Record<string, unknown> = { ...compiled.variables, ...invocation.values };
@@ -22599,6 +22622,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     sourceRevision: currentSourceRevision,
                     contractFingerprint: descriptor.contractRef.fingerprint,
                     validation: compiled.validation,
+                    ...(compiled.nameWarnings.length ? { nameWarnings: compiled.nameWarnings } : {}),
                     trust: descriptor.trust,
                     lifecycle: descriptor.lifecycle,
                     binding: {
@@ -23051,6 +23075,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 let appliedFilters: Array<{ field: string; op: TileFilterOperator; values: unknown[]; placement: 'where' | 'having' }>;
                 /** C8 outcome the executed SQL was compiled under; recorded on the receipt. */
                 let tileValidation: CompiledDatasetTileQuery['validation'];
+                /** Names grouped without a key (new-user round 3, problem 4): the tile says they may merge namesakes. */
+                let tileNameWarnings: CompiledDatasetTileQuery['nameWarnings'] = [];
                 let comparisonEvidence: Record<string, unknown> | undefined;
                 /** A cache delivery is display-only and never fresh execution authority. */
                 let cacheDelivery: DatasetCacheDeliveryReceiptV1 | undefined;
@@ -23074,6 +23100,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                       const periodCompiled = compileDatasetTileQuery({
                         descriptor,
                         query: period.query,
+                        // Periods are matched by their labels; a name told apart in one period only would not match.
+                        groupNamesByKey: false,
                         sourceSql: executionSourceSql,
                         sourceSqlParams: executionSourceSqlParams,
                         sourceVariables: executionSourceVariables,
@@ -23164,12 +23192,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     parameters: datasetSourceParameters,
                     aggregateComponentProof: aggregatePreparation?.componentProof,
                     aggregateComponentBinding: { sourceId: source.sourceId, sourceRevision: currentSourceRevision, targetFingerprint: datasetTargetFingerprint },
+                    // A filter's value list reads the names themselves, never "Maria Lopez (#1043)".
+                    groupNamesByKey: !datasetFieldValuesRun,
                     driver: datasetTargetConnection.driver,
                   });
                   queryFingerprint = compiled.queryFingerprint;
                   filterFingerprint = compiled.filterFingerprint;
                   appliedFilters = compiled.appliedFilters;
                   tileValidation = compiled.validation;
+                  tileNameWarnings = compiled.nameWarnings;
                   const boundValues: Record<string, unknown> = { ...compiled.variables, ...invocation.values };
                   datasetBoundParameters.set(item.i, compiled.sqlParams.map((parameter) => ({
                     position: parameter.position,
@@ -23217,8 +23248,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                         adapterFingerprint: 'dataset_block_runtime_v1',
                         // A joined tile's result also depends on the joins it read.
                         compilerFingerprint: tileJoins.length
-                          ? `dataset_tile_compiler_v1+joins:${fingerprintDashboardRuntimeState(tileJoins.map((join) => ({ relation: join.relation, keys: join.keys, parent: join.parent ?? null })))}`
-                          : 'dataset_tile_compiler_v1',
+                          ? `dataset_tile_compiler_v2+joins:${fingerprintDashboardRuntimeState(tileJoins.map((join) => ({ relation: join.relation, keys: join.keys, parent: join.parent ?? null })))}`
+                          : 'dataset_tile_compiler_v2',
                         rowBoundFingerprint: `normalized_result_rows:${NOTEBOOK_EXECUTE_PREVIEW_ROW_LIMIT}`,
                         personaPolicyFingerprint: personaFingerprint,
                       }
@@ -23326,6 +23357,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     sourceRevision: currentSourceRevision,
                     contractFingerprint: descriptor.contractRef.fingerprint,
                     validation: tileValidation,
+                    ...(tileNameWarnings.length ? { nameWarnings: tileNameWarnings } : {}),
                     trust: descriptor.trust,
                     ...(joinReceipts.length ? { joins: joinReceipts } : {}),
                     lifecycle: descriptor.lifecycle,
@@ -24772,6 +24804,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   filters: tile.filters,
                   // The joins to related tables it used, in plain words (design D2).
                   ...(Array.isArray(dataset?.joins) ? { joins: dataset.joins } : {}),
+                  // A name grouped without a key may merge namesakes (new-user round 3, problem 4).
+                  ...(Array.isArray(dataset?.nameWarnings) ? { nameWarnings: dataset.nameWarnings } : {}),
                   receipt,
                 }
               : {

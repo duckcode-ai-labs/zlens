@@ -1,4 +1,5 @@
 import { tileQueryOutputAliases, type TileQuery } from '@zlens/core/apps/tile-query';
+import { DEFAULT_NAME_TOP_N, isNameFieldName } from './field-query';
 import type { QueryResult } from '../../../store/types';
 import type { ShelfFieldRef } from '@zlens/core/apps/viz-encoding';
 
@@ -80,10 +81,16 @@ export function isBarVisualization(visualization: string | undefined): boolean {
  * query has no sort of its own.
  */
 export function withDefaultBarSort(query: TileQuery, visualization: string | undefined): TileQuery {
-  if (!isBarVisualization(visualization) || query.orderBy?.length || query.detail || query.comparison) return query;
+  if (!isBarVisualization(visualization) || query.detail || query.comparison) return query;
   if (!query.dimensions.length || query.dimensions.some((dimension) => dimension.timeGrain)) return query;
   const measure = tileQueryOutputAliases(query).find((output) => output.kind === 'measure');
-  return measure ? { ...query, orderBy: [{ alias: measure.alias, direction: 'desc' }] } : query;
+  if (!measure) return query;
+  const sorted: TileQuery = query.orderBy?.length ? query : { ...query, orderBy: [{ alias: measure.alias, direction: 'desc' }] };
+  // A bar of names (930 customers) starts as an explicit "Top 10" on the
+  // measure pill, not a silent cut (new-user round 3, problem 9).
+  const names = query.dimensions.length === 1 && isNameFieldName(query.dimensions[0]!.field);
+  if (names && sorted.limit === undefined && sorted.orderBy?.[0]?.direction === 'desc') return { ...sorted, limit: DEFAULT_NAME_TOP_N };
+  return sorted;
 }
 
 /**
@@ -91,10 +98,14 @@ export function withDefaultBarSort(query: TileQuery, visualization: string | und
  * leaving the tile drops its sort with it; that is not a choice.
  */
 export function sortTouched(previous: TileQuery, next: TileQuery): boolean {
-  if (previous.limit !== next.limit) return true;
+  const outputs = new Set(tileQueryOutputAliases(next).map((output) => output.alias.toLowerCase()));
+  if (previous.limit !== next.limit) {
+    // A Top N whose measure left the tile goes with it; that is not a choice either.
+    const rankedBy = previous.orderBy?.[0]?.alias.toLowerCase();
+    return !(next.limit === undefined && rankedBy && !outputs.has(rankedBy));
+  }
   const after = JSON.stringify(next.orderBy ?? []);
   if (JSON.stringify(previous.orderBy ?? []) === after) return false;
-  const outputs = new Set(tileQueryOutputAliases(next).map((output) => output.alias.toLowerCase()));
   const kept = (previous.orderBy ?? []).filter((entry) => outputs.has(entry.alias.toLowerCase()));
   return JSON.stringify(kept) !== after;
 }
