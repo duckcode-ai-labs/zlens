@@ -17,6 +17,7 @@ import { Modal, SearchPicker, iconButtonStyle, inputStyle, linkButton } from './
 import type { ModelingSearchOption } from './modeling-search';
 import {
   CARDINALITY_CHOICES,
+  discardEditWords,
   RELATIONSHIP_LEVELS,
   fanoutForCardinality,
   levelOfRelationship,
@@ -295,8 +296,9 @@ export function RelationshipBuilder({ data, relationship, draft, selectedDomain,
       <div style={{ display: 'grid', gap: 14 }}>
         {confirmDiscard ? (
           <div role="alert" style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 8, border: '1px solid var(--status-warning)', fontSize: 11.5 }}>
-            <span style={{ flex: 1 }}>Discard this relationship? Your changes are not saved.</span>
-            <button type="button" onClick={onClose} style={buttonStyle(t, 'danger')}>Discard</button>
+            {/* Closing only drops the edit; the label says so (new-user round 2, problem 10). */}
+            <span style={{ flex: 1 }}>{discardEditWords(Boolean(existing)).question}</span>
+            <button type="button" onClick={onClose} style={buttonStyle(t, 'danger')}>{discardEditWords(Boolean(existing)).action}</button>
             <button type="button" onClick={() => setConfirmDiscard(false)} style={buttonStyle(t)}>Keep editing</button>
           </div>
         ) : null}

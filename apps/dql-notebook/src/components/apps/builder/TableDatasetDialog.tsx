@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, CalendarDays, Copy, Hash, Search, Table2, X } from 'lucide-react';
-import { applyTableDuplicateChoices, type TableDatasetProposal, type TableDuplicateChoice } from '@zlens/core/datasets/table-draft';
+import { applyTableDuplicateChoices, duplicateColumnWords, type TableDatasetProposal, type TableDuplicateChoice } from '@zlens/core/datasets/table-draft';
 import { api, type CertificationByline, type WarehouseTableSummary } from '../../../api/client';
 import { messageOf } from './studio-ui';
 
@@ -97,17 +97,19 @@ export function DuplicateColumnQuestions({
   return <>
     {pairs.map((pair) => {
       const use = choices.find((choice) => choice.name === pair.name)?.use ?? 'minor';
+      // Worded for what the check found (new-user round 2, problem 7): "Subtotal is stored twice: Subtotal (dollars) and Subtotal cents."
+      const words = duplicateColumnWords(pair);
       return (
-        <fieldset key={pair.name} className="table-dataset-duplicate" aria-label={pair.question}>
-          <legend><Copy size={12} aria-hidden="true" /> {pair.question}</legend>
-          <p className="table-dataset-muted"><code>{pair.plainColumn}</code> and <code>{pair.minorColumn}</code> hold the same number. ZLens keeps one and hides the other.</p>
+        <fieldset key={pair.name} className="table-dataset-duplicate" aria-label={words.question}>
+          <legend><Copy size={12} aria-hidden="true" /> {words.question}</legend>
+          <p className="table-dataset-muted">{words.detail}</p>
           <label>
             <input type="radio" name={`duplicate-${pair.name}`} checked={use === 'minor'} onChange={() => onChoice(pair.name, 'minor')} />
-            <span><strong>Yes, use {pair.minorColumn} in {pair.major}</strong> <em>Recommended</em><small>Its name says it is stored in {pair.minorUnits}. {pair.plainColumn} is hidden.</small></span>
+            <span><strong>{words.recommended.title}</strong> <em>Recommended</em><small>{words.recommended.detail}</small></span>
           </label>
           <label>
             <input type="radio" name={`duplicate-${pair.name}`} checked={use === 'plain'} onChange={() => onChoice(pair.name, 'plain')} />
-            <span><strong>No, use {pair.plainColumn} as it is</strong><small>{pair.minorColumn} is hidden.</small></span>
+            <span><strong>{words.alternative.title}</strong><small>{words.alternative.detail}</small></span>
           </label>
         </fieldset>
       );

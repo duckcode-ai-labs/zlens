@@ -5,7 +5,9 @@ import {
   proposeTableDataset,
   readWarehouseCatalog,
   warehouseRelationId,
+  withDuplicateUnitRelations,
   wordsFor,
+  type DuplicateUnitRelation,
   type TableDatasetProposal,
   type TableProfile,
 } from '@zlens/core';
@@ -108,10 +110,15 @@ export async function draftTableDataset(input: {
 }): Promise<{ proposal: TableDatasetProposal; rows: number }> {
   const primaryKey = input.table.primaryKey ?? (input.modeledKey ? [input.modeledKey] : undefined);
   // ZLens writes this Dataset's SQL, so cents columns are read as dollars.
-  const proposal = proposeTableDataset({ table: input.table.name, relation: input.table.relation, columns: input.table.columns, ...(primaryKey ? { primaryKey } : {}), convertMinorUnits: true });
-  if (!proposal.fields.length) {
+  const proposed = proposeTableDataset({ table: input.table.name, relation: input.table.relation, columns: input.table.columns, ...(primaryKey ? { primaryKey } : {}), convertMinorUnits: true });
+  if (!proposed.fields.length) {
     throw new TableDatasetError('TABLE_HAS_NO_COLUMNS', `${input.table.name} has no columns ZLens can read by name.`);
   }
+  // `subtotal` beside `subtotal_cents`: the data says whether they are the same
+  // amount in two units or the same number twice, and the question says so.
+  const proposal = proposed.duplicates?.length
+    ? withDuplicateUnitRelations(proposed, await checkDuplicateUnits({ relation: input.table.relation, pairs: proposed.duplicates, driver: input.driver, run: input.run }))
+    : proposed;
   // A key the model already checked is counted on its own (one distinct count,
   // not up to eight); only when it no longer holds are the other candidates tried.
   if (input.modeledKey && proposal.keyCandidates.includes(input.modeledKey)) {
@@ -121,6 +128,45 @@ export async function draftTableDataset(input: {
   }
   const profile = await profileTable({ relation: input.table.relation, columns: proposal.keyCandidates, driver: input.driver, run: input.run });
   return { proposal: applyTableProfile(proposal, profile, input.table.name), rows: profile.rows };
+}
+
+/**
+ * How each duplicate pair relates on the data (new-user round 2, problem 7):
+ * `hundredths` when the cents column is the plain one × 100 on (nearly) every
+ * row where both are filled, `same` when they hold the same number. One
+ * aggregate statement; nothing when it cannot be read or the rows say neither.
+ */
+export async function checkDuplicateUnits(input: {
+  relation: string;
+  pairs: Array<{ name: string; plainColumn: string; minorColumn: string }>;
+  driver: string;
+  run: RunSql;
+}): Promise<Record<string, DuplicateUnitRelation | undefined>> {
+  if (!input.pairs.length) return {};
+  const quote = (name: string) => getDialect(input.driver).quoteIdentifier(name);
+  const selects = input.pairs.flatMap((pair, index) => {
+    const plain = `CAST(${quote(pair.plainColumn)} AS DOUBLE PRECISION)`;
+    const minor = `CAST(${quote(pair.minorColumn)} AS DOUBLE PRECISION)`;
+    return [
+      `COUNT(CASE WHEN ${plain} IS NOT NULL AND ${minor} IS NOT NULL AND ${minor} <> 0 THEN 1 END) AS ${quote(`dql_both_${index}`)}`,
+      `COUNT(CASE WHEN ${minor} <> 0 AND ABS(${plain} * 100 - ${minor}) < 0.5 THEN 1 END) AS ${quote(`dql_hundredths_${index}`)}`,
+      `COUNT(CASE WHEN ${minor} <> 0 AND ABS(${plain} - ${minor}) < 0.005 THEN 1 END) AS ${quote(`dql_same_${index}`)}`,
+    ];
+  });
+  try {
+    const [row] = await input.run(`SELECT ${selects.join(', ')} FROM ${input.relation}`);
+    const read = (key: string) => Number(row?.[key] ?? row?.[key.toUpperCase()] ?? 0);
+    return Object.fromEntries(input.pairs.map((pair, index) => {
+      const both = read(`dql_both_${index}`);
+      if (!(both > 0)) return [pair.name, undefined];
+      const hundredths = read(`dql_hundredths_${index}`) / both;
+      const same = read(`dql_same_${index}`) / both;
+      return [pair.name, hundredths >= 0.99 ? 'hundredths' : same >= 0.99 ? 'same' : undefined];
+    }));
+  } catch {
+    // The question still asks, worded from the column names alone.
+    return {};
+  }
 }
 
 /**

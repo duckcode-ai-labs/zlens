@@ -58,6 +58,8 @@ test.beforeAll(async () => {
     order_id: `O${index}`,
     customer_id: `C${index % CUSTOMERS}`,
     ordered_at: `2026-0${1 + (index % 3)}-${String(1 + (index % 27)).padStart(2, '0')} 10:00:00`,
+    // A yes/no count before the money column: the first summed measure, never the default (new-user round 2, problem 8).
+    count_drink_items: index % 2,
     order_total: 10 + index,
   }));
   const seedPath = join(workDir, 'quick-seed.json');
@@ -67,7 +69,7 @@ test.beforeAll(async () => {
       rows: customers,
     },
     orders: {
-      columns: [{ name: 'order_id', type: 'text' }, { name: 'customer_id', type: 'text' }, { name: 'ordered_at', type: 'timestamp' }, { name: 'order_total', type: 'decimal' }],
+      columns: [{ name: 'order_id', type: 'text' }, { name: 'customer_id', type: 'text' }, { name: 'ordered_at', type: 'timestamp' }, { name: 'count_drink_items', type: 'int' }, { name: 'order_total', type: 'decimal' }],
       rows: orders,
     },
   } }));
@@ -141,6 +143,14 @@ test('without AI, three quick choices build exactly those tiles with plain title
   await expect(tiles.getByRole('listitem').nth(0)).toHaveAttribute('aria-label', 'Tile 1: KPI');
   await expect(tiles.getByRole('listitem').nth(1)).toHaveAttribute('aria-label', 'Tile 2: Trend');
   await expect(tiles.getByRole('listitem').nth(2)).toHaveAttribute('aria-label', 'Tile 3: Top');
+  // The defaults lead with money (new-user round 2, problem 8): Order Total, by month, and the top
+  // customers by name ranked by a money measure, never "Count Drink Items".
+  await expect(page.getByRole('combobox', { name: 'Tile 1: measure' }).locator('option:checked')).toHaveText('Order Total');
+  await expect(page.getByRole('combobox', { name: 'Tile 2: measure' }).locator('option:checked')).toHaveText('Order Total');
+  await expect(page.getByRole('combobox', { name: 'Tile 2: time grain' })).toHaveValue('month');
+  await expect(page.getByRole('combobox', { name: 'Tile 3: rank' }).locator('option:checked')).toHaveText('Customer Name');
+  await expect(page.getByRole('combobox', { name: 'Tile 3: measure' }).locator('option:checked')).toHaveText(/^(Order Total|Lifetime Spend)$/);
+  await expect(tiles).not.toContainText('Count Drink Items by');
   await page.getByRole('combobox', { name: 'Tile 1: measure' }).selectOption({ label: 'Order Total' });
   await page.getByRole('combobox', { name: 'Tile 2: measure' }).selectOption({ label: 'Order Total' });
   await page.getByRole('combobox', { name: 'Tile 2: time grain' }).selectOption('month');

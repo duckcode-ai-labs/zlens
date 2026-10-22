@@ -108,7 +108,7 @@ import {
 } from './app-dashboard-filter-scope';
 import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/authored-domain-options';
 import { useOperations } from '../../operations/OperationsProvider';
-import { appLibraryLaunchExpanded, type AppLibraryLaunchPreference } from './app-library-launch';
+import { BUILD_NEW_APP_EVENT, appLibraryLaunchExpanded, buildNewAppRequested, type AppLibraryLaunchPreference } from './app-library-launch';
 import { plainSourceText } from './source-names';
 import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
 
@@ -1221,7 +1221,17 @@ function AppLibrarySurface({
       name: mode === 'quick' && current.name === 'Untitled Analytics App' ? '' : mode === 'manual' && !current.name.trim() ? 'Untitled Analytics App' : current.name,
     });
   }, [aiConnected]);
-  const [launchPreference, setLaunchPreference] = useState<AppLibraryLaunchPreference>('auto');
+  // Setup's "Finish setup · Build an App" opens the form, even when Apps already exist.
+  const [launchPreference, setLaunchPreference] = useState<AppLibraryLaunchPreference>(() => (buildNewAppRequested() ? 'expanded' : 'auto'));
+  useEffect(() => {
+    const open = () => {
+      if (!buildNewAppRequested({ consume: true })) return;
+      setLaunchPreference('expanded');
+    };
+    open();
+    window.addEventListener(BUILD_NEW_APP_EVENT, open);
+    return () => window.removeEventListener(BUILD_NEW_APP_EVENT, open);
+  }, []);
   const launchExpanded = appLibraryLaunchExpanded({
     preference: launchPreference,
     loading,
@@ -2244,7 +2254,7 @@ function AppWorkspaceSurface({
                               className={`dql-app-filter-coverage ${coverage.applied.length === 0 ? 'is-none' : 'is-partial'}`}
                               title={`Unaffected: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${plainSourceText(tile.reason)}` : ''}`).join('; ')}`}
                             >
-                              {formatBusinessLabel(filter.id)} affects {coverage.applied.length} of {coverage.filterable} tiles
+                              {filter.label?.trim() || formatBusinessLabel(filter.id)} affects {coverage.applied.length} of {coverage.filterable} tiles
                             </span>
                           );
                         })}

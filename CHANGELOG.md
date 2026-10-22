@@ -8,6 +8,54 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Drafted models save the first time, revenue first, plain names, no joins on names
+
+New-user review round 2, problems 4, 7, 8, 9 and 10.
+
+- **Drafted models save the first time.** Save no longer fails with "Project
+  sources changed after this proposal was reviewed" because something else
+  changed after drafting (certifying a table in an App, a setup step writing
+  `dql.config.json`). Save previews the reviewed changes again on the current
+  project and writes them as they are when every file they write is exactly
+  as reviewed; it asks only when a drafted file changed, in plain words that
+  name the tables ("…was edited after you reviewed them (Orders). Update the
+  drafts to the latest project and review them again before saving."). The
+  button is **Update drafts and review again**, never "Rebase proposal".
+  Draft my models says "Not saved yet: review and save them in Modeling."
+- **Cents questions say what the data shows.** "Subtotal is stored twice:
+  Subtotal (dollars) and Subtotal cents. Use Subtotal in dollars?" The check
+  reads the rows: the same amount in two units (×100), or the same number
+  twice (both in cents, where keeping the plain column shows a number, never
+  Money 100 times too large). Columns are named as people read them.
+- **Quick start leads with money.** Default measures rank Money-formatted
+  measures first, then money names (revenue, sales, amount, total, spend…),
+  then other sums, then counts, and counts of yes/no flags ("Count Drink
+  Items") last. The trend is that measure by month; the top list ranks the
+  most name-like field (Customer Name, never an id).
+- **Plain names.** "Customer Name affects 3 of 4 tiles", never "Customer
+  Customer Name"; "not mapped to Beverage Revenue By Product" and "Also filter
+  Beverage Revenue By Product", never the saved query's id — in filter chips,
+  "Not filtered by" reasons (also ones older Apps stored) and the Filters tab.
+- **No joins on names.** Database-only setup drafts joins only on key-like
+  columns (`*_id`, declared keys, whole-number or uuid keys the data proves
+  unique), and never a second join between two tables that already have one:
+  no more `order_item → product` on `product_name` next to `product_id`. The
+  field list never shows two groups that read the same: one join per related
+  table and name, a key join over a label join, a certified one over a draft
+  (an older descriptor's twins are named by their keys).
+- **Smaller fixes.** Closing the relationship editor asks "Discard your changes? The
+  relationship stays as it was." **Finish setup · Build an App** opens the new
+  App form, also when Apps already exist. **View as** is hidden for a
+  one-person App without row rules, where every role sees the same rows
+  ("Sees all rows" replaces "no RLS narrowing"). Publishing keeps the
+  description the author wrote, or the App's existing one, and fills "A
+  dashboard of live numbers for <Domain>." only when there is none — never
+  "Governed analytical App for …". `zlens doctor` says "19 metrics and 5
+  measures" where it said "24 metrics", matching `zlens sync` and Setup;
+  `zlens sync` reads `semantic_manifest.json` when the manifest lists no
+  metrics, and says so when the manifest cannot be read instead of "0
+  metric(s)".
+
 ### Trust: one answer on every screen
 
 - **One trust answer for an App.** The publish check, the editor's tile dots
@@ -44,6 +92,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   check it", with the server's words under **Technical details**).
 - **A checked draft join reads Draft** in Modeling, the level its editor
   opens on, instead of "Validated".
+
 
 ### Trust: checking is not certifying
 

@@ -181,6 +181,8 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   await page.getByRole('button', { name: 'Create filter' }).click();
   await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText('Not filtered by Customer Name')).toHaveCount(0);
+  // The filter is "Customer Name", never "Customer Customer Name" (new-user round 2, problem 9).
+  await expect(page.getByText(/Customer Customer/)).toHaveCount(0);
 
   // Picking Ann narrows the Orders trend to her orders (January only, 150).
   const filtered = page.waitForResponse((response) => /\/dashboards\/[^/]+\/run$/.test(response.url())

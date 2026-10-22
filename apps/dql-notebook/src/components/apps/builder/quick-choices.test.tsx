@@ -13,6 +13,7 @@ import {
   quickDimensionNoun,
   quickFieldKey,
   quickKpiTitle,
+  quickMeasureTier,
   quickStartAppName,
   quickTileLayout,
   quickTopTitle,
@@ -125,6 +126,45 @@ describe('the three quick choices a new App opens with', () => {
     expect(quickChoiceTitle(data, kpi!)).toBe('Order Total');
     expect(quickChoiceTitle(data, trend!)).toBe('Order Total by month');
     expect(quickChoiceTitle(data, top!)).toBe('Top 10 customers by Order Total');
+  });
+
+  // New-user round 2, problem 8: every default was "Count Drink Items", the first summed measure.
+  it('leads with money, not the first sum: revenue for the KPI, its trend by month, and top customers by name', () => {
+    const money = (name: string, extra: Record<string, unknown> = {}) => ({ ...sum(name), format: { kind: 'currency', currency: 'USD' }, ...extra });
+    const sales = descriptor('shop::order_items', {
+      label: 'Order Items',
+      grain: { entityIds: ['order_item'], keyFields: ['order_item_id'], keyEvidence: 'proof' },
+      fields: [
+        physical('order_item_id', { role: 'key' }),
+        physical('customer_id', { role: 'key' }),
+        physical('customer_type'),
+        physical('ordered_at', { type: 'timestamp', role: 'time', time: { grains: ['day', 'week', 'month', 'quarter', 'year'], primary: true } }),
+        sum('count_drink_items'),
+        sum('count_food_items'),
+        { kind: 'measure', name: 'order_item_count', qualifiedId: 'm::order_item_count', aggregation: 'count', from: 'order_item_id', dependsOn: ['order_item_id'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['count'], status: 'approved' },
+        sum('tax_paid'),
+        sum('quantity'),
+        money('product_price'),
+        money('revenue'),
+        physical('customer__customer_name', { related: { join: 'customer', column: 'customer_name' } }),
+      ],
+      joins: [{
+        id: 'customer', label: 'Customer', table: 'customers', relation: '"main"."customers"', keys: [{ from: 'customer_id', to: 'customer_id' }],
+        cardinality: 'many_to_one', trust: 'certified', origin: 'model', relationshipId: 'items_customer', uniqueness: 'current', sentence: 'each order item has one customer',
+      }],
+    } as unknown as Partial<DatasetDescriptor>);
+    const itemsData = quickChoiceData([item('src:items', 'Order Items', sales)], 'shop');
+    const [kpi, trend, top] = defaultQuickChoices(itemsData);
+    expect(kpi).toMatchObject({ kind: 'kpi', measure: key('src:items', 'revenue') });
+    expect(trend).toMatchObject({ kind: 'trend', measure: key('src:items', 'revenue'), grain: 'month' });
+    expect(top).toMatchObject({ kind: 'top', measure: key('src:items', 'revenue'), dimension: key('src:items', 'customer__customer_name') });
+    expect(quickChoiceTitle(itemsData, top!)).toBe('Top 10 customers by Revenue');
+    // The order: Money, then money words, then other sums, then counts, then yes/no counts.
+    const tiers = Object.fromEntries(itemsData[0]!.measures.map((measure) => [measure.name, quickMeasureTier(measure)]));
+    expect(tiers).toEqual({ revenue: 5, product_price: 5, tax_paid: 4, quantity: 1, order_item_count: 1, count_food_items: 0, count_drink_items: 0 });
+    // Without Money formats, names decide: "Order Total" before "Order Cost", both before a count.
+    const plain = descriptor('shop::plain', { label: 'Plain', fields: [sum('count_drink_items'), sum('order_cost'), sum('order_total'), sum('units')] as never });
+    expect(defaultQuickChoices(quickChoiceData([item('src:plain', 'Plain', plain)]))[0]).toMatchObject({ measure: key('src:plain', 'order_total') });
   });
 
   it('offers only what the data can make', () => {

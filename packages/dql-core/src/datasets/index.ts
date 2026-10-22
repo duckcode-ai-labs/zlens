@@ -84,6 +84,7 @@ export type {
 export {
   applyTableDuplicateChoices,
   applyTableProfile,
+  duplicateColumnWords,
   proposeTableDataset,
   renderTableDatasetBlock,
   tableColumnKind,
@@ -91,6 +92,7 @@ export {
   tableDatasetDeclaration,
   tableProfileColumns,
   singularWords,
+  withDuplicateUnitRelations,
   wordsFor,
 } from './table-draft.js';
 export {
@@ -110,7 +112,7 @@ export {
   withoutDatasetJoins,
 } from './related-fields.js';
 export type { DiscoveredDatasetJoins, RelatedRelationshipEdge } from './related-fields.js';
-export type { TableColumnInput, TableColumnKind, TableDatasetDuplicate, TableDatasetField, TableDatasetHiddenColumn, TableDatasetMeasure, TableDatasetProposal, TableDuplicateChoice, TableProfile } from './table-draft.js';
+export type { DuplicateColumnWords, DuplicateUnitRelation, TableColumnInput, TableColumnKind, TableDatasetDuplicate, TableDatasetField, TableDatasetHiddenColumn, TableDatasetMeasure, TableDatasetProposal, TableDuplicateChoice, TableProfile } from './table-draft.js';
 export {
   NON_ADDITIVE_REASON,
   SAVED_QUERY_ROW_COUNT,

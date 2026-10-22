@@ -44,6 +44,8 @@ export interface QuickField {
 
 export interface QuickMeasure extends QuickField {
   aggregation: DatasetMeasureField['aggregation'];
+  /** How its values are shown: Money ranks first for the default picks. */
+  format?: NonNullable<DatasetMeasureField['format']>['kind'];
 }
 
 /** The main time field a trend groups by, and the grains it offers. */
@@ -119,7 +121,7 @@ export function quickChoiceData(items: readonly AppBlockRecommendation[], appDom
     const field = (entry: DatasetField, group: string, review = false): QuickField => ({
       key: quickFieldKey(sourceId, entry.name), sourceId, name: entry.name, label: humanize(entry.name), group, review,
     });
-    const measures = groups.measures.flatMap((entry) => entry.kind === 'measure' ? [{ ...field(entry, label), aggregation: entry.aggregation }] : []);
+    const measures = groups.measures.flatMap((entry) => entry.kind === 'measure' ? [{ ...field(entry, label), aggregation: entry.aggregation, ...(entry.format?.kind ? { format: entry.format.kind } : {}) }] : []);
     // Keys last: "Top 10 customer ids" is rarely what anyone wants.
     const own = [...groups.dimensions.filter((entry) => entry.role !== 'key'), ...groups.dimensions.filter((entry) => entry.role === 'key')]
       .filter((entry) => entry.type !== 'number');
@@ -188,16 +190,60 @@ export function quickKindAvailable(data: readonly QuickData[], kind: QuickChoice
   return quickDimensionOptions(data).length > 0;
 }
 
-/** A total reads best for a sum; counts, averages and rates read as themselves. */
-function preferredMeasure(measures: readonly QuickMeasure[]): QuickMeasure | undefined {
-  return measures.find((measure) => measure.aggregation === 'sum') ?? measures[0];
+/** Names of the number a sales page leads with, then other money words. */
+const LEAD_MONEY_WORDS = /\b(revenue|sales|amount|total|spend|spending|income|gmv|bookings)\b/;
+const MONEY_WORDS = /\b(price|cost|costs|profit|value|payment|payments|paid|fee|fees)\b/;
+const COUNT_WORDS = /\b(count|counts|number|num|qty|quantity)\b/;
+/** A count of yes/no rows ("Count Drink Items", "Is Food Item"): rarely the number a page leads with. */
+const FLAG_WORDS = /^(count\s+)?(is|has)\b|\bflags?\b|^count\s+\w+\s+items?$/;
+
+/**
+ * How good a default a measure is (new-user round 2, problem 8), as a tier:
+ * 5 shown as Money, 4 named like money (revenue, sales, amount, total,
+ * spend, cost…), 3 a sum of another number, 2 an average or other number,
+ * 1 a count, 0 a count of yes/no flags ("Count Drink Items"). Higher is
+ * better.
+ */
+export function quickMeasureTier(measure: Pick<QuickMeasure, 'label' | 'aggregation' | 'format'>): number {
+  const words = measure.label.toLowerCase();
+  if (FLAG_WORDS.test(words)) return 0;
+  const counting = measure.aggregation === 'count' || measure.aggregation === 'count_distinct' || COUNT_WORDS.test(words);
+  if (counting) return 1;
+  if (measure.format === 'currency') return 5;
+  if (measure.format !== 'percent' && (LEAD_MONEY_WORDS.test(words) || MONEY_WORDS.test(words))) return 4;
+  if (measure.aggregation === 'sum' && measure.format !== 'percent') return 3;
+  return 2;
 }
 
-/** "Customer Name" ranks better than "Customer Id"; a field of the same data as the KPI wins a tie. */
+/** Within a tier: "Order Total" and "Revenue" before "Order Cost" or "Tax Paid". */
+function leadWords(measure: Pick<QuickMeasure, 'label'>): number {
+  const words = measure.label.toLowerCase();
+  return LEAD_MONEY_WORDS.test(words) ? 2 : MONEY_WORDS.test(words) ? 1 : 0;
+}
+
+/**
+ * The best default among these measures: the best tier; within it the
+ * App's own data order (its Domain and certified data first), then the
+ * number a sales page leads with, then the data's own field order.
+ */
+function preferredMeasure(measures: readonly QuickMeasure[]): QuickMeasure | undefined {
+  const sourceOrder = new Map<string, number>();
+  for (const measure of measures) if (!sourceOrder.has(measure.sourceId)) sourceOrder.set(measure.sourceId, sourceOrder.size);
+  return measures
+    .map((measure, index) => ({ measure, index, tier: quickMeasureTier(measure), source: sourceOrder.get(measure.sourceId) ?? 0, lead: leadWords(measure) }))
+    .sort((left, right) => right.tier - left.tier || left.source - right.source || right.lead - left.lead || Number(left.measure.review) - Number(right.measure.review) || left.index - right.index)[0]?.measure;
+}
+
+/**
+ * The most name-like dimension ranks first: "Customer Name" and "Product
+ * Name" over "Customer Type", never an id; a field of the same data as the
+ * KPI wins a tie.
+ */
 function dimensionScore(field: QuickField, preferSourceId?: string): number {
   const words = field.label.toLowerCase();
   let score = 0;
   if (/\bname\b/.test(words)) score += 3;
+  if (/\b(customer|product|store|location|region|country|city|category|brand|supplier|vendor)\b/.test(words)) score += 1;
   if (/\b(id|key|uuid|code)\b/.test(words)) score -= 4;
   if (!field.review) score += 1;
   if (preferSourceId && field.sourceId === preferSourceId) score += 1;

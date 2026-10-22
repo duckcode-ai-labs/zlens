@@ -43,6 +43,18 @@ test.beforeAll(async () => {
   seed.tables.stg_customers = seed.tables.dim_customers;
   seed.tables.stg_orders = seed.tables.fct_orders;
   seed.tables['raw.raw_customers'] = seed.tables.dim_customers;
+  // A products table: order_items reaches it on product_id, and also shares a
+  // unique product_name with it, which once drafted a second Product join
+  // (new-user round 2, problem 5).
+  seed.tables.products = {
+    columns: [{ name: 'product_id', type: 'text' }, { name: 'product_name', type: 'text' }, { name: 'product_type', type: 'text' }],
+    rows: [
+      { product_id: 'P1', product_name: 'Burger', product_type: 'food' },
+      { product_id: 'P2', product_name: 'Fries', product_type: 'food' },
+      { product_id: 'P3', product_name: 'Cola', product_type: 'drink' },
+      { product_id: 'P4', product_name: 'Salad', product_type: 'food' },
+    ],
+  };
   const seedPath = join(workDir, 'seed.json');
   writeFileSync(seedPath, JSON.stringify(seed));
   run('node', [join(repoRoot, 'scripts/seed-eval-warehouse.mjs'), '--connector-root', connectorRoot, '--seed', seedPath, '--out', join(projectDir, 'jaffle_shop.duckdb'), '--schema', 'dev']);
@@ -108,7 +120,9 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await expect(setup.getByText(/LOCAL_[0-9A-F]{8}/)).toHaveCount(0);
 
   await draft.getByRole('button', { name: 'Draft my models' }).click();
-  await expect(draft.getByRole('status')).toContainText(/Drafted 4 models and \d+ joins? from 6 tables/, { timeout: 120_000 });
+  await expect(draft.getByRole('status')).toContainText(/Drafted 5 models and \d+ joins? from 7 tables/, { timeout: 120_000 });
+  // Honest about what is saved (new-user round 2, problem 4).
+  await expect(draft.getByRole('status')).toContainText('Not saved yet: review and save them in Modeling.');
   // The staging copies are left out; the Domain is named after the file, not the schema.
   await expect(draft.getByText('Left out 2 staging tables (stg_customers, stg_orders): a final table holds the same data.')).toBeVisible();
   await expect(draft.getByLabel('Domain name')).toContainText('Your tables go in the Domain Jaffle shop, named after your database.');
@@ -116,17 +130,25 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   // "Show staging tables" drafts them too, and back.
   const showStaging = draft.getByRole('checkbox', { name: 'Show staging tables' });
   await showStaging.check();
-  await expect(draft.getByRole('status')).toContainText(/Drafted 6 models/, { timeout: 120_000 });
+  await expect(draft.getByRole('status')).toContainText(/Drafted 7 models/, { timeout: 120_000 });
   await expect(draft.getByText('Staging tables are drafted too.')).toBeVisible();
   await showStaging.uncheck();
-  await expect(draft.getByRole('status')).toContainText(/Drafted 4 models/, { timeout: 120_000 });
-  await expect(draft.getByLabel('Drafts waiting')).toHaveText('4 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
+  await expect(draft.getByRole('status')).toContainText(/Drafted 5 models/, { timeout: 120_000 });
+  await expect(draft.getByLabel('Drafts waiting')).toHaveText('5 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
 
   // A restart resumes at the same step, with the drafted models kept.
   await page.reload();
   await expect(setup.getByRole('heading', { name: 'Connect your database' })).toBeVisible({ timeout: 60_000 });
   await expect(draft.getByRole('status')).toContainText(/Drafted \d+ models?/);
-  await expect(draft.getByLabel('Drafts waiting')).toHaveText('4 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
+  await expect(draft.getByLabel('Drafts waiting')).toHaveText('5 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
+
+  // Joins are drafted on keys: one Product join from order items, on product_id, never a second on product_name.
+  const waitingNow = await (await page.request.get(`${server!.baseUrl}/api/modeling/warehouse/drafts`)).json() as { waiting: { proposalId: string } };
+  const draftedProposal = await (await page.request.get(`${server!.baseUrl}/api/context-proposals/${encodeURIComponent(waitingNow.waiting.proposalId)}`)).json() as { proposal: { operations: Array<{ change?: { operation: string; value: { from?: string; to?: string; keys?: Array<{ from: string; to: string }> } } }> } };
+  const joins = draftedProposal.proposal.operations.flatMap((operation) => (operation.change?.operation === 'upsert_relationship' ? [operation.change.value] : []));
+  const productJoins = joins.filter((join) => join.from === 'order_item' && String(join.to).endsWith('product'));
+  expect(productJoins.map((join) => join.keys?.map((pair) => pair.from).join('+')), JSON.stringify(joins)).toEqual(['product_id']);
+  expect(joins.some((join) => join.keys?.some((pair) => /_name$/.test(pair.from))), JSON.stringify(joins)).toBe(false);
 
   // Apps lists the drafted tables as drafted, with the key setup checked.
   const tables = await (await page.request.get(`${server!.baseUrl}/api/app-datasets/tables`)).json() as { tables: Array<{ name: string; modeled?: { state: string; key?: string } }> };
@@ -148,7 +170,7 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await expect(review.getByText('Drafted from your database · needs review')).toBeVisible();
   // One plain line for the tables placed in the default area; codes and ids only under Technical details.
   await expect(review.getByRole('listitem').filter({ hasText: 'tables placed in the default area' })).toHaveCount(1);
-  await expect(review.getByText('4 tables placed in the default area. You can rename or move them later.', { exact: true })).toBeVisible();
+  await expect(review.getByText('5 tables placed in the default area. You can rename or move them later.', { exact: true })).toBeVisible();
   await expect(review.getByText(/MODEL_AREA_DEFAULTED/)).toBeHidden();
   await expect(review.getByText(/scope:domain:/)).toBeHidden();
   await expect(review.getByText('Create the Domain Jaffle shop')).toBeVisible();
@@ -160,15 +182,36 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   await review.getByRole('button', { name: 'Keep for later' }).click();
   await expect(review).toBeHidden();
   const waiting = page.getByRole('status', { name: 'Drafted models waiting for review' });
-  await expect(waiting).toContainText('4 drafted models waiting for review in Jaffle shop.');
+  await expect(waiting).toContainText('5 drafted models waiting for review in Jaffle shop.');
   await page.reload();
-  await expect(waiting).toContainText('4 drafted models waiting for review in Jaffle shop.', { timeout: 60_000 });
+  await expect(waiting).toContainText('5 drafted models waiting for review in Jaffle shop.', { timeout: 60_000 });
 
-  // Review them again and save: nothing waits any more.
+  // Something else changes the project before the drafts are saved: an App
+  // checks a table, which writes its Dataset (new-user round 2, problem 4).
+  const listing = await (await page.request.get(`${server!.baseUrl}/api/app-datasets/tables`)).json() as { tables: Array<{ id: string; name: string }> };
+  const customersTable = listing.tables.find((table) => table.name === 'dim_customers');
+  expect(customersTable, JSON.stringify(listing.tables.map((table) => table.name))).toBeDefined();
+  const checked = await page.request.post(`${server!.baseUrl}/api/app-datasets/tables/create`, { data: { tableId: customersTable!.id, name: 'Customers', measures: [] } });
+  expect(checked.ok(), await checked.text()).toBe(true);
+
+  // Review them again and save: saved the first time, no "Rebase proposal", nothing waits any more.
   await waiting.getByRole('button', { name: 'Review drafts' }).click();
   await expect(review.getByText('Review the models ZLens drafted')).toBeVisible();
   await review.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(review).toBeHidden({ timeout: 60_000 });
+  await expect(page.getByRole('button', { name: /Rebase|Update drafts/ })).toHaveCount(0);
+  await expect(page.getByText('Project sources changed after this proposal was reviewed.')).toHaveCount(0);
   await expect(waiting).toBeHidden();
   expect(readFileSync(join(projectDir, 'domains', 'jaffle-shop', 'domain.dql'), 'utf8')).toContain('Jaffle shop');
+
+  // The saved model reaches products once: Order Items has one "Product" group of fields, never two.
+  const itemsTable = listing.tables.find((table) => table.name === 'order_items');
+  expect(itemsTable).toBeDefined();
+  const items = await page.request.post(`${server!.baseUrl}/api/app-datasets/tables/create`, { data: { tableId: itemsTable!.id, name: 'Order Items', measures: [] } });
+  expect(items.ok(), await items.text()).toBe(true);
+  const build = await (await page.request.post(`${server!.baseUrl}/api/app-builds`, { data: { name: 'Products', goal: 'Revenue by product', authoringMode: 'manual', sourcePolicy: 'include_review_required', template: 'blank' } })).json() as { draft: { id: string } };
+  const candidates = await (await page.request.get(`${server!.baseUrl}/api/app-builds/${build.draft.id}/source-candidates?limit=50`)).json() as { items: Array<{ name: string; capabilities: { dataset?: { joins?: Array<{ id: string; label: string; table: string; keys: Array<{ from: string }> }> } } }> };
+  const itemJoins = candidates.items.find((item) => item.name === 'Order Items')?.capabilities.dataset?.joins ?? [];
+  expect(itemJoins.filter((join) => join.table === 'products').map((join) => join.keys.map((key) => key.from).join('+')), JSON.stringify(itemJoins)).toEqual(['product_id']);
+  expect(new Set(itemJoins.map((join) => join.label)).size, JSON.stringify(itemJoins)).toBe(itemJoins.length);
 });

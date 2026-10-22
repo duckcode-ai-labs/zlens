@@ -1,3 +1,5 @@
+import { relatedFieldWords } from '@zlens/core/datasets/related-fields';
+
 /**
  * Shared presentation text helpers for the Apps surface.
  *
@@ -17,8 +19,13 @@ export function appHeaderTitle(name?: string | null, id?: string | null): string
   return tidyTitle(name) || id || 'App';
 }
 
+/**
+ * A name in words. A related field's id reads as the field ("customer__customer_name"
+ * is "Customer Name", never "Customer Customer Name"; new-user round 2, problem 9).
+ */
 export function formatBusinessLabel(value?: string | null): string {
-  const clean = String(value ?? '').replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
+  const raw = String(value ?? '').trim();
+  const clean = (relatedFieldWords(raw) ?? raw).replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!clean) return 'Business';
   return clean.split(' ').map((word) => {
     const lower = word.toLowerCase();

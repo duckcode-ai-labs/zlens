@@ -91,15 +91,80 @@ export interface TableDatasetDuplicate {
   major: 'dollars' | 'pounds';
   /** The field the proposal reads the hundredths column as before the answer ("order_total_dollars"). */
   convertedField: string;
-  /** "Use Order total in dollars?" */
+  /** "Order total is stored twice: Order total (dollars) and Order total cents. Use Order total in dollars?" */
   question: string;
+  /**
+   * What the data shows about the two columns (checked on the table):
+   * `hundredths`, the hundredths column is the plain one × 100 (19.00 and
+   * 1900, the same amount in two units); `same`, they hold the same number
+   * (both in cents). Absent when it could not be checked.
+   */
+  relation?: DuplicateUnitRelation;
 }
+
+/** How two columns of one amount relate on the data: ×100 (two units) or the same number (both in hundredths). */
+export type DuplicateUnitRelation = 'hundredths' | 'same';
 
 /** An answer: use the hundredths column read in dollars (recommended), or the plain column as it is. */
 export interface TableDuplicateChoice { name: string; use: 'minor' | 'plain' }
 
 /** A column a duplicate answer left out. */
-export interface TableDatasetHiddenColumn { column: string; keptColumn: string; reason: string }
+export interface TableDatasetHiddenColumn { column: string; keptColumn: string; reason: string; relation?: DuplicateUnitRelation }
+
+/** The words of one duplicate-column question, for what the data showed (new-user round 2, problem 7). */
+export interface DuplicateColumnWords {
+  question: string;
+  detail: string;
+  recommended: { title: string; detail: string };
+  alternative: { title: string; detail: string };
+}
+
+/**
+ * "Subtotal is stored twice: Subtotal (dollars) and Subtotal cents. Use
+ * Subtotal in dollars?" The columns are named as people read them, and the
+ * sentence says what the data showed: the same amount in two units (×100),
+ * the same number twice (both in cents), or, unchecked, what the names say.
+ */
+export function duplicateColumnWords(pair: Pick<TableDatasetDuplicate, 'plainColumn' | 'minorColumn' | 'minorUnits' | 'major' | 'relation'>): DuplicateColumnWords {
+  const plain = wordsFor(pair.plainColumn);
+  const minor = wordsFor(pair.minorColumn);
+  const recommended = { title: `Yes, use ${plain} in ${pair.major}`, detail: `Read from ${minor} ÷ 100, shown as Money. The ${plain} column is hidden.` };
+  if (pair.relation === 'hundredths') {
+    return {
+      question: `${plain} is stored twice: ${plain} (${pair.major}) and ${minor}. Use ${plain} in ${pair.major}?`,
+      detail: `${minor} is ${plain} × 100: the same amount in ${pair.minorUnits}. ZLens keeps one and hides the other.`,
+      recommended,
+      alternative: { title: `No, use the ${plain} column as it is`, detail: `It is already in ${pair.major}. ${minor} is hidden.` },
+    };
+  }
+  if (pair.relation === 'same') {
+    return {
+      question: `${plain} is stored twice, both in ${pair.minorUnits}: ${plain} and ${minor}. Use ${plain} in ${pair.major}?`,
+      detail: `${plain} and ${minor} hold the same number, in ${pair.minorUnits}. ZLens keeps one and hides the other.`,
+      recommended,
+      alternative: { title: `No, use the ${plain} column as it is`, detail: `It stays in ${pair.minorUnits}, shown as a plain number. ${minor} is hidden.` },
+    };
+  }
+  return {
+    question: `${plain} is stored twice: ${plain} and ${minor}. Use ${plain} in ${pair.major}?`,
+    detail: `${minor} is stored in ${pair.minorUnits}, as its name says. ZLens keeps one and hides the other.`,
+    recommended,
+    alternative: { title: `No, use the ${plain} column as it is`, detail: `${minor} is hidden.` },
+  };
+}
+
+/** The proposal with what the data showed about each duplicate pair, and the question worded for it. */
+export function withDuplicateUnitRelations(proposal: TableDatasetProposal, relations: Record<string, DuplicateUnitRelation | undefined>): TableDatasetProposal {
+  if (!proposal.duplicates?.length) return proposal;
+  return {
+    ...proposal,
+    duplicates: proposal.duplicates.map((pair) => {
+      const relation = relations[pair.name];
+      const next = relation ? { ...pair, relation } : pair;
+      return { ...next, question: duplicateColumnWords(next).question };
+    }),
+  };
+}
 
 export interface TableProfile {
   rows: number;
@@ -242,7 +307,7 @@ export function proposeTableDataset(input: {
           minorUnits: minor,
           major: MINOR_UNIT_MONEY[minor].major,
           convertedField: name,
-          question: `Use ${wordsFor(plainColumn.name)} in ${MINOR_UNIT_MONEY[minor].major}?`,
+          question: duplicateColumnWords({ plainColumn: plainColumn.name, minorColumn: column.name, minorUnits: minor, major: MINOR_UNIT_MONEY[minor].major }).question,
         });
       }
       return { name, label: wordsFor(name), role: 'attribute', type: 'number', column: column.name, divideBy: 100 };
@@ -352,11 +417,21 @@ export function applyTableDuplicateChoices(proposal: TableDatasetProposal, raw?:
         .map((measure) => (measure.from === pair.convertedField
           ? { ...measure, name: plainMeasure?.name ?? measureName(pair.name), label: pair.label, from: pair.name, reason: `Adds up ${pair.label.toLowerCase()} across rows.` }
           : measure));
-      hidden.push({ column: pair.plainColumn, keptColumn: pair.minorColumn, reason: `${pair.label} uses ${pair.minorColumn}, shown in ${pair.major}; ${pair.plainColumn} holds the same number, so it is hidden.` });
+      const why = pair.relation === 'hundredths'
+        ? `is the same amount in ${pair.major}`
+        : pair.relation === 'same' ? `holds the same number, in ${pair.minorUnits}` : 'holds the same amount';
+      hidden.push({ column: pair.plainColumn, keptColumn: pair.minorColumn, reason: `${pair.label} uses ${pair.minorColumn}, shown in ${pair.major}; ${pair.plainColumn} ${why}, so it is hidden.`, ...(pair.relation ? { relation: pair.relation } : {}) });
     } else {
       fields = fields.filter((field) => field.name !== pair.convertedField);
       measures = measures.filter((measure) => measure.from !== pair.convertedField);
-      hidden.push({ column: pair.minorColumn, keptColumn: pair.plainColumn, reason: `${pair.label} uses ${pair.plainColumn} as it is; ${pair.minorColumn} holds the same number in ${pair.minorUnits}, so it is hidden.` });
+      // Both columns in cents: the plain one is a number, never Money (it would read 100 times too large).
+      if (pair.relation === 'same') {
+        measures = measures.map((measure) => (measure.from === pair.plainColumn && measure.format === 'currency'
+          ? { ...measure, format: 'number' as const, currency: undefined, minorUnits: pair.minorUnits, unitNote: `Stored as ${pair.minorUnits}, so it is shown as a plain number: as Money it would read 100 times too large` }
+          : measure));
+      }
+      const why = pair.relation === 'same' ? 'holds the same number' : `is the same amount in ${pair.minorUnits}`;
+      hidden.push({ column: pair.minorColumn, keptColumn: pair.plainColumn, reason: `${pair.label} uses ${pair.plainColumn} as it is; ${pair.minorColumn} ${why}, so it is hidden.`, ...(pair.relation ? { relation: pair.relation } : {}) });
     }
   }
   const { duplicates: _answered, ...rest } = proposal;
@@ -473,11 +548,11 @@ function convertedNote(proposal: TableDatasetProposal): string {
   return parts.length ? ` ${parts.join('; ')}.` : '';
 }
 
-/** " order_total is hidden (order_total_cents holds the same number)." for the block's description. */
+/** " order_total is hidden (order_total_cents holds the same amount)." for the block's description. */
 function hiddenNote(proposal: TableDatasetProposal): string {
   const hidden = proposal.hiddenColumns ?? [];
   if (!hidden.length) return '';
-  return ` ${hidden.map((entry) => `${entry.column} is hidden (${entry.keptColumn} holds the same number)`).join('; ')}.`;
+  return ` ${hidden.map((entry) => `${entry.column} is hidden (${entry.keptColumn} holds the same ${entry.relation === 'same' ? 'number' : 'amount'})`).join('; ')}.`;
 }
 
 /**
