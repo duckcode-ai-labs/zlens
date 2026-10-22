@@ -1,7 +1,7 @@
 # Work in a notebook
 
 A notebook is where you explore: SQL and DQL cells, their results, and notes,
-in one file. When a query is worth keeping, you save it as a block.
+in one file. When a query is worth keeping, you keep it as a saved query.
 
 {{ clip("notebook") }}
 
@@ -23,7 +23,7 @@ in one file. When a query is worth keeping, you save it as a block.
 
 An empty notebook asks **What are you researching?** and offers:
 
-- **Use existing block** opens a block picker and adds the block you pick.
+- **Use existing saved query** opens a picker and adds the saved query you pick.
 - **Ask Notebook AI** opens the [Notebook AI](#notebook-ai-and-history) panel.
 - **Create DQL query** adds an empty DQL cell.
 - **Import local data** opens the [Import data](#import-local-data) panel.
@@ -36,9 +36,9 @@ Hover between cells and click **Add cell**. Pick a type:
 
 | Type | What it does |
 |---|---|
-| **Block** | Opens a block picker and adds a DQL cell that runs the block you pick, such as `@block("monthly_revenue")`. |
+| **Saved query** | Opens a saved query picker and adds a DQL cell that runs the saved query you pick, such as `@block("monthly_revenue")`. |
 | **Ask AI** | Opens the Notebook AI panel. It adds no cell until you insert an answer. |
-| **DQL** | A DQL block, or an `@block("…")` reference. |
+| **DQL** | A saved query written in DQL, or an `@block("…")` reference. |
 | **SQL** | Plain SQL against your database. |
 | **Import** | Opens the Import data panel. It adds no cell until you import a file. |
 | **Note** | Markdown text. |
@@ -51,7 +51,7 @@ workspace** for [imported data](#import-local-data).
 
 ### Write a DQL cell
 
-A DQL cell holds a block. To start one, click **Insert DQL example** in an
+A DQL cell holds a saved query (a `.dql` block definition). To start one, click **Insert DQL example** in an
 empty DQL cell. The example runs on the Jaffle sample:
 
 ```dql
@@ -76,9 +76,9 @@ To switch an empty DQL cell to plain SQL, click **Switch to SQL cell**.
 
 `@metric(...)` and `@dim(...)` work in a **SQL** cell: ZLens replaces them with
 the SQL from your semantic layer. A DQL cell rejects them, because a query
-like `SELECT @metric(...) ...` is still plain SQL, not a block. In DQL, ask for
-metrics with a semantic block, `type = "semantic"`, which names a `metric` and
-its `dimensions`. See [Semantic Block](../reference/language.md#semantic-block).
+like `SELECT @metric(...) ...` is still plain SQL, not a saved query. In DQL, ask for
+metrics with `type = "semantic"`, which names a `metric` and its
+`dimensions`. See [Semantic block](../reference/language.md#semantic-block) in the DQL reference.
 
 ## Run cells
 
@@ -152,33 +152,33 @@ changes.
 The notebook is a `.dqlnb` file. Results go in a `.run.json` file next to it,
 which git ignores, so data never ends up in a commit.
 
-## Save a cell as a block
+## Save a cell as a saved query
 
 When a query is worth reusing:
 
-1. Hover over the cell and click **Save Block** ("Save this cell as a reusable
-   block").
-2. In **Save as Block**, fill in **Block Name** and **Owner**, and ideally a
+1. Hover over the cell and click **Save as saved query** ("Save this cell as a reusable
+   saved query").
+2. In **Save as saved query**, fill in **Name** and **Owner**, and ideally a
    **Domain**, **Tags** and **Description**. **Governance checks** shows what is
    still missing. The dialog shows the file it will write, such as
    `domains/commerce/blocks/orders_by_store.dql`.
-3. Click **Save draft block**.
+3. Click **Save draft saved query**.
 
-ZLens saves a draft block and opens it in Block Studio. As the dialog says,
-saving never certifies: click **Certify** in Block Studio when it is ready.
+ZLens saves a draft saved query and opens it in the saved query editor. As the dialog says,
+saving never certifies: click **Certify** in the saved query editor when it is ready.
 See [Save and certify](../blocks/certify.md).
 
 ## See where a cell's data comes from
 
-Under a SQL or DQL cell, open **Cell SQL lineage** (SQL) or **Project block
+Under a SQL or DQL cell, open **Cell SQL lineage** (SQL) or **Project saved query
 lineage** (DQL) to see the tables, joins, filters and outputs. On a DQL cell,
-**View in DAG** opens the **Lineage Inspector** panel on that block. See
+**View in DAG** opens the **Lineage Inspector** panel on that saved query. See
 [lineage](../lineage/index.md).
 
 ## Notebook AI and history
 
 - **Notebook AI** (top right) opens a side panel that answers questions using
-  the whole notebook, dbt and semantic metadata, and certified blocks. It needs
+  the whole notebook, dbt and semantic metadata, and certified saved queries. It needs
   an [AI provider](../get-started/ai-provider.md).
 - **Ask AI** on a SQL or DQL cell (hover over the cell) opens the same panel on
   that cell, titled with the cell's type and name, such as

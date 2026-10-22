@@ -39,8 +39,8 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('Saved query · Needs review · Growth');
     // A database table not checked yet is in the same list and goes through the check.
     expect(markup).toContain('Table · Not checked yet · dev · 7 columns · ~935 rows');
-    expect(markup).toContain('aria-label="Check customers and add it as a Dataset"');
-    expect(markup).toContain('A table becomes a Dataset after ZLens checks it once.');
+    expect(markup).toContain('aria-label="Check customers and add it"');
+    expect(markup).toContain('ZLens checks a table once before Apps use it.');
     // In the catalog's trust order, tables not checked yet last.
     const order = ['Orders', 'Order Lines', 'Monthly Revenue', 'Margin', 'Top Customers', 'Draft Revenue', '>customers<'].map((name) => markup.indexOf(name));
     expect(order.every((position, index) => position >= 0 && (index === 0 || position > order[index - 1]!))).toBe(true);
@@ -122,6 +122,6 @@ describe('Add data browser: one list (design D1)', () => {
     const order = ['>customers<', '>orders<', '>payments<'].map((name) => markup.indexOf(name));
     expect(order[0]).toBeLessThan(order[1]!);
     expect(order[1]).toBeLessThan(order[2]!);
-    expect(markup).toContain('aria-label="Check orders and add it as a Dataset"');
+    expect(markup).toContain('aria-label="Check orders and add it"');
   });
 });

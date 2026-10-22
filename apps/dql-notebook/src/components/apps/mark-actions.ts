@@ -190,7 +190,7 @@ export function explainDefinitionFor(input: {
   anchor?: string;
 }): { definition: DashboardDriverDefinitionV1 } | { needsPeriod: { timeField: string; grain: Grain } } | { unavailable: string } {
   const query = input.item.query as TileQuery | undefined;
-  if (!query || query.detail) return { unavailable: 'Only a Dataset tile can be explained.' };
+  if (!query || query.detail) return { unavailable: 'Only a tile built from fields can be explained.' };
   const measure = input.mark?.measure?.name ?? query.measures[0]?.measure;
   if (!measure) return { unavailable: 'This tile has no measure to explain.' };
   const markTime = input.mark?.values.find((entry) => entry.timeGrain);
@@ -198,7 +198,7 @@ export function explainDefinitionFor(input: {
   const primary = (input.fields ?? []).find((field) => field.role === 'time' && field.primary) ?? (input.fields ?? []).find((field) => field.role === 'time');
   const timeField = markTime?.field ?? tileTime?.field ?? primary?.name;
   const grain = markTime?.timeGrain ?? grainOf(tileTime?.timeGrain) ?? (primary ? (grainOf(['month', 'week', 'quarter', 'day', 'year'].find((candidate) => (primary.grains ?? ['month']).includes(candidate))) ?? 'month') : undefined);
-  if (!timeField || !grain) return { unavailable: 'This Dataset has no time field, so there is no change to explain.' };
+  if (!timeField || !grain) return { unavailable: 'This data has no time field, so there is no change to explain.' };
   // Categories the reader pointed at, drills and the Explore path narrow both periods alike.
   const categoryFilters = (input.mark?.values ?? []).filter((entry) => !entry.timeGrain).map((entry) => ({ field: entry.field, op: 'eq' as const, values: [entry.value] }));
   const pathFilters = (input.path ?? []).flatMap((step) => step.filters)

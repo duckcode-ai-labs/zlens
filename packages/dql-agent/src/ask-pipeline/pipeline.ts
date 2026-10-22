@@ -491,7 +491,7 @@ export function heldBlockRefusal(block: VocabularyEntry, missing: string[]): str
   // The entailment's reasons are written for the governed repair ("the answer
   // is composed by entity key instead"); a refusal says only what is missing.
   const reasons = [...new Set(missing.map((reason) => reason.replace(/;\s*the answer is composed[\s\S]*$/, '').replace(/, so it cannot bound the period$/, '')))];
-  return `The certified block "${block.name}" cannot answer this as asked: ${reasons.join('; ')}.${returns}${takes}`;
+  return `The certified saved query "${block.name}" cannot answer this as asked: ${reasons.join('; ')}.${returns}${takes}`;
 }
 
 /** The sentence a run tells when it answers a retired block's question from its replacement. */
@@ -690,7 +690,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     receipt.lastCompletedPhase = stage;
     input.trace?.({ stage, detail: timings[stage] });
   };
-  const TIER_NAMES: Record<string, string> = { certified: 'Certified blocks', semantic: 'Semantic layer', relational: 'Governed tables and joins', exploratory: 'AI-drafted SQL from the schema' };
+  const TIER_NAMES: Record<string, string> = { certified: 'Certified saved queries', semantic: 'Semantic layer', relational: 'Governed tables and joins', exploratory: 'AI-drafted SQL from the schema' };
   const step = (phase: AskStoryStepV1['phase'], title: string, state: AskStoryStepV1['state'], extra: { detail?: string; ms?: number } = {}) => {
     const entry: AskStoryStepV1 = { version: 1, phase, title, state, at: Date.now(), ...(extra.detail ? { detail: extra.detail.slice(0, 600) } : {}), ...(extra.ms !== undefined ? { ms: extra.ms } : {}) };
     (receipt.story ??= []).push(entry);
@@ -1236,8 +1236,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       receipt.refusals.push({ tier: 'certified', code: 'block_not_applicable', message: `${held.entry.ref}: ${[...verdict.missing, ...open].join('; ')}`, repairable: false });
       receipt.tiers.push({ round: 0, tier: 'certified', outcome: 'refused', detail: `${held.how === 'named' ? 'named block' : 'follow-up on the block'}: ${[...verdict.missing, ...open].join('; ').slice(0, 560)}` });
       receipt.failure = { stage: 'prepare', reason: 'named_block_not_applicable', message };
-      step('tier', `Certified block ${held.entry.name}: cannot answer this as asked`, 'missed', { detail: message });
-      return { kind: 'gap', gap: 'not_modeled', message, nearest: [], text: `${message} Ask within what the block declares, or explore the tables for a review-required answer.`, receipt, intent: asked, offerExploration: true };
+      step('tier', `Certified saved query ${held.entry.name}: cannot answer this as asked`, 'missed', { detail: message });
+      return { kind: 'gap', gap: 'not_modeled', message, nearest: [], text: `${message} Ask within what the saved query declares, or explore the tables for a review-required answer.`, receipt, intent: asked, offerExploration: true };
     }
   }
   // THE RELATIONS THE READING NAMES ARE DESCRIBED BEFORE ANYTHING IS PREPARED.

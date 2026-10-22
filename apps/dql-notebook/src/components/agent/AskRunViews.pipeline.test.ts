@@ -56,8 +56,8 @@ describe('Ask pipeline runs on the trace page', () => {
   it('tells the run as a headline and numbered steps instead of the older summaries', () => {
     const markup = renderToStaticMarkup(createElement(tracePage.TraceDecisionStory, { trace: trace({ runtimeReceiptV9: v9, runtimeAnswerV1: { status: 'completed', sql: 'SELECT 1' } }), t: themes.paper, onSelectSpan: () => undefined }));
     expect(markup).toContain('Answered from the semantic layer.');
-    expect(markup).toContain('Certified blocks');
-    expect(markup).toContain('No certified block matches this question.');
+    expect(markup).toContain('Certified saved queries');
+    expect(markup).toContain('No certified saved query matches this question.');
     expect(markup).not.toContain('Canonical decision summary unavailable');
   });
 

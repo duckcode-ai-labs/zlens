@@ -33,6 +33,7 @@ import {
   isAddedToApp,
   needsReview,
   savedQueryNeedsFields,
+  DOMAIN_EXPLANATION,
   sourceOriginLabel,
   tilesUsingSource,
   trustLabel,
@@ -271,7 +272,7 @@ export function AddDataBrowser({
       <div className="add-data-kinds" role="group" aria-label="Kind of data">
         {ADD_DATA_KINDS.map(([id, label]) => <button key={id} type="button" aria-pressed={kind === id} className={kind === id ? 'on' : ''} onClick={() => setKind(id)}>{label}{!loading && (id !== 'all' && id !== 'tables' ? true : tables !== null) ? <small>{counts[id]}</small> : null}</button>)}
       </div>
-      <div className="add-data-domains" role="group" aria-label="Domain">
+      <div className="add-data-domains" role="group" aria-label="Domain" title={DOMAIN_EXPLANATION}>
         <button type="button" aria-pressed={domain === ''} className={domain === '' ? 'on' : ''} onClick={() => setDomain('')}>All domains</button>
         {chips.map((chip) => <button key={chip.value} type="button" aria-pressed={domain === chip.value} className={domain === chip.value ? 'on' : ''} onClick={() => setDomain(chip.value)}>{chip.label}</button>)}
       </div>
@@ -319,7 +320,7 @@ export function AddDataBrowser({
             {table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
           </div>
         </div>
-        <div className="add-data-action"><button type="button" disabled={disabled} onClick={() => setCheckingTable(table)} aria-label={`Check ${table.name} and add it as a Dataset`}><Plus size={13} /> Check and add</button></div>
+        <div className="add-data-action"><button type="button" disabled={disabled} onClick={() => setCheckingTable(table)} aria-label={`Check ${table.name} and add it`}><Plus size={13} /> Check and add</button></div>
       </article>)}
       {(kind === 'all' || kind === 'tables') && !domain ? <>
         {tablesError ? <p className="add-data-error" role="alert">{tablesError}</p> : null}

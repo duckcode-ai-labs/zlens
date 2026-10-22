@@ -78,7 +78,7 @@ export function teachScopeLabels(scope: TeachCorrectionScope): string[] {
     scope.metric?.trim() ? `metric ${scope.metric.trim()}` : undefined,
     scope.dbtModel?.trim() ? `model ${scope.dbtModel.trim()}` : undefined,
     scope.term?.trim() ? `term ${scope.term.trim()}` : undefined,
-    scope.block?.trim() ? `block ${scope.block.trim()}` : undefined,
+    scope.block?.trim() ? `saved query ${scope.block.trim()}` : undefined,
     scope.dialect?.trim() ? `dialect ${scope.dialect.trim()}` : undefined,
   ].filter((value): value is string => Boolean(value));
 }

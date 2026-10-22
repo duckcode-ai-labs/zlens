@@ -25,7 +25,7 @@ describe('Data step (design D3)', () => {
     expect(markup).toContain('This App&#x27;s data');
     expect(markup).toContain('No data yet');
     expect(markup).toContain('Skip, start empty');
-    expect(markup).toContain('Open canvas');
+    expect(markup).toContain('Open blank Studio');
     expect(markup).not.toContain('Open canvas with');
     expect(markup).toContain('aria-label="Kind of data"');
   });
@@ -33,7 +33,7 @@ describe('Data step (design D3)', () => {
   it('lists the App data with type, trust and domain, and counts it on Open canvas', () => {
     const draft = draftWith({ sources: [appDataSourceFromCandidate(orderLinesDataset)] });
     const markup = renderToStaticMarkup(<DataStep draft={draft} known={[orderLinesDataset]} onBack={vi.fn()} onOpenCanvas={vi.fn()} onSkip={vi.fn()} browser={browser} />);
-    expect(markup).toContain('Open canvas with 1 source');
+    expect(markup).toContain('Open Studio with 1 source');
     // The origin label: a Dataset written in DQL is a saved query made row-level.
     expect(markup).toContain('Saved query · Certified · Commerce');
     expect(markup).toContain('aria-label="Remove Order Lines from this App"');
@@ -163,7 +163,7 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(markup).toContain('For: <strong>Weekly revenue health for finance</strong>');
     expect(markup).toContain('Check the data before AI builds pages. Remove anything you don’t trust.');
     expect(markup).toContain('Deterministic planner fallback');
-    expect(markup).toContain('Dataset · Certified · Commerce');
+    expect(markup).toContain('Table · Certified · Commerce');
     expect(markup).toContain('Metrics · Certified · Finance');
     expect(markup).toContain('Why: Order lines carries revenue by order date.');
     expect(markup).toContain('Why: Margin metrics answer profitability.');

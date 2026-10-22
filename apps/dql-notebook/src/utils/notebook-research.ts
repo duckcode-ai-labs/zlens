@@ -182,7 +182,7 @@ export function deriveCellResearchState(
     return {
       kind: 'review_sql',
       label: 'AI: Review SQL',
-      title: 'Review generated SQL before promoting this work into a reusable block.',
+      title: 'Review generated SQL before promoting this work into a reusable saved query.',
       run,
       syncStatus,
     };
@@ -218,7 +218,7 @@ export function deriveCellResearchState(
     return {
       kind: 'reuse',
       label: 'AI: Reuse',
-      title: 'A similar certified block was found. Review whether this should reuse existing logic.',
+      title: 'A similar certified saved query was found. Review whether this should reuse existing logic.',
       run,
       syncStatus,
     };

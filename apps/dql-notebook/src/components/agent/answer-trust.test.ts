@@ -38,17 +38,17 @@ describe('one trust decision for the heading, the badge, the note and the card',
     expect(answerTrustHeading(run)).toBe('Governed answer');
     expect(simpleRunTitle(run)).toBe('Governed answer');
     expect(answerTrustBadge(run)).toBe('Governed');
-    expect(trustExplainer(run)).toMatch(/certified block as published/);
+    expect(trustExplainer(run)).toMatch(/certified saved query as published/);
     expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('governed');
   });
 
   it('the same block with a reading that does not cover the question needs review, and still names the block', () => {
-    const run = answered('review_required', 'certified_block', 'Answer to review, from a certified block');
-    expect(answerTrustHeading(run)).toBe('Answer to review, from a certified block');
+    const run = answered('review_required', 'certified_block', 'Answer to review, from a certified saved query');
+    expect(answerTrustHeading(run)).toBe('Answer to review, from a certified saved query');
     expect(simpleRunTitle(run)).toBe(run.artifacts[0].title);
     expect(answerTrustBadge(run)).toBe('Needs review');
     expect(trustExplainer(run)).not.toMatch(/AI-generated/);
-    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('certified block · needs review');
+    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('certified saved query · needs review');
   });
 
   it('governed definitions downgraded for coverage are not AI-generated either', () => {

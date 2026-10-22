@@ -70,9 +70,9 @@ export function adaptCertifiedSqlWithFilter(input: {
 
   return {
     sql,
-    trustQualifier: `adapted from certified block ${input.blockName}`,
+    trustQualifier: `adapted from certified saved query ${input.blockName}`,
     provenance:
-      `Derived from certified block "${input.blockName}" by filtering its result to ` +
+      `Derived from certified saved query "${input.blockName}" by filtering its result to ` +
       `${filterColumn} = ${quoteAdaptValue(filterValue)}. Not itself certified — review before stakeholder reuse.`,
   };
 }

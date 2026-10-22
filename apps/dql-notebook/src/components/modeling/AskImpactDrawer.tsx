@@ -82,7 +82,7 @@ export function AskImpactDrawer({ domain, area, areaName, t, onClose }: { domain
               ) : null}
 
               <Section title="Also read" t={t}>
-                <Muted t={t}>{impact.terms} term{impact.terms === 1 ? '' : 's'} · {impact.concepts} concept{impact.concepts === 1 ? '' : 's'} · {impact.certifiedBlocks} certified block{impact.certifiedBlocks === 1 ? '' : 's'}</Muted>
+                <Muted t={t}>{impact.terms} term{impact.terms === 1 ? '' : 's'} · {impact.concepts} concept{impact.concepts === 1 ? '' : 's'} · {impact.certifiedBlocks} certified {impact.certifiedBlocks === 1 ? 'saved query' : 'saved queries'}</Muted>
               </Section>
             </>
           ) : null}

@@ -345,7 +345,7 @@ export function LineagePanel({ variant = 'sidebar' }: { variant?: 'sidebar' | 'p
       <div style={{ height: '100%', background: page ? t.sidebarBg : 'transparent', border: page ? `1px solid ${t.headerBorder}` : 'none', borderRadius: page ? 8 : 0 }}>
         <PanelEmpty
           title="No lineage data"
-          description="Run `zlens compile` or add notebooks/blocks first."
+          description="Run `zlens compile` or add notebooks or saved queries first."
         />
       </div>
     );
@@ -411,7 +411,7 @@ export function LineagePanel({ variant = 'sidebar' }: { variant?: 'sidebar' | 'p
             Icon={Database}
             label="Technical"
             value={summary.technicalNodes}
-            detail={`${grouped.tables.length} tables · ${grouped.dbtModels.length + grouped.dbtSources.length} dbt · ${grouped.blocks.length} blocks`}
+            detail={`${grouped.tables.length} tables · ${grouped.dbtModels.length + grouped.dbtSources.length} dbt · ${grouped.blocks.length} saved queries`}
             t={t}
           />
           <SummaryCard
@@ -462,7 +462,7 @@ export function LineagePanel({ variant = 'sidebar' }: { variant?: 'sidebar' | 'p
           <>
             <Section title="Business Terms" nodes={grouped.terms} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
             <Section title="Business Views" nodes={grouped.businessViews} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
-            <Section title="DQL Blocks" nodes={grouped.blocks} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
+            <Section title="Saved queries" nodes={grouped.blocks} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
             <Section title="Metrics" nodes={grouped.metrics} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
             <Section title="Dimensions" nodes={grouped.dimensions} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
             <Section title="Dashboards" nodes={grouped.dashboards} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />

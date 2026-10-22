@@ -193,11 +193,11 @@ DuckDB for you.
 
 ---
 
-## Authoring blocks
+## Authoring saved queries
 
 ### `zlens certify` says `tests-pass: ✗` but the data looks right
 
-The certifier runs the block against `defaultConnection` from
+The certifier runs the saved query against `defaultConnection` from
 `dql.config.json` (or the connection you pass with `--connection`). If
 your local DuckDB doesn't have the tables but your prod warehouse does,
 you'll see different test results. Pin the connection explicitly:
@@ -206,7 +206,7 @@ you'll see different test results. Pin the connection explicitly:
 zlens certify blocks/foo.dql --connection duckdb
 ```
 
-— and make sure the connection actually contains the tables the block
+— and make sure the connection actually contains the tables the saved query
 reads (for a dbt project, run `dbt build` first).
 
 ### `Block parse error in blocks/foo.dql`
@@ -220,10 +220,10 @@ query = """
 """
 ```
 
-### Block doesn't show up in the manifest
+### Saved query doesn't show up in the manifest
 
 `zlens compile` only scans `blocks/`, `dashboards/`, `workbooks/`, and
-`apps/<id>/blocks/` (when configured). If your block lives somewhere
+`apps/<id>/blocks/` (when configured). If your saved query lives somewhere
 else, add the directory to `dql.config.json`:
 
 ```json
@@ -232,7 +232,7 @@ else, add the directory to `dql.config.json`:
 }
 ```
 
-### Two blocks have the same name
+### Two saved queries have the same name
 
 The manifest keys by `block.name` (the string after `block "..."`). If
 two `.dql` files both declare `block "foo"`, the second one silently
@@ -272,9 +272,9 @@ curl -s http://127.0.0.1:3475/api/apps    | jq
 
 ### Branch viewer sees rows from other branches
 
-`@rls` only narrows when the **block** carries the decorator. Confirm:
+`@rls` only narrows when the **saved query** carries the decorator. Confirm:
 
-1. The block declares `@rls("branch", "{user.branch}")` (and `@rls("region", …)`).
+1. The saved query declares `@rls("branch", "{user.branch}")` (and `@rls("region", …)`).
 2. The App has `rlsBindings` mapping `role: "branch_viewer"` → `from: "branch"`.
 3. The member's `attributes.branch` is set.
 
@@ -287,7 +287,7 @@ curl -s http://127.0.0.1:3475/api/persona | jq '.persona.rlsContext'
 `rlsContext` should show the substituted values. If it's `{}`, the App
 binding didn't match the member's roles + attributes.
 
-### `policies[].domain = "*"` doesn't match my block's domain
+### `policies[].domain = "*"` doesn't match my saved query's domain
 
 Wildcard `*` matches every domain. If you want "any domain in the cards
 org", make policies explicit per domain (`cards`, `cards.fraud`,
@@ -326,7 +326,7 @@ node -e "
 > the agent will use Ollama. If `ollama` returns `false`, the daemon
 > isn't running. Start it: `ollama serve`.
 
-### Every certified block answer cites the same block, even when wrong
+### Every certified saved query answer cites the same saved query, even when wrong
 
 The FTS5 retrieval threshold is too loose for your domain. Tune in
 [`packages/dql-agent/src/answer-loop.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-agent/src/answer-loop.ts):
@@ -403,7 +403,7 @@ a file or wrap with `2>&1 | tee dql-slack.log`.
 
 ### `zlens verify` says "drift" but the diff looks empty
 
-The diff prints terse change descriptions. To see the full per-block
+The diff prints terse change descriptions. To see the full per-saved-query
 diff, use `--format json`:
 
 ```bash
@@ -412,7 +412,7 @@ zlens verify --format json | jq
 
 Common silent drift causes:
 
-- A block test result changed (a stat was non-deterministic).
+- A saved query test result changed (a stat was non-deterministic).
 - A semantic-layer YAML moved.
 - `dbtImport` filters changed.
 
@@ -426,7 +426,7 @@ diff /tmp/old-manifest.json dql-manifest.json | head -80
 
 ### `zlens certify` is non-deterministic in CI
 
-If a block test like `assert row_count >= 100` flickers, the underlying data
+If a saved query test like `assert row_count >= 100` flickers, the underlying data
 is non-deterministic. Either:
 
 1. Pin the test data (commit a small CSV that drives the test).
@@ -434,7 +434,7 @@ is non-deterministic. Either:
 3. Move volatile expectations to `invariants` (which are documentation for the
    agent, not executable). Note `assert` compares a returned column to a value
    on every row (`assert <column> <op> <value>`) — wrap any aggregation in the
-   block's SQL and assert on the resulting column.
+   saved query's SQL and assert on the resulting column.
 
 ---
 
@@ -442,7 +442,7 @@ is non-deterministic. Either:
 
 The architecture is small and readable. Bookmark these:
 
-- Block lifecycle and certification: [`packages/dql-governance/src/certifier.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-governance/src/certifier.ts)
+- Saved query lifecycle and certification: [`packages/dql-governance/src/certifier.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-governance/src/certifier.ts)
 - Apps + dashboards parsing: [`packages/dql-core/src/apps/`](https://github.com/duckcode-ai-labs/zlens/tree/main/packages/dql-core/src/apps)
 - Persona registry: [`packages/dql-project/src/persona.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-project/src/persona.ts)
 - RLS lowering: [`packages/dql-compiler/src/ir/lowering.ts:440`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-compiler/src/ir/lowering.ts) (`applyRLSDecorators`)

@@ -148,7 +148,7 @@ describe('framing an investigation from a reading', () => {
 
     const governed = planInvestigationFrame({ reading: blockReading, vocabulary: withBlock('order_total'), lane: 'governed' });
     expect(governed).toMatchObject({ status: 'planned', plan: { lane: 'governed', metric: { ref: 'metric:orders.order_total', additivity: 'additive' } } });
-    if (governed.status === 'planned') expect(governed.plan.notes?.[0]).toContain('certified block monthly revenue, which cannot be split into periods');
+    if (governed.status === 'planned') expect(governed.plan.notes?.[0]).toContain('certified saved query monthly revenue, which cannot be split into periods');
 
     const tables = planInvestigationFrame({ reading: blockReading, vocabulary: withBlock('order_cost'), lane: 'governed' });
     expect(tables).toMatchObject({ status: 'planned', plan: { lane: 'ai', metric: { ref: 'column:dev.orders.order_cost', aggregation: 'sum', additivity: 'additive' } } });

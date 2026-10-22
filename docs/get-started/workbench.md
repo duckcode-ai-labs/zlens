@@ -15,7 +15,7 @@ groups.
 
 | Item | What it is for |
 |---|---|
-| **Apps** | Dashboards and reports built from blocks. See [Apps](../apps/index.md). |
+| **Apps** | Dashboards and reports built from saved queries. See [Apps](../apps/index.md). |
 | **Ask** | Ask a question in plain English and see how far to trust the answer. See [Ask](../ask/index.md). |
 
 **Build**: make and review analytics.
@@ -23,7 +23,7 @@ groups.
 | Item | What it is for |
 |---|---|
 | **Notebooks** | SQL and DQL cells, results and notes. See [Notebooks](../notebooks/index.md). |
-| **Blocks** | Reusable, reviewed queries, edited in Block Studio. See [Blocks](../blocks/index.md). |
+| **Saved queries** | Reusable, reviewed queries, edited in the saved query editor. See [Saved queries](../blocks/index.md). |
 | **Lineage** | Where a number comes from and what uses it. See [Lineage](../lineage/index.md). |
 
 **Govern**: keep the project trustworthy.
@@ -59,7 +59,7 @@ Use the theme menu at the top right to switch between **Paper**, **White** and
 | You make | It is saved as |
 |---|---|
 | A notebook | `notebooks/<name>.dqlnb` (results go in a git-ignored `.run.json` beside it) |
-| A block | a `.dql` file under `blocks/` or `domains/<domain>/blocks/` |
+| A saved query | a `.dql` block file under `blocks/` or `domains/<domain>/blocks/` |
 | An App | `apps/<app-id>/dql.app.json` and `apps/<app-id>/dashboards/*.dqld`, once you publish it |
 | Settings, chats, run history | `.dql/` (git-ignored) |
 

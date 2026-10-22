@@ -746,7 +746,7 @@ export function BlockStudio() {
       dispatch({ type: 'OPEN_BLOCK_STUDIO', file, payload });
       setCatalogError(null);
     } catch (error) {
-      setCatalogError(error instanceof Error ? error.message : 'Could not open this block.');
+      setCatalogError(error instanceof Error ? error.message : 'Could not open this saved query.');
     }
   };
 
@@ -870,7 +870,7 @@ export function BlockStudio() {
       );
       if (scopeEpoch !== blockScopeEpochRef.current) return;
       if (liveDraftRef.current !== originalSource) {
-        throw new Error('The block changed while AI repair was running. The stale repair was not applied.');
+        throw new Error('The saved query changed while AI repair was running. The stale repair was not applied.');
       }
       const validation = await api.validateBlockStudio(repaired.source, state.activeBlockPath);
       if (scopeEpoch !== blockScopeEpochRef.current) return;
@@ -879,14 +879,14 @@ export function BlockStudio() {
           ?? 'The repaired DQL still has an authoring error.');
       }
       if (liveDraftRef.current !== originalSource) {
-        throw new Error('The block changed while AI repair was running. The stale repair was not applied.');
+        throw new Error('The saved query changed while AI repair was running. The stale repair was not applied.');
       }
       const certificationAssessment = options.requireCertificationReady
         ? await api.assessBlockStudioCertification(repaired.source)
         : null;
       if (scopeEpoch !== blockScopeEpochRef.current) return;
       if (liveDraftRef.current !== originalSource) {
-        throw new Error('The block changed while AI repair was running. The stale repair was not applied.');
+        throw new Error('The saved query changed while AI repair was running. The stale repair was not applied.');
       }
       handleDraftChange(repaired.source);
       dispatch({ type: 'SET_BLOCK_STUDIO_VALIDATION', validation });
@@ -918,7 +918,7 @@ export function BlockStudio() {
         setCertificationResult(null);
         setRepairNotice(`${repaired.repairMode === 'ai' ? 'AI repaired' : 'ZLens repaired'} the draft, and every certification check now passes. Review the changes, then click Certify.`);
       } else {
-        setRepairNotice(`${repaired.repairMode === 'ai' ? 'AI fixed' : 'ZLens fixed'} the draft and the corrected block ran successfully. Review the changes, then save the draft.`);
+        setRepairNotice(`${repaired.repairMode === 'ai' ? 'AI fixed' : 'ZLens fixed'} the draft and the corrected saved query ran successfully. Review the changes, then save the draft.`);
       }
       setEditorMode('source');
       setResultTab('results');
@@ -940,7 +940,7 @@ export function BlockStudio() {
 
   const persistBlockStudioDraft = async (source = state.blockStudioDraft): Promise<BlockStudioOpenPayload> => {
     if (!state.blockStudioMetadata) {
-      throw new Error('Block metadata is required before saving.');
+      throw new Error('Saved query details are required before saving.');
     }
     const payload = await api.saveBlockStudio({
       path: state.activeBlockPath,
@@ -987,7 +987,7 @@ export function BlockStudio() {
       // a background task so save acknowledgement is never held by compilation.
       void loadBlockLineage(payload.metadata.name);
     } else if (payload.lineageRefresh?.status === 'failed') {
-      setSaveError(`Block saved, but lineage refresh failed: ${payload.lineageRefresh.message ?? 'compile failed'}`);
+      setSaveError(`Saved, but lineage refresh failed: ${payload.lineageRefresh.message ?? 'compile failed'}`);
       setTimeout(() => setSaveError(null), 7000);
     }
     return payload;
@@ -1009,7 +1009,7 @@ export function BlockStudio() {
       dispatch({ type: 'SET_BLOCK_STUDIO_VALIDATION', validation });
       if (validation.saveable === false || (validation.saveable === undefined && !validation.valid)) {
         const message = validation.diagnostics.find((item) => item.severity === 'error')?.message
-          ?? 'Fix the block errors before saving.';
+          ?? 'Fix the errors in this saved query before saving.';
         setSaveError(`Draft not saved: ${message}`);
         setRecoveryError(message);
         setRecoveryScope('save');
@@ -1024,7 +1024,7 @@ export function BlockStudio() {
       setRepairWarning(null);
       // Edits to a certified block land in a draft beside it; say so, so the move to the draft is not a surprise.
       if (editingCertified && /(^|\/)_drafts\//.test(saved.path)) {
-        setRepairNotice('Saved as a draft beside the certified block. The certified version stays in use until this draft is certified.');
+        setRepairNotice('Saved as a draft beside the certified saved query. The certified version stays in use until this draft is certified.');
       }
       setResultTab('save');
       return true;
@@ -1038,7 +1038,7 @@ export function BlockStudio() {
         setEditorMode('source');
         return false;
       }
-      setSaveError(err?.code === 'BLOCK_EXISTS' || err?.status === 409 ? 'A block with this name already exists in this folder. Rename it and try again.' : msg);
+      setSaveError(err?.code === 'BLOCK_EXISTS' || err?.status === 409 ? 'A saved query with this name already exists in this folder. Rename it and try again.' : msg);
       return false;
     } finally {
       setSaving(false);
@@ -1070,7 +1070,7 @@ export function BlockStudio() {
       setPendingDeleteBlock(null);
       setBlockLibraryRefreshKey((current) => current + 1);
       if (deleted.lineageRefresh?.status === 'failed') {
-        setCatalogError(`Block deleted, but lineage refresh failed: ${deleted.lineageRefresh.message ?? 'compile failed'}`);
+        setCatalogError(`Deleted, but lineage refresh failed: ${deleted.lineageRefresh.message ?? 'compile failed'}`);
       }
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : String(error));
@@ -1131,9 +1131,9 @@ export function BlockStudio() {
       const msg = err?.message ?? 'Certification could not start';
       setSaveError(
         err?.code === 'SOURCE_CHANGED'
-          ? 'This block changed on disk after you opened it. Reopen it to certify the latest version.'
+          ? 'This saved query changed on disk after you opened it. Reopen it to certify the latest version.'
           : err?.code === 'BLOCK_EXISTS'
-            ? 'A block with this name already exists in this folder. Rename it and try again.'
+            ? 'A saved query with this name already exists in this folder. Rename it and try again.'
             : msg,
       );
       return false;
@@ -1253,7 +1253,7 @@ export function BlockStudio() {
     }
     if (item.kind === 'segment' && item.sql) {
       if (isSemanticBlock) {
-        setDatabaseInsertWarning('Segments are SQL. Keep this Semantic Block on metrics and dimensions, or switch to a SQL Block to inline the segment.');
+        setDatabaseInsertWarning('Segments are SQL. Keep this saved query on metrics and dimensions, or switch to a SQL saved query to inline the segment.');
         return;
       }
       handleDraftChange(appendSnippetToDraft(state.blockStudioDraft, `/* segment:${item.name} */ (${item.sql})`));
@@ -1261,7 +1261,7 @@ export function BlockStudio() {
     }
     if (item.kind === 'pre_aggregation') {
       if (isSemanticBlock) {
-        setDatabaseInsertWarning('Pre-aggregations are referenced by the semantic runtime, not pasted into a query. This Semantic Block stays on metrics and dimensions.');
+        setDatabaseInsertWarning('Pre-aggregations are referenced by the semantic runtime, not pasted into a query. This saved query stays on metrics and dimensions.');
         return;
       }
       handleDraftChange(appendSnippetToDraft(state.blockStudioDraft, `/* pre_aggregation:${item.name} */`));
@@ -1271,7 +1271,7 @@ export function BlockStudio() {
   const handleDatabaseInsert = (snippet: string) => {
     setSemanticInsertChoice(null);
     if (isSemanticBlock) {
-      setDatabaseInsertWarning('Database tables and SELECT snippets belong in SQL blocks. Use a SQL Block for raw SELECT work, or keep this Semantic Block on metrics and dimensions.');
+      setDatabaseInsertWarning('Database tables and SELECT snippets belong in SQL saved queries. Use a SQL saved query for raw SELECT work, or keep this one on metrics and dimensions.');
       return;
     }
     handleDraftChange(appendSnippetToDraft(state.blockStudioDraft, snippet));
@@ -1280,7 +1280,7 @@ export function BlockStudio() {
   const handleAiSqlInsert = (sql: string, meta?: AiSqlDraftMeta) => {
     const sourceBeforeInsert = state.blockStudioDraft.trim()
       ? state.blockStudioDraft
-      : buildCustomSkeleton(meta?.title?.trim() || 'AI Generated Block');
+      : buildCustomSkeleton(meta?.title?.trim() || 'AI generated query');
     const nextDraft = meta?.blockSource?.trim()
       ? meta.blockSource.trim()
       : applyGeneratedSqlToBlockDraft(sourceBeforeInsert, sql);
@@ -1290,10 +1290,10 @@ export function BlockStudio() {
       dispatch({
         type: 'SET_BLOCK_STUDIO_METADATA',
         metadata: {
-          name: parsed.name || meta?.title || 'AI Generated Block',
+          name: parsed.name || meta?.title || 'AI generated query',
           path: state.activeBlockPath,
           domain: parsed.domain || meta?.domain || 'analytics',
-          description: parsed.description || meta?.description || `AI generated block for ${meta?.question ?? 'analysis'}`,
+          description: parsed.description || meta?.description || `AI generated saved query for ${meta?.question ?? 'analysis'}`,
           owner: parsed.owner || meta?.owner || '',
           tags: parsed.tags.length > 0 ? parsed.tags : (meta?.tags ?? ['ai-generated', 'review-required']),
           reviewStatus: parsed.status || 'draft',
@@ -1314,7 +1314,7 @@ export function BlockStudio() {
             severity: 'info',
             code: 'ai_sql_draft_inserted',
             message: parsed
-              ? 'AI generated a draft block with metadata, SQL, visualization, and tests. Run preview, review joins and grain, then save.'
+              ? 'AI generated a draft saved query with metadata, SQL, visualization, and tests. Run preview, review joins and grain, then save.'
               : 'AI generated SQL inserted. Run preview, review joins and grain, then save or certify.',
           },
         ],
@@ -1350,11 +1350,11 @@ export function BlockStudio() {
     const source = semanticSource
       || generatedSource
       || applyGeneratedSqlToBlockDraft(
-        buildCustomSkeleton(payload.title?.trim() || 'AI Generated Block'),
+        buildCustomSkeleton(payload.title?.trim() || 'AI generated query'),
         sql,
       );
     const parsed = parseBlockFields(source);
-    const name = parsed?.name || payload.dqlArtifact?.name || payload.title || 'AI Generated Block';
+    const name = parsed?.name || payload.dqlArtifact?.name || payload.title || 'AI generated query';
     setSaving(true);
     setSaveError(null);
     try {
@@ -1552,7 +1552,7 @@ export function BlockStudio() {
             onBlockDomainChange={setDomainFilter}
             onInsertText={(text) => {
               if (isSemanticBlock) {
-                setDatabaseInsertWarning('That snippet is SQL. Use a SQL Block for raw SELECT work, or keep this Semantic Block on metrics and dimensions.');
+                setDatabaseInsertWarning('That snippet is SQL. Use a SQL saved query for raw SELECT work, or keep this one on metrics and dimensions.');
                 return;
               }
               handleDraftChange(appendSnippetToDraft(state.blockStudioDraft, text));
@@ -1611,11 +1611,11 @@ export function BlockStudio() {
           <button
             type="button"
             onClick={goToBlockStudioHome}
-            title="Back to Block Studio"
+            title="Back to Saved queries"
             className="dql-hover"
             style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'transparent', border: 'none', padding: '2px 4px', margin: '0 -4px', borderRadius: 6, color: t.textMuted, fontSize: 12, fontFamily: t.font, whiteSpace: 'nowrap', cursor: 'pointer' }}
           >
-            <ChevronLeft size={12} strokeWidth={2} /> Blocks
+            <ChevronLeft size={12} strokeWidth={2} /> Saved queries
           </button>
           <ChevronRight size={11} color={t.textMuted} style={{ flexShrink: 0 }} />
           <span style={{ fontSize: 12.5, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 220 }}>
@@ -1662,7 +1662,7 @@ export function BlockStudio() {
             onDelete={() => requestDeleteBlock(state.activeBlockPath!, state.blockStudioMetadata?.name || activeBlockName || state.activeBlockPath!)}
             onNew={beginNewWorkspace}
             onAsk={() => openAskAi({ kind: 'ask' })}
-            onModify={() => openAskAi({ kind: 'edit', initialInput: `Modify this block${activeBlockName ? ` (${activeBlockName})` : ''}: ` })}
+            onModify={() => openAskAi({ kind: 'edit', initialInput: `Modify this saved query${activeBlockName ? ` (${activeBlockName})` : ''}: ` })}
             onRun={() => void handleRun()}
             onSave={() => void handleSave()}
             onCertify={() => void handleCertify()}
@@ -1697,10 +1697,10 @@ export function BlockStudio() {
               <button type="button" onClick={() => setEditorMode('source')} style={secondaryImportButtonStyle(t)}>Edit DQL</button>
               <button
                 type="button"
-                onClick={() => openAskAi({ kind: 'edit', initialInput: `Help me fix this block error without changing its intended grain, parameters, or trust state: ${recoveryError} ` })}
+                onClick={() => openAskAi({ kind: 'edit', initialInput: `Help me fix this saved query error without changing its intended grain, parameters, or trust state: ${recoveryError} ` })}
                 style={secondaryImportButtonStyle(t)}
               >
-                Open Block AI
+                Open saved query AI
               </button>
             </div>
           </div>
@@ -1727,7 +1727,7 @@ export function BlockStudio() {
             semanticCount={semanticObjectCount}
             onChange={handleDraftChange}
             onOpenExplorer={() => { setLeftPaneCollapsed(false); setExplorerTab('database'); }}
-            onOpenAi={() => openAskAi({ kind: 'edit', initialInput: 'Review and improve this block context. Keep only grounded business references, sources, constraints, and caveats: ' })}
+            onOpenAi={() => openAskAi({ kind: 'edit', initialInput: 'Review and improve this saved query context. Keep only grounded business references, sources, constraints, and caveats: ' })}
             t={t}
           />
         )}
@@ -1758,7 +1758,7 @@ export function BlockStudio() {
               onCreateSemantic={readOnlyBlocks ? undefined : () => beginManualDraft('semantic')}
               readOnlyReason={readOnlyBlocksReason}
               onImport={readOnlyBlocks ? undefined : () => setWorkspaceMode('import')}
-              onBuildDql={() => openAskAi({ kind: 'build', initialInput: 'Draft a reusable DQL block that ' })}
+              onBuildDql={() => openAskAi({ kind: 'build', initialInput: 'Draft a reusable saved query that ' })}
               t={t}
             />
           ) : editorMode === 'detail' ? (
@@ -1798,7 +1798,7 @@ export function BlockStudio() {
                     chartConfig={currentChart}
                     onChange={handleDraftChange}
                     onMetadataChange={(next) => state.blockStudioMetadata && dispatch({ type: 'SET_BLOCK_STUDIO_METADATA', metadata: { ...state.blockStudioMetadata, ...next } })}
-                    onOpenAi={() => openAskAi({ kind: 'edit', initialInput: 'Help resolve the selected semantic metrics and dimensions for this block: ' })}
+                    onOpenAi={() => openAskAi({ kind: 'edit', initialInput: 'Help resolve the selected semantic metrics and dimensions for this saved query: ' })}
                     onSetupRuntime={() => {
                       dispatch({ type: 'SET_SETTINGS_TAB', tab: 'project' });
                       dispatch({ type: 'SET_MAIN_VIEW', view: 'settings' });
@@ -1970,7 +1970,7 @@ export function BlockStudio() {
                 onEdit={() => setEditorMode('source')}
               />
             ) : (
-              <EmptyPanel message="Run the block to preview results." />
+              <EmptyPanel message="Run the saved query to preview results." />
             )
           )}
           {resultTab === 'lineage' && (
@@ -2104,15 +2104,15 @@ export function BlockStudio() {
       {aiDockOpen && (
         <AiSidePanel
           t={t}
-          title="Block AI"
-          subtitle={activeBlockName ? `Current block: ${activeBlockName}` : 'Unsaved governed block draft'}
+          title="Saved query AI"
+          subtitle={activeBlockName ? `Current saved query: ${activeBlockName}` : 'Unsaved draft'}
           expanded={aiDockExpanded}
           onToggleExpanded={() => setAiDockExpanded((value) => !value)}
           onClose={() => { setAiDockOpen(false); setAiDockExpanded(false); }}
           onNewChat={() => { agentThread.resetThreadId(); setAgentPanelEpoch((value) => value + 1); }}
           running={aiRunning}
           compact={compactLayout}
-          ariaLabel="Block Studio AI"
+          ariaLabel="Saved query AI"
           style={{
             gridColumn: compactLayout ? '1' : '5',
             gridRow: compactLayout ? editorGridRow : '1 / 4',
@@ -2121,8 +2121,8 @@ export function BlockStudio() {
           <UnifiedAgentRunPanel
               key={`${agentScope}:${agentPanelEpoch}`}
               themeMode={state.themeMode}
-              title="Block AI"
-              scopeHint={activeBlockName ? `Current block: ${activeBlockName}` : 'Block Studio project context'}
+              title="Saved query AI"
+              scopeHint={activeBlockName ? `Current saved query: ${activeBlockName}` : 'Project context'}
               workspaceContext={{
                 surface: 'block-studio',
                 task: askAiKind === 'edit' ? 'edit_block' : 'author_block',
@@ -2143,19 +2143,19 @@ export function BlockStudio() {
               onInsertSql={(sql, title) => handleAiSqlInsert(sql, { question: title ?? activeBlockName ?? 'analysis', title })}
               onInsertDql={(payload) => { void addGeneratedDqlToBlockStudio(payload); }}
               answerFirstCards
-              insertDqlActionLabel="Add to Block Studio"
-              emptyHint="Describe the governed block you need. ZLens checks certified blocks and semantic metrics before creating a review-required draft."
+              insertDqlActionLabel="Add to editor"
+              emptyHint="Describe the saved query you need. ZLens checks certified saved queries and semantic metrics before drafting one for you to review."
               examplePrompts={[
-                { label: 'Build from business question', prompt: 'Build a reusable governed DQL block for this business question: ' },
-                { label: 'Find reusable blocks', prompt: 'Which certified DQL blocks already answer this analysis, and what should be reused instead of duplicated?' },
-                { label: 'Review this block', prompt: 'Review this block for grain, compatible metrics and dimensions, parameters, tests, and certification gaps.' },
+                { label: 'Build from business question', prompt: 'Build a reusable saved query for this business question: ' },
+                { label: 'Find reusable saved queries', prompt: 'Which certified saved queries already answer this analysis, and what should be reused instead of duplicated?' },
+                { label: 'Review this saved query', prompt: 'Review this saved query for grain, compatible metrics and dimensions, parameters, tests, and certification gaps.' },
               ]}
           />
         </AiSidePanel>
       )}
 
       {!aiDockOpen && !compactLayout && (
-        <button type="button" onClick={() => setAiDockOpen(true)} title="Open Block AI" aria-label="Open Block AI" style={{ position: 'absolute', right: 16, bottom: 16, zIndex: 5, width: 34, height: 34, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.accent, cursor: 'pointer', boxShadow: '0 6px 18px rgba(0, 0, 0, 0.12)' }}>
+        <button type="button" onClick={() => setAiDockOpen(true)} title="Open saved query AI" aria-label="Open saved query AI" style={{ position: 'absolute', right: 16, bottom: 16, zIndex: 5, width: 34, height: 34, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', borderRadius: 8, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.accent, cursor: 'pointer', boxShadow: '0 6px 18px rgba(0, 0, 0, 0.12)' }}>
           <PanelRightOpen size={16} strokeWidth={2} />
         </button>
       )}
@@ -2305,9 +2305,9 @@ export function BlockToolbarActions(props: {
     <>
       {/* The block overview has its own Run and Delete; the toolbar shows them only while editing. */}
       {!readOnly && activeBlockPath && !detail && (
-        <TemplateButton label="Delete" Icon={Trash2} variant="danger" title="Delete this saved block" onClick={props.onDelete} />
+        <TemplateButton label="Delete" Icon={Trash2} variant="danger" title="Delete this saved query" onClick={props.onDelete} />
       )}
-      {!readOnly && <TemplateButton label="New block" Icon={Plus} onClick={props.onNew} />}
+      {!readOnly && <TemplateButton label="New saved query" Icon={Plus} onClick={props.onNew} />}
       {hasActiveDraft && (
         <>
           {/* A saved block gets one AI action, Modify with AI; Ask AI is for a block not saved yet. */}
@@ -2469,8 +2469,8 @@ function selectionChipStyle(t: Theme, selected: boolean): React.CSSProperties {
  */
 export function blockIdentityDialogCopy(action: 'save' | 'certify'): { title: string; body: string } {
   return action === 'certify'
-    ? { title: 'Name this block', body: 'Every block needs a name and an owner (the person or team to ask about it). Then ZLens checks that it runs and its tests pass, and certifies it with your name and today\'s date.' }
-    : { title: 'Name this block', body: 'Every block needs a name and an owner (the person or team to ask about it). Saving keeps it as a draft; certifying it is a separate step.' };
+    ? { title: 'Name this saved query', body: 'Every saved query needs a name and an owner (the person or team to ask about it). Then ZLens checks that it runs and its tests pass, and certifies it with your name and today\'s date.' }
+    : { title: 'Name this saved query', body: 'Every saved query needs a name and an owner (the person or team to ask about it). Saving keeps it as a draft; certifying it is a separate step.' };
 }
 
 function BlockIdentityDialog({
@@ -2496,13 +2496,13 @@ function BlockIdentityDialog({
   const domainOptions = domains ? blockDomainOptions(undefined, domains) : [];
   const ready = Boolean(name.trim() && owner.trim() && (!domains || domain));
   return (
-    <div role="dialog" aria-modal="true" aria-label="Save block" style={{ position: 'absolute', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.32)', padding: 18 }}>
+    <div role="dialog" aria-modal="true" aria-label="Save query" style={{ position: 'absolute', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.32)', padding: 18 }}>
       <div style={{ width: 420, maxWidth: '100%', display: 'grid', gap: 14, padding: 18, borderRadius: 10, border: `1px solid ${t.headerBorder}`, background: t.cellBg, boxShadow: '0 24px 70px rgba(0,0,0,.35)' }}>
         <div>
           <div style={{ fontSize: 15, fontWeight: 850, color: t.textPrimary }}>{blockIdentityDialogCopy(action).title}</div>
           <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: t.textMuted }}>{blockIdentityDialogCopy(action).body}</div>
         </div>
-        <FieldLabel label="Block name" t={t}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} style={importInputStyle(t)} /></FieldLabel>
+        <FieldLabel label="Saved query name" t={t}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} style={importInputStyle(t)} /></FieldLabel>
         <FieldLabel label="Owner" t={t}><input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="analytics@company.com or team name" style={importInputStyle(t)} /></FieldLabel>
         {domains && (
           <FieldLabel label="Domain" t={t}>
@@ -2516,7 +2516,7 @@ function BlockIdentityDialog({
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" onClick={onCancel} style={secondaryImportButtonStyle(t)}>Cancel</button>
-          <button type="button" disabled={!ready} onClick={() => ready && onConfirm({ name: name.trim(), owner: owner.trim(), ...(domains ? { domain } : {}) })} style={{ ...primaryImportButtonStyle(t), opacity: ready ? 1 : .55 }}>{domains ? 'Certify block' : 'Save block'}</button>
+          <button type="button" disabled={!ready} onClick={() => ready && onConfirm({ name: name.trim(), owner: owner.trim(), ...(domains ? { domain } : {}) })} style={{ ...primaryImportButtonStyle(t), opacity: ready ? 1 : .55 }}>{domains ? 'Certify' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -2537,16 +2537,16 @@ function DirtyWorkDialog({
   t: Theme;
 }) {
   return (
-    <div role="dialog" aria-modal="true" aria-label="Unsaved block" style={{ position: 'fixed', inset: 0, zIndex: 90, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(0, 0, 0, 0.42)' }}>
+    <div role="dialog" aria-modal="true" aria-label="Unsaved changes" style={{ position: 'fixed', inset: 0, zIndex: 90, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(0, 0, 0, 0.42)' }}>
       <div style={{ width: 'min(430px, 100%)', border: `1px solid ${t.cellBorder}`, borderRadius: 12, background: t.cellBg, padding: 18, display: 'grid', gap: 14, boxShadow: '0 20px 60px rgba(0, 0, 0, 0.24)' }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Save this block before leaving?</div>
-          <div style={{ marginTop: 5, fontSize: 12, lineHeight: 1.5, color: t.textMuted, fontFamily: t.font }}>Your current Block Studio workspace has unsaved changes.</div>
+          <div style={{ fontSize: 15, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Save your changes before leaving?</div>
+          <div style={{ marginTop: 5, fontSize: 12, lineHeight: 1.5, color: t.textMuted, fontFamily: t.font }}>This saved query has unsaved changes.</div>
         </div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" onClick={onCancel} disabled={saving} style={secondaryImportButtonStyle(t)}>Cancel</button>
           <button type="button" onClick={onDiscard} disabled={saving} style={{ ...secondaryImportButtonStyle(t), color: t.error }}>Discard</button>
-          <button type="button" onClick={() => void onSave()} disabled={saving} style={primaryImportButtonStyle(t)}>{saving ? 'Saving…' : 'Save block'}</button>
+          <button type="button" onClick={() => void onSave()} disabled={saving} style={primaryImportButtonStyle(t)}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -2571,7 +2571,7 @@ function DeleteBlockDialog({
   t: Theme;
 }) {
   return (
-    <div role="dialog" aria-modal="true" aria-label="Delete block" style={{ position: 'fixed', inset: 0, zIndex: 95, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(0, 0, 0, 0.42)' }}>
+    <div role="dialog" aria-modal="true" aria-label="Delete saved query" style={{ position: 'fixed', inset: 0, zIndex: 95, display: 'grid', placeItems: 'center', padding: 20, background: 'rgba(0, 0, 0, 0.42)' }}>
       <div style={{ width: 'min(460px, 100%)', border: `1px solid ${t.error}55`, borderRadius: 12, background: t.cellBg, padding: 18, display: 'grid', gap: 14, boxShadow: '0 20px 60px rgba(0, 0, 0, 0.26)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
           <span style={{ width: 30, height: 30, display: 'grid', placeItems: 'center', borderRadius: 8, background: `${t.error}12` }}><Trash2 size={16} color={t.error} /></span>
@@ -2581,13 +2581,13 @@ function DeleteBlockDialog({
           </div>
         </div>
         <div style={{ fontSize: 12, lineHeight: 1.5, color: t.textSecondary, fontFamily: t.font }}>
-          This removes the saved <code>.dql</code> block and its generated semantic companion. Unsaved editor changes are discarded. Git can recover committed versions.
+          This removes the saved query (its <code>.dql</code> block file) and its generated semantic companion. Unsaved editor changes are discarded. Git can recover committed versions.
         </div>
         {error && <div role="alert" style={{ padding: '8px 10px', borderRadius: 7, border: `1px solid ${t.error}45`, background: `${t.error}0d`, color: t.error, fontSize: 11, lineHeight: 1.4 }}>{error}</div>}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" onClick={onCancel} disabled={deleting} style={secondaryImportButtonStyle(t)}>Cancel</button>
           <button type="button" onClick={onConfirm} disabled={deleting} style={{ ...primaryImportButtonStyle(t), background: t.error, borderColor: t.error, opacity: deleting ? 0.65 : 1 }}>
-            {deleting ? <><Loader2 size={13} className="dql-spin" /> Deleting…</> : <><Trash2 size={13} /> Delete block</>}
+            {deleting ? <><Loader2 size={13} className="dql-spin" /> Deleting…</> : <><Trash2 size={13} /> Delete saved query</>}
           </button>
         </div>
       </div>
@@ -2629,14 +2629,14 @@ export function BlockStudioStartPage({
 }) {
   const manualActions = [
     onCreateSql && {
-      title: 'Blank SQL block',
+      title: 'Blank SQL query',
       detail: 'Start with an empty custom query.',
       action: onCreateSql,
       label: 'Create',
       Icon: Code2,
     },
     onCreateSemantic && {
-      title: 'Semantic block',
+      title: 'Query from metrics',
       detail: 'Build directly from governed metrics.',
       action: onCreateSemantic,
       label: 'Build',
@@ -2654,7 +2654,7 @@ export function BlockStudioStartPage({
     <div style={{ height: '100%', overflow: 'auto', padding: 22, display: 'grid', gap: 14, alignContent: 'start', background: t.appBg }}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
         <div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Create DQL blocks</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: t.textPrimary, fontFamily: t.font }}>Create saved queries</div>
           <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.45, marginTop: 5, maxWidth: 560, fontFamily: t.font }}>
             Start from SQL you already have, or describe the business asset you want ZLens to build from project context.
           </div>
@@ -2670,8 +2670,8 @@ export function BlockStudioStartPage({
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 10 }}>
         <PrimaryStartAction
           title="Ask AI"
-          detail="Describe the business asset you need. ZLens uses this domain's blocks, models, and semantic metrics to draft it."
-          label="Describe block"
+          detail="Describe the business asset you need. ZLens uses this domain's saved queries, models, and semantic metrics to draft it."
+          label="Describe the query"
           Icon={Bot}
           onClick={onBuildDql}
           t={t}
@@ -2679,7 +2679,7 @@ export function BlockStudioStartPage({
         {onImport && (
           <PrimaryStartAction
             title="Import SQL"
-            detail="Paste scripts, upload files, or point at a folder. ZLens analyzes candidates without writing block files until you save."
+            detail="Paste scripts, upload files, or point at a folder. ZLens analyzes candidates without writing files until you save."
             label="Start import"
             Icon={FileInput}
             onClick={onImport}
@@ -2935,18 +2935,18 @@ function BlockContextInspector({
   return (
     <div style={{ padding: '10px 14px', borderBottom: `1px solid ${t.headerBorder}`, background: t.appBg, display: 'grid', gap: 10 }}>
       <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 12, fontWeight: 750, color: t.textPrimary }}>Block context</div>
-        <span style={{ fontSize: 11, color: t.textMuted }}>Only grounded context is kept with the block and used for retrieval.</span>
+        <div style={{ fontSize: 12, fontWeight: 750, color: t.textPrimary }}>Context</div>
+        <span style={{ fontSize: 11, color: t.textMuted }}>Only grounded context is kept with the saved query and used for retrieval.</span>
         <div style={{ flex: 1 }} />
         <button type="button" onClick={onOpenExplorer} style={secondaryImportButtonStyle(t)}>{databaseStats.tables} database tables</button>
         <button type="button" onClick={onOpenAi} style={secondaryImportButtonStyle(t)}>Review with AI</button>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 10 }}>
         <FieldLabel label="Business outcome" t={t}>
-          <SourceTextField value={field('businessOutcome')} onChange={(next) => onChange(setBlockStringField(source, 'businessOutcome', next))} placeholder="Decision or outcome this block supports" style={importInputStyle(t)} />
+          <SourceTextField value={field('businessOutcome')} onChange={(next) => onChange(setBlockStringField(source, 'businessOutcome', next))} placeholder="Decision or outcome this saved query supports" style={importInputStyle(t)} />
         </FieldLabel>
         <FieldLabel label="Agent guidance" t={t}>
-          <SourceTextField value={field('llmContext')} onChange={(next) => onChange(setBlockStringField(source, 'llmContext', next))} placeholder="When to use this block" style={importInputStyle(t)} />
+          <SourceTextField value={field('llmContext')} onChange={(next) => onChange(setBlockStringField(source, 'llmContext', next))} placeholder="When to use this saved query" style={importInputStyle(t)} />
         </FieldLabel>
         {tokenFields.map((item) => (
           <ContextTokenEditor key={item.key} label={item.label} hint={item.hint} values={array(item.key)} onChange={(values) => onChange(setBlockArray(source, item.key, values))} t={t} />
@@ -3019,7 +3019,7 @@ function VisualParameterEditor({
     <PanelBox title="Runtime parameters" t={t}>
       <div style={{ display: 'grid', gap: 10 }}>
         <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.45 }}>
-          Add a values-only input once, then reuse this block for a different period, region, customer set, or limit.
+          Add a values-only input once, then reuse this saved query for a different period, region, customer set, or limit.
           {kind === 'custom'
             ? <> Use <code>{'${parameter_name}'}</code> in SQL where the value belongs; ZLens always binds it safely.</>
             : ' Choose a semantic field above as a filter to create its governed parameter binding.'}
@@ -3099,7 +3099,7 @@ const PARAMETER_POLICY_OPTIONS = ['dynamic', 'static', 'business', 'derived', 'o
 // meta line, "Open in builder", stat strip, Outputs pills, Parameters table,
 // DQL source with "Open in DQL Source", Tests checklist, collapsed Lineage.
 const CERTIFICATION_SURFACE_LABELS: Record<string, string> = {
-  'block-studio': 'Block Studio',
+  'block-studio': 'the saved query editor',
   'sql-import': 'SQL import',
   'app-dataset': 'App Dataset',
   cli: 'zlens certify',
@@ -3109,7 +3109,7 @@ const CERTIFICATION_SURFACE_LABELS: Record<string, string> = {
 export const BLOCK_TESTS_HINT = 'Optional. Certify runs them: a declared test must pass, and a column test must hold on every row.';
 
 /** Why a certified block shows Recertify: its source changed after the receipt was written. */
-export const CERTIFIED_SOURCE_CHANGED_LINE = 'Edited after it was certified: this source no longer matches its certification receipt, so Ask treats the block as needing recertification. Open it in the builder and Re-certify.';
+export const CERTIFIED_SOURCE_CHANGED_LINE = 'Edited after it was certified: this source no longer matches its certification receipt, so Ask treats the saved query as needing recertification. Open it in the builder and Re-certify.';
 
 /** One line saying who certified this block and when (D5) — or that no receipt exists. */
 export function certificationReceiptLine(receipt: BlockStudioMetadata['certification'] | undefined): string {
@@ -3239,7 +3239,7 @@ export function BlockDetailView({
               {running ? <Loader2 size={12} style={{ animation: 'dql-agent-run-spin 0.8s linear infinite' }} /> : <Play size={11} fill="currentColor" />} Run
             </button>
             {onDelete ? (
-              <button type="button" aria-label={`Delete ${name}`} title="Delete block" onClick={onDelete} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${t.error}55`, background: `${t.error}0d`, color: t.error, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
+              <button type="button" aria-label={`Delete ${name}`} title="Delete saved query" onClick={onDelete} style={{ width: 32, height: 32, borderRadius: 8, border: `1px solid ${t.error}55`, background: `${t.error}0d`, color: t.error, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}>
                 <Trash2 size={14} />
               </button>
             ) : null}
@@ -3281,7 +3281,7 @@ export function BlockDetailView({
               <span>Name</span><span>Type</span><span>Default</span><span>Policy</span>
             </div>
             {parameters.length === 0 ? (
-              <div style={{ padding: '9px 12px', fontSize: 12, color: t.textMuted }}>No parameters — this block always runs the same way.</div>
+              <div style={{ padding: '9px 12px', fontSize: 12, color: t.textMuted }}>No parameters — this saved query always runs the same way.</div>
             ) : parameters.map((parameter, index) => (
               <div key={parameter.name} style={{ display: 'grid', gridTemplateColumns: '1.2fr 0.8fr 1fr 0.9fr', gap: 8, padding: '8px 12px', borderBottom: index < parameters.length - 1 ? '1px solid var(--border-subtle)' : 'none', fontSize: 12, alignItems: 'center' }}>
                 <span style={{ fontFamily: t.fontMono, fontWeight: 600, color: t.textPrimary }}>{parameter.name}</span>
@@ -3303,7 +3303,7 @@ export function BlockDetailView({
               Open in DQL Source <ChevronRight size={11} strokeWidth={2} />
             </button>
           </div>
-          <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{source.trim() || 'Open the builder to author this block.'}</pre>
+          <pre style={{ margin: 0, border: '1px solid var(--border-subtle)', background: t.cellBg, borderRadius: 9, padding: '13px 15px', fontSize: 11.5, lineHeight: 1.65, fontFamily: t.fontMono, whiteSpace: 'pre', overflowX: 'auto', color: t.textPrimary, maxHeight: 320, overflowY: 'auto' }}>{source.trim() || 'Open the builder to author this saved query.'}</pre>
         </div>
 
         {/* tests + lineage */}
@@ -3543,11 +3543,11 @@ function SemanticBlockBuilder({
               </div>
             ) : (dbtStatus?.counts.metrics ?? 0) > 0 || dbtStatus?.artifacts.semanticManifest.exists ? (
               <div role="alert" style={{ fontSize: 12, color: 'var(--status-warning)', lineHeight: 1.45 }}>
-                dbt artifacts contain {(dbtStatus?.counts.metrics ?? 0).toLocaleString()} metrics, but Block Studio could not load them. Refresh the semantic layer; another dbt parse is not required.
+                dbt artifacts contain {(dbtStatus?.counts.metrics ?? 0).toLocaleString()} metrics, but Saved queries could not load them. Refresh the semantic layer; another dbt parse is not required.
               </div>
             ) : (
               <div style={{ fontSize: 12, color: 'var(--status-warning)', lineHeight: 1.45 }}>
-                No semantic metrics were discovered. Run dbt parse or import a semantic layer, then refresh Block Studio.
+                No semantic metrics were discovered. Run dbt parse or import a semantic layer, then refresh Saved queries.
               </div>
             )
           )}
@@ -3559,7 +3559,7 @@ function SemanticBlockBuilder({
           )}
         </PanelBox>
 
-        <PanelBox title="Chart intent" hint="How apps and answers render this block by default." t={t}>
+        <PanelBox title="Chart intent" hint="How apps and answers render this saved query by default." t={t}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
             <FieldLabel label="Type" t={t}>
               <select value={chartConfig.chart ?? 'table'} onChange={(event) => onChange(upsertVisualizationConfig(source, { ...chartConfig, chart: event.target.value }))} style={compactInput}>
@@ -3606,7 +3606,7 @@ function SemanticBlockBuilder({
         )}
       </PanelBox>
 
-      <PanelBox title="Filters and parameters" hint="Values-only inputs so this block is reusable across periods and regions." t={t}>
+      <PanelBox title="Filters and parameters" hint="Values-only inputs so this saved query is reusable across periods and regions." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
           {Array.from(new Set([...values.dimensions, ...(values.timeDimension ? [values.timeDimension] : [])])).map((name) => {
             const selected = values.filters.includes(name);
@@ -3624,7 +3624,7 @@ function SemanticBlockBuilder({
         t={t}
       />
 
-      <PanelBox title={`Output fields${outputFields.length ? ` · ${outputFields.length}` : ''}`} hint="What consumers see when this block answers a question." t={t}>
+      <PanelBox title={`Output fields${outputFields.length ? ` · ${outputFields.length}` : ''}`} hint="What consumers see when this saved query answers a question." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>{outputFields.length > 0 ? outputFields.map((field) => <span key={field} style={selectionChipStyle(t, true)}>{businessLabel(field)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Select metrics and dimensions to define outputs.</span>}</div>
       </PanelBox>
       <PanelBox title="Tests" hint={BLOCK_TESTS_HINT} t={t}>
@@ -3658,10 +3658,10 @@ function CompactBlockIdentity({
   const options = blockDomainOptions(metadata?.domain, domains);
   const input = compactBuilderInputStyle(t);
   return (
-    <PanelBox title="Details" hint="Name, ownership, and where this block lives." t={t}>
+    <PanelBox title="Details" hint="Name, ownership, and where this saved query lives." t={t}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <FieldLabel label="Block name" t={t}>
-          <input aria-label="Block name" aria-invalid={metadata ? !metadata.name.trim() : undefined} value={metadata?.name ?? ''} onChange={(event) => onTextChange('name', event.target.value)} style={{ ...input, fontFamily: t.fontMono }} />
+        <FieldLabel label="Saved query name" t={t}>
+          <input aria-label="Saved query name" aria-invalid={metadata ? !metadata.name.trim() : undefined} value={metadata?.name ?? ''} onChange={(event) => onTextChange('name', event.target.value)} style={{ ...input, fontFamily: t.fontMono }} />
           {metadata && !metadata.name.trim() && (
             <div role="alert" data-testid="block-name-required" style={{ marginTop: 5, fontSize: 10, color: t.error }}>
               A block needs a name. Type one to save; until then the block keeps its previous name.
@@ -3669,7 +3669,7 @@ function CompactBlockIdentity({
           )}
         </FieldLabel>
         <FieldLabel label="Domain" t={t}>
-          <select aria-label="Block domain" value={blockDomainSelectValue(metadata?.domain)} onChange={(event) => onTextChange('domain', event.target.value || GLOBAL_BLOCK_DOMAIN)} style={input}>
+          <select aria-label="Saved query domain" value={blockDomainSelectValue(metadata?.domain)} onChange={(event) => onTextChange('domain', event.target.value || GLOBAL_BLOCK_DOMAIN)} style={input}>
             <option value="">Global / cross-domain</option>
             {options.map((domain) => (
               <option key={domain.value} value={domain.value} disabled={domain.disabled}>
@@ -3683,7 +3683,7 @@ function CompactBlockIdentity({
         <div style={{ gridColumn: '1 / -1' }}>
           <FieldLabel label="Folder (optional)" t={t}>
             <input
-              aria-label="Block folder"
+              aria-label="Saved query folder"
               value={metadata?.folderPath ?? ''}
               onChange={(event) => onFolderChange(event.target.value)}
               placeholder="executive/monthly"
@@ -3935,7 +3935,7 @@ function SqlBlockVisualBuilder({
       />
       <PanelBox title="Query" hint="Write raw SQL — it compiles into a governed DQL script." t={t}>
         <textarea
-          aria-label="Block SQL"
+          aria-label="Saved query SQL"
           rows={7}
           value={sqlDraft}
           onChange={(event) => editSql(event.target.value)}
@@ -3957,7 +3957,7 @@ function SqlBlockVisualBuilder({
           </span>
         </div>
       </PanelBox>
-      <PanelBox title="Chart intent" hint="How apps and answers render this block by default." t={t}>
+      <PanelBox title="Chart intent" hint="How apps and answers render this saved query by default." t={t}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10 }}>
           <FieldLabel label="Type" t={t}>
             <select value={chartConfig.chart ?? 'table'} onChange={(event) => onChange(upsertVisualizationConfig(source, { ...chartConfig, chart: event.target.value }))} style={input}>
@@ -3971,7 +3971,7 @@ function SqlBlockVisualBuilder({
         </div>
         <FieldLabel label="Title" t={t}><input value={chartConfig.title ?? ''} onChange={(event) => onChange(upsertVisualizationConfig(source, { ...chartConfig, title: event.target.value }))} style={input} /></FieldLabel>
       </PanelBox>
-      <PanelBox title="Business outputs" hint="What consumers see when this block answers a question." t={t}>
+      <PanelBox title="Business outputs" hint="What consumers see when this saved query answers a question." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 7 }}>
           {outputs.length > 0 ? outputs.map((output) => <span key={output} style={selectionChipStyle(t, true)}>{businessLabel(output)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Add aliases in DQL Source to expose business-friendly output names.</span>}
         </div>
@@ -4005,14 +4005,14 @@ function BuilderNotice({
   t: Theme;
 }) {
   const message = semanticChoice
-    ? `${semanticChoice.kind === 'metric' ? 'Metric' : 'Dimension'} "${semanticChoice.name}" belongs in a Semantic Block. SQL Blocks can still use advanced @metric/@dim refs when you choose that explicitly.`
+    ? `${semanticChoice.kind === 'metric' ? 'Metric' : 'Dimension'} "${semanticChoice.name}" belongs in a saved query built from metrics. SQL saved queries can still use advanced @metric/@dim refs when you choose that explicitly.`
     : databaseWarning ?? '';
   return (
     <div style={{ padding: '10px 12px', borderBottom: `1px solid ${t.headerBorder}`, background: `${t.accent}10`, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
       <span style={{ fontSize: 12, color: t.textSecondary, lineHeight: 1.4, flex: 1, minWidth: 260 }}>{message}</span>
       {semanticChoice && (
         <>
-          {onCreateSemantic && <button onClick={onCreateSemantic} style={secondaryImportButtonStyle(t)}>Create Semantic Block</button>}
+          {onCreateSemantic && <button onClick={onCreateSemantic} style={secondaryImportButtonStyle(t)}>Create saved query built from metrics</button>}
           <button onClick={onInsertAdvanced} style={primaryImportButtonStyle(t)}>Insert advanced ref</button>
         </>
       )}
@@ -4148,7 +4148,7 @@ function smartItemFromCandidate(candidate: BlockStudioImportCandidate): SmartImp
 }
 
 function importAnalysisMessage(status: BlockStudioImportCandidate['analysisStatus']): string {
-  if (status === 'retrieving') return 'Checking certified blocks and semantic metrics.';
+  if (status === 'retrieving') return 'Checking certified saved queries and semantic metrics.';
   if (status === 'reviewing') return 'Reviewing governed evidence and building the candidate.';
   if (status === 'ready') return 'Analysis ready. Preparing preview.';
   if (status === 'needs_attention') return 'Analysis needs attention.';
@@ -4189,7 +4189,7 @@ function isAiGeneratedCandidate(candidate: BlockStudioImportCandidate): boolean 
 function smartImportPhaseLabel(phase: SmartImportPhase): string {
   if (phase === 'creating') return 'Reading SQL';
   if (phase === 'running') return 'Running previews';
-  if (phase === 'saving') return 'Saving blocks';
+  if (phase === 'saving') return 'Saving';
   if (phase === 'complete') return 'Import complete';
   return 'Ready';
 }
@@ -4412,7 +4412,7 @@ function BlockStudioImportWorkspace({
               rows: rowCountForImportCandidate(next),
               savedPath: next.draftSave?.path ?? next.savedPath,
               message: next.recommendedAction === 'reuse_existing'
-                ? 'A governed block already answers this SQL. Reuse it instead of saving a duplicate.'
+                ? 'A governed saved query already answers this SQL. Reuse it instead of saving a duplicate.'
                 : 'Preview ran successfully. Nothing is written until you save.',
             }));
         } catch (err: any) {
@@ -4529,7 +4529,7 @@ function BlockStudioImportWorkspace({
       if (!session) return;
       const saveOwner = candidate.owner.trim() || owner.trim();
       if (!saveOwner) {
-        setError('Owner is required before a block can be saved or certified.');
+        setError('Owner is required before a saved query can be saved or certified.');
         return;
       }
       setLoading(true);
@@ -4554,7 +4554,7 @@ function BlockStudioImportWorkspace({
     } catch (err: any) {
       const message = err?.message ?? 'Candidate save failed.';
       setError(message.includes('409') || message.includes('already exists')
-        ? 'A block with this name already exists. Rename this candidate, then save again.'
+        ? 'A saved query with this name already exists. Rename this candidate, then save again.'
         : message);
     } finally {
       setLoading(false);
@@ -4566,7 +4566,7 @@ function BlockStudioImportWorkspace({
   const certifyCandidate = async (candidate: BlockStudioImportCandidate) => {
     if (!session) return;
     if (!(candidate.owner.trim() || owner.trim())) {
-      setError('Owner is required before a block can be certified.');
+      setError('Owner is required before a saved query can be certified.');
       return;
     }
     setLoading(true);
@@ -4611,7 +4611,7 @@ function BlockStudioImportWorkspace({
     if (!session) return;
     const saveOwner = owner.trim() || session.defaults.owner.trim();
     if (!saveOwner) {
-      setError('Owner is required before blocks can be saved or certified.');
+      setError('Owner is required before saved queries can be saved or certified.');
       return;
     }
     setSavingAll(true);
@@ -4632,7 +4632,7 @@ function BlockStudioImportWorkspace({
             ...smartItemFromCandidate(candidate),
             status: 'needs_attention' as const,
             message: errorMessage.includes('409') || errorMessage.includes('already exists')
-              ? 'A block with this name already exists. Rename it in advanced details, then save again.'
+              ? 'A saved query with this name already exists. Rename it in advanced details, then save again.'
               : errorMessage,
           }];
         }
@@ -4689,7 +4689,7 @@ function BlockStudioImportWorkspace({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(130px, 1fr))', gap: 6, width: 'min(560px, 44vw)', minWidth: 390 }}>
           <ImportStep index={1} active={activeStep === 1} complete={Boolean(session)} title="Source" detail={mode === 'paste' ? 'Paste SQL' : mode === 'upload' ? 'Upload files' : 'Local path'} t={t} />
-          <ImportStep index={2} active={activeStep === 2} complete={smartCounts.ready > 0 || smartCounts.saved > 0} title="Draft" detail={session ? `${session.candidates.length} blocks · ${readyCount} ready` : 'Generate DQL'} t={t} />
+          <ImportStep index={2} active={activeStep === 2} complete={smartCounts.ready > 0 || smartCounts.saved > 0} title="Draft" detail={session ? `${session.candidates.length} saved queries · ${readyCount} ready` : 'Generate DQL'} t={t} />
           <ImportStep index={3} active={activeStep === 3} complete={certifiedCount > 0} title="Review" detail={certifiedCount > 0 ? `${certifiedCount} certified` : draftSavedCount > 0 ? `${draftSavedCount} draft${draftSavedCount === 1 ? '' : 's'} saved · certify next` : 'Preview and certify'} t={t} />
         </div>
         <div style={{ flex: 1 }} />
@@ -4794,7 +4794,7 @@ function BlockStudioImportWorkspace({
           <section style={{ minHeight: 0, overflow: 'auto', padding: 12, display: 'grid', alignContent: 'start', gap: 10 }}>
             {!session ? (
               <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.5 }}>
-                Paste SQL, upload files, or choose a local path. Analysis stays in this session until you save a block.
+                Paste SQL, upload files, or choose a local path. Analysis stays in this session until you save a saved query.
               </div>
             ) : (
               <>
@@ -4866,7 +4866,7 @@ function BlockStudioImportWorkspace({
                   </button>
                 )}
                 {!session.candidates.some(isAiGeneratedCandidate) && smartCounts.ready > 0 && (
-                  <button onClick={() => void saveAll()} disabled={savingAll} style={primaryImportButtonStyle(t)}>{savingAll ? 'Saving...' : 'Save valid blocks'}</button>
+                  <button onClick={() => void saveAll()} disabled={savingAll} style={primaryImportButtonStyle(t)}>{savingAll ? 'Saving...' : 'Save all valid'}</button>
                 )}
               </>
             )}
@@ -4913,7 +4913,7 @@ function BlockStudioImportWorkspace({
           {session && selectedCandidate && certifyFix?.candidateId === selectedCandidate.id && (
             <div role="status" style={{ padding: '10px 12px', border: `1px solid ${t.accent}55`, background: `${t.accent}0d`, borderRadius: 8, marginBottom: 12, display: 'grid', gap: 8, fontSize: 12, color: t.textSecondary, lineHeight: 1.45 }}>
               <div>
-                Certifying is the review, so the description should say what the block returns, not that it needs review. The description becomes:
+                Certifying is the review, so the description should say what the saved query returns, not that it needs review. The description becomes:
               </div>
               <div style={{ color: t.textPrimary, fontWeight: 700 }}>{certifyFix.suggestedDescription}</div>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -4954,8 +4954,8 @@ function BlockStudioImportWorkspace({
           busy={loading}
           title={pendingDelete.kind === 'all' ? 'Clear import history?' : 'Delete import preview?'}
           message={pendingDelete.kind === 'all'
-            ? `This removes ${sessions.length} local import preview${sessions.length === 1 ? '' : 's'} from .dql/imports. Saved blocks stay in the project.`
-            : 'This removes the selected local import preview from .dql/imports. Saved blocks stay in the project.'}
+            ? `This removes ${sessions.length} local import preview${sessions.length === 1 ? '' : 's'} from .dql/imports. Saved queries stay in the project.`
+            : 'This removes the selected local import preview from .dql/imports. Saved queries stay in the project.'}
           confirmLabel={pendingDelete.kind === 'all' ? 'Clear history' : 'Delete preview'}
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => void confirmDelete()}
@@ -5056,14 +5056,14 @@ function SmartImportOverview({
         ? smartImportPhaseLabel(phase)
         : counts.ready > 0
           ? `${counts.ready} draft${counts.ready === 1 ? '' : 's'} ready for review`
-          : `${counts.saved} DQL block${counts.saved === 1 ? '' : 's'} saved`;
+          : `Saved ${counts.saved} ${counts.saved === 1 ? 'saved query' : 'saved queries'}`;
     const detail = counts.attention > 0
       ? 'Ready candidates remain in this session. Fix the exceptions in advanced details before saving.'
       : counts.processing > 0
         ? 'ZLens is previewing SQL and keeping generated drafts saved.'
         : counts.ready > 0
           ? 'Generated DQL drafts are saved under blocks/_drafts or domains/<domain>/blocks/_drafts. Open a candidate to review, preview, and certify.'
-          : 'Saved drafts stay drafts until someone clicks Certify; certified blocks move to the canonical blocks folder.';
+          : 'Saved drafts stay drafts until someone clicks Certify; certified ones move to the main blocks/ folder.';
 
   return (
     <div style={{ display: 'grid', gap: 12 }}>
@@ -5094,7 +5094,7 @@ function SmartImportOverview({
         </div>
       </PanelBox>
 
-      <PanelBox title="Blocks" t={t}>
+      <PanelBox title="Saved queries" t={t}>
         {orderedItems.length === 0 ? (
           <EmptyPanel message="Import status will appear here." />
         ) : (
@@ -5134,7 +5134,7 @@ function SmartImportOverview({
             ))}
             {orderedItems.length > 40 && (
               <div style={{ fontSize: 12, color: t.textMuted, fontFamily: t.font }}>
-                {orderedItems.length - 40} more block(s). Open advanced details to search the full list.
+                {orderedItems.length - 40} more saved quer{orderedItems.length - 40 === 1 ? 'y' : 'ies'}. Open advanced details to search the full list.
               </div>
             )}
           </div>
@@ -5319,7 +5319,7 @@ export function ImportCandidateDetail({
           <button
             onClick={() => void withEditsApplied(onCertify)}
             disabled={loading || trust !== 'draft_saved'}
-            title={trust === 'certified' ? 'Certified' : trust === 'unsaved' ? 'Save the draft first, then certify it.' : 'Run the certification rules and certify this block as its reviewer.'}
+            title={trust === 'certified' ? 'Certified' : trust === 'unsaved' ? 'Save the draft first, then certify it.' : 'Run the certification rules and certify this saved query as its reviewer.'}
             style={trust === 'draft_saved' ? primaryImportButtonStyle(t) : secondaryImportButtonStyle(t)}
           >
             {trust === 'certified' ? 'Certified' : 'Certify'}
@@ -5402,7 +5402,7 @@ export function ImportCandidateDetail({
           </details>
 
           <details style={importDisclosureStyle(t)}>
-            <summary style={importSummaryStyle(t)}>Draft DQL block</summary>
+            <summary style={importSummaryStyle(t)}>Draft saved query</summary>
             <pre style={{ margin: '10px 0 0', whiteSpace: 'pre-wrap', fontSize: 11, lineHeight: 1.45, color: t.textSecondary, fontFamily: t.fontMono }}>{candidate.dqlSource}</pre>
           </details>
         </div>
@@ -5579,11 +5579,11 @@ function ImportGuide({ t }: { t: Theme }) {
   const items = [
     ['1', 'Add SQL', 'Paste SQL, upload files, or point to an enterprise SQL folder.'],
     ['2', 'Generate drafts', 'ZLens analyzes statements, project metadata, tables, and business context.'],
-    ['3', 'Review and certify', 'Preview results, edit metadata, then certify the governed block.'],
+    ['3', 'Review and certify', 'Preview results, edit metadata, then certify the governed saved query.'],
   ];
   return (
     <div style={{ display: 'grid', gap: 12 }}>
-      <EmptyPanel message="Add SQL to analyze DQL candidates without creating block files." />
+      <EmptyPanel message="Add SQL to analyze DQL candidates without creating saved query files." />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
         {items.map(([index, title, detail]) => (
           <div key={title} style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, background: t.appBg, padding: 12, display: 'grid', gap: 6 }}>
@@ -5848,18 +5848,18 @@ function BlockLineagePanel({
   t: Theme;
 }) {
   if (!blockName) {
-    return <EmptyPanel message="Lineage will appear once the block has a name." />;
+    return <EmptyPanel message="Lineage will appear once the saved query has a name." />;
   }
 
   if (loading) {
-    return <EmptyPanel message="Loading block lineage…" />;
+    return <EmptyPanel message="Loading saved query lineage…" />;
   }
 
   if (!detail?.node) {
     return (
       <div style={{ padding: 12, display: 'grid', gap: 12 }}>
         <div style={{ fontSize: 12, color: t.textMuted, fontFamily: t.font }}>
-          No lineage node was found for this block yet. Save the block to compile and refresh its focused lineage automatically.
+          No lineage node was found for this saved query yet. Save it to compile and refresh its focused lineage automatically.
         </div>
         <div>
           <button
@@ -5884,7 +5884,7 @@ function BlockLineagePanel({
             {detail.node.name}
           </div>
           <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
-            {detail.node.domain ? `Domain: ${detail.node.domain}` : 'Block lineage focus'}
+            {detail.node.domain ? `Domain: ${detail.node.domain}` : 'Saved query lineage focus'}
           </div>
         </div>
         <div style={{ flex: 1 }} />
@@ -5916,7 +5916,7 @@ function BlockLineagePanel({
         <div style={{ display: 'grid', gap: 10 }}>
           {paths.upstreamPaths.length > 0 && (
             <LineagePathSection
-              title="Source to Block"
+              title="Sources to this saved query"
               paths={paths.upstreamPaths}
               onNodeClick={onSelectNode}
               focalNodeId={focalNodeId}
@@ -5925,7 +5925,7 @@ function BlockLineagePanel({
           )}
           {paths.downstreamPaths.length > 0 && (
             <LineagePathSection
-              title="Block to Consumption"
+              title="This saved query to its consumers"
               paths={paths.downstreamPaths}
               onNodeClick={onSelectNode}
               focalNodeId={focalNodeId}
@@ -5977,7 +5977,7 @@ function SavePanel({
 
   return (
     <div style={{ display: 'grid', gap: 10, padding: 12 }}>
-      <input value={values.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Block name" style={inputStyle} />
+      <input value={values.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Saved query name" style={inputStyle} />
       <input value={values.domain} onChange={(event) => onChange({ domain: event.target.value })} placeholder="Domain" style={inputStyle} />
       <input value={values.folderPath} onChange={(event) => onChange({ folderPath: event.target.value })} placeholder="Folder (optional), e.g. executive/monthly" style={{ ...inputStyle, fontFamily: t.fontMono }} />
       <input value={values.owner} onChange={(event) => onChange({ owner: event.target.value })} placeholder="Owner" style={inputStyle} />
@@ -6004,13 +6004,13 @@ function BlockStudioParameterPanel({
   running: boolean;
   t: Theme;
 }) {
-  if (parameters.length === 0) return <EmptyPanel message="This block has no runtime parameters. Add typed params in DQL Source when scope should be configurable." />;
+  if (parameters.length === 0) return <EmptyPanel message="This saved query has no runtime parameters. Add typed params in DQL Source when scope should be configurable." />;
   return (
     <div style={{ padding: 14, display: 'grid', gap: 12 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 13, fontWeight: 800, color: t.textPrimary }}>Test parameter values</div>
-          <div style={{ fontSize: 11, color: t.textMuted, marginTop: 3 }}>These values affect only the preview. Save defaults in the block definition.</div>
+          <div style={{ fontSize: 11, color: t.textMuted, marginTop: 3 }}>These values affect only the preview. Save defaults in the saved query definition.</div>
         </div>
         <button type="button" onClick={onRun} disabled={running} style={primaryImportButtonStyle(t)}>{running ? 'Running…' : 'Run preview'}</button>
       </div>
@@ -6054,7 +6054,7 @@ function BlockStudioRunStatusCard({ elapsedMs }: { elapsedMs: number }) {
           </span>
         </div>
         <div style={{ color: t.textMuted, fontSize: 12, lineHeight: 1.45 }}>
-          Executing the block query against the active connection.
+          Running the saved query against the active connection.
         </div>
       </div>
     </div>
@@ -6269,7 +6269,7 @@ function CertificationChecklistPanel({
         code: 'certification_blocker',
         title: 'Certification requirement is not ready',
         message,
-        correction: 'Update the block, run it again, and retry certification.',
+        correction: 'Update the saved query, run it again, and retry certification.',
         action: message === 'The query must run successfully.' ? 'run_again' : 'edit_source',
       }));
   const accent = result.pending ? t.accent : result.ok ? '#3fb950' : '#d29922';
@@ -6277,7 +6277,7 @@ function CertificationChecklistPanel({
     <div style={{ margin: '12px 12px 0', border: `1px solid ${accent}55`, borderRadius: 8, background: `${accent}0d`, padding: 12, display: 'grid', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: accent, fontFamily: t.font }}>
-          {result.pending ? 'Certification running' : result.ok ? 'Block certified' : 'Unable to certify'}
+          {result.pending ? 'Certification running' : result.ok ? 'Saved query certified' : 'Unable to certify'}
         </span>
         {checklist?.checkedAt && <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono }}>{checklist.checkedAt}</span>}
       </div>
@@ -6286,8 +6286,8 @@ function CertificationChecklistPanel({
           ? result.message ?? 'The exact draft is saved and the certification gates are running in the background.'
           : result.ok
           ? checklist?.tests
-            ? 'Latest edits were saved, the block ran successfully, tests passed, and status was updated to certified.'
-            : 'Latest edits were saved, the block ran successfully, no block tests are defined, and status was updated to certified.'
+            ? 'Latest edits were saved, the saved query ran successfully, tests passed, and status was updated to certified.'
+            : 'Latest edits were saved, the saved query ran successfully, no tests are defined, and status was updated to certified.'
           : `The draft is saved. Certification stopped with ${issues.length || 1} required fix${issues.length === 1 ? '' : 'es'}; nothing was partially certified.`}
       </div>
       {result.pending && (
@@ -6320,7 +6320,7 @@ function CertificationChecklistPanel({
             const actionLabel = issue.action === 'review_metrics'
               ? 'Review metrics'
               : issue.action === 'run_again'
-                ? 'Run block'
+                ? 'Run saved query'
                 : issue.action === 'edit_parameters'
                   ? 'Edit run inputs'
                   : issue.action === 'configure_runtime'
@@ -6438,7 +6438,7 @@ function TestsPanel({
 
       {assertions.length === 0 && (
         <div style={{ fontSize: 12, color: t.textMuted, fontFamily: t.font, lineHeight: 1.5 }}>
-          No test assertions found. Add assertions in your block:
+          No test assertions found. Add assertions in your saved query:
           <pre style={{
             margin: '8px 0 0', padding: '8px 10px', background: t.editorBg,
             border: `1px solid ${t.cellBorder}`, borderRadius: 6,
@@ -6513,12 +6513,12 @@ function HistoryPanel({
   }
   if (entries.length === 0) {
     const text = status === 'not_a_repo'
-      ? 'This project is not a Git repository yet, so blocks have no version history. Set up Git from Source control.'
+      ? 'This project is not a Git repository yet, so saved queries have no version history. Set up Git from Source control.'
       : status === 'git_unavailable'
         ? (message ?? 'Git is not installed or is not on the PATH of the ZLens server, so version history is unavailable.')
         : status === 'error'
           ? `Version history could not be loaded: ${message ?? 'unknown error'}`
-          : 'No commits include this block yet. Commit it from Source control to start its history.';
+          : 'No commits include this saved query yet. Commit it from Source control to start its history.';
     return (
       <div style={{ padding: 16, display: 'grid', gap: 10, justifyItems: 'start' }}>
         <div role={status === 'error' ? 'alert' : undefined} style={{ fontSize: 12, color: status === 'error' ? t.error : t.textMuted, fontFamily: t.font, lineHeight: 1.5 }}>
@@ -6667,7 +6667,7 @@ function DatabaseExplorer({
           <div>
             <div style={{ fontSize: 12, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Database Browser</div>
             <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
-              Browse the active connection, inspect schemas and columns, then insert tables or starter queries into the block.
+              Browse the active connection, inspect schemas and columns, then insert tables or starter queries into the saved query.
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

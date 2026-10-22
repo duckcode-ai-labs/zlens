@@ -260,7 +260,7 @@ export async function planResearch(input: {
       steps: [{
         thought: 'This asks to assemble a decision surface, not answer one question.',
         action: { kind: 'compose_app', target: metricName ?? humanize(input.question) },
-        expectation: 'A planned app: KPI + trend + breakdowns over the certified blocks.',
+        expectation: 'A planned app: KPI + trend + breakdowns over the certified saved queries.',
       }],
       sources: Array.from(sources),
       done: false,
@@ -336,7 +336,7 @@ export async function planResearch(input: {
       steps.push({
         thought: `Check the certified definition and limitations for ${label}.`,
         action: { kind: 'lookup_block', target: metricBlocks[0].name },
-        expectation: `Whether the certified block's scope, filters, and grain qualify the observation.`,
+        expectation: `Whether the certified saved query's scope, filters, and grain qualify the observation.`,
       });
     }
     if (steps.length < 3 && metricName && !steps.some((step) => step.action.kind === 'check_lineage')) {
@@ -397,7 +397,7 @@ export async function planResearch(input: {
   // ── answer: a single grounded step. ──────────────────────────────────────────
   const answerStep: ResearchStep = metricBlocks.length > 0
     ? {
-        thought: `A certified block answers this directly.`,
+        thought: `A certified saved query answers this directly.`,
         action: { kind: 'lookup_block', target: metricBlocks[0].name },
         expectation: `The certified ${humanize(metricBlocks[0].name)} result.`,
       }

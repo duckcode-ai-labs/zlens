@@ -1,7 +1,7 @@
 # Build an App
 
-An App is a set of pages for a team or a decision, built from Datasets,
-Metrics and saved queries. You build it in **App Studio** as a private draft,
+An App is a set of pages for a team or a decision, built from tables,
+saved queries and Metrics. You build it in **App Studio** as a private draft,
 then publish it as files in your project. The words App Studio uses are listed
 in [Words used in App Studio](index.md#words-used-in-app-studio).
 
@@ -24,7 +24,7 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 4. Pick a **Domain**, or leave **All domains**. Lists of data start on this
    domain; you can still pick data from any domain.
 5. Pick a **Starting layout**: **Executive Brief**, **Operational Dashboard**,
-   **Investigation** or **Blank canvas**. A layout other than Blank puts one
+   **Investigation** or **Blank page**. A layout other than Blank puts one
    intro at the top of the page for you to edit (its wording differs by
    layout); you add the tiles. Starting manually, the button then reads
    **Open Studio with an intro**.
@@ -49,12 +49,12 @@ you say so.
 
 1. **Describe.** While AI plans, the Data step says **AI is picking data** and
    shows its progress: **Understanding your decision**, **Finding certified
-   Datasets, Metrics and saved queries**, **Checking trust and capabilities**
+   tables, Metrics and saved queries**, **Checking trust and capabilities**
    and **Preparing source review**.
 2. **Check the data AI picked.** The Data step says **AI picked N sources**,
    **For:** your goal, and *Check the data before AI builds pages. Remove
    anything you don’t trust.* Each pick under **AI picks** shows its type,
-   trust and domain, such as **Dataset · Certified · Commerce**, **Creates N
+   trust and domain, such as **Table · Certified · Commerce**, **Creates N
    tiles**, and a **Why:** line with the reason AI picked it.
     - **Remove** moves a pick to **AI suggestions**; **Add back** returns it.
     - **Notes from AI** lists what the planner could not do, in plain words
@@ -62,7 +62,7 @@ you say so.
       what you asked.* or *Journey Customers can't answer this with its
       approved fields yet.*
     - **Not covered yet** lists the parts of your request no data answers.
-      **Generate draft DQL that needs review** drafts a Dataset for one of
+      **Generate draft DQL that needs review** drafts data for one of
       them; it needs **Also allow data that needs review**.
     - If AI needs a choice from you, **AI needs one more decision** asks it;
       answer it, or click **Re-run proposal**.
@@ -72,7 +72,7 @@ you say so.
     - With **Only certified data**, AI is given certified data only.
 3. **Build pages.** Click **Build pages with N sources**. **Discard** drops
    AI's picks and leaves you on **Data for this App** to pick data yourself.
-4. **Review the tiles.** The canvas shows the proposed tiles, and the
+4. **Review the tiles.** The page shows the proposed tiles, and the
    **Review the tiles** panel lists them. **Skip** leaves a tile out and
    **Keep** brings it back, here or on the tile itself. Click **Apply N
    changes** to add the tiles and their data to the App, or **Discard**.
@@ -87,7 +87,7 @@ matcher instead, and every place it shows up says so:
 - The Data step heading is **Suggested from keywords · no AI connected**, the
   list is **Keyword suggestions** (removed ones go to **Removed suggestions**),
   and the planner's notes are under **Notes**. The progress reads **Reading the
-  words in your request**, **Matching them to certified Datasets, Metrics and
+  words in your request**, **Matching them to certified tables, Metrics and
   saved queries**, and so on.
 - Each suggestion's **Why:** line names the words of your request it matched
   and its trust, for example *Its name and description match “customers” ·
@@ -95,7 +95,7 @@ matcher instead, and every place it shows up says so:
 - Parts of your request no suggestion matched (such as *Keep it short and
   clear*) are listed under **Not covered yet** as notes. They are never
   publish fixes: add tiles for them yourself, or leave them out.
-- The tile review on the canvas is labelled **Keyword suggestions** and says
+- The tile review on the page is labelled **Keyword suggestions** and says
   **Matched on:** your request.
 
 In the Studio, one rule applies to every AI entry point. What keyword
@@ -133,9 +133,9 @@ publish, and publishing goes through the same checks.
 **Data for this App** lists the App's data on the left (**This App's data**)
 and one **Add data** list on the right. Everything in it has fields:
 
-- **Table**: a Dataset made from a database table, or a table that is **Not
-  checked yet**. A table becomes a Dataset after ZLens checks it once.
-- **Saved query**: a block. Its fields come from its result, with no review
+- **Table**: a database table ZLens has checked, or one that is **Not
+  checked yet**. ZLens checks a table once before you use it.
+- **Saved query**: a reusable, reviewed query (a `.dql` block file). Its fields come from its result, with no review
   step (see [Fields from a saved query](#fields-from-a-saved-query)).
 - **Metrics**: measures from a semantic model.
 
@@ -155,22 +155,22 @@ rows** reads a few of its rows.
 - Data marked **Needs review** shows **Allow data that needs review & add**
   while the App allows only certified data.
 - On a table that is **Not checked yet**, click **Check and add**, check the
-  numbers, and click **Certify and use this data**. The new Dataset is added
+  numbers, and click **Certify and use this data**. The table is added
   to the App, and the list says who certified it and when, for example
   **Orders · Certified by Kranthi · 21 Oct**, with the **Checks passed**: what
   one row is (the row key), how each number is shown (money stored as cents is
   shown in dollars), and its tests. You are recorded as the person who
   certified it: the signed-in person with a host, otherwise your git
   `user.name`.
-- Tables your model already binds say **Modeled**, and tables Guided Setup's
+- Tables your model already uses say **Modeled**, and tables Guided Setup's
   **Draft my models** drafted say **Drafted — review to use**, with
   **Review in Modeling**. Both are listed first, and **Check and add** reuses
   the row key the model checked, so the check counts one column.
 - On a saved query, **⋯ → Make row-level** is only needed for row-safe
   measures (see [Make a saved query row-level](#make-a-saved-query-row-level)).
 
-Click **Open canvas with N sources**, or **Skip, start empty**. You can add
-more later: on the canvas, the **Data** tab's source menu lists **This App's
+Click **Open Studio with N sources**, or **Skip, start empty**. You can add
+more later: in the Studio, the **Data** tab's source menu lists **This App's
 data** first, then **+ Add data…**.
 
 ## 3. Add tiles
@@ -249,7 +249,7 @@ Other ways to add content:
   **Remove Summary** takes it off again.
 - **Ask AI** in the top bar to change the page with AI.
 
-An AI proposal on the canvas opens **Review the tiles**. When it uses data the
+An AI proposal on the page opens **Review the tiles**. When it uses data the
 App does not have yet, the review lists it as **New data for this App:** with
 its type, trust and **Why:** line. **Apply N changes** adds that data to
 **This App's data**, the same way **Add to App** does.
@@ -345,13 +345,13 @@ Customers*. The search ignores spaces, underscores and capitals, so
 *customer name* finds **Customer Name**. A tile that can't take the field says
 why in plain words, for example *Monthly Revenue has no Customer Name field.*
 
-A new filter starts linked to the tiles of the Dataset you picked the field
-from. When other Datasets in the App have an approved field with the same
-name and kind, **Also filter these tiles?** lists each as *Dataset · field*,
+A new filter starts linked to the tiles of the data you picked the field
+from. When other data in the App have an approved field with the same
+name and kind, **Also filter these tiles?** lists each as *data · field*,
 unchecked. Check one to link its tiles too; nothing is linked by name on its
 own.
 
-A Dataset that reaches the field through a join (see [Fields from related
+Data that reaches the field through a join (see [Fields from related
 tables](#fields-from-related-tables)) is offered the same way, with the join
 named: a **Customer Name** filter lists the Orders trend as *Orders · via
 Customer*, and its tile row says *From Orders · via Customer*. Once checked,
@@ -366,7 +366,7 @@ A tile you add after a filter exists is not linked to it either. When it
 could take the filter (it has the field, or reaches it through a join), the
 new tile says **Customer Name filter can apply to this tile** with
 **Apply** and **Not now**. Apply links that one tile; until then it shows
-everything. In the field list, a Dataset's own main date comes first (for
+everything. In the field list, the data's own main date comes first (for
 Orders, **Ordered At**), and a count such as *3 compatible (2 through a
 join)* says when a field reaches tiles only through a join (a customer's
 **First Ordered At** reaching the Orders tiles).
@@ -399,9 +399,9 @@ not saved for readers.
 
 | Tile | How the filter applies |
 | --- | --- |
-| Dataset | A condition on the Dataset field the filter is mapped to, also a field of a related table (the tile then joins that table). |
+| Table | A condition on the field the filter is mapped to, also a field of a related table (the tile then joins that table). |
 | Metrics | A condition on a dimension of the metric's model, also when the tile doesn't group by it (a KPI). Text search works with the DQL native compiler; with MetricFlow the tile shows **Not filtered by**. |
-| Saved query (fields) | A condition on the saved query's result column the filter is mapped to, like a Dataset field. Click-to-filter works the same way. |
+| Saved query (fields) | A condition on the saved query's result column the filter is mapped to, like a table field. Click-to-filter works the same way. |
 | Saved query (as it is) | A parameter with the filter's name (`region`, or `period_start` / `period_end` for a range), otherwise a condition on the result column the filter is linked to. |
 | Draft (needs review) | The same as a Saved query tile shown as it is. Its evidence lists the filters that applied and the ones that didn't. |
 | Text | Never filtered. |

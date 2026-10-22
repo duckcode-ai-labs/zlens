@@ -258,7 +258,7 @@ export function AppShell() {
                 },
                 validation: {
                   valid: false,
-                  diagnostics: [{ severity: 'warning', message: 'Opened block without studio metadata. Save once to normalize it.' }],
+                  diagnostics: [{ severity: 'warning', message: 'Opened saved query without studio metadata. Save once to normalize it.' }],
                   semanticRefs: { metrics: [], dimensions: [], segments: [] },
                 },
               },

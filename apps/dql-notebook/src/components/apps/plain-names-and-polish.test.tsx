@@ -73,7 +73,7 @@ describe('display names, never internal IDs (B7)', () => {
     expect(revenue.reason).toBe('Monthly Revenue has no Customer Name field.');
     const spend = mappings.find((mapping) => mapping.tileId === 'spend')!;
     const markup = renderToStaticMarkup(<FilterTileChoice mapping={spend} applies onChoose={() => undefined} />);
-    expect(markup).toContain('From Customers · Dataset field');
+    expect(markup).toContain('From Customers · field');
     expect(markup).not.toContain('8f7fac5d');
     expect(renderToStaticMarkup(<FilterTileChoice mapping={revenue} applies={false} onChoose={() => undefined} />)).not.toContain('88e1');
   });

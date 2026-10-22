@@ -196,14 +196,14 @@ describe('a block certified through the product is the answer Ask gives first', 
     expect(Date.now() - started).toBeLessThan(5_000);
     expect(provider.calls).toBe(0);
     expect(trust).toBe('blocked');
-    expect(answer).toMatch(/The block "Eligible Top Players With Player ID" was not used: it is marked certified but still carries the review-required tag/);
-    expect(answer).toMatch(/Certify it again in Block Studio/);
+    expect(answer).toMatch(/The saved query "Eligible Top Players With Player ID" was not used: it is marked certified but still carries the review-required tag/);
+    expect(answer).toMatch(/Certify it again in Saved queries/);
   }, 60_000);
 
   it('a draft named as a block says it is a draft; a question that merely equals a draft title is not refused', () => {
     const projectRoot = project();
     const manifest = buildManifest({ projectRoot });
-    expect(namedBlockNotServed(NAMED, manifest)).toMatch(/is a draft, not certified, and Ask only answers from certified blocks/);
+    expect(namedBlockNotServed(NAMED, manifest)).toMatch(/is a draft, not certified, and Ask only answers from certified saved queries/);
     expect(namedBlockNotServed('Who are the eligible top players with player id?', manifest)).toBeUndefined();
   });
 

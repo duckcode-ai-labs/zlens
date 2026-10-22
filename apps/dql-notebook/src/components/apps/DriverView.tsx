@@ -135,7 +135,7 @@ export function DriverPanel({
         )}
         <footer>
           {footer}
-          <small>Every number here comes from governed comparisons on this tile’s Dataset, with the page’s filters. No AI was used.</small>
+          <small>Every number here comes from governed comparisons on this tile’s data, with the page’s filters. No AI was used.</small>
         </footer>
       </div>
     </div>

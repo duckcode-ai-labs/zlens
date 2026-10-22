@@ -91,7 +91,7 @@ export async function runVerify(
 function changedCertifiedBlocks(manifest: DQLManifest): string[] {
   return Object.values(manifest.blocks)
     .filter((block) => block.certificationSourceChanged)
-    .map((block) => `${block.filePath}: ${changedSinceCertifiedMessage(block.name, null)} Certify it again (Block Studio's Re-certify).`);
+    .map((block) => `${block.filePath}: ${changedSinceCertifiedMessage(block.name, null)} Certify it again (Re-certify in Saved queries).`);
 }
 
 function diffManifest(a: DQLManifest, b: DQLManifest): string[] {

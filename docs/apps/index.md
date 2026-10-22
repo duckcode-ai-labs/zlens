@@ -1,6 +1,6 @@
 # Read an App
 
-An App is a set of dashboard and report pages built from blocks. Every tile
+An App is a set of dashboard and report pages built from saved queries. Every tile
 says how far to trust it, and you can ask questions about what the page
 shows.
 
@@ -65,26 +65,32 @@ last refreshed and which tiles need review; ids are under
 
 ## Words used in App Studio
 
-App Studio uses one set of words for data and trust:
+App Studio uses one small set of words:
 
 | Word | Means |
 |---|---|
-| **Data** | The data an App uses: tables, saved queries and Metrics, chosen from one list on **Data for this App** or with **+ Add data…**. Everything you add has fields. |
+| **App** | A set of dashboard and report pages you publish together. |
+| **Page** | One dashboard or report inside an App. A reader switches pages with **Pages**. |
+| **Tile** | One KPI, chart, table or text box on a page. |
+| **Data** | What an App reads, chosen from one list on **Data for this App** or with **+ Add data…**. Each item says where it comes from: **table**, **saved query** or **Metrics**. |
 | **Field** | A measure to add up or count, or a dimension or time to group by. You build tiles by picking fields. |
-| **Table** | A table in your database. It becomes a Dataset after ZLens checks it once (**Check and add**). |
-| **Saved query** | A block. Its result's columns are its fields, with no review step: grouped by its own columns its values show as they are, otherwise numbers add up (**Sum**) and averages are never added up. |
-| **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and writes a row-level definition, for row-safe measures such as distinct counts. |
-| **Dataset** | Data with a row-level definition: a checked table, or a saved query made row-level. |
-| **Related table** | A table a Dataset's rows point to through a checked many-to-one join (each order has one customer). Its fields show under the Dataset as **Orders → Customer**, and totals stay the same. |
+| **Filter** | A control above the tiles that narrows what the page shows, such as a region or a date range. |
+| **Domain** | A Domain groups data by business area, like Sales or Finance. It filters the lists; it is not a kind of data. |
+| **Table** | A table in your database. ZLens checks it once (**Check and add**) before you use it. |
+| **Saved query** | A reusable, reviewed query. Files and the CLI call it a block (a `.dql` block file). Its result's columns are its fields, with no review step: grouped by its own columns its values show as they are, otherwise numbers add up (**Sum**) and averages are never added up. |
+| **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and records it, for row-safe measures such as distinct counts. |
+| **Related table** | A table that checked data points to through a many-to-one join (each order has one customer). Its fields show under the data as **Orders → Customer**, and totals stay the same. |
 | **Metrics** | Measures and dimensions from a semantic model. |
-| **Domain** | A label that filters the lists, such as `finance`. It is not a kind of data. |
 | **Certified** | Someone owns the data and checked it. ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. |
 | **Certified by** | The person who certified the data: the signed-in person with a host, otherwise your git `user.name`. Older data shows **Certified · date** or **Certified**. |
 | **Unpublished changes** | Changes to an App that only you can see until you publish. |
 | **Summary** | A short auto-written paragraph about a page's numbers. Off unless the author adds it. |
 | **Technical details** | Ids, hashes and fingerprints, kept out of the way under a toggle that starts closed. |
 | **Needs review** | Nobody has certified the data yet. A page that uses it cannot publish. |
-| **Tile** | One KPI, chart, table or text box on a page. |
+
+Files, the API and the reference docs use a few more technical words: a
+checked table or a row-level saved query is a *Dataset* there, and a saved
+query is a *block*.
 
 ## Change a filter
 
@@ -123,5 +129,5 @@ A tile's **⋯** menu has **How this was computed**, **View DQL**,
 ## See where the numbers come from
 
 Click **Lineage** in the dashboard toolbar, or the lineage icon in the App
-header, to see the page's sources: tiles, blocks, dbt models and tables. See
+header, to see the page's sources: tiles, saved queries, dbt models and tables. See
 [Lineage](../lineage/index.md).

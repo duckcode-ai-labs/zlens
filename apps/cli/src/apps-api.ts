@@ -2910,13 +2910,13 @@ function buildAppProposal(plan: AppPlan): AppBuildProposal {
     const question = cleanString(report.question) || report.title;
     if (!question || seenGap.has(question.toLowerCase())) continue;
     seenGap.add(question.toLowerCase());
-    gaps.push({ id: report.id, question, reason: report.description || 'No certified block covers this question.' });
+    gaps.push({ id: report.id, question, reason: report.description || 'No certified saved query covers this question.' });
   }
   for (const evidence of plan.missingEvidence) {
     const question = cleanString(evidence);
     if (!question || seenGap.has(question.toLowerCase())) continue;
     seenGap.add(question.toLowerCase());
-    gaps.push({ id: `gap_${gaps.length + 1}`, question, reason: 'No certified block covers this question.' });
+    gaps.push({ id: `gap_${gaps.length + 1}`, question, reason: 'No certified saved query covers this question.' });
   }
   const metrics = Array.from(new Set(plan.requirements.flatMap((requirement) => requirement.measures)));
   const dimensions = Array.from(new Set(plan.requirements.flatMap((requirement) => requirement.dimensions)));
@@ -2926,7 +2926,7 @@ function buildAppProposal(plan: AppPlan): AppBuildProposal {
     clarifications.push({
       id: 'metric',
       question: 'Which governed business metric should lead this App?',
-      choices: ['Choose a certified block', 'Choose a semantic metric', 'Describe the calculation as review-required analysis'],
+      choices: ['Choose a certified saved query', 'Choose a semantic metric', 'Describe the calculation as review-required analysis'],
       required: true,
     });
   }
@@ -5111,7 +5111,7 @@ async function routeAppAskQuestion(
         trustState: 'draft_ready',
         reviewStatus: 'draft_ready',
         citations,
-        followUps: ['Add analysis context', 'Check proof', 'Create block draft'],
+        followUps: ['Add analysis context', 'Check proof', 'Create saved query draft'],
         decision,
         proposal: investigationProposal,
       };
@@ -5150,7 +5150,7 @@ async function routeAppAskQuestion(
         trustState: 'draft_ready',
         reviewStatus: 'draft_ready',
         citations,
-        followUps: ['Review the memo', 'Add reviewed result to this app', 'Create a draft DQL block'],
+        followUps: ['Review the memo', 'Add reviewed result to this app', 'Create a draft saved query'],
         decision,
         investigation: investigationForReader(investigation, withheld),
       };
@@ -5178,7 +5178,7 @@ async function routeAppAskQuestion(
       trustState: tile?.trustState === 'certified' || tile?.display?.trustState === 'certified' ? 'certified' : 'review_required',
       reviewStatus: tile?.reviewStatus === 'certified' || tile?.display?.reviewStatus === 'certified' ? 'certified' : 'review_required',
       citations,
-      followUps: ['Explain the visible result', 'Investigate drivers', 'Create block draft from this result'],
+      followUps: ['Explain the visible result', 'Investigate drivers', 'Create saved query draft from this result'],
       decision: buildAppAskDecision('certified_answer', { question, blockId, selected, appName: loaded.app.name }),
     };
   };
@@ -5249,8 +5249,8 @@ function buildAppAskDecision(
   if (route === 'generated_answer') {
     return {
       mode: 'answer',
-      reason: 'Answered by routing the question through the governed answer loop (best-matching certified block, or review-required generated SQL).',
-      nextAction: 'Review the result; promote to a certified block when it should be reused.',
+      reason: 'Answered by routing the question through the governed answer loop (best-matching certified saved query, or review-required generated SQL).',
+      nextAction: 'Review the result; promote to a certified saved query when it should be reused.',
       requiresContext: false,
       usesCertifiedResult: false,
       confidence: 0.7,
@@ -5271,7 +5271,7 @@ function buildAppAskDecision(
     return {
       mode: 'app_change',
       reason: 'The question asks to change presentation or layout, not business logic.',
-      nextAction: 'Review the proposed app change in Build mode and keep certified block logic unchanged.',
+      nextAction: 'Review the proposed app change in Build mode and keep certified saved query logic unchanged.',
       requiresContext: false,
       usesCertifiedResult: Boolean(input.blockId || input.selected),
       confidence: 0.78,
@@ -5403,7 +5403,7 @@ function mapGovernedToAppAsk(
       ? [`Open the "${draft.name}" draft`, 'Review its join and grain', 'Certify it to make it governed']
       : noAnswer
         ? ['Name the metric and grain', 'Pick a certified tile', 'Start driver analysis']
-        : ['Investigate drivers', 'Break this down further', 'Create a draft DQL block'],
+        : ['Investigate drivers', 'Break this down further', 'Create a draft saved query'],
     decision: buildAppAskDecision(route, { question: input.question, blockId: input.blockId, appName: input.appName }),
   };
 }
@@ -5504,7 +5504,7 @@ function buildCertifiedAppAnswer(input: {
     ? `${label ? `${label} is the leading visible row and ` : 'The current visible result '}shows ${formatMetricValue(currentValue)} for ${formatBusinessColumn(metricName)}${baselineValue !== null ? ` versus ${formatMetricValue(baselineValue)} for the next comparison` : ''}${deltaValue !== null ? `, a gap of ${formatMetricValue(deltaValue)}` : ''}.`
     : rows.length > 0
       ? `The certified result is loaded with ${rows.length} sampled row${rows.length === 1 ? '' : 's'} across ${columns.length} field${columns.length === 1 ? '' : 's'}.`
-      : 'The certified block is selected, but this request did not include result rows for a numeric summary.';
+      : 'The certified saved query is selected, but this request did not include result rows for a numeric summary.';
   const rowDetails = firstRow && columns.length
     ? columns
       .slice(0, 5)
@@ -5513,14 +5513,14 @@ function buildCertifiedAppAnswer(input: {
     : '';
   const nextStep = /\bwhy|driver|change|changed|compare|segment|drill|root cause|because\b/i.test(input.question)
     ? 'This question asks for explanation beyond the current certified result. Use the copilot analysis flow with the exact comparison, timeframe, and segment so ZLens can create review-required analysis.'
-    : 'Use deeper analysis only when you need a new grain, driver breakdown, segment comparison, or reusable block that this certified tile does not already cover.';
+    : 'Use deeper analysis only when you need a new grain, driver breakdown, segment comparison, or reusable saved query that this certified tile does not already cover.';
 
   return [
     `## Answer`,
     `For **${resultTitle}**${filterSummary ? ` with ${filterSummary}` : ''}, ${currentLine}`,
     rowDetails ? `Visible row detail: ${rowDetails}.` : '',
     `## Trusted source`,
-    `This answer is grounded in certified DQL block **${input.blockId}**. The app can present this result directly; new SQL or new business logic still needs review before promotion.`,
+    `This answer is grounded in certified saved query **${input.blockId}**. The app can present this result directly; new SQL or new business logic still needs review before promotion.`,
     `## Next step`,
     nextStep,
   ].filter(Boolean).join('\n\n');
@@ -5601,7 +5601,7 @@ export function recommendDashboardTile(
     })),
     ...(block ? [{
       source: `block:${block.name}`,
-      reason: block.status === 'certified' ? 'Certified block can back this app tile.' : 'Block is not certified; keep review-required.',
+      reason: block.status === 'certified' ? 'Certified saved query can back this app tile.' : 'Saved query is not certified; keep review-required.',
       kind: 'block',
       path: block.path,
       trustState: block.status === 'certified' ? 'certified' as const : 'review_required' as const,
@@ -5913,28 +5913,28 @@ function appPublicationReadiness(
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_not_certified',
-            message: `${dashboard.id}/${item.i} uses retired block ${block.name}${replacement ? `, replaced by ${replacement.name}` : ''}; it no longer resolves to a certified block.`,
+            message: `${dashboard.id}/${item.i} uses retired saved query ${block.name}${replacement ? `, replaced by ${replacement.name}` : ''}; it no longer resolves to a certified saved query.`,
           });
         } else if (!block || block.status !== 'certified') {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_not_certified',
-            message: `${dashboard.id}/${item.i} no longer resolves to a certified block.`,
+            message: `${dashboard.id}/${item.i} no longer resolves to a certified saved query.`,
           });
         } else if (!boundRevision) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_source_unversioned',
-            message: `${dashboard.id}/${item.i} has no bound source revision; refresh the certified block before publication.`,
+            message: `${dashboard.id}/${item.i} has no bound source revision; refresh the certified saved query before publication.`,
           });
         } else if (boundRevision !== block.fingerprint) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_source_changed',
-            message: `${dashboard.id}/${item.i} changed after it was selected; review the current certified block before publication.`,
+            message: `${dashboard.id}/${item.i} changed after it was selected; review the current certified saved query before publication.`,
           });
         }
       }
@@ -5943,7 +5943,7 @@ function appPublicationReadiness(
           dashboardId: dashboard.id,
           tileId: item.i,
           code: 'exploratory_source',
-          message: `${dashboard.id}/${item.i} references app-scoped exploratory DQL; promote it to governed semantic logic or a certified block first.`,
+          message: `${dashboard.id}/${item.i} references app-scoped exploratory DQL; promote it to governed semantic logic or a certified saved query first.`,
         });
       }
       if (item.semantic) {
@@ -7807,7 +7807,7 @@ export function addAskResultToAppBuildDraft(
   if (requestedBlockId) {
     const block = collectBlockCandidates(projectRoot).find((candidate) => candidate.status === 'certified'
       && (candidate.id === requestedBlockId || candidate.name === requestedBlockId || candidate.path === requestedBlockId));
-    if (!block) throw new Error(`Certified block "${requestedBlockId}" is no longer available.`);
+    if (!block) throw new Error(`Certified saved query "${requestedBlockId}" is no longer available.`);
     const sourceId = `block:${block.id}`;
     operations.push({
       type: 'upsert_source',
@@ -8370,7 +8370,7 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
       if (source.kind === 'block' || source.kind === 'certified_block') {
         const block = blocks.find((candidate) => candidate.path === source.executionRef || candidate.path === source.sourceRef);
         if (!block || block.status !== 'certified' || block.fingerprint !== source.sourceRevision) {
-          errors.push(`${page.id}/${tile.i} does not resolve to its current certified Dataset block.`);
+          errors.push(`${page.id}/${tile.i} does not resolve to its current certified saved query.`);
         }
       } else if (source.kind === 'governed_semantic' || source.kind === 'semantic_query') {
         if (dataset.kind !== 'semantic' || Object.keys(source.capabilities?.metricCapabilities ?? {}).length === 0) {
@@ -8758,8 +8758,8 @@ function appBuildBlockedMessage(validation: unknown, plan: Record<string, unknow
   const warnings = appBuildWarnings(validation, plan).slice(0, 4);
   const reviewTasks = reviewTasksFromPlan(plan).slice(0, 4);
   return [
-    'No certified DQL blocks matched strongly enough to create a stakeholder app.',
-    'ZLens did not write an empty dashboard. Create or certify reusable blocks first, or select certified blocks explicitly.',
+    'No certified saved queries matched strongly enough to create a stakeholder app.',
+    'ZLens did not write an empty dashboard. Create or certify reusable saved queries first, or select certified saved queries explicitly.',
     warnings.length ? `Missing proof: ${warnings.join(' | ')}` : '',
     reviewTasks.length ? `Next review tasks: ${reviewTasks.join(' | ')}` : '',
   ].filter(Boolean).join(' ');
@@ -9219,10 +9219,10 @@ export function createAppPackage(
     .map((blockId) => blocks.find((block) => block.id === blockId || block.name === blockId))
     .filter((block): block is BlockCandidate => Boolean(block));
   const missingBlocks = selectedIds.filter((blockId) => !selectedBlocks.some((block) => block.id === blockId || block.name === blockId));
-  if (missingBlocks.length) return { ok: false, error: `Unknown block selection: ${missingBlocks.join(', ')}` };
+  if (missingBlocks.length) return { ok: false, error: `Unknown saved query selection: ${missingBlocks.join(', ')}` };
   const uncertifiedBlocks = selectedBlocks.filter((block) => block.status !== 'certified');
   if (uncertifiedBlocks.length) {
-    return { ok: false, error: `Manual App creation accepts certified blocks only: ${uncertifiedBlocks.map((block) => block.name).join(', ')}` };
+    return { ok: false, error: `Manual App creation accepts certified saved queries only: ${uncertifiedBlocks.map((block) => block.name).join(', ')}` };
   }
 
   const app: AppDocument = {
@@ -9347,9 +9347,9 @@ function createAppPackageViaBuildDraft(
     .map((id) => blocks.find((block) => block.id === id || block.name === id))
     .filter((block): block is BlockCandidate => Boolean(block));
   const missing = selectedIds.filter((id) => !selectedBlocks.some((block) => block.id === id || block.name === id));
-  if (missing.length) return { ok: false, error: `Unknown block selection: ${missing.join(', ')}` };
+  if (missing.length) return { ok: false, error: `Unknown saved query selection: ${missing.join(', ')}` };
   const uncertified = selectedBlocks.filter((block) => block.status !== 'certified');
-  if (uncertified.length) return { ok: false, error: `Manual App creation accepts certified blocks only: ${uncertified.map((block) => block.name).join(', ')}` };
+  if (uncertified.length) return { ok: false, error: `Manual App creation accepts certified saved queries only: ${uncertified.map((block) => block.name).join(', ')}` };
 
   const draft = createStoredAppBuildDraft(projectRoot, {
     appId,
@@ -9579,7 +9579,7 @@ function displayForAiPin(
     defaultVisualization: chartType,
     allowedVisualizations: allowedVisualizationsForComponent(component, chartType),
     layoutIntent: layoutIntentForComponent(component),
-    rationale: 'AI-generated analysis pin saved as governed presentation metadata; promote the SQL to a draft block before treating it as reusable logic.',
+    rationale: 'AI-generated analysis pin saved as governed presentation metadata; promote the SQL to a draft saved query before treating it as reusable logic.',
     trustState: certified ? 'certified' : 'review_required',
     reviewStatus: certified ? 'certified' : 'review_required',
   };
@@ -9803,7 +9803,7 @@ function recommendationRationale(
   prompt: string,
 ): string {
   if (block) {
-    return `Recommended ${component} with ${viz} from the block display hint and result shape. The certified block remains the business logic source.`;
+    return `Recommended ${component} with ${viz} from the saved query display hint and result shape. The certified saved query remains the business logic source.`;
   }
   if (columns.length > 0) {
     return `Recommended ${component} with ${viz} from ${columns.length} output column(s) and the app prompt. This is consumer-level metadata pending review.`;
@@ -11047,7 +11047,7 @@ function buildInvestigationTrust(
     sourceBlockId: investigation.sourceBlockId ?? selectedString(selected, 'blockId'),
     sourceTileId: investigation.sourceTileId ?? selectedString(selected, 'tileId'),
     caveats: [
-      'Analysis output is not certified until a reviewer promotes or certifies the generated block.',
+      'Analysis output is not certified until a reviewer promotes or certifies the generated saved query.',
       ...(sqlError ? [`SQL preview caveat: ${sqlError}`] : []),
     ],
   };
@@ -11098,7 +11098,7 @@ function buildInvestigationSummary(
     ? `${currentLabel} leads on ${metricName} with ${formatMetricValue(currentValue)}${baselineValue !== null ? ` versus ${formatMetricValue(baselineValue)} for ${baselineLabel}` : ''}${deltaValue !== null ? `, a gap of ${formatMetricValue(deltaValue)}` : ''}.`
     : '';
   if (intent === 'trust_gap_review') {
-    return `This tile can be used as certified context only where its source block and lineage are certified. ${valueSentence || 'The deeper answer is AI-generated analysis and needs review before leaders rely on it.'}`;
+    return `This tile can be used as certified context only where its source saved query and lineage are certified. ${valueSentence || 'The deeper answer is AI-generated analysis and needs review before leaders rely on it.'}`;
   }
   const driverTitle = cleanString(drivers[0]?.title);
   const driver = driverTitle && driverTitle !== currentLabel
@@ -11132,7 +11132,7 @@ function buildMissingBaselineSummary(
 
 function buildMissingBaselineRecommendation(selected: Record<string, unknown> | null): string {
   const target = selectedString(selected, 'title') ?? 'this tile';
-  return `Use ${target} as current-state evidence. To explain change, add or select a block with a time grain, snapshot date, or prior-period baseline, then rerun the analysis.`;
+  return `Use ${target} as current-state evidence. To explain change, add or select a saved query with a time grain, snapshot date, or prior-period baseline, then rerun the analysis.`;
 }
 
 function buildInvestigationRecommendation(
@@ -11145,10 +11145,10 @@ function buildInvestigationRecommendation(
   if (sqlErrorKind === 'ai_generation_timeout') return 'Use the certified app result as the current answer, then retry AI SQL generation or draft the scoped SQL manually before promotion.';
   if (sqlErrorKind === 'timeout') return 'Simplify the generated SQL or narrow the app filters, then refresh the bounded preview before promotion.';
   if (sqlErrorKind === 'safety') return 'Rewrite the SQL as a read-only SELECT/WITH query before any preview or promotion.';
-  if (sqlError) return 'Review the generated SQL or add a certified drilldown block before promoting this result.';
-  if (intent === 'trust_gap_review') return 'Use the certified tile for stakeholder reporting, and promote only the reviewed gaps into a draft block.';
+  if (sqlError) return 'Review the generated SQL or add a certified drilldown saved query before promoting this result.';
+  if (intent === 'trust_gap_review') return 'Use the certified tile for stakeholder reporting, and promote only the reviewed gaps into a draft saved query.';
   if (!selected) return 'Select a dashboard tile or provide SQL so ZLens can rank drivers with stronger evidence.';
-  return 'Review the driver evidence, then pin the useful answer or promote the SQL path into a draft DQL block.';
+  return 'Review the driver evidence, then pin the useful answer or promote the SQL path into a draft saved query.';
 }
 
 function buildInvestigationReportSections(input: {
@@ -11235,7 +11235,7 @@ function buildInvestigationReportSections(input: {
         id: 'review-boundary',
         kind: 'review_boundary',
         title: 'Review boundary',
-        body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable DQL block.',
+        body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable saved query.',
         tone: 'review',
       });
     }
@@ -11308,7 +11308,7 @@ function buildInvestigationReportSections(input: {
       id: 'review-boundary',
       kind: 'review_boundary',
       title: 'Review boundary',
-      body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable DQL block.',
+      body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable saved query.',
       tone: 'review',
     },
   );
@@ -11452,7 +11452,7 @@ function reportPreviewIssue(
   return {
     id: 'sql-repair-path',
     title: 'SQL repair path',
-    body: 'The generated SQL preview needs review before this analysis can be promoted. Open the trace appendix, edit the SQL against the selected block context, rerun the preview, then pin or draft reusable logic only after the row sample matches the business question.',
+    body: 'The generated SQL preview needs review before this analysis can be promoted. Open the trace appendix, edit the SQL against the selected saved query context, rerun the preview, then pin or draft reusable logic only after the row sample matches the business question.',
     tone: 'warning',
   };
 }
@@ -11498,7 +11498,7 @@ function reportInterpretationForIntent(input: {
     return 'This is a reusable-logic candidate. Preserve the business question, parameters, allowed filters, output grain, source proof, and review path before certification.';
   }
   if (input.actionMode === 'evidence' || input.intent === 'trust_gap_review') {
-    return `This validation is bounded to ${input.sourceName}. Treat the claim as trusted only after source block, lineage, filters, and preview rows are reviewed.`;
+    return `This validation is bounded to ${input.sourceName}. Treat the claim as trusted only after source saved query, lineage, filters, and preview rows are reviewed.`;
   }
   if (input.driver) {
     const driverSentence = `${input.driver} is the strongest visible driver${input.driverValue ? ` (${input.driverValue})` : ''}.`;
@@ -11511,10 +11511,10 @@ function reportInterpretationForIntent(input: {
     return `${driverSentence}${comparisonSentence}${reviewSentence}`;
   }
   if (input.intent === 'diagnose_change') {
-    return 'The analysis does not yet have a comparable baseline or ranked drivers. Add a time grain, prior-period block, or segment field before treating the change explanation as complete.';
+    return 'The analysis does not yet have a comparable baseline or ranked drivers. Add a time grain, prior-period saved query, or segment field before treating the change explanation as complete.';
   }
   if (input.intent === 'segment_compare') {
-    return 'The analysis does not yet have a clear segment grouping. Add a segment field or certified breakdown block before using this as a stakeholder segment comparison.';
+    return 'The analysis does not yet have a clear segment grouping. Add a segment field or certified breakdown saved query before using this as a stakeholder segment comparison.';
   }
   if (input.intent === 'entity_drilldown') {
     return 'The analysis does not yet have a stable entity identifier. Add the entity key and output grain before using this as a stakeholder drilldown.';

@@ -1,6 +1,6 @@
 export const APP_STUDIO_AI_ACTIVITY_LABELS = [
   'Understanding your decision',
-  'Finding certified Datasets, Metrics and saved queries',
+  'Finding certified tables, Metrics and saved queries',
   'Checking trust and capabilities',
   'Preparing source review',
 ] as const;

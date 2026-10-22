@@ -68,7 +68,7 @@ export function BlockReplacementLink({
               {replacementName}
             </button>
           ) : (
-            <span style={{ fontWeight: 600, color: t.textPrimary }} title={replacementPath ? undefined : 'This block was not found in the project'}>
+            <span style={{ fontWeight: 600, color: t.textPrimary }} title={replacementPath ? undefined : 'This saved query was not found in the project'}>
               {replacementName}
             </span>
           )}

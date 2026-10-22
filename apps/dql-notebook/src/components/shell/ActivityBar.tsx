@@ -195,7 +195,7 @@ export function ActivityBar() {
       label: 'Build',
       items: [
         { key: 'files', title: 'Notebooks', icon: <FileText size={16} strokeWidth={1.75} />, active: state.sidebarPanel === 'files' && state.sidebarOpen },
-        { key: 'block_library', title: 'Blocks', icon: <BlockIcon size={16} />, active: state.sidebarPanel === 'block_library' && state.sidebarOpen },
+        { key: 'block_library', title: 'Saved queries', icon: <BlockIcon size={16} />, active: state.sidebarPanel === 'block_library' && state.sidebarOpen },
         { key: 'lineage', title: 'Lineage', icon: <LineageNodeIcon size={16} />, active: state.mainView === 'lineage' || state.mainView === 'lineage_detail' },
       ],
     },

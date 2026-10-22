@@ -244,7 +244,7 @@ describe('AI Data step model (design D3, AI path)', () => {
     const ordersId = orderLinesDataset.sourceId!;
     const model = appStudioAiDataModel(proposal, summary, new Set([ordersId]), [orderLinesDataset]);
     expect(model.picked.map((pick) => [pick.label, pick.meta, pick.rationale, pick.tileTitles])).toEqual([
-      ['Order Lines', 'Dataset · Certified · Commerce', 'Order lines carries revenue by order date.', ['Revenue trend']],
+      ['Order Lines', 'Table · Certified · Commerce', 'Order lines carries revenue by order date.', ['Revenue trend']],
     ]);
     expect(model.suggestions.map((pick) => [pick.label, pick.meta])).toEqual([['Margin', 'Metrics · Certified']]);
     expect(model.warnings).toEqual(['Revenue by channel was not added because no Dataset has a channel field.']);

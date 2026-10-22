@@ -197,7 +197,7 @@ function blocksConflict(a: ManifestBlock, b: ManifestBlock): { concept: string; 
   if (rulesDiverge) reasonParts.push('business rules differ');
   return {
     concept,
-    reason: `Both certified blocks claim "${concept}" but ${reasonParts.join(' and ')}.`,
+    reason: `Both certified saved queries claim "${concept}" but ${reasonParts.join(' and ')}.`,
   };
 }
 
@@ -259,7 +259,7 @@ export function detectTrustConflicts(
         kind: 'conflict',
         filePath: a.filePath,
         severity: 'warning',
-        message: `Conflicting certified blocks "${a.name}" and "${b.name}": ${hit.reason}`,
+        message: `Conflicting certified saved queries "${a.name}" and "${b.name}": ${hit.reason}`,
         conflict: detail,
       });
     }

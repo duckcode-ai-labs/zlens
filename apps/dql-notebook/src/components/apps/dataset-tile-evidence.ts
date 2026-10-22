@@ -46,7 +46,7 @@ export function datasetTileNotices(tile: DashboardRunTile | undefined, options: 
         kind: 'adapted',
         label: adaptation.kind === 'aggregate_time_rollup'
           ? 'Rolled up over time'
-          : adaptation.kind === 'saved_query_rollup' ? 'Rolled up from a saved query' : 'Rolled up above Dataset grain',
+          : adaptation.kind === 'saved_query_rollup' ? 'Rolled up from a saved query' : 'Rolled up above the data’s grain',
         detail: adaptation.message,
       });
     }
@@ -113,8 +113,8 @@ function parameterRows(evidence: DashboardDatasetParameterEvidence[] | undefined
 function provenanceRows(provenance: DashboardDatasetExecutionProvenance | undefined): DatasetEvidenceRow[] {
   if (!provenance) return [];
   const rows: DatasetEvidenceRow[] = [
-    { label: 'Runtime', value: provenance.kind === 'semantic_runtime' ? 'Semantic Dataset execution' : 'Block Dataset execution' },
-    { label: 'Dataset source', value: `${provenance.sourceId} · ${provenance.sourceRevision}` },
+    { label: 'Runtime', value: provenance.kind === 'semantic_runtime' ? 'Metrics run' : 'Saved query run' },
+    { label: 'Data source', value: `${provenance.sourceId} · ${provenance.sourceRevision}` },
     { label: 'Contract', value: provenance.contractFingerprint },
     { label: 'Query', value: provenance.queryFingerprint },
     { label: 'Filters', value: provenance.filterFingerprint },
@@ -133,7 +133,7 @@ function receiptPresentation(receipt: unknown): DatasetTileEvidencePresentation[
     return {
       kind: 'provider_receipt_unavailable',
       rows: [],
-      notice: 'No provider execution receipt was returned for this block Dataset run. Server execution provenance is shown instead.',
+      notice: 'No provider execution receipt was returned for this saved query run. Server execution provenance is shown instead.',
     };
   }
   const record = receipt as Record<string, unknown>;
@@ -265,7 +265,7 @@ export function presentDatasetTileEvidence(tile: DashboardRunTile): DatasetTileE
     : undefined;
   return {
     authoredQuerySpec,
-    authoredQuerySpecUnavailable: 'The server did not return a redacted authored Dataset query specification for this result.',
+    authoredQuerySpecUnavailable: 'The server did not return a redacted authored field query specification for this result.',
     executedSql,
     executedSqlUnavailable: 'Provider SQL was unavailable for this executed result. The provider returned no inspectable SQL; execution provenance is shown instead.',
     parameterEvidence: parameterRows(tile.dataset.parameterEvidence),

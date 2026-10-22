@@ -453,7 +453,7 @@ export function AgentAnswerCard({
     { id: 'dql', label: 'DQL', visible: Boolean(dqlArtifact) },
     { id: 'visual', label: compact ? 'Chart' : 'Visualization', visible: hasChart },
     { id: 'data', label: 'Data', visible: Boolean(result) },
-    { id: 'sql', label: 'SQL / Block', visible: showSql && hasSqlPanel },
+    { id: 'sql', label: 'SQL / Saved query', visible: showSql && hasSqlPanel },
     { id: 'lineage', label: compact ? 'Trace' : 'Lineage', visible: hasEvidence },
     { id: 'context', label: compact ? 'Context' : 'Business Context', visible: hasEvidence },
     { id: 'review', label: compact ? 'Trust' : 'Review', visible: hasEvidence || Boolean(answer.citations?.length) },
@@ -701,9 +701,9 @@ export function resolveAgentOutcome(
     const block = context.blockName ?? answer.sourceCertifiedBlock ?? answer.block?.name;
     return {
       kind: 'reuse_certified_block',
-      label: 'Reuse certified block',
-      detail: block ? `Existing DQL block ${block} answers this request.` : 'A certified DQL artifact answers this request.',
-      nextAction: 'Use the certified block instead of creating duplicate SQL.',
+      label: 'Reuse certified saved query',
+      detail: block ? `Existing saved query ${block} answers this request.` : 'A certified DQL artifact answers this request.',
+      nextAction: 'Use the certified saved query instead of creating duplicate SQL.',
       tone: 'success',
     };
   }
@@ -743,7 +743,7 @@ export function resolveAgentOutcome(
         : 'Review-required SQL is available but still needs preview and DQL metadata review.',
       nextAction: context.result
         ? 'Create a DQL draft after reviewing parameters and lineage; insert SQL only as a notebook preview.'
-        : 'Run preview, inspect parameters, then create a draft block.',
+        : 'Run preview, inspect parameters, then create a draft saved query.',
       tone: 'warning',
     };
   }
@@ -1625,7 +1625,7 @@ function ReviewPanel({ answer, t }: { answer: AgentAnswerEnvelope; t: Theme }) {
         )}
         {answer.executionError && <KeyValue label="Execution Error" value={answer.executionError} t={t} />}
         {answer.kind !== 'certified' && (
-          <KeyValue label="Promotion Path" value="Create draft block, edit SQL, attach tests, then certify after analyst approval." t={t} />
+          <KeyValue label="Promotion Path" value="Create draft saved query, edit SQL, attach tests, then certify after analyst approval." t={t} />
         )}
       </div>
       {analysisPlan && (
@@ -1725,7 +1725,7 @@ function SqlPanel({ sql, blockPath, executionError, t }: { sql?: string; blockPa
     <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
       {blockPath && (
         <div style={{ fontSize: 12, color: t.textSecondary }}>
-          Source block: <span style={{ fontFamily: t.fontMono, color: t.textPrimary }}>{blockPath}</span>
+          Source saved query: <span style={{ fontFamily: t.fontMono, color: t.textPrimary }}>{blockPath}</span>
         </div>
       )}
       {executionError && (
@@ -2083,7 +2083,7 @@ function formatCascadeLane(value?: string): string | undefined {
 function formatCascadeTier(value?: string): string | undefined {
   switch (value) {
     case 'certified_block':
-      return 'Certified block';
+      return 'Certified saved query';
     case 'semantic_metric':
       return 'Semantic metric';
     case 'generated_sql':

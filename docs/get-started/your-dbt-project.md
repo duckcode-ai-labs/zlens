@@ -97,7 +97,7 @@ databases and for drivers.
 
 - `npm run doctor` passes its checks.
 - In **Notebooks**, the **Database** tab lists your dbt models.
-- In **Lineage**, picking a block shows the dbt models it reads.
+- In **Lineage**, picking a saved query shows the dbt models it reads.
 
 ## dbt semantic metrics
 

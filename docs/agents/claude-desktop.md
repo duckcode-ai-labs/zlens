@@ -2,7 +2,7 @@
 
 Connect the Claude Desktop app to your ZLens project. Claude Desktop cannot
 open your project's files, so everything it learns about the project comes
-through the ZLens tools: blocks, Apps, notebooks, lineage, the semantic layer
+through the ZLens tools: saved queries, Apps, notebooks, lineage, the semantic layer
 and the catalog.
 
 ## Before you start
@@ -64,11 +64,11 @@ always.
 ## What to expect
 
 - *"How has revenue changed by month?"*: Claude routes the question with
-  `ask_dql`, runs the certified block with `query_via_block`, and labels the
+  `ask_dql`, runs the certified saved query with `query_via_block`, and labels the
   answer **Certified**.
-- A question no certified block answers is run as one read-only query with
+- A question no certified saved query answers is run as one read-only query with
   `query_via_metadata` and labelled **AI-Generated (review required)**, with
-  the path of the draft block ZLens saved.
+  the path of the draft saved query ZLens kept.
 - *"What Apps do we have, and are their tiles certified?"* uses `list_apps`;
   *"What's in the welcome notebook?"* uses `list_notebooks`. These replace
   opening the files, which Claude Desktop cannot do.

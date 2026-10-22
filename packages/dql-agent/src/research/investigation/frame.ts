@@ -148,7 +148,7 @@ function measureForBlock(vocabulary: VocabularyIndex, measure: IntentMeasure): {
     const governed = pool[0]!;
     return {
       measure: { ...measure, ref: governed.ref },
-      note: `The reading named the certified block ${blockLabel}, which cannot be split into periods; Research measures ${entryLabel(vocabulary, governed.ref)}, the governed metric with the same definition.`,
+      note: `The reading named the certified saved query ${blockLabel}, which cannot be split into periods; Research measures ${entryLabel(vocabulary, governed.ref)}, the governed metric with the same definition.`,
     };
   }
   const relation = block.contract?.relations[0];
@@ -156,7 +156,7 @@ function measureForBlock(vocabulary: VocabularyIndex, measure: IntentMeasure): {
   return {
     measure: { ...measure, ref: `column:${relation}.${source.sourceColumn}`, aggregation: source.aggregate },
     lane: 'ai',
-    note: `The reading named the certified block ${blockLabel}, which cannot be split into periods, and no governed metric has its definition; Research measures the ${source.aggregate} of ${source.sourceColumn} with SQL the AI writes from the tables.`,
+    note: `The reading named the certified saved query ${blockLabel}, which cannot be split into periods, and no governed metric has its definition; Research measures the ${source.aggregate} of ${source.sourceColumn} with SQL the AI writes from the tables.`,
   };
 }
 

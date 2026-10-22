@@ -17,7 +17,7 @@ export const SECTIONS = [
   { title: 'Guided Setup', mins: '4 min' },
   { title: 'Run CLI commands', mins: '2 min' },
   { title: 'Build your first App', mins: '5 min' },
-  { title: 'Create your first block', mins: '5 min' },
+  { title: 'Create your first saved query', mins: '5 min' },
   { title: 'Ask your first question', mins: '3 min' },
   { title: 'Share your work', mins: '3 min' },
   { title: 'Troubleshooting', mins: '—' },
@@ -170,36 +170,36 @@ export function HelpDocsPage() {
             <p style={para}>Open <strong>Apps → Build new App</strong>, give it a name, and choose its data. The <strong>Data</strong> list shows every table, saved query and Metrics in one place. Tables setup drafted say <strong>Drafted — review to use</strong>; tables your model binds say <strong>Modeled</strong>.</p>
             <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <li>On a table, click <strong>Check and add</strong>. ZLens checks what one row is and which numbers add up, then adds it with fields.</li>
-              <li>On the canvas, click fields — a number and a date make a line chart, a number and a name make a bar chart, one number makes a KPI.</li>
+              <li>On the page, click fields — a number and a date make a line chart, a number and a name make a bar chart, one number makes a KPI.</li>
               <li>Add filters, then <strong>Publish</strong>. Readers see the numbers with who checked the data.</li>
             </ol>
           </div>
 
           <div ref={setSectionRef(4)} style={{ marginTop: 44 }}>
-            {h2('05', 'Create your first block')}
-            <p style={para}>Blocks are reusable, governed questions — &quot;total revenue&quot;, &quot;churn by tier&quot;. Answers route through certified blocks before anything is generated, so every block you certify makes the whole workspace more trustworthy.</p>
+            {h2('05', 'Create your first saved query')}
+            <p style={para}>Saved queries are reusable, governed questions — &quot;total revenue&quot;, &quot;churn by tier&quot;. Answers route through certified saved queries before anything is generated, so every saved query you certify makes the whole workspace more trustworthy.</p>
             <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <li>Open <strong>Blocks</strong> and hit <strong>+</strong>, or start from an Ask AI answer with <em>Save as block</em>.</li>
+              <li>Open <strong>Saved queries</strong> and hit <strong>+</strong>, or start from an Ask AI answer with <em>Save as saved query</em>.</li>
               <li>In the Visual Builder, pick measures and dimensions from the semantic picker — or paste raw SQL and convert it.</li>
-              <li>Add parameters (like <span style={inlineCode}>{'${region}'}</span>) so the block is reusable.</li>
+              <li>Add parameters (like <span style={inlineCode}>{'${region}'}</span>) so the saved query is reusable.</li>
               <li>Run it, check the result, and <strong>Save draft</strong>. Certification happens in review.</li>
             </ol>
           </div>
 
           <div ref={setSectionRef(5)} style={{ marginTop: 44 }}>
             {h2('06', 'Ask your first question')}
-            <p style={para}>Open <strong>Ask</strong> and type a business question. ZLens answers in a strict order — certified blocks first, semantic metrics next, generated SQL last — and labels every answer with how it was produced.</p>
+            <p style={para}>Open <strong>Ask</strong> and type a business question. ZLens answers in a strict order — certified saved queries first, semantic metrics next, generated SQL last — and labels every answer with how it was produced.</p>
             <div style={{ margin: '14px 0 0', border: '1px solid var(--border-subtle)', borderRadius: 10, background: t.cellBg, overflow: 'hidden' }}>
               <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', fontSize: 12.5 }}>
                 <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-1)', fontWeight: 650, color: 'var(--status-success)' }}>Certified</div>
-                <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', color: t.textSecondary }}>Answered from a certified block — instant and trusted.</div>
+                <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', color: t.textSecondary }}>Answered from a certified saved query — instant and trusted.</div>
                 <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-1)', fontWeight: 650, color: t.accent }}>Governed</div>
                 <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', color: t.textSecondary }}>Composed from semantic metrics and proven joins.</div>
                 <div style={{ padding: '9px 13px', background: 'var(--bg-1)', fontWeight: 650, color: 'var(--status-warning)' }}>AI-generated</div>
                 <div style={{ padding: '9px 13px', color: t.textSecondary }}>Fresh SQL grounded in your schema, verified, and clearly labeled.</div>
               </div>
             </div>
-            <p style={para}>Click any artifact chip in the chat to inspect the result, chart, DQL, SQL, and the full trust trail. Good answers deserve <em>Save as block</em> — that&apos;s how the certified layer grows.</p>
+            <p style={para}>Click any artifact chip in the chat to inspect the result, chart, DQL, SQL, and the full trust trail. Good answers deserve <em>Save as saved query</em> — that&apos;s how the certified layer grows.</p>
           </div>
 
           <div ref={setSectionRef(6)} style={{ marginTop: 44 }}>
@@ -214,7 +214,7 @@ export function HelpDocsPage() {
               {troubleCard('“dbt manifest not found”', <>Run <span style={inlineCode}>dbt parse</span> in the dbt project, then <span style={inlineCode}>zlens sync dbt</span> from its ZLens workspace. ZLens needs a compiled manifest to read lineage.</>)}
               {troubleCard('“zlens: command not found”', <>A project-local install uses <span style={inlineCode}>npm run ...</span> or <span style={inlineCode}>npm exec -- zlens ...</span>. Install the CLI globally only if you want bare <span style={inlineCode}>zlens ...</span> commands.</>)}
               {troubleCard('Connection test fails', <>Check <span style={inlineCode}>zlens doctor</span> and <strong>Settings → Database</strong>. A DuckDB file written by a newer DuckDB (2.x) cannot be opened yet; rebuild it with <span style={inlineCode}>pip install &apos;duckdb&lt;1.5&apos;</span>.</>)}
-              {troubleCard('AI answers feel wrong', <>Add a skill with your definitions (&quot;revenue = recognized, not bookings&quot;) and certify more blocks. Trust labels tell you which route produced each answer.</>)}
+              {troubleCard('AI answers feel wrong', <>Add a skill with your definitions (&quot;revenue = recognized, not bookings&quot;) and certify more saved queries. Trust labels tell you which route produced each answer.</>)}
             </div>
           </div>
 

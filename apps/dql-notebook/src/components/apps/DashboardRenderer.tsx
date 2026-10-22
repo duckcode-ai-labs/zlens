@@ -129,7 +129,7 @@ export function datasetTileVisualizationDisplayError(item: DashboardLayoutItem):
   const visualization = datasetTileVisualizationCompatibility(item.query, item.viz.type);
   return visualization.compatible
     ? undefined
-    : `${visualization.message} Open App Studio and switch to Table or change the Dataset field selection.`;
+    : `${visualization.message} Open App Studio and switch to Table or change the field selection.`;
 }
 
 /**
@@ -998,7 +998,7 @@ export function DashboardRenderer({
 
   const clearDatasetMarks = useCallback(() => {
     if (activeCrossFilters.length === 0) return;
-    setCrossFilterNotice('Selected result marks cleared. Refreshing mapped Dataset tiles…');
+    setCrossFilterNotice('Selected result marks cleared. Refreshing linked tiles…');
     setActiveHierarchyDrills([]);
     // With every selection cleared the whole page runs again, so its summary returns.
     setActiveCrossFilters(() => {
@@ -1014,7 +1014,7 @@ export function DashboardRenderer({
       pendingAffectedTileIdsRef.current = next.length ? datasetAffectedTileIds(dashboard, current) : null;
       return next;
     });
-    setCrossFilterNotice(`${field} result mark cleared. Refreshing mapped Dataset tiles…`);
+    setCrossFilterNotice(`${field} result mark cleared. Refreshing linked tiles…`);
   }, [dashboard]);
 
   const applyDatasetHierarchyDrill = useCallback((
@@ -1243,7 +1243,7 @@ export function DashboardRenderer({
         )}
       </div>
       )}
-      {editable && <div style={dashboardEditHintStyle}>{editableCanvas ? 'Drag tiles, select a block for Copilot context, or use the tile controls for sizing and chart settings.' : `${breakpoint === 'medium' ? 'Tablet' : 'Mobile'} preview uses the saved responsive projection. Return to a wide canvas to rearrange tiles.`}</div>}
+      {editable && <div style={dashboardEditHintStyle}>{editableCanvas ? 'Drag tiles, select a saved query for Copilot context, or use the tile controls for sizing and chart settings.' : `${breakpoint === 'medium' ? 'Tablet' : 'Mobile'} preview uses the saved responsive projection. Return to a wide canvas to rearrange tiles.`}</div>}
 
       {activeCrossFilters.length > 0 ? (
         <div
@@ -1337,10 +1337,10 @@ export function DashboardRenderer({
           </div>
           <div style={{ maxWidth: 520, opacity: 0.68, lineHeight: 1.45 }}>
             {hiddenReviewTileCount > 0
-              ? 'Generated analysis and trust placeholders are hidden from the stakeholder view. Open Customize or Analysis to review them, then add certified blocks or pinned insights.'
+              ? 'Generated analysis and trust placeholders are hidden from the stakeholder view. Open Customize or Analysis to review them, then add certified saved queries or pinned insights.'
               : hiddenPresentationTileCount > 0
                 ? 'Static duplicate tiles are hidden from the stakeholder view because a filter-aware certified tile can answer the same question.'
-              : 'Add certified domain blocks, narrative text, or use the scoped AI drawer and pin an answer into this layout.'}
+              : 'Add certified saved queries from this domain, narrative text, or use the scoped AI drawer and pin an answer into this layout.'}
           </div>
           <div style={{ marginTop: 18, display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
             <AddTileMenu
@@ -1962,7 +1962,7 @@ function DashboardTile({
             if (blockId) onFocusBlock?.(blockId);
             if (blockId) onAskBlock?.(blockId, defaultTileCopilotQuestion(item.title ?? blockId));
           }}
-          title={canAskChart ? 'Ask about this current Dataset chart' : 'Open app Copilot for this tile'}
+          title={canAskChart ? 'Ask about this current chart' : 'Open app Copilot for this tile'}
         >
           <Sparkles size={11} strokeWidth={2} /> {canAskChart ? 'Ask about chart' : 'Ask AI'}
         </button>
@@ -2330,7 +2330,7 @@ export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number],
   // DISTINCT or a ratio does not, a Top-N result is not the whole, and a row
   // set may repeat a period per breakdown), so a percent would be made up.
   if (item?.query?.dimensions?.length) {
-    return `${label} reports ${metricLabel} at ${formattedTopValue} for this grouped Dataset result.`;
+    return `${label} reports ${metricLabel} at ${formattedTopValue}.`;
   }
   return `${label} leads ${metricLabel} at ${formattedTopValue}.`;
 }
@@ -2841,7 +2841,7 @@ export function TileBody({
   if (error && !tile) return <span>{error}</span>;
   if (!tile) return <span>No run result.</span>;
   if (tile.status === 'unauthorized') return <span>Not authorized.</span>;
-  if (tile.status === 'unresolved') return <span>{tile.error ?? 'Block reference unresolved.'}</span>;
+  if (tile.status === 'unresolved') return <span>{tile.error ?? 'Saved query reference unresolved.'}</span>;
   if (tile.status === 'error' && tile.error?.startsWith('APP_DATASETS_FEATURE_DISABLED')) {
     return <DatasetsDisabledTileNotice />;
   }
@@ -2878,7 +2878,7 @@ export function TileBody({
   const datasetVisualizationError = datasetTileVisualizationDisplayError(item);
   if (datasetVisualizationError) {
     return <div role="alert" style={{ display: 'grid', gap: 6, justifyItems: 'center', textAlign: 'center', padding: 8 }}>
-      <strong>Dataset visualization needs attention</strong>
+      <strong>Chart needs attention</strong>
       <span>{datasetVisualizationError}</span>
     </div>;
   }
@@ -2913,7 +2913,7 @@ export function TileBody({
   } else if (groupedDatasetKpi) {
     dataView = (
       <div style={{ width: '100%', alignSelf: 'stretch', display: 'grid', gap: 6 }}>
-        <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>This Dataset tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.</small>
+        <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>This tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.</small>
         <TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} />
       </div>
     );
@@ -3075,11 +3075,11 @@ export function TileEvidencePanel({
   const runEvidence = presentDashboardTileRunEvidence(tile);
   const canOpenNotebook = canOpenTileInNotebook(tile);
   const sourceLabel = artifact?.sourceKind === 'certified_block'
-    ? 'Certified block'
+    ? 'Certified saved query'
     : artifact?.sourceKind === 'semantic_query'
       ? 'Governed semantic query'
       : artifact?.sourceKind === 'dataset_query'
-        ? 'Governed Dataset query'
+        ? 'Governed field query'
       : artifact?.sourceKind === 'draft_analysis'
         ? 'App analysis'
         : artifact?.sourceKind === 'ai_pin'
@@ -3131,9 +3131,9 @@ export function TileEvidencePanel({
                 <details className="dql-technical-details">
                   <summary>Technical details</summary>
                   <div style={{ display: 'grid', gap: 12, marginTop: 8 }}>
-                    {tile.dataset?.sourceId ? <EvidenceRow label="Dataset source" value={`${tile.dataset.sourceId}${tile.dataset.sourceRevision ? ` · ${tile.dataset.sourceRevision}` : ''}`} /> : null}
-                    {tile.dataset?.queryFingerprint ? <EvidenceRow label="Dataset query" value={tile.dataset.queryFingerprint} /> : null}
-                    {tile.dataset?.filterFingerprint ? <EvidenceRow label="Dataset filters" value={tile.dataset.filterFingerprint} /> : null}
+                    {tile.dataset?.sourceId ? <EvidenceRow label="Data source" value={`${tile.dataset.sourceId}${tile.dataset.sourceRevision ? ` · ${tile.dataset.sourceRevision}` : ''}`} /> : null}
+                    {tile.dataset?.queryFingerprint ? <EvidenceRow label="Field query" value={tile.dataset.queryFingerprint} /> : null}
+                    {tile.dataset?.filterFingerprint ? <EvidenceRow label="Filters" value={tile.dataset.filterFingerprint} /> : null}
                     {tile.dataset?.executionFingerprint ? <EvidenceRow label="Execution" value={tile.dataset.executionFingerprint} /> : null}
                     {tile.dataset?.proofState ? <EvidenceRow label="Grain evidence" value={tile.dataset.proofState} /> : null}
                     {isDatasetArtifact && currentDatasetEvidence ? <>
@@ -3146,8 +3146,8 @@ export function TileEvidencePanel({
                   </div>
                 </details>
               ) : null}
-              {isDatasetArtifact && !currentDatasetEvidence ? <EvidenceRow label="Execution evidence" value="This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence." /> : null}
-              {isDatasetArtifact ? <EvidenceRow label="Notebook" value="Dataset queries cannot be opened in Notebook yet." /> : null}
+              {isDatasetArtifact && !currentDatasetEvidence ? <EvidenceRow label="Execution evidence" value="This result no longer matches the current data source or query. Run the dashboard again before inspecting execution evidence." /> : null}
+              {isDatasetArtifact ? <EvidenceRow label="Notebook" value="Field queries cannot be opened in Notebook yet." /> : null}
               {artifact?.explanation?.length ? (
                 <div>
                   <b>Execution</b>
@@ -3161,7 +3161,7 @@ export function TileEvidencePanel({
               {tile.repair ? <EvidenceRow label="Repair" value={tile.repair.message} /> : null}
               <div style={{ padding: 10, borderRadius: 8, background: 'var(--bg-2)', color: 'var(--text-secondary)' }}>
                 {isDatasetArtifact
-                  ? 'Parameter values are intentionally omitted here. Dataset execution evidence remains available in this App.'
+                  ? 'Parameter values are intentionally omitted here. Query run evidence remains available in this App.'
                   : 'Parameter values are intentionally omitted here. Open the editable Notebook cell to inspect or change the full execution contract.'}
               </div>
             </div>
@@ -3169,10 +3169,10 @@ export function TileEvidencePanel({
             <pre style={tileEvidenceCodeStyle}>
               {tab === 'dql'
                 ? isDatasetArtifact
-                  ? currentDatasetEvidence?.authoredQuerySpec ?? currentDatasetEvidence?.authoredQuerySpecUnavailable ?? 'This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence.'
+                  ? currentDatasetEvidence?.authoredQuerySpec ?? currentDatasetEvidence?.authoredQuerySpecUnavailable ?? 'This result no longer matches the current data source or query. Run the dashboard again before inspecting execution evidence.'
                   : artifact?.dql ?? 'This tile does not expose DQL source. Its governed semantic intent is composed into SQL at runtime.'
                 : isDatasetArtifact
-                  ? currentDatasetEvidence?.executedSql ?? currentDatasetEvidence?.executedSqlUnavailable ?? 'This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence.'
+                  ? currentDatasetEvidence?.executedSql ?? currentDatasetEvidence?.executedSqlUnavailable ?? 'This result no longer matches the current data source or query. Run the dashboard again before inspecting execution evidence.'
                   : artifact?.sql ?? 'Executed SQL is not available for this saved result.'}
             </pre>
           )}
@@ -3612,7 +3612,7 @@ function AddTileMenu({
             textAlign: 'left',
           }}
         >
-          <AddTileMenuItem title="Certified block" description="Chart, table, or KPI from this App domain" onClick={onCertifiedBlock} />
+          <AddTileMenuItem title="Certified saved query" description="Chart, table, or KPI from this App domain" onClick={onCertifiedBlock} />
           <AddTileMenuItem title="Text / summary" description="Narrative, notes, caveats, or CXO context" onClick={onText} />
           <AddTileMenuItem title="Section heading" description="Separate an App page into readable groups" onClick={onHeading} />
           <AddTileMenuItem title="Copilot insight" description="Open scoped AI, then pin the reviewed answer to this App" onClick={onAi} />
@@ -3950,20 +3950,20 @@ function BlockCatalogDialog({
     <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.36)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div style={{ width: 'min(860px, 94vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', background: 'var(--color-bg, #fff)', color: 'inherit', borderRadius: 8, overflow: 'hidden', boxShadow: '0 18px 60px rgba(0,0,0,0.35)' }}>
         <div style={{ padding: 14, borderBottom: '1px solid var(--border-color, rgba(0,0,0,0.1))', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <div style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>Add Certified Block</div>
+          <div style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>Add certified saved query</div>
           <button type="button" onClick={onClose} style={toolbarButtonStyle(false)}>Close</button>
         </div>
         <div style={{ padding: 14, borderBottom: '1px solid var(--border-color, rgba(0,0,0,0.08))' }}>
           <input
             value={search}
             onChange={(event) => onSearch(event.target.value)}
-            placeholder="Search domain blocks..."
+            placeholder="Search domain saved queries..."
             style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--border-color, rgba(0,0,0,0.12))', borderRadius: 6, padding: '8px 10px', background: 'var(--surface, transparent)', color: 'inherit' }}
           />
         </div>
         <div style={{ overflow: 'auto', padding: 12, display: 'grid', gap: 8 }}>
           {filtered.length === 0 ? (
-            <div style={{ padding: 18, fontSize: 12, opacity: 0.66 }}>No certified blocks match this App scope.</div>
+            <div style={{ padding: 18, fontSize: 12, opacity: 0.66 }}>No certified saved queries match this App scope.</div>
           ) : filtered.map((block) => (
             <button
               key={block.id}
@@ -3994,7 +3994,7 @@ function ScopedLineagePanel({ lineage }: { lineage: any | null }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
         <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', opacity: 0.62, marginBottom: 6 }}>App Lineage</div>
-        <div style={{ fontSize: 12, opacity: 0.72 }}>Terms and business views connect the App back to DQL blocks, dbt models, and source tables.</div>
+        <div style={{ fontSize: 12, opacity: 0.72 }}>Terms and business views connect the App back to saved queries, dbt models, and source tables.</div>
       </div>
       {breadcrumbs.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

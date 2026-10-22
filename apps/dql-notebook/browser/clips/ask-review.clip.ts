@@ -20,7 +20,7 @@ clip('ask-review', async ({ page, sample, director }) => {
   await director.point(label);
   await director.beat(1400);
   director.poster();
-  const saved = page.getByText(/Saved for review as a draft block/).first();
+  const saved = page.getByText(/Saved for review as a draft saved query/).first();
   await expect(saved).toBeVisible();
   await director.point(saved, { x: 120, y: 8 });
   await director.beat(1600);

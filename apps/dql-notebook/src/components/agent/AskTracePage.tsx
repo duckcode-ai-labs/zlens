@@ -494,7 +494,7 @@ export function incidentSummaryForTrace(trace: AskTraceDataV1): TraceIncidentSum
         ? 'The frozen certified plan could not reach a database connection.'
         : 'The frozen analytical plan could not reach a database connection.',
       why: certified
-        ? 'The certified plan was frozen, but no database connection was configured before ZLens could compile or execute its block.'
+        ? 'The certified plan was frozen, but no database connection was configured before ZLens could compile or execute its saved query.'
         : 'The selected plan was frozen, but no database connection was configured before ZLens could compile or execute it.',
       impact: certified
         ? 'No query or data result executed after the frozen certified plan.'
@@ -1347,7 +1347,7 @@ function providerSafeAction(value: unknown): string {
 
 function knownCoverageSource(value: unknown): string | undefined {
   const labels: Record<string, string> = {
-    certified: 'certified blocks', semantic: 'semantic models', dbt_manifest: 'dbt manifest', runtime_schema: 'runtime schema', vector: 'local vector index', graph: 'relationship graph', conversation: 'conversation context', business: 'business context', safe_value: 'safe value lookup', relational: 'governed relationships',
+    certified: 'certified saved queries', semantic: 'semantic models', dbt_manifest: 'dbt manifest', runtime_schema: 'runtime schema', vector: 'local vector index', graph: 'relationship graph', conversation: 'conversation context', business: 'business context', safe_value: 'safe value lookup', relational: 'governed relationships',
   };
   return typeof value === 'string' ? labels[value] : undefined;
 }

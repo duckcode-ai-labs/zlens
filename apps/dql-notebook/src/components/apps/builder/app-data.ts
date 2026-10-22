@@ -21,7 +21,10 @@ type DraftTile = AppStudioBuildDraft['pages'][number]['layout']['items'][number]
 /** Shown only when a project sets `apps.datasets: false`; field-based tiles are on by default. */
 export const FIELD_TILES_OFF_MESSAGE = 'Field-based tiles are turned off for this project (apps.datasets is false in dql.config.json).';
 
-export const TABLE_BECOMES_DATASET_HINT = 'A table becomes a Dataset after ZLens checks it once.';
+/** Said once, where Domain first appears (the Start form; a tooltip in Add data). */
+export const DOMAIN_EXPLANATION = 'A Domain groups data by business area, like Sales or Finance.';
+
+export const TABLE_BECOMES_DATASET_HINT = 'ZLens checks a table once before Apps use it.';
 
 /** What "Make row-level" is for, next to the action (design D1). */
 export const MAKE_ROW_LEVEL_HINT = 'Only needed for row-safe measures, like distinct counts or averages over rows. ZLens checks what one row is and may send the saved query back for review.';
@@ -31,12 +34,12 @@ export const SAVED_QUERY_FIELDS_NOTE = 'Fields from its result. Grouped by its o
 
 // ── One glossary (docs/apps/index.md "Words used in App Studio") ─────────────
 
-/** A Dataset has fields, Metrics come from a semantic model, a saved query is a plain block. */
-export function sourceCatalogKindLabel(source: Pick<AppBlockRecommendation, 'capabilities' | 'kind'>): 'Dataset' | 'Metrics' | 'Saved query' {
+/** A checked table has fields, Metrics come from a semantic model, a saved query is a plain block. Files and the API call a checked table a Dataset. */
+export function sourceCatalogKindLabel(source: Pick<AppBlockRecommendation, 'capabilities' | 'kind'>): 'Table' | 'Metrics' | 'Saved query' {
   if (source.capabilities?.dataset?.kind === 'semantic') return 'Metrics';
   // Fields read from a saved query's result keep it a saved query (design D1).
   if (source.capabilities?.dataset?.result) return 'Saved query';
-  if (source.capabilities?.dataset) return 'Dataset';
+  if (source.capabilities?.dataset) return 'Table';
   if (source.capabilities?.semanticModelId || source.kind === 'semantic') return 'Metrics';
   return 'Saved query';
 }
@@ -51,7 +54,7 @@ export function sourceKindLabel(
   if (kind === 'exploratory_sql') return 'Draft SQL';
   if (kind === 'governed_semantic' || kind === 'semantic_query') return 'Metrics';
   if (capabilities?.dataset?.kind === 'semantic' || capabilities?.semanticModelId) return 'Metrics';
-  if (capabilities?.dataset && !capabilities.dataset.result) return 'Dataset';
+  if (capabilities?.dataset && !capabilities.dataset.result) return 'Table';
   return 'Saved query';
 }
 
@@ -299,8 +302,8 @@ export function appDataItems(sources: readonly DraftSource[], known: readonly Ap
 }
 
 export function openCanvasLabel(count: number): string {
-  if (count === 0) return 'Open canvas';
-  return `Open canvas with ${count} ${count === 1 ? 'source' : 'sources'}`;
+  if (count === 0) return 'Open blank Studio';
+  return `Open Studio with ${count} ${count === 1 ? 'source' : 'sources'}`;
 }
 
 export type StudioStage = 'data' | 'canvas';

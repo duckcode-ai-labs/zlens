@@ -48,14 +48,14 @@ function formatMetadataValue(value: unknown): string | null {
 
 function contextForNode(node: LineageNode | null): string {
   if (!node) return 'Focused technical and business lineage for the selected item.';
-  if (node.type === 'term') return 'Business definition used by blocks, views, dashboards, and AI agents.';
-  if (node.type === 'business_view') return 'Business composition built from trusted terms, DQL blocks, and other business views.';
-  if (node.type === 'block') return 'Reusable DQL block with its technical inputs and business consumption paths.';
+  if (node.type === 'term') return 'Business definition used by saved queries, views, dashboards, and AI agents.';
+  if (node.type === 'business_view') return 'Business composition built from trusted terms, saved queries, and other business views.';
+  if (node.type === 'block') return 'Reusable saved query with its technical inputs and business consumption paths.';
   if (node.type === 'dbt_model' || node.type === 'dbt_source' || node.type === 'source_table') {
     return 'Technical data asset connected to semantic, business, and consumption lineage.';
   }
   if (node.type === 'dashboard' || node.type === 'notebook' || node.type === 'app' || node.type === 'chart') {
-    return 'Consumption surface showing which trusted blocks and business concepts feed the experience.';
+    return 'Consumption surface showing which trusted saved queries and business concepts feed the experience.';
   }
   return 'Focused technical and business lineage for the selected item.';
 }
@@ -381,7 +381,7 @@ function MetadataPanel({ node, t }: { node: LineageNode; t: Theme }) {
   add('Owner', node.owner, 'owner');
   add('Status', node.status, 'status');
   add('Term Type', metadata.termType, 'termType');
-  add('Block Type', metadata.blockType, 'blockType');
+  add('Saved query type', metadata.blockType, 'blockType');
   add('Materialized As', metadata.materializedAs, 'materializedAs');
   add('Identifiers', metadata.identifiers, 'identifiers');
   add('Synonyms', metadata.synonyms, 'synonyms');

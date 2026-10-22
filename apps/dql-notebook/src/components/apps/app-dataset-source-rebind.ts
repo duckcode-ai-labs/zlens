@@ -51,7 +51,7 @@ export function planDatasetSourceRebind(
 ): DatasetSourceRebindPlan {
   const sourceId = candidate?.sourceId ?? candidate?.id;
   if (!candidate || !sourceId) {
-    return { ok: false, code: 'SOURCE_UNAVAILABLE', error: 'This Dataset is not available in the current governed catalog. Keep the App binding pinned and reselect a compatible Dataset when it is available.' };
+    return { ok: false, code: 'SOURCE_UNAVAILABLE', error: 'This data is not available in the current governed catalog. Keep the App on its current data and choose compatible data when it is available.' };
   }
   const stored = draft.sources.find((source) => source.id === sourceId);
   const descriptor = candidate.capabilities?.dataset;
@@ -64,19 +64,19 @@ export function planDatasetSourceRebind(
     return {
       ok: false,
       code: 'SOURCE_INCOMPATIBLE',
-      error: `${candidate.name || sourceId} does not expose one complete current Dataset revision and contract. Keep the saved App binding pinned and reselect a compatible Dataset.`,
+      error: `${candidate.name || sourceId} does not expose one complete current data version and contract. Keep the App on its current data and choose compatible data.`,
     };
   }
   const references = referencedPages(draft, sourceId);
   if (references.length === 0) {
-    return { ok: false, code: 'NO_APP_BINDING', error: 'This current Dataset is not bound to a field-based tile in this local App.' };
+    return { ok: false, code: 'NO_APP_BINDING', error: 'This data is not used by a field-based tile in this App.' };
   }
   const reviewRequired = candidate.lifecycle !== 'certified' || candidate.trust !== 'certified';
   if (reviewRequired && draft.sourcePolicy !== 'include_review_required' && !options.enableReviewPreview) {
     return {
       ok: false,
       code: 'REVIEW_POLICY_REQUIRED',
-      error: `${candidate.name || sourceId} is review-required. Enable local review preview explicitly before refreshing this App binding; it will remain blocked from Project publication.`,
+      error: `${candidate.name || sourceId} is review-required. Enable local review preview explicitly before refreshing this data; it will remain blocked from Project publication.`,
     };
   }
   if (!candidate.eligibility?.localPreview && !reviewRequired) {
@@ -161,7 +161,7 @@ function referencedPages(draft: AppStudioBuildDraft, sourceId: string): DatasetP
 
 function validateRebindPage(page: DatasetPage, sourceId: string, descriptor: DatasetDescriptor): string | undefined {
   const bindings = page.datasets?.filter((binding) => binding.sourceId === sourceId) ?? [];
-  if (bindings.length === 0) return `Page ${page.metadata.title} has a Dataset tile for ${sourceId} without an exact Dataset binding.`;
+  if (bindings.length === 0) return `Page ${page.metadata.title} has a tile for ${sourceId} that is not linked to this data.`;
   const bindingIds = new Set(bindings.map((binding) => binding.id));
   const physical = (field: string) => {
     const resolved = datasetPhysicalField(descriptor, field);
@@ -170,7 +170,7 @@ function validateRebindPage(page: DatasetPage, sourceId: string, descriptor: Dat
   for (const tile of page.layout.items) {
     if (!tile.query || tile.sourceId !== sourceId) continue;
     const bound = bindings.some((binding) => binding.sourceRevision === tile.sourceRevision);
-    if (!bound) return `${tile.title || `${page.id}/${tile.i}`} is not pinned to an exact Dataset binding on this page.`;
+    if (!bound) return `${tile.title || `${page.id}/${tile.i}`} is not linked to this data on this page.`;
     const validation = validateTileQuery(descriptor, tile.query);
     if (validation.outcome === 'rejected') {
       return `${tile.title || `${page.id}/${tile.i}`} cannot be refreshed because its selected fields are no longer covered: ${validation.diagnostics.map((diagnostic) => diagnostic.message).join(' ')}`;
@@ -181,12 +181,12 @@ function validateRebindPage(page: DatasetPage, sourceId: string, descriptor: Dat
   for (const filter of page.filters ?? []) {
     for (const [bindingId, target] of Object.entries(filter.datasetBindings ?? {})) {
       if (!bindingIds.has(bindingId)) continue;
-      if (!physical(target.field)) return `Filter ${filter.label ?? filter.id} targets ${target.field}, which is not an approved physical field in the current Dataset.`;
+      if (!physical(target.field)) return `Filter ${filter.label ?? filter.id} targets ${target.field}, which is not an approved physical field in the current data.`;
     }
   }
   for (const mapping of page.interactions?.crossFilter?.mappings ?? []) {
     if (bindingIds.has(mapping.toDataset) && !physical(mapping.toField)) {
-      return `Cross-filter ${mapping.fromTileId} → ${mapping.toDataset} targets ${mapping.toField}, which is not an approved physical field in the current Dataset.`;
+      return `Cross-filter ${mapping.fromTileId} → ${mapping.toDataset} targets ${mapping.toField}, which is not an approved physical field in the current data.`;
     }
     const fromTile = page.layout.items.find((tile) => tile.i === mapping.fromTileId);
     if (fromTile?.query && fromTile.sourceId === sourceId) {
@@ -198,7 +198,7 @@ function validateRebindPage(page: DatasetPage, sourceId: string, descriptor: Dat
   const detail = page.interactions?.detail;
   if (detail && bindingIds.has(detail.dataset)) {
     const invalid = detail.columns.find((column) => !physical(column));
-    if (invalid) return `Detail navigation targets ${invalid}, which is not an approved physical field in the current Dataset.`;
+    if (invalid) return `Detail navigation targets ${invalid}, which is not an approved physical field in the current data.`;
   }
   return undefined;
 }

@@ -65,7 +65,7 @@ export function AiPinsPanel({ appDoc }: { appDoc: AppDocumentSummary | null }) {
 
 export function DraftsPanel({ appDoc }: { appDoc: AppDocumentSummary | null }) {
   const drafts = appDoc?.drafts ?? [];
-  if (!drafts.length) return <EmptyPanel title="No drafts." detail="Generated and promoted draft blocks will appear here for review." />;
+  if (!drafts.length) return <EmptyPanel title="No drafts." detail="Generated and promoted draft saved queries will appear here for review." />;
   return (
     <div className="dql-app-simple-list">
       {drafts.map((draft) => (

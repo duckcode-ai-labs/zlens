@@ -99,7 +99,7 @@ export function AskRunChecks({ checks, t }: { checks: RunCheck[]; t: Theme }): J
 /** What the answer read: tables, joins, metrics, filters and the rules applied. */
 export function AskRunDataUsed({ data, t }: { data: RunDataUsed; t: Theme }): JSX.Element {
   const sections: Array<[string, string[]]> = ([
-    ['Certified block', data.certifiedBlock ? [data.certifiedBlock] : []],
+    ['Certified saved query', data.certifiedBlock ? [data.certifiedBlock] : []],
     ['Metrics', data.metrics],
     ['Dimensions', data.dimensions],
     ['Tables', data.tables],

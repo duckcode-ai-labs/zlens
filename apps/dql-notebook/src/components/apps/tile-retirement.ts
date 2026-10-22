@@ -12,7 +12,7 @@ export function retiredTileNotice(tile: DashboardRunTile | undefined): { label: 
   if (!tile?.retirement) return undefined;
   const { replacedBy, deprecatedOn } = tile.retirement;
   const label = replacedBy ? `Retired — replaced by ${replacedBy}` : 'Retired';
-  const block = tile.blockId ? `${tile.blockId} was retired` : 'This block was retired';
-  const detail = `${block}${deprecatedOn ? ` on ${deprecatedOn}` : ''}. ${replacedBy ? `Rebind this tile to ${replacedBy} before you publish again.` : 'Rebind this tile to a certified block before you publish again.'}`;
+  const block = tile.blockId ? `${tile.blockId} was retired` : 'This saved query was retired';
+  const detail = `${block}${deprecatedOn ? ` on ${deprecatedOn}` : ''}. ${replacedBy ? `Point this tile at ${replacedBy} before you publish again.` : 'Point this tile at a certified saved query before you publish again.'}`;
   return { label, detail };
 }

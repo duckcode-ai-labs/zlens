@@ -6,12 +6,14 @@ models your database's own tables (see [No dbt?](no-dbt.md)). ZLens covers what 
 do with the data next: the queries, dashboards and AI answers. Everything is a file in your project, so it can be reviewed
 in git.
 
-## Block
+## Saved query
 
-A **block** is a named, reusable query saved as a `.dql` file. Besides the
-SQL (or a semantic metric query), it records an owner, a domain, a
-description, tests and a chart. Blocks are what ZLens reuses, reviews and
-cites.
+A **saved query** is a named, reusable query. On disk it is a saved query (a
+`.dql` block file). Besides the SQL (or a semantic metric query), it records an
+owner, a Domain, a description, tests and a chart. Saved queries are what ZLens
+reuses, reviews and cites.
+
+A Domain groups data by business area, like Sales or Finance.
 
 ```dql
 block "Revenue by Segment" {
@@ -35,19 +37,19 @@ GROUP BY 1
 
 ## Draft and certified
 
-Every block has a status. The two that matter most:
+Every saved query has a status. The two that matter most:
 
 - **Draft**: saved, but nobody has vouched for it yet.
-- **Certified**: a person checked it. Certifying runs the block and any tests
+- **Certified**: a person checked it. Certifying runs the saved query and any tests
   it declares (tests are optional), and records who certified it, when, and a
   fingerprint of the exact source.
 
-**Saving never certifies.** Saving a block, importing SQL, or keeping an AI
-answer always makes a draft. Only a person certifying it makes a block
-certified: **Certify** in Block Studio or on an imported draft, **Certify and
-use this data** for an App Dataset, or `zlens certify --from-draft`.
+**Saving never certifies.** Saving your work, importing SQL, or keeping an AI
+answer always makes a draft. Only a person certifying it makes a saved query
+certified: **Certify** in the saved query editor or on an imported draft, **Certify and
+use this data** for a table in an App, or `zlens certify --from-draft`.
 
-If a certified block's file is edited afterwards outside ZLens, its source no
+If a certified saved query's file is edited afterwards outside ZLens, its source no
 longer matches that fingerprint. ZLens then shows it as **RECERTIFY** and Ask
 stops treating it as certified until someone certifies it again.
 
@@ -59,7 +61,7 @@ Every answer and every App tile says how far to trust it:
 
 | Label | Means |
 |---|---|
-| **Certified** | It ran a certified block exactly as reviewed. |
+| **Certified** | It ran a certified saved query exactly as reviewed. |
 | **Governed** | It was built from semantic metrics and dimensions. |
 | **Needs review** / **AI-generated** | AI wrote the SQL. Check it before relying on it. |
 | A refusal | ZLens could not answer safely and says why, instead of guessing. |
@@ -70,8 +72,8 @@ See [Ask and trust](../ask/index.md).
 
 A **notebook** (`.dqlnb`) is a list of cells: SQL, DQL, notes and inputs. It
 is where you explore. Results are kept in a git-ignored `.run.json` file next
-to it, so they never end up in a commit. A useful cell becomes a block with
-**Save Block**. See [Notebooks](../notebooks/index.md).
+to it, so they never end up in a commit. A useful cell becomes a saved query with
+**Save as saved query**. See [Notebooks](../notebooks/index.md).
 
 ## Semantic layer
 
@@ -83,19 +85,19 @@ without writing joins. See [Semantic layer](../reference/semantic-layer.md).
 ## App
 
 An **App** is a set of dashboard and report pages for a decision or a team,
-built from blocks. Each tile shows its trust label, and readers can ask
+built from saved queries. Each tile shows its trust label, and readers can ask
 questions about the App. Published Apps live in `apps/<app-id>/`. See
 [Apps](../apps/index.md).
 
 ## Manifest
 
-`dql-manifest.json` is ZLens's compiled view of the project: blocks,
+`dql-manifest.json` is ZLens's compiled view of the project: saved queries,
 notebooks, Apps, metrics, the dbt models they read, and the links between
 them. `zlens compile` and `zlens sync dbt` write it.
 
 ## Lineage
 
-**Lineage** is the graph from source tables and dbt models through blocks to
+**Lineage** is the graph from source tables and dbt models through saved queries to
 the Apps that show them. It answers "where did this number come from?" and
 "what uses this model?". See [Lineage](../lineage/index.md).
 

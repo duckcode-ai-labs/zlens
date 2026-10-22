@@ -1,7 +1,7 @@
 # Codex
 
 Connect [Codex](https://developers.openai.com/codex) to your ZLens project so it
-answers data questions from certified blocks first and labels every answer the
+answers data questions from certified saved queries first and labels every answer the
 way Ask does.
 
 ## Before you start
@@ -70,20 +70,20 @@ so a tool that needs an approval fails there; keep `auto` for scripted runs.
 
 Ask a question, for example *"How has revenue changed by month?"*.
 
-- Codex calls `inspect_dql_project`, then `ask_dql`. When a certified block
+- Codex calls `inspect_dql_project`, then `ask_dql`. When a certified saved query
   answers the question, it runs it with `query_via_block` and labels the
-  answer **Certified**, citing the block.
-- For a question no certified block answers, for example *"Which store
+  answer **Certified**, citing the saved query.
+- For a question no certified saved query answers, for example *"Which store
   locations had the most revenue in 2025?"*, it calls
   `inspect_metadata_context` and runs one read-only query with
   `query_via_metadata`. The answer is labelled **AI-Generated (review
-  required)** and names the draft block ZLens saved.
+  required)** and names the draft saved query ZLens kept.
 - When the project cannot answer, Codex says what is missing, or asks you to
   pick a definition, instead of guessing.
 - Lineage (`lineage_impact`), joins (`resolve_analytical_path`,
   `explain_relationship_proof`), certification checks (`certify`), Apps
   (`list_apps`, `build_dql_app`) and notebooks (`list_notebooks`) work the
-  same way. Codex cannot certify; a person does, in Block Studio or with
+  same way. Codex cannot certify; a person does, in the saved query editor or with
   `zlens certify --from-draft`.
 
 `answer_question` (ZLens answers by itself, like the Ask page) works only when

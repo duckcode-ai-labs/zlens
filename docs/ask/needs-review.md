@@ -1,6 +1,6 @@
 # Answers that need review
 
-When no certified block or semantic metric answers a question, Ask can write
+When no certified saved query or semantic metric answers a question, Ask can write
 SQL from your tables with AI. That answer may well be right, but nobody has
 checked it yet, so ZLens labels it and keeps it as a draft for review.
 
@@ -16,10 +16,10 @@ in the sample project:
 2. The summary says where the answer came from, for example
    `Source: SQL written by AI from the schema (review before relying on it)`.
 3. The result card says `AI-generated`.
-4. Under the result, a line reads **Saved for review as a draft block (not
+4. Under the result, a line reads **Saved for review as a draft saved query (not
    certified):** and the draft's path, such as
    `domains/commerce/blocks/_drafts/many_orders_placed_each_store_location.dql`.
-5. **Open draft to review** opens that draft in Block Studio.
+5. **Open draft to review** opens that draft in the saved query editor.
 
 The draft is named after its file, here `many_orders_placed_each_store_location`.
 When every table the answer reads is listed in one Domain's **Source systems**
@@ -34,17 +34,17 @@ certify first.
 
 ## Review and certify the draft
 
-1. Click **Open draft to review**, or find it in **Blocks** in the **Drafts**
+1. Click **Open draft to review**, or find it in **Saved queries** in the **Drafts**
    folder.
 2. Check the SQL and click **Run** to look at the rows.
-3. Check the **Block name** and **Domain**, set an **Owner** and a clear
+3. Check the **Name** and **Domain**, set an **Owner** and a clear
    description. Add a test if you can.
 4. Click **Certify**. If the draft has no Domain yet and your project has
-   Domains, Block Studio asks for one first: a Domain, or **Global /
+   Domains, the saved query editor asks for one first: a Domain, or **Global /
    cross-domain** for an answer that spans Domains.
 
-When it passes, the block is **Certified** and is saved in its Domain under its
-name. A certified block is available to Apps because it is certified, so it
+When it passes, the saved query is **Certified** and is saved in its Domain under its
+name. A certified saved query is available to Apps because it is certified, so it
 carries no `app-source` tag. Ask uses it from then on: the
 same question now gets a **Certified answer**. See
 [Save and certify](../blocks/certify.md).
@@ -84,9 +84,9 @@ ZLens saves a review draft only when the answer actually ran and produced
 SQL. It does not save one for a refusal, a cancelled run, or a Research
 report. Evaluation runs (`zlens agent eval`) never write drafts.
 
-To keep an answer that was not saved, click **Save as block** on it.
-**Save as block** opens the **Save as Block** dialog; **Save draft block**
-saves a draft and opens it in Block Studio.
+To keep an answer that was not saved, click **Save as saved query** on it.
+**Save as saved query** opens the **Save as saved query** dialog; **Save draft saved query**
+saves a draft and opens it in the saved query editor.
 
 ## Other labels you may see
 

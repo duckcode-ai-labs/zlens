@@ -2314,7 +2314,7 @@ function AppWorkspaceSurface({
               </section>
             ) : null}
             {loading ? (
-              <EmptyPanel title="Loading app..." detail="Reading dashboard files and running local blocks." />
+              <EmptyPanel title="Loading app..." detail="Reading dashboard files and running local saved queries." />
             ) : section === 'dashboards' && dashboardLoadError && dashboardRefusal ? (
               <div role="alert" style={{ display: 'grid', justifyItems: 'start', gap: 10 }}>
                 <EmptyPanel title="You don't have access to this App" detail={dashboardLoadError} />
@@ -2500,7 +2500,7 @@ function AppWorkspaceTabs({
   onChange: (section: AppSection) => void;
 }) {
   const reportCount = appDoc?.investigations?.length ?? 0;
-  const appTab = { id: 'dashboards' as const, label: 'Canvas', count: dashboardCount, icon: <LayoutDashboard size={14} /> };
+  const appTab = { id: 'dashboards' as const, label: 'Pages', count: dashboardCount, icon: <LayoutDashboard size={14} /> };
   const contextItems: Array<{ id: AppSection; label: string; count?: number; icon: ReactNode }> = [
     { id: 'research', label: 'Analysis & evidence', count: reportCount, icon: <Search size={14} /> },
     { id: 'notebooks', label: 'Source notebooks', count: appDoc?.notebooks?.length ?? appDoc?.app.notebooks?.length ?? 0, icon: <BookOpenText size={14} /> },
@@ -2698,7 +2698,7 @@ function UnifiedAppAiPanel({
           examplePrompts={[
             { label: 'Explain this dashboard', prompt: 'Explain the most important business story in this dashboard and what action it suggests.' },
             { label: 'Find the main driver', prompt: 'What is the main driver behind the current result? Use the active app filters and governed evidence.' },
-            { label: 'Check this result', prompt: 'Validate the current result against its certified block, semantic definitions, and lineage.' },
+            { label: 'Check this result', prompt: 'Validate the current result against its certified saved query, semantic definitions, and lineage.' },
           ]}
         />
       </Suspense>
@@ -2916,9 +2916,9 @@ function buildAppBriefMarkdown(
     '',
     ...(dashboards.length ? dashboards.map((item) => `- ${item.title} (${item.itemCount} tiles)`) : ['- No dashboard pages found.']),
     '',
-    '## Governed Blocks',
+    '## Saved queries',
     '',
-    ...(blocks.length ? blocks.map((name) => `- ${name}`) : ['- No block-backed tiles found.']),
+    ...(blocks.length ? blocks.map((name) => `- ${name}`) : ['- No saved query-backed tiles found.']),
     '',
     '## Supporting Assets',
     '',
@@ -2979,7 +2979,7 @@ function AddPageDialog({
             <small>Personal App only · bounded preview · needs review</small>
           </button>
         ) : (
-          <small className="dql-app-page-source-policy">Shared-project pages use certified Datasets, Metrics and saved queries.</small>
+          <small className="dql-app-page-source-policy">Shared-project pages use certified tables, Metrics and saved queries.</small>
         )}
         {error ? <div className="dql-app-error">{error}</div> : null}
         <div>
@@ -3029,7 +3029,7 @@ export function DatasetChartAnswerPanel({
   return (
     <section
       aria-live="polite"
-      aria-label="Dataset chart answer"
+      aria-label="Chart answer"
       style={{
         marginTop: 12,
         border: '1px solid var(--border-default, var(--border-color, rgba(0,0,0,0.12)))',
@@ -3044,7 +3044,7 @@ export function DatasetChartAnswerPanel({
         <strong>About this chart</strong>
         <button type="button" className="dql-apps-btn dql-apps-btn-line" onClick={onClose}>Close</button>
       </div>
-      {answer.state === 'loading' ? <span>Checking the current Dataset result…</span> : null}
+      {answer.state === 'loading' ? <span>Checking the current result…</span> : null}
       {answer.state === 'error' ? <div role="alert">{answer.error}</div> : null}
       {answer.state === 'ready' && answer.answer ? (
         <>

@@ -9,7 +9,7 @@ import { fetchRuntime, readRuntimeJson, runtimeBaseUrl } from '../runtime-fetch.
 export const certifyInput = zodInputShapeForTool('certify');
 
 const NOTE =
-  'This is a check only: it changes no status and writes nothing. A person certifies in Block Studio (Certify) or with `zlens certify --from-draft <path>`.';
+  'This is a check only: it changes no status and writes nothing. A person certifies in Saved queries (Certify) or with `zlens certify --from-draft <path>`.';
 
 interface CertificationCheckPayload {
   ok?: boolean;

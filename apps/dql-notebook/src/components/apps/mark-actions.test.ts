@@ -128,7 +128,7 @@ describe('keep only and exclude on the tile’s own Dataset', () => {
     expect(kept.crossFilter?.exclude).toBeUndefined();
     expect(buildDatasetCrossFilter(page, byRegion, 'region', ['US'], { exclude: true }).crossFilter?.exclude).toBe(true);
     // A period is not a value: a date grain still needs the author's mapping.
-    expect(buildDatasetCrossFilter(page, trend, 'order_date_month', ['2026-02-01']).error).toContain('No explicit Dataset mapping');
+    expect(buildDatasetCrossFilter(page, trend, 'order_date_month', ['2026-02-01']).error).toContain('No filter link is set up');
   });
 
   it('reruns every tile on that Dataset, not tiles on other Datasets', () => {

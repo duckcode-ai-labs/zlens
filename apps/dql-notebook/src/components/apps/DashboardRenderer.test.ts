@@ -193,7 +193,7 @@ describe('App dashboard interaction contract', () => {
     expect(how).toContain('1 explicitly unmapped dashboard filter');
     expect(how).toContain('Period comparison');
     expect(how).toContain('2026-03-01 to before 2026-04-01');
-    expect(how).toContain('Dataset queries cannot be opened in Notebook yet.');
+    expect(how).toContain('Field queries cannot be opened in Notebook yet.');
     expect(how).not.toContain('Open in Notebook');
     // The same predicate guards the click handler, so direct callers cannot
     // turn a declarative Dataset TileQuery into a fake sql_block handoff.
@@ -258,7 +258,7 @@ describe('App dashboard interaction contract', () => {
       } as any,
       tab: 'how', onTab: () => undefined, onClose: () => undefined,
     }));
-    expect(semantic).toContain('Semantic Dataset execution');
+    expect(semantic).toContain('Metrics run');
     expect(semantic).toContain('native');
     expect(semantic).toContain('region (eq)');
   });
@@ -407,7 +407,7 @@ describe('App dashboard interaction contract', () => {
     } as any);
 
     expect(insight).toContain('60%');
-    expect(insight).toContain('grouped Dataset result');
+    expect(insight).toBe('Jan 2026 reports Margin Rate at 60%.');
     expect(insight).not.toContain('(55%)');
   });
 });

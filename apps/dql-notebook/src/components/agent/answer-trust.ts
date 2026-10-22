@@ -53,7 +53,7 @@ export function answerTrustHeading(run: RunTrust): string {
   if (run.trustState === 'certified') return 'Certified answer';
   if (source === 'app_view') return run.trustState === 'governed' ? 'Governed answer from this App' : 'Answer from this App · needs review';
   if (run.trustState === 'governed' || run.trustState === 'grounded') return 'Governed answer';
-  if (source === 'block_as_evidence') return 'Answer to review, from a certified block';
+  if (source === 'block_as_evidence') return 'Answer to review, from a certified saved query';
   if (source === 'governed_definitions') return 'Answer to review, from governed definitions';
   return 'AI-generated answer';
 }

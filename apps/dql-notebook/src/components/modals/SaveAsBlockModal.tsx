@@ -65,8 +65,8 @@ export function SaveAsBlockModal({
   const tagList = useMemo(() => tags.split(',').map((s) => s.trim()).filter(Boolean), [tags]);
 
   const ruleResults: { id: string; label: string; severity: 'error' | 'warning'; passed: boolean }[] = [
-    { id: 'has-name', label: 'Block has name', severity: 'error', passed: !!name.trim() },
-    { id: 'has-owner', label: 'Block has owner', severity: 'error', passed: !!owner.trim() },
+    { id: 'has-name', label: 'Saved query has name', severity: 'error', passed: !!name.trim() },
+    { id: 'has-owner', label: 'Saved query has owner', severity: 'error', passed: !!owner.trim() },
     { id: 'has-description', label: 'Description', severity: 'warning', passed: !!description.trim() },
     { id: 'has-domain', label: 'Domain', severity: 'warning', passed: !!domain.trim() },
     { id: 'has-tags', label: 'Has at least one tag', severity: 'warning', passed: tagList.length > 0 },
@@ -92,11 +92,11 @@ export function SaveAsBlockModal({
 
   const handleSave = async () => {
     if (hasErrors) {
-      setError('Enter the block name and owner before saving.');
+      setError('Enter the saved query name and owner before saving.');
       return;
     }
     if (!content.trim()) {
-      setError('Block content is required.');
+      setError('Saved query content is required.');
       return;
     }
 
@@ -200,7 +200,7 @@ export function SaveAsBlockModal({
           }}
         >
           <h2 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: t.textPrimary, fontFamily: t.font }}>
-            Save as Block
+            Save as saved query
           </h2>
           <button
             onClick={onClose}
@@ -214,7 +214,7 @@ export function SaveAsBlockModal({
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font }}>
-                Block Name <RequiredMark />
+                Name <RequiredMark />
               </label>
               <input ref={nameRef} value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
             </div>
@@ -269,7 +269,7 @@ export function SaveAsBlockModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 10 }}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 <label style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font }}>
-                  How should an AI describe this block?
+                  How should an AI describe this saved query?
                 </label>
                 <textarea
                   value={llmContext}
@@ -473,7 +473,7 @@ export function SaveAsBlockModal({
           <span style={{ fontSize: 11.5, color: t.textMuted, marginRight: 'auto', alignSelf: 'center' }}>
             {cell.datasetRefs?.length
               ? 'This analysis uses imported or staged data, so it will be saved as a review-required draft. Certification requires project-controlled, contracted, tested, reproducible sources.'
-              : 'Saved as a draft block that needs review. Saving never certifies: open it in Block Studio and click Certify when it is ready.'}
+              : 'Saved as a draft that needs review. Saving never certifies: open it in Saved queries and click Certify when it is ready.'}
           </span>
           <button
             onClick={onClose}
@@ -506,7 +506,7 @@ export function SaveAsBlockModal({
               opacity: saving || hasErrors ? 0.5 : 1,
             }}
           >
-            {saving ? 'Saving draft…' : 'Save draft block'}
+            {saving ? 'Saving draft…' : 'Save draft'}
           </button>
         </div>
       </div>

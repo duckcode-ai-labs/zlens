@@ -65,7 +65,7 @@ export function groupingIdentityGap(grouping: readonly string[], tables: readonl
   const key = identityKeyForLabels(grouping, relations);
   const groups = grouping.join(', ');
   const message = key
-    ? `Ask can't use this block as a certified answer: it groups by ${groups} only. Add ${key} (the key) to SELECT and GROUP BY.`
-    : `Ask can't use this block as a certified answer: it groups by ${groups} only, and two entities can share a name. Add the entity's identifier column to SELECT and GROUP BY.`;
+    ? `Ask can't use this saved query as a certified answer: it groups by ${groups} only. Add ${key} (the key) to SELECT and GROUP BY.`
+    : `Ask can't use this saved query as a certified answer: it groups by ${groups} only, and two entities can share a name. Add the entity's identifier column to SELECT and GROUP BY.`;
   return { labels: [...grouping], ...(key ? { key } : {}), message };
 }

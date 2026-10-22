@@ -208,7 +208,7 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
   const dataset = tile.dataset;
   if (dataset) {
     const outcome = dataset.validation?.outcome;
-    if (outcome === 'rejected') return trust('blocked', 'The Dataset contract rejected this query.');
+    if (outcome === 'rejected') return trust('blocked', 'The data’s checks rejected this query.');
     // A join nobody certified yet (drafted in setup) makes the tile Needs review, like other review data.
     if (dataset.trust === 'certified' && outcome !== 'needs_review' && dataset.joins?.some((join) => join.trust !== 'certified')) {
       return trust('review', 'It uses a join between tables that nobody has certified yet.');
@@ -217,20 +217,20 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
     if (dataset.trust === 'certified' && outcome !== 'needs_review' && calculated) {
       // Checked arithmetic over certified measures is governed, not certified:
       // nobody reviewed this formula. Promoting it into the Dataset certifies it.
-      return trust('governed', 'Calculated on a certified Dataset: checked arithmetic over its certified measures.');
+      return trust('governed', 'Calculated on certified data: checked arithmetic over its certified measures.');
     }
     if (dataset.trust === 'certified' && outcome !== 'needs_review') {
       return outcome === 'adapted'
-        ? certifiedTrust('Certified Dataset; the query was adapted within its contract.', tile.certification)
-        : certifiedTrust('Runs on a certified Dataset, within its contract.', tile.certification);
+        ? certifiedTrust('Certified data; the query was adapted within what it certifies.', tile.certification)
+        : certifiedTrust('Runs on certified data, within what it certifies.', tile.certification);
     }
     return trust('review', outcome === 'needs_review'
-      ? 'The query goes beyond what the Dataset certifies.'
-      : 'The Dataset is not certified yet.');
+      ? 'The query goes beyond what the data certifies.'
+      : 'This data is not certified yet.');
   }
 
   if (tile.certificationStatus === 'certified' || tile.artifact?.trustState === 'certified' || tile.trustState === 'certified') {
-    return certifiedTrust('Runs a certified block exactly as it was reviewed.', tile.certification);
+    return certifiedTrust('Runs a certified saved query exactly as it was reviewed.', tile.certification);
   }
   if (tile.tileType === 'semantic' || item.semantic || tile.artifact?.sourceKind === 'semantic_query') {
     return trust('governed', 'Metrics and dimensions come from the governed semantic model.');

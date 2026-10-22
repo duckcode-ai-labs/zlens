@@ -9,7 +9,7 @@ import { writeFieldDrag } from './ShelfEditor';
 import { appDataSameNameOrigins } from './app-data-names';
 import { SUMMARY_OPTION } from '../reader-page-structure';
 import { certifiedByLabel } from '../reader-trust';
-import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canMakeRowLevel, needsReview, sourceCatalogKindLabel, trustLabel } from './app-data';
+import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canMakeRowLevel, needsReview, sourceOriginLabel, trustLabel } from './app-data';
 
 export type DataPanelTarget =
   | { kind: 'none' }
@@ -95,7 +95,7 @@ export function DataPanel({
       className={`data-field ${on ? 'on' : ''}`}
       disabled={disabled || locked}
       aria-pressed={on}
-      title={locked ? 'Suggested field — it needs review in the Dataset before tiles can use it.' : options.review ? `${label} comes through a join nobody has certified yet: a tile that uses it needs review.` : on ? `Remove ${label}` : `Add ${label}, or drag it onto a shelf`}
+      title={locked ? 'Suggested field — it needs review in the data before tiles can use it.' : options.review ? `${label} comes through a join nobody has certified yet: a tile that uses it needs review.` : on ? `Remove ${label}` : `Add ${label}, or drag it onto a shelf`}
       onClick={() => onPickField(field)}
       draggable={!disabled && !locked}
       onDragStart={(event) => writeFieldDrag(event, field.kind === 'measure' ? { measure: field.name } : { dimension: field.name })}
@@ -115,7 +115,7 @@ export function DataPanel({
         <span className="dataset-icon"><TableGlyph /></span>
         <span className="dataset-text">
           <strong>{active ? humanize(active.name) : appData.length ? 'Choose your data' : 'No data yet'}{active && sameNames.get(active.id) ? <em className="same-name-origin"> · {sameNames.get(active.id)}</em> : null}</strong>
-          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceCatalogKindLabel(active)} · {activeCertified ? certifiedByLabel(active.certification) : trustLabel('review')}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
+          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceOriginLabel(active)} · {activeCertified ? certifiedByLabel(active.certification) : trustLabel('review')}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
         </span>
         <ChevronDown size={14} />
       </button>
@@ -130,13 +130,13 @@ export function DataPanel({
         {appData.map((item) => {
           const certified = !needsReview(item);
           return <button key={item.id} type="button" role="menuitemradio" aria-checked={item.id === active?.id} className={item.id === active?.id ? 'on' : ''} onClick={() => { onChoose(item); setPickerOpen(false); setSearch(''); }}>
-            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceCatalogKindLabel(item)} · {certified ? certifiedByLabel(item.certification) : trustLabel('review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
+            <span><strong>{humanize(item.name)}{sameNames.get(item.id) ? <em className="same-name-origin"> · {sameNames.get(item.id)}</em> : null}</strong><small>{sourceOriginLabel(item)} · {certified ? certifiedByLabel(item.certification) : trustLabel('review')}{item.domain && item.domain !== 'Unassigned' ? ` · ${humanize(item.domain)}` : ''}</small></span>
             {item.id === active?.id ? <Check size={13} /> : null}
           </button>;
         })}
         {!appData.length ? <small className="dataset-menu-empty">No data in this App yet.</small> : null}
         <hr />
-        <button type="button" role="menuitem" onClick={() => { setPickerOpen(false); onAddData(); }}><span><strong>+ Add data…</strong><small>Datasets, Metrics, saved queries and database tables</small></span></button>
+        <button type="button" role="menuitem" onClick={() => { setPickerOpen(false); onAddData(); }}><span><strong>+ Add data…</strong><small>Tables, Metrics and saved queries</small></span></button>
       </div> : null}
     </div>
 
@@ -178,8 +178,8 @@ export function DataPanel({
       {descriptor?.joinNotes?.length && !search ? <div className="field-help join-notes" role="note">{descriptor.joinNotes.map((note) => <small key={note}>{note}</small>)}</div> : null}
       {resultFields ? <small className="field-help">{SAVED_QUERY_FIELDS_NOTE}</small> : null}
       {active && (onAuthorDataset || onRefreshBinding) ? <div className="dataset-source-actions">
-        {onAuthorDataset ? <button type="button" className="link" disabled={disabled} onClick={() => onAuthorDataset(active)}><FileText size={12} /> Author Dataset definition</button> : null}
-        {onRefreshBinding ? <button type="button" className="link" disabled={disabled} onClick={() => onRefreshBinding(active)}><ShieldCheck size={12} /> Refresh this App binding</button> : null}
+        {onAuthorDataset ? <button type="button" className="link" disabled={disabled} onClick={() => onAuthorDataset(active)}><FileText size={12} /> Define fields</button> : null}
+        {onRefreshBinding ? <button type="button" className="link" disabled={disabled} onClick={() => onRefreshBinding(active)}><ShieldCheck size={12} /> Refresh this data</button> : null}
       </div> : null}
     </> : null}
 
@@ -202,7 +202,7 @@ export function DataPanel({
         : <div className="data-start">
           <Table2 size={20} aria-hidden="true" />
           <strong>This App has no data yet</strong>
-          <p>Add a Dataset, Metrics, a saved query or a database table. Then click its fields to build tiles.</p>
+          <p>Add a table, Metrics or a saved query. Then click its fields to build tiles.</p>
           <button type="button" className="primary" disabled={disabled} onClick={onAddData}><Plus size={13} /> Add data</button>
         </div>) : null}
 

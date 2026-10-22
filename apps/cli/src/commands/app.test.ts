@@ -190,7 +190,7 @@ describe('a tile bound to a retired block', () => {
     expect(result.blockers).toContainEqual(expect.objectContaining({
       code: 'block_not_certified',
       tileId: 'kpi',
-      message: 'overview/kpi uses retired block Claims Summary, replaced by Claims Dataset; it no longer resolves to a certified block.',
+      message: 'overview/kpi uses retired saved query Claims Summary, replaced by Claims Dataset; it no longer resolves to a certified saved query.',
     }));
   });
 });

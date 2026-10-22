@@ -107,7 +107,7 @@ const CASCADE_LANE_ORDER: CascadeLane[] = ['triage', 'certified', 'semantic', 'g
 
 const DEFAULT_LANE_LABELS: Record<CascadeLane, string> = {
   triage: 'Lane 0 triage checked request intent and ambiguity',
-  certified: 'Lane 1 checked certified DQL blocks and business context',
+  certified: 'Lane 1 checked certified saved queries and business context',
   semantic: 'Lane 2 checked semantic metrics and dimensions',
   generated: 'Lane 3 checked generated DQL artifact with SQL preview',
   refusal: 'Lane 4 checked honest refusal and redirect',

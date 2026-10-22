@@ -82,7 +82,7 @@ export function AiBuildDialog(): JSX.Element | null {
           </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 850, color: t.textPrimary, fontFamily: t.font }}>
-              {request.mode === 'edit' ? 'Ask AI to modify a block' : 'Ask AI to build a block'}
+              {request.mode === 'edit' ? 'Ask AI to modify a saved query' : 'Ask AI to build a saved query'}
             </div>
             <div style={{ fontSize: 11.5, color: t.textMuted, fontFamily: t.font, marginTop: 1 }}>
               {request.sourceLabel

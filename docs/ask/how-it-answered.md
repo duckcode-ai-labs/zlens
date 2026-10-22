@@ -8,11 +8,11 @@ passed.
 
 1. Under the answer, click **How it was answered**.
 2. The panel opens on **How it answered**. It starts with the outcome, such as
-   **Answered from a certified block.**, and a line like
+   **Answered from a certified saved query.**, and a line like
    `Worked for 52 s · 6 steps · 1 AI call`.
 3. Read the steps in order:
     - **Read the question**: how Ask understood it.
-    - **Certified blocks**: whether a certified block answers it.
+    - **Certified saved queries**: whether a certified saved query answers it.
     - **Semantic layer**: whether metrics and dimensions could answer it.
     - **Governed tables** and **AI wrote SQL**: used only when nothing more
       trusted could answer.
@@ -22,7 +22,7 @@ passed.
     Each step is marked done or skipped. Click a step to see its details, such
     as the AI calls and the SQL it wrote.
 4. Use the other tabs for the detail: **DQL**, **SQL**, **Data used** (the
-   certified block, metrics, dimensions, tables, joins and filters) and
+   certified saved query, metrics, dimensions, tables, joins and filters) and
    **Checks**.
 5. Click **Open full trace** for the complete record.
 

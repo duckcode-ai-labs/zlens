@@ -171,7 +171,7 @@ export function WelcomeScreen({ onOpenFile, onOpenResearchFile }: WelcomeScreenP
             </h1>
             <p style={{ margin: '8px 0 0', color: t.textSecondary, fontSize: 13, lineHeight: 1.55, maxWidth: 520 }}>
               Open a notebook to explore data — write SQL/DQL, chart the results, and
-              promote governed blocks. Create a new one to start a focused analysis.
+              save what is reusable as a saved query. Create a new one to start a focused analysis.
             </p>
           </div>
           <span
@@ -203,7 +203,7 @@ export function WelcomeScreen({ onOpenFile, onOpenResearchFile }: WelcomeScreenP
           )}
           {!readOnlyBlocks && (
             <ActionButton
-              label="New Block"
+              label="New saved query"
               Icon={Blocks}
               onClick={() => dispatch({ type: 'OPEN_NEW_BLOCK_MODAL' })}
               t={t}

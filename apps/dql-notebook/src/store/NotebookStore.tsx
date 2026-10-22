@@ -672,7 +672,7 @@ function notebookReducer(state: NotebookState, action: NotebookAction): Notebook
         blockStudioImportOpen: false,
         newBlockModalOpen: false,
         newBlockModalDefaultType: action.blockType ?? 'custom',
-        notebookTitle: 'Blocks',
+        notebookTitle: 'Saved queries',
       };
 
     case 'CLOSE_NEW_BLOCK_MODAL':

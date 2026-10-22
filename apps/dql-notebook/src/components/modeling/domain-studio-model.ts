@@ -36,7 +36,7 @@ export const DOMAIN_STUDIO_NAVIGATION: DomainStudioNavigationGroup[] = [
       { id: 'diagram', label: 'Map' },
       { id: 'terms', label: 'Terms & concepts' },
       { id: 'skills', label: 'Skills' },
-      { id: 'blocks', label: 'Blocks' },
+      { id: 'blocks', label: 'Saved queries' },
       { id: 'used_by', label: 'Used by' },
     ],
   },

@@ -750,7 +750,7 @@ describe('AskTracePage presentation model', () => {
       state: 'attention',
       spanId: 'e'.repeat(16),
       whatHappened: 'The frozen certified plan could not reach a database connection.',
-      why: 'The certified plan was frozen, but no database connection was configured before ZLens could compile or execute its block.',
+      why: 'The certified plan was frozen, but no database connection was configured before ZLens could compile or execute its saved query.',
       impact: 'No query or data result executed after the frozen certified plan.',
       howToFix: 'Open Connections, add or select a warehouse or local DuckDB/file connection, then retry the Ask. Recorded safe action: configure a database connection.',
     }));
@@ -813,7 +813,7 @@ describe('AskTracePage presentation model', () => {
       state: 'attention',
       spanId: coverageGap.spanId,
       whatHappened: 'The Ask flow stopped before it could freeze an executable analytical plan.',
-      why: expect.stringContaining('incomplete coverage from certified blocks, semantic models'),
+      why: expect.stringContaining('incomplete coverage from certified saved queries, semantic models'),
       howToFix: 'Refresh or restore the listed local sources, then retry the Ask.',
     });
   });

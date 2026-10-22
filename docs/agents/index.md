@@ -2,7 +2,7 @@
 
 ZLens includes an [MCP](https://modelcontextprotocol.io) server. Connect it
 to Claude Code, Codex, Cursor or Claude Desktop, and your agent answers data
-questions the way Ask does: from certified blocks first, with the same trust
+questions the way Ask does: from certified saved queries first, with the same trust
 labels, and with AI-written SQL clearly marked for review.
 
 {{ clip("mcp-connect") }}
@@ -101,16 +101,16 @@ works. `zlens mcp test` reports whether it is reachable at
 Ask your agent a data question, for example *"Who are our top customers by
 lifetime spend?"*
 
-- If a certified block answers it, the agent answers from it and the label is
+- If a certified saved query answers it, the agent answers from it and the label is
   **Certified**.
 - If not, ZLens writes SQL, runs it, labels the answer as needing review, and
-  saves a draft block for review, exactly as [Ask](../ask/needs-review.md) does.
+  saves a draft saved query for review, exactly as [Ask](../ask/needs-review.md) does.
 - If the project cannot answer safely, the agent is told to refuse rather than
   guess.
 
 The server tells the agent to report trust labels exactly as given and never
 upgrade them. The agent cannot certify anything: the `certify` tool only
-checks the rules. A person certifies in Block Studio or with
+checks the rules. A person certifies in the saved query editor or with
 `zlens certify --from-draft`.
 
 Your agent is the model here: it writes the SQL itself through `ask_dql` and

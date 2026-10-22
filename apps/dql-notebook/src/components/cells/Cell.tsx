@@ -232,7 +232,7 @@ const PLACEHOLDER_META: Partial<Record<string, PlaceholderMeta>> = {
   },
   writeback: {
     title: 'Writeback',
-    subtitle: 'Governed output sink — writes a dataframe back to your warehouse with block tests gating the commit. Lands in v0.11.',
+    subtitle: 'Governed output sink — writes a dataframe back to your warehouse with saved query tests gating the commit. Lands in v0.11.',
     color: '#d2a8ff',
     badge: 'v0.11',
   },
@@ -450,16 +450,16 @@ function BoundBlockParameterControls({
   return (
     <div style={{ padding: '8px 10px', borderBottom: `1px solid ${t.cellBorder}`, background: t.appBg }}>
       <div style={{ marginBottom: 6, fontSize: 10.5, fontWeight: 750, color: t.textSecondary }}>
-        Block inputs <span style={{ fontWeight: 400, color: t.textMuted }}>· defaults come from the block; notebook overrides stay here</span>
+        Inputs <span style={{ fontWeight: 400, color: t.textMuted }}>· defaults come from the saved query; notebook overrides stay here</span>
       </div>
       {loadError && (
         <div style={{ marginBottom: 6, fontSize: 10.5, color: t.error }}>
-          Could not load this block's parameter contract. The saved overrides were not changed.
+          Could not load this saved query's parameters. The saved overrides were not changed.
         </div>
       )}
       {staleOverrides.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 7, fontSize: 10.5, color: t.warning }}>
-          <span>Block definition changed. Unknown overrides: {staleOverrides.join(', ')}.</span>
+          <span>Saved query definition changed. Unknown overrides: {staleOverrides.join(', ')}.</span>
           <button
             type="button"
             onClick={() => onChange(Object.fromEntries(Object.entries(current).filter(([name]) => parameterNames.has(name))))}
@@ -548,8 +548,8 @@ function BlockBindingChip({
   const accent = isForked ? t.warning : t.success;
   const label = isForked ? 'FORKED' : 'BOUND';
   const helpText = isForked
-    ? 'Local edits have diverged from the block file — Revert to discard, or Save as Block to promote as a new version.'
-    : 'This cell mirrors the block file. Edit to fork locally.';
+    ? 'Local edits have diverged from the saved query file — Revert to discard, or Save as saved query to promote as a new version.'
+    : 'This cell mirrors the saved query file. Edit to fork locally.';
   return (
     <div
       title={helpText}
@@ -581,7 +581,7 @@ function BlockBindingChip({
       <span style={{ color: t.textSecondary }}>{binding.path}</span>
       {binding.version && <span style={{ color: t.textMuted }}>· v{binding.version}</span>}
       {!isForked && (
-        <span title="Bound cells track the block file — edits fork locally" style={{ color: t.textMuted }}>
+        <span title="Bound cells track the saved query file — edits fork locally" style={{ color: t.textMuted }}>
           🔒
         </span>
       )}
@@ -589,7 +589,7 @@ function BlockBindingChip({
       {isForked && (
         <button
           onClick={onRevert}
-          title="Discard local edits and restore the block file body"
+          title="Discard local edits and restore the saved query file body"
           style={binderBtnStyle(t, accent)}
         >
           Revert
@@ -598,7 +598,7 @@ function BlockBindingChip({
       {!isForked && (
         <button
           onClick={onCustomize}
-          title="Load the block source into this notebook and customize a local copy"
+          title="Load the saved query source into this notebook and customize a local copy"
           style={binderBtnStyle(t, accent)}
         >
           Customize copy
@@ -606,7 +606,7 @@ function BlockBindingChip({
       )}
       <button
         onClick={onUnbind}
-        title="Detach this cell from the block file"
+        title="Detach this cell from the saved query file"
         style={binderBtnStyle(t, t.btnBorder)}
       >
         Unbind
@@ -716,7 +716,7 @@ function BlockGovernanceBar({
         <input
           style={{ ...fieldStyle, flex: 1, minWidth: 120 }}
           value={fields.description}
-          placeholder="What this block measures"
+          placeholder="What this saved query measures"
           onChange={e => onChange(setBlockStringField(content, 'description', e.target.value))}
         />
       </div>
@@ -743,7 +743,7 @@ function RunningOutput({
   }, []);
   const seconds = elapsed < 1000 ? `${Math.max(1, Math.round(elapsed))}ms` : `${(elapsed / 1000).toFixed(1)}s`;
   const stage = cellType === 'dql'
-    ? elapsed < 1200 ? 'Preparing DQL block' : elapsed < 5000 ? 'Executing generated SQL' : 'Waiting for warehouse response'
+    ? elapsed < 1200 ? 'Preparing saved query' : elapsed < 5000 ? 'Executing generated SQL' : 'Waiting for warehouse response'
     : elapsed < 1200 ? 'Preparing SQL' : elapsed < 5000 ? 'Executing query' : 'Waiting for database response';
   return (
     <div
@@ -1731,7 +1731,7 @@ function CellComponentInner({ cell, index, onStartResearch, researchState }: Cel
               }}
             />
             <span
-              title={cell.type === 'dql' ? 'DQL cell — write a governed block (type, owner, description, tests) or an @block("…") reference' : cell.type === 'sql' ? 'SQL cell — write raw SQL, use @metric()/@dim() refs, reference other cells with {{name}}' : undefined}
+              title={cell.type === 'dql' ? 'DQL cell — write a governed saved query (type, owner, description, tests) or an @block("…") reference' : cell.type === 'sql' ? 'SQL cell — write raw SQL, use @metric()/@dim() refs, reference other cells with {{name}}' : undefined}
               style={{
                 fontSize: 11,
                 fontWeight: 700,
@@ -1883,11 +1883,11 @@ function CellComponentInner({ cell, index, onStartResearch, researchState }: Cel
             {cellHovered && canSaveAsBlock && (
               <button
                 type="button"
-                title="Save this cell as a reusable block"
+                title="Save this cell as a reusable saved query"
                 onClick={() => setSaveAsBlockOpen(true)}
                 style={cellHeaderTextButtonStyle(t)}
               >
-                Save Block
+                Save as saved query
               </button>
             )}
 
@@ -2104,11 +2104,11 @@ function CellComponentInner({ cell, index, onStartResearch, researchState }: Cel
               ) : (
                 <button
                   type="button"
-                  title="Save this governed DQL as a reusable block"
+                  title="Save this governed DQL as a reusable saved query"
                   onClick={(event) => { event.preventDefault(); event.stopPropagation(); setSaveAsBlockOpen(true); }}
                   style={{ marginLeft: 'auto', border: 'none', background: 'transparent', cursor: 'pointer', color: t.accent, fontFamily: t.font, fontSize: 10.5, fontWeight: 700, padding: '1px 4px' }}
                 >
-                  Save as DQL block
+                  Save as saved query
                 </button>
               )}
             </summary>
@@ -2146,7 +2146,7 @@ function CellComponentInner({ cell, index, onStartResearch, researchState }: Cel
           ) ? (
             <div style={{ borderTop: `1px solid ${t.cellBorder}`, padding: '5px 12px', background: `${t.warning}0A`, color: t.textMuted, font: `500 10.5px ${t.font}` }}>
               <strong style={{ color: t.textSecondary }}>Saved governed DQL.</strong>{' '}
-              Notebook edits are a draft for block review and recertification; they do not create Teach ZLens learning or overwrite the source automatically.
+              Notebook edits are a draft for review and recertification of the saved query; they do not create Teach ZLens learning or overwrite the source automatically.
             </div>
           ) : null
         )}
@@ -2644,7 +2644,7 @@ function DqlCellGuide({
       <span style={{ flex: "1 1 260px" }}>
         {holdsSql
           ? <>This is a <strong>DQL cell</strong>, and this looks like plain SQL. Switch to a SQL cell to run it as SQL.</>
-          : <>A <strong>DQL cell</strong> holds a block, a named reusable query: <code style={{ fontFamily: t.fontMono }}>{'block "Name" { query = """SELECT …""" }'}</code>. For plain SQL, use a SQL cell.</>}
+          : <>A <strong>DQL cell</strong> holds a block, the DQL form of a saved query: <code style={{ fontFamily: t.fontMono }}>{'block "Name" { query = """SELECT …""" }'}</code>. For plain SQL, use a SQL cell.</>}
       </span>
       <button type="button" onClick={onSwitchToSql} style={{ ...buttonStyle, ...(holdsSql ? { color: t.accent, borderColor: t.accent } : {}) }}>
         Switch to SQL cell
@@ -3032,7 +3032,7 @@ function TeachCorrectionBar({ cell, t }: { cell: Cell; t: Theme }) {
       return;
     }
     if (!teachScopeHasRecallAnchor(scope)) {
-      setError('Confirm at least one domain, metric, dbt model, business term, or block so this learning cannot become project-wide by accident.');
+      setError('Confirm at least one domain, metric, dbt model, business term, or saved query so this learning cannot become project-wide by accident.');
       setState('error');
       return;
     }
@@ -3254,7 +3254,7 @@ function TeachCorrectionBar({ cell, t }: { cell: Cell; t: Theme }) {
                 ['metric', 'Metric'],
                 ['dbtModel', 'dbt model'],
                 ['term', 'Business term'],
-                ['block', 'Block'],
+                ['block', 'Saved query'],
                 ['dialect', 'SQL dialect'],
               ] as Array<[keyof TeachCorrectionScope, string]>).map(([field, label]) => (
                 <label key={field} style={{ display: 'grid', gap: 3, color: t.textMuted, fontSize: 10 }}>
@@ -3291,7 +3291,7 @@ function TeachCorrectionBar({ cell, t }: { cell: Cell; t: Theme }) {
             <div style={{ color: t.textMuted }}>
               Will not apply when a confirmed scope value differs. Relations and columns are derived from the corrected SQL and current project snapshot, then used for ranking, drift checks, and review evidence.
             </div>
-            {!teachScopeHasRecallAnchor(scope) ? <div style={{ color: t.warning }}>Add at least one domain, metric, model, term, or block before saving.</div> : null}
+            {!teachScopeHasRecallAnchor(scope) ? <div style={{ color: t.warning }}>Add at least one domain, metric, model, term, or saved query before saving.</div> : null}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>

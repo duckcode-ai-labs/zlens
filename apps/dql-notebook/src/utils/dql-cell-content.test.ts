@@ -18,7 +18,7 @@ describe('dqlCellHoldsPlainSql', () => {
 
 describe('queryCellKindLabel', () => {
   it('labels a DQL cell as DQL and a SQL cell as SQL', () => {
-    expect(queryCellKindLabel({ type: 'dql', content: '' })).toBe('DQL block');
+    expect(queryCellKindLabel({ type: 'dql', content: '' })).toBe('DQL query');
     expect(queryCellKindLabel({ type: 'sql', content: 'select 1' })).toBe('Warehouse SQL');
     expect(queryCellKindLabel({ type: 'sql', content: 'select 1', executionTarget: { target: 'local' } })).toBe('Local dataset SQL');
     expect(queryCellKindLabel({ type: 'dql', content: 'block "x" { query = """SELECT @metric(revenue)""" }' })).toBe('Semantic query');

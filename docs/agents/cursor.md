@@ -1,7 +1,7 @@
 # Cursor
 
 Connect [Cursor](https://cursor.com) to your ZLens project so its agent
-answers data questions from certified blocks first and labels every answer the
+answers data questions from certified saved queries first and labels every answer the
 way Ask does.
 
 ## Before you start
@@ -50,11 +50,11 @@ It shows 27 tools once it has started.
 In the agent chat, ask a question such as *"How has revenue changed by
 month?"*.
 
-- The agent routes it with `ask_dql`, runs the certified block with
+- The agent routes it with `ask_dql`, runs the certified saved query with
   `query_via_block`, and labels the answer **Certified**.
-- A question no certified block answers runs as one read-only query with
+- A question no certified saved query answers runs as one read-only query with
   `query_via_metadata`, labelled **AI-Generated (review required)**, with the
-  path of the draft block ZLens saved.
+  path of the draft saved query ZLens kept.
 - Cursor asks before it runs a tool unless you allowed it.
 
 `answer_question` works only when an AI model is set up in ZLens; without one

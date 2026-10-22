@@ -43,7 +43,7 @@ describe('App data: one list per App (design D1, D3, D4)', () => {
     // Result fields keep a saved query a saved query, not a Dataset.
     expect(sourceCatalogKindLabel(monthlyRevenueQuery)).toBe('Saved query');
     expect(sourceKindLabel('block', monthlyRevenueQuery.capabilities)).toBe('Saved query');
-    expect(sourceKindLabel('block', orderLinesDataset.capabilities)).toBe('Dataset');
+    expect(sourceKindLabel('block', orderLinesDataset.capabilities)).toBe('Table');
     // Reading fields applies to a saved query without them; Make row-level to any saved query.
     expect([topCustomersQuery, monthlyRevenueQuery, orderLinesDataset, marginMetrics].map(savedQueryNeedsFields)).toEqual([true, false, false, false]);
     expect([topCustomersQuery, monthlyRevenueQuery, orderLinesDataset, marginMetrics].map(canMakeRowLevel)).toEqual([true, true, false, false]);
@@ -152,9 +152,9 @@ describe('App data: one list per App (design D1, D3, D4)', () => {
     expect(initialStudioStage({ mode: 'ai', resumingDraft: false, editingPublishedApp: true })).toBe('canvas');
     expect(initialStudioStage({ mode: 'manual', resumingDraft: true, editingPublishedApp: false })).toBe('canvas');
     expect(initialStudioStage({ mode: 'manual', resumingDraft: false, editingPublishedApp: true })).toBe('canvas');
-    expect(openCanvasLabel(0)).toBe('Open canvas');
-    expect(openCanvasLabel(1)).toBe('Open canvas with 1 source');
-    expect(openCanvasLabel(2)).toBe('Open canvas with 2 sources');
+    expect(openCanvasLabel(0)).toBe('Open blank Studio');
+    expect(openCanvasLabel(1)).toBe('Open Studio with 1 source');
+    expect(openCanvasLabel(2)).toBe('Open Studio with 2 sources');
   });
 
   it('reads sample rows only through a bounded row-detail query the Dataset allows', () => {

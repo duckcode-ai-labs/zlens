@@ -17,7 +17,7 @@ Ask the sample project `What is our employee headcount by department?`:
 3. The status line reads **No answer**, with the steps Ask took and what it
    looked for and missed.
 
-No draft block is saved for a refusal.
+ZLens keeps no draft for a refusal.
 
 ## Common reasons
 
@@ -28,7 +28,7 @@ No draft block is saved for a refusal.
 | **One detail is missing** | Answer the question Ask asks (shown as **Needs clarification**), and it carries on. |
 | A certified relationship or approved allocation is needed | Ask will not invent a join between tables. Define the relationship in **Modeling**. |
 | No AI model is configured | Set up an [AI provider](../get-started/ai-provider.md). Ask needs one to read the question. |
-| AI-written SQL is turned off for this project | Only certified blocks and semantic metrics can answer. Certify a block for the question. |
+| AI-written SQL is turned off for this project | Only certified saved queries and semantic metrics can answer. Certify a saved query for the question. |
 | **Policy or permissions blocked this query** | The query touches data your project's policy excludes. |
 | Ask is scoped to a domain that no longer exists | Clear the **Scope** or pick another domain. |
 
@@ -36,7 +36,7 @@ No draft block is saved for a refusal.
 
 Click **How it was answered**. Each step shows whether it was done or skipped,
 and the last step, **No answer**, gives the reason. For example, a step can
-say **No certified block matches this question.** or **The semantic layer has
+say **No certified saved query matches this question.** or **The semantic layer has
 no metric or dimension for part of this question.**
 
 See [How Ask answered](how-it-answered.md).
@@ -45,6 +45,6 @@ See [How Ask answered](how-it-answered.md).
 
 1. Find the gap in **How it was answered**.
 2. Add what is missing: a dbt model or column, a semantic metric, a
-   relationship in **Modeling**, or a certified block.
+   relationship in **Modeling**, or a certified saved query.
 3. Run `npm run sync` if you changed dbt.
 4. Ask again.
