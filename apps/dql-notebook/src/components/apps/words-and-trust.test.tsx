@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { ReaderTrustBadge } from './ReaderTrust';
 import { readerTileReceipt, readerTileTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
-import { SAVED_UNPUBLISHED, UNPUBLISHED_CHANGES, previewSettledWords, rowCountWords } from './app-studio-words';
+import { UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords } from './app-studio-words';
 import { allDataCertifiedLabel, appCardSeal, appCertificationRollup } from './app-certification';
 import { CertifiedReceiptNote } from './builder/CertifiedReceiptNote';
 import { DataPanel } from './builder/DataPanel';
@@ -190,7 +190,8 @@ describe('plain words in App Studio (D6)', () => {
     expect(rowCountWords(12)).toBe('12 rows');
     expect(rowCountWords(1)).toBe('1 row');
     expect(UNPUBLISHED_CHANGES).toBe('Unpublished changes (only you can see them)');
-    expect(SAVED_UNPUBLISHED).not.toMatch(/locally|draft/i);
+    expect(draftStatusWords({ published: false, saved: true })).not.toMatch(/locally|draft/i);
+    expect(draftStatusWords({ published: true, saved: true })).not.toMatch(/locally|draft/i);
   });
 
   it('says what clicking a chart does, without the broken sentence', async () => {

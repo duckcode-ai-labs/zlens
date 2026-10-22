@@ -148,7 +148,7 @@ test('a new manual App picks its data first, then builds a tile from a measure',
   for (const chip of ['All', 'Tables', 'Saved queries', 'Metrics']) await expect(kinds.getByRole('button', { name: new RegExp(`^${chip}`) })).toBeVisible();
   await expect(browser.locator('article.add-data-row').filter({ hasText: DATASET }).first()).toContainText('Table · Certified');
   await expect(browser.locator('article.add-data-row').filter({ hasText: 'Monthly Revenue' }).first()).toContainText('Saved query · Certified');
-  await expect(browser.locator('article.add-data-row.table').filter({ hasText: 'fct_orders' }).first()).toContainText('Table · Not checked yet', { timeout: 30_000 });
+  await expect(browser.locator('article.add-data-row.table').filter({ hasText: 'fct_orders' }).first()).toContainText('Table · Not certified yet', { timeout: 30_000 });
 
   await browser.getByRole('button', { name: `Add to App: ${DATASET}` }).click();
   await expect(browser.getByRole('button', { name: `Remove ${DATASET} from this App` })).toBeVisible({ timeout: 30_000 });

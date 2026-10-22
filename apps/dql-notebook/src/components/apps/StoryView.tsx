@@ -128,7 +128,7 @@ export function StoryView({
           : <figure key={block.id} className="dql-story-tile">{renderTile(block.tileId)}</figure>
       ))}
       <footer className="dql-story-footer">
-        {narrative.generatedBy === 'ai' ? `Drafted with ${narrative.model ?? 'AI'} and checked: every figure is bound to this page's governed results.` : 'Every figure is bound to this page’s governed results.'}
+        {narrative.generatedBy === 'ai' ? `Drafted with ${narrative.model ?? 'AI'} and checked: every figure is bound to this page's results.` : 'Every figure is bound to this page’s results.'}
       </footer>
     </article>
   );

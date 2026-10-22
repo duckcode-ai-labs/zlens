@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
   Activity, AlertTriangle, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, Database, FileText, Filter,
@@ -55,7 +55,7 @@ import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
 import { ReaderPreviewParts } from './ReaderPreviewParts';
 import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
-import { SAVED_UNPUBLISHED, UNPUBLISHED_CHANGES, previewSettledWords, rowCountWords } from './app-studio-words';
+import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -364,7 +364,8 @@ export interface AppStudioV2Props {
   domainOptions?: AuthoredDomainOption[];
   audience?: string;
   themeMode: ThemeMode;
-  onBack: () => void;
+  /** Back to Apps, with the draft as it is now so the library lists it at once. */
+  onBack: (draft?: AppStudioBuildDraft | null) => void;
   onPublished: (app: AppSummary, dashboardId?: string) => void;
   onDraftDeleted: (recovery: { appName: string; recoveryId: string }) => void;
   /**
@@ -444,7 +445,7 @@ export function AppStudioLaunchSurface({
     <div className="dql-studio-v2-intro">
       <span className="eyebrow"><Sparkles size={14} /> ZLens App Studio 2.0</span>
       <h1 id="app-studio-home-title">Start with the decision.<br />Shape the experience together.</h1>
-      <p>{noAi ? 'Start from a few quick choices or build by hand.' : 'Build with AI or by hand.'} Everything stays a private draft until you publish it.</p>
+      <p>{noAi ? 'Start from a few quick choices or build by hand.' : 'Build with AI or by hand.'} Only you can see it until you publish it.</p>
     </div>
     <div className="dql-studio-v2-start-card">
       <div className="mode-switch" role="tablist" aria-label="Authoring mode">
@@ -476,8 +477,8 @@ export function AppStudioLaunchSurface({
         </div>
       </details>}
       {error ? <div className="studio-error" role="alert">{error}</div> : null}
-      <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : mode === 'quick' ? <><Database size={17} /> Choose data</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>
-      <small className="launch-next-step">Private local draft first · review sources and preview results · publish only when ready</small>
+      <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing…' : mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : mode === 'quick' ? <><Database size={17} /> Choose data</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>
+      <small className="launch-next-step">Only you can see it until you publish · preview with live data · publish when ready</small>
     </div>
   </section>;
 }
@@ -608,7 +609,7 @@ export function AppStudioV2({
   const [redoStack, setRedoStack] = useState<AppStudioBuildDraft[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [savedMessage, setSavedMessage] = useState<string>(UNPUBLISHED_CHANGES);
+  const [savedMessage, setSavedMessage] = useState<string>(() => draftStatusWords({ published: Boolean(baseAppId) }));
   const [previewRunsByPage, setPreviewRunsByPage] = useState<Record<string, DashboardRunResponse>>({});
   const [previewing, setPreviewing] = useState(false);
   const [savingDatasetTileId, setSavingDatasetTileId] = useState<string | null>(null);
@@ -753,7 +754,7 @@ export function AppStudioV2({
         setDraft(selected);
         setName(selected.name);
         setActivePageId(selected.pages[0]?.id ?? 'overview');
-        setSavedMessage(UNPUBLISHED_CHANGES);
+        setSavedMessage(draftStatusWords({ published: Boolean(selected.baseApp) }));
         // An AI draft with no pages built yet (one Ask or an MCP client made,
         // or a "Describe with AI" draft left early) opens at the AI Data step.
         const aiResume = appStudioAiDataResume(selected);
@@ -779,7 +780,8 @@ export function AppStudioV2({
       setDraft(resolved);
       setName(resolved.name);
       setActivePageId(resolved.pages[0]?.id ?? 'overview');
-      setSavedMessage(UNPUBLISHED_CHANGES);
+      // A fresh edit of a published App has changed nothing yet (round 3).
+      setSavedMessage(existing ? UNPUBLISHED_CHANGES : NO_UNPUBLISHED_CHANGES);
     }).catch((cause) => {
       if (active && (baseAppId || initialDraftId)) setError(messageOf(cause));
     }).finally(() => {
@@ -999,7 +1001,7 @@ export function AppStudioV2({
       setActivePageId(result.draft.pages[0]?.id ?? 'overview');
       setStage(initialStudioStage({ mode, resumingDraft: false, editingPublishedApp: Boolean(baseAppId) }));
       setAiDataFlow(mode === 'ai' && !baseAppId);
-      setSavedMessage(SAVED_UNPUBLISHED);
+      setSavedMessage(draftStatusWords({ published: Boolean(latestDraftRef.current?.baseApp), saved: true }));
       setPreviewRunsByPage({});
       setPreviewVariablesByPage({});
       setFilterOptionsByPage({});
@@ -1172,14 +1174,53 @@ export function AppStudioV2({
   // same revision twice, and the second failed with a proposal conflict.
   const latestDraftRef = useRef(draft);
   latestDraftRef.current = draft;
+  // Back hands the library the draft as it is now: a new App is listed at once (round 3).
+  const goBack = () => onBack(latestDraftRef.current);
+  // A tile just added, or the tile being built, is scrolled into view (round 3):
+  // the author may be at the bottom of the page while it lands near the top.
+  const pendingRevealRef = useRef<string | null>(null);
+  // The tile previews are drawn again only when what they show changes (round 3):
+  // their actions call the newest handlers through this ref, never a stale copy.
+  const tileHandlersRef = useRef<StudioTileHandlers | null>(null);
+  const revealTile = (tileId: string) => { pendingRevealRef.current = tileId; };
+  useEffect(() => {
+    const tileId = pendingRevealRef.current;
+    if (!tileId) return;
+    const element = canvasRef.current?.querySelector<HTMLElement>(`[data-tile-id="${tileId.replace(/["\\]/g, '\\$&')}"]`);
+    if (!element) return;
+    pendingRevealRef.current = null;
+    element.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [draft]);
+  const buildingTile = Boolean(draftTile);
+  useEffect(() => {
+    if (!buildingTile) return;
+    canvasRef.current?.querySelector<HTMLElement>('.draft-tile')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [buildingTile]);
   const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
-  const mutate = (operations: AppStudioDraftOperation[], recordHistory = true): Promise<AppStudioBuildDraft | null> => {
-    if (!draft || operations.length === 0) return Promise.resolve(null);
-    const queued = mutationQueueRef.current.then(() => applyMutation(operations, recordHistory));
+  /** Runs `work` after every save already queued, so it always starts from the newest draft. */
+  const enqueueDraftWork = <T,>(work: () => Promise<T>): Promise<T> => {
+    const queued = mutationQueueRef.current.then(work);
     mutationQueueRef.current = queued.catch(() => undefined);
     return queued;
   };
-  const applyMutation = async (operations: AppStudioDraftOperation[], recordHistory: boolean) => {
+  const mutate = (operations: AppStudioDraftOperation[], recordHistory = true, rerunTileIds?: string[]): Promise<AppStudioBuildDraft | null> => {
+    if (!draft || operations.length === 0) return Promise.resolve(null);
+    return enqueueDraftWork(() => applyMutation(operations, recordHistory, rerunTileIds));
+  };
+  /**
+   * A save whose operations are worked out from the newest draft when its turn
+   * comes, not from what was on screen when it was asked for (round 3): two
+   * quick field clicks on one tile both land, the second on top of the first.
+   */
+  const mutateFromLatest = (build: (current: AppStudioBuildDraft) => AppStudioDraftOperation[] | null): Promise<AppStudioBuildDraft | null> => {
+    if (!draft) return Promise.resolve(null);
+    return enqueueDraftWork(async () => {
+      const current = latestDraftRef.current;
+      const operations = current ? build(current) : null;
+      return operations?.length ? applyMutation(operations, true) : null;
+    });
+  };
+  const applyMutation = async (operations: AppStudioDraftOperation[], recordHistory: boolean, rerunTileIds?: string[]) => {
     const current = latestDraftRef.current;
     if (!current) return null;
     setBusy(true);
@@ -1192,8 +1233,10 @@ export function AppStudioV2({
       const priorRun = pageId ? previewRunsByPage[pageId] : undefined;
       // Editing, adding or removing a tile reruns only that tile; the rest of
       // the page keeps its results. Page-wide edits still rerun everything.
+      // A caller that knows which tiles an edit reaches (a filter offer applied
+      // to one tile) says so; the rest of the page keeps its results.
       const plan = !keepVisiblePreview && pageId && canRerunTilesOnly(pageId)
-        ? incrementalPreviewPlan(operations, pageId)
+        ? (rerunTileIds ? { rerunTileIds, dropTileIds: rerunTileIds } : incrementalPreviewPlan(operations, pageId))
         : undefined;
       const result = await api.patchAppBuild(current.id, current.revision, operations, current.proposalHash);
       latestDraftRef.current = result.draft;
@@ -1227,7 +1270,7 @@ export function AppStudioV2({
         setUndoStack((items) => [...items.slice(-29), previous]);
         setRedoStack([]);
       }
-      setSavedMessage(SAVED_UNPUBLISHED);
+      setSavedMessage(draftStatusWords({ published: Boolean(latestDraftRef.current?.baseApp), saved: true }));
       return result.draft;
     } catch (cause) {
       setSavedMessage('Save failed');
@@ -1466,7 +1509,7 @@ export function AppStudioV2({
       const generatedPage = next.pages.find((page) => page.id === proposal.targetPageId) ?? next.pages[0];
       setActivePageId(generatedPage?.id ?? activePageId);
       if (generatedPage && pageHasDataTiles(generatedPage)) {
-        setSavedMessage('App generated · loading governed data…');
+        setSavedMessage('App generated · loading data…');
         await runPreviewForDraft(next, generatedPage.id);
       }
     } catch (cause) {
@@ -1893,65 +1936,76 @@ export function AppStudioV2({
       setSavedMessage('Composing source…');
       setError(null);
       try {
-        const previous = draft;
-        let result = await api.composeAppBuild(draft.id, {
-          mode: 'manual',
-          expectedRevision: draft.revision,
-          expectedProposalHash: draft.proposalHash,
-          selections: [{
-            sourceId,
-            pageId: activePage.id,
-            view: kind as 'kpi' | 'chart' | 'table',
-            ...(datasetQuery ? { query: datasetQuery } : {}),
-            ...(datasetTitle?.trim() ? { title: datasetTitle.trim() } : {}),
-          }],
+        // Saved in turn after any queued edit, from the newest draft (round 3),
+        // so an add never races a field click that is still saving.
+        const composedAdd = await enqueueDraftWork(async () => {
+          const previous = latestDraftRef.current ?? draft;
+          let result = await api.composeAppBuild(previous.id, {
+            mode: 'manual',
+            expectedRevision: previous.revision,
+            expectedProposalHash: previous.proposalHash,
+            selections: [{
+              sourceId,
+              pageId: activePage.id,
+              view: kind as 'kpi' | 'chart' | 'table',
+              ...(datasetQuery ? { query: datasetQuery } : {}),
+              ...(datasetTitle?.trim() ? { title: datasetTitle.trim() } : {}),
+            }],
+          });
+          const addedTileId = result.tileIds[0];
+          const composedPage = result.draft.pages.find((page) => page.id === activePage.id);
+          const addedTile = composedPage?.layout.items.find((item) => item.i === addedTileId);
+          const followUp: AppStudioDraftOperation[] = [];
+          if (addedTile && ((datasetVisualization && addedTile.viz.type !== datasetVisualization) || datasetEncoding)) {
+            // Keep the chart the author built (a date reads as a line), on the
+            // shelves they built it on.
+            followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { viz: {
+              ...addedTile.viz,
+              ...(datasetVisualization ? { type: datasetVisualization } : {}),
+              ...(datasetEncoding && addedTile.query && !addedTile.query.detail ? { encoding: datasetEncoding } : {}),
+            } } });
+          }
+          if (composedPage && addedTile) {
+            // The new tile fills the first gap it fits instead of going under the page.
+            const others = settleGridLayout(composedPage.layout.items.filter((item) => item.i !== addedTile.i), CANVAS_COLUMNS);
+            const spot = firstFreeGridCell(others, addedTile.w, addedTile.h, CANVAS_COLUMNS);
+            if (spot.y < addedTile.y || (spot.y === addedTile.y && spot.x !== addedTile.x)) {
+              followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { x: spot.x, y: spot.y } });
+            }
+          }
+          if (composedPage && addedTile) {
+            // A page shown as a report or a custom layout shows the new tile
+            // there too, at the end, so the author sees what they added.
+            const shownAs = composedPage.narrative?.presentation;
+            const tileNode: CanvasNode = { kind: 'element', tag: 'dql-tile', attrs: [['tile', addedTile.i]], children: [] };
+            const layout = shownAs === 'canvas' && composedPage.canvas?.html ? checkCanvasHtml(composedPage.canvas.html) : null;
+            if (composedPage.canvas && layout && layout.issues.length === 0) {
+              followUp.push({ type: 'set_canvas', pageId: activePage.id, canvas: { ...composedPage.canvas, html: serializeCanvasNodes(insertCanvasNodes(parseCanvasHtml(layout.html), [tileNode]).nodes), generatedBy: 'author' } });
+            }
+            if (shownAs === 'story' && composedPage.narrative && !composedPage.narrative.blocks.some((block) => block.kind === 'tile' && block.tileId === addedTile.i)) {
+              const taken = new Set(composedPage.narrative.blocks.map((block) => block.id));
+              let n = composedPage.narrative.blocks.length + 1;
+              while (taken.has(`b${n}`)) n += 1;
+              followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks: [...composedPage.narrative.blocks, { id: `b${n}`, kind: 'tile', tileId: addedTile.i }] } });
+            }
+          }
+          if (followUp.length) {
+            // Same undo step as the add.
+            const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
+            result = { ...result, draft: patched.draft };
+          }
+          // The new tile is scrolled into view wherever it landed (round 3).
+          if (addedTileId) revealTile(addedTileId);
+          latestDraftRef.current = result.draft;
+          setDraft(result.draft);
+          setUndoStack((items) => [...items.slice(-29), previous]);
+          setRedoStack([]);
+          return { result, addedTileId };
         });
-        const addedTileId = result.tileIds[0];
-        const composedPage = result.draft.pages.find((page) => page.id === activePage.id);
-        const addedTile = composedPage?.layout.items.find((item) => item.i === addedTileId);
-        const followUp: AppStudioDraftOperation[] = [];
-        if (addedTile && ((datasetVisualization && addedTile.viz.type !== datasetVisualization) || datasetEncoding)) {
-          // Keep the chart the author built (a date reads as a line), on the
-          // shelves they built it on.
-          followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { viz: {
-            ...addedTile.viz,
-            ...(datasetVisualization ? { type: datasetVisualization } : {}),
-            ...(datasetEncoding && addedTile.query && !addedTile.query.detail ? { encoding: datasetEncoding } : {}),
-          } } });
-        }
-        if (composedPage && addedTile) {
-          // The new tile fills the first gap it fits instead of going under the page.
-          const others = settleGridLayout(composedPage.layout.items.filter((item) => item.i !== addedTile.i), CANVAS_COLUMNS);
-          const spot = firstFreeGridCell(others, addedTile.w, addedTile.h, CANVAS_COLUMNS);
-          if (spot.y < addedTile.y || (spot.y === addedTile.y && spot.x !== addedTile.x)) {
-            followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { x: spot.x, y: spot.y } });
-          }
-        }
-        if (composedPage && addedTile) {
-          // A page shown as a report or a custom layout shows the new tile
-          // there too, at the end, so the author sees what they added.
-          const shownAs = composedPage.narrative?.presentation;
-          const tileNode: CanvasNode = { kind: 'element', tag: 'dql-tile', attrs: [['tile', addedTile.i]], children: [] };
-          const layout = shownAs === 'canvas' && composedPage.canvas?.html ? checkCanvasHtml(composedPage.canvas.html) : null;
-          if (composedPage.canvas && layout && layout.issues.length === 0) {
-            followUp.push({ type: 'set_canvas', pageId: activePage.id, canvas: { ...composedPage.canvas, html: serializeCanvasNodes(insertCanvasNodes(parseCanvasHtml(layout.html), [tileNode]).nodes), generatedBy: 'author' } });
-          }
-          if (shownAs === 'story' && composedPage.narrative && !composedPage.narrative.blocks.some((block) => block.kind === 'tile' && block.tileId === addedTile.i)) {
-            const taken = new Set(composedPage.narrative.blocks.map((block) => block.id));
-            let n = composedPage.narrative.blocks.length + 1;
-            while (taken.has(`b${n}`)) n += 1;
-            followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks: [...composedPage.narrative.blocks, { id: `b${n}`, kind: 'tile', tileId: addedTile.i }] } });
-          }
-        }
-        if (followUp.length) {
-          // Same undo step as the add.
-          const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
-          result = { ...result, draft: patched.draft };
-        }
-        setDraft(result.draft);
-        setUndoStack((items) => [...items.slice(-29), previous]);
-        setRedoStack([]);
-        setSelectedTileId(selectionAfterAdd(origin, result.tileIds[0]));
+        const { result, addedTileId } = composedAdd;
+        // A tile built from field clicks leaves the selection alone: the author
+        // may already be on the next tile.
+        if (origin !== 'field_draft') setSelectedTileId(selectionAfterAdd(origin, result.tileIds[0]));
         if (addedTileId) setFilterOfferTiles((current) => new Set([...current, `${activePage.id}:${addedTileId}`]));
         setSourceFeedback({ sourceId, status: 'added', view, pageTitle: activePage.metadata.title });
         sourceFeedbackTimerRef.current = window.setTimeout(() => {
@@ -2019,10 +2073,14 @@ export function AppStudioV2({
     if (!page) return;
     const operations = tileFilterOfferOperations(page, offer);
     if (!operations.length) return;
-    const next = await mutate(operations);
+    // Applying a filter to one new tile re-runs that tile only (round 3); the
+    // rest of the page keeps its results instead of going back to skeletons.
+    const onlyThisTile = offer.pageId === activePage?.id && canRerunTilesOnly(offer.pageId);
+    const next = await mutate(operations, true, onlyThisTile ? [offer.tileId] : undefined);
     if (!next) return;
     const tileTitle = page.layout.items.find((tile) => tile.i === offer.tileId)?.title || humanize(offer.tileId);
     setSavedMessage(`${offer.filterLabel} filter now applies to ${tileTitle} · refreshing…`);
+    if (onlyThisTile) return;
     await runPreviewForDraft(next, offer.pageId, previewVariablesByPage[offer.pageId] ?? {});
   };
   const pendingTileFilterOffers = (pageId: string, tileId: string): StudioTileFilterOffer[] => {
@@ -3127,8 +3185,8 @@ export function AppStudioV2({
   if (!draft) {
     return <div className="dql-studio-v2-loading">
       <style>{APP_STUDIO_V2_STYLES}</style>
-      <button type="button" className="icon" onClick={onBack} aria-label="Back to Apps"><ArrowLeft size={18} /></button>
-      <div><span className="loading-mark"><LayoutDashboard size={20} /></span><strong>{error ? 'Studio could not open' : initialDraftId ? 'Opening your local draft…' : baseAppId ? 'Preparing a safe edit draft…' : 'Opening Studio…'}</strong><small>{error ?? 'Your work stays private until you publish it.'}</small>{error ? <button type="button" onClick={() => { immediateStartRef.current = false; void createDraft(); }}>Try again</button> : null}</div>
+      <button type="button" className="icon" onClick={goBack} aria-label="Back to Apps"><ArrowLeft size={18} /></button>
+      <div><span className="loading-mark"><LayoutDashboard size={20} /></span><strong>{error ? 'Studio could not open' : initialDraftId ? 'Opening your App…' : baseAppId ? 'Preparing a safe edit draft…' : 'Opening Studio…'}</strong><small>{error ?? 'Your work stays private until you publish it.'}</small>{error ? <button type="button" onClick={() => { immediateStartRef.current = false; void createDraft(); }}>Try again</button> : null}</div>
     </div>;
   }
 
@@ -3319,7 +3377,7 @@ export function AppStudioV2({
         known={knownItems}
         error={error}
         onDismissError={() => setError(null)}
-        onBack={onBack}
+        onBack={goBack}
         onOpenCanvas={openCanvas}
         onSkip={() => { setStage('canvas'); setPanel('sources'); }}
         browser={browser}
@@ -3342,7 +3400,7 @@ export function AppStudioV2({
         data={quickChoiceData(appData, draftDomain)}
         busy={busy}
         error={quickError ?? error}
-        onBack={onBack}
+        onBack={goBack}
         onBackToData={() => { setQuickError(null); setStage('data'); }}
         onBuild={(choices) => void buildQuickTiles(choices, 'app')}
         {...(onConnectAi ? { onConnectAi } : {})}
@@ -3609,46 +3667,20 @@ export function AppStudioV2({
   /** A field click builds the new tile, or edits the selected Dataset tile. */
   const pickField = (field: DatasetField) => {
     if (!activeDatasetItem || !activeDescriptor || !activePage) return;
-    if (tileTarget?.query && !tileTarget.query.detail) {
-      // A click puts the field on the shelf a Tableau author expects, or
-      // takes it off every shelf when it is already there (RFC 0009).
-      const ref = field.kind === 'measure' ? { measure: field.name } : { dimension: field.name };
-      const current = tileTarget.viz.encoding ?? encodingFromQuery(tileTarget.query, tileTarget.viz.type);
-      const encoding = encodingHas(current, ref) ? removeField(current, ref) : addFieldByClick(current, ref, isTimeField(field));
-      const query = queryFromEncoding(encoding, tileTarget.query, descriptorTimeGrain(activeDescriptor));
-      if (!query.measures.length) {
-        setSavedMessage('A tile needs at least one measure');
-        return;
-      }
-      const validation = validateTileQuery(activeDescriptor, query);
-      if (!tileQueryValidationRuns(validation)) {
-        setError(validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.');
-        return;
-      }
-      const type = vizTypeForEncoding(encoding, descriptorTimeField(activeDescriptor), tileTarget.viz.type);
-      const viz = datasetTileVisualizationCompatibility(query, type).compatible ? type : 'table';
-      // A title DQL generated from the fields follows the fields; a title the
-      // author wrote is never touched.
-      const generatedTitle = (tileTarget.title ?? '').trim().toLowerCase() === defaultTileTitle(tileTarget.query, humanize).toLowerCase();
-      void mutate([{ type: 'update_tile', pageId: activePage.id, tileId: tileTarget.i, patch: {
-        query,
-        viz: { ...tileTarget.viz, type: viz as typeof tileTarget.viz.type, encoding },
-        ...(generatedTitle ? { title: defaultTileTitle(query, humanize) } : {}),
-      } }]);
-      return;
-    }
     if (tileTarget?.query) {
-      const query = toggleFieldInQuery(tileTarget.query, field);
-      if (!query.measures.length && !query.detail) {
-        setSavedMessage('A tile needs at least one measure');
-        return;
-      }
-      const validation = validateTileQuery(activeDescriptor, query);
-      if (!tileQueryValidationRuns(validation)) {
-        setError(validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.');
-        return;
-      }
-      void mutate([{ type: 'update_tile', pageId: activePage.id, tileId: tileTarget.i, patch: { query } }]);
+      // Worked out from the tile as saved when this click's turn comes, never
+      // from the screen: a quick second click lands on top of the first (round 3).
+      const pageId = activePage.id;
+      const tileId = tileTarget.i;
+      const descriptor = activeDescriptor;
+      void mutateFromLatest((current) => {
+        const tile = current.pages.find((page) => page.id === pageId)?.layout.items.find((item) => item.i === tileId);
+        if (!tile?.query) return null;
+        const change = tileFieldClickPatch(tile, field, descriptor);
+        if ('message' in change) { setSavedMessage(change.message); return null; }
+        if ('error' in change) { setError(change.error); return null; }
+        return [{ type: 'update_tile', pageId, tileId, patch: change.patch }];
+      });
       return;
     }
     const base = draftTile && draftTile.sourceKey === activeDatasetItem.id ? draftTile : emptyDraft(activeDatasetItem);
@@ -3671,16 +3703,25 @@ export function AppStudioV2({
   };
   const commitDraftTile = async () => {
     if (!draftTile || !activeDatasetItem) return;
-    const title = draftTile.title.trim() || defaultTileTitle(draftTile.query, humanize);
-    const visualization = activeDescriptor ? draftVisualization(activeDescriptor, draftTile) : undefined;
+    const committed = draftTile;
+    const title = committed.title.trim() || defaultTileTitle(committed.query, humanize);
+    const visualization = activeDescriptor ? draftVisualization(activeDescriptor, committed) : undefined;
     // A new pivot asks for its totals from the start.
-    const query = visualization === 'pivot' ? withPivotRollups(withoutRowLimit(draftTile.query), draftTile.encoding, undefined) : draftTile.query;
+    const query = visualization === 'pivot' ? withPivotRollups(withoutRowLimit(committed.query), committed.encoding, undefined) : committed.query;
+    // The draft leaves at once (round 3): the next field click starts a new
+    // tile while this one is saved and run, instead of landing on it (a KPI
+    // turned into a bar chart by a click made a second too soon).
+    setDraftTile(null);
+    setSelectedTileId(null);
     const added = activeDescriptor
-      ? await addComponent(draftTile.view, activeDatasetItem, query, title, visualization as AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], draftTile.encoding, 'field_draft')
-      : await addComponent(draftTile.view, activeDatasetItem, draftTile.query, title, tileVisualization(draftTile.query, draftTile.view), undefined, 'field_draft');
-    // The next field click starts a new tile instead of changing this one.
-    if (added) { setDraftTile(null); setSelectedTileId(null); }
+      ? await addComponent(committed.view, activeDatasetItem, query, title, visualization as AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], committed.encoding, 'field_draft')
+      : await addComponent(committed.view, activeDatasetItem, committed.query, title, tileVisualization(committed.query, committed.view), undefined, 'field_draft');
+    // Not added: the tile comes back as it was, unless a new one was started.
+    if (!added) setDraftTile((current) => current ?? committed);
   };
+  // No AI provider, no AI controls on tiles (round 3): Quick tiles and Tile
+  // settings stay; "Edit with AI" / "Change with AI" would only open a dead end.
+  const tileAiAvailable = aiConnected !== false;
   const askAiAboutTile = (tileId: string) => {
     selectAppAutopilotTile(tileId);
     setAiScope('tile');
@@ -3698,6 +3739,8 @@ export function AppStudioV2({
     const tile = activePage?.layout.items.find((item) => item.i === tileId);
     return tile ? <div className="studio-page-grid story-embed">{renderTile({ ...tile, w: 12 }, 'story-embed')}</div> : null;
   };
+  tileHandlersRef.current = { applyDatasetCrossFilter, exploreDatasetHierarchy, returnFromDatasetHierarchy, navigateFromDatasetTile, linkDatasetTileField, openMarkMenu, previewRun };
+  const tileHandlers = () => tileHandlersRef.current!;
   const renderTile = (tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number], extraClass = '', badge: ReactNode = null, placed = false) => {
     return (
                 <article
@@ -3725,12 +3768,12 @@ export function AppStudioV2({
                       return <span className={`trust-dot ${tone}`} data-trust={trust.state} role="img" aria-label={trust.label} title={`${trust.label}: ${trust.detail}`} />;
                     })()}
                     <div className={`tile-tools ${tileMenuId === tile.i ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
-                      {editing && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
+                      {editing && tileAiAvailable && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
                       {tile.query ? <button type="button" className={`studio-tile-dql-toggle ${dqlTileId === tile.i ? 'on' : ''}`} aria-pressed={dqlTileId === tile.i} aria-label="View DQL" title="View DQL" onClick={() => setDqlTileId((current) => current === tile.i ? null : tile.i)}><Code2 size={13} /></button> : null}
                       <button type="button" className="tile-more" aria-label="Tile actions" aria-haspopup="menu" aria-expanded={tileMenuId === tile.i} title="More" onClick={() => setTileMenuId((current) => current === tile.i ? null : tile.i)}><MoreHorizontal size={14} /></button>
                       {tileMenuId === tile.i ? <div className="tile-menu" role="menu">
                         {tile.query ? <button type="button" role="menuitem" onClick={() => { setDqlTileId(tile.i); setTileMenuId(null); }}><Code2 size={14} /> View DQL and SQL</button> : null}
-                        {tile.sourceId && tile.query ? <button type="button" role="menuitem" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={14} /> {editing ? 'Change with AI' : 'Ask about this tile'}</button> : null}
+                        {tileAiAvailable && tile.sourceId && tile.query ? <button type="button" role="menuitem" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={14} /> {editing ? 'Change with AI' : 'Ask about this tile'}</button> : null}
                         {editing ? <button type="button" role="menuitem" onClick={() => { setSelectedTileId(tile.i); setTileMenuId(null); setCopilotOpen(false); }}><Settings2 size={14} /> Tile settings</button> : null}
                         {editing && driverProbeFor(tile, previewRun?.tiles.find((item) => item.tileId === tile.i)) ? <button type="button" role="menuitem" onClick={() => { setTileMenuId(null); void addDriverTile(tile.i); }}><Activity size={14} /> Explain the latest change</button> : null}
                         {editing ? <button type="button" role="menuitem" onClick={() => { setTileMenuId(null); void duplicateTile(tile.i); }}><Copy size={14} /> Duplicate <kbd>{modifierKeyLabel()}D</kbd></button> : null}
@@ -3761,7 +3804,7 @@ export function AppStudioV2({
                   })() : null}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
                   {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the field query and the SQL it compiled to.</p>; })()}</div> : null}
-                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{studioTextTileLines(tile.text.markdown).map((line, index) => line.heading ? <strong key={index} className="tile-text-title">{line.text}</strong> : <p key={index}>{line.text}</p>)}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={editing ? datasetLinkProposal(activePage!, tile) : undefined} sourceLabel={draft.sources.find((source) => source.id === tile.sourceId)?.capabilities?.dataset?.label} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
+                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{studioTextTileLines(tile.text.markdown).map((line, index) => line.heading ? <strong key={index} className="tile-text-title">{line.text}</strong> : <p key={index}>{line.text}</p>)}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><MemoStudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => tileHandlers().applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => tileHandlers().exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => tileHandlers().returnFromDatasetHierarchy(tile.i)} onNavigate={() => tileHandlers().navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={editing ? datasetLinkProposal(activePage!, tile) : undefined} sourceLabel={draft.sources.find((source) => source.id === tile.sourceId)?.capabilities?.dataset?.label} onLinkField={() => tileHandlers().linkDatasetTileField(tile)} onMark={(row, at, candidates) => tileHandlers().openMarkMenu(tile, tileHandlers().previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
                   {placed && canArrange ? <>
                     <span className="tile-resize-handle e" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-e'); }} />
                     <span className="tile-resize-handle s" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-s'); }} />
@@ -3776,7 +3819,7 @@ export function AppStudioV2({
     <div className={`dql-studio-v2 ${projectedPages ? 'has-proposal' : ''} studio-${studioView} right-${rightPane}`}>
       <style>{APP_STUDIO_V2_STYLES}</style>
       <header className="studio-topbar">
-        <div className="studio-brand"><button type="button" className="ghost-icon" onClick={onBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button><span className="mark"><LayoutDashboard size={15} /></span><div><input aria-label="App name" value={name || draft.name} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && name.trim() !== draft.name) void mutate([{ type: 'set_name', name: name.trim() }]); }} /><small>{savedMessage}</small></div></div>
+        <div className="studio-brand"><button type="button" className="ghost-icon" onClick={goBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button><span className="mark"><LayoutDashboard size={15} /></span><div><input aria-label="App name" value={name || draft.name} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && name.trim() !== draft.name) void mutate([{ type: 'set_name', name: name.trim() }]); }} /><small>{savedMessage}</small></div></div>
         <nav className="page-nav" aria-label="App pages">
           {projectedPages ? projectedPages.map((page) => <button key={page.id} type="button" className={`${projectedPage?.id === page.id ? 'on' : ''} ${page.isNew ? 'proposed-page' : ''}`} aria-current={projectedPage?.id === page.id ? 'page' : undefined} onClick={() => { setProposalPageId(page.id); if (!page.isNew) setActivePageId(page.id); }}>{page.title}{page.changeCount ? <span className="change-dot" aria-label={`${page.changeCount} proposed ${page.changeCount === 1 ? 'change' : 'changes'}`} /> : null}</button>) : draft.pages.map((page) => <button key={page.id} type="button" className={activePage?.id === page.id ? 'on' : ''} aria-current={activePage?.id === page.id ? 'page' : undefined} onClick={() => { setActivePageId(page.id); setSelectedTileId(null); setTileMenuId(null); setDraftTile(null); }}>{page.metadata.title}</button>)}
           {editing && !projectedPages ? <button type="button" className="ghost-icon" onClick={() => void addPage()} aria-label="Add page" title="Add page"><Plus size={15} /></button> : null}
@@ -3801,7 +3844,7 @@ export function AppStudioV2({
             <button type="button" role="menuitem" disabled={!activePage?.layout.items.length || busy} onClick={() => { setActionsOpen(false); void arrangePage(); }}><LayoutDashboard size={14} /> Tidy page layout</button>
             <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); setStudioView('edit'); setSelectedTileId(null); setCopilotOpen(false); setSettingsOpen(true); }}><Settings2 size={14} /> App settings</button>
             <hr />
-            <button type="button" role="menuitem" className="danger" onClick={() => { setActionsOpen(false); setDeleteConfirmOpen(true); }}><Trash2 size={14} /> Delete local draft</button>
+            <button type="button" role="menuitem" className="danger" onClick={() => { setActionsOpen(false); setDeleteConfirmOpen(true); }}><Trash2 size={14} /> Delete draft</button>
           </div> : null}
         </div>
       </header>
@@ -3860,6 +3903,7 @@ export function AppStudioV2({
               run={previewRun}
               {...(editing ? { onRemoveSummary: () => void toggleSummary(false) } : {})}
               onAskInPreview={() => setSavedMessage('Readers ask about this page here once it is published. Questions are not sent from Preview.')}
+              {...(aiConnected !== undefined ? { aiConnected } : {})}
             /> : null}
             {previewRun?.incomplete ? <div className="studio-preview-incomplete" role="status" aria-label="Incomplete preview">
               <strong>Preview incomplete · {previewRun.tiles.filter((tile) => tile.status === 'ok').length}/{previewRun.tiles.length} tiles ready</strong>
@@ -3922,7 +3966,7 @@ export function AppStudioV2({
           activity={aiActivity}
           label={planWords.activitySteps[aiActivityIndex] ?? planWords.activitySteps[0] ?? ''}
           voice={planVoice}
-          onBack={onBack}
+          onBack={goBack}
           onReturn={aiActivity.returnToProposal && proposal ? () => setAiActivity(null) : undefined}
           onRetry={() => retryAiActivity(aiActivity)}
         /> : proposal && proposalSummary ? <AiPlanReview
@@ -4161,7 +4205,7 @@ export function AppStudioV2({
           <footer><button type="button" className="primary" onClick={() => setAddDataOpen(false)}>Done</button></footer>
         </section>
       </div> : null}
-      {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete local App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this local draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, tiles, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
+      {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, tiles, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
     </div>
   );
 }
@@ -4780,7 +4824,7 @@ function StaticComponentPreview({ loading, view }: { loading: boolean; view?: st
     // when results arrive.
     const shape = view === 'single_value' || view === 'kpi' ? 'kpi' : view === 'table' || view === 'pivot' ? 'table' : view === 'line' || view === 'area' ? 'line' : 'bars';
     return <div className={`preview-skeleton ${shape}`} role="status" aria-busy="true">
-      <span className="visually-hidden">Running governed preview…</span>
+      <span className="visually-hidden">Running preview…</span>
       {shape === 'kpi' ? <><i className="sk-value" /><i className="sk-caption" /></> : null}
       {shape === 'table' ? Array.from({ length: 5 }, (_, index) => <i key={index} className="sk-row" />) : null}
       {shape === 'bars' ? <div className="sk-bars">{[62, 84, 48, 72, 36, 58].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div> : null}
@@ -4915,6 +4959,77 @@ export function StudioFilterDropdown({
       <footer>{applying ? 'Applying…' : query.trim() && search.searching ? 'Searching all values…' : query.trim() && search.truncated ? `First ${visible.length} matches · type more to narrow` : query.trim() ? `${visible.length} ${visible.length === 1 ? 'match' : 'matches'}` : capHint ?? `${values.length}${truncated ? '+' : ''} available values`}</footer>
     </div>
   </details>;
+}
+
+type StudioTile = AppStudioBuildDraft['pages'][number]['layout']['items'][number];
+
+/** What a tile preview's actions call: always the Studio's newest handlers (see tileHandlersRef). */
+type StudioTileHandlers = {
+  applyDatasetCrossFilter: (tile: StudioTile, field: string, values: unknown[]) => void;
+  exploreDatasetHierarchy: (tile: StudioTile, candidate: RuntimeDatasetHierarchyDrillCandidate, row: Record<string, unknown>) => void;
+  returnFromDatasetHierarchy: (tileId: string) => void;
+  navigateFromDatasetTile: (tile: StudioTile) => void;
+  linkDatasetTileField: (tile: StudioTile) => void;
+  openMarkMenu: (tile: StudioTile, run: DashboardRunResponse['tiles'][number] | undefined, row: Record<string, unknown>, at: MarkPointer | undefined, candidates: RuntimeDatasetHierarchyDrillCandidate[]) => void;
+  previewRun: DashboardRunResponse | null;
+};
+
+const VALUE_COMPARED_PREVIEW_PROPS = new Set(['crossFilterFields', 'activeCrossFilters', 'linkProposal']);
+
+/**
+ * Whether a tile preview would draw the same: its data props are the same (by
+ * value for the small lists built each render); its action props are not
+ * compared, because they call the newest handlers through a ref. A field
+ * click on one tile no longer draws every chart on the page again.
+ */
+export function sameTilePreviewProps(previous: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    const left = previous[key];
+    const right = next[key];
+    if (typeof left === 'function' && typeof right === 'function') continue;
+    if (Object.is(left, right)) continue;
+    if (VALUE_COMPARED_PREVIEW_PROPS.has(key) && JSON.stringify(left) === JSON.stringify(right)) continue;
+    return false;
+  }
+  return true;
+}
+
+
+/**
+ * What one field click does to a saved Dataset tile: on a shelf tile it puts
+ * the field on the shelf a Tableau author expects, or takes it off every
+ * shelf when it is already there (RFC 0009); on a detail tile it toggles the
+ * column. A title DQL generated from the fields follows them; a title the
+ * author wrote is never touched.
+ */
+export function tileFieldClickPatch(
+  tile: StudioTile,
+  field: DatasetField,
+  descriptor: DatasetDescriptor,
+): { patch: Partial<StudioTile> } | { message: string } | { error: string } {
+  if (!tile.query) return { message: 'This tile has no fields to change' };
+  if (!tile.query.detail) {
+    const ref = field.kind === 'measure' ? { measure: field.name } : { dimension: field.name };
+    const current = tile.viz.encoding ?? encodingFromQuery(tile.query, tile.viz.type);
+    const encoding = encodingHas(current, ref) ? removeField(current, ref) : addFieldByClick(current, ref, isTimeField(field));
+    const query = queryFromEncoding(encoding, tile.query, descriptorTimeGrain(descriptor));
+    if (!query.measures.length) return { message: 'A tile needs at least one measure' };
+    const validation = validateTileQuery(descriptor, query);
+    if (!tileQueryValidationRuns(validation)) return { error: validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.' };
+    const type = vizTypeForEncoding(encoding, descriptorTimeField(descriptor), tile.viz.type);
+    const viz = datasetTileVisualizationCompatibility(query, type).compatible ? type : 'table';
+    const generatedTitle = (tile.title ?? '').trim().toLowerCase() === defaultTileTitle(tile.query, humanize).toLowerCase();
+    return { patch: {
+      query,
+      viz: { ...tile.viz, type: viz as typeof tile.viz.type, encoding },
+      ...(generatedTitle ? { title: defaultTileTitle(query, humanize) } : {}),
+    } };
+  }
+  const query = toggleFieldInQuery(tile.query, field);
+  if (!query.measures.length && !query.detail) return { message: 'A tile needs at least one measure' };
+  const validation = validateTileQuery(descriptor, query);
+  if (!tileQueryValidationRuns(validation)) return { error: validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.' };
+  return { patch: { query } };
 }
 
 export function StudioTilePreview({
@@ -5330,3 +5445,4 @@ function createAppStudioPreviewRunScope(): string {
   return `studio_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
 }
 
+const MemoStudioTilePreview = memo(StudioTilePreview, (previous, next) => sameTilePreviewProps(previous as Record<string, unknown>, next as Record<string, unknown>));

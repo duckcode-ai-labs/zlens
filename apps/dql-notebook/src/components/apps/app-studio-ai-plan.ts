@@ -100,7 +100,7 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
       id: tile.i,
       title: tile.title || businessLabel(tile.i),
       visualization: businessLabel(tile.viz.type),
-      source: blockRef || semanticRef || draftRef || (tile.text ? 'Page content' : 'Governed source'),
+      source: blockRef || semanticRef || draftRef || (tile.text ? 'Page content' : 'Data source'),
       ...(sourceId ? { sourceId } : {}),
       ...(rationale ? { rationale } : {}),
     });

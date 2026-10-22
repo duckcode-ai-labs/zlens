@@ -35,8 +35,29 @@ export function askAboutAppCapability(scope: Pick<AskAboutAppScope, 'resultsRead
     : 'This page has not finished running: Ask can see its saved queries and filters, not its results yet.';
 }
 
-export function AskAboutApp({ scope, onAsk }: { scope: AskAboutAppScope; onAsk: (question: string) => void }): JSX.Element {
+/** What the Ask box says when no AI provider is connected: no question box, no "AI-generated" label (round 3). */
+export const ASK_NEEDS_AI_PROVIDER = 'Ask needs an AI provider. The owner can connect one in Settings.';
+
+export function AskAboutApp({ scope, onAsk, aiConnected }: {
+  scope: AskAboutAppScope;
+  onAsk: (question: string) => void;
+  /** `false` when no AI provider is connected: the box says so instead of taking a question. */
+  aiConnected?: boolean;
+}): JSX.Element {
   const [question, setQuestion] = useState('');
+  if (aiConnected === false) {
+    return (
+      <div
+        className="dql-app-ask-about dql-app-ask-unavailable"
+        role="note"
+        aria-label={`Ask about ${scope.appName}`}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px', padding: '8px 12px', border: '1px solid var(--border-subtle)', borderRadius: 10, background: 'var(--bg-2)', fontSize: 12.5, color: 'var(--text-secondary)' }}
+      >
+        <MessageSquare size={14} aria-hidden="true" style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+        <span>{ASK_NEEDS_AI_PROVIDER}</span>
+      </div>
+    );
+  }
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const text = question.trim();

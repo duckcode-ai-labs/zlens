@@ -1,9 +1,11 @@
+import type { AppStudioBuildDraft } from '../../api/client';
+
 /** Which Apps the library shows. */
 export type LibraryFilter = 'all' | 'drafts' | 'private' | 'shared' | 'fav';
 
 const FILTER_LABELS: Record<LibraryFilter, string> = {
   all: 'All',
-  drafts: 'Local drafts',
+  drafts: 'Not published yet',
   private: 'Private',
   shared: 'Shared',
   fav: 'Favourites',
@@ -24,12 +26,12 @@ export function appLibraryWords(reader: boolean): {
 } {
   if (!reader) {
     return {
-      intro: 'Local drafts and Project-published Apps live together here, with their visibility and trust state always clear.',
+      intro: 'Your Apps, published or not. Only you can see an App until you publish it.',
       filters: ['all', 'drafts', 'private', 'shared', 'fav'],
       label: (filter) => FILTER_LABELS[filter],
       localCounts: true,
       loadingDetail: 'Reading local app files from this ZLens project.',
-      emptyDetail: 'Change the filter or start a new App above. New work always begins as a local private draft.',
+      emptyDetail: 'Change the filter or start a new App above. A new App stays visible only to you until you publish it.',
       appNote: (app) => `${app.name} consumption surface for ${app.domain}.`,
     };
   }
@@ -42,4 +44,18 @@ export function appLibraryWords(reader: boolean): {
     emptyDetail: 'Change the filter. An App you need but cannot see: ask its owner to share it with you.',
     appNote: (app) => (app.domain ? `An App for ${app.domain}.` : ''),
   };
+}
+
+/**
+ * The library's draft list with this draft in it, newest first (round 3):
+ * Back to Apps lists the App just built before the list is read again. A
+ * draft already listed is replaced; a published draft is not added.
+ */
+export function withDraftListed<T extends { ok: true; drafts: AppStudioBuildDraft[] }>(
+  current: T | undefined,
+  draft: AppStudioBuildDraft,
+): T | { ok: true; drafts: AppStudioBuildDraft[] } {
+  const drafts = (current?.drafts ?? []).filter((item) => item.id !== draft.id);
+  if (draft.state === 'project_published') return current ?? { ok: true, drafts };
+  return { ...(current ?? { ok: true as const }), drafts: [draft, ...drafts] };
 }

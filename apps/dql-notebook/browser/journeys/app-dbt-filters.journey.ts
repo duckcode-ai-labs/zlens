@@ -157,10 +157,19 @@ test('a new tile keeps the field list in place, then offers the Customer Name fi
   // Not linked until the author says so.
   await page.getByRole('tab', { name: 'Filters' }).click();
   await expect(page.locator('.filter-contract-list article').filter({ hasText: 'Customer Name' })).toContainText('2 linked tiles');
+  // Apply re-runs that one tile (round 3): the other tiles keep their results.
+  const runs: Array<{ affectedTileIds?: string[]; fullRun?: boolean }> = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/api\/app-builds\/[^/]+\/dashboards\/[^/]+\/run$/.test(request.url())) runs.push(JSON.parse(request.postData() ?? '{}'));
+  });
+  const newTileId = await offer.evaluate((element) => element.closest('[data-tile-id]')?.getAttribute('data-tile-id'));
   await offer.getByRole('button', { name: /^Apply the Customer Name filter/ }).click();
   await expect(offer).toHaveCount(0, { timeout: 30_000 });
   await expect(page.locator('.filter-contract-list article').filter({ hasText: 'Customer Name' })).toContainText('3 linked tiles', { timeout: 30_000 });
-  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Updated 1 tile|tiles up to date/)).toBeVisible({ timeout: 60_000 });
+  expect(runs).toHaveLength(1);
+  expect(runs[0]!.affectedTileIds).toEqual([newTileId]);
+  expect(runs[0]!.fullRun).toBeUndefined();
 });
 
 test('Publish says "saved as files" outside git, and a published App with an open draft is one card', async ({ page }) => {

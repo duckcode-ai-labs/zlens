@@ -5656,7 +5656,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             status: 'completed',
             stage: 'ready',
             progress: 100,
-            message: `Ready. Indexed ${prepared.nodes.toLocaleString()} governed objects for fast search.`,
+            message: `Ready. Indexed ${prepared.nodes.toLocaleString()} items from your project for search.`,
             updatedAt: completedAt,
             phases: current.phases.map((phase) => phase.id === 'search_index'
               ? { ...phase, status: 'completed', durationMs: indexDurationMs }
