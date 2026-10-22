@@ -41,7 +41,7 @@ describe("defaultAgentRunGates", () => {
 
     const exec = evaluations.find((evaluation) => evaluation.id === "execution-error");
     expect(exec?.passed).toBe(false);
-    expect(exec?.message).toContain("ZLens could not turn this answer into a reusable block");
+    expect(exec?.message).toContain("ZLens could not turn this answer into a reusable saved query");
     expect(exec?.message).not.toContain("failed to execute against the bounded preview");
     expect(exec?.message).toContain("I need values for: region.");
   });

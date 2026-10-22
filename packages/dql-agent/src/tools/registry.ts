@@ -424,7 +424,7 @@ const CORE_TOOL_DEFINITIONS = [
   },
   {
     name: 'search_blocks',
-    description: 'Find blocks (certified and draft) by keyword, domain, or status. Each result carries its status; only a certified block is a certified answer.',
+    description: 'Find saved queries (blocks), certified and draft, by keyword, domain, or status. Each result carries its status; only a certified saved query is a certified answer.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -439,7 +439,7 @@ const CORE_TOOL_DEFINITIONS = [
   },
   {
     name: 'get_block',
-    description: 'Return full metadata, dependencies, and SQL for a block.',
+    description: 'Return full metadata, dependencies, and SQL for a saved query (block).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -454,7 +454,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'query_via_block',
     description:
-      'Tier-1 of graduated trust. Execute a certified block against the local DQL runtime when the block grain exactly answers the user question. For named-entity filters, custom rankings, breakdowns, comparisons, or drill-throughs, use the block as context and call query_via_metadata instead.',
+      'Tier-1 of graduated trust. Execute a certified saved query (block) against the local DQL runtime when the block grain exactly answers the user question. For named-entity filters, custom rankings, breakdowns, comparisons, or drill-throughs, use the block as context and call query_via_metadata instead.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -614,7 +614,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'build_block_from_prompt',
     description:
-      "Governed block builder from a natural-language prompt. Runs DQL's buildFromPrompt (the same governed engine the UI uses) to draft a reusable, review-required DQL block — you do NOT author SQL. Symmetric with build_dql_app. Returns the draft path, generated SQL, and the Certifier verdict; NEVER auto-certifies. Requires the ZLens runtime (the workbench `zlens notebook` starts) with an AI model set up in ZLens; without one it returns modelUnavailable — then write the SQL yourself and save it with suggest_block.",
+      "Governed saved query (block) builder from a natural-language prompt. Runs DQL's buildFromPrompt (the same governed engine the UI uses) to draft a reusable, review-required DQL block — you do NOT author SQL. Symmetric with build_dql_app. Returns the draft path, generated SQL, and the Certifier verdict; NEVER auto-certifies. Requires the ZLens runtime (the workbench `zlens notebook` starts) with an AI model set up in ZLens; without one it returns modelUnavailable — then write the SQL yourself and save it with suggest_block.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -668,7 +668,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'certify',
     description:
-      'Check a block against the certification rules and report pass/fail with the blocking rules. With the workbench running it runs the same check as Block Studio (owner, compile, run, tests); otherwise it checks the declared metadata only and says tests were not run. Changes nothing: a person certifies in Block Studio or with `zlens certify --from-draft`.',
+      'Check a saved query (block) against the certification rules and report pass/fail with the blocking rules. With the workbench running it runs the same check as the Saved queries page (owner, compile, run, tests); otherwise it checks the declared metadata only and says tests were not run. Changes nothing: a person certifies in Saved queries or with `zlens certify --from-draft`.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -683,7 +683,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'suggest_block',
     description:
-      'Write a curated proposed block to the local draft queue with a hand-shaped name and structure, plus the governance gate result. Use when proposing a shared building block; for one-shot ad-hoc Tier-2 captures, use query_via_metadata instead.',
+      'Write a curated proposed saved query (block) to the local draft queue with a hand-shaped name and structure, plus the governance gate result. Use when proposing a shared building block; for one-shot ad-hoc Tier-2 captures, use query_via_metadata instead.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

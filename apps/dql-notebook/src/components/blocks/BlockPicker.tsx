@@ -91,23 +91,23 @@ export function BlockPicker({ themeMode, onPick, autoFocus = true, compact = tru
           ref={inputRef}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search question, block, domain, owner, or tag…"
-          aria-label="Search existing blocks"
+          placeholder="Search question, saved query, domain, owner, or tag…"
+          aria-label="Search existing saved queries"
           style={{ ...selectStyle, flex: 1, padding: '6px 8px' }}
         />
-        <select aria-label="Filter blocks by domain" value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)} style={selectStyle}>
+        <select aria-label="Filter saved queries by domain" value={domainFilter} onChange={(e) => setDomainFilter(e.target.value)} style={selectStyle}>
           <option value="">All domains</option>
           {domains.map((domain) => <option key={domain.value} value={domain.value}>{domain.label}</option>)}
           {hasUnassigned ? <option value="uncategorized">Unassigned</option> : null}
         </select>
-        <select aria-label="Filter blocks by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
+        <select aria-label="Filter saved queries by status" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} style={selectStyle}>
           <option value="">Any</option>
           {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
       </div>
       {!loading && (
         <div style={{ fontSize: 10, color: t.textMuted, fontFamily: t.font, padding: '0 2px' }}>
-          {filtered.length} reusable {filtered.length === 1 ? 'block' : 'blocks'} · certified results are listed first
+          {filtered.length} reusable {filtered.length === 1 ? 'saved query' : 'saved queries'} · certified results are listed first
         </div>
       )}
       <div
@@ -121,9 +121,9 @@ export function BlockPicker({ themeMode, onPick, autoFocus = true, compact = tru
         }}
       >
         {loading ? (
-          <EmptyNote t={t}>Loading blocks...</EmptyNote>
+          <EmptyNote t={t}>Loading saved queries...</EmptyNote>
         ) : filtered.length === 0 ? (
-          <EmptyNote t={t}>{blocks.length === 0 ? 'No blocks yet. Save a cell as a block to get started.' : 'No blocks match your filters.'}</EmptyNote>
+          <EmptyNote t={t}>{blocks.length === 0 ? 'No saved queries yet. Save a cell as a saved query to get started.' : 'No saved queries match your filters.'}</EmptyNote>
         ) : (
           filtered.map((block) => (
             <BlockRow

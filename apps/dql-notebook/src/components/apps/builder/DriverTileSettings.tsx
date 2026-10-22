@@ -34,6 +34,6 @@ export function DriverTileSettings({ driver, disabled, onChange }: {
     </select>
     <label htmlFor="driver-dimensions">Break down by</label>
     <input id="driver-dimensions" disabled={disabled} placeholder="All approved dimensions" value={allDimensions ? '' : dimensions} onChange={(event) => setDimensions(event.target.value)} onBlur={commitDimensions} />
-    <small className="field-help">Dataset field names, separated by commas (up to 6). Leave empty to use every approved dimension.</small>
+    <small className="field-help">Field names, separated by commas (up to 6). Leave empty to use every approved dimension.</small>
   </section>;
 }

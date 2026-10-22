@@ -96,7 +96,7 @@ export function ExplorePanel({
       void explain(path, comparison).then((state) => { if (current === ticket.current) setExplained(state); });
       return;
     }
-    if (!query) { setView({ status: 'error', message: mode === 'rows' ? 'This Dataset lists no columns a reader may see.' : 'This Dataset lists no fields to break it down by.' }); return; }
+    if (!query) { setView({ status: 'error', message: mode === 'rows' ? 'This data lists no columns a reader may see.' : 'This data lists no fields to break it down by.' }); return; }
     setView({ status: 'loading' });
     void run(query).then((outcome) => {
       if (current !== ticket.current) return;
@@ -201,8 +201,8 @@ export function ExplorePanel({
           ) : null}
         </div>
         <footer>
-          {mode !== 'explain' && trust ? <span className={`dql-explore-trust ${trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'certified' : 'review'}`}>{trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'Certified Dataset · checked against its contract' : 'Needs review · not certified'}</span> : null}
-          {mode === 'explain' ? <small>Every number here comes from governed comparisons on this tile's Dataset, with the page's filters. No AI was used.</small> : null}
+          {mode !== 'explain' && trust ? <span className={`dql-explore-trust ${trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'certified' : 'review'}`}>{trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'Certified data · checked against its contract' : 'Needs review · not certified'}</span> : null}
+          {mode === 'explain' ? <small>Every number here comes from governed comparisons on this tile's data, with the page's filters. No AI was used.</small> : null}
           <span className="dql-explore-actions">
             {onAsk ? <button type="button" onClick={() => onAsk(`In "${pathTitle}", what explains these numbers, and what should I look at next?`)}><MessageSquare size={13} aria-hidden="true" /> Ask about this</button> : null}
             {onSaveAsTile && view.status === 'ready' && mode !== 'explain' ? <button type="button" className="primary" onClick={() => onSaveAsTile(view.query, savedTitle(base, path, mode === 'rows' ? undefined : byField?.name))}><Plus size={13} aria-hidden="true" /> Save as tile</button> : null}

@@ -8,6 +8,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Wording
+
+- **Blocks are now called Saved queries** everywhere people read: the left
+  rail, the saved query editor and library, notebooks, Ask, Apps, the App
+  reader's receipts ("Runs a certified saved query exactly as it was
+  reviewed"), in-app Help and the user guides. Nothing changes on disk:
+  `.dql` block files, the DQL `block` keyword, the `zlens block` CLI, MCP tool
+  names, the API and the reference docs keep the word `block`. Where a page
+  needs the file or the CLI, it says so once: "saved query (a `.dql` block
+  file)".
+- **Fewer nouns in Apps.** App Studio and the reader say "data" instead of
+  "Dataset" ("Choose data", "This App's data", "Define fields"), and no
+  longer show "Model area", "Binding" or "Canvas" ("Refresh this data",
+  "Pages"). Files, the API and the reference docs still say Dataset.
+- **Domain is explained once.** The App Start form's Domain field says "A
+  Domain groups data by business area, like Sales or Finance"; the domain
+  chips in Add data carry the same line as a tooltip.
+
 ### Setup and first start
 
 - **Start from any folder.** `zlens notebook <folder>` on a folder with no

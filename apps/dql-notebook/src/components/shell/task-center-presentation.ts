@@ -133,7 +133,7 @@ export function taskOutcomePresentation(operation: LocalOperation): TaskOutcomeP
         message: blockerCount > 0
           ? `Draft saved with ${blockerCount} certification blocker${blockerCount === 1 ? '' : 's'}.`
           : 'Draft saved, but certification requirements are not ready.',
-        guidance: 'Open Block Studio to review the exact fixes and retry.',
+        guidance: 'Open Saved queries to review the exact fixes and retry.',
       };
     }
     if (result?.outcome === 'certified') {
@@ -141,7 +141,7 @@ export function taskOutcomePresentation(operation: LocalOperation): TaskOutcomeP
         active: false,
         tone: 'success',
         statusLabel: 'certified',
-        message: 'The block passed its required gates and was certified.',
+        message: 'The saved query passed its required gates and was certified.',
       };
     }
   }

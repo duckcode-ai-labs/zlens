@@ -744,8 +744,8 @@ function NotebookAiDrawer({
     ? `${sourceCell.type.toUpperCase()} cell${sourceCell.name ? ` · ${sourceCell.name}` : ''}`
     : 'Whole notebook';
   const scopeHint = sourceCell
-    ? 'This cell + dbt, semantic metadata, certified blocks, prior AI history'
-    : 'Whole notebook + dbt, semantic metadata, certified blocks, prior AI history';
+    ? 'This cell + dbt, semantic metadata, certified saved queries, prior AI history'
+    : 'Whole notebook + dbt, semantic metadata, certified saved queries, prior AI history';
   const agentRunSelectedObject = sourceCell
     ? { kind: 'cell' as const, id: sourceCell.id, title: sourceCell.name, path: notebookPath }
     : notebookPath

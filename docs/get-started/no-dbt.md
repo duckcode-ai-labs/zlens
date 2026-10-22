@@ -350,7 +350,7 @@ Ask needs an AI model: [set up an AI provider](ai-provider.md). Then open
 
 Ask works from the synced schema and the joins you modeled. It labels the
 answer with what it used, as it does in a dbt project. SQL that AI wrote is
-labelled for review and saved as a draft block; certify that block, and Ask can
+labelled for review and saved as a draft saved query; certify that saved query, and Ask can
 answer the question from it as **Certified**. Metrics you add with
 **Modeling → New metric** give **Governed** answers. See
 [Ask a question](../ask/index.md).
@@ -444,5 +444,5 @@ bound to warehouse tables keep working. See
   scope.
 - [Modeling and Domain Packages](../datalex-and-dql.md): how the three
   modeling modes work.
-- [Save a query as a block](../blocks/index.md) and certify it.
+- [Keep a query as a saved query](../blocks/index.md) and certify it.
 - [CLI reference](../reference/cli.md).

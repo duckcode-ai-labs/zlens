@@ -166,7 +166,7 @@ export function ConnectionRuntimeSettings({
           )}
           {!section && (
           <section style={{ marginTop: 22 }}>
-            <SectionTitle title="Model providers" detail="Connect at least one AI provider — it powers governed answers, block suggestions, and research. Sign in with a Claude or ChatGPT subscription, or use an API key / local model." t={t} />
+            <SectionTitle title="Model providers" detail="Connect at least one AI provider — it powers governed answers, saved query suggestions, and research. Sign in with a Claude or ChatGPT subscription, or use an API key / local model." t={t} />
 
             <GroupLabel
               title="Use your subscription"

@@ -147,7 +147,7 @@ test('a new manual App picks its data first, then builds a tile from a measure',
 
   await browser.getByRole('button', { name: `Add to App: ${DATASET}` }).click();
   await expect(browser.getByRole('button', { name: `Remove ${DATASET} from this App` })).toBeVisible({ timeout: 30_000 });
-  const openCanvas = page.getByRole('button', { name: /Open canvas with 1 source/ });
+  const openCanvas = page.getByRole('button', { name: /Open Studio with 1 source/ });
   await expect(openCanvas).toBeVisible();
   await openCanvas.click();
 
@@ -196,7 +196,7 @@ test('a saved query has fields: Month + Gross Revenue is one line, Customer Name
   await expect(browser.getByRole('button', { name: 'Remove Monthly Revenue from this App' })).toBeVisible({ timeout: 30_000 });
   await browser.getByRole('button', { name: 'Add to App: Top Customers' }).click();
   await expect(browser.getByRole('button', { name: 'Remove Top Customers from this App' })).toBeVisible({ timeout: 30_000 });
-  await page.getByRole('button', { name: /Open canvas with 2 sources/ }).click();
+  await page.getByRole('button', { name: /Open Studio with 2 sources/ }).click();
 
   // Month + Gross Revenue on the same shelves as any Dataset: one line, as it is.
   const dataPane = page.locator('.data-panel');

@@ -1,12 +1,12 @@
 # Set up an AI provider
 
-Ask, Notebook AI and the AI helpers in Block Studio and App Studio need a
+Ask, Notebook AI and the AI helpers in the saved query editor and App Studio need a
 language model. Everything else works without one: notebooks, SQL and DQL
-queries, blocks, certification, Apps and lineage.
+queries, saved queries, certification, Apps and lineage.
 
 !!! note "Ask needs a model, even for certified answers"
     Ask uses the model to understand the question before it looks for a
-    certified block. Without a provider, Ask answers **Couldn't run this
+    certified saved query. Without a provider, Ask answers **Couldn't run this
     query** and says that no AI model is configured.
 
 ## Pick a provider

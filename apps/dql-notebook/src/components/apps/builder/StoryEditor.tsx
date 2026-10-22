@@ -89,7 +89,7 @@ export function StoryEditor({
             <span className="studio-story-block-tools">
               <button type="button" aria-label="Move up" disabled={disabled || index === 0} onClick={() => move(index, -1)}>↑</button>
               <button type="button" aria-label="Move down" disabled={disabled || index === blocks.length - 1} onClick={() => move(index, 1)}>↓</button>
-              <button type="button" aria-label="Remove block" disabled={disabled} onClick={() => commit(blocks.filter((_, i) => i !== index))}>✕</button>
+              <button type="button" aria-label="Remove from report" disabled={disabled} onClick={() => commit(blocks.filter((_, i) => i !== index))}>✕</button>
             </span>
           </header>
           {block.kind === 'text'

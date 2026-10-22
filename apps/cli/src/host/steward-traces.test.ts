@@ -98,7 +98,7 @@ describe('askTraceReason', () => {
   } as unknown as Parameters<typeof askTraceReason>[0]);
 
   it('says why an answer was given, from the stop reason', () => {
-    expect(askTraceReason(run('certified_answer_found'))).toBe('Answered from a certified block.');
+    expect(askTraceReason(run('certified_answer_found'))).toBe('Answered from a certified saved query.');
     expect(askTraceReason(run('governed_semantic_answer'))).toBe('Answered from the governed semantic layer.');
     expect(askTraceReason(run('needs_clarification'))).toBe('Asked the person to clarify before answering.');
   });

@@ -120,7 +120,7 @@ export function dashboardFilterCoverage(
           title: item.title,
           reason: datasetBinding
             ? 'Excluded by this filter’s linked-component selection.'
-            : 'This Dataset is not mapped to this filter.',
+            : 'This data is not mapped to this filter.',
         });
       }
       continue;

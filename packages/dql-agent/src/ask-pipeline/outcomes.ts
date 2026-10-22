@@ -347,7 +347,7 @@ export function composeAnsweredText(intent: AnalyticalIntentV1, result: Executed
     .filter((entry, index, all): entry is NonNullable<typeof entry> => Boolean(entry && entry.kind === 'dimension' && entry.description && all.indexOf(entry) === index))
     .slice(0, 2);
   if (defined.length) lines.push(`Definitions: ${defined.map((entry) => `${entry.label ?? entry.name}: ${entry.description!.replace(/\s+/g, ' ').slice(0, 200).replace(/[.\s]+$/, '')}`).join('; ')}.`);
-  lines.push(trust === 'certified' ? 'Source: a certified block.' : trust === 'governed' ? 'Source: the semantic layer.' : 'Source: SQL written by AI from the schema (review before relying on it).');
+  lines.push(trust === 'certified' ? 'Source: a certified saved query.' : trust === 'governed' ? 'Source: the semantic layer.' : 'Source: SQL written by AI from the schema (review before relying on it).');
   for (const caveat of extras.caveats ?? []) lines.push(caveat.replace(/[.\s]+$/, '') + '.');
   return lines.join(' ');
 }

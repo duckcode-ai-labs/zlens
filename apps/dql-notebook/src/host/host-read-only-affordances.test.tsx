@@ -20,7 +20,7 @@ describe('Notebooks landing screen', () => {
   it('hides New Notebook and New Block for a project.read-only viewer, keeps Home', () => {
     const html = welcome(viewer);
     expect(html).not.toContain('New Notebook');
-    expect(html).not.toContain('New Block');
+    expect(html).not.toContain('New saved query');
     expect(html).toContain('Home');
   });
 
@@ -28,7 +28,7 @@ describe('Notebooks landing screen', () => {
     for (const state of [author, NO_HOST]) {
       const html = welcome(state);
       expect(html).toContain('New Notebook');
-      expect(html).toContain('New Block');
+      expect(html).toContain('New saved query');
     }
   });
 });

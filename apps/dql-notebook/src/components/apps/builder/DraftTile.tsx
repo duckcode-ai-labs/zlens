@@ -112,7 +112,7 @@ export function draftColumnsMeta(descriptor: DatasetDescriptor, query: TileQuery
 export function draftTileBlocker(descriptor: DatasetDescriptor, draft: DraftTileState): string | undefined {
   if (!draft.query.measures.length && !draft.query.detail && !draft.query.calculations?.some((calculation) => calculation.expr)) return 'Pick at least one measure.';
   const validation = validateTileQuery(descriptor, draft.query);
-  if (!tileQueryValidationRuns(validation)) return validation.diagnostics[0]?.message ?? 'This field combination is not covered by the Dataset.';
+  if (!tileQueryValidationRuns(validation)) return validation.diagnostics[0]?.message ?? 'This field combination is not covered by the data.';
   const compatibility = datasetTileVisualizationCompatibility(draft.query, draftVisualization(descriptor, draft));
   return compatibility.compatible ? undefined : compatibility.message;
 }
@@ -293,7 +293,7 @@ export function DraftTileInspector({
   };
   return <div className="inspector-body draft-inspector">
     <section className="inspector-title"><label htmlFor="draft-tile-title">Title</label><input id="draft-tile-title" value={draft.title} placeholder={defaultTileTitle(draft.query, humanize)} onChange={(event) => onChange({ ...draft, title: event.target.value })} /></section>
-    <section><label>Dataset</label><div className="static-field">{datasetLabel}</div></section>
+    <section><label>Data</label><div className="static-field">{datasetLabel}</div></section>
     {draft.query.detail ? null : <section>
       <ShelfEditor descriptor={descriptor} encoding={draft.encoding} query={draft.query} disabled={disabled} onChange={changeShelves} onFilterField={(field) => { setFilterField(field); setMoreOpen(true); }} visualization={draftVisualization(descriptor, draft)} result={result} />
       <small className="field-help">Drag fields from the Data panel onto a shelf, or click one to add it.</small>

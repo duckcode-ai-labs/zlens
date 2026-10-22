@@ -75,7 +75,7 @@ npm install --prefix .dql/connectors duckdb
 
 !!! warning "Do not run `create-zlens-app` in the sample"
     `npx create-zlens-app` inside the sample creates a second, empty workspace
-    in `dql/`, without the sample's domain, blocks, App and notebook. If you
+    in `dql/`, without the sample's domain, saved queries, App and notebook. If you
     already have a `dql/` folder from an older quickstart, delete it.
 
 ## 3. Import the dbt project
@@ -116,7 +116,7 @@ The first time, ZLens opens **Guided Setup** in four steps.
    up: you see **DuckDB · configured** and **Test passed**. Click
    **Continue to optional AI**.
 3. **Set up an AI provider.** This step is optional. Ask needs a model, but
-   notebooks, blocks, Apps and lineage do not. Set one up now
+   notebooks, saved queries, Apps and lineage do not. Set one up now
    ([how](ai-provider.md)) or click **Continue to finish**.
 4. **Where do you want to start?** Click **Finish setup**.
 
@@ -168,7 +168,7 @@ certify. See [No dbt? Start from your database](no-dbt.md).
 
 - [Find your way around](workbench.md) the workbench.
 - [Ask a question](../ask/index.md) in plain English.
-- [Save the query as a block](../blocks/index.md) and certify it.
+- [Keep the query as a saved query](../blocks/index.md) and certify it.
 - [Share your work with your team](../notebooks/share-with-your-team.md)
   through your own git repository.
 - [Add ZLens to your own dbt project](your-dbt-project.md), or

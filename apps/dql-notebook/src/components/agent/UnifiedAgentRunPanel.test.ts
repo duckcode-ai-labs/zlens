@@ -1645,7 +1645,7 @@ describe('UnifiedAgentRunPanel DQL-first artifact display helpers', () => {
         rowCount: 10,
         executionTime: 2100,
       },
-    })).toBe('Table · 10 rows · 2.1s · certified block');
+    })).toBe('Table · 10 rows · 2.1s · certified saved query');
   });
 
   it('keeps the exact certified-title result visibly certified instead of relabeling it as generated', () => {
@@ -1663,8 +1663,8 @@ describe('UnifiedAgentRunPanel DQL-first artifact display helpers', () => {
         payload: { selectedConceptIds: ['revenue_operations::block::Top Customers by Revenue'] },
       }],
     } as any;
-    expect(trustExplainer(run)).toBe('Answered from a certified block.');
-    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('certified block');
+    expect(trustExplainer(run)).toBe('Answered from a certified saved query.');
+    expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('certified saved query');
   });
 
   it('AGT-005/UI-012 labels a frozen semantic compiler failure as compile, never connection or AI-generated', () => {
@@ -2606,7 +2606,7 @@ describe('the story an Ask run tells while it works and keeps afterwards', () =>
     expect(askStoryActiveLabel([at('context', 'Searched the project: 19 tables')])).toBe('Asking the AI to read the question');
     expect(askStoryActiveLabel([at('read', 'Asked the AI to read the question')])).toBe('Checking the reading against the project');
     expect(askStoryActiveLabel([at('search', 'Fetched 4 fields the first reading had not seen')])).toBe('Asking the AI to read the question with those fields');
-    expect(askStoryActiveLabel([at('read', 'Settled the reading')])).toBe('Looking for a certified block or semantic metric');
+    expect(askStoryActiveLabel([at('read', 'Settled the reading')])).toBe('Looking for a certified saved query or semantic metric');
     expect(askStoryActiveLabel([at('schema', 'Asking the AI to write SQL from the tables')])).toBe('Asking the AI to draft SQL from the tables');
     expect(askStoryActiveLabel([at('schema', 'No governed answer: asking the tables directly')])).toBe('Asking the AI to draft SQL from the tables');
     expect(askStoryActiveLabel([at('schema', 'Chose the tables dev.products, dev.supplies')])).toBe('Asking the AI to draft SQL from the tables');

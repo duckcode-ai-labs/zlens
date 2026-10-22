@@ -64,7 +64,7 @@ clip('app-builder', async ({ page, sample, director }) => {
   await director.click(browser.getByRole('button', { name: `Add to App: ${DATASET}` }), { after: 300 });
   await expect(browser.getByRole('button', { name: `Remove ${DATASET} from this App` })).toBeVisible({ timeout: 30_000 });
   await director.beat(700);
-  await director.click(page.getByRole('button', { name: /Open canvas with 1 source/ }), { after: 400 });
+  await director.click(page.getByRole('button', { name: /Open Studio with 1 source/ }), { after: 400 });
 
   // 3. On the canvas, click a measure: a new tile; then add it to the page.
   await director.click(page.locator('.data-panel button.data-field').filter({ hasText: /^Σ\s*Lifetime Spend\s*sum$/ }), { after: 300 });

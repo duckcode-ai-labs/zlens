@@ -41,7 +41,7 @@ export function DatasetTileQueryInspector({
   const commit = (next: TileQuery): string | void => {
     const validation = validateTileQuery(descriptor, next);
     if (!tileQueryValidationRuns(validation)) {
-      return validation.diagnostics[0]?.message ?? 'That change is not covered by this Dataset.';
+      return validation.diagnostics[0]?.message ?? 'That change is not covered by this data.';
     }
     const visualizationContract = datasetTileVisualizationCompatibility(next, visualization);
     if (!visualizationContract.compatible) {
@@ -66,7 +66,7 @@ export function DatasetTileQueryInspector({
     if (message) setRefusal(message);
   };
   return <section className="dataset-query-inspector">
-    <div className="inspector-field"><label>Dataset</label><div className="static-field">{descriptor.label}</div></div>
+    <div className="inspector-field"><label>Data</label><div className="static-field">{descriptor.label}</div></div>
     {query.detail ? <div className="inspector-field"><label>Rows</label><p className="field-help">Row details: {query.detailColumns?.length ?? 0} columns. Change them under Filters, sort and more.</p></div> : <>
       <ShelfEditor
         descriptor={descriptor}
@@ -85,7 +85,7 @@ export function DatasetTileQueryInspector({
       <summary>Filters, sort and more</summary>
       <p className="field-help">{descriptor.label} · changes rerun this tile against the same source revision.</p>
       <TileQueryEditor descriptor={descriptor} query={query} disabled={disabled} onChange={commit} idPrefix={`dataset-inspector-${descriptor.id}`} shelves={!query.detail} filterField={filterField} />
-      <button type="button" className="dataset-change-source" disabled={disabled} onClick={onOpenSources}><Blocks size={12} /> Choose another Dataset</button>
+      <button type="button" className="dataset-change-source" disabled={disabled} onClick={onOpenSources}><Blocks size={12} /> Choose other data</button>
     </details>
   </section>;
 }
@@ -148,7 +148,7 @@ export function DatasetInteractionInspector({
 
   const saveCrossFilter = () => {
     if (!fromField || !selectedTarget || !targetField) {
-      setMessage('Choose an output field and an approved target Dataset field before saving this mapping.');
+      setMessage('Choose an output field and an approved target field before saving this mapping.');
       return;
     }
     const existing = page.interactions?.crossFilter?.mappings ?? [];
@@ -160,7 +160,7 @@ export function DatasetInteractionInspector({
       ...(page.interactions ?? {}),
       crossFilter: { ...(page.interactions?.crossFilter ?? {}), mappings },
     });
-    setMessage(`Mapped ${humanize(fromField)} to ${selectedTarget.descriptor.label}.${humanize(targetField)}. Preview result marks can now filter that Dataset.`);
+    setMessage(`Mapped ${humanize(fromField)} to ${selectedTarget.descriptor.label}.${humanize(targetField)}. Preview result marks can now filter that data.`);
   };
   const removeCrossFilter = (index: number) => {
     const existing = page.interactions?.crossFilter?.mappings ?? [];
@@ -198,10 +198,10 @@ export function DatasetInteractionInspector({
     <p>Map a selected output to a specific approved field. Matching display names never create a cross-filter.</p>
     {sourceFields.length && targetDatasets.length ? <div className="dataset-interaction-form">
       <select aria-label="Source result field" value={fromField} disabled={disabled} onChange={(event) => setFromField(event.target.value)}>{sourceFields.map((field) => <option key={field} value={field}>{humanize(field)}</option>)}</select>
-      <select aria-label="Target Dataset" value={targetDatasetId} disabled={disabled} onChange={(event) => setTargetDatasetId(event.target.value)}>{targetDatasets.map((target) => <option key={target.binding.id} value={target.binding.id}>{target.descriptor.label}</option>)}</select>
-      <select aria-label="Target Dataset field" value={targetField} disabled={disabled || !targetFields.length} onChange={(event) => setTargetField(event.target.value)}>{targetFields.map((field) => <option key={field.qualifiedId} value={field.name}>{humanize(field.name)}</option>)}</select>
+      <select aria-label="Target data" value={targetDatasetId} disabled={disabled} onChange={(event) => setTargetDatasetId(event.target.value)}>{targetDatasets.map((target) => <option key={target.binding.id} value={target.binding.id}>{target.descriptor.label}</option>)}</select>
+      <select aria-label="Target data field" value={targetField} disabled={disabled || !targetFields.length} onChange={(event) => setTargetField(event.target.value)}>{targetFields.map((field) => <option key={field.qualifiedId} value={field.name}>{humanize(field.name)}</option>)}</select>
       <button type="button" disabled={disabled} onClick={saveCrossFilter}>Map cross-filter</button>
-    </div> : <small className="field-help">Add a grouped Dataset tile and a second bound Dataset to map result marks across sources.</small>}
+    </div> : <small className="field-help">Add a grouped tile from a second data source to map result marks across them.</small>}
     {ownMappings.length ? <div className="dataset-interaction-list">{ownMappings.map((mapping, index) => <span key={`${mapping.fromField}:${mapping.toDataset}:${mapping.toField}`}>{humanize(mapping.fromField)} → {humanize(mapping.toField)}<button type="button" disabled={disabled} onClick={() => removeCrossFilter(index)} aria-label={`Remove ${mapping.fromField} mapping`}><X size={11} /></button></span>)}</div> : null}
     <div className="dataset-navigation-form">
       <small>Details navigation</small>

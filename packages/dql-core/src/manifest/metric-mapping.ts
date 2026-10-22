@@ -44,9 +44,9 @@ export function validateBlockMetricMappings(
         error(`"${mapping.output}" maps to metric "${mapping.metric}", which is not in the semantic layer${metricNames.size === 0 ? ' (the project has no semantic-layer metrics)' : ''}.`);
       }
       if (!block.declaredOutputs?.length) {
-        if (!noOutputsReported) error('the block must declare its outputs (outputs = [...]) so Ask can check the rows it returns against the question.');
+        if (!noOutputsReported) error('the saved query must declare its outputs (outputs = [...]) so Ask can check the rows it returns against the question.');
         noOutputsReported = true;
-      } else if (outputs.size > 0 && !outputs.has(key)) error(`"${mapping.output}" is not an output column of the block (${[...outputs].join(', ')}).`);
+      } else if (outputs.size > 0 && !outputs.has(key)) error(`"${mapping.output}" is not an output column of the saved query (${[...outputs].join(', ')}).`);
       const unreadable = mapping.filter ? unreadableFilterParts(mapping.filter) : [];
       if (unreadable.length) error(`the filter for "${mapping.output}" has parts that are not "column = value" conditions: ${unreadable.join('; ')}.`);
     }

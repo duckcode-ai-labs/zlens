@@ -77,7 +77,7 @@ type BuildPhase = 'idle' | 'building' | 'ready' | 'error';
 
 const TARGET_LABEL: Record<AiBuildTarget, string> = {
   cell: 'Cell',
-  block: 'Block',
+  block: 'Saved query',
 };
 
 export function AiBuildResult({
@@ -207,8 +207,8 @@ export function AiBuildResult({
             {target === 'cell'
               ? 'Create a review-required SQL preview for a notebook cell.'
               : blockMode === 'edit'
-                ? 'Rewrite an existing draft DQL block.'
-                : 'Generate a reusable draft DQL block.'}
+                ? 'Rewrite an existing draft saved query.'
+                : 'Generate a reusable draft saved query.'}
           </span>
           {owner && (
             <span
@@ -229,7 +229,7 @@ export function AiBuildResult({
         {/* Spec 17 (part A) — New block vs. Modify existing (block builds only) */}
         {target === 'block' ? (
           <div style={{ display: 'grid', gap: 8 }}>
-            <div role="group" aria-label="Block build mode" style={segmentGroupStyle(t)}>
+            <div role="group" aria-label="Saved query build mode" style={segmentGroupStyle(t)}>
               {(['create', 'edit'] as AiBuildMode[]).map((value) => {
                 const active = blockMode === value;
                 return (
@@ -245,7 +245,7 @@ export function AiBuildResult({
                     style={segmentButtonStyle(t, active, false)}
                   >
                     {value === 'create' ? <SquarePlus size={13} strokeWidth={2} /> : <SquarePen size={13} strokeWidth={2} />}
-                    {value === 'create' ? 'New block' : 'Modify existing'}
+                    {value === 'create' ? 'New saved query' : 'Modify existing'}
                   </button>
                 );
               })}
@@ -289,7 +289,7 @@ export function AiBuildResult({
               ? 'Describe the preview SQL you want, e.g. "monthly revenue by region for the last 12 months".'
               : blockMode === 'edit'
                 ? 'Describe the change, e.g. "add a 12-month trailing window and exclude test accounts".'
-                : 'Describe the reusable block, e.g. "active customers by signup cohort".'}
+                : 'Describe the reusable saved query, e.g. "active customers by signup cohort".'}
             style={textareaStyle(t)}
           />
           {context?.cellSql ? (
@@ -299,7 +299,7 @@ export function AiBuildResult({
           ) : null}
           {editMissingBlock ? (
             <div style={{ fontSize: 10.5, color: t.textMuted, fontFamily: t.font }}>
-              Pick the block you want to modify above.
+              Pick the saved query you want to modify above.
             </div>
           ) : null}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -310,7 +310,7 @@ export function AiBuildResult({
               style={{ ...primaryButtonStyle(t), opacity: building || !prompt.trim() || editMissingBlock ? 0.6 : 1 }}
             >
               {building ? <Loader2 size={13} strokeWidth={2} /> : <Hammer size={13} strokeWidth={2} />}
-              {building ? (editingBlock ? 'Updating…' : 'Building…') : editingBlock ? 'Update block' : 'Build'}
+              {building ? (editingBlock ? 'Updating…' : 'Building…') : editingBlock ? 'Update saved query' : 'Build'}
             </button>
           </div>
         </div>
@@ -477,7 +477,7 @@ function BlockResultCard({
         <div>
           <button type="button" onClick={() => setSqlOpen((open) => !open)} style={disclosureToggleStyle(t)}>
             {sqlOpen ? <ChevronDown size={13} strokeWidth={2} /> : <ChevronRight size={13} strokeWidth={2} />}
-            {sqlOpen ? 'Hide SQL this block will run' : 'Show SQL this block will run'}
+            {sqlOpen ? 'Hide SQL this saved query will run' : 'Show SQL this saved query will run'}
           </button>
           {sqlOpen ? <div style={{ marginTop: 7 }}><CodeBlock t={t} code={sqlPreview} /></div> : null}
         </div>
@@ -517,7 +517,7 @@ function BlockResultCard({
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button type="button" onClick={onOpen} style={primaryButtonStyle(t)}>
           {isEdit ? <SquarePen size={13} strokeWidth={2} /> : <Blocks size={13} strokeWidth={2} />}
-          {isEdit ? 'Update block in Block Studio' : 'Open in Block Studio'}
+          {isEdit ? 'Update the saved query' : 'Open in Saved queries'}
         </button>
         <button type="button" onClick={onRefine} style={ghostButtonStyle(t)}>
           <RotateCcw size={13} strokeWidth={2} /> Refine
@@ -791,7 +791,7 @@ export function RouteBadge({ t, route }: { t: Theme; route?: AiRoute }): JSX.Ele
 export function defaultRouteLabel(route: AiRoute): string {
   switch (route.tier) {
     case 'certified_block':
-      return route.ref ? `Certified block ${route.ref}` : 'Certified block';
+      return route.ref ? `Certified saved query ${route.ref}` : 'Certified saved query';
     case 'semantic_metric':
       return route.ref ? `Answered from metric ${route.ref}` : 'Answered from metric';
     case 'generated_sql':
@@ -852,7 +852,7 @@ function BlockPicker({
           type="text"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder={selected ? `Modifying ${selected.name} — search to change` : 'Search blocks to modify…'}
+          placeholder={selected ? `Modifying ${selected.name} — search to change` : 'Search saved queries to modify…'}
           style={{
             width: '100%',
             border: `1px solid ${t.btnBorder}`,
@@ -868,11 +868,11 @@ function BlockPicker({
       </div>
       {loading ? (
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, color: t.textMuted, fontFamily: t.font, padding: '4px 2px' }}>
-          <Loader2 size={12} strokeWidth={2} /> Loading blocks…
+          <Loader2 size={12} strokeWidth={2} /> Loading saved queries…
         </div>
       ) : blocks.length === 0 ? (
         <div style={{ fontSize: 11.5, color: t.textMuted, fontFamily: t.font, padding: '2px 2px', lineHeight: 1.45 }}>
-          No blocks found. Type the block file path you want to modify, then press Enter.
+          No saved queries found. Type the file path of the saved query (a .dql block file) you want to modify, then press Enter.
           <input
             type="text"
             defaultValue={selectedPath ?? ''}
@@ -900,7 +900,7 @@ function BlockPicker({
       ) : (
         <div style={{ display: 'grid', gap: 3, maxHeight: 184, overflow: 'auto' }}>
           {filtered.length === 0 ? (
-            <div style={{ fontSize: 11.5, color: t.textMuted, fontFamily: t.font, padding: '4px 2px' }}>No blocks match “{query}”.</div>
+            <div style={{ fontSize: 11.5, color: t.textMuted, fontFamily: t.font, padding: '4px 2px' }}>No saved queries match “{query}”.</div>
           ) : filtered.map((block) => {
             const active = block.path === selectedPath;
             return (

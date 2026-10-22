@@ -2,7 +2,7 @@
 
 Lineage shows where a number comes from and what uses it: from your warehouse
 tables (and, if you use dbt, the sources and models behind them), through
-blocks, to the dashboards and Apps that show them. ZLens builds it from your
+saved queries, to the dashboards and Apps that show them. ZLens builds it from your
 synced warehouse catalog or dbt manifest plus your ZLens files, so it is always
 up to date after `npm run sync` (or `zlens compile`).
 
@@ -11,17 +11,17 @@ up to date after `npm run sync` (or `zlens compile`).
 ## Trace one item
 
 1. In the left rail, click **Lineage**.
-2. **Trace lineage** asks you to pick something. Use the tabs (**Blocks**,
-   **Apps**, **Notebooks**, **Dashboards**) or **Search blocks…**.
-3. Click an item, such as the block `Top customers by lifetime spend`.
+2. **Trace lineage** asks you to pick something. Use the tabs (**Saved queries**,
+   **Apps**, **Notebooks**, **Dashboards**) or **Search saved queries…**.
+3. Click an item, such as the saved query `Top customers by lifetime spend`.
 
 The graph shows everything upstream and downstream of it. In the sample
 project that is: the raw dbt sources, the staging and mart models
-(`stg_customers`, `orders`, `customers` and so on), the block, the dashboard
+(`stg_customers`, `orders`, `customers` and so on), the saved query, the dashboard
 page, and the App.
 
-Each card names the item and its type, such as **dbt Model**, **DQL Block**,
-**Dashboard** or **App**. Certified blocks have a green shield.
+Each card names the item and its type, such as **dbt Model**, **Saved query**,
+**Dashboard** or **App**. Certified saved queries have a green shield.
 
 The status bar reads, for example, `End-to-end lineage of Top customers by
 lifetime spend · 18 nodes · 18 edges` and **Compiled from the dbt manifest**.
@@ -44,18 +44,18 @@ Click the empty canvas, or **Show all**, to clear the focus.
 
 | Control | Options |
 |---|---|
-| View | **Technical** (sources and dbt), **Domain** (terms, domains, metrics, certified blocks), **End-to-end** (everything) |
+| View | **Technical** (sources and dbt), **Domain** (terms, domains, metrics, certified saved queries), **End-to-end** (everything) |
 | Layout | **Flow** or **Layered** |
 | Direction | **LR** (left to right) or **TB** (top to bottom) |
 
 To trace something else, click **Tracing** at the top left, or type in
-**Search another block, app, or notebook…**.
+**Search another saved query, app, or notebook…**.
 
 ## From other places
 
-- **A notebook cell**: open **Cell SQL lineage** or **Project block lineage**
+- **A notebook cell**: open **Cell SQL lineage** or **Project saved query lineage**
   under the cell, then **View in DAG**.
-- **A block**: the **Lineage** tab at the bottom of Block Studio.
+- **A saved query**: the **Lineage** tab at the bottom of the saved query editor.
 - **An App**: **Lineage** in the dashboard toolbar opens the page's lineage.
 
 ## From the terminal
@@ -91,6 +91,6 @@ Lineage reads `dql-manifest.json`. If it says **No lineage data found**, run
 ## What lineage tracks
 
 Node types: source tables, dbt sources and models, semantic metrics and
-dimensions, business terms and views, domains, blocks, charts, notebooks,
+dimensions, business terms and views, domains, saved queries, charts, notebooks,
 dashboard pages and Apps. For the full model, see
 [Lineage model](../architecture/lineage-model.md).

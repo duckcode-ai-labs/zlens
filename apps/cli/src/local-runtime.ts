@@ -1736,7 +1736,7 @@ export function askTraceReason(run: Pick<AgentRun, 'stopReason' | 'status' | 'ar
     ? (typeof gap?.kind === 'string' ? ASK_TRACE_GAP_SENTENCES[gap.kind] ?? '' : '')
     : typeof gap?.message === 'string' ? gap.message.trim().slice(0, 300) : '';
   const byStop: Record<AgentRun['stopReason'], string> = {
-    certified_answer_found: 'Answered from a certified block.',
+    certified_answer_found: 'Answered from a certified saved query.',
     governed_semantic_answer: 'Answered from the governed semantic layer.',
     governed_compound_answer: 'Answered from the governed semantic layer.',
     generated_review_required: 'Answered with SQL that needs review before it is trusted.',
@@ -5587,7 +5587,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       status: 'running',
       stage: 'indexing',
       progress: 65,
-      message: 'Indexing dbt models, columns, semantic metrics, certified blocks, and governed relationships.',
+      message: 'Indexing dbt models, columns, semantic metrics, certified saved queries, and governed relationships.',
       createdAt: now,
       updatedAt: now,
       snapshotId: input.snapshotId,
@@ -8887,7 +8887,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // Add to Block Studio.
       const governedResult: AgentRouteExecutorResult = carriedDqlArtifact && (attempt ?? 0) === 0
         ? {
-            summary: 'Reused the governed answer artifact as a transient Block AI draft.',
+            summary: 'Reused the governed answer artifact as a transient saved query draft.',
             answer: 'Prepared the existing governed DQL as an ownerless review draft. No file was changed.',
             artifacts: [agentRunArtifact(
               'answer',
@@ -8902,7 +8902,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 'Reused governed DQL artifact',
                 true,
                 'info',
-                'Reused the exact answer artifact without regenerating SQL or writing a block file.',
+                'Reused the exact answer artifact without regenerating SQL or writing a saved query file.',
               ),
             ],
           }
@@ -8961,7 +8961,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         },
       };
       return {
-        summary: 'Prepared an ownerless, review-required DQL block draft. No file was changed.',
+        summary: 'Prepared an ownerless, review-required saved query draft. No file was changed.',
         answer: governedResult.answer,
         status: 'needs_review',
         trustState: 'review_required',
@@ -8977,15 +8977,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ...(governedResult.evaluations ?? []),
           agentRunEvaluation(
             'block-commit-boundary',
-            'Explicit Block Studio commit',
+            'Explicit save from Saved queries',
             true,
             'warning',
-            'Generation produced an ownerless transient DQL artifact. Add to Block Studio is the only action that writes the review draft.',
+            'Generation produced an ownerless transient DQL artifact. Add to saved queries is the only action that writes the review draft.',
             result,
           ),
         ],
         nextActions: [
-          { id: 'add-to-block-studio', label: 'Add to Block Studio', artifactKind: 'dql_block_draft' },
+          { id: 'add-to-block-studio', label: 'Add to saved queries', artifactKind: 'dql_block_draft' },
         ],
       };
     },
@@ -9199,7 +9199,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       emit({
         type: 'executor.started',
-        message: 'Planning the app: matching certified blocks and finding coverage gaps.',
+        message: 'Planning the app: matching certified saved queries and finding coverage gaps.',
         route: 'app_build',
       });
       // Two-phase build: this run only PROPOSES the content list (no files). The
@@ -10448,7 +10448,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     try {
       artifact = generatedSqlArtifactContract(question, sql, seed);
     } catch (error) {
-      warnings.push(`This answer could not be captured as a reusable DQL block: ${apiErrorMessage(error)}`);
+      warnings.push(`This answer could not be captured as a reusable saved query: ${apiErrorMessage(error)}`);
       return undefined;
     }
 
@@ -10460,7 +10460,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ? `it still needs values for ${invocation.unresolvedParameters.join(', ')}`
           : undefined;
       if (divergence) {
-        warnings.push(`The reusable DQL block for this answer needs review before reuse: ${divergence}`);
+        warnings.push(`The reusable saved query for this answer needs review before reuse: ${divergence}`);
         // Keep the declared parameter contract even when the block cannot run
         // as-is. This branch is precisely "it still needs values for X", so the
         // parameter-input surface needs the list in order to ASK for them —
@@ -10481,7 +10481,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         ...(Object.keys(invocation.values).length > 0 ? { parameterValues: invocation.values } : {}),
       });
     } catch (error) {
-      warnings.push(`The reusable DQL block for this answer needs review before reuse: ${apiErrorMessage(error)}`);
+      warnings.push(`The reusable saved query for this answer needs review before reuse: ${apiErrorMessage(error)}`);
       return withCandidates({ ...artifact, trustState: 'review_required', compiledSql: executedSql });
     }
   };
@@ -12780,7 +12780,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       || replacementFor.has(match.name.toLowerCase())
       || (match.objectKey && replacementFor.has(match.objectKey.toLowerCase()));
     if (documentedReplacement) return null;
-    return `Likely duplicate of ${match.name} (${match.kind}, ${Math.round(match.score * 100)}% match). Reuse the existing block, extend it, or document this draft as a replacement before certification.`;
+    return `Likely duplicate of ${match.name} (${match.kind}, ${Math.round(match.score * 100)}% match). Reuse the existing saved query, extend it, or document this draft as a replacement before certification.`;
   };
 
   const runBlockStudioPreviewSource = async (
@@ -12831,7 +12831,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!executableSql) {
       const message = semanticCompose?.diagnostics.find((item) => item.severity === 'error')?.message
         ?? validation.diagnostics.find((item) => item.severity === 'error')?.message
-        ?? 'No executable SQL found in block source.';
+        ?? 'No executable SQL found in the saved query.';
       throw new Error(message);
     }
     const plan = buildExecutionPlan(
@@ -12913,7 +12913,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           name: 'build execution plan',
           passed: false,
           error: semanticCompose?.diagnostics.find((diagnostic) => diagnostic.severity === 'error')?.message
-            ?? 'Could not build an execution plan for this block.',
+            ?? 'Could not build an execution plan for this saved query.',
         }],
         runAt: new Date(),
       };
@@ -13009,7 +13009,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     options.reportProgress?.({
       phase: 'previewing',
       progress: 30,
-      message: 'Compiling and previewing the saved block.',
+      message: 'Compiling and previewing the saved query.',
     });
     try {
       preview = await runBlockStudioPreviewSource(source, undefined, {}, timer);
@@ -13021,7 +13021,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     options.reportProgress?.({
       phase: 'testing',
       progress: 60,
-      message: 'Evaluating declared block tests.',
+      message: 'Evaluating the saved query tests.',
     });
     try {
       testResults = preview
@@ -13604,7 +13604,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   ): Promise<DatasetTileSaveAsBlockResponse> => {
     const refuse = (code: string, error: string, status = 409): DatasetTileSaveAsBlockResponse => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('DATASET_TILE_SAVE_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before saving a reusable block.');
+      return refuse('DATASET_TILE_SAVE_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before saving a reusable saved query.');
     }
     const run = dashboardRunEvidence.get(input.runId);
     if (!run || run.expiresAt < Date.now()) {
@@ -13733,7 +13733,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const message = error instanceof Error ? error.message : String(error);
       return refuse(message === 'BLOCK_EXISTS' ? 'DATASET_TILE_SAVE_PATH_EXISTS' : 'DATASET_TILE_SAVE_FAILED',
         message === 'BLOCK_EXISTS'
-          ? 'A review draft already uses that block path. Choose a different name.'
+          ? 'A review draft already uses that name. Choose a different name.'
           : `ZLens could not save this Dataset tile as a review draft: ${message}`,
         message === 'BLOCK_EXISTS' ? 409 : 400);
     }
@@ -13764,10 +13764,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return refuse('DATASET_TILE_REPLACE_NOT_SETTLED', 'This tile has no complete current Dataset execution evidence. Run the current tile again before replacing it.');
     }
     if (execution.comparison) {
-      return refuse('comparison_not_representable_as_single_block', 'This comparison uses multiple executions and result graph arithmetic, so it cannot replace the tile with one reusable SQL block. The Dataset tile remains runnable.');
+      return refuse('comparison_not_representable_as_single_block', 'This comparison uses multiple executions and result graph arithmetic, so it cannot replace the tile with one reusable saved query. The Dataset tile remains runnable.');
     }
     if (!execution.futureBindingsRepresentable || !execution.sql.trim() || execution.sql.includes('?')) {
-      return refuse('dataset_tile_dynamic_binding_not_representable', 'This tile has filters, parameters, or interactions that the saved fixed-value review block cannot represent. The Dataset tile remains unchanged.');
+      return refuse('dataset_tile_dynamic_binding_not_representable', 'This tile has filters, parameters, or interactions that the saved fixed-value review draft cannot represent. The Dataset tile remains unchanged.');
     }
 
     const normalizedBlockPath = normalize(input.blockPath).replaceAll('\\', '/').replace(/^\/+/, '');
@@ -13802,7 +13802,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return refuse('DATASET_TILE_REPLACE_INTENT_STALE', 'The App page content changed after this result ran. Run the current tile again before replacing it.');
     }
     if (draft.sourcePolicy !== 'include_review_required' && input.enableReviewRequired !== true) {
-      return refuse('DATASET_TILE_REPLACE_REVIEW_POLICY_REQUIRED', 'Replacing this tile uses a review-required block. Choose the explicit review-required replacement action to keep that source policy visible.');
+      return refuse('DATASET_TILE_REPLACE_REVIEW_POLICY_REQUIRED', 'Replacing this tile uses a review-required saved query. Choose the explicit review-required replacement action to keep that source policy visible.');
     }
 
     let blockSource: string;
@@ -13829,7 +13829,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         return refuse('DATASET_TILE_REPLACE_BLOCK_STALE', 'The selected review draft does not match this current Dataset tile and execution. Save a new review draft before replacing it.');
       }
     } catch (error) {
-      return refuse('DATASET_TILE_REPLACE_BLOCK_INVALID', `ZLens could not read this review draft as one executable block: ${error instanceof Error ? error.message : String(error)}`, 400);
+      return refuse('DATASET_TILE_REPLACE_BLOCK_INVALID', `ZLens could not read this review draft as one executable saved query: ${error instanceof Error ? error.message : String(error)}`, 400);
     }
 
     const snapshot = projectSnapshot();
@@ -17837,19 +17837,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           hostedOwner = hostActor() ?? currentPrincipal()?.displayName ?? currentPrincipal()?.id;
           if (mode === 'create' && hostHooks?.onePerson !== true) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(serializeJSON({ error: 'A block built with AI is a draft for you alone: build it in your private workspace (your own copy of this project), where it goes to review.', code: 'BUILD_IN_DRAFT_SPACE' }));
+            res.end(serializeJSON({ error: 'A saved query built with AI is a draft for you alone: build it in your private workspace (your own copy of this project), where it goes to review.', code: 'BUILD_IN_DRAFT_SPACE' }));
             return;
           }
           if (mode === 'edit') {
             const file = blockPath && blockPath.endsWith('.dql') ? hostedProjectFile(projectRoot, blockPath, { privateDrafts: privateDraftsAllowed() }) : null;
             if (!file || !existsSync(file)) {
               res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-              res.end(serializeJSON({ error: 'That block was not found in this project.' }));
+              res.end(serializeJSON({ error: 'That saved query was not found in this project.' }));
               return;
             }
             if (/\bstatus\s*=\s*"certified"/i.test(readFileSync(file, 'utf-8'))) {
               res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-              res.end(serializeJSON({ error: 'A certified block changes only through review. Build a new draft from it instead, in your private workspace; a steward approves the change before it replaces the certified one.', code: 'CERTIFIED_BLOCK' }));
+              res.end(serializeJSON({ error: 'A certified saved query changes only through review. Build a new draft from it instead, in your private workspace; a steward approves the change before it replaces the certified one.', code: 'CERTIFIED_BLOCK' }));
               return;
             }
           }
@@ -20591,7 +20591,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const blockPath = normalize(block.filePath).replace(/^\/+/, '');
         const absolute = isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
         if (!absolute || !existsSync(absolute)) {
-          reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved block file ZLens can change.` });
+          reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query file ZLens can change.` });
           return;
         }
         const blockSource = readFileSync(absolute, 'utf-8');
@@ -21725,7 +21725,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const savedQueryResult = discoveryDescriptor.result;
                 const block = resolveDatasetSourceManifestBlock(manifest, source.executionRef);
                 if (!block || !isPlainSavedQueryBlock(block)) {
-                  throw new Error(`Saved query ${source.title} no longer resolves to its saved block. Refresh it in the Data pane.`);
+                  throw new Error(`Saved query ${source.title} no longer resolves to its file. Refresh it in the Data pane.`);
                 }
                 assertAppAccess({
                   app: loaded.app,
@@ -23201,7 +23201,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 sql: blockFilterApplication.sql.slice(0, 40_000),
                 trustState: block.status === 'certified' ? 'certified' : 'review_required',
                 explanation: [
-                  block.status === 'certified' ? 'This tile executed a certified project block.' : 'This project block is not certified and remains review-required.',
+                  block.status === 'certified' ? 'This tile executed a certified saved query.' : 'This saved query is not certified and remains review-required.',
                   'Dashboard filters and typed parameters were bound before read-only execution.',
                 ],
                 executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -23270,7 +23270,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     sql: repaired.repairedSql.slice(0, 40_000),
                     trustState: 'review_required',
                     explanation: [
-                      'The saved certified block was not changed.',
+                      'The certified saved query was not changed.',
                       'A bounded repair executed on the original data target; this repaired result requires human review.',
                     ],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -23294,7 +23294,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     dql: blockSource.slice(0, 40_000),
                     ...(blockFilterApplication?.sql ?? blockPlan?.sql ? { sql: (blockFilterApplication?.sql ?? blockPlan!.sql).slice(0, 40_000) } : {}),
                     trustState: 'review_required',
-                    explanation: ['Automatic repair could not produce a safe executable result. The saved block was not changed.'],
+                    explanation: ['Automatic repair could not produce a safe executable result. The saved query was not changed.'],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
                   },
                 } : {}),
@@ -25793,7 +25793,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (missing.length > 0) {
           res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({
-            error: `Block is missing required governance fields: ${missing.join(', ')}`,
+            error: `Saved query is missing required fields: ${missing.join(', ')}`,
             missing,
           }));
           return;
@@ -26262,7 +26262,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const parameterNames = new Set((validation.parameters ?? []).map((parameter) => parameter.name));
         if (parameterNames.has(column) || (parsedMeta.outputs.length > 0 && !parsedMeta.outputs.includes(column))) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: `"${column}" is not a declared output of this block` }));
+          res.end(serializeJSON({ error: `"${column}" is not a declared output of this saved query` }));
           return;
         }
         const activeConnection = requireActiveConnection();
@@ -26449,7 +26449,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const absoluteCurrentPath = safeJoin(projectRoot, currentPath);
           if (!absoluteCurrentPath || !existsSync(absoluteCurrentPath)) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(serializeJSON({ error: 'The block changed or moved. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
+            res.end(serializeJSON({ error: 'The saved query changed or moved. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
             return;
           }
           const actualFingerprint = createHash('sha256')
@@ -26457,7 +26457,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             .digest('hex');
           if (actualFingerprint !== expectedSourceFingerprint) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(serializeJSON({ error: 'The block changed after it was opened. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
+            res.end(serializeJSON({ error: 'The saved query changed after it was opened. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
             return;
           }
         }
@@ -26469,7 +26469,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           : parsed.name;
         if (!name) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Block name is required.' }));
+          res.end(serializeJSON({ error: 'Saved query name is required.' }));
           return;
         }
         const existingCanonical = Boolean(currentPath && !isDraftBlockPath(currentPath));
@@ -26576,7 +26576,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             };
           }
 
-          report({ phase: 'publishing', progress: 82, message: 'Publishing the certified block.' });
+          report({ phase: 'publishing', progress: 82, message: 'Publishing the certified saved query.' });
           const publishedDraftSource = certifiedBesideDraft ? stripDraftEditName(draftSource) : draftSource;
           const certifiedSource = setBlockStudioStatusInSource(withoutAskOriginReuseTag(publishedDraftSource), 'certified');
           const certifiedMetadata = parseBlockSourceMetadata(certifiedSource);
@@ -26773,7 +26773,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           // something no rule looked at.
           const onDisk = existsSync(join(projectRoot, normalizedBlockPath)) ? readFileSync(join(projectRoot, normalizedBlockPath), 'utf-8') : '';
           if (setBlockStudioStatusInSource(onDisk, 'draft').trim() !== setBlockStudioStatusInSource(source, 'draft').trim()) {
-            throw Object.assign(new Error('The saved block differs from the source that was checked. Save it, then certify again.'), { code: 'SOURCE_CHANGED' });
+            throw Object.assign(new Error('The saved query differs from the version that was checked. Save it, then certify again.'), { code: 'SOURCE_CHANGED' });
           }
           setBlockStudioStatus(projectRoot, normalizedBlockPath, 'certified', receipt);
           if (result.preview) writeBlockStudioRunSummary(projectRoot, normalizedBlockPath, certifiedSource, result.preview.result);
@@ -26924,7 +26924,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               results.push({
                 candidateId,
                 status: 'error',
-                blockers: ['An equivalent governed block already exists. Open and reuse it instead of saving a duplicate.'],
+                blockers: ['An equivalent saved query already exists. Open and reuse it instead of saving a duplicate.'],
                 candidate: candidate as DqlGenerationCandidate,
               });
               continue;
@@ -27745,7 +27745,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         if (typeof metadata.name !== 'string' || !metadata.name.trim()) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Block name is required. Type a name in Block name, then save.' }));
+          res.end(serializeJSON({ error: 'A name is required. Type a name, then save.' }));
           return;
         }
         const validation = validateBlockStudioSource(source, semanticLayer);
@@ -27756,7 +27756,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           );
           res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({
-            error: errors[0]?.message ?? 'Fix the block errors before saving.',
+            error: errors[0]?.message ?? 'Fix the errors in this saved query before saving.',
             code: 'BLOCK_VALIDATION_FAILED',
             recoverable: true,
             details: { validation: { ...validation, saveable: false } },
@@ -27831,7 +27831,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch (error) {
         if (error instanceof Error && error.message === 'BLOCK_EXISTS') {
           res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'A block with this name already exists in this folder. Rename it and try again.', code: 'BLOCK_EXISTS' }));
+          res.end(serializeJSON({ error: 'A saved query with this name already exists in this folder. Rename it and try again.', code: 'BLOCK_EXISTS' }));
           return;
         }
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -29774,7 +29774,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         if (cell.type === 'dql' && /^\s*@block\(/i.test(cell.source)) {
           res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Customize the bound block as a notebook copy before repairing it.' }));
+          res.end(serializeJSON({ error: 'Customize the bound saved query as a notebook copy before repairing it.' }));
           return;
         }
         const embeddedSourceSql = notebookCellRepairSql(cell);
@@ -31055,7 +31055,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (!block) {
           res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
           // With a host, a request's own text is not repeated back.
-          res.end(serializeJSON({ error: hostedRequest() ? 'That block was not found. Pick a certified block from the list.' : `Block "${blockName}" was not found.` }));
+          res.end(serializeJSON({ error: hostedRequest() ? 'That saved query was not found. Pick a certified saved query from the list.' : `Saved query "${blockName}" was not found.` }));
           return;
         }
         if (block.status !== 'certified') throw new Error(`Block "${blockName}" is not certified.`);
@@ -41018,7 +41018,7 @@ function presentBlockStudioDiagnostic(
         title: 'Semantic runtime is not ready',
         field: 'Runtime',
         references: semanticRefs.metrics,
-        message: 'This semantic block needs a configured dbt Cloud, local MetricFlow, or DQL semantic runtime before it can run or be certified.',
+        message: 'This saved query needs a configured dbt Cloud, local MetricFlow, or DQL semantic runtime before it can run or be certified.',
         correction: 'Open semantic runtime settings, connect the project runtime, then run the block again.',
         technicalDetails: raw,
         action: 'configure_runtime',
@@ -41028,7 +41028,7 @@ function presentBlockStudioDiagnostic(
         ...base,
         title: 'Choose at least one metric',
         field: 'Metrics',
-        message: 'This semantic block does not select a metric yet.',
+        message: 'This saved query does not select a metric yet.',
         correction: 'Add one or more governed metrics in the visual builder or DQL source.',
         action: 'review_metrics',
       };
@@ -42010,7 +42010,7 @@ export function validateBlockStudioSource(
     diagnostics.push({
       severity: 'warning',
       code: 'visualization_missing',
-      message: 'Block has no visualization section yet.',
+      message: 'This saved query has no visualization section yet.',
     });
   }
 
@@ -42019,7 +42019,7 @@ export function validateBlockStudioSource(
       ? {
           severity: 'warning',
           code: 'semantic_not_runnable',
-          message: 'Semantic block is not runnable yet. Select a metric and complete any required time settings.',
+          message: 'This saved query is not runnable yet. Select a metric and complete any required time settings.',
         }
       : {
           // A block that DECLARES a query section and leaves it blank is broken,
@@ -42029,8 +42029,8 @@ export function validateBlockStudioSource(
           severity: /query\s*=\s*"""/i.test(source) ? 'error' : 'warning',
           code: 'sql_missing',
           message: /query\s*=\s*"""/i.test(source)
-            ? 'The block declares a query section but it is empty. Add the SQL, or remove the query section and define metrics and dimensions instead.'
-            : 'No executable SQL found in the block source.',
+            ? 'The saved query declares a query section but it is empty. Add the SQL, or remove the query section and define metrics and dimensions instead.'
+            : 'No executable SQL found in the saved query.',
         });
   }
 
@@ -42042,7 +42042,7 @@ export function validateBlockStudioSource(
       diagnostics.push({
         severity: 'error',
         code: 'semantic_block_has_query',
-        message: 'Semantic blocks are defined by metrics and dimensions and must not contain a query section. Move the SQL into a custom block.',
+        message: 'A saved query built from metrics is defined by metrics and dimensions and must not contain a query section. Move the SQL into a SQL saved query.',
       });
     }
   }
@@ -42385,7 +42385,7 @@ async function processDqlGenerationSessionForProject(
           evidence: validated.evidence ?? [],
           draftSave: {
             status: validated.recommendedAction === 'reuse_existing' ? 'skipped' as const : 'pending' as const,
-            reason: validated.recommendedAction === 'reuse_existing' ? 'Reuse an existing governed block; no draft file was created.' : undefined,
+            reason: validated.recommendedAction === 'reuse_existing' ? 'Reuse an existing saved query; no draft file was created.' : undefined,
           },
         };
     writeBlockStudioImportCandidate(projectRoot, session.id, result);
@@ -42460,7 +42460,7 @@ function saveDqlGenerationDraftForProject(
         status: 'skipped',
         reason: topMatch
           ? `Reuse recommended: ${topMatch.name} (${topMatch.kind}, ${(topMatch.score * 100).toFixed(0)}%).`
-          : 'Reuse recommended; no new draft block was needed.',
+          : 'Reuse recommended; no new draft was needed.',
       },
       generationMode: candidate.generationMode ?? 'deterministic',
       generationProvider: candidate.generationProvider ?? 'local-deterministic',
@@ -43525,7 +43525,7 @@ function buildBlockStudioCertificationChecklist(input: {
       issues.push({
         severity: 'error',
         code: 'tests_failed',
-        title: 'A block test failed',
+        title: 'A saved query test failed',
         field: 'Tests',
         message: 'One or more declared tests did not pass against the latest preview result.',
         correction: 'Review the failed assertion and result, correct the query or expectation, then run certification again.',
@@ -43539,7 +43539,7 @@ function buildBlockStudioCertificationChecklist(input: {
         title: 'Certification requirement is not ready',
         field: 'Metadata',
         message: compactSemanticRuntimeFailure(combined),
-        correction: 'Update the named block field, save the draft, and certify again.',
+        correction: 'Update the named field, save the draft, and certify again.',
         action: 'edit_source',
         technicalDetails: combined,
       });
@@ -43560,10 +43560,10 @@ function buildBlockStudioCertificationChecklist(input: {
       code: 'description_review_required',
       title: 'The description says it needs review',
       field: 'Metadata',
-      message: 'The description still says "review required". Certifying is the review: Ask never treats a block as certified while its own description says it still needs review, so the description has to say what the block returns instead.',
+      message: 'The description still says "review required". Certifying is the review: Ask never treats a saved query as certified while its own description says it still needs review, so the description has to say what the saved query returns instead.',
       correction: suggestedDescription
         ? `Remove "review required" from the description and certify. The description becomes: "${suggestedDescription}"`
-        : 'Describe what the block returns without "review required", save the draft, and certify again.',
+        : 'Describe what the saved query returns without "review required", save the draft, and certify again.',
       ...(suggestedDescription ? { suggestedDescription, action: 'fix_description' as const } : { action: 'edit_source' as const }),
     });
   }
@@ -43574,7 +43574,7 @@ function buildBlockStudioCertificationChecklist(input: {
       title: 'Preview did not finish',
       field: 'Run',
         message: compactBlockStudioRuntimeFailure(blocker),
-      correction: 'Correct the reported query or runtime problem, then run the block again before certification.',
+      correction: 'Correct the reported query or runtime problem, then run the saved query again before certification.',
       technicalDetails: blocker,
       action: 'run_again',
     });
@@ -43583,10 +43583,10 @@ function buildBlockStudioCertificationChecklist(input: {
     issues.push({
       severity: 'error',
       code: 'preview_required',
-      title: 'Run the block',
+      title: 'Run the saved query',
       field: 'Run',
-      message: 'The block needs a successful preview result before certification.',
-      correction: 'Run the block, resolve any preview error, then certify again.',
+      message: 'The saved query needs a successful preview result before certification.',
+      correction: 'Run the saved query, resolve any preview error, then certify again.',
       action: 'run_again',
     });
   }
@@ -43597,7 +43597,7 @@ function buildBlockStudioCertificationChecklist(input: {
     issues.push({
       severity: 'error',
       code: 'tests_failed',
-      title: 'A block test failed',
+      title: 'A saved query test failed',
       field: 'Tests',
       message: 'One or more declared tests did not pass against the latest preview result.',
       correction: 'Review the failed assertion and result, correct the query or expectation, then run certification again.',
@@ -50390,11 +50390,11 @@ function buildNotebookResearchReviewChecklist(run: NotebookResearchRun): Noteboo
   if (!hasSql && !hasDqlArtifact && !reuseRecommended) blockers.push('Add reviewed SQL, generate SQL, or attach a DQL artifact before promotion.');
   if (run.status === 'error') blockers.push(run.error ? `Fix preview error: ${run.error}` : 'Fix the failed preview before promotion.');
   if (!previewReady && run.status !== 'error' && !reuseRecommended) warnings.push('Run a bounded preview before certification review.');
-  if (!evidenceReady && !reuseRecommended) warnings.push('Inspect metadata evidence before turning this into a reusable block.');
-  if (hasSql && dynamicParameters.length === 0) warnings.push('No dynamic parameters were detected; confirm this should be a static block before certification.');
+  if (!evidenceReady && !reuseRecommended) warnings.push('Inspect metadata evidence before turning this into a reusable saved query.');
+  if (hasSql && dynamicParameters.length === 0) warnings.push('No dynamic parameters were detected; confirm this should be a static saved query before certification.');
   for (const warning of parameterReview?.warnings ?? []) warnings.push(warning);
   if (promoted && !duplicateChecked) warnings.push('Promotion exists but duplicate/reuse evidence is missing.');
-  if (reuseRecommended && !reuseClosed) warnings.push('Reuse the matching block or explicitly document a replacement before certification.');
+  if (reuseRecommended && !reuseClosed) warnings.push('Reuse the matching saved query or explicitly document a replacement before certification.');
   if (promotionReviewRequired) warnings.push('Resolve the review-required promotion decision before certification.');
 
   const items: NotebookResearchReviewChecklist['items'] = [
@@ -50402,7 +50402,7 @@ function buildNotebookResearchReviewChecklist(run: NotebookResearchRun): Noteboo
       id: 'question',
       label: 'Question',
       status: questionReady ? 'passed' : 'blocked',
-      detail: questionReady ? 'Business question is captured.' : 'A reusable block needs a clear business question.',
+      detail: questionReady ? 'Business question is captured.' : 'A reusable saved query needs a clear business question.',
     },
     {
       id: 'sql',

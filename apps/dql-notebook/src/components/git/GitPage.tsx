@@ -2168,7 +2168,7 @@ function NotARepo({ t, onInit, busy, error }: { t: Theme; onInit: () => void; bu
       <GitBranch size={36} strokeWidth={1.5} color={t.textMuted} style={{ opacity: 0.5 }} />
       <div style={{ fontSize: 16, fontWeight: 600, color: t.textPrimary }}>Not a Git repository yet</div>
       <div style={{ fontSize: 13, color: t.textMuted, maxWidth: 440, textAlign: 'center', lineHeight: 1.5 }}>
-        Initialize Git to track changes to blocks, notebooks, and apps, see each block&apos;s version history, and share work for review. Nothing is sent anywhere until you add a remote.
+        Initialize Git to track changes to saved queries, notebooks, and apps, see each saved query&apos;s version history, and share work for review. Nothing is sent anywhere until you add a remote.
       </div>
       <button
         type="button"

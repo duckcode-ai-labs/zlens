@@ -159,7 +159,7 @@ describe('Studio Dataset mark interaction (APP-041)', () => {
     // Result cardinality never makes two selected measures safe for a scalar
     // view; the author sees a repair path before a hidden value can render.
     for (const markup of [render([]), render([{ revenue: 130, order_count: 6 }])]) {
-      expect(markup).toContain('Dataset visualization needs attention');
+      expect(markup).toContain('Chart needs attention');
       expect(markup).toContain('exactly one selected measure');
       expect(markup).toContain('Choose Table');
     }
@@ -202,19 +202,19 @@ describe('Studio Dataset source authoring (APP-055)', () => {
     );
 
     expect(markup).toContain('What is one row?');
-    expect(markup).toContain('Author Dataset definition');
+    expect(markup).toContain('Define fields');
     // Ids and proof references sit under a collapsed Technical details toggle (D6).
     expect(markup).toMatch(/<details class="dql-technical-details"><summary>Technical details<\/summary>[\s\S]*proof\.customer-day[\s\S]*<\/details>/);
     expect(markup).not.toMatch(/<details[^>]*open/);
     expect(markup).not.toContain('Native grain proposal');
     expect(markup).toContain('Column types');
-    expect(markup).toContain('Dataset native time bucket');
+    expect(markup).toContain('Native time bucket');
     expect(markup).toContain('order_date role');
     expect(markup).toContain('Gross margin');
     expect(markup).toContain('SUM(daily_revenue) - SUM(daily_margin)');
     expect(markup).toContain('Aggregate formula');
     expect(markup).toContain('Review source change');
-    expect(markup).toContain('does not change this App’s Dataset binding');
+    expect(markup).toContain('does not change this App’s data');
   });
 
   it('makes review-preview opt-in explicit before refreshing a changed Dataset binding', async () => {
@@ -224,7 +224,7 @@ describe('Studio Dataset source authoring (APP-055)', () => {
     );
     expect(markup).toContain('Allow data that needs review &amp; refresh');
     expect(markup).toContain('Project publication stays blocked');
-    expect(markup).toContain('does not certify the Dataset');
+    expect(markup).toContain('does not certify the data');
   });
 });
 
@@ -543,7 +543,7 @@ describe('Studio legacy semantic conversion (M4-CONV-01)', () => {
       />,
     );
 
-    expect(markup).toContain('Convert to Dataset query');
+    expect(markup).toContain('Convert to a field query');
     expect(markup).toContain('Preview Dataset conversion');
     expect(markup).toContain('Mapped source: app:semantic:commerce:orders');
     expect(markup).toContain('Apply Dataset conversion');
@@ -669,7 +669,7 @@ describe('Canvas AI review keeps only the tiles (design D3, D5)', () => {
     const markup = review({ newSources });
     expect(markup).toContain('New data for this App: Order Lines');
     expect(markup).toContain('Why: Order lines carries revenue by order date.');
-    expect(markup).toContain('Dataset · Certified');
+    expect(markup).toContain('Table · Certified');
     expect(markup).not.toContain('New data for this App: Margin');
     // Canvas proposals still show the planner notes and gaps.
     expect(markup).toContain('Revenue by channel was not added because no Dataset has a channel field.');

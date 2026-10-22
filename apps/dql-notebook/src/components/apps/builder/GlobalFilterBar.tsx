@@ -242,7 +242,7 @@ export function FiltersPanel({
         <section className="filter-builder-field"><span><ShieldCheck size={15} /></span><div><small>FIELD</small><strong>{humanize(configuration.fieldId)}</strong></div>{!editingExisting ? <button type="button" onClick={() => setConfiguration({ ...configuration, fieldId: '', selectedMappingKeys: [] })}>Change</button> : null}</section>
         {linkSuggestions.length ? <fieldset className="filter-link-suggestions" aria-label="Also filter these tiles?">
           <legend>Also filter these tiles?</legend>
-          <small>Other Datasets in this App have this field, or reach it through a checked join. Nothing is linked until you check it.</small>
+          <small>Other data in this App has this field, or reach it through a checked join. Nothing is linked until you check it.</small>
           {linkSuggestions.map((suggestion) => {
             const checked = suggestion.mappingKeys.every((key) => selectedMappings.has(key));
             // "Orders · via Customer": the Dataset reaches the field through its Customer join (design D2).
@@ -262,7 +262,7 @@ export function FiltersPanel({
               "no dates" is said only when every linked tile's column was read. */}
           <div><strong>{fieldAvailability?.dateRange ? `Data from ${formatDashboardCalendarDate(fieldAvailability.dateRange.min)} to ${formatDashboardCalendarDate(fieldAvailability.dateRange.max)}` : dateFieldHasNoValues ? 'No dates in the current preview' : 'Any date'}</strong><small>{configuration.type === 'daterange' ? 'Readers set a start, an end, or both. Only a start means “from”; only an end means “until”.' : 'Readers pick one day; it keeps that whole day.'}</small></div>
         </section> : null}
-        <fieldset><legend>Apply to</legend><div className="filter-scope-switch"><button type="button" className={configuration.scope === 'page' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'page' })}>This page</button><button type="button" className={configuration.scope === 'app' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'app' })}>All compatible pages</button></div><small>{configuration.scope === 'app' ? 'One dashboard control is retained on every page. Unmapped Dataset tiles stay visibly excluded until linked.' : `Only ${activePage?.metadata.title ?? 'this page'} receives this control.`}</small></fieldset>
+        <fieldset><legend>Apply to</legend><div className="filter-scope-switch"><button type="button" className={configuration.scope === 'page' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'page' })}>This page</button><button type="button" className={configuration.scope === 'app' ? 'on' : ''} onClick={() => setConfiguration({ ...configuration, scope: 'app' })}>All compatible pages</button></div><small>{configuration.scope === 'app' ? 'One dashboard control is retained on every page. Unmapped tiles stay visibly excluded until linked.' : `Only ${activePage?.metadata.title ?? 'this page'} receives this control.`}</small></fieldset>
         <fieldset className="filter-mapping"><legend>Tiles</legend><header><span>Applies to {selectedVisibleCount} of {visibleMappings.length} {visibleMappings.length === 1 ? 'tile' : 'tiles'}</span>{supportedVisibleCount > 0 ? <button type="button" onClick={() => setAllVisibleMappings(selectedVisibleCount !== supportedVisibleCount)}>{selectedVisibleCount === supportedVisibleCount ? 'Apply to none' : 'Apply to all'}</button> : null}</header>
           <small className="filter-mapping-hint">Each tile either takes this filter or shows “Not filtered by {configuration.label.trim() || humanize(configuration.fieldId)}” to readers. Both choices are saved; neither blocks publishing.</small>
           <div>{draft.pages.filter((page) => configuration.scope === 'app' || page.id === activePage?.id).map((page) => {
@@ -281,7 +281,7 @@ export function FiltersPanel({
 
   return <>
     <PanelTitle title="Filters" detail="Controls linked to certified fields" action={<button type="button" disabled={disabled || candidates.length === 0} onClick={() => setConfiguration({ id: '', fieldId: '', label: '', type: 'select', scope: 'app', required: false, selectedMappingKeys: [] })} aria-label="Create filter"><Plus size={14} /></button>} />
-    <div className="filter-workflow" aria-label="How App filters work"><span><b>1</b>Choose a field</span><span><b>2</b>Link all or selected tiles</span><span><b>3</b>Use the control directly on the canvas</span><small>Changing a filter refreshes every linked tile together.</small></div>
+    <div className="filter-workflow" aria-label="How App filters work"><span><b>1</b>Choose a field</span><span><b>2</b>Link all or selected tiles</span><span><b>3</b>Use the control directly on the page</span><small>Changing a filter refreshes every linked tile together.</small></div>
     {logicalFilters.length > 0 ? <div className="panel-section-label"><span>Dashboard filters</span><small>{logicalFilters.length} configured</small></div> : null}
     <div className="filter-contract-list">{logicalFilters.map((item) => {
       const fieldId = item.filter.field?.name ?? item.filter.bindsTo ?? item.filter.id;
@@ -310,7 +310,7 @@ export function FilterTileChoice({ mapping, applies, onChoose, onUseDateField, o
   const tileName = humanize(mapping.tileTitle);
   const sourceName = sourceDisplayName(mapping.sourceName);
   return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason ? plainSourceText(mapping.reason) : undefined} data-testid="filter-tile-choice">
-    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}` : mapping.via ? `via ${mapping.via}` : mapping.datasetId ? 'Dataset field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
+    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}` : mapping.via ? `via ${mapping.via}` : mapping.datasetId ? 'field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
       {!mapping.supported && mapping.dateFieldOptions?.length && onUseDateField ? <span className="filter-date-field-options">{mapping.dateFieldOptions.map((option) => <button key={option.field} type="button" onClick={() => onUseDateField(option.field)}>Use {humanize(option.field)} on {sourceName}</button>)}</span> : null}
       {mapping.supported && mapping.mappedFrom && onClearDateField ? <button type="button" className="filter-date-field-clear" onClick={onClearDateField}>Don’t use {humanize(mapping.datasetField ?? '')}</button> : null}
     </span>

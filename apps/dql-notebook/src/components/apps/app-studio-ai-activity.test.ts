@@ -12,7 +12,7 @@ describe('App Studio AI activity and source actions (UI-022, UI-023, E2E-020)', 
   it('uses honest non-percentage planning labels in a deterministic rotation', () => {
     expect(APP_STUDIO_AI_ACTIVITY_LABELS).toEqual([
       'Understanding your decision',
-      'Finding certified Datasets, Metrics and saved queries',
+      'Finding certified tables, Metrics and saved queries',
       'Checking trust and capabilities',
       'Preparing source review',
     ]);

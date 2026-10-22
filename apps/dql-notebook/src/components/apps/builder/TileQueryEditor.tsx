@@ -238,14 +238,14 @@ export function TileQueryEditor({
         <div className="dataset-measure-list">
           {fields.measures.map((measure) => {
             const suggested = measure.status !== 'approved';
-            return <label key={measure.qualifiedId} className={suggested ? 'is-suggested' : undefined} title={suggested ? 'Suggested by ZLens and not yet reviewed. Approve it in the Dataset definition to use it.' : undefined}>
+            return <label key={measure.qualifiedId} className={suggested ? 'is-suggested' : undefined} title={suggested ? 'Suggested by ZLens and not yet reviewed. Approve it in the field definition to use it.' : undefined}>
               <input type="checkbox" checked={selectedMeasures.has(measure.name) || selectedMeasures.has(measure.qualifiedId)} disabled={disabled || suggested} onChange={() => toggleMeasure(measure)} />
               <span><strong>{humanize(measure.name)}</strong><small>{measure.aggregation.replace(/_/g, ' ')}{measure.format?.kind ? ` · ${measure.format.kind}` : ''}</small></span>
               {suggested ? <em className="dataset-field-badge">Suggested · needs review</em> : null}
             </label>;
           })}
         </div>
-        {!fields.measures.some((measure) => measure.status === 'approved') ? <small className="dataset-builder-error">This Dataset has no approved measure yet.</small> : null}
+        {!fields.measures.some((measure) => measure.status === 'approved') ? <small className="dataset-builder-error">This data has no approved measure yet.</small> : null}
       </fieldset>
 
       <div className="dataset-editor-row">
@@ -274,7 +274,7 @@ export function TileQueryEditor({
           if (!event.target.checked) { removeComparison(); return; }
           setComparisonOpen(true);
           setComparisonDraft(datasetComparisonDraftFromQuery(descriptor, query.comparison));
-        }} /><span><strong>Compare two calendar periods</strong><small>{comparisonTimeFields.length ? 'Shows current, prior, difference, and change together. It uses a Table or chart.' : 'This Dataset does not declare a supported comparison time field.'}</small></span></label>
+        }} /><span><strong>Compare two calendar periods</strong><small>{comparisonTimeFields.length ? 'Shows current, prior, difference, and change together. It uses a Table or chart.' : 'This data does not declare a supported comparison time field.'}</small></span></label>
         {comparisonOpen ? <div className="dataset-comparison-fields">
           <label><span>Time field</span><select value={comparisonDraft.timeField} disabled={disabled || !comparisonTimeFields.length} onChange={(event) => {
             const timeField = event.target.value;
@@ -295,7 +295,7 @@ export function TileQueryEditor({
             <label><span>Compare with period ending before</span><input type="date" value={comparisonDraft.comparisonEnd} disabled={disabled} onChange={(event) => setComparisonDraft((current) => ({ ...current, comparisonEnd: event.target.value }))} /></label>
           </div>
           <details className="dataset-comparison-advanced"><summary>Advanced period settings</summary>
-            <small>Defaults come from the Dataset. Change them only when the governed calendar needs it.</small>
+            <small>Defaults come from the data. Change them only when the governed calendar needs it.</small>
             <label><span>Time role</span><select value={comparisonDraft.timeRole} disabled={disabled} onChange={(event) => setComparisonDraft((current) => ({ ...current, timeRole: event.target.value }))}><option value="event_time">Event time</option><option value="reporting_time">Reporting time</option></select></label>
             <label><span>Time zone</span><input value={comparisonDraft.timezone} disabled={disabled} onChange={(event) => setComparisonDraft((current) => ({ ...current, timezone: event.target.value }))} aria-label="Comparison time zone" /></label>
             <label><span>Calendar</span><select value={comparisonDraft.calendarId} disabled><option value="calendar:gregorian">Gregorian calendar</option></select></label>
@@ -307,7 +307,7 @@ export function TileQueryEditor({
         {query.comparison ? <small className="dataset-comparison-summary">Applied: {datasetComparisonSummary(query.comparison)}</small> : null}
       </fieldset>
     </> : <fieldset className="dataset-detail-columns"><legend>Row detail columns</legend>
-      <small>Live source rows, ordered by the Dataset key. ZLens rechecks the key on every run.</small>
+      <small>Live source rows, ordered by the data key. ZLens rechecks the key on every run.</small>
       <div>{fields.filterable.map((field) => <label key={field.qualifiedId}><input type="checkbox" checked={(query.detailColumns ?? []).includes(field.name)} disabled={disabled} onChange={() => toggleDetailColumn(field)} /><span>{humanize(field.name)}</span><em>{field.role}</em></label>)}</div>
       <label className="dataset-detail-limit"><span>Maximum rows</span><input type="number" min={1} max={10000} value={typeof query.limit === 'number' ? query.limit : 100} disabled={disabled} onChange={(event) => change({ ...query, limit: Number(event.target.value) })} /></label>
     </fieldset>}

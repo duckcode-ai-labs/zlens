@@ -22,7 +22,7 @@ describe('the App reader for stakeholders (HH-16)', () => {
     // An empty question cannot be sent.
     expect(html).toMatch(/<button type="submit"[^>]*disabled=""/);
     // Before the page has run, the control says what Ask cannot see yet (N3).
-    expect(html).toContain('Ask can see its blocks and filters, not its results yet');
+    expect(html).toContain('Ask can see its saved queries and filters, not its results yet');
   });
 
   it('says it reads the page results, sources, trust and filters once the page has run (N3)', () => {

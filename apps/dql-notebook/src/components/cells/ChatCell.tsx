@@ -124,7 +124,7 @@ export function ChatCell({ cell, cells, index, themeMode, onUpdate }: ChatCellPr
       <UnifiedAgentRunPanel
         themeMode={themeMode}
         title="Chat"
-        scopeHint="Ask a metric, SQL draft, comparison, or dashboard — grounded in your blocks and semantic layer"
+        scopeHint="Ask a metric, SQL draft, comparison, or dashboard — grounded in your saved queries and semantic layer"
         audience="analyst"
         initialMode="auto"
         workspaceContext={upstreamSql ? { upstreamSql } : undefined}

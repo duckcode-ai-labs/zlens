@@ -125,9 +125,9 @@ export function isAskPipelineReceipt(value: unknown): boolean {
 
 /** Internal codes a reader must never see verbatim, with the sentence they stand for. */
 export const REFUSAL_SENTENCES: Record<string, string> = {
-  no_certified_block: 'No certified block matches this question.',
-  block_not_applicable: 'A certified block exists, but it does not answer this question as asked.',
-  block_unbound_parameters: 'A certified block matches, but it still needs parameter values.',
+  no_certified_block: 'No certified saved query matches this question.',
+  block_not_applicable: 'A certified saved query exists, but it does not answer this question as asked.',
+  block_unbound_parameters: 'A certified saved query matches, but it still needs parameter values.',
   not_semantic: 'The semantic layer has no metric or dimension for part of this question.',
   semantic_compile_failed: 'The semantic engine could not compile this question.',
   semantic_runtime_unavailable: 'No semantic layer is loaded for this project.',
@@ -236,7 +236,7 @@ function storyOf(value: unknown): RunStoryEntry | undefined {
   };
 }
 
-const TIER_TITLES: Record<string, string> = { certified: 'Certified blocks', semantic: 'Semantic layer', relational: 'Governed tables' };
+const TIER_TITLES: Record<string, string> = { certified: 'Certified saved queries', semantic: 'Semantic layer', relational: 'Governed tables' };
 const WAREHOUSE_SENTENCES: Record<string, string> = {
   warehouse_suspended: 'The warehouse is not running.',
   relation_missing: 'The warehouse cannot see a table the query reads.',
@@ -245,7 +245,7 @@ const WAREHOUSE_SENTENCES: Record<string, string> = {
   sql_error: 'The warehouse rejected the SQL.',
 };
 const SOURCE_WORDS: Record<string, string> = {
-  certified: 'a certified block',
+  certified: 'a certified saved query',
   semantic: 'the semantic layer',
   exploratory: 'SQL written by AI from the tables (review before relying on it)',
   relational: 'governed tables',
@@ -306,7 +306,7 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
     const aiLaneActivity = draftCalls.length > 0 || tiers.some((entry) => Number(entry.round) === 97) || story.some((entry) => entry.phase === 'schema') || executedTier === 'exploratory';
     if (!readFailed) {
       if (governedRounds.length === 0 && aiLaneActivity) {
-        push({ id: 'governed', kind: 'semantic', title: 'Certified blocks and semantic layer', outcome: 'skipped', reason: 'The question is not about a certified block or a semantic metric, so the AI wrote the SQL.' });
+        push({ id: 'governed', kind: 'semantic', title: 'Certified saved queries and semantic layer', outcome: 'skipped', reason: 'The question is not about a certified saved query or a semantic metric, so the AI wrote the SQL.' });
       }
       // A question that named a retired block was answered from its replacement.
       const retiredNotes = story
@@ -321,9 +321,9 @@ export function explainAskRun(input: ExplainAskRunInput): RunExplanation | undef
         const outcome: RunStepOutcome = answeredHere || servedAsPublished || last.outcome === 'prepared' ? 'done' : last.outcome === 'skipped' ? 'skipped' : 'refused';
         const refusal = refusalFor(tier);
         const reason = outcome === 'done'
-          ? servedAsPublished ? 'A certified block was served as published.' : tier === 'certified' ? 'A certified block answers this question.' : tier === 'semantic' ? 'The semantic layer compiled this question.' : 'These tables answer this question.'
+          ? servedAsPublished ? 'A certified saved query was served as published.' : tier === 'certified' ? 'A certified saved query answers this question.' : tier === 'semantic' ? 'The semantic layer compiled this question.' : 'These tables answer this question.'
           : outcome === 'skipped'
-            ? refusal ? plainReason(str(refusal.code), str(refusal.message)) : tier === 'certified' ? 'No certified block matches this question.' : 'Not needed: an earlier tier answered.'
+            ? refusal ? plainReason(str(refusal.code), str(refusal.message)) : tier === 'certified' ? 'No certified saved query matches this question.' : 'Not needed: an earlier tier answered.'
             : plainReason(str(refusal?.code), str(refusal?.message) ?? str(last.detail));
         push({
           id: `tier-${tier}`, kind: tier as RunStepKind, title: TIER_TITLES[tier]!, outcome, reason,

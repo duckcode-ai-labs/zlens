@@ -220,7 +220,7 @@ export function datasetAuthoringChangeForDefinition(
   formula?: DatasetCalculatedMeasureDraft,
 ): DatasetAuthoringChange {
   if (descriptor.kind !== 'block' || !source.qualifiedIdentity || !source.path || !source.sourceRevision) {
-    throw new Error('Only a current block-backed Dataset source can be edited. Refresh the source catalog and try again.');
+    throw new Error('Only data from a current saved query can be edited. Refresh the source catalog and try again.');
   }
   const grain = grainPatchFromDefinition(descriptor, definition);
   const fields = fieldPatchesFromDefinition(descriptor, definition);
@@ -319,7 +319,7 @@ function calculatedMeasurePatch(
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error('Formula names must be DQL identifiers.');
   if (!expression) throw new Error('Enter an aggregate formula before creating a proposal.');
   const measureNames = new Set(datasetMeasures(descriptor).map((measure) => measure.name.toLowerCase()));
-  if (measureNames.has(name.toLowerCase())) throw new Error(`A measure named ${name} already exists in this Dataset.`);
+  if (measureNames.has(name.toLowerCase())) throw new Error(`A measure named ${name} already exists in this data.`);
   return {
     name,
     aggregation: draft.aggregation,

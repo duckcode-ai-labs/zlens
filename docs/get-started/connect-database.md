@@ -81,7 +81,7 @@ Every driver's fields are listed in the [Connectors reference](../reference/conn
 
 After a passing test, **Metadata scope** appears under the form. It decides
 which schemas ZLens reads. ZLens copies their table and column names, never
-their rows, into a local index so Ask, notebook and Block Studio searches
+their rows, into a local index so Ask, notebook and saved query searches
 stay fast. What else the scope does depends on how the project models data:
 
 - **With dbt** (`dbt-first`), the dbt project already says which tables

@@ -46,9 +46,9 @@ export function queryCellKindLabel(cell: {
   blockBinding?: unknown;
   executionTarget?: { target?: string };
 }): string {
-  if (cell.blockBinding) return 'Certified or draft block';
+  if (cell.blockBinding) return 'Certified or draft saved query';
   if (/@(?:metric|dim)\s*\(/i.test(cell.content)) return 'Semantic query';
-  if (cell.type === 'dql') return 'DQL block';
+  if (cell.type === 'dql') return 'DQL query';
   return cell.executionTarget?.target === 'local' ? 'Local dataset SQL' : 'Warehouse SQL';
 }
 

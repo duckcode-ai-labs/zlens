@@ -91,7 +91,7 @@ export function Header() {
     ? state.activeFile
       ? state.notebookTitle || 'Untitled'
       : state.mainView === 'block_studio'
-        ? 'Blocks'
+        ? 'Saved queries'
         : 'Notebooks'
     : VIEW_TITLES[state.mainView] ?? productName;
 

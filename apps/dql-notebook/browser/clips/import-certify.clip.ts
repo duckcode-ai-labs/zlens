@@ -11,7 +11,7 @@ clip('import-certify', async ({ page, sample, director }) => {
   const server = await sample.serve(sample.freshProject());
   await openAndRecord(page, director, server.baseUrl);
 
-  await director.click(page.getByRole('button', { name: 'Blocks', exact: true }).first());
+  await director.click(page.getByRole('button', { name: 'Saved queries', exact: true }).first());
   await director.click(page.getByRole('button', { name: 'Start import' }));
   const sql = page.getByPlaceholder(/select \.\.\./);
   await director.click(sql, { after: 200 });

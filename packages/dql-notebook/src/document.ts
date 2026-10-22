@@ -188,7 +188,7 @@ function listTablesSQL(driver?: string): string {
 const SAVE_A_QUERY_MARKDOWN = [
   '## Save a query',
   '',
-  'When a query answers a question people ask again, choose **Save as block** on its cell. ZLens saves it as a DQL block in `domains/`, and it appears in Apps under **Data** once it is certified:',
+  'When a query answers a question people ask again, choose **Save as saved query** on its cell. ZLens saves it as a saved query (a `.dql` block file) in `domains/`, and it appears in Apps under **Data** once it is certified:',
   '',
   '```dql',
   'block "Revenue by month" {',
@@ -237,7 +237,7 @@ export function createWelcomeNotebook(template: string, projectTitle: string, dr
         id: 'next-steps',
         type: 'markdown',
         title: 'Next Steps',
-        source: `## Next steps\n\n1. Query a dbt model and save the useful logic as a DQL block.\n2. Add business terms under \`terms/\` for the vocabulary stakeholders use.\n3. Compose blocks into \`business_view\` files under \`business-views/\`.\n4. Run \`zlens compile .\` to refresh \`dql-manifest.json\`.\n5. Open Lineage to trace source -> model -> block -> business view -> consumption.`,
+        source: `## Next steps\n\n1. Query a dbt model and save the useful logic as a saved query.\n2. Add business terms under \`terms/\` for the vocabulary stakeholders use.\n3. Compose saved queries into \`business_view\` files under \`business-views/\`.\n4. Run \`zlens compile .\` to refresh \`dql-manifest.json\`.\n5. Open Lineage to trace source -> model -> saved query -> business view -> consumption.`,
       },
     ], { description: 'ZLens workbench for turning a dbt project into business lineage.', template: 'dbt' });
   }
@@ -272,7 +272,7 @@ export function createWelcomeNotebook(template: string, projectTitle: string, dr
       id: 'next-steps',
       type: 'markdown',
       title: 'Next Steps',
-      source: `## Next steps\n\n1. Add data by connecting a warehouse or adding a local DuckDB/file source.\n2. Save repeated SQL as DQL blocks under \`blocks/\`.\n3. Add business terms under \`terms/\` for shared vocabulary.\n4. Compose blocks into \`business_view\` files under \`business-views/\`.\n5. Run \`zlens compile .\` and open Lineage to inspect the business and technical path.`,
+      source: `## Next steps\n\n1. Add data by connecting a warehouse or adding a local DuckDB/file source.\n2. Save repeated SQL as saved queries (\`.dql\` block files) under \`blocks/\`.\n3. Add business terms under \`terms/\` for shared vocabulary.\n4. Compose saved queries into \`business_view\` files under \`business-views/\`.\n5. Run \`zlens compile .\` and open Lineage to inspect the business and technical path.`,
     },
   ], { description: 'DQL workbench for building a domain-first analytics project.', template: 'default' });
 }

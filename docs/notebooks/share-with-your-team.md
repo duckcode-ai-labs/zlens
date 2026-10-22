@@ -1,12 +1,12 @@
 # Share your work with your team
 
-Your blocks, notebooks and Apps are files in a git repository. Sharing them
+Your saved queries, notebooks and Apps are files in a git repository. Sharing them
 is: keep a change, send it as a branch, open a pull request, and let a
 teammate review it before it reaches the main branch. The **Source control**
 page does each step for you, so you don't need a terminal.
 
-Review matters because of what a block's label promises. **Certified** means
-a person checked the block and its tests passed; a pull request is where your
+Review matters because of what a saved query's label promises. **Certified** means
+a person checked the saved query and its tests passed; a pull request is where your
 team sees that change before everyone's answers depend on it. See
 [Save and certify](../blocks/certify.md).
 

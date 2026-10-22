@@ -166,7 +166,7 @@ export function TaskCenter() {
 }
 
 function operationLabel(type: string): string {
-  if (type === 'block_certification') return 'Block certification';
+  if (type === 'block_certification') return 'Saved query certification';
   if (type === 'project_refresh') return 'Project metadata refresh';
   if (type === 'agent_run') return 'AI request';
   if (type === 'app_ai_build') return 'App proposal';

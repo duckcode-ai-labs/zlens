@@ -74,16 +74,16 @@ export function planDatasetSourceRecovery(
   candidate: AppBlockRecommendation | undefined,
 ): DatasetSourceRecoveryPlan {
   if (!isDatasetSourceRecoveryTask(draft, task) || !task.sourceId) {
-    return { ok: false, error: 'This review task is not an exact Dataset source recovery.' };
+    return { ok: false, error: 'This review task is not an exact data source recovery.' };
   }
   const sourceId = task.sourceId;
   const storedSource = draft.sources.find((source) => source.id === sourceId);
   if (!storedSource) {
-    return { ok: false, error: `The saved Dataset source ${sourceId} is no longer present in this draft. Reselect a current Dataset before continuing.` };
+    return { ok: false, error: `The saved data source ${sourceId} is no longer in this draft. Choose current data before continuing.` };
   }
   const recoveredSourceId = candidate?.sourceId ?? candidate?.id;
   if (!candidate || recoveredSourceId !== sourceId) {
-    return { ok: false, error: `Dataset source ${sourceId} is not available in the current governed catalog. Keep this App pinned and reselect a current Dataset when it is available.` };
+    return { ok: false, error: `Data source ${sourceId} is not available in the current governed catalog. Keep this App as it is and choose current data when it is available.` };
   }
   const descriptor = candidate.capabilities?.dataset;
   const sourceRevision = candidate.sourceRevision?.trim();
@@ -92,10 +92,10 @@ export function planDatasetSourceRecovery(
     || descriptor.sourceRevision !== sourceRevision
     || descriptor.binding.sourceRevision !== sourceRevision
     || descriptor.binding.contractFingerprint !== contractFingerprint) {
-    return { ok: false, error: `${candidate.name || sourceId} does not expose a complete current Dataset revision and contract. Keep the saved binding pinned and reselect a compatible Dataset.` };
+    return { ok: false, error: `${candidate.name || sourceId} does not expose a complete current data version and contract. Keep the App on its current data and choose compatible data.` };
   }
   if (candidate.lifecycle !== 'certified' || candidate.trust !== 'certified' || candidate.eligibility?.projectPublish !== true) {
-    return { ok: false, error: `${candidate.name || sourceId} is currently ${candidate.lifecycle ?? 'not verified'} and cannot restore this certified Dataset binding. Review or replace it; ZLens will not change the App source policy or certify it automatically.` };
+    return { ok: false, error: `${candidate.name || sourceId} is currently ${candidate.lifecycle ?? 'not verified'} and cannot restore this certified data. Review or replace it; ZLens will not change the App source policy or certify it automatically.` };
   }
 
   const references = datasetTileReferences(draft, sourceId);
@@ -107,7 +107,7 @@ export function planDatasetSourceRecovery(
       || binding.contractFingerprint !== contractFingerprint) {
       return {
         ok: false,
-        error: `${tile.title || `${page.id}/${tile.i}`} is pinned to a different Dataset revision or contract. Keep this source review open and use the explicit rebind flow after reviewing the changed fields.`,
+        error: `${tile.title || `${page.id}/${tile.i}`} is pinned to a different data version or contract. Keep this source review open and use “Refresh this data” after reviewing the changed fields.`,
       };
     }
   }
@@ -116,7 +116,7 @@ export function planDatasetSourceRecovery(
     .filter((candidateTask) => candidateTask.sourceId === sourceId && isDatasetSourceRecoveryTask(draft, candidateTask))
     .map((candidateTask) => candidateTask.id);
   if (taskIds.length === 0) {
-    return { ok: false, error: 'No current Dataset source-drift task is available to clear.' };
+    return { ok: false, error: 'No current data source-drift task is available to clear.' };
   }
 
   const sourceClass = descriptor.kind === 'semantic' ? 'governed_semantic' : 'certified_block';
@@ -167,7 +167,7 @@ export async function runDatasetSourceRecoveryAction(input: {
   onPreviewInvalidated?: () => void;
 }): Promise<DatasetSourceRecoveryActionResult> {
   if (!isDatasetSourceRecoveryTask(input.draft, input.task) || !input.task.sourceId) {
-    return { ok: false, error: 'This review task is not an exact Dataset source recovery.' };
+    return { ok: false, error: 'This review task is not an exact data source recovery.' };
   }
   const sourceId = input.task.sourceId;
   const resolved = await input.resolveCandidates(input.draft.id, [sourceId]);

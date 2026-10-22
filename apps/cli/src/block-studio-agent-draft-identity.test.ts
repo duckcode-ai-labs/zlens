@@ -70,7 +70,7 @@ describe('POST /api/block-studio/agent-drafts tells the creator about a labels-o
     // A suggestion for the creator to review: the draft is not rewritten to add the key.
     expect(saved.source).not.toContain('adjuster_id');
     expect(saved.prefill?.identityGap?.message).toBe(
-      "Ask can't use this block as a certified answer: it groups by adjuster_name only. Add adjuster_id (the key) to SELECT and GROUP BY.",
+      "Ask can't use this saved query as a certified answer: it groups by adjuster_name only. Add adjuster_id (the key) to SELECT and GROUP BY.",
     );
   });
 

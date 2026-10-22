@@ -22,7 +22,7 @@ results. It runs no new query, and the answer cites each tile it read, for
 example:
 
 ```text
-Source on "Overview": "Top customers by lifetime spend" reads block Top customers by lifetime spend (…) — Certified: Runs a certified block exactly as it was reviewed.
+Source on "Overview": "Top customers by lifetime spend" reads saved query Top customers by lifetime spend (…) — Certified: Runs a certified saved query exactly as it was reviewed.
 ```
 
 The answer's trust is the weakest tile it read. The answer shows it as a
@@ -44,7 +44,7 @@ to this App's domain and filters.
 Ask needs the page's results:
 
 - Before the page finishes, the box says **This page has not finished
-  running: Ask can see its blocks and filters, not its results yet.**
+  running: Ask can see its saved queries and filters, not its results yet.**
 - If the results are too old or missing, Ask says it **can't see this page's
   current results** and asks you to refresh the page and ask again. Results
   stay available to Ask for 15 minutes after the page runs.

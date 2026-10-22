@@ -90,9 +90,9 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
       onFileOpened(file);
     } catch (e: any) {
       if (e.message?.includes('already exists')) {
-        setError('A block with this name already exists.');
+        setError('A saved query with this name already exists.');
       } else {
-        setError(e.message ?? 'Failed to create block.');
+        setError(e.message ?? 'Failed to create saved query.');
       }
     } finally {
       setCreating(false);
@@ -148,7 +148,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
               margin: 0,
             }}
           >
-            New Block
+            New saved query
           </h2>
           <button
             onClick={() => dispatch({ type: 'CLOSE_NEW_BLOCK_MODAL' })}
@@ -186,7 +186,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
                 textAlign: 'left',
               }}
             >
-              SQL Block
+              SQL query
               <span style={{ display: 'block', marginTop: 3, color: t.textMuted, fontWeight: 400, fontSize: 11 }}>
                 Build from dbt models, tables, and SELECT queries.
               </span>
@@ -207,7 +207,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
                 textAlign: 'left',
               }}
             >
-              Semantic Block
+              Query from metrics
               <span style={{ display: 'block', marginTop: 3, color: t.textMuted, fontWeight: 400, fontSize: 11 }}>
                 Build from dbt/DQL metrics and dimensions.
               </span>
@@ -218,7 +218,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
             <label style={{ fontSize: 12, fontWeight: 500, color: t.textSecondary, fontFamily: t.font }}>
               Who is this for
             </label>
-            <div role="radiogroup" aria-label="Block visibility" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <div role="radiogroup" aria-label="Saved query visibility" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
               {([
                 { value: 'shared' as const, label: 'Shared with the team', description: 'Git tracks it, so the team reviews it.' },
                 { value: 'private' as const, label: 'Private to me', description: 'Outside Git until you publish it.' },
@@ -257,7 +257,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
                 fontFamily: t.font,
               }}
             >
-              Block Name
+              Name
             </label>
             <input
               ref={nameRef}
@@ -300,7 +300,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
             <label style={{ display: 'grid', gap: 6, fontSize: 12, fontWeight: 500, color: t.textSecondary, fontFamily: t.font }}>
               Domain
               <select
-                aria-label="Block domain"
+                aria-label="Saved query domain"
                 value={domain}
                 onChange={(event) => setDomain(event.target.value)}
                 style={{
@@ -321,7 +321,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
             <label style={{ display: 'grid', gap: 6, fontSize: 12, fontWeight: 500, color: t.textSecondary, fontFamily: t.font }}>
               Folder
               <input
-                aria-label="Block folder"
+                aria-label="Saved query folder"
                 value={folderPath}
                 onChange={(event) => setFolderPath(event.target.value)}
                 placeholder="reporting/monthly"
@@ -351,7 +351,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
             }}
           >
             {blockType === 'semantic'
-              ? 'Semantic blocks use governed metrics, dimensions, and chart intent. They do not start with raw SQL.'
+              ? 'Saved queries built from metrics use governed metrics, dimensions, and chart intent. They do not start with raw SQL.'
               : 'SQL blocks are reusable SELECT queries stored in the blocks/ folder. Use them for dbt models, tables, and imported SQL.'}
           </div>
         </div>
@@ -401,7 +401,7 @@ export function NewBlockModal({ onFileOpened }: NewBlockModalProps) {
               gap: 6,
             }}
           >
-            {creating ? 'Creating...' : 'Create Block'}
+            {creating ? 'Creating...' : 'Create saved query'}
           </button>
         </div>
       </div>

@@ -47,9 +47,9 @@ interface WorkflowStep {
 const ARTIFACTS = [
   ['dql-manifest.json', 'Compiled project graph for lineage, trust, Apps, and AI context.'],
   ['semantic-layer/', 'Imported or authored metrics, dimensions, models, and saved queries.'],
-  ['connections', 'Warehouse credentials and schema status for executing blocks.'],
+  ['connections', 'Warehouse credentials and schema status for executing saved queries.'],
   ['blocks/', 'Reusable DQL blocks built from dbt objects, SQL, tables, or semantic metrics.'],
-  ['notebooks/', 'Analysis workspaces where users explore, edit, and assemble blocks.'],
+  ['notebooks/', 'Analysis workspaces where users explore, edit, and assemble saved queries.'],
   ['apps/', 'Published consumption surfaces for stakeholders.'],
 ];
 
@@ -193,7 +193,7 @@ export function HomePage() {
       id: 'connection',
       number: '2',
       title: 'Connect database and test access',
-      body: 'Use dbt profiles.yml where your runtime already resolves it, or enter warehouse credentials directly. Test the connection and refresh schema before building blocks.',
+      body: 'Use dbt profiles.yml where your runtime already resolves it, or enter warehouse credentials directly. Test the connection and refresh schema before building saved queries.',
       state: connectionReady ? 'ready' : currentStep === 'connection' ? 'active' : 'waiting',
       Icon: Database,
       primaryLabel: connectionReady ? 'Manage connections' : 'Add database connection',
@@ -225,16 +225,16 @@ export function HomePage() {
     {
       id: 'build',
       number: '4',
-      title: 'Build governed blocks',
-      body: 'Build reviewed reusable DQL blocks from dbt and semantic context. Use AI suggestions when configured, or work deterministically in Block Studio.',
+      title: 'Build governed saved queries',
+      body: 'Build reviewed reusable saved queries from dbt and semantic context. Use AI suggestions when configured, or work deterministically in Saved queries.',
       state: dqlReady ? 'ready' : currentStep === 'build' ? 'active' : 'waiting',
       Icon: Blocks,
-      primaryLabel: dqlReady ? 'Open block suggestions' : 'Suggest blocks with AI',
+      primaryLabel: dqlReady ? 'Open saved query suggestions' : 'Suggest saved queries with AI',
       onPrimary: () => dispatch({ type: 'SET_MAIN_VIEW', view: 'readiness' }),
-      secondaryLabel: 'Open Block Studio',
+      secondaryLabel: 'Open Saved queries',
       onSecondary: () => dispatch({ type: 'SET_MAIN_VIEW', view: 'block_studio' }),
       evidence: [
-        `${counts.blocks} blocks`,
+        `${counts.blocks} saved queries`,
         `${counts.terms} business terms`,
         `${counts.businessViews} business views`,
       ],
@@ -243,7 +243,7 @@ export function HomePage() {
       id: 'notebook',
       number: '5',
       title: 'Analyze in notebooks and publish to Apps',
-      body: 'Search, add, and edit notebooks around reviewed blocks. When the answer is ready, promote it into an App for stakeholder consumption.',
+      body: 'Search, add, and edit notebooks around reviewed saved queries. When the answer is ready, promote it into an App for stakeholder consumption.',
       state: notebookReady || appReady ? 'ready' : currentStep === 'notebook' ? 'active' : 'waiting',
       Icon: BookOpenText,
       primaryLabel: notebookReady ? 'Open notebooks' : 'Create notebook',
@@ -307,8 +307,8 @@ export function HomePage() {
             </h1>
             <p className="dql-home-lead" style={{ color: t.textSecondary }}>
               {allReady
-                ? 'Source, database, blocks, notebooks and Apps are all connected. Jump back into building.'
-                : 'Connect your data, build reviewed DQL blocks, then deliver with notebooks and Apps.'}
+                ? 'Source, database, saved queries, notebooks and Apps are all connected. Jump back into building.'
+                : 'Connect your data, build reviewed saved queries, then deliver with notebooks and Apps.'}
             </p>
             <div className="dql-home-cta-row">
               <button className="dql-home-primary-btn" onClick={currentStepObj.onPrimary}>
@@ -357,7 +357,7 @@ export function HomePage() {
         )}
 
         <section className="dql-home-metrics dql-home-fade" style={{ animationDelay: '180ms' }}>
-          <MetricChip label="Blocks" value={counts.blocks} Icon={Blocks} t={t} />
+          <MetricChip label="Saved queries" value={counts.blocks} Icon={Blocks} t={t} />
           <MetricChip label="Notebooks" value={counts.notebooks} Icon={BookOpenText} t={t} />
           <MetricChip label="Apps" value={state.apps.length} Icon={Workflow} t={t} />
           <MetricChip label="Tables" value={schemaCounts.tables} Icon={Database} t={t} />
@@ -389,7 +389,7 @@ export function HomePage() {
               />
               <ContextPanel
                 title="Database catalog"
-                description="Connection and schema determine whether blocks run."
+                description="Connection and schema determine whether saved queries run."
                 Icon={Database}
                 t={t}
                 rows={[
@@ -409,13 +409,13 @@ export function HomePage() {
                 Icon={FileJson}
                 t={t}
                 rows={[
-                  ['Blocks', String(counts.blocks)],
+                  ['Saved queries', String(counts.blocks)],
                   ['Business terms', String(counts.terms)],
                   ['Business views', String(counts.businessViews)],
                   ['Notebooks', String(counts.notebooks)],
                   ['Apps', String(state.apps.length)],
                 ]}
-                actionLabel="Open Block Studio"
+                actionLabel="Open Saved queries"
                 onAction={() => dispatch({ type: 'SET_MAIN_VIEW', view: 'block_studio' })}
               />
             </div>
@@ -561,7 +561,7 @@ function nextActionShort(currentStep: string): string {
   if (currentStep === 'source') return 'Connect a dbt or semantic source';
   if (currentStep === 'connection') return 'Add and test a database';
   if (currentStep === 'ai') return 'Connect an AI provider';
-  if (currentStep === 'build') return 'Build your first DQL block';
+  if (currentStep === 'build') return 'Build your first saved query';
   return 'Open notebooks and publish an App';
 }
 
@@ -618,15 +618,15 @@ function statusLabel(state: StepState): string {
 
 function nextActionCopy(currentStep: string): string {
   if (currentStep === 'source') {
-    return 'Connect a dbt project or semantic source first. ZLens needs source context before it can recommend useful blocks and lineage.';
+    return 'Connect a dbt project or semantic source first. ZLens needs source context before it can recommend useful saved queries and lineage.';
   }
   if (currentStep === 'connection') {
-    return 'Add a database connection and test it. This confirms ZLens can execute the blocks created from your source context.';
+    return 'Add a database connection and test it. This confirms ZLens can execute the saved queries created from your source context.';
   }
   if (currentStep === 'build') {
-    return 'Create the first reviewed DQL block from a semantic metric, dbt model, table, or imported SQL file.';
+    return 'Create the first reviewed saved query from a semantic metric, dbt model, table, or imported SQL file.';
   }
-  return 'Open a notebook, assemble the reviewed blocks, and publish the answer into an App when it is ready for others.';
+  return 'Open a notebook, assemble the reviewed saved queries, and publish the answer into an App when it is ready for others.';
 }
 
 function artifactLabel(artifact?: { exists: boolean; count?: number }): string {

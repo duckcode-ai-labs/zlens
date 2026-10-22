@@ -83,7 +83,7 @@ export const TYPE_TITLES: Record<string, string> = {
   dbt_model: 'dbt Model',
   dbt_source: 'dbt Source',
   term: 'Business Term',
-  block: 'DQL Block',
+  block: 'Saved query',
   business_view: 'Business View',
   metric: 'Metric',
   dimension: 'Dimension',

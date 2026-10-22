@@ -1178,7 +1178,7 @@ export function answeredArtifactTitle(
 ): string {
   if (trustState === 'certified') return 'Certified answer';
   if (source === 'ai_sql') return 'AI-drafted answer';
-  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Governed answer from a certified block' : 'Answer to review, from a certified block';
+  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Governed answer from a certified saved query' : 'Answer to review, from a certified saved query';
   return trustState === 'governed' ? 'Semantic answer' : 'Answer to review, from governed definitions';
 }
 
@@ -1935,7 +1935,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       for (const entry of vocabulary.entries) counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + 1);
       const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
       const found = [
-        counts.get('block') ? plural(counts.get('block')!, 'certified block', 'certified blocks') : '',
+        counts.get('block') ? plural(counts.get('block')!, 'certified saved query', 'certified saved queries') : '',
         (counts.get('metric') ?? 0) + (counts.get('measure') ?? 0) ? plural((counts.get('metric') ?? 0) + (counts.get('measure') ?? 0), 'metric', 'metrics') : '',
         counts.get('dimension') ? plural(counts.get('dimension')!, 'dimension', 'dimensions') : '',
         counts.get('relation') ? plural(counts.get('relation')!, 'table', 'tables') : '',
@@ -3045,11 +3045,11 @@ function namedBlockFailure(runId: string, message: string, startedAt: number): A
   const receipt = result.askPipelineReceipt as PipelineReceipt;
   receipt.failure = { stage: 'prepare', reason: 'named_block_not_served', message };
   receipt.tiers = [{ round: 0, tier: 'certified', outcome: 'refused', detail: message.slice(0, 580) }];
-  receipt.story = [{ version: 1, phase: 'tier', title: 'The block the question names is not one Ask answers from', detail: message, state: 'missed', at: Date.now() }];
+  receipt.story = [{ version: 1, phase: 'tier', title: 'The saved query the question names is not one Ask answers from', detail: message, state: 'missed', at: Date.now() }];
   return {
     ...result,
     answerRefusalCode: 'modeling_gap',
-    artifacts: (result.artifacts ?? []).map((artifact) => ({ ...artifact, title: 'The named block was not used' })),
+    artifacts: (result.artifacts ?? []).map((artifact) => ({ ...artifact, title: 'The named saved query was not used' })),
     nextActions: [],
   };
 }
@@ -3473,7 +3473,7 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
   // A certified block served as published for a question it cannot answer
   // with identity is evidence: governed trust, the block as its source.
   const blockAsEvidence = candidate.tier === 'certified' && !certified;
-  const route = certified ? { tier: 'certified_block', label: 'Certified block' } : blockAsEvidence ? { tier: 'certified_block', label: 'Certified block, served as evidence' } : reviewRequired ? { tier: 'generated_sql', label: 'AI-drafted SQL (review required)' } : { tier: 'semantic_metric', label: 'Semantic metric' };
+  const route = certified ? { tier: 'certified_block', label: 'Certified saved query' } : blockAsEvidence ? { tier: 'certified_block', label: 'Certified saved query, served as evidence' } : reviewRequired ? { tier: 'generated_sql', label: 'AI-drafted SQL (review required)' } : { tier: 'semantic_metric', label: 'Semantic metric' };
   // GOVERNED MEANS THE WHOLE QUESTION. A semantic answer is labelled governed
   // only when its reading uses everything the question names and meets every
   // obligation it recorded. A word the reading left unused ("premium" in "the
@@ -3524,7 +3524,7 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
     evaluations: [
       ...contextEvaluation(receipt),
       { id: 'pipeline-interpretation', label: 'Interpretation', passed: true, severity: 'info', message: `Read as: ${outcome.intent.reading || 'the intent below'}` },
-      { id: 'pipeline-preparation', label: certified ? 'Certified entailment' : candidate.tier === 'semantic' ? 'Semantic compilation' : reviewRequired ? 'AI-drafted SQL checks' : 'Certified block', passed: true, severity: 'info', message: candidate.proof.join(' ') },
+      { id: 'pipeline-preparation', label: certified ? 'Certified entailment' : candidate.tier === 'semantic' ? 'Semantic compilation' : reviewRequired ? 'AI-drafted SQL checks' : 'Certified saved query', passed: true, severity: 'info', message: candidate.proof.join(' ') },
       ...(receipt.executed?.proofs ?? []).map((proof, index) => ({ id: `pipeline-execution-${index + 1}`, label: 'Execution proof', passed: true, severity: 'info' as const, message: proof })),
       // Words the reading does not use are never a passed check; the
       // evaluation carries no repair action, so it informs and does not loop.
@@ -3535,10 +3535,10 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
       ...(receipt.grounding ?? []).filter((note) => note.startsWith('identity:') && /share the name/.test(note)).map((note, index) => ({ id: `pipeline-identity-${index + 1}`, label: 'Identity', passed: true, severity: 'warning' as const, message: note.slice('identity:'.length).trim() })),
       // A certified block served as published with a label-only grouping
       // says so: the answer cannot keep two same-named entities apart.
-      ...(candidate.tier === 'certified' ? candidate.proof.filter((line) => /no identity key/.test(line)).map((line, index) => ({ id: `pipeline-certified-caveat-${index + 1}`, label: 'Certified block identity', passed: false, severity: 'warning' as const, message: `${line.replace(/^the block/, 'The block')}. Recertify it with the entity key to keep same-named members apart.` })) : []),
+      ...(candidate.tier === 'certified' ? candidate.proof.filter((line) => /no identity key/.test(line)).map((line, index) => ({ id: `pipeline-certified-caveat-${index + 1}`, label: 'Certified saved query identity', passed: false, severity: 'warning' as const, message: `${line.replace(/^the block/, 'The block')}. Recertify it with the entity key to keep same-named members apart.` })) : []),
       // A certified answer always names who owns its block; a block with no
       // recorded owner is listed here and the answer says "Owner: not set".
-      ...(certified && candidate.sourceRef && !candidate.sourceOwner ? [{ id: 'pipeline-certified-owner', label: 'Certified block owner', passed: false, severity: 'warning' as const, message: `${candidate.sourceRef} has no owner recorded. Set owner in the block declaration.` }] : []),
+      ...(certified && candidate.sourceRef && !candidate.sourceOwner ? [{ id: 'pipeline-certified-owner', label: 'Certified saved query owner', passed: false, severity: 'warning' as const, message: `${candidate.sourceRef} has no owner recorded. Set owner in the block declaration.` }] : []),
       // An answer that could not carry a requested output says so, and the
       // check does not pass: a ranking whose only identity is a numeric key
       // has not answered "which teams".
@@ -3553,10 +3553,10 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
         // The label lives on another entity of the same thing: a concept draft can name that (A-005), for review, never certified by asking.
         { id: 'draft-concept', label: 'Draft a business concept for this identity', route: 'modeling_draft' as const },
       ] : []),
-      ...(receipt.refusals.some((refusal) => refusal.tier === 'certified' && /no identity key/.test(refusal.message)) || (candidate.tier === 'certified' && candidate.proof.some((line) => /no identity key/.test(line))) ? [{ id: 'recertify-with-key', label: 'Recertify this block with the entity key', route: 'dql_block_draft' as const, artifactKind: 'dql_block_draft' as const }] : []),
+      ...(receipt.refusals.some((refusal) => refusal.tier === 'certified' && /no identity key/.test(refusal.message)) || (candidate.tier === 'certified' && candidate.proof.some((line) => /no identity key/.test(line))) ? [{ id: 'recertify-with-key', label: 'Recertify this saved query with the entity key', route: 'dql_block_draft' as const, artifactKind: 'dql_block_draft' as const }] : []),
       ...(receipt.context?.suggestedDomain ? [{ id: 'scope-to-domain', label: `Scope Ask to ${receipt.context.suggestedDomain}`, route: 'generated_answer' as const }] : []),
       ...(undeclaredJoin ? [{ id: 'create-relationship', label: `Save the ${undeclaredJoin.relations!.map(tableName).join(' → ')} join as a relationship`, route: 'modeling_draft' as const }] : []),
-      { id: 'create-block', label: 'Save as block', route: 'dql_block_draft', artifactKind: 'dql_block_draft' }, { id: 'research-gap', label: 'Research deeper', route: 'research' },
+      { id: 'create-block', label: 'Save as saved query', route: 'dql_block_draft', artifactKind: 'dql_block_draft' }, { id: 'research-gap', label: 'Research deeper', route: 'research' },
     ],
     telemetry,
   });

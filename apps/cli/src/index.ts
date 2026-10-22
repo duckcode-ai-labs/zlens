@@ -210,8 +210,8 @@ const COMMAND_HELP: Record<string, string> = {
   Notes:
     \`zlens certify <file.dql>\` evaluates the certification rules and writes
     nothing. Saving a block never certifies it; a person certifies explicitly.
-    \`zlens certify --from-draft <path>\` runs the same rules Block Studio's
-    Certify runs (owner, a successful compile and run, passing tests) and only
+    \`zlens certify --from-draft <path>\` runs the same rules Certify runs
+    in Saved queries (owner, a successful compile and run, passing tests) and only
     when they pass promotes the draft to status = "certified", recording who
     certified it in the block's companion YAML (reviewStatus + certification).
     --enterprise makes grain, declared outputs, source-system lineage,

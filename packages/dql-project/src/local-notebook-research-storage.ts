@@ -1735,7 +1735,7 @@ function titleFromQuestion(question: string): string {
 
 function seedQuestionForCell(sourceCellName: string): string {
   const cleanName = sourceCellName.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return `What reusable business logic does ${cleanName || 'this query'} represent, and should it become a DQL block?`;
+  return `What reusable business logic does ${cleanName || 'this query'} represent, and should it become a saved query?`;
 }
 
 function normalizeSourceCellInput(value: unknown): {

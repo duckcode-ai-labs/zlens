@@ -64,7 +64,7 @@ export function appStudioPlannerVoice(
 
 export const APP_STUDIO_KEYWORD_ACTIVITY_LABELS = [
   'Reading the words in your request',
-  'Matching them to certified Datasets, Metrics and saved queries',
+  'Matching them to certified tables, Metrics and saved queries',
   'Checking trust and capabilities',
   'Preparing source review',
 ] as const;
@@ -173,7 +173,7 @@ export function appStudioAskWords(voice: AppStudioPlannerVoice): AppStudioAskWor
       draftPage: 'Suggest tiles from keywords',
       buildOrRevise: 'Suggest tiles from keywords',
       revise: 'Suggest from keywords',
-      pageHelp: (governedOnly) => `No AI provider is connected, so suggestions match the words you type to ${governedOnly ? 'certified Datasets, Metrics and saved queries' : 'Datasets, Metrics and saved queries, including data that needs review'}. New tiles are added below what is already here, and you keep or skip each one before anything changes.`,
+      pageHelp: (governedOnly) => `No AI provider is connected, so suggestions match the words you type to ${governedOnly ? 'certified tables, Metrics and saved queries' : 'Tables, Metrics and saved queries, including data that needs review'}. New tiles are added below what is already here, and you keep or skip each one before anything changes.`,
     };
   }
   return {
@@ -184,6 +184,6 @@ export function appStudioAskWords(voice: AppStudioPlannerVoice): AppStudioAskWor
     draftPage: 'Draft with AI',
     buildOrRevise: 'Ask AI to build or revise this page',
     revise: 'Revise with AI',
-    pageHelp: (governedOnly) => `${governedOnly ? 'AI plans tiles from certified Datasets, Metrics and saved queries only.' : 'AI plans tiles from Datasets, Metrics and saved queries, including data that needs review.'} New tiles are added below what is already here, and you keep or skip each one before anything changes.`,
+    pageHelp: (governedOnly) => `${governedOnly ? 'AI plans tiles from certified tables, Metrics and saved queries only.' : 'AI plans tiles from tables, Metrics and saved queries, including data that needs review.'} New tiles are added below what is already here, and you keep or skip each one before anything changes.`,
   };
 }

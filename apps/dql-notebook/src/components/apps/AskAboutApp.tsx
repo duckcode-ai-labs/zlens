@@ -32,7 +32,7 @@ export interface AskAboutAppScope {
 export function askAboutAppCapability(scope: Pick<AskAboutAppScope, 'resultsReady'>): string {
   return scope.resultsReady
     ? 'Answers read this page’s current results, each tile’s source and trust label, and the filters on screen.'
-    : 'This page has not finished running: Ask can see its blocks and filters, not its results yet.';
+    : 'This page has not finished running: Ask can see its saved queries and filters, not its results yet.';
 }
 
 export function AskAboutApp({ scope, onAsk }: { scope: AskAboutAppScope; onAsk: (question: string) => void }): JSX.Element {

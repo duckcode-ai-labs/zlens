@@ -116,6 +116,6 @@ export function certifiedBlockFileState(
 /** The sentence every surface uses for a certified block edited after certification. */
 export function changedSinceCertifiedMessage(blockName: string, companionPath: string | null): string {
   const receipt = companionPath ? `the certification receipt in ${companionPath}` : 'its certification receipt';
-  return `certified block "${blockName}" was edited after it was certified: its source no longer matches ${receipt}. `
+  return `certified saved query "${blockName}" was edited after it was certified: its source no longer matches ${receipt}. `
     + 'Ask treats it as needing recertification until it is certified again.';
 }

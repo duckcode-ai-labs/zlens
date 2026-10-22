@@ -98,12 +98,12 @@ export function StarterBlocks({
           </span>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 14, fontWeight: 760, color: t.textPrimary }}>
-              Turn on AI to generate starter blocks
+              Turn on AI to generate starter saved queries
             </div>
             <p style={{ margin: '3px 0 0', fontSize: 12.5, lineHeight: 1.5, color: t.textSecondary }}>
-              Block suggestions are drafted by <strong>your AI provider</strong> from your dbt models and
+              Saved query suggestions are drafted by <strong>your AI provider</strong> from your dbt models and
               data — that's where the value is. Connect a provider (OpenAI, Anthropic, Gemini, or a local
-              Ollama) and ZLens will propose a few important blocks you can learn from and certify.
+              Ollama) and ZLens will propose a few important saved queries you can learn from and certify.
             </p>
           </div>
         </div>
@@ -138,10 +138,10 @@ export function StarterBlocks({
         </span>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 760, color: t.textPrimary }}>
-            New here? Start with blocks ZLens built for you
+            New here? Start with saved queries ZLens built for you
           </div>
           <p style={{ margin: '3px 0 0', fontSize: 12.5, lineHeight: 1.5, color: t.textSecondary }}>
-            A <strong>block</strong> is a reusable piece of analytics — one trusted metric or
+            A <strong>saved query</strong> is a reusable piece of analytics — one trusted metric or
             query your whole team can reuse across answers and Apps. Here are a few important ones ZLens
             drafted from your dbt models. Open <em>See details</em> on each to understand exactly what it
             measures and the SQL behind it — then build your own.
@@ -164,11 +164,11 @@ export function StarterBlocks({
           </div>
           <div style={footerStyle(t)}>
             <span style={{ fontSize: 12, color: t.textMuted }}>
-              Open a suggested block to edit it, or build one from scratch.
+              Open a suggested saved query to edit it, or build one from scratch.
             </span>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button type="button" onClick={reviewAll} style={primaryBtnStyle(t)}>
-                Open block suggestions
+                Open saved query suggestions
                 <ArrowRight size={14} strokeWidth={2.2} aria-hidden="true" />
               </button>
               <button type="button" onClick={buildOwn} style={ghostBtnStyle(t)}>
@@ -185,11 +185,11 @@ export function StarterBlocks({
             <span style={{ fontSize: 12.5, color: t.textSecondary, lineHeight: 1.5 }}>
               {readiness && !readiness.ready && readiness.reason
                 ? readiness.reason
-                : 'No starter blocks to suggest yet — connect a dbt project so ZLens can read your models, or build your first block by hand to see how it works.'}
+                : 'No starter saved queries to suggest yet — connect a dbt project so ZLens can read your models, or build your first saved query by hand to see how it works.'}
             </span>
             <button type="button" onClick={buildOwn} style={ghostBtnStyle(t)}>
               <BlocksIcon size={14} strokeWidth={2} aria-hidden="true" />
-              Build a block in Block Studio
+              Build a saved query
             </button>
           </div>
         </div>
@@ -340,7 +340,7 @@ function TrustLine({ verdict, t }: { verdict?: { blocking: string[]; warnings: s
       ) : (
         <span style={{ display: 'inline-flex', alignItems: 'flex-start', gap: 6, fontSize: 12, color: t.warning, lineHeight: 1.45 }}>
           <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
-          An AI draft — a person reviews and certifies it before your team relies on it. That review step is what makes a block trustworthy.
+          An AI draft — a person reviews and certifies it before your team relies on it. That review step is what makes a saved query trustworthy.
         </span>
       )}
     </Field>

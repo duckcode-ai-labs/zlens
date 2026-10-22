@@ -4585,7 +4585,7 @@ function normalizeNotebookResearchChecklist(raw: NotebookResearchReviewChecklist
         id: 'preview',
         label: 'Preview',
         status: hasPreview || reuseExisting ? 'passed' : 'pending',
-        detail: hasPreview ? 'Preview result is available.' : reuseExisting ? 'Certified block reuse does not require a new raw SQL preview.' : 'Run a bounded preview.',
+        detail: hasPreview ? 'Preview result is available.' : reuseExisting ? 'Certified saved query reuse does not require a new raw SQL preview.' : 'Run a bounded preview.',
       },
       {
         id: 'dql_draft',
@@ -5769,7 +5769,7 @@ export const api = {
     try {
       return await request('/api/blocks/library');
     } catch (error) {
-      return { blocks: [], error: error instanceof Error ? error.message : 'The block library could not be loaded.' };
+      return { blocks: [], error: error instanceof Error ? error.message : 'The saved query list could not be loaded.' };
     }
   },
 
@@ -5879,7 +5879,7 @@ export const api = {
           id: 'block-studio-draft',
           type: 'dql',
           source,
-          title: title || 'Block Studio draft',
+          title: title || 'Saved query draft',
         },
         error,
         attemptedSql: source,
@@ -7387,7 +7387,7 @@ export const api = {
           } | undefined,
         };
       }
-      return { error: error instanceof Error ? error.message : 'Failed to preview semantic block' };
+      return { error: error instanceof Error ? error.message : 'Failed to preview saved query built from metrics' };
     }
   },
 

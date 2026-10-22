@@ -286,7 +286,7 @@ export function agentGuideBlock(clientName: string): string {
     '- Semantic metrics: `query_semantic_model`. Lineage and impact: `lineage_impact`. Joins: `resolve_analytical_path` and `explain_relationship_proof`. Schema: `search_metadata`, `get_table_schema`, `validate_sql`.',
     '- Blocks: `search_blocks` and `get_block`. To save a reusable block, call `build_block_from_prompt` (ZLens drafts it) or write the SQL and save it with `suggest_block`; a request to save a block does not need `ask_dql` first. `certify` checks the rules and changes nothing.',
     '- Apps and notebooks: `list_apps`, `build_dql_app` (starts an App Studio draft), `list_notebooks`. App Datasets: `list_datasets`, `describe_dataset`, `query_dataset`.',
-    '- Report trust labels exactly as the tools return them. Never call AI-written SQL, a draft block or a draft App certified: only a person certifies, in Block Studio or with `zlens certify --from-draft`.',
+    '- Report trust labels exactly as the tools return them. Never call AI-written SQL, a draft block or a draft App certified: only a person certifies, in Saved queries or with `zlens certify --from-draft`.',
     '- Queries run through the ZLens workbench (`npm run notebook` or `zlens notebook`); keep it running.',
     '<!-- END DQL AGENT GUIDE -->',
     '',

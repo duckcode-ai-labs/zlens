@@ -48,7 +48,7 @@ describe('the certify warning and the certified matcher agree', () => {
 
   it('names the label and the key from the table', () => {
     expect(groupingIdentityGapOfSql(CASES[0]!.sql, KNOWN)?.message).toBe(
-      "Ask can't use this block as a certified answer: it groups by adjuster_name only. Add adjuster_id (the key) to SELECT and GROUP BY.",
+      "Ask can't use this saved query as a certified answer: it groups by adjuster_name only. Add adjuster_id (the key) to SELECT and GROUP BY.",
     );
   });
 

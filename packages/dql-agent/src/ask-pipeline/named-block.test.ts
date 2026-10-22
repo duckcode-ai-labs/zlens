@@ -154,7 +154,7 @@ describe('a question that names a block as a block', () => {
     expect(executed).toEqual([]);
     expect(outcome.kind).toBe('gap');
     if (outcome.kind !== 'gap') return;
-    expect(outcome.message).toMatch(/The certified block "Eligible Top Players With Player ID" cannot answer this as asked: the block does not accept a filter on season/);
+    expect(outcome.message).toMatch(/The certified saved query "Eligible Top Players With Player ID" cannot answer this as asked: the block does not accept a filter on season/);
     expect(outcome.message).toMatch(/accepts top_n/);
     expect(outcome.offerExploration).toBe(true);
     expect(outcome.text).toMatch(/explore the tables for a review-required answer/);

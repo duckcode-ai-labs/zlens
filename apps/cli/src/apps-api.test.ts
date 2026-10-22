@@ -413,7 +413,7 @@ describe('Apps command center API helpers', () => {
     });
 
     expect(result).toMatchObject({ ok: false });
-    if (!result.ok) expect(result.error).toMatch(/certified blocks only/i);
+    if (!result.ok) expect(result.error).toMatch(/certified saved queries only/i);
     expect(existsSync(join(root, 'apps/unsafe-growth'))).toBe(false);
   });
 
@@ -1646,7 +1646,7 @@ describe('Apps command center API helpers', () => {
     };
     const unversionedErrors = preflightStoredAppBuildDraft(root, unversionedDraft);
     expect(unversionedErrors).toContain(`Source block:${block.id} has no bound source revision; refresh it before Project publication.`);
-    expect(unversionedErrors).toContain('overview/customer-profile has no bound source revision; refresh the certified block before publication.');
+    expect(unversionedErrors).toContain('overview/customer-profile has no bound source revision; refresh the certified saved query before publication.');
     expect(() => publishStoredAppBuildDraft(root, {
       ...unversionedDraft,
       state: 'preflight_ready' as const,
@@ -1828,7 +1828,7 @@ describe('Apps command center API helpers', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain('No certified DQL blocks matched strongly enough');
+    expect(result.error).toContain('No certified saved queries matched strongly enough');
     expect(result.error).toContain('ZLens did not write an empty dashboard');
     expect(existsSync(join(root, 'apps/revenue-app-for-leadership-without-any-certified-blocks'))).toBe(false);
   });
@@ -1871,8 +1871,8 @@ describe('Apps command center API helpers', () => {
 
     expect(session.status).toBe('error');
     expect(session.generatedPaths).toEqual([]);
-    expect(session.error).toContain('No certified DQL blocks matched strongly enough');
-    expect(session.warnings.join(' ')).toContain('No certified DQL blocks matched strongly enough');
+    expect(session.error).toContain('No certified saved queries matched strongly enough');
+    expect(session.warnings.join(' ')).toContain('No certified saved queries matched strongly enough');
     const loaded = getAppAiBuildSession(root, session.id);
     expect(loaded?.status).toBe('error');
   });
@@ -3555,7 +3555,7 @@ describe('Apps command center API helpers', () => {
     expect(result.route).toBe('investigation');
     expect(result.investigation).toBeUndefined();
     expect(result.answer).toContain('Add the comparison, filters, timeframe, and decision context');
-    expect(result.followUps).toEqual(expect.arrayContaining(['Add analysis context', 'Create block draft']));
+    expect(result.followUps).toEqual(expect.arrayContaining(['Add analysis context', 'Create saved query draft']));
     expect(result.decision).toMatchObject({
       mode: 'analysis',
       requiresContext: true,

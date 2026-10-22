@@ -67,7 +67,7 @@ as **From team documents** with each page's title and link.
   states a figure is removed, and a sentence in the answer that states a
   figure only a document holds is removed too.
 - **Documents never change trust.** A certified answer is certified because
-  of its block; an answer that needs review still needs review. Citations
+  of its saved query; an answer that needs review still needs review. Citations
   are kept apart from the trust decision.
 - **What leaves the machine.** Pages go only to a model on this machine
   (Ollama on a loopback address) unless you allow a server's pages to reach

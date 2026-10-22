@@ -50,7 +50,7 @@ export interface DerivationWalkPanelProps {
 
 const STEP_LABEL: Record<DerivationStepKind, string> = {
   value: 'Value',
-  block: 'Certified block',
+  block: 'Certified saved query',
   term: 'Business term',
   metric: 'Metric',
   dimension: 'Dimension',

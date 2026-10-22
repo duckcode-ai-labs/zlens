@@ -95,7 +95,7 @@ export function CommandPalette({
       ['Files', 'files', Files],
       ['Lineage', 'lineage', GitFork],
       ['Git', 'git', GitBranch],
-      ['Block Library', 'block_library', Blocks],
+      ['Saved queries', 'block_library', Blocks],
       ['Apps', 'apps', Network],
       ['Connections', 'connection', Plug],
     ];
@@ -175,7 +175,7 @@ export function CommandPalette({
     if (!hostReadOnly(hostUi, 'block_library')) {
       result.push({
         id: 'block.new',
-        label: 'New block…',
+        label: 'New saved query…',
         group: 'Create',
         icon: BoxSelect,
         mode: 'studio',

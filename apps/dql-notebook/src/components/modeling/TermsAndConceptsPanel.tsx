@@ -259,7 +259,7 @@ function TermDrawer({ term, domain, domains, metrics, t, onClose, onSaved }: {
       <Field label="Words people use" hint="Ask recognizes the term when a question uses any of these. Press Enter after each." t={t}>
         <ListInput values={draft.synonyms ?? []} onChange={(next) => set('synonyms', next)} placeholder="sales, gross revenue…" t={t} />
       </Field>
-      <Field label="Measured by metric" hint={metrics.length ? 'The governed metric Ask uses when someone says this word.' : 'This project has no semantic metrics to link. A skill can point Ask at a certified block instead.'} t={t}>
+      <Field label="Measured by metric" hint={metrics.length ? 'The governed metric Ask uses when someone says this word.' : 'This project has no semantic metrics to link. A skill can point Ask at a certified saved query instead.'} t={t}>
         {metrics.length ? (
           <>
             <ListInput values={draft.metricRefs ?? []} onChange={(next) => set('metricRefs', next)} placeholder="Add a metric…" suggestions={metrics} t={t} />

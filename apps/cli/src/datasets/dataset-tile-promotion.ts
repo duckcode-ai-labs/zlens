@@ -72,13 +72,13 @@ export interface DatasetTileBoundParameter {
  */
 export function planDatasetTilePromotion(input: DatasetTilePromotionInput): DatasetTilePromotionPlan {
   if (input.query.comparison) {
-    return refusal('comparison_not_representable_as_single_block', 'This comparison uses multiple executions and result graph arithmetic, so it cannot be saved as one reusable SQL block. The Dataset tile remains runnable.');
+    return refusal('comparison_not_representable_as_single_block', 'This comparison uses multiple executions and result graph arithmetic, so it cannot be saved as one reusable saved query. The Dataset tile remains runnable.');
   }
   if (input.cacheDelivery) {
-    return refusal('dataset_tile_not_settled', 'Cached delivery is not fresh execution authority. Refresh this tile before saving it as a reusable block.');
+    return refusal('dataset_tile_not_settled', 'Cached delivery is not fresh execution authority. Refresh this tile before saving it as a reusable saved query.');
   }
   if (input.complete !== true) {
-    return refusal('dataset_tile_not_settled', 'This Dataset result is not a complete current tile result. Run a complete current tile before saving it as a reusable block.');
+    return refusal('dataset_tile_not_settled', 'This Dataset result is not a complete current tile result. Run a complete current tile before saving it as a reusable saved query.');
   }
   const required = [
     input.appId, input.pageId, input.tileId, input.name, input.domain, input.datasetId,
@@ -93,10 +93,10 @@ export function planDatasetTilePromotion(input: DatasetTilePromotionInput): Data
   const sql = input.sql.trim();
   if (!sql) return refusal('dataset_tile_sql_unavailable', 'This Dataset execution did not return one reusable physical SQL statement.');
   if (!isOneSqlStatement(sql)) {
-    return refusal('dataset_tile_not_single_statement', 'This Dataset execution requires more than one SQL statement or unsupported dynamic SQL, so ZLens will not save it as a reusable block.');
+    return refusal('dataset_tile_not_single_statement', 'This Dataset execution requires more than one SQL statement or unsupported dynamic SQL, so ZLens will not save it as a reusable saved query.');
   }
   if (sql.includes('"""')) {
-    return refusal('dataset_tile_sql_unavailable', 'The executed SQL cannot be represented safely in a DQL block body.');
+    return refusal('dataset_tile_sql_unavailable', 'The executed SQL cannot be represented safely in a saved query.');
   }
   const parameterized = parameterizeExecutedSql(sql, input.boundParameters);
   if (!parameterized.ok) return refusal('dataset_tile_dynamic_binding_not_representable', parameterized.message);
@@ -148,7 +148,7 @@ export function planDatasetTilePromotion(input: DatasetTilePromotionInput): Data
     replacementEligible: input.futureBindingsRepresentable,
     ...(input.futureBindingsRepresentable
       ? {}
-      : { replacementMessage: 'Saved as a fixed-value review draft. Replacement is unavailable because this tile has bindings or interactions that the current block contract cannot represent.' }),
+      : { replacementMessage: 'Saved as a fixed-value review draft. Replacement is unavailable because this tile has bindings or interactions that the current saved query contract cannot represent.' }),
   };
 }
 
@@ -201,7 +201,7 @@ function parameterizeExecutedSql(sql: string, bound: DatasetTileBoundParameter[]
     if (current === '/' && next === '*') { blockComment = true; out += '/*'; index += 1; continue; }
     if (current === "'" || current === '"' || current === '`') { quote = current; out += current; continue; }
     if (current === '?') {
-      return { ok: false, message: 'The executed SQL uses an anonymous parameter that a saved block cannot name. The Dataset tile remains unchanged.' };
+      return { ok: false, message: 'The executed SQL uses an anonymous parameter that a saved query cannot name. The Dataset tile remains unchanged.' };
     }
     if (current === '$' && next !== undefined && /[0-9]/.test(next)) {
       let end = index + 1;
@@ -215,7 +215,7 @@ function parameterizeExecutedSql(sql: string, bound: DatasetTileBoundParameter[]
         }
         const literal = paramLiteral(parameter.value);
         if (!literal) {
-          return { ok: false, message: `Parameter $${position} holds a value a saved block cannot declare as a default. The Dataset tile remains unchanged.` };
+          return { ok: false, message: `Parameter $${position} holds a value a saved query cannot declare as a default. The Dataset tile remains unchanged.` };
         }
         const base = /^[A-Za-z][A-Za-z0-9_]*$/.test(parameter.name) && !parameter.name.startsWith('__') ? parameter.name : `tile_param_${position}`;
         name = base;

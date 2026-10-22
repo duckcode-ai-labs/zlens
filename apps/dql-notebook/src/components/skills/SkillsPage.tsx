@@ -553,7 +553,7 @@ function SkillRow({ skill, t, onEdit, onDelete, onPublish, publishing = false }:
         >
           <SkillPillGroup t={t} label="Apply when" values={skill.triggers} empty="No trigger phrases defined" />
           <SkillPillGroup t={t} label="Prefer these metrics" values={skill.preferredMetrics} empty="No preferred metrics" accent mono />
-          <SkillPillGroup t={t} label="Reuse these blocks" values={skill.preferredBlocks} empty="No preferred blocks" accent mono />
+          <SkillPillGroup t={t} label="Reuse these saved queries" values={skill.preferredBlocks} empty="No preferred saved queries" accent mono />
           <SkillPillGroup t={t} label="Ask first when" values={skill.clarifyWhen} empty="No clarification rule defined" />
           {skill.exclusions?.length ? <SkillPillGroup t={t} label="Avoid when" values={skill.exclusions} empty="" /> : null}
           {skill.modelAreaRefs?.length ? <SkillPillGroup t={t} label="Subject areas" values={skill.modelAreaRefs} empty="" mono /> : null}
@@ -857,8 +857,8 @@ function SkillFormDrawer({ mode, options, domains, defaultDomain = null, default
               <MultiSelect t={t} options={options.metrics} optionKind="metrics" selected={draft.preferredMetrics} onChange={(next) => set('preferredMetrics', next)} placeholder="Search metrics…" emptyOptionsHint="No metrics available from the project yet." />
             </label>
             <label style={formLabelCol}>
-              <span style={formLabelText(t)}>Blocks</span>
-              <MultiSelect t={t} options={options.blocks} optionKind="blocks" selected={draft.preferredBlocks} onChange={(next) => set('preferredBlocks', next)} placeholder="Search blocks…" emptyOptionsHint="No blocks available from the project yet." />
+              <span style={formLabelText(t)}>Saved queries</span>
+              <MultiSelect t={t} options={options.blocks} optionKind="blocks" selected={draft.preferredBlocks} onChange={(next) => set('preferredBlocks', next)} placeholder="Search saved queries…" emptyOptionsHint="No saved queries available from the project yet." />
             </label>
           </div>
 

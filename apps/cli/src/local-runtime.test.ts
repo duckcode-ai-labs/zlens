@@ -1906,7 +1906,7 @@ describe('uniform DQL artifact parameter invocation API (PRD-001, CTX-001, AGT-0
       const parameterOptionsResponse = await fetch(`${base}/api/dashboard/filter-options?block=${encodeURIComponent('Runtime Parameter')}&column=category`);
       expect(parameterOptionsResponse.status).toBe(400);
       await expect(parameterOptionsResponse.json()).resolves.toMatchObject({
-        error: '"category" is not a declared output of this block',
+        error: '"category" is not a declared output of this saved query',
       });
       expect(executeQuery).not.toHaveBeenCalled();
 
@@ -5556,7 +5556,7 @@ LIMIT \${top_n}
       });
       const blank = await save('   ');
       expect(blank.status).toBe(400);
-      expect((await blank.json() as { error: string }).error).toMatch(/Block name is required/);
+      expect((await blank.json() as { error: string }).error).toMatch(/A name is required/);
       expect(existsSync(join(projectRoot, 'blocks'))).toBe(false);
 
       const named = await save('order_value');

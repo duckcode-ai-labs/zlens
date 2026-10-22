@@ -145,7 +145,7 @@ export function analyticalErrorHeadline(origin: AnalyticalErrorOrigin): string {
     case 'warehouse':
       return 'The warehouse rejected the query.';
     case 'dql_compilation':
-      return 'ZLens could not turn this answer into a reusable block.';
+      return 'ZLens could not turn this answer into a reusable saved query.';
     case 'governance_gate':
       return 'ZLens stopped this query before running it.';
     case 'retrieval_gap':

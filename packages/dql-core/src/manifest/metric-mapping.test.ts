@@ -87,7 +87,7 @@ describe('buildManifest metricMappings checks', () => {
     metric('claim_count');
     writeFileSync(join(projectRoot, 'blocks', 'open_claims.dql'), block(`  metricMappings {\n    total {\n      metric = "claim_count"\n      filter = "region LIKE 'N%'"\n    }\n  }`));
     const messages = errors().map((d) => d.message).join(' ');
-    expect(messages).toMatch(/"total" is not an output column of the block/);
+    expect(messages).toMatch(/"total" is not an output column of the saved query/);
     expect(messages).toMatch(/not "column = value" conditions: region LIKE 'N%'/);
   });
 });

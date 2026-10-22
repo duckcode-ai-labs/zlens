@@ -48,7 +48,7 @@ export function TableCell({ cell, cells, index, themeMode, onUpdate }: TableCell
         accentColor={ACCENT}
         cellLabel="Table"
         cellName={cell.name}
-        description="Renders an upstream dataframe — the rows of a named SQL, DQL, or Block cell above — as a sortable, exportable table. Use visibleColumns in tableConfig to pin a subset."
+        description="Renders an upstream dataframe — the rows of a named SQL, DQL, or Saved query cell above — as a sortable, exportable table. Use visibleColumns in tableConfig to pin a subset."
         upstreamOptions={upstreamOptions}
         onPick={(name) => onUpdate({ upstream: name })}
       />

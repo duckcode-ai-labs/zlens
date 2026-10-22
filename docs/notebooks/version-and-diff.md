@@ -1,6 +1,6 @@
 # Version and diff your work
 
-Notebooks, blocks and Apps are plain text files, so git is how you review
+Notebooks, saved queries and Apps are plain text files, so git is how you review
 and share them. ZLens adds a **Source control** page for people who do not
 use git every day, and a semantic diff for people who do.
 
@@ -32,7 +32,7 @@ for this project**. With no remote, **Add remote** asks for the
 
 | Committed | Kept out of git |
 |---|---|
-| `.dql` blocks and their companion YAML | `.run.json` results |
+| `.dql` block files (saved queries) and their companion YAML | `.run.json` results |
 | `.dqlnb` notebooks | `.dql/` (settings, chats, caches, private work) |
 | Published Apps in `apps/` | `dql-manifest.json` (rebuilt by `zlens compile`) |
 | `dql.config.json` | DuckDB files, `node_modules/` |
@@ -41,7 +41,7 @@ A notebook's results go in `<notebook>.run.json` beside it. When you reopen
 the notebook, cells show their last results with a `cached` chip, without
 running the queries again.
 
-## See what changed in a block or notebook
+## See what changed in a saved query or notebook
 
 `git diff` shows changed characters. `zlens diff` shows what changed in
 meaning:

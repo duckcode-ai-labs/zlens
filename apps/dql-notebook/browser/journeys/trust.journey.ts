@@ -18,7 +18,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('Import SQL: Save draft writes a draft; only Certify certifies, with a receipt (F1)', async ({ page, request }) => {
-  await page.getByRole('button', { name: 'Blocks', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
   await page.getByRole('button', { name: 'Start import' }).click();
   await page.getByPlaceholder(/select \.\.\./).fill('select count(*) as customer_count from dev.dim_customers');
   await page.getByPlaceholder('auto').fill('orders');
