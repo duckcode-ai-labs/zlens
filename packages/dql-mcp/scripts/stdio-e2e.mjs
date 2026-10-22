@@ -243,6 +243,9 @@ async function profileChecks(lane, project, runtimeUrl) {
       const mentioned = [...instructions.matchAll(/`([a-z][a-z0-9_]+)`/g)].map((match) => match[1]).filter((word) => /_/.test(word) && (expected.includes(word) || dqlToolNamesForSurface('mcp').includes(word)));
       const unserved = mentioned.filter((name) => !names.includes(name));
       record(lane, 'instructions', profile, expectThat(unserved.length === 0, `instructions name tools this profile does not serve: ${[...new Set(unserved)].join(', ')}`));
+      // Claude Desktop reads only these instructions: ask_dql comes before the semantic layer.
+      const askFirst = instructions.indexOf('1. Call `ask_dql` first');
+      record(lane, 'instructions', `${profile} ask_dql first`, expectThat(askFirst > -1 && askFirst < instructions.indexOf('`query_semantic_model`'), 'instructions must route through ask_dql before query_semantic_model'));
     } finally {
       await mcp.close();
     }
@@ -288,7 +291,7 @@ async function dbtLane(project, runtimeUrl) {
   await profileChecks(lane, project, runtimeUrl);
   const mcp = await connectMcp(project, runtimeUrl);
   try {
-    await call(lane, mcp, 'inspect_dql_project', {}, ok((b) => expectThat(b.blocks?.certified >= 4, `certified blocks ${b.blocks?.certified}`)));
+    await call(lane, mcp, 'inspect_dql_project', {}, ok((b) => expectThat(b.blocks?.certified >= 4 && b.certifiedBlocks?.some((x) => x.name === 'monthly_revenue' && x.grain === 'one row per calendar month') && b.nextTool === 'ask_dql', `certified blocks ${b.blocks?.certified}, listed ${JSON.stringify(b.certifiedBlocks?.map((x) => x.name))}, next ${b.nextTool}`)));
     await call(lane, mcp, 'search_blocks', { query: 'revenue' }, ok((b) => expectThat(b.blocks?.some((x) => x.name === 'monthly_revenue' && x.status === 'certified'), 'monthly_revenue (certified) not found')));
     await call(lane, mcp, 'search_blocks', { status: 'bogus' }, fails('status'));
     await call(lane, mcp, 'get_block', { name: 'monthly_revenue' }, ok((b) => expectThat(/order_total/.test(b.sql ?? '') && b.status === 'certified', 'monthly_revenue SQL/status')));
@@ -331,7 +334,10 @@ async function dbtLane(project, runtimeUrl) {
     await call(lane, mcp, 'query_via_metadata', { question: 'drop it', contextPackId, proposedSql: 'DELETE FROM dev.orders' }, fails(/read-only|SELECT/i));
     await call(lane, mcp, 'query_via_metadata', { question: 'q', contextPackId, proposedSql: 'select * from dev.no_such_table' }, fails(/no_such_table|not in the inspected|unknown/i));
 
-    await call(lane, mcp, 'query_semantic_model', { metrics: ['order_total'], timeDimension: { name: 'metric_time', granularity: 'month' }, saveDraft: false }, ok((b) => expectThat(b.matched && b.uncertified === true && b.trustLabelInfo?.base === 'AI-Generated' && b.executionStatus === 'executed' && b.rowCount > 0, `matched ${b.matched} status ${b.executionStatus} label ${b.trustLabelInfo?.base}`)));
+    await call(lane, mcp, 'query_semantic_model', { metrics: ['order_total'], timeDimension: { name: 'metric_time', granularity: 'month' }, saveDraft: false }, ok((b) => expectThat(b.matched && b.uncertified === true && b.trustLabelInfo?.base === 'AI-Generated' && b.executionStatus === 'executed' && b.rowCount > 0 && b.certifiedBlock?.name === 'monthly_revenue' && b.nextTool === 'query_via_block', `matched ${b.matched} status ${b.executionStatus} label ${b.trustLabelInfo?.base} certifiedBlock ${b.certifiedBlock?.name}`)));
+    // The Claude Desktop recording: the question asked straight of the semantic layer must name the certified block.
+    await call(lane, mcp, 'query_semantic_model', { question: 'How has revenue changed by month?', dryRun: true, saveDraft: false }, ok((b) => expectThat(b.certifiedBlock?.name === 'monthly_revenue' && b.nextTool === 'query_via_block' && !JSON.stringify(b).includes('No certified block'), `certifiedBlock ${b.certifiedBlock?.name} next ${b.nextTool}`)), { label: 'certified question' });
+    await call(lane, mcp, 'query_semantic_model', { question: 'Which store location had the most orders in 2025?', dryRun: true, saveDraft: false }, ok((b) => expectThat(!b.certifiedBlock && b.certifiedCheck?.checked === true, `certifiedBlock ${b.certifiedBlock?.name} check ${JSON.stringify(b.certifiedCheck)}`)), { label: 'no certified block' });
     await call(lane, mcp, 'query_semantic_model', { metrics: ['no_such_metric'] }, ok((b) => expectThat(b.matched === false && b.reason, 'unknown metric not reported')), { label: 'invalid' });
 
     await call(lane, mcp, 'lineage_impact', { focus: 'monthly_revenue' }, ok((b) => expectThat(JSON.stringify(b.nodes ?? []).includes('dbt_model:orders'), 'orders not upstream of monthly_revenue')));

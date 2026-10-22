@@ -307,7 +307,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'query_semantic_model',
     description:
-      'Semantic-layer compiler and bounded preview runner. Use after ask_dql when a governed metric/dimension/time-grain selection can answer the question before deep dbt/warehouse SQL search. Accepts explicit semantic members or a question, returns selected members, compiled SQL, bounded preview rows when runtime execution is available, and a reviewable DQL semantic artifact.',
+      'Semantic-layer compiler and bounded preview runner. Use only after ask_dql returned no certified block, when a governed metric/dimension/time-grain selection can answer the question before deep dbt/warehouse SQL search. When a certified block already answers the requested metric and grain, the result names it under certifiedBlock with nextTool query_via_block. Accepts explicit semantic members or a question, returns selected members, compiled SQL, bounded preview rows when runtime execution is available, and a reviewable DQL semantic artifact.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -779,7 +779,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'inspect_dql_project',
     description:
-      'Front-door project health/context tool for MCP clients. Refreshes metadata/index by default and returns block, app, dashboard, semantic, catalog, and recommended-next-step status.',
+      'Front-door project health/context tool for MCP clients. Refreshes metadata/index by default and returns block, app, dashboard, semantic, catalog, and recommended-next-step status, plus the certified blocks with their grains. Next step: ask_dql with the user\'s question.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
