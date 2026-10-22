@@ -64,6 +64,20 @@ export interface EntityBindingAuthoringInput {
   keys?: string[];
 }
 
+/**
+ * The grains and keys of both models a relationship was certified against,
+ * and, when the certify action recorded them, who certified it and when
+ * (not part of the proof: a later change to grains or keys makes it stale,
+ * and the date stays for "Changed since it was certified on …").
+ */
+export interface RelationshipCertifiedAgainst {
+  from: { grain: string; keys: string[] };
+  to: { grain: string; keys: string[] };
+  certifiedAt?: string;
+  certifiedBy?: string;
+  certifiedByName?: string;
+}
+
 export interface RelationshipAuthoringInput {
   id: string;
   domain: string;
@@ -77,10 +91,7 @@ export interface RelationshipAuthoringInput {
   status?: ManifestModelLifecycle;
   crossDomain?: boolean;
   owner?: string;
-  certifiedAgainst?: {
-    from: { grain: string; keys: string[] };
-    to: { grain: string; keys: string[] };
-  };
+  certifiedAgainst?: RelationshipCertifiedAgainst;
   validation?: ManifestRelationshipValidationEvidence;
   ownerDomain?: string;
   verb?: string;
@@ -193,10 +204,7 @@ export interface RelationshipValidationRecordInput extends ModelingObjectRef {
   sourcePath?: string;
   validation: ManifestRelationshipValidationEvidence;
   /** Set only when a person certifies with the check: the status becomes certified against these grains. */
-  certifiedAgainst?: {
-    from: { grain: string; keys: string[] };
-    to: { grain: string; keys: string[] };
-  };
+  certifiedAgainst?: RelationshipCertifiedAgainst;
 }
 
 /** Identifies an authored modeling object for removal. */

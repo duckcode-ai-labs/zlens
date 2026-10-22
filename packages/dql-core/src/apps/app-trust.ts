@@ -115,10 +115,14 @@ function staticRunTile(page: AppTrustPageLike, tile: AppTrustTileLike, input: Ap
   if (tile.query) {
     const descriptor = datasetOf(source);
     if (!source || !descriptor) return { status: 'ok', trustState: 'review_required' };
-    const joins = tileJoinsReachable(page, tile, descriptor).joins.map((join) => ({
-      id: join.id,
-      trust: input.joinTrust?.(page.id, tile.i, join) ?? join.trust,
-    }));
+    const joins = tileJoinsReachable(page, tile, descriptor).joins.map((join) => {
+      const trust = input.joinTrust?.(page.id, tile.i, join) ?? join.trust;
+      return {
+        id: join.id,
+        trust,
+        ...(trust !== 'certified' && join.changedSinceCertified ? { changedSinceCertified: join.changedSinceCertified } : {}),
+      };
+    });
     return {
       status: 'ok',
       tileType: 'dataset',

@@ -171,3 +171,24 @@ describe('a certifier is named as themselves', () => {
     expect(certifiedByLabel({ by: 'analytics@jaffle.shop', at: '2026-10-16T12:00:00Z', byYou: true }, new Date('2026-10-22T00:00:00Z'))).toBe('Certified by you · 16 Oct');
   });
 });
+
+describe('a join that changed since it was certified (T4)', () => {
+  it('keeps the date on the join and says so on every tile that uses it', () => {
+    const changed: RelatedRelationshipEdge[] = [{ ...edges[0]!, origin: 'model', id: 'shop::relationship::orders_to_customers', certified: false, previousCertification: { at: '2026-10-22T09:00:00.000Z', by: 'maria@example.test' } }];
+    const descriptor = withDatasetJoins(base, discoverDatasetJoins({ descriptor: base, baseRelation: 'main.orders', edges: changed, columnsOf: (relation) => columns[relation] }));
+    expect(descriptor.joins?.[0]).toMatchObject({ trust: 'review_required', changedSinceCertified: { at: '2026-10-22T09:00:00.000Z', by: 'maria@example.test' } });
+    const answer = appTrustAnswer({ pages: [salesPage()], sourceFor: sources({ orders: { ...certifiedOrders, capabilities: { dataset: descriptor } } }) });
+    expect(appTileTrustFor(answer, 'overview', 'top')?.trust).toMatchObject({ state: 'review', detail: expect.stringMatching(/^Uses a join that changed since it was certified on 22 Oct/) });
+    // Certified now: the date is not carried, and nothing reads "changed".
+    const current = withDatasetJoins(base, discoverDatasetJoins({ descriptor: base, baseRelation: 'main.orders', edges: [{ ...changed[0]!, certified: true }], columnsOf: (relation) => columns[relation] }));
+    expect(current.joins?.[0]?.changedSinceCertified).toBeUndefined();
+    // A join nobody ever certified keeps the plain sentence.
+    expect(appTileTrustFor(appTrustAnswer({ pages: [salesPage()], sourceFor: sources() }), 'overview', 'top')?.trust.detail).toBe('Uses a join nobody has certified.');
+  });
+
+  it('a source that changed since it was certified says when, not "nobody"', () => {
+    const changedSource: AppTrustSourceLike = { id: 'beverage', kind: 'block', lifecycle: 'review', trustState: 'review_required', reviewStatus: 'required', certification: { by: 'maria@example.test', at: '2026-10-22T09:00:00.000Z' } };
+    const answer = appTrustAnswer({ pages: [salesPage([])], sourceFor: sources({ beverage: changedSource }) });
+    expect(appTileTrustFor(answer, 'overview', 'bev')?.trust).toMatchObject({ state: 'review', detail: expect.stringMatching(/^Changed since it was certified on 22 Oct/) });
+  });
+});

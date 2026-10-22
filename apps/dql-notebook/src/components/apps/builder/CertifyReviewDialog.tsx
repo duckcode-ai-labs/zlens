@@ -1,11 +1,31 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Check, Copy, Hash, Link2, ShieldCheck, Table2, X } from 'lucide-react';
+import { AlertTriangle, Check, Copy, Hash, Link2, ListChecks, Play, ShieldCheck, Table2, UserRound, X } from 'lucide-react';
 import { api, type CertificationByline, type CertifyReview } from '../../../api/client';
 import { checkedByLabel } from './app-data';
+import { certifiedDateLabel } from '@zlens/core/apps/reader-trust';
 import { humanize, messageOf } from './studio-ui';
 
 type ReviewLoader = (sourceId: string) => Promise<{ ok: boolean; review?: CertifyReview; error?: string }>;
-type Certifier = (sourceId: string, sourceRevision?: string) => Promise<{ ok: boolean; certification?: CertificationByline; sourceRevision?: string; blockers?: string[]; error?: string }>;
+type Certifier = (sourceId: string, sourceRevision?: string, owner?: string) => Promise<{ ok: boolean; certification?: CertificationByline; sourceRevision?: string; blockers?: string[]; error?: string }>;
+
+/**
+ * Whether "I vouch for this — certify" may be pressed, and the owner it
+ * sends: a review that can be vouched for (data, or a saved query ZLens ran
+ * here), whose row key check did not fail, and — for a saved query nobody
+ * owns yet — with an owner typed in (T4).
+ */
+export function certifyReviewVouch(review: CertifyReview | null, owner: string): { enabled: boolean; owner?: string } {
+  if (!review) return { enabled: false };
+  const savedQuery = review.kind === 'saved_query' ? review.savedQuery : undefined;
+  const vouchable = review.kind === 'dataset' || Boolean(savedQuery);
+  const keyFailed = Boolean(review.keyCheck && !review.keyCheck.ok);
+  const named = owner.trim();
+  const ownerMissing = Boolean(savedQuery?.ownerRequired && !named);
+  return {
+    enabled: vouchable && review.canVouch && !keyFailed && !ownerMissing,
+    ...(savedQuery?.ownerRequired && named ? { owner: named } : {}),
+  };
+}
 
 /**
  * The short review before certifying data on purpose (design Q1). "Check and
@@ -15,7 +35,10 @@ type Certifier = (sourceId: string, sourceRevision?: string) => Promise<{ ok: bo
  * joins used, columns hidden as duplicates — then one button, "I vouch for
  * this — certify". The server runs the same certification rules as Block
  * Studio's Certify; with a host, only people who may certify can.
- * A saved query without a row-level definition certifies in Block Studio.
+ *
+ * A saved query certifies here too (T4): it runs and its tests run now, who
+ * owns it (asked for, and written, when nobody is named) and what one row is.
+ * The saved query editor stays one small link away.
  */
 export function CertifyReviewDialog({
   sourceId,
@@ -43,6 +66,7 @@ export function CertifyReviewDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<{ message: string; blockers: string[] } | null>(null);
+  const [owner, setOwner] = useState('');
 
   useEffect(() => {
     if (initialReview) return undefined;
@@ -64,7 +88,7 @@ export function CertifyReviewDialog({
     if (!review) return;
     setSaving(true);
     setError(null);
-    void (certify ?? ((id, revision) => api.certifyAppData(id, revision)))(review.sourceId, review.sourceRevision).then((response) => {
+    void (certify ?? ((id, revision, named) => api.certifyAppData(id, revision, named)))(review.sourceId, review.sourceRevision, certifyReviewVouch(review, owner).owner).then((response) => {
       setSaving(false);
       if (!response.ok) {
         setError({ message: response.error ?? 'ZLens could not certify this data.', blockers: response.blockers ?? [] });
@@ -78,7 +102,10 @@ export function CertifyReviewDialog({
   };
 
   const title = humanize(review?.name ?? name ?? 'this data');
-  const keyFailed = review?.keyCheck && !review.keyCheck.ok;
+  const savedQuery = review?.kind === 'saved_query' ? review.savedQuery : undefined;
+  const vouchable = review?.kind === 'dataset' || Boolean(savedQuery);
+  const canVouchNow = certifyReviewVouch(review, owner).enabled;
+  const changedOn = review && !review.certified ? certifiedDateLabel(review.previousCertification?.at) : undefined;
   return (
     <div className="proposal-scrim certify-review-scrim" role="dialog" aria-modal="true" aria-labelledby="certify-review-title">
       <section className="table-dataset-card certify-review-card">
@@ -86,8 +113,8 @@ export function CertifyReviewDialog({
           <span className="table-dataset-icon"><ShieldCheck size={17} aria-hidden="true" /></span>
           <div>
             <h2 id="certify-review-title">Certify {title}</h2>
-            <p>{review?.kind === 'saved_query'
-              ? 'A saved query is certified in Block Studio, where its tests run.'
+            <p>{review?.kind === 'saved_query' && !savedQuery
+              ? 'A saved query ZLens cannot run here is certified in the saved query editor.'
               : review?.kind === 'metrics'
                 ? 'Metrics come from your semantic model and are certified there.'
                 : 'A short review. Certifying says you looked at it and vouch for these numbers.'}</p>
@@ -98,7 +125,35 @@ export function CertifyReviewDialog({
           {!review && !loadError ? <p className="table-dataset-muted" role="status">Checking {title} again…</p> : null}
           {loadError ? <p className="table-dataset-error" role="alert">{loadError}</p> : null}
           {review ? <>
+            {changedOn ? <p className="certify-review-who">Changed since it was certified on {changedOn}.</p> : null}
             {review.check ? <p className="certify-review-who">{checkedByLabel(review.check)}</p> : null}
+            {savedQuery ? <>
+              <section className="certify-review-part" aria-label="It runs">
+                <h3><Play size={13} aria-hidden="true" /> It runs</h3>
+                {savedQuery.runs.ok
+                  ? <p className="certify-review-ok"><Check size={13} aria-hidden="true" /> {savedQuery.runs.sentence}</p>
+                  : <p className="table-dataset-error" role="alert"><AlertTriangle size={13} aria-hidden="true" /> {savedQuery.runs.error}</p>}
+              </section>
+              <section className="certify-review-part" aria-label="Its tests pass">
+                <h3><ListChecks size={13} aria-hidden="true" /> Its tests pass</h3>
+                <p>{savedQuery.testsSentence}</p>
+                {savedQuery.tests.length ? <ul>{savedQuery.tests.map((test) => <li key={test.name} className={test.passed ? 'certify-review-ok' : 'table-dataset-error'}>{test.passed ? <Check size={12} aria-hidden="true" /> : <AlertTriangle size={12} aria-hidden="true" />} {test.name}{test.passed ? ' · passed' : ` · failed${test.error ? `: ${test.error}` : ''}`}</li>)}</ul> : null}
+              </section>
+              <section className="certify-review-part" aria-label="Who owns it">
+                <h3><UserRound size={13} aria-hidden="true" /> Who owns it</h3>
+                {savedQuery.ownerRequired
+                  ? <label className="certify-review-owner">
+                    <span>Nobody owns it yet. Name the person or team who answers for these numbers; ZLens writes it into the saved query when you certify.</span>
+                    <input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="Owner, e.g. Maria Lopez or Sales analytics" aria-label="Owner" maxLength={120} disabled={saving} />
+                  </label>
+                  : <p>{savedQuery.owner}</p>}
+              </section>
+              <section className="certify-review-part" aria-label="What one row is">
+                <h3><Table2 size={13} aria-hidden="true" /> What one row is</h3>
+                <p>{savedQuery.row ?? 'Not known: it declares no grain or grouping columns.'}</p>
+              </section>
+              {savedQuery.blockers.length ? <div className="table-dataset-error" role="alert"><p>Not ready to certify:</p><ul>{savedQuery.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
+            </> : null}
             {review.kind === 'dataset' ? <>
               <section className="certify-review-part" aria-label="What one row is">
                 <h3><Table2 size={13} aria-hidden="true" /> What one row is</h3>
@@ -127,11 +182,11 @@ export function CertifyReviewDialog({
         </div>
         <footer>
           <button type="button" onClick={onClose} disabled={saving}>Not now</button>
-          {review?.kind === 'dataset' ? <small>ZLens records you as the person who certified it, with the date and what was checked.</small> : <span />}
-          {review?.kind === 'dataset'
-            ? <button type="button" className="primary" disabled={saving || !review.canVouch || Boolean(keyFailed)} onClick={vouch}>{saving ? 'Certifying…' : 'I vouch for this — certify'}</button>
+          {vouchable ? <small>ZLens records you as the person who certified it, with the date and what was checked.{review?.kind === 'saved_query' && review.blockStudioPath && onOpenBlockStudio ? <> <button type="button" className="link certify-review-editor-link" onClick={() => onOpenBlockStudio(review.blockStudioPath!)} disabled={saving}>Open in the saved query editor</button></> : null}</small> : <span />}
+          {vouchable
+            ? <button type="button" className="primary" disabled={saving || !canVouchNow} onClick={vouch}>{saving ? 'Certifying…' : 'I vouch for this — certify'}</button>
             : review?.kind === 'saved_query' && review.blockStudioPath && onOpenBlockStudio
-              ? <button type="button" className="primary" onClick={() => onOpenBlockStudio(review.blockStudioPath!)}>Open in Block Studio</button>
+              ? <button type="button" className="primary" onClick={() => onOpenBlockStudio(review.blockStudioPath!)}>Open in the saved query editor</button>
               : null}
         </footer>
       </section>

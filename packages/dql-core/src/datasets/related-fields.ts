@@ -41,6 +41,8 @@ export interface RelatedRelationshipEdge {
    * was unique. `failed` is a check that did not pass.
    */
   evidence?: { current: boolean; fromUnique?: boolean; toUnique?: boolean; failed?: boolean };
+  /** A relationship certified once that no longer holds as certified: who certified it and when. */
+  previousCertification?: { at: string; by?: string; name?: string };
 }
 
 export interface DiscoveredDatasetJoins {
@@ -265,6 +267,7 @@ export function discoverDatasetJoins(input: {
       relationshipId: step.edge.id,
       uniqueness: step.edge.evidence?.current && step.targetUnique === true ? 'current' : 'recheck',
       sentence: `each ${fromEntity} has one ${targetWords}`,
+      ...(!step.edge.certified && step.edge.previousCertification ? { changedSinceCertified: { ...step.edge.previousCertification } } : {}),
     };
     joins.push(join);
     for (const column of shown) {

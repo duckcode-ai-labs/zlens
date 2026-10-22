@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hostActor, hostActorDisplayName } from './host/request-context.js';
-import { blockCertificationByline, bylineForViewer, gitUserName, localPersonAliases, localPersonSelf, personDisplayName, type CertificationByline } from './certification-receipt.js';
+import { blockCertificationByline, blockPreviousCertificationByline, bylineForViewer, gitUserName, localPersonAliases, localPersonSelf, personDisplayName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -2104,7 +2104,13 @@ function withCertificationBylines<Item extends { trust?: string; kind?: string; 
     let named = ownerName && ownerName !== item.owner ? { ...item, ownerName } : item;
     // "Checked by you · 22 Oct" for data ZLens checked that nobody certified yet (design Q1).
     if (item.check) named = { ...named, check: bylineForViewer(item.check, person) };
-    if (item.trust !== 'certified' || item.kind === 'semantic' || !item.sourcePath) return named;
+    if (item.kind === 'semantic' || !item.sourcePath) return named;
+    if (item.trust !== 'certified') {
+      // Certified once, changed since (T4): keep who certified it and when,
+      // so the Data list says "Changed since it was certified on 22 Oct".
+      const previous = blockPreviousCertificationByline(projectRoot, item.sourcePath);
+      return previous ? { ...named, certification: previous } : named;
+    }
     const certification = blockCertificationByline(projectRoot, item.sourcePath);
     // "Certified by you" when the person reading certified it (design Q1).
     return certification ? { ...named, certification: bylineForViewer(certification, person) } : named;

@@ -3,7 +3,7 @@ import type {
   AppStudioBuildDraft,
   AppStudioDraftOperation,
 } from '../../../api/client';
-import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
+import type { DatasetDescriptor, DatasetJoin } from '@zlens/core/datasets/descriptor';
 import { datasetPhysicalField } from '@zlens/core/datasets/descriptor';
 import { tileQueryValidationRuns, validateTileQuery, type TileQuery } from '@zlens/core/apps/tile-query';
 import { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from '@zlens/core/apps/app-data-sources';
@@ -206,16 +206,22 @@ export function dataTrustDetail(item: Pick<AppBlockRecommendation, 'trust' | 'st
 }
 
 /**
- * Data "I vouch for this — certify" applies to (design Q1): a row-level
- * Dataset (from a table, or a saved query made row-level) nobody certified
- * yet. A saved query certifies in Block Studio; Metrics in the model.
+ * Data "I vouch for this — certify" applies to (design Q1, T4): a row-level
+ * Dataset (from a table, or a saved query made row-level) or a saved query
+ * nobody certified yet. Metrics are certified in the semantic model.
  */
 export function canCertifyAppData(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'capabilities' | 'kind'>): boolean {
   const dataset = item.capabilities?.dataset;
   return needsReview(item)
     && item.lifecycle !== 'deprecated'
     && item.kind !== 'semantic'
-    && Boolean(dataset && dataset.kind !== 'semantic' && !dataset.result);
+    && dataset?.kind !== 'semantic';
+}
+
+/** The joins of a Dataset nobody certified yet: each one certifies from the Data list's ⋯ menu (T4). */
+export function joinsToCertify(item: Pick<AppBlockRecommendation, 'capabilities'> | null | undefined): DatasetJoin[] {
+  const joins = (item?.capabilities?.dataset as { joins?: DatasetJoin[] } | undefined)?.joins ?? [];
+  return joins.filter((join) => join.trust !== 'certified');
 }
 
 /**

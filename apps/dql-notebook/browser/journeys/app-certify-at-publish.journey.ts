@@ -17,6 +17,8 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
  * for this — certify" → All checks passed → published: "All tiles certified",
  * and the tile reads "Certified by you".
  *
+ * The Data list's ⋯ menu opens the same review (T4).
+ *
  * It starts its own server on its own copy of the fixture: the Dataset and App
  * it adds would change what the shared server's journeys count.
  * ZLENS_CERTIFY_SHOTS_DIR saves 18-certify-at-publish.png (the review).
@@ -95,6 +97,13 @@ test('checking a table does not certify it; certifying is a short review from th
   const dataPane = page.locator('.data-panel');
   await expect(dataPane.locator('.dataset-current')).toContainText('Customers');
   await expect(dataPane.locator('.dataset-current')).toContainText('Table · Not certified yet');
+  // The Data list's ⋯ menu opens the same short review as the publish dialog (T4).
+  await dataPane.getByRole('button', { name: 'More for Customers' }).click();
+  await dataPane.getByRole('menuitem', { name: /Certify…/ }).click();
+  const fromMenu = page.getByRole('dialog', { name: 'Certify Customers' });
+  await expect(fromMenu.getByRole('region', { name: 'What one row is' })).toBeVisible({ timeout: 60_000 });
+  await fromMenu.getByRole('button', { name: 'Not now' }).click();
+  await expect(fromMenu).toBeHidden();
   await dataPane.locator('button.data-field').filter({ hasText: 'Lifetime Spend' }).click();
   await expect(page.locator('article.draft-tile')).toBeVisible();
   await page.getByRole('button', { name: 'Add to page' }).click();

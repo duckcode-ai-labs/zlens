@@ -1267,6 +1267,12 @@ export interface ManifestModelRelationship {
   sourcePath: string;
   fingerprint: string;
   certificationFingerprint?: string;
+  /**
+   * Who certified the relationship and when, when the certify action recorded
+   * it (inside `certifiedAgainst`). Kept when the certification goes stale, so
+   * receipts can say "Changed since it was certified on 22 Oct".
+   */
+  certification?: { by?: string; name?: string; at?: string };
   /** Warehouse-backed evidence captured before certification. */
   validation?: ManifestRelationshipValidationEvidence;
   /** Lowercased catalog data types of the join keys, when dbt's catalog knows them; part of the validation proof. */

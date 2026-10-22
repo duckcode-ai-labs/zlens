@@ -773,7 +773,7 @@ describe('Publish lists tiles on a join nobody certified, and never blocks on th
       expect(markup).toContain('aria-label="1 tile not certified yet"');
       expect(markup).toContain('Revenue by location');
       expect(markup).toContain('Uses a join nobody has certified.');
-      expect(markup).toContain('Certify the join (recommended)');
+      expect(markup).toContain('Certify this join (recommended)');
       expect(markup).toContain('Remove the related field');
       expect(markup).toContain('Readers will see \u2018Not certified yet\u2019 on 1 tile.');
       expect(markup).toMatch(/<button type="button" class="primary">Publish<\/button>/);
@@ -787,7 +787,7 @@ describe('Publish lists tiles on a join nobody certified, and never blocks on th
     expect(markup).not.toContain('Ready to publish');
     expect(markup).toContain('1 fix before publishing');
     expect(markup).toContain('This project requires every tile to be certified before an App is published.');
-    expect(markup).toContain('Certify the join (recommended)');
+    expect(markup).toContain('Certify this join (recommended)');
     expect(markup).not.toMatch(/>Publish<\/button>/);
   });
 });
@@ -848,7 +848,7 @@ describe('Certify at publish (design Q1)', () => {
     expect(markup).not.toMatch(/fix before publishing|Only certified data|Needs certifying|Checked ·/);
   });
 
-  it('a saved query not certified yet gets its own Certify now (it opens the saved query, for now)', () => {
+  it('a saved query not certified yet gets its own Certify now (its short review, here: T4)', () => {
     const markup = dialog(draftWith([checkedTable, savedQuery]));
     expect(markup).toContain('aria-label="Certify now: Top Customers"');
     expect(markup).not.toContain('Local analysis cannot publish');

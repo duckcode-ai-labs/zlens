@@ -210,6 +210,7 @@ import {
   type DbtSourceAuthoringInput,
   type DbtMetricAuthoringInput,
   type RelationshipAuthoringInput,
+  type EntityBindingAuthoringInput,
   type ManifestRelationshipValidationEvidence,
   normalizeAnalyticalFailureV1,
   normalizeAnalyticalRepairCapabilityV1,
@@ -242,6 +243,8 @@ import {
   currentBlockFileCheck,
   isSavedQueryResultDataset,
   wordsFor,
+  singularWords,
+  bareRelation,
   type BlockCheckRecord,
   resolveBlockReplacement,
   groupingIdentityGapOfSql,
@@ -281,6 +284,7 @@ import {
   applyCompanionCertification,
   applyCompanionCheck,
   blockCertificationByline,
+  blockPreviousCertificationByline,
   blockSourceStatus,
   buildCertificationReceipt,
   buildCheckRecord,
@@ -294,7 +298,9 @@ import {
   passedCheckNames,
   readCompanionCertification,
   readCompanionDeprecation,
+  personDisplayName,
   sourceSha256,
+  withBlockOwner,
   withBlockStatus,
   describesReviewPending,
   withoutReviewPendingWording,
@@ -666,6 +672,7 @@ import { loadOrCreateSnapshotKey, localSnapshotSigner, readSnapshotPublicKey, si
 import { dashboardDriverProbeItem, dashboardExploreProbeItem, expandDashboardDriverItems, foldDashboardDriverTiles, withDriverFilterScopes } from './datasets/dashboard-drivers.js';
 import { compileDatasetTileQuery, sourceColumnReference, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
 import { decorateDatasetDescriptor, joinableTables, joinRepeatsKeyMessage, joinUniquenessSql, readDbtArtifacts, relatedTablesContext, type RelatedTablesContext } from './datasets/related-tables.js';
+import { joinCertifyDecision, nextRelationshipId, savedQueryReview, type RowKeyCheck } from './datasets/inline-certify.js';
 import { summarizeDatasetChartFacts } from './datasets/dataset-chart-fact-summary.js';
 import { planDatasetTilePromotion, type DatasetTileBoundParameter } from './datasets/dataset-tile-promotion.js';
 import { proveDatasetResultEquivalence } from './datasets/result-equivalence.js';
@@ -8595,6 +8602,329 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     return proposal;
   };
 
+
+  /**
+   * Save a reviewed proposal: write its patches (all or none), refresh the
+   * project, and record the commit. The Modeling drafts' Save and the
+   * inline join certification (T4) both save through here, so a join
+   * certified from an App is written exactly as Modeling writes it.
+   */
+  const commitContextProposal = async (proposal: ContextAuthoringProposalV1, idempotencyKey: string): Promise<{ committed: ContextAuthoringProposalV1; snapshotId: string; modeling: DQLManifest['modeling']; rebased: boolean }> => {
+    if (proposal.status !== 'proposed') throw Object.assign(new Error('Only a proposed change can be committed.'), { code: 'PROPOSAL_STALE' });
+    if (proposal.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) throw Object.assign(new Error('Resolve all blocking proposal diagnostics before saving.'), { code: 'PROPOSAL_BLOCKED' });
+    const beforeSnapshot = projectSnapshot();
+    // Something else changed in the project since review: save the
+    // reviewed changes as they are when none of their files moved, and
+    // ask only when one did.
+    const reviewed = beforeSnapshot.snapshotId === proposal.baseSnapshotId ? proposal : rebaseReviewedProposal(proposal);
+    const resolvedPatches = reviewed.patches.map((patch) => ({ patch, absolute: resolveContextPatchPath(projectRoot, gitRoot, patch.path) }));
+    for (const { patch, absolute } of resolvedPatches) {
+      const current = existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
+      if (current !== patch.before) throw Object.assign(new Error(`Source changed after preview: ${patch.path}`), { code: 'SOURCE_CHANGED' });
+    }
+    const written: Array<{ patch: ContextAuthoringPatchV1; absolute: string }> = [];
+    try {
+      for (const item of resolvedPatches) {
+        if (!item.patch.changed) continue;
+        if (!item.patch.after) rmSync(item.absolute, { force: true });
+        else {
+          mkdirSync(dirname(item.absolute), { recursive: true });
+          writeFileSync(item.absolute, item.patch.after, 'utf8');
+        }
+        written.push(item);
+      }
+      projectSnapshots.invalidate();
+      invalidateAgentProjectState(projectRoot);
+      const nextSnapshot = projectSnapshot();
+      if (nextSnapshot.error) throw Object.assign(new Error(nextSnapshot.error), { code: 'COMPILE_FAILED' });
+      await refreshUnifiedProjectIndexes(projectRoot);
+      const committedAt = new Date().toISOString();
+      const committed: ContextAuthoringProposalV1 = { ...reviewed, status: 'committed', committedAt, committedSnapshotId: nextSnapshot.snapshotId };
+      contextProposalStore.save(committed);
+      // The reviewed proposal was saved as its rebased copy: it waits for no one now.
+      if (reviewed !== proposal) contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: committedAt, supersededBy: committed.id });
+      contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
+      // Saved drafts are reviewed: older copies of them wait for no one.
+      if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: committed.id });
+      return { committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling, rebased: reviewed !== proposal };
+    } catch (error) {
+      for (const { patch, absolute } of written.reverse()) {
+        if (!patch.before) rmSync(absolute, { force: true });
+        else {
+          mkdirSync(dirname(absolute), { recursive: true });
+          writeFileSync(absolute, patch.before, 'utf8');
+        }
+      }
+      projectSnapshots.invalidate();
+      invalidateAgentProjectState(projectRoot);
+      contextProposalStore.save(proposal);
+      contextProposalStore.deleteCommitReceipt(idempotencyKey);
+      throw error;
+    }
+  };
+
+
+  /**
+   * Certify a join from where the author is (T4): the publish dialog and the
+   * Data list's ⋯ menu. A fresh, bounded check runs on the warehouse (the
+   * Modeling page's one validation statement); when the model lacks the
+   * grain or key columns Modeling wants, they are filled only from what a
+   * check just proved — the "one" side's join key, unique and filled on
+   * every row, and the Dataset's own row key, checked now. Nothing is
+   * written when a check fails. Writing goes through Modeling's own path: a
+   * proposal of modeling changes (the entities' grain and keys, the
+   * relationship certified against them, with who and when), saved at once,
+   * so Modeling shows it certified afterwards.
+   */
+  const coded = (code: string, message: string) => Object.assign(new Error(message), { code });
+  const planJoinCertification = async (sourceId: string, joinId: string, requestBody: Record<string, unknown>) => {
+    const snapshot = projectSnapshot();
+    const manifest = snapshot.manifest;
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
+    const source = resolved.items[0];
+    if (!source || resolved.missingSourceIds.length > 0) throw coded('DATASET_SOURCE_NOT_FOUND', 'That data is not in this project any more. Refresh the list.');
+    const descriptor = source.capabilities.dataset;
+    const join = descriptor?.joins?.find((candidate) => candidate.id === joinId);
+    if (!descriptor || !join) throw coded('JOIN_NOT_FOUND', `${source.title} has no join "${joinId}" any more. Refresh this App's data.`);
+    if (!manifest.modeling) throw coded('MODELING_NOT_ENABLED', 'Joins are certified in the project\'s model, and this project has none yet. Set up Modeling first.');
+    const { context } = currentRelatedTables(true);
+    const edge = context.edges.find((candidate) => candidate.id === join.relationshipId);
+    if (!edge) throw coded('JOIN_NOT_FOUND', `ZLens no longer finds where the join ${source.title} → ${join.label} comes from. Refresh this App's data.`);
+    const modeling = manifest.modeling;
+    const nodes = manifest.dbtProvenance?.nodes ?? {};
+    const sameRelation = (left: string | undefined, right: string) => Boolean(left) && bareRelation(left!).toLowerCase() === bareRelation(right).toLowerCase();
+    const relationshipOperations: ContextAuthoringOperation[] = [];
+    const draftedProposal = edge.origin === 'drafted'
+      ? contextProposalStore.list().find((candidate) => candidate.status === 'proposed' && edge.id.startsWith(`${candidate.id}:`))
+      : undefined;
+    type Endpoint = {
+      side: 'from' | 'to';
+      key?: string;
+      localId: string;
+      domain: string;
+      areaId?: string;
+      dbtModel: string;
+      table: string;
+      grain?: string;
+      keys: string[];
+      businessName?: string;
+      /** The entity as a setup draft holds it, written with the certification. */
+      drafted?: EntityBindingAuthoringInput;
+    };
+    const endpoint = (side: 'from' | 'to', relation: string, table: string, fallbackDomain?: string): Endpoint => {
+      const modeled = Object.entries(modeling.entities).find(([, entity]) => sameRelation(nodes[entity.dbtUniqueId]?.relation, relation));
+      if (modeled) {
+        const [key, entity] = modeled;
+        return { side, key, localId: entity.localId, domain: entity.domain, ...(entity.areaId ? { areaId: modelAreaLocalId(entity.areaId) } : {}), dbtModel: entity.dbtUniqueId, table, ...(entity.grain ? { grain: entity.grain } : {}), keys: entity.keys ?? [] };
+      }
+      const node = Object.values(nodes).find((candidate) => sameRelation(candidate.relation, relation));
+      if (!node) throw coded('JOIN_TABLE_NOT_MODELED', `${table} is not in the project's model or its warehouse listing. Sync the warehouse schema, then try again.`);
+      const draftedEntity = (draftedProposal?.operations ?? []).flatMap((operation) => (
+        operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' && operation.change.value.dbtModel === node.uniqueId ? [operation.change.value] : []
+      ))[0];
+      if (draftedEntity) {
+        return { side, localId: draftedEntity.id, domain: draftedEntity.domain, ...(draftedEntity.areaId ? { areaId: draftedEntity.areaId } : {}), dbtModel: node.uniqueId, table, ...(draftedEntity.grain ? { grain: draftedEntity.grain } : {}), keys: draftedEntity.keys ?? [], drafted: draftedEntity };
+      }
+      const localId = (node.name || table).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `${side}_table`;
+      return { side, localId, domain: fallbackDomain ?? defaultAuthoringDomainId(manifest), dbtModel: node.uniqueId, table, keys: [], businessName: wordsFor(table) };
+    };
+    const fromSide = endpoint('from', edge.fromRelation, edge.fromTable);
+    const toSide = endpoint('to', edge.toRelation, edge.toTable, fromSide.domain);
+
+    // The relationship as its source holds it.
+    const modelRelationship = edge.origin === 'model'
+      ? Object.values(modeling.relationships).find((candidate) => (candidate.qualifiedId ?? candidate.id) === edge.id || candidate.id === edge.id)
+      : undefined;
+    const draftedOperation = draftedProposal?.operations.find((operation) => operation.kind === 'modeling_change'
+      && operation.change.operation === 'upsert_relationship'
+      && `${draftedProposal.id}:${operation.id ?? operation.change.value.id}` === edge.id);
+    const draftedRelationship = draftedOperation?.kind === 'modeling_change' && draftedOperation.change.operation === 'upsert_relationship' ? draftedOperation.change.value : undefined;
+    if (edge.origin === 'model' && !modelRelationship) throw coded('JOIN_NOT_FOUND', `The relationship behind ${source.title} → ${join.label} is not in the model any more. Refresh this App's data.`);
+    if (edge.origin === 'drafted' && !draftedRelationship) throw coded('JOIN_NOT_FOUND', `The setup draft of ${source.title} → ${join.label} is not waiting any more. Refresh this App's data.`);
+    if (modelRelationship?.status === 'certified' && !modelRelationship.staleCertification) throw coded('ALREADY_CERTIFIED', `The join ${source.title} → ${join.label} is already certified.`);
+    const cardinality = modelRelationship?.cardinality ?? draftedRelationship?.cardinality ?? edge.cardinality;
+    const maxUnmatchedShare = modelRelationship?.maxUnmatchedShare ?? draftedRelationship?.maxUnmatchedShare;
+    const validationScope = modelRelationship?.validationScope ?? draftedRelationship?.validationScope;
+    const crossDomain = fromSide.domain !== toSide.domain;
+    if (edge.origin === 'dbt_test' && crossDomain) {
+      throw coded('JOIN_CROSS_DOMAIN', `${edge.fromTable} and ${edge.toTable} belong to different domains; a join across domains is certified in Modeling, with its export and import.`);
+    }
+
+    // The fresh check: the Modeling page's one validation statement, bounded (aggregates only).
+    const spec = {
+      fromRelation: edge.fromRelation,
+      toRelation: edge.toRelation,
+      keys: edge.keys,
+      cardinality,
+      fanout: 'safe' as const,
+      ...(maxUnmatchedShare !== undefined ? { maxUnmatchedShare } : {}),
+      ...(validationScope ? { scope: validationScope } : {}),
+    };
+    const connection = await resolveExecutionConnection(requestBody);
+    const evidence = await validateRelationshipOnWarehouse(
+      { ...spec, keyTypes: catalogKeyTypes(manifest, spec, undefined, projectRoot) },
+      (sql) => executor.executeQuery(sql, [], {}, connection),
+      (identifier) => getDialect(connection.driver).quoteIdentifier(identifier),
+      new Date(),
+      connection.driver,
+    );
+
+    // The Dataset's own row key, checked now, proves the grain of its table when the model lacks it.
+    const rowKeyChecks: { from?: RowKeyCheck; to?: RowKeyCheck } = {};
+    const datasetSide: 'from' | 'to' | undefined = join.parent
+      ? undefined
+      : sameRelation(edge.toRelation, join.relation) ? 'from' : sameRelation(edge.fromRelation, join.relation) ? 'to' : undefined;
+    const datasetEndpoint = datasetSide === 'from' ? fromSide : datasetSide === 'to' ? toSide : undefined;
+    const rowKeys = descriptor.grain.keyFields ?? [];
+    if (datasetSide && datasetEndpoint && !(datasetEndpoint.grain && datasetEndpoint.keys.length) && rowKeys.length && !descriptor.grain.aggregate) {
+      const checkSource = `the row key of ${source.title}, checked just now`;
+      try {
+        await validateDatasetSourceGrain({ sourceId: source.sourceId, sourceRevision: source.sourceRevision });
+        rowKeyChecks[datasetSide] = { keys: rowKeys, ok: true, source: checkSource };
+      } catch (error) {
+        rowKeyChecks[datasetSide] = { keys: rowKeys, ok: false, error: `${rowKeys.join(', ')} did not pass its check: ${error instanceof Error ? error.message.replace(/^[A-Z_]+:\s*/, '') : String(error)}`, source: checkSource };
+      }
+    }
+    const noun = (table: string) => singularWords(table).toLowerCase();
+    const decision = joinCertifyDecision({
+      from: { table: edge.fromTable, noun: noun(edge.fromTable), ...(fromSide.grain ? { grain: fromSide.grain } : {}), keys: fromSide.keys },
+      to: { table: edge.toTable, noun: noun(edge.toTable), ...(toSide.grain ? { grain: toSide.grain } : {}), keys: toSide.keys },
+      keys: edge.keys,
+      cardinality,
+      evidence,
+      sentence: join.sentence,
+      rowKeyChecks,
+      // Totals a wrong join would inflate: sums first, then the other approved measures.
+      measures: descriptor.fields
+        .flatMap((field) => (field.kind === 'measure' && field.status === 'approved' ? [field] : []))
+        .sort((left, right) => Number(right.aggregation === 'sum') - Number(left.aggregation === 'sum'))
+        .map((field) => field.name),
+    });
+
+    // What certifying writes: each side's entity (grain and keys filled from
+    // the checks, or as the setup draft holds it), then the relationship
+    // certified against them, with the fresh evidence and who certified it.
+    const operations: ContextAuthoringOperation[] = [];
+    const entityOperationIds: string[] = [];
+    if (decision.ok && decision.certifiedAgainst) {
+      for (const side of [fromSide, toSide]) {
+        const fill = decision.fills.find((candidate) => candidate.side === side.side);
+        if (!fill && side.key) continue;
+        const value: EntityBindingAuthoringInput = {
+          ...(side.drafted ?? {}),
+          id: side.localId,
+          domain: side.domain,
+          dbtModel: side.dbtModel,
+          ...(side.areaId ? { areaId: side.areaId } : {}),
+          ...(!side.key && !side.drafted && side.businessName ? { businessName: side.businessName, status: 'draft' as const } : {}),
+          ...(fill ? { grain: fill.grain, keys: fill.keys } : {}),
+        };
+        const id = `app-certify-join:entity:${side.domain}:${side.localId}`;
+        if (operations.some((operation) => operation.id === id)) continue;
+        operations.push({ id, kind: 'modeling_change', change: { operation: 'upsert_entity', value }, evidence: [fill ? fill.because : 'Drafted in setup; written with the join it belongs to.'] });
+        entityOperationIds.push(id);
+      }
+      const certifiedBy = hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot));
+      const certifiedByName = hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot);
+      const certifiedAgainst = {
+        ...decision.certifiedAgainst,
+        certifiedAt: new Date().toISOString(),
+        ...(certifiedBy ? { certifiedBy } : {}),
+        ...(certifiedByName && certifiedByName !== certifiedBy ? { certifiedByName } : {}),
+      };
+      const reference = (side: Endpoint) => (side.domain === fromSide.domain ? side.localId : `${side.domain}::entity::${side.localId}`);
+      if (modelRelationship && modelRelationship.fanout === 'safe') {
+        relationshipOperations.push({
+          id: `app-certify-join:relationship:${modelRelationship.ownerDomain ?? fromSide.domain}:${modelRelationship.localId}`,
+          kind: 'modeling_change',
+          dependsOn: entityOperationIds,
+          change: { operation: 'record_relationship_validation', value: { id: modelRelationship.localId, domain: modelRelationship.ownerDomain ?? fromSide.domain, sourcePath: modelRelationship.sourcePath, validation: evidence, certifiedAgainst } },
+          evidence: [`warehouse check passed ${evidence.checkedAt}`],
+        });
+      } else {
+        const base: RelationshipAuthoringInput = modelRelationship
+          ? { id: modelRelationship.localId, domain: modelRelationship.ownerDomain ?? fromSide.domain, ...(modelRelationship.areaId ? { areaId: modelAreaLocalId(modelRelationship.areaId) } : {}), from: reference(fromSide), to: reference(toSide), keys: modelRelationship.keys, cardinality, fanout: 'safe' }
+          : draftedRelationship
+            ? { ...draftedRelationship }
+            : {
+              id: nextRelationshipId(fromSide.localId, toSide.localId, Object.values(modeling.relationships).filter((candidate) => (candidate.ownerDomain ?? '') === fromSide.domain).map((candidate) => candidate.localId)),
+              domain: fromSide.domain,
+              from: fromSide.localId,
+              to: reference(toSide),
+              keys: edge.keys,
+              cardinality,
+              fanout: 'safe',
+              rationale: `Declared by the dbt relationships test ${edge.id}; checked on the warehouse and certified from an App.`,
+            };
+        relationshipOperations.push({
+          id: `app-certify-join:relationship:${base.domain}:${base.id}`,
+          kind: 'modeling_change',
+          dependsOn: entityOperationIds,
+          change: { operation: 'upsert_relationship', value: { ...base, cardinality, fanout: 'safe', status: 'certified', validation: evidence, certifiedAgainst } },
+          evidence: [`warehouse check passed ${evidence.checkedAt}`],
+        });
+      }
+      operations.push(...relationshipOperations);
+    }
+    const relationshipId = (() => {
+      const change = relationshipOperations[0]?.kind === 'modeling_change' ? relationshipOperations[0].change : undefined;
+      const value = change && (change.operation === 'upsert_relationship' || change.operation === 'record_relationship_validation') ? change.value : undefined;
+      return value ? `${value.domain}::relationship::${value.id}` : modelRelationship?.qualifiedId ?? edge.id;
+    })();
+    const review = {
+      sourceId: source.sourceId,
+      joinId: join.id,
+      name: `${source.title} → ${join.label}`,
+      from: edge.fromTable,
+      to: edge.toTable,
+      keysSentence: decision.keysSentence,
+      ...(decision.checkedSentence ? { checkedSentence: decision.checkedSentence } : {}),
+      checkLines: decision.checkLines,
+      doubleCount: decision.doubleCount,
+      blockers: decision.blockers,
+      fills: decision.fills,
+      canVouch: decision.ok,
+      origin: edge.origin,
+      relationshipId,
+      ...(join.changedSinceCertified ? { previousCertification: bylineForViewer({ by: join.changedSinceCertified.by, name: join.changedSinceCertified.name, at: join.changedSinceCertified.at }, thisPerson(projectRoot)) } : {}),
+      checkedAt: evidence.checkedAt,
+    };
+    return { source, join, edge, decision, operations, review, draftedProposal, draftedOperation, snapshotId: snapshot.snapshotId, relationshipId };
+  };
+
+  /**
+   * After a setup draft's join is certified, the draft waits only for the
+   * rest of what it holds: the certified relationship and the entities
+   * written with it leave it, so saving the draft later never writes the
+   * join back as a draft.
+   */
+  const withoutCertifiedJoin = (proposal: ContextAuthoringProposalV1, written: ReadonlyArray<ContextAuthoringOperation>, relationshipOperationId: string | undefined): void => {
+    const writtenEntities = new Set(written.flatMap((operation) => (
+      operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' ? [`${operation.change.value.domain}::${operation.change.value.id}`] : []
+    )));
+    const removed = new Set<string>();
+    const remaining = proposal.operations.filter((operation) => {
+      const drop = operation.id === relationshipOperationId
+        || (operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' && writtenEntities.has(`${operation.change.value.domain}::${operation.change.value.id}`));
+      if (drop) removed.add(operation.id);
+      return !drop;
+    }).map((operation) => (operation.dependsOn?.some((id) => removed.has(id)) ? { ...operation, dependsOn: operation.dependsOn.filter((id) => !removed.has(id)) } : operation));
+    const at = new Date().toISOString();
+    const keepsSomething = remaining.some((operation) => operation.kind === 'modeling_change' && operation.change.operation !== 'upsert_domain' && operation.change.operation !== 'upsert_area');
+    if (!keepsSomething) {
+      contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: at });
+      return;
+    }
+    const next = previewContextAuthoring({
+      origin: proposal.origin,
+      operations: remaining,
+      sourceRunId: proposal.sourceRunId,
+      sourceArtifactId: proposal.sourceArtifactId,
+      revision: (proposal.revision ?? 1) + 1,
+    });
+    contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: at, supersededBy: next.id });
+  };
+
   /**
    * Save after something else in the project changed (new-user round 2,
    * problem 4): certifying a table in an App, a setup step writing
@@ -15752,57 +16082,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         if (proposal.status !== 'proposed') throw Object.assign(new Error('Only a proposed change can be committed.'), { code: 'PROPOSAL_STALE' });
         if (proposal.proposalHash !== expectedProposalHash) throw Object.assign(new Error('The proposal changed after review.'), { code: 'PROPOSAL_STALE' });
-        if (proposal.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) throw Object.assign(new Error('Resolve all blocking proposal diagnostics before saving.'), { code: 'PROPOSAL_BLOCKED' });
-        const beforeSnapshot = projectSnapshot();
-        // Something else changed in the project since review: save the
-        // reviewed changes as they are when none of their files moved, and
-        // ask only when one did.
-        const reviewed = beforeSnapshot.snapshotId === proposal.baseSnapshotId ? proposal : rebaseReviewedProposal(proposal);
-        const resolvedPatches = reviewed.patches.map((patch) => ({ patch, absolute: resolveContextPatchPath(projectRoot, gitRoot, patch.path) }));
-        for (const { patch, absolute } of resolvedPatches) {
-          const current = existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
-          if (current !== patch.before) throw Object.assign(new Error(`Source changed after preview: ${patch.path}`), { code: 'SOURCE_CHANGED' });
-        }
-        const written: Array<{ patch: ContextAuthoringPatchV1; absolute: string }> = [];
-        try {
-          for (const item of resolvedPatches) {
-            if (!item.patch.changed) continue;
-            if (!item.patch.after) rmSync(item.absolute, { force: true });
-            else {
-              mkdirSync(dirname(item.absolute), { recursive: true });
-              writeFileSync(item.absolute, item.patch.after, 'utf8');
-            }
-            written.push(item);
-          }
-          projectSnapshots.invalidate();
-          invalidateAgentProjectState(projectRoot);
-          const nextSnapshot = projectSnapshot();
-          if (nextSnapshot.error) throw Object.assign(new Error(nextSnapshot.error), { code: 'COMPILE_FAILED' });
-          await refreshUnifiedProjectIndexes(projectRoot);
-          const committedAt = new Date().toISOString();
-          const committed: ContextAuthoringProposalV1 = { ...reviewed, status: 'committed', committedAt, committedSnapshotId: nextSnapshot.snapshotId };
-          contextProposalStore.save(committed);
-          // The reviewed proposal was saved as its rebased copy: it waits for no one now.
-          if (reviewed !== proposal) contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: committedAt, supersededBy: committed.id });
-          contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
-          // Saved drafts are reviewed: older copies of them wait for no one.
-          if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: committed.id });
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ requestId, proposal: committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling, ...(reviewed !== proposal ? { rebased: true } : {}) }));
-        } catch (error) {
-          for (const { patch, absolute } of written.reverse()) {
-            if (!patch.before) rmSync(absolute, { force: true });
-            else {
-              mkdirSync(dirname(absolute), { recursive: true });
-              writeFileSync(absolute, patch.before, 'utf8');
-            }
-          }
-          projectSnapshots.invalidate();
-          invalidateAgentProjectState(projectRoot);
-          contextProposalStore.save(proposal);
-          contextProposalStore.deleteCommitReceipt(idempotencyKey);
-          throw error;
-        }
+        const saved = await commitContextProposal(proposal, idempotencyKey);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, proposal: saved.committed, snapshotId: saved.snapshotId, modeling: saved.modeling, ...(saved.rebased ? { rebased: true } : {}) }));
       } catch (error) {
         const code = apiErrorCode(error, /changed after/i.test(apiErrorMessage(error)) ? 'SOURCE_CHANGED' : 'PROPOSAL_COMMIT_FAILED');
         const status = code === 'PROPOSAL_NOT_FOUND' ? 404 : ['PROPOSAL_STALE', 'SOURCE_CHANGED', 'IDEMPOTENCY_CONFLICT', 'OWNERSHIP_CONFLICT', 'DEPENDENCY_CONFLICT'].includes(code) ? 409 : code === 'PROPOSAL_BLOCKED' ? 422 : 400;
@@ -20913,6 +21195,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const person = thisPerson(projectRoot);
         const descriptor = source.capabilities.dataset;
+        // Certified once, changed since (T4): "Changed since it was certified on 22 Oct".
+        const previousCertification = source.sourcePath ? blockPreviousCertificationByline(projectRoot, source.sourcePath) : null;
         const kind: 'dataset' | 'saved_query' | 'metrics' = source.kind === 'semantic' || descriptor?.kind === 'semantic' || source.capabilities.semanticModelId
           ? 'metrics'
           : !descriptor || isSavedQueryResultDataset(descriptor) ? 'saved_query' : 'dataset';
@@ -20933,10 +21217,32 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             return { ok: false, error: `${keys || 'The row key'} did not pass its check: ${error instanceof Error ? error.message.replace(/^[A-Z_]+:\s*/, '') : String(error)}` };
           }
         };
+        // A saved query certifies here too (T4): it runs and its tests run
+        // now, through the same certification path as Block Studio's Certify.
+        const savedQueryAbsolute = kind === 'saved_query' && isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
+        const savedQueryFile = savedQueryAbsolute && existsSync(savedQueryAbsolute) ? savedQueryAbsolute : null;
+        const savedQueryReviewOf = (blockSource: string, verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>>) => {
+          const parsedBlock = parseBlockSourceMetadata(blockSource);
+          const owner = parsedBlock.owner?.trim();
+          return savedQueryReview({
+            verdict,
+            ...(owner ? { owner: personDisplayName(owner, person) ?? owner } : {}),
+            ...(parsedBlock.grain ? { grain: parsedBlock.grain } : {}),
+            dimensions: parsedBlock.dimensions ?? [],
+            keyFields: descriptor?.grain.keyFields ?? [],
+          });
+        };
         if (reviewing) {
           const grain = descriptor?.grain;
           const entity = grain?.timeGrain ?? (grain?.entityIds[0] ?? '').split(/[.:]/).pop()?.replace(/_/g, ' ');
           const keyCheck = await runKeyCheck();
+          const savedQuery = savedQueryFile && !certified
+            ? await (async () => {
+              const blockSource = readFileSync(savedQueryFile, 'utf-8');
+              const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+              return savedQueryReviewOf(blockSource, await certifyBlockStudioSource(blockSource, blockPath, { enterprise }));
+            })()
+            : undefined;
           const formatNotes = (check?.checks ?? [])
             .filter((line) => line.startsWith('Number formats: '))
             .flatMap((line) => line.slice('Number formats: '.length).split('; '));
@@ -20966,19 +21272,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               joins: (descriptor?.joins ?? []).map((join) => ({ label: join.label, sentence: join.sentence, trust: join.trust })),
               hiddenColumns: check?.hiddenColumns ?? [],
               checks: check?.checks ?? [],
-              canVouch: kind === 'dataset' && !certified && source.lifecycle !== 'deprecated',
+              canVouch: (kind === 'dataset' || Boolean(savedQuery)) && !certified && source.lifecycle !== 'deprecated' && !(savedQuery && savedQuery.blockers.length),
+              ...(savedQuery ? { savedQuery } : {}),
+              ...(previousCertification ? { previousCertification: bylineForViewer(previousCertification, person) } : {}),
               ...(kind === 'saved_query' && isBlockStudioBlockPath(blockPath) ? { blockStudioPath: blockPath } : {}),
             },
           });
           return;
         }
-        if (kind !== 'dataset') {
+        if (kind === 'metrics' || (kind === 'saved_query' && !savedQueryFile)) {
           reply(409, {
             ok: false,
             code: kind === 'metrics' ? 'METRICS_CERTIFIED_IN_MODEL' : 'SAVED_QUERY_CERTIFIES_IN_BLOCK_STUDIO',
             error: kind === 'metrics'
               ? `${source.title} comes from the semantic model; it is governed there.`
-              : `${source.title} is a saved query: certify it in Block Studio.`,
+              : `${source.title} is a saved query ZLens cannot open as a file here: certify it in the saved query editor.`,
           });
           return;
         }
@@ -20998,6 +21306,52 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const absolute = isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
         if (!absolute || !existsSync(absolute)) {
           reply(409, { ok: false, code: 'SOURCE_NOT_A_BLOCK', error: `${source.title} is not a file ZLens can certify.` });
+          return;
+        }
+        if (kind === 'saved_query') {
+          // T4: it runs, its tests pass, someone owns it — checked again now,
+          // by the same rules as Block Studio's Certify. Nothing is written
+          // unless every check passes; a missing owner is asked for and
+          // written into the saved query with the certification.
+          const onDisk = readFileSync(absolute, 'utf-8');
+          const declaredOwner = parseBlockSourceMetadata(onDisk).owner?.trim();
+          const requestedOwner = typeof body.owner === 'string' ? body.owner.replace(/[\r\n]/g, ' ').trim().slice(0, 120) : '';
+          if (!declaredOwner && !requestedOwner) {
+            reply(422, { ok: false, code: 'OWNER_REQUIRED', blockers: ['Who owns it? Name the person or team who answers for these numbers.'], details: { blockers: ['Who owns it? Name the person or team who answers for these numbers.'] }, error: `${source.title} needs an owner before it can be certified.` });
+            return;
+          }
+          const candidate = declaredOwner ? onDisk : withBlockOwner(onDisk, requestedOwner);
+          const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+          const verdict = await certifyBlockStudioSource(candidate, blockPath, { enterprise });
+          const review = savedQueryReviewOf(candidate, verdict);
+          const blockers = Array.from(new Set(verdict.checklist.blockers));
+          if (!verdict.certification.certified || blockers.length > 0) {
+            reply(422, { ok: false, code: 'CERTIFICATION_CHECKS_FAILED', blockers, details: { blockers }, review, error: `${source.title} did not pass its certification checks. ${blockers.join(' ')}`.trim() });
+            return;
+          }
+          if (candidate !== onDisk) writeFileSync(absolute, candidate, 'utf-8');
+          // A hand-written saved query may have no companion YAML yet: the receipt needs one to live in.
+          const savedQueryCompanion = blockCompanionRelativePath(projectRoot, blockPath);
+          if (savedQueryCompanion && !existsSync(join(projectRoot, savedQueryCompanion))) {
+            const meta = parseBlockSourceMetadata(candidate);
+            mkdirSync(dirname(join(projectRoot, savedQueryCompanion)), { recursive: true });
+            writeFileSync(join(projectRoot, savedQueryCompanion), dumpYaml({ name: meta.name, block: meta.name, ...(meta.domain ? { domain: meta.domain } : {}), ...(meta.owner ? { owner: meta.owner } : {}), reviewStatus: 'draft' }, { lineWidth: 200, noRefs: true }), 'utf-8');
+          }
+          const certifiedSource = setBlockStudioStatusInSource(candidate, 'certified');
+          const receipt = explicitCertificationReceipt({ source: certifiedSource, via: 'app-dataset', enterprise, verdict, extraChecks: review.checks });
+          setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
+          if (verdict.preview) writeBlockStudioRunSummary(projectRoot, blockPath, certifiedSource, verdict.preview.result);
+          await refreshLocalMetadataCatalog(projectRoot);
+          const after = resolveAppSourceCatalogRecords(projectRoot, [source.sourceId], 'include_review_required').items[0];
+          reply(200, {
+            ok: true,
+            status: 'certified',
+            sourceId: source.sourceId,
+            ...(after ? { sourceRevision: after.sourceRevision } : {}),
+            path: blockPath,
+            ...(candidate !== onDisk ? { ownerWritten: requestedOwner } : {}),
+            certification: bylineForViewer(certificationByline(receipt), person),
+          });
           return;
         }
         const keyCheck = await runKeyCheck();
@@ -21041,6 +21395,77 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         reply(400, { ok: false, error: message });
+      }
+      return;
+    }
+
+    // Certify a join without leaving the App (T4): the short review (its
+    // keys, a fresh bounded check, what would double-count if it were
+    // wrong, the grain and keys it fills), then "I vouch for this join —
+    // certify". A host gates the POST as `dataset.certify` (route-actions).
+    if (path === '/api/app-datasets/joins/certify-review' || path === '/api/app-datasets/joins/certify') {
+      const reply = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      const reviewing = path === '/api/app-datasets/joins/certify-review';
+      if (reviewing ? req.method !== 'GET' : req.method !== 'POST') {
+        reply(405, { ok: false, error: reviewing ? 'Use GET.' : 'Use POST.' });
+        return;
+      }
+      try {
+        const body = reviewing ? {} as Record<string, unknown> : await readJSON(req) as Record<string, unknown>;
+        const read = (name: string) => (reviewing ? url.searchParams.get(name) ?? '' : typeof body[name] === 'string' ? body[name] as string : '').trim();
+        const sourceId = read('sourceId');
+        const joinId = read('joinId');
+        if (!sourceId || !joinId) {
+          reply(400, { ok: false, code: 'JOIN_REQUIRED', error: 'Choose the data and the join to certify.' });
+          return;
+        }
+        const snapshot = projectSnapshot();
+        await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+        const plan = await planJoinCertification(sourceId, joinId, body);
+        if (reviewing) {
+          reply(200, { ok: true, review: plan.review });
+          return;
+        }
+        if (!plan.decision.ok) {
+          reply(422, { ok: false, code: 'JOIN_CHECK_FAILED', blockers: plan.decision.blockers, details: { blockers: plan.decision.blockers }, review: plan.review, error: `${plan.review.name} cannot be certified: ${plan.decision.blockers.join(' ')}` });
+          return;
+        }
+        const proposal = previewContextAuthoring({ origin: 'manual', operations: plan.operations, expectedSnapshotId: plan.snapshotId });
+        const blocking = proposal.diagnostics.filter((diagnostic) => diagnostic.severity === 'blocking');
+        if (blocking.length) {
+          contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: new Date().toISOString() });
+          reply(422, { ok: false, code: 'JOIN_CERTIFY_BLOCKED', blockers: blocking.map((diagnostic) => diagnostic.message), review: plan.review, error: `${plan.review.name} cannot be certified: ${blocking.map((diagnostic) => diagnostic.message).join(' ')}` });
+          return;
+        }
+        await commitContextProposal(proposal, `app-certify-join:${proposal.id}`);
+        if (plan.draftedProposal) {
+          try {
+            withoutCertifiedJoin(plan.draftedProposal, plan.operations, plan.draftedOperation?.id);
+          } catch {
+            // Best effort: the certified join is saved; the rest of the draft waits as it was.
+          }
+        }
+        await refreshLocalMetadataCatalog(projectRoot);
+        currentRelatedTables(true);
+        const relationship = Object.values(projectSnapshot().manifest.modeling?.relationships ?? {}).find((candidate) => (candidate.qualifiedId ?? candidate.id) === plan.relationshipId);
+        reply(200, {
+          ok: true,
+          status: 'certified',
+          sourceId: plan.source.sourceId,
+          joinId: plan.join.id,
+          relationshipId: plan.relationshipId,
+          filled: plan.decision.fills,
+          ...(relationship?.certification ? { certification: bylineForViewer(relationship.certification, thisPerson(projectRoot)) } : {}),
+          proposalId: proposal.id,
+        });
+      } catch (error) {
+        const code = error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : undefined;
+        const message = error instanceof Error ? error.message : String(error);
+        const status = code === 'DATASET_SOURCE_NOT_FOUND' || code === 'JOIN_NOT_FOUND' ? 404 : code === 'ALREADY_CERTIFIED' || code === 'PROPOSAL_STALE' || code === 'SOURCE_CHANGED' ? 409 : code ? 422 : 400;
+        reply(status, { ok: false, ...(code ? { code } : {}), error: message });
       }
       return;
     }
@@ -22610,6 +23035,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   sentence: tileJoins.some((used) => used.id === join.id)
                     ? datasetJoinReceiptSentence(join, trustJoins)
                     : `A page filter can join it to ${join.table} on ${join.keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(' and ')}${join.trust === 'certified' ? '' : '; the join is not certified yet'}`,
+                  // Certified once, changed since (T4): the receipt keeps the date.
+                  ...(join.trust !== 'certified' && join.changedSinceCertified ? { changedSinceCertified: join.changedSinceCertified } : {}),
                 }));
                 const executionSourceSql = aggregateScope?.preparedSourceSql ?? sourceSql;
                 const executionSourceSqlParams = aggregateScope?.sourceSqlParams ?? blockPlan?.sqlParams;
@@ -23683,7 +24110,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const certifiedPath = tile.dataset
             ? (tile.dataset.trust === 'certified' && datasetSourceId ? datasetSourceById.get(datasetSourceId)?.sourcePath : undefined)
             : tile.certificationStatus === 'certified' && typeof tile.blockPath === 'string' ? tile.blockPath : undefined;
-          if (!certifiedPath) continue;
+          if (!certifiedPath) {
+            // Certified once, changed since (T4): the receipt keeps the date it was certified.
+            const changedPath = tile.dataset
+              ? (datasetSourceId ? datasetSourceById.get(datasetSourceId)?.sourcePath : undefined)
+              : typeof tile.blockPath === 'string' ? tile.blockPath : undefined;
+            const previous = changedPath && !tile.dataset?.checked ? blockPreviousCertificationByline(projectRoot, changedPath) : null;
+            if (previous) tile.certification = previous;
+            continue;
+          }
           const certification = blockCertificationByline(projectRoot, certifiedPath);
           // "Certified by you" when the person reading certified it (design Q1).
           if (certification) tile.certification = bylineForViewer(certification, viewer);

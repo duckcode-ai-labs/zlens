@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { blockCompanionRelativePath, certifiedSourceSha256, type BlockCheckRecord } from '@zlens/core';
+import { blockCompanionRelativePath, certifiedSourceSha256, certifiedSourceState, type BlockCheckRecord } from '@zlens/core';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
 
 /**
@@ -264,7 +264,13 @@ export function applyCompanionCertification(
 ): string {
   const keptReceipt = status === 'deprecated' ? receipt ?? readCompanionCertification(companion) : null;
   const keptDeprecation = status === 'deprecated' ? deprecation ?? readCompanionDeprecation(companion) : null;
-  let next = removeTopLevelKey(removeTopLevelKey(removeTopLevelKey(companion, 'reviewStatus'), 'certification'), 'deprecation').trimEnd();
+  // A certified block that goes back to draft or review keeps who certified
+  // it and when, so every surface can say "Changed since it was certified on
+  // 22 Oct" (T4). Certifying again replaces it with the new receipt.
+  const keptPrevious = status === 'draft' || status === 'review'
+    ? previousFromReceipt(readCompanionCertification(companion)) ?? readCompanionPreviousCertification(companion)
+    : null;
+  let next = removeTopLevelKey(removeTopLevelKey(removeTopLevelKey(removeTopLevelKey(companion, 'reviewStatus'), 'certification'), 'deprecation'), 'previousCertification').trimEnd();
   if (status === 'certified') next = withoutCompanionReviewPendingTags(next);
   next += `\nreviewStatus: ${status}\n`;
   if (status === 'certified' && receipt) {
@@ -272,7 +278,47 @@ export function applyCompanionCertification(
   }
   if (keptReceipt) next += dumpYaml({ certification: keptReceipt }, { lineWidth: 200, noRefs: true });
   if (keptDeprecation) next += dumpYaml({ deprecation: keptDeprecation }, { lineWidth: 200, noRefs: true });
+  if (keptPrevious) next += dumpYaml({ previousCertification: keptPrevious }, { lineWidth: 200, noRefs: true });
   return next.endsWith('\n') ? next : `${next}\n`;
+}
+
+/**
+ * Who certified a block before it changed, and when: what a companion keeps
+ * after a certified block went back to draft or review. History only — no
+ * reader treats it as a certification.
+ */
+export interface PreviousCertificationRecord {
+  certifiedBy: string;
+  certifiedByName?: string;
+  certifiedAt: string;
+}
+
+function previousFromReceipt(receipt: CertificationReceipt | null): PreviousCertificationRecord | null {
+  if (!receipt) return null;
+  return {
+    certifiedBy: receipt.certifiedBy,
+    ...(receipt.certifiedByName ? { certifiedByName: receipt.certifiedByName } : {}),
+    certifiedAt: receipt.certifiedAt,
+  };
+}
+
+/** The `previousCertification` record a companion YAML holds, when it holds a valid one. */
+export function readCompanionPreviousCertification(companion: string | null | undefined): PreviousCertificationRecord | null {
+  if (!companion) return null;
+  try {
+    const parsed = loadYaml(companion) as { previousCertification?: Record<string, unknown> } | null;
+    const record = parsed?.previousCertification;
+    if (!record || typeof record !== 'object' || typeof record.certifiedBy !== 'string') return null;
+    const at = record.certifiedAt as unknown;
+    if (at === undefined || at === null) return null;
+    return {
+      certifiedBy: record.certifiedBy,
+      ...(typeof record.certifiedByName === 'string' && record.certifiedByName.trim() ? { certifiedByName: record.certifiedByName.trim() } : {}),
+      certifiedAt: at instanceof Date ? at.toISOString() : String(at),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** The deprecation record a companion YAML holds, when it holds a valid one. */
@@ -494,6 +540,48 @@ export function certificationByline(receipt: CertificationReceipt): Certificatio
     at: receipt.certifiedAt,
     ...(receipt.checks?.length ? { checks: receipt.checks } : {}),
   };
+}
+
+/**
+ * Who certified a block that is no longer certified as it stands, and when:
+ * a certified file edited after it was certified (its receipt's sha256 no
+ * longer matches the source), or a block that went back to draft or review
+ * and kept a `previousCertification` record. Null for a block that is
+ * certified as it stands, or was never certified (T4: "Changed since it was
+ * certified on 22 Oct").
+ */
+export function blockPreviousCertificationByline(projectRoot: string, blockPath: string | undefined | null): CertificationByline | null {
+  if (!blockPath) return null;
+  try {
+    const absolute = join(projectRoot, blockPath);
+    if (!existsSync(absolute)) return null;
+    const source = readFileSync(absolute, 'utf-8');
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath);
+    const companion = companionPath && existsSync(join(projectRoot, companionPath)) ? readFileSync(join(projectRoot, companionPath), 'utf-8') : null;
+    const status = blockSourceStatus(source);
+    if (status === 'certified') {
+      if (certifiedSourceState(source, companion) !== 'changed') return null;
+      const receipt = readCompanionCertification(companion);
+      return receipt ? { by: receipt.certifiedBy, ...(receipt.certifiedByName ? { name: receipt.certifiedByName } : {}), at: receipt.certifiedAt } : null;
+    }
+    if (status === 'deprecated') return null;
+    const previous = readCompanionPreviousCertification(companion);
+    return previous ? { by: previous.certifiedBy, ...(previous.certifiedByName ? { name: previous.certifiedByName } : {}), at: previous.certifiedAt } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The source with its owner set (`owner = "…"`): replaced when declared,
+ * else written on the line after the `block "…" {` header. Certifying needs
+ * an owner; the inline review asks for one when the source has none.
+ */
+export function withBlockOwner(source: string, owner: string): string {
+  const value = owner.replace(/[\r\n]/g, ' ').trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  if (!value) return source;
+  if (/^\s*owner\s*=\s*"[^"]*"/m.test(source)) return source.replace(/^(\s*owner\s*=\s*)"[^"]*"/m, (_whole, lead: string) => `${lead}"${value}"`);
+  return source.replace(/(block\s+"[^"]*"\s*\{)/, (match) => `${match}\n  owner = "${value}"`);
 }
 
 /**

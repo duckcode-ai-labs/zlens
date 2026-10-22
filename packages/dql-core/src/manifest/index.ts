@@ -80,6 +80,7 @@ export {
   type ModelAreaAuthoringInput,
   type EntityBindingAuthoringInput,
   type RelationshipAuthoringInput,
+  type RelationshipCertifiedAgainst,
   type RelationshipValidationRecordInput,
   type ContractAuthoringInput,
   type DomainExportAuthoringInput,

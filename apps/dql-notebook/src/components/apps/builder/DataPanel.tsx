@@ -8,7 +8,8 @@ import { humanize } from './studio-ui';
 import { writeFieldDrag } from './ShelfEditor';
 import { appDataSameNameOrigins } from './app-data-names';
 import { SUMMARY_OPTION } from '../reader-page-structure';
-import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canCertifyAppData, canMakeRowLevel, dataTrustLabel, needsReview, sourceOriginLabel } from './app-data';
+import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canCertifyAppData, canMakeRowLevel, dataTrustLabel, joinsToCertify, needsReview, sourceOriginLabel } from './app-data';
+import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
 
 export type DataPanelTarget =
   | { kind: 'none' }
@@ -39,6 +40,7 @@ export function DataPanel({
   onRefreshBinding,
   onMakeRowLevel,
   onCertify,
+  onCertifyJoin,
   fieldsStatus,
   pickerRequest = 0,
   defaultPickerOpen = false,
@@ -69,6 +71,8 @@ export function DataPanel({
   onMakeRowLevel?: (item: AppBlockRecommendation) => void;
   /** Open the short review before "I vouch for this — certify" (design Q1). */
   onCertify?: (item: AppBlockRecommendation) => void;
+  /** Open the short review of a join of the active Dataset nobody certified yet (T4). */
+  onCertifyJoin?: (item: AppBlockRecommendation, join: DatasetJoin) => void;
   /** Reading the chosen saved query's result columns as fields, or why that failed. */
   fieldsStatus?: { state: 'reading' } | { state: 'failed'; error: string };
   /** Changing this number opens the switcher (tile settings "Choose another Dataset"). */
@@ -88,6 +92,7 @@ export function DataPanel({
   const groups = descriptor && datasetTilesEnabled ? groupDatasetFields(descriptor, search) : null;
   const rowLevel = active && onMakeRowLevel && canMakeRowLevel(active) ? onMakeRowLevel : undefined;
   const certify = active && onCertify && canCertifyAppData(active) ? onCertify : undefined;
+  const reviewJoins = active && onCertifyJoin ? joinsToCertify(active) : [];
   const used = queryFieldNames(target.kind === 'none' ? undefined : target.query);
   const fieldRow = (field: DatasetField, meta: string, glyph: JSX.Element, locked = false, options: { label?: string; review?: boolean } = {}) => {
     const on = used.has(field.name.toLowerCase());
@@ -122,10 +127,11 @@ export function DataPanel({
         </span>
         <ChevronDown size={14} />
       </button>
-      {(rowLevel || certify) && active ? <span className="dataset-more">
+      {(rowLevel || certify || reviewJoins.length) && active ? <span className="dataset-more">
         <button type="button" aria-haspopup="menu" aria-expanded={moreOpen} aria-label={`More for ${humanize(active.name)}`} disabled={disabled} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {moreOpen ? <span className="dataset-more-menu" role="menu" aria-label={`More for ${humanize(active.name)}`}>
           {certify ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); certify(active); }}><strong>Certify…</strong><small>A short review, then “I vouch for this — certify”.</small></button> : null}
+          {reviewJoins.map((join) => <button key={join.id} type="button" role="menuitem" onClick={() => { setMoreOpen(false); onCertifyJoin?.(active, join); }}><strong>Certify the join to {humanize(join.label)}…</strong><small>{join.sentence}: a fresh check, then “I vouch for this join — certify”.</small></button>)}
           {rowLevel ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); rowLevel(active); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button> : null}
         </span> : null}
       </span> : null}
