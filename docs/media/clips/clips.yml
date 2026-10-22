@@ -99,24 +99,23 @@ app-ask:
     - The answer opens beside the page, scoped to Jaffle Growth Review, labelled Certified answer, answered from a certified block.
 
 app-builder:
-  title: Build an App, by hand and with AI
+  title: Build an App, by hand and from quick choices
   caption: >-
     App Studio starts every App with its data. By hand, the certified
     Customers Dataset is added in the Data step, and clicking its Lifetime
-    Spend measure makes a tile. Described with keyword suggestions, the App
-    first shows the data they matched and why; pages are built only after
-    that, and every proposed tile is reviewed before it is applied. This
-    sample has no AI provider, so App Studio says the suggestions come from
-    keywords, never from AI.
+    Spend measure makes a tile. This sample has no AI provider, so Build new
+    App opens on Quick start: pick the data, then a total, a trend and a top
+    list, and Build App makes exactly those tiles, with plain titles. No AI is
+    used, and nothing guesses from your words.
   steps:
     - Open Apps and click Build new App.
     - Choose Start manually, name the App, pick the Commerce domain and click Open blank Studio.
-    - In Data for this App, the Customers row reads Dataset · Certified · Commerce; open it to see its Measures, Dimensions and Time.
-    - Click Add to App, then Open canvas with 1 source.
+    - In Data for this App, the Customers row reads Table · Certified · Commerce; open it to see its Measures, Dimensions and Time.
+    - Click Add to App, then Open Studio with 1 source.
     - Click the Lifetime Spend measure; a new tile shows the total. Click Add to page.
-    - Back in Apps, click Build new App, choose Describe with AI; with no AI provider it asks to connect one, so click Try keyword suggestions, enter "Customer spend and order counts for the commerce team" and click Suggest from keywords.
-    - The Data step says Suggested from keywords · no AI connected, listing the Customers Dataset and the Monthly Revenue saved query, each with a Why line; Not covered yet notes the order counts.
-    - Click Build pages with 2 sources. The canvas shows the proposed tiles and Review the tiles lists them, with Apply 2 changes.
+    - Back in Apps, click Build new App. With no AI provider it opens on Quick start; click Choose data.
+    - "Add Customers, then click Next: choose tiles. What should this App show? lists a KPI, a Trend (when the data has a date) and a Top row, each with its title."
+    - Click Build App. The page shows exactly those tiles.
 
 overview:
   title: ZLens in under a minute

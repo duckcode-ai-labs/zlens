@@ -29,9 +29,9 @@ async function certifyCustomersDataset(baseUrl: string): Promise<void> {
 
 /**
  * Apps: build an App by hand (pick a Domain, add a certified Dataset in the
- * Data step, click a measure, add the tile), then describe one to AI and check
- * the data it picked before it builds pages. The server has no AI provider, so
- * the built-in planner picks the data; nothing reaches a model.
+ * Data step, click a measure, add the tile), then start one from Quick start:
+ * pick the data, then a total, a trend and a top list, and Build App. The
+ * server has no AI provider; nothing reaches a model.
  */
 clip('app-builder', async ({ page, sample, director }) => {
   const server = await sample.serve(sample.freshProject(), { ai: false });
@@ -76,38 +76,31 @@ clip('app-builder', async ({ page, sample, director }) => {
   await director.point(page.locator('.studio-page-grid .studio-component-card').first());
   await director.beat(1500);
 
-  // 4. Describe with AI with no provider connected: keyword suggestions, labelled
-  // as such (design D4), show the data they matched, and why, before building pages.
+  // 4. With no AI provider connected, Quick start (round-2 design Q2): pick the
+  // data, then a total, a trend and a top list; Build App makes exactly those tiles.
   await director.click(page.getByRole('button', { name: 'Back to Apps' }), { after: 400 });
   await director.click(page.getByRole('button', { name: 'Build new App' }));
-  await director.click(page.getByRole('tab', { name: 'Describe with AI' }), { after: 300 });
-  await director.click(page.getByRole('button', { name: 'Try keyword suggestions' }), { after: 300 });
-  await director.type(
-    page.getByRole('textbox', { name: 'What decision should this App support?' }),
-    'Customer spend and order counts for the commerce team',
-    { clear: true },
-  );
-  await director.click(page.getByRole('button', { name: /Suggest from keywords/ }), { after: 300 });
-  const picked = page.getByRole('heading', { name: 'Suggested from keywords · no AI connected' });
-  await director.fastForward(() => expect(picked).toBeVisible({ timeout: 60_000 }));
-  await director.beat(600);
-  await director.point(picked);
-  await director.beat(1000);
-  const picks = page.getByRole('list', { name: 'Keyword suggestions' });
+  await director.click(page.getByRole('tab', { name: 'Quick start' }), { after: 300 });
+  await expect(page.getByRole('tab', { name: 'Quick start' })).toHaveAttribute('aria-selected', 'true');
+  await director.beat(700);
+  await director.click(page.getByRole('button', { name: 'Choose data' }), { after: 300 });
+  await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
+  const quickBrowser = page.getByRole('region', { name: 'Add data' });
+  await director.click(quickBrowser.getByRole('button', { name: `Add to App: ${DATASET}` }), { after: 300 });
+  await expect(quickBrowser.getByRole('button', { name: `Remove ${DATASET} from this App` })).toBeVisible({ timeout: 30_000 });
+  await director.click(page.getByRole('button', { name: 'Next: choose tiles' }), { after: 400 });
+  const choices = page.getByRole('list', { name: 'Tiles to build' });
+  await expect(choices.getByRole('listitem').first()).toBeVisible();
   director.poster();
-  await director.point(picks.getByText(/^Why: /).first());
-  await director.beat(1800);
-  await director.point(picks.getByText(/^Why: /).nth(1));
+  await director.point(choices.getByRole('listitem').first());
+  await director.beat(1400);
+  await director.point(choices.getByRole('listitem').last());
   await director.beat(1400);
 
-  // 5. Build pages, then review the proposed tiles before anything is applied.
-  await director.click(page.getByRole('button', { name: /Build pages with \d+ sources?/ }), { after: 300 });
-  const review = page.getByRole('complementary', { name: 'Keyword suggestions' });
-  await director.fastForward(() => expect(review.getByRole('heading', { name: 'Review the tiles' })).toBeVisible({ timeout: 60_000 }));
-  await expect(page.locator('.proposal-tile').first()).toBeVisible();
+  // 5. Build App: the tiles, with plain titles, on the page.
+  await director.click(page.getByRole('button', { name: 'Build App' }), { after: 300 });
+  await director.fastForward(() => expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 }));
   await director.beat(800);
-  await director.point(review.getByRole('heading', { name: 'Review the tiles' }));
-  await director.beat(1200);
-  await director.point(review.getByRole('button', { name: /^Apply \d+ changes?$/ }));
+  await director.point(page.locator('.studio-page-grid .studio-component-card').first());
   await director.beat(2400);
 });

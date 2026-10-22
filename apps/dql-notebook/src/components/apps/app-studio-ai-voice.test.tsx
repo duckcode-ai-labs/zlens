@@ -6,6 +6,7 @@ import {
   appStudioAiConnected,
   appStudioAskWords,
   appStudioDefaultLaunchMode,
+  appStudioLaunchTab,
   appStudioPlannerVoice,
   appStudioPlannerWords,
   KEYWORD_SUGGESTIONS_LABEL,
@@ -16,9 +17,10 @@ import { aiProposal, draftWith, marginMetrics, orderLinesDataset } from './build
 import { DataStep, type DataStepAiProps } from './builder/DataStep';
 
 /**
- * Honest when no AI is connected (design D4): Start manually by default, keyword
- * suggestions labelled as such everywhere, their gaps notes and never publish
- * blockers, and a revise that never counts the page's own tiles as new.
+ * Honest when no AI is connected (design D4, round-2 Q2): Quick start by
+ * default with no free text, keyword suggestions made earlier still labelled
+ * as such, their gaps notes and never publish blockers, and a revise that
+ * never counts the page's own tiles as new.
  */
 
 let studio: typeof AppStudioV2Module;
@@ -42,10 +44,18 @@ describe('whether an AI provider is connected', () => {
     expect(appStudioAiConnected(null)).toBe(false);
   });
 
-  it('opens Build new App on Start manually unless AI is connected', () => {
+  it('opens Build new App on Describe with AI with a provider, Quick start without one, Start manually while unknown', () => {
     expect(appStudioDefaultLaunchMode(true)).toBe('ai');
-    expect(appStudioDefaultLaunchMode(false)).toBe('manual');
+    expect(appStudioDefaultLaunchMode(false)).toBe('quick');
     expect(appStudioDefaultLaunchMode(undefined)).toBe('manual');
+  });
+
+  it('shows Quick start in place of Describe with AI without a provider, and never with one', () => {
+    expect(appStudioLaunchTab('ai', false)).toBe('quick');
+    expect(appStudioLaunchTab('quick', true)).toBe('ai');
+    expect(appStudioLaunchTab('quick', undefined)).toBe('ai');
+    expect(appStudioLaunchTab('manual', false)).toBe('manual');
+    expect(appStudioLaunchTab('quick', false)).toBe('quick');
   });
 
   it('takes the plan voice from the proposal first, then the settings', () => {
@@ -61,7 +71,11 @@ describe('whether an AI provider is connected', () => {
     expect(keywords.pickedHeading(3)).toBe('Suggested from keywords · no AI connected');
     expect(JSON.stringify({ ...keywords, pickedHeading: keywords.pickedHeading(3) })).not.toMatch(/AI picked|from AI|AI proposal|AI PROPOSAL/);
     expect(appStudioPlannerWords('ai').pickedHeading(3)).toBe('AI picked 3 sources');
-    expect(appStudioAskWords('keywords').revise).toBe('Suggest from keywords');
+    // Without AI the Studio's entry points open the quick choices.
+    expect(appStudioAskWords('keywords').toolbar).toBe('Quick tiles');
+    expect(appStudioAskWords('keywords').revise).toBe('Add quick tiles');
+    expect(JSON.stringify({ ...appStudioAskWords('keywords'), pageHelp: appStudioAskWords('keywords').pageHelp(true) })).not.toMatch(/keyword|Suggest/i);
+    expect(appStudioAskWords('ai').toolbar).toBe('Ask AI');
     expect(appStudioAskWords('ai').revise).toBe('Revise with AI');
   });
 });
@@ -78,35 +92,47 @@ describe('Build new App form without AI', () => {
     />);
   };
 
-  it('asks to connect a provider on the AI tab, with keyword suggestions second', () => {
-    const markup = launch({ mode: 'ai' }, false);
-    expect(markup).toContain('Connect an AI provider to describe an App');
-    expect(markup).toContain('>Connect an AI provider</button>');
-    expect(markup).toContain('>Try keyword suggestions</button>');
-    expect(markup).not.toContain('Generate editable App');
-    expect(markup).not.toContain('AI picks your certified data');
+  it('replaces Describe with AI by Quick start: no free text, no keyword suggestions, a link to connect AI', () => {
+    for (const mode of ['quick', 'ai'] as const) {
+      const markup = launch({ mode, name: '' }, false);
+      expect(markup).toMatch(/aria-selected="true" class="on"><svg[^]*?Quick start/);
+      expect(markup).not.toContain('Describe with AI');
+      expect(markup).not.toContain('<textarea');
+      expect(markup).not.toContain('What decision should this App support?');
+      expect(markup).toContain('What should this App be called?');
+      expect(markup).toContain('Pick your data, then a total, a trend and a top list');
+      expect(markup).toContain('>Connect an AI provider to describe an App in your own words</button>');
+      expect(markup).toMatch(/<button type="button" class="launch-action"><svg[^]*?Choose data<\/button>/);
+      expect(markup).not.toMatch(/keyword/i);
+      expect(markup).not.toContain('Starting layout');
+    }
   });
 
-  it('labels keyword suggestions once chosen', () => {
-    const markup = launch({ mode: 'ai', keywordSuggestions: true, prompt: 'Revenue' }, false);
-    expect(markup).toContain(KEYWORD_SUGGESTIONS_LABEL);
-    expect(markup).toContain('Suggest from keywords');
-    expect(markup).toContain('What decision should this App support?');
-    expect(markup).not.toContain('Generate editable App');
-    expect(markup).not.toContain('AI picks your certified data');
+  it('suggests "<Domain> overview" as the name when it is left empty', () => {
+    const markup = studio.AppStudioLaunchSurface({
+      config: { mode: 'quick', prompt: '', name: '', template: 'blank', sourcePolicy: 'governed_only', domain: 'sales' },
+      domainOptions: [{ value: 'sales', label: 'Sales' }] as never,
+      aiConnected: false,
+      onChange: vi.fn(),
+      onSubmit: vi.fn(),
+    });
+    expect(renderToStaticMarkup(markup)).toContain('placeholder="Sales overview"');
   });
 
   it('is unchanged with a provider', () => {
     const markup = launch({ mode: 'ai' }, true);
+    expect(markup).toContain('Describe with AI');
     expect(markup).toContain('AI picks your certified data and drafts a first version');
     expect(markup).toContain('Generate editable App');
+    expect(markup).toContain('What decision should this App support?');
     expect(markup).not.toContain('Connect an AI provider');
+    expect(markup).not.toContain('Quick start');
   });
 
-  it('opens on Start manually by default without AI', () => {
-    const markup = launch({ mode: appStudioDefaultLaunchMode(false), template: 'blank' }, false);
-    expect(markup).toMatch(/aria-selected="true" class="on"><svg[^]*?Start manually/);
-    expect(markup).toContain('What should this App be called?');
+  it('opens on Quick start by default without AI', () => {
+    const markup = launch({ mode: appStudioDefaultLaunchMode(false), template: 'blank', name: '' }, false);
+    expect(markup).toMatch(/aria-selected="true" class="on"><svg[^]*?Quick start/);
+    expect(markup).toContain('Start manually');
   });
 });
 
@@ -200,7 +226,7 @@ describe('keyword gaps never block publishing', () => {
     expect(unresolvedPublicationRequirements(draft([keywordRequirement, realRequirement])).map((item) => item.id)).toEqual(['margin']);
   });
 
-  it('shows no "Unanswered App question" for it, and offers keyword suggestions for a real one without AI', () => {
+  it('shows no "Unanswered App question" for it, and offers quick tiles for a real one without AI', () => {
     const PublishReadinessDialog = studio.PublishReadinessDialog;
     const render = (requirements: Requirement[]) => renderToStaticMarkup(<PublishReadinessDialog
       draft={draft(requirements)} serverIssues={[]} busy={false} previewRun={null} reviseLabel={appStudioAskWords('keywords').revise}
@@ -212,7 +238,7 @@ describe('keyword gaps never block publishing', () => {
     expect(real).toContain('Unanswered App question');
     expect(real).toContain('Gross margin');
     expect(real).not.toContain('Keep it short and clear');
-    expect(real).toContain('Suggest from keywords');
+    expect(real).toContain('Add quick tiles');
     expect(real).not.toContain('Revise with AI');
   });
 });

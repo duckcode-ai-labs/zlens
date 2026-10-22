@@ -70,8 +70,14 @@ export function DataStep({
   onSkip,
   browser,
   ai,
+  next,
 }: {
   draft: AppStudioBuildDraft;
+  /**
+   * Quick start (round-2 Q2): the step's main button goes on to the quick
+   * choices instead of opening the canvas.
+   */
+  next?: { label: string; disabled: boolean; hint?: string; onClick: () => void };
   /** Catalog records already seen, so each row can show its domain and owner. */
   known: AppBlockRecommendation[];
   error?: string | null;
@@ -116,7 +122,9 @@ export function DataStep({
     </div>
     <footer className="data-step-footer">
       <button type="button" onClick={onSkip}>Skip, start empty</button>
-      <button type="button" className="primary" onClick={onOpenCanvas}>{openCanvasLabel(items.length)} <ArrowRight size={14} /></button>
+      {next
+        ? <>{next.hint ? <small className="data-step-next-hint">{next.hint}</small> : null}<button type="button" className="primary" disabled={next.disabled} onClick={next.onClick}>{next.label} <ArrowRight size={14} /></button></>
+        : <button type="button" className="primary" onClick={onOpenCanvas}>{openCanvasLabel(items.length)} <ArrowRight size={14} /></button>}
     </footer>
   </section>;
 }

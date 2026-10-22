@@ -12,32 +12,36 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 1. In the left rail, click **Apps**.
 2. Click **Build new App** if the form is not already open. With an
    [AI provider](../get-started/ai-provider.md) connected it opens on
-   **Describe with AI**; without one it opens on **Start manually**.
+   **Describe with AI**; without one it opens on **Quick start**.
 3. Choose how to start:
-    - **Describe with AI**: answer **What decision should this App support?**
-      AI picks certified data and drafts a first version. You check the data it
-      chose and every tile before anything is applied. Without an AI provider
-      this tab says **Connect an AI provider to describe an App**, with
-      **Connect an AI provider** (Settings → AI provider) and **Try keyword
-      suggestions** (see [Without an AI provider](#without-an-ai-provider-keyword-suggestions)).
+    - **Describe with AI** (AI provider connected): answer **What decision
+      should this App support?** AI picks certified data and drafts a first
+      version. You check the data it chose and every tile before anything is
+      applied.
+    - **Quick start** (no AI provider): answer **What should this App be
+      called?**, or leave it empty and the App is named after its Domain, such
+      as **Sales overview**. You pick the data, then a total, a trend and a top
+      list (see [Quick start without AI](#quick-start-without-ai)). **Connect
+      an AI provider to describe an App in your own words** opens Settings → AI
+      provider.
     - **Start manually**: answer **What should this App be called?**
 4. Pick a **Domain**, or leave **All domains**. Lists of data start on this
    domain; you can still pick data from any domain.
-5. Pick a **Starting layout**: **Executive Brief**, **Operational Dashboard**,
-   **Investigation** or **Blank page**. A layout other than Blank puts one
-   intro at the top of the page for you to edit (its wording differs by
-   layout); you add the tiles. Starting manually, the button then reads
-   **Open Studio with an intro**.
+5. With AI or by hand, pick a **Starting layout**: **Executive Brief**,
+   **Operational Dashboard**, **Investigation** or **Blank page**. A layout
+   other than Blank puts one intro at the top of the page for you to edit (its
+   wording differs by layout); you add the tiles. Starting manually, the button
+   then reads **Open Studio with an intro**.
 6. Leave **Only certified data** on. **Also let me try data that needs review**
    is useful while exploring, but a page that uses such data cannot publish
    until the data is certified.
-7. Click **Generate editable App** (AI), **Suggest from keywords** (no AI
-   provider) or **Open blank Studio** (manual).
+7. Click **Generate editable App** (AI), **Choose data** (Quick start) or
+   **Open blank Studio** (manual).
 
 The App is a private draft; the header says **Unpublished changes (only you
-can see them)**. Both ways
-open on the Data step first: with **Start manually** it is **Data for this
-App**; with AI it shows the data AI picked (see below).
+can see them)**. Every way opens on the Data step first: by hand and with
+Quick start it is **Data for this App**; with AI it shows the data AI picked
+(see below).
 
 You can change the data rule later in the App's settings: **Data rule** is
 **Only certified data** or **Also allow data that needs review**.
@@ -78,33 +82,43 @@ you say so.
    changes** to add the tiles and their data to the App, or **Discard**.
    **Back to data** returns to the AI picks until you apply.
 
-### Without an AI provider: keyword suggestions
+### Quick start without AI
 
-With no AI provider connected, nothing reads your request, so App Studio never
-says AI picked anything. **Try keyword suggestions** uses a simple built-in
-matcher instead, and every place it shows up says so:
+With no AI provider connected, nothing can read a request, so App Studio
+doesn't guess from your words. **Quick start** builds the first tiles from
+three quick choices instead, and you get exactly the tiles you pick.
 
-- The Data step heading is **Suggested from keywords · no AI connected**, the
-  list is **Keyword suggestions** (removed ones go to **Removed suggestions**),
-  and the planner's notes are under **Notes**. The progress reads **Reading the
-  words in your request**, **Matching them to certified tables, Metrics and
-  saved queries**, and so on.
-- Each suggestion's **Why:** line names the words of your request it matched
-  and its trust, for example *Its name and description match “customers” ·
-  Certified saved query*.
-- Parts of your request no suggestion matched (such as *Keep it short and
-  clear*) are listed under **Not covered yet** as notes. They are never
-  publish fixes: add tiles for them yourself, or leave them out.
-- The tile review on the page is labelled **Keyword suggestions** and says
-  **Matched on:** your request.
+1. In **Data for this App**, add the data the App will use, then click
+   **Next: choose tiles**.
+2. **What should this App show?** lists three rows:
+    - **KPI**: **Total of** a measure, such as Order Total.
+    - **Trend**: a measure **by** a time grain (day, week, month, quarter or
+      year), over the data's main date.
+    - **Top**: **Top** 5, 10 or 25 of a field, such as Customer Name, **by** a
+      measure from the same data.
 
-In the Studio, one rule applies to every AI entry point. What keyword
-suggestions can do is offered with the same label: the toolbar's **Suggest
-tiles** (instead of **Ask AI**), **Suggest tiles from keywords** on an empty
-page or in the App settings, and **Suggest from keywords** in the publish
+    The pickers list the fields of this App's data with the same names as the
+    Data pane, including fields of related tables (under **Orders →
+    Customer**). Data in the App's Domain is listed first, then certified data.
+    Each row shows the title its tile gets: **Total Lifetime Spend** (a summed
+    measure whose name doesn't already say total), **Order Total by month**,
+    **Top 10 customers by Lifetime Spend**.
+3. **Add another tile** adds a **KPI**, **Trend** or **Top** row, up to six
+   tiles. **×** removes a row.
+4. Click **Build App**. The tiles are added to the page as ordinary field
+   tiles: the KPI as a single value, the trend as a line, the top list as a bar
+   chart sorted by the measure and showing the top N. Change any of them later
+   like any other tile. **Back to data** returns to the Data step.
+
+In the Studio, the toolbar's **Quick tiles** (instead of **Ask AI**) opens the
+same choices for the page that is open, with **Add N tiles to page**; so do
+**Add quick tiles** on an empty page, in the App settings and in the publish
 review. What only an AI can do says **Connect an AI provider** instead:
 changing one tile (**Edit with AI**) and **Design layout with AI**. With an AI
 provider connected, all of these work as described above.
+
+A draft made earlier with keyword suggestions still says **Suggested from
+keywords · no AI connected** where its plan is shown.
 
 Whichever planner runs, a proposal never adds a tile the page already shows:
 the plan's note says *Revenue by region is already on this page, so it wasn't

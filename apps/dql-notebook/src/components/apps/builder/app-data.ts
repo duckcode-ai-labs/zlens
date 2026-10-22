@@ -306,7 +306,8 @@ export function openCanvasLabel(count: number): string {
   return `Open Studio with ${count} ${count === 1 ? 'source' : 'sources'}`;
 }
 
-export type StudioStage = 'data' | 'canvas';
+/** `quick`: the three quick choices after the Data step, for a new App with no AI provider (round-2 Q2). */
+export type StudioStage = 'data' | 'quick' | 'canvas';
 
 /**
  * A new App starts at the Data step: a manual App picks its data there, and an

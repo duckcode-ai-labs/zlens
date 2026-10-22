@@ -116,6 +116,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Apps
 
+- **Without AI, build an App from three quick choices.** With no AI provider
+  connected, **Build new App** opens on **Quick start** instead of a
+  "Describe with AI" tab that matched the words of a request (it picked the
+  wrong data and measure, made no KPI, gave tiles snake_case titles and named
+  the App after the whole sentence). Pick the data, then **KPI** (Total of a
+  measure), **Trend** (a measure by month, week, …, over the data's main
+  date) and **Top** (Top 10 of a field by a measure); **Add another tile** goes
+  up to six. **Build App** adds exactly those tiles as ordinary field tiles —
+  a single value, a line, and a bar sorted by the measure showing the top N —
+  with plain titles ("Total Lifetime Spend", "Order Total by month", "Top 10
+  customers by Lifetime Spend"). The pickers list this App's fields as the
+  Data pane names them, related fields included, Domain first and certified
+  first. An App left unnamed is called "<Domain> overview". In the Studio,
+  **Quick tiles** replaces "Suggest tiles" and adds the same choices to the
+  open page. Free text and AI planning are unchanged with an AI provider;
+  "Connect an AI provider to describe an App in your own words" links to
+  Settings.
 - **Filters follow dbt relationships.** In a dbt project, a Customer Name
   filter reaches the Orders tiles "via Customer", as in a database-only
   project. The jaffle-shop sample has a dbt `relationships` test from
