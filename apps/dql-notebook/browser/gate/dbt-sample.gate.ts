@@ -78,8 +78,8 @@ test('Lineage: monthly_revenue from the dbt model to the App', async ({ page, no
   await expect(nodes.filter({ hasText: 'monthly_revenue' }).first()).toBeVisible({ timeout: 60_000 });
   const labels = (await nodes.allInnerTexts()).map((label) => label.replace(/\s+/g, ' ').trim());
   notes.push(`nodes: ${labels.join(' | ')}`);
-  // The chain the quickstart promises: dbt source → dbt model → certified block → App.
-  for (const expected of [/^raw_orders DBT SOURCE/i, /^orders DBT MODEL/i, /^monthly_revenue DQL BLOCK/i, /^Jaffle Growth Review APP/i]) {
+  // The chain the quickstart promises: dbt source → dbt model → certified block (a "Saved query" node since #165) → App.
+  for (const expected of [/^raw_orders DBT SOURCE/i, /^orders DBT MODEL/i, /^monthly_revenue SAVED QUERY/i, /^Jaffle Growth Review APP/i]) {
     expect(labels.some((label) => expected.test(label)), `a lineage node matching ${expected}`).toBe(true);
   }
   notes.push(`footer: ${(await page.getByText(/End-to-end lineage of monthly_revenue/).first().innerText()).trim()}`);
