@@ -99,6 +99,8 @@ import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrust
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
 import {
+  acceptRememberedAppFilterValues,
+  dashboardFilterFingerprint,
   isAppScopedDashboardFilter,
   readPersistedAppFilterValues,
   valuesForDashboardPage,
@@ -108,6 +110,7 @@ import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/autho
 import { useOperations } from '../../operations/OperationsProvider';
 import { appLibraryLaunchExpanded, type AppLibraryLaunchPreference } from './app-library-launch';
 import { plainSourceText } from './source-names';
+import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -271,6 +274,13 @@ export function AppsView(): JSX.Element {
   const [appliedDashboardFilterValuesByPage, setAppliedDashboardFilterValuesByPage] = useState<Record<string, Record<string, unknown>>>({});
   const [appScopedDashboardFilterValues, setAppScopedDashboardFilterValues] = useState<Record<string, unknown>>({});
   const [appliedAppScopedDashboardFilterValues, setAppliedAppScopedDashboardFilterValues] = useState<Record<string, unknown>>({});
+  // The definition each App-scoped value was chosen for. A remembered value is
+  // applied only to that same filter (id, type and field), never to a filter
+  // that was re-created or changed since.
+  const [appScopedDashboardFilterFingerprints, setAppScopedDashboardFilterFingerprints] = useState<Record<string, string>>({});
+  // Filters whose value came back from this browser's last visit rather than
+  // a choice made now: the filter row says so next to Reset.
+  const [rememberedDashboardFilterIds, setRememberedDashboardFilterIds] = useState<ReadonlySet<string>>(() => new Set());
   const [dashboardFilterPersistenceAppId, setDashboardFilterPersistenceAppId] = useState<string | null>(null);
   const [dashboardNavigationStack, setDashboardNavigationStack] = useState<DashboardNavigationEntry[]>([]);
   const [explainOpen, setExplainOpen] = useState(false);
@@ -488,6 +498,8 @@ export function AppsView(): JSX.Element {
     if (!appId) {
       setAppScopedDashboardFilterValues({});
       setAppliedAppScopedDashboardFilterValues({});
+      setAppScopedDashboardFilterFingerprints({});
+      setRememberedDashboardFilterIds(new Set());
       setDashboardFilterPersistenceAppId(null);
       return;
     }
@@ -498,9 +510,13 @@ export function AppsView(): JSX.Element {
       );
       setAppScopedDashboardFilterValues(persisted.draft);
       setAppliedAppScopedDashboardFilterValues(persisted.applied);
+      setAppScopedDashboardFilterFingerprints(persisted.fingerprints);
+      setRememberedDashboardFilterIds(new Set(Object.keys(persisted.applied)));
     } catch {
       setAppScopedDashboardFilterValues({});
       setAppliedAppScopedDashboardFilterValues({});
+      setAppScopedDashboardFilterFingerprints({});
+      setRememberedDashboardFilterIds(new Set());
     }
     setDashboardFilterPersistenceAppId(appId);
   }, [state.activeAppId]);
@@ -511,13 +527,53 @@ export function AppsView(): JSX.Element {
       writePersistedAppFilterValues(
         window.localStorage,
         `${APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX}${state.activeAppId}`,
-        { draft: appScopedDashboardFilterValues, applied: appliedAppScopedDashboardFilterValues },
+        {
+          draft: appScopedDashboardFilterValues,
+          applied: appliedAppScopedDashboardFilterValues,
+          fingerprints: appScopedDashboardFilterFingerprints,
+        },
       );
     } catch {
       // Browser storage is not execution authority. The current App still
       // receives its in-memory scope when persistence is unavailable.
     }
-  }, [appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterPersistenceAppId, state.activeAppId]);
+  }, [appScopedDashboardFilterFingerprints, appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterPersistenceAppId, state.activeAppId]);
+
+  // Only App-scoped values chosen for this page's filters as they are today.
+  // Computed on the render path, so a stale value never reaches a run, Ask or
+  // a control even for one render.
+  const acceptedAppScopedDraft = useMemo(() => acceptRememberedAppFilterValues({
+    filters: dashboardFilters,
+    values: appScopedDashboardFilterValues,
+    fingerprints: appScopedDashboardFilterFingerprints,
+    remembered: rememberedDashboardFilterIds,
+  }), [appScopedDashboardFilterFingerprints, appScopedDashboardFilterValues, dashboardFilters, rememberedDashboardFilterIds]);
+  const acceptedAppScopedApplied = useMemo(() => acceptRememberedAppFilterValues({
+    filters: dashboardFilters,
+    values: appliedAppScopedDashboardFilterValues,
+    fingerprints: appScopedDashboardFilterFingerprints,
+    remembered: rememberedDashboardFilterIds,
+  }), [appScopedDashboardFilterFingerprints, appliedAppScopedDashboardFilterValues, dashboardFilters, rememberedDashboardFilterIds]);
+
+  // Forget a remembered value whose filter changed or was re-created, so it
+  // can never come back on another page or visit.
+  useEffect(() => {
+    const rejected = new Set([...acceptedAppScopedDraft.rejected, ...acceptedAppScopedApplied.rejected]);
+    if (rejected.size === 0) return;
+    const forget = (current: Record<string, unknown>) => {
+      if (![...rejected].some((id) => Object.prototype.hasOwnProperty.call(current, id))) return current;
+      const next = { ...current };
+      for (const id of rejected) delete next[id];
+      return next;
+    };
+    setAppScopedDashboardFilterValues(forget);
+    setAppliedAppScopedDashboardFilterValues(forget);
+    setAppScopedDashboardFilterFingerprints((current) => forget(current) as Record<string, string>);
+    setRememberedDashboardFilterIds((current) => {
+      if (![...rejected].some((id) => current.has(id))) return current;
+      return new Set([...current].filter((id) => !rejected.has(id)));
+    });
+  }, [acceptedAppScopedApplied.rejected, acceptedAppScopedDraft.rejected]);
 
   useEffect(() => {
     if (!activeDashboardFilterPageId) return;
@@ -525,7 +581,7 @@ export function AppsView(): JSX.Element {
       const pageValues = valuesForDashboardPage({
         filters: dashboardFilters,
         pageValues: current[activeDashboardFilterPageId] ?? {},
-        appValues: appScopedDashboardFilterValues,
+        appValues: acceptedAppScopedDraft.values,
         defaultValue: defaultDashboardFilterValue,
       });
       if (shallowEqualRecords(current[activeDashboardFilterPageId] ?? {}, pageValues)) return current;
@@ -535,13 +591,13 @@ export function AppsView(): JSX.Element {
       const pageValues = valuesForDashboardPage({
         filters: dashboardFilters,
         pageValues: current[activeDashboardFilterPageId] ?? {},
-        appValues: appliedAppScopedDashboardFilterValues,
+        appValues: acceptedAppScopedApplied.values,
         defaultValue: defaultDashboardFilterValue,
       });
       if (shallowEqualRecords(current[activeDashboardFilterPageId] ?? {}, pageValues)) return current;
       return { ...current, [activeDashboardFilterPageId]: pageValues };
     });
-  }, [activeDashboardFilterPageId, appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterKey, dashboardFilters]);
+  }, [activeDashboardFilterPageId, acceptedAppScopedApplied.values, acceptedAppScopedDraft.values, dashboardFilterKey, dashboardFilters]);
 
   /**
    * Dataset detail navigation carries only explicitly named filters that the
@@ -583,6 +639,14 @@ export function AppsView(): JSX.Element {
     if (Object.keys(carriedAppScoped).length) {
       setAppScopedDashboardFilterValues((current) => ({ ...current, ...carriedAppScoped }));
       setAppliedAppScopedDashboardFilterValues((current) => ({ ...current, ...carriedAppScoped }));
+      setAppScopedDashboardFilterFingerprints((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.keys(carriedAppScoped).flatMap((filterId) => {
+          const filter = target.dashboard.filters?.find((candidate) => candidate.id === filterId);
+          return filter ? [[filterId, dashboardFilterFingerprint(filter)]] : [];
+        })),
+      }));
+      setRememberedDashboardFilterIds((current) => new Set([...current].filter((id) => !(id in carriedAppScoped))));
     }
     dispatch({ type: 'OPEN_DASHBOARD', dashboardId: input.toDashboardId });
     return { ok: true };
@@ -753,9 +817,9 @@ export function AppsView(): JSX.Element {
   const dashboardVariables = useMemo(() => valuesForDashboardPage({
     filters: dashboardFilters,
     pageValues: appliedDashboardFilterValues,
-    appValues: appliedAppScopedDashboardFilterValues,
+    appValues: acceptedAppScopedApplied.values,
     defaultValue: defaultDashboardFilterValue,
-  }), [appliedAppScopedDashboardFilterValues, appliedDashboardFilterValues, dashboardFilters]);
+  }), [acceptedAppScopedApplied.values, appliedDashboardFilterValues, dashboardFilters]);
   // Each App page's tile trust from its last settled run, so the library card
   // never says "App certified" while the App itself says otherwise.
   const [runTrustByApp, setRunTrustByApp] = useState<Record<string, Record<string, AppRunTrust>>>({});
@@ -779,7 +843,14 @@ export function AppsView(): JSX.Element {
     }));
     if (isAppScopedDashboardFilter(filter)) {
       setAppScopedDashboardFilterValues((current) => ({ ...current, [filter.id]: nextValue }));
+      setAppScopedDashboardFilterFingerprints((current) => ({ ...current, [filter.id]: dashboardFilterFingerprint(filter) }));
     }
+    setRememberedDashboardFilterIds((current) => {
+      if (!current.has(filter.id)) return current;
+      const next = new Set(current);
+      next.delete(filter.id);
+      return next;
+    });
   }, [activeDashboardFilterPageId]);
   const applyDashboardFilters = useCallback(() => {
     if (!activeDashboardFilterPageId) return;
@@ -793,6 +864,12 @@ export function AppsView(): JSX.Element {
         .filter(isAppScopedDashboardFilter)
         .map((filter) => [filter.id, dashboardFilterValues[filter.id]])),
     }));
+    setAppScopedDashboardFilterFingerprints((current) => ({
+      ...current,
+      ...Object.fromEntries(dashboardFilters
+        .filter(isAppScopedDashboardFilter)
+        .map((filter) => [filter.id, dashboardFilterFingerprint(filter)])),
+    }));
   }, [activeDashboardFilterPageId, dashboardFilterValues, dashboardFilters]);
   const resetDashboardFilters = useCallback(() => {
     const defaults = Object.fromEntries(dashboardFilters.map((filter) => [filter.id, defaultDashboardFilterValue(filter)]));
@@ -805,8 +882,22 @@ export function AppsView(): JSX.Element {
     if (Object.keys(appDefaults).length > 0) {
       setAppScopedDashboardFilterValues((current) => ({ ...current, ...appDefaults }));
       setAppliedAppScopedDashboardFilterValues((current) => ({ ...current, ...appDefaults }));
+      setAppScopedDashboardFilterFingerprints((current) => ({
+        ...current,
+        ...Object.fromEntries(dashboardFilters
+          .filter(isAppScopedDashboardFilter)
+          .map((filter) => [filter.id, dashboardFilterFingerprint(filter)])),
+      }));
     }
+    setRememberedDashboardFilterIds(new Set());
   }, [activeDashboardFilterPageId, dashboardFilters]);
+  // The page opened with a value this browser remembered (and still applies):
+  // the filter row says so beside Reset, so the narrowing is never silent.
+  const dashboardFiltersRemembered = useMemo(() => dashboardFilters.some((filter) => (
+    rememberedDashboardFilterIds.has(filter.id)
+    && Object.prototype.hasOwnProperty.call(acceptedAppScopedApplied.values, filter.id)
+    && JSON.stringify(acceptedAppScopedApplied.values[filter.id] ?? null) !== JSON.stringify(defaultDashboardFilterValue(filter) ?? null)
+  )), [acceptedAppScopedApplied.values, dashboardFilters, rememberedDashboardFilterIds]);
   // Filters apply as the reader changes them. A short pause folds a burst of
   // changes (several chips, or typing) into one page refresh.
   const dashboardFiltersPending = useMemo(() => dashboardFilters.some((filter) => (
@@ -954,6 +1045,7 @@ export function AppsView(): JSX.Element {
           explainExpanded={explainExpanded}
           dashboardFilters={dashboardFilters}
           dashboardFilterValues={dashboardFilterValues}
+          dashboardFiltersRemembered={dashboardFiltersRemembered}
           themeMode={state.themeMode}
           variables={dashboardVariables}
           onBack={returnToAppLibrary}
@@ -1450,6 +1542,7 @@ function AppWorkspaceSurface({
   explainExpanded,
   dashboardFilters,
   dashboardFilterValues,
+  dashboardFiltersRemembered = false,
   themeMode,
   variables: declaredVariables,
   onBack,
@@ -1491,6 +1584,8 @@ function AppWorkspaceSurface({
   explainExpanded: boolean;
   dashboardFilters: DashboardFilter[];
   dashboardFilterValues: Record<string, unknown>;
+  /** Some value on this page came back from the reader's last visit. */
+  dashboardFiltersRemembered?: boolean;
   themeMode: ThemeMode;
   variables: Record<string, unknown>;
   onBack: () => void;
@@ -1769,10 +1864,11 @@ function AppWorkspaceSurface({
     });
   }, [dispatch, isEditable, onExplainChange, workspaceAppId, workspaceAppName, dashboardDoc, variables, currentPageRunId]);
   const askAboutAppFilters = useMemo(() => [
+    // The same words as the filter row and the appendix: a date range reads
+    // "1 Jan 2025 – 30 Jun 2025", never disappears for being an object.
     ...dashboardFilters.flatMap((filter) => {
-      const value = dashboardFilterValues[filter.id];
-      const text = Array.isArray(value) ? value.map(String).join(', ') : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
-      return text.trim() ? [{ label: formatBusinessLabel((filter as { label?: string }).label ?? filter.id), value: text.slice(0, 80) }] : [];
+      const text = formatDashboardFilterValue(dashboardFilterValues[filter.id], filter);
+      return text ? [{ label: dashboardFilterLabel(filter.id, filter), value: text.slice(0, 80) }] : [];
     }),
     ...viewerFilters.map((filter) => ({ label: formatBusinessLabel(filter.column), value: filter.values.join(', ').slice(0, 80) })),
   ], [dashboardFilters, dashboardFilterValues, viewerFilters]);
@@ -2109,7 +2205,10 @@ function AppWorkspaceSurface({
                         })}
                       </div>
                     ) : null}
-                    {dashboardFilters.some((filter) => JSON.stringify(dashboardFilterValues[filter.id] ?? null) !== JSON.stringify(defaultDashboardFilterValue(filter) ?? null)) ? (
+                    {dashboardFiltersRemembered ? (
+                      <span className="dql-app-filter-remembered" role="status">Opened with your last filters</span>
+                    ) : null}
+                    {dashboardFiltersRemembered || dashboardFilters.some((filter) => JSON.stringify(dashboardFilterValues[filter.id] ?? null) !== JSON.stringify(defaultDashboardFilterValue(filter) ?? null)) ? (
                       <button type="button" className="dql-app-filter-reset" onClick={onResetDashboardFilters}>Reset</button>
                     ) : null}
                   </>

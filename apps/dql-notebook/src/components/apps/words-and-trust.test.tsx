@@ -123,6 +123,40 @@ describe('technical details on request (D6)', () => {
     vi.unstubAllGlobals();
   });
 
+  it('writes the appendix filters with their labels and in words, and counts data sources', async () => {
+    vi.stubGlobal('window', { location: { origin: 'http://127.0.0.1:3000' } });
+    const { ReviewAppendix } = await import('./DashboardRenderer');
+    const appendix = (variables: Record<string, unknown>, tiles: unknown[]) => renderToStaticMarkup(<ReviewAppendix
+      run={{ ...run, tiles, story: { headline: 'x', paragraphs: [], claims: [], evidenceRefs: ['blocks/commerce/revenue.dql'], trustState: 'certified', generatedBy: 'deterministic' } } as never}
+      variables={variables}
+      filters={[
+        { id: 'ordered_at', type: 'daterange', label: 'Ordered At' },
+        { id: 'customer_name', type: 'multiselect' },
+      ]}
+    />);
+    const ok = { status: 'ok', tileType: 'dataset' };
+    const html = appendix(
+      { ordered_at: { start: '2025-01-01', end: '2025-06-30' }, customer_name: ['Angela Moyer'], smartView: 'x' },
+      [
+        { ...ok, tileId: 'a', dataset: { sourceId: 'orders' } },
+        { ...ok, tileId: 'b', dataset: { sourceId: 'orders' } },
+        { ...ok, tileId: 'c', dataset: { sourceId: 'customers' } },
+        { status: 'ok', tileType: 'text', tileId: 'intro' },
+      ],
+    );
+    expect(html).not.toContain('[object Object]');
+    expect(html).toContain('Ordered At: 1 Jan 2025 – 30 Jun 2025');
+    expect(html).toContain('Customer Name: Angela Moyer');
+    expect(html).not.toContain('smartView');
+    expect(html).toContain('2 data sources');
+    expect(html).not.toContain('1 sources');
+    const fromOnly = appendix({ ordered_at: { start: '2025-01-01' } }, [{ ...ok, tileId: 'a', dataset: { sourceId: 'orders' } }]);
+    expect(fromOnly).toContain('Ordered At: From 1 Jan 2025');
+    expect(fromOnly).toContain('1 data source ·');
+    expect(appendix({ ordered_at: {}, customer_name: [] }, [])).toContain('No filters');
+    vi.unstubAllGlobals();
+  });
+
   it('shows column types as icons with Number, Text and Date tooltips', () => {
     expect(['numeric', 'string', 'date'].map((kind) => columnKindBadge(kind as never).label)).toEqual(['Number', 'Text', 'Date']);
     const html = renderToStaticMarkup(<TableOutput result={{ columns: ['amount', 'name', 'ordered_on'], rows: [{ amount: 1, name: 'A', ordered_on: '2026-10-21' }], rowCount: 1 }} themeMode="light" />);

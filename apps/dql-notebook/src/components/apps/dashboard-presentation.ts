@@ -4,6 +4,7 @@ import { coerceTrustState, getDashboardItemBlockId, getDqlGenUi, roleForDisplayC
 import { settleGridLayout } from '@zlens/core/apps/grid-layout';
 import { nonMeasureColumnRole, isRankColumnName } from '@zlens/core/apps/result-measures';
 import { formatDashboardValue, formatGenUiLabel, isNumericColumn, type DashboardStory } from './dashboard-format';
+import { formatDashboardFilterValue } from './dashboard-filter-words';
 
 /**
  * How a dashboard is presented to a stakeholder: which tiles the read-only
@@ -165,6 +166,7 @@ export function buildDashboardStory(
   items: DashboardLayoutItem[],
   tileResults: Map<string, DashboardRunTile>,
   variables: Record<string, unknown>,
+  filters?: DashboardDocumentResponse['dashboard']['filters'],
 ): DashboardStory | null {
   const candidate = items
     .map((item, index) => ({ item, tile: tileResults.get(item.i), index }))
@@ -206,8 +208,8 @@ export function buildDashboardStory(
   const firstMetric = metricColumn ? toStoryNumber(first[metricColumn]) : null;
   const secondMetric = metricColumn && second ? toStoryNumber(second[metricColumn]) : null;
   const metricLabel = metricColumn ? storyMetricLabel(metricColumn) : null;
-  const filters = storyFilterChips(variables);
-  const filterPhrase = filters.length ? 'under the selected app filters' : 'in the current dashboard view';
+  const filterChips = storyFilterChips(variables, filters);
+  const filterPhrase = filterChips.length ? 'under the selected app filters' : 'in the current dashboard view';
   const sourceTitle = candidate.item.title ?? candidate.tile.title ?? getDashboardItemBlockId(candidate.item) ?? 'Dashboard result';
   const rowCount = result.rowCount ?? rows.length;
   const trust = candidate.tile.certificationStatus === 'certified'
@@ -233,7 +235,7 @@ export function buildDashboardStory(
     summary,
     sourceTitle,
     trust,
-    filters,
+    filters: filterChips,
     chips: [
       `${rowCount} ${rowCount === 1 ? 'row' : 'rows'}`,
       columns.length ? `${columns.length} fields` : '',
@@ -297,19 +299,28 @@ function storyMetricLabel(column: string): string {
   return formatGenUiLabel(column).toLowerCase();
 }
 
-export function storyFilterChips(variables: Record<string, unknown>): Array<{ label: string; value: string }> {
+export function storyFilterChips(
+  variables: Record<string, unknown>,
+  filters?: DashboardDocumentResponse['dashboard']['filters'],
+): Array<{ label: string; value: string }> {
+  const declared = new Map((filters ?? []).map((filter) => [filter.id, filter]));
   return Object.entries(variables)
     .filter(([key, value]) => {
       if (/^(smartView|persona|dashboardId|appId)$/i.test(key)) return false;
       if (key.startsWith('__')) return false;
       if (value === null || value === undefined || value === '') return false;
       if (Array.isArray(value) && value.length === 0) return false;
-      return typeof value !== 'object' || Array.isArray(value);
+      // A date or number range is a filter too: it reads in words below.
+      return typeof value !== 'object' || Array.isArray(value) || formatDashboardFilterValue(value, declared.get(key)) !== null;
     })
     .slice(0, 6)
     .map(([key, value]) => ({
-      label: formatGenUiLabel(key),
-      value: Array.isArray(value) ? value.map((entry) => formatStoryFilterValue(key, entry)).join(', ') : formatStoryFilterValue(key, value),
+      label: declared.get(key)?.label?.trim() || formatGenUiLabel(key),
+      value: Array.isArray(value)
+        ? value.map((entry) => formatStoryFilterValue(key, entry)).join(', ')
+        : typeof value === 'object'
+          ? formatDashboardFilterValue(value, declared.get(key)) ?? ''
+          : formatStoryFilterValue(key, value),
     }));
 }
 

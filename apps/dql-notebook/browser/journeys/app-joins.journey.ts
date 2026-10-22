@@ -192,3 +192,43 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   expect(trend?.result?.rows).toHaveLength(1);
   expect(Number(trend?.result?.rows?.[0]?.order_total)).toBe(150);
 });
+
+test('"Only certified data" blocks publishing a tile that uses an uncertified join, until data that needs review is allowed', async ({ page }) => {
+  test.setTimeout(180_000);
+  // A Revenue by store tile reads Location Name through the join setup drafted (not certified).
+  const current = await call<{ draft: { revision: number; proposalHash: string } }>(`/api/app-builds/${draftId}`, undefined, 'GET');
+  const candidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${draftId}/source-candidates?limit=50`);
+  const orders = candidates.items.find((item) => item.name === 'Orders')!;
+  await call(`/api/app-builds/${draftId}/compose`, {
+    expectedRevision: current.draft.revision,
+    expectedProposalHash: current.draft.proposalHash,
+    mode: 'manual',
+    selections: [
+      { sourceId: orders.sourceId, view: 'chart', title: 'Revenue by store', query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'order_total' }] } },
+    ],
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${server!.baseUrl}/?appDraft=${draftId}`);
+  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: /^Review and publish to Project/ }).click();
+  const review = page.getByRole('dialog', { name: /fix(es)? before publishing/ });
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  // The source is certified; the tile is not: it never says every check passed.
+  await expect(review.getByText('Every check passed')).toHaveCount(0);
+  await expect(review.getByText('Ready to publish')).toHaveCount(0);
+  const storeFix = review.getByRole('region', { name: 'Needs review: Revenue by store' });
+  await expect(storeFix).toContainText('Revenue by store uses the join to Location, which is not certified yet.');
+  await expect(storeFix.getByRole('button', { name: 'Certify the join in Modeling' })).toBeVisible();
+  await expect(storeFix.getByRole('button', { name: 'Remove the related field' })).toBeVisible();
+  // The Customer Name filter reaches the Orders trend through the drafted Customer join: it counts too.
+  await expect(review.getByRole('region', { name: 'Needs review: Orders trend' })).toContainText('Customer Name filter reaches it through that join');
+
+  // Allow data that needs review: after one fresh run, it is ready to publish.
+  await storeFix.getByRole('button', { name: 'Allow data that needs review' }).click();
+  await expect(review.getByRole('region', { name: /^Needs review:/ })).toHaveCount(0, { timeout: 30_000 });
+  const runFirst = review.getByRole('button', { name: 'Run preview' });
+  if (await runFirst.count()) await runFirst.first().click();
+  await expect(page.getByRole('dialog', { name: 'Ready to publish' })).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByRole('dialog', { name: 'Ready to publish' }).getByText('Every check passed.')).toBeVisible();
+});

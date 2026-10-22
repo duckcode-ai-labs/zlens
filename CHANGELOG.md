@@ -375,6 +375,39 @@ or 24 (Node 24 LTS recommended).
 
 ### Fixed
 
+- **Remembered filter values are checked before they apply.** A reader's App
+  filter values are kept in the browser between visits. A value left by an
+  earlier App with the same id (same port), or by a filter that was since
+  re-created or moved to another field, was applied without a check: the
+  control said **All** while a tile was narrowed to a customer the reader
+  never picked. Each remembered value now carries the filter it was chosen
+  for (id, control type and field, including each Dataset's mapped field) and
+  applies only to that same filter, as a value its control can show; anything
+  else is dropped and forgotten. A value that does come back is shown in the
+  control, with **Opened with your last filters** and **Reset** beside it. A
+  multi-select given a single name shows that name, never **All**. The Share
+  note now says the link does not carry your filter choices.
+- **The review appendix reads plainly.** The reader's **Evidence & review
+  appendix** printed `ordered_at: [object Object]` for a date range and
+  "1 sources" for two data sources. Filters now read by their label and in
+  words (**Ordered At: 1 Jan 2025 – 30 Jun 2025**, **From 1 Jan 2025**,
+  **At least 500**), and the count is of distinct data sources ("1 data
+  source", "2 data sources"; two tiles on one Dataset are one). The same
+  wording is used by the summary story (which used to leave a date range
+  out), tile receipts (**Ordered At from 1 Jan 2025** instead of `ordered_at
+  gte 2025-01-01`), result-mark chips, Ask's filter chips and Research.
+- **Joins count in the publish check.** Under **Only certified data**, an App
+  published with a tile marked Needs review because it read a field through a
+  join nobody certified yet (drafted in setup), and the check said **Every
+  check passed**: it looked only at sources. Publish readiness, in App Studio
+  and on the server (preflight and publish), now looks at every Dataset tile:
+  its groupings, filters, detail columns, calculations, driver, and the page
+  filters mapped to it through a related field. Each such tile is a fix,
+  **Tile needs review**, with **Certify the join in Modeling**, **Remove the
+  related field** and **Allow data that needs review**; the server refuses with
+  `APP_BUILD_TILE_NEEDS_REVIEW`. A join certified since passes, and with
+  **Also allow data that needs review** the tile publishes as Needs review.
+
 - **DuckDB on Node 25 and 26.** ZLens's DuckDB driver has no prebuilt binary
   for those versions, so its install fell back to a 10-minute source build
   that usually failed, and the Connections test said the driver was missing.

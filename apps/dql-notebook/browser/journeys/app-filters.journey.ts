@@ -376,3 +376,64 @@ test('the editor marks unlinked tiles, finds a value past the first 200, and map
   await expect(page.getByText(/Showing 1–1 of 1 rows?/)).toBeVisible({ timeout: 60_000 });
   await expect(page.getByText('Not filtered by Contact Name')).toBeVisible();
 });
+
+test('a filter value left in this browser by an earlier App is ignored; a remembered one shows in the control with Reset', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // An earlier session on the same port and App id left a single customer for
+  // a filter that has since been re-created (no record of which filter it was for).
+  await page.goto(`${server!.baseUrl}/`);
+  await page.evaluate(() => {
+    window.localStorage.setItem('dql.apps.dashboard-filter-values.v1:customer-review', JSON.stringify({
+      draft: { customer_name: 'Bob' },
+      applied: { customer_name: 'Bob' },
+    }));
+  });
+  const readerVariables: Array<Record<string, unknown>> = [];
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /\/api\/apps\/[^/]+\/dashboards\/[^/]+\/run$/.test(request.url())) {
+      readerVariables.push((JSON.parse(request.postData() ?? '{}') as RunRequest).variables ?? {});
+    }
+  });
+  await page.goto(`${server!.baseUrl}/?app=customer-review&page=overview`);
+  const customer = page.getByRole('button', { name: /^Customer Name: / });
+  await expect(customer).toHaveAccessibleName('Customer Name: All', { timeout: 60_000 });
+  await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible({ timeout: 60_000 });
+  // Nothing narrowed the page while the control said All.
+  expect(readerVariables.length).toBeGreaterThan(0);
+  expect(readerVariables.some((variables) => variables.customer_name === 'Bob')).toBe(false);
+  await expect(page.getByText('Opened with your last filters')).toHaveCount(0);
+  await expect(page.getByText('Not filtered by Customer Name')).toHaveCount(0);
+
+  // A value picked now is remembered for this filter, and shown when the page opens again.
+  await customer.click();
+  await page.getByRole('option', { name: 'Alice', exact: true }).click();
+  await expect(page.getByText('Not filtered by Customer Name')).toBeVisible({ timeout: 60_000 });
+  readerVariables.length = 0;
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^Customer Name: / })).toHaveAccessibleName('Customer Name: Alice', { timeout: 60_000 });
+  await expect(page.getByText('Opened with your last filters')).toBeVisible();
+  await expect.poll(() => readerVariables.some((variables) => variables.customer_name === 'Alice'), { timeout: 30_000 }).toBe(true);
+  await page.locator('.dql-app-filter-reset').click();
+  await expect(page.getByRole('button', { name: /^Customer Name: / })).toHaveAccessibleName('Customer Name: All', { timeout: 30_000 });
+  await expect(page.getByText('Opened with your last filters')).toHaveCount(0);
+});
+
+test('the reader\'s review appendix writes a date range in words and counts both data sources', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${server!.baseUrl}/?app=item-review&page=overview`);
+  const from = page.getByLabel('Ordered At from');
+  await expect(from).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText('Showing 1–4 of 4 rows')).toBeVisible({ timeout: 60_000 });
+  await from.fill('2024-01-01');
+  await page.getByLabel('Ordered At to').fill('2024-01-03');
+  await expect(page.getByText('Showing 1–3 of 3 rows').first()).toBeVisible({ timeout: 60_000 });
+  const appendix = page.getByRole('group', { name: 'Evidence and review appendix' });
+  await expect(appendix.locator('summary').first()).toContainText('2 data sources', { timeout: 60_000 });
+  await appendix.locator('summary').first().click();
+  await expect(appendix).toContainText('Ordered At: 1 Jan 2024 – 3 Jan 2024');
+  await expect(appendix).not.toContainText('[object Object]');
+  await expect(appendix).not.toContainText('ordered_at:');
+  await expect(appendix).not.toContainText('1 sources');
+});
