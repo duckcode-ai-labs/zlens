@@ -20918,8 +20918,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 if (field.kind !== 'measure' || field.status !== 'approved') return [];
                 const format = field.format?.kind === 'currency' ? `Money${field.format.currency ? ` (${field.format.currency})` : ''}` : field.format?.kind === 'percent' ? 'Percent' : 'Number';
                 const label = wordsFor(field.name);
-                const note = formatNotes.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`));
-                return [{ name: field.name, label, format, aggregation: field.aggregation, ...(note ? { note: note.slice(label.length + 1).trim() } : {}) }];
+                const note = formatNotes.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`))?.slice(label.length + 1).trim();
+                // Only notes that add something ("shown in dollars (stored as cents)"), not the format again.
+                const useful = note && !/^(money|a number|a percent)$/i.test(note) ? note : undefined;
+                return [{ name: field.name, label, format, aggregation: field.aggregation, ...(useful ? { note: useful } : {}) }];
               }),
               joins: (descriptor?.joins ?? []).map((join) => ({ label: join.label, sentence: join.sentence, trust: join.trust })),
               hiddenColumns: check?.hiddenColumns ?? [],
@@ -24671,8 +24673,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                         error: `Dataset tile ${record.tileId} is currently ${source.lifecycle} and is not eligible for this local preview policy. Enable review-required sources or select a certified Dataset.`,
                       };
                     }
+                    // Checked · Needs certifying (design Q1) previews under any data rule.
                     if ((source.lifecycle !== 'certified' || source.trust !== 'certified')
-                      && currentDraftSourcePolicy !== 'include_review_required') {
+                      && currentDraftSourcePolicy !== 'include_review_required'
+                      && !source.check) {
                       return {
                         ok: false,
                         error: `Dataset tile ${record.tileId} is currently ${source.lifecycle}. Enable review-required sources explicitly before saving its local preview evidence.`,
@@ -32551,8 +32555,10 @@ function datasetDraftStoredAuthorityErrors(
       );
       continue;
     }
+    // Checked · Needs certifying (design Q1) runs under "Only certified data"; it never publishes until certified.
     if (sourcePolicy === 'governed_only'
-      && (source.lifecycle !== 'certified' || source.trustState !== 'certified')) {
+      && (source.lifecycle !== 'certified' || source.trustState !== 'certified')
+      && !source.checked) {
       errors.set(
         item.sourceId,
         `APP_BUILD_REVIEW_POLICY_REQUIRED: ${item.title || item.i} uses a ${source.lifecycle ?? 'unknown'} Dataset source. Enable review-required sources or select a certified Dataset before running it.`,

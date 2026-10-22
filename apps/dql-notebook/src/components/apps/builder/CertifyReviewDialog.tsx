@@ -111,7 +111,7 @@ export function CertifyReviewDialog({
               </section>
               <section className="certify-review-part" aria-label="Number formats">
                 <h3><Hash size={13} aria-hidden="true" /> Number formats</h3>
-                {review.numbers.length ? <ul>{review.numbers.map((number) => <li key={number.name}><strong>{number.label}</strong>: {number.format}{number.note ? ` · ${number.note}` : ''}</li>)}</ul> : <p className="table-dataset-muted">No numbers.</p>}
+                {review.numbers.length ? <ul>{review.numbers.map((number) => <li key={number.name}><strong>{humanize(number.name)}</strong>: {number.format}{number.note ? ` · ${number.note}` : ''}</li>)}</ul> : <p className="table-dataset-muted">No numbers.</p>}
               </section>
               <section className="certify-review-part" aria-label="Joins used">
                 <h3><Link2 size={13} aria-hidden="true" /> Joins used</h3>

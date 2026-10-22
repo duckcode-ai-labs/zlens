@@ -1800,6 +1800,11 @@ export function AppStudioV2({
         return;
       }
       next = result.draft;
+      // Its review tasks ("… must be certified …") are done: certifying was the review.
+      const doneTasks = next.reviewTasks.filter((task) => task.status === 'open' && task.sourceId === sourceId);
+      if (doneTasks.length) {
+        next = (await api.patchAppBuild(next.id, next.revision, doneTasks.map((task) => ({ type: 'remove_review_task' as const, taskId: task.id })), next.proposalHash)).draft;
+      }
       latestDraftRef.current = next;
       setDraft(next);
       setUndoStack((items) => [...items.slice(-29), current]);

@@ -6940,7 +6940,8 @@ async function composeStoredAppBuildDraft(
     if (missing.length) throw new Error(`APP_BUILD_SOURCE_NOT_IN_PROPOSAL: ${missing.join(', ')}`);
     for (const sourceId of selected) {
       const source = available.get(sourceId)!;
-      if (current.sourcePolicy === 'governed_only' && source.trustState !== 'certified') {
+      // Checked data (design Q1) may be added under "Only certified data"; publishing still needs it certified.
+      if (current.sourcePolicy === 'governed_only' && source.trustState !== 'certified' && !(source.checked && source.capabilities?.dataset)) {
         throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before adding ${source.qualifiedIdentity ?? source.sourceRef}.`);
       }
     }
