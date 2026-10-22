@@ -10,7 +10,7 @@ import { installDuckdbConnector, repoRoot, run, startNotebookServer, type Notebo
  * orders keep each amount twice, in dollars and in cents:
  *   - Add data → Check and add asks about the cents columns once for the
  *     table, junk counts start unticked, and the table then reads
- *     "Added · Checked" with no second "Check and add" (problems 7, 8);
+ *     "Not certified yet · added" with no second "Check and add" (problems 7, 8);
  *   - Top customers shows two Maria Lopez bars, told apart by their ids (4);
  *   - a date filter lists the order's own Ordered At first, a customer's
  *     date by its table, and a different date only by its meaning (2);
@@ -86,7 +86,7 @@ test.afterAll(async () => {
   if (workDir) rmSync(workDir, { recursive: true, force: true });
 });
 
-test('Check and add asks about cents once, leaves junk counts off, and the table then reads Added · Checked', async ({ page }) => {
+test('Check and add asks about cents once, leaves junk counts off, and the table then reads Not certified yet · added', async ({ page }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(server!.baseUrl);
@@ -105,9 +105,9 @@ test('Check and add asks about cents once, leaves junk counts off, and the table
   const ordersRow = browser.locator('article.add-data-row.table').filter({ hasText: /^orders/ }).first();
   const customersRow = browser.locator('article.add-data-row.table').filter({ hasText: /^customers/ }).first();
   // Setup drafted it; nothing was made from it yet.
-  await expect(ordersRow).toContainText(/Table · (Not checked yet|Drafted — review to use)/, { timeout: 30_000 });
+  await expect(ordersRow).toContainText(/Table · Not certified yet/, { timeout: 30_000 });
   // Customers was checked in another App: it is added as that Dataset, never checked into a second copy.
-  await expect(customersRow).toContainText('Table · Checked');
+  await expect(customersRow).toContainText('Table · Not certified yet');
   await expect(customersRow.getByRole('button', { name: 'Check customers and add it' })).toHaveCount(0);
 
   await ordersRow.getByRole('button', { name: 'Check orders and add it' }).click();
@@ -128,10 +128,10 @@ test('Check and add asks about cents once, leaves junk counts off, and the table
   await expect(check).toBeHidden({ timeout: 60_000 });
 
   // The table says what became of it; no second Check and add.
-  await expect(ordersRow).toContainText('Table · Added · Checked', { timeout: 30_000 });
+  await expect(ordersRow).toContainText('Table · Not certified yet · added', { timeout: 30_000 });
   await expect(ordersRow.getByRole('button', { name: 'Check orders and add it' })).toHaveCount(0);
   await customersRow.getByRole('button', { name: 'Add customers to App as Customers' }).click();
-  await expect(customersRow).toContainText('Table · Added · Checked', { timeout: 30_000 });
+  await expect(customersRow).toContainText('Table · Not certified yet · added', { timeout: 30_000 });
   if (process.env.ZLENS_NAMES_SHOTS_DIR) await page.screenshot({ path: join(process.env.ZLENS_NAMES_SHOTS_DIR, 'table-states.png') });
 });
 

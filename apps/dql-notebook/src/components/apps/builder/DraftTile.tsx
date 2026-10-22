@@ -67,7 +67,7 @@ export function draftVisualization(descriptor: DatasetDescriptor, draft: DraftTi
 type PreviewState =
   | { state: 'idle' }
   | { state: 'running' }
-  | { state: 'ready'; result: QueryResult; ms: number; reviewJoin?: boolean }
+  | { state: 'ready'; result: QueryResult; ms: number; reviewJoin?: boolean; key: string }
   | { state: 'failed'; message: string };
 
 /**
@@ -177,6 +177,7 @@ export function DatasetQueryPreview({
         const columns = named.length ? named : Object.keys(rows[0] ?? {});
         setPreview({
           state: 'ready',
+          key,
           ms: Math.round(performance.now() - started),
           reviewJoin: Boolean(response.joins?.some((join) => join.trust !== 'certified')),
           result: { columns, rows, rowCount: response.result?.rowCount ?? rows.length, ...(descriptor ? { columnsMeta: draftColumnsMeta(descriptor, runQuery, columns) } : {}) },
@@ -184,28 +185,33 @@ export function DatasetQueryPreview({
       }).catch(() => {
         // Superseded by a newer edit.
       });
-    }, 300);
+    // Short: a field click is one action, not typing (round 3: clicks felt a second late).
+    }, 120);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
   }, [sourceId, key, runnable]);
+  // A result for an earlier query is never drawn as this one (round 3): a KPI's
+  // single total drawn as a line read "1 row" with its total on the x-axis
+  // until the new run came back. Until the result matches, it is running.
+  const current: PreviewState = preview.state === 'ready' && preview.key !== key ? { state: 'running' } : preview;
   useEffect(() => {
     if (!onStatus) return;
-    if (preview.state === 'ready') {
-      const count = preview.result.rowCount ?? preview.result.rows.length;
+    if (current.state === 'ready') {
+      const count = current.result.rowCount ?? current.result.rows.length;
       // A join nobody certified yet (drafted in setup) keeps the tile Not certified yet (design D2).
-      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${preview.ms} ms${preview.reviewJoin ? ' · Not certified yet: it uses a join nobody has certified' : ''}`, 'ok');
-    } else if (preview.state === 'running') onStatus('Running…', 'idle');
-    else if (preview.state === 'failed') onStatus('Run failed', 'error');
-  }, [preview]);
+      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${current.ms} ms${current.reviewJoin ? ' · Not certified yet: it uses a join nobody has certified' : ''}`, 'ok');
+    } else if (current.state === 'running') onStatus('Running…', 'idle');
+    else if (current.state === 'failed') onStatus('Run failed', 'error');
+  }, [current.state, current.state === 'ready' ? current.key : '', preview]);
   useEffect(() => {
-    onResult?.(preview.state === 'ready' ? preview.result : undefined);
-  }, [preview]);
-  if (preview.state === 'failed') return <div className="draft-empty warn"><strong>This query did not run</strong><span>{preview.message}</span></div>;
-  if (preview.state !== 'ready') return <div className="draft-empty loading"><span>{sourceId ? 'Running against live data…' : 'Runs when applied'}</span></div>;
+    onResult?.(current.state === 'ready' ? current.result : undefined);
+  }, [current.state, current.state === 'ready' ? current.key : '', preview]);
+  if (current.state === 'failed') return <div className="draft-empty warn"><strong>This query did not run</strong><span>{current.message}</span></div>;
+  if (current.state !== 'ready') return <div className="draft-empty loading"><span>{sourceId && runnable ? 'Running against live data…' : 'Runs when applied'}</span></div>;
   const shelved = { query, viz: { type: visualization, ...(encoding ? { encoding } : {}) } };
-  const shown = encodedTileResult(shelved, preview.result);
+  const shown = encodedTileResult(shelved, current.result);
   if (visualization === 'pivot' && !query.detail) return <PivotTable result={shown} layout={pivotLayout(encoding ?? encodingFromQuery(query, 'pivot'), query)} themeMode={themeMode} maxHeight={height + 20} />;
   if (visualization === 'table' || visualization === 'pivot') return <TableOutput result={shown} themeMode={themeMode} maxHeight={height + 20} initialPageSize={10} />;
   if ((visualization === 'single_value' || visualization === 'kpi') && usesKpiCard(query, undefined)) return <KpiCard result={shown} query={query} label="This KPI" />;

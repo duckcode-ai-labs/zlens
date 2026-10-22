@@ -1864,7 +1864,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     const startedAt = Date.now();
     const provider = await deps.selectProvider(request);
     if (!provider) {
-      return { blocked: failure(runId, 'No AI model is configured for this project, so the question could not be interpreted.', 'provider_error', startedAt) };
+      // No model ran: the run says so (`providerMissing`), so nothing labels it AI-generated (round 3).
+      return { blocked: failure(runId, 'No AI model is configured for this project, so the question could not be interpreted.', 'provider_error', startedAt, { providerMissing: true }) };
     }
     const scopeMessage = askScopeProblem(deps.getManifest().manifest, request.workspaceContext, deps.getManifest().snapshotId);
     if (scopeMessage) return { blocked: scopeFailure(runId, scopeMessage, startedAt) };
@@ -3054,20 +3055,22 @@ function namedBlockFailure(runId: string, message: string, startedAt: number): A
   };
 }
 
-function failure(runId: string, message: string, code: 'provider_error' | 'execution_error', startedAt: number): AgentRouteExecutorResult {
+function failure(runId: string, message: string, code: 'provider_error' | 'execution_error', startedAt: number, options: { providerMissing?: boolean } = {}): AgentRouteExecutorResult {
   // Even a run that stops before reading the question tells the reader where
   // it stopped and why, in its own words, never a generic "not worked out".
   const receipt: PipelineReceipt = {
     version: 1, vocabularyFingerprint: '', dispatches: [], candidates: [], refusals: [], tiers: [],
     timings: { total: Date.now() - startedAt },
     failure: { stage: 'resolve', reason: code, message },
-    story: [{ version: 1, phase: 'read', title: code === 'provider_error' ? 'Could not reach an AI model' : 'Could not run the query', detail: message, state: 'failed', at: Date.now() }],
+    story: [{ version: 1, phase: 'read', title: options.providerMissing ? 'No AI provider is connected' : code === 'provider_error' ? 'Could not reach an AI model' : 'Could not run the query', detail: message, state: 'failed', at: Date.now() }],
   };
   return {
     askPipelineReceipt: receipt,
     summary: message, answer: message, status: 'blocked', trustState: 'blocked', stopReason: 'blocked', resolvedRoute: 'generated_answer', answerRefusalCode: code,
-    artifacts: [{ id: `${runId}:diagnostic`, kind: 'answer', title: 'Could not answer', trustState: 'blocked', payload: { kind: 'no_answer', text: message, answer: message, executionError: message } }],
-    evaluations: [], nextActions: [{ id: 'retry-after-provider', label: 'Retry after fixing the AI model settings', route: 'generated_answer' }],
+    artifacts: [{ id: `${runId}:diagnostic`, kind: 'answer', title: options.providerMissing ? 'Ask needs an AI provider' : 'Could not answer', trustState: 'blocked', payload: options.providerMissing
+      ? { kind: 'no_answer', text: message, answer: message, refusalCode: 'provider_error', providerMissing: true }
+      : { kind: 'no_answer', text: message, answer: message, executionError: message } }],
+    evaluations: [], nextActions: [{ id: 'retry-after-provider', label: options.providerMissing ? 'Ask again after connecting an AI provider' : 'Retry after fixing the AI model settings', route: 'generated_answer' }],
     telemetry: { version: 1, stageDurationsMs: { total: Date.now() - startedAt }, providerRoundTrips: 0, toolCalls: 0, sqlExecutions: 0, repairs: 0, egressReceipts: 0 },
   };
 }

@@ -23,6 +23,7 @@ export function ReaderPreviewParts({
   run,
   onRemoveSummary,
   onAskInPreview,
+  aiConnected,
 }: {
   parts: ReaderPagePart[];
   appName: string;
@@ -32,6 +33,8 @@ export function ReaderPreviewParts({
   onRemoveSummary?: () => void;
   /** A question typed in Preview is not sent; say where readers ask. */
   onAskInPreview?: () => void;
+  /** `false` without an AI provider: the Ask box says Ask needs one. */
+  aiConnected?: boolean;
 }): JSX.Element | null {
   const [trustLens, setTrustLens] = useState(false);
   const shown = parts.filter((part) => part !== 'tiles');
@@ -51,6 +54,7 @@ export function ReaderPreviewParts({
               key="ask"
               scope={{ appId: 'preview', appName, filters: [], resultsReady: Boolean(run && dashboardRunIsSettled(run)) }}
               onAsk={() => onAskInPreview?.()}
+              {...(aiConnected !== undefined ? { aiConnected } : {})}
             />
           );
         }

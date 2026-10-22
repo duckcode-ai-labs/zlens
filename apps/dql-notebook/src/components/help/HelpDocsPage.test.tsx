@@ -52,6 +52,7 @@ describe('Help guide matches the first start (D7)', () => {
 
   it('covers Apps', () => {
     expect(html).toContain('Build your first App');
-    expect(html).toContain('Drafted — review to use');
+    expect(html).toContain('Not certified yet');
+    expect(html).not.toContain('Drafted — review to use');
   });
 });

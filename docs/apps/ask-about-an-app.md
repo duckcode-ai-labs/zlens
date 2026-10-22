@@ -49,8 +49,11 @@ Ask needs the page's results:
   current results** and asks you to refresh the page and ask again. Results
   stay available to Ask for 15 minutes after the page runs.
 
-Without an AI provider, Ask still reads the rows back from the page and says
-that no AI model wrote the answer.
+Without an AI provider there is no question box: the page says *Ask needs an
+AI provider. The owner can connect one in Settings.* A question that reached
+Ask with no provider is headed **Ask needs an AI provider**, never
+"AI-generated answer". A chart's own **Ask about this chart** still reads that
+chart's rows without AI.
 
 ## One conversation per page
 

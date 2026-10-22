@@ -8,6 +8,53 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### New Apps show after Back, no AI controls without AI, two trust words, steadier canvas
+
+Round-3 new-user review, problems 1, 5, 6 and 10.
+
+- **Back to Apps lists the new App at once.** Back from App Studio puts the
+  draft you just left on the Apps list straight away and reads the list again
+  (it used to show the list from before the App existed until a reload);
+  deleting an App re-reads the drafts too.
+- **One wording for Apps nobody else can see yet.** A new App says **Not
+  published yet** (Studio header: *Not published yet (only you can see it)*;
+  card: **Only you**, **Not published yet**); a published App you are editing
+  says **Unpublished changes (only you can see them)**, and right after you
+  open it **No changes yet · readers see the published App**. "Local draft"
+  and "Private draft" are gone; the library tab is **Not published yet** and
+  its counters count the cards it shows (a published App's draft is not
+  counted as a second App).
+- **Two trust words in the Data list.** A database table reads **Not
+  certified yet**, with **drafted — review in Modeling** when setup drafted it;
+  "Modeled", "Drafted — review to use" and "Not checked yet" are gone (how the
+  model knows the table is in the tooltip). "Governed" no longer appears in
+  App page text (stories, custom layouts, driver and explore notes).
+- **No AI controls without an AI provider.** Tiles have no **Edit with AI** /
+  **Change with AI** / **Ask about this tile**, and block tiles in the reader
+  no **Ask AI**; Quick tiles and Tile settings stay. The reader's Ask box (and
+  its Preview) says *Ask needs an AI provider. The owner can connect one in
+  Settings.* A run refused because no model is configured is marked
+  `providerMissing` and headed **Ask needs an AI provider** · **Not
+  answered**; any other refusal reads **No answer** · **Refused**. Neither is
+  ever called "AI-generated".
+- **Steadier canvas.** A new tile's preview never draws the previous query's
+  result as the new chart (a KPI's total drawn as a one-row trend); it shows
+  *Running…* until the matching result arrives, and runs sooner after a click.
+  **Add to page** clears the tile at once, so a field clicked right after
+  starts the next tile instead of changing this one. Field clicks on a saved
+  tile and adds queue behind earlier saves and work from the newest draft.
+  The tile being built and a tile just added are scrolled into view. Tile
+  charts redraw only when their own data changes (no long tasks on a field
+  click at 6x CPU throttling, down from 75–125 ms).
+- **Filters re-run only the tiles they reach.** Applying a filter offer to a
+  new tile re-runs that tile; the rest keep their results. In the reader, a
+  filter change re-runs only the tiles linked to the filters that changed
+  (pages with a Summary still run whole); tiles that did not run say *Not
+  filtered by …* for the new value. Asking about the App or a chart after such
+  a change runs the whole page once first, so Ask reads every tile's result.
+- Setup's status reads *Indexed N items from your project for search* instead
+  of "governed objects".
+
 ### No customers merged by name, the order date first, honest table states, one cents question, date presets
 
 New-user review, round 3 (problems 2, 4, 7, 8, 9 and the Show Me "does not add
@@ -36,8 +83,8 @@ up" explanation).
   tile says "uses First Ordered At, a different date".
 - **Added tables say so.** `GET /api/app-datasets/tables` lists the Datasets
   made from each table (`datasets: [{ sourceId, name, state }]`). Add data
-  shows **Added · Checked** (or Certified) for a table in this App, **Checked ·
-  Add to App** for one made elsewhere (added as that Dataset, never checked
+  shows **Not certified yet · added** (or **Certified · added**) for a table in
+  this App, **Not certified yet** with **Add to App** for one made elsewhere (added as that Dataset, never checked
   into a second copy), and **Check and add** only for a table not made into a
   Dataset yet. Check and add opens straight on the check, without flashing the
   table list.

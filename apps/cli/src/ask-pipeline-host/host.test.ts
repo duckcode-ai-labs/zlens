@@ -989,7 +989,10 @@ describe('a run that cannot reach an AI model says so, with its story', () => {
     });
     const result = await run(executor, 'total revenue');
     expect(result.answer).toContain('No AI model is configured');
-    expect(result.askPipelineReceipt?.story).toEqual([expect.objectContaining({ title: 'Could not reach an AI model', state: 'failed', detail: expect.stringContaining('No AI model is configured') })]);
+    expect(result.askPipelineReceipt?.story).toEqual([expect.objectContaining({ title: 'No AI provider is connected', state: 'failed', detail: expect.stringContaining('No AI model is configured') })]);
+    // No model ran, so the run says so: nothing may label it AI-generated (round 3).
+    expect(result.artifacts?.[0]).toEqual(expect.objectContaining({ title: 'Ask needs an AI provider', payload: expect.objectContaining({ providerMissing: true, refusalCode: 'provider_error' }) }));
+    expect((result.artifacts?.[0]?.payload as Record<string, unknown>).executionError).toBeUndefined();
   });
 });
 

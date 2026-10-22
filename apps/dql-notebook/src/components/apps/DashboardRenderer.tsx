@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { changedFilterIds as changedFilterIdsOf, filterChangeRerunTileIds, withUnrunTileFilterNotices } from './reader-filter-rerun';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useHostUi } from '../../host/host-ui';
 import { EXPORT_LABELS, exportAppTile, type ExportFormat } from '../../api/exports';
@@ -208,6 +209,7 @@ export function DashboardRenderer({
   onBlockFocus,
   onAskBlock,
   onAskChart,
+  onSettledRunProvider,
   onOpenLineageNode,
   copilotOpen,
   onCopilotChange,
@@ -232,6 +234,12 @@ export function DashboardRenderer({
   onAskBlock?: (blockId: string, question: string) => void;
   /** A Dataset chart question carries only the server-issued settled run id. */
   onAskChart?: (input: { tileId: string; runId: string; question: string }) => void;
+  /**
+   * Hands the parent a way to get a whole-page run before asking: after a
+   * filter change re-ran only the linked tiles (round 3), Ask needs the
+   * page's complete results.
+   */
+  onSettledRunProvider?: (ensure: () => Promise<DashboardRunResponse | null>) => void;
   onOpenLineageNode?: (nodeId: string) => void;
   copilotOpen?: boolean;
   onCopilotChange?: (open: boolean) => void;
@@ -529,7 +537,7 @@ export function DashboardRenderer({
           selected={Boolean(getDashboardItemBlockId(item) && getDashboardItemBlockId(item) === selectedBlockId)}
           onFocusBlock={onBlockFocus}
           onAskBlock={onAskBlock}
-          onAskChart={onAskChart}
+          onAskChart={askChart}
           runId={run?.runId}
           reader={readerContext}
           onExplainChange={editable ? undefined : explainChange}
@@ -584,7 +592,7 @@ export function DashboardRenderer({
     nextVariables: Record<string, unknown>,
     nextCrossFilters: DashboardDatasetCrossFilter[],
     nextHierarchyDrills: DashboardDatasetHierarchyDrill[],
-    schedule?: { tileId?: string; affectedTileIds?: string[] },
+    schedule?: { tileId?: string; affectedTileIds?: string[]; changedFilterIds?: string[]; keepVisible?: boolean },
     staleAttempt = 0,
   ): Promise<DashboardRunResponse | null> => {
     const onRunChange = onRunChangeRef.current;
@@ -602,7 +610,7 @@ export function DashboardRenderer({
     // An affected-only refresh keeps unaffected tiles only when the authored
     // mapping says their inputs cannot change; the visible status marks the
     // mapped tiles stale until their server result settles.
-    if (!boundedRefresh || !priorRun) {
+    if ((!boundedRefresh && !schedule?.keepVisible) || !priorRun) {
       setRun(null);
       onRunChange?.(null);
     } else {
@@ -635,9 +643,19 @@ export function DashboardRenderer({
       if (shouldRerunStaleDashboardRun(result, staleAttempt)) {
         return runLatest(nextVariables, nextCrossFilters, nextHierarchyDrills, schedule, staleAttempt + 1);
       }
-      const accepted = result?.partial && boundedRefresh && priorRun
+      const merged = result?.partial && boundedRefresh && priorRun
         ? mergePartialDashboardRun(priorRun, result, layoutItems)
         : result;
+      // Tiles a filter change did not run again say what the new values mean for them.
+      const accepted = merged && merged !== result && schedule?.changedFilterIds?.length
+        ? withUnrunTileFilterNotices({
+          run: merged,
+          page: dashboardRef.current,
+          changedFilterIds: schedule.changedFilterIds,
+          values: nextVariables,
+          executedTileIds: result!.executedTileIds ?? result!.tiles.map((entry) => entry.tileId),
+        })
+        : merged;
       setRun(accepted);
       if (accepted) latestSettledRunRef.current = accepted;
       if (result) {
@@ -691,11 +709,54 @@ export function DashboardRenderer({
   const autoRunInputsRef = useRef({ runVariables, effectiveCrossFilters, effectiveHierarchyDrills });
   autoRunInputsRef.current = { runVariables, effectiveCrossFilters, effectiveHierarchyDrills };
 
+  /**
+   * The page's complete results: the current run when it is whole, else one
+   * whole-page run that keeps every tile on screen while it runs.
+   */
+  const ensureSettledRun = useCallback(async (): Promise<DashboardRunResponse | null> => {
+    const current = latestSettledRunRef.current;
+    if (current && !current.partial && !current.stale) return current;
+    const inputs = autoRunInputsRef.current;
+    return runLatest(inputs.runVariables, inputs.effectiveCrossFilters, inputs.effectiveHierarchyDrills, { keepVisible: true });
+  }, [runLatest]);
+  useEffect(() => { onSettledRunProvider?.(ensureSettledRun); }, [ensureSettledRun, onSettledRunProvider]);
+  // A chart question reads the chart's settled result: after a partial re-run, the whole page runs first.
+  const askChart = onAskChart ? (input: { tileId: string; runId: string; question: string }) => {
+    if (!latestSettledRunRef.current?.partial) { onAskChart(input); return; }
+    void ensureSettledRun().then((full) => { if (full?.runId) onAskChart({ ...input, runId: full.runId }); });
+  } : undefined;
+
+  // What the last automatic run read, so a reader's filter change can re-run
+  // only the tiles linked to the filters that changed (round 3), as App Studio does.
+  const lastAutoRunRef = useRef<{ appId: string; pageRevision: string; variables: Record<string, unknown>; others: string } | null>(null);
   useEffect(() => {
-    const affectedTileIds = pendingAffectedTileIdsRef.current;
+    let affectedTileIds = pendingAffectedTileIdsRef.current;
     pendingAffectedTileIdsRef.current = null;
     const inputs = autoRunInputsRef.current;
-    void runLatest(inputs.runVariables, inputs.effectiveCrossFilters, inputs.effectiveHierarchyDrills, affectedTileIds?.length ? { affectedTileIds } : undefined);
+    const others = JSON.stringify([crossFiltersKey, hierarchyDrillsKey, viewerFiltersKey, state.activePersona?.userId ?? null]);
+    const previous = lastAutoRunRef.current;
+    lastAutoRunRef.current = { appId, pageRevision, variables: inputs.runVariables, others };
+    let changedFilterIds: string[] | undefined;
+    const settled = latestSettledRunRef.current;
+    if (!affectedTileIds?.length && previous && previous.appId === appId && previous.pageRevision === pageRevision && previous.others === others
+      && settled && !settled.stale && !settled.incomplete
+      && !inputs.effectiveCrossFilters.length && !inputs.effectiveHierarchyDrills.length
+      // A page with a Summary runs whole: the Summary is written from every tile.
+      && !pageShowsSummary(dashboardRef.current.metadata)) {
+      const linked = filterChangeRerunTileIds(dashboardRef.current, previous.variables, inputs.runVariables);
+      if (linked) {
+        affectedTileIds = linked;
+        changedFilterIds = changedFilterIdsOf(previous.variables, inputs.runVariables);
+      }
+    }
+    void runLatest(
+      inputs.runVariables,
+      inputs.effectiveCrossFilters,
+      inputs.effectiveHierarchyDrills,
+      affectedTileIds?.length ? { affectedTileIds, ...(changedFilterIds ? { changedFilterIds } : {}) } : undefined,
+    );
+  // The key covers every input; the refs read their newest values.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoRunKey, runLatest]);
 
   useEffect(() => {
@@ -1074,7 +1135,7 @@ export function DashboardRenderer({
     drillDown: (item, candidate, row) => applyDatasetHierarchyDrill(item, candidate, row),
     hasDetailsPage: (tileId) => Boolean(dashboard.interactions?.navigate?.some((candidate) => candidate.fromTile === tileId)),
     openDetailsPage: (tileId) => void navigateFromDatasetTile(tileId),
-    ...(onAskChart && run?.runId ? { ask: (item: DashboardLayoutItem, question: string) => onAskChart({ tileId: item.i, runId: run.runId, question }) } : {}),
+    ...(askChart && run?.runId ? { ask: (item: DashboardLayoutItem, question: string) => askChart({ tileId: item.i, runId: run.runId, question }) } : {}),
     ...(dashboard.interactions?.detail?.columns?.length ? { authoredColumns: dashboard.interactions.detail.columns } : {}),
     label: formatGenUiLabel,
   });
@@ -1452,7 +1513,7 @@ export function DashboardRenderer({
                       selected={Boolean(getDashboardItemBlockId(item) && getDashboardItemBlockId(item) === selectedBlockId)}
                       onFocusBlock={onBlockFocus}
                       onAskBlock={onAskBlock}
-                      onAskChart={onAskChart}
+                      onAskChart={askChart}
                       runId={run?.runId}
                       reader={readerContext}
                       onExplainChange={editable ? undefined : explainChange}

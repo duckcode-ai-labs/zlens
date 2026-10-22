@@ -15,7 +15,7 @@ import { groupDatasetFields } from './field-query';
 import { humanize, messageOf } from './studio-ui';
 import { TableDatasetDialog } from './TableDatasetDialog';
 import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
-import { appDataSameNameOrigins } from './app-data-names';
+import { appDataSameNameOrigins, madeTableTrustWords, tableTrustLine, tableTrustWords } from './app-data-names';
 import { useDispatch } from '../../../store/NotebookStore';
 import { rememberProposalForModeling } from '../../modals/setup-model-source';
 import { splitStagingTables } from '@zlens/core/staging-tables';
@@ -362,7 +362,7 @@ export function AddDataBrowser({
         return <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}${state.kind === 'added' ? ' added' : ''}`} role="listitem" data-table-id={table.id} data-table-state={state.kind} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
           <div className="add-data-summary static">
             <span className="add-data-mark"><Table2 size={14} /></span>
-            <div><strong>{table.name}</strong><small>{['Table', state.label, table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : '', table.joins?.length ? `joins: ${table.joins.join(', ')}` : ''].filter(Boolean).join(' · ')}</small>
+            <div><strong>{table.name}</strong><small title={state.detail}>{['Table', state.label, table.schema, `${table.columnCount} columns`, table.rowCountEstimate !== undefined ? `~${table.rowCountEstimate.toLocaleString()} rows` : '', table.joins?.length ? `joins: ${table.joins.join(', ')}` : ''].filter(Boolean).join(' · ')}</small>
               {state.kind === 'new' && table.modeled?.state === 'drafted' ? <p>Drafted in setup with its row key{table.modeled.key ? ` (${table.modeled.key})` : ''} and joins. <button type="button" className="link" onClick={() => reviewDraftedModels(table.modeled?.proposalId)}>Review in Modeling</button></p> : null}
               {state.kind !== 'new' ? <p>{state.kind === 'added' ? 'In this App' : 'Already checked'} as <strong>{humanize(state.dataset.name)}</strong>.</p> : null}
             </div>
@@ -518,15 +518,11 @@ function AddDataDetail({ item, fieldsEnabled, fieldRead }: { item: AppBlockRecom
 }
 
 /**
- * A database table's trust word in the list (design D7): "Modeled" when the
- * project's model binds it, "Drafted — review to use" when setup drafted it
- * and it waits for review in Modeling, else "Not checked yet". Either way
- * "Check and add" reuses the row key the model checked.
+ * A database table's trust words in the list (round 3): "Not certified yet",
+ * with "drafted — review in Modeling" when setup drafted it (tableTrustWords).
  */
-export function tableModelLabel(table: Pick<WarehouseTableSummary, 'modeled'>): string {
-  if (table.modeled?.state === 'modeled') return 'Modeled';
-  if (table.modeled?.state === 'drafted') return 'Drafted — review to use';
-  return 'Not checked yet';
+export function tableModelLabel(table: Pick<WarehouseTableSummary, 'modeled'>, options: { added?: boolean } = {}): string {
+  return tableTrustLine(table, options);
 }
 
 /**
@@ -536,17 +532,17 @@ export function tableModelLabel(table: Pick<WarehouseTableSummary, 'modeled'>): 
  * to App"), else `new` ("Not checked yet · Check and add").
  */
 export type TableAppState =
-  | { kind: 'added' | 'made'; label: string; dataset: NonNullable<WarehouseTableSummary['datasets']>[number] }
-  | { kind: 'new'; label: string };
+  | { kind: 'added' | 'made'; label: string; detail: string; dataset: NonNullable<WarehouseTableSummary['datasets']>[number] }
+  | { kind: 'new'; label: string; detail: string };
 
+/** What became of a table, in the two trust words (madeTableTrustWords / tableTrustWords). */
 export function tableAppState(table: Pick<WarehouseTableSummary, 'modeled' | 'datasets'>, sources: ReadonlyArray<{ id: string }>): TableAppState {
   const made = table.datasets ?? [];
-  const word = (state: NonNullable<WarehouseTableSummary['datasets']>[number]['state']) => (state === 'certified' ? 'Certified' : state === 'checked' ? 'Checked' : 'Saved as a draft');
   const added = made.find((dataset) => sources.some((source) => source.id === dataset.sourceId));
-  if (added) return { kind: 'added', label: `Added · ${word(added.state)}`, dataset: added };
+  if (added) return { kind: 'added', ...madeTableTrustWords(added.state, { added: true }), dataset: added };
   const best = [...made].sort((left, right) => rank(left.state) - rank(right.state))[0];
-  if (best) return { kind: 'made', label: word(best.state), dataset: best };
-  return { kind: 'new', label: tableModelLabel(table) };
+  if (best) return { kind: 'made', ...madeTableTrustWords(best.state), dataset: best };
+  return { kind: 'new', label: tableModelLabel(table), detail: tableTrustWords(table).detail };
   function rank(state: string) { return state === 'certified' ? 0 : state === 'checked' ? 1 : 2; }
 }
 

@@ -167,7 +167,7 @@ export function HelpDocsPage() {
 
           <div ref={setSectionRef(3)} style={{ marginTop: 44 }}>
             {h2('04', 'Build your first App')}
-            <p style={para}>Open <strong>Apps → Build new App</strong>, give it a name, and choose its data. The <strong>Data</strong> list shows every table, saved query and Metrics in one place. Tables setup drafted say <strong>Drafted — review to use</strong>; tables your model binds say <strong>Modeled</strong>.</p>
+            <p style={para}>Open <strong>Apps → Build new App</strong>, give it a name, and choose its data. The <strong>Data</strong> list shows every table, saved query and Metrics in one place. Data reads <strong>Certified</strong> once someone vouches for it, otherwise <strong>Not certified yet</strong>; tables setup drafted also say <strong>drafted — review in Modeling</strong>.</p>
             <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <li>On a table, click <strong>Check and add</strong>. ZLens checks what one row is and which numbers add up, then adds it with fields.</li>
               <li>On the page, click fields — a number and a date make a line chart, a number and a name make a bar chart, one number makes a KPI.</li>
