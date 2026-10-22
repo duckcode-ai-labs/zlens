@@ -761,6 +761,10 @@ export const APP_STUDIO_V2_STYLES = `
 .readiness-ready > div { display:grid; gap:3px; }
 .readiness-ready strong { color:var(--text-primary); font-size:13px; }
 .readiness-ready span { color:var(--text-secondary); font-size:13px; line-height:1.45; }
+.readiness-ready.with-review { border-color:color-mix(in srgb,var(--status-warning) 30%,var(--border-default)); background:color-mix(in srgb,var(--status-warning) 6%,var(--bg-2)); color:var(--status-warning); }
+.readiness-technical { margin-top:6px; font-size:12px; color:var(--text-tertiary); }
+.readiness-technical summary { cursor:pointer; }
+.readiness-technical code { display:block; margin-top:4px; white-space:pre-wrap; word-break:break-word; font-size:11px; color:var(--text-secondary); }
 .studio-readiness-card > footer { padding:14px 20px; border-top:1px solid var(--border-subtle); display:flex; align-items:center; justify-content:flex-end; gap:8px; }
 .studio-readiness-card > footer button { border:1px solid var(--border-default); background:var(--bg-1); border-radius:8px; padding:9px 12px; font-size:13px; font-weight:600; }
 .studio-readiness-card > footer button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg); }

@@ -18,9 +18,8 @@ import { loadProjectConfig, prepareLocalExecution, normalizeProjectConnection, r
 import type { ProjectConfig } from '../local-runtime.js';
 import type { CLIFlags } from '../args.js';
 import { promoteFromDraft } from '../promote-from-draft.js';
-import { passedCheckNames } from '../certification-receipt.js';
+import { localPersonIdentity, passedCheckNames } from '../certification-receipt.js';
 import { blockTestAssertionName, evaluateBlockTestAssertion, formatBlockTestExpected } from '../block-test-assertions.js';
-import { resolveLocalOwner } from '@zlens/agent';
 import { startProjectRuntime } from './notebook.js';
 import { WorkbenchRoutedQueryExecutor } from '../workbench-query-route.js';
 import { findRunningNotebook, serverTokenFor } from '../schedule/notebook-runtime.js';
@@ -261,7 +260,8 @@ export async function runCertify(filePath: string, flags: CLIFlags): Promise<voi
     const projectRoot = process.cwd();
     const result = await promoteFromDraft(projectRoot, flags, {
       gate: (input) => runtimeCertificationGate(projectRoot, flags, input.source),
-      certifiedBy: resolveLocalOwner(projectRoot, { persist: false }),
+      // The person certifying, never the project's configured owner (B6).
+      certifiedBy: localPersonIdentity(projectRoot),
     });
     if (flags.format === 'json') {
       console.log(JSON.stringify(result, null, 2));

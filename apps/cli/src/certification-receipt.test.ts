@@ -9,7 +9,11 @@ import {
   buildCertificationReceipt,
   certificationByline,
   gitUserName,
+  bylineForViewer,
+  isViewer,
   localPersonAliases,
+  localPersonIdentity,
+  localPersonSelf,
   personDisplayName,
   readCompanionCertification,
 } from './certification-receipt.js';
@@ -89,13 +93,43 @@ describe('one name for one person (phase-4 review: git name, noreply email and "
     process.env.USER = 'Kranthi';
     try {
       const person = { name: 'DuckCode AI Labs', aliases: localPersonAliases(root) };
-      expect(personDisplayName('analytics@jaffle.shop', person)).toBe('DuckCode AI Labs');
+      // The project's configured owner is someone else in a sample project (B6).
+      expect(personDisplayName('analytics@jaffle.shop', person)).toBe('analytics@jaffle.shop');
       expect(personDisplayName('232610070+someone@users.noreply.github.com', person)).toBe('DuckCode AI Labs');
       expect(personDisplayName('Kranthi@local', person)).toBe('DuckCode AI Labs');
       expect(personDisplayName('maria@acme.com', person)).toBe('maria@acme.com');
       expect(personDisplayName('', person)).toBeUndefined();
       // Without a display name, the identity stays as recorded.
       expect(personDisplayName('Kranthi@local', { aliases: person.aliases })).toBe('Kranthi@local');
+    } finally {
+      if (previousUser === undefined) delete process.env.USER; else process.env.USER = previousUser;
+    }
+  });
+});
+
+describe('"by you" only for your own certifications (B6)', () => {
+  it('the sample owner\'s certification is not the viewer\'s, and the viewer\'s own records their identity', () => {
+    const root = project();
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['config', 'user.email', 'kranthi@example.test'], { cwd: root });
+    writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ identity: { owner: 'analytics@jaffle.shop' } }));
+    const previousUser = process.env.USER;
+    process.env.USER = 'Kranthi';
+    try {
+      const self = localPersonSelf(root);
+      expect([...self].sort()).toEqual(['kranthi@example.test', 'kranthi@local']);
+      const person = { aliases: localPersonAliases(root), self };
+      // The sample's certified saved query: certified by its own owner, not by whoever opens it.
+      expect(isViewer('analytics@jaffle.shop', person)).toBe(false);
+      expect(bylineForViewer({ by: 'analytics@jaffle.shop', at: '2026-10-16T00:00:00Z' }, person)).not.toHaveProperty('byYou');
+      // A placeholder names nobody, so it is nobody's "you".
+      expect(isViewer('local', person)).toBe(false);
+      expect(isViewer('owner@local', person)).toBe(false);
+      // The viewer's own certification, by git email or by $USER@local.
+      expect(bylineForViewer<{ by: string; byYou?: boolean }>({ by: 'Kranthi@Example.test' }, person).byYou).toBe(true);
+      expect(isViewer('Kranthi@local', person)).toBe(true);
+      // A new certification records the person, never the configured owner.
+      expect(localPersonIdentity(root)).toBe('kranthi@example.test');
     } finally {
       if (previousUser === undefined) delete process.env.USER; else process.env.USER = previousUser;
     }

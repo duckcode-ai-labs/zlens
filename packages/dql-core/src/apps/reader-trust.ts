@@ -96,10 +96,20 @@ const trust = (state: ReaderTrustState, detail: string): ReaderTrust => ({ state
 const ANONYMOUS_CERTIFIERS = new Set(['local', 'guest@local', 'owner@local', 'unknown', 'anonymous']);
 
 /**
+ * Team and role mailboxes: "analytics@jaffle.shop" is a team, not a person
+ * called Analytics, so it keeps its domain ("Analytics (jaffle.shop)").
+ */
+const ROLE_MAILBOXES = new Set([
+  'admin', 'analytics', 'analysts', 'bi', 'data', 'dataops', 'dbt', 'engineering', 'finance', 'info',
+  'insights', 'marketing', 'ops', 'operations', 'reporting', 'sales', 'support', 'team', 'warehouse',
+]);
+
+/**
  * The name to show for a certifier. A recorded display name wins. Otherwise an
  * email is shortened to its name part ("maria.lopez@acme.com" → "Maria Lopez",
- * a GitHub noreply address loses its number), and a placeholder identity
- * ("local") names nobody.
+ * a GitHub noreply address loses its number), a team mailbox keeps its domain
+ * ("analytics@jaffle.shop" → "Analytics (jaffle.shop)"), and a placeholder
+ * identity ("local") names nobody.
  */
 export function certifierDisplayName(by?: string | null, name?: string | null): string | undefined {
   const display = name?.trim();
@@ -111,7 +121,12 @@ export function certifierDisplayName(by?: string | null, name?: string | null): 
   const local = identity.slice(0, at).replace(/^\d+\+/, '');
   const words = local.split(/[._-]+/).filter(Boolean);
   if (!words.length) return undefined;
-  return words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  const shown = words.map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+  const domain = identity.slice(at + 1).toLowerCase();
+  if (words.length === 1 && ROLE_MAILBOXES.has(words[0]!.toLowerCase()) && domain && domain !== 'local' && !domain.endsWith('noreply.github.com')) {
+    return `${shown} (${domain})`;
+  }
+  return shown;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -263,12 +278,23 @@ export function readerTrustCounts(trusts: Array<ReaderTrust | null>): Array<{ st
     .filter((entry) => entry.count > 0);
 }
 
+/**
+ * The one way every surface counts certified tiles: "All 6 tiles certified"
+ * or "4 of 6 tiles certified"; empty for no data tiles. The App header, the
+ * reader's trust line, the Apps card and the publish check all use it.
+ */
+export function tileTrustCountText(certified: number, total: number): string {
+  if (total <= 0) return '';
+  return certified === total
+    ? `All ${total} ${total === 1 ? 'tile' : 'tiles'} certified`
+    : `${certified} of ${total} ${total === 1 ? 'tile' : 'tiles'} certified`;
+}
+
 /** "All 6 tiles certified" or "4 of 6 tiles certified"; empty when no data tile ran. */
 export function readerTrustSummary(trusts: Array<ReaderTrust | null>): { certified: number; total: number; text: string } {
   const total = trusts.filter(Boolean).length;
   const certified = trusts.filter((entry) => entry?.state === 'certified').length;
-  const text = total === 0 ? '' : certified === total ? `All ${total} ${total === 1 ? 'tile' : 'tiles'} certified` : `${certified} of ${total} tiles certified`;
-  return { certified, total, text };
+  return { certified, total, text: tileTrustCountText(certified, total) };
 }
 
 /**
@@ -333,9 +359,7 @@ export function appTrustSummary<Item extends ReaderTrustItem & { i: string }>(
   const byline = across && across !== 'Certified' ? across : undefined;
   const drafts = options.pendingDrafts ?? 0;
   const allCertified = certified === total && drafts === 0;
-  const text = certified === total
-    ? `All ${total} ${total === 1 ? 'tile' : 'tiles'} certified`
-    : `${certified} of ${total} ${total === 1 ? 'tile' : 'tiles'} certified`;
+  const text = tileTrustCountText(certified, total);
   return {
     state: allCertified ? 'certified' : certified > 0 ? 'partial' : 'review',
     certified,

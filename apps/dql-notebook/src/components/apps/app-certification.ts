@@ -1,5 +1,5 @@
 import type { DashboardDocumentResponse, DashboardRunResponse } from '../../api/client';
-import { appTrustSummary, certifiedByLabel, type AppTrustState, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
+import { appTrustSummary, certifiedByLabel, tileTrustCountText, type AppTrustState, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
 
 type DashboardLayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
 type RunTile = DashboardRunResponse['tiles'][number];
@@ -91,23 +91,33 @@ export interface AppRunTrust {
 
 /**
  * The library card's seal. It reads the App's lifecycle, but never contradicts
- * the App itself: when a settled run of one of its pages in this session found
- * tiles that are not certified, the card shows that run's count (the same
- * words the App header shows) instead of "App certified" (B1).
+ * the App itself (B6): it says "App certified" only when every data tile was
+ * certified. The tile trust recorded at publish (`tileTrust` in
+ * `dql.app.json`, the same answer the App header gives) decides it after a
+ * reload; a settled run of one of its pages in this session that found tiles
+ * not certified says so too. Either way the card shows the App header's own
+ * words: "3 of 4 tiles certified".
  */
 export function appCardSeal(input: {
   lifecycle: string | undefined;
   certification: string | undefined;
   draftCount: number;
   runTrust?: AppRunTrust | null;
+  /** The tile trust recorded when the App was published. */
+  publishedTrust?: AppRunTrust | null;
   /** Who published the App as certified, and when. */
   certifiedBy?: string;
   certifiedAt?: string;
 }): { certified: boolean; label: string } {
   const lifecycleCertified = input.certification === 'certified' || input.lifecycle === 'certified';
+  const pending = input.draftCount > 0 ? ` · ${input.draftCount} change${input.draftCount === 1 ? '' : 's'} pending` : '';
   const run = input.runTrust;
-  if (lifecycleCertified && run && run.total > 0 && run.certified < run.total) {
-    return { certified: false, label: `${run.certified} of ${run.total} tiles certified` };
+  if (run && run.total > 0 && run.certified < run.total && (lifecycleCertified || input.publishedTrust)) {
+    return { certified: false, label: `${tileTrustCountText(run.certified, run.total)}${pending}` };
+  }
+  const published = input.publishedTrust;
+  if (published && published.total > 0 && published.certified < published.total) {
+    return { certified: false, label: `${tileTrustCountText(published.certified, published.total)}${pending}` };
   }
   return {
     certified: lifecycleCertified,

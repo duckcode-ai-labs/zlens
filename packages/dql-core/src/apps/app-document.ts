@@ -134,6 +134,13 @@ export interface AppDocument extends ProductDomainContext {
   certifiedBy?: string;
   /** ISO-8601 time the App became certified. */
   certifiedAt?: string;
+  /**
+   * How many of the App's data tiles were certified when it was published
+   * (B6): the Apps card reads it, so it never says "App certified" for an App
+   * whose own header says "3 of 4 tiles certified". Absent on Apps published
+   * before this was recorded.
+   */
+  tileTrust?: { certified: number; total: number };
   owners: string[];
   tags?: string[];
   notebooks?: AppNotebookRef[];
@@ -312,6 +319,7 @@ function validateAppDocument(raw: unknown, path: string): AppDocumentLoadResult 
   const lifecycle = enumField(obj, 'lifecycle', ['draft', 'review', 'certified', 'deprecated'] as const, err, 'draft');
   const certifiedBy = optionalString(obj, 'certifiedBy', err)?.trim() || undefined;
   const certifiedAt = optionalString(obj, 'certifiedAt', err)?.trim() || undefined;
+  const tileTrust = readTileTrust(obj.tileTrust, err);
   if (obj.usesDomains !== undefined) stringArray(obj, 'usesDomains', err);
   if (obj.requiredExports !== undefined) stringArray(obj, 'requiredExports', err);
   const productContext = normalizeProductDomainContext(obj, domain);
@@ -367,6 +375,7 @@ function validateAppDocument(raw: unknown, path: string): AppDocumentLoadResult 
     lifecycle,
     ...(lifecycle === 'certified' && certifiedBy ? { certifiedBy } : {}),
     ...(lifecycle === 'certified' && certifiedAt ? { certifiedAt } : {}),
+    ...(tileTrust ? { tileTrust } : {}),
     owners,
     tags,
     notebooks: notebooks.length > 0 ? notebooks : undefined,
@@ -446,6 +455,18 @@ function stringArray(
     return [];
   }
   return v as string[];
+}
+
+/** `tileTrust`: `{ certified, total }`, whole numbers with certified ≤ total. */
+function readTileTrust(value: unknown, err: (message: string) => void): { certified: number; total: number } | undefined {
+  if (value === undefined) return undefined;
+  const record = value as { certified?: unknown; total?: unknown } | null;
+  const whole = (entry: unknown): entry is number => typeof entry === 'number' && Number.isInteger(entry) && entry >= 0;
+  if (!record || typeof record !== 'object' || !whole(record.certified) || !whole(record.total) || record.certified > record.total) {
+    err('tileTrust must be { certified, total } with whole numbers and certified no more than total');
+    return undefined;
+  }
+  return { certified: record.certified, total: record.total };
 }
 
 function readMembers(raw: unknown, err: (m: string) => void): AppMember[] {

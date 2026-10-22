@@ -155,6 +155,7 @@ import {
   datasetJoinReceiptSentence,
   datasetJoinsTrust,
   datasetJoinsUsed,
+  tileJoinsReachable,
   relatedFieldWords,
   type StoryBindingCatalog,
   type StoryBindingTileInput,
@@ -286,6 +287,7 @@ import {
   certificationByline,
   checkByline,
   gitUserName,
+  localPersonIdentity,
   buildDeprecationRecord,
   demoteCertifiedSource,
   passedCheckNames,
@@ -13164,7 +13166,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     extraChecks?: string[];
   }): CertificationReceipt => buildCertificationReceipt({
     source: input.source,
-    certifiedBy: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false })) ?? parseBlockSourceMetadata(input.source).owner,
+    // The person certifying, never the project's configured owner (B6).
+    certifiedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(input.source).owner,
     // The name "Certified by" shows: the host's display name, else git user.name.
     certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
     via: input.via,
@@ -13192,7 +13195,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
     const record = buildCheckRecord({
       source,
-      checkedBy: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false })) ?? parseBlockSourceMetadata(source).owner,
+      checkedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(source).owner,
       checkedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
       checks: [...input.checks, ...(input.verdict ? passedCheckNames(input.verdict.checklist) : [])],
       ...(input.hiddenColumns?.length ? { hiddenColumns: input.hiddenColumns } : {}),
@@ -22555,8 +22558,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   filters: [...(effectiveDatasetQuery.filters ?? []), ...filterResolution.filters],
                 });
                 await ensureJoinsAddNoRows(tileJoins, datasetTargetConnection, datasetTargetFingerprint, descriptor.label);
-                const tileTrust = descriptor.trust === 'certified' && datasetJoinsTrust(tileJoins) === 'certified' ? 'certified' as const : 'review_required' as const;
-                const joinReceipts = tileJoins.map((join) => ({ id: join.id, table: join.table, trust: join.trust, sentence: datasetJoinReceiptSentence(join, tileJoins) }));
+                // Trust is a property of the page, not of the reader's filter
+                // values (B6): a page filter mapped to this tile through a
+                // related field counts its join whether or not a value is
+                // picked, so picking a customer never flips the label.
+                const reachableJoinIds = new Set(tileJoinsReachable(executionDashboard, item, descriptor).joins.map((join) => join.id));
+                const trustJoins = (descriptor.joins ?? []).filter((join) => reachableJoinIds.has(join.id) || tileJoins.some((used) => used.id === join.id));
+                const tileTrust = descriptor.trust === 'certified' && datasetJoinsTrust(trustJoins) === 'certified' ? 'certified' as const : 'review_required' as const;
+                const joinReceipts = trustJoins.map((join) => ({
+                  id: join.id,
+                  table: join.table,
+                  trust: join.trust,
+                  // A join this run did not read (no filter value picked) says so.
+                  sentence: tileJoins.some((used) => used.id === join.id)
+                    ? datasetJoinReceiptSentence(join, trustJoins)
+                    : `A page filter can join it to ${join.table} on ${join.keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(' and ')}${join.trust === 'certified' ? '' : '; the join is not certified yet, so it needs review'}`,
+                }));
                 const executionSourceSql = aggregateScope?.preparedSourceSql ?? sourceSql;
                 const executionSourceSqlParams = aggregateScope?.sourceSqlParams ?? blockPlan?.sqlParams;
                 const executionSourceVariables = aggregateScope?.sourceVariables ?? blockPlan?.variables;

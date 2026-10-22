@@ -75,13 +75,60 @@ function joinsFor(descriptor: DatasetDescriptor, fields: { dimensions?: Array<{ 
 }
 
 /**
+ * Every join a tile can run through: the joins its own query and driver read,
+ * and the joins of every page filter mapped to it, whether or not a reader
+ * picked a value. Trust is a property of the page, decided when it is built
+ * and published, not of the current filter values (B6): a tile a Customer
+ * filter reaches through a drafted join is Needs review before anyone picks
+ * a customer, so its label never changes under a reader's hand.
+ */
+export function tileJoinsReachable(page: JoinTrustPageLike, tile: JoinTrustTileLike, descriptor: DatasetDescriptor): {
+  joins: DatasetJoin[];
+  ownJoins: DatasetJoin[];
+  filterJoins: Array<{ filterId: string; field: string; joins: DatasetJoin[] }>;
+  ownFields: string[];
+} {
+  const query = tile.query ?? {};
+  const driverFields = {
+    dimensions: (tile.driver?.dimensions ?? []).map((field) => ({ field })),
+    filters: tile.driver?.filters ?? [],
+  };
+  const ownFields = [
+    ...(query.dimensions ?? []).map((dimension) => dimension.field),
+    ...(query.filters ?? []).map((filter) => filter.field),
+    ...(query.detailColumns ?? []),
+    ...driverFields.dimensions.map((dimension) => dimension.field),
+    ...driverFields.filters.map((filter) => filter.field),
+  ];
+  if (!descriptor.joins?.length) return { joins: [], ownJoins: [], filterJoins: [], ownFields };
+  const ownJoins = joinsFor(descriptor, {
+    dimensions: [...(query.dimensions ?? []), ...driverFields.dimensions],
+    filters: [...(query.filters ?? []), ...driverFields.filters],
+    detailColumns: query.detailColumns,
+    calculations: query.calculations,
+  });
+  // A filter mapped by column name reaches a related field the way the
+  // runtime resolves it ("customer_name" → Orders' Customer join).
+  const filterJoins = tileFilterFields(page, tile).map((entry) => {
+    const field = datasetFieldForFilter(descriptor, entry.field)?.field.name ?? entry.field;
+    return { ...entry, field, joins: joinsFor(descriptor, { filters: [{ field }] }) };
+  });
+  const ids = new Set([...ownJoins, ...filterJoins.flatMap((entry) => entry.joins)].map((join) => join.id));
+  return { joins: descriptor.joins.filter((join) => ids.has(join.id)), ownJoins, filterJoins, ownFields };
+}
+
+/**
  * Every Dataset tile whose path uses a join that is not certified. A tile on
  * a Dataset without joins, or one that reads only its own fields, is never
  * listed. The source's own trust is checked separately.
+ *
+ * `joinTrust` lets current evidence (a settled run of the page) say a join
+ * was certified since the source card was stored.
  */
 export function appTilesNeedingJoinReview(input: {
   pages: readonly JoinTrustPageLike[];
   descriptorFor: (sourceId: string) => DatasetDescriptor | undefined;
+  joinTrust?: (pageId: string, tileId: string, join: DatasetJoin) => DatasetJoin['trust'];
 }): AppTileNeedingJoinReview[] {
   const out: AppTileNeedingJoinReview[] = [];
   for (const page of input.pages) {
@@ -89,39 +136,16 @@ export function appTilesNeedingJoinReview(input: {
       if (!tile.sourceId || (!tile.query && !tile.driver)) continue;
       const descriptor = input.descriptorFor(tile.sourceId);
       if (!descriptor?.joins?.length) continue;
-      const query = tile.query ?? {};
-      const driverFields = {
-        dimensions: (tile.driver?.dimensions ?? []).map((field) => ({ field })),
-        filters: tile.driver?.filters ?? [],
-      };
-      const ownJoins = joinsFor(descriptor, {
-        dimensions: [...(query.dimensions ?? []), ...driverFields.dimensions],
-        filters: [...(query.filters ?? []), ...driverFields.filters],
-        detailColumns: query.detailColumns,
-        calculations: query.calculations,
-      });
-      // A filter mapped by column name reaches a related field the way the
-      // runtime resolves it ("customer_name" → Orders' Customer join).
-      const filterFields = tileFilterFields(page, tile).map((entry) => ({
-        ...entry,
-        field: datasetFieldForFilter(descriptor, entry.field)?.field.name ?? entry.field,
-      }));
-      const filterJoins = filterFields.map((entry) => ({ ...entry, joins: joinsFor(descriptor, { filters: [{ field: entry.field }] }) }));
+      const reachable = tileJoinsReachable(page, tile, descriptor);
+      const trustOf = (join: DatasetJoin) => input.joinTrust?.(page.id, tile.i, join) ?? join.trust;
       const reviewJoins = new Map<string, DatasetJoin>();
-      for (const join of [...ownJoins, ...filterJoins.flatMap((entry) => entry.joins)]) {
-        if (join.trust !== 'certified') reviewJoins.set(join.id, join);
+      for (const join of reachable.joins) {
+        if (trustOf(join) !== 'certified') reviewJoins.set(join.id, join);
       }
       if (reviewJoins.size === 0) continue;
       // A related field on a review join, or below one (Customer → Region).
       const onReviewPath = (field: string): boolean => joinsFor(descriptor, { filters: [{ field }] })
         .some((join) => reviewJoins.has(join.id));
-      const ownFields = [
-        ...(query.dimensions ?? []).map((dimension) => dimension.field),
-        ...(query.filters ?? []).map((filter) => filter.field),
-        ...(query.detailColumns ?? []),
-        ...driverFields.dimensions.map((dimension) => dimension.field),
-        ...driverFields.filters.map((filter) => filter.field),
-      ];
       out.push({
         pageId: page.id,
         ...(page.metadata?.title ? { pageTitle: page.metadata.title } : {}),
@@ -129,8 +153,8 @@ export function appTilesNeedingJoinReview(input: {
         ...(tile.title ? { tileTitle: tile.title } : {}),
         sourceId: tile.sourceId,
         joins: (descriptor.joins ?? []).filter((join) => reviewJoins.has(join.id)),
-        relatedFields: Array.from(new Set(ownFields.filter(onReviewPath))),
-        filterIds: Array.from(new Set(filterJoins.filter((entry) => entry.joins.some((join) => reviewJoins.has(join.id))).map((entry) => entry.filterId))),
+        relatedFields: Array.from(new Set(reachable.ownFields.filter(onReviewPath))),
+        filterIds: Array.from(new Set(reachable.filterJoins.filter((entry) => entry.joins.some((join) => reviewJoins.has(join.id))).map((entry) => entry.filterId))),
       });
     }
   }

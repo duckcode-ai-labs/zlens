@@ -774,10 +774,14 @@ describe('Publish counts tiles that need review under "Only certified data" (des
     expect(markup).toContain('Allow data that needs review');
   });
 
-  it('is ready once data that needs review is allowed', () => {
+  it('is ready once data that needs review is allowed, and says so instead of "every check passed" (B6)', () => {
     const markup = dialog(draftWith('include_review_required'));
     expect(markup).toContain('Ready to publish');
     expect(markup).not.toContain('Tile needs review');
+    expect(markup).toContain('Ready to publish · 1 tile needs review (allowed)');
+    expect(markup).toContain('the App reads “0 of 1 tile certified”');
+    expect(markup).not.toContain('Every check passed');
+    expect(markup).not.toContain('All checks passed');
   });
 });
 

@@ -1,6 +1,7 @@
 import type { AppStudioBuildDraft, AppStudioDraftOperation, DashboardRunResponse } from '../../api/client';
 import { appSourceIdsUsedByTiles } from '@zlens/core/apps/app-data-sources';
-import { appTilesNeedingJoinReview, type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
+import { type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
+import { appTrustAnswer, type AppTrustAnswer, type AppTrustPageLike, type AppTrustSourceLike } from '@zlens/core/apps/app-trust';
 import { removeField } from '@zlens/core/apps/viz-encoding';
 import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { sourceKindLabel } from './builder/app-data';
@@ -19,10 +20,31 @@ export interface AppPublicationStep {
 
 export type AppPublicationIssueAction = 'sources' | 'refresh_sources' | 'filters' | 'preview' | 'tile_review';
 
-export function publicationIssueSummaries(issues: string[]): Array<{ id: string; title: string; detail: string; action: AppPublicationIssueAction }> {
+export interface PublicationIssueSummary {
+  id: string;
+  title: string;
+  detail: string;
+  action: AppPublicationIssueAction;
+  /** The server's own words, ids and all: shown only under Technical details. */
+  technical?: string;
+}
+
+/** A tile the server named, as `page/tile` or `Dataset tile <tile>`, or a source as `Source <id>`. */
+export function publicationIssueSubject(issue: string): { pageId?: string; tileId?: string; sourceId?: string } {
+  const stripped = issue.replace(/^[A-Z_]+: /, '');
+  const pageTile = stripped.match(/^([^/\s]+)\/(\S+?)(?::|\s)/);
+  if (pageTile) return { pageId: pageTile[1], tileId: pageTile[2] };
+  const datasetTile = stripped.match(/^Dataset tile (\S+) /);
+  if (datasetTile) return { tileId: datasetTile[1] };
+  const source = stripped.match(/^(?:Dataset )?[Ss]ource (\S+?) /);
+  if (source) return { sourceId: source[1] };
+  return {};
+}
+
+export function publicationIssueSummaries(issues: string[]): PublicationIssueSummary[] {
   // Data not certified yet is listed by the publish check itself (design Q1), once.
   const known = /Required App question is unresolved|Review task is still open|Run a current settled preview|requires snapshot-bound semantic approval|is review-required and cannot be published|references app-scoped exploratory DQL|Resolve required Build Frame clarifications|APP_BUILD_DATASET_NOT_CERTIFIED|APP_BUILD_DATASET_PUBLICATION_INELIGIBLE/i;
-  const summaries = issues.filter((issue) => !known.test(issue)).map((issue) => {
+  const summaries = issues.filter((issue) => !known.test(issue)).map((issue): PublicationIssueSummary => {
     const choiceMatch = issue.match(/^[^/]+\/[^ ]+ has no choice for filter (.+?)\. Open the Filters tab/i);
     if (choiceMatch) {
       const label = choiceMatch[1];
@@ -56,11 +78,20 @@ export function publicationIssueSummaries(issues: string[]): Array<{ id: string;
       return { id: `sources:${sourceMatch[1]}`, title: `Review ${source}`, detail: `${source} changed since it was selected. Accept the current certified version; ZLens will then request a fresh preview.`, action: 'refresh_sources' as const };
     }
     if (/does not resolve to (?:a current |a )?certified block|no longer resolves to a certified block/i.test(issue)) return { id: `unavailable:${issue}`, title: 'Replace or remove this source', detail: issue, action: 'sources' as const };
-    if (/changed after selection|certified block|source/i.test(issue)) return { id: 'sources', title: 'Review changed sources', detail: issue, action: 'sources' as const };
-    if (/preview|settled run|receipt|runtime/i.test(issue)) return { id: 'preview', title: 'Refresh the settled preview', detail: 'The saved preview no longer matches the current App data contract.', action: 'preview' as const };
-    return { id: `validation:${issue}`, title: 'Complete governed validation', detail: issue, action: 'sources' as const };
+    if (/changed after selection|certified block|source/i.test(issue)) {
+      return { id: 'sources', title: 'Check this data', detail: 'Some data on this page changed or is not certified yet. Replace it, or certify it and run the page again.', action: 'sources' as const, technical: issue };
+    }
+    if (/preview|settled run|receipt|runtime/i.test(issue)) return { id: 'preview', title: 'Run the page once to check it', detail: 'The last run no longer matches the page. Run it once and ZLens checks it again.', action: 'preview' as const };
+    // Anything else the server checks: one run of the page settles most of it.
+    return { id: `validation:${issue}`, title: 'Run the page once to check it', detail: 'ZLens could not confirm this part of the page yet. Run the page once; if it stays, see Technical details.', action: 'preview' as const, technical: issue };
   });
   return Array.from(new Map(summaries.map((summary) => [summary.id, summary])).values());
+}
+
+/** A review task in plain words: older drafts stored "Orders is review and must be certified, …". */
+export function plainReviewTaskMessage(message: string): string {
+  const old = message.match(/^(.+?) is \w+ and must be certified, replaced, or removed before Project publication\.?$/);
+  return old ? `${old[1]} needs certifying before this App is published: certify it, replace it, or remove the tiles that use it.` : message;
 }
 
 function publicationHumanize(value: string): string {
@@ -321,28 +352,42 @@ export function notCertifiedYetTitle(sources: AppStudioBuildDraft['sources']): s
 }
 
 /**
+ * The App's one trust answer (B6), from the draft: the same function the App
+ * header, the Apps card and the published `dql.app.json` use. A settled
+ * preview is the current evidence for a join, so a join certified since the
+ * source card was stored no longer counts against its tiles.
+ */
+export function draftTrust(
+  draft: AppStudioBuildDraft,
+  runsByPage: Readonly<Record<string, DashboardRunResponse | undefined>> = {},
+): AppTrustAnswer {
+  const sources = new Map(draft.sources.map((source) => [source.id, source]));
+  return appTrustAnswer({
+    pages: draft.pages as unknown as AppTrustPageLike[],
+    sourceFor: (sourceId) => sources.get(sourceId) as AppTrustSourceLike | undefined,
+    sourcePolicy: draft.sourcePolicy,
+    joinTrust: (pageId, tileId, join) => {
+      const ran = runsByPage[pageId]?.tiles.find((tile) => tile.tileId === tileId)?.dataset?.joins;
+      if (!ran?.length) return join.trust;
+      return (ran.find((entry) => (entry as { id?: string }).id === join.id)?.trust as typeof join.trust | undefined) ?? join.trust;
+    },
+  });
+}
+
+/**
  * Tiles marked Needs review because they read a field through a join nobody
- * certified yet (design D2). Under "Only certified data" each one blocks
+ * certified yet (design D2), including a page filter that reaches them
+ * through a related field. Under "Only certified data" each one blocks
  * publishing, exactly like a source that needs review: the rule is about
- * every number on the page, not only about the sources. A settled preview is
- * the current evidence for a tile, so a tile whose last run used only
- * certified joins (the join was certified since) no longer blocks here; the
- * server repeats the check against the current model either way.
+ * every number on the page, not only about the sources. The server repeats
+ * the check against the current model either way.
  */
 export function publicationTilesNeedingReview(
   draft: AppStudioBuildDraft,
   runsByPage: Readonly<Record<string, DashboardRunResponse | undefined>> = {},
 ): AppTileNeedingJoinReview[] {
   if (draft.sourcePolicy !== 'governed_only') return [];
-  const sources = new Map(draft.sources.map((source) => [source.id, source]));
-  return appTilesNeedingJoinReview({
-    pages: draft.pages,
-    descriptorFor: (sourceId) => sources.get(sourceId)?.capabilities?.dataset as DatasetDescriptor | undefined,
-  }).filter((item) => {
-    const joins = runsByPage[item.pageId]?.tiles.find((tile) => tile.tileId === item.tileId)?.dataset?.joins;
-    if (!joins?.length) return true;
-    return item.joins.some((join) => joins.find((ran) => ran.id === join.id)?.trust !== 'certified');
-  });
+  return draftTrust(draft, runsByPage).tiles.flatMap((tile) => (tile.joinReview ? [tile.joinReview] : []));
 }
 
 /** Stable key for a tile in the publish check: `page/tile`. */
@@ -385,21 +430,110 @@ export function tilePatchWithoutRelatedFields(
   return { query, viz: { ...tile.viz, type: type as AppStudioTile['viz']['type'], ...(encoding ? { encoding } : {}) } };
 }
 
+/**
+ * The publish check, as one list (B6): the Publish button's count and the
+ * dialog's rows both come from here, so "5 fixes" never opens "9 fixes".
+ * One root cause is one row: a review task, a server message or a tile
+ * about data already listed (the same source, tile and kind) is not repeated.
+ */
+export interface PublicationReadiness {
+  clarifications: NonNullable<AppStudioBuildDraft['frame']['clarificationQuestions']>;
+  requirements: AppStudioBuildDraft['requirements'];
+  tasks: AppStudioBuildDraft['reviewTasks'];
+  /** Pages Publish runs itself first; listed, but not counted as fixes. */
+  previewPages: AppStudioBuildDraft['pages'];
+  /** Metrics results to approve: one row. */
+  semanticTiles: LegacySemanticPendingTile[];
+  /** Tables and saved queries nobody certified yet: one row each. */
+  uncertifiedSources: AppStudioBuildDraft['sources'];
+  /** Metrics Datasets that need review: one row each. */
+  datasetSources: AppStudioBuildDraft['sources'];
+  /** Tiles on a join nobody certified, under "Only certified data": one row each. */
+  reviewTiles: AppTileNeedingJoinReview[];
+  /** Local analysis that cannot publish: one row. */
+  localOnlySources: AppStudioBuildDraft['sources'];
+  /** What the server found that nothing above already says: one row each. */
+  serverIssues: PublicationIssueSummary[];
+  /** The number of rows the author fixes: the button and the dialog title both show it. */
+  fixCount: number;
+  ready: boolean;
+  /** The App's trust answer, for "Ready to publish · 1 tile needs review (allowed)". */
+  trust: AppTrustAnswer;
+}
+
+export function publicationReadiness(
+  draft: AppStudioBuildDraft,
+  serverIssues: string[] = [],
+  runsByPage: Readonly<Record<string, DashboardRunResponse | undefined>> = {},
+): PublicationReadiness {
+  const clarifications = (draft.frame.clarificationQuestions ?? []).filter((question) => question.required && !question.answerId);
+  const requirements = unresolvedPublicationRequirements(draft);
+  const previewPages = pagesNeedingSettledPreview(draft);
+  const sources = publicationBlockingSources(draft);
+  const semanticTiles = legacySemanticTilesNeedingApproval(draft);
+  const uncertifiedSources = uncertifiedPublicationSources(sources);
+  const uncertifiedIds = new Set(uncertifiedSources.map((source) => source.id));
+  const datasetSources = sources.filter((source) => isDatasetBackedAppSource(source) && !uncertifiedIds.has(source.id));
+  const localOnlySources = sources.filter((source) => !isDatasetBackedAppSource(source)
+    && !uncertifiedIds.has(source.id)
+    && source.kind !== 'governed_semantic'
+    && source.kind !== 'semantic_query');
+  const trust = draftTrust(draft, runsByPage);
+  const reviewTiles = draft.sourcePolicy === 'governed_only'
+    ? trust.tiles.flatMap((tile) => (tile.joinReview ? [tile.joinReview] : []))
+    : [];
+  // Sources already listed above, and the tiles that read them.
+  const listedSourceIds = new Set(sources.map((source) => source.id));
+  const tileSource = new Map(draft.pages.flatMap((page) => page.layout.items.map((tile) => [`${page.id}/${tile.i}`, tile.sourceId] as const)));
+  const tileSourceById = new Map(draft.pages.flatMap((page) => page.layout.items.map((tile) => [tile.i, tile.sourceId] as const)));
+  const reviewTileKeys = new Set(reviewTiles.map((item) => publicationTileKey(item)));
+  const coveredTile = (pageId: string | undefined, tileId: string | undefined): boolean => {
+    if (!tileId) return false;
+    if (pageId && reviewTileKeys.has(`${pageId}/${tileId}`)) return true;
+    const sourceId = pageId ? tileSource.get(`${pageId}/${tileId}`) : tileSourceById.get(tileId);
+    return Boolean(sourceId && listedSourceIds.has(sourceId));
+  };
+  const tasks = blockingPublicationReviewTasks(draft).filter((task) => {
+    if (task.sourceId && listedSourceIds.has(task.sourceId)) return false;
+    if (task.tileId && coveredTile(task.pageId, task.tileId)) return false;
+    return true;
+  });
+  const remainingIssues = publicationIssueSummaries(serverIssues).filter((issue) => {
+    if (issue.id.startsWith('tile-review:')) return !reviewTileKeys.has(issue.id.slice('tile-review:'.length));
+    const subject = publicationIssueSubject(issue.technical ?? issue.detail);
+    if (subject.sourceId && Array.from(listedSourceIds).some((id) => id === subject.sourceId || draft.sources.find((source) => source.id === id)?.qualifiedIdentity === subject.sourceId)) return false;
+    if (coveredTile(subject.pageId, subject.tileId)) return false;
+    return true;
+  });
+  const fixCount = clarifications.length
+    + requirements.length
+    + tasks.length
+    + (semanticTiles.length ? 1 : 0)
+    + uncertifiedSources.length
+    + datasetSources.length
+    + reviewTiles.length
+    + (localOnlySources.length ? 1 : 0)
+    + remainingIssues.length;
+  return {
+    clarifications,
+    requirements,
+    tasks,
+    previewPages,
+    semanticTiles,
+    uncertifiedSources,
+    datasetSources,
+    reviewTiles,
+    localOnlySources,
+    serverIssues: remainingIssues,
+    fixCount,
+    ready: fixCount === 0 && previewPages.length === 0,
+    trust,
+  };
+}
+
+/** The Publish button's count: the same rows the publish dialog lists. */
 export function publicationBlockerCount(draft: AppStudioBuildDraft, serverIssues: string[] = [], runsByPage: Readonly<Record<string, DashboardRunResponse | undefined>> = {}): number {
-  const clarifications = (draft.frame.clarificationQuestions ?? [])
-    .filter((question) => question.required && !question.answerId);
-  const pendingLegacySourceIds = new Set(legacySemanticSourcesNeedingApproval(draft).map((source) => source.id));
-  const nonLegacyBlockingSources = publicationBlockingSources(draft)
-    .filter((source) => !pendingLegacySourceIds.has(source.id));
-  return unresolvedPublicationRequirements(draft).length
-    + clarifications.length
-    + blockingPublicationReviewTasks(draft).length
-    + pagesNeedingSettledPreview(draft).length
-    + legacySemanticTilesNeedingApproval(draft).length
-    + nonLegacyBlockingSources.length
-    + publicationTilesNeedingReview(draft, runsByPage).length
-    + publicationIssueSummaries(serverIssues).filter((issue) => !issue.id.startsWith('tile-review:')
-      || !publicationTilesNeedingReview(draft, runsByPage).some((item) => issue.id === `tile-review:${publicationTileKey(item)}`)).length;
+  return publicationReadiness(draft, serverIssues, runsByPage).fixCount;
 }
 
 export function localPublicationSteps(draft: AppStudioBuildDraft, runsByPage: Readonly<Record<string, DashboardRunResponse | undefined>> = {}): AppPublicationStep[] {

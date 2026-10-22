@@ -77,7 +77,10 @@ export function relationshipStatusView(relationship: Pick<ManifestModelRelations
       : 'Certified, but its warehouse check is missing, stale or failed, or a model\'s grain or keys changed. Ask treats it as a hint until it is checked again.';
     return { level: 'stale', label: 'Needs recheck', meaning, color: '#d47822' };
   }
-  if (relationship.validation?.status === 'passed') return { level: 'validated', label: 'Validated', meaning: 'Checked safe to join. Ask prefers it when it writes SQL.', color: '#5b73d6' };
+  // A draft keeps reading Draft after its warehouse check passed, the level
+  // the editor opens on (B6): the badge never claims more than the editor.
+  if (relationship.validation?.status === 'passed' && relationship.status !== 'draft') return { level: 'validated', label: 'Validated', meaning: 'Checked safe to join. Ask prefers it when it writes SQL.', color: '#5b73d6' };
+  if (relationship.validation?.status === 'passed') return { level: 'draft', label: 'Draft', meaning: 'Checked in the warehouse, but nobody reviewed it yet. Ask sees it as a hint only.', color: '#9a6b2f' };
   return { level: 'draft', label: 'Draft', meaning: 'Not checked in the warehouse. Ask sees it as a hint only.', color: '#9a6b2f' };
 }
 
