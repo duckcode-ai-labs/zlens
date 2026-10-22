@@ -91,4 +91,4 @@ zlens promote app <app-id> --to shared
 
 ## Check the project in CI
 
-See [CI and zlens verify](../tutorials/05-ci-and-verify.md).
+See [CI with zlens eval](../tutorials/05-ci-and-verify.md).

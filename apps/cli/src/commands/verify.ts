@@ -1,10 +1,12 @@
 /**
  * `zlens verify` — prove the on-disk manifest is reproducible from source.
  *
- * Recompiles the manifest in-memory and diffs it against `dql-manifest.json`.
- * Returns a non-zero exit code (and prints a diff summary) on drift. Used by
- * CI to ensure programmable artifacts (Apps, dashboards, blocks, RLS rules,
- * schedules) stay in lock-step with their source files.
+ * Recompiles the manifest in-memory and diffs it against `dql-manifest.json`:
+ * block SQL, status and domain, plus added or removed blocks, notebooks, Apps,
+ * dashboards, metrics, dimensions and sources. Returns a non-zero exit code
+ * (and prints a diff summary) on drift. `dql-manifest.json` is gitignored and
+ * `zlens doctor git-hygiene` flags it when tracked, so this is a local check
+ * after `zlens compile`, not a CI gate on a clean clone (`zlens eval` is).
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -81,9 +83,10 @@ export async function runVerify(
   if (json) {
     console.log(JSON.stringify({ ok: false, drift, ...(warnings.length > 0 ? { warnings } : {}) }, null, 2));
   } else {
-    console.error(`  ✗ Manifest drift detected:`);
-    for (const item of drift) console.error(`    - ${item}`);
-    console.error('\n  Run `zlens compile` to regenerate, then commit.');
+    // The report goes to stdout like the success line; the exit code is the signal.
+    console.log(`  ✗ Manifest drift detected:`);
+    for (const item of drift) console.log(`    - ${item}`);
+    console.log('\n  Run `zlens compile` to regenerate it.');
   }
   process.exit(1);
 }

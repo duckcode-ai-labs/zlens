@@ -295,7 +295,7 @@ Keep `npm run notebook` running while the agent works: it runs the queries.
    Certifying records who vouched for them.
 3. **Compile.** `zlens compile` writes `dql-manifest.json`: every saved query,
    metric, notebook and App, with lineage and trust.
-4. **Serve.** Apps, notebooks, Ask, your agent over MCP and `zlens verify` in
+4. **Serve.** Apps, notebooks, Ask, your agent over MCP and `zlens eval` in
    CI all use the same certified saved queries instead of each inventing its own SQL.
 
 DQL is the language saved queries are written in: each is a `block` in a

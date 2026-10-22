@@ -228,4 +228,4 @@ when it has to generate a deeper or different-grain answer.
 ✓ A local generated App package with certified tiles and draft review tasks
 ✓ An MCP server giving Claude, Codex, Cursor, and other agents governed access to your analytics
 
-[Continue to tutorial 05 — CI and `zlens verify` →](./05-ci-and-verify.md)
+[Continue to tutorial 05 — CI with `zlens eval` →](./05-ci-and-verify.md)

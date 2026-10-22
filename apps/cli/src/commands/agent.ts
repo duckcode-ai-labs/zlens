@@ -1097,17 +1097,15 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
   const execute = Boolean((flags as { execute?: boolean }).execute);
   // R3.2: optional LLM-as-judge. Uses the same provider's completion; skipped
   // gracefully when no provider is available so offline eval stays deterministic.
-  const judge = Boolean((flags as { judge?: boolean }).judge);
+  const judge = Boolean(flags.judge);
   const judgeComplete: JudgeCompletion = async ({ system, user }) =>
     provider.generate([{ role: 'system', content: system }, { role: 'user', content: user }], {});
   // Which half of the stack is under test. `loop` preserves today's behaviour;
   // `runtime` is the one that exercises routing and gates end to end.
   // The in-process answer-loop driver is gone with the V1 runtime; every case
   // runs through a live server so it exercises routing, the lane, and the gates.
+  // `parseArgs` rejects any other --via value.
   const via = 'runtime' as const;
-  if ((flags as { via?: string }).via && (flags as { via?: string }).via !== 'runtime') {
-    throw new Error(`--via ${(flags as { via?: string }).via} is no longer supported; the eval drives a running server (--via runtime).`);
-  }
   const runtimeBase = (flags as { runtimeUrl?: string; runtime?: string }).runtimeUrl
     ?? (flags as { runtime?: string }).runtime
     ?? readEnv('ZLENS_RUNTIME_URL')

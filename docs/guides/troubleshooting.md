@@ -399,24 +399,48 @@ a file or wrap with `2>&1 | tee dql-slack.log`.
 
 ---
 
-## CI / `zlens verify`
+## CI / `zlens eval` and `zlens verify`
 
-### `zlens verify` says "drift" but the diff looks empty
+### `zlens eval` fails in CI: a block example routes to generated
 
-The diff prints terse change descriptions. To see the full per-saved-query
-diff, use `--format json`:
+A certified block's `examples` must be questions that block answers as
+written. The failing line names what happened, for example
+`route expected certified, got generated`. The usual causes:
 
-```bash
-zlens verify --format json | jq
-```
+- The example names a member ("…for Matthew Meyer"). A certified block runs its
+  SQL as written and cannot filter to one member, so Ask generates SQL. Reword
+  the example, or move it to `eval/*.yaml` with `expectRoute: generated`.
+- The example asks for a measure the block does not output. A count output such
+  as `order_count` answers "number of orders" or "how many orders", not
+  "orders".
 
-Common silent drift causes:
+Run `zlens eval . --format json` to see each case's route reason in `trace`.
+See [CI with zlens eval](../tutorials/05-ci-and-verify.md#when-a-block-example-fails).
 
-- A saved query test result changed (a stat was non-deterministic).
-- A semantic-layer YAML moved.
-- `dbtImport` filters changed.
+### `zlens eval` rejects `--min-route-accuracy 90`
 
-If you can't pin it, force a fresh compile and inspect:
+Thresholds are shares between 0 and 1: use `0.9` for 90%. Older versions
+silently ignored an out-of-range value, which left the gate off.
+
+### `zlens verify` fails in CI with "dql-manifest.json not found"
+
+`dql-manifest.json` is gitignored, so a clean clone has none. `zlens verify` is
+a local check after `zlens compile`; running both in one CI job always passes,
+because it compares a fresh compile with itself. Gate pull requests on
+`zlens eval` instead (`zlens ci init` writes the workflow).
+
+### `zlens verify` reports drift you did not expect
+
+`zlens verify` lists each difference on its own line, and `--format json`
+prints the same list (`{ "ok": false, "drift": [...] }`). It compares block
+SQL, status and domain, plus added or removed blocks, notebooks, Apps,
+dashboards, metrics, dimensions and sources. Common causes:
+
+- A block was edited, renamed or re-certified after the last `zlens compile`.
+- A semantic-layer metric or dimension was added, removed or renamed.
+- `dbtImport` filters or the dbt manifest changed the set of sources.
+
+To compare the full manifests:
 
 ```bash
 mv dql-manifest.json /tmp/old-manifest.json

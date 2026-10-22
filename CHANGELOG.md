@@ -8,6 +8,44 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### CI that works on a clean clone: `zlens ci init`, honest eval and verify docs
+
+- **`zlens ci init [path] [--force]`** writes
+  `.github/workflows/zlens-eval.yml` at the git root. On every pull request it
+  runs `npx -y --package=@zlens/cli@<this version> zlens eval .
+  --min-route-accuracy 1 --min-refusal 1`. It has no install step (samples ship
+  no lockfile) and no compile or verify step. A project in a subfolder gets a
+  `working-directory`. `zlens eval` needs no `*.duckdb`, dbt `target/`,
+  `dql-manifest.json` or API key.
+- **Threshold flags refuse out-of-range values.** `--min-route-accuracy 90`
+  used to be silently dropped, leaving the gate off. Every `<0..1>` flag on
+  `zlens eval` and `zlens agent eval` now prints "expects a share between 0
+  and 1 (for 90% use 0.9)" and exits 1. The text report says when a
+  threshold is not applied because no case measures it.
+- **`zlens agent eval --judge` is parsed**, so `--min-judge-pass` has judge
+  scores to gate on. `--via loop` (the removed in-process driver) and any
+  `--via` or `--cassette` value that is not supported are rejected when the
+  arguments are parsed. Help now lists `--via runtime` only.
+- **`zlens eval --init`** writes examples for the Jaffle Shop sample's blocks
+  (`monthly_revenue`, a member-filter generated case, a follow-up, a refusal).
+  The old examples came from another project. The no-cases message no longer
+  says to run `zlens compile`; eval builds the manifest itself.
+- **`zlens verify`** prints its drift report to stdout, like its success line.
+  Its help says what it compares, and that it is a local check because
+  `dql-manifest.json` is gitignored.
+- **Docs.** Tutorial 05 is now "CI with `zlens eval`". The old workflow could
+  not run or always passed: `npm ci` with no lockfile, a wrong
+  `working-directory: dql`, `^dql/blocks/` filters that miss
+  `domains/<d>/blocks/`, `git add` of an ignored manifest, and compile-then-verify.
+  The tutorial now shows the generated workflow, how to fix a block example
+  that routes to generated, `agent eval` in replay mode, and verify as a
+  local check. The CLI reference documents `zlens ci`,
+  `--min-candidate-recall`, `--init`, `--via`, `--cassette`, `--judge`,
+  `--max-false-refusal`, `--min-refusal-recall` and the other agent eval
+  gates. It also corrects the `diff --impact` exit rule and the certify JSON,
+  and removes exit code 2, which no command returns. The troubleshooting
+  section on CI is rewritten to match.
+
 ### Certify tables, saved queries and joins without leaving the publish dialog
 
 Trust and publishing design, phase 2 (T4).

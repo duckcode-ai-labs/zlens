@@ -99,10 +99,12 @@ export interface CLIFlags {
   minJudgePass?: number;
   /** `zlens agent eval --max-wrong-certified <n>` — fail if more than n answers were wrongly stamped certified. */
   maxWrongCertified?: number;
-  /** `zlens agent eval --via runtime|loop` — drive the full runtime, or the answer loop in-process. */
+  /** `zlens agent eval --via runtime` — drive a running workbench (the only driver). */
   via?: string;
-  /** `zlens agent eval --cassette record|replay` — record provider responses, or replay them offline. */
+  /** `zlens agent eval --cassette record|replay|live` — cassette mode for the eval process's own provider calls (the judge). */
   cassette?: string;
+  /** `zlens agent eval --judge` — score each answer with the LLM judge (feeds `--min-judge-pass`). */
+  judge?: boolean;
   /** `zlens agent eval --max-false-refusal <0..1>` — fail above this share of answerable cases refused. */
   maxFalseRefusal?: number;
   /**
@@ -131,6 +133,8 @@ export interface CLIFlags {
   impact?: boolean;
   /** `zlens diff --impact --write-recertification` — mark impacted semantic YAML as pending recertification. */
   writeRecertification?: boolean;
+  /** Invalid flag values. The CLI prints them and exits 1 before running any command. */
+  argErrors?: string[];
 }
 
 export interface ParsedArgs {
@@ -168,6 +172,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
   let command: string | null = null;
   let file: string | null = null;
   const rest: string[] = [];
+  const argError = (message: string) => { (flags.argErrors ??= []).push(message); };
+  // An out-of-range share must fail loudly: silently dropping
+  // `--min-route-accuracy 90` left CI running with no gate at all.
+  const share = (flag: string, raw: string | undefined): number | undefined => {
+    const value = Number(raw);
+    if (raw !== undefined && raw.trim() !== '' && Number.isFinite(value) && value >= 0 && value <= 1) return value;
+    argError(`${flag} expects a share between 0 and 1 (for 90% use 0.9), got "${raw ?? ''}".`);
+    return undefined;
+  };
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
@@ -298,44 +311,50 @@ export function parseArgs(argv: string[]): ParsedArgs {
     } else if ((arg === '--analysis-depth' || arg === '--depth') && i + 1 < argv.length) {
       flags.analysisDepth = argv[++i];
     } else if (arg === '--min-candidate-recall' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minCandidateRecall = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minCandidateRecall = value;
     } else if (arg === '--min-route-accuracy' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minRouteAccuracy = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minRouteAccuracy = value;
     } else if (arg === '--min-refusal' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minRefusal = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minRefusal = value;
     } else if (arg === '--min-answer-rate' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minAnswerRate = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minAnswerRate = value;
     } else if (arg === '--case-timeout-ms' && i + 1 < argv.length) {
       const value = Number(argv[++i]);
       if (Number.isFinite(value) && value > 0) flags.caseTimeoutMs = value;
     } else if (arg === '--min-tool-requirement' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minToolRequirement = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minToolRequirement = value;
     } else if (arg === '--min-execution-match' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minExecutionMatch = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minExecutionMatch = value;
     } else if (arg === '--min-judge-pass' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minJudgePass = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minJudgePass = value;
     } else if (arg === '--max-wrong-certified' && i + 1 < argv.length) {
       const value = Number(argv[++i]);
       if (Number.isFinite(value) && value >= 0) flags.maxWrongCertified = value;
     } else if (arg === '--cassette' && i + 1 < argv.length) {
       const value = String(argv[++i]);
       if (value === 'record' || value === 'replay' || value === 'live') flags.cassette = value;
+      else argError(`--cassette expects record, replay or live, got "${value}".`);
     } else if (arg === '--via' && i + 1 < argv.length) {
+      // The in-process answer-loop driver (`--via loop`) was removed with the
+      // V1 runtime; every case now runs through a running workbench.
       const value = String(argv[++i]);
-      if (value === 'runtime' || value === 'loop') flags.via = value;
+      if (value === 'runtime') flags.via = value;
+      else argError(`--via ${value} is not supported: agent eval drives a running ZLens workbench (--via runtime, the default).`);
+    } else if (arg === '--judge') {
+      flags.judge = true;
     } else if (arg === '--min-grounded-narration' && i + 1 < argv.length) {
-      const value = Number.parseFloat(argv[++i]!);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minGroundedNarration = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minGroundedNarration = value;
     } else if (arg === '--max-false-refusal' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.maxFalseRefusal = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.maxFalseRefusal = value;
     } else if (arg === '--max-provider-dispatches' && i + 1 < argv.length) {
       const value = Number(argv[++i]);
       if (Number.isFinite(value) && value >= 0) flags.maxProviderDispatches = value;
@@ -343,8 +362,8 @@ export function parseArgs(argv: string[]): ParsedArgs {
       const value = Number(argv[++i]);
       if (Number.isFinite(value) && value > 0) flags.maxLatencyP95Ms = value;
     } else if (arg === '--min-refusal-recall' && i + 1 < argv.length) {
-      const value = Number(argv[++i]);
-      if (Number.isFinite(value) && value >= 0 && value <= 1) flags.minRefusalRecall = value;
+      const value = share(arg, argv[++i]);
+      if (value !== undefined) flags.minRefusalRecall = value;
     } else if (arg === '--no-examples') {
       flags.noExamples = true;
     } else if (arg === '--init') {
