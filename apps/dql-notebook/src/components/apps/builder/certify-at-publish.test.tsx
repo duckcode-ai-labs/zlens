@@ -124,7 +124,7 @@ describe('The short review before certifying (design Q1)', () => {
     expect(html).toMatch(/Checked by you · /);
     expect(html).toContain('Each row is one order (order_id).');
     expect(html).toContain('order_id is filled and different on every row, checked just now.');
-    expect(html).toContain('<strong>Order total</strong>: Money (USD) · shown in dollars (stored as cents)');
+    expect(html).toContain('<strong>Order Total</strong>: Money (USD) · shown in dollars (stored as cents)');
     expect(html).toContain('each order has one customer');
     expect(html).toContain('Order total uses order_total_cents, shown in dollars; order_total holds the same number, so it is hidden.');
     expect(html).toContain('I vouch for this — certify');
