@@ -187,15 +187,20 @@ SQL and, with `--execute`, the rows. It always drives a running workbench
       - name: Agent eval
         run: >
           npx -y --package=@zlens/cli@0.2.2 zlens agent eval agent-evals.yml
-          --runtime-url http://127.0.0.1:3474
+          --runtime-url http://127.0.0.1:3474 --cassette replay
           --max-false-refusal 0.05 --min-refusal-recall 1
 ```
 
 In replay mode a question whose provider call was not recorded fails; it
-never reaches a live model. `--cassette record|replay` on `zlens agent eval`
-applies only to that process's own provider calls, which are the `--judge`
-calls. `--judge` and `--min-judge-pass` need a live provider, so keep them for
-a scheduled, credentialed job rather than a pull-request gate.
+never reaches a live model. The workbench makes the provider calls, so the
+environment variables above are what make it replay. `--cassette replay`
+checks that: when the workbench's `/api/health` reports another mode, the eval
+stops before any case runs and prints the command to start the workbench in
+replay mode. The `--cassette` check and the mode in `/api/health` are new
+after 0.2.2; 0.2.2 does not check the workbench's mode.
+
+`--judge` and `--min-judge-pass` need a live provider, so keep them for a
+scheduled, credentialed job rather than a pull-request gate.
 
 ---
 

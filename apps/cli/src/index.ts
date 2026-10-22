@@ -168,8 +168,8 @@ const HELP = `
       --min-answer-rate <0..1>        For "eval": fail below non-refusal rate on answerable cases
       --min-tool-requirement <0..1>    For "agent eval": fail below required tool-call pass rate
       --via runtime                    For "agent eval": drive a running workbench (routing + gates); the default and only driver
-      --cassette record|replay         For "agent eval": record or replay this process's own provider calls (the --judge);
-                                       the workbench replays its calls from ZLENS_EVAL_CASSETTE_DIR
+      --cassette record|replay         For "agent eval": require the workbench to run in this cassette mode (it is started
+                                       with ZLENS_EVAL_CASSETTE_DIR and ZLENS_EVAL_CASSETTE_MODE); also the --judge calls' mode
       --judge                          For "agent eval": score each answer with the LLM judge (needs a provider)
       --min-judge-pass <0..1>          For "agent eval": fail below this judge pass rate (needs --judge)
       --max-false-refusal <0..1>       For "agent eval": fail above this share of ANSWERABLE cases refused

@@ -270,7 +270,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--no-examples` | For `zlens eval`: score YAML cases without manifest examples |
 | `--init` | For `zlens eval`: write a starter `eval/golden.yaml`; never overwrites one |
 | `--via runtime` | For `zlens agent eval`: drive a running workbench. The default and only driver; any other value is an error |
-| `--cassette record\|replay\|live` | For `zlens agent eval`: cassette mode for this process's own provider calls (the `--judge` calls). The workbench replays its calls from `ZLENS_EVAL_CASSETTE_DIR` with `ZLENS_EVAL_CASSETTE_MODE` (`replay` unless set to `record` or `live`) |
+| `--cassette record\|replay\|live` | For `zlens agent eval`: the cassette mode the workbench must be running in. The workbench makes the provider calls, and it replays them only when it was started with `ZLENS_EVAL_CASSETTE_DIR` (plus `ZLENS_EVAL_CASSETTE_MODE`, which is `replay` unless set to `record` or `live`). When its `/api/health` reports another mode, or none, the eval stops before any case runs and prints the command to start it. The flag also sets the mode for this process's own `--judge` calls |
 | `--judge` | For `zlens agent eval`: score each answer with the LLM judge; needs a provider |
 | `--min-judge-pass <0..1>` | For `zlens agent eval`: minimum LLM-judge pass rate (needs `--judge`) |
 | `--max-false-refusal <0..1>` | For `zlens agent eval`: maximum share of answerable cases that refused |

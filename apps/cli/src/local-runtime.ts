@@ -343,7 +343,7 @@ import {
   setProviderUsageListener,
   hasGeneratedAppSourceOrigin,
 } from '@zlens/agent';
-import { applyEvalCassette, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, resolveAgentFollowUpContext } from './llm/providers/provider-runner.js';
+import { applyEvalCassette, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, evalCassetteRuntimeMode, resolveAgentFollowUpContext } from './llm/providers/provider-runner.js';
 import type {
   AgentConversationContext,
   AgentRunRequest as LlmAgentRunRequest,
@@ -15034,6 +15034,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         versionStatus,
         retrievalHealth,
         askRuntimeMode: askAgentRuntimeMode,
+        evalCassetteMode: evalCassetteRuntimeMode(),
         ...(opts.instanceId ? { instanceId: opts.instanceId } : {}),
       }));
       return;

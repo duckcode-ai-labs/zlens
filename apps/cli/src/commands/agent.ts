@@ -35,13 +35,14 @@ import {
   cassetteDirFor,
   evalCassetteCanonicalizationV2,
   resolveCassetteModeFromEnv,
+  runtimeCassetteModeMismatch,
   withCassette,
   type CassetteMode,
 } from './agent-eval-cassette.js';
 import type { AgentRun } from '@zlens/agent';
 import { goldRowsMatch } from './eval-row-match.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import {
   AskTraceSqliteStoreV1,
@@ -1113,6 +1114,7 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
     ?? (flags as { runtime?: string }).runtime
     ?? readEnv('ZLENS_RUNTIME_URL')
     ?? 'http://127.0.0.1:3474';
+  let runtimeCassetteMode: string | undefined;
   if (via === 'runtime') {
     // Fail fast and loudly. Without this, an unreachable server turns every case
     // into a transport error and the report reads as a false-refusal spike that
@@ -1123,6 +1125,15 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
         `--via runtime needs a running ZLens workbench at ${runtimeBase}. Start one with \`zlens notebook ${projectRoot}\` (\`npm run notebook\`), or point --runtime-url / ZLENS_RUNTIME_URL at a running one.`,
       );
     }
+    const health = await probe.json().catch(() => ({})) as { evalCassetteMode?: string };
+    runtimeCassetteMode = health.evalCassetteMode;
+    const mismatch = runtimeCassetteModeMismatch({
+      requested: cassetteMode,
+      reported: runtimeCassetteMode,
+      runtimeBase,
+      cassetteDir: relative(projectRoot, cassetteDirFor(projectRoot, rest[0] ?? 'agent-evals')),
+    });
+    if (mismatch) throw new Error(mismatch);
   }
   const semanticLayer = loadAgentSemanticLayer(projectRoot);
   const expandGroundingContext = createGroundingContextExpander(projectRoot);
@@ -1269,8 +1280,11 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
       : undefined;
   // The runtime reads its mode from the same environment (replay unless
   // ZLENS_EVAL_CASSETTE_MODE says record or live).
+  const reportedCassetteMode = runtimeCassetteMode === 'record' || runtimeCassetteMode === 'replay' || runtimeCassetteMode === 'live'
+    ? runtimeCassetteMode
+    : undefined;
   const cassetteRunMode: CassetteMode = via === 'runtime'
-    ? resolveCassetteModeFromEnv(process.env)
+    ? reportedCassetteMode ?? resolveCassetteModeFromEnv(process.env)
     : cassetteMode === 'record' ? 'record' : 'replay';
   const cassetteEvidence = cassetteDirectory
     ? { ...cassetteEvidenceSummary(new CassetteStore(cassetteDirectory)), mode: cassetteRunMode }

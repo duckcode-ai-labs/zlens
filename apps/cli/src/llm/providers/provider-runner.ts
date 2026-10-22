@@ -176,6 +176,15 @@ const SPECS: Record<SimpleProviderId, ProviderSpec> = {
   },
 };
 
+/**
+ * The eval cassette mode this runtime's providers run in, reported by
+ * `/api/health` so `zlens agent eval --cassette <mode>` can check the
+ * workbench it drives. `off` without ZLENS_EVAL_CASSETTE_DIR.
+ */
+export function evalCassetteRuntimeMode(env: Record<string, string | undefined> = process.env): 'off' | 'record' | 'replay' | 'live' {
+  return readEnv('ZLENS_EVAL_CASSETTE_DIR', env) ? resolveCassetteModeFromEnv(env) : 'off';
+}
+
 export function applyEvalCassette(provider: AgentProvider, projectRoot: string): AgentProvider {
   const dir = readEnv('ZLENS_EVAL_CASSETTE_DIR');
   if (!dir) return provider;

@@ -358,6 +358,33 @@ export function cassetteEvidenceLine(summary: CassetteEvidenceSummary, mode: Cas
   return 'Real-provider quality evidence: eligible.';
 }
 
+/**
+ * `zlens agent eval --cassette <mode>` drives a workbench that owns its own
+ * provider, so the flag alone cannot make it replay: the workbench replays only
+ * when it was started with ZLENS_EVAL_CASSETTE_DIR (and ZLENS_EVAL_CASSETTE_MODE).
+ * Returns the error to stop on when the workbench's reported mode (from
+ * `/api/health`) is not the requested one, or when it reports none.
+ */
+export function runtimeCassetteModeMismatch(input: {
+  requested: string | undefined;
+  reported: string | undefined;
+  runtimeBase: string;
+  cassetteDir: string;
+}): string | undefined {
+  const { requested, reported } = input;
+  if (!requested) return undefined;
+  if (requested === reported || (requested === 'live' && reported === 'off')) return undefined;
+  const envMode = requested === 'live' ? '' : ` ZLENS_EVAL_CASSETTE_MODE=${requested}`;
+  const start = requested === 'live'
+    ? 'Start it without ZLENS_EVAL_CASSETTE_DIR'
+    : `Start it with \`ZLENS_EVAL_CASSETTE_DIR=${input.cassetteDir}${envMode} zlens notebook . --no-open\``;
+  const seen = reported === undefined
+    ? 'does not report its cassette mode (it predates this check)'
+    : `runs with cassette mode "${reported}"`;
+  return `--cassette ${requested} needs the workbench to run in ${requested} mode, but the workbench at ${input.runtimeBase} ${seen}. `
+    + `The workbench makes the provider calls, so the flag alone cannot change them. ${start}, then run the eval again.`;
+}
+
 export class CassetteMissError extends Error {
   readonly key: string;
   readonly fingerprintDiagnostics?: CassetteFingerprintDiagnosticsV2;

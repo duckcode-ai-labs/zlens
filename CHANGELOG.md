@@ -38,6 +38,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   from this run — every provider call was replayed from N recorded
   response(s)". The JSON `cassetteEvidence` gains `mode`. Record mode still
   reports eligible when every entry came from a real provider.
+- **`zlens agent eval --cassette <mode>` checks the workbench's mode.** The
+  workbench makes the provider calls, and it replays only when started with
+  `ZLENS_EVAL_CASSETTE_DIR` / `ZLENS_EVAL_CASSETTE_MODE`. So `--cassette replay`
+  against a normally started workbench used to make live calls while the
+  report claimed cassette evidence. `/api/health` now reports
+  `evalCassetteMode` (`off`, `record`, `replay` or `live`). When it differs
+  from `--cassette`, or is missing, the eval stops before any case and prints
+  the command to start the workbench in that mode.
 - **`zlens verify`** prints its drift report to stdout, like its success line.
   Its help says what it compares, and that it is a local check because
   `dql-manifest.json` is gitignored.
