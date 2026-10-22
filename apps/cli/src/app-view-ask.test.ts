@@ -318,7 +318,13 @@ describe('Ask from an App sees that App (N3)', () => {
     const asked = await post('/api/agent-runs', appAsk(QUESTION, pageRunId));
     expect(asked.status, asked.text.slice(0, 600)).toBe(201);
     expect(asked.text).not.toContain('James Harden');
-    expect(asked.text).not.toContain('2888');
+    // Search for the withheld figure only outside generated ids, hashes and
+    // timestamps: a random run id such as 5f28884c-… can contain "2888".
+    const withoutIds = asked.text
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
+      .replace(/(?:sha256:)?[0-9a-f]{32,64}/gi, '<hash>')
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, '<time>');
+    expect(withoutIds).not.toContain('2888');
     expect(asked.body.run.answer).toBe(WITHHELD_ANSWER);
   });
 });
