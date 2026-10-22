@@ -1,6 +1,6 @@
 {
   "name": "@zlens/plugin-api",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Stable plugin contracts for DQL \u2014 connectors, chart renderers, governance rule packs. Frozen at v1.0.",
   "license": "Apache-2.0",
   "type": "module",

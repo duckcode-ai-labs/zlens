@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.3 - 2026-10-22
+
+Apps are built from the data you choose, with one trust answer on every
+screen: a tile is Certified or Not certified yet, and publishing never blocks
+unless the project requires it. A database-only first run reads plainly,
+`zlens ci init` writes a CI check that works on a clean clone, and chat
+clients with no guide file, such as Claude Desktop, answer from certified
+blocks first.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.3` in each project. Use Node 20, 22
+or 24 (Node 24 LTS recommended). `build_dql_app` over MCP has a breaking
+change: see AI agents (MCP) below.
+
 ### CI that works on a clean clone: `zlens ci init`, honest eval and verify docs
 
 - **`zlens ci init [path] [--force]`** writes
@@ -814,6 +827,20 @@ New-user review round 2, problems 4, 7, 8, 9 and 10.
   - `saveDraft: false` returns the picked data without creating a draft.
   - `blocks` still names the exact certified blocks to use, now as the App's
     data.
+- **Certified blocks first for chat clients with no guide file.** Claude
+  Desktop reads only the MCP server instructions; asked "How has revenue
+  changed by month?" it called `query_semantic_model` and said no certified
+  block answered, while `monthly_revenue` did. The instructions now give one
+  order: `ask_dql` first, a `certified` route goes to `query_via_block`, and
+  the semantic layer only when `ask_dql` finds no certified block.
+  - `inspect_dql_project` lists `certifiedBlocks` (name, domain, grain,
+    description) and returns `nextTool: "ask_dql"`.
+  - `query_semantic_model` checks for a certified block first: through the
+    `ask_dql` router for a question, and by measure, table and time grain for
+    explicit members. When one answers, the result leads with
+    `certifiedBlock` and `nextTool: "query_via_block"`, and no duplicate
+    draft is saved. It no longer says "No certified block exactly answered
+    this question" unless the check ran and found none.
 
 ## v0.2.2 - 2026-10-19
 
