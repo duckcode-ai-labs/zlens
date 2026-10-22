@@ -78,6 +78,7 @@ export function TileLivePreview({
     {!runnable ? <p className="dataset-live-preview-note">{reason || 'Choose at least one measure, or switch to row details.'}</p> : null}
     {runnable && status.state === 'failed' ? <p className="dataset-builder-error" role="alert">{status.message}</p> : null}
     {adaptations.map((adaptation) => <p key={adaptation.kind} className="dataset-live-preview-note">{adaptation.message}</p>)}
+    {status.state === 'ready' ? (status.preview.nameWarnings ?? []).map((warning) => <p key={warning.field} className="dataset-live-preview-note" role="note">{warning.message}</p>) : null}
     {runnable && status.state === 'ready' && rows.length === 0 ? <p className="dataset-live-preview-note">No rows match.</p> : null}
     {rows.length ? <div className="dataset-live-preview-table">
       <table>

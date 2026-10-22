@@ -128,12 +128,28 @@ export function toggleFieldInQuery(query: TileQuery, field: DatasetField): TileQ
   // order on its own. Stale sort/limit keys never survive a field change.
   const { orderBy: _orderBy, limit: _limit, detail: _detail, detailColumns: _detailColumns, ...rest } = query;
   const categorical = dimensions.length > 0 && !dimensions.some((dimension) => dimension.timeGrain);
+  // A name has many values (930 customers): its bar chart starts as an
+  // explicit Top 10 the pill shows, not a silent cut (new-user round 3,
+  // problem 9). A Top N the author already chose for the same grouping stays.
+  const names = categorical && measures[0] && dimensions.length === 1 && isNameFieldName(dimensions[0]!.field);
+  const sameGrouping = query.dimensions.length === 1 && dimensions.length === 1 && query.dimensions[0]!.field.toLowerCase() === dimensions[0]!.field.toLowerCase();
+  const topN = names ? (sameGrouping && typeof query.limit === 'number' ? query.limit : DEFAULT_NAME_TOP_N) : undefined;
   return {
     ...rest,
     measures,
     dimensions,
     ...(categorical && measures[0] ? { orderBy: [{ alias: measures[0].alias ?? measures[0].measure, direction: 'desc' as const }] } : {}),
+    ...(topN ? { limit: topN } : {}),
   };
+}
+
+/** How many names a new bar chart of names shows: "Top 10". */
+export const DEFAULT_NAME_TOP_N = 10;
+
+/** "customer_name", "customer__customer_name", "name": a field of names a person reads. */
+export function isNameFieldName(name: string): boolean {
+  const column = name.includes('__') ? name.slice(name.lastIndexOf('__') + 2) : name;
+  return /^(?:.+_)?name$/i.test(column);
 }
 
 /** The view a picked set of fields reads best as; shelves decide when there are any. */

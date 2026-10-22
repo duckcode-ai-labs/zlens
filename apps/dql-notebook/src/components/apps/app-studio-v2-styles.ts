@@ -229,7 +229,7 @@ export const APP_STUDIO_V2_STYLES = `
 .filter-mapping-row.unsupported { background:var(--bg-0); }
 .filter-mapping-row > span { min-width:0; display:grid; gap:1px; }
 .filter-date-field-options { display:flex; flex-wrap:wrap; gap:4px; margin-top:4px; }
-.filter-date-field-options button, .filter-date-field-clear { justify-self:start; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--accent); font-size:12px; font-weight:600; padding:3px 7px; cursor:pointer; }
+.filter-date-field-options select, .filter-date-field-clear { justify-self:start; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--accent); font-size:12px; font-weight:600; padding:3px 7px; cursor:pointer; }
 .filter-date-field-clear { margin-top:4px; border:0; background:none; padding:0; color:var(--text-tertiary); font-weight:500; }
 .filter-mapping-row strong { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .filter-mapping-row small { color:var(--text-tertiary); font-size:11px; line-height:1.3; overflow-wrap:anywhere; }
@@ -477,6 +477,8 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-filter.range { grid-template-columns:1fr auto 1fr; align-items:end; }
 .studio-filter.range > span { grid-column:1/-1; }
 .studio-filter.range input { min-width:112px; }
+.studio-filter.range .date-range-presets { grid-column:1/-1; border:1px solid var(--border-default); border-radius:4px; background:var(--bg-1); color:var(--text-primary); font-size:12px; padding:2px 4px; }
+.studio-page-filterbar .studio-filter.range .date-range-presets { border:0; background:transparent; font-weight:600; max-width:120px; }
 .studio-filter.range i { align-self:center; color:var(--text-muted); font-style:normal; }
 .studio-filter.range > small { grid-column:1/-1; }
 .studio-filter.empty { border-color:color-mix(in srgb,var(--status-warning) 42%,var(--border-default)); background:color-mix(in srgb,var(--status-warning) 5%,var(--bg-2)); }
@@ -1485,6 +1487,11 @@ export const APP_STUDIO_V2_STYLES = `
 .table-dataset-duplicate label span { display:grid; gap:2px; }
 .table-dataset-duplicate label em { font-style:normal; font-size:11px; font-weight:600; color:var(--accent); }
 .table-dataset-duplicate label small { color:var(--text-secondary); font-size:11px; }
+.table-dataset-duplicate p { margin:0; font-size:12px; color:var(--text-secondary); line-height:1.45; }
+.table-dataset-duplicate p strong { color:var(--text-primary); }
+.table-dataset-duplicate-actions { display:flex; gap:6px; }
+.table-dataset-duplicate-actions button { border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--text-primary); font-size:12px; font-weight:600; padding:4px 12px; cursor:pointer; }
+.table-dataset-duplicate-actions button.on { background:var(--accent); border-color:var(--accent); color:var(--accent-fg); }
 .certify-review-scrim { z-index:80; }
 .certify-review-who { margin:0; color:var(--text-secondary); font-size:12px; }
 .certify-review-part { display:grid; gap:4px; }

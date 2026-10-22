@@ -136,7 +136,10 @@ describe('a date filter maps to a tile\'s own date field (review problem 2)', ()
     const items = dated.find((mapping) => mapping.tileId === 'items')!;
     expect(items).toMatchObject({ supported: false, sourceId: 'source.items', dateFieldOptions: [{ field: 'ordered_at', type: 'timestamp' }] });
     const markup = renderToStaticMarkup(<FilterTileChoice mapping={items} applies={false} onChoose={() => undefined} onUseDateField={() => undefined} />);
-    expect(markup).toContain('Use Ordered At on Order Items');
+    // A different date is offered by its meaning, never as a one-click swap (new-user round 3, problem 2).
+    expect(markup).toContain('aria-label="Use a different date on Order Items"');
+    expect(markup).toContain('Different meaning: the order item’s Ordered At');
+    expect(markup).not.toContain('<button type="button">Use Ordered At');
   });
 
   it('a chosen field links the tile through that field and is saved as its Dataset binding', () => {
@@ -144,7 +147,7 @@ describe('a date filter maps to a tile\'s own date field (review problem 2)', ()
     const mappings = filterTileMappingsForField(pages, [], 'month', {}, sources, options);
     const items = mappings.find((mapping) => mapping.tileId === 'items')!;
     expect(items).toMatchObject({ supported: true, datasetId: 'ds-items', datasetField: 'ordered_at', mappedFrom: 'month' });
-    expect(renderToStaticMarkup(<FilterTileChoice mapping={items} applies onChoose={() => undefined} onClearDateField={() => undefined} />)).toContain('uses Ordered At');
+    expect(renderToStaticMarkup(<FilterTileChoice mapping={items} applies onChoose={() => undefined} onClearDateField={() => undefined} />)).toContain('uses Ordered At, a different date');
     expect(datasetFilterBindingsForSelection(mappings, new Set(mappings.map((mapping) => mapping.key)))).toEqual({
       'ds-items': { field: 'ordered_at', tileIds: ['items'] },
       'ds-revenue': { field: 'month', tileIds: ['trend'] },

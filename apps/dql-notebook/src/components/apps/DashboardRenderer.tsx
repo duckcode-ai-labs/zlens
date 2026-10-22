@@ -2121,10 +2121,10 @@ function DashboardTile({
               </span>
             </div>
           ) : null}
-          {datasetUnboundNotices.length || tile?.dataset?.validation?.outcome === 'adapted' ? datasetTileNotices(tile, { filterLabels }).map((notice) => (
+          {datasetUnboundNotices.length || tile?.dataset?.validation?.outcome === 'adapted' || tile?.dataset?.nameWarnings?.length ? datasetTileNotices(tile, { filterLabels }).map((notice) => (
             <div key={notice.key} style={{ marginTop: 5 }}>
               <span style={generatedMetaPillStyle} title={notice.detail}>
-                {notice.kind === 'adapted' ? <Activity size={9} /> : <Filter size={9} />} {notice.label}
+                {notice.kind === 'adapted' ? <Activity size={9} /> : notice.kind === 'names' ? <AlertTriangle size={9} /> : <Filter size={9} />} {notice.label}
               </span>
             </div>
           )) : null}
@@ -2274,6 +2274,14 @@ export function showTileSourceRef(input: { editable: boolean; compact: boolean; 
   return input.editable && !input.compact && input.blockRef !== 'text';
 }
 
+/** What one row of a grouping is, in words: "customer" for customer_name or customer__customer_name. */
+function insightNoun(column: string): string {
+  const own = column.includes('__') ? column.slice(column.lastIndexOf('__') + 2) : column;
+  const words = own.replace(/[_-]+/g, ' ').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const trimmed = words.length > 1 && /^(name|id|key|code|label|title)$/.test(words[words.length - 1]!) ? words.slice(0, -1) : words;
+  return trimmed.join(' ') || 'value';
+}
+
 export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number], item?: DashboardLayoutItem): string | null {
   // A driver tile's rows repeat the same periods once per breakdown, so no
   // caption can be computed from them; its own checked summary is the caption.
@@ -2316,6 +2324,10 @@ export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number],
   const valueMeta = tile?.result?.columnsMeta?.find((meta) => meta.name === valueCol);
   const formatMetric = (value: unknown, compact = true) => formatDisplayValue(valueCol, value, valueSamples, { compact, ...(valueMeta ? { meta: valueMeta } : {}) });
   if (rows.length === 1) {
+    // A KPI already shows its number under the author's title ("Total
+    // revenue"); a caption repeating it under the raw field name
+    // ("Lifetime Spend: $671.4K.") only confuses (new-user round 3, problem 9).
+    if (item?.query && !item.query.dimensions?.length) return null;
     const v = toNum(typedRows[0]![valueCol]);
     return v !== undefined ? `${metricLabel}: ${formatMetric(v)}.` : null;
   }
@@ -2329,8 +2341,16 @@ export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number],
   // No share of a total: the visible rows are not known to add up (a COUNT
   // DISTINCT or a ratio does not, a Top-N result is not the whole, and a row
   // set may repeat a period per breakdown), so a percent would be made up.
+  // A field tile says it as a person would (new-user round 3, problem 9):
+  // "Top customer: Maria Lopez, $3.1K lifetime spend", "Highest month: Aug
+  // 2025, $94.2K order total", never "… reports Lifetime Spend at $3.1K".
   if (item?.query?.dimensions?.length) {
-    return `${label} reports ${metricLabel} at ${formattedTopValue}.`;
+    const dimensions = item.query.dimensions;
+    const grouping = dimensions.find((dimension) => (dimension.alias ?? (dimension.timeGrain ? `${dimension.field}_${dimension.timeGrain}` : dimension.field)) === labelCol)
+      ?? (dimensions.length === 1 ? dimensions[0] : undefined);
+    const what = metricLabel.toLowerCase();
+    if (grouping?.timeGrain) return `Highest ${grouping.timeGrain.replace(/_/g, ' ')}: ${label}, ${formattedTopValue} ${what}.`;
+    return `Top ${insightNoun(labelCol ?? '')}: ${label}, ${formattedTopValue} ${what}.`;
   }
   return `${label} leads ${metricLabel} at ${formattedTopValue}.`;
 }

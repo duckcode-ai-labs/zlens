@@ -359,11 +359,14 @@ describe('fields from related tables (design D2)', () => {
       'WITH ds AS (SELECT __dql_base.*, __dql_j_customer."customer_name" AS "customer__customer_name"',
       'FROM (SELECT * FROM order_lines) AS __dql_base',
       'LEFT JOIN "main"."customers" AS __dql_j_customer ON __dql_base."customer_id" = __dql_j_customer."customer_id")',
-      'SELECT ds."customer__customer_name" AS "customer__customer_name", SUM(ds."net_amount") AS "revenue"',
+      // Customer Name groups by its customer (new-user round 3, problem 4): namesakes stay apart.
+      'SELECT CASE WHEN MIN(ds."customer_id") OVER (PARTITION BY ds."customer__customer_name") <> MAX(ds."customer_id") OVER (PARTITION BY ds."customer__customer_name") THEN CAST(ds."customer__customer_name" AS VARCHAR) || \' (#\' || CAST(ds."customer_id" AS VARCHAR) || \')\' ELSE ds."customer__customer_name" END AS "customer__customer_name", SUM(ds."net_amount") AS "revenue"',
       'FROM ds',
-      'GROUP BY ds."customer__customer_name"',
+      'GROUP BY ds."customer__customer_name", ds."customer_id"',
     ].join('\n'));
     expect(compiled.joins.map((join) => join.id)).toEqual(['customer']);
+    expect(compiled.nameKeys).toEqual([{ field: 'customer__customer_name', key: 'customer_id', alias: 'customer__customer_name' }]);
+    expect(compiled.nameWarnings).toEqual([]);
   });
 
   it('follows a second hop through its parent, and a page filter on a related field adds the join', () => {
@@ -394,5 +397,69 @@ describe('fields from related tables (design D2)', () => {
     descriptor.joins![0] = { ...descriptor.joins![0]!, relation: 'customers; DROP TABLE x' };
     expect(() => compile('duckdb', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, descriptor))
       .toThrowError(expect.objectContaining({ code: 'DATASET_JOIN_INVALID' }));
+  });
+});
+
+describe('names grouped by their key (new-user round 3, problem 4)', () => {
+  const customers = (fields: DatasetDescriptor['fields'] = []): DatasetDescriptor => orderLines({
+    label: 'Customers',
+    grain: { entityIds: ['customer'], keyFields: ['customer_id'], keyEvidence: 'proof.customers' },
+    fields: [
+      { kind: 'physical', name: 'customer_id', qualifiedId: 'customers.customer_id', type: 'string', role: 'key', status: 'approved' },
+      { kind: 'physical', name: 'customer_name', qualifiedId: 'customers.customer_name', type: 'string', role: 'dimension', status: 'approved' },
+      { kind: 'physical', name: 'store_name', qualifiedId: 'customers.store_name', type: 'string', role: 'dimension', status: 'approved' },
+      { kind: 'physical', name: 'first_ordered_at', qualifiedId: 'customers.first_ordered_at', type: 'date', role: 'time', status: 'approved', time: { grains: ['month'], primary: true } },
+      { kind: 'physical', name: 'lifetime_spend', qualifiedId: 'customers.lifetime_spend', type: 'number', role: 'attribute', status: 'approved' },
+      { kind: 'measure', name: 'lifetime_spend', qualifiedId: 'customers.m.lifetime_spend', aggregation: 'sum', from: 'lifetime_spend', dependsOn: ['lifetime_spend'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
+      ...fields,
+    ],
+  });
+  const top: TileQuery = { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'lifetime_spend' }], orderBy: [{ alias: 'lifetime_spend', direction: 'desc' }], limit: 10 };
+
+  it('groups a name of the row by the row key and shows the key only for a shared name', () => {
+    const compiled = compile('duckdb', top, customers());
+    expect(compiled.sql).toContain('GROUP BY ds."customer_name", ds."customer_id"');
+    expect(compiled.sql).toContain('ELSE ds."customer_name" END AS "customer_name"');
+    // Top N still ranks by the measure, ties broken by the shown name.
+    expect(compiled.sql).toContain('ORDER BY "lifetime_spend" DESC, "customer_name" ASC');
+    expect(compiled.nameKeys).toEqual([{ field: 'customer_name', key: 'customer_id', alias: 'customer_name' }]);
+    expect(compiled.columns[0]).toMatchObject({ alias: 'customer_name', role: 'dimension' });
+    expect(compiled.columns).toHaveLength(2);
+  });
+
+  it('casts to STRING on BigQuery and keeps a time grouping as it is', () => {
+    expect(compile('bigquery', top, customers()).sql).toContain('CAST(ds.`customer_id` AS STRING)');
+    const trend = compile('duckdb', { dimensions: [{ field: 'first_ordered_at', timeGrain: 'month' }], measures: [{ measure: 'lifetime_spend' }] }, customers());
+    expect(trend.nameKeys).toEqual([]);
+    expect(trend.sql).not.toContain('OVER (PARTITION BY');
+  });
+
+  it('warns about a name whose key it does not know, and groups it as it is', () => {
+    const compiled = compile('duckdb', { dimensions: [{ field: 'store_name' }], measures: [{ measure: 'lifetime_spend' }] }, customers());
+    expect(compiled.sql.endsWith('GROUP BY ds."store_name"')).toBe(true);
+    expect(compiled.nameKeys).toEqual([]);
+    expect(compiled.nameWarnings).toEqual([{ field: 'store_name', entity: 'store', message: 'Store Name may not be unique: different stores with the same name are shown as one, and this data has no store key to tell them apart.' }]);
+  });
+
+  it('is off for a filter value list and a period comparison, and in pivot totals the key is grouped with the name', () => {
+    const values = compileDatasetTileQuery({ descriptor: customers(), query: top, driver: 'duckdb', sourceSql: 'SELECT * FROM customers', groupNamesByKey: false });
+    expect(values.sql).toContain('GROUP BY ds."customer_name"\n');
+    expect(values.nameWarnings).toEqual([]);
+    const pivot = compile('duckdb', { dimensions: [{ field: 'customer_name' }, { field: 'store_name' }], measures: [{ measure: 'lifetime_spend' }], rollups: [['store_name']] }, customers());
+    expect(pivot.sql).toContain('GROUP BY GROUPING SETS ((ds."customer_name", ds."customer_id", ds."store_name"), (ds."store_name"))');
+  });
+
+  it('filters a bar told apart by its key to that one key', () => {
+    const compiled = compileDatasetTileQuery({
+      descriptor: customers(),
+      query: top,
+      filters: [{ field: 'customer_name', op: 'in', values: ['Maria Lopez (#C1)', 'Bob'] }],
+      driver: 'duckdb',
+      sourceSql: 'SELECT * FROM customers',
+    });
+    expect(compiled.sql).toContain('WHERE ((ds."customer_name" = $1 AND CAST(ds."customer_id" AS VARCHAR) = $2) OR ds."customer_name" = $3)');
+    expect(compiled.variables).toMatchObject({ __dataset_tile_customer_name_1: 'Maria Lopez', __dataset_tile_customer_name_2: 'C1', __dataset_tile_customer_name_3: 'Bob' });
+    const excluded = compileDatasetTileQuery({ descriptor: customers(), query: top, filters: [{ field: 'customer_name', op: 'neq', values: ['Maria Lopez (#C1)'] }], driver: 'duckdb', sourceSql: 'SELECT * FROM customers' });
+    expect(excluded.sql).toContain('WHERE NOT (');
   });
 });

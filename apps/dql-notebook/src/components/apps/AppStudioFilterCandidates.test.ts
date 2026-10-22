@@ -441,11 +441,25 @@ describe('new tiles and existing filters (phase-4 review, problem 7)', () => {
     const dates = discoverAppFilterCandidates(pages, [], {}, sources).filter((candidate) => /ordered_at$/.test(candidate.id));
     expect(dates.map((candidate) => [candidate.id, candidate.affectedTileCount, candidate.viaJoinCount ?? 0, candidate.mainDateTileCount ?? 0])).toEqual([
       ['ordered_at', 2, 0, 2],
-      ['first_ordered_at', 3, 2, 1],
       ['last_ordered_at', 1, 0, 0],
+      ['first_ordered_at', 3, 2, 1],
     ]);
     // A tile without the filter's field offers its own main date first.
     const mapping = filterTileMappingsForField(pages, [], 'ordered_at', {}, sources, { dateFilter: true }).find((item) => item.tileId === 'people');
     expect(mapping?.dateFieldOptions?.map((option) => option.field)).toEqual(['first_ordered_at', 'last_ordered_at']);
+  });
+
+  it('puts the order date first and names a customer date by its table, even when more Customers tiles use it (new-user round 3, problem 2)', () => {
+    // The review's page: two Customers tiles (main date First Ordered At) and one Orders trend.
+    const { sources, pages } = joinedShop([
+      { i: 'spend', title: 'Lifetime spend', x: 0, y: 3, w: 3, h: 2, sourceId: 'customers', sourceRevision: 'rev-customers', query: { measures: [{ measure: 'customer_count' }], dimensions: [] }, viz: { type: 'kpi' } },
+    ]);
+    const candidates = discoverAppFilterCandidates(pages, [], {}, sources);
+    expect(candidates[0]).toMatchObject({ id: 'ordered_at', date: true, groupedTileCount: 1 });
+    const first = candidates.find((candidate) => candidate.id === 'first_ordered_at')!;
+    expect(first).toMatchObject({ relatedTable: 'Customer', label: 'Customer · First Ordered At', mainDateTileCount: 2 });
+    expect(candidates.indexOf(first)).toBeGreaterThan(0);
+    // Every date comes before the other fields.
+    expect(candidates.findIndex((candidate) => !candidate.date)).toBeGreaterThan(candidates.findIndex((candidate) => candidate.id === 'first_ordered_at'));
   });
 });

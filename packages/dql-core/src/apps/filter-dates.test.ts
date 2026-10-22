@@ -100,3 +100,21 @@ describe('the one App date rule', () => {
     expect(describeDashboardDateRange(undefined)).toBeNull();
   });
 });
+
+describe('date range quick choices (new-user round 3, problem 9)', () => {
+  it('fills each preset with calendar dates ending today, and names a range by its preset', async () => {
+    const { DATE_RANGE_PRESETS, dateRangePresetValue, matchingDateRangePreset, todayForDateFilter } = await import('./filter-dates.js');
+    expect(DATE_RANGE_PRESETS.map((preset) => preset.label)).toEqual(['Last 7 days', 'Last 30 days', 'This month', 'This quarter', 'This year']);
+    const today = '2026-10-22';
+    expect(dateRangePresetValue('last_7_days', today)).toEqual({ start: '2026-10-16', end: today });
+    expect(dateRangePresetValue('last_30_days', today)).toEqual({ start: '2026-09-23', end: today });
+    expect(dateRangePresetValue('month_to_date', today)).toEqual({ start: '2026-10-01', end: today });
+    expect(dateRangePresetValue('quarter_to_date', today)).toEqual({ start: '2026-10-01', end: today });
+    expect(dateRangePresetValue('year_to_date', today)).toEqual({ start: '2026-01-01', end: today });
+    expect(dateRangePresetValue('next_week', today)).toBeUndefined();
+    expect(matchingDateRangePreset({ start: '2026-10-16', end: today }, today)).toBe('last_7_days');
+    expect(matchingDateRangePreset({ start: '2025-03-01' }, today)).toBe('custom');
+    expect(matchingDateRangePreset(undefined, today)).toBe('');
+    expect(todayForDateFilter('America/Chicago', new Date('2026-10-22T03:00:00Z'))).toBe('2026-10-21');
+  });
+});

@@ -60,6 +60,16 @@ export function filterCandidateOrigin(candidate: Pick<StudioFilterCandidate, 'so
   return `from ${names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`}`;
 }
 
+/**
+ * Whose date a date field is, in the field list (new-user round 3, problem
+ * 2): the rows' own date, or a related table's ("the customer's date").
+ */
+export function filterCandidateDateNote(candidate: Pick<StudioFilterCandidate, 'date' | 'relatedTable' | 'groupedTileCount' | 'mainDateTileCount'>): string {
+  if (!candidate.date) return '';
+  if (candidate.relatedTable) return ` · the ${candidate.relatedTable.toLowerCase()}’s date`;
+  return candidate.groupedTileCount || candidate.mainDateTileCount ? ' · each row’s own date' : '';
+}
+
 export type StudioFilterControlType = StudioDashboardFilter['type'];
 
 export type StudioDashboardFilter = NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number];
@@ -143,7 +153,7 @@ export function FiltersPanel({
     setConfiguration({
       id: candidate.id,
       fieldId: candidate.id,
-      label: humanize(candidate.id),
+      label: candidate.label ?? humanize(candidate.id),
       type: defaultStudioFilterType(candidate.id),
       scope: 'app',
       required: false,
@@ -234,7 +244,7 @@ export function FiltersPanel({
         <label className="filter-field-search"><Search size={14} /><input autoFocus value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} placeholder="Search fields" /></label>
         <div className="filter-field-results">
           {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).map((candidate) => <button key={candidate.id} type="button" onClick={() => chooseField(candidate)}>
-            <span><Filter size={14} /></span><div><strong>{humanize(candidate.id)}</strong><small>{filterCandidateOrigin(candidate)}</small><em>{candidate.affectedTileCount} compatible{candidate.viaJoinCount ? ` (${candidate.viaJoinCount} through a join)` : ''}{candidate.mainDateTileCount ? ' · main date' : ''} · {candidate.pageCount} {candidate.pageCount === 1 ? 'page' : 'pages'}</em></div><ChevronDown size={13} />
+            <span><Filter size={14} /></span><div><strong>{candidate.label ?? humanize(candidate.id)}</strong><small>{filterCandidateOrigin(candidate)}</small><em>{candidate.affectedTileCount} compatible{candidate.viaJoinCount ? ` (${candidate.viaJoinCount} through a join)` : ''}{filterCandidateDateNote(candidate)} · {candidate.pageCount} {candidate.pageCount === 1 ? 'page' : 'pages'}</em></div><ChevronDown size={13} />
           </button>)}
         </div>
         {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).length === 0 ? <p className="panel-empty">No additional fields match this search.</p> : null}
@@ -310,8 +320,16 @@ export function FilterTileChoice({ mapping, applies, onChoose, onUseDateField, o
   const tileName = humanize(mapping.tileTitle);
   const sourceName = sourceDisplayName(mapping.sourceName);
   return <div className={`filter-mapping-row ${applies ? 'applies' : 'does-not-apply'} ${mapping.supported ? '' : 'unsupported'}`} title={mapping.reason ? plainSourceText(mapping.reason) : undefined} data-testid="filter-tile-choice">
-    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}` : mapping.via ? `via ${mapping.via}` : mapping.datasetId ? 'field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
-      {!mapping.supported && mapping.dateFieldOptions?.length && onUseDateField ? <span className="filter-date-field-options">{mapping.dateFieldOptions.map((option) => <button key={option.field} type="button" onClick={() => onUseDateField(option.field)}>Use {humanize(option.field)} on {sourceName}</button>)}</span> : null}
+    <span><strong>{tileName}</strong><small>{mapping.supported ? `From ${sourceName} · ${mapping.mappedFrom && mapping.datasetField ? `uses ${humanize(mapping.datasetField)}, a different date` : mapping.via ? `via ${mapping.via}` : mapping.datasetId ? 'field' : mapping.mode === 'semantic' ? 'Metrics field' : 'field binding'}` : plainSourceText(mapping.reason)}</small>
+      {/* Another date of this tile is a different date, never the same filter
+          (new-user round 3, problem 2): offered only by name, as a different
+          meaning, never as a one-click swap. */}
+      {!mapping.supported && mapping.dateFieldOptions?.length && onUseDateField ? <label className="filter-date-field-options">
+        <select aria-label={`Use a different date on ${sourceName}`} value="" onChange={(event) => { if (event.target.value) onUseDateField(event.target.value); }}>
+          <option value="">Use a different date…</option>
+          {mapping.dateFieldOptions.map((option) => <option key={option.field} value={option.field}>{differentDateLabel(sourceName, option.field)}</option>)}
+        </select>
+      </label> : null}
       {mapping.supported && mapping.mappedFrom && onClearDateField ? <button type="button" className="filter-date-field-clear" onClick={onClearDateField}>Don’t use {humanize(mapping.datasetField ?? '')}</button> : null}
     </span>
     <div className="filter-applies-switch" role="radiogroup" aria-label={`Does this filter apply to ${tileName}?`}>
@@ -319,6 +337,13 @@ export function FilterTileChoice({ mapping, applies, onChoose, onUseDateField, o
       <button type="button" role="radio" aria-checked={!applies} className={!applies ? 'on' : ''} onClick={() => onChoose(false)}><X size={11} /> Does not apply</button>
     </div>
   </div>;
+}
+
+/** "Different meaning: the customer's First Ordered At" — another date of a tile's data. */
+export function differentDateLabel(sourceName: string, field: string): string {
+  const words = sourceName.trim().toLowerCase();
+  const one = words.endsWith('ies') ? `${words.slice(0, -3)}y` : words.endsWith('s') && !words.endsWith('ss') ? words.slice(0, -1) : words;
+  return `Different meaning: the ${one}’s ${humanize(field)}`;
 }
 
 export function filterControlOptions(fieldId: string): Array<{ value: StudioFilterControlType; label: string }> {

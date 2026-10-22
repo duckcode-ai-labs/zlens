@@ -351,3 +351,37 @@ export function applyTableDatasetChoices(drafted: TableDatasetProposal, raw: unk
     }),
   };
 }
+
+/**
+ * What became of a table in this project (new-user round 3, problem 7): the
+ * Datasets "Check and add" already made from it, so the Add data list says
+ * "Added · Checked" (or Certified) instead of "Not checked yet · Check and
+ * add" and never invites a second copy. A Dataset made from a table is the
+ * block "Start from a table" wrote: tagged `from-table`, its query reading
+ * `FROM <relation>`.
+ */
+export interface TableDatasetLink {
+  sourceId: string;
+  name: string;
+  state: 'certified' | 'checked' | 'draft';
+}
+
+export function tableDatasetLinks(input: {
+  tables: Array<Pick<WarehouseTableSummary, 'id' | 'relation'>>;
+  sources: Array<{ sourceId: string; name: string; tags: string[]; trust: string; lifecycle: string; check?: unknown; sourcePath: string }>;
+  readSource: (sourcePath: string) => string | undefined;
+}): Map<string, TableDatasetLink[]> {
+  const bare = (relation: string) => relation.replace(/["`\[\]]/g, '').replace(/\s*\.\s*/g, '.').trim().toLowerCase();
+  const byRelation = new Map(input.tables.map((table) => [bare(table.relation), table.id]));
+  const links = new Map<string, TableDatasetLink[]>();
+  for (const source of input.sources) {
+    if (!source.tags.includes('from-table')) continue;
+    const text = input.readSource(source.sourcePath);
+    const relation = text ? /^\s*FROM\s+([^\s;]+)\s*$/im.exec(text.split('query = """')[1] ?? '')?.[1] : undefined;
+    const tableId = relation ? byRelation.get(bare(relation)) : undefined;
+    if (!tableId) continue;
+    const state: TableDatasetLink['state'] = source.trust === 'certified' ? 'certified' : source.lifecycle === 'draft' && !source.check ? 'draft' : 'checked';
+    links.set(tableId, [...(links.get(tableId) ?? []), { sourceId: source.sourceId, name: source.name, state }]);
+  }
+  return links;
+}
