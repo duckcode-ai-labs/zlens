@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor } from './doctor.js';
+import { checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -437,5 +437,17 @@ type: string
     ]));
     expect(report.commitPolicy.durable).toContain('.dql/hints/**/*.hint.yaml');
     expect(report.commitPolicy.durable).toContain('.dql/evaluations/**/*.hint-evaluation.yaml');
+  });
+});
+
+// New-user round 2, problem 10: sync said 19 metrics, Setup 19, doctor 24 (19 metrics + 5 measures).
+describe('metric counts read the same as sync and Setup', () => {
+  it('names dbt metrics and the measures ZLens adds separately', () => {
+    const metric = { source: { objectType: 'metric' } };
+    const measure = { source: { objectType: 'measure' } };
+    expect(semanticMetricWords([...Array(19)].map(() => metric).concat([...Array(5)].map(() => measure)))).toBe('19 metrics and 5 measures');
+    expect(semanticMetricWords([metric])).toBe('1 metric');
+    expect(semanticMetricWords([metric, metric, {}])).toBe('3 metrics');
+    expect(semanticMetricWords([metric, measure])).toBe('1 metric and 1 measure');
   });
 });

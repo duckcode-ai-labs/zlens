@@ -78,6 +78,15 @@ export function groupDatasetFields(descriptor: DatasetDescriptor, search = ''): 
     else if (field.role === 'attribute' && field.type === 'number' && measureInputs.has(field.name.toLowerCase())) continue;
     else groups.dimensions.push(field);
   }
+  // Never two groups that read the same (new-user round 2, problem 5): a
+  // descriptor stored before joins were deduplicated may still carry two
+  // joins to one table; each is named by its keys then ("Product (by product id)").
+  const paths = new Map<string, number>();
+  for (const group of groups.related) paths.set(group.path, (paths.get(group.path) ?? 0) + 1);
+  for (const group of groups.related) {
+    if ((paths.get(group.path) ?? 0) < 2) continue;
+    group.path = `${group.path} (by ${group.join.keys.map((pair) => pair.from.replace(/_/g, ' ').toLowerCase()).join(' and ')})`;
+  }
   return groups;
 }
 

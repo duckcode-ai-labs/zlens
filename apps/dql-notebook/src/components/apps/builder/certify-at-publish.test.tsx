@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { AppBlockRecommendation, CertifyReview } from '../../../api/client';
-import { proposeTableDataset } from '@zlens/core/datasets/table-draft';
+import { proposeTableDataset, withDuplicateUnitRelations } from '@zlens/core/datasets/table-draft';
 import { allDataCertifiedLabel, appCertificationRollup } from '../app-certification';
 import { AddDataBrowser } from './AddDataBrowser';
 import { CertifyReviewDialog } from './CertifyReviewDialog';
@@ -96,12 +96,27 @@ describe('Duplicate columns, one question (design Q1.4)', () => {
 
   it('asks "Use Order total in dollars?" once, with the cents column recommended', () => {
     const html = renderToStaticMarkup(<DuplicateColumnQuestions proposal={proposal} choices={[]} onChoice={vi.fn()} />);
-    expect(html).toContain('Use Order total in dollars?');
-    expect(html).toContain('Yes, use order_total_cents in dollars</strong> <em>Recommended</em>');
-    expect(html).toContain('No, use order_total as it is');
+    expect(html).toContain('Order total is stored twice: Order total and Order total cents. Use Order total in dollars?');
+    expect(html).toContain('Yes, use Order total in dollars</strong> <em>Recommended</em>');
+    expect(html).toContain('Read from Order total cents ÷ 100, shown as Money. The Order total column is hidden.');
+    expect(html).toContain('No, use the Order total column as it is');
+    // Never "hold the same number" for two units, never a raw column name.
+    expect(html).not.toContain('hold the same number');
+    expect(html).not.toContain('order_total_cents in dollars');
     expect(html.match(/type="radio"/g)).toHaveLength(2);
     expect(html).toMatch(/<input type="radio" name="duplicate-order_total" checked=""/);
     expect(renderToStaticMarkup(<DuplicateColumnQuestions proposal={{ ...proposal, duplicates: undefined }} choices={[]} onChoice={vi.fn()} />)).toBe('');
+  });
+
+  it('says what the check found: the same amount in two units, or the same number twice (new-user round 2, problem 7)', () => {
+    const hundredths = renderToStaticMarkup(<DuplicateColumnQuestions proposal={withDuplicateUnitRelations(proposal, { order_total: 'hundredths' })} choices={[]} onChoice={vi.fn()} />);
+    expect(hundredths).toContain('Order total is stored twice: Order total (dollars) and Order total cents. Use Order total in dollars?');
+    expect(hundredths).toContain('Order total cents is Order total × 100: the same amount in cents.');
+    expect(hundredths).toContain('It is already in dollars. Order total cents is hidden.');
+    const same = renderToStaticMarkup(<DuplicateColumnQuestions proposal={withDuplicateUnitRelations(proposal, { order_total: 'same' })} choices={[]} onChoice={vi.fn()} />);
+    expect(same).toContain('Order total is stored twice, both in cents: Order total and Order total cents. Use Order total in dollars?');
+    expect(same).toContain('Order total and Order total cents hold the same number, in cents.');
+    expect(same).toContain('It stays in cents, shown as a plain number.');
   });
 });
 

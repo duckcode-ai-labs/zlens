@@ -276,7 +276,8 @@ export function draftOutcome(result: { report: WarehouseDiscoveryReport; proposa
   return {
     ok: true,
     proposalId: proposal.id,
-    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}.`,
+    // Honest about what is written (new-user round 2, problem 4): drafts wait for a Save in Modeling.
+    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}. Not saved yet: review and save them in Modeling.`,
     ...(domain ? { domain } : {}),
     ...(report.stagingHidden?.length ? { stagingHidden: report.stagingHidden } : {}),
   };

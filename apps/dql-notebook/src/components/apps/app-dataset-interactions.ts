@@ -6,6 +6,7 @@ import {
   type TileQuery,
 } from '@zlens/core/apps/tile-query';
 import type { DatasetDescriptor, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
+import { sourceDisplayName } from './source-names';
 import type {
   DashboardDatasetCrossFilter,
   DashboardDatasetHierarchyDrill,
@@ -346,7 +347,8 @@ export function proposeDatasetCrossFilterLinks(input: {
       ));
       if (!descriptor || !target) continue;
       mappings.push({ fromTileId: tile.i, fromField: alias, toDataset: binding.id, toField: target.name });
-      targetLabels.push(descriptor.label);
+      // "Beverage Revenue By Product", never the saved query's id (new-user round 2, problem 9).
+      targetLabels.push(sourceDisplayName(descriptor.id, descriptor.label));
     }
     if (mappings.length) return { fromField: alias, fieldLabel: field.name, mappings, targetLabels };
   }

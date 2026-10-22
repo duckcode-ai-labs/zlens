@@ -51,6 +51,9 @@ export function plainSourceText(text: string | null | undefined): string {
   if (exposed) return missingFieldReason(exposed[2]!, exposed[1]!);
   const physical = named.match(/^\s*(.+?) is not an approved physical field on this Dataset source\.?\s*$/i);
   if (physical) return missingFieldReason('This data', physical[1]!);
+  // "Ordered At is not mapped to beverage_revenue_by_product." names the data, never its id (new-user round 2, problem 9).
+  const unmapped = named.match(/^\s*(.+?) is not mapped to ([A-Za-z][\w-]*)\.?\s*$/);
+  if (unmapped && /[_-]/.test(unmapped[2]!)) return `${unmapped[1]} is not mapped to ${sourceDisplayName(unmapped[2])}.`;
   return named;
 }
 

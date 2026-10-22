@@ -8622,6 +8622,27 @@ function mergeRepublishedAppDocument(appDir: string, generated: AppDocument): Ap
   return merged as unknown as AppDocument;
 }
 
+/** Goals ZLens writes itself when the author typed none: never a description. */
+const GENERATED_APP_GOALS = /^(create .+|edit this governed app|a dashboard of live, checked numbers|build a governed analytics app)$/i;
+
+/**
+ * The App's description on publish (new-user round 2, problem 10): what the
+ * author wrote (the decision it supports, or the request they typed), else
+ * the description the published App already has, else a plain default only
+ * because there is nothing else. Never "Governed analytical App for …".
+ */
+export function appDescriptionFor(projectRoot: string, draft: Pick<AppBuildDraft, 'appId' | 'baseApp' | 'frame'>, name: string, domain: string): string {
+  const typed = cleanString(draft.frame.decision) || cleanString(draft.frame.goal);
+  if (typed && !GENERATED_APP_GOALS.test(typed) && typed.toLowerCase() !== name.trim().toLowerCase()) return typed;
+  if (draft.baseApp) {
+    const existing = cleanString(loadAppById(projectRoot, draft.appId)?.app.description);
+    if (existing && !/^Governed analytical App for /i.test(existing)) return existing;
+  }
+  const words = domain.replace(/[_-]+/g, ' ').trim();
+  const area = words && !['general', 'unassigned'].includes(words.toLowerCase()) ? ` for ${words.charAt(0).toUpperCase()}${words.slice(1)}` : '';
+  return `A dashboard of live numbers${area}.`;
+}
+
 /**
  * The App's trust at publish (B6): the same answer the publish check, the
  * editor, the App header and the Apps card give — every tile's source, every
@@ -8686,7 +8707,7 @@ export function publishStoredAppBuildDraft(
     version: 1,
     id: draft.appId,
     name,
-    description: draft.frame.decision || `Governed analytical App for ${name}`,
+    description: appDescriptionFor(projectRoot, draft, name, domain),
     visibility: 'shared',
     publicationIntent: 'shared_project',
     ownerDomain: domain,

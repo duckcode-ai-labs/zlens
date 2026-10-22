@@ -173,6 +173,16 @@ function joinStem(keys: Array<{ from: string; to: string }>, targetTable: string
   return /^[a-z]/.test(stem) ? stem : `t_${stem || 'table'}`;
 }
 
+/** A join on key columns (`product_id`, `id`), not on a label such as `product_name`. */
+function keyedJoin(step: Pick<DirectedEdge, 'keys'>): boolean {
+  return step.keys.every((pair) => KEY_SUFFIX.test(pair.from) || KEY_SUFFIX.test(pair.to) || /^(id|uuid|key)$/i.test(pair.to) || /^(id|uuid|key)$/i.test(pair.from));
+}
+
+/** Lower is better: a keyed join first, then the relationship's own rank, then fewer columns. */
+function joinPreference(step: DirectedEdge): number {
+  return (keyedJoin(step) ? 0 : 100) + edgeRank(step.edge) * 10 + step.keys.length;
+}
+
 function capitalized(words: string): string {
   return words ? words.charAt(0).toUpperCase() + words.slice(1) : words;
 }
@@ -217,7 +227,17 @@ export function discoverDatasetJoins(input: {
       const current = byKey.get(key);
       if (!current || edgeRank(step.edge) < edgeRank(current.edge)) byKey.set(key, step);
     }
-    return [...byKey.values()].sort((left, right) => left.targetTable.localeCompare(right.targetTable) || edgeRank(left.edge) - edgeRank(right.edge));
+    // One join per (target, name) as well (new-user round 2, problem 5): a
+    // second join to the same table that would read the same ("Order Items →
+    // Product" on product_id and again on product_name) is left out. A join on
+    // key columns beats one on a label, then a certified model join beats a draft.
+    const byGroup = new Map<string, DirectedEdge>();
+    for (const step of byKey.values()) {
+      const group = `${bareRelation(step.target)}|${joinStem(step.keys, step.targetTable)}`;
+      const current = byGroup.get(group);
+      if (!current || joinPreference(step) < joinPreference(current)) byGroup.set(group, step);
+    }
+    return [...byGroup.values()].sort((left, right) => left.targetTable.localeCompare(right.targetTable) || edgeRank(left.edge) - edgeRank(right.edge));
   };
 
   const addJoin = (step: DirectedEdge, parent: DatasetJoin | undefined, fromEntity: string): DatasetJoin | undefined => {

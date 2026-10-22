@@ -29,6 +29,7 @@ import {
   type ModelSource,
   type ProjectSyncStep,
 } from './setup-model-source';
+import { requestBuildNewApp } from '../apps/app-library-launch';
 
 type SetupState = 'missing' | 'configured' | 'passed';
 type SetupTarget = SetupStartTarget;
@@ -213,6 +214,8 @@ export function SetupOnboarding({
     if (acknowledging || requiresUpgradeReapply) return;
     void acknowledge().then((acknowledged) => {
       if (!acknowledged) return;
+      // "Build an App" opens the new App form, not only the library (new-user round 2, problem 10).
+      if (target === 'apps') requestBuildNewApp();
       dispatch({ type: 'SET_MAIN_VIEW', view: target });
       if (target === 'notebook') dispatch({ type: 'OPEN_NEW_NOTEBOOK_MODAL' });
       dispatch({ type: 'CLOSE_SETUP' });

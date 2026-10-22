@@ -434,4 +434,76 @@ describe('warehouse-first modeling in the local runtime', () => {
     expect(Object.keys(modeling.modeling.entities).sort()).toEqual(['jaffle_shop::entity::customer', 'jaffle_shop::entity::order', 'jaffle_shop::entity::payment']);
     await executor.disconnect();
   }, 60_000);
+
+  // New-user round 2, problem 4: drafted models are saved the first time,
+  // although something else in the project changed after they were drafted
+  // (certifying a table in an App, a setup step writing dql.config.json).
+  it('saves reviewed drafts as they are when other project files changed, and asks in plain words only when a drafted file changed', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-draft-rebase-'));
+    roots.push(projectRoot);
+    const db = new Database(join(projectRoot, 'jaffle_shop.sqlite'));
+    db.exec(`
+      CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE orders (order_id INTEGER PRIMARY KEY, customer_id INTEGER REFERENCES customers(customer_id));
+      INSERT INTO customers VALUES (1, 'Ann');
+      INSERT INTO orders VALUES (10, 1);
+    `);
+    db.close();
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
+      project: 'shop', manifestVersion: 3, modeling: { mode: 'warehouse-first' },
+      connections: { default: { driver: 'sqlite', filepath: './jaffle_shop.sqlite' } },
+    }));
+    const executor = new QueryExecutor();
+    const port = await startLocalServer({ rootDir: projectRoot, projectRoot, executor, preferredPort: 0, captureServer: (created) => { server = created; } });
+    const base = `http://127.0.0.1:${port}`;
+    const post = async (path: string, body: unknown) => {
+      const response = await fetch(`${base}${path}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      return { status: response.status, body: await response.json() as any };
+    };
+    const waiting = async () => ((await (await fetch(`${base}/api/modeling/warehouse/drafts`)).json()) as any).waiting;
+    await fetch(`${base}/api/connections/default/metadata-sync`, { method: 'POST' });
+
+    // Unrelated changes after drafting: a block, and dql.config.json.
+    const drafted = await post('/api/modeling/warehouse/discover/proposal', { validate: true });
+    expect(drafted.status).toBe(201);
+    mkdirSync(join(projectRoot, 'blocks'), { recursive: true });
+    writeFileSync(join(projectRoot, 'blocks', 'orders.dql'), 'block "Orders" {\n  domain = "general"\n  type = "custom"\n  query = """SELECT * FROM orders"""\n}\n');
+    const config = JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8'));
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ ...config, preview: { port: 3474 } }, null, 2));
+    expect(await waiting()).toMatchObject({ proposalId: drafted.body.proposal.id, stale: true });
+
+    // Save works the first time: the drafted files are exactly as reviewed.
+    const saved = await post(`/api/context-proposals/${encodeURIComponent(drafted.body.proposal.id)}/commit`, { expectedProposalHash: drafted.body.proposal.proposalHash, idempotencyKey: 'rebase-1' });
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+    expect(saved.body.rebased).toBe(true);
+    expect(saved.body.proposal.status).toBe('committed');
+    expect(readFileSync(join(projectRoot, 'domains', 'jaffle-shop', 'domain.dql'), 'utf-8')).toContain('Jaffle shop');
+    expect(await waiting()).toBeNull();
+    const reviewed = await (await fetch(`${base}/api/context-proposals/${drafted.body.proposal.id}`)).json() as any;
+    expect(reviewed.proposal).toMatchObject({ status: 'discarded', supersededBy: saved.body.proposal.id });
+    // The same request again is the same answer, not a second write.
+    const replay = await post(`/api/context-proposals/${encodeURIComponent(drafted.body.proposal.id)}/commit`, { expectedProposalHash: drafted.body.proposal.proposalHash, idempotencyKey: 'rebase-1' });
+    expect(replay.status).toBe(200);
+    expect(replay.body).toMatchObject({ idempotent: true, proposal: { id: saved.body.proposal.id, status: 'committed' } });
+
+    // A file the drafts write was edited after review: asked, in plain words, never "rebase".
+    const db2 = new Database(join(projectRoot, 'jaffle_shop.sqlite'));
+    db2.exec(`CREATE TABLE payments (payment_id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(order_id)); INSERT INTO payments VALUES (100, 10);`);
+    db2.close();
+    await fetch(`${base}/api/connections/default/metadata-sync`, { method: 'POST' });
+    const second = await post('/api/modeling/warehouse/discover/proposal', { validate: true });
+    expect(second.status).toBe(201);
+    const touched = second.body.proposal.patches.find((patch: any) => patch.changed && patch.before);
+    expect(touched, JSON.stringify(second.body.proposal.patches.map((patch: any) => patch.path))).toBeTruthy();
+    writeFileSync(join(projectRoot, touched.path), `${touched.before}\n`);
+    const conflicted = await post(`/api/context-proposals/${encodeURIComponent(second.body.proposal.id)}/commit`, { expectedProposalHash: second.body.proposal.proposalHash, idempotencyKey: 'rebase-2' });
+    expect(conflicted.status).toBe(409);
+    expect(conflicted.body.code).toBe('PROPOSAL_STALE');
+    expect(conflicted.body.message).toMatch(/edited after you reviewed them \(.+\)\. Update the drafts to the latest project and review them again before saving\./);
+    expect(JSON.stringify(conflicted.body)).not.toMatch(/rebase/i);
+    // Nothing was written, and the drafts still wait.
+    expect(readFileSync(join(projectRoot, touched.path), 'utf-8')).toBe(`${touched.before}\n`);
+    expect(await waiting()).toMatchObject({ proposalId: second.body.proposal.id });
+    await executor.disconnect();
+  }, 60_000);
 });

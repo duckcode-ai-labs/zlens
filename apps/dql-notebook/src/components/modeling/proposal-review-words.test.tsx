@@ -2,7 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { ContextAuthoringProposalV1 } from '../../api/client';
 import { themes } from '../../themes/notebook-theme';
-import { ContextProposalReviewDrawer } from './ContextProposalReviewDrawer';
+import { ContextProposalReviewDrawer, proposalNeedsUpdate, updateProposalLabel } from './ContextProposalReviewDrawer';
+import { DqlApiError } from '../../api/client';
 import {
   describeProposalOperation,
   groupProposalDiagnostics,
@@ -92,5 +93,19 @@ describe('the proposal review in plain words (new-user round 2, Q3)', () => {
     expect(waitingDraftsSentence({ models: 9, joins: 12, domains: ['Jaffle shop'] })).toBe('9 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
     expect(waitingDraftsSentence({ models: 1, joins: 0, domains: [] })).toBe('1 drafted model waiting for review. They are kept until you save or discard them.');
     expect(stagingLeftOutSentence([{ relation: 'dev.stg_a' }, { relation: 'dev.stg_b' }, { relation: 'dev.stg_c' }, { relation: 'dev.stg_d' }])).toBe('Left out 4 staging tables (stg_a, stg_b, stg_c, +1 more): a final table holds the same data.');
+  });
+});
+
+// New-user round 2, problem 4: the first Save failed with "Rebase proposal".
+describe('a reviewed proposal whose files changed', () => {
+  it('offers "Update drafts and review again" only for a change to what it writes, never "Rebase"', () => {
+    expect(updateProposalLabel('warehouse_discovery')).toBe('Update drafts and review again');
+    expect(updateProposalLabel('ai')).toBe('Update and review again');
+    expect(proposalNeedsUpdate(new DqlApiError({ message: 'Part of the project these drafts change was edited after you reviewed them (Orders).', status: 409, code: 'PROPOSAL_STALE' }))).toBe(true);
+    expect(proposalNeedsUpdate(new DqlApiError({ message: 'Source changed after preview', status: 409, code: 'SOURCE_CHANGED' }))).toBe(true);
+    expect(proposalNeedsUpdate(new DqlApiError({ message: 'Resolve all blocking proposal diagnostics before saving.', status: 422, code: 'PROPOSAL_BLOCKED' }))).toBe(false);
+    expect(proposalNeedsUpdate(new Error('offline'))).toBe(false);
+    const html = renderToStaticMarkup(<ContextProposalReviewDrawer proposal={firstRun} theme={themes.paper} onClose={() => undefined} onCommitted={() => undefined} onDiscarded={() => undefined} />);
+    expect(html).not.toMatch(/rebase/i);
   });
 });

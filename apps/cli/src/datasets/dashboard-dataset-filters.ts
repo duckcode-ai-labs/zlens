@@ -3,6 +3,7 @@ import {
   datasetPhysicalField,
   isDashboardDateFilterType,
   isEmptyDashboardDateValue,
+  relatedFieldWords,
   resolveDashboardDateFilter,
   resolveRelativeDateRange,
   tileQueryOutputAliases,
@@ -21,6 +22,23 @@ export interface DashboardDatasetCrossFilterInput {
   values: unknown[];
   /** Exclude these values instead of keeping only them (RFC 0009 step 6a). */
   exclude?: boolean;
+}
+
+/**
+ * Names a person reads in these messages (new-user round 2, problem 9): a
+ * saved query's id "beverage_revenue_by_product" reads "Beverage Revenue By
+ * Product", as the Data list names it; a name with spaces is kept.
+ */
+export function dataWords(label: string): string {
+  const trimmed = label.trim();
+  return !trimmed || /\s/.test(trimmed) ? trimmed : trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/** A filter's label, else its field in words ("customer__customer_name" reads "Customer Name"). */
+function filterWords(filter: { id: string; label?: string }): string {
+  if (filter.label?.trim()) return filter.label.trim();
+  const related = relatedFieldWords(filter.id);
+  return related ? related.replace(/\b\w/g, (letter) => letter.toUpperCase()) : dataWords(filter.id);
 }
 
 export type DatasetFilterIssue = {
@@ -84,7 +102,7 @@ export function resolveDashboardDatasetFilters(input: {
       unbound.push({
         filterId: filter.id,
         code: 'FILTER_MAPPING_MISSING',
-        message: `${filter.label ?? filter.id} is not mapped to ${input.descriptor.label}.`,
+        message: `${filterWords(filter)} is not mapped to ${dataWords(input.descriptor.label)}.`,
       });
       continue;
     }
@@ -153,7 +171,7 @@ export function resolveDashboardDatasetFilters(input: {
         unbound.push({
           filterId: crossFilter.fromTileId,
           code: 'CROSS_FILTER_UNSUPPORTED',
-          message: `The cross-filter from ${crossFilter.fromTileId} is not mapped to ${input.descriptor.label}.`,
+          message: `The cross-filter from ${crossFilter.fromTileId} is not mapped to ${dataWords(input.descriptor.label)}.`,
         });
         continue;
       }

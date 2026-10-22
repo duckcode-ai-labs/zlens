@@ -140,7 +140,7 @@ export interface BlockCheckRecord {
   sourceSha256: string;
   /** What the check found, in plain words ("Row key: …", "Number formats: …"). */
   checks?: string[];
-  /** Columns left out because another column holds the same number in other units. */
+  /** Columns left out because another column holds the same amount (in other units, or the same number twice). */
   hiddenColumns?: Array<{ column: string; keptColumn: string; reason: string }>;
 }
 

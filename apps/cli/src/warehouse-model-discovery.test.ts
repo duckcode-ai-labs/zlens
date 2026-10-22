@@ -160,6 +160,44 @@ describe('joins the data proves, on a warehouse that declares no keys', () => {
   });
 });
 
+// New-user round 2, problem 5: database-only setup drafted order_item → product
+// on product_name next to the product_id join: two identical "Order Items → Product" groups.
+describe('joins are drafted on keys, never on names', () => {
+  it('drafts the product_id join and no second join on product_name; a unique name alone is not a key', async () => {
+    const t = (name: string, columns: Array<[string, string]>, rows: number) => ({
+      id: warehouseRelationId({ schema: 'main', name }), schema: 'main', name, relation: `main.${name}`, kind: 'table' as const,
+      columns: columns.map(([column, type]) => ({ name: column, type })), rowCountEstimate: rows,
+    });
+    const bare = normalizeWarehouseCatalog({
+      version: 1, driver: 'sqlite', connectionId: 'default', scopes: [{ catalogOrDatabase: 'main', schemas: ['main'] }], capturedAt: '2026-10-22T00:00:00.000Z',
+      relations: [
+        t('products', [['product_id', 'TEXT'], ['product_name', 'TEXT'], ['product_price', 'DOUBLE']], 3),
+        t('order_items', [['order_item_id', 'TEXT'], ['product_id', 'TEXT'], ['product_name', 'TEXT']], 4),
+        t('stores', [['store_name', 'TEXT'], ['city', 'TEXT']], 2),
+        t('visits', [['visit_ref', 'INTEGER'], ['store_name', 'TEXT']], 3),
+      ],
+    });
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE products (product_id TEXT, product_name TEXT, product_price DOUBLE);
+      CREATE TABLE order_items (order_item_id TEXT, product_id TEXT, product_name TEXT);
+      CREATE TABLE stores (store_name TEXT, city TEXT);
+      CREATE TABLE visits (visit_ref INTEGER, store_name TEXT);
+      INSERT INTO products VALUES ('p1', 'Latte', 4.5), ('p2', 'Mocha', 5), ('p3', 'Bagel', 3);
+      INSERT INTO order_items VALUES ('i1', 'p1', 'Latte'), ('i2', 'p2', 'Mocha'), ('i3', 'p1', 'Latte'), ('i4', 'p3', 'Bagel');
+      INSERT INTO stores VALUES ('North', 'Brooklyn'), ('South', 'Philadelphia');
+      INSERT INTO visits VALUES (1, 'North'), (2, 'South'), (3, 'North');
+    `);
+    const execute = async (sql: string) => ({ rows: db.prepare(sql.replace(/"main"\./g, '')).all() as Array<Record<string, unknown>> });
+    const drafted = discoverWarehouseModel({ snapshot: bare, projectName: 'shop' });
+    const inferred = await inferSharedKeyJoins(drafted, bare, execute, (identifier) => `"${identifier}"`);
+    const joins = inferred.relationships.map((item) => `${item.from}.${item.keys.map((pair) => pair.from).join('+')} -> ${item.to}`).sort();
+    expect(joins).toEqual(['order_item.product_id -> product']);
+    expect(inferred.relationships.some((item) => item.keys.some((pair) => /name/.test(pair.from)))).toBe(false);
+    db.close();
+  });
+});
+
 describe('query-history evidence (opt-in)', () => {
   it('counts the joins recent queries ran, once per statement, and keeps no query text', () => {
     const observed = observedJoinsFromQueries([
@@ -257,8 +295,9 @@ describe('a table’s grain is its own identity column', () => {
     expect(report.entities.find((entity) => entity.id === 'product')).toMatchObject({ grain: 'product_id', keys: ['product_id'], grainSource: 'unique_column' });
     expect(report.entities.find((entity) => entity.id === 'supply')).toMatchObject({ grain: 'supply_uuid', keys: ['supply_uuid'], grainSource: 'unique_column' });
     expect(report.entities.find((entity) => entity.id === 'order_item')).toMatchObject({ grain: 'order_item_id' });
-    // The label join is still found; it no longer decides the grain.
-    expect(report.relationships.some((item) => item.keys[0]!.from === 'product_name' && item.to === 'product')).toBe(true);
+    // A label is not a key (new-user round 2, problem 5): no second Product join on product_name.
+    expect(report.relationships.some((item) => item.keys[0]!.from === 'product_name' && item.to === 'product')).toBe(false);
+    expect(report.relationships.filter((item) => item.from === 'order_item' && item.to === 'product').map((item) => item.keys[0]!.from)).toEqual(['product_id']);
     db.close();
   });
 });

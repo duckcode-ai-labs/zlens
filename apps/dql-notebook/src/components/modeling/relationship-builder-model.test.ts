@@ -3,6 +3,7 @@ import {
   entityForRelation,
   relationshipDraftFromJoin,
   fanoutForCardinality,
+  discardEditWords,
   levelOfRelationship,
   lifecycleForLevel,
   nextRelationshipLocalId,
@@ -56,6 +57,7 @@ describe('relationship status and ids', () => {
     // A checked draft reads Draft, the level the editor opens on, never Validated (B6).
     expect(relationshipStatusView({ status: 'draft', automaticJoinAllowed: false, validation: evidence() }).label).toBe('Draft');
     expect(levelOfRelationship({ status: 'draft', validation: evidence() })).toBe('draft');
+    expect(relationshipStatusView({ status: 'draft', automaticJoinAllowed: false, validation: evidence() }).level).toBe(levelOfRelationship({ status: 'draft', validation: evidence() }));
     expect(relationshipStatusView({ status: 'deprecated', automaticJoinAllowed: false }).label).toBe('Retired');
   });
 
@@ -120,5 +122,12 @@ describe('what blocks a save', () => {
     expect(certifiedWithoutKeys.label).toBe('Needs recheck');
     expect(certifiedWithoutKeys.meaning).toContain('without the grain and key columns');
     expect(relationshipStatusView({ status: 'certified', automaticJoinAllowed: false, validation: evidence({ status: 'failed' }), certificationFingerprint: 'c' }).meaning).toContain('warehouse check');
+  });
+});
+
+describe('closing the editor with unsaved edits (new-user round 2, problem 10)', () => {
+  it('says it discards the edit of an existing relationship, never the relationship', () => {
+    expect(discardEditWords(true)).toEqual({ question: 'Discard your changes? The relationship stays as it was.', action: 'Discard changes' });
+    expect(discardEditWords(false)).toEqual({ question: 'Discard this new relationship? It is not saved yet.', action: 'Discard' });
   });
 });

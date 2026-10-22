@@ -904,13 +904,12 @@ function checkSemanticLayer(semanticConfig: unknown, projectRoot: string): Check
       };
     }
 
-    const metrics = result.layer.listMetrics().length;
     const dims = result.layer.listDimensions().length;
     const provider = result.detectedProvider ?? 'configured';
     return {
       name: 'Semantic layer',
       ok: true,
-      detail: `provider=${provider}, ${metrics} metrics, ${dims} dimensions`,
+      detail: `provider=${provider}, ${semanticMetricWords(result.layer.listMetrics())}, ${dims} dimensions`,
     };
   } catch (err) {
     return {
@@ -1165,7 +1164,7 @@ async function checkSemanticExecutionRuntime(projectRoot: string, semanticConfig
       : null;
     const summary = [
       `engine=${runtime.active}`,
-      `metrics=${metrics.length} (${composable} native-composable, ${runtimeOnly} need a full semantic runtime)`,
+      `${semanticMetricWords(metrics)} (${composable} native-composable, ${runtimeOnly} need a full semantic runtime)`,
       adapterDetail || undefined,
     ].filter(Boolean).join(', ');
     if (runtimeOnly === 0 || runtime.active !== 'native') {
@@ -1230,4 +1229,17 @@ function checkDbtArtifactFreshness(projectRoot: string): Check {
     return { name: 'dbt artifacts', ok: true, detail: summary };
   }
   return { name: 'dbt artifacts', ok: false, detail: `${summary}. ${problems.join(' ')} Note: avoid running dbt while Ask sessions are active — artifacts are read per question.` };
+}
+
+/**
+ * The semantic layer's metrics in the words `zlens sync` and Setup use
+ * (new-user round 2, problem 10): dbt's own metrics, and separately the
+ * measures ZLens also offers as metrics. "19 metrics and 5 measures", never
+ * "24 metrics" beside a sync that says 19.
+ */
+export function semanticMetricWords(metrics: Array<{ source?: { objectType?: string } }>): string {
+  const measures = metrics.filter((metric) => metric.source?.objectType === 'measure').length;
+  const own = metrics.length - measures;
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  return measures ? `${plural(own, 'metric')} and ${plural(measures, 'measure')}` : plural(own, 'metric');
 }

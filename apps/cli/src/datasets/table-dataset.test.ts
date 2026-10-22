@@ -260,13 +260,14 @@ describe('start from a table', () => {
       const dupOrders = tables.body.tables.find((table: { name: string }) => table.name === 'dup_orders');
       const dupDraft = await call(base, '/api/app-datasets/tables/draft', { tableId: dupOrders.id });
       expect(dupDraft.status, dupDraft.text).toBe(200);
-      expect(dupDraft.body.proposal.duplicates).toEqual([expect.objectContaining({ question: 'Use Order total in dollars?', plainColumn: 'order_total', minorColumn: 'order_total_cents' })]);
+      // Checked on the rows (new-user round 2, problem 7): 21.59 and 2159 are one amount in two units, never "the same number".
+      expect(dupDraft.body.proposal.duplicates).toEqual([expect.objectContaining({ relation: 'hundredths', question: 'Order total is stored twice: Order total (dollars) and Order total cents. Use Order total in dollars?', plainColumn: 'order_total', minorColumn: 'order_total_cents' })]);
       const dupCreated = await call(base, '/api/app-datasets/tables/create', { tableId: dupOrders.id, name: 'Dup orders', domain: 'commerce' });
       expect(dupCreated.status, dupCreated.text).toBe(201);
       const dupSource = readFileSync(join(projectRoot, dupCreated.body.path), 'utf-8');
       expect(dupSource).toContain('"order_total_cents" / 100.0 AS "order_total"');
       expect(dupSource).toContain('/* Hidden duplicate columns: order_total (order_total_cents is used) */');
-      expect(dupSource).toContain('order_total is hidden (order_total_cents holds the same number)');
+      expect(dupSource).toContain('order_total is hidden (order_total_cents holds the same amount)');
       const dupTotal = await call(base, '/api/app-datasets/run', { sourceId: dupCreated.body.sourceId, query: { dimensions: [], measures: [{ measure: 'order_total' }] } });
       expect(dupTotal.status, dupTotal.text).toBe(200);
       expect(Number(dupTotal.body.result.rows[0].order_total)).toBeCloseTo(26.99, 6);

@@ -147,6 +147,34 @@ describe('fields from related tables (D2)', () => {
     expect(discover(ordersDescriptor(), [model, shipping]).joins.map((join) => [join.id, join.label])).toEqual([['customer', 'Customer'], ['location', 'Location']]);
   });
 
+  // New-user round 2, problem 5: two identical "Order Items → Product" groups, one per join.
+  it('never shows two joins to one table that read the same: the key join wins over a label join, a certified one over a draft', () => {
+    const items = ordersDescriptor({
+      id: 'app:block:shop:order_items',
+      label: 'Order Items',
+      grain: { entityIds: ['order_item'], keyFields: ['order_item_id'], keyEvidence: 'proof.items' },
+      fields: [
+        { kind: 'physical', name: 'order_item_id', qualifiedId: 'items::order_item_id', type: 'string', role: 'key', status: 'approved' },
+        { kind: 'physical', name: 'product_id', qualifiedId: 'items::product_id', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'product_name', qualifiedId: 'items::product_name', type: 'string', role: 'dimension', status: 'approved' },
+      ],
+    });
+    const columns: Record<string, Array<{ name: string; type?: string }>> = {
+      'main.products': [{ name: 'product_id', type: 'VARCHAR' }, { name: 'product_name', type: 'VARCHAR' }, { name: 'product_type', type: 'VARCHAR' }],
+    };
+    const byId = edge({ id: 'by-id', origin: 'drafted', certified: false, fromRelation: 'main.order_items', toRelation: 'main.products', keys: [{ from: 'product_id', to: 'product_id' }] });
+    const byName = edge({ id: 'by-name', origin: 'drafted', certified: false, fromRelation: 'main.order_items', toRelation: 'main.products', keys: [{ from: 'product_name', to: 'product_name' }] });
+    const found = (edges: RelatedRelationshipEdge[]) => discoverDatasetJoins({ descriptor: items, baseRelation: 'main.order_items', edges, columnsOf: (relation) => columns[relation] });
+    expect(found([byName, byId]).joins.map((join) => [join.id, join.label, join.relationshipId])).toEqual([['product', 'Product', 'by-id']]);
+    expect(found([byId, byName]).joins.map((join) => join.relationshipId)).toEqual(['by-id']);
+    // Even a certified label join gives way to a key join; alone, it is still followed.
+    expect(found([{ ...byName, certified: true, origin: 'model' }, byId]).joins.map((join) => join.relationshipId)).toEqual(['by-id']);
+    expect(found([byName]).joins.map((join) => join.relationshipId)).toEqual(['by-name']);
+    // Two key joins that read differently are both kept.
+    const labels = (joins: Array<{ label: string }>) => joins.map((join) => join.label);
+    expect(new Set(labels(found([byId, byName]).joins)).size).toBe(found([byId, byName]).joins.length);
+  });
+
   it('follows one foreign key to one table: a dbt test to a staging copy does not add a second Customer (dbt sample)', () => {
     const columns: Record<string, Array<{ name: string; type?: string }>> = {
       ...COLUMNS,

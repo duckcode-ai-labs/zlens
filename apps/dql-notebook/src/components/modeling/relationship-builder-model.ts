@@ -199,3 +199,14 @@ export function relationshipProfileLines(evidence: RelationshipEvidence, fromNam
   }
   return lines;
 }
+
+/**
+ * What closing the relationship editor with unsaved edits does, in words that
+ * match it: an existing relationship stays as it was; only a new one that was
+ * never saved goes away.
+ */
+export function discardEditWords(existing: boolean): { question: string; action: string } {
+  return existing
+    ? { question: 'Discard your changes? The relationship stays as it was.', action: 'Discard changes' }
+    : { question: 'Discard this new relationship? It is not saved yet.', action: 'Discard' };
+}

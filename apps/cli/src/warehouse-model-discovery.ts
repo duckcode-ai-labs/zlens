@@ -152,6 +152,25 @@ export interface WarehouseDiscoveryReport {
 const EVIDENCE_ORDER: RelationshipEvidenceSource[] = ['declared_foreign_key', 'view_join', 'query_history', 'shared_key', 'named_for_table', 'same_name'];
 /** Column types that are never join keys: measures, flags and timestamps. */
 const NON_KEY_TYPE = /^(double|float|real|decimal|numeric|money|bool|boolean|date|time|timestamp|datetime|interval|json|jsonb|blob|bytea|array|struct|map)/i;
+/** A column named like a key: `id`, `<thing>_id`, `_key`, `_code`, `_uuid`, `_ref`, `_number`, `_no`. */
+const KEY_LIKE_NAME = /^(id|uuid|key)$|_(id|key|code|uuid|ref|number|no)$/i;
+/** Types a surrogate key is stored as: whole numbers and uuids. */
+const KEY_TYPE = /^(int|integer|bigint|smallint|tinyint|hugeint|ubigint|uinteger|usmallint|utinyint|serial|bigserial|smallserial|uuid)\b/i;
+
+/**
+ * Whether a column can be a drafted join key (new-user round 2, problem 5):
+ * named like a key, declared as a key, or a whole number or uuid (whose
+ * uniqueness the data then has to prove). A product name that happens to be
+ * unique is a label, not a key: joining on it drafted a second Product join.
+ */
+export function keyLikeColumn(relation: WarehouseCatalogRelationV1, column: { name: string; type?: string }): boolean {
+  if (KEY_LIKE_NAME.test(column.name)) return true;
+  const lower = column.name.toLowerCase();
+  if ((relation.primaryKey ?? []).some((key) => key.toLowerCase() === lower)) return true;
+  if ((relation.foreignKeys ?? []).some((foreignKey) => foreignKey.columns.some((key) => key.toLowerCase() === lower))) return true;
+  return Boolean(column.type && KEY_TYPE.test(column.type.trim()));
+}
+
 /** A name shared by this many tables or more is an audit or housekeeping column, not a key. */
 const MAX_TABLES_SHARING_A_KEY = 12;
 /** Share of the referencing side's values that may be missing on the unique side. */
@@ -557,6 +576,7 @@ export async function inferSharedKeyJoins(
   for (const relation of tables) {
     for (const column of relation.columns) {
       if (column.type && NON_KEY_TYPE.test(column.type)) continue;
+      if (!keyLikeColumn(relation, column)) continue;
       const key = column.name.toLowerCase();
       holders.set(key, [...(holders.get(key) ?? []), { relation, column: column.name }]);
     }
@@ -590,10 +610,22 @@ export async function inferSharedKeyJoins(
   // (either direction), identified by table id.
   const relationIdOf = new Map(report.entities.map((entity) => [`${entity.domain}::${entity.id}`, entity.relationId]));
   const known = new Set<string>([...(report.modeledJoins ?? []), ...(report.dismissedJoins ?? [])]);
+  // Two tables that already have a join keep that one: a second join between
+  // them on another shared column draws two identical groups ("Order Items →
+  // Product" twice), whichever columns it matches on. A join a reviewer
+  // removed or rejected is not replaced by another one between the same tables.
+  const joinedPairs = new Set<string>();
+  for (const signature of [...(report.modeledJoins ?? []), ...(report.dismissedJoins ?? [])]) {
+    const [fromId, toId] = signature.split('|');
+    if (fromId && toId) joinedPairs.add(`${fromId}|${toId}`).add(`${toId}|${fromId}`);
+  }
   for (const item of report.relationships) {
     const fromId = relationIdOf.get(`${item.fromDomain}::${item.from}`);
     const toId = relationIdOf.get(`${item.toDomain}::${item.to}`);
-    if (fromId && toId) known.add(`${fromId}|${toId}|${item.keys.map((pair) => `${pair.from}=${pair.to}`).join('&')}`.toLowerCase());
+    if (fromId && toId) {
+      known.add(`${fromId}|${toId}|${item.keys.map((pair) => `${pair.from}=${pair.to}`).join('&')}`.toLowerCase());
+      joinedPairs.add(`${fromId}|${toId}`.toLowerCase()).add(`${toId}|${fromId}`.toLowerCase());
+    }
   }
   const added: DiscoveredRelationship[] = [];
   const referencedBy = new Map<string, number>();
@@ -618,7 +650,9 @@ export async function inferSharedKeyJoins(
           const signature = `${source.relation.id}|${target.relation.id}|${source.column}=${target.column}`.toLowerCase();
           const reverse = `${target.relation.id}|${source.relation.id}|${target.column}=${source.column}`.toLowerCase();
           if (known.has(signature) || known.has(reverse)) continue;
+          if (joinedPairs.has(`${source.relation.id}|${target.relation.id}`.toLowerCase())) continue;
           known.add(signature);
+          joinedPairs.add(`${source.relation.id}|${target.relation.id}`.toLowerCase()).add(`${target.relation.id}|${source.relation.id}`.toLowerCase());
           referencedBy.set(`${target.relation.id}|${target.column.toLowerCase()}`, (referencedBy.get(`${target.relation.id}|${target.column.toLowerCase()}`) ?? 0) + 1);
           added.push({
             id: '',

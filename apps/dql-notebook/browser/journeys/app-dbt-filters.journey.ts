@@ -173,6 +173,11 @@ test('Publish says "saved as files" outside git, and a published App with an ope
   await expect(dialog.getByText(/review in git/)).toHaveCount(0);
   await dialog.getByRole('button', { name: 'Publish to Project', exact: true }).click();
   await expect(page).toHaveURL(/app=customer-review/, { timeout: 60_000 });
+  // Plain names in the published App (new-user round 2, problem 9): the filter reads
+  // "Customer Name", never "Customer Customer Name"; no raw field or saved query ids.
+  await expect(page.getByText(/tiles up to date|Customer Name/).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Customer Customer/)).toHaveCount(0);
+  await expect(page.getByText(/customer__customer_name/)).toHaveCount(0);
 
   // Edit the published App: that opens a private draft of it.
   await page.getByRole('button', { name: 'Edit', exact: true }).first().click();
@@ -186,4 +191,6 @@ test('Publish says "saved as files" outside git, and a published App with an ope
   await expect(cards.getByText(/Unpublished changes/)).toBeVisible();
   await expect(cards.getByRole('button', { name: 'Continue editing Customer Review' })).toBeVisible();
   await expect(cards.getByRole('button', { name: 'View Customer Review' })).toBeVisible();
+  // The card keeps a plain description, never "Governed analytical App for …" (new-user round 2, problem 10).
+  await expect(cards.getByText(/Governed analytical App/)).toHaveCount(0);
 });

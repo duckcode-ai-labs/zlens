@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runCompile } from './compile.js';
-import { runSync } from './sync.js';
+import { readDbtCounts, runSync } from './sync.js';
 
 const baseFlags = {
   format: 'text' as const,
@@ -180,5 +180,23 @@ describe('runSync dbt', () => {
     const output = err.mock.calls.flat().join('\n');
     expect(output).toMatch(/Usage/);
     expect(process.exitCode).toBe(1);
+  });
+});
+
+describe('dbt counts (new-user round 2, problem 10)', () => {
+  it('counts dbt metrics from the manifest, or from semantic_manifest.json when the manifest has none, and never says 0 for an unreadable file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-sync-counts-'));
+    try {
+      const manifest = join(root, 'manifest.json');
+      writeFileSync(manifest, JSON.stringify({ nodes: { a: { resource_type: 'model' } }, metrics: { 'metric.x.revenue': {}, 'metric.x.orders': {} }, semantic_models: { s: {} } }));
+      expect(readDbtCounts(manifest)).toEqual({ models: 1, sources: 0, metrics: 2, semanticModels: 1 });
+      writeFileSync(manifest, JSON.stringify({ nodes: {} }));
+      writeFileSync(join(root, 'semantic_manifest.json'), JSON.stringify({ metrics: [{ name: 'a' }, { name: 'b' }, { name: 'c' }] }));
+      expect(readDbtCounts(manifest).metrics).toBe(3);
+      writeFileSync(manifest, '{ not json');
+      expect(readDbtCounts(manifest)).toMatchObject({ unreadable: true });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -8,7 +8,20 @@ import { api, type AppDocumentSummary } from '../../api/client';
  * store and on the server (which feeds RLS template variables into block
  * execution).
  */
-export function PersonaSwitcher({ app }: { app: AppDocumentSummary['app'] | null }): JSX.Element {
+/**
+ * Whether "View as" can show anything different (new-user round 2, problem
+ * 10). A person's roles change what an App shows only through its row-level
+ * rules (`rlsBindings`, filled from a member's attributes). A single-user
+ * project App with one member and no row rules looks the same to every role,
+ * so offering "View as" there, without a Viewer to pick, only misleads: it is
+ * hidden. A synthetic Viewer would read every row, exactly as the owner does.
+ */
+export function personaSwitcherUseful(app: Pick<AppDocumentSummary['app'], 'members' | 'rlsBindings'> | null): boolean {
+  if (!app) return false;
+  return app.members.length > 1 || (app.rlsBindings?.length ?? 0) > 0;
+}
+
+export function PersonaSwitcher({ app }: { app: AppDocumentSummary['app'] | null }): JSX.Element | null {
   const { state, dispatch } = useNotebook();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -26,6 +39,9 @@ export function PersonaSwitcher({ app }: { app: AppDocumentSummary['app'] | null
     ? `${state.activePersona.displayName ?? state.activePersona.userId} [${state.activePersona.roles.join(', ')}]`
     : 'View as: Owner';
 
+  // Nothing to preview (one person, no row rules): no control. A persona already
+  // chosen stays visible so it can be cleared.
+  if (!personaSwitcherUseful(app) && !state.activePersona) return null;
   if (!app || app.members.length === 0) {
     return (
       <span style={{ fontSize: 12, opacity: 0.6 }}>
@@ -90,7 +106,7 @@ export function PersonaSwitcher({ app }: { app: AppDocumentSummary['app'] | null
             style={menuItemStyle(state.activePersona === null)}
           >
             <div style={{ fontWeight: 500 }}>Owner (local)</div>
-            <div style={{ fontSize: 11, opacity: 0.65 }}>Default — no RLS narrowing</div>
+            <div style={{ fontSize: 11, opacity: 0.65 }}>Sees all rows</div>
           </button>
           <div style={{ height: 1, background: 'var(--border-color, rgba(0,0,0,0.08))', margin: '4px 0' }} />
           {app.members.map((m) => (

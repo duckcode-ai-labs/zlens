@@ -152,8 +152,8 @@ describe('dataset tile notices shared by Studio and the viewer', () => {
       },
     } as never);
     expect(notices.map((notice) => [notice.kind, notice.label])).toEqual([
-      ['excluded', 'Not filtered by region'],
-      ['not_linked', 'Not filtered by sales channel'],
+      ['excluded', 'Not filtered by Region'],
+      ['not_linked', 'Not filtered by Sales Channel'],
       ['adapted', 'Rolled up over time'],
     ]);
     expect(notices[2]?.detail).toContain('day grain to month');

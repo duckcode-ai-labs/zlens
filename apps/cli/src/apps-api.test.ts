@@ -495,6 +495,29 @@ describe('Apps command center API helpers', () => {
     expect(existsSync(join(appDir, 'dashboards', 'overview.dqld'))).toBe(true);
   });
 
+  // New-user round 2, problem 10: the card read "Governed analytical App for Sales Manager Manual", never written by anyone.
+  it('keeps the description the author wrote, and fills a plain one only when there is none', () => {
+    const root = createProject();
+    const plain = createStoredAppBuildDraft(root, { appId: 'sales-manual', name: 'Sales Manager Manual', domain: 'finance', authoringMode: 'manual', sourcePolicy: 'governed_only' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, plain));
+    const appPath = join(root, 'apps/sales-manual/dql.app.json');
+    expect(JSON.parse(readFileSync(appPath, 'utf-8')).description).toBe('A dashboard of live numbers for Finance.');
+
+    // The author writes a description; a republish without a new one keeps it.
+    const app = JSON.parse(readFileSync(appPath, 'utf-8'));
+    writeFileSync(appPath, JSON.stringify({ ...app, description: 'Weekly numbers for the sales managers.' }, null, 2) + '\n');
+    const edit = createStoredAppBuildDraft(root, { baseAppId: 'sales-manual', name: 'Sales Manager Manual', authoringMode: 'manual', sourcePolicy: 'governed_only' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, edit));
+    expect(JSON.parse(readFileSync(appPath, 'utf-8')).description).toBe('Weekly numbers for the sales managers.');
+
+    // What the author typed for the App is its description.
+    const typed = createStoredAppBuildDraft(root, { appId: 'typed', name: 'Revenue', goal: 'Revenue by month for the weekly review', authoringMode: 'ai', sourcePolicy: 'governed_only' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, typed));
+    const description = JSON.parse(readFileSync(join(root, 'apps/typed/dql.app.json'), 'utf-8')).description;
+    expect(description).toBe('Revenue by month for the weekly review');
+    expect(description).not.toMatch(/Governed analytical/);
+  });
+
   it('rehydrates published source bindings for safe editing and returns every page from the App route', async () => {
     const root = createProject();
     const created = createAppPackage(root, {

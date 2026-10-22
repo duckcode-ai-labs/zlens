@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AlertTriangle, CheckCircle2, FileDiff, Loader2, RefreshCw, ShieldCheck, Trash2, X } from 'lucide-react';
-import { api, type ContextAuthoringProposalV1 } from '../../api/client';
+import { api, DqlApiError, type ContextAuthoringProposalV1 } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
 import { describeProposalOperation, groupProposalDiagnostics, proposalOriginWords, proposalReviewTitle, proposalScopeNames } from './proposal-review-words';
 
@@ -74,7 +74,9 @@ export function ContextProposalReviewDrawer({
       onCommitted(result.proposal);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      setRebaseAvailable(true);
+      // Only a change to what these drafts write is asked about; Save already
+      // saves them as they are when other project files changed.
+      setRebaseAvailable(proposalNeedsUpdate(cause));
     } finally {
       setBusy(null);
     }
@@ -197,7 +199,7 @@ export function ContextProposalReviewDrawer({
 
         <footer style={{ padding: '12px 18px', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 9 }}>
           <span style={{ flex: 1, fontSize: 10.5, color: theme.textMuted }}>{selected.length} of {current.operations.length} change{current.operations.length === 1 ? '' : 's'} ticked</span>
-          {rebaseAvailable ? <button type="button" onClick={() => void rebase()} disabled={Boolean(busy)} style={secondaryButton(theme)}><RefreshCw size={13} /> Rebase proposal</button> : null}
+          {rebaseAvailable ? <button type="button" onClick={() => void rebase()} disabled={Boolean(busy)} style={secondaryButton(theme)}><RefreshCw size={13} /> {updateProposalLabel(current.origin)}</button> : null}
           {keptDrafts && onDiscarded ? <button type="button" onClick={() => void discard()} disabled={Boolean(busy)} style={secondaryButton(theme)}><Trash2 size={13} /> {busy === 'discard' ? 'Discarding…' : 'Discard drafts'}</button> : null}
           <button type="button" onClick={onClose} disabled={Boolean(busy)} style={secondaryButton(theme)}>{keptDrafts ? 'Keep for later' : 'Cancel'}</button>
           <button type="button" onClick={() => void commit()} disabled={Boolean(busy) || selected.length === 0 || blocking.length > 0} style={{ ...primaryButton(theme), opacity: busy || selected.length === 0 || blocking.length ? .55 : 1 }}>
@@ -207,6 +209,17 @@ export function ContextProposalReviewDrawer({
       </aside>
     </div>
   );
+}
+
+/** Whether Save failed because what the proposal writes changed since review ("Update drafts and review again"). */
+export function proposalNeedsUpdate(cause: unknown): boolean {
+  const code = cause instanceof DqlApiError ? cause.code : undefined;
+  return code === 'PROPOSAL_STALE' || code === 'SOURCE_CHANGED';
+}
+
+/** The button that previews the proposal again on the latest project. Never "Rebase". */
+export function updateProposalLabel(origin: ContextAuthoringProposalV1['origin']): string {
+  return origin === 'warehouse_discovery' ? 'Update drafts and review again' : 'Update and review again';
 }
 
 function Summary({ label, value, theme }: { label: string; value: number; theme: Theme }) {

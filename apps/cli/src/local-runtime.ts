@@ -8389,6 +8389,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     diagnostics?: ContextAuthoringDiagnosticV1[];
     /** Names for the Domains the proposal creates, by id. */
     domainNames?: Record<string, string>;
+    /** False: build it without keeping it (Save checks a reviewed proposal against the current project this way). */
+    persist?: boolean;
   }): ContextAuthoringProposalV1 => {
     const snapshot = projectSnapshot();
     if (input.expectedSnapshotId && input.expectedSnapshotId !== snapshot.snapshotId) {
@@ -8581,8 +8583,38 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       sourceArtifactId: input.sourceArtifactId,
       revision: input.revision,
     });
-    contextProposalStore.save(proposal);
+    if (input.persist !== false) contextProposalStore.save(proposal);
     return proposal;
+  };
+
+  /**
+   * Save after something else in the project changed (new-user round 2,
+   * problem 4): certifying a table in an App, a setup step writing
+   * dql.config.json, a block edit. The reviewed changes are previewed again
+   * on the current project. When every file they write comes out exactly as
+   * reviewed, nothing the person looked at moved, so they are saved as they
+   * are. When a drafted table or join comes out differently, the person is
+   * asked, in plain words naming what changed.
+   */
+  const rebaseReviewedProposal = (reviewed: ContextAuthoringProposalV1): ContextAuthoringProposalV1 => {
+    let rebased: ContextAuthoringProposalV1;
+    try {
+      rebased = previewContextAuthoring({
+        origin: reviewed.origin,
+        operations: reviewed.operations,
+        sourceRunId: reviewed.sourceRunId,
+        sourceArtifactId: reviewed.sourceArtifactId,
+        revision: (reviewed.revision ?? 1) + 1,
+        persist: false,
+      });
+    } catch {
+      throw Object.assign(new Error(staleProposalMessage(reviewed, reviewed.operations.map((operation) => operation.id))), { code: 'PROPOSAL_STALE' });
+    }
+    const changed = proposalRebaseConflicts(reviewed, rebased);
+    if (changed.length || rebased.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) {
+      throw Object.assign(new Error(staleProposalMessage(reviewed, changed)), { code: 'PROPOSAL_STALE' });
+    }
+    return rebased;
   };
 
   /**
@@ -15715,16 +15747,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const receipt = contextProposalStore.getCommitReceipt(idempotencyKey);
         if (receipt) {
           if (receipt.proposalId !== proposal.id || receipt.proposalHash !== expectedProposalHash) throw Object.assign(new Error('The idempotency key belongs to another reviewed proposal request.'), { code: 'IDEMPOTENCY_CONFLICT' });
+          const saved = contextProposalStore.get(proposal.id);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ requestId, proposal: contextProposalStore.get(proposal.id), snapshotId: receipt.snapshotId, idempotent: true }));
+          res.end(serializeJSON({ requestId, proposal: (saved?.supersededBy ? contextProposalStore.get(saved.supersededBy) : undefined) ?? saved, snapshotId: receipt.snapshotId, idempotent: true }));
           return;
         }
         if (proposal.status !== 'proposed') throw Object.assign(new Error('Only a proposed change can be committed.'), { code: 'PROPOSAL_STALE' });
         if (proposal.proposalHash !== expectedProposalHash) throw Object.assign(new Error('The proposal changed after review.'), { code: 'PROPOSAL_STALE' });
         if (proposal.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) throw Object.assign(new Error('Resolve all blocking proposal diagnostics before saving.'), { code: 'PROPOSAL_BLOCKED' });
         const beforeSnapshot = projectSnapshot();
-        if (beforeSnapshot.snapshotId !== proposal.baseSnapshotId) throw Object.assign(new Error('Project sources changed after this proposal was reviewed.'), { code: 'PROPOSAL_STALE' });
-        const resolvedPatches = proposal.patches.map((patch) => ({ patch, absolute: resolveContextPatchPath(projectRoot, gitRoot, patch.path) }));
+        // Something else changed in the project since review: save the
+        // reviewed changes as they are when none of their files moved, and
+        // ask only when one did.
+        const reviewed = beforeSnapshot.snapshotId === proposal.baseSnapshotId ? proposal : rebaseReviewedProposal(proposal);
+        const resolvedPatches = reviewed.patches.map((patch) => ({ patch, absolute: resolveContextPatchPath(projectRoot, gitRoot, patch.path) }));
         for (const { patch, absolute } of resolvedPatches) {
           const current = existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
           if (current !== patch.before) throw Object.assign(new Error(`Source changed after preview: ${patch.path}`), { code: 'SOURCE_CHANGED' });
@@ -15745,13 +15781,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const nextSnapshot = projectSnapshot();
           if (nextSnapshot.error) throw Object.assign(new Error(nextSnapshot.error), { code: 'COMPILE_FAILED' });
           await refreshUnifiedProjectIndexes(projectRoot);
-          const committed: ContextAuthoringProposalV1 = { ...proposal, status: 'committed', committedAt: new Date().toISOString(), committedSnapshotId: nextSnapshot.snapshotId };
+          const committedAt = new Date().toISOString();
+          const committed: ContextAuthoringProposalV1 = { ...reviewed, status: 'committed', committedAt, committedSnapshotId: nextSnapshot.snapshotId };
           contextProposalStore.save(committed);
+          // The reviewed proposal was saved as its rebased copy: it waits for no one now.
+          if (reviewed !== proposal) contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: committedAt, supersededBy: committed.id });
           contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
           // Saved drafts are reviewed: older copies of them wait for no one.
-          if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
+          if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: committed.id });
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ requestId, proposal: committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling }));
+          res.end(serializeJSON({ requestId, proposal: committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling, ...(reviewed !== proposal ? { rebased: true } : {}) }));
         } catch (error) {
           for (const { patch, absolute } of written.reverse()) {
             if (!patch.before) rmSync(absolute, { force: true });
@@ -15770,7 +15809,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const code = apiErrorCode(error, /changed after/i.test(apiErrorMessage(error)) ? 'SOURCE_CHANGED' : 'PROPOSAL_COMMIT_FAILED');
         const status = code === 'PROPOSAL_NOT_FOUND' ? 404 : ['PROPOSAL_STALE', 'SOURCE_CHANGED', 'IDEMPOTENCY_CONFLICT', 'OWNERSHIP_CONFLICT', 'DEPENDENCY_CONFLICT'].includes(code) ? 409 : code === 'PROPOSAL_BLOCKED' ? 422 : 400;
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: ['Rebase or repreview the proposal before saving.'] })));
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: ['Update the drafts to the latest project, review them again, then save.'] })));
       }
       return;
     }
@@ -20575,7 +20614,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           owner,
           content: source,
           // A duplicate-column answer (design Q1.4) is said in the description too.
-          description: `${proposal.name} from ${table.name}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.${(proposal.hiddenColumns ?? []).map((entry) => ` ${entry.column} is hidden (${entry.keptColumn} holds the same number).`).join('')}`,
+          description: `${proposal.name} from ${table.name}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.${(proposal.hiddenColumns ?? []).map((entry) => ` ${entry.column} is hidden (${entry.keptColumn} holds the same ${entry.relation === 'same' ? 'number' : 'amount'}).`).join('')}`,
           tags: ['app-datasets', 'from-table'],
           gitMetadata: readGitMetadata(projectRoot),
         });
@@ -35843,6 +35882,58 @@ export function skillDraftId(question: string, domain: string): string {
 
 function authoringSlug(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+/**
+ * The operations of a reviewed proposal whose files come out differently when
+ * it is previewed again on the current project (new-user round 2, problem 4),
+ * or whose files were edited since. Empty: every file it writes is exactly
+ * as reviewed, before and after, so it can be saved as it is although other
+ * project files changed.
+ */
+export function proposalRebaseConflicts(reviewed: ContextAuthoringProposalV1, rebased: ContextAuthoringProposalV1): string[] {
+  const written = (proposal: ContextAuthoringProposalV1) => new Map(proposal.patches.filter((patch) => patch.changed).map((patch) => [patch.path, patch]));
+  const before = written(reviewed);
+  const after = written(rebased);
+  const changed = new Set<string>();
+  for (const [path, patch] of before) {
+    const next = after.get(path);
+    // A file it writes that was edited after review is asked about, even when the result would read the same.
+    if (!next || next.after !== patch.after || next.before !== patch.before) changed.add(patch.operationId);
+  }
+  for (const [path, patch] of after) if (!before.has(path)) changed.add(patch.operationId);
+  const reviewedIds = new Set(reviewed.operations.map((operation) => operation.id));
+  const rebasedIds = new Set(rebased.operations.map((operation) => operation.id));
+  for (const id of rebasedIds) if (!reviewedIds.has(id)) changed.add(id);
+  for (const id of reviewedIds) if (!rebasedIds.has(id)) changed.add(id);
+  return [...changed].sort();
+}
+
+/** What a changed operation is about, in words: "Orders", "the join from Order to Customer", a file. */
+function staleOperationWords(operation: ContextAuthoringOperation | undefined, id: string): string {
+  if (operation?.kind === 'modeling_change') {
+    const change = operation.change;
+    if (change.operation === 'upsert_entity') return change.value.businessName || titleCaseAuthoring(change.value.id);
+    if (change.operation === 'upsert_relationship') return `the join from ${titleCaseAuthoring(change.value.from.split('::').pop() ?? change.value.from)} to ${titleCaseAuthoring(change.value.to.split('::').pop() ?? change.value.to)}`;
+    if (change.operation === 'upsert_domain') return `the Domain ${change.value.name || titleCaseAuthoring(change.value.id)}`;
+    const value = change.value as { id?: string; name?: string };
+    return value.name || titleCaseAuthoring(value.id ?? id);
+  }
+  return titleCaseAuthoring(id.split(':').pop() ?? id);
+}
+
+/**
+ * Why a reviewed proposal cannot be saved as it is, in plain words: what
+ * changed, and what to do. Never "rebase".
+ */
+export function staleProposalMessage(reviewed: ContextAuthoringProposalV1, changedOperationIds: string[]): string {
+  const byId = new Map(reviewed.operations.map((operation) => [operation.id, operation]));
+  const names = [...new Set(changedOperationIds.map((id) => staleOperationWords(byId.get(id), id)))];
+  const what = reviewed.origin === 'warehouse_discovery' ? 'drafts' : 'changes';
+  const listed = names.length > 4 ? `${names.slice(0, 4).join(', ')} and ${names.length - 4} more` : names.join(', ');
+  return names.length
+    ? `Part of the project these ${what} change was edited after you reviewed them (${listed}). Update the ${what} to the latest project and review them again before saving.`
+    : `The project changed after you reviewed these ${what}. Update the ${what} to the latest project and review them again before saving.`;
 }
 
 /**

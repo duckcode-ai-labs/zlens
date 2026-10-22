@@ -13,7 +13,9 @@ import { discoverAppFilterCandidates, filterTileMappingsForField } from './app-s
 import { FilterTileChoice, filterCandidateMatches, filterCandidateOrigin } from './builder/GlobalFilterBar';
 import { datasetTileNotices } from './dataset-tile-evidence';
 import { canvasShortcut, canvasShortcutApplies, selectionAfterAdd } from './builder/canvas-interactions';
-import { appHeaderTitle } from './app-text';
+import { appHeaderTitle, formatBusinessLabel } from './app-text';
+import { proposeDatasetCrossFilterLinks } from './app-dataset-interactions';
+import { personaSwitcherUseful } from './PersonaSwitcher';
 import { tableRowCountLabel } from '../output/TableOutput';
 import { kpiValueFontSize } from '../output/ChartOutput';
 import { appDataSameNameOrigins } from './builder/app-data-names';
@@ -96,6 +98,40 @@ describe('display names, never internal IDs (B7)', () => {
       filterReport: { applied: [], notApplied: [{ filter: 'customer_name', code: 'does_not_apply', reason: 'customer name is not exposed by commerce::block::monthly_revenue::88e1e6c0d79c8e655ab1.' }] },
     } as never, { filterLabels: { customer_name: 'Customer Name' } });
     expect(notices).toEqual([expect.objectContaining({ label: 'Not filtered by Customer Name', detail: 'Monthly Revenue has no Customer Name field.' })]);
+  });
+});
+
+// New-user round 2, problem 9: "Customer Customer Name affects 3 of 4 tiles", "not mapped to beverage_revenue_by_product".
+describe('labels never repeat a relation or show a saved query id', () => {
+  it('reads a related field id as the field, once', () => {
+    expect(formatBusinessLabel('customer__customer_name')).toBe('Customer Name');
+    expect(formatBusinessLabel('customer__city')).toBe('Customer City');
+    expect(formatBusinessLabel('customer__region__region_name')).toBe('Region Name');
+    expect(formatBusinessLabel('ordered_at')).toBe('Ordered At');
+    expect(formatBusinessLabel('order_kpi')).toBe('Order KPI');
+  });
+
+  it('names the data a filter does not reach, also in reasons older Apps stored', () => {
+    expect(plainSourceText('Ordered At is not mapped to beverage_revenue_by_product.')).toBe('Ordered At is not mapped to Beverage Revenue By Product.');
+    expect(plainSourceText('Sales channel is not mapped to Orders.')).toBe('Sales channel is not mapped to Orders.');
+    const notices = datasetTileNotices({
+      tileId: 'beverage', status: 'ok', tileType: 'block',
+      dataset: { unboundFilters: [{ filterId: 'customer__customer_name', code: 'FILTER_MAPPING_MISSING', message: 'customer__customer_name is not mapped to beverage_revenue_by_product.' }] },
+    } as never);
+    expect(notices).toEqual([expect.objectContaining({ label: 'Not filtered by Customer Name' })]);
+    expect(notices[0]!.detail).toContain('Beverage Revenue By Product');
+    expect(JSON.stringify(notices)).not.toMatch(/beverage_revenue_by_product|Customer Customer/);
+  });
+
+  it('the "Also filter" hint names the data, not its id', () => {
+    const tile = { i: 'by-product', sourceId: 's.orders', sourceRevision: 'r1', query: { dimensions: [{ field: 'product_name' }], measures: [{ measure: 'revenue' }] } } as never;
+    const field = { kind: 'physical', name: 'product_name', qualifiedId: 'f::product_name', type: 'string', role: 'dimension', status: 'approved' };
+    const own = { id: 's.orders', label: 'Orders', fields: [field] };
+    const beverage = { id: 'commerce::block::beverage_revenue_by_product::88e1', label: 'beverage_revenue_by_product', fields: [field] };
+    const page = { datasets: [{ id: 'orders', sourceId: 's.orders', sourceRevision: 'r1' }, { id: 'beverage', sourceId: 's.beverage', sourceRevision: 'r1' }], layout: { items: [] } } as never;
+    const proposal = proposeDatasetCrossFilterLinks({ page, tile, descriptorFor: (binding) => ((binding as { id: string }).id === 'orders' ? own : beverage) as never });
+    expect(proposal?.targetLabels).toContain('Beverage Revenue By Product');
+    expect(proposal?.targetLabels.join(' ')).not.toContain('beverage_revenue_by_product');
   });
 });
 
@@ -183,5 +219,17 @@ describe('smaller editor fixes (B14)', () => {
     expect(kpiValueFontSize('$671.4K')).toBeUndefined();
     expect(kpiValueFontSize('$2.9K', 600)).toBe(40);
     expect(kpiValueFontSize('$2.9K')).toBeUndefined();
+  });
+});
+
+// New-user round 2, problem 10: "View as" offered only the owner, with no Viewer to pick.
+describe('"View as" only where it can show something different', () => {
+  it('is hidden for a one-person App without row rules, and shown with row rules or more people', () => {
+    const owner = { userId: 'me@local', roles: ['owner', 'analyst'] };
+    expect(personaSwitcherUseful(null)).toBe(false);
+    expect(personaSwitcherUseful({ members: [owner], rlsBindings: [] })).toBe(false);
+    expect(personaSwitcherUseful({ members: [owner] })).toBe(false);
+    expect(personaSwitcherUseful({ members: [owner, { userId: 'ana@local', roles: ['viewer'] }] })).toBe(true);
+    expect(personaSwitcherUseful({ members: [owner], rlsBindings: [{ role: 'viewer', variable: 'region', from: 'region' }] })).toBe(true);
   });
 });

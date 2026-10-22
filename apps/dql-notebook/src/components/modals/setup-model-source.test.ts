@@ -142,7 +142,7 @@ describe('Draft my models', () => {
     expect(outcome).toEqual({
       ok: true,
       proposalId: 'proposal-1',
-      message: 'Drafted 2 models and 1 join from 6 tables, each join checked on the data.',
+      message: 'Drafted 2 models and 1 join from 6 tables, each join checked on the data. Not saved yet: review and save them in Modeling.',
       domain: 'main',
     });
     const storage = { setItem: vi.fn() };

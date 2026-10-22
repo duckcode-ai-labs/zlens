@@ -5,6 +5,7 @@ import type {
   DashboardRunResponse,
 } from '../../api/client';
 import { plainSourceText } from './source-names';
+import { formatBusinessLabel } from './app-text';
 
 type DashboardRunTile = DashboardRunResponse['tiles'][number];
 
@@ -25,7 +26,7 @@ export type DatasetTileNotice = {
 
 export function datasetTileNotices(tile: DashboardRunTile | undefined, options: { filterLabels?: Record<string, string> } = {}): DatasetTileNotice[] {
   const notices: DatasetTileNotice[] = [];
-  const nameOf = (filterId: string) => options.filterLabels?.[filterId] ?? filterId.replace(/[_-]+/g, ' ');
+  const nameOf = (filterId: string) => options.filterLabels?.[filterId] ?? formatBusinessLabel(filterId);
   for (const issue of tile?.dataset?.unboundFilters ?? []) {
     const name = nameOf(issue.filterId);
     notices.push(issue.code === 'DATASET_TILE_EXCLUDED'
