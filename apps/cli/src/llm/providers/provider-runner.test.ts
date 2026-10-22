@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { __test__, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, resolveEffectiveQuestion } from './provider-runner.js';
+import { __test__, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, evalCassetteRuntimeMode, resolveEffectiveQuestion } from './provider-runner.js';
 import { CassetteStore, cassetteFingerprint, cassetteKey, evalCassetteCanonicalizationV2 } from '../../commands/agent-eval-cassette.js';
 import type { AgentRunRequest } from '../types.js';
 import type { AgentMessage } from '@zlens/agent';
@@ -149,5 +149,15 @@ describe('the provider runner is not an answer surface', () => {
     await expect(runner.run(req([{ role: 'user', content: 'total revenue' }]), (turn) => { turns.push(turn); }, new AbortController().signal))
       .rejects.toMatchObject({ code: 'ASK_PIPELINE_OWNS_GOVERNED_ANSWERS' });
     expect(turns).toEqual([expect.objectContaining({ kind: 'error' })]);
+  });
+});
+
+describe('evalCassetteRuntimeMode', () => {
+  it('reports off without a cassette directory, and replay unless the mode says record or live', () => {
+    expect(evalCassetteRuntimeMode({})).toBe('off');
+    expect(evalCassetteRuntimeMode({ ZLENS_EVAL_CASSETTE_MODE: 'record' })).toBe('off');
+    expect(evalCassetteRuntimeMode({ ZLENS_EVAL_CASSETTE_DIR: '/c' })).toBe('replay');
+    expect(evalCassetteRuntimeMode({ ZLENS_EVAL_CASSETTE_DIR: '/c', ZLENS_EVAL_CASSETTE_MODE: 'record' })).toBe('record');
+    expect(evalCassetteRuntimeMode({ ZLENS_EVAL_CASSETTE_DIR: '/c', ZLENS_EVAL_CASSETTE_MODE: 'live' })).toBe('live');
   });
 });

@@ -47,7 +47,7 @@ Decisions:
 | `tutorials/02-authoring-blocks.md` | archive | replaced by `blocks/` |
 | `tutorials/03-dashboards-and-apps.md` | archive | replaced by `apps/` |
 | `tutorials/04-agentic-analytics.md` | archive | replaced by `ask/` and `agents/` |
-| `tutorials/05-ci-and-verify.md` | keep | Reference nav ("CI and zlens verify") |
+| `tutorials/05-ci-and-verify.md` | keep | Reference nav ("CI with zlens eval") |
 | `datalex-and-dql.md` | keep | Reference nav ("Modeling and Domain Packages") |
 | `agentic-answer-flow.md` | keep | Architecture nav |
 | `migrations/workbook-to-dashboard.md` | keep | Reference nav; linked from compiler messages |

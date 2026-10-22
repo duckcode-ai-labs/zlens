@@ -33,6 +33,7 @@ import { runImport } from "./commands/import.js";
 import { runConnect } from "./commands/connect.js";
 import { runPromote } from "./commands/promote.js";
 import { runEval } from "./commands/eval.js";
+import { runCi } from "./commands/ci.js";
 import { runPropose } from "./commands/propose.js";
 import { runModel } from "./commands/model.js";
 import { explainNativeDependencyError, sqlitePreflightMessage } from "./native-deps.js";
@@ -121,9 +122,10 @@ const HELP = `
       zlens agent feedback up|down    Record local answer-quality telemetry for later review
       zlens agent eval agent-evals.yml  Measure certified/follow-up/refusal accuracy
     zlens slack serve               Slack slash-command bot (forwards to the answer loop)
-    zlens verify                    Verify dql-manifest.json is reproducible from source
+    zlens verify [path]             Check the local dql-manifest.json still matches the source
     zlens eval [path]               Replay block examples + eval/*.yaml through the agent
                                     router and score routing accuracy (CI-gateable)
+    zlens ci init [path]            Write a GitHub Actions workflow that runs zlens eval on every PR
     zlens --version                  Show version
     zlens --help                    Show this help
 
@@ -165,8 +167,11 @@ const HELP = `
       --execute                       For "agent eval": run bounded SQL previews
       --min-answer-rate <0..1>        For "eval": fail below non-refusal rate on answerable cases
       --min-tool-requirement <0..1>    For "agent eval": fail below required tool-call pass rate
-      --via runtime|loop               For "agent eval": drive a running server (routing + gates) or the answer loop only
-      --cassette record|replay         For "agent eval": record provider responses once, then replay offline
+      --via runtime                    For "agent eval": drive a running workbench (routing + gates); the default and only driver
+      --cassette record|replay         For "agent eval": require the workbench to run in this cassette mode (it is started
+                                       with ZLENS_EVAL_CASSETTE_DIR and ZLENS_EVAL_CASSETTE_MODE); also the --judge calls' mode
+      --judge                          For "agent eval": score each answer with the LLM judge (needs a provider)
+      --min-judge-pass <0..1>          For "agent eval": fail below this judge pass rate (needs --judge)
       --max-false-refusal <0..1>       For "agent eval": fail above this share of ANSWERABLE cases refused
       --min-refusal-recall <0..1>      For "agent eval": fail below this share of must-refuse cases that refused
       --thread <id>                   For "agent ask": continue a persisted conversation thread
@@ -321,6 +326,12 @@ const COMMAND_HELP: Record<string, string> = {
     zlens eval [path] --min-route-accuracy <0..1> --min-refusal <0..1> --min-candidate-recall <0..1>
     zlens eval [path] --no-examples
     zlens eval [path] --init        Write a starter eval/golden.yaml template
+    zlens eval [path] --min-answer-rate <0..1>
+
+  Thresholds are shares between 0 and 1 (90% is 0.9); a value outside that
+  range is an error. A threshold that no case measures (for example
+  --min-refusal with no expectRefuse case) is reported as n/a and not applied.
+  The manifest is built from source in memory: no zlens compile needed.
 
   Replays every certified block's examples[].question plus any eval/*.yaml
   cases through the existing agent router (no warehouse, no LLM judging) and
@@ -344,12 +355,30 @@ const COMMAND_HELP: Record<string, string> = {
       priorMeasures: ["<measure>"]       # optional; prior turn's answered measures
   `,
   verify: `
-  zlens verify — Verify dql-manifest.json is reproducible
+  zlens verify — Check the local dql-manifest.json still matches the source
 
   Usage:
     zlens verify [path] [--dbt-manifest <path>] [--dbt-hops <n>] [--datalex-manifest <path>] [--format json]
 
-  Run after zlens compile in CI or before release commits.
+  Recompiles in memory and compares block SQL, status and domain, plus added
+  or removed blocks, notebooks, Apps, dashboards, metrics, dimensions and
+  sources. Exits 1 on drift. dql-manifest.json is gitignored, so this is a
+  local check after zlens compile; in CI, gate on zlens eval (zlens ci init).
+  `,
+  ci: `
+  zlens ci — Continuous-integration setup
+
+  Usage:
+    zlens ci init [path] [--force]
+
+  Writes .github/workflows/zlens-eval.yml at the git root. On every pull
+  request it runs, with the CLI pinned to this version:
+
+    npx -y --package=@zlens/cli@<version> zlens eval . --min-route-accuracy 1 --min-refusal 1
+
+  zlens eval reads no warehouse and calls no model, so the job needs no
+  database file, dbt target/, dql-manifest.json, lockfile or API key. A
+  project in a subfolder gets a working-directory. --force overwrites.
   `,
 };
 
@@ -380,6 +409,11 @@ async function main() {
     process.exit(0);
   }
 
+  if (flags.argErrors?.length) {
+    for (const message of flags.argErrors) console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+
   const commandAllowsNoFile =
     command === "init" ||
     command === "serve" ||
@@ -397,6 +431,7 @@ async function main() {
     command === "schedule" ||
     command === "verify" ||
     command === "eval" ||
+    command === "ci" ||
     command === "propose" ||
     (command === "certify" && Boolean(flags.fromDraft));
   if (!file && !commandAllowsNoFile) {
@@ -509,6 +544,9 @@ async function main() {
         break;
       case "eval":
         await runEval(file, rest, flags);
+        break;
+      case "ci":
+        await runCi(file, rest, flags);
         break;
       default:
         console.error(

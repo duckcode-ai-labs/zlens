@@ -50,7 +50,7 @@ installation.
 | `zlens doctor git-hygiene` | Flag tracked local/generated files before commit |
 | `zlens validate [path]` | Validate all `.dql` files and semantic references |
 | `zlens compile [path]` | Generate project manifest (`dql-manifest.json`) |
-| `zlens verify [path]` | Verify that `dql-manifest.json` is reproducible from tracked source |
+| `zlens verify [path]` | Check that the local `dql-manifest.json` (written by `zlens compile`) still matches the source: block SQL, status and domain, plus added or removed blocks, notebooks, Apps, dashboards, metrics, dimensions and sources. Exits 1 on drift. The manifest is gitignored, so this is a local check, not a CI gate on a clean clone |
 
 `zlens doctor scale --format json` includes counts, cache freshness,
 metadata/KG index state, context-pack timing, source fingerprints, domain
@@ -88,9 +88,14 @@ local databases, data files, AI pins, saved views, and layout overrides.
 | --- | --- |
 | `zlens diff <path>` | Semantic diff of a `.dql` or `.dqlnb` against git HEAD |
 | `zlens diff <before> <after>` | Semantic diff between two files on disk |
+| `zlens diff <path> --impact` | Add downstream impact from the compiled lineage (run `zlens compile` first) |
 | `zlens diff <path> --impact --write-recertification` | Mark impacted semantic metric/dimension YAML as `pending_recertification` |
 
-Exits **1** on changes — scriptable like `git diff`.
+Without `--impact`, `zlens diff` exits **1** on any change, like `git diff
+--exit-code`. With `--impact`, it exits **1** only when a changed block
+invalidates a certified downstream item that `--write-recertification` did not
+mark for recertification; otherwise it exits 0, including when there is no
+`dql-manifest.json` to read lineage from.
 
 ### Build & preview
 
@@ -190,8 +195,10 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `zlens schedule status [path]` | Show local scheduler status |
 | `zlens schedule stop [path]` | Stop the local scheduler |
 | `zlens slack serve [path]` | Run the Slack slash-command bot through the governed answer loop |
-| `zlens eval [path]` | Replay block examples and `eval/*.yaml` through the router |
-| `zlens agent eval <file.yml>` | Evaluate certified/follow-up/refusal behavior, optional tools, SQL execution, and judging |
+| `zlens eval [path]` | Replay block examples and `eval/*.yaml` through the router. Builds the manifest from source in memory and reads no warehouse or model, so it runs on a clean clone |
+| `zlens eval [path] --init` | Write a starter `eval/golden.yaml` (commented examples for the Jaffle Shop sample's blocks) |
+| `zlens ci init [path] [--force]` | Write `.github/workflows/zlens-eval.yml` at the git root: `zlens eval . --min-route-accuracy 1 --min-refusal 1` on every pull request, with the CLI pinned to this version. See [CI with zlens eval](../tutorials/05-ci-and-verify.md) |
+| `zlens agent eval <file.yml>` | Evaluate certified/follow-up/refusal behavior, optional tools, SQL execution, and judging, through a running workbench (`zlens notebook`) |
 
 ### Migration
 
@@ -250,7 +257,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--ai-layout` | Store dynamic GenUI layout metadata for `zlens app generate` |
 | `--provider <name>` | Select agent provider where supported |
 | `--user <id>` | Attribute agent memory or feedback to a local user id |
-| `--runtime-url <url>` / `--runtime <url>` | Select the local agent runtime endpoint |
+| `--runtime-url <url>` / `--runtime <url>` | Select the local agent runtime endpoint; for `zlens agent eval`, the workbench to drive (default `http://127.0.0.1:3474`, or `ZLENS_RUNTIME_URL`) |
 | `--thread <id>` | Continue a persisted `zlens agent ask` conversation |
 | `--reasoning-effort low\|medium\|high` | Select supported provider reasoning effort |
 | `--analysis-depth quick\|deep` | Control the agent context budget |
@@ -259,18 +266,35 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--min-route-accuracy <0..1>` | For `zlens eval`: minimum expected-route accuracy |
 | `--min-refusal <0..1>` | For `zlens eval`: minimum refusal recall |
 | `--min-answer-rate <0..1>` | For `zlens eval`: fail when answerable cases route to missing context below this non-refusal rate |
+| `--min-candidate-recall <0..1>` | For `zlens eval`: minimum share of cases whose expected block was retrieved at all (separates a retrieval miss from a routing miss) |
+| `--no-examples` | For `zlens eval`: score YAML cases without manifest examples |
+| `--init` | For `zlens eval`: write a starter `eval/golden.yaml`; never overwrites one |
+| `--via runtime` | For `zlens agent eval`: drive a running workbench. The default and only driver; any other value is an error |
+| `--cassette record\|replay\|live` | For `zlens agent eval`: the cassette mode the workbench must be running in. The workbench makes the provider calls, and it replays them only when it was started with `ZLENS_EVAL_CASSETTE_DIR` (plus `ZLENS_EVAL_CASSETTE_MODE`, which is `replay` unless set to `record` or `live`). When its `/api/health` reports another mode, or none, the eval stops before any case runs and prints the command to start it. The flag also sets the mode for this process's own `--judge` calls |
+| `--judge` | For `zlens agent eval`: score each answer with the LLM judge; needs a provider |
+| `--min-judge-pass <0..1>` | For `zlens agent eval`: minimum LLM-judge pass rate (needs `--judge`) |
+| `--max-false-refusal <0..1>` | For `zlens agent eval`: maximum share of answerable cases that refused |
+| `--min-refusal-recall <0..1>` | For `zlens agent eval`: minimum share of must-refuse cases that refused |
 | `--min-tool-requirement <0..1>` | For `zlens agent eval`: fail when cases with `expected.minToolCalls` fall below this pass rate |
 | `--min-execution-match <0..1>` | For `zlens agent eval`: minimum expected-row execution match |
-| `--min-judge-pass <0..1>` | For `zlens agent eval`: minimum LLM-judge pass rate |
+| `--min-grounded-narration <0..1>` | For `zlens agent eval`: minimum share of attempted verified-fact narrations that passed their fact check |
 | `--max-wrong-certified <n>` | For `zlens agent eval`: maximum wrongly certified answers |
-| `--no-examples` | For `zlens eval`: score YAML cases without manifest examples |
+| `--max-provider-dispatches <n>` | For `zlens agent eval`: maximum provider round trips for the worst question |
+| `--max-latency-p95-ms <ms>` | For `zlens agent eval`: maximum p95 latency for answerable cases |
+| `--case-timeout-ms <ms>` | For `zlens agent eval`: how long one question may take before it is recorded as failed |
 | `--impact` | Include downstream impact in `zlens diff` |
 | `--write-recertification` | Mark impacted semantic YAML pending recertification |
+
+Every `<0..1>` flag takes a share between 0 and 1 (90% is `0.9`). A value
+outside that range is an error and the command does not run. In `zlens eval`,
+a threshold that no case measures (for example `--min-refusal` with no
+`expectRefuse` case) is reported as n/a and not applied.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Generic failure *or* `zlens diff`/`zlens fmt --check` found differences |
-| `2` | Usage / argument error |
+| `1` | Any failure: an error, an invalid flag value, a missed `eval`/`agent eval` threshold, drift found by `zlens verify`, or differences found by `zlens diff` (see its `--impact` rule above), `zlens fmt --check` or `zlens migrate format --check` |
+
+There is no separate exit code for usage errors.

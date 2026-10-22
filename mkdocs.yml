@@ -167,7 +167,7 @@ nav:
       - Semantic layer: reference/semantic-layer.md
       - Modeling and Domain Packages: datalex-and-dql.md
       - Ask traces: reference/ask-traces.md
-      - CI and zlens verify: tutorials/05-ci-and-verify.md
+      - CI with zlens eval: tutorials/05-ci-and-verify.md
       - Migrate from other tools: guides/migrate.md
       - Workbook to dashboard: migrations/workbook-to-dashboard.md
       - Compatibility: reference/compatibility.md

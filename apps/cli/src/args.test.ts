@@ -161,4 +161,44 @@ describe('parseArgs', () => {
     expect(parsed.flags.impact).toBe(true);
     expect(parsed.flags.writeRecertification).toBe(true);
   });
+
+  it('parses eval and agent eval share thresholds between 0 and 1', () => {
+    const parsed = parseArgs(['eval', '.', '--min-route-accuracy', '1', '--min-refusal', '0', '--min-candidate-recall', '0.9']);
+    expect(parsed.flags.minRouteAccuracy).toBe(1);
+    expect(parsed.flags.minRefusal).toBe(0);
+    expect(parsed.flags.minCandidateRecall).toBe(0.9);
+    expect(parsed.flags.argErrors).toBeUndefined();
+  });
+
+  it('rejects an out-of-range share instead of silently dropping the gate', () => {
+    const parsed = parseArgs(['eval', '.', '--min-route-accuracy', '90', '--max-false-refusal', '-1', '--min-judge-pass', 'high']);
+    expect(parsed.flags.minRouteAccuracy).toBeUndefined();
+    expect(parsed.flags.maxFalseRefusal).toBeUndefined();
+    expect(parsed.flags.minJudgePass).toBeUndefined();
+    expect(parsed.flags.argErrors).toEqual([
+      '--min-route-accuracy expects a share between 0 and 1 (for 90% use 0.9), got "90".',
+      '--max-false-refusal expects a share between 0 and 1 (for 90% use 0.9), got "-1".',
+      '--min-judge-pass expects a share between 0 and 1 (for 90% use 0.9), got "high".',
+    ]);
+    // The value was consumed, so it never becomes a positional path.
+    expect(parsed.file).toBe('.');
+    expect(parsed.rest).toEqual([]);
+  });
+
+  it('parses --judge so --min-judge-pass has judge scores to gate on', () => {
+    const parsed = parseArgs(['agent', 'eval', 'agent-evals.yml', '--judge', '--min-judge-pass', '0.8']);
+    expect(parsed.flags.judge).toBe(true);
+    expect(parsed.flags.minJudgePass).toBe(0.8);
+    expect(parsed.file).toBe('eval');
+    expect(parsed.rest).toEqual(['agent-evals.yml']);
+  });
+
+  it('accepts --via runtime and rejects the removed in-process --via loop driver', () => {
+    expect(parseArgs(['agent', 'eval', '--via', 'runtime']).flags.via).toBe('runtime');
+    const loop = parseArgs(['agent', 'eval', '--via', 'loop']);
+    expect(loop.flags.via).toBeUndefined();
+    expect(loop.flags.argErrors?.[0]).toContain('--via loop is not supported');
+    expect(parseArgs(['agent', 'eval', '--cassette', 'tape']).flags.argErrors?.[0])
+      .toBe('--cassette expects record, replay or live, got "tape".');
+  });
 });

@@ -23,8 +23,9 @@ repo.
 4. **[04 — Agentic analytics](./04-agentic-analytics.md)** — the knowledge
    graph, governed agent answers, the uncertified → certified promotion loop,
    and the MCP server.
-5. **[05 — CI and `zlens verify`](./05-ci-and-verify.md)** — keep
-   `dql-manifest.json` reproducible and gate drift in CI.
+5. **[05 — CI with `zlens eval`](./05-ci-and-verify.md)** — gate pull
+   requests on the routing eval, and check the local manifest with
+   `zlens verify`.
 
 ## End-to-end Example
 
@@ -48,8 +49,8 @@ surface for a domain. `zlens compile` writes `dql-manifest.json`, which powers
 **lineage** (`source → dbt model → block → dashboard → App`), the local
 **knowledge graph**, and the **agent**: it retrieves certified blocks first;
 if nothing matches, an LLM proposes SQL marked *Uncertified* that analysts
-review and certify back into blocks. **`zlens verify`** keeps the manifest in
-lock-step with source so CI can gate changes.
+review and certify back into blocks. **`zlens eval`** replays your golden
+questions through the router so CI can gate changes.
 
 If you'd rather skim the architecture first, jump to
 [../architecture/overview.md](../architecture/overview.md).

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
@@ -637,6 +637,84 @@ describe('runEval (end-to-end against the real router)', () => {
     } else {
       expect(process.exitCode).toBe(1);
     }
+  });
+});
+
+describe('runEval --init and the text report', () => {
+  function emptyProject(): string {
+    const root = mkdtempSync(join(tmpdir(), 'dql-eval-init-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ project: 'eval_init' }), 'utf-8');
+    return root;
+  }
+
+  it('writes a Jaffle-style golden template whose cases load once uncommented', async () => {
+    const projectRoot = emptyProject();
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runEval(projectRoot, [], { format: 'text', init: true } as never);
+
+    const template = readFileSync(join(projectRoot, 'eval', 'golden.yaml'), 'utf-8');
+    // The starter used to ship another project's metrics and customers.
+    expect(template).not.toMatch(/BCM|Capital One|consumption|campaign/i);
+    expect(template).toContain('monthly_revenue');
+    expect(template).toContain('Matthew Meyer');
+
+    writeFileSync(
+      join(projectRoot, 'eval', 'golden.yaml'),
+      template.replace(/^  # (- name:|  )/gm, '  $1'),
+      'utf-8',
+    );
+    const cases = loadYamlEvalCases(projectRoot);
+    expect(cases.map((testCase) => [testCase.category, testCase.expectRoute ?? null])).toEqual([
+      ['certified', 'certified'],
+      ['generated', 'generated'],
+      ['follow_up', null],
+      ['insufficient_context', null],
+    ]);
+    expect(cases[1]!.expectFilters).toEqual(['Matthew Meyer']);
+    expect(cases[2]!.priorQuestion).toBe('How has revenue changed by month?');
+    expect(cases[3]!.expectRefuse).toBe(true);
+  });
+
+  it('does not tell the reader to run zlens compile when there are no cases', async () => {
+    const projectRoot = emptyProject();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runEval(projectRoot, [], { format: 'text' } as never);
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('No eval cases found.');
+    expect(output).toContain('zlens eval --init');
+    expect(output).not.toContain('zlens compile');
+  });
+
+  it('prints every score and cascade value in one column', async () => {
+    const projectRoot = seedProject();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runEval(projectRoot, [], { format: 'text' } as never);
+
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    const rows = lines.filter((line) =>
+      /^  (Cases passed|Answer rate|Candidate recall|Route accuracy|Block-selection accuracy|Grain-match precision|Refusal precision|Refusal recall|Certified|Generated|Missing context|Research):/.test(line));
+    expect(rows).toHaveLength(12);
+    const valueColumns = new Set(rows.map((line) => line.indexOf(':') + 1 + /^ */.exec(line.slice(line.indexOf(':') + 1))![0].length));
+    expect([...valueColumns]).toEqual([28]);
+    expect(rows.find((line) => line.startsWith('  Block-selection accuracy:'))).toBe('  Block-selection accuracy: 100%');
+  });
+
+  it('says when a threshold is not applied because no case measures it', async () => {
+    const projectRoot = seedProject();
+    rmSync(join(projectRoot, 'eval'), { recursive: true });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runEval(projectRoot, [], { format: 'text', minRouteAccuracy: 1, minRefusal: 1 } as never);
+
+    const output = log.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(output).toContain('--min-refusal 1  (refusal recall n/a: no case measures this, so it is not applied)');
+    expect(output).toContain('--min-route-accuracy 1  (route accuracy 100%)');
+    expect(process.exitCode).toBeUndefined();
   });
 });
 
