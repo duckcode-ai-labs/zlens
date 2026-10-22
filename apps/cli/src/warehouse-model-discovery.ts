@@ -15,7 +15,11 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
+  isTechnicalSchema,
+  meaningfulDatabaseName,
   resolveWarehouseRelation,
+  sentenceCaseName,
+  stagingDuplicates,
   type DQLManifest,
   type ManifestFanoutPolicy,
   type ManifestRelationshipCardinality,
@@ -127,6 +131,11 @@ export interface WarehouseDiscoveryReport {
   relationships: DiscoveredRelationship[];
   /** Relationships already modeled, left alone. */
   existingRelationships: number;
+  /**
+   * Staging copies left out because a final table holds the same thing
+   * (`stg_customers` beside `customers`). Drafted only with "Show staging tables".
+   */
+  stagingHidden?: Array<{ relation: string; finalRelation: string }>;
   /** The modeled joins as `<relation id>|<relation id>|<from>=<to>` (lower case), so later checks leave them alone too. */
   modeledJoins?: string[];
   /** Joins found but not proposed because a reviewer removed or rejected them. */
@@ -210,8 +219,16 @@ export function discoverWarehouseModel(input: {
   manifest?: DQLManifest;
   /** Put every entity into this one domain. */
   domain?: string;
-  /** Names the domain of a generic schema such as `main` or `public`. */
+  /** Names the domain when the database's own name says nothing (`memory`, `postgres`). */
   projectName?: string;
+  /**
+   * The database's name: a DuckDB or SQLite file (`jaffle_shop.duckdb`) or the
+   * catalog. A schema named for a pipeline layer or environment (`dev`, `main`,
+   * `public`) maps into one Domain named after it ("Jaffle shop").
+   */
+  databaseName?: string;
+  /** Leave out staging copies of tables a final table already holds (`stg_customers` beside `customers`). */
+  hideStagingDuplicates?: boolean;
   /** Existing Domain Package ids. */
   existingDomains?: Iterable<string>;
   /** Opt-in: joins seen in recent query history. */
@@ -219,18 +236,45 @@ export function discoverWarehouseModel(input: {
   /** What reviewers decided about earlier drafts (`.dql/modeling-discovery.json`). */
   decisions?: DiscoveryDecision[];
 }): WarehouseDiscoveryReport {
-  const { snapshot } = input;
   const existingDomains = new Set(input.existingDomains ?? []);
   const boundEntities = new Map<string, { qualifiedId: string; localId: string; domain: string }>();
   for (const entity of Object.values(input.manifest?.modeling?.entities ?? {})) {
     if (entity.dbtUniqueId) boundEntities.set(entity.dbtUniqueId, { qualifiedId: entity.qualifiedId ?? entity.id, localId: entity.localId ?? entity.id, domain: entity.domain });
   }
+  // Staging copies of a final table wait behind "Show staging tables"; one
+  // the model already binds stays.
+  const relationById = new Map(input.snapshot.relations.map((relation) => [relation.id, relation]));
+  const stagingHidden = input.hideStagingDuplicates
+    ? [...stagingDuplicates(input.snapshot.relations)].filter(([id]) => !boundEntities.has(id))
+    : [];
+  const hiddenIds = new Set(stagingHidden.map(([id]) => id));
+  const snapshot = hiddenIds.size
+    ? { ...input.snapshot, relations: input.snapshot.relations.filter((relation) => !hiddenIds.has(relation.id)) }
+    : input.snapshot;
 
+  // The first Domain is named after the data, never a raw schema name such as
+  // `dev` (new-user round 2, Q3): the database file or catalog ("Jaffle
+  // shop"), else the project. A schema named for a business area (`sales`)
+  // keeps its own Domain, and so does a schema Domain the project already has.
+  const domainNames = new Map<string, string>();
+  const databaseDomain = (() => {
+    const name = meaningfulDatabaseName(
+      input.databaseName,
+      ...input.snapshot.relations.map((relation) => relation.database),
+      ...input.snapshot.scopes.map((scope) => scope.catalogOrDatabase),
+    ) ?? input.projectName ?? 'warehouse';
+    return { id: slug(name), name: sentenceCaseName(name) };
+  })();
   const domainOf = (relation: WarehouseCatalogRelationV1): string => {
-    if (input.domain) return slug(input.domain);
+    if (input.domain) {
+      const id = slug(input.domain);
+      domainNames.set(id, input.domain.trim());
+      return id;
+    }
     const schema = relation.schema?.toLowerCase();
-    if (!schema || GENERIC_SCHEMAS.has(schema)) return slug(input.projectName ?? 'warehouse');
-    return slug(schema);
+    if (schema && !GENERIC_SCHEMAS.has(schema) && (!isTechnicalSchema(schema) || existingDomains.has(slug(schema)))) return slug(schema);
+    domainNames.set(databaseDomain.id, databaseDomain.name);
+    return databaseDomain.id;
   };
 
   // Entities: one per relation, named for what a row is.
@@ -432,11 +476,12 @@ export function discoverWarehouseModel(input: {
   return {
     catalogFingerprint: snapshot.fingerprint,
     capturedAt: snapshot.capturedAt,
-    relations: snapshot.relations.length,
-    domains: domainIds.map((id) => ({ id, name: titleCase(id), existing: existingDomains.has(id) })),
+    relations: input.snapshot.relations.length,
+    domains: domainIds.map((id) => ({ id, name: domainNames.get(id) ?? titleCase(id), existing: existingDomains.has(id) })),
     entities,
     relationships,
     existingRelationships,
+    ...(stagingHidden.length ? { stagingHidden: stagingHidden.map(([id, finalId]) => ({ relation: relationById.get(id)?.relation ?? id, finalRelation: relationById.get(finalId)?.relation ?? finalId })) } : {}),
     modeledJoins: [...modeled].map((signature) => signature.toLowerCase()).sort(),
     ...(dismissed.length ? { dismissed } : {}),
     ...(dismissedBy.size ? { dismissedJoins: [...dismissedBy.keys()].sort() } : {}),

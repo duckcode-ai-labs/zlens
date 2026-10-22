@@ -1,6 +1,8 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Boxes, Database, FolderOpen, GitBranch, Layers, RefreshCw } from 'lucide-react';
 import type { Theme } from '../../themes/notebook-theme';
+import type { WaitingWarehouseDrafts } from '../../api/client';
+import { stagingLeftOutSentence, waitingDraftsSentence } from '../modeling/proposal-review-words';
 import {
   databaseOnlyUnavailable,
   EXISTING_PROJECT_TITLE,
@@ -117,16 +119,34 @@ export function DraftModelsCard({
   canDraft,
   outcome,
   onDraft,
+  waiting = null,
+  includeStaging = false,
+  onToggleStaging,
+  onRename,
   t,
 }: {
   busy: boolean;
   canDraft: boolean;
   outcome: DraftOutcome | null;
   onDraft: () => void;
+  /** The drafts that wait for review on the server (kept until saved or discarded). */
+  waiting?: WaitingWarehouseDrafts | null;
+  /** Staging copies are drafted too. */
+  includeStaging?: boolean;
+  onToggleStaging?: (include: boolean) => void;
+  /** Draft again into a Domain with this name. */
+  onRename?: (name: string) => void;
   t: Theme;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const domain = outcome?.domain ?? waiting?.domains[0];
+  const [name, setName] = useState(domain ?? '');
+  useEffect(() => { if (!renaming) setName(domain ?? ''); }, [domain, renaming]);
+  const drafted = Boolean(outcome?.ok && outcome.proposalId) || Boolean(waiting);
+  const hidden = outcome?.stagingHidden ?? [];
+  const smallButton: React.CSSProperties = { height: 26, padding: '0 10px', borderRadius: 7, border: `1px solid ${t.headerBorder}`, background: t.cellBg, color: t.textSecondary, fontSize: 11, fontWeight: 650, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: t.font };
   return (
-    <section aria-label="Draft my models" style={{ maxWidth: 640, border: `1px solid ${outcome?.ok && outcome.proposalId ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
+    <section aria-label="Draft my models" style={{ maxWidth: 640, border: `1px solid ${drafted ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--accent-dim)', color: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Boxes size={16} aria-hidden="true" /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -144,12 +164,52 @@ export function DraftModelsCard({
           {busy ? 'Drafting…' : 'Draft my models'}
         </button>
       </div>
-      {!canDraft && !outcome ? (
+      {!canDraft && !outcome && !waiting ? (
         <div style={{ fontSize: 10.5, color: t.textMuted }}>Choose schemas and Apply and synchronize first.</div>
       ) : null}
       {outcome ? (
         <div role={outcome.ok ? 'status' : 'alert'} style={{ fontSize: 11.5, lineHeight: 1.5, color: outcome.ok ? (outcome.proposalId ? 'var(--status-success)' : t.textSecondary) : 'var(--status-error)' }}>
           {outcome.message}
+        </div>
+      ) : null}
+      {waiting ? (
+        <div aria-label="Drafts waiting" style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary }}>{waitingDraftsSentence(waiting)}</div>
+      ) : outcome?.ok && outcome.proposalId ? (
+        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary }}>They are kept until you review or discard them in Modeling.</div>
+      ) : null}
+      {drafted && domain && onRename ? (
+        <div aria-label="Domain name" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: t.textSecondary }}>
+          {renaming ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const next = name.trim();
+                if (!next) return;
+                setRenaming(false);
+                if (next !== domain) onRename(next);
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <label htmlFor="setup-domain-name">Domain name</label>
+              <input id="setup-domain-name" value={name} maxLength={80} autoFocus onChange={(event) => setName(event.target.value)} style={{ height: 26, borderRadius: 7, border: `1px solid ${t.headerBorder}`, background: t.appBg, color: t.textPrimary, padding: '0 8px', fontFamily: t.font, fontSize: 11.5 }} />
+              <button type="submit" disabled={busy || !name.trim()} style={smallButton}>Save name</button>
+              <button type="button" onClick={() => setRenaming(false)} style={smallButton}>Cancel</button>
+            </form>
+          ) : (
+            <>
+              <span>Your tables go in the Domain <strong style={{ color: t.textPrimary }}>{domain}</strong>, named after your database.</span>
+              <button type="button" disabled={busy} onClick={() => setRenaming(true)} style={smallButton}>Rename</button>
+            </>
+          )}
+        </div>
+      ) : null}
+      {onToggleStaging && (hidden.length || includeStaging) ? (
+        <div aria-label="Staging tables" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: t.textSecondary }}>
+          <span style={{ flex: 1, minWidth: 0 }}>{includeStaging ? 'Staging tables are drafted too.' : stagingLeftOutSentence(hidden)}</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: busy ? 'not-allowed' : 'pointer' }}>
+            <input type="checkbox" checked={includeStaging} disabled={busy} onChange={(event) => onToggleStaging(event.target.checked)} />
+            Show staging tables
+          </label>
         </div>
       ) : null}
     </section>

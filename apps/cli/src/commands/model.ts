@@ -296,6 +296,8 @@ function usesWarehouseDiscovery(rest: string[]): boolean {
  * writes them as drafts. `--validate` checks each join and naming-key grain
  * on the warehouse (aggregates only) and proposes the cardinality it saw.
  * `--query-history` (opt-in) also counts the joins recent queries ran.
+ * Staging copies of a final table (`stg_customers` beside `customers`) are
+ * left out, as in Guided Setup; `--include-staging` drafts them too.
  */
 async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery', rest: string[], flags: CLIFlags): Promise<void> {
   const pathArg = rest.find((value, index) => !value.startsWith('-') && rest[index - 1] !== '--source' && rest[index - 1] !== '--dbt-manifest');
@@ -303,6 +305,7 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
   const validate = rest.includes('--validate');
   // Opt-in: read recent query text in memory and keep only which columns were joined.
   const queryHistory = rest.includes('--query-history');
+  const includeStaging = rest.includes('--include-staging');
   const { discoverProjectWarehouseModel, applyProjectWarehouseDiscovery } = await import('../local-runtime.js');
   // A running workbench holds a DuckDB file open; the checks then run through it.
   const { WorkbenchRoutedQueryExecutor } = await import('../workbench-query-route.js');
@@ -312,6 +315,7 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
       ...(flags.domain ? { domain: flags.domain } : {}),
       validate,
       queryHistory,
+      hideStagingDuplicates: !includeStaging,
       ...(executor ? { executor } : {}),
     });
     const writing = subcommand === 'apply-discovery' && flags.apply === true && flags.dryRun !== true;
@@ -353,7 +357,11 @@ function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js
       : `  query history: ${report.queryHistory.statements} recent statements read in memory · ${report.queryHistory.joins} distinct joins seen (only join pairs kept)`);
   }
   console.log('Domains');
-  for (const domain of report.domains) console.log(`  ${domain.id}${domain.existing ? ' (exists)' : ''}`);
+  for (const domain of report.domains) console.log(`  ${domain.id}${domain.name && domain.name !== domain.id ? ` ("${domain.name}")` : ''}${domain.existing ? ' (exists)' : ''}`);
+  if (report.stagingHidden?.length) {
+    console.log('Staging copies left out (a final table holds the same data; --include-staging drafts them)');
+    for (const item of report.stagingHidden) console.log(`  ${item.relation} · same as ${item.finalRelation}`);
+  }
   console.log('Entities');
   for (const entity of report.entities) {
     const grain = entity.grain ? `grain ${entity.grain} (${entity.grainSource === 'primary_key' ? 'primary key' : 'unique on the warehouse'})` : entity.grainCandidate ? `grain unset (candidate ${entity.grainCandidate}; --validate checks it)` : 'grain unset';

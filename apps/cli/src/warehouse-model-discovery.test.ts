@@ -262,3 +262,50 @@ describe('a table’s grain is its own identity column', () => {
     db.close();
   });
 });
+
+describe('a first Domain named after the data, without staging copies (new-user round 2, Q3)', () => {
+  const layered = normalizeWarehouseCatalog({
+    version: 1,
+    driver: 'duckdb',
+    connectionId: 'default',
+    scopes: [{ catalogOrDatabase: 'jaffle_shop', schemas: ['dev', 'raw', 'sales'] }],
+    capturedAt: '2026-10-21T00:00:00.000Z',
+    relations: [
+      table('dev', 'customers', ['customer_id', 'name'], { database: 'jaffle_shop', primaryKey: ['customer_id'] }),
+      table('dev', 'stg_customers', ['customer_id', 'name'], { database: 'jaffle_shop' }),
+      table('raw', 'raw_orders', ['id', 'customer'], { database: 'jaffle_shop' }),
+      table('dev', 'orders', ['order_id', 'customer_id'], { database: 'jaffle_shop', primaryKey: ['order_id'] }),
+      table('sales', 'targets', ['target_id', 'amount'], { database: 'jaffle_shop' }),
+    ],
+  });
+
+  it('maps dev and raw into one Domain named after the database; a business schema keeps its own', () => {
+    const report = discoverWarehouseModel({ snapshot: layered, projectName: 'shop' });
+    expect(report.domains).toEqual([
+      { id: 'jaffle_shop', name: 'Jaffle shop', existing: false },
+      { id: 'sales', name: 'Sales', existing: false },
+    ]);
+    expect(report.entities.find((item) => item.relation === 'dev.customers')?.domain).toBe('jaffle_shop');
+    expect(report.entities.find((item) => item.relation === 'sales.targets')?.domain).toBe('sales');
+    // The file name wins over the catalog when the runtime knows it.
+    expect(discoverWarehouseModel({ snapshot: layered, databaseName: 'shop_2026' }).domains).toContainEqual({ id: 'shop_2026', name: 'Shop 2026', existing: false });
+  });
+
+  it('keeps a schema Domain the project already has, and a Domain the person named', () => {
+    expect(discoverWarehouseModel({ snapshot: layered, existingDomains: ['dev'] }).entities.find((item) => item.relation === 'dev.orders')?.domain).toBe('dev');
+    expect(discoverWarehouseModel({ snapshot: layered, domain: 'Jaffle Shop Sales' }).domains).toEqual([{ id: 'jaffle_shop_sales', name: 'Jaffle Shop Sales', existing: false }]);
+  });
+
+  it('leaves out staging copies of a final table only when asked, and says which', () => {
+    const all = discoverWarehouseModel({ snapshot: layered });
+    expect(all.entities.map((item) => item.relation)).toContain('dev.stg_customers');
+    expect(all.stagingHidden).toBeUndefined();
+    const plain = discoverWarehouseModel({ snapshot: layered, hideStagingDuplicates: true });
+    expect(plain.entities.map((item) => item.relation).sort()).toEqual(['dev.customers', 'dev.orders', 'sales.targets']);
+    expect(plain.stagingHidden).toEqual([
+      { relation: 'dev.stg_customers', finalRelation: 'dev.customers' },
+      { relation: 'raw.raw_orders', finalRelation: 'dev.orders' },
+    ]);
+    expect(plain.relations).toBe(5);
+  });
+});

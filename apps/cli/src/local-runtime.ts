@@ -252,6 +252,7 @@ import {
   resolveDashboardDateFilter,
   blockCompanionRelativePath as coreBlockCompanionRelativePath,
   certifiedBlockFileState,
+  meaningfulDatabaseName,
 } from '@zlens/core';
 import {
   dashboardSemanticFiltersForTile,
@@ -8104,6 +8105,23 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const contextProposalStore = new FileContextAuthoringProposalStore(projectRoot);
 
   /**
+   * Drafts are kept automatically (new-user round 2, Q3): what "Draft my
+   * models" drafted waits in the proposal store until a person saves it in
+   * Modeling or discards it. Leaving setup or Modeling, or reloading, loses
+   * nothing. Newest first.
+   */
+  const waitingWarehouseDrafts = (): ContextAuthoringProposalV1[] =>
+    contextProposalStore.list().filter((proposal) => proposal.origin === 'warehouse_discovery' && proposal.status === 'proposed');
+  /** Close the waiting drafts: a newer draft, revision or save replaced them, or a person discarded them. */
+  const closeWaitingWarehouseDrafts = (options: { supersededBy?: string } = {}): void => {
+    const at = new Date().toISOString();
+    for (const proposal of waitingWarehouseDrafts()) {
+      if (proposal.id === options.supersededBy) continue;
+      contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: at, ...(options.supersededBy ? { supersededBy: options.supersededBy } : {}) });
+    }
+  };
+
+  /**
    * Fields from related tables (design D2). Every App source record the
    * catalog returns (Data pane, planner, previews, runs) carries the related
    * fields its table Dataset reaches through checked many-to-one joins. The
@@ -8195,6 +8213,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const ensureAuthoringScopeOperations = (
     operations: ContextAuthoringOperation[],
     manifest: DQLManifest,
+    /** Names for Domains this batch creates ("Jaffle shop"), by id; otherwise the id in title case. */
+    domainNames?: Record<string, string>,
   ): ContextAuthoringOperation[] => {
     const modeling = manifest.modeling;
     if (!modeling) return operations;
@@ -8233,7 +8253,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             id,
             kind: 'modeling_change',
             evidence: ['created automatically so the requested modeling scope exists'],
-            change: { operation: 'upsert_domain', value: { id: domain, name: titleCaseAuthoring(domain) } },
+            change: { operation: 'upsert_domain', value: { id: domain, name: domainNames?.[domain] || titleCaseAuthoring(domain) } },
           });
         }
         if (!dependsOn.includes(id)) dependsOn.push(id);
@@ -8356,6 +8376,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     sourceArtifactId?: string;
     revision?: number;
     diagnostics?: ContextAuthoringDiagnosticV1[];
+    /** Names for the Domains the proposal creates, by id. */
+    domainNames?: Record<string, string>;
   }): ContextAuthoringProposalV1 => {
     const snapshot = projectSnapshot();
     if (input.expectedSnapshotId && input.expectedSnapshotId !== snapshot.snapshotId) {
@@ -8371,6 +8393,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const requested = input.baseOperations?.length
       ? mergeAuthoringOperations(input.baseOperations, input.operations)
       : input.operations;
+    const areaDefaulted: string[] = [];
     const operations = requested.map((operation): ContextAuthoringOperation => {
       if (operation.kind === 'dataset_change') {
         const prepared = prepareDatasetAuthoringChangeForProposal(projectRoot, snapshot.manifest, operation.change);
@@ -8433,17 +8456,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // Every model still belongs to exactly one Domain and subject area. An
         // omitted area is filled with the default rather than blocking the
         // author; `ensureAuthoringScopeOperations` creates it if it is new.
-        diagnostics.push({ code: 'MODEL_AREA_DEFAULTED', severity: 'info', operationId: operation.id, message: `No subject area was selected, so these models were placed in "${DEFAULT_MODEL_AREA_ID}". You can rename or move them later.` });
+        // One plain note covers them all (below), not one line per table.
+        areaDefaulted.push(operation.id);
         return { ...operation, change: { ...operation.change, value: { ...operation.change.value, areaId: DEFAULT_MODEL_AREA_ID } } };
       }
       return operation;
     });
+    if (areaDefaulted.length) diagnostics.push(modelAreaDefaultedDiagnostic(areaDefaulted, input.origin));
     // dbt discovery and Modeling AI bind models; give them the edges dbt already
     // declares. Manual authoring and YAML import bring their own relationships.
     const withDeclaredEdges = input.origin === 'dbt_discovery' || input.origin === 'ai'
       ? appendDbtDeclaredRelationships(operations, snapshot.manifest)
       : operations;
-    const scopedOperations = ensureAuthoringScopeOperations(withDeclaredEdges, snapshot.manifest);
+    const scopedOperations = ensureAuthoringScopeOperations(withDeclaredEdges, snapshot.manifest, input.domainNames);
     const operationIds = new Set(scopedOperations.map((operation) => operation.id));
     for (const operation of scopedOperations) {
       for (const dependency of operation.dependsOn ?? []) {
@@ -15599,6 +15624,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           sourceArtifactId: current.sourceArtifactId,
           revision: (current.revision ?? 1) + 1,
         });
+        // The reviewed revision is the draft that waits now.
+        if (current.origin === 'warehouse_discovery' && current.status === 'proposed') closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
         res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, proposal }));
       } catch (error) {
@@ -15606,6 +15633,29 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.writeHead(['PROPOSAL_STALE', 'SOURCE_CHANGED', 'DATASET_SOURCE_TARGET_NOT_FOUND', 'DATASET_SOURCE_TARGET_AMBIGUOUS'].includes(code) ? 409 : code === 'PROPOSAL_NOT_FOUND' ? 404 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: ['Refresh the proposal against the latest project snapshot.'] })));
       }
+      return;
+    }
+
+    // Discard a proposal nobody will save ("Discard drafts"). Nothing in the
+    // project changes; the draft stops waiting for review.
+    const contextDiscardMatch = path.match(/^\/api\/context-proposals\/([^/]+)\/discard$/);
+    if (req.method === 'POST' && contextDiscardMatch) {
+      const requestId = apiRequestId('context-discard');
+      const proposal = contextProposalStore.get(decodeURIComponent(contextDiscardMatch[1]!));
+      if (!proposal) {
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'PROPOSAL_NOT_FOUND', message: 'Context proposal not found.' })));
+        return;
+      }
+      if (proposal.status !== 'proposed' && proposal.status !== 'discarded') {
+        res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'PROPOSAL_STALE', message: 'Only a proposal that is still waiting can be discarded.' })));
+        return;
+      }
+      const discarded: ContextAuthoringProposalV1 = proposal.status === 'discarded' ? proposal : { ...proposal, status: 'discarded', discardedAt: new Date().toISOString() };
+      contextProposalStore.save(discarded);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ requestId, proposal: discarded }));
       return;
     }
 
@@ -15658,6 +15708,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const committed: ContextAuthoringProposalV1 = { ...proposal, status: 'committed', committedAt: new Date().toISOString(), committedSnapshotId: nextSnapshot.snapshotId };
           contextProposalStore.save(committed);
           contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
+          // Saved drafts are reviewed: older copies of them wait for no one.
+          if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({ requestId, proposal: committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling }));
         } catch (error) {
@@ -15949,6 +16001,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
+    // Drafts kept automatically: the newest "Draft my models" proposal that
+    // waits for review, in a few words, for setup, Modeling and Apps.
+    if (req.method === 'GET' && path === '/api/modeling/warehouse/drafts') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ waiting: waitingWarehouseDraftSummary(waitingWarehouseDrafts()[0], projectSnapshot().snapshotId) }));
+      return;
+    }
+
     // Modeling → Draft from warehouse: the runtime drafts the map and opens it
     // as an ordinary reviewable proposal. The operations, and any validation
     // evidence on them, come from this server's own discovery run, never from
@@ -15957,11 +16017,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const requestId = apiRequestId('modeling-warehouse-proposal');
       const snapshot = projectSnapshot();
       try {
-        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string };
+        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean };
         if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
           throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
         }
-        const report = await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain: body.domain, validate: body.validate === true, queryHistory: body.queryHistory === true, executor });
+        // Staging copies of a final table are left out unless the person asks
+        // for them ("Show staging tables"), so the map has one Customer.
+        const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
+        const report = await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
         // New Domains and subject areas are created by the proposal's own scope
         // step, as for dbt discovery, so the batch stays in dependency order.
         // A drafted join lives in the subject area of the entity it starts
@@ -16000,7 +16063,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           change,
           evidence: evidenceFor(change),
         }));
-        const proposal = previewContextAuthoring({ origin: 'warehouse_discovery', operations, expectedSnapshotId: snapshot.snapshotId });
+        const proposal = previewContextAuthoring({
+          origin: 'warehouse_discovery',
+          operations,
+          expectedSnapshotId: snapshot.snapshotId,
+          domainNames: Object.fromEntries(report.domains.map((item) => [item.id, item.name])),
+        });
+        // The newest draft replaces the ones before it; they wait for no one now.
+        closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
         res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, report, proposal }));
       } catch (error) {
@@ -28057,6 +28127,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           : warehouseMetadataStatus(projectRoot),
         // The environment variables the default connection reads, by name, and whether each is set.
         environmentReferences: manages ? connectionEnvironmentReferences(connections[defaultKey]) : [],
+        // Opt-in value profiles send a few column values to the AI provider; setup says so when they are on.
+        valueProfile: valueProfileAllowed(cfg, Boolean(hostHooks)),
         // Present only in warehouse-first and hybrid modeling (RFC 0007).
         ...(() => {
           const warehouseCatalog = warehouseCatalogStatus(projectRoot, cfg, defaultKey);
@@ -35538,6 +35610,45 @@ function authoringSlug(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+/**
+ * One plain note for every model placed in the default subject area (new-user
+ * round 2, Q3): "13 tables placed in the default area", not thirteen
+ * identical lines. The operations it covers stay listed for the technical
+ * details.
+ */
+/** What a waiting "Draft my models" proposal holds, in counts a person reads ("9 drafted models waiting for review"). */
+export function waitingWarehouseDraftSummary(proposal: ContextAuthoringProposalV1 | undefined, snapshotId: string): {
+  proposalId: string;
+  createdAt: string;
+  models: number;
+  joins: number;
+  domains: string[];
+  stale: boolean;
+} | null {
+  if (!proposal) return null;
+  const changes = proposal.operations.flatMap((operation) => (operation.kind === 'modeling_change' ? [operation.change] : []));
+  return {
+    proposalId: proposal.id,
+    createdAt: proposal.createdAt,
+    models: changes.filter((change) => change.operation === 'upsert_entity').length,
+    joins: changes.filter((change) => change.operation === 'upsert_relationship').length,
+    domains: changes.flatMap((change) => (change.operation === 'upsert_domain' ? [change.value.name || change.value.id] : [])),
+    stale: proposal.baseSnapshotId !== snapshotId,
+  };
+}
+
+export function modelAreaDefaultedDiagnostic(operationIds: string[], origin: ContextAuthoringOrigin): ContextAuthoringDiagnosticV1 {
+  const noun = origin === 'warehouse_discovery' ? 'table' : 'model';
+  const count = operationIds.length;
+  return {
+    code: 'MODEL_AREA_DEFAULTED',
+    severity: 'info',
+    operationId: operationIds[0],
+    operationIds: [...operationIds],
+    message: `${count} ${noun}${count === 1 ? '' : 's'} placed in the default area. You can rename or move ${count === 1 ? 'it' : 'them'} later.`,
+  };
+}
+
 function titleCaseAuthoring(value: string): string {
   return value.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -37239,6 +37350,8 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   validate?: boolean;
   /** Opt-in: also learn joins from recent query history (text read in memory, only join pairs kept). */
   queryHistory?: boolean;
+  /** Leave out staging copies of tables a final table already holds (setup and Modeling's drafts). */
+  hideStagingDuplicates?: boolean;
   executor?: QueryExecutor;
 }): Promise<WarehouseDiscoveryReport> {
   const cfg = loadProjectConfig(projectRoot);
@@ -37273,11 +37386,20 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
       }
     }
   }
+  // The first Domain takes the database's name: the DuckDB or SQLite file, or the catalog.
+  const catalogConnection = connection ?? projectConnectionById(projectRoot, cfg, connectionId);
+  const databaseName = meaningfulDatabaseName(
+    (catalogConnection as { filepath?: string } | null)?.filepath,
+    (catalogConnection as { database?: string } | null)?.database,
+    (catalogConnection as { catalog?: string } | null)?.catalog,
+  );
   const drafted = discoverWarehouseModel({
     snapshot,
     manifest,
     ...(options.domain ? { domain: options.domain } : {}),
     ...(cfg.project ? { projectName: cfg.project } : {}),
+    ...(databaseName ? { databaseName } : {}),
+    ...(options.hideStagingDuplicates ? { hideStagingDuplicates: true } : {}),
     existingDomains: loadDomainPackageRegistry(projectRoot).values().map((pkg) => pkg.id),
     ...(observedJoins ? { observedJoins } : {}),
     // A join a reviewer removed or rejected is not proposed again.

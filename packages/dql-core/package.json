@@ -138,6 +138,10 @@
     "./modeling-ids": {
       "types": "./dist/manifest/model-area-id.d.ts",
       "import": "./dist/manifest/model-area-id.js"
+    },
+    "./staging-tables": {
+      "types": "./dist/manifest/staging-tables.d.ts",
+      "import": "./dist/manifest/staging-tables.js"
     }
   },
   "scripts": {

@@ -28,6 +28,44 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Setup and first start
 
+- **A database-only first run in plain words** (new-user round 2, Q3):
+  - **Grouped notes.** Drafting no longer adds one `MODEL_AREA_DEFAULTED`
+    note per table: one line says *13 tables placed in the default area*.
+    The review drawer is titled **Review the models ZLens drafted**, shows one
+    plain line per kind of note and says what each change does (*Add orders
+    as Order in Jaffle shop*). Codes, operation ids (`scope:domain:…`), patch
+    counts and the proposal hash are under **Technical details**.
+  - **A real Domain name.** The first Domain is named after the database
+    file or catalog (`jaffle_shop.duckdb` → **Jaffle shop**), never a schema
+    named for a layer or environment (`dev`, `main`, `public`); schemas like
+    those map into it. A business-area schema (`sales`) keeps its own Domain,
+    and so does a schema Domain the project already has. Setup offers
+    **Rename**; `zlens model discover --domain` still names one.
+  - **No staging clutter.** When a staging copy (`stg_*`, or a table in a
+    `staging`, `stg` or `raw` schema) and a final table hold the same thing,
+    the final one is shown and drafted. **Show staging tables** brings them
+    back in setup's schema list, **Draft my models** and Modeling's
+    **Draft from warehouse**, and **Apps → Data**. `zlens model discover`
+    leaves them out too; `--include-staging` drafts them.
+  - **Drafts kept.** What **Draft my models** drafted waits until you save
+    or discard it: leaving Setup or Modeling without Save, or reloading, loses
+    nothing. Modeling, Setup and Apps say *N drafted models waiting for
+    review*, with **Review drafts** and **Discard** (**Keep for later** in the
+    review). A newer draft replaces the one before it. New endpoints:
+    `GET /api/modeling/warehouse/drafts` and
+    `POST /api/context-proposals/:id/discard` (a proposal's status can now
+    be `discarded`).
+  - **Honest wording about rows.** "never their rows" is gone: *ZLens reads
+    table structure and counts rows to check keys. Sample rows are shown only
+    to you, on this computer. Nothing is sent anywhere unless you turn on
+    value profiles for AI answers.* With value profiles on, Setup says *Value
+    profiles are on: a few column values are sent to your AI provider*
+    (`GET /api/connections` reports `valueProfile`). Setup's sync line reads
+    *Read 13 tables (86 columns)*.
+  - The welcome screen, Guided Setup and Modeling's **Saved queries** tab say
+    "saved query" where they still said "block" (**Save a query** / **New
+    saved query**, "certified saved queries").
+
 - **Start from any folder.** `zlens notebook <folder>` on a folder with no
   ZLens project asks **No ZLens project here. Create one? [Y/n]** and creates
   it. A database file and no dbt project make a **Database only** project

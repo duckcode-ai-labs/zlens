@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ZLensMark } from '../shell/ZLensMark';
 import { ArrowLeft, ArrowRight, Boxes, FileText, LayoutDashboard, MessageCircleQuestion, Sparkles } from 'lucide-react';
-import { api, type ProviderSettings, type SetupLaunchResponse, type WarehouseCatalogSummary } from '../../api/client';
+import { api, type ProviderSettings, type SetupLaunchResponse, type WaitingWarehouseDrafts, type WarehouseCatalogSummary } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import { ConnectionPanel } from '../panels/ConnectionPanel';
@@ -16,6 +16,7 @@ import {
   initialModelSource,
   modelingModeForSource,
   rememberProposalForModeling,
+  rowsPrivacy,
   setupFinishTarget,
   setupStepTitles,
   type SetupStartTarget,
@@ -89,6 +90,12 @@ export function SetupOnboarding({
   const [catalogReady, setCatalogReady] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draft, setDraft] = useState<DraftOutcome | null>(null);
+  // Drafts are kept on the server until saved or discarded (new-user round 2, Q3).
+  const [waitingDrafts, setWaitingDrafts] = useState<WaitingWarehouseDrafts | null>(null);
+  const [includeStaging, setIncludeStaging] = useState(false);
+  const [domainName, setDomainName] = useState<string | null>(null);
+  // Value profiles on: the rows sentence says a few column values reach the AI provider.
+  const [valueProfileOn, setValueProfileOn] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncSteps, setSyncSteps] = useState<ProjectSyncStep[] | null>(null);
   const [environment, setEnvironment] = useState<Array<{ name: string; set: boolean }>>([]);
@@ -117,8 +124,10 @@ export function SetupOnboarding({
       api.getConnections().catch(() => null),
       api.getProviderSettings().catch(() => null),
       api.getSetupProgress().catch(() => null),
-    ]).then(([onboarding, dbt, connectionInfo, providerInfo, progress]) => {
+      api.getWaitingWarehouseDrafts().catch(() => null),
+    ]).then(([onboarding, dbt, connectionInfo, providerInfo, progress, waiting]) => {
       if (!alive) return;
+      setWaitingDrafts(waiting);
       if (onboarding?.dbt?.configured || (dbt?.configured && dbt.artifacts.manifest.exists)) {
         setProjectState(onboarding?.modeling?.snapshotState === 'ready' ? 'passed' : 'configured');
         setProjectDetail(onboarding?.preparation?.message || onboarding?.dbt?.repoUrl || onboarding?.dbt?.projectDir || dbt?.projectPath || 'dbt project configured');
@@ -134,6 +143,7 @@ export function SetupOnboarding({
         setConnectionId(connectionInfo.default);
       }
       setEnvironment(connectionInfo?.environmentReferences ?? []);
+      setValueProfileOn(connectionInfo?.valueProfile === true);
       const catalog = (connectionInfo as { warehouseCatalog?: WarehouseCatalogSummary } | null)?.warehouseCatalog;
       if (catalog?.relations && !catalog.error) setCatalogReady(true);
       const project = existingProjectFromStatus(onboarding, realConnection ? connectionInfo : null);
@@ -252,18 +262,29 @@ export function SetupOnboarding({
       setContinuing(false);
     }
   };
-  const draftModels = async () => {
+  const draftModels = async (options: { includeStaging?: boolean; domain?: string | null } = {}) => {
+    const staging = options.includeStaging ?? includeStaging;
+    const domain = options.domain === undefined ? domainName : options.domain;
     setDrafting(true);
     setDraft(null);
     try {
-      const outcome = draftOutcome(await api.draftWarehouseModel({ validate: true }));
+      const outcome = draftOutcome(await api.draftWarehouseModel({ validate: true, ...(staging ? { includeStaging: true } : {}), ...(domain ? { domain } : {}) }));
       if (outcome.proposalId) rememberProposalForModeling(outcome.proposalId);
       setDraft(outcome);
     } catch (error) {
       setDraft({ ok: false, message: draftErrorMessage(error) });
     } finally {
+      setWaitingDrafts(await api.getWaitingWarehouseDrafts().catch(() => null));
       setDrafting(false);
     }
+  };
+  const toggleStaging = (include: boolean) => {
+    setIncludeStaging(include);
+    void draftModels({ includeStaging: include });
+  };
+  const renameDomain = (name: string) => {
+    setDomainName(name);
+    void draftModels({ domain: name });
   };
   const synchronize = async () => {
     if (!existing) return;
@@ -279,14 +300,14 @@ export function SetupOnboarding({
     }
   };
 
-  const drafted = Boolean(draft?.proposalId);
-  const stepTwo = stepTwoCopy(source, existing);
+  const drafted = Boolean(draft?.proposalId || waitingDrafts);
+  const stepTwo = stepTwoCopy(source, existing, valueProfileOn);
   const hint = useMemo(() => {
     if (loading) return 'Loading existing project-local configuration…';
     if (step === 1) {
       if (requiresUpgradeReapply) return `Required for ZLens ${launch?.version}: Preview and Reapply the prefilled dbt project.`;
       if (stepOneBlocked) return stepOneBlocked;
-      if (source === 'warehouse') return 'Database only · ZLens reads tables, columns, keys and comments — never rows.';
+      if (source === 'warehouse') return `Database only · ${rowsPrivacy(valueProfileOn, true)}`;
       if (source === 'existing') return `Existing project · ${existing?.label ?? 'configured'}`;
       return projectState === 'missing'
         ? 'Preview before applying; existing dbt settings stay untouched.'
@@ -298,7 +319,7 @@ export function SetupOnboarding({
     }
     if (step === 3) return aiSkipped ? 'AI skipped · limited-AI mode remains available.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
     return 'Setup complete';
-  }, [aiProvider, aiSkipped, aiState, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, requiresUpgradeReapply, source, step, stepOneBlocked]);
+  }, [aiProvider, aiSkipped, aiState, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
 
   const supportingText = t.textSecondary;
   const primaryButton: React.CSSProperties = {
@@ -397,7 +418,17 @@ export function SetupOnboarding({
                 }}
               />
               {draftsFromWarehouse(source) ? (
-                <DraftModelsCard busy={drafting} canDraft={catalogReady} outcome={draft} onDraft={() => void draftModels()} t={t} />
+                <DraftModelsCard
+                  busy={drafting}
+                  canDraft={catalogReady}
+                  outcome={draft}
+                  onDraft={() => void draftModels()}
+                  waiting={waitingDrafts}
+                  includeStaging={includeStaging}
+                  onToggleStaging={toggleStaging}
+                  onRename={renameDomain}
+                  t={t}
+                />
               ) : null}
               {source === 'existing' && existing ? (
                 <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
@@ -431,7 +462,7 @@ export function SetupOnboarding({
                   <StartCard icon={<Boxes size={17} />} title="Build your domain" body="Add models, relationships, business terms, and skills." action="Open Modeling" onClick={() => finishTo('domains')} t={t} />
                 )}
                 <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={aiState === 'missing' || aiSkipped ? 'Open Ask in limited mode; configure AI before a governed model answer.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} />
-                <StartCard icon={<FileText size={17} />} title="Research notebook" body="Work with SQL, DQL, and charts, then save reusable blocks." action="New notebook" onClick={() => finishTo('notebook')} t={t} />
+                <StartCard icon={<FileText size={17} />} title="Research notebook" body="Work with SQL, DQL, and charts, then save reusable queries." action="New notebook" onClick={() => finishTo('notebook')} t={t} />
               </div>
             </div>
           ) : null}
@@ -441,7 +472,7 @@ export function SetupOnboarding({
       <footer style={{ flexShrink: 0, minHeight: 58, borderTop: `1px solid ${t.headerBorder}`, background: t.headerBg, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 22px' }}>
         {step > 1 ? <button type="button" onClick={() => setStep((current) => Math.max(1, current - 1))} style={secondaryButton}><ArrowLeft size={13} /> Back</button> : null}
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: t.textMuted, maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hint}</span>
+        <span title={hint} style={{ fontSize: 11, color: t.textMuted, maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hint}</span>
         {acknowledgeError ? <span role="alert" style={{ fontSize: 11, color: 'var(--status-error)', maxWidth: 320 }}>{acknowledgeError}</span> : null}
         <button type="button" disabled={acknowledging || requiresUpgradeReapply} onClick={close} style={{ ...secondaryButton, opacity: acknowledging || requiresUpgradeReapply ? 0.5 : 1, cursor: acknowledging || requiresUpgradeReapply ? 'not-allowed' : 'pointer' }}>
           {acknowledging

@@ -18,6 +18,7 @@ import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
 import { appDataSameNameOrigins } from './app-data-names';
 import { useDispatch } from '../../../store/NotebookStore';
 import { rememberProposalForModeling } from '../../modals/setup-model-source';
+import { splitStagingTables } from '@zlens/core/staging-tables';
 import {
   ADD_DATA_KINDS,
   MAKE_ROW_LEVEL_HINT,
@@ -120,6 +121,8 @@ export function AddDataBrowser({
   const [addingId, setAddingId] = useState<string | null>(null);
   const [tables, setTables] = useState<WarehouseTableSummary[] | null>(initialTables ?? null);
   const [tablesError, setTablesError] = useState<string | null>(null);
+  // Staging copies of a final table wait behind "Show staging tables" (new-user round 2, Q3).
+  const [showStaging, setShowStaging] = useState(false);
   const [checkingTable, setCheckingTable] = useState<WarehouseTableSummary | null>(null);
   // "Certify and use this data" says who certified it and which checks passed (D5).
   const [certifiedNotice, setCertifiedNotice] = useState<{ name: string; certification: CertificationByline } | null>(null);
@@ -181,18 +184,22 @@ export function AddDataBrowser({
   const rows = useMemo(() => filterAddDataCatalog(items, kind), [items, kind]);
   const sameNames = useMemo(() => appDataSameNameOrigins(items), [items]);
   const tableNeedle = query.trim().toLowerCase().replace(/[\s_]+/g, '');
+  // A table the project already models stays visible even when it is a staging copy.
+  const stagingSplit = useMemo(() => splitStagingTables(tables ?? [], { keep: (table) => table.modeled?.state === 'modeled' }), [tables]);
+  const listedTables = showStaging ? (tables ?? []) : stagingSplit.shown;
+  const draftedTables = useMemo(() => (tables ?? []).filter((table) => table.modeled?.state === 'drafted'), [tables]);
   // Database tables have no domain: a domain chip shows the catalog only.
   const shownTables = (kind === 'all' || kind === 'tables') && !domain
-    ? (tables ?? []).filter((table) => !tableNeedle || `${table.schema ?? ''}.${table.name}`.toLowerCase().replace(/[\s_]+/g, '').includes(tableNeedle))
+    ? listedTables.filter((table) => !tableNeedle || `${table.schema ?? ''}.${table.name}`.toLowerCase().replace(/[\s_]+/g, '').includes(tableNeedle))
       // Tables setup or Modeling already modeled come first (design D7).
       .sort((left, right) => tableModelRank(left) - tableModelRank(right))
       .slice(0, 200)
     : [];
   const counts = useMemo(() => {
-    const value: Record<AddDataKind, number> = { all: items.length + (tables?.length ?? 0), tables: tables?.length ?? 0, queries: 0, metrics: 0 };
+    const value: Record<AddDataKind, number> = { all: items.length + listedTables.length, tables: listedTables.length, queries: 0, metrics: 0 };
     for (const item of items) value[addDataKindOf(item)] += 1;
     return value;
-  }, [items, tables]);
+  }, [items, listedTables]);
   const noCertifiedData = !loading && !error && !query.trim() && kind !== 'tables' && items.every((item) => needsReview(item));
 
   const add = async (item: AppBlockRecommendation, allowReview: boolean) => {
@@ -313,6 +320,8 @@ export function AddDataBrowser({
       })}
       {nextCursor && kind !== 'tables' ? <button type="button" className="add-data-more" disabled={loading} onClick={loadMore}>{loading ? 'Loading…' : 'Show more'}</button> : null}
       {shownTables.length ? <p className="add-data-hint"><Table2 size={13} aria-hidden="true" /> {TABLE_BECOMES_DATASET_HINT}</p> : null}
+      {(kind === 'all' || kind === 'tables') && !domain && draftedTables.length ? <p className="add-data-hint" role="status" aria-label="Drafted models waiting"><Database size={13} aria-hidden="true" /> {draftedTables.length} drafted model{draftedTables.length === 1 ? '' : 's'} waiting for review. <button type="button" className="link" onClick={() => reviewDraftedModels(draftedTables[0]?.modeled?.proposalId)}>Review in Modeling</button></p> : null}
+      {(kind === 'all' || kind === 'tables') && !domain && stagingSplit.hidden.length ? <label className="add-data-hint add-data-staging"><input type="checkbox" checked={showStaging} onChange={(event) => setShowStaging(event.target.checked)} /> Show staging tables <small>· {stagingSplit.hidden.length} staging cop{stagingSplit.hidden.length === 1 ? 'y' : 'ies'} of tables listed here {showStaging ? 'shown' : 'hidden'}</small></label> : null}
       {shownTables.map((table) => <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}`} role="listitem" data-table-id={table.id} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
         <div className="add-data-summary static">
           <span className="add-data-mark"><Table2 size={14} /></span>
