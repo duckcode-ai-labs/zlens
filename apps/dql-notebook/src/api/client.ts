@@ -3150,6 +3150,8 @@ export interface AppBlockRecommendation {
   domain: string;
   status: string;
   owner: string | null;
+  /** The owner as a person reads it, when it is this machine's person (their display name). */
+  ownerName?: string;
   tags: string[];
   path: string;
   fingerprint: string;

@@ -24,7 +24,10 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
 4. Pick a **Domain**, or leave **All domains**. Lists of data start on this
    domain; you can still pick data from any domain.
 5. Pick a **Starting layout**: **Executive Brief**, **Operational Dashboard**,
-   **Investigation** or **Blank canvas**.
+   **Investigation** or **Blank canvas**. A layout other than Blank puts one
+   intro at the top of the page for you to edit (its wording differs by
+   layout); you add the tiles. Starting manually, the button then reads
+   **Open Studio with an intro**.
 6. Leave **Only certified data** on. **Also let me try data that needs review**
    is useful while exploring, but a page that uses such data cannot publish
    until the data is certified.
@@ -253,7 +256,7 @@ its type, trust and **Why:** line. **Apply N changes** adds that data to
 
 ### Sort and show the top N
 
-Click **⋯** on a measure's pill on the shelves:
+Click **⋯** on a measure's pill on the shelves. **Sort & top** comes first:
 
 - **Sort**: **Ascending** or **Descending** by that measure, or **Clear**.
 - **Show top**: **5**, **10**, **25**, **All**, or type another number and
@@ -264,6 +267,10 @@ highest first. A bar chart with more than 50 categories draws the top 25 and
 says *Showing top 25 of 935 · Show all*. **Show all** draws every category;
 **Top 25** goes back. A tile with its own **Show top** number draws exactly
 that many.
+
+The pill says how the tile is sorted: **Top 10 ▾** when it shows the top 10
+by that measure, **Sorted ↓** or **Sorted ↑** when it is only sorted by it.
+Click it to open the same menu.
 
 **Filters, sort and more** in **Tile settings** has the same **Sort by** and
 **Show top** controls. Both edit the same tile, so they always agree.
@@ -349,7 +356,20 @@ tables](#fields-from-related-tables)) is offered the same way, with the join
 named: a **Customer Name** filter lists the Orders trend as *Orders · via
 Customer*, and its tile row says *From Orders · via Customer*. Once checked,
 picking a customer narrows the Orders trend to that customer's orders. A tile
-you don't link says **Not filtered by Customer Name**, as before.
+you don't link says **Not filtered by Customer Name**, as before. This works
+the same in a dbt project: when a dbt `relationships` test points
+`orders.customer_id` at a staging copy (`stg_customers`) as well as at
+`customers`, Orders follows the one to `customers`, so there is one Customer
+group and one Customer Name.
+
+A tile you add after a filter exists is not linked to it either. When it
+could take the filter (it has the field, or reaches it through a join), the
+new tile says **Customer Name filter can apply to this tile** with
+**Apply** and **Not now**. Apply links that one tile; until then it shows
+everything. In the field list, a Dataset's own main date comes first (for
+Orders, **Ordered At**), and a count such as *3 compatible (2 through a
+join)* says when a field reaches tiles only through a join (a customer's
+**First Ordered At** reaching the Orders tiles).
 
 ### Applies or Does not apply
 

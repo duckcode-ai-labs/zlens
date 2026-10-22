@@ -149,10 +149,17 @@ export function DataPanel({
         {search ? <button type="button" onClick={() => setSearch('')} aria-label="Clear field search"><X size={12} /></button> : null}
       </label>
 
-      <p className="field-target" role="status">{target.kind === 'tile'
+      {/* Always two lines tall, whatever it says, so the field list below never
+          moves while the pointer is on its way to a field (a new tile starting
+          used to push it down a line: Customer Id got the click meant for Customer Name). */}
+      <p className="field-target" role="status" title={target.kind === 'tile'
+        ? `Click a field to add it to ${target.title}. Click it again to remove it.`
+        : target.kind === 'draft'
+          ? 'Building a new tile. Values become numbers; dates and categories group them.'
+          : 'Click a field to start a new tile.'}>{target.kind === 'tile'
         ? <>Click a field to add it to <strong>{target.title}</strong>. Click it again to remove it.</>
         : target.kind === 'draft'
-          ? <>Building a <strong>new tile</strong>. Values become numbers; dates and categories group them.</>
+          ? <>Building a <strong>new tile</strong>. Click more fields to add them.</>
           : <>Click a field to start a new tile.</>}</p>
 
       <div className="field-groups">

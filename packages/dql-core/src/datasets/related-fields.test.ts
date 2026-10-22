@@ -11,6 +11,7 @@ import {
   relatedFieldWords,
   withDatasetJoins,
   withoutDatasetJoins,
+  withoutSupersededEdges,
   type RelatedRelationshipEdge,
 } from './related-fields.js';
 
@@ -144,6 +145,42 @@ describe('fields from related tables (D2)', () => {
     expect(discover(ordersDescriptor(), [drafted, model]).joins.map((join) => join.relationshipId)).toEqual(['model']);
     const shipping = edge({ id: 'ship', fromRelation: 'main.orders', toRelation: 'main.customers', keys: [{ from: 'location_id', to: 'customer_id' }] });
     expect(discover(ordersDescriptor(), [model, shipping]).joins.map((join) => [join.id, join.label])).toEqual([['customer', 'Customer'], ['location', 'Location']]);
+  });
+
+  it('follows one foreign key to one table: a dbt test to a staging copy does not add a second Customer (dbt sample)', () => {
+    const columns: Record<string, Array<{ name: string; type?: string }>> = {
+      ...COLUMNS,
+      'main.stg_customers': [{ name: 'customer_id', type: 'VARCHAR' }, { name: 'customer_name', type: 'VARCHAR' }],
+    };
+    // The semantic model joins orders.customer_id to customers (not certified yet);
+    // a dbt `relationships` test points the same column at stg_customers.
+    const model = edge({ id: 'model', certified: false, evidence: undefined, fromRelation: 'main.orders', toRelation: 'main.customers', keys: [{ from: 'customer_id', to: 'customer_id' }] });
+    const dbtTest = edge({ id: 'test', origin: 'dbt_test', certified: false, evidence: undefined, fromRelation: 'main.orders', toRelation: 'main.stg_customers', keys: [{ from: 'customer_id', to: 'customer_id' }] });
+    const found = discoverDatasetJoins({ descriptor: ordersDescriptor(), baseRelation: 'main.orders', edges: [model, dbtTest], columnsOf: (relation) => columns[relation] });
+    expect(found.joins.map((join) => [join.id, join.table])).toEqual([['customer', 'customers']]);
+    const descriptor = withDatasetJoins(ordersDescriptor(), found);
+    expect(datasetFieldForFilter(descriptor, 'customer_name')?.field.name).toBe('customer__customer_name');
+    // Two dbt tests of equal rank: the staging copy gives way to the mart.
+    const martTest = edge({ ...dbtTest, id: 'mart-test', toRelation: 'main.customers', toTable: 'customers' });
+    expect(withoutSupersededEdges([dbtTest, martTest]).map((item) => item.id)).toEqual(['mart-test']);
+    // Two equally good tables on one key are both kept; another key is never touched.
+    const addresses = edge({ id: 'addresses', fromRelation: 'main.orders', toRelation: 'main.addresses', keys: [{ from: 'customer_id', to: 'customer_id' }] });
+    const certifiedCustomers = edge({ id: 'customers', fromRelation: 'main.orders', toRelation: 'main.customers', keys: [{ from: 'customer_id', to: 'customer_id' }] });
+    const kept = [certifiedCustomers, addresses, ...EDGES.slice(1)];
+    expect(withoutSupersededEdges(kept)).toBe(kept);
+    // Authored the other way round (one customer has many orders), the same rule holds.
+    const reversed = edge({ ...dbtTest, id: 'reversed', fromRelation: 'main.stg_customers', toRelation: 'main.orders', fromTable: 'stg_customers', toTable: 'orders', cardinality: 'one_to_many' });
+    expect(withoutSupersededEdges([model, reversed]).map((item) => item.id)).toEqual(['model']);
+  });
+
+  it('a filter prefers the nearest related table when two joins read the same column', () => {
+    const columns: Record<string, Array<{ name: string; type?: string }>> = {
+      ...COLUMNS,
+      'main.regions': [...COLUMNS['main.regions']!, { name: 'customer_name', type: 'VARCHAR' }],
+    };
+    const found = discoverDatasetJoins({ descriptor: ordersDescriptor(), baseRelation: 'main.orders', edges: EDGES, columnsOf: (relation) => columns[relation.replace(/"/g, '')] });
+    const descriptor = withDatasetJoins(ordersDescriptor(), found);
+    expect(datasetFieldForFilter(descriptor, 'customer_name')?.field.name).toBe('customer__customer_name');
   });
 
   it('finds the joins a query reads, parents first, and their trust', () => {

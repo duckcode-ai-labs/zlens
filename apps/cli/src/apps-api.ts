@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hostActor, hostActorDisplayName } from './host/request-context.js';
-import { blockCertificationByline, gitUserName, type CertificationByline } from './certification-receipt.js';
+import { blockCertificationByline, gitUserName, localPersonAliases, personDisplayName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -2077,15 +2077,40 @@ type AppListEntry = {
  * Catalog items with who certified each certified block and when (D5), read
  * from its receipt, so the Data list says "Certified by <name> · <date>".
  */
-function withCertificationBylines<Item extends { trust?: string; kind?: string; sourcePath?: string }>(
+function withCertificationBylines<Item extends { trust?: string; kind?: string; sourcePath?: string; owner?: string | null }>(
   projectRoot: string,
   items: Item[],
-): Array<Item & { certification?: CertificationByline }> {
+): Array<Item & { certification?: CertificationByline; ownerName?: string }> {
+  const person = thisPerson(projectRoot);
   return items.map((item) => {
-    if (item.trust !== 'certified' || item.kind === 'semantic' || !item.sourcePath) return item;
+    // The owner as one person reads everywhere ("DuckCode AI Labs", not their noreply email).
+    const ownerName = personDisplayName(item.owner, person);
+    const named = ownerName && ownerName !== item.owner ? { ...item, ownerName } : item;
+    if (item.trust !== 'certified' || item.kind === 'semantic' || !item.sourcePath) return named;
     const certification = blockCertificationByline(projectRoot, item.sourcePath);
-    return certification ? { ...item, certification } : item;
+    return certification ? { ...named, certification } : named;
   });
+}
+
+/**
+ * The person using ZLens here, for showing names: the host's signed-in
+ * person, else git user.name with every local spelling of their identity.
+ * Read once a minute (git is asked at most that often).
+ */
+const localPersonCache = new Map<string, { at: number; person: { name?: string; aliases: ReadonlySet<string> } }>();
+function thisPerson(projectRoot: string): { name?: string; aliases: ReadonlySet<string> } {
+  const actor = hostActor();
+  if (actor) return { name: hostActorDisplayName() ?? actor, aliases: new Set([actor.toLowerCase()]) };
+  const cached = localPersonCache.get(projectRoot);
+  if (cached && Date.now() - cached.at < 60_000) return cached.person;
+  const person = { name: gitUserName(projectRoot), aliases: localPersonAliases(projectRoot) };
+  localPersonCache.set(projectRoot, { at: Date.now(), person });
+  return person;
+}
+
+/** An identity as a person reads it: this machine's person by their display name, anyone else as recorded. */
+export function appOwnerDisplayName(projectRoot: string, identity: string | null | undefined): string | undefined {
+  return personDisplayName(identity, thisPerson(projectRoot));
 }
 
 /**
@@ -2147,6 +2172,7 @@ function collectAppsList(projectRoot: string): AppListEntry[] {
       visibility: document.visibility ?? 'shared',
       publicationIntent: document.publicationIntent ?? (document.visibility === 'private' ? 'personal' : 'shared_project'),
       owners: document.owners,
+      ...(() => { const ownerName = appOwnerDisplayName(projectRoot, document.owners[0]); return ownerName && ownerName !== document.owners[0] ? { ownerName } : {}; })(),
       tags: document.tags ?? [],
       members: document.members.length,
       roles: document.roles.length,
@@ -7927,7 +7953,7 @@ function applyAppStudioTemplate(
       : `# ${appName}\n\nDocument the question, findings, caveats, and evidence for this investigation.`;
   const items: DashboardGridItem[] = [{
     i: 'template-introduction', x: 0, y: 0, w: 12, h: 2,
-    title: template === 'investigation' ? 'Investigation question' : 'Executive context',
+    title: template === 'investigation' ? 'Investigation question' : 'Intro',
     sectionId: 'exec_summary',
     text: { markdown: intro },
     viz: { type: 'text' },

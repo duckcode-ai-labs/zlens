@@ -272,9 +272,12 @@ function cartesianOption(
         }
       : { color: tokens.muted, fontSize: 11, hideOverlap: true },
   };
+  // Value ticks never run into each other ("$500.0$1.0K$1.5K" on a narrow
+  // bar tile): ECharts drops a label that would overlap, and round ticks drop
+  // their ".0" ("$500", "$1K", "$1.5K").
   const valueAxis = {
     type: 'value' as const,
-    axisLabel: { color: tokens.muted, fontSize: 11, formatter: (value: number) => axisFormat(value) },
+    axisLabel: { color: tokens.muted, fontSize: 11, hideOverlap: true, formatter: (value: number) => axisTickLabel(axisFormat(value)) },
     splitLine: { lineStyle: { color: tokens.grid } },
   };
   const showLegend = series.length > 1 && style.legend !== 'none';
@@ -750,4 +753,10 @@ function itemTooltip(
     lines.push(`${escapeHtmlText(columnName(result, column))}: ${escapeHtmlText(extra === null ? 'Unavailable' : numberFormatter(result, column, {}, config)(extra))}`);
   }
   return lines.join('<br/>') + tooltipFooterHtml(config);
+}
+
+
+/** An axis tick without a trailing ".0": "$500.0" → "$500", "$1.0K" → "$1K"; "$1.5K" is kept. */
+export function axisTickLabel(label: string): string {
+  return label.replace(/(\d)\.0+(?=[^\d.]*$)/, '$1');
 }

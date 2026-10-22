@@ -165,7 +165,10 @@ import {
   studioTileFilterBindings,
   discoverAppFilterCandidates,
   filterTileMappingsForField,
+  tileFilterOfferOperations,
+  tileFilterOffers,
   type StudioRuntimeFilterFields,
+  type StudioTileFilterOffer,
 } from './app-studio-filter-candidates';
 import {
   hydrateAppScopedDashboardFilterValues,
@@ -359,12 +362,36 @@ export interface AppStudioV2Props {
   onConnectAi?: () => void;
 }
 
+/**
+ * Starting layouts, said as what they make. A layout other than Blank puts
+ * one intro you edit at the top of the page (its wording differs); you add
+ * the tiles. With Describe with AI, the AI also drafts the tiles under it.
+ */
 const TEMPLATE_OPTIONS: Array<{ id: StudioTemplate; title: string; description: string }> = [
-  { id: 'executive_brief', title: 'Executive Brief', description: 'Editorial summary, KPI band, decision evidence, and appendix.' },
-  { id: 'operational_dashboard', title: 'Operational Dashboard', description: 'Filters, KPIs, trends, drivers, and operating detail.' },
-  { id: 'investigation', title: 'Investigation', description: 'Question, findings, comparisons, caveats, and evidence.' },
-  { id: 'blank', title: 'Blank canvas', description: 'Start with one clean responsive page.' },
+  { id: 'executive_brief', title: 'Executive Brief', description: 'An intro to edit: the decision this page supports. Then add KPIs and evidence.' },
+  { id: 'operational_dashboard', title: 'Operational Dashboard', description: 'An intro to edit: what this page monitors. Then add KPIs, trends and detail.' },
+  { id: 'investigation', title: 'Investigation', description: 'An intro to edit: the question. Then add findings, caveats and evidence.' },
+  { id: 'blank', title: 'Blank canvas', description: 'One empty page.' },
 ];
+
+/**
+ * A text tile's words as the editor canvas shows them: a markdown heading is
+ * its own bold line, never run into the sentence after it ("Sales Manager
+ * Overview Monitor current…").
+ */
+export function studioTextTileLines(markdown: string): Array<{ text: string; heading: boolean }> {
+  return markdown.split(/\n\s*\n|\n(?=#)/).flatMap((block) => {
+    const text = block.replace(/\s*\n\s*/g, ' ').trim();
+    if (!text) return [];
+    const heading = /^#{1,6}\s+/.test(text);
+    return [{ text: text.replace(/^#{1,6}\s+/, ''), heading }];
+  });
+}
+
+/** The manual start button says what it opens: an empty page, or one with an intro to edit. */
+export function manualLaunchLabel(template: StudioTemplate): string {
+  return template === 'blank' ? 'Open blank Studio' : 'Open Studio with an intro';
+}
 
 export function AppStudioLaunchSurface({
   config,
@@ -443,7 +470,7 @@ export function AppStudioLaunchSurface({
         <label className="studio-review-toggle"><input type="checkbox" checked={config.sourcePolicy === 'include_review_required'} onChange={(event) => onChange({ sourcePolicy: event.target.checked ? 'include_review_required' : 'governed_only' })} /><i aria-hidden="true" /><span><strong>Also let me try data that needs review</strong><small>Useful while exploring; a page that uses it cannot publish until that data is certified.</small></span></label>
       </section>
       {error ? <div className="studio-error" role="alert">{error}</div> : null}
-      {connectFirst ? null : <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : config.mode === 'ai' ? <><Sparkles size={17} /> {noAi ? 'Suggest from keywords' : 'Generate editable App'}</> : <><LayoutDashboard size={17} /> Open blank Studio</>}</button>}
+      {connectFirst ? null : <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : config.mode === 'ai' ? <><Sparkles size={17} /> {noAi ? 'Suggest from keywords' : 'Generate editable App'}</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>}
       <small className="launch-next-step">Private local draft first · review sources and preview results · publish only when ready</small>
     </div>
   </section>;
@@ -520,6 +547,14 @@ export function AppStudioV2({
   const [workspaceWidth, setWorkspaceWidth] = useState(1260);
   const [activePageId, setActivePageId] = useState('overview');
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null);
+  /**
+   * Tiles added in this session ("pageId:tileId"): each shows a one-click
+   * offer for the page filters it can take ("Customer Name filter can apply
+   * to this tile — Apply"). Nothing links on its own; "Keep unfiltered"
+   * dismisses one offer ("pageId:tileId:filterId").
+   */
+  const [filterOfferTiles, setFilterOfferTiles] = useState<ReadonlySet<string>>(() => new Set());
+  const [dismissedFilterOffers, setDismissedFilterOffers] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedSource, setSelectedSource] = useState<AppBlockRecommendation | null>(null);
   const [catalog, setCatalog] = useState<AppBlockRecommendation[]>([]);
   const [catalogQuery, setCatalogQuery] = useState('');
@@ -589,6 +624,14 @@ export function AppStudioV2({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
+  /** Whether the project folder is a git repository; Publish mentions git only then. Unknown until asked. */
+  const [projectInGit, setProjectInGit] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!publishReviewOpen || projectInGit !== undefined) return;
+    let cancelled = false;
+    api.fetchGitStatus().then((status) => { if (!cancelled) setProjectInGit(Boolean(status.inRepo)); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [publishReviewOpen, projectInGit]);
   const [publishIssues, setPublishIssues] = useState<string[]>([]);
   const [datasetAuthoringSource, setDatasetAuthoringSource] = useState<AppBlockRecommendation | null>(null);
   const [datasetAuthoringProposal, setDatasetAuthoringProposal] = useState<ContextAuthoringProposalV1 | null>(null);
@@ -1824,6 +1867,7 @@ export function AppStudioV2({
         setUndoStack((items) => [...items.slice(-29), previous]);
         setRedoStack([]);
         setSelectedTileId(selectionAfterAdd(origin, result.tileIds[0]));
+        if (addedTileId) setFilterOfferTiles((current) => new Set([...current, `${activePage.id}:${addedTileId}`]));
         setSourceFeedback({ sourceId, status: 'added', view, pageTitle: activePage.metadata.title });
         sourceFeedbackTimerRef.current = window.setTimeout(() => {
           setSourceFeedback((current) => current?.sourceId === sourceId ? null : current);
@@ -1882,6 +1926,24 @@ export function AppStudioV2({
     const items = packStudioItems(collapseTemplateIntroductions(activePage.layout.items, draft.template), 12);
     const next = await mutate([{ type: 'set_layout', pageId: activePage.id, layout: { ...activePage.layout, items } }]);
     if (next) setSavedMessage('Page arranged · preview preserved');
+  };
+
+  /** The author accepted a new tile's filter offer: link that one tile, then refresh the page. */
+  const applyTileFilterOffer = async (offer: StudioTileFilterOffer) => {
+    const page = latestDraftRef.current?.pages.find((candidate) => candidate.id === offer.pageId);
+    if (!page) return;
+    const operations = tileFilterOfferOperations(page, offer);
+    if (!operations.length) return;
+    const next = await mutate(operations);
+    if (!next) return;
+    const tileTitle = page.layout.items.find((tile) => tile.i === offer.tileId)?.title || humanize(offer.tileId);
+    setSavedMessage(`${offer.filterLabel} filter now applies to ${tileTitle} · refreshing…`);
+    await runPreviewForDraft(next, offer.pageId, previewVariablesByPage[offer.pageId] ?? {});
+  };
+  const pendingTileFilterOffers = (pageId: string, tileId: string): StudioTileFilterOffer[] => {
+    if (!draft || !filterOfferTiles.has(`${pageId}:${tileId}`)) return [];
+    return tileFilterOffers({ pages: draft.pages, pageId, tileId, catalog, runtimeFields: runtimeFilterFields, boundSources: draft.sources })
+      .filter((offer) => !dismissedFilterOffers.has(`${pageId}:${tileId}:${offer.filterId}`));
   };
 
   const saveFilter = async (configuration: StudioFilterConfiguration) => {
@@ -3491,11 +3553,26 @@ export function AppStudioV2({
                   </header>
                   {/* "Not filtered by …" in Edit and Preview, from the run's filter
                       report, or the page's stored choice when the run predates it. */}
-                  {activePage ? studioTileFilterNotices({ page: activePage, tile, run: previewRun?.tiles.find((item) => item.tileId === tile.i), values: previewVariables, mode: editing ? 'edit' : 'preview' })
-                    .map((notice) => <div key={notice.key} className="tile-filter-notice" role="note" title={`${notice.label}. ${notice.detail}`}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>) : null}
+                  {activePage ? (() => {
+                    // A tile just added that can take a page filter offers it in one click; the
+                    // default stays "Not filtered by …" until the author chooses Apply.
+                    const offers = editing && !projectedPage ? pendingTileFilterOffers(activePage.id, tile.i) : [];
+                    const offered = new Set(offers.map((offer) => offer.filterId));
+                    return <>
+                      {offers.map((offer) => <div key={`offer:${offer.filterId}`} className="tile-filter-notice tile-filter-offer" role="note" data-testid="tile-filter-offer" onClick={(event) => event.stopPropagation()}>
+                        <Filter size={11} />
+                        <span title={`${offer.filterLabel} filter can apply to this tile${offer.via ? ` through its ${offer.via} join` : ''}. It is not linked until you choose Apply.`}><strong>{offer.filterLabel} filter can apply to this tile</strong>{offer.via ? ` · via ${offer.via}` : ''}</span>
+                        <button type="button" disabled={busy} onClick={() => void applyTileFilterOffer(offer)} aria-label={`Apply the ${offer.filterLabel} filter to ${tile.title || humanize(tile.i)}`}>Apply</button>
+                        <button type="button" className="quiet" onClick={() => setDismissedFilterOffers((current) => new Set([...current, `${offer.pageId}:${offer.tileId}:${offer.filterId}`]))} aria-label={`Keep ${tile.title || humanize(tile.i)} unfiltered by ${offer.filterLabel}`} title="Keep unfiltered">Not now</button>
+                      </div>)}
+                      {studioTileFilterNotices({ page: activePage, tile, run: previewRun?.tiles.find((item) => item.tileId === tile.i), values: previewVariables, mode: editing ? 'edit' : 'preview' })
+                        .filter((notice) => !offered.has(notice.filterId))
+                        .map((notice) => <div key={notice.key} className="tile-filter-notice" role="note" title={`${notice.label}. ${notice.detail}`}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
+                    </>;
+                  })() : null}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
                   {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the Dataset query and the SQL it compiled to.</p>; })()}</div> : null}
-                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={editing ? datasetLinkProposal(activePage!, tile) : undefined} sourceLabel={draft.sources.find((source) => source.id === tile.sourceId)?.capabilities?.dataset?.label} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
+                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{studioTextTileLines(tile.text.markdown).map((line, index) => line.heading ? <strong key={index} className="tile-text-title">{line.text}</strong> : <p key={index}>{line.text}</p>)}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={editing ? datasetLinkProposal(activePage!, tile) : undefined} sourceLabel={draft.sources.find((source) => source.id === tile.sourceId)?.capabilities?.dataset?.label} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
                   {placed && canArrange ? <>
                     <span className="tile-resize-handle e" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-e'); }} />
                     <span className="tile-resize-handle s" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-s'); }} />
@@ -3811,6 +3888,7 @@ export function AppStudioV2({
       </AiSidePanel> : null}
       {publishReviewOpen ? <PublishReadinessDialog
         draft={draft}
+        {...(projectInGit !== undefined ? { inGitRepo: projectInGit } : {})}
         serverIssues={publishIssues}
         busy={busy || previewing}
         previewRun={previewRun}
@@ -3871,6 +3949,16 @@ export function AppStudioV2({
   );
 }
 
+/**
+ * What Publish does, in words: it saves the App as files in the project.
+ * Git is mentioned only when the folder is a git repository.
+ */
+export function publishSavesAsFilesSentence(inGitRepo: boolean | undefined): string {
+  return inGitRepo
+    ? 'Publishing saves the App as files in your project, ready to review in git. Nothing is committed for you.'
+    : 'Publishing saves the App as files in your project folder.';
+}
+
 export function PublishReadinessDialog({
   draft,
   serverIssues,
@@ -3894,8 +3982,11 @@ export function PublishReadinessDialog({
   onAllowReviewData = () => undefined,
   onRemoveRelatedFields = () => undefined,
   onCertifyJoin = () => undefined,
+  inGitRepo,
 }: {
   draft: AppStudioBuildDraft;
+  /** Whether the project folder is a git repository (undefined: not known yet). */
+  inGitRepo?: boolean;
   serverIssues: string[];
   busy: boolean;
   previewRun: DashboardRunResponse | null;
@@ -4001,7 +4092,7 @@ export function PublishReadinessDialog({
           <div><strong>{issue.title}</strong><p>{issue.detail}</p><div className="readiness-actions">{issue.action === 'tile_review' ? <><button type="button" className="primary" onClick={() => onCertifyJoin(undefined)} disabled={busy}><ShieldCheck size={13} /> Certify the join in Modeling</button><button type="button" onClick={onAllowReviewData} disabled={busy}>Allow data that needs review</button></> : issue.action === 'filters' ? <button type="button" className="primary" onClick={onOpenFilters}><Filter size={13} /> Open Filters</button> : issue.action === 'refresh_sources' ? <button type="button" className="primary" onClick={onRefreshSources} disabled={busy}><ShieldCheck size={13} /> Accept current certified source</button> : issue.action === 'preview' ? <button type="button" className="primary" onClick={onRunAllPreviews} disabled={busy}><Play size={13} /> {busy ? 'Refreshing previews…' : 'Refresh all page previews'}</button> : <button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace or remove source</button>}</div></div>
         </section>)}
         {unusedNote ? <p className="readiness-unused-note" role="note"><Blocks size={14} /> {unusedNote}</p> : null}
-        {ready ? <div className="readiness-ready"><Check size={18} /><div><strong>All checks passed</strong><span>Publishing saves the App as files in your project, ready to review in git. Nothing is committed for you.</span></div></div> : null}
+        {ready ? <div className="readiness-ready"><Check size={18} /><div><strong>All checks passed</strong><span>{publishSavesAsFilesSentence(inGitRepo)}</span></div></div> : null}
       </div>
       <footer><button type="button" onClick={onClose} disabled={busy}>Back to editing</button>{ready ? <button type="button" className="primary" onClick={onRetry} disabled={busy}>{busy ? 'Publishing…' : 'Publish to Project'}</button> : <span className="readiness-footer-hint">Choose a fix above. This review updates as you work.</span>}</footer>
     </section>
@@ -4498,7 +4589,7 @@ export function StudioFilterDropdown({
       <button type="button" className="filter-option-clear" onClick={() => { onChange(multiple ? [] : ''); if (!multiple && detailsRef.current) detailsRef.current.open = false; }}>All values</button>
       <div>{visible.map((option) => <button key={option} type="button" className={selected.has(option) ? 'on' : ''} onClick={() => selectValue(option)}>{multiple ? <span className="filter-option-check">{selected.has(option) ? <Check size={11} /> : null}</span> : null}<span>{option}</span>{!multiple && selected.has(option) ? <Check size={12} /> : null}</button>)}</div>
       {visible.length === 0 ? <small>{search.searching ? 'Searching all values…' : 'No matching values'}</small> : null}
-      <footer>{applying ? 'Applying…' : query.trim() && search.searching ? 'Searching all values…' : query.trim() && search.truncated ? `First ${visible.length} matches · type more to narrow` : !query.trim() && capHint ? capHint : `${values.length}${truncated ? '+' : ''} available values`}</footer>
+      <footer>{applying ? 'Applying…' : query.trim() && search.searching ? 'Searching all values…' : query.trim() && search.truncated ? `First ${visible.length} matches · type more to narrow` : query.trim() ? `${visible.length} ${visible.length === 1 ? 'match' : 'matches'}` : capHint ?? `${values.length}${truncated ? '+' : ''} available values`}</footer>
     </div>
   </details>;
 }
@@ -4732,7 +4823,7 @@ function studioTemplatePage(
   const introId = `template-${template}-introduction`;
   const intro = {
     i: introId, x: 0, y: 0, w: 12, h: 2,
-    title: template === 'investigation' ? 'Investigation question' : 'Executive context',
+    title: template === 'investigation' ? 'Investigation question' : 'Intro',
     sectionId: 'exec_summary',
     text: { markdown: template === 'executive_brief'
       ? `# ${appName}\n\nSummarize the decision and the governed evidence that supports it.`

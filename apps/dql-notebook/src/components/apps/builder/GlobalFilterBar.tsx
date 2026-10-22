@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, CalendarDays, Check, ChevronDown, Filter, Plus, Search, Settings2, ShieldCheck, Trash2, X } from 'lucide-react';
 import { formatDashboardCalendarDate } from '@zlens/core/apps/filter-dates';
 import type { AppBlockRecommendation, AppStudioBuildDraft, DashboardRunResponse } from '../../../api/client';
@@ -91,6 +91,9 @@ export function FiltersPanel({
 }): JSX.Element {
   const [configuration, setConfiguration] = useState<StudioFilterConfiguration | null>(null);
   const [fieldQuery, setFieldQuery] = useState('');
+  // The field search starts empty for every new choice: a query typed for the
+  // last filter ("ordered") never prefixes the next one ("orderedcustomer").
+  useEffect(() => { setFieldQuery(''); }, [configuration?.fieldId]);
   const activePage = draft.pages.find((page) => page.id === activePageId) ?? draft.pages[0];
   const logicalFilters = useMemo(() => {
     const byId = new Map<string, { filter: StudioDashboardFilter; pageIds: string[] }>();
@@ -231,7 +234,7 @@ export function FiltersPanel({
         <label className="filter-field-search"><Search size={14} /><input autoFocus value={fieldQuery} onChange={(event) => setFieldQuery(event.target.value)} placeholder="Search fields" /></label>
         <div className="filter-field-results">
           {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).map((candidate) => <button key={candidate.id} type="button" onClick={() => chooseField(candidate)}>
-            <span><Filter size={14} /></span><div><strong>{humanize(candidate.id)}</strong><small>{filterCandidateOrigin(candidate)}</small><em>{candidate.affectedTileCount} compatible · {candidate.pageCount} {candidate.pageCount === 1 ? 'page' : 'pages'}</em></div><ChevronDown size={13} />
+            <span><Filter size={14} /></span><div><strong>{humanize(candidate.id)}</strong><small>{filterCandidateOrigin(candidate)}</small><em>{candidate.affectedTileCount} compatible{candidate.viaJoinCount ? ` (${candidate.viaJoinCount} through a join)` : ''}{candidate.mainDateTileCount ? ' · main date' : ''} · {candidate.pageCount} {candidate.pageCount === 1 ? 'page' : 'pages'}</em></div><ChevronDown size={13} />
           </button>)}
         </div>
         {visibleCandidates.filter((candidate) => !existingIds.has(candidate.id)).length === 0 ? <p className="panel-empty">No additional fields match this search.</p> : null}

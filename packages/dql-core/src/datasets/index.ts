@@ -101,6 +101,7 @@ export {
   datasetJoinsUsed,
   datasetRelatedFieldsUsed,
   discoverDatasetJoins,
+  withoutSupersededEdges,
   relatedFieldParts,
   relatedFieldWords,
   tileQueryFieldNames,

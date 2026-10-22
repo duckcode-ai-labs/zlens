@@ -244,6 +244,8 @@ export interface AppSummary {
   visibility?: 'shared' | 'private' | 'template';
   publicationIntent?: 'personal' | 'shared_project';
   owners: string[];
+  /** The first owner as a person reads it (this machine's person by their display name). */
+  ownerName?: string;
   tags: string[];
   members: number;
   roles: number;

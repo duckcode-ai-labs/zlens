@@ -2155,7 +2155,8 @@ function DashboardTile({
                 </span>
               ) : null}
             </div>
-          ) : !isCompactMetric ? (
+          ) : showTileSourceRef({ editable, compact: isCompactMetric, blockRef }) ? (
+            // The source id ("block:customer_profile") is an author's detail; readers never see it, nor "text" on a text tile.
             <div style={{ marginTop: 5, fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono, monospace)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{blockRef}</div>
           ) : null}
         </div>
@@ -2266,6 +2267,11 @@ function TileInsightCaption({ item, tile, themeMode }: { item: DashboardLayoutIt
       <span>{caption}</span>
     </div>
   );
+}
+
+/** Whether a tile shows its source id under the title: only to an author, never "text" for a text tile. */
+export function showTileSourceRef(input: { editable: boolean; compact: boolean; blockRef: string }): boolean {
+  return input.editable && !input.compact && input.blockRef !== 'text';
 }
 
 export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number], item?: DashboardLayoutItem): string | null {

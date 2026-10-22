@@ -55,6 +55,8 @@ describe('filter value search', () => {
         "UNION ALL SELECT 'K-900', 'Zelda Zimmer', TIMESTAMP '2025-12-01 00:00:00', 10.0",
         "UNION ALL SELECT 'K-901', 'Ann 100%_Real', TIMESTAMP '2025-12-02 00:00:00', 20.0",
       ].join('\n'), [], connection);
+      // 930 leads: more values than one run returns (its 500-row screen cap).
+      await executor.executePositional("CREATE TABLE main.crm_leads AS SELECT 'L-' || lpad(CAST(i AS VARCHAR), 4, '0') AS lead_id, 'Lead ' || lpad(CAST(i AS VARCHAR), 4, '0') AS lead_name, CAST(i AS DOUBLE) AS score FROM range(1, 931) AS t(i)", [], connection);
       const port = await startLocalServer({ rootDir: projectRoot, projectRoot, executor, connection, preferredPort: 0, captureServer: (created) => { server = created; } });
       const base = `http://127.0.0.1:${port}`;
       const tables = await call(base, '/api/app-datasets/tables');
@@ -91,6 +93,14 @@ describe('filter value search', () => {
       // A search with no match is an empty list, not an error.
       const none = await call(base, '/api/app-datasets/field-values', { sourceId, field: 'contact_name', search: 'Lori Butler' });
       expect(none.body).toMatchObject({ ok: true, values: [], truncated: false });
+
+      // More values than one run returns: the count is the field's, not the run's 500 rows.
+      const leads = tables.body.tables.find((table: { name: string }) => table.name === 'crm_leads');
+      const leadSource = (await call(base, '/api/app-datasets/tables/create', { tableId: leads.id, name: 'Leads', domain: 'commerce' })).body.sourceId as string;
+      const leadValues = await call(base, '/api/app-datasets/field-values', { sourceId: leadSource, field: 'lead_name' });
+      expect(leadValues.status, leadValues.text).toBe(200);
+      expect(leadValues.body).toMatchObject({ ok: true, truncated: true, valueCount: 930 });
+      expect(leadValues.body.valueCountCapped).toBeUndefined();
 
       // The search is a governed field query: only approved groupable fields.
       const unknown = await call(base, '/api/app-datasets/field-values', { sourceId, field: 'not_a_field', search: 'x' });

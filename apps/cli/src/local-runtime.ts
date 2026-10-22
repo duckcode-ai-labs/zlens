@@ -23925,11 +23925,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (mcpRequest && datasetFieldValuesRun) {
           const tile = tilesWithFilters.find((candidate) => candidate.tileId === mcpRequest.tileId);
           const field = mcpRequest.query.dimensions[0]?.field ?? '';
-          const result = tile?.status === 'ok' && !staleRun ? tile.result as { rows?: Array<Record<string, unknown>> } | undefined : undefined;
+          const result = tile?.status === 'ok' && !staleRun ? tile.result as { rows?: Array<Record<string, unknown>>; rowCount?: number; truncated?: boolean } | undefined : undefined;
           const values = Array.from(new Set((result?.rows ?? [])
             .map((row) => row[field])
             .filter((value) => value !== null && value !== undefined && value !== '')
             .map(String)));
+          // The run returns at most its screen row cap (500) but counts every
+          // grouped row: the field has that many values ("all 930"), not 500.
+          // A cut result without a count says only "500+".
+          const countedRows = Number(result?.rowCount ?? 0);
+          const totalValues = Math.max(values.length, Number.isFinite(countedRows) ? countedRows : 0);
+          const rowsCut = Boolean(result?.truncated) && totalValues <= (result?.rows?.length ?? 0);
           const searched = Boolean(mcpRequest.query.filters?.length);
           const search = datasetFieldValueSearchText((fieldValuesBody as Record<string, unknown> | undefined)?.search);
           // A non-text field has no server search: its values are matched here.
@@ -23945,8 +23951,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 truncated: matched.length > DATASET_FIELD_VALUE_LIMIT,
                 ...(search ? { search } : {
                   // How many values the field has, up to the count limit.
-                  valueCount: Math.min(values.length, DATASET_FIELD_VALUE_COUNT_LIMIT),
-                  ...(values.length > DATASET_FIELD_VALUE_COUNT_LIMIT ? { valueCountCapped: true } : {}),
+                  valueCount: Math.min(totalValues, DATASET_FIELD_VALUE_COUNT_LIMIT),
+                  ...(totalValues > DATASET_FIELD_VALUE_COUNT_LIMIT || rowsCut ? { valueCountCapped: true } : {}),
                 }),
               }
             : { ok: false, field, values: [], error: tile?.error ?? 'The field values did not settle. Retry the page.' }));

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { QueryResult } from '../../../store/types';
 import { DQL_SERIES_DARK, DQL_SERIES_LIGHT } from '../chart-palettes';
-import { buildVizOption, chronological, MAX_SERIES } from './viz-option';
+import { axisTickLabel, buildVizOption, chronological, MAX_SERIES } from './viz-option';
 import { renderOptionToSvg } from './EChartsChart';
 
 const monthly: QueryResult = {
@@ -120,6 +120,17 @@ describe('buildVizOption (RFC 0008 step 4)', () => {
     const big: QueryResult = { ...regions, rows: [{ region: 'US', revenue: 1_860_000 }] };
     const built = buildVizOption({ chartType: 'bar', result: big, themeMode: 'paper', config: { chart: 'bar', style: { format: 'compact' } } })!;
     expect((built.option.xAxis as any).axisLabel.formatter(1_860_000)).toBe('1.9M');
+  });
+
+  it('keeps value-axis ticks apart and drops a round tick\'s ".0" (bar axis read "$500.0$1.0K$1.5K")', () => {
+    const built = buildVizOption({ chartType: 'bar', result: regions, themeMode: 'paper', config: { chart: 'bar' } })!;
+    const valueAxis = built.option.xAxis as { axisLabel: { hideOverlap?: boolean } };
+    expect(valueAxis.axisLabel.hideOverlap).toBe(true);
+    expect(axisTickLabel('$500.0')).toBe('$500');
+    expect(axisTickLabel('$1.0K')).toBe('$1K');
+    expect(axisTickLabel('$1.5K')).toBe('$1.5K');
+    expect(axisTickLabel('12.0%')).toBe('12%');
+    expect(axisTickLabel('2,000')).toBe('2,000');
   });
 
   it('reads heatmaps in long and wide form and leaves types it does not draw to the caller', () => {

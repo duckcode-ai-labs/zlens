@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DatasetDescriptor, DQLManifest } from '@zlens/core';
+import { datasetFieldForFilter, type DatasetDescriptor, type DQLManifest } from '@zlens/core';
 import {
   datasetBaseRelation,
   decorateDatasetDescriptor,
@@ -116,6 +116,50 @@ describe('related tables from the project model (D2)', () => {
     expect(context.edges).toEqual([expect.objectContaining({ origin: 'dbt_test', cardinality: 'many_to_one', certified: false, keys: [{ from: 'customer_id', to: 'customer_id' }] })]);
     expect(context.edges[0]!.evidence).toBeUndefined();
     expect(context.columnsOf('db.main.customers')?.map((column) => column.name)).toEqual(['customer_id', 'customer_name']);
+  });
+
+  it('follows the model join, not also a dbt test to the staging copy (jaffle-shop: orders.customer_id → customers and stg_customers)', () => {
+    const dbtManifest = {
+      nodes: {
+        'test.shop.relationships_orders_customer_id__stg_customers': {
+          resource_type: 'test', name: 'relationships_orders_customer_id__customer_id__ref_stg_customers_', column_name: 'customer_id', attached_node: 'model.shop.orders',
+          test_metadata: { name: 'relationships', kwargs: { field: 'customer_id' } }, depends_on: { nodes: ['model.shop.stg_customers', 'model.shop.orders'] },
+        },
+      },
+    };
+    const model = (name: string) => ({ ...node(`model.shop.${name}`, name, `"db"."dev"."${name}"`), resourceType: 'model' as const });
+    const sample = {
+      ...manifest,
+      modeling: {
+        entities: {
+          'shop::entity::orders': { ...manifest.modeling!.entities['shop::entity::orders']!, dbtUniqueId: 'model.shop.orders' },
+          'shop::entity::customers': { ...manifest.modeling!.entities['shop::entity::customers']!, dbtUniqueId: 'model.shop.customers' },
+        },
+        relationships: {
+          // Imported from the semantic model: known, not certified, no warehouse check yet.
+          'shop::relationship::orders_customers': { ...manifest.modeling!.relationships['shop::relationship::orders_customers']!, status: 'draft', validation: undefined, automaticJoinAllowed: false },
+        },
+      },
+      dbtProvenance: { ...manifest.dbtProvenance!, nodes: { 'model.shop.orders': model('orders'), 'model.shop.customers': model('customers'), 'model.shop.stg_customers': model('stg_customers') } },
+    } as unknown as DQLManifest;
+    const columns = (names: string[]) => ({ columns: Object.fromEntries(names.map((name) => [name, { name, type: 'TEXT' }])) });
+    const context = relatedTablesContext({
+      manifest: sample,
+      dbt: { manifest: dbtManifest, catalog: { nodes: {
+        'model.shop.customers': columns(['customer_id', 'customer_name', 'lifetime_spend']),
+        'model.shop.stg_customers': columns(['customer_id', 'customer_name']),
+      } } },
+    });
+    expect(context.edges.map((edge) => [edge.origin, edge.toTable])).toEqual([['model', 'customers'], ['dbt_test', 'stg_customers']]);
+    const decorated = decorateDatasetDescriptor({ descriptor: orders(), block: { ...block, rawTableRefs: ['"db"."dev"."orders"'] }, context, quote });
+    // One Customer group (not "Customer · 2 fields" and "Customer · 1 field"), so Customer Name is one field a filter can reach.
+    expect(decorated.joins?.map((join) => [join.id, join.table, join.origin])).toEqual([['customer', 'customers', 'model']]);
+    expect(decorated.fields.filter((field) => field.kind === 'physical' && field.related).map((field) => field.name)).toEqual(['customer__customer_name', 'customer__lifetime_spend']);
+    expect(datasetFieldForFilter(decorated, 'customer_name')?.field.name).toBe('customer__customer_name');
+    expect(joinableTables(context, 'db.dev.orders')).toEqual(['customers']);
+    // The warehouse listing names the table without its database.
+    expect(joinableTables(context, 'dev.orders')).toEqual(['customers']);
+    expect(joinableTables(context, '"dev"."orders"')).toEqual(['customers']);
   });
 
   it('knows which one table a Dataset reads, and never treats a joined, grouped or ref source as a table', () => {
