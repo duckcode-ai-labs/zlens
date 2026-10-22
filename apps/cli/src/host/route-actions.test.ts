@@ -21,6 +21,8 @@ describe('what each API request does (RFC 0010 HH-2)', () => {
     ['POST', '/api/app-datasets/tables/create', 'dataset.author', 'project'],
     ['POST', '/api/app-datasets/certify', 'dataset.certify', 'project'],
     ['GET', '/api/app-datasets/certify-review', 'project.read', 'project'],
+    ['POST', '/api/app-datasets/joins/certify', 'dataset.certify', 'project'],
+    ['GET', '/api/app-datasets/joins/certify-review', 'project.read', 'project'],
     ['POST', '/api/app-datasets/tables/draft', 'dataset.author', 'project'],
     ['POST', '/api/app-datasets/saved-queries/create', 'dataset.author', 'project'],
     ['POST', '/api/app-datasets/saved-queries/draft', 'dataset.author', 'project'],

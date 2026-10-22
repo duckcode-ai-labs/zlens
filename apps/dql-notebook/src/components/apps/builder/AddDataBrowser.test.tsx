@@ -97,7 +97,11 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('aria-label="More for Top Customers"');
     expect(markup).not.toContain('aria-label="More for Order Lines"');
     expect(markup).not.toContain('aria-label="More for Margin"');
-    expect(render({ fieldsEnabled: false })).not.toContain('aria-label="More for');
+    // With field tiles off there is no Make row-level; ⋯ stays only where Certify… applies (T4).
+    const off = render({ fieldsEnabled: false });
+    expect(off).not.toContain('aria-label="More for Monthly Revenue"');
+    expect(off).not.toContain('aria-label="More for Top Customers"');
+    expect(off).toContain('aria-label="More for Draft Revenue"');
   });
 
   it('says what to do when there is no certified data yet', () => {

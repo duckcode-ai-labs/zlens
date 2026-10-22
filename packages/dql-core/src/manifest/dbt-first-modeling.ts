@@ -870,6 +870,7 @@ function buildRelationships(
       sourcePath,
       fingerprint: currentProof,
       certificationFingerprint,
+      ...(relationshipCertification(value.certifiedAgainst) ? { certification: relationshipCertification(value.certifiedAgainst) } : {}),
       validation,
       ...(keyTypesKnown ? { keyTypes } : {}),
       staleCertification,
@@ -1046,6 +1047,21 @@ function resolveScopedKey<T extends ScopedManifestObject>(record: Record<string,
     || item.qualifiedId === reference
     || `${item.domain ?? item.ownerDomain}:${item.localId}` === reference);
   return matches.length === 1 ? matches[0]![0] : undefined;
+}
+
+/**
+ * Who certified a relationship and when, as the certify action recorded it
+ * beside the grains it certified against (`certifiedAgainst.certifiedAt`,
+ * `certifiedBy`, `certifiedByName`). Not part of the certification proof.
+ */
+function relationshipCertification(value: unknown): { by?: string; name?: string; at?: string } | undefined {
+  const record = asRecord(value);
+  const rawAt = record.certifiedAt ?? record.certified_at;
+  const at = rawAt instanceof Date ? rawAt.toISOString() : stringValue(rawAt);
+  const by = stringValue(record.certifiedBy ?? record.certified_by);
+  const name = stringValue(record.certifiedByName ?? record.certified_by_name);
+  if (!at && !by) return undefined;
+  return { ...(by ? { by } : {}), ...(name ? { name } : {}), ...(at ? { at } : {}) };
 }
 
 function certificationProof(

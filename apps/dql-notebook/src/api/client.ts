@@ -59,10 +59,53 @@ export interface CertifyReview {
   joins: Array<{ label: string; sentence: string; trust: 'certified' | 'review_required' }>;
   hiddenColumns: Array<{ column: string; keptColumn: string; reason: string }>;
   checks: string[];
-  /** A Dataset nobody certified yet: "I vouch for this — certify" applies. */
+  /** Data or a saved query nobody certified yet whose checks pass: "I vouch for this — certify" applies. */
   canVouch: boolean;
-  /** A saved query without a row-level definition certifies in Block Studio. */
+  /** The saved query's file, for "Open in the saved query editor". */
   blockStudioPath?: string;
+  /** A saved query's review (T4), run now through the certification path: it runs, its tests, its owner, one row. */
+  savedQuery?: SavedQueryCertifyReview;
+  /** Certified once, changed since (T4): who certified it and when. */
+  previousCertification?: CertificationByline;
+}
+
+/** A saved query's short review before "I vouch for this — certify" (T4). */
+export interface SavedQueryCertifyReview {
+  runs: { ok: true; sentence: string } | { ok: false; error: string };
+  tests: Array<{ name: string; passed: boolean; error?: string }>;
+  testsSentence: string;
+  owner?: string;
+  /** Nobody owns it yet: the review asks, and certifying writes the owner. */
+  ownerRequired: boolean;
+  row?: string;
+  blockers: string[];
+  checks: string[];
+}
+
+/** A join's short review before "I vouch for this join — certify" (T4). */
+export interface JoinCertifyReview {
+  sourceId: string;
+  joinId: string;
+  /** "Orders → Location" */
+  name: string;
+  from: string;
+  to: string;
+  /** "orders.location_id = locations.location_id" */
+  keysSentence: string;
+  /** "each order has one location — checked on 61,948 rows" (the check passed). */
+  checkedSentence?: string;
+  checkLines: string[];
+  /** What would double-count if the join were wrong. */
+  doubleCount: string;
+  /** Why it cannot be certified now. */
+  blockers: string[];
+  /** The grain and key columns certifying fills in the model, from the checks just run. */
+  fills: Array<{ side: 'from' | 'to'; table: string; grain: string; keys: string[]; because: string }>;
+  canVouch: boolean;
+  origin: 'model' | 'drafted' | 'dbt_test';
+  relationshipId: string;
+  previousCertification?: CertificationByline;
+  checkedAt: string;
 }
 
 /** Guided Setup progress (design D7), saved by the server in `.dql/local/setup-progress.json`. */
@@ -4109,6 +4152,16 @@ export interface BlockStudioCertificationAssessment {
     checkedAt?: string;
   };
   blockers: string[];
+}
+
+/** The code and plain blockers a refused certification carries (`details.blockers`). */
+function apiErrorBlockers(error: unknown): { code?: string; blockers?: string[] } {
+  if (!(error instanceof DqlApiError)) return {};
+  const blockers = (error.details as { blockers?: unknown } | undefined)?.blockers;
+  return {
+    ...(error.code ? { code: error.code } : {}),
+    ...(Array.isArray(blockers) ? { blockers: blockers.filter((item): item is string => typeof item === 'string') } : {}),
+  };
 }
 
 export class DqlApiError extends Error {
@@ -8901,12 +8954,34 @@ export const api = {
     }
   },
 
-  /** "I vouch for this — certify" (design Q1): the same certification rules as Block Studio's Certify. */
-  async certifyAppData(sourceId: string, sourceRevision?: string): Promise<{ ok: boolean; status?: 'certified'; sourceId?: string; sourceRevision?: string; certification?: CertificationByline; blockers?: string[]; error?: string; code?: string }> {
+  /**
+   * "I vouch for this — certify" (design Q1, T4): the same certification rules
+   * as Block Studio's Certify, for data and saved queries. `owner` names who
+   * owns a saved query that declares nobody; it is written with the certification.
+   */
+  async certifyAppData(sourceId: string, sourceRevision?: string, owner?: string): Promise<{ ok: boolean; status?: 'certified'; sourceId?: string; sourceRevision?: string; certification?: CertificationByline; blockers?: string[]; error?: string; code?: string }> {
     try {
-      return await request('/api/app-datasets/certify', { method: 'POST', body: JSON.stringify({ sourceId, ...(sourceRevision ? { sourceRevision } : {}) }) });
+      return await request('/api/app-datasets/certify', { method: 'POST', body: JSON.stringify({ sourceId, ...(sourceRevision ? { sourceRevision } : {}), ...(owner?.trim() ? { owner: owner.trim() } : {}) }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...apiErrorBlockers(error) };
+    }
+  },
+
+  /** A join's short review (T4): its keys, a fresh bounded check, what would double-count, what it fills. */
+  async getJoinCertifyReview(sourceId: string, joinId: string): Promise<{ ok: boolean; review?: JoinCertifyReview; error?: string; code?: string }> {
+    try {
+      return await request(`/api/app-datasets/joins/certify-review?sourceId=${encodeURIComponent(sourceId)}&joinId=${encodeURIComponent(joinId)}`);
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** "I vouch for this join — certify" (T4): checked again now, then written through Modeling's own path. */
+  async certifyAppJoin(sourceId: string, joinId: string): Promise<{ ok: boolean; status?: 'certified'; relationshipId?: string; certification?: CertificationByline; filled?: JoinCertifyReview['fills']; blockers?: string[]; error?: string; code?: string }> {
+    try {
+      return await request('/api/app-datasets/joins/certify', { method: 'POST', body: JSON.stringify({ sourceId, joinId }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...apiErrorBlockers(error) };
     }
   },
 

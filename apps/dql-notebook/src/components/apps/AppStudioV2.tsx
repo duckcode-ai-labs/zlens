@@ -101,6 +101,7 @@ import {
 } from './builder/quick-choices';
 import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
 import { CertifyReviewDialog } from './builder/CertifyReviewDialog';
+import { CertifyJoinDialog } from './builder/CertifyJoinDialog';
 import { appStudioAiDataResume } from './app-studio-handoff';
 import {
   FIELD_TILES_OFF_MESSAGE,
@@ -225,7 +226,6 @@ import {
 import { type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
 import { appTileTrustFor, readersWillSeeText, tilesNotCertifiedText } from '@zlens/core/apps/app-trust';
 import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
-import { rememberProposalForModeling } from '../modals/setup-model-source';
 import { useDispatch } from '../../store/NotebookStore';
 import {
   isDatasetSourceRecoveryTask,
@@ -659,6 +659,8 @@ export function AppStudioV2({
   const [savedQueryFields, setSavedQueryFields] = useState<AppBlockRecommendation | null>(null);
   /** The short review before "I vouch for this — certify" (design Q1). */
   const [certifyReview, setCertifyReview] = useState<{ sourceId: string; name: string } | null>(null);
+  // T4: a join certifies in its own short review, here, never a detour to Modeling.
+  const [certifyJoin, setCertifyJoin] = useState<{ sourceId: string; joinId: string; name: string } | null>(null);
   /** Saved queries whose result columns are being read as fields, or could not be (design D1). */
   const [savedQueryFieldReads, setSavedQueryFieldReads] = useState<Record<string, { state: 'reading' } | { state: 'failed'; error: string }>>({});
   const [copilotOpen, setCopilotOpen] = useState(false);
@@ -1740,8 +1742,32 @@ export function AppStudioV2({
     if (!current) return;
     const usedByTiles = current.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === sourceId));
     if (!usedByTiles) {
-      if (current.sources.some((source) => source.id === sourceId)) await addDataSource(sourceId, { allowReview: false, refresh: true });
+      const source = current.sources.find((candidate) => candidate.id === sourceId);
+      const shownAsItIs = current.pages.some((page) => page.layout.items.some((tile) => !tile.query && tile.sourceId === sourceId));
+      if (source && shownAsItIs) {
+        // A saved query shown as it is (T4): its copy and its tiles move to the certified revision.
+        try {
+          const resolved = await api.resolveAppSourceCandidates(current.id, [sourceId]);
+          const operations = certifiedBlockOperations(current, [source], new Map(resolved.items.map((item) => [item.id, item])));
+          if (operations.length) await mutate(operations);
+        } catch (cause) {
+          setError(messageOf(cause));
+          return;
+        }
+      } else if (source) {
+        await addDataSource(sourceId, { allowReview: false, refresh: true });
+      }
       setSavedMessage('Certified');
+      const latest = latestDraftRef.current;
+      if (!latest || !publishReviewOpenRef.current) return;
+      setPublishIssues([]);
+      let refreshed = latest;
+      for (const page of refreshed.pages.filter((candidate) => pageHasDataTiles(candidate))) {
+        const recorded = await runPreviewForDraft(refreshed, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+        if (!recorded) return;
+        refreshed = recorded;
+      }
+      await publish(false, refreshed);
       return;
     }
     setBusy(true);
@@ -2355,11 +2381,34 @@ export function AppStudioV2({
       setSavedMessage(`${item.tileTitle || 'The tile'} no longer uses ${item.joins.map((join) => join.label).join(', ')} · run the preview again`);
     }
   };
-  const certifyJoinInModeling = (join: DatasetJoin | undefined) => {
-    // A join drafted in setup opens on its proposal in Modeling.
-    if (join?.origin === 'drafted') rememberProposalForModeling(join.relationshipId.split(':')[0]!);
-    setPublishReviewOpen(false);
-    dispatchNotebook({ type: 'SET_MAIN_VIEW', view: 'domains' });
+  /** Open the short review of a join (T4), named as the Data list names it ("Orders → Location"). */
+  const openJoinCertify = (sourceId: string, join: DatasetJoin, dataName?: string) => {
+    const known = dataName ?? appData.find((item) => (item.sourceId ?? item.id) === sourceId)?.name;
+    setCertifyJoin({ sourceId, joinId: join.id, name: `${known ? humanize(known) : 'Data'} → ${humanize(join.label)}` });
+  };
+
+  /**
+   * A join was certified (T4). Its Dataset's copy in the App is read again
+   * (the join is certified in it now), and when the publish check is open
+   * its pages run again so the count updates in place and the tile leaves
+   * the not-certified list.
+   */
+  const afterJoinCertified = async (sourceId: string) => {
+    setCertifyJoin(null);
+    setCatalogRefreshNonce((value) => value + 1);
+    const current = latestDraftRef.current;
+    if (!current) return;
+    if (current.sources.some((source) => source.id === sourceId)) await addDataSource(sourceId, { allowReview: false, refresh: true });
+    setSavedMessage('Join certified');
+    const next = latestDraftRef.current;
+    if (!next || !publishReviewOpenRef.current) return;
+    let refreshed = next;
+    for (const page of refreshed.pages.filter((candidate) => pageHasDataTiles(candidate))) {
+      const recorded = await runPreviewForDraft(refreshed, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+      if (!recorded) return;
+      refreshed = recorded;
+    }
+    await publish(false, refreshed);
   };
 
   const publish = async (publishWhenReady = true, targetDraft = draft) => {
@@ -2463,51 +2512,7 @@ export function AppStudioV2({
       setError(`${unavailableSources.map((source) => humanize(source.sourceRef)).join(', ')} ${unavailableSources.length === 1 ? 'is' : 'are'} no longer certified. Replace or remove ${unavailableSources.length === 1 ? 'this source' : 'these sources'} before publication.`);
       return;
     }
-    for (const source of blockSources) {
-      const block = byId.get(source.id);
-      if (block && block.lifecycle === 'certified' && (source.sourceRevision !== block.sourceRevision || source.trustState !== 'certified' || source.reviewStatus !== 'not_required')) {
-        operations.push({
-          type: 'upsert_source',
-          source: {
-            ...source,
-            kind: 'block',
-            sourceRef: block.path,
-            sourcePath: block.path,
-            executionRef: block.path,
-            qualifiedIdentity: block.qualifiedIdentity,
-            snapshotId: block.snapshotId,
-            sourceRevision: block.sourceRevision,
-            sourceFingerprint: block.sourceRevision,
-            lifecycle: 'certified',
-            capabilities: block.capabilities,
-            trustState: 'certified',
-            reviewStatus: 'not_required',
-          },
-        });
-      }
-    }
-    for (const page of draft.pages) {
-      for (const tile of page.layout.items) {
-        if (!tile.sourceId) continue;
-        const block = byId.get(tile.sourceId);
-        if (!block || block.lifecycle !== 'certified') continue;
-        if (tile.sourceRevision !== block.sourceRevision || tile.review?.sourceFingerprint !== block.sourceRevision || tile.review?.status !== 'not_required') {
-          operations.push({
-            type: 'update_tile',
-            pageId: page.id,
-            tileId: tile.i,
-            patch: {
-              sourceRevision: block.sourceRevision,
-              block: { ref: block.path },
-              sourceClass: 'certified_block',
-              trustState: 'certified',
-              reviewStatus: 'certified',
-              review: { ...tile.review, status: 'not_required', sourceFingerprint: block.sourceRevision },
-            },
-          });
-        }
-      }
-    }
+    operations.push(...certifiedBlockOperations(draft, blockSources, byId));
     if (!operations.length) {
       setPublishIssues([]);
       setSavedMessage('Certified sources are already current');
@@ -3825,6 +3830,7 @@ export function AppStudioV2({
             {...(activeDatasetItem?.sourceId && draft.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === activeDatasetItem.sourceId)) ? { onRefreshBinding: (item: AppBlockRecommendation) => { if (item.sourceId) void refreshDatasetBinding(item.sourceId); } } : {})}
             {...(datasetTilesEnabled ? { onMakeRowLevel: setSavedQueryFields } : {})}
             onCertify={(item: AppBlockRecommendation) => setCertifyReview({ sourceId: item.sourceId ?? item.id, name: item.name })}
+            onCertifyJoin={(item: AppBlockRecommendation, join: DatasetJoin) => openJoinCertify(item.sourceId ?? item.id, join, humanize(item.name))}
             {...(activeAppData && savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] ? { fieldsStatus: savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] } : {})}
             pickerRequest={dataPickerRequest}
           /> : null}
@@ -4087,12 +4093,9 @@ export function AppStudioV2({
         onClose={() => setPublishReviewOpen(false)}
         onRetry={() => void publish(true)}
         requireCertifiedToPublish={requireCertifiedToPublish}
-        onOpenSavedQuery={(source) => {
-          const path = source.sourcePath ?? source.executionRef ?? source.sourceRef;
-          if (path) { setPublishReviewOpen(false); openSavedQueryInBlockStudio(path); }
-        }}
+        onOpenSavedQuery={(source) => setCertifyReview({ sourceId: source.id, name: appData.find((item) => (item.sourceId ?? item.id) === source.id)?.name ?? source.capabilities?.dataset?.label ?? source.sourceRef })}
         onRemoveRelatedFields={(item) => void removeReviewRelatedFields(item)}
-        onCertifyJoin={certifyJoinInModeling}
+        onCertifyJoin={(join, sourceId) => { if (join && sourceId) openJoinCertify(sourceId, join); }}
         onRunPreview={(pageId) => void runPreviewAndReview(pageId)}
         onRunAllPreviews={() => void runAllPreviewsAndReview()}
         onRemoveRequirement={(requirementId) => void removeRequirementFromPublishScope(requirementId)}
@@ -4114,6 +4117,13 @@ export function AppStudioV2({
         onClose={() => setCertifyReview(null)}
         onCertified={(sourceId) => void afterDataCertified(sourceId)}
         onOpenBlockStudio={openSavedQueryInBlockStudio}
+      /> : null}
+      {certifyJoin ? <CertifyJoinDialog
+        sourceId={certifyJoin.sourceId}
+        joinId={certifyJoin.joinId}
+        name={certifyJoin.name}
+        onClose={() => setCertifyJoin(null)}
+        onCertified={(sourceId) => void afterJoinCertified(sourceId)}
       /> : null}
       {datasetAuthoringSource ? <DatasetSourceAuthoringDialog
         source={datasetAuthoringSource}
@@ -4151,6 +4161,65 @@ export function AppStudioV2({
       {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete local App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this local draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, tiles, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
     </div>
   );
+}
+
+/**
+ * The draft operations that point a certified saved query's copy in the App,
+ * and the tiles that show it, at its certified revision: after Certify in
+ * the publish check (T4) and "Accept current source".
+ */
+function certifiedBlockOperations(
+  draft: AppStudioBuildDraft,
+  blockSources: AppStudioBuildDraft['sources'],
+  byId: ReadonlyMap<string, Awaited<ReturnType<typeof api.resolveAppSourceCandidates>>['items'][number]>,
+): AppStudioDraftOperation[] {
+  const operations: AppStudioDraftOperation[] = [];
+  for (const source of blockSources) {
+    const block = byId.get(source.id);
+    if (block && block.lifecycle === 'certified' && (source.sourceRevision !== block.sourceRevision || source.trustState !== 'certified' || source.reviewStatus !== 'not_required')) {
+      operations.push({
+        type: 'upsert_source',
+        source: {
+          ...source,
+          kind: 'block',
+          sourceRef: block.path,
+          sourcePath: block.path,
+          executionRef: block.path,
+          qualifiedIdentity: block.qualifiedIdentity,
+          snapshotId: block.snapshotId,
+          sourceRevision: block.sourceRevision,
+          sourceFingerprint: block.sourceRevision,
+          lifecycle: 'certified',
+          capabilities: block.capabilities,
+          trustState: 'certified',
+          reviewStatus: 'not_required',
+        },
+      });
+    }
+  }
+  for (const page of draft.pages) {
+    for (const tile of page.layout.items) {
+      if (!tile.sourceId) continue;
+      const block = byId.get(tile.sourceId);
+      if (!block || block.lifecycle !== 'certified') continue;
+      if (tile.sourceRevision !== block.sourceRevision || tile.review?.sourceFingerprint !== block.sourceRevision || tile.review?.status !== 'not_required') {
+        operations.push({
+          type: 'update_tile',
+          pageId: page.id,
+          tileId: tile.i,
+          patch: {
+            sourceRevision: block.sourceRevision,
+            block: { ref: block.path },
+            sourceClass: 'certified_block',
+            trustState: 'certified',
+            reviewStatus: 'certified',
+            review: { ...tile.review, status: 'not_required', sourceFingerprint: block.sourceRevision },
+          },
+        });
+      }
+    }
+  }
+  return operations;
 }
 
 /**
@@ -4195,9 +4264,8 @@ export function PublishReadinessDialog({
   /** Open the short review before "I vouch for this — certify" for data not certified yet (design Q1). */
   onCertifySource?: (source: AppStudioBuildDraft['sources'][number]) => void;
   /**
-   * A plain saved query not certified yet: open it to certify it (phase 1
-   * opens Block Studio; phase 2 certifies it inline here). Falls back to
-   * `onCertifySource`, whose review links to Block Studio.
+   * A saved query not certified yet: open its short review, here (T4). Falls
+   * back to `onCertifySource`, the same review.
    */
   onOpenSavedQuery?: (source: AppStudioBuildDraft['sources'][number]) => void;
   /** How the App's data names a source ("Orders"), when known. */
@@ -4215,8 +4283,8 @@ export function PublishReadinessDialog({
   onRetry: () => void;
   /** Take a tile's related fields that are not certified off it. */
   onRemoveRelatedFields?: (item: AppTileNeedingJoinReview) => void;
-  /** Open Modeling on the join to certify (phase 2 certifies it inline here). */
-  onCertifyJoin?: (join: DatasetJoin | undefined) => void;
+  /** Open the join's short review, here (T4): the join and the Dataset it belongs to. */
+  onCertifyJoin?: (join: DatasetJoin | undefined, sourceId?: string) => void;
   onRunPreview: (pageId: string) => void;
   onRunAllPreviews: () => void;
   onRemoveRequirement: (requirementId: string) => void;
@@ -4301,10 +4369,10 @@ export function PublishReadinessDialog({
 
 /**
  * The tiles readers will see as "Not certified yet" (T3), each with what
- * certifies it. Recommended, never required — unless the project requires
- * certified data (`apps.requireCertifiedToPublish`), when one plain sentence
- * says so and Publish waits. Phase 2 (T4) makes the saved-query and join
- * actions inline; each row already carries its `CertifyNowAction`.
+ * certifies it — a table, a saved query or a join, each in its own short
+ * review here (T4). Recommended, never required — unless the project
+ * requires certified data (`apps.requireCertifiedToPublish`), when one plain
+ * sentence says so and Publish waits.
  */
 export function NotCertifiedTilesSection({
   title,
@@ -4323,7 +4391,7 @@ export function NotCertifiedTilesSection({
   busy: boolean;
   onCertifySource: (source: AppStudioBuildDraft['sources'][number]) => void;
   onOpenSavedQuery: (source: AppStudioBuildDraft['sources'][number]) => void;
-  onCertifyJoin: (join: DatasetJoin | undefined) => void;
+  onCertifyJoin: (join: DatasetJoin | undefined, sourceId?: string) => void;
   onRemoveRelatedFields: (item: AppTileNeedingJoinReview) => void;
   onOpenFilters: () => void;
 }): JSX.Element {
@@ -4340,7 +4408,7 @@ export function NotCertifiedTilesSection({
             {action.kind === 'source' ? <button type="button" className="primary" onClick={() => onCertifySource(action.source)} disabled={busy} aria-label={`Certify now: ${name}`}>Certify now (recommended)</button> : null}
             {action.kind === 'saved_query' ? <button type="button" className="primary" onClick={() => onOpenSavedQuery(action.source)} disabled={busy} aria-label={`Certify now: ${name}`}>Certify now (recommended)</button> : null}
             {action.kind === 'join' ? <>
-              <button type="button" className="primary" onClick={() => onCertifyJoin(action.joins[0])} disabled={busy} aria-label={`Certify the join for ${tile.title}`}>Certify the join (recommended)</button>
+              <button type="button" className="primary" onClick={() => onCertifyJoin(action.joins[0], action.review.sourceId)} disabled={busy} aria-label={`Certify the join for ${tile.title}`}>Certify this join (recommended)</button>
               {action.review.relatedFields.length ? <button type="button" onClick={() => onRemoveRelatedFields(action.review)} disabled={busy}><Trash2 size={13} /> {action.review.relatedFields.length === 1 ? 'Remove the related field' : 'Remove the related fields'}</button> : null}
               {action.review.filterIds.length && !action.review.relatedFields.length ? <button type="button" onClick={onOpenFilters} disabled={busy}><Filter size={13} /> Open Filters</button> : null}
             </> : null}

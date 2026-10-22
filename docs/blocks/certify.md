@@ -54,7 +54,21 @@ write the same receipt:
 |---|---|---|
 | [Import SQL](import-sql.md) | **Certify** on a saved draft | `via: sql-import` |
 | App Studio, data checked from a table (or a saved query made row-level) | **I vouch for this — certify**, at publish or under **⋯ → Certify…** | `via: app-dataset` |
+| App Studio, a saved query | **Certify now** in the publish dialog, or **⋯ → Certify…**: a short review (it runs, its tests, who owns it, what one row is), then **I vouch for this — certify** | `via: app-dataset` |
 | Terminal | `zlens certify --from-draft <path>` | `via: cli` |
+
+### Certify from an App
+
+In App Studio a saved query certifies without opening the saved query editor
+(see [Check vs certify](../apps/build.md#check-vs-certify)). The review runs
+the saved query and its tests now, by the rules below, and shows **It runs**,
+**Its tests pass** (each test and how it did), **Who owns it** and **What one
+row is**. When the saved query names no owner, the review asks for one, and
+ZLens writes `owner = "…"` into the `.dql` file together with the
+certification. If a test fails or it does not run, nothing is written. The
+receipt records who certified it and when, and its `checks` add plain lines
+such as `Tests: All 2 tests pass.` and `Owner: Maria Lopez`. **Open in the saved
+query editor** stays one click away.
 
 ## The rules
 
@@ -144,8 +158,16 @@ recertification:
 - `zlens compile` lists the saved query as `pending_recertification`, and `zlens
   verify` and `zlens certify <file>` print a warning.
 
-To clear it, open the saved query, check the change, and click **Re-certify**. A new
-receipt is written for the edited source.
+To clear it, open the saved query, check the change, and click **Re-certify**
+(or certify it again from an App). A new receipt is written for the edited
+source.
+
+ZLens keeps the date it was certified, so the App surfaces and the review say
+*Changed since it was certified on 22 Oct* rather than *Nobody has certified
+it yet*. A saved query that ZLens itself sends back to draft or review (an
+edit saved in the editor) keeps the same date in its companion YAML as
+`previousCertification` (who certified it and when, as history, never a
+claim); certifying again replaces it with a new receipt.
 
 A saved query certified before ZLens wrote receipts has no `sourceSha256` to compare
 with, so it stays certified. Editing a certified saved query in the saved query editor never

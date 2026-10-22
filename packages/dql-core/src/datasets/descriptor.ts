@@ -123,6 +123,12 @@ export interface DatasetJoin {
   uniqueness: 'current' | 'recheck';
   /** "each order has one customer" */
   sentence: string;
+  /**
+   * A join someone certified that changed since (its keys, cardinality or a
+   * side's grain moved): who certified it and when, so receipts say
+   * "Changed since it was certified on 22 Oct". Absent otherwise.
+   */
+  changedSinceCertified?: { at: string; by?: string; name?: string };
 }
 
 export interface DatasetMeasureField {

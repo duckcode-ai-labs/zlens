@@ -8,6 +8,49 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Certify tables, saved queries and joins without leaving the publish dialog
+
+Trust and publishing design, phase 2 (T4).
+
+- **Saved queries certify inline.** **Certify now** on a saved query tile in
+  the publish dialog (and **⋯ → Certify…** on a saved query in the Data tab or
+  Add data) opens the same short review as a table instead of Block Studio:
+  **It runs** (run now), **Its tests pass** (each test and its result), **Who
+  owns it** and **What one row is** (its grain or grouping columns), then **I
+  vouch for this — certify**. When the saved query names no owner, the review
+  asks for one and writes `owner = "…"` into the `.dql` with the
+  certification. It goes through the same certification rules and receipt as
+  Block Studio's **Certify** (`POST /api/app-datasets/certify`, with an
+  optional `owner`); a failing test or a query that does not run refuses and
+  writes nothing (`OWNER_REQUIRED`, `CERTIFICATION_CHECKS_FAILED`). The saved
+  query editor stays one small link away.
+- **Joins certify inline.** **Certify this join** (publish dialog) and **⋯ →
+  Certify the join to …** (Data tab) open a join review: the keys, *each order
+  has one location — checked on N rows* from a fresh bounded check (Modeling's
+  one validation statement), and what would double-count if the join were
+  wrong. When Modeling lacks a side's grain or key columns they are filled from
+  the checks just run — the "one" side's join key (unique and filled on every
+  row) and the Dataset's own row key — never from anything a check did not
+  prove. **I vouch for this join — certify** writes through Modeling's own
+  path (a modeling proposal, saved at once: the entities' grain and keys and
+  the relationship certified against them, with who and when), so Modeling
+  shows it certified; a setup draft's join leaves the draft. A failing check
+  says why and writes nothing. New routes: `GET
+  /api/app-datasets/joins/certify-review` and `POST
+  /api/app-datasets/joins/certify` (a host gates the POST as `dataset.certify`).
+- **The count updates in place.** After any certification in the dialog the
+  pages run again, the count updates ("All tiles certified") and the item
+  leaves the list, without closing the dialog or reloading.
+- **"Changed since it was certified on 22 Oct" keeps its date.** A certified
+  table or saved query edited afterwards (sha256 mismatch) and a certified join
+  whose keys or a side's grain changed now keep who certified them and when on
+  the catalog, run and review records, so receipts and the publish list say
+  *Changed since it was certified on …* (for a join, *Uses a join that changed
+  since it was certified on …*) instead of *Nobody has certified it yet*. A
+  block ZLens sends back to draft or review keeps a `previousCertification`
+  record in its companion YAML; a join keeps `certifiedAt`, `certifiedBy` and
+  `certifiedByName` inside `certifiedAgainst` (not part of the proof).
+
 ### One trust model: Certified or Not certified yet, per tile, and publishing that never blocks unless the project requires it
 
 Trust and publishing design, phase 1 (T1–T3).
@@ -39,8 +82,8 @@ Trust and publishing design, phase 1 (T1–T3).
   and the ones older drafts kept never block publishing.
 - **Publishing never blocks on trust by default.** The publish dialog shows
   the count, lists the tiles not certified yet with **Certify now
-  (recommended)** (the short certify review for a table; the saved query in
-  Block Studio and the join in Modeling for now), and a **Publish** button
+  (recommended)** (each opens its short review in the dialog; see phase 2
+  above), and a **Publish** button
   that says *Readers will see 'Not certified yet' on N tiles*. Readers see
   **Not certified yet** on those tiles. The button is **Publish**, no longer
   "Publish to Project".

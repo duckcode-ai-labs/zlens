@@ -23,6 +23,12 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
  * with APP_BUILD_REQUIRES_CERTIFIED — until Orders is certified from the
  * dialog; then it publishes and the reader says "All tiles certified".
  *
+ * Then a saved query certifies inside the publish dialog (T4): it runs, its
+ * test passes, nobody owns it so the review asks, "I vouch for this —
+ * certify", and the count says All tiles certified without leaving the App.
+ * Edited afterwards, the publish dialog says "Changed since it was certified
+ * on …".
+ *
  * It starts its own server on its own copy of the fixture. ZLENS_TRUST_SHOTS_DIR
  * saves 20-publish-one-trust.png and 21-reader-not-certified.png.
  */
@@ -98,6 +104,28 @@ test.beforeAll(async () => {
   workDir = mkdtempSync(join(tmpdir(), 'dql-browser-onetrust-'));
   projectDir = join(workDir, 'project');
   seedProject(projectDir, { connectorRoot: process.env.ZLENS_E2E_DUCKDB_CONNECTORS });
+  // A saved query nobody owns or certified yet, with one test (T4).
+  writeFileSync(join(projectDir, 'blocks', 'top_spenders.dql'), [
+    '// dql-format: 1',
+    '',
+    'block "top_spenders" {',
+    '  domain = "orders"',
+    '  type = "custom"',
+    '  status = "draft"',
+    '  description = "The five customers who spent the most."',
+    '  dimensions = ["customer"]',
+    '  query = """',
+    '    SELECT customer_name, lifetime_spend',
+    '    FROM dim_customers',
+    '    ORDER BY lifetime_spend DESC',
+    '    LIMIT 5',
+    '  """',
+    '  tests {',
+    '    assert row_count > 0',
+    '  }',
+    '}',
+    '',
+  ].join('\n'));
   server = await startNotebookServer({ projectDir, workDir });
 
   // Customers: checked, then certified on purpose. Orders: checked, not certified yet.
@@ -193,4 +221,70 @@ test('when the project requires certified data, publishing waits for the certify
   await expect(page.locator('.dql-trust-badge.review')).toHaveCount(0);
   void customersId;
   void ordersId;
+});
+
+test('a saved query certifies inside the publish dialog; edited afterwards, it says when it was certified (T4)', async ({ page }) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  // Back to the open-source default: publishing is not gated on trust.
+  const configPath = join(projectDir, 'dql.config.json');
+  const config = JSON.parse(readFileSync(configPath, 'utf8')) as Record<string, unknown>;
+  writeFileSync(configPath, `${JSON.stringify({ ...config, apps: { ...((config.apps as Record<string, unknown> | undefined) ?? {}), requireCertifiedToPublish: false } }, null, 2)}\n`);
+
+  const app = await ok<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
+    name: 'Top Spenders', goal: 'Our best customers', domain: 'orders', authoringMode: 'manual', template: 'blank',
+  });
+  const candidates = await ok<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${app.draft.id}/source-candidates?limit=50`, undefined, 'GET');
+  const spenders = candidates.items.find((candidate) => candidate.name === 'top_spenders');
+  expect(spenders, candidates.items.map((candidate) => candidate.name).join(', ')).toBeDefined();
+  await ok(`/api/app-builds/${app.draft.id}/compose`, {
+    expectedRevision: app.draft.revision,
+    expectedProposalHash: app.draft.proposalHash,
+    mode: 'manual',
+    selections: [{ sourceId: spenders!.sourceId, view: 'table', title: 'Top spenders' }],
+  });
+  await openPublishDialog(page, app.draft.id);
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('0 of 1 tile certified', { timeout: 90_000 });
+  const item = ready.getByRole('listitem', { name: 'Not certified yet: Top spenders' });
+  await item.getByRole('button', { name: 'Certify now: Top Spenders' }).click();
+
+  // The short review, here: it runs, its test passes, who owns it, what one row is.
+  const review = page.getByRole('dialog', { name: 'Certify Top Spenders' });
+  await expect(review.getByRole('region', { name: 'It runs' })).toContainText(/Ran just now: \d+ rows?\./, { timeout: 90_000 });
+  await expect(review.getByRole('region', { name: 'Its tests pass' })).toContainText('Its one test passes.');
+  await expect(review.getByRole('region', { name: 'What one row is' })).toContainText('One row for each customer.');
+  await expect(review.getByRole('button', { name: 'Open in the saved query editor' })).toBeVisible();
+  const vouch = review.getByRole('button', { name: 'I vouch for this — certify' });
+  // Nobody owns it yet: the review asks, and the button waits for an answer.
+  await expect(vouch).toBeDisabled();
+  await review.getByRole('textbox', { name: 'Owner' }).fill('Maria Lopez');
+  await expect(vouch).toBeEnabled();
+  await vouch.click();
+  await expect(review).toBeHidden({ timeout: 90_000 });
+
+  // The count updates in place; the App never left the screen.
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('All tiles certified', { timeout: 120_000 });
+  await expect(ready.getByText('All checks passed')).toBeVisible();
+  // Still in the App: the publish dialog never closed.
+  await expect(ready).toBeVisible();
+  const written = readFileSync(join(projectDir, 'blocks', 'top_spenders.dql'), 'utf8');
+  expect(written).toContain('owner = "Maria Lopez"');
+  expect(written).toContain('status = "certified"');
+  const receipt = readFileSync(join(projectDir, 'semantic-layer', 'blocks', 'top_spenders.yaml'), 'utf8');
+  expect(receipt).toContain('reviewStatus: certified');
+  expect(receipt).toContain('Owner: Maria Lopez');
+  await ready.getByRole('button', { name: 'Back to editing' }).click();
+
+  // Someone edits the file afterwards: no longer certified, and the review says since when.
+  writeFileSync(join(projectDir, 'blocks', 'top_spenders.dql'), written.replace('LIMIT 5', 'LIMIT 6'));
+  await page.goto(`${server!.baseUrl}/?appDraft=${app.draft.id}`);
+  const dataPane = page.locator('.data-panel');
+  await dataPane.locator('.dataset-current').click({ timeout: 90_000 });
+  await page.getByRole('menuitemradio', { name: /^Top Spenders/ }).click();
+  await expect(dataPane.locator('.dataset-current')).toContainText('Not certified yet', { timeout: 60_000 });
+  await dataPane.getByRole('button', { name: 'More for Top Spenders' }).click();
+  await dataPane.getByRole('menuitem', { name: /Certify…/ }).click();
+  const again = page.getByRole('dialog', { name: 'Certify Top Spenders' });
+  await expect(again.getByText(/^Changed since it was certified on \d{1,2} [A-Z][a-z]{2}/)).toBeVisible({ timeout: 90_000 });
 });

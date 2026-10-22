@@ -73,7 +73,7 @@ export interface ReaderTrustTile {
     checked?: boolean | null;
     validation?: { outcome?: string } | null;
     /** Joins to related tables the tile used (design D2), in plain words. */
-    joins?: Array<{ trust?: string; sentence?: string }> | null;
+    joins?: Array<{ trust?: string; sentence?: string; changedSinceCertified?: { at?: string | null } | null }> | null;
   } | null;
   artifact?: { trustState?: string; sourceKind?: string } | null;
   certificationStatus?: string | null;
@@ -103,6 +103,12 @@ export const READER_TRUST_LABELS: Record<ReaderTrustState, string> = {
   review: NOT_CERTIFIED_YET,
   blocked: 'Blocked',
 };
+
+/** "Uses a join that changed since it was certified on 21 Oct." for a join whose certification no longer holds. */
+export function changedJoinDetail(at: string | null | undefined, now: Date = new Date()): string | undefined {
+  const date = certifiedDateLabel(at, now);
+  return date ? `Uses a join that changed since it was certified on ${date}.` : undefined;
+}
 
 /** "Changed since it was certified on 21 Oct." for data whose certification no longer holds. */
 export function changedSinceCertifiedDetail(at: string | null | undefined, now: Date = new Date()): string | undefined {
@@ -269,7 +275,8 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
     if (outcome === 'rejected') return trust('blocked', 'The data’s checks rejected this query.');
     // A join nobody certified yet (drafted in setup) keeps the tile from being certified.
     if (dataset.trust === 'certified' && outcome !== 'needs_review' && dataset.joins?.some((join) => join.trust !== 'certified')) {
-      return trust('review', UNCERTIFIED_JOIN_DETAIL);
+      const changed = dataset.joins.find((join) => join.trust !== 'certified' && join.changedSinceCertified?.at);
+      return trust('review', changedJoinDetail(changed?.changedSinceCertified?.at) ?? UNCERTIFIED_JOIN_DETAIL);
     }
     const calculated = Boolean((item.query as { calculations?: unknown[] } | undefined)?.calculations?.length);
     if (dataset.trust === 'certified' && outcome !== 'needs_review') {

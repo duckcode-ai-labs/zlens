@@ -61,12 +61,14 @@ describe('Checked, not certified yet (design Q1, T1)', () => {
     expect(appDataSourceFromCandidate(orderLinesDataset).checked).toBeUndefined();
   });
 
-  it('offers certify for a row-level Dataset nobody certified, never for Metrics, saved queries or certified data', () => {
+  it('offers certify for data and saved queries nobody certified (T4), never for Metrics or certified data', () => {
     expect(canCertifyAppData(checkedOrders)).toBe(true);
     expect(canCertifyAppData(reviewOrders)).toBe(true);
     expect(canCertifyAppData(orderLinesDataset)).toBe(false);
     const savedQuery = { ...reviewOrders, capabilities: { ...reviewOrders.capabilities!, dataset: undefined } } as unknown as AppBlockRecommendation;
-    expect(canCertifyAppData(savedQuery)).toBe(false);
+    expect(canCertifyAppData(savedQuery)).toBe(true);
+    expect(canCertifyAppData({ ...savedQuery, kind: 'semantic' } as unknown as AppBlockRecommendation)).toBe(false);
+    expect(canCertifyAppData({ ...savedQuery, lifecycle: 'deprecated' } as unknown as AppBlockRecommendation)).toBe(false);
   });
 
   it('says what "Check and use" left behind: checked, by whom, and not certified yet', () => {
@@ -154,14 +156,19 @@ describe('The short review before certifying (design Q1)', () => {
     expect(html).not.toMatch(/<button type="button" class="primary" disabled=""/);
   });
 
-  it('will not vouch for data whose row key check fails, and sends a saved query to Block Studio', () => {
+  it('will not vouch for data whose row key check fails; a saved query ZLens cannot run here opens in its editor', () => {
     const failing = renderToStaticMarkup(<CertifyReviewDialog sourceId={review.sourceId} initialReview={{ ...review, keyCheck: { ok: false, error: 'order_id did not pass its check: it repeats.' } }} onClose={vi.fn()} onCertified={vi.fn()} />);
     expect(failing).toContain('order_id did not pass its check: it repeats.');
     expect(failing).toMatch(/<button type="button" class="primary" disabled="">I vouch for this — certify<\/button>/);
     const query = renderToStaticMarkup(<CertifyReviewDialog sourceId="q" initialReview={{ ...review, kind: 'saved_query', origin: 'saved_query', canVouch: false, blockStudioPath: 'domains/shop/blocks/top.dql' }} onClose={vi.fn()} onCertified={vi.fn()} onOpenBlockStudio={vi.fn()} />);
-    expect(query).toContain('A saved query is certified in Block Studio');
-    expect(query).toContain('Open in Block Studio');
+    expect(query).toContain('A saved query ZLens cannot run here is certified in the saved query editor.');
+    expect(query).toContain('Open in the saved query editor');
     expect(query).not.toContain('I vouch for this');
+  });
+
+  it('says when data changed since it was certified (T4)', () => {
+    const html = renderToStaticMarkup(<CertifyReviewDialog sourceId={review.sourceId} initialReview={{ ...review, check: undefined, previousCertification: { by: 'maria@example.test', at: '2026-10-22T09:00:00.000Z' } }} onClose={vi.fn()} onCertified={vi.fn()} />);
+    expect(html).toContain('Changed since it was certified on 22 Oct');
   });
 });
 

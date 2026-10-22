@@ -326,8 +326,10 @@ says which tables it reaches, for example *joins: customers, locations*.
   join that was only drafted, for example by **Draft my models** in setup,
   shows **Not certified yet** on its group, and a tile that uses it is **Not
   certified yet** (its receipt says *Uses a join nobody has certified*), like
-  any data nobody has certified yet. Certify the join in **Modeling**, or from
-  the publish dialog, to change that.
+  any data nobody has certified yet. Certify the join from the publish dialog
+  (**Certify this join**) or from the Data tab's **⋯ → Certify the join to
+  …**, without leaving the App (see [Certify a join](#certify-a-join)).
+  **Modeling** shows it certified afterwards.
 - **Receipt.** A tile's receipt lists each join it used, for example *Joined to
   customers on customer_id (each order has one customer — checked)*.
 
@@ -488,10 +490,13 @@ join nobody has certified*.
    header, the Apps card and the published `dql.app.json` show.
 4. Tiles that are not certified yet are listed, for example **1 tile not
    certified yet**: **Order total**, *Checked, not certified yet. Data:
-   Orders.*, with **Certify now (recommended)**. For a table it opens the
-   short certify review (see [Check vs certify](#check-vs-certify)); for a
-   saved query it opens the saved query in Block Studio; for a join it opens
-   Modeling. Certifying is recommended, never required by default.
+   Orders.*, with **Certify now (recommended)** (or **Certify this join
+   (recommended)** for a tile on a join nobody certified). Each opens a short
+   review right there, for a table, a saved query or a join (see
+   [Check vs certify](#check-vs-certify)), with the same **I vouch for this —
+   certify** button. Once you certify, the count updates in place and the
+   tile leaves the list; you never leave the App. Certifying is recommended,
+   never required by default.
 5. Click **Publish**. Next to it the dialog says what readers will see, for
    example **Readers will see 'Not certified yet' on 1 tile.** When every tile
    is certified it says **All checks passed**.
@@ -529,12 +534,54 @@ the reader's side (**Certified by you · 22 Oct**, **Certified by Kranthi ·
   (cents shown in dollars), the joins it uses and any columns hidden as
   duplicates. Click **I vouch for this — certify**. ZLens records who
   certified it, when, and the checks that passed, in the data's file.
-- A saved query without a row-level definition is certified in Block Studio
-  (**Certify** there, where its tests run); the review offers **Open in Block
-  Studio**. Metrics are certified in your semantic model.
+- A **saved query** certifies in the same kind of review. ZLens runs it and
+  its tests now, through the same rules as **Certify** in the saved query
+  editor, and shows:
+  - **It runs**: *Ran just now: 12 rows.*, or why it did not run;
+  - **Its tests pass**: each test and how it did;
+  - **Who owns it**: the owner it names. When it names nobody, type the person
+    or team who answers for the numbers; ZLens writes the owner into the saved
+    query when you certify;
+  - **What one row is**, when it declares a grain or grouping columns.
+
+  A failing test or a query that does not run keeps the button off and says
+  why. **Open in the saved query editor** is a small link, for when you want
+  to change it first. Metrics are certified in your semantic model.
+- A **join** certifies in its own review too: see
+  [Certify a join](#certify-a-join).
+- **Certification ends when the thing changes.** Edit a certified saved query
+  or table, or change a certified join's keys or a side's grain, and it is
+  **Not certified yet** again. ZLens keeps the date it was certified, so its
+  receipt, the review and the publish dialog say *Changed since it was
+  certified on 22 Oct*. Certify it again to vouch for the new version.
 - With a host, certifying needs the steward role, as before, and the host's
   admin policy can turn on `apps.requireCertifiedToPublish` for the project.
   Data certified before this change stays certified.
+
+### Certify a join
+
+**Certify this join** in the publish dialog, or **⋯ → Certify the join to
+Location…** in the Data tab, opens a short review of the join:
+
+- **The keys**: *orders.location_id = locations.location_id*.
+- **Checked just now**: *each order has one location — checked on 61,948
+  rows*. ZLens runs Modeling's one bounded check on the warehouse (counts
+  only, no row values leave it) every time the review opens, and again when
+  you certify.
+- **What would double-count if it were wrong**: for example *If locations had
+  two rows for one location_id, every order with that value would be joined
+  twice, so totals such as order total would be counted more than once.*
+- **Filled in the model from these checks**, when Modeling lacks a side's
+  grain or key columns: the "one" side's join key (filled and different on
+  every row, checked now) and the Dataset's own row key (checked now). ZLens
+  never fills anything a check did not prove.
+
+Click **I vouch for this join — certify**. ZLens writes it through Modeling's
+own path: each side's grain and keys, and the relationship certified against
+them with the check, who certified it and when. **Modeling** then shows it
+**Certified**; there is no "set the grain and keys first" step. When the check
+fails (a key repeats on the "one" side, too many rows lose their match), the
+review says why and nothing is written.
 
 ```text
 apps/customer-overview/

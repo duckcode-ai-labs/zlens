@@ -6,6 +6,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyCompanionCertification,
   blockCertificationByline,
+  blockPreviousCertificationByline,
+  readCompanionPreviousCertification,
+  withBlockOwner,
   buildCertificationReceipt,
   certificationByline,
   gitUserName,
@@ -133,5 +136,45 @@ describe('"by you" only for your own certifications (B6)', () => {
     } finally {
       if (previousUser === undefined) delete process.env.USER; else process.env.USER = previousUser;
     }
+  });
+});
+
+describe('"Changed since it was certified on …" keeps the date (T4)', () => {
+  const receipt = buildCertificationReceipt({ source: SOURCE, certifiedBy: 'maria@example.test', certifiedByName: 'Maria', via: 'app-dataset', now: new Date('2026-10-22T09:00:00.000Z') });
+  const write = (root: string, source: string, companion: string) => {
+    mkdirSync(join(root, 'blocks'), { recursive: true });
+    mkdirSync(join(root, 'semantic-layer', 'blocks'), { recursive: true });
+    writeFileSync(join(root, 'blocks', 'orders.dql'), source);
+    writeFileSync(join(root, 'semantic-layer', 'blocks', 'orders.yaml'), companion);
+  };
+
+  it('a certified file edited afterwards keeps who certified it and when; a current one has no previous date', () => {
+    const root = project();
+    const companion = applyCompanionCertification('name: Orders\n', 'certified', receipt);
+    write(root, SOURCE, companion);
+    expect(blockPreviousCertificationByline(root, 'blocks/orders.dql')).toBeNull();
+    write(root, SOURCE.replace('SELECT 1 AS n', 'SELECT 2 AS n'), companion);
+    expect(blockPreviousCertificationByline(root, 'blocks/orders.dql')).toEqual({ by: 'maria@example.test', name: 'Maria', at: '2026-10-22T09:00:00.000Z' });
+  });
+
+  it('a certified block that goes back to draft keeps the date as history, and certifying again replaces it', () => {
+    const certified = applyCompanionCertification('name: Orders\n', 'certified', receipt);
+    const draft = applyCompanionCertification(certified, 'draft', null);
+    expect(readCompanionCertification(draft)).toBeNull();
+    expect(readCompanionPreviousCertification(draft)).toEqual({ certifiedBy: 'maria@example.test', certifiedByName: 'Maria', certifiedAt: '2026-10-22T09:00:00.000Z' });
+    // Saved again as a draft: the first date stays.
+    expect(readCompanionPreviousCertification(applyCompanionCertification(draft, 'review', null))?.certifiedAt).toBe('2026-10-22T09:00:00.000Z');
+    const root = project();
+    write(root, SOURCE.replace('status = "certified"', 'status = "draft"'), draft);
+    expect(blockPreviousCertificationByline(root, 'blocks/orders.dql')?.at).toBe('2026-10-22T09:00:00.000Z');
+    const again = applyCompanionCertification(draft, 'certified', { ...receipt, certifiedAt: '2026-10-23T09:00:00.000Z' });
+    expect(readCompanionPreviousCertification(again)).toBeNull();
+    expect(readCompanionCertification(again)?.certifiedAt).toBe('2026-10-23T09:00:00.000Z');
+  });
+
+  it('writes an owner into a saved query: replaced when declared, added under the header when not', () => {
+    expect(withBlockOwner(SOURCE, 'Maria Lopez')).toContain('block "Orders" {\n  owner = "Maria Lopez"\n  domain');
+    expect(withBlockOwner('block "A" {\n  owner = ""\n}\n', 'Ops "team"')).toBe('block "A" {\n  owner = "Ops \\"team\\""\n}\n');
+    expect(withBlockOwner(SOURCE, '   ')).toBe(SOURCE);
   });
 });

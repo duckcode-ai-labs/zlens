@@ -118,6 +118,10 @@ export function relatedTablesContext(sources: RelatedTablesSources): RelatedTabl
       cardinality: relationship.cardinality,
       certified,
       evidence: evidenceOf(relationship.validation, certified && relationship.automaticJoinAllowed),
+      // Certified once, changed since: keep who certified it and when (T4).
+      ...(!certified && relationship.status === 'certified' && relationship.certification?.at
+        ? { previousCertification: { at: relationship.certification.at, ...(relationship.certification.by ? { by: relationship.certification.by } : {}), ...(relationship.certification.name ? { name: relationship.certification.name } : {}) } }
+        : {}),
     });
   }
 

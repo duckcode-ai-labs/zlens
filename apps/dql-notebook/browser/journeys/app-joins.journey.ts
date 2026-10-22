@@ -264,3 +264,68 @@ test('a tile on a join nobody certified publishes as Not certified yet: the dial
   await expect(card.getByText('1 of 3 tiles certified')).toBeVisible();
   await expect(card.getByText(/App certified/)).toHaveCount(0);
 });
+
+test('certify a join inside the publish dialog: a fresh check, "I vouch for this join — certify", and the count becomes All tiles certified without leaving the App (T4)', async ({ page }) => {
+  test.setTimeout(300_000);
+  // A new App with two tiles, each through a join setup drafted (nobody certified either).
+  const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
+    name: 'Store Joins', goal: 'Revenue by store and customer', domain: 'shop', authoringMode: 'manual', template: 'blank',
+  });
+  const candidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${app.draft.id}/source-candidates?limit=50`);
+  const orders = candidates.items.find((item) => item.name === 'Orders')!;
+  await call(`/api/app-builds/${app.draft.id}/compose`, {
+    expectedRevision: app.draft.revision,
+    expectedProposalHash: app.draft.proposalHash,
+    mode: 'manual',
+    selections: [
+      { sourceId: orders.sourceId, view: 'chart', title: 'Revenue by store', query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'order_total' }] } },
+      { sourceId: orders.sourceId, view: 'chart', title: 'Revenue by customer', query: { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'order_total' }] } },
+    ],
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${server!.baseUrl}/?appDraft=${app.draft.id}`);
+  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: /^Review and publish to Project/ }).click();
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('0 of 2 tiles certified', { timeout: 60_000 });
+
+  // "Certify this join" opens the join's short review here, not Modeling.
+  const list = ready.getByRole('region', { name: '2 tiles not certified yet' });
+  const store = list.getByRole('listitem', { name: 'Not certified yet: Revenue by store' });
+  await expect(store.getByRole('button', { name: 'Certify the join for Revenue by store' })).toHaveText('Certify this join (recommended)');
+  await store.getByRole('button', { name: 'Certify the join for Revenue by store' }).click();
+  const review = page.getByRole('dialog', { name: 'Certify the join Orders → Location' });
+  await expect(review.getByRole('region', { name: 'The keys' })).toContainText('orders.location_id = locations.location_id', { timeout: 60_000 });
+  await expect(review.getByRole('region', { name: 'The check' })).toContainText('each order has one location — checked on 5 rows');
+  await expect(review.getByRole('region', { name: 'What would double-count' })).toContainText('would be counted more than once');
+  await expect(review.getByText(/set them in the model|Open Modeling/i)).toHaveCount(0);
+  if (shotsDir) {
+    mkdirSync(shotsDir, { recursive: true });
+    await page.screenshot({ path: join(shotsDir, '22-certify-join-inline.png') });
+  }
+  await review.getByRole('button', { name: 'I vouch for this join — certify' }).click();
+  await expect(review).toBeHidden({ timeout: 60_000 });
+
+  // The count updates in place, and the tile leaves the list.
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('1 of 2 tiles certified', { timeout: 120_000 });
+  await expect(ready.getByRole('listitem', { name: 'Not certified yet: Revenue by store' })).toHaveCount(0);
+  // Still in the App: the publish dialog never closed.
+  await expect(ready).toBeVisible();
+
+  // The other join, the same way: then every tile is certified.
+  const customer = ready.getByRole('listitem', { name: 'Not certified yet: Revenue by customer' });
+  await customer.getByRole('button', { name: 'Certify the join for Revenue by customer' }).click();
+  const second = page.getByRole('dialog', { name: 'Certify the join Orders → Customer' });
+  await expect(second.getByRole('region', { name: 'The check' })).toContainText('each order has one customer — checked on 5 rows', { timeout: 60_000 });
+  await second.getByRole('button', { name: 'I vouch for this join — certify' }).click();
+  await expect(second).toBeHidden({ timeout: 60_000 });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('All tiles certified', { timeout: 120_000 });
+  await expect(ready.getByText('All checks passed')).toBeVisible();
+  await expect(ready.getByRole('region', { name: /not certified yet/ })).toHaveCount(0);
+
+  // Modeling has both joins certified (written through its own path), and the Data pane agrees.
+  const after = await call<{ items: Array<{ sourceId: string; capabilities: { dataset?: { joins?: Array<{ id: string; origin: string; trust: string }> } } }> }>(`/api/app-builds/${app.draft.id}/source-candidates?limit=50`);
+  const joins = after.items.find((item) => item.sourceId === orders.sourceId)!.capabilities.dataset!.joins!;
+  expect(joins.map((join) => [join.id, join.origin, join.trust])).toEqual([['customer', 'model', 'certified'], ['location', 'model', 'certified']]);
+});
