@@ -201,7 +201,7 @@ export function ExplorePanel({
           ) : null}
         </div>
         <footer>
-          {mode !== 'explain' && trust ? <span className={`dql-explore-trust ${trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'certified' : 'review'}`}>{trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'Certified data · checked against its contract' : 'Needs review · not certified'}</span> : null}
+          {mode !== 'explain' && trust ? <span className={`dql-explore-trust ${trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'certified' : 'review'}`}>{trust === 'certified' && (outcome === 'covered' || outcome === 'adapted') ? 'Certified data · checked against its contract' : 'Not certified yet'}</span> : null}
           {mode === 'explain' ? <small>Every number here comes from governed comparisons on this tile's data, with the page's filters. No AI was used.</small> : null}
           <span className="dql-explore-actions">
             {onAsk ? <button type="button" onClick={() => onAsk(`In "${pathTitle}", what explains these numbers, and what should I look at next?`)}><MessageSquare size={13} aria-hidden="true" /> Ask about this</button> : null}

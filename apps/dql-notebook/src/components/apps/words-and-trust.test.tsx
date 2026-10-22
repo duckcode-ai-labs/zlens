@@ -51,24 +51,24 @@ describe('Certified by <name> · <date> (D5)', () => {
     expect(old).toContain('Updated just now');
   });
 
-  it('puts who and when in the App header and on the Apps card', () => {
-    expect(allDataCertifiedLabel('Certified by Maria · 21 Oct')).toBe('All data certified by Maria · 21 Oct');
-    expect(allDataCertifiedLabel('Certified · 21 Oct')).toBe('All data certified · 21 Oct');
-    expect(allDataCertifiedLabel(undefined)).toBe('All data certified');
+  it('the App header and the Apps card say the tile count; who and when are on each tile (T2)', () => {
+    expect(allDataCertifiedLabel('Certified by Maria · 21 Oct')).toBe('All tiles certified');
+    expect(allDataCertifiedLabel(undefined)).toBe('All tiles certified');
     const rollup = appCertificationRollup([item], 0, [certifiedTile({ name: 'Maria', at: today })] as never);
-    expect(rollup.label).toMatch(/^All data certified by Maria · /);
+    expect(rollup.label).toBe('All tiles certified');
+    expect(rollup.byline).toMatch(/^Certified by Maria · /);
     expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' }).label)
-      .toMatch(/^App certified by Maria · 21 Oct/);
-    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0 }).label).toBe('App certified');
+      .toBe('All tiles certified');
+    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0 }).label).toBe('All tiles certified');
   });
 
-  it('the Apps card, the App header and the publish check say the same thing after "Allow data that needs review" (B6)', () => {
+  it('the Apps card, the App header and the publish check say the same thing when a tile is not certified (B6, T2)', () => {
     // Recorded at publish: 3 of 4 tiles certified, so the card never says "App certified", even after a reload.
     const card = appCardSeal({ lifecycle: 'review', certification: 'uncertified', draftCount: 0, publishedTrust: { certified: 3, total: 4 } });
     expect(card).toEqual({ certified: false, label: '3 of 4 tiles certified' });
     // An App certified before this was recorded still yields to the stored or run count.
     expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, publishedTrust: { certified: 3, total: 4 } }).certified).toBe(false);
-    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, publishedTrust: { certified: 4, total: 4 }, certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' }).label).toMatch(/^App certified by Maria/);
+    expect(appCardSeal({ lifecycle: 'certified', certification: 'certified', draftCount: 0, publishedTrust: { certified: 4, total: 4 }, certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' }).label).toBe('All tiles certified');
     // The App header's words for the same tiles.
     const reviewTile = { ...certifiedTile(), dataset: { ...certifiedTile().dataset, joins: [{ trust: 'review_required' }] } };
     const items = [item, { ...(item as object), i: 'b' }, { ...(item as object), i: 'c' }, { ...(item as object), i: 'd' }] as never;
@@ -122,7 +122,7 @@ describe('technical details on request (D6)', () => {
   it('writes the appendix in plain words, ids under Technical details', async () => {
     vi.stubGlobal('window', { location: { origin: 'http://127.0.0.1:3000' } });
     const { ReviewAppendix, appendixTrustWords } = await import('./DashboardRenderer');
-    expect(appendixTrustWords('draft_ready')).toBe('Some sources need review');
+    expect(appendixTrustWords('draft_ready')).toBe('Some sources not certified yet');
     expect(appendixTrustWords('certified')).toBe('All sources certified');
     const html = renderToStaticMarkup(<ReviewAppendix
       run={{ ...run, tiles: [], story: { headline: 'x', paragraphs: [], claims: [], evidenceRefs: ['blocks/commerce/revenue.dql'], trustState: 'draft_ready', generatedBy: 'deterministic' } } as never}
@@ -131,7 +131,7 @@ describe('technical details on request (D6)', () => {
     />);
     const [plain, technical] = html.split('<details class="dql-technical-details">');
     expect(plain).toContain('Last refreshed');
-    expect(plain).toContain('Some sources need review');
+    expect(plain).toContain('Some sources not certified yet');
     expect(plain).not.toContain('draft_ready');
     expect(plain).not.toContain('app_run_');
     expect(technical).toContain('app_run_123456789abcdef');
@@ -232,7 +232,7 @@ describe('Preview shows what readers see (D6)', () => {
       const html = renderToStaticMarkup(<ReaderPreviewParts parts={parts} appName="Sales" items={[item]} run={settled} />);
       expect(html).toContain(`data-reader-parts="${parts.filter((part) => part !== 'tiles').join(' ')}"`);
       expect(html).toContain('aria-label="Ask about Sales"');
-      expect(html).toContain('All 1 tile certified');
+      expect(html).toContain('All tiles certified');
       expect(html.includes('aria-label="Summary"')).toBe(summary);
       expect(html.includes('Revenue rose')).toBe(summary);
       expect(html).not.toContain('Business Story');

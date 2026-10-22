@@ -7,8 +7,8 @@
  * Trust is decided from what the page is built from, not from the reader's
  * current filter values: each tile's source, every join it can run through
  * (its own fields, and every page filter mapped to it through a related
- * field, whether or not a value is picked), its calculations, and whether
- * the author allowed data that needs review. Each tile is then labelled by
+ * field, whether or not a value is picked) and its calculations' inputs.
+ * Trust lives at one level, the tile (T2): each tile is labelled by
  * the same rule the reader uses (`readerTileTrust`), and the page by the same
  * aggregate (`appTrustSummary`).
  *
@@ -67,24 +67,24 @@ export interface AppTrustAnswer {
   state: AppTrustState;
   certified: number;
   total: number;
-  /** Data tiles labelled Needs review. */
+  /** Data tiles in the `review` state (code name; people read "Not certified yet"). */
   needsReview: number;
+  /** Data tiles that are not certified, whatever the reason: readers see "Not certified yet" on each. */
+  notCertified: number;
   allCertified: boolean;
-  /**
-   * Tiles that need review and are published only because the author chose
-   * "Allow data that needs review" (0 under "Only certified data").
-   */
-  reviewAllowed: number;
-  /** "All data certified", "3 of 4 tiles certified", "No data tiles". */
+  /** "All tiles certified", "3 of 4 tiles certified", "No data tiles". */
   label: string;
-  /** "All 4 tiles certified", "3 of 4 tiles certified"; empty with no data tiles. */
+  /** "All tiles certified", "3 of 4 tiles certified"; empty with no data tiles. */
   text: string;
 }
 
 export interface AppTrustInput {
   pages: readonly AppTrustPageLike[];
   sourceFor: (sourceId: string) => AppTrustSourceLike | undefined;
-  /** `include_review_required` when the author allowed data that needs review. */
+  /**
+   * @deprecated The per-App data rule is gone (T3). An old App's stored
+   * `sourcePolicy` is read and ignored: it never changes a tile's trust.
+   */
   sourcePolicy?: string;
   /**
    * Current evidence of a join's trust (a settled run of the page): a join
@@ -127,7 +127,7 @@ function staticRunTile(page: AppTrustPageLike, tile: AppTrustTileLike, input: Ap
     };
   }
   if (tile.semantic && !tile.block) {
-    // A governed semantic query: Governed, never Certified on its own.
+    // A legacy semantic-model result: not certified on its own.
     return { status: 'ok', tileType: 'semantic' };
   }
   // A saved query shown as it was reviewed.
@@ -176,8 +176,8 @@ export function appTrustAnswer(input: AppTrustInput): AppTrustAnswer {
     certified: summary.certified,
     total: summary.total,
     needsReview,
+    notCertified: summary.total - summary.certified,
     allCertified: summary.allCertified,
-    reviewAllowed: input.sourcePolicy === 'include_review_required' ? needsReview : 0,
     label: summary.label,
     text: summary.text,
   };
@@ -188,23 +188,96 @@ export function appTileTrustFor(answer: AppTrustAnswer, pageId: string, tileId: 
   return answer.tiles.find((tile) => tile.pageId === pageId && tile.tileId === tileId);
 }
 
-/** "1 tile needs review", "3 tiles need review". */
-export function tilesNeedReviewText(count: number): string {
-  return `${count} ${count === 1 ? 'tile needs' : 'tiles need'} review`;
+/** "1 tile not certified yet", "3 tiles not certified yet". */
+export function tilesNotCertifiedText(count: number): string {
+  return `${count} ${count === 1 ? 'tile' : 'tiles'} not certified yet`;
+}
+
+/** @deprecated Use `tilesNotCertifiedText` (T1: no "needs review" on App screens). */
+export const tilesNeedReviewText = tilesNotCertifiedText;
+
+/**
+ * What readers will see, said next to the Publish button (T3): publishing is
+ * never blocked by trust unless the project requires it, so the dialog says
+ * plainly how many tiles readers will see marked "Not certified yet".
+ */
+export function readersWillSeeText(notCertified: number): string {
+  if (notCertified <= 0) return 'Readers will see every tile certified.';
+  return `Readers will see ‘Not certified yet’ on ${notCertified} ${notCertified === 1 ? 'tile' : 'tiles'}.`;
 }
 
 /**
  * What the publish check says once nothing is left to fix. It never says
- * "Every check passed" while a tile needs review: data that needs review
- * that the author allowed is named — "1 tile needs review (allowed)".
+ * "Every check passed" while a tile is not certified: the count is named —
+ * "3 of 4 tiles certified".
  */
-export function publishReadyLine(answer: Pick<AppTrustAnswer, 'needsReview' | 'allCertified' | 'certified' | 'total'>): {
-  /** "Every check passed." or "1 tile needs review (allowed)". */
+export function publishReadyLine(answer: Pick<AppTrustAnswer, 'allCertified' | 'certified' | 'total'> & { notCertified?: number; needsReview?: number }): {
+  /** "Every check passed." or "3 of 4 tiles certified". */
   detail: string;
   allPassed: boolean;
 } {
-  if (answer.needsReview > 0) return { detail: `${tilesNeedReviewText(answer.needsReview)} (allowed)`, allPassed: false };
+  const notCertified = answer.notCertified ?? Math.max(0, answer.total - answer.certified);
+  if (notCertified > 0) return { detail: tileTrustCountText(answer.certified, answer.total), allPassed: false };
   return { detail: 'Every check passed.', allPassed: true };
+}
+
+/**
+ * Project settings for Apps that decide publishing (T3). The open-source
+ * default never blocks publishing on trust: tiles nobody certified carry
+ * "Not certified yet" for readers. `apps.requireCertifiedToPublish: true` in
+ * `dql.config.json` turns the gate back on for the whole project; an
+ * Enterprise host sets it on by default through its admin policy. There is no
+ * per-App rule.
+ */
+export interface AppsPublishSettings {
+  requireCertifiedToPublish: boolean;
+}
+
+export const DEFAULT_APPS_PUBLISH_SETTINGS: AppsPublishSettings = { requireCertifiedToPublish: false };
+
+/** The publish settings from a parsed `dql.config.json`; anything but `true` is off. */
+export function appsPublishSettings(config: unknown): AppsPublishSettings {
+  const apps = config && typeof config === 'object' ? (config as { apps?: unknown }).apps : undefined;
+  const value = apps && typeof apps === 'object' ? (apps as { requireCertifiedToPublish?: unknown }).requireCertifiedToPublish : undefined;
+  return { requireCertifiedToPublish: value === true };
+}
+
+/** Problems with the `apps` publish settings in a parsed `dql.config.json` (for `zlens doctor`). */
+export function appsPublishSettingsProblems(config: unknown): string[] {
+  const apps = config && typeof config === 'object' ? (config as { apps?: unknown }).apps : undefined;
+  if (apps === undefined || apps === null) return [];
+  if (typeof apps !== 'object' || Array.isArray(apps)) return ['apps must be an object.'];
+  const value = (apps as { requireCertifiedToPublish?: unknown }).requireCertifiedToPublish;
+  if (value !== undefined && typeof value !== 'boolean') return ['apps.requireCertifiedToPublish must be true or false.'];
+  return [];
+}
+
+/** The code of the one message publishing gives when the project requires certified tiles. */
+export const REQUIRE_CERTIFIED_TO_PUBLISH_CODE = 'APP_BUILD_REQUIRES_CERTIFIED';
+
+/**
+ * The one plain message when the project requires certified data and some
+ * tiles are not certified yet. It names the tiles; the publish dialog shows
+ * the certify actions next to it.
+ */
+export function requireCertifiedToPublishMessage(tiles: ReadonlyArray<Pick<AppTileTrust, 'tileId' | 'tileTitle'>>): string {
+  const names = tiles.map((tile) => tile.tileTitle || tile.tileId);
+  const shown = names.slice(0, 5).join(', ') + (names.length > 5 ? ` and ${names.length - 5} more` : '');
+  return `${REQUIRE_CERTIFIED_TO_PUBLISH_CODE}: This project requires every tile to be certified before an App is published. Not certified yet: ${shown}.`;
+}
+
+/** Tiles that are not certified, in page order. */
+export function notCertifiedTiles(answer: Pick<AppTrustAnswer, 'tiles'>): AppTileTrust[] {
+  return answer.tiles.filter((tile) => tile.trust.state !== 'certified');
+}
+
+/**
+ * Review tasks ZLens used to open for every source nobody certified ("X needs
+ * certifying before this App is published"). Trust is shown per tile now
+ * (T3), so these stored reminders never block publishing.
+ */
+export function isTrustReminderTaskId(id: string | undefined | null): boolean {
+  return typeof id === 'string' && (id.startsWith('review-source-') || id.startsWith('dataset-source-rebind:'));
 }
 
 /**

@@ -1161,7 +1161,7 @@ export function DashboardRenderer({
           <ShieldCheck size={13} />
           {hiddenReviewTileCount + hiddenPresentationTileCount} tile
           {hiddenReviewTileCount + hiddenPresentationTileCount === 1 ? ' is' : 's are'} hidden from this
-          stakeholder view because {hiddenReviewTileCount > 0 ? 'they still need review' : 'a certified tile already answers the same question'}. Switch to Edit to see everything on this page.
+          stakeholder view because {hiddenReviewTileCount > 0 ? 'they are not certified yet' : 'a certified tile already answers the same question'}. Switch to Edit to see everything on this page.
         </div>
       ) : null}
       {(!embeddedHeader || editable) && (
@@ -1420,7 +1420,7 @@ export function DashboardRenderer({
                       <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--dql-app-text, #0f172a)' }}>{section.title}</h3>
                       {isAppendix ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid rgba(217,119,6,0.4)', color: '#b45309', background: 'rgba(217,119,6,0.08)', borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 600 }}>
-                          needs review
+                          not certified yet
                         </span>
                       ) : null}
                     </div>
@@ -2507,11 +2507,8 @@ const generatedVizOverflowStyle: React.CSSProperties = {
 /** The same words the tiles use (READER_TRUST_LABELS), so a page never says two things. */
 function TrustPill({ trust }: { trust: string }) {
   const certified = trust === 'certified';
-  const label = certified
-    ? READER_TRUST_LABELS.certified
-    : trust === 'governed' || trust === 'grounded'
-      ? READER_TRUST_LABELS.governed
-      : trust === 'review_required' ? READER_TRUST_LABELS.review : 'Draft';
+  // Two words for people (T1): Certified, or Not certified yet.
+  const label = certified ? READER_TRUST_LABELS.certified : READER_TRUST_LABELS.review;
   return (
     <span style={trustPillStyle(certified)}>
       {certified ? <ShieldCheck size={10} strokeWidth={2.4} /> : <AlertTriangle size={10} strokeWidth={2.4} />}
@@ -2555,8 +2552,8 @@ function DashboardStoryStrip({ story }: { story: DashboardStory }): JSX.Element 
  */
 export function storySourceChipLabel(story: Pick<DashboardStoryBrief, 'generatedBy' | 'trustState'>): string {
   const certified = story.trustState === 'certified';
-  if (story.generatedBy === 'ai') return certified ? 'AI wording · verified facts' : 'AI wording · facts from sources that need review';
-  return certified ? 'Verified result summary' : 'Result summary · sources need review';
+  if (story.generatedBy === 'ai') return certified ? 'AI wording · verified facts' : 'AI wording · some facts not certified yet';
+  return certified ? 'Verified result summary' : 'Result summary · some sources not certified yet';
 }
 
 /**
@@ -2612,8 +2609,7 @@ export function BusinessStoryPanel({
 /** The appendix's trust line in plain words, never a raw state like "draft_ready". */
 export function appendixTrustWords(trustState: string | undefined): string {
   if (trustState === 'certified') return 'All sources certified';
-  if (trustState === 'governed') return 'From the governed model';
-  return 'Some sources need review';
+  return 'Some sources not certified yet';
 }
 
 export function ReviewAppendix({
@@ -3077,9 +3073,9 @@ export function TileEvidencePanel({
   const sourceLabel = artifact?.sourceKind === 'certified_block'
     ? 'Certified saved query'
     : artifact?.sourceKind === 'semantic_query'
-      ? 'Governed semantic query'
+      ? 'Semantic query'
       : artifact?.sourceKind === 'dataset_query'
-        ? 'Governed field query'
+        ? 'Field query'
       : artifact?.sourceKind === 'draft_analysis'
         ? 'App analysis'
         : artifact?.sourceKind === 'ai_pin'

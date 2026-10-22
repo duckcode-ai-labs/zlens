@@ -98,7 +98,7 @@ export function DataPanel({
       className={`data-field ${on ? 'on' : ''}`}
       disabled={disabled || locked}
       aria-pressed={on}
-      title={locked ? 'Suggested field — it needs review in the data before tiles can use it.' : options.review ? `${label} comes through a join nobody has certified yet: a tile that uses it needs review.` : on ? `Remove ${label}` : `Add ${label}, or drag it onto a shelf`}
+      title={locked ? 'Suggested field: it is not certified yet, so tiles cannot use it until it is approved in the data.' : options.review ? `${label} comes through a join nobody has certified yet: a tile that uses it reads Not certified yet.` : on ? `Remove ${label}` : `Add ${label}, or drag it onto a shelf`}
       onClick={() => onPickField(field)}
       draggable={!disabled && !locked}
       onDragStart={(event) => writeFieldDrag(event, field.kind === 'measure' ? { measure: field.name } : { dimension: field.name })}
@@ -169,11 +169,11 @@ export function DataPanel({
         {groups.measures.length ? <section><h3>Measures</h3>{groups.measures.map((field) => fieldRow(field, field.kind === 'measure' ? aggregationLabel(field.aggregation) : '', measureGlyph))}</section> : null}
         {groups.time.length ? <section><h3>Time</h3>{groups.time.map((field) => fieldRow(field, field.time?.grains?.slice(0, 3).join(' · ') ?? field.type, <CalendarDays size={14} />))}</section> : null}
         {groups.dimensions.length ? <section><h3>Dimensions</h3>{groups.dimensions.map((field) => fieldRow(field, field.kind === 'physical' && field.role === 'key' ? 'key' : '', field.kind === 'physical' && field.role === 'key' ? <Hash size={13} /> : <span className="aa">Aa</span>))}</section> : null}
-        {groups.review.length ? <section><h3>Needs review</h3>{groups.review.map((field) => fieldRow(field, '', field.kind === 'measure' ? measureGlyph : <span className="aa">Aa</span>, true))}</section> : null}
+        {groups.review.length ? <section><h3>Suggested, not certified yet</h3>{groups.review.map((field) => fieldRow(field, '', field.kind === 'measure' ? measureGlyph : <span className="aa">Aa</span>, true))}</section> : null}
         {/* Fields of related tables (design D2): each order has one customer, so they are just fields of Orders. */}
         {groups.related.map((group) => <section key={group.join.id} className="related-fields" aria-label={`${humanize(descriptor!.label)} → ${group.path}`}>
-          <h3 title={`Joined on ${group.join.keys.map((pair) => pair.from).join(', ')}: ${group.join.sentence}, so totals stay the same.`}>{humanize(descriptor!.label)} → {group.path}{group.review ? <span className="badge">Needs review</span> : null}</h3>
-          {/* The heading says Needs review once; each row keeps the reason in its tooltip. */}
+          <h3 title={`Joined on ${group.join.keys.map((pair) => pair.from).join(', ')}: ${group.join.sentence}, so totals stay the same.`}>{humanize(descriptor!.label)} → {group.path}{group.review ? <span className="badge" title="Uses a join nobody has certified.">Not certified yet</span> : null}</h3>
+          {/* The heading says Not certified yet once; each row keeps the reason in its tooltip. */}
           {group.fields.map((field) => fieldRow(field, field.time?.grains?.slice(0, 3).join(' · ') ?? '', field.role === 'time' ? <CalendarDays size={14} /> : <span className="aa">Aa</span>, false, { label: humanize(field.related!.column), review: group.review }))}
         </section>)}
         {!groups.measures.length && !groups.time.length && !groups.dimensions.length && !groups.review.length && !groups.related.length ? <p className="field-empty">No field matches “{search}”.</p> : null}

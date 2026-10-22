@@ -77,7 +77,7 @@ test.beforeAll(async () => {
 
   // A manual App whose data is the Customers Dataset, with one KPI on the page.
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Customer Ranking', goal: 'Rank customers by spend', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+    name: 'Customer Ranking', goal: 'Rank customers by spend', domain: 'orders', authoringMode: 'manual', template: 'blank',
   });
   draftId = app.draft.id;
   const candidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${draftId}/source-candidates?limit=50`);

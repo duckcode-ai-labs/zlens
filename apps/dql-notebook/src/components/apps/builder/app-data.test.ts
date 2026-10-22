@@ -12,6 +12,7 @@ import {
   addDataKindOf,
   canMakeRowLevel,
   filterAddDataCatalog,
+  dataTrustLabel,
   savedQueryNeedsFields,
   sourceCatalogKindLabel,
   sourceKindLabel,
@@ -80,17 +81,20 @@ describe('App data: one list per App (design D1, D3, D4)', () => {
     expect(appDataSourceFromCandidate(marginMetrics)).toMatchObject({ kind: 'governed_semantic' });
   });
 
-  it('adds data that needs review only with an explicit choice, which also changes the data rule', () => {
-    const blocked = planAddDataSource(draftWith(), draftRevenueQuery);
-    expect(blocked).toMatchObject({ ok: false, code: 'REVIEW_POLICY_REQUIRED' });
-    const allowed = planAddDataSource(draftWith(), draftRevenueQuery, { allowReview: true });
-    expect(allowed.ok && allowed.operations).toEqual([
-      { type: 'set_source_policy', sourcePolicy: 'include_review_required' },
+  it('adds data nobody certified with one plain step, whatever an old App\'s data rule said (T3)', () => {
+    const expected = [
       { type: 'upsert_source', source: expect.objectContaining({ id: draftRevenueQuery.sourceId, trustState: 'review_required', reviewStatus: 'required' }) },
-    ]);
-    const alreadyAllowed = planAddDataSource(draftWith({ sourcePolicy: 'include_review_required' }), draftRevenueQuery);
-    expect(alreadyAllowed.ok && alreadyAllowed.operations.map((operation) => operation.type)).toEqual(['upsert_source']);
+    ];
+    expect(planAddDataSource(draftWith(), draftRevenueQuery)).toEqual({ ok: true, operations: expected });
+    expect(planAddDataSource(draftWith({ sourcePolicy: 'governed_only' }), draftRevenueQuery)).toEqual({ ok: true, operations: expected });
+    expect(planAddDataSource(draftWith({ sourcePolicy: 'include_review_required' }), draftRevenueQuery, { allowReview: true })).toEqual({ ok: true, operations: expected });
     expect(planAddDataSource(draftWith(), undefined)).toMatchObject({ ok: false, code: 'SOURCE_UNAVAILABLE' });
+  });
+
+  it('lists certified data first in Add data, and keeps data nobody certified addable (T3)', () => {
+    const listed = filterAddDataCatalog([draftRevenueQuery, topCustomersQuery], 'all');
+    expect(listed.map((item) => item.id)).toEqual([topCustomersQuery.id, draftRevenueQuery.id]);
+    expect(dataTrustLabel(draftRevenueQuery)).toBe('Not certified yet');
   });
 
   it('removes a source with remove_source, with the tiles that use it and their review tasks', () => {

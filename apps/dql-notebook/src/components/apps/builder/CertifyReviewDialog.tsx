@@ -9,7 +9,7 @@ type Certifier = (sourceId: string, sourceRevision?: string) => Promise<{ ok: bo
 
 /**
  * The short review before certifying data on purpose (design Q1). "Check and
- * use" left it **Checked · Needs certifying**; certifying is a separate step,
+ * use" left it checked, **Not certified yet**; certifying is a separate step,
  * opened from the publish check or the Data list's ⋯ menu: what one row is,
  * the row key checked again now, number formats (cents read as dollars),
  * joins used, columns hidden as duplicates — then one button, "I vouch for
@@ -89,7 +89,7 @@ export function CertifyReviewDialog({
             <p>{review?.kind === 'saved_query'
               ? 'A saved query is certified in Block Studio, where its tests run.'
               : review?.kind === 'metrics'
-                ? 'Metrics come from your semantic model and are governed there.'
+                ? 'Metrics come from your semantic model and are certified there.'
                 : 'A short review. Certifying says you looked at it and vouch for these numbers.'}</p>
           </div>
           <button type="button" className="icon" onClick={onClose} disabled={saving} aria-label="Close"><X size={15} /></button>

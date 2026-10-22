@@ -22,7 +22,7 @@ describe('reader trust (RFC 0008 step 6)', () => {
   });
 
   it('labels AI answers by their review, and never labels text', () => {
-    expect(readerTileTrust(item({ aiPin: { id: 'p' } }), tile({ aiPin: { certification: 'ai_generated' } }))?.label).toBe('Needs review');
+    expect(readerTileTrust(item({ aiPin: { id: 'p' } }), tile({ aiPin: { certification: 'ai_generated' } }))?.label).toBe('Not certified yet');
     expect(readerTileTrust(item({ aiPin: { id: 'p' } }), tile({ aiPin: { certification: 'certified' } }))?.label).toBe('Certified');
     expect(readerTileTrust(item({ text: { markdown: 'Hi' }, block: undefined }), tile({ tileType: 'text' }))).toBeNull();
   });
@@ -31,7 +31,7 @@ describe('reader trust (RFC 0008 step 6)', () => {
     const trusts = [readerTileTrust(item(), tile({})), readerTileTrust(item(), tile({ certificationStatus: 'certified' })), null];
     expect(readerTrustCounts(trusts)).toEqual([
       { state: 'certified', label: 'Certified', count: 1 },
-      { state: 'review', label: 'Needs review', count: 1 },
+      { state: 'review', label: 'Not certified yet', count: 1 },
     ]);
   });
 

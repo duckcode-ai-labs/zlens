@@ -88,7 +88,7 @@ test.beforeAll(async () => {
 
   // A manual App with a Dataset tile and a Saved query tile on one page.
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Customer Review', goal: 'Review customers', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+    name: 'Customer Review', goal: 'Review customers', domain: 'orders', authoringMode: 'manual', template: 'blank',
   });
   draftId = app.draft.id;
   const candidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${draftId}/source-candidates?limit=50`);
@@ -117,7 +117,7 @@ test.beforeAll(async () => {
   expect(itemsCreated.status).toBe('checked');
   expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: itemsCreated.sourceId })).status).toBe('certified');
   const itemsApp = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Item Review', goal: 'Review order items', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+    name: 'Item Review', goal: 'Review order items', domain: 'orders', authoringMode: 'manual', template: 'blank',
   });
   itemsDraftId = itemsApp.draft.id;
   const itemCandidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${itemsDraftId}/source-candidates?limit=50`);
@@ -146,7 +146,7 @@ test.beforeAll(async () => {
   expect(contactsCreated.status).toBe('checked');
   expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: contactsCreated.sourceId })).status).toBe('certified');
   const contactsApp = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Contact Review', goal: 'Review contacts', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+    name: 'Contact Review', goal: 'Review contacts', domain: 'orders', authoringMode: 'manual', template: 'blank',
   });
   contactsDraftId = contactsApp.draft.id;
   const contactCandidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${contactsDraftId}/source-candidates?limit=50`);
@@ -234,7 +234,7 @@ test('a filter that does not apply to a tile still publishes, and readers see "N
   // "Does not apply" is a decision, not a gap: publishing is allowed.
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
   await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 60_000 });
-  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=customer-review/, { timeout: 60_000 });
 
   // A reader picks a customer: the Dataset tile narrows; the Saved query tile says it was not filtered.
@@ -288,7 +288,7 @@ test('a start-only date range means "from" that day, in the editor and for reade
   // A reader gets the same rule: only a "from" date keeps 3 and 4 January.
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
   await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 60_000 });
-  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=item-review/, { timeout: 60_000 });
   await page.goto(`${server!.baseUrl}/?app=item-review&page=overview`);
   const from = page.getByLabel('Ordered At from');
@@ -366,7 +366,7 @@ test('the editor marks unlinked tiles, finds a value past the first 200, and map
   await page.getByLabel('Ordered At start').fill('');
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
   await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 60_000 });
-  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Ready to publish' }).getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=contact-review/, { timeout: 60_000 });
   await page.goto(`${server!.baseUrl}/?app=contact-review&page=overview`);
   const readerContact = page.getByRole('button', { name: /^Contact Name: / });

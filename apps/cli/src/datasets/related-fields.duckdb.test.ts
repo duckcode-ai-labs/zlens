@@ -145,7 +145,7 @@ describe('fields from related tables on DuckDB (D2)', () => {
       expect(byLocation.trustState).toBe('review_required');
       expect(byLocation.joins).toEqual([expect.objectContaining({
         trust: 'review_required',
-        sentence: 'Joined to locations on location_id (each order has one location — checked; the join is not certified yet, so it needs review)',
+        sentence: 'Joined to locations on location_id (each order has one location — checked; the join is not certified yet)',
       })]);
 
       const byCustomer = await run({ dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'order_total' }, { measure: countMeasure }] });

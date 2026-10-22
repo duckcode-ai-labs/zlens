@@ -19,7 +19,7 @@ export interface SavedQueryDatasetDraft {
 
 export interface SavedQueryDatasetResult {
   ok: boolean;
-  /** `checked`: its checks passed and it is Checked · Needs certifying (design Q1); never certified here. */
+  /** `checked`: its checks passed and it is checked, not certified yet (design Q1); never certified here. */
   status?: 'checked' | 'review' | 'draft';
   previousStatus?: 'certified' | 'review' | 'draft';
   sourceId?: string;
@@ -33,7 +33,7 @@ export interface SavedQueryDatasetResult {
 }
 
 /**
- * Who checked data that nobody certified yet ("Checked · Needs certifying",
+ * Who checked data that nobody certified yet ("checked, not certified yet",
  * design Q1), what the check found and which columns it hid as duplicates.
  */
 export interface AppDataCheck extends CertificationByline {
@@ -2873,7 +2873,7 @@ export interface DashboardRunResponse {
       sourceRevision?: string;
       contractFingerprint?: string;
       trust?: 'certified' | 'review_required';
-      /** Checked · Needs certifying (design Q1). */
+      /** checked, not certified yet (design Q1). */
       checked?: boolean;
       lifecycle?: string;
       binding?: DatasetDescriptor['binding'];
@@ -3246,7 +3246,7 @@ export interface AppBlockRecommendation {
   };
   /** Who certified it and when, for a certified block (D5). */
   certification?: CertificationByline;
-  /** Checked · Needs certifying (design Q1): who checked it, and what the check found. */
+  /** checked, not certified yet (design Q1): who checked it, and what the check found. */
   check?: AppDataCheck;
 }
 
@@ -3530,7 +3530,8 @@ export interface AppStudioBuildDraft {
   proposalHash: string;
   authoringMode: 'ai' | 'manual';
   template: 'executive_brief' | 'operational_dashboard' | 'investigation' | 'blank';
-  sourcePolicy: 'governed_only' | 'include_review_required';
+  /** @deprecated Older Apps' per-App data rule: read and ignored (T3); new Apps have none. */
+  sourcePolicy?: 'governed_only' | 'include_review_required';
   state: 'local_draft' | 'clarification_required' | 'preflight_ready' | 'project_published';
   frame: Omit<AppBuildFrame, 'clarificationQuestions'> & {
     decision?: string;
@@ -3574,7 +3575,7 @@ export interface AppStudioBuildDraft {
     capabilities?: NonNullable<AppBlockRecommendation['capabilities']>;
     trustState: 'certified' | 'review_required' | 'draft_ready';
     reviewStatus: 'not_required' | 'required' | 'approved';
-    /** Checked · Needs certifying (design Q1), set by the App API from the catalog. */
+    /** checked, not certified yet (design Q1), set by the App API from the catalog. */
     checked?: boolean;
   }>;
   pages: DashboardDocumentResponse['dashboard'][];
@@ -8176,6 +8177,15 @@ export const api = {
     });
   },
 
+  /**
+   * The project's App publish settings (T3), read fresh from dql.config.json:
+   * `requireCertifiedToPublish` is false unless the project (or an Enterprise
+   * policy) turns it on.
+   */
+  async getAppsSettings(): Promise<{ ok: boolean; requireCertifiedToPublish: boolean }> {
+    return request('/api/apps/settings');
+  },
+
   async preflightAppBuild(id: string, expectedRevision: number, proposalHash: string): Promise<{ ok: boolean; draft: AppStudioBuildDraft; errors: string[] }> {
     return request(`/api/app-builds/${encodeURIComponent(id)}/preflight`, {
       method: 'POST',
@@ -8273,7 +8283,7 @@ export const api = {
     | {
       ok: true;
       draft: AppStudioBuildDraft;
-      sources: Array<{ sourceId: string; title: string; kind: 'Dataset' | 'Metrics' | 'Saved query'; trust: 'Certified' | 'Needs review'; domain?: string; reason: string }>;
+      sources: Array<{ sourceId: string; title: string; kind: 'Dataset' | 'Metrics' | 'Saved query'; trust: 'Certified' | 'Not certified yet'; domain?: string; reason: string }>;
       notCoveredYet: string[];
       reused: boolean;
     }
@@ -8871,7 +8881,7 @@ export const api = {
 
   /**
    * "Check and use" (design Q1): save the author's choice as a Dataset they
-   * own. Its checks passing makes it Checked · Needs certifying (`checked`);
+   * own. Its checks passing makes it checked, not certified yet (`checked`);
    * it is never certified here.
    */
   async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; duplicates?: Array<{ name: string; use: 'minor' | 'plain' }> }): Promise<{ ok: boolean; status?: 'checked' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; check?: CertificationByline; error?: string }> {

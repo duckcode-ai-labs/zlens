@@ -180,12 +180,14 @@ describe('AI Data step (design D3, AI path)', () => {
     expect(governed).toContain('Revenue by channel was not added because no Dataset has a channel field.');
     expect(governed).toContain('Not covered yet');
     expect(governed).toContain('Which channel drives revenue?');
-    expect(governed).toContain('Allow data that needs review to generate');
+    // No per-App data rule (T3): drafting DQL for a gap needs no "allow" step.
+    expect(governed).toContain('Generate draft DQL');
+    expect(governed).not.toMatch(/needs review|data rule/i);
     const review = renderAi(aiProps({ sourcePolicy: 'include_review_required' }));
-    expect(review.markup).toContain('Generate draft DQL that needs review');
+    expect(review.markup).toContain('Generate draft DQL');
     const generate = vi.fn();
     const withGenerate = renderAi(aiProps({ sourcePolicy: 'include_review_required', onGenerateGap: generate }));
-    (button(withGenerate.tree, 'Generate draft DQL that needs review').props.onClick as () => void)();
+    (button(withGenerate.tree, 'Generate draft DQL').props.onClick as () => void)();
     expect(generate).toHaveBeenCalledWith('channel');
   });
 

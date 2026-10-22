@@ -143,8 +143,9 @@ describe('Ask App proposal: Open in App Studio', () => {
       compact: true,
     }));
     expect(markup).toContain(OPEN_IN_APP_STUDIO_LABEL);
-    expect(markup).toContain('Metrics · Needs review');
-    expect(markup).toContain('Draft SQL · Needs review');
+    expect(markup).toContain('Metrics · Not certified yet');
+    expect(markup).toContain('Draft SQL · Not certified yet');
+    expect(markup).not.toMatch(/needs review/i);
     expect(markup).toContain('Not covered yet');
     expect(markup).toContain('Nothing is written to your project until you publish.');
     expect(markup).not.toContain('Build draft (');

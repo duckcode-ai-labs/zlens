@@ -8,6 +8,52 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### One trust model: Certified or Not certified yet, per tile, and publishing that never blocks unless the project requires it
+
+Trust and publishing design, phase 1 (T1–T3).
+
+- **Two words.** Every App, Data, publish and reader surface says a tile,
+  table, saved query or join is **Certified by** *name* **·** *date* (or **by
+  you**) or **Not certified yet**. "Needs review", "Checked · Needs
+  certifying", "Needs certifying", "Governed", "draft" as a trust word, the
+  "review lane" and the data rule's "Only certified data" / "Also allow data
+  that needs review" are gone from these screens. Why a tile is not certified
+  is detail in its receipt or tooltip: *Checked by you, not certified yet*,
+  *Changed since it was certified on 22 Oct*, *Uses a join nobody has
+  certified*. Ask's answer labels are unchanged.
+- **Trust lives at the tile.** A tile is certified only when everything it
+  can use is: its data, every join it can reach (also through a filter) and,
+  for a calculation, every input — a calculation over certified data is now
+  **Certified**, not "Governed". The App header, the trust line, the Apps card
+  ("App certified" is gone), the publish dialog and the published
+  `dql.app.json` (`tileTrust`) all show one count from one shared function:
+  **All tiles certified** or **3 of 4 tiles certified**.
+- **Per-App data rules are gone.** The Start form's "Only certified data"
+  switch, App settings' **Data rule**, the Data step's "Data rule: … Change"
+  line and the publish dialog's **Allow data that needs review** button are
+  removed. Every App can use any data, certified first; data nobody certified
+  is added with the same **Add to App**, and the AI, keyword and quick-choice
+  planners prefer certified data without leaving the rest out. An older App's
+  stored `sourcePolicy` is read and ignored (old files still open); new Apps
+  no longer write it. ZLens no longer opens "needs certifying" review tasks,
+  and the ones older drafts kept never block publishing.
+- **Publishing never blocks on trust by default.** The publish dialog shows
+  the count, lists the tiles not certified yet with **Certify now
+  (recommended)** (the short certify review for a table; the saved query in
+  Block Studio and the join in Modeling for now), and a **Publish** button
+  that says *Readers will see 'Not certified yet' on N tiles*. Readers see
+  **Not certified yet** on those tiles. The button is **Publish**, no longer
+  "Publish to Project".
+- **New project setting: `apps.requireCertifiedToPublish`.** `true` in
+  `dql.config.json` makes every tile need to be certified before an App is
+  published: the dialog says *This project requires every tile to be
+  certified before an App is published.* with the certify actions and no
+  Publish button, and the server refuses with one message
+  (`APP_BUILD_REQUIRES_CERTIFIED`). It is read at every publish
+  (`GET /api/apps/settings`), validated by `zlens doctor` (**App publishing**),
+  and off by default in the open-source edition. A host's admin policy can
+  turn it on for a project.
+
 ### Drafted models save the first time, revenue first, plain names, no joins on names
 
 New-user review round 2, problems 4, 7, 8, 9 and 10.

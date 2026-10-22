@@ -21,8 +21,9 @@ describe('App Studio AI activity and source actions (UI-022, UI-023, E2E-020)', 
   });
 
   it('makes review-lane activation and row-local compose feedback explicit', () => {
+    // Data nobody certified is added the same way (T3): no "allow" step.
     expect(appStudioSourceActionLabel({ view: 'Chart', status: 'idle', reviewRequired: true, alreadyUsed: false }))
-      .toBe('Allow data that needs review & add Chart');
+      .toBe('Add Chart');
     expect(appStudioSourceActionLabel({ view: 'Chart', status: 'adding', reviewRequired: false, alreadyUsed: false }))
       .toBe('Adding…');
     expect(appStudioSourceActionLabel({ view: 'Chart', status: 'added', reviewRequired: false, alreadyUsed: true, pageTitle: 'Overview' }))

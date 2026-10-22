@@ -417,7 +417,7 @@ export function datasetJoinReceiptSentence(join: DatasetJoin, joins: DatasetJoin
   const parent = join.parent ? joins.find((candidate) => candidate.id === join.parent) : undefined;
   const on = join.keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(' and ');
   const through = parent ? ` through ${parent.table}` : '';
-  const review = join.trust === 'certified' ? '' : '; the join is not certified yet, so it needs review';
+  const review = join.trust === 'certified' ? '' : '; the join is not certified yet';
   return `Joined to ${join.table}${through} on ${on} (${join.sentence} — checked${review})`;
 }
 

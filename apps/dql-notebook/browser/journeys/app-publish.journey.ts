@@ -11,11 +11,12 @@ import { startNotebookServer, type NotebookServer } from '../support/server';
  *
  * A page with three tiles (a chart and a KPI from a checked Dataset, and a
  * certified Saved query) and a Customer Name filter → Review and publish →
- * "1 table not certified yet" → Review and certify → "I vouch for this —
- * certify" (design Q1) → Publish to Project → the reader shows real numbers
- * and "All 3 tiles certified" with NO reload, never "superseded", after
- * exactly one page run, and the header says the data was certified by you.
- * Back on the Apps list, the card agrees with the App.
+ * "Ready to publish · 1 of 3 tiles certified", the two tiles not certified
+ * yet listed with "Certify now (recommended)" (T3: publishing is not blocked)
+ * → Certify now → "I vouch for this — certify" (design Q1) → Publish → the
+ * reader shows real numbers and "All tiles certified" with NO reload, never
+ * "superseded", after exactly one page run, and each tile says it was
+ * certified by you. Back on the Apps list, the card agrees with the App.
  *
  * The bug: opening a page with filters ran it twice (before and after the
  * filter defaults loaded). When the two requests reached the server out of
@@ -58,12 +59,12 @@ test.beforeAll(async () => {
     domain: 'orders',
     measures: drafted.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
   });
-  // Checked · Needs certifying: it is certified on purpose at publish (design Q1).
+  // Checked, not certified yet: it is certified on purpose, here from the publish dialog (design Q1).
   expect(created.status).toBe('checked');
 
   // A manual App with three tiles on one page.
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Sales Review', goal: 'Review sales', domain: 'orders', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+    name: 'Sales Review', goal: 'Review sales', domain: 'orders', authoringMode: 'manual', template: 'blank',
   });
   draftId = app.draft.id;
   const candidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${draftId}/source-candidates?limit=50`);
@@ -118,32 +119,37 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   });
 
   await page.getByRole('button', { name: 'Review and publish to Project' }).click();
-  // Design Q1: "Only certified data" holds publishing until the table is certified on purpose.
-  const notCertified = page.getByRole('region', { name: '1 table not certified yet' });
-  await expect(notCertified).toBeVisible({ timeout: 60_000 });
-  await expect(notCertified).toContainText('Checked · Needs certifying');
-  await notCertified.getByRole('button', { name: 'Review and certify Customers' }).click();
+  // T3: nothing blocks publishing; the two tiles on the checked table are listed, certifying recommended.
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready).toBeVisible({ timeout: 60_000 });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('1 of 3 tiles certified');
+  const notCertified = ready.getByRole('region', { name: '2 tiles not certified yet' });
+  await expect(notCertified).toContainText('Checked, not certified yet.');
+  await expect(ready.getByText('Readers will see \u2018Not certified yet\u2019 on 2 tiles.')).toBeVisible();
+  await expect(ready.getByText(/Needs certifying|Only certified data|needs review/)).toHaveCount(0);
+  await notCertified.getByRole('button', { name: 'Certify now: Customers' }).first().click();
   const review = page.getByRole('dialog', { name: 'Certify Customers' });
   await expect(review.getByText(/is filled and different on every row, checked just now/)).toBeVisible({ timeout: 60_000 });
   await review.getByRole('button', { name: 'I vouch for this — certify' }).click();
   await expect(review).toBeHidden({ timeout: 60_000 });
-  await expect(page.getByText('Ready to publish')).toBeVisible({ timeout: 90_000 });
   // B6: every tile is certified, so — and only so — the dialog says every check passed.
-  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
-  await expect(ready.getByText('All checks passed')).toBeVisible();
-  await expect(ready.getByText(/needs? review \(allowed\)/)).toHaveCount(0);
-  await ready.getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await expect(ready.getByText('All checks passed')).toBeVisible({ timeout: 90_000 });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('All tiles certified');
+  await expect(ready.getByRole('region', { name: /not certified yet/ })).toHaveCount(0);
+  await ready.getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=sales-review/, { timeout: 60_000 });
 
   // No reload: the page publishing opened shows the published App's results.
-  await expect(page.getByText('All 3 tiles certified')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.dql-trust-summary')).toHaveText('All tiles certified', { timeout: 60_000 });
   await expect(page.locator('.dql-kpi-value').filter({ hasText: '$380.00' })).toBeVisible();
   await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible();
   await expect(page.getByText('No result.')).toHaveCount(0);
   await expect(page.getByText(/superseded/i)).toHaveCount(0);
   await expect(page.getByText(/\d+ of 3 tiles certified/i)).toHaveCount(0);
-  // D5 and design Q1: the header says who certified the data, from the reader's side, and when.
-  await expect(page.getByText(/^All data certified by you · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible();
+  // T2: the header says the same count; each tile says who certified it, from the reader's side, and when.
+  await expect(page.locator('.dql-app-view-topbar .dql-app-seal').first()).toHaveText('All tiles certified');
+  await expect(page.locator('.dql-trust-badge.certified').filter({ hasText: /^Certified by you · \d{1,2} [A-Z][a-z]{2}/ }).first()).toBeVisible();
+  await expect(page.getByText(/Not certified yet/)).toHaveCount(0);
   // Publishing ran the page once, and that run is the one on screen.
   expect(readerRuns).toHaveLength(1);
   expect(readerResponses.some((response) => response.stale)).toBe(false);
@@ -153,7 +159,8 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await page.getByRole('button', { name: 'Apps', exact: true }).last().click();
   const card = page.locator('article.dql-app-card').filter({ hasText: 'Sales Review' });
   await expect(card).toBeVisible({ timeout: 30_000 });
-  await expect(card.getByText(/^App certified( by .+)? · \d{1,2} [A-Z][a-z]{2}/)).toBeVisible();
+  await expect(card.getByText('All tiles certified')).toBeVisible();
+  await expect(card.getByText(/App certified/)).toHaveCount(0);
   // D6: Pages and Updated, without the zero counts.
   await expect(card.getByText('Updated')).toBeVisible();
   await expect(card.getByText(/Books|local insights|Shared Project/)).toHaveCount(0);

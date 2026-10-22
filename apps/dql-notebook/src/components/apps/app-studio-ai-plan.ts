@@ -61,12 +61,17 @@ export function appStudioProposalRequestSourceIds(
   return Array.from(new Set(sourceIds.map((sourceId) => sourceId.trim()).filter(Boolean)));
 }
 
+/**
+ * Adding data to AI's picks: select it when AI proposed it, else plan again
+ * with it required. Data nobody certified is added the same way (T3: no
+ * per-App data rule); `reviewRequired` and `sourcePolicy` are kept for older
+ * callers and ignored.
+ */
 export function appStudioProposalSourceAddMode(input: {
   alreadyProposed: boolean;
-  reviewRequired: boolean;
-  sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
+  reviewRequired?: boolean;
+  sourcePolicy?: AppStudioBuildDraft['sourcePolicy'];
 }): AppStudioProposalSourceAddMode {
-  if (input.reviewRequired && input.sourcePolicy === 'governed_only') return 'enable_review_and_replan';
   return input.alreadyProposed ? 'select_existing' : 'replan';
 }
 

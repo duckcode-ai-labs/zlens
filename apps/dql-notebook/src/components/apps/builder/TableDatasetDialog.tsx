@@ -122,7 +122,7 @@ export function DuplicateColumnQuestions({
  * proposes what it can add up and count and what one row is, checked
  * against the table; "Check and use" saves it as a Dataset the author owns
  * after the same checks as Block Studio's Certify (compiles, runs, owner).
- * It is **Checked · Needs certifying**, never certified here (design Q1):
+ * It is checked, **Not certified yet**, never certified here (design Q1):
  * tiles work right away, and someone certifies it on purpose before the App
  * is published. No dbt, no modeling vocabulary: numbers, groupings and dates.
  */
@@ -272,7 +272,7 @@ export function TableDatasetDialog({
 
         <footer>
           {proposal ? <button type="button" onClick={() => { setDraft(null); setPicked(null); setError(null); }} disabled={saving}>Back</button> : <span />}
-          {proposal ? <small>ZLens saves it as a file in your project and checks it compiles and runs. You can build tiles right away; it is <strong>Checked · Needs certifying</strong> until someone certifies it, before you publish.</small> : null}
+          {proposal ? <small>ZLens saves it as a file in your project and checks it compiles and runs. You can build tiles right away; it is <strong>Not certified yet</strong> until someone certifies it.</small> : null}
           {proposal ? (
             <button type="button" className="primary" disabled={saving || !proposal.key || keptCount === 0} onClick={save}>{saving ? 'Checking…' : 'Check and use'}</button>
           ) : null}

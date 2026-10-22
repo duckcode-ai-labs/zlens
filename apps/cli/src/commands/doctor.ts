@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { QueryExecutor } from '@zlens/connectors';
 import { WorkbenchRoutedQueryExecutor, type WorkbenchQueryRouteOptions } from '../workbench-query-route.js';
-import { buildManifest, collectInputFiles, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics } from '@zlens/core';
+import { appsPublishSettings, appsPublishSettingsProblems, buildManifest, collectInputFiles, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics } from '@zlens/core';
 import { buildLocalContextPack, defaultKgPath, defaultMetadataPath, openMetadataCatalog } from '@zlens/agent';
 import type { CLIFlags } from '../args.js';
 import {
@@ -32,6 +32,24 @@ interface Check {
   ok: boolean;
   detail: string;
   advisory?: boolean;
+}
+
+/**
+ * How publishing an App treats trust (T3): never blocked by default, every
+ * tile certified when `apps.requireCertifiedToPublish` is true.
+ */
+export function checkAppsPublishing(projectRoot: string): Check {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8'));
+  } catch {
+    raw = undefined;
+  }
+  const problems = appsPublishSettingsProblems(raw);
+  if (problems.length) return { name: 'App publishing', ok: false, detail: `${problems.join(' ')} Publishing is not blocked until it is fixed.` };
+  return appsPublishSettings(raw).requireCertifiedToPublish
+    ? { name: 'App publishing', ok: true, detail: 'every tile must be certified to publish (apps.requireCertifiedToPublish: true)' }
+    : { name: 'App publishing', ok: true, detail: 'not blocked by trust; readers see "Not certified yet" on tiles nobody certified (set apps.requireCertifiedToPublish: true to require certified tiles)' };
 }
 
 export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest: string[] = []): Promise<void> {
@@ -111,6 +129,7 @@ export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest
   ];
 
   checks.push(checkNotebookAssets());
+  checks.push(checkAppsPublishing(projectRoot));
   checks.push(checkOutputContractDrift(projectRoot));
   checks.push(await checkDqlVersionDrift(projectRoot));
   checks.push(checkRetrievalHealth(projectRoot, config));

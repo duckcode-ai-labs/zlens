@@ -61,12 +61,12 @@ test('App: Jaffle Growth Review renders with its trust labels', async ({ page, n
   await openWorkbench(page);
   await openRail(page, 'Apps');
   await page.getByText('Jaffle Growth Review').first().click();
-  await expect(page.getByText(/ALL DATA CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByText(/All 4 tiles certified/).first()).toBeVisible();
+  await expect(page.getByText(/ALL TILES CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText(/All tiles certified/).first()).toBeVisible();
   // No tile on an all-certified page may say it needs review or failed.
   const body = await page.locator('main').first().innerText();
-  expect(body).not.toMatch(/Needs review|AI-drafted|Couldn.t run/);
-  notes.push('ALL DATA CERTIFIED; All 4 tiles certified; no review/failed label on the page');
+  expect(body).not.toMatch(/Needs review|Not certified yet|AI-drafted|Couldn.t run/);
+  notes.push('All tiles certified (header and trust line); no Not certified yet/failed label on the page');
 });
 
 test('Lineage: monthly_revenue from the dbt model to the App', async ({ page, notes }) => {
@@ -110,7 +110,7 @@ for (const question of ['How has revenue changed by month?', 'What is beverage r
     await openWorkbench(page);
     await openRail(page, 'Apps');
     await page.getByText('Jaffle Growth Review').first().click();
-    await expect(page.getByText(/ALL DATA CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByText(/ALL TILES CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
     const box = page.getByPlaceholder(/Ask about Jaffle Growth Review/);
     const answer = await askAndWait(page, box, question, page.getByRole('button', { name: 'Ask', exact: true }).last());
     const text = await answer.innerText();

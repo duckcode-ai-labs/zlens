@@ -68,7 +68,7 @@ describe('build_dql_app (design D9: AI builds open in App Studio)', () => {
       saved: true,
       appId: 'revenue-performance',
       name: 'Revenue Performance',
-      sourcePolicy: 'Only certified data',
+      sourcePolicy: 'Certified data first',
       openPath: `/?appDraft=${out.draftId}`,
     });
     expect(out.sources).toEqual([
@@ -80,22 +80,25 @@ describe('build_dql_app (design D9: AI builds open in App Studio)', () => {
     const draft = storedDraft(ctx.projectRoot, out.draftId);
     expect(draft).toMatchObject({
       authoringMode: 'ai',
-      sourcePolicy: 'governed_only',
       frame: expect.objectContaining({ goal: 'Revenue performance for leadership' }),
     });
+    expect(draft).not.toHaveProperty('sourcePolicy');
     expect(draft?.pages[0]?.metadata.domain).toBe('revenue');
     expect(draft?.pages.every((page) => page.layout.items.length === 0)).toBe(true);
     expect(draft?.sources.map((source) => source.trustState)).toEqual(['certified', 'certified']);
   });
 
-  it('picks certified data for the request with a reason for each pick, and never data that needs review', async () => {
+  it('picks data for the request with a reason for each pick, certified first, and keeps data nobody certified as Not certified yet (T3)', async () => {
     const ctx = project();
     const out = await buildDqlApp(ctx, { prompt: 'revenue and margin for leadership' });
     expect(out.ok).toBe(true);
     if (!out.ok || !('draftId' in out)) throw new Error(JSON.stringify(out));
     expect(out.sources.length).toBeGreaterThan(0);
-    expect(out.sources.every((source) => source.trust === 'Certified' && source.reason.length > 0)).toBe(true);
-    expect(out.sources.some((source) => source.title === 'Draft Margin')).toBe(false);
+    expect(out.sources.every((source) => source.reason.length > 0)).toBe(true);
+    const trusts = out.sources.map((source) => source.trust);
+    expect(trusts.every((trust) => trust === 'Certified' || trust === 'Not certified yet')).toBe(true);
+    // Certified first.
+    expect(trusts.indexOf('Not certified yet') === -1 || trusts.lastIndexOf('Certified') < trusts.indexOf('Not certified yet')).toBe(true);
     expect(storedDraft(ctx.projectRoot, out.draftId)?.sources.length).toBe(out.sources.length);
     expect(existsSync(join(ctx.projectRoot, 'apps'))).toBe(false);
   });

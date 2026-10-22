@@ -162,7 +162,13 @@ describe('AppSourceCatalogService', () => {
     });
   });
 
-  it('keeps review-required sources out of the AI shortlist when the App uses only certified data', async () => {
+  it('puts certified sources first in the AI shortlist and never drops data nobody certified (T3)', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const shortlist = shortlistAppSources(projectRoot, 'performance customer growth revenue');
+    expect(shortlist.items.map((source) => source.lifecycle)).toEqual(['certified', 'draft']);
+  });
+
+  it('a legacy certified-only caller still sees only certified data', async () => {
     await ensureAgentProjectReady(projectRoot);
 
     const certifiedOnly = shortlistAppSources(projectRoot, 'performance customer growth revenue', { sourcePolicy: 'governed_only' });
@@ -315,7 +321,7 @@ describe('AppSourceCatalogService', () => {
     expect(matched.unmatched).toEqual(['No Such Block']);
   });
 
-  it('D9 makes an AI App draft with the picked data, its gaps and only certified data unless review data was kept', async () => {
+  it('D9 makes an AI App draft with the picked data, certified first, and its gaps — no per-App data rule (T3)', async () => {
     await ensureAgentProjectReady(projectRoot);
     const all = queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items;
     const certified = all.filter((source) => source.trust === 'certified');
@@ -328,10 +334,12 @@ describe('AppSourceCatalogService', () => {
     expect(draft).toMatchObject({
       appId: 'sales-performance-for-leadership',
       authoringMode: 'ai',
-      sourcePolicy: 'governed_only',
       frame: expect.objectContaining({ goal: 'Sales performance for leadership' }),
     });
-    expect(draft.sources.map((source) => source.id)).toEqual(certified.map((source) => source.sourceId));
+    expect(draft).not.toHaveProperty('sourcePolicy');
+    // Every picked source is kept, certified ones first.
+    expect(draft.sources).toHaveLength(all.length);
+    expect(draft.sources.slice(0, certified.length).map((source) => source.id)).toEqual(certified.map((source) => source.sourceId));
     expect(draft.pages).toHaveLength(1);
     expect(draft.pages[0]).toMatchObject({ metadata: expect.objectContaining({ domain: 'sales' }), layout: expect.objectContaining({ items: [] }) });
     expect(draft.requirements.map((requirement) => requirement.question)).toEqual(['Why is churn rising?']);

@@ -95,7 +95,7 @@ import {
 import { semanticApprovalState } from './app-semantic-approval';
 import { relativeAge } from './reader-trust';
 import { UNPUBLISHED_CHANGES } from './app-studio-words';
-import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, type AppRunTrust } from './app-certification';
+import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, unpublishedChangesText, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
 import {
@@ -110,6 +110,7 @@ import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/autho
 import { useOperations } from '../../operations/OperationsProvider';
 import { BUILD_NEW_APP_EVENT, appLibraryLaunchExpanded, buildNewAppRequested, type AppLibraryLaunchPreference } from './app-library-launch';
 import { plainSourceText } from './source-names';
+import { isTrustReminderTaskId } from '@zlens/core/apps/app-trust';
 import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
@@ -243,7 +244,6 @@ export function AppsView(): JSX.Element {
   const [dashboardMissing, setDashboardMissing] = useState(false);
   const [workspaceLoadAttempt, setWorkspaceLoadAttempt] = useState(0);
   const [builderMode, setBuilderMode] = useState<BuilderMode>('ai');
-  const [builderExploreGaps, setBuilderExploreGaps] = useState(false);
   const [builderTemplate, setBuilderTemplate] = useState<AppStudioLaunchConfig['template']>('operational_dashboard');
   const [builderPrompt, setBuilderPrompt] = useState(DEFAULT_PROMPT);
   const [builderName, setBuilderName] = useState('');
@@ -353,7 +353,6 @@ export function AppsView(): JSX.Element {
     setBuilderExistingAppId(session.inputs.existingAppId ?? null);
     setBuilderDomain(resolveAuthoredDomainId(session.inputs.domain, state.authoredDomains));
     setBuilderAudience(session.inputs.audience ?? 'stakeholders');
-    setBuilderExploreGaps(session.inputs.exploreGaps === true);
     if (session.status === 'building' || session.status === 'error') return;
     // This runs on every build-status transition, so seeding must not clobber
     // what the author has typed. Previously a name was silently reverted to
@@ -754,7 +753,6 @@ export function AppsView(): JSX.Element {
     setBuilderExistingAppId(null);
     setBuilderDraftId(null);
     setBuilderMode(config.mode === 'ai' ? 'ai' : config.mode === 'quick' ? 'quick' : 'classic');
-    setBuilderExploreGaps(config.sourcePolicy === 'include_review_required');
     setBuilderTemplate(config.template);
     setBuilderPrompt(config.mode === 'ai' ? config.prompt : 'A dashboard of live, checked numbers');
     setBuilderName(config.mode === 'ai' ? '' : config.name.trim());
@@ -803,7 +801,6 @@ export function AppsView(): JSX.Element {
     setBuilderAudience(appDoc.app.audience ?? 'stakeholders');
     const localDraft = appDoc.app.publicationIntent === 'personal'
       || (!appDoc.app.publicationIntent && appDoc.app.visibility === 'private');
-    setBuilderExploreGaps(localDraft && addPageExploreGaps);
     setBuildSession(null);
     setAddPageOpen(false);
     setAddPageTitle('');
@@ -989,7 +986,6 @@ export function AppsView(): JSX.Element {
             setBuilderExistingAppId(draft.baseApp?.appId ?? null);
             setBuilderMode(draft.authoringMode === 'ai' ? 'ai' : 'classic');
             setBuilderTemplate(draft.template);
-            setBuilderExploreGaps(draft.sourcePolicy === 'include_review_required');
             setBuilderPrompt(draft.frame.goal);
             setBuilderName(draft.name);
             setBuilderDomain(draft.pages[0]?.metadata.domain ?? '');
@@ -1008,7 +1004,6 @@ export function AppsView(): JSX.Element {
           initialPrompt={builderPrompt}
           initialName={builderName}
           initialDraftId={builderDraftId}
-          initialSourcePolicy={builderExploreGaps ? 'include_review_required' : 'governed_only'}
           initialTemplate={builderTemplate}
           startImmediately
           baseAppId={builderExistingAppId}
@@ -1206,7 +1201,6 @@ function AppLibrarySurface({
       prompt: DEFAULT_PROMPT,
       name: mode === 'quick' ? '' : 'Untitled Analytics App',
       template: mode === 'ai' ? 'operational_dashboard' : 'blank',
-      sourcePolicy: 'governed_only',
     };
   });
   const launchModeTouched = useRef(false);
@@ -1386,7 +1380,8 @@ export function mergeDraftsIntoAppCards<D extends Pick<AppStudioBuildDraft, 'id'
 }
 
 function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: () => void }) {
-  const needsReview = draft.reviewTasks.some((task) => task.status === 'open');
+  // Open checks only: "needs certifying" reminders older drafts kept are not checks (T3).
+  const openChecks = draft.reviewTasks.some((task) => task.status === 'open' && !isTrustReminderTaskId(task.id));
   const domain = draft.pages[0]?.metadata.domain || 'Local workspace';
   return (
     <article className="dql-app-card dql-app-draft-card">
@@ -1395,7 +1390,7 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
           <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private"><ShieldCheck size={12} /> Private draft</span></div>
           <span className="dql-app-draft-mark"><LayoutDashboard size={15} /></span>
         </div>
-        <StatusSeal tone={needsReview ? 'draft' : 'agentic'}>{needsReview ? 'needs review' : 'Unpublished'}</StatusSeal>
+        <StatusSeal tone={openChecks ? 'draft' : 'agentic'}>{openChecks ? 'Checks to finish' : 'Unpublished'}</StatusSeal>
         <h3>{draft.name}</h3>
         <p>{cleanStakeholderCopy(draft.frame.goal || 'A private App draft ready to shape in Studio.')}</p>
         <div className="dql-app-card-mini">
@@ -1407,7 +1402,7 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
         </div>
       </div>
       <div className="dql-app-card-depth">
-        <span>{draft.sourcePolicy === 'include_review_required' ? 'Also allows data that needs review' : 'Only certified data'}</span>
+        <span />
         <button type="button" className="dql-app-card-act primary" onClick={onOpen}>Continue <ArrowRight size={12} /></button>
       </div>
     </article>
@@ -1708,7 +1703,7 @@ function AppWorkspaceSurface({
   const certification = pageTrust && pageTrust.state !== 'pending' && pageTrust.state !== 'empty'
     ? {
         allCertified: pageTrust.allCertified && draftCount === 0,
-        label: pageTrust.allCertified && draftCount === 0 ? allDataCertifiedLabel(pageTrust.byline) : draftCount > 0 && pageTrust.allCertified ? `${pageTrust.text} · ${draftCount} App draft pending` : pageTrust.text,
+        label: pageTrust.allCertified && draftCount === 0 ? allDataCertifiedLabel() : draftCount > 0 && pageTrust.allCertified ? `${pageTrust.text} · ${unpublishedChangesText(draftCount)}` : pageTrust.text,
       }
     : rollup;
   const [chartAnswer, setChartAnswer] = useState<{
@@ -2070,11 +2065,11 @@ function AppWorkspaceSurface({
         {/* Everyone reads the App's name; builders find its id in the tooltip. */}
         <span className="dql-app-crumb" title={hostReader(hostUi) ? undefined : workspaceAppId ?? undefined}><b>{appHeaderTitle(workspaceAppName, workspaceAppId)}</b></span>
         {onDashboards ? (
-          <StatusSeal tone={certification.allCertified ? 'certified' : 'draft'} title="Data trust: whether every tile on this page ran from a certified source.">
+          <StatusSeal tone={certification.allCertified ? 'certified' : 'draft'} title="How many tiles on this page are certified. Each tile says Certified (by whom, and when) or Not certified yet.">
             {certification.label}
           </StatusSeal>
         ) : null}
-        {draftCount > 0 ? <StatusSeal tone="draft" title="App drafts waiting for review">{draftCount} App draft{draftCount === 1 ? '' : 's'}</StatusSeal> : null}
+        {draftCount > 0 ? <StatusSeal tone="draft" title="Changes to this App that are not published yet">{unpublishedChangesText(draftCount)}</StatusSeal> : null}
 
         {readerOnly ? null : <span className="dql-app-topbar-divider" aria-hidden="true" />}
 
@@ -2113,7 +2108,7 @@ function AppWorkspaceSurface({
                 title={semanticRunReady
                   ? 'Approve the successful semantic run for publication'
                   : repairedSemanticTileIds.length > 0
-                    ? 'AI-repaired Metrics previews need review and cannot be approved as certified Metrics results'
+                    ? 'AI-repaired Metrics previews are not certified yet and cannot be approved as certified Metrics results'
                     : 'Run this dashboard successfully before semantic approval'}
               >
                 <Check size={14} /> Approve semantic ({semanticTileIds.length})
@@ -2998,7 +2993,7 @@ function AddPageDialog({
           >
             <span>{exploreGaps ? <Check size={11} strokeWidth={3} /> : null}</span>
             <b>Explore uncovered gaps with AI SQL</b>
-            <small>Personal App only · bounded preview · needs review</small>
+            <small>Personal App only · bounded preview · not certified yet</small>
           </button>
         ) : (
           <small className="dql-app-page-source-policy">Shared-project pages use certified tables, Metrics and saved queries.</small>

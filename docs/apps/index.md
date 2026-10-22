@@ -16,26 +16,25 @@ The workbench opens on **Apps**.
    owners...** to find one.
 3. Click **View** on the App's card.
 
-Each card shows how many **Pages** the App has and when it was last
-**Updated**. A certified App's card says who published it as certified and
-when, for example **App certified by Kranthi · 21 Oct**.
+Each card shows how many **Pages** the App has, when it was last
+**Updated**, and how many of its tiles are certified, for example **All tiles
+certified** or **3 of 4 tiles certified**.
 
-The App opens on its first page. At the top you see the App's name and its
-trust badge, for example **All data certified by Kranthi · 21 Oct** or
-**2 of 3 tiles certified**.
+The App opens on its first page. At the top you see the App's name and the
+same count for the page, for example **3 of 4 tiles certified**.
 **View** and **Edit** switch between reading and building; see
 [Build an App](build.md).
 
 ## Read the trust on each tile
 
-Each tile has a trust label:
+Each tile says one of two things:
 
 | Label | Means |
 |---|---|
-| **Certified by** *name* **·** *date* | Runs certified data exactly as it was reviewed, and says who certified it and when, for example **Certified by Kranthi · 21 Oct**. |
-| **Governed** | Built from approved semantic metrics and dimensions. |
-| **Needs review** | Uses data nobody has certified yet. |
-| **Blocked** | Cannot run, for example because of a policy. |
+| **Certified by** *name* **·** *date* | Everything the tile uses is certified — its data, every join it can reach and, for a calculation, every input — and it says who certified it and when, for example **Certified by Kranthi · 21 Oct**, or **Certified by you**. |
+| **Not certified yet** | Nobody has vouched for something the tile uses yet. The receipt says why, for example *Checked by you, not certified yet*, *Changed since it was certified on 22 Oct* or *Uses a join nobody has certified*. |
+
+A tile that cannot run says **Blocked**, for example because of a policy.
 
 Data certified before ZLens recorded who certified it says **Certified · 21 Oct**,
 or just **Certified**. Other labels also say how fresh the result is, such as
@@ -49,19 +48,21 @@ file and the fingerprints of the result and the SQL are under
 **Technical details**, which starts closed. **Show the query and SQL** opens
 what ran.
 
-The bar above the tiles summarizes the page, for example
-**All 1 tile certified**. Turn on **Trust lens** to highlight each tile's
-trust.
+The bar above the tiles summarizes the page, for example **All tiles
+certified** or **3 of 4 tiles certified**. Turn on **Trust lens** to
+highlight each tile's trust.
 
 Some pages have a **Summary (auto-written)** above the tiles: a few sentences
 about the page's current numbers. It appears only when the page's author added
 it. The **Evidence & review appendix** at the bottom says when the page was
-last refreshed and which tiles need review; ids are under
+last refreshed and which tiles are not certified yet; ids are under
 **Technical details**.
 
 !!! note
-    People who only read Apps never see draft or needs-review tiles. Those
-    appear only while you build.
+    An App can be published with tiles that are not certified yet, and
+    readers see **Not certified yet** on them. A project can require every
+    tile to be certified before an App is published; see
+    [Publish](build.md#7-publish).
 
 ## Words used in App Studio
 
@@ -77,17 +78,17 @@ App Studio uses one small set of words:
 | **Filter** | A control above the tiles that narrows what the page shows, such as a region or a date range. |
 | **Domain** | A Domain groups data by business area, like Sales or Finance. It filters the lists; it is not a kind of data. |
 | **Table** | A table in your database. ZLens checks it once (**Check and add** → **Check and use**) before you use it. |
-| **Checked · Needs certifying** | ZLens checked the data (it runs, what one row is, number formats) and you can build tiles from it, but nobody has certified it yet. It is certified on purpose before the App is published. |
+| **Not certified yet** | Nobody has vouched for the data (or for a join or input a tile uses) yet. You can build and publish with it; its tiles say **Not certified yet** to readers. The receipt says why, for example *Checked by you, not certified yet* after **Check and use**. |
 | **Saved query** | A reusable, reviewed query. Files and the CLI call it a block (a `.dql` block file). Its result's columns are its fields, with no review step: grouped by its own columns its values show as they are, otherwise numbers add up (**Sum**) and averages are never added up. |
 | **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and records it, for row-safe measures such as distinct counts. |
 | **Related table** | A table that checked data points to through a many-to-one join (each order has one customer). Its fields show under the data as **Orders → Customer**, and totals stay the same. |
 | **Metrics** | Measures and dimensions from a semantic model. |
-| **Certified** | A person reviewed the data and vouched for it (**I vouch for this — certify**, or **Certify** in Block Studio). ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. |
+| **Certified** | A person reviewed the data and vouched for it (**I vouch for this — certify**, or **Certify** in Block Studio). ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. A tile is certified when everything it uses is. |
+| **3 of 4 tiles certified** | The App's one count. The App header, the Apps card, the publish dialog and the published `dql.app.json` all show the same count. |
 | **Certified by** | The person who certified the data: the signed-in person with a host, otherwise your git `user.name`. You read **Certified by you** for data you certified. Older data shows **Certified · date** or **Certified**. |
 | **Unpublished changes** | Changes to an App that only you can see until you publish. |
 | **Summary** | A short auto-written paragraph about a page's numbers. Off unless the author adds it. |
 | **Technical details** | Ids, hashes and fingerprints, kept out of the way under a toggle that starts closed. |
-| **Needs review** | Nobody has certified the data yet. A page that uses it cannot publish. |
 
 Files, the API and the reference docs use a few more technical words: a
 checked table or a row-level saved query is a *Dataset* there, and a saved

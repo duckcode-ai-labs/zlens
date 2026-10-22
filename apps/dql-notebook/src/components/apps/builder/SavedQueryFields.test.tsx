@@ -126,7 +126,7 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
         { name: 'lifetime_spend', include: true, format: 'number', currency: 'USD' },
       ],
     });
-    expect(submission).toEqual({ kind: 'added', status: 'checked', sourceId: 'app:block:orders/top_customers', message: 'Top Customers is row-level now and checked: it needs certifying before you publish.', blockers: [] });
+    expect(submission).toEqual({ kind: 'added', status: 'checked', sourceId: 'app:block:orders/top_customers', message: 'Top Customers is row-level now and checked. It is not certified yet: certify it when you are ready.', blockers: [] });
   });
 
   it('asks before sending a certified saved query back for review when its check fails', async () => {
@@ -139,7 +139,7 @@ describe('A saved query has fields; Make row-level is under ⋯ (design D1)', ()
     expect(refused).toEqual({ kind: 'refused', message: 'Top Customers is certified, and made row-level it did not pass its checks, so nothing changed yet.', blockers: ['All tests pass: row_count > 1000000 failed.'] });
     const sent = await submitSavedQueryFields(client, { ...input, allowReview: true });
     expect(client.create).toHaveBeenLastCalledWith(expect.objectContaining({ allowReview: true }));
-    expect(sent).toMatchObject({ kind: 'added', status: 'review', message: 'Top Customers is row-level now. It needs review: it did not pass its checks yet.' });
+    expect(sent).toMatchObject({ kind: 'added', status: 'review', message: 'Top Customers is row-level now. It is not certified yet: it did not pass its checks yet.' });
   });
 
   it('says plainly when the server refuses', () => {

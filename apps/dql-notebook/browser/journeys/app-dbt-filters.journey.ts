@@ -66,7 +66,7 @@ test.beforeAll(async () => {
   }
 
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Customer Review', goal: 'Orders by customer', domain: 'shop', authoringMode: 'manual', sourcePolicy: 'include_review_required', template: 'blank',
+    name: 'Customer Review', goal: 'Orders by customer', domain: 'shop', authoringMode: 'manual', template: 'blank',
   });
   draftId = app.draft.id;
   const candidates = await call<{ items: Array<{ sourceId: string; name: string; capabilities: { dataset?: { joins?: Array<{ id: string; table: string }>; fields: Array<{ name: string; kind: string; aggregation?: string }> } } }> }>(`/api/app-builds/${draftId}/source-candidates?limit=50`);
@@ -171,7 +171,7 @@ test('Publish says "saved as files" outside git, and a published App with an ope
   await expect(dialog).toBeVisible({ timeout: 60_000 });
   await expect(dialog.getByText('Publishing saves the App as files in your project folder.')).toBeVisible({ timeout: 30_000 });
   await expect(dialog.getByText(/review in git/)).toHaveCount(0);
-  await dialog.getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=customer-review/, { timeout: 60_000 });
   // Plain names in the published App (new-user round 2, problem 9): the filter reads
   // "Customer Name", never "Customer Customer Name"; no raw field or saved query ids.

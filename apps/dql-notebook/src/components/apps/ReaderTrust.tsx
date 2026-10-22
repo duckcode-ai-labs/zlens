@@ -1,10 +1,12 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
-import { AlertTriangle, Ban, Landmark, ShieldCheck, X } from 'lucide-react';
+import { AlertTriangle, Ban, ShieldCheck, X } from 'lucide-react';
 import { splitTechnicalRows, type ReaderTrust, type ReaderTrustState, type ReceiptRow } from './reader-trust';
+import { tileTrustCountText } from '@zlens/core/apps/reader-trust';
 
 const ICONS: Record<ReaderTrustState, typeof ShieldCheck> = {
   certified: ShieldCheck,
-  governed: Landmark,
+  // A legacy semantic-model result reads "Not certified yet" like `review` (T1).
+  governed: AlertTriangle,
   review: AlertTriangle,
   blocked: Ban,
 };
@@ -143,7 +145,7 @@ export function TrustLensBar({
   return (
     <div className="dql-trust-lens-bar" role="group" aria-label="Trust on this page">
       <span className="dql-trust-summary">
-        {summary || (certified === total ? `All ${total} ${total === 1 ? 'tile' : 'tiles'} certified` : `${certified} of ${total} tiles certified`)}
+        {summary || tileTrustCountText(certified, total)}
       </span>
       {on ? counts.map((entry) => (
         <span key={entry.state} className={`dql-trust-count ${entry.state}`}>

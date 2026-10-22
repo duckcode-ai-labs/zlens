@@ -108,7 +108,7 @@ test.beforeAll(async () => {
     }),
   })).json() as { ok: boolean; status?: string; sourceId?: string; error?: string; blockers?: string[] };
   expect(created.ok, created.error).toBe(true);
-  // "Check and use" leaves it Checked · Needs certifying; certifying is its own step (design Q1).
+  // "Check and use" leaves it checked, Not certified yet; certifying is its own step (design Q1).
   expect(created.status, (created.blockers ?? []).join(' ')).toBe('checked');
   const certified = await (await fetch(`${base}/api/app-datasets/certify`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sourceId: created.sourceId }),

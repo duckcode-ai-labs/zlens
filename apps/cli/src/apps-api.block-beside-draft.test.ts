@@ -58,8 +58,12 @@ describe('a draft saved beside a certified block', () => {
     expect(checkAppPublication(root, 'claims-ops')!.blockers).toEqual([]);
   });
 
-  it('can be chosen for a tile by path, and is then not certified', () => {
+  const requireCertified = (root: string) => writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ project: 'beside', apps: { requireCertifiedToPublish: true } }));
+
+  it('can be chosen for a tile by path, and is then not certified: it blocks only when the project requires certified data (T3)', () => {
     const root = projectWithCopy(nameDraftEditBesideCertified(legacyCopy), { ref: COPY_PATH });
+    expect(checkAppPublication(root, 'claims-ops')!.blockers.filter((blocker) => blocker.code === 'block_not_certified')).toEqual([]);
+    requireCertified(root);
     const result = checkAppPublication(root, 'claims-ops')!;
     expect(result.ready).toBe(false);
     expect(result.blockers).toContainEqual(expect.objectContaining({ code: 'block_not_certified', tileId: 'kpi' }));
@@ -67,7 +71,13 @@ describe('a draft saved beside a certified block', () => {
 
   it('can be chosen for a tile by its own name, and is then not certified', () => {
     const root = projectWithCopy(nameDraftEditBesideCertified(legacyCopy), { blockId: 'Open claims by region (draft edit)' });
+    requireCertified(root);
     const result = checkAppPublication(root, 'claims-ops')!;
     expect(result.blockers).toContainEqual(expect.objectContaining({ code: 'block_not_certified', tileId: 'kpi' }));
+  });
+
+  it('a tile whose saved query is gone is a blocker whatever the project requires', () => {
+    const root = projectWithCopy(legacyCopy, { ref: 'domains/claims/blocks/gone.dql' });
+    expect(checkAppPublication(root, 'claims-ops')!.blockers).toContainEqual(expect.objectContaining({ code: 'block_missing', tileId: 'kpi' }));
   });
 });

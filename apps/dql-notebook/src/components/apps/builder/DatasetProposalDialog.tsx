@@ -111,7 +111,7 @@ export function DatasetSourceAuthoringDialog({
         </section>
         {message ? <p className="dataset-source-authoring-message" role="status">{message}</p> : null}
       </div>
-      <footer><span>Saving creates a source proposal that needs review. It does not change this App’s data.</span><button type="button" onClick={onClose} disabled={disabled}>Cancel</button><button type="button" className="primary" onClick={preview} disabled={disabled}><FileText size={13} /> Review source change</button></footer>
+      <footer><span>Saving creates a source proposal that is not certified yet. It does not change this App’s data.</span><button type="button" onClick={onClose} disabled={disabled}>Cancel</button><button type="button" className="primary" onClick={preview} disabled={disabled}><FileText size={13} /> Review source change</button></footer>
     </section>
   </div>;
 }
@@ -147,12 +147,12 @@ export function DatasetSourceRebindReviewDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }): JSX.Element {
-  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Allow data that needs review">
+  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Refresh this data">
     <section className="dataset-source-rebind-card">
-      <header><span><FileText size={17} /></span><div><small>NEEDS REVIEW</small><h2>Refresh this data?</h2></div><button type="button" className="icon" onClick={onCancel} disabled={disabled} aria-label="Close data refresh"><X size={15} /></button></header>
-      <p><strong>{humanize(title)}</strong> changed and currently needs review. You can explicitly allow data that needs review and refresh this App’s saved source revision.</p>
-      <p>This does not certify the data. Existing previews are cleared, and Project publication stays blocked until the data is certified.</p>
-      <footer><button type="button" onClick={onCancel} disabled={disabled}>Keep current data</button><button type="button" className="primary" onClick={onConfirm} disabled={disabled}><FileText size={13} /> Allow data that needs review &amp; refresh</button></footer>
+      <header><span><FileText size={17} /></span><div><small>NOT CERTIFIED YET</small><h2>Refresh this data?</h2></div><button type="button" className="icon" onClick={onCancel} disabled={disabled} aria-label="Close data refresh"><X size={15} /></button></header>
+      <p><strong>{humanize(title)}</strong> changed and is not certified yet. Refresh this App’s saved source revision to use it; its tiles read “Not certified yet” until someone certifies it.</p>
+      <p>This does not certify the data. Existing previews are cleared, and the page runs again with the refreshed data.</p>
+      <footer><button type="button" onClick={onCancel} disabled={disabled}>Keep current data</button><button type="button" className="primary" onClick={onConfirm} disabled={disabled}><FileText size={13} /> Refresh data</button></footer>
     </section>
   </div>;
 }

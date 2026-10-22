@@ -142,12 +142,13 @@ const EXPECTED_TEST_FILES = 189;
 // 2554 with an Ask review draft named after its own id and given the one Domain its tables belong to (drafts.test.ts, +2).
 // 2555 with the runtime's App source record decorator (fields from related tables, design D2,
 // app-source-catalog.test.ts, +1).
-// 2556 with checked data that previews under "Only certified data" and never publishes until certified
-// (design Q1, app-source-catalog.test.ts, +1).
-const EXPECTED_TESTS = 2556;
+// 2556 with checked data the App shortlist keeps, certified first (design Q1, app-source-catalog.test.ts, +1).
+// 2557 with the App shortlist putting certified data first and never dropping data nobody certified
+// (one trust model T3, app-source-catalog.test.ts, +1).
+const EXPECTED_TESTS = 2557;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2479.
+// The ordinary lane's share is the difference: 2480.
 const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];

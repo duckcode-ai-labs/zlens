@@ -194,8 +194,8 @@ export function DatasetQueryPreview({
     if (!onStatus) return;
     if (preview.state === 'ready') {
       const count = preview.result.rowCount ?? preview.result.rows.length;
-      // A join nobody certified yet (drafted in setup) makes the tile Needs review (design D2).
-      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${preview.ms} ms${preview.reviewJoin ? ' · Needs review: it uses a join that is not certified yet' : ''}`, 'ok');
+      // A join nobody certified yet (drafted in setup) keeps the tile Not certified yet (design D2).
+      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${preview.ms} ms${preview.reviewJoin ? ' · Not certified yet: it uses a join nobody has certified' : ''}`, 'ok');
     } else if (preview.state === 'running') onStatus('Running…', 'idle');
     else if (preview.state === 'failed') onStatus('Run failed', 'error');
   }, [preview]);

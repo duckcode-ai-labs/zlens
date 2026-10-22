@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
+import { checkAppsPublishing, checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -14,6 +14,27 @@ describe('Snowflake Node runtime support', () => {
     expect(isSnowflakeSupportedNodeVersion('22.18.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('24.4.1')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(false);
+  });
+});
+
+describe('App publishing check (T3)', () => {
+  afterEach(() => {
+    while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  });
+  const project = (config: unknown) => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-doctor-apps-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, 'dql.config.json'), typeof config === 'string' ? config : JSON.stringify(config));
+    return root;
+  };
+
+  it('says publishing is not blocked by trust by default, and when the project requires certified tiles', () => {
+    expect(checkAppsPublishing(project({ project: 'p' }))).toMatchObject({ name: 'App publishing', ok: true, detail: expect.stringContaining('not blocked by trust') });
+    expect(checkAppsPublishing(project({ apps: { requireCertifiedToPublish: true } }))).toMatchObject({ ok: true, detail: expect.stringContaining('every tile must be certified to publish') });
+  });
+
+  it('flags a setting that is not true or false', () => {
+    expect(checkAppsPublishing(project({ apps: { requireCertifiedToPublish: 'yes' } }))).toMatchObject({ ok: false, detail: expect.stringContaining('apps.requireCertifiedToPublish must be true or false.') });
   });
 });
 

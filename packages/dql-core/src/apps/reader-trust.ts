@@ -1,12 +1,14 @@
 /**
- * One trust vocabulary for App readers (RFC 0008 step 6). Every data tile
- * shows exactly one of four states, worked out from the governed run
- * evidence the server returned, never from the tile's own claims alone:
+ * One trust vocabulary for App readers (RFC 0008 step 6; one trust model,
+ * T1/T2). People see two words: **Certified** (by whom, and when) or **Not
+ * certified yet**. Everything else is detail in the tile's receipt. The
+ * states are worked out from the run evidence the server returned, never
+ * from the tile's own claims alone:
  *
- * - certified: a certified source ran exactly as reviewed
- * - governed:  a governed semantic query (metrics and dimensions from the
- *              model), or a checked calculation over certified measures;
- *              not individually certified
+ * - certified: a certified source ran exactly as reviewed, through certified
+ *              joins; a calculation is certified when all its inputs are
+ * - governed:  a legacy semantic-model result nobody certified (shown as
+ *              "Not certified yet", like `review`; kept as a code value)
  * - review:    not certified yet, adapted, out of date, or AI-generated
  * - blocked:   governance or the source stopped this tile from showing data
  *
@@ -67,7 +69,7 @@ export interface ReaderTrustTile {
   aiPin?: { certification?: string; reviewStatus?: string } | null;
   dataset?: {
     trust?: string;
-    /** ZLens checked the data and someone added it, but nobody certified it yet ("Checked · Needs certifying"). */
+    /** ZLens checked the data and someone added it, but nobody certified it yet (receipt: "Checked, not certified yet"). */
     checked?: boolean | null;
     validation?: { outcome?: string } | null;
     /** Joins to related tables the tile used (design D2), in plain words. */
@@ -80,15 +82,42 @@ export interface ReaderTrustTile {
   certification?: CertificationByline | null;
 }
 
-/** The label of data ZLens checked that nobody certified yet (design Q1). */
-export const CHECKED_NEEDS_CERTIFYING_LABEL = 'Needs certifying';
+/**
+ * The second of the two trust words (T1): anything nobody has vouched for.
+ * Why (checked but not certified, changed since it was certified, a join
+ * nobody certified) is detail in the receipt, never a third word.
+ */
+export const NOT_CERTIFIED_YET = 'Not certified yet';
+
+/** @deprecated Checked data reads "Not certified yet" like any other (T1). */
+export const CHECKED_NEEDS_CERTIFYING_LABEL = NOT_CERTIFIED_YET;
+
+/** Receipt detail for data ZLens checked that nobody certified yet. */
+export const CHECKED_NOT_CERTIFIED_DETAIL = 'Checked, not certified yet.';
+/** Receipt detail for a tile on a join nobody certified. */
+export const UNCERTIFIED_JOIN_DETAIL = 'Uses a join nobody has certified.';
 
 export const READER_TRUST_LABELS: Record<ReaderTrustState, string> = {
   certified: 'Certified',
-  governed: 'Governed',
-  review: 'Needs review',
+  governed: NOT_CERTIFIED_YET,
+  review: NOT_CERTIFIED_YET,
   blocked: 'Blocked',
 };
+
+/** "Changed since it was certified on 21 Oct." for data whose certification no longer holds. */
+export function changedSinceCertifiedDetail(at: string | null | undefined, now: Date = new Date()): string | undefined {
+  const date = certifiedDateLabel(at, now);
+  return date ? `Changed since it was certified on ${date}.` : undefined;
+}
+
+/**
+ * "Checked by you, not certified yet." — who checked it, when known.
+ */
+export function checkedNotCertifiedDetail(check: { byYou?: boolean | null; by?: string | null; name?: string | null } | null | undefined): string {
+  if (check?.byYou) return 'Checked by you, not certified yet.';
+  const who = certifierDisplayName(check?.by, check?.name);
+  return who ? `Checked by ${who}, not certified yet.` : CHECKED_NOT_CERTIFIED_DETAIL;
+}
 
 const trust = (state: ReaderTrustState, detail: string): ReaderTrust => ({ state, label: READER_TRUST_LABELS[state], detail });
 
@@ -238,59 +267,65 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
   if (dataset) {
     const outcome = dataset.validation?.outcome;
     if (outcome === 'rejected') return trust('blocked', 'The data’s checks rejected this query.');
-    // A join nobody certified yet (drafted in setup) makes the tile Needs review, like other review data.
+    // A join nobody certified yet (drafted in setup) keeps the tile from being certified.
     if (dataset.trust === 'certified' && outcome !== 'needs_review' && dataset.joins?.some((join) => join.trust !== 'certified')) {
-      return trust('review', 'It uses a join between tables that nobody has certified yet.');
+      return trust('review', UNCERTIFIED_JOIN_DETAIL);
     }
     const calculated = Boolean((item.query as { calculations?: unknown[] } | undefined)?.calculations?.length);
-    if (dataset.trust === 'certified' && outcome !== 'needs_review' && calculated) {
-      // Checked arithmetic over certified measures is governed, not certified:
-      // nobody reviewed this formula. Promoting it into the Dataset certifies it.
-      return trust('governed', 'Calculated on certified data: checked arithmetic over its certified measures.');
-    }
     if (dataset.trust === 'certified' && outcome !== 'needs_review') {
+      // A calculation is certified when every input is (T2): checked
+      // arithmetic over certified measures, through certified joins.
+      if (calculated) return certifiedTrust('Calculated from certified data: every input is certified.', tile.certification);
       return outcome === 'adapted'
         ? certifiedTrust('Certified data; the query was adapted within what it certifies.', tile.certification)
         : certifiedTrust('Runs on certified data, within what it certifies.', tile.certification);
     }
     if (outcome !== 'needs_review' && dataset.checked) {
-      return { ...trust('review', 'ZLens checked this data, but nobody has certified it yet. It is certified before the App is published.'), label: CHECKED_NEEDS_CERTIFYING_LABEL };
+      return trust('review', CHECKED_NOT_CERTIFIED_DETAIL);
     }
-    return trust('review', outcome === 'needs_review'
-      ? 'The query goes beyond what the data certifies.'
-      : 'This data is not certified yet.');
+    if (outcome === 'needs_review') return trust('review', 'The query goes beyond what the data certifies.');
+    return trust('review', changedSinceCertifiedDetail(tile.certification?.at) ?? 'Nobody has certified this data yet.');
   }
 
   if (tile.certificationStatus === 'certified' || tile.artifact?.trustState === 'certified' || tile.trustState === 'certified') {
     return certifiedTrust('Runs a certified saved query exactly as it was reviewed.', tile.certification);
   }
   if (tile.tileType === 'semantic' || item.semantic || tile.artifact?.sourceKind === 'semantic_query') {
-    return trust('governed', 'Metrics and dimensions come from the governed semantic model.');
+    return trust('governed', 'Metrics and dimensions come from the semantic model; nobody has certified this result.');
   }
-  return trust('review', 'This source is not certified yet; check it before relying on it.');
-}
-
-/** Counts for the Trust Lens legend, in a fixed order. */
-export function readerTrustCounts(trusts: Array<ReaderTrust | null>): Array<{ state: ReaderTrustState; label: string; count: number }> {
-  const order: ReaderTrustState[] = ['certified', 'governed', 'review', 'blocked'];
-  return order
-    .map((state) => ({ state, label: READER_TRUST_LABELS[state], count: trusts.filter((entry) => entry?.state === state).length }))
-    .filter((entry) => entry.count > 0);
+  return trust('review', changedSinceCertifiedDetail(tile.certification?.at) ?? 'Nobody has certified this saved query yet.');
 }
 
 /**
- * The one way every surface counts certified tiles: "All 6 tiles certified"
- * or "4 of 6 tiles certified"; empty for no data tiles. The App header, the
- * reader's trust line, the Apps card and the publish check all use it.
+ * Counts for the Trust Lens legend, in a fixed order: Certified, Not
+ * certified yet (every tile nobody vouched for, whatever the reason), Blocked.
+ */
+export function readerTrustCounts(trusts: Array<ReaderTrust | null>): Array<{ state: ReaderTrustState; label: string; count: number }> {
+  const count = (states: ReaderTrustState[]) => trusts.filter((entry) => entry && states.includes(entry.state)).length;
+  return ([
+    { state: 'certified', label: READER_TRUST_LABELS.certified, count: count(['certified']) },
+    { state: 'review', label: NOT_CERTIFIED_YET, count: count(['review', 'governed']) },
+    { state: 'blocked', label: READER_TRUST_LABELS.blocked, count: count(['blocked']) },
+  ] as Array<{ state: ReaderTrustState; label: string; count: number }>).filter((entry) => entry.count > 0);
+}
+
+/** "All tiles certified": the one count text when every data tile is certified (T2). */
+export const ALL_TILES_CERTIFIED = 'All tiles certified';
+
+/**
+ * The one way every surface counts certified tiles (T2): "All tiles
+ * certified" or "3 of 4 tiles certified"; empty for no data tiles. The App
+ * header, the reader's trust line, the Apps card, the publish dialog and the
+ * stored `dql.app.json` count all read it.
  */
 export function tileTrustCountText(certified: number, total: number): string {
   if (total <= 0) return '';
   return certified === total
-    ? `All ${total} ${total === 1 ? 'tile' : 'tiles'} certified`
+    ? ALL_TILES_CERTIFIED
     : `${certified} of ${total} ${total === 1 ? 'tile' : 'tiles'} certified`;
 }
 
-/** "All 6 tiles certified" or "4 of 6 tiles certified"; empty when no data tile ran. */
+/** "All tiles certified" or "4 of 6 tiles certified"; empty when no data tile ran. */
 export function readerTrustSummary(trusts: Array<ReaderTrust | null>): { certified: number; total: number; text: string } {
   const total = trusts.filter(Boolean).length;
   const certified = trusts.filter((entry) => entry?.state === 'certified').length;
@@ -317,7 +352,7 @@ export interface AppTrustSummary {
   certified: number;
   total: number;
   allCertified: boolean;
-  /** Short badge text: "All data certified", "0 of 1 tiles certified", "Trust not checked yet". */
+  /** Short badge text: "All tiles certified", "0 of 1 tile certified", "Trust not checked yet". */
   label: string;
   /** Sentence form for summaries; empty when no data tile ran. */
   text: string;
@@ -365,7 +400,7 @@ export function appTrustSummary<Item extends ReaderTrustItem & { i: string }>(
     certified,
     total,
     allCertified,
-    label: allCertified ? 'All data certified' : text,
+    label: text,
     text,
     ...(byline ? { byline } : {}),
   };

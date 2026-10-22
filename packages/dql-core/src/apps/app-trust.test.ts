@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DatasetDescriptor } from '../datasets/descriptor.js';
 import { discoverDatasetJoins, withDatasetJoins, type RelatedRelationshipEdge } from '../datasets/related-fields.js';
-import { appTileTrustFor, appTrustAnswer, publishReadyLine, publishedTileTrustText, type AppTrustPageLike, type AppTrustSourceLike } from './app-trust.js';
+import { appTileTrustFor, appTrustAnswer, appsPublishSettings, appsPublishSettingsProblems, isTrustReminderTaskId, notCertifiedTiles, publishReadyLine, publishedTileTrustText, readersWillSeeText, requireCertifiedToPublishMessage, type AppTrustPageLike, type AppTrustSourceLike } from './app-trust.js';
 import { certifiedByLabel, certifierDisplayName, readerTileTrust } from './reader-trust.js';
 
 const base: DatasetDescriptor = {
@@ -100,35 +100,55 @@ describe('one trust answer for an App (B6)', () => {
     expect(unfiltered.label).toBe('3 of 4 tiles certified');
   });
 
-  it('allowing data that needs review publishes those tiles but never reads as every check passed', () => {
-    const allowed = appTrustAnswer({ pages: [salesPage()], sourceFor: sources(), sourcePolicy: 'include_review_required' });
-    expect(allowed.reviewAllowed).toBe(3);
-    expect(allowed.label).toBe('1 of 4 tiles certified');
-    expect(publishReadyLine(allowed)).toEqual({ detail: '3 tiles need review (allowed)', allPassed: false });
-    const one = appTrustAnswer({ pages: [salesPage([])], sourceFor: sources(), sourcePolicy: 'include_review_required' });
-    expect(publishReadyLine(one).detail).toBe('1 tile needs review (allowed)');
-    expect(appTrustAnswer({ pages: [salesPage()], sourceFor: sources() }).reviewAllowed).toBe(0);
+  it('an old App\'s data rule is read and ignored: the same tiles, the same count (T3)', () => {
+    const plain = appTrustAnswer({ pages: [salesPage()], sourceFor: sources() });
+    for (const sourcePolicy of ['governed_only', 'include_review_required']) {
+      const old = appTrustAnswer({ pages: [salesPage()], sourceFor: sources(), sourcePolicy });
+      expect(old).toEqual(plain);
+    }
+    expect(plain.notCertified).toBe(3);
+    expect(plain.label).toBe('1 of 4 tiles certified');
+    expect(publishReadyLine(plain)).toEqual({ detail: '1 of 4 tiles certified', allPassed: false });
+    expect(readersWillSeeText(plain.notCertified)).toBe('Readers will see \u2018Not certified yet\u2019 on 3 tiles.');
+    expect(readersWillSeeText(1)).toBe('Readers will see \u2018Not certified yet\u2019 on 1 tile.');
+    expect(notCertifiedTiles(plain).map((tile) => tile.tileId)).toEqual(plain.tiles.filter((tile) => tile.trust.state !== 'certified').map((tile) => tile.tileId));
+  });
+
+  it('reads apps.requireCertifiedToPublish from the project config: off unless exactly true (T3)', () => {
+    expect(appsPublishSettings(undefined)).toEqual({ requireCertifiedToPublish: false });
+    expect(appsPublishSettings({ apps: { datasets: true } })).toEqual({ requireCertifiedToPublish: false });
+    expect(appsPublishSettings({ apps: { requireCertifiedToPublish: 'yes' } })).toEqual({ requireCertifiedToPublish: false });
+    expect(appsPublishSettings({ apps: { requireCertifiedToPublish: true } })).toEqual({ requireCertifiedToPublish: true });
+    expect(appsPublishSettingsProblems({ apps: { requireCertifiedToPublish: 'yes' } })).toEqual(['apps.requireCertifiedToPublish must be true or false.']);
+    expect(appsPublishSettingsProblems({ apps: { requireCertifiedToPublish: false } })).toEqual([]);
+    expect(appsPublishSettingsProblems({})).toEqual([]);
+    const message = requireCertifiedToPublishMessage([{ tileId: 'kpi', tileTitle: 'Revenue' }, { tileId: 'trend' }]);
+    expect(message).toBe('APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Revenue, trend.');
+    expect(isTrustReminderTaskId('review-source-abc')).toBe(true);
+    expect(isTrustReminderTaskId('task-1')).toBe(false);
   });
 
   it('says all data certified only when every tile, joins included, is certified', () => {
     const answer = appTrustAnswer({ pages: [salesPage()], sourceFor: sources({ orders: { ...certifiedOrders, capabilities: { dataset: certifiedJoins } } }) });
     expect(answer.allCertified).toBe(true);
-    expect(answer.label).toBe('All data certified');
+    expect(answer.label).toBe('All tiles certified');
     expect(publishReadyLine(answer)).toEqual({ detail: 'Every check passed.', allPassed: true });
     // A settled run that found the join certified since counts as current evidence.
     const ran = appTrustAnswer({ pages: [salesPage()], sourceFor: sources(), joinTrust: () => 'certified' });
     expect(ran.allCertified).toBe(true);
   });
 
-  it('a calculation reads Governed and a source nobody certified reads Needs certifying, so neither is certified', () => {
+  it('a calculation is certified when its inputs are; a source nobody certified reads Not certified yet (T2)', () => {
     const page = salesPage([]);
     const calc: AppTrustPageLike = { ...page, layout: { items: [{ i: 'aov', title: 'AOV', sourceId: 'orders', query: { dimensions: [], calculations: [{ expr: { op: 'div' } }] } }] } };
-    const governed = appTrustAnswer({ pages: [calc], sourceFor: sources({ orders: { ...certifiedOrders, capabilities: { dataset: certifiedJoins } } }) });
-    expect(governed.tiles[0]!.trust.state).toBe('governed');
-    expect(governed.allCertified).toBe(false);
-    expect(governed.label).toBe('0 of 1 tile certified');
+    const calculated = appTrustAnswer({ pages: [calc], sourceFor: sources({ orders: { ...certifiedOrders, capabilities: { dataset: certifiedJoins } } }) });
+    expect(calculated.tiles[0]!.trust.state).toBe('certified');
+    expect(calculated.allCertified).toBe(true);
+    expect(calculated.label).toBe('All tiles certified');
+    const uncertifiedInput = appTrustAnswer({ pages: [calc], sourceFor: sources({ orders: { ...certifiedOrders, lifecycle: 'review', trustState: 'review_required' } }) });
+    expect(uncertifiedInput.tiles[0]!.trust.label).toBe('Not certified yet');
     const checked = appTrustAnswer({ pages: [page], sourceFor: sources({ orders: { ...certifiedOrders, lifecycle: 'review', trustState: 'review_required', checked: true } }) });
-    expect(checked.tiles.find((tile) => tile.tileId === 'kpi')!.trust.label).toBe('Needs certifying');
+    expect(checked.tiles.find((tile) => tile.tileId === 'kpi')!.trust.label).toBe('Not certified yet');
     expect(checked.certified).toBe(1);
   });
 
@@ -137,7 +157,7 @@ describe('one trust answer for an App (B6)', () => {
     expect(answer.total).toBe(8);
     expect(answer.certified).toBe(4);
     expect(publishedTileTrustText({ certified: answer.certified, total: answer.total })).toBe(answer.text);
-    expect(publishedTileTrustText({ certified: 4, total: 4 })).toBe('All 4 tiles certified');
+    expect(publishedTileTrustText({ certified: 4, total: 4 })).toBe('All tiles certified');
   });
 });
 

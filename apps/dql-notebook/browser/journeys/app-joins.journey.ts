@@ -9,8 +9,8 @@ import { installDuckdbConnector, repoRoot, run, startNotebookServer, type Notebo
  * CLI on a database-only shop whose stores are UUIDs: setup's "Draft my
  * models" drafts and checks orders → customers and orders → locations; Orders
  * and Customers become Datasets from their tables. In the App:
- *   - Orders' field list shows "Orders → Location" (Needs review: the join is
- *     a setup draft) with Location Name;
+ *   - Orders' field list shows "Orders → Location" (Not certified yet: the
+ *     join is a setup draft) with Location Name;
  *   - Order Total + Location Name (dragged onto a shelf) draws a bar labelled
  *     with store names, never the UUIDs;
  *   - a Customer Name filter offers the Orders trend "via Customer"; once
@@ -95,7 +95,7 @@ test.beforeAll(async () => {
   }
 
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
-    name: 'Store Review', goal: 'Sales by store and customer', domain: 'shop', authoringMode: 'manual', sourcePolicy: 'governed_only', template: 'blank',
+    name: 'Store Review', goal: 'Sales by store and customer', domain: 'shop', authoringMode: 'manual', template: 'blank',
   });
   draftId = app.draft.id;
   const candidates = await call<{ items: Array<{ sourceId: string; name: string; capabilities: { dataset?: { fields: Array<{ name: string; kind: string; aggregation?: string }> } } }> }>(`/api/app-builds/${draftId}/source-candidates?limit=50`);
@@ -131,7 +131,7 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   const fields = panel.locator('.field-groups');
   const locationGroup = fields.getByRole('region', { name: 'Orders → Location' });
   await expect(locationGroup).toBeVisible();
-  await expect(locationGroup.locator('h3')).toContainText('Needs review');
+  await expect(locationGroup.locator('h3')).toContainText('Not certified yet');
   await expect(fields.getByRole('region', { name: 'Orders → Customer' }).getByRole('button', { name: /Customer Name/ })).toBeVisible();
 
   // Order Total, then Location Name dragged onto the Columns shelf: a bar by store.
@@ -151,13 +151,13 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   await expect(draft.locator('svg').getByText('Brooklyn').first()).toBeVisible();
   await expect(draft.getByText(STORES.philadelphia)).toHaveCount(0);
   // The rows the server returned are store names that add up to every order,
-  // and the drafted join keeps the tile Needs review, with the join on its receipt.
+  // and the drafted join keeps the tile Not certified yet, with the join on its receipt.
   await expect.poll(() => previews.some((preview) => preview.result?.rows?.some((row) => 'location__location_name' in row)), { timeout: 30_000 }).toBe(true);
   const byStore = previews.filter((preview) => preview.result?.rows?.some((row) => 'location__location_name' in row)).at(-1)!;
   expect(byStore.result!.rows!.map((row) => row.location__location_name).sort()).toEqual(['Brooklyn', 'Philadelphia']);
   expect(byStore.result!.rows!.reduce((total, row) => total + Number(row.order_total), 0)).toBe(225);
   expect(byStore.trustState).toBe('review_required');
-  expect(byStore.joins?.[0]?.sentence).toBe('Joined to locations on location_id (each order has one location — checked; the join is not certified yet, so it needs review)');
+  expect(byStore.joins?.[0]?.sentence).toBe('Joined to locations on location_id (each order has one location — checked; the join is not certified yet)');
   if (shotsDir) {
     mkdirSync(shotsDir, { recursive: true });
     await page.screenshot({ path: join(shotsDir, '17-related-fields.png') });
@@ -197,7 +197,7 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   expect(Number(trend?.result?.rows?.[0]?.order_total)).toBe(150);
 });
 
-test('"Only certified data" blocks publishing a tile that uses an uncertified join, until data that needs review is allowed', async ({ page }) => {
+test('a tile on a join nobody certified publishes as Not certified yet: the dialog lists it with its join action, and the count agrees everywhere (T3)', async ({ page }) => {
   test.setTimeout(180_000);
   // A Revenue by store tile reads Location Name through the join setup drafted (not certified).
   const current = await call<{ draft: { revision: number; proposalHash: string } }>(`/api/app-builds/${draftId}`, undefined, 'GET');
@@ -215,43 +215,32 @@ test('"Only certified data" blocks publishing a tile that uses an uncertified jo
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(`${server!.baseUrl}/?appDraft=${draftId}`);
   await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
-  // B6: the count on the Publish button is the count the dialog opens with.
+  // B6/T3: nothing to fix, so the Publish button counts no fixes.
   const publishButton = page.getByRole('button', { name: /^Review and publish to Project/ });
-  await expect(publishButton).toHaveAttribute('aria-label', /, \d+ fix/, { timeout: 30_000 });
-  const buttonCount = Number((await publishButton.getAttribute('aria-label'))?.match(/, (\d+) fix/)?.[1]);
+  await expect(publishButton).toHaveAttribute('aria-label', 'Review and publish to Project', { timeout: 30_000 });
   await publishButton.click();
-  const review = page.getByRole('dialog', { name: /fix(es)? before publishing/ });
-  await expect(review).toBeVisible({ timeout: 60_000 });
-  await expect(review.getByRole('heading', { name: `${buttonCount} ${buttonCount === 1 ? 'fix' : 'fixes'} before publishing` })).toBeVisible({ timeout: 30_000 });
-  await expect(review.getByText(/Complete governed validation|Scoped review| is review /)).toHaveCount(0);
-  // The source is certified; the tile is not: it never says every check passed.
-  await expect(review.getByText('Every check passed')).toHaveCount(0);
-  await expect(review.getByText('Ready to publish')).toHaveCount(0);
-  const storeFix = review.getByRole('region', { name: 'Needs review: Revenue by store' });
-  await expect(storeFix).toContainText('Revenue by store uses the join to Location, which is not certified yet.');
-  await expect(storeFix.getByRole('button', { name: 'Certify the join in Modeling' })).toBeVisible();
-  await expect(storeFix.getByRole('button', { name: 'Remove the related field' })).toBeVisible();
-  // The Customer Name filter reaches the Orders trend through the drafted Customer join: it counts too.
-  await expect(review.getByRole('region', { name: 'Needs review: Orders trend' })).toContainText('Customer Name filter reaches it through that join');
-
-  // Allow data that needs review: after one fresh run, it is ready to publish.
-  await storeFix.getByRole('button', { name: 'Allow data that needs review' }).click();
-  await expect(review.getByRole('region', { name: /^Needs review:/ })).toHaveCount(0, { timeout: 30_000 });
-  const runFirst = review.getByRole('button', { name: 'Run preview' });
-  if (await runFirst.count()) await runFirst.first().click();
   const ready = page.getByRole('dialog', { name: 'Ready to publish' });
   await expect(ready).toBeVisible({ timeout: 60_000 });
-  // B6: allowed is named, never "every check passed": Revenue by store and the
-  // Orders trend (the Customer filter reaches it) need review; Customers by name is certified.
-  await expect(ready.getByText('Ready to publish · 2 tiles need review (allowed)')).toBeVisible();
+  await expect(ready.getByText(/Complete governed validation|Scoped review| is review /)).toHaveCount(0);
+  // Revenue by store and the Orders trend (the Customer filter reaches it) are not certified; Customers by name is.
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('1 of 3 tiles certified');
   await expect(ready.getByText(/Every check passed|All checks passed/)).toHaveCount(0);
-  await expect(ready).toContainText('the App reads “1 of 3 tiles certified”');
-  await ready.getByRole('button', { name: 'Publish to Project', exact: true }).click();
+  const list = ready.getByRole('region', { name: '2 tiles not certified yet' });
+  const store = list.getByRole('listitem', { name: 'Not certified yet: Revenue by store' });
+  await expect(store).toContainText('Uses a join nobody has certified.');
+  await expect(store.getByRole('button', { name: 'Certify the join for Revenue by store' })).toBeVisible();
+  await expect(store.getByRole('button', { name: 'Remove the related field' })).toBeVisible();
+  await expect(list.getByRole('listitem', { name: 'Not certified yet: Orders trend' })).toBeVisible();
+  await expect(ready.getByText('Readers will see \u2018Not certified yet\u2019 on 2 tiles.')).toBeVisible();
+  await expect(ready.getByText(/Allow data that needs review|data rule|Only certified data/)).toHaveCount(0);
+  await ready.getByRole('button', { name: 'Publish', exact: true }).click();
   await expect(page).toHaveURL(/app=store-review/, { timeout: 60_000 });
 
   // The App header says the same as the dialog.
   await expect(page.getByText('1 of 3 tiles certified').first()).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByText(/All data certified/)).toHaveCount(0);
+  await expect(page.getByText(/All tiles certified/)).toHaveCount(0);
+  // The tile on the uncertified join says so to readers.
+  await expect(page.locator('.dql-trust-badge.review').first()).toContainText('Not certified yet');
 
   // A reader picks a customer: trust is the page's, not the filter value's, so the count holds.
   await page.goto(`${server!.baseUrl}/?app=store-review&page=overview`);
@@ -267,7 +256,7 @@ test('"Only certified data" blocks publishing a tile that uses an uncertified jo
   await expect(page.getByText('1 of 3 tiles certified').first()).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText(/[02] of 3 tiles certified/)).toHaveCount(0);
 
-  // The Apps card agrees, after a reload too: never "App certified" over a tile that needs review.
+  // The Apps card agrees, after a reload too: never "App certified" over a tile not certified yet.
   await page.goto(server!.baseUrl);
   await page.getByRole('button', { name: 'Apps', exact: true }).first().click();
   const card = page.locator('article.dql-app-card').filter({ hasText: 'Store Review' });

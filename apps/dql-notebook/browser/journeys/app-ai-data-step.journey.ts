@@ -81,7 +81,7 @@ test.beforeAll(async () => {
   server = await startNotebookServer({ projectDir, workDir, env: NO_PROVIDER });
 
   // Orders and Customers become certified data through the calls Add data's "Check and use" and
-  // "I vouch for this — certify" make (design Q1: checking alone leaves data Checked · Needs certifying).
+  // "I vouch for this — certify" make (design Q1: checking alone leaves data Not certified yet).
   const listing = await call<{ ok: boolean; tables: Array<{ id: string; name: string }> }>('/api/app-datasets/tables');
   for (const [table, name] of [['orders', 'Orders'], ['dim_customers', 'Customers']] as const) {
     const found = listing.tables.find((candidate) => candidate.name === table);

@@ -74,7 +74,7 @@ describe('whether an AI provider is connected', () => {
     // Without AI the Studio's entry points open the quick choices.
     expect(appStudioAskWords('keywords').toolbar).toBe('Quick tiles');
     expect(appStudioAskWords('keywords').revise).toBe('Add quick tiles');
-    expect(JSON.stringify({ ...appStudioAskWords('keywords'), pageHelp: appStudioAskWords('keywords').pageHelp(true) })).not.toMatch(/keyword|Suggest/i);
+    expect(JSON.stringify({ ...appStudioAskWords('keywords'), pageHelp: appStudioAskWords('keywords').pageHelp() })).not.toMatch(/keyword|Suggest/i);
     expect(appStudioAskWords('ai').toolbar).toBe('Ask AI');
     expect(appStudioAskWords('ai').revise).toBe('Revise with AI');
   });
@@ -122,7 +122,8 @@ describe('Build new App form without AI', () => {
   it('is unchanged with a provider', () => {
     const markup = launch({ mode: 'ai' }, true);
     expect(markup).toContain('Describe with AI');
-    expect(markup).toContain('AI picks your certified data and drafts a first version');
+    expect(markup).toContain('AI picks your data, certified first, and drafts a first version');
+    expect(markup).not.toMatch(/Only certified data|data that needs review/);
     expect(markup).toContain('Generate editable App');
     expect(markup).toContain('What decision should this App support?');
     expect(markup).not.toContain('Connect an AI provider');

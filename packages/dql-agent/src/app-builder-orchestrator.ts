@@ -798,7 +798,7 @@ export function plannerSourceName(title: string): string {
   return /\s/.test(trimmed) ? trimmed : humanizePlannerId(trimmed);
 }
 
-/** "Certified saved query", "Certified Dataset", "Metrics · Needs review" (the App glossary). */
+/** "Certified saved query", "Certified Dataset", "Metrics · Not certified yet" (the App glossary, T1). */
 export function sourceKindAndTrust(candidate: Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>): string {
   const kind = candidate.capabilities.dataset?.kind === 'semantic'
     ? 'Metrics'
@@ -809,7 +809,7 @@ export function sourceKindAndTrust(candidate: Pick<AppSourceCatalogRecord, 'kind
         : 'saved query';
   return candidate.trust === 'certified'
     ? `Certified ${kind}`
-    : `${kind.charAt(0).toUpperCase()}${kind.slice(1)} · Needs review`;
+    : `${kind.charAt(0).toUpperCase()}${kind.slice(1)} · Not certified yet`;
 }
 
 const RATIONALE_IGNORED_WORDS = new Set(['all', 'any', 'are', 'but', 'each', 'how', 'into', 'our', 'over', 'per', 'show', 'than', 'that', 'their', 'this', 'what', 'when', 'which', 'who', 'why', 'your']);

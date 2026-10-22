@@ -209,7 +209,7 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   expect(itemsTable).toBeDefined();
   const items = await page.request.post(`${server!.baseUrl}/api/app-datasets/tables/create`, { data: { tableId: itemsTable!.id, name: 'Order Items', measures: [] } });
   expect(items.ok(), await items.text()).toBe(true);
-  const build = await (await page.request.post(`${server!.baseUrl}/api/app-builds`, { data: { name: 'Products', goal: 'Revenue by product', authoringMode: 'manual', sourcePolicy: 'include_review_required', template: 'blank' } })).json() as { draft: { id: string } };
+  const build = await (await page.request.post(`${server!.baseUrl}/api/app-builds`, { data: { name: 'Products', goal: 'Revenue by product', authoringMode: 'manual', template: 'blank' } })).json() as { draft: { id: string } };
   const candidates = await (await page.request.get(`${server!.baseUrl}/api/app-builds/${build.draft.id}/source-candidates?limit=50`)).json() as { items: Array<{ name: string; capabilities: { dataset?: { joins?: Array<{ id: string; label: string; table: string; keys: Array<{ from: string }> }> } } }> };
   const itemJoins = candidates.items.find((item) => item.name === 'Order Items')?.capabilities.dataset?.joins ?? [];
   expect(itemJoins.filter((join) => join.table === 'products').map((join) => join.keys.map((key) => key.from).join('+')), JSON.stringify(itemJoins)).toEqual(['product_id']);

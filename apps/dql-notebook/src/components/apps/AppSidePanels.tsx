@@ -71,7 +71,7 @@ export function DraftsPanel({ appDoc }: { appDoc: AppDocumentSummary | null }) {
       {drafts.map((draft) => (
         <PanelCard key={draft.path} icon={<FileText size={16} />}>
           <b>{draft.name}</b>
-          <span>{draft.reviewStatus ?? 'needs review'} / {draft.path}</span>
+          <span>{draft.reviewStatus ?? 'not certified yet'} / {draft.path}</span>
         </PanelCard>
       ))}
     </div>

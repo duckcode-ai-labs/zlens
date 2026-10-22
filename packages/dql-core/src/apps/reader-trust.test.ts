@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appTrustSummary, certifiedByAcross, certifiedByLabel, certifiedDateLabel, certifierDisplayName, plainCertificationChecks, readerTileTrust, readerTrustSummary } from './reader-trust.js';
+import { NOT_CERTIFIED_YET, READER_TRUST_LABELS, appTrustSummary, certifiedByAcross, changedSinceCertifiedDetail, checkedNotCertifiedDetail, readerTrustCounts, certifiedByLabel, certifiedDateLabel, certifierDisplayName, plainCertificationChecks, readerTileTrust, readerTrustSummary } from './reader-trust.js';
 
 describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
   it('gives the server and the reader one answer for the same run tile', () => {
@@ -10,18 +10,19 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
     expect(readerTileTrust({ text: { markdown: 'x' } }, { status: 'ok', tileType: 'text' })).toBeNull();
   });
 
-  it('keeps a certified Dataset tile certified through a certified join, and a drafted join makes it Needs review (D2)', () => {
+  it('keeps a certified Dataset tile certified through a certified join, and a drafted join keeps it Not certified yet (D2)', () => {
     const joined = (trust: string) => ({ status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'covered' }, joins: [{ trust, sentence: 'Joined to customers on customer_id (each order has one customer — checked)' }] } });
     expect(readerTileTrust({ query: {} }, joined('certified'))?.state).toBe('certified');
     const review = readerTileTrust({ query: {} }, joined('review_required'));
     expect(review?.state).toBe('review');
-    expect(review?.detail).toBe('It uses a join between tables that nobody has certified yet.');
+    expect(review?.label).toBe('Not certified yet');
+    expect(review?.detail).toBe('Uses a join nobody has certified.');
   });
 
   it('summarises a page', () => {
     const certified = readerTileTrust({ block: {} }, { status: 'ok', certificationStatus: 'certified' });
     const review = readerTileTrust({ block: {} }, { status: 'ok' });
-    expect(readerTrustSummary([certified, certified, null])).toEqual({ certified: 2, total: 2, text: 'All 2 tiles certified' });
+    expect(readerTrustSummary([certified, certified, null])).toEqual({ certified: 2, total: 2, text: 'All tiles certified' });
     expect(readerTrustSummary([certified, review]).text).toBe('1 of 2 tiles certified');
     expect(readerTrustSummary([null]).text).toBe('');
   });
@@ -32,7 +33,7 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
     const review = appTrustSummary(items, new Map([['a', { status: 'ok', trustState: 'review_required' }]]));
     expect(review).toMatchObject({ state: 'review', certified: 0, total: 1, allCertified: false, text: '0 of 1 tile certified' });
     const certified = appTrustSummary(items, [{ tileId: 'a', status: 'ok', certificationStatus: 'certified' }]);
-    expect(certified).toMatchObject({ state: 'certified', allCertified: true, label: 'All data certified', text: 'All 1 tile certified' });
+    expect(certified).toMatchObject({ state: 'certified', allCertified: true, label: 'All tiles certified', text: 'All tiles certified' });
     expect(appTrustSummary(items, [{ tileId: 'a', status: 'ok', certificationStatus: 'certified' }], { pendingDrafts: 1 }).allCertified).toBe(false);
   });
 
@@ -92,10 +93,40 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
     expect(summary.byline).toMatch(/^Certified by you · 22 Oct/);
   });
 
-  it('labels checked data that nobody certified yet "Needs certifying" (design Q1)', () => {
+  it('says two words to people — Certified or Not certified yet — with the reason in the receipt (T1)', () => {
+    expect(Object.values(READER_TRUST_LABELS).filter((label) => label !== 'Blocked').sort()).toEqual(['Certified', NOT_CERTIFIED_YET, NOT_CERTIFIED_YET]);
     const checked = readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'review_required', checked: true } });
-    expect(checked).toMatchObject({ state: 'review', label: 'Needs certifying' });
-    expect(checked?.detail).toContain('nobody has certified it yet');
-    expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'review_required' } })).toMatchObject({ state: 'review', label: 'Needs review' });
+    expect(checked).toMatchObject({ state: 'review', label: 'Not certified yet', detail: 'Checked, not certified yet.' });
+    expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'review_required' } })).toMatchObject({ state: 'review', label: 'Not certified yet' });
+    // A saved query whose certification no longer holds says since when.
+    const changed = readerTileTrust({ block: {} }, { status: 'ok', certification: { at: '2026-10-22T09:00:00Z' } });
+    expect(changed).toMatchObject({ label: 'Not certified yet' });
+    expect(changed?.detail).toMatch(/^Changed since it was certified on 22 Oct/);
+    expect(changedSinceCertifiedDetail(null)).toBeUndefined();
+    expect(checkedNotCertifiedDetail({ byYou: true })).toBe('Checked by you, not certified yet.');
+    expect(checkedNotCertifiedDetail({ by: 'maria.lopez@acme.com' })).toBe('Checked by Maria Lopez, not certified yet.');
+    expect(checkedNotCertifiedDetail(null)).toBe('Checked, not certified yet.');
+    // A legacy semantic-model result reads Not certified yet, never "Governed".
+    expect(readerTileTrust({ semantic: {} }, { status: 'ok', tileType: 'semantic' })?.label).toBe('Not certified yet');
+    // No retired word anywhere in what a reader sees.
+    const retired = /needs review|needs certifying|governed|draft|checked ·/i;
+    for (const trust of [checked, changed, readerTileTrust({ semantic: {} }, { status: 'ok', tileType: 'semantic' })]) {
+      expect(`${trust?.label} ${trust?.detail}`).not.toMatch(retired);
+    }
+  });
+
+  it('counts the Trust Lens in two words plus Blocked', () => {
+    const certified = readerTileTrust({ block: {} }, { status: 'ok', certificationStatus: 'certified' });
+    const review = readerTileTrust({ block: {} }, { status: 'ok' });
+    const semantic = readerTileTrust({ semantic: {} }, { status: 'ok', tileType: 'semantic' });
+    expect(readerTrustCounts([certified, review, semantic])).toEqual([
+      { state: 'certified', label: 'Certified', count: 1 },
+      { state: 'review', label: 'Not certified yet', count: 2 },
+    ]);
+  });
+
+  it('a calculation over certified data is certified (T2)', () => {
+    const calc = readerTileTrust({ query: { calculations: [{}] } }, { status: 'ok', dataset: { trust: 'certified' } });
+    expect(calc).toMatchObject({ state: 'certified', label: 'Certified' });
   });
 });

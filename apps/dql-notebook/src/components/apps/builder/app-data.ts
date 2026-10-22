@@ -7,7 +7,7 @@ import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
 import { datasetPhysicalField } from '@zlens/core/datasets/descriptor';
 import { tileQueryValidationRuns, validateTileQuery, type TileQuery } from '@zlens/core/apps/tile-query';
 import { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from '@zlens/core/apps/app-data-sources';
-import { certifiedByLabel, certifiedDateLabel, certifierDisplayName } from '@zlens/core/apps/reader-trust';
+import { NOT_CERTIFIED_YET, certifiedByLabel, certifiedDateLabel, certifierDisplayName, checkedNotCertifiedDetail } from '@zlens/core/apps/reader-trust';
 
 /**
  * The App's data (design D1, D3, D4): one list of data sources per App, kept
@@ -25,13 +25,17 @@ export const FIELD_TILES_OFF_MESSAGE = 'Field-based tiles are turned off for thi
 /** Said once, where Domain first appears (the Start form; a tooltip in Add data). */
 export const DOMAIN_EXPLANATION = 'A Domain groups data by business area, like Sales or Finance.';
 
-export const TABLE_BECOMES_DATASET_HINT = 'ZLens checks a table once before Apps use it. You certify it when you publish.';
+export const TABLE_BECOMES_DATASET_HINT = 'ZLens checks a table once before Apps use it. Certify it when you are ready; until then readers see “Not certified yet” on its tiles.';
 
-/** Data ZLens checked that nobody certified yet (design Q1). */
-export const CHECKED_NEEDS_CERTIFYING = 'Checked · Needs certifying';
+/**
+ * Data ZLens checked that nobody certified yet (design Q1) reads like any
+ * other data nobody certified (T1): "Not certified yet". That it was checked
+ * is detail, in the row's tooltip and receipt ("Checked by you, not certified yet").
+ */
+export const CHECKED_NEEDS_CERTIFYING = NOT_CERTIFIED_YET;
 
 /** What "Make row-level" is for, next to the action (design D1). */
-export const MAKE_ROW_LEVEL_HINT = 'Only needed for row-safe measures, like distinct counts or averages over rows. ZLens checks what one row is and may send the saved query back for review.';
+export const MAKE_ROW_LEVEL_HINT = 'Only needed for row-safe measures, like distinct counts or averages over rows. ZLens checks what one row is; the saved query is not certified again until someone certifies it.';
 
 /** How a saved query's result fields add up, under its fields (design D1). */
 export const SAVED_QUERY_FIELDS_NOTE = 'Fields from its result. Grouped by its own columns, values show as they are; rolled up, numbers add up (Sum). Averages and rates are never added up.';
@@ -48,7 +52,7 @@ export function sourceCatalogKindLabel(source: Pick<AppBlockRecommendation, 'cap
   return 'Saved query';
 }
 
-/** Source type in the App glossary; rows append the trust word (Certified or Needs review). */
+/** Source type in the App glossary; rows append the trust words (Certified or Not certified yet). */
 export function sourceKindLabel(
   kind: DraftSource['kind'],
   capabilities?: DraftSource['capabilities'],
@@ -84,9 +88,9 @@ export function canMakeRowLevel(source: Pick<AppBlockRecommendation, 'capabiliti
   return sourceCatalogKindLabel(source) === 'Saved query' && source.kind !== 'semantic';
 }
 
-/** Visible trust uses two words only. */
-export function trustLabel(trust: string | undefined): 'Certified' | 'Needs review' {
-  return trust === 'certified' ? 'Certified' : 'Needs review';
+/** Visible trust uses two words only (T1): Certified or Not certified yet. */
+export function trustLabel(trust: string | undefined): 'Certified' | 'Not certified yet' {
+  return trust === 'certified' ? 'Certified' : NOT_CERTIFIED_YET;
 }
 
 // ── The Add data browser ─────────────────────────────────────────────────────
@@ -104,9 +108,17 @@ export function addDataKindOf(item: Pick<AppBlockRecommendation, 'capabilities' 
   return origin === 'Metrics' ? 'metrics' : origin === 'Table' ? 'tables' : 'queries';
 }
 
-/** The catalog items one chip shows, in the catalog's trust order. */
+/**
+ * The catalog items one chip shows, certified first (T3): data nobody
+ * certified is still listed and addable, after the certified data, in the
+ * catalog's order within each group.
+ */
 export function filterAddDataCatalog(items: AppBlockRecommendation[], kind: AddDataKind): AppBlockRecommendation[] {
-  return kind === 'all' ? items : items.filter((item) => addDataKindOf(item) === kind);
+  const shown = kind === 'all' ? items : items.filter((item) => addDataKindOf(item) === kind);
+  return shown
+    .map((item, index) => ({ item, index, rank: needsReview(item) ? 1 : 0 }))
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
+    .map((entry) => entry.item);
 }
 
 /** The catalog request for one search and domain chip. "All domains" sends no domain. */
@@ -160,9 +172,9 @@ export function needsReview(item: Pick<AppBlockRecommendation, 'trust' | 'status
 }
 
 /**
- * Checked · Needs certifying (design Q1): ZLens checked it ("Check and use")
- * and nobody certified it yet. Tiles can use it under any data rule; it is
- * certified on purpose before the App is published.
+ * Checked, not certified yet (design Q1): ZLens checked it ("Check and use")
+ * and nobody certified it yet. It reads "Not certified yet" like other data
+ * nobody certified; being checked is detail in its tooltip and receipt.
  */
 export function isCheckedNeedsCertifying(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'check'>): boolean {
   return needsReview(item) && Boolean(item.check);
@@ -175,10 +187,22 @@ export function checkedByLabel(check: AppBlockRecommendation['check'], now: Date
   return [who ? `Checked by ${who}` : 'Checked', when].filter(Boolean).join(' · ');
 }
 
-/** The one trust phrase a Data row shows: who certified it, Checked · Needs certifying, or Needs review. */
+/** The one trust phrase a Data row shows (T1): "Certified by <name> · <date>" or "Not certified yet". */
 export function dataTrustLabel(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'check' | 'certification'>): string {
   if (!needsReview(item)) return certifiedByLabel(item.certification);
-  return isCheckedNeedsCertifying(item) ? CHECKED_NEEDS_CERTIFYING : trustLabel('review');
+  return NOT_CERTIFIED_YET;
+}
+
+/**
+ * The detail behind "Not certified yet", for a tooltip or receipt: "Checked by
+ * you, not certified yet", "Changed since it was certified on 22 Oct", or
+ * "Nobody has certified it yet". Undefined for certified data.
+ */
+export function dataTrustDetail(item: Pick<AppBlockRecommendation, 'trust' | 'status' | 'lifecycle' | 'check' | 'certification'>, now: Date = new Date()): string | undefined {
+  if (!needsReview(item)) return undefined;
+  if (isCheckedNeedsCertifying(item)) return checkedNotCertifiedDetail(item.check);
+  const changed = certifiedDateLabel(item.certification?.at, now);
+  return changed ? `Changed since it was certified on ${changed}.` : 'Nobody has certified it yet.';
 }
 
 /**
@@ -194,9 +218,12 @@ export function canCertifyAppData(item: Pick<AppBlockRecommendation, 'trust' | '
     && Boolean(dataset && dataset.kind !== 'semantic' && !dataset.result);
 }
 
-/** Needs review while the App allows only certified data: adding it also changes the data rule. Checked data does not. */
-export function addNeedsReviewChoice(item: AppBlockRecommendation, sourcePolicy: AppStudioBuildDraft['sourcePolicy']): boolean {
-  return sourcePolicy === 'governed_only' && needsReview(item) && !isCheckedNeedsCertifying(item);
+/**
+ * @deprecated There is no per-App data rule (T3): data nobody certified is
+ * added like any other, with no extra step. Always false.
+ */
+export function addNeedsReviewChoice(_item: AppBlockRecommendation, _sourcePolicy?: AppStudioBuildDraft['sourcePolicy']): boolean {
+  return false;
 }
 
 export function isAddedToApp(sources: readonly DraftSource[], item: Pick<AppBlockRecommendation, 'id' | 'sourceId'>): boolean {
@@ -234,30 +261,23 @@ export function appDataSourceFromCandidate(candidate: AppBlockRecommendation): D
 
 export type AddDataPlan =
   | { ok: true; operations: AppStudioDraftOperation[] }
-  | { ok: false; code: 'SOURCE_UNAVAILABLE' | 'REVIEW_POLICY_REQUIRED'; error: string };
+  | { ok: false; code: 'SOURCE_UNAVAILABLE'; error: string };
 
 /**
  * Connect one source to the App with the existing `upsert_source` operation.
- * Data that needs review is added only with an explicit choice, which also
- * switches the data rule in the same saved change.
+ * Certified or not, data is added the same way (T3): there is no per-App
+ * data rule, and tiles on data nobody certified read "Not certified yet".
+ * `draft` and `options` are kept for older callers and ignored.
  */
 export function planAddDataSource(
-  draft: Pick<AppStudioBuildDraft, 'sourcePolicy'>,
+  _draft: Partial<Pick<AppStudioBuildDraft, 'sourcePolicy'>>,
   candidate: AppBlockRecommendation | undefined,
-  options: { allowReview?: boolean } = {},
+  _options: { allowReview?: boolean } = {},
 ): AddDataPlan {
   if (!candidate) {
     return { ok: false, code: 'SOURCE_UNAVAILABLE', error: 'This data is no longer in the project catalog. Refresh the list and choose it again.' };
   }
-  const operations: AppStudioDraftOperation[] = [];
-  if (addNeedsReviewChoice(candidate, draft.sourcePolicy)) {
-    if (!options.allowReview) {
-      return { ok: false, code: 'REVIEW_POLICY_REQUIRED', error: `${candidate.name} needs review. Allow data that needs review to add it.` };
-    }
-    operations.push({ type: 'set_source_policy', sourcePolicy: 'include_review_required' });
-  }
-  operations.push({ type: 'upsert_source', source: appDataSourceFromCandidate(candidate) });
-  return { ok: true, operations };
+  return { ok: true, operations: [{ type: 'upsert_source', source: appDataSourceFromCandidate(candidate) }] };
 }
 
 function tileUsesSource(tile: DraftTile, source: DraftSource): boolean {

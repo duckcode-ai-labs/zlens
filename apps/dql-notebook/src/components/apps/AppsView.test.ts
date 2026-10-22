@@ -374,7 +374,7 @@ describe('Build Brief: tiles App Studio will not build', () => {
   it('never adds Draft SQL to an App, in a Personal Draft or a Shared Project, and names the way forward', () => {
     for (const target of ['personal', 'shared_project'] as const) {
       const p = proposal(target, [{ title: 'Revenue by region', sql: 'select 1' }]);
-      expect(unbuildableSelectedTiles(p, all(p))[0]?.reason).toMatch(/Draft SQL is not added to an App.*Not covered yet.*needs review/);
+      expect(unbuildableSelectedTiles(p, all(p))[0]?.reason).toMatch(/Draft SQL is not added to an App.*Not covered yet.*draft DQL/);
     }
   });
 
@@ -528,12 +528,12 @@ describe('the app header badge is the one aggregate page trust, from the current
     expect(rollup).toMatchObject({ certified: 0, total: 1, allCertified: false, state: 'review', label: '0 of 1 tile certified' });
   });
 
-  it('says All data certified only when every data tile ran from a certified source and no App draft is pending', () => {
+  it('says All tiles certified only when every data tile ran from a certified source and no App change is pending (T2)', () => {
     const items = [tile('a', { block: { blockId: 'b1' } }), tile('b', { block: { blockId: 'b2' } }), tile('c', { text: { markdown: 'Summary' } })];
     const certifiedRun = [ran('a', { certificationStatus: 'certified' }), ran('b', { trustState: 'certified' } as never)];
-    expect(appCertificationRollup(items, 0, certifiedRun)).toMatchObject({ certified: 2, total: 2, allCertified: true, label: 'All data certified' });
-    // A pending App draft is a review state of its own.
-    expect(appCertificationRollup(items, 1, certifiedRun)).toMatchObject({ allCertified: false, label: 'All 2 tiles certified · 1 draft pending' });
+    expect(appCertificationRollup(items, 0, certifiedRun)).toMatchObject({ certified: 2, total: 2, allCertified: true, label: 'All tiles certified' });
+    // A pending App change is named as one, never as a trust word.
+    expect(appCertificationRollup(items, 1, certifiedRun)).toMatchObject({ allCertified: false, label: 'All tiles certified · 1 unpublished change' });
     // One tile that is not certified is enough.
     const mixed = [ran('a', { certificationStatus: 'certified' }), ran('b', { trustState: 'review_required' } as never)];
     expect(appCertificationRollup(items, 0, mixed)).toMatchObject({ certified: 1, total: 2, allCertified: false, state: 'partial', label: '1 of 2 tiles certified' });
@@ -544,9 +544,10 @@ describe('the app header badge is the one aggregate page trust, from the current
     expect(appCertificationRollup(pinned, 0, [ran('p', { aiPin: { certification: 'review_required' } } as never)]).allCertified).toBe(false);
   });
 
-  it('labels the library card as App lifecycle, not data trust', () => {
-    expect(appLifecycleLabel('draft', false, 0)).toBe('App draft');
-    expect(appLifecycleLabel('review', false, 2)).toBe('App in review · 2 changes pending');
-    expect(appLifecycleLabel(undefined, true, 0)).toBe('App certified');
+  it('labels a library card with no stored count in the two words, never "App certified" (T2)', () => {
+    expect(appLifecycleLabel('draft', false, 0)).toBe('Not certified yet');
+    expect(appLifecycleLabel('review', false, 2)).toBe('Not certified yet · 2 unpublished changes');
+    expect(appLifecycleLabel(undefined, true, 0)).toBe('All tiles certified');
+    expect(appLifecycleLabel('deprecated', false, 0)).toBe('Retired');
   });
 });

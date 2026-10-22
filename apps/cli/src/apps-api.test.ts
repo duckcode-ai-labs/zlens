@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppPlan, AppSourceCatalogRecord } from '@zlens/agent';
 import type { AppBuildDraft, AppBuildDraftSource, DashboardDocument, DatasetDescriptor } from '@zlens/core';
-import { appBuildPreviewIntentFingerprint, loadDashboardDocument } from '@zlens/core';
+import { appBuildPreviewIntentFingerprint, loadDashboardDocument, publishedTileTrustText } from '@zlens/core';
 import { defaultLocalAppsDbPath, defaultPersonaRegistry, LocalAppStorage } from '@zlens/project';
 import {
   __test__,
@@ -40,6 +40,7 @@ import {
   matchAppDraftForQuestion,
   openAppAiBuildInStudio,
   writeDashboardForTest,
+  readAppsPublishSettings,
 } from './apps-api.js';
 
 const tempDirs: string[] = [];
@@ -887,8 +888,10 @@ describe('Apps command center API helpers', () => {
       sourcePolicy: 'governed_only',
       template: 'blank',
     });
+    // An App saved before T3 with "Only certified data".
     const stored: AppBuildDraft = {
       ...initial,
+      sourcePolicy: 'governed_only',
       sources: [publishedDatasetDraftSource(oldCatalog)],
       pages: [oldPage],
       reviewTasks: [{
@@ -910,17 +913,8 @@ describe('Apps command center API helpers', () => {
       expect(sourceIds).toEqual([sourceId]);
       return [currentCatalog];
     };
-    // Browser policy alone cannot opt a governed-only App into a review source.
-    const withoutPolicy = await invokeAppsApi(root, `/api/app-builds/${stored.id}`, 'PATCH', {
-      expectedRevision: stored.revision,
-      operations: [
-        { type: 'upsert_source', source: { ...publishedDatasetDraftSource(oldCatalog), lifecycle: 'certified', trustState: 'certified', reviewStatus: 'not_required' } },
-        { type: 'upsert_page', page: currentPage },
-      ],
-    }, { resolveDatasetSourceAuthority: sourceAuthority });
-    expect(withoutPolicy).toMatchObject({ handled: true, status: 400 });
-    expect((withoutPolicy.payload as any).error).toContain('include_review_required policy');
-
+    // The old App's "Only certified data" rule is read and ignored (T3): the
+    // refresh needs no rule, and an older client's set_source_policy changes nothing.
     const refreshed = await invokeAppsApi(root, `/api/app-builds/${stored.id}`, 'PATCH', {
       expectedRevision: stored.revision,
       operations: [
@@ -944,7 +938,7 @@ describe('Apps command center API helpers', () => {
     }, { resolveDatasetSourceAuthority: sourceAuthority });
     expect(refreshed).toMatchObject({ handled: true, status: 200 });
     const rebound = (refreshed.payload as any).draft as AppBuildDraft;
-    expect(rebound).toMatchObject({ sourcePolicy: 'include_review_required' });
+    expect(rebound.sourcePolicy).toBe('governed_only');
     expect(rebound.sources).toEqual([expect.objectContaining({
       id: sourceId,
       sourceRevision: currentRevision,
@@ -984,7 +978,17 @@ describe('Apps command center API helpers', () => {
     }
   });
 
-  it('refuses to publish a tile that reads a field through an uncertified join under "Only certified data"', async () => {
+  it('reads apps.requireCertifiedToPublish fresh from dql.config.json for the publish dialog (T3)', async () => {
+    const root = createProject();
+    expect((await invokeAppsApi(root, '/api/apps/settings', 'GET', {})).payload).toEqual({ ok: true, requireCertifiedToPublish: false });
+    expect(readAppsPublishSettings(root)).toEqual({ requireCertifiedToPublish: false });
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    expect((await invokeAppsApi(root, '/api/apps/settings', 'GET', {})).payload).toEqual({ ok: true, requireCertifiedToPublish: true });
+    writeFileSync(join(root, 'dql.config.json'), '{ not json');
+    expect(readAppsPublishSettings(root)).toEqual({ requireCertifiedToPublish: false });
+  });
+
+  it('publishes a tile on a join nobody certified by default, and refuses it when the project requires certified data (T3)', async () => {
     const root = createProject();
     const sourceId = 'app:block:commerce:orders-with-location';
     const sourceRevision = 'sha256:orders-with-location';
@@ -1050,28 +1054,30 @@ describe('Apps command center API helpers', () => {
       return { status: response.status, errors: ((response.payload as { errors?: string[]; error?: string }).errors ?? []) };
     };
 
+    // No per-App data rule (T3): even an old "Only certified data" App is not
+    // held back by a join nobody certified; its tile reads Not certified yet.
     const governed = saveDraft('governed_only');
+    const open = await preflight(governed, draftedCatalog);
+    expect(open.errors.filter((error) => /APP_BUILD_TILE_NEEDS_REVIEW|APP_BUILD_REQUIRES_CERTIFIED/.test(error))).toEqual([]);
+
+    // The project requires certified data: one plain message naming the tile.
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
     const refused = await preflight(governed, draftedCatalog);
     expect(refused.status).toBe(400);
-    const tileErrors = refused.errors.filter((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'));
-    expect(tileErrors).toEqual([
-      'APP_BUILD_TILE_NEEDS_REVIEW: overview/revenue-by-location: Revenue by location uses the join to Location, which is not certified yet. This App uses only certified data: certify the join in Modeling, remove the related field, or allow data that needs review.',
+    expect(refused.errors.filter((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toEqual([
+      'APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Revenue by location.',
     ]);
     // Publish repeats the same check; it never publishes past it.
     const publishRefused = await preflight(governed, draftedCatalog, 'publish-to-project');
     expect(publishRefused.status).toBe(400);
-    expect(publishRefused.errors.some((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'))).toBe(true);
+    expect(publishRefused.errors.some((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toBe(true);
 
     // Certified in Modeling since: the current model decides, so it passes this check.
     const afterCertify = await preflight(governed, certifiedCatalog);
-    expect(afterCertify.errors.some((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'))).toBe(false);
-
-    // "Also allow data that needs review": the tile publishes as Needs review.
-    const allowed = await preflight(saveDraft('include_review_required'), draftedCatalog);
-    expect(allowed.errors.some((error) => error.startsWith('APP_BUILD_TILE_NEEDS_REVIEW'))).toBe(false);
+    expect(afterCertify.errors.some((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toBe(false);
   });
 
-  it('allows opted-in review Dataset preview evidence but refuses governed-only preview and Project publication (APP-058)', async () => {
+  it('previews a Dataset nobody certified in any App, publishes it as Not certified yet, and refuses it only when the project requires certified data (APP-058, T3)', async () => {
     const root = createProject();
     const sourceId = 'app:block:commerce:review-orders';
     const sourceRevision = 'sha256:review-orders-source';
@@ -1155,9 +1161,6 @@ describe('Apps command center API helpers', () => {
       intentFingerprint: string;
     }) => {
       purposes.push(input.purpose);
-      if (input.purpose === 'project_publish') {
-        return { ok: false as const, error: 'Dataset is review-required and cannot be published.' };
-      }
       return {
         ok: true as const,
         snapshotId: 'snapshot-review',
@@ -1198,9 +1201,18 @@ describe('Apps command center API helpers', () => {
       expectedRevision: savedDraft.revision,
       proposalHash: savedDraft.proposalHash,
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(publication).toMatchObject({ handled: true, status: 400 });
-    expect((publication.payload as { errors: string[] }).errors.join('\n')).toContain('APP_BUILD_DATASET_PUBLICATION_INELIGIBLE');
+    // Not a trust error: an old review task and the fixture's missing block file are what remain.
+    const openErrors = ((publication.payload as { errors?: string[] }).errors ?? []).join('\n');
+    expect(openErrors).not.toMatch(/APP_BUILD_DATASET_PUBLICATION_INELIGIBLE|APP_BUILD_DATASET_NOT_CERTIFIED|APP_BUILD_REQUIRES_CERTIFIED|review-required and cannot be published/);
     expect(purposes).toContain('project_publish');
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    const required = await invokeAppsApi(root, `/api/app-builds/${reviewDraft.id}/preflight`, 'POST', {
+      expectedRevision: savedDraft.revision,
+      proposalHash: savedDraft.proposalHash,
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(required).toMatchObject({ handled: true, status: 400 });
+    expect((required.payload as { errors: string[] }).errors).toContain('APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Review revenue.');
+    writeFileSync(join(root, 'dql.config.json'), '{}\n');
 
     const governedInitial = createStoredAppBuildDraft(root, {
       name: 'Governed-only review refusal',
@@ -1225,15 +1237,15 @@ describe('Apps command center API helpers', () => {
       id: 'governed-only-review-preview',
       revision: governedDraft.revision,
     };
-    const rejectedPreview = await invokeAppsApi(root, `/api/app-builds/${governedDraft.id}`, 'PATCH', {
+    // An old "Only certified data" App previews it too: the rule is read and ignored.
+    const oldRulePreview = await invokeAppsApi(root, `/api/app-builds/${governedDraft.id}`, 'PATCH', {
       expectedRevision: governedDraft.revision,
       operations: [{ type: 'set_preview_receipt', receipt: governedReceipt }],
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(rejectedPreview).toMatchObject({ handled: true, status: 400 });
-    expect((rejectedPreview.payload as { error: string }).error).toContain('requires include_review_required policy');
+    expect(oldRulePreview).toMatchObject({ handled: true, status: 200 });
   });
 
-  it('previews a checked Dataset under "Only certified data" and refuses to publish it until it is certified (design Q1)', async () => {
+  it('previews a checked Dataset in an old "Only certified data" App and publishes it as Not certified yet unless the project requires certified data (design Q1, T3)', async () => {
     const root = createProject();
     const sourceId = 'app:block:commerce:checked-orders';
     const sourceRevision = 'sha256:checked-orders-source';
@@ -1251,7 +1263,7 @@ describe('Apps command center API helpers', () => {
       check: { by: 'kranthi@example.test', name: 'Kranthi', at: '2026-10-22T09:00:00.000Z', checks: ['Row key: each row is one order'] },
     };
     // The same Dataset without a check record: plain "needs review" data.
-    const uncheckedCatalog: AppSourceCatalogRecord = { ...checkedCatalog, eligibility: { ...checkedCatalog.eligibility, localPreview: false, reasonCodes: ['ENABLE_REVIEW_REQUIRED_SOURCES'] } };
+    const uncheckedCatalog: AppSourceCatalogRecord = { ...checkedCatalog, eligibility: { ...checkedCatalog.eligibility, reasonCodes: ['REVIEW_REQUIRED_SOURCE'] } };
     delete (uncheckedCatalog as { check?: unknown }).check;
     const base = publishedDatasetPage({
       id: 'overview',
@@ -1284,8 +1296,10 @@ describe('Apps command center API helpers', () => {
       sourcePolicy: 'governed_only',
       template: 'blank',
     });
+    // An App saved before T3 with "Only certified data".
     const draft: AppBuildDraft = {
       ...initial,
+      sourcePolicy: 'governed_only',
       sources: [{ ...publishedDatasetDraftSource(checkedCatalog), checked: true }],
       pages: [page],
     };
@@ -1320,30 +1334,35 @@ describe('Apps command center API helpers', () => {
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
     expect(savedPreview, JSON.stringify(savedPreview.payload)).toMatchObject({ handled: true, status: 200 });
     const saved = (savedPreview.payload as { draft: AppBuildDraft }).draft;
+    // The old App keeps its stored rule (read and ignored).
     expect(saved.sourcePolicy).toBe('governed_only');
     expect(saved.sources).toEqual([expect.objectContaining({ id: sourceId, checked: true, trustState: 'review_required' })]);
 
-    // Publishing is refused, saying what to do.
+    // Publishing is not refused for trust: nothing asks to certify first.
     const preflight = await invokeAppsApi(root, `/api/app-builds/${draft.id}/preflight`, 'POST', {
       expectedRevision: saved.revision,
       proposalHash: saved.proposalHash,
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(preflight).toMatchObject({ handled: true, status: 400 });
-    expect((preflight.payload as { errors: string[] }).errors.join('\n')).toMatch(/APP_BUILD_DATASET_NOT_CERTIFIED: Checked revenue uses block orders, which is checked but not certified yet\. Certify it before publishing\./);
-    const publish = await invokeAppsApi(root, `/api/app-builds/${draft.id}/publish-to-project`, 'POST', {
+    const trustErrors = /APP_BUILD_DATASET_NOT_CERTIFIED|APP_BUILD_DATASET_PUBLICATION_INELIGIBLE|APP_BUILD_REQUIRES_CERTIFIED|APP_BUILD_REVIEW_POLICY_REQUIRED/;
+    expect(((preflight.payload as { errors?: string[] }).errors ?? []).join('\n')).not.toMatch(trustErrors);
+
+    // The project requires certified data: refused with the one plain message.
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    const required = await invokeAppsApi(root, `/api/app-builds/${draft.id}/publish-to-project`, 'POST', {
       expectedRevision: saved.revision,
       proposalHash: saved.proposalHash,
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(publish.status).not.toBe(200);
-    expect(publish.status).not.toBe(201);
+    expect(required.status).toBe(400);
+    expect((required.payload as { errors: string[] }).errors).toContain('APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Checked revenue.');
+    writeFileSync(join(root, 'dql.config.json'), '{}\n');
 
-    // Data nobody checked stays out of a governed-only preview, as before.
+    // Data nobody checked previews too: there is no per-App data rule.
     current = uncheckedCatalog;
-    const rejected = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+    const unchecked = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
       expectedRevision: saved.revision,
       operations: [{ type: 'set_preview_receipt', receipt: { ...receipt, id: 'unchecked-preview', revision: saved.revision } }],
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(rejected).toMatchObject({ handled: true, status: 400 });
+    expect(unchecked).toMatchObject({ handled: true, status: 200 });
   });
 
   it('refuses a client-issued preview receipt invalidation', async () => {
@@ -1671,7 +1690,7 @@ describe('Apps command center API helpers', () => {
 
     const source = result.draft.sources.find((candidate) => candidate.kind === 'review_dql');
     expect(source).toMatchObject({ trustState: 'review_required', reviewStatus: 'required' });
-    expect(result.draft.sourcePolicy).toBe('include_review_required');
+    expect(result.draft).not.toHaveProperty('sourcePolicy');
     expect(result.draft.reviewTasks).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceId: source?.id, tileId: result.tileId, status: 'open' }),
     ]));
@@ -1710,6 +1729,13 @@ describe('Apps command center API helpers', () => {
       reviewTasks: [{ id: 'review-overview', message: 'Confirm the Overview evidence.', status: 'open' as const, pageId: draft.pages[0].id }],
     };
     expect(preflightStoredAppBuildDraft(root, scopedTask)).toContain('Review task is still open: Confirm the Overview evidence.');
+
+    // "X needs certifying" reminders older drafts stored are not gates (T3): trust is per tile.
+    const trustReminder = {
+      ...draft,
+      reviewTasks: [{ id: 'review-source-0123456789ab', message: 'Orders needs certifying before this App is published.', status: 'open' as const, pageId: draft.pages[0].id }],
+    };
+    expect(preflightStoredAppBuildDraft(root, trustReminder)).toEqual([]);
   });
 
   it('accepts an explicitly unsupported tile as a governed filter exclusion', () => {
@@ -1783,7 +1809,7 @@ describe('Apps command center API helpers', () => {
     };
     const unversionedErrors = preflightStoredAppBuildDraft(root, unversionedDraft);
     expect(unversionedErrors).toContain(`Source block:${block.id} has no bound source revision; refresh it before Project publication.`);
-    expect(unversionedErrors).toContain('overview/customer-profile has no bound source revision; refresh the certified saved query before publication.');
+    expect(unversionedErrors).toContain('overview/customer-profile has no bound source revision; refresh the saved query before publication.');
     expect(() => publishStoredAppBuildDraft(root, {
       ...unversionedDraft,
       state: 'preflight_ready' as const,
@@ -2190,7 +2216,7 @@ describe('Apps command center API helpers', () => {
     expect(JSON.stringify(page)).not.toContain('SELECT region');
   });
 
-  it('carries the planner reason onto each AI tile and keeps review-required data out when only certified data is allowed', async () => {
+  it('carries the planner reason onto each AI tile and offers certified data first without leaving other data out (T3)', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', {
       name: 'Total Revenue',
@@ -2221,8 +2247,10 @@ describe('Apps command center API helpers', () => {
 
     const sources = proposal.operations.flatMap((operation) => operation.type === 'upsert_source' ? [operation.source] : []);
     expect(sources.length).toBeGreaterThan(0);
-    expect(sources.every((source) => source.trustState === 'certified')).toBe(true);
-    expect(proposal.candidateSourceIds?.some((id) => id.includes('draft_revenue'))).toBeFalsy();
+    // Certified data first, never only certified data (T3): the old App's rule is ignored.
+    const candidates = proposal.candidateSourceIds ?? [];
+    expect(candidates).toHaveLength(2);
+    expect(sources.filter((source) => source.trustState === 'certified').map((source) => source.id)).toContain(candidates[0]);
     const page = proposal.operations.find((operation) => operation.type === 'upsert_page');
     const tiles = page?.type === 'upsert_page' ? page.page.layout.items.filter((item) => item.sourceId) : [];
     expect(tiles.length).toBeGreaterThan(0);
@@ -2231,10 +2259,10 @@ describe('Apps command center API helpers', () => {
         source: tile.sourceId,
         kind: 'planner_rationale',
         reason: expect.stringMatching(/\S/),
-        trustState: 'certified',
+        trustState: sources.find((source) => source.id === tile.sourceId)?.trustState,
       })]);
     }
-    expect(proposal.summary).toMatchObject({ certifiedSources: sources.length, semanticSources: 0 });
+    expect(proposal.summary).toMatchObject({ certifiedSources: sources.filter((source) => source.trustState === 'certified').length, semanticSources: 0 });
   });
 
   it('uses one catalog for all-draft AI and manual composition, with explicit gap generation (PRD-007, API-014)', async () => {
@@ -2292,7 +2320,8 @@ describe('Apps command center API helpers', () => {
       selections: [{ sourceId: draftSource.sourceId, pageId: 'overview', view: 'chart' }],
     });
     const composedManual = (manualCompose.payload as any).draft;
-    expect(composedManual).toMatchObject({ version: 3, sourcePolicy: 'include_review_required' });
+    expect(composedManual).toMatchObject({ version: 3 });
+    expect(composedManual).not.toHaveProperty('sourcePolicy');
     expect(composedManual.sources[0]).toMatchObject({
       id: draftSource.sourceId, kind: 'block', lifecycle: 'draft', trustState: 'review_required',
     });
@@ -2467,7 +2496,9 @@ describe('Apps command center API helpers', () => {
     expect(__test__.collectAppsList(root).find((entry) => entry.id === 'review-allowed')).toMatchObject({ certification: 'uncertified', tileTrust: { certified: 0, total: 1 } });
     // The same answer the Studio and the App header give.
     const trust = appBuildDraftTrust(allowed.settled, (sourceId) => withReviewJoin(allowed.settled.sources.find((source) => source.id === sourceId)!.capabilities!.dataset as DatasetDescriptor));
-    expect([trust.label, trust.reviewAllowed]).toEqual(['0 of 1 tile certified', 1]);
+    expect([trust.label, trust.notCertified]).toEqual(['0 of 1 tile certified', 1]);
+    // Its stored count reads back in the same words the header and the Apps card use.
+    expect(publishedTileTrustText(allowed.written.tileTrust)).toBe(trust.label);
   });
 
   it('PR3 connects data before any tile; data no tile uses never blocks Publish and is not written (design D4)', async () => {
@@ -2485,7 +2516,8 @@ describe('Apps command center API helpers', () => {
     const dataset = items.find((item) => item.capabilities?.dataset);
     const review = items.find((item) => item.name === 'Draft Orders');
     expect(dataset).toMatchObject({ trust: 'certified' });
-    expect(review).toMatchObject({ trust: 'review_required', eligibility: { localPreview: false } });
+    // No per-App data rule (T3): data nobody certified is listed and usable.
+    expect(review).toMatchObject({ trust: 'review_required', eligibility: { localPreview: true } });
     // The Add data browser sends the catalog card as the API builds it for a composed tile.
     const draftSource = (item: any) => ({
       id: item.sourceId, kind: item.kind === 'semantic' ? 'governed_semantic' : 'block',
@@ -2496,17 +2528,9 @@ describe('Apps command center API helpers', () => {
       reviewStatus: item.trust === 'certified' ? 'not_required' : 'required',
     });
 
-    // Data that needs review is refused while only certified data is allowed.
-    const refused = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
-      expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
-      operations: [{ type: 'upsert_source', source: draftSource(review) }],
-    });
-    expect(refused.status).toBe(400);
-
     const patched = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
       expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
       operations: [
-        { type: 'set_source_policy', sourcePolicy: 'include_review_required' },
         { type: 'upsert_source', source: draftSource(dataset) },
         { type: 'upsert_source', source: draftSource(review) },
       ],
@@ -2524,7 +2548,8 @@ describe('Apps command center API helpers', () => {
     expect(page).not.toContain(review.sourceId);
     expect(page).not.toContain(dataset.sourceId);
 
-    // Once a tile uses the review data, it blocks publishing again.
+    // A tile on data nobody certified publishes as Not certified yet, unless
+    // the project requires certified data.
     const second = await invokeAppsApi(root, '/api/app-builds', 'POST', {
       appId: 'data-second', name: 'Data Second', goal: 'Orders', authoringMode: 'manual', sourcePolicy: 'include_review_required',
     });
@@ -2534,7 +2559,17 @@ describe('Apps command center API helpers', () => {
       selections: [{ sourceId: review.sourceId, pageId: 'overview', view: 'table' }],
     });
     expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
-    expect(preflightStoredAppBuildDraft(root, (composed.payload as any).draft).join(' ')).toMatch(/review-required and cannot be published/);
+    const composedDraft = (composed.payload as any).draft as AppBuildDraft;
+    expect(preflightStoredAppBuildDraft(root, composedDraft).join(' ')).not.toMatch(/review-required|not certified|APP_BUILD_REQUIRES_CERTIFIED/);
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    expect(preflightStoredAppBuildDraft(root, composedDraft).filter((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toHaveLength(1);
+    // The HTTP preflight says it too, for a page of saved-query tiles only.
+    const required = await invokeAppsApi(root, `/api/app-builds/${composedDraft.id}/preflight`, 'POST', {
+      expectedRevision: composedDraft.revision, proposalHash: composedDraft.proposalHash,
+    });
+    expect(required.status).toBe(400);
+    expect(((required.payload as { errors?: string[] }).errors ?? []).filter((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toHaveLength(1);
+    writeFileSync(join(root, 'dql.config.json'), '{}\n');
   });
 
   it('stores a field-builder query with its v3 Dataset binding atomically (APP-031)', async () => {
@@ -3349,21 +3384,17 @@ describe('Apps command center API helpers', () => {
       expect.objectContaining({ requirementId: 'margin', status: 'gap', sourceIds: [], componentIds: [] }),
     ]));
 
-    const blocked = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals/${revisedProposal.id}/revisions`, 'POST', {
+    // Data nobody certified is added without any data rule (T3), even to an
+    // App created with the old "Only certified data" request field.
+    const added = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals/${revisedProposal.id}/revisions`, 'POST', {
       expectedRevision: draft.revision,
       expectedProposalHash: draft.proposalHash,
       selectedSourceIds: [revenue.sourceId, orders.sourceId],
       additionalSourceIds: [margin.sourceId],
     }, { planAppBuild: provider });
-    expect(blocked).toMatchObject({ status: 400, payload: { ok: false } });
-    expect((blocked.payload as any).error).toContain('APP_BUILD_REVIEW_POLICY_REQUIRED');
+    expect(added).toMatchObject({ status: 201, payload: { ok: true } });
 
-    const enabled = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
-      expectedRevision: draft.revision,
-      expectedProposalHash: draft.proposalHash,
-      operations: [{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }],
-    });
-    const reviewDraft = (enabled.payload as any).draft;
+    const reviewDraft = draft;
     const reviewProposalResponse = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
       prompt: reviewDraft.frame.goal,
       expectedRevision: reviewDraft.revision,
@@ -3379,7 +3410,7 @@ describe('Apps command center API helpers', () => {
     ]));
   });
 
-  it('atomically enables the review lane during manual draft composition (API-014, UI-023)', async () => {
+  it('composes data nobody certified with no data rule to change (API-014, UI-023, T3)', async () => {
     const root = createProject();
     writeBlock(root, 'sales/margin.dql', {
       name: 'Margin Review', domain: 'sales', status: 'draft', tags: ['margin'],
@@ -3397,19 +3428,16 @@ describe('Apps command center API helpers', () => {
       selections: [{ sourceId: source.sourceId, pageId: 'overview', view: 'chart' }],
     };
 
-    const blocked = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', request);
-    expect((blocked.payload as any).error).toContain('APP_BUILD_REVIEW_POLICY_REQUIRED');
-
-    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
-      ...request,
-      enableReviewRequired: true,
-    });
-    expect(composed.status).toBe(200);
-    expect((composed.payload as any).draft).toMatchObject({
-      sourcePolicy: 'include_review_required',
+    // An older client's enableReviewRequired flag is accepted and changes nothing.
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', request);
+    expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
+    const composedDraft = (composed.payload as any).draft;
+    expect(composedDraft).toMatchObject({
       sources: [expect.objectContaining({ id: source.sourceId, lifecycle: 'draft', trustState: 'review_required' })],
-      reviewTasks: [expect.objectContaining({ sourceId: source.sourceId, status: 'open' })],
+      // No "needs certifying" task: the tile reads Not certified yet instead.
+      reviewTasks: [],
     });
+    expect(composedDraft).not.toHaveProperty('sourcePolicy');
   });
 
   it('lazily migrates v2 only when source identity is unique and exposes ambiguity as a blocker', async () => {
@@ -5236,9 +5264,9 @@ describe('Ask App proposals open in App Studio (design D9)', () => {
     expect(draft).toMatchObject({
       name: 'Leadership Revenue',
       authoringMode: 'ai',
-      sourcePolicy: 'governed_only',
       frame: expect.objectContaining({ goal: prompt }),
     });
+    expect(draft).not.toHaveProperty('sourcePolicy');
     expect(draft.pages[0]?.metadata.domain).toBe('revenue');
     // The page is empty: App Studio builds the tiles after the Data step.
     expect(draft.pages.every((page) => page.layout.items.length === 0)).toBe(true);
@@ -5278,7 +5306,7 @@ describe('Ask App proposals open in App Studio (design D9)', () => {
     expect((again.payload as { draft: AppBuildDraft }).draft.id).toBe(draft.id);
   });
 
-  it('lists AI-written SQL under Not covered yet and allows data that needs review only when the author kept it', async () => {
+  it('lists AI-written SQL under Not covered yet, with no per-App data rule (T3)', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
     const propose = () => proposeAppAiBuild(root, {
@@ -5303,7 +5331,7 @@ describe('Ask App proposals open in App Studio (design D9)', () => {
     });
     expect(opened.ok).toBe(true);
     if (!opened.ok) return;
-    expect(opened.draft.sourcePolicy).toBe('include_review_required');
+    expect(opened.draft).not.toHaveProperty('sourcePolicy');
     expect(opened.notCoveredYet).toContain(draftSql.question || draftSql.title);
     // No AI-written SQL became an App tile, a draft source or a file.
     expect(opened.draft.pages.flatMap((page) => page.layout.items)).toEqual([]);
@@ -5325,7 +5353,7 @@ describe('Ask App proposals open in App Studio (design D9)', () => {
     expect(carried).toBeTruthy();
     expect(setRequirements.coverage.find((candidate: { requirementId: string }) => candidate.requirementId === carried.id)?.status).toBe('gap');
 
-    // Not kept: the draft stays on "Only certified data".
+    // Not kept: the draft has no data rule either (T3).
     const second = await propose();
     // The saved queries Ask kept get their result fields read first (design D1).
     const readSavedQueryFields = vi.fn(async (_sourceIds: string[]) => undefined);
@@ -5333,7 +5361,7 @@ describe('Ask App proposals open in App Studio (design D9)', () => {
       selectedTileIds: second.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id),
       expectedProposalHash: second.proposalHash,
     }, { readSavedQueryFields });
-    expect(notKept.ok && notKept.draft.sourcePolicy).toBe('governed_only');
+    expect(notKept.ok && notKept.draft.sourcePolicy).toBeUndefined();
     expect(readSavedQueryFields).toHaveBeenCalledTimes(1);
     expect(readSavedQueryFields.mock.calls[0]![0]).toEqual(notKept.ok ? notKept.draft.sources.map((source) => source.id) : []);
   });

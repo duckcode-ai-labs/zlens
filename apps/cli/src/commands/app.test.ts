@@ -63,11 +63,12 @@ describe('runApp', () => {
       draft: {
         appId: 'customer-360',
         authoringMode: 'manual',
-        sourcePolicy: 'governed_only',
         state: 'local_draft',
         pages: [{ metadata: { domain: 'customer', visibility: 'private', lifecycle: 'draft' } }],
       },
     });
+    // No per-App data rule is written for a new App (T3).
+    expect(payload.draft).not.toHaveProperty('sourcePolicy');
     expect(existsSync(join(projectRoot, 'domains', 'customer', 'apps', 'customer-360', 'dql.app.json'))).toBe(false);
     expect(existsSync(join(projectRoot, 'apps', 'customer-360', 'dql.app.json'))).toBe(false);
     expect(__test__.collectApps(projectRoot)).toEqual([]);

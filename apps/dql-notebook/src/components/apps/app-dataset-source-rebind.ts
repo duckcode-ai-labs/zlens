@@ -71,14 +71,10 @@ export function planDatasetSourceRebind(
   if (references.length === 0) {
     return { ok: false, code: 'NO_APP_BINDING', error: 'This data is not used by a field-based tile in this App.' };
   }
+  // Data nobody certified refreshes like any other (T3: no per-App data rule);
+  // its tiles read "Not certified yet". `options.enableReviewPreview` is ignored.
   const reviewRequired = candidate.lifecycle !== 'certified' || candidate.trust !== 'certified';
-  if (reviewRequired && draft.sourcePolicy !== 'include_review_required' && !options.enableReviewPreview) {
-    return {
-      ok: false,
-      code: 'REVIEW_POLICY_REQUIRED',
-      error: `${candidate.name || sourceId} is review-required. Enable local review preview explicitly before refreshing this data; it will remain blocked from Project publication.`,
-    };
-  }
+  void options;
   if (!candidate.eligibility?.localPreview && !reviewRequired) {
     return { ok: false, code: 'SOURCE_UNAVAILABLE', error: `${candidate.name || sourceId} is not currently eligible for local preview. Check its governed source state before refreshing this App.` };
   }
@@ -90,32 +86,12 @@ export function planDatasetSourceRebind(
     pages.push(reboundPage(page, sourceId, candidate, descriptor));
   }
   const operations: AppStudioDraftOperation[] = [];
-  if (reviewRequired && draft.sourcePolicy !== 'include_review_required') {
-    operations.push({ type: 'set_source_policy', sourcePolicy: 'include_review_required' });
-  }
   // The API discards this historic object and re-resolves `sourceId` from the
   // active catalog. Sending no browser-generated descriptor keeps all three
   // authority checks on the server.
   operations.push({ type: 'upsert_source', source: stored });
   operations.push(...pages.map((page) => ({ type: 'upsert_page' as const, page })));
-  if (reviewRequired) {
-    for (const page of pages) {
-      for (const tile of page.layout.items) {
-        if (!tile.query || tile.sourceId !== sourceId || hasOpenSourceTileTask(draft, sourceId, page.id, tile.i)) continue;
-        operations.push({
-          type: 'set_review_task',
-          task: {
-            id: `dataset-source-rebind:${encodeURIComponent(sourceId)}:${page.id}:${tile.i}`,
-            message: `${candidate.name || sourceId} is review-required after this source change. Preview locally if policy permits; certify, replace, or remove it before Project publication.`,
-            status: 'open',
-            sourceId,
-            pageId: page.id,
-            tileId: tile.i,
-          },
-        });
-      }
-    }
-  }
+  // No review task for data nobody certified (T3): its tiles say so to readers.
   return { ok: true, sourceId, requiresReviewPolicy: reviewRequired, operations };
 }
 
@@ -235,9 +211,3 @@ function reboundPage(
   };
 }
 
-function hasOpenSourceTileTask(draft: AppStudioBuildDraft, sourceId: string, pageId: string, tileId: string): boolean {
-  return draft.reviewTasks.some((task) => task.status === 'open'
-    && task.sourceId === sourceId
-    && task.pageId === pageId
-    && task.tileId === tileId);
-}
