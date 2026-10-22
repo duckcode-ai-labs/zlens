@@ -689,6 +689,21 @@ describe('runEval --init and the text report', () => {
     expect(output).not.toContain('zlens compile');
   });
 
+  it('prints every score and cascade value in one column', async () => {
+    const projectRoot = seedProject();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runEval(projectRoot, [], { format: 'text' } as never);
+
+    const lines = log.mock.calls.map((call) => String(call[0]));
+    const rows = lines.filter((line) =>
+      /^  (Cases passed|Answer rate|Candidate recall|Route accuracy|Block-selection accuracy|Grain-match precision|Refusal precision|Refusal recall|Certified|Generated|Missing context|Research):/.test(line));
+    expect(rows).toHaveLength(12);
+    const valueColumns = new Set(rows.map((line) => line.indexOf(':') + 1 + /^ */.exec(line.slice(line.indexOf(':') + 1))![0].length));
+    expect([...valueColumns]).toEqual([28]);
+    expect(rows.find((line) => line.startsWith('  Block-selection accuracy:'))).toBe('  Block-selection accuracy: 100%');
+  });
+
   it('says when a threshold is not applied because no case measures it', async () => {
     const projectRoot = seedProject();
     rmSync(join(projectRoot, 'eval'), { recursive: true });

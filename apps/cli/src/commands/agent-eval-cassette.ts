@@ -341,6 +341,23 @@ export function cassetteEvidenceSummary(store: CassetteStore): CassetteEvidenceS
   };
 }
 
+/**
+ * The report's provenance line. The summary classifies how the entries were
+ * recorded; it cannot say this run reached a provider. In replay mode every
+ * dispatch is answered from the cassette (a miss fails, never goes live), so
+ * the run carries no real-provider quality evidence of its own.
+ */
+export function cassetteEvidenceLine(summary: CassetteEvidenceSummary, mode: CassetteMode): string {
+  if (!summary.realProviderQualityEligible) {
+    return `Real-provider quality evidence: excluded (${summary.realProviderQualityExclusionReasons.join(', ')}).`;
+  }
+  if (mode === 'replay') {
+    return 'Real-provider quality evidence: none from this run — every provider call was replayed from '
+      + `${summary.recordedProviderEntries} recorded response(s); no provider was called.`;
+  }
+  return 'Real-provider quality evidence: eligible.';
+}
+
 export class CassetteMissError extends Error {
   readonly key: string;
   readonly fingerprintDiagnostics?: CassetteFingerprintDiagnosticsV2;

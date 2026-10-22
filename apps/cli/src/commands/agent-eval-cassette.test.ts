@@ -7,6 +7,7 @@ import type { AgentProvider, AgentToolDefinition } from '@zlens/agent';
 import {
   CassetteMissError,
   CassetteStore,
+  cassetteEvidenceLine,
   cassetteEvidenceSummary,
   cassetteFingerprint,
   cassetteDirFor,
@@ -393,6 +394,28 @@ describe('withCassette', () => {
       realProviderQualityEligible: false,
       realProviderQualityExclusionReasons: ['synthetic_deterministic_orchestration_fixture'],
     });
+  });
+
+  it('never reports real-provider evidence for a run where every call was replayed', () => {
+    const recorded = {
+      totalEntries: 3,
+      recordedProviderEntries: 3,
+      migratedLegacyDeterministicFixtureEntries: 0,
+      syntheticDeterministicOrchestrationFixtureEntries: 0,
+      unknownProvenanceEntries: 0,
+      orchestrationReplayEligible: true,
+      realProviderQualityEligible: true,
+      realProviderQualityExclusionReasons: [],
+    };
+    expect(cassetteEvidenceLine(recorded, 'replay')).toBe(
+      'Real-provider quality evidence: none from this run — every provider call was replayed from 3 recorded response(s); no provider was called.',
+    );
+    expect(cassetteEvidenceLine(recorded, 'replay')).not.toContain('eligible');
+    expect(cassetteEvidenceLine(recorded, 'record')).toBe('Real-provider quality evidence: eligible.');
+    expect(cassetteEvidenceLine(
+      { ...recorded, realProviderQualityEligible: false, realProviderQualityExclusionReasons: ['no_cassette_entries'] },
+      'record',
+    )).toBe('Real-provider quality evidence: excluded (no_cassette_entries).');
   });
 
   it('derives a readable cassette directory per suite', () => {

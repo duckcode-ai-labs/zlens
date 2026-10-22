@@ -30,10 +30,13 @@ import {
 } from './agent-eval-runtime.js';
 import {
   CassetteStore,
+  cassetteEvidenceLine,
   cassetteEvidenceSummary,
   cassetteDirFor,
   evalCassetteCanonicalizationV2,
+  resolveCassetteModeFromEnv,
   withCassette,
+  type CassetteMode,
 } from './agent-eval-cassette.js';
 import type { AgentRun } from '@zlens/agent';
 import { goldRowsMatch } from './eval-row-match.js';
@@ -1264,8 +1267,13 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
     : cassetteMode === 'record' || cassetteMode === 'replay'
       ? cassetteDirFor(projectRoot, rest[0] ?? 'agent-evals')
       : undefined;
+  // The runtime reads its mode from the same environment (replay unless
+  // ZLENS_EVAL_CASSETTE_MODE says record or live).
+  const cassetteRunMode: CassetteMode = via === 'runtime'
+    ? resolveCassetteModeFromEnv(process.env)
+    : cassetteMode === 'record' ? 'record' : 'replay';
   const cassetteEvidence = cassetteDirectory
-    ? cassetteEvidenceSummary(new CassetteStore(cassetteDirectory))
+    ? { ...cassetteEvidenceSummary(new CassetteStore(cassetteDirectory)), mode: cassetteRunMode }
     : undefined;
   const thresholds = {
     minToolRequirement: (flags as { minToolRequirement?: number }).minToolRequirement ?? null,
@@ -1307,9 +1315,7 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
       + `(${cassetteEvidence.migratedLegacyDeterministicFixtureEntries} migrated legacy deterministic fixture, `
       + `${cassetteEvidence.syntheticDeterministicOrchestrationFixtureEntries} synthetic deterministic orchestration fixture).`,
     );
-    console.log(cassetteEvidence.realProviderQualityEligible
-      ? 'Real-provider quality evidence: eligible.'
-      : `Real-provider quality evidence: excluded (${cassetteEvidence.realProviderQualityExclusionReasons.join(', ')}).`);
+    console.log(cassetteEvidenceLine(cassetteEvidence, cassetteEvidence.mode));
   }
   console.log(`False refusal rate: ${formatRate(metrics.false_refusal_rate)} (${metrics.false_refusal_count}/${metrics.answerable_case_count} answerable cases refused)`);
   console.log(`Clarification rate: ${formatRate(metrics.clarification_rate)} (answerable cases asked instead of answered)`);

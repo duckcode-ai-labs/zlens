@@ -758,6 +758,13 @@ function formatRate(value: number | null): string {
   return value === null ? 'n/a' : `${Math.round(value * 1000) / 10}%`;
 }
 
+/** One score row; every value starts in the same column. */
+function scoreRow(label: string, value: string): string {
+  return `  ${label.padEnd(SCORE_LABEL_WIDTH)}${value}`;
+}
+
+const SCORE_LABEL_WIDTH = 'Block-selection accuracy: '.length;
+
 /** A threshold with no case measuring it is skipped (see meetsThresholds); say so. */
 function formatThresholdActual(value: number | null): string {
   return value === null ? 'n/a: no case measures this, so it is not applied' : formatRate(value);
@@ -888,21 +895,21 @@ function printReport(report: EvalReport): void {
 
   console.log('\n  Scores');
   console.log('  ' + '-'.repeat(50));
-  console.log(`  Cases passed:            ${scores.passed}/${scores.total}`);
-  console.log(`  Answer rate:             ${formatRate(scores.answerRate)}`);
-  console.log(`  Candidate recall:        ${formatRate(scores.executableCandidateRecall)}`);
-  console.log(`  Route accuracy:          ${formatRate(scores.routeAccuracy)}`);
-  console.log(`  Block-selection accuracy:${formatRate(scores.blockSelectionAccuracy).padStart(7)}`);
-  console.log(`  Grain-match precision:   ${formatRate(scores.grainMatchPrecision)}`);
-  console.log(`  Refusal precision:       ${formatRate(scores.refusalPrecision)}`);
-  console.log(`  Refusal recall:          ${formatRate(scores.refusalRecall)}`);
+  console.log(scoreRow('Cases passed:', `${scores.passed}/${scores.total}`));
+  console.log(scoreRow('Answer rate:', formatRate(scores.answerRate)));
+  console.log(scoreRow('Candidate recall:', formatRate(scores.executableCandidateRecall)));
+  console.log(scoreRow('Route accuracy:', formatRate(scores.routeAccuracy)));
+  console.log(scoreRow('Block-selection accuracy:', formatRate(scores.blockSelectionAccuracy)));
+  console.log(scoreRow('Grain-match precision:', formatRate(scores.grainMatchPrecision)));
+  console.log(scoreRow('Refusal precision:', formatRate(scores.refusalPrecision)));
+  console.log(scoreRow('Refusal recall:', formatRate(scores.refusalRecall)));
 
   console.log('\n  Cascade distribution');
   console.log('  ' + '-'.repeat(50));
-  console.log(`  Certified:               ${formatCountAndShare(distributions.actualRoutes.certified, scores.total)}`);
-  console.log(`  Generated:               ${formatCountAndShare(distributions.actualRoutes.generated, scores.total)}`);
-  console.log(`  Missing context:         ${formatCountAndShare(distributions.actualRoutes.missing_context, scores.total)}`);
-  console.log(`  Research:                ${formatCountAndShare(distributions.actualRoutes.research, scores.total)}`);
+  console.log(scoreRow('Certified:', formatCountAndShare(distributions.actualRoutes.certified, scores.total)));
+  console.log(scoreRow('Generated:', formatCountAndShare(distributions.actualRoutes.generated, scores.total)));
+  console.log(scoreRow('Missing context:', formatCountAndShare(distributions.actualRoutes.missing_context, scores.total)));
+  console.log(scoreRow('Research:', formatCountAndShare(distributions.actualRoutes.research, scores.total)));
 
   const t = report.thresholds;
   if (t.minRouteAccuracy !== null || t.minRefusal !== null || t.minAnswerRate !== null || t.minCandidateRecall !== null) {

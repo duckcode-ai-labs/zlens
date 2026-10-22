@@ -30,6 +30,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   (`monthly_revenue`, a member-filter generated case, a follow-up, a refusal).
   The old examples came from another project. The no-cases message no longer
   says to run `zlens compile`; eval builds the manifest itself.
+- **`zlens eval` scores line up.** Every Scores and Cascade distribution value
+  starts in one column; "Block-selection accuracy:" no longer pushes its value
+  out of line.
+- **`zlens agent eval` in cassette replay mode no longer says "Real-provider
+  quality evidence: eligible."** No provider was called, so it now says "none
+  from this run — every provider call was replayed from N recorded
+  response(s)". The JSON `cassetteEvidence` gains `mode`. Record mode still
+  reports eligible when every entry came from a real provider.
 - **`zlens verify`** prints its drift report to stdout, like its success line.
   Its help says what it compares, and that it is a local check because
   `dql-manifest.json` is gitignored.
