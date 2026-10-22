@@ -59,7 +59,7 @@ import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel'
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { appPageUrl } from './app-links';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
-import { appStudioAiConnected, appStudioDefaultLaunchMode } from './app-studio-ai-voice';
+import { appStudioAiConnected, appStudioDefaultLaunchMode, appStudioLaunchTab } from './app-studio-ai-voice';
 import { APP_STYLES } from './app-styles';
 import { appHeaderTitle, cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
 import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, SettingsPanel, StatusSeal } from './AppSidePanels';
@@ -119,7 +119,8 @@ const StructuredAnswerText = lazy(() => import('../agent/AgentAnswerCard')
 
 type AppSurface = 'library' | 'create' | 'workspace';
 type AppExperience = AppWorkspaceExperience;
-type BuilderMode = 'ai' | 'classic';
+/** `quick`: the three quick choices after the Data step, with no AI provider (round-2 Q2). */
+type BuilderMode = 'ai' | 'classic' | 'quick';
 type AppSection = AppWorkspaceSection;
 type DashboardFilter = NonNullable<DashboardDocumentResponse['dashboard']['filters']>[number];
 type DashboardLayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
@@ -304,7 +305,7 @@ export function AppsView(): JSX.Element {
     enabled: !readOnlyLink,
   });
   // Whether an AI provider is connected (design D4): the Build new App form
-  // opens on Start manually without one, and keyword suggestions say so.
+  // opens on Quick start without one (round-2 Q2).
   const providerSettingsQuery = useQuery({
     queryKey: ['app-studio-ai-connected'],
     queryFn: () => api.getProviderSettings(),
@@ -752,11 +753,11 @@ export function AppsView(): JSX.Element {
     setBuildOperationId(null);
     setBuilderExistingAppId(null);
     setBuilderDraftId(null);
-    setBuilderMode(config.mode === 'ai' ? 'ai' : 'classic');
+    setBuilderMode(config.mode === 'ai' ? 'ai' : config.mode === 'quick' ? 'quick' : 'classic');
     setBuilderExploreGaps(config.sourcePolicy === 'include_review_required');
     setBuilderTemplate(config.template);
     setBuilderPrompt(config.mode === 'ai' ? config.prompt : 'A dashboard of live, checked numbers');
-    setBuilderName(config.mode === 'manual' ? config.name : '');
+    setBuilderName(config.mode === 'ai' ? '' : config.name.trim());
     // A new App starts in the domain chosen on the Start form, or none. Never
     // inherit the domain of the App opened for editing last; it would
     // silently scope AI and the catalog.
@@ -1003,7 +1004,7 @@ export function AppsView(): JSX.Element {
         />
       ) : surface === 'create' ? (
         <AppStudioV2
-          initialMode={builderMode === 'ai' ? 'ai' : 'manual'}
+          initialMode={builderMode === 'ai' ? 'ai' : builderMode === 'quick' ? 'quick' : 'manual'}
           initialPrompt={builderPrompt}
           initialName={builderName}
           initialDraftId={builderDraftId}
@@ -1195,15 +1196,16 @@ function AppLibrarySurface({
   onDeleteApp: (app: AppSummary) => void;
 }) {
   const counts = libraryCounts(allApps, localDrafts, favorites);
-  // Start manually until the settings say an AI provider is connected (design
-  // D4); then Describe with AI, unless the author already picked a tab.
+  // Start manually until the settings answer (design D4); then Describe with
+  // AI with a provider, or Quick start without one (round-2 Q2), unless the
+  // author already picked a tab.
   const [launchConfig, setLaunchConfig] = useState<AppStudioLaunchConfig>(() => {
     const mode = appStudioDefaultLaunchMode(aiConnected);
     return {
       mode,
       prompt: DEFAULT_PROMPT,
-      name: 'Untitled Analytics App',
-      template: mode === 'manual' ? 'blank' : 'operational_dashboard',
+      name: mode === 'quick' ? '' : 'Untitled Analytics App',
+      template: mode === 'ai' ? 'operational_dashboard' : 'blank',
       sourcePolicy: 'governed_only',
     };
   });
@@ -1211,7 +1213,13 @@ function AppLibrarySurface({
   useEffect(() => {
     if (launchModeTouched.current) return;
     const mode = appStudioDefaultLaunchMode(aiConnected);
-    setLaunchConfig((current) => current.mode === mode ? current : { ...current, mode, template: mode === 'manual' ? 'blank' : 'operational_dashboard' });
+    setLaunchConfig((current) => current.mode === mode ? current : {
+      ...current,
+      mode,
+      template: mode === 'ai' ? 'operational_dashboard' : 'blank',
+      // Quick start names the App after its Domain unless the author types a name.
+      name: mode === 'quick' && current.name === 'Untitled Analytics App' ? '' : mode === 'manual' && !current.name.trim() ? 'Untitled Analytics App' : current.name,
+    });
   }, [aiConnected]);
   const [launchPreference, setLaunchPreference] = useState<AppLibraryLaunchPreference>('auto');
   const launchExpanded = appLibraryLaunchExpanded({
@@ -1251,7 +1259,11 @@ function AppLibrarySurface({
               if (patch.mode) launchModeTouched.current = true;
               setLaunchConfig((current) => ({ ...current, ...patch }));
             }}
-            onSubmit={() => onStartStudio(launchConfig)}
+            onSubmit={() => {
+              const mode = appStudioLaunchTab(launchConfig.mode, aiConnected);
+              // Quick start builds its own tiles on a blank page.
+              onStartStudio({ ...launchConfig, mode, ...(mode === 'quick' ? { template: 'blank' as const } : {}) });
+            }}
           />
         ) : null}
       </div>

@@ -1,8 +1,8 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
-  Activity, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, FileText, Filter,
-  Gauge, Heading, Info, LayoutDashboard, LineChart, Monitor, MoreHorizontal, PanelRight,
+  Activity, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, Database, FileText, Filter,
+  Gauge, Heading, Info, LayoutDashboard, LayoutGrid, LineChart, Monitor, MoreHorizontal, PanelRight,
   Play, Plus, Redo2, ScatterChart, Search, Settings2, ShieldCheck, Smartphone, Sparkles, Table2,
   Trash2, Type, Undo2, Upload, X,
 } from 'lucide-react';
@@ -89,6 +89,16 @@ import { PivotTable } from './PivotTable';
 import { KpiCard, usesKpiCard } from './KpiCard';
 import { AddDataBrowser } from './builder/AddDataBrowser';
 import { DataStep } from './builder/DataStep';
+import { QuickStartStep, QuickTilesPanel } from './builder/QuickChoices';
+import {
+  CONNECT_AI_TO_DESCRIBE_IN_WORDS,
+  QUICK_START_TAB,
+  quickChoiceData,
+  quickChoiceTiles,
+  quickStartAppName,
+  quickTileLayout,
+  type QuickChoice,
+} from './builder/quick-choices';
 import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
 import { appStudioAiDataResume } from './app-studio-handoff';
 import {
@@ -155,10 +165,9 @@ import {
   appStudioAskWords,
   appStudioPlannerVoice,
   appStudioPlannerWords,
+  appStudioLaunchTab,
   CONNECT_AI_ACTION,
-  CONNECT_AI_TO_DESCRIBE,
-  KEYWORD_SUGGESTIONS_LABEL,
-  TRY_KEYWORD_SUGGESTIONS,
+  type AppStudioLaunchMode,
   type AppStudioPlannerVoice,
 } from './app-studio-ai-voice';
 import {
@@ -325,19 +334,19 @@ type AppStudioSourceFeedback = {
 };
 
 export interface AppStudioLaunchConfig {
-  mode: 'ai' | 'manual';
+  /** `quick`: the three quick choices, the Start form's first tab with no AI provider (round-2 design Q2). */
+  mode: AppStudioLaunchMode;
   prompt: string;
   name: string;
   template: StudioTemplate;
   sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
   /** The App's domain; '' is "All domains" (the server keeps `general`). */
   domain?: string;
-  /** With no AI provider, the author chose "Try keyword suggestions" (design D4). */
-  keywordSuggestions?: boolean;
 }
 
 export interface AppStudioV2Props {
-  initialMode: 'ai' | 'manual';
+  /** `quick`: a manual App that opens the three quick choices after its data is picked (no AI, round-2 Q2). */
+  initialMode: 'ai' | 'manual' | 'quick';
   initialPrompt: string;
   initialName?: string;
   initialDraftId?: string | null;
@@ -355,8 +364,9 @@ export interface AppStudioV2Props {
   onDraftDeleted: (recovery: { appName: string; recoveryId: string }) => void;
   /**
    * Whether an AI provider is connected (design D4); `undefined` while the
-   * settings load, which reads as connected. Without one, plans come from the
-   * keyword matcher and say so, and AI-only actions ask to connect a provider.
+   * settings load, which reads as connected. Without one, the toolbar's Quick
+   * tiles opens the three quick choices (round-2 Q2), and AI-only actions ask
+   * to connect a provider.
    */
   aiConnected?: boolean;
   /** Opens Settings → AI provider. */
@@ -411,8 +421,8 @@ export function AppStudioLaunchSurface({
   error?: string | null;
   /**
    * Whether an AI provider is connected (design D4); `undefined` while the
-   * settings load. With none, Describe with AI asks to connect one first and
-   * offers keyword suggestions as a labelled second choice.
+   * settings load. With none, the Describe with AI tab is Quick start: three
+   * quick choices after the data is picked, and no free text (round-2 Q2).
    */
   aiConnected?: boolean;
   /** Opens Settings → AI provider. */
@@ -421,34 +431,29 @@ export function AppStudioLaunchSurface({
   onSubmit: () => void;
 }): JSX.Element {
   const noAi = aiConnected === false;
-  const connectFirst = config.mode === 'ai' && noAi && !config.keywordSuggestions;
-  const canSubmit = config.mode === 'ai' ? !connectFirst && Boolean(config.prompt.trim()) : Boolean(config.name.trim());
+  const mode = appStudioLaunchTab(config.mode, aiConnected);
+  const canSubmit = mode === 'ai' ? Boolean(config.prompt.trim()) : mode === 'quick' ? true : Boolean(config.name.trim());
+  const domainLabel = domainOptions.find((option) => option.value === config.domain)?.label ?? config.domain ?? '';
   return <section className="dql-app-studio-home" aria-labelledby="app-studio-home-title">
     <style>{APP_STUDIO_V2_STYLES}</style>
     <div className="dql-studio-v2-intro">
       <span className="eyebrow"><Sparkles size={14} /> ZLens App Studio 2.0</span>
       <h1 id="app-studio-home-title">Start with the decision.<br />Shape the experience together.</h1>
-      <p>Build with AI or by hand. Everything stays a private draft until you publish it.</p>
+      <p>{noAi ? 'Start from a few quick choices or build by hand.' : 'Build with AI or by hand.'} Everything stays a private draft until you publish it.</p>
     </div>
     <div className="dql-studio-v2-start-card">
       <div className="mode-switch" role="tablist" aria-label="Authoring mode">
-        <button type="button" role="tab" aria-selected={config.mode === 'ai'} className={config.mode === 'ai' ? 'on' : ''} onClick={() => onChange({ mode: 'ai', template: config.template === 'blank' ? 'operational_dashboard' : config.template })}><Sparkles size={16} /> Describe with AI</button>
-        <button type="button" role="tab" aria-selected={config.mode === 'manual'} className={config.mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank', name: config.name || 'Untitled Analytics App' })}><LayoutDashboard size={16} /> Start manually</button>
+        {noAi
+          ? <button type="button" role="tab" aria-selected={mode === 'quick'} className={mode === 'quick' ? 'on' : ''} onClick={() => onChange({ mode: 'quick', template: 'blank', name: config.name === 'Untitled Analytics App' ? '' : config.name })}><LayoutGrid size={16} /> {QUICK_START_TAB}</button>
+          : <button type="button" role="tab" aria-selected={mode === 'ai'} className={mode === 'ai' ? 'on' : ''} onClick={() => onChange({ mode: 'ai', template: config.template === 'blank' ? 'operational_dashboard' : config.template })}><Sparkles size={16} /> Describe with AI</button>}
+        <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank', name: config.name || 'Untitled Analytics App' })}><LayoutDashboard size={16} /> Start manually</button>
       </div>
-      {connectFirst ? <section className="ai-launch-connect" aria-labelledby="ai-launch-connect-title">
-        <strong id="ai-launch-connect-title">{CONNECT_AI_TO_DESCRIBE}</strong>
-        <p>No AI provider is connected, so nothing can read your request and pick data for you yet. Connect one in Settings, or start manually.</p>
-        <p>Keyword suggestions match the words you type to your certified data. They are not AI, and you check every source and tile before anything is applied.</p>
-        <span className="ai-launch-connect-actions">
-          {onConnectAi ? <button type="button" className="primary" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
-          <button type="button" onClick={() => onChange({ keywordSuggestions: true })}>{TRY_KEYWORD_SUGGESTIONS}</button>
-        </span>
-      </section> : <label className="primary-field">
-        <span>{config.mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
-        {config.mode === 'ai'
+      <label className="primary-field">
+        <span>{mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
+        {mode === 'ai'
           ? <textarea value={config.prompt} onChange={(event) => onChange({ prompt: event.target.value })} placeholder="Build a weekly revenue health App for finance leaders with trends, drivers, and customer detail." rows={4} />
-          : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Revenue Operations" />}
-      </label>}
+          : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={mode === 'quick' ? (domainLabel ? quickStartAppName({ domainLabel }) : 'Sales overview') : 'Revenue Operations'} />}
+      </label>
       <label className="launch-domain-field">
         <span>Domain</span>
         <select value={config.domain ?? ''} onChange={(event) => onChange({ domain: event.target.value })} aria-label="Domain">
@@ -457,21 +462,20 @@ export function AppStudioLaunchSurface({
         </select>
         <small>{DOMAIN_EXPLANATION} Lists of data start on this one; you can still pick data from any domain.</small>
       </label>
-      {config.mode === 'ai' && !connectFirst ? (noAi
-        ? <div className="ai-launch-explainer keywords"><span><Sparkles size={16} /></span><div><strong>{KEYWORD_SUGGESTIONS_LABEL}</strong><small>Words in your request are matched to your certified data. No AI is used; you review every source and tile before anything is applied.{onConnectAi ? <> <button type="button" className="link" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button></> : null}</small></div></div>
-        : <div className="ai-launch-explainer"><span><Sparkles size={16} /></span><div><strong>AI picks your certified data and drafts a first version</strong><small>You review the data it chose and every tile before anything is applied.</small></div></div>) : null}
-      <details className="launch-options" open={config.mode === 'manual'}>
+      {mode === 'quick' ? <div className="ai-launch-explainer quick"><span><LayoutGrid size={16} /></span><div><strong>Pick your data, then a total, a trend and a top list</strong><small>You get exactly the tiles you choose, with plain titles. No AI is used. Left empty, the name is the Domain’s, like “Sales overview”.{onConnectAi ? <> <button type="button" className="link" onClick={onConnectAi}>{CONNECT_AI_TO_DESCRIBE_IN_WORDS}</button></> : null}</small></div></div> : null}
+      {mode === 'ai' ? <div className="ai-launch-explainer"><span><Sparkles size={16} /></span><div><strong>AI picks your certified data and drafts a first version</strong><small>You review the data it chose and every tile before anything is applied.</small></div></div> : null}
+      {mode === 'quick' ? null : <details className="launch-options" open={mode === 'manual'}>
         <summary><span>Starting layout</span><strong>{TEMPLATE_OPTIONS.find((option) => option.id === config.template)?.title ?? 'Operational Dashboard'}</strong><ChevronDown size={15} /></summary>
         <div className="template-grid">
           {TEMPLATE_OPTIONS.map((option) => <button key={option.id} type="button" className={config.template === option.id ? 'on' : ''} onClick={() => onChange({ template: option.id })}><span>{templateIcon(option.id)}</span><strong>{option.title}</strong><small>{option.description}</small></button>)}
         </div>
-      </details>
+      </details>}
       <section className="studio-source-policy-row" aria-label="App source policy">
         <header><span className="policy-mark"><ShieldCheck size={17} /></span><p><strong>Only certified data</strong><small>Every number comes from data someone owns and checked. Recommended.</small></p></header>
         <label className="studio-review-toggle"><input type="checkbox" checked={config.sourcePolicy === 'include_review_required'} onChange={(event) => onChange({ sourcePolicy: event.target.checked ? 'include_review_required' : 'governed_only' })} /><i aria-hidden="true" /><span><strong>Also let me try data that needs review</strong><small>Useful while exploring; a page that uses it cannot publish until that data is certified.</small></span></label>
       </section>
       {error ? <div className="studio-error" role="alert">{error}</div> : null}
-      {connectFirst ? null : <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : config.mode === 'ai' ? <><Sparkles size={17} /> {noAi ? 'Suggest from keywords' : 'Generate editable App'}</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>}
+      <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : mode === 'quick' ? <><Database size={17} /> Choose data</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>
       <small className="launch-next-step">Private local draft first · review sources and preview results · publish only when ready</small>
     </div>
   </section>;
@@ -537,9 +541,20 @@ export function AppStudioV2({
   const dispatchNotebook = useDispatch();
   /** The App's domain, stored on its first page when the draft is created; `general` means every domain. */
   const draftDomain = appDraftDomain(draft);
-  const [mode, setMode] = useState<'ai' | 'manual'>(initialMode);
+  const [mode] = useState<'ai' | 'manual'>(initialMode === 'quick' ? 'manual' : initialMode);
+  /** Quick start (round-2 Q2): after the Data step, the three quick choices build the first tiles. */
+  const quickStart = initialMode === 'quick';
+  /** The author typed the App's name on the Start form; otherwise Build App names it "<Domain> overview". */
+  const quickNameTyped = Boolean(initialName.trim());
+  const [quickError, setQuickError] = useState<string | null>(null);
+  /** A Domain's name as the Domains page shows it; '' for All domains. */
+  const domainLabelOf = (value?: string): string => {
+    const id = (value ?? '').trim();
+    if (!id || id.toLowerCase() === 'general') return '';
+    return domainOptions.find((option) => option.value === id)?.label ?? id;
+  };
   const [sourcePolicy, setSourcePolicy] = useState<AppStudioBuildDraft['sourcePolicy']>(initialSourcePolicy);
-  const [template, setTemplate] = useState<StudioTemplate>(initialTemplate ?? (initialMode === 'manual' ? 'blank' : 'operational_dashboard'));
+  const [template, setTemplate] = useState<StudioTemplate>(initialTemplate ?? (initialMode === 'ai' ? 'operational_dashboard' : 'blank'));
   const [prompt, setPrompt] = useState(initialPrompt);
   const [name, setName] = useState(initialName);
   const [panel, setPanel] = useState<StudioPanel>('sources');
@@ -961,7 +976,7 @@ export function AppStudioV2({
     try {
       const result = await api.createAppBuild({
         baseAppId: baseAppId ?? undefined,
-        name: name.trim() || undefined,
+        name: quickStart ? quickStartAppName({ name, domainLabel: domainLabelOf(domain) }) : name.trim() || undefined,
         goal: prompt.trim() || name.trim() || 'A dashboard of live, checked numbers',
         audience,
         domain,
@@ -2374,6 +2389,13 @@ export function AppStudioV2({
 
   const reviseRequirementWithAi = (question: string) => {
     if (!draft) return;
+    if (aiConnected === false) {
+      // No AI: nothing reads the question; the quick choices add the tiles for it (round-2 Q2).
+      setPublishReviewOpen(false);
+      setAiScope('page');
+      setCopilotOpen(true);
+      return;
+    }
     const instruction = `Revise this App so it can answer this publish question with governed evidence: ${question}`;
     setPrompt(instruction);
     setPublishReviewOpen(false);
@@ -3080,6 +3102,100 @@ export function AppStudioV2({
     fieldsEnabled: datasetTilesEnabled,
     onFieldsAdded: (sourceId: string, status: 'certified' | 'review' | 'draft') => void savedQueryFieldsAdded(sourceId, status),
   };
+  /**
+   * Quick choices → tiles (round-2 Q2): exactly the chosen tiles, composed as
+   * ordinary field tiles on the open page in one change (and one undo step),
+   * placed KPIs first, then charts. A new App also gets its name here when the
+   * author left it empty: "<Domain> overview".
+   */
+  const buildQuickTiles = async (choices: QuickChoice[], target: 'app' | 'page'): Promise<boolean> => {
+    if (!activePage) return false;
+    const data = quickChoiceData(appData, draftDomain);
+    const plan = quickChoiceTiles(data, choices);
+    if (!plan.ok) {
+      setQuickError(plan.error);
+      return false;
+    }
+    setQuickError(null);
+    setError(null);
+    setBusy(true);
+    setSavedMessage(`Adding ${plan.tiles.length} ${plan.tiles.length === 1 ? 'tile' : 'tiles'}…`);
+    try {
+      const previous = draft;
+      let result = await api.composeAppBuild(draft.id, {
+        mode: 'manual',
+        expectedRevision: draft.revision,
+        expectedProposalHash: draft.proposalHash,
+        selections: plan.tiles.map((tile) => ({ sourceId: tile.sourceId, pageId: activePage.id, view: tile.view, query: tile.query, title: tile.title })),
+      });
+      const composedPage = result.draft.pages.find((page) => page.id === activePage.id);
+      const added = new Set(result.tileIds);
+      const spots = quickTileLayout((composedPage?.layout.items ?? []).filter((item) => !added.has(item.i)), plan.tiles, CANVAS_COLUMNS);
+      const followUp: AppStudioDraftOperation[] = [];
+      result.tileIds.forEach((tileId, index) => {
+        const tile = composedPage?.layout.items.find((item) => item.i === tileId);
+        const spec = plan.tiles[index];
+        const spot = spots[index];
+        if (tile && spec && spot) followUp.push({ type: 'update_tile', pageId: activePage.id, tileId, patch: { ...spot, viz: { ...tile.viz, type: spec.visualization } } });
+      });
+      if (composedPage) {
+        // A page shown as a report or a custom layout shows the new tiles there too, at the end.
+        const shownAs = composedPage.narrative?.presentation;
+        const layout = shownAs === 'canvas' && composedPage.canvas?.html ? checkCanvasHtml(composedPage.canvas.html) : null;
+        if (composedPage.canvas && layout && layout.issues.length === 0) {
+          const nodes: CanvasNode[] = result.tileIds.map((tileId) => ({ kind: 'element', tag: 'dql-tile', attrs: [['tile', tileId]], children: [] }));
+          followUp.push({ type: 'set_canvas', pageId: activePage.id, canvas: { ...composedPage.canvas, html: serializeCanvasNodes(insertCanvasNodes(parseCanvasHtml(layout.html), nodes).nodes), generatedBy: 'author' } });
+        }
+        if (shownAs === 'story' && composedPage.narrative) {
+          const blocks = [...composedPage.narrative.blocks];
+          const taken = new Set(blocks.map((block) => block.id));
+          let n = blocks.length + 1;
+          for (const tileId of result.tileIds) {
+            if (blocks.some((block) => block.kind === 'tile' && block.tileId === tileId)) continue;
+            while (taken.has(`b${n}`)) n += 1;
+            taken.add(`b${n}`);
+            blocks.push({ id: `b${n}`, kind: 'tile', tileId });
+          }
+          followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks } });
+        }
+      }
+      if (target === 'app' && !quickNameTyped) {
+        const used = new Set(plan.tiles.map((tile) => tile.sourceId));
+        const appName = quickStartAppName({ domainLabel: domainLabelOf(draftDomain), data: data.filter((entry) => used.has(entry.sourceId)) });
+        if (appName !== result.draft.name) followUp.push({ type: 'set_name', name: appName });
+      }
+      if (followUp.length) {
+        // Same undo step as the add.
+        const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
+        result = { ...result, draft: patched.draft };
+      }
+      setDraft(result.draft);
+      setName(result.draft.name);
+      setUndoStack((items) => [...items.slice(-29), previous]);
+      setRedoStack([]);
+      setSelectedTileId(null);
+      setFilterOfferTiles((current) => new Set([...current, ...result.tileIds.map((tileId) => `${activePage.id}:${tileId}`)]));
+      setCopilotOpen(false);
+      if (target === 'app') {
+        setStage('canvas');
+        setPanel('sources');
+        setPanelOpen(typeof window === 'undefined' || window.innerWidth > 820);
+      }
+      setSavedMessage(`${plan.tiles.length} ${plan.tiles.length === 1 ? 'tile' : 'tiles'} added · loading data…`);
+      previewSequenceRef.current += 1;
+      setPreviewRunsByPage({});
+      setFilterOptionsByPage({});
+      await runPreviewForDraft(result.draft, activePage.id);
+      return true;
+    } catch (cause) {
+      setQuickError(messageOf(cause));
+      setSavedMessage('Quick tiles were not added');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openCanvas = () => {
     setStage('canvas');
     setPanel('sources');
@@ -3147,9 +3263,16 @@ export function AppStudioV2({
       onRemove: aiStep.onRemovePick,
       onChangePolicy: (nextPolicy: AppStudioBuildDraft['sourcePolicy']) => void changeAiSourcePolicy(nextPolicy),
     } : addDataBrowserProps;
+    const quickData = quickChoiceData(appData, draftDomain);
     return <div className="dql-studio-v2 studio-data-stage">
       <style>{APP_STUDIO_V2_STYLES}</style>
       <DataStep
+        {...(quickStart && !aiStep ? { next: {
+          label: 'Next: choose tiles',
+          disabled: busy || quickData.length === 0,
+          hint: quickData.length ? undefined : 'Add data with fields to choose tiles.',
+          onClick: () => { setQuickError(null); setStage('quick'); },
+        } } : {})}
         draft={draft}
         known={knownItems}
         error={error}
@@ -3166,6 +3289,22 @@ export function AppStudioV2({
         onClose={() => setDatasetAuthoringProposal(null)}
         onCommitted={finishDatasetAuthoringProposal}
       /> : null}
+    </div>;
+  }
+
+  if (stage === 'quick') {
+    return <div className="dql-studio-v2 studio-data-stage">
+      <style>{APP_STUDIO_V2_STYLES}</style>
+      <QuickStartStep
+        appName={draft.name}
+        data={quickChoiceData(appData, draftDomain)}
+        busy={busy}
+        error={quickError ?? error}
+        onBack={onBack}
+        onBackToData={() => { setQuickError(null); setStage('data'); }}
+        onBuild={(choices) => void buildQuickTiles(choices, 'app')}
+        {...(onConnectAi ? { onConnectAi } : {})}
+      />
     </div>;
   }
 
@@ -3206,7 +3345,7 @@ export function AppStudioV2({
   const canvasMode = Boolean(activePage?.narrative?.presentation === 'canvas' && !projectedPage);
   const storyCatalog = previewRun ? buildStoryBindingCatalog(previewRun.tiles as StoryBindingTileInput[], Object.fromEntries((activePage?.layout.items ?? []).map((item) => [item.i, item.title]))) : {};
   const storyPageTiles = (activePage?.layout.items ?? []).filter((item) => !item.text).map((item) => ({ tileId: item.i, title: item.title || humanize(item.i) }));
-  // Designing a layout needs a real AI provider; keyword suggestions cannot (design D4).
+  // Designing a layout needs a real AI provider (design D4).
   const storyDraftBlocked = aiConnected === false
     ? `${CONNECT_AI_ACTION} to design with AI.`
     : !previewRun
@@ -3603,7 +3742,7 @@ export function AppStudioV2({
             <button type="button" className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => { setStudioView('view'); setSelectedTileId(null); setSettingsOpen(false); setTileMenuId(null); }} title="See the page exactly as readers will">Preview</button>
           </div>
           <button type="button" className="preview" onClick={() => void runPreview()} disabled={previewing || busy} aria-label={previewing ? 'Running preview' : 'Run preview'} title="Run every tile on this page again"><Play size={13} /><span>{previewing ? 'Running…' : 'Run'}</span></button>
-          <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label={askWords.toolbar} title={askVoice === 'keywords' ? KEYWORD_SUGGESTIONS_LABEL : undefined}><Sparkles size={14} /><span>{askWords.toolbar}</span></button>
+          <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile && askVoice !== 'keywords' ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label={askWords.toolbar} title={askVoice === 'keywords' ? 'Add a total, a trend or a top list from this App’s data' : undefined}>{askVoice === 'keywords' ? <LayoutGrid size={14} /> : <Sparkles size={14} />}<span>{askWords.toolbar}</span></button>
           <button type="button" className="publish" onClick={() => void publishFromToolbar()} disabled={busy} aria-label={`Review and publish to Project${publishStepCount ? `, ${publishStepCount} ${publishStepCount === 1 ? 'fix' : 'fixes'} needed` : ''}`}><span>Publish</span>{publishStepCount ? <small>{publishStepCount} {publishStepCount === 1 ? 'fix' : 'fixes'}</small> : null}</button>
           <button type="button" className="ghost-icon overflow-button" aria-label="More draft actions" aria-expanded={actionsOpen} onClick={() => setActionsOpen((open) => !open)}><MoreHorizontal size={17} /></button>
           {actionsOpen ? <div className="studio-overflow-menu" role="menu">
@@ -3718,7 +3857,7 @@ export function AppStudioV2({
                   item.change === 'removed' ? <span className="proposal-badge removed">WILL BE REMOVED</span> : projectedPage.linkedTileIds.has(item.tile.i) ? <span className="proposal-badge link">PROPOSED LINK</span> : null,
                 ))
                 : canvasItems.map((tile) => renderTile(tile, '', null, breakpoint === 'wide'))}
-              {!visibleItems.length && !draftTile && !projectedPage ? <div className="empty-canvas"><span><Plus size={22} /></span><strong>This page is empty</strong><p>{editing ? `Choose your data in the Data panel, then click the numbers and fields you want to see. ${askVoice === 'keywords' ? 'You can also get keyword suggestions for the page.' : 'You can also ask AI to draft the page.'}` : 'Switch to Edit to add tiles to this page.'}</p>{editing ? <div className="empty-actions"><button type="button" className="primary" onClick={openAddTile}><Plus size={14} /> Add tile</button><button type="button" onClick={() => { setAiScope('page'); setCopilotOpen(true); }}><Sparkles size={14} /> {askWords.draftPage}</button></div> : null}</div> : null}
+              {!visibleItems.length && !draftTile && !projectedPage ? <div className="empty-canvas"><span><Plus size={22} /></span><strong>This page is empty</strong><p>{editing ? `Choose your data in the Data panel, then click the numbers and fields you want to see. ${askVoice === 'keywords' ? 'Or add a total, a trend and a top list with Quick tiles.' : 'You can also ask AI to draft the page.'}` : 'Switch to Edit to add tiles to this page.'}</p>{editing ? <div className="empty-actions"><button type="button" className="primary" onClick={openAddTile}><Plus size={14} /> Add tile</button><button type="button" onClick={() => { setAiScope('page'); setCopilotOpen(true); }}>{askVoice === 'keywords' ? <LayoutGrid size={14} /> : <Sparkles size={14} />} {askWords.draftPage}</button></div> : null}</div> : null}
             </div>
             {canArrange && visibleItems.length ? <p id="studio-canvas-keys" className="studio-canvas-keys">Drag a tile by its header or resize it from its edges. With a tile selected: arrow keys move it, Shift + arrows resize, {modifierKeyLabel()}D duplicates, Delete removes, {modifierKeyLabel()}Z undoes.</p> : null}
             </>}
@@ -3801,7 +3940,17 @@ export function AppStudioV2({
         )}
       </aside> : null}
 
-      {rightPane === 'ai' ? <AiSidePanel
+      {rightPane === 'ai' && askVoice === 'keywords' && aiScope === 'page' ? <QuickTilesPanel
+        pageTitle={activePage?.metadata.title ?? 'this page'}
+        data={quickChoiceData(appData, draftDomain)}
+        busy={busy || previewing}
+        error={quickError}
+        onAdd={(choices) => void buildQuickTiles(choices, 'page')}
+        onAddData={() => { setCopilotOpen(false); setAddDataOpen(true); }}
+        onClose={() => { setCopilotOpen(false); setQuickError(null); }}
+        {...(onConnectAi ? { onConnectAi } : {})}
+      /> : null}
+      {rightPane === 'ai' && !(askVoice === 'keywords' && aiScope === 'page') ? <AiSidePanel
         t={themes[themeMode]}
         title={askWords.panelTitle}
         subtitle={draft.name}
@@ -3828,7 +3977,6 @@ export function AppStudioV2({
           <label htmlFor="studio-ai-page-prompt">Describe the page or the change you want</label>
           <textarea id="studio-ai-page-prompt" value={prompt} rows={5} onChange={(event) => setPrompt(event.target.value)} placeholder="Revenue and order trends by region for the weekly business review" />
           <small>{askWords.pageHelp(draft.sourcePolicy === 'governed_only')}</small>
-          {askVoice === 'keywords' && onConnectAi ? <button type="button" className="link studio-ai-connect-link" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
           <label htmlFor="studio-ai-replace-page" className="studio-ai-replace">
             <input id="studio-ai-replace-page" type="checkbox" checked={replacePageWithAi} onChange={(event) => setReplacePageWithAi(event.target.checked)} />
             Rebuild this page instead (replaces its current tiles)
@@ -3846,7 +3994,7 @@ export function AppStudioV2({
         /> : null}
         {aiScope === 'tile' && askVoice === 'keywords' ? <section className="studio-ai-connect" aria-label="Changing a tile needs AI">
           <strong>Changing a tile needs an AI provider</strong>
-          <span>Keyword suggestions can add tiles to a page, but they cannot read or change one tile. Connect an AI provider, or change the tile yourself in Tile settings.</span>
+          <span>Quick tiles add new tiles to a page; reading or changing one tile needs AI. Connect an AI provider, or change the tile yourself in Tile settings.</span>
           {onConnectAi ? <button type="button" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
         </section> : null}
         {aiScope === 'tile' && askVoice !== 'keywords' ? <Suspense fallback={<div className="studio-copilot-loading">Loading…</div>}>

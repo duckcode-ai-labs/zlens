@@ -1522,6 +1522,36 @@ export const APP_STUDIO_V2_STYLES = `
 .data-step-footer button.primary { border-color:var(--accent); background:var(--accent); color:var(--accent-fg); }
 .data-step-footer button.primary:hover { background:var(--accent-hover); }
 .data-step-footer button:disabled { opacity:.5; cursor:default; }
+.data-step-next-hint { color:var(--text-tertiary); font-size:12px; }
+/* No AI (round-2 Q2): three quick choices, then Build App. */
+.quick-start-step .data-step-header small.quick-start-note, .quick-start-note { text-transform:none; letter-spacing:0; color:var(--text-tertiary); font-size:12px; line-height:1.45; }
+.quick-start-note button.link { padding:0; border:0; background:transparent; color:var(--accent); font:inherit; text-align:left; cursor:pointer; text-decoration:underline; }
+.quick-start-step > .quick-choices, .quick-start-step > .quick-start-empty { width:min(760px,100%); }
+.quick-choices { display:grid; gap:12px; }
+.quick-choice-list { list-style:none; margin:0; padding:0; display:grid; gap:8px; }
+.quick-choice { display:grid; grid-template-columns:76px minmax(0,1fr) 28px; grid-template-areas:"kind sentence remove" ". title title"; align-items:center; gap:6px 10px; padding:12px; border:1px solid var(--border-subtle); border-radius:12px; background:var(--bg-2); }
+.quick-choice-kind { grid-area:kind; display:inline-flex; align-items:center; gap:5px; justify-self:start; padding:3px 8px; border-radius:999px; background:var(--accent-dim); color:var(--accent); font-size:12px; font-weight:600; }
+.quick-choice-sentence { grid-area:sentence; display:flex; flex-wrap:wrap; align-items:center; gap:6px; min-width:0; color:var(--text-secondary); font-size:14px; }
+.quick-choice-sentence select { min-width:0; max-width:100%; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-1); color:var(--text-primary); padding:6px 8px; font:inherit; font-size:13px; }
+.quick-choice-sentence select:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.quick-choice-time { color:var(--text-tertiary); font-size:12px; }
+.quick-choice-title { grid-area:title; color:var(--text-tertiary); font-size:12px; }
+.quick-choice-title strong { color:var(--text-primary); font-weight:600; }
+.quick-choice-remove { grid-area:remove; width:28px; height:28px; display:grid; place-items:center; border:0; border-radius:8px; background:transparent; color:var(--text-tertiary); cursor:pointer; }
+.quick-choice-remove:hover:not(:disabled) { background:var(--bg-3); color:var(--text-primary); }
+.quick-choice-remove:disabled { opacity:.35; cursor:default; }
+.quick-choice-add { display:flex; flex-wrap:wrap; align-items:center; gap:6px; color:var(--text-secondary); font-size:13px; }
+.quick-choice-add button { display:inline-flex; align-items:center; gap:4px; border:1px dashed var(--border-default); border-radius:8px; background:transparent; color:var(--text-primary); padding:5px 10px; font-size:12px; font-weight:600; cursor:pointer; }
+.quick-choice-add button:hover:not(:disabled) { border-color:var(--accent); color:var(--accent); }
+.quick-choice-add button:disabled { opacity:.45; cursor:default; }
+.quick-choice-submit { justify-self:start; border:1px solid var(--accent); border-radius:8px; background:var(--accent); color:var(--accent-fg); padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; }
+.quick-choice-submit:hover:not(:disabled) { background:var(--accent-hover); }
+.quick-choice-submit:disabled { opacity:.5; cursor:default; }
+.studio-quick-panel { width:360px; }
+.studio-quick-panel .inspector-body { display:grid; gap:12px; padding-top:8px; }
+.studio-quick-panel .quick-choice { grid-template-columns:minmax(0,1fr) 28px; grid-template-areas:"kind remove" "sentence sentence" "title title"; }
+.studio-quick-panel .data-step-empty { flex-wrap:wrap; }
+@media (max-width:620px) { .quick-choice { grid-template-columns:minmax(0,1fr) 28px; grid-template-areas:"kind remove" "sentence sentence" "title title"; } }
 .ai-data-step .data-step-header p.data-step-goal { color:var(--text-primary); font-size:14px; }
 .ai-data-step .data-step-header p.data-step-goal strong { font-weight:600; }
 .ai-data-step .data-step-header .data-step-provenance { text-transform:none; letter-spacing:0; }

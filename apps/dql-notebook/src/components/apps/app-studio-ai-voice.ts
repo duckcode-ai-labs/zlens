@@ -10,18 +10,18 @@ import { APP_STUDIO_AI_ACTIVITY_LABELS } from './app-studio-ai-activity';
  * the author reads about a plan says which one made it: "AI picked 3 sources"
  * only when an AI did, "Suggested from keywords · no AI connected" otherwise.
  *
- * One rule for every entry point: what the keyword matcher can do (describe an
- * App, suggest tiles for a page, revise) is offered as keyword suggestions with
- * the same label; what only an AI can do (change one tile, design a layout) says
- * "Connect an AI provider" instead. Pure: no React, no fetches.
+ * Without AI, App Studio no longer guesses from the words of a request (round-2
+ * design Q2): a new App starts from three quick choices (a total, a trend, a
+ * top list) and the canvas's toolbar opens the same choices as Quick tiles.
+ * What only an AI can do (describe an App in your own words, change one tile,
+ * design a layout) says "Connect an AI provider" instead. Proposals the keyword
+ * matcher made earlier still say so when opened. Pure: no React, no fetches.
  */
 
 export type AppStudioPlannerVoice = 'ai' | 'keywords';
 
 export const KEYWORD_SUGGESTIONS_LABEL = 'Suggested from keywords · no AI connected';
-export const CONNECT_AI_TO_DESCRIBE = 'Connect an AI provider to describe an App';
 export const CONNECT_AI_ACTION = 'Connect an AI provider';
-export const TRY_KEYWORD_SUGGESTIONS = 'Try keyword suggestions';
 
 /**
  * Whether an AI provider is connected, from `GET /api/settings/providers`.
@@ -38,13 +38,27 @@ export function appStudioAiConnected(settings: {
   return (settings.providers ?? []).some((provider) => provider.enabled && provider.configured);
 }
 
+/** How a new App starts: described to AI, from the quick choices (no AI), or by hand. */
+export type AppStudioLaunchMode = 'ai' | 'quick' | 'manual';
+
 /**
- * The tab the Build new App form opens on: Describe with AI only when an AI
- * provider is connected. Until the settings answer (`undefined`) it opens on
- * Start manually, so a person with no AI never lands on an AI form first.
+ * The tab the Build new App form opens on: Describe with AI when an AI
+ * provider is connected, Quick start when none is. Until the settings answer
+ * (`undefined`) it opens on Start manually, so nobody lands on the wrong form.
  */
-export function appStudioDefaultLaunchMode(aiConnected: boolean | undefined): 'ai' | 'manual' {
-  return aiConnected === true ? 'ai' : 'manual';
+export function appStudioDefaultLaunchMode(aiConnected: boolean | undefined): AppStudioLaunchMode {
+  if (aiConnected === true) return 'ai';
+  return aiConnected === false ? 'quick' : 'manual';
+}
+
+/**
+ * The tab a Build new App form shows for a chosen mode: without AI the
+ * Describe with AI tab is Quick start, and with AI there is no Quick start tab.
+ */
+export function appStudioLaunchTab(mode: AppStudioLaunchMode, aiConnected: boolean | undefined): AppStudioLaunchMode {
+  if (aiConnected === false && mode === 'ai') return 'quick';
+  if (aiConnected !== false && mode === 'quick') return 'ai';
+  return mode;
 }
 
 /**
@@ -165,15 +179,16 @@ export interface AppStudioAskWords {
 
 export function appStudioAskWords(voice: AppStudioPlannerVoice): AppStudioAskWords {
   if (voice === 'keywords') {
+    // No AI: these open the quick choices (a total, a trend, a top list) for the page.
     return {
-      toolbar: 'Suggest tiles',
-      panelTitle: 'Suggestions',
-      proposeAdditions: 'Suggest from keywords',
-      proposePage: 'Suggest a new page from keywords',
-      draftPage: 'Suggest tiles from keywords',
-      buildOrRevise: 'Suggest tiles from keywords',
-      revise: 'Suggest from keywords',
-      pageHelp: (governedOnly) => `No AI provider is connected, so suggestions match the words you type to ${governedOnly ? 'certified tables, Metrics and saved queries' : 'Tables, Metrics and saved queries, including data that needs review'}. New tiles are added below what is already here, and you keep or skip each one before anything changes.`,
+      toolbar: 'Quick tiles',
+      panelTitle: 'Quick tiles',
+      proposeAdditions: 'Add to page',
+      proposePage: 'Add to page',
+      draftPage: 'Add quick tiles',
+      buildOrRevise: 'Add quick tiles',
+      revise: 'Add quick tiles',
+      pageHelp: () => 'No AI provider is connected. Quick tiles add a total, a trend or a top list from this App\'s data, exactly as you pick them, below what is already here.',
     };
   }
   return {
