@@ -15,6 +15,7 @@ import {
   shortlistAppSources,
 } from './index.js';
 import type { AppSourceCatalogRecord } from './index.js';
+import { blockCompanionRelativePath, certifiedSourceSha256, renderTableDatasetBlock } from '@zlens/core';
 
 describe('AppSourceCatalogService', () => {
   let projectRoot: string;
@@ -177,6 +178,35 @@ describe('AppSourceCatalogService', () => {
     const required = resolveAppSourceCatalogRecords(projectRoot, [draftId], 'governed_only');
     expect(required.items).toHaveLength(1);
     expect(required.items[0]).toMatchObject({ trust: 'review_required', eligibility: { localPreview: false } });
+  });
+
+  it('lets checked data preview under "Only certified data" and never publish until it is certified (design Q1)', async () => {
+    const source = renderTableDatasetBlock({
+      proposal: {
+        name: 'Orders', relation: 'orders', keyCandidates: ['order_id'], key: { column: 'order_id', entity: 'order' },
+        fields: [{ name: 'order_id', label: 'Order id', role: 'key', type: 'string' }, { name: 'region', label: 'Region', role: 'dimension', type: 'string' }],
+        measures: [{ name: 'order_count', label: 'Order count', aggregation: 'count_distinct', from: 'order_id', format: 'number', include: true, reason: '' }],
+      },
+      blockName: 'Checked orders', domain: 'sales', owner: 'kranthi@example.test', columnSql: (name) => name,
+    }).replace('status = "draft"', 'status = "review"');
+    const blockPath = 'domains/sales/blocks/checked-orders.dql';
+    writeFileSync(join(projectRoot, blockPath), source);
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath)!;
+    mkdirSync(join(projectRoot, companionPath, '..'), { recursive: true });
+    const companion = (sha: string) => `name: Checked orders\nreviewStatus: review\ncheck:\n  checkedBy: kranthi@example.test\n  checkedAt: '2026-10-22T09:00:00.000Z'\n  sourceSha256: ${sha}\n  checks:\n    - 'Row key: each row is one order'\n`;
+    writeFileSync(join(projectRoot, companionPath), companion(certifiedSourceSha256(source)));
+    await ensureAgentProjectReady(projectRoot);
+
+    const page = queryAppSourceCatalog(projectRoot, { query: 'checked orders', sourcePolicy: 'governed_only' });
+    const checked = page.items.find((item) => item.name === 'Checked orders');
+    expect(checked).toMatchObject({
+      lifecycle: 'review',
+      trust: 'review_required',
+      check: { by: 'kranthi@example.test', at: '2026-10-22T09:00:00.000Z', checks: ['Row key: each row is one order'] },
+      eligibility: { localPreview: true, projectPublish: false, reasonCodes: expect.arrayContaining(['CHECKED_NEEDS_CERTIFYING']) },
+    });
+    // The planner may build with it while the App is edited.
+    expect(shortlistAppSources(projectRoot, 'checked orders', { sourcePolicy: 'governed_only' }).items.map((item) => item.name)).toContain('Checked orders');
   });
 
   it('orders catalog pages and the AI shortlist by trust after relevance', async () => {

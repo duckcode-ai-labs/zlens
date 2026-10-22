@@ -781,6 +781,96 @@ describe('Publish counts tiles that need review under "Only certified data" (des
   });
 });
 
+describe('Certify at publish (design Q1)', () => {
+  const checkedTable = { id: 'app:block:shop:orders', kind: 'block' as const, sourceRef: 'domains/shop/blocks/orders.dql', lifecycle: 'review' as const, trustState: 'review_required' as const, reviewStatus: 'required' as const, checked: true, capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: { kind: 'block', label: 'Orders', trust: 'review_required', fields: [] } } };
+  const savedQuery = { id: 'app:block:shop:top', kind: 'block' as const, sourceRef: 'domains/shop/blocks/top.dql', lifecycle: 'draft' as const, trustState: 'review_required' as const, reviewStatus: 'required' as const };
+  const draftWith = (sources: unknown[]) => ({
+    version: 3, id: 'build_1', appId: 'orders-app', name: 'Orders', revision: 2, proposalHash: 'hash',
+    authoringMode: 'manual', template: 'blank', sourcePolicy: 'governed_only', state: 'local_draft',
+    frame: { goal: 'Orders', metrics: [], dimensions: [], filters: [] }, requirements: [], coverage: [],
+    sources,
+    pages: [{
+      version: 3, id: 'overview', metadata: { title: 'Overview' },
+      datasets: [{ id: 'orders_ds', sourceId: checkedTable.id, sourceRevision: 'r', snapshotId: 's', contractFingerprint: 'c' }],
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [
+        { i: 'kpi', x: 0, y: 0, w: 3, h: 2, title: 'Orders', sourceId: checkedTable.id, sourceRevision: 'r', query: { dimensions: [], measures: [{ measure: 'order_count' }], respectsGlobalFilters: true }, viz: { type: 'single_value' } },
+        { i: 'top', x: 3, y: 0, w: 3, h: 2, title: 'Top', block: { ref: 'domains/shop/blocks/top.dql' }, sourceId: savedQuery.id, viz: { type: 'table' } },
+      ] },
+    }],
+    previewReceipts: [{ id: 'run', pageId: 'overview', revision: 2, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'x', createdAt: '' }],
+    reviewTasks: [], createdAt: '', updatedAt: '',
+  }) as never;
+  const dialog = (draft: never, onCertifySource = vi.fn()) => renderToStaticMarkup(
+    <studio.PublishReadinessDialog
+      draft={draft}
+      serverIssues={['APP_BUILD_DATASET_NOT_CERTIFIED: Orders uses Orders, which is checked but not certified yet. Certify it before publishing.']}
+      busy={false}
+      previewRun={null}
+      onClose={vi.fn()}
+      onRetry={vi.fn()}
+      onRunPreview={vi.fn()}
+      onRunAllPreviews={vi.fn()}
+      onRemoveRequirement={vi.fn()}
+      onReviseRequirement={vi.fn()}
+      onAnswerQuestion={vi.fn()}
+      onResolveTask={vi.fn()}
+      onOpenSources={vi.fn()}
+      onOpenFilters={vi.fn()}
+      onRefreshSources={vi.fn()}
+      onApproveSemantic={vi.fn()}
+      onRemoveLocalAnalysis={vi.fn()}
+      onCertifySource={onCertifySource}
+      sourceName={(source) => (source.id === checkedTable.id ? 'orders' : 'top_customers')}
+    />,
+  );
+
+  it('lists data that is not certified yet, each with a short review, and holds publishing under "Only certified data"', () => {
+    const markup = dialog(draftWith([checkedTable]));
+    expect(markup).toContain('1 table not certified yet');
+    expect(markup).toContain('This App uses only certified data.');
+    expect(markup).toContain('Orders</strong><small>Table · Checked · Needs certifying');
+    expect(markup).toContain('aria-label="Review and certify Orders"');
+    expect(markup).not.toContain('Ready to publish');
+    // The server says the same thing; it is listed once, not again as a separate fix.
+    expect(markup).not.toContain('Complete governed validation');
+    expect(markup).toContain('1 fix before publishing');
+  });
+
+  it('lists uncertified saved queries too, and words a mix plainly', () => {
+    const markup = dialog(draftWith([checkedTable, savedQuery]));
+    expect(markup).toContain('1 table and 1 saved query not certified yet');
+    expect(markup).toContain('Top Customers</strong><small>Saved query · Needs review');
+    expect(markup).not.toContain('Local analysis cannot publish');
+  });
+
+  it('is ready once the data is certified', () => {
+    const certified = { ...checkedTable, lifecycle: 'certified' as const, trustState: 'certified' as const, reviewStatus: 'not_required' as const, checked: undefined };
+    const markup = renderToStaticMarkup(
+      <studio.PublishReadinessDialog
+        draft={draftWith([certified])}
+        serverIssues={[]}
+        busy={false}
+        previewRun={null}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onRunPreview={vi.fn()}
+        onRunAllPreviews={vi.fn()}
+        onRemoveRequirement={vi.fn()}
+        onReviseRequirement={vi.fn()}
+        onAnswerQuestion={vi.fn()}
+        onResolveTask={vi.fn()}
+        onOpenSources={vi.fn()}
+        onOpenFilters={vi.fn()}
+        onRefreshSources={vi.fn()}
+        onApproveSemantic={vi.fn()}
+        onRemoveLocalAnalysis={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('Ready to publish');
+    expect(markup).not.toContain('not certified yet');
+  });
+});
+
 describe('tile settings row count (B14)', () => {
   it('says how many rows the tile holds when it holds only the first rows', () => {
     expect(studio.liveRowsLabel(935, 500)).toBe('Live · 935 rows · first 500 loaded');

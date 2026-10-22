@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { FileText, ShieldCheck, X } from 'lucide-react';
+import { FileText, SearchCheck, X } from 'lucide-react';
 import { api, type CertificationByline, type SavedQueryDatasetDraft, type SavedQueryDatasetResult } from '../../../api/client';
-import { CertifiedReceiptNote } from './CertifiedReceiptNote';
+import { CheckedReceiptNote } from './CertifiedReceiptNote';
 import { DatasetNumbersCheck, initialNumberChoices, type NumberChoice } from './TableDatasetDialog';
 import { humanize, messageOf } from './studio-ui';
 
@@ -19,9 +19,10 @@ const defaultApi: SavedQueryFieldsApi = {
 };
 
 /** What the dialog says once the server answered a create. */
-export function savedQueryFieldsOutcome(result: SavedQueryDatasetResult, name: string): { kind: 'certified' | 'review' | 'refused' | 'error'; message: string } {
-  if (result.ok && result.status === 'certified') {
-    return { kind: 'certified', message: `${name} is row-level now and certified: its checks passed.` };
+export function savedQueryFieldsOutcome(result: SavedQueryDatasetResult, name: string): { kind: 'checked' | 'review' | 'refused' | 'error'; message: string } {
+  // Checks passing never certify (design Q1): it is Checked · Needs certifying.
+  if (result.ok && result.status === 'checked') {
+    return { kind: 'checked', message: `${name} is row-level now and checked: it needs certifying before you publish.` };
   }
   if (result.ok) {
     return { kind: 'review', message: `${name} is row-level now. It needs review: it did not pass its checks yet.` };
@@ -33,7 +34,7 @@ export function savedQueryFieldsOutcome(result: SavedQueryDatasetResult, name: s
 }
 
 export type SavedQueryFieldsSubmission =
-  | { kind: 'added'; status: 'certified' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[]; certification?: CertificationByline }
+  | { kind: 'added'; status: 'checked' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[]; check?: CertificationByline }
   | { kind: 'refused'; message: string; blockers: string[] }
   | { kind: 'error'; message: string };
 
@@ -58,7 +59,7 @@ export async function submitSavedQueryFields(client: SavedQueryFieldsApi, input:
   const outcome = savedQueryFieldsOutcome(result, input.name);
   if (outcome.kind === 'refused') return { kind: 'refused', message: outcome.message, blockers: result.blockers ?? [] };
   if (outcome.kind === 'error') return { kind: 'error', message: outcome.message };
-  return { kind: 'added', status: result.status ?? 'review', sourceId: result.sourceId ?? input.sourceId, message: outcome.message, blockers: result.blockers ?? [], ...(result.certification ? { certification: result.certification } : {}) };
+  return { kind: 'added', status: result.status ?? 'review', sourceId: result.sourceId ?? input.sourceId, message: outcome.message, blockers: result.blockers ?? [], ...(result.check ? { check: result.check } : {}) };
 }
 
 /**
@@ -67,10 +68,11 @@ export async function submitSavedQueryFields(client: SavedQueryFieldsApi, input:
  * row-safe measures (distinct counts, averages over rows). The same "Check the numbers" step
  * as "Start from a table", for an existing saved query: ZLens reads its
  * columns, checks what one row is against its rows, and writes the fields
- * onto the same saved query file. The same certification check as the table
- * path then runs: when it passes the saved query is a certified Dataset; when
- * it does not, it stays Needs review. A certified saved query goes back for
- * review, and is only changed after a failed check if the author sends it.
+ * onto the same saved query file. The same checks as the table path then
+ * run: when they pass it is Checked · Needs certifying (design Q1), certified
+ * on purpose later; when they do not, it stays Needs review. A certified saved
+ * query goes back for review, and is only changed after a failed check if the
+ * author sends it.
  */
 export function SavedQueryFieldsDialog({
   sourceId,
@@ -84,8 +86,8 @@ export function SavedQueryFieldsDialog({
   /** The saved query's name, shown while its proposal loads. */
   name: string;
   onClose: () => void;
-  /** The fields are written; `status` says whether it is certified or needs review. */
-  onAdded: (sourceId: string, status: 'certified' | 'review' | 'draft') => void;
+  /** The fields are written; `status` says whether it is checked or needs review. */
+  onAdded: (sourceId: string, status: 'checked' | 'review' | 'draft') => void;
   client?: SavedQueryFieldsApi;
   /** A proposal already read (tests); otherwise the dialog reads it on open. */
   initialDraft?: SavedQueryDatasetDraft;
@@ -96,7 +98,7 @@ export function SavedQueryFieldsDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<string[] | null>(null);
-  const [done, setDone] = useState<{ status: 'certified' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[]; certification?: CertificationByline } | null>(null);
+  const [done, setDone] = useState<{ status: 'checked' | 'review' | 'draft'; sourceId: string; message: string; blockers: string[]; check?: CertificationByline } | null>(null);
 
   useEffect(() => {
     if (initialDraft) return undefined;
@@ -134,7 +136,7 @@ export function SavedQueryFieldsDialog({
         return;
       }
       setRefusal(null);
-      setDone({ status: submission.status, sourceId: submission.sourceId, message: submission.message, blockers: submission.blockers, ...(submission.certification ? { certification: submission.certification } : {}) });
+      setDone({ status: submission.status, sourceId: submission.sourceId, message: submission.message, blockers: submission.blockers, ...(submission.check ? { check: submission.check } : {}) });
     }).catch((cause) => {
       setSaving(false);
       setError(messageOf(cause));
@@ -160,18 +162,18 @@ export function SavedQueryFieldsDialog({
         <div className="table-dataset-body">
           {!proposal && !error ? <p className="table-dataset-muted" role="status">Reading {label} and checking its rows…</p> : null}
           {done ? (
-            <div className={`saved-query-fields-done ${done.status === 'certified' ? 'certified' : 'review'}`} role="status">
-              {done.status === 'certified' ? <ShieldCheck size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
+            <div className={`saved-query-fields-done ${done.status === 'checked' ? 'checked' : 'review'}`} role="status">
+              {done.status === 'checked' ? <SearchCheck size={16} aria-hidden="true" /> : <FileText size={16} aria-hidden="true" />}
               <div>
                 <strong>{done.message}</strong>
                 <small>Its row-level Measures and Dimensions are in the Data pane.{done.blockers.length ? ` Why it needs review: ${done.blockers.join(' ')}` : ''}</small>
               </div>
             </div>
           ) : null}
-          {done?.status === 'certified' && done.certification ? <CertifiedReceiptNote certification={done.certification} /> : null}
+          {done?.status === 'checked' && done.check ? <CheckedReceiptNote check={done.check} /> : null}
           {!done && proposal ? (
             <>
-              {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its certification checks right away: if they pass, it is certified again.</p> : null}
+              {sendsBack ? <p className="saved-query-fields-notice" role="note"><strong>{MAKE_ROW_LEVEL_SENDS_BACK_FOR_REVIEW}</strong> ZLens runs its checks right away: if they pass, it is checked and needs certifying again before you publish.</p> : null}
               <DatasetNumbersCheck proposal={proposal} rows={draft?.rows ?? 0} choices={choices} onChoice={setChoice} groupByKey noKeyMessage={`No column in ${label} is filled and different on every row, so ZLens cannot count its rows safely. Add an id column to the saved query first.`} />
               {proposal.skipped?.length ? <p className="table-dataset-muted">Left out (names ZLens cannot use): {proposal.skipped.join(', ')}.</p> : null}
               {refusal ? <div className="table-dataset-error" role="alert">

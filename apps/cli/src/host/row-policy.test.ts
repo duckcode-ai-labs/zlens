@@ -325,7 +325,10 @@ describe('two people, the same questions, different rows (RFC 0010 HH-3)', () =>
       const table = tables.body.tables.find((entry: { name: string }) => entry.name === 'order_lines');
       const created = await call('admin', '/api/app-datasets/tables/create', { tableId: table.id, name: 'Order lines', domain: 'commerce' });
       expect(created.status, created.text).toBe(201);
-      expect(created.body.status).toBe('certified');
+      // Checking leaves it Checked · Needs certifying; the admin certifies it on purpose (design Q1).
+      expect(created.body.status).toBe('checked');
+      const certified = await call('admin', '/api/app-datasets/certify', { sourceId: created.body.sourceId });
+      expect(certified.status, certified.text).toBe(200);
 
       // The same Dataset question, asked by each person.
       const byRegion = { dimensions: [{ field: 'region' }], measures: [{ measure: 'order_line_count' }] };

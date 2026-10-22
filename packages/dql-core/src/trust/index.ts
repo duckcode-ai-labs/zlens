@@ -26,5 +26,8 @@ export {
   certifiedSourceState,
   changedSinceCertifiedMessage,
   receiptSourceSha256,
+  readCompanionCheck,
+  currentCheckForSource,
+  currentBlockFileCheck,
 } from './certification-source.js';
-export type { CertifiedSourceState } from './certification-source.js';
+export type { CertifiedSourceState, BlockCheckRecord } from './certification-source.js';

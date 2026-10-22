@@ -41,6 +41,12 @@ export interface CertificationByline {
   name?: string | null;
   at?: string | null;
   checks?: ReadonlyArray<string> | null;
+  /**
+   * The person reading is the person who certified it (the server compares
+   * the recorded identity with the viewer's, the same way it names people
+   * everywhere): "Certified by you · 22 Oct".
+   */
+  byYou?: boolean | null;
 }
 
 /** The parts of a layout item trust depends on. */
@@ -61,6 +67,8 @@ export interface ReaderTrustTile {
   aiPin?: { certification?: string; reviewStatus?: string } | null;
   dataset?: {
     trust?: string;
+    /** ZLens checked the data and someone added it, but nobody certified it yet ("Checked · Needs certifying"). */
+    checked?: boolean | null;
     validation?: { outcome?: string } | null;
     /** Joins to related tables the tile used (design D2), in plain words. */
     joins?: Array<{ trust?: string; sentence?: string }> | null;
@@ -71,6 +79,9 @@ export interface ReaderTrustTile {
   /** Who certified the source behind this tile, and when (D5). */
   certification?: CertificationByline | null;
 }
+
+/** The label of data ZLens checked that nobody certified yet (design Q1). */
+export const CHECKED_NEEDS_CERTIFYING_LABEL = 'Needs certifying';
 
 export const READER_TRUST_LABELS: Record<ReaderTrustState, string> = {
   certified: 'Certified',
@@ -120,7 +131,7 @@ export function certifiedDateLabel(at?: string | null, now: Date = new Date()): 
  * "Certified · 21 Oct", and with neither just "Certified".
  */
 export function certifiedByLabel(receipt: CertificationByline | null | undefined, now: Date = new Date()): string {
-  const who = certifierDisplayName(receipt?.by, receipt?.name);
+  const who = receipt?.byYou ? 'you' : certifierDisplayName(receipt?.by, receipt?.name);
   const when = certifiedDateLabel(receipt?.at, now);
   return [who ? `Certified by ${who}` : 'Certified', when].filter(Boolean).join(' · ');
 }
@@ -159,7 +170,10 @@ export function certifiedByAcross(receipts: ReadonlyArray<CertificationByline | 
   const present = receipts.filter((receipt): receipt is CertificationByline => Boolean(receipt));
   if (!present.length) return undefined;
   const names: string[] = [];
+  // The reader comes first when they certified some of it: "Certified by you and Maria".
+  if (present.some((receipt) => receipt.byYou)) names.push('you');
   for (const receipt of present) {
+    if (receipt.byYou) continue;
     const name = certifierDisplayName(receipt.by, receipt.name);
     if (name && !names.includes(name)) names.push(name);
   }
@@ -223,6 +237,9 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
       return outcome === 'adapted'
         ? certifiedTrust('Certified data; the query was adapted within what it certifies.', tile.certification)
         : certifiedTrust('Runs on certified data, within what it certifies.', tile.certification);
+    }
+    if (outcome !== 'needs_review' && dataset.checked) {
+      return { ...trust('review', 'ZLens checked this data, but nobody has certified it yet. It is certified before the App is published.'), label: CHECKED_NEEDS_CERTIFYING_LABEL };
     }
     return trust('review', outcome === 'needs_review'
       ? 'The query goes beyond what the data certifies.'

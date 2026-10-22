@@ -53,7 +53,7 @@ write the same receipt:
 | Where | Action | Receipt says |
 |---|---|---|
 | [Import SQL](import-sql.md) | **Certify** on a saved draft | `via: sql-import` |
-| App Studio, data from a table | **Certify and use this data** | `via: app-dataset` |
+| App Studio, data checked from a table (or a saved query made row-level) | **I vouch for this — certify**, at publish or under **⋯ → Certify…** | `via: app-dataset` |
 | Terminal | `zlens certify --from-draft <path>` | `via: cli` |
 
 ## The rules

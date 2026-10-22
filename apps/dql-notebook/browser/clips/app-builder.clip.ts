@@ -22,9 +22,12 @@ async function certifyCustomersDataset(baseUrl: string): Promise<void> {
     name: DATASET,
     domain: 'commerce',
     measures: drafted.proposal!.measures.map(({ name, include, format }) => ({ name, include, format })),
-  }) as { ok: boolean; status?: string; error?: string; blockers?: string[] };
+  }) as { ok: boolean; status?: string; sourceId?: string; error?: string; blockers?: string[] };
   expect(created.ok, created.error).toBe(true);
-  expect(created.status, (created.blockers ?? []).join(' ')).toBe('certified');
+  // "Check and use", then "I vouch for this — certify" (design Q1).
+  expect(created.status, (created.blockers ?? []).join(' ')).toBe('checked');
+  const certified = await post('/api/app-datasets/certify', { sourceId: created.sourceId }) as { status?: string; error?: string };
+  expect(certified.status, certified.error).toBe('certified');
 }
 
 /**

@@ -1,4 +1,5 @@
 import {
+  applyTableDuplicateChoices,
   applyTableProfile,
   getDialect,
   proposeTableDataset,
@@ -274,10 +275,13 @@ export async function profileTable(input: { relation: string; columns: string[];
 }
 
 /**
- * Apply the author's choices to a proposal the server re-derived: which
- * numbers to keep and how to show them. Nothing else in the request is used.
+ * Apply the author's choices to a proposal the server re-derived: which of
+ * two duplicate columns to use (design Q1.4; unanswered means the
+ * recommended one), then which numbers to keep and how to show them. Nothing
+ * else in the request is used.
  */
-export function applyTableDatasetChoices(proposal: TableDatasetProposal, raw: unknown): TableDatasetProposal {
+export function applyTableDatasetChoices(drafted: TableDatasetProposal, raw: unknown, duplicates?: unknown): TableDatasetProposal {
+  const proposal = applyTableDuplicateChoices(drafted, duplicates);
   const choices = Array.isArray(raw) ? raw : [];
   const byName = new Map<string, Record<string, unknown>>();
   for (const choice of choices) {

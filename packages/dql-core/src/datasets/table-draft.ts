@@ -65,7 +65,41 @@ export interface TableDatasetProposal {
   keyCandidates: string[];
   /** Columns left out because their names are not plain identifiers. */
   skipped?: string[];
+  /**
+   * Two columns that hold the same number in different units (`order_total`
+   * and `order_total_cents`). The check asks one question per pair and keeps
+   * one column ({@link applyTableDuplicateChoices}); until it is answered both
+   * are proposed.
+   */
+  duplicates?: TableDatasetDuplicate[];
+  /** Columns the author's duplicate answers left out, and why (recorded with the Dataset). */
+  hiddenColumns?: TableDatasetHiddenColumn[];
 }
+
+/** One "same number, two units" pair the check asks about. */
+export interface TableDatasetDuplicate {
+  /** The field the kept column becomes: "order_total". */
+  name: string;
+  /** "Order total". */
+  label: string;
+  /** The column without a unit in its name: `order_total`. */
+  plainColumn: string;
+  /** The column stored in hundredths: `order_total_cents`. */
+  minorColumn: string;
+  minorUnits: 'cents' | 'pennies';
+  /** The unit the hundredths column is read in: "dollars". */
+  major: 'dollars' | 'pounds';
+  /** The field the proposal reads the hundredths column as before the answer ("order_total_dollars"). */
+  convertedField: string;
+  /** "Use Order total in dollars?" */
+  question: string;
+}
+
+/** An answer: use the hundredths column read in dollars (recommended), or the plain column as it is. */
+export interface TableDuplicateChoice { name: string; use: 'minor' | 'plain' }
+
+/** A column a duplicate answer left out. */
+export interface TableDatasetHiddenColumn { column: string; keptColumn: string; reason: string }
 
 export interface TableProfile {
   rows: number;
@@ -181,6 +215,8 @@ export function proposeTableDataset(input: {
   ].filter((name, index, all) => all.indexOf(name) === index).slice(0, 8);
   let firstTime = true;
   const takenNames = new Set(columns.map((column) => column.name.toLowerCase()));
+  const numberColumns = new Set(columns.filter((column) => column.kind === 'number').map((column) => column.name.toLowerCase()));
+  const duplicates: TableDatasetDuplicate[] = [];
   const fields: TableDatasetField[] = columns.map((column) => {
     if (column.kind === 'date' || column.kind === 'timestamp') {
       const field: TableDatasetField = { name: column.name, label: wordsFor(column.name), role: 'time', type: column.kind, grains: TIME_GRAINS, ...(firstTime ? { primary: true } : {}) };
@@ -191,9 +227,24 @@ export function proposeTableDataset(input: {
     if (minor && input.convertMinorUnits) {
       // Read as dollars: the field gets the dollars name, the SQL divides by 100.
       let name = majorUnitName(column.name);
+      const plain = name.toLowerCase();
+      const plainColumn = columns.find((other) => other.name.toLowerCase() === plain);
       if (takenNames.has(name.toLowerCase())) name = `${name}_${MINOR_UNIT_MONEY[minor].major}`;
       for (let suffix = 2; takenNames.has(name.toLowerCase()); suffix += 1) name = `${majorUnitName(column.name)}_${MINOR_UNIT_MONEY[minor].major}_${suffix}`;
       takenNames.add(name.toLowerCase());
+      // `order_total` beside `order_total_cents`: the same number twice. One question decides which one tiles use.
+      if (plainColumn && plainColumn.name !== column.name && numberColumns.has(plainColumn.name.toLowerCase())) {
+        duplicates.push({
+          name: plainColumn.name,
+          label: wordsFor(plainColumn.name),
+          plainColumn: plainColumn.name,
+          minorColumn: column.name,
+          minorUnits: minor,
+          major: MINOR_UNIT_MONEY[minor].major,
+          convertedField: name,
+          question: `Use ${wordsFor(plainColumn.name)} in ${MINOR_UNIT_MONEY[minor].major}?`,
+        });
+      }
       return { name, label: wordsFor(name), role: 'attribute', type: 'number', column: column.name, divideBy: 100 };
     }
     if (column.kind === 'number' && (minor || !NOT_A_MEASURE.test(column.name))) {
@@ -263,7 +314,53 @@ export function proposeTableDataset(input: {
     measures,
     keyCandidates,
     ...(skipped.length ? { skipped } : {}),
+    ...(duplicates.length ? { duplicates } : {}),
   };
+}
+
+/**
+ * Apply the answers to the duplicate-column questions (design Q1.4). For each
+ * pair the recommended answer, used when none was given, is the hundredths
+ * column read in dollars: its name says its unit, the plain column's does
+ * not. The other column is hidden from fields and measures, and recorded in
+ * `hiddenColumns` so the Dataset says what was left out and why. The kept
+ * field takes the plain name ("Order total"), so number choices keyed by it
+ * stay the same whichever answer is given. Applying twice changes nothing.
+ */
+export function applyTableDuplicateChoices(proposal: TableDatasetProposal, raw?: unknown): TableDatasetProposal {
+  const pairs = proposal.duplicates ?? [];
+  if (!pairs.length) return proposal;
+  const answers = new Map<string, 'minor' | 'plain'>();
+  for (const choice of Array.isArray(raw) ? raw : []) {
+    if (choice && typeof choice === 'object' && typeof (choice as { name?: unknown }).name === 'string') {
+      const use = (choice as { use?: unknown }).use;
+      if (use === 'minor' || use === 'plain') answers.set((choice as { name: string }).name, use);
+    }
+  }
+  let fields = proposal.fields;
+  let measures = proposal.measures;
+  const hidden: TableDatasetHiddenColumn[] = [...(proposal.hiddenColumns ?? [])];
+  const measureName = (name: string) => name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
+  for (const pair of pairs) {
+    if ((answers.get(pair.name) ?? 'minor') === 'minor') {
+      const plainMeasure = measures.find((measure) => measure.from === pair.plainColumn && measure.aggregation === 'sum');
+      fields = fields
+        .filter((field) => !(field.name === pair.plainColumn && !field.column))
+        .map((field) => (field.name === pair.convertedField ? { ...field, name: pair.name, label: pair.label } : field));
+      measures = measures
+        .filter((measure) => measure !== plainMeasure)
+        .map((measure) => (measure.from === pair.convertedField
+          ? { ...measure, name: plainMeasure?.name ?? measureName(pair.name), label: pair.label, from: pair.name, reason: `Adds up ${pair.label.toLowerCase()} across rows.` }
+          : measure));
+      hidden.push({ column: pair.plainColumn, keptColumn: pair.minorColumn, reason: `${pair.label} uses ${pair.minorColumn}, shown in ${pair.major}; ${pair.plainColumn} holds the same number, so it is hidden.` });
+    } else {
+      fields = fields.filter((field) => field.name !== pair.convertedField);
+      measures = measures.filter((measure) => measure.from !== pair.convertedField);
+      hidden.push({ column: pair.minorColumn, keptColumn: pair.plainColumn, reason: `${pair.label} uses ${pair.plainColumn} as it is; ${pair.minorColumn} holds the same number in ${pair.minorUnits}, so it is hidden.` });
+    }
+  }
+  const { duplicates: _answered, ...rest } = proposal;
+  return { ...rest, fields, measures, hiddenColumns: hidden };
 }
 
 /**
@@ -376,6 +473,13 @@ function convertedNote(proposal: TableDatasetProposal): string {
   return parts.length ? ` ${parts.join('; ')}.` : '';
 }
 
+/** " order_total is hidden (order_total_cents holds the same number)." for the block's description. */
+function hiddenNote(proposal: TableDatasetProposal): string {
+  const hidden = proposal.hiddenColumns ?? [];
+  if (!hidden.length) return '';
+  return ` ${hidden.map((entry) => `${entry.column} is hidden (${entry.keptColumn} holds the same number)`).join('; ')}.`;
+}
+
 /**
  * The Dataset block for a checked proposal. Only included measures are
  * written; the row identity names a stable proof id the runtime checks
@@ -424,7 +528,7 @@ export function renderTableDatasetBlock(input: {
     '  type = "custom"',
     '  status = "draft"',
     `  owner = ${quote(input.owner)}`,
-    `  description = ${quote(input.description ?? `${proposal.name} from ${proposal.relation}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.${convertedNote(proposal)}`)}`,
+    `  description = ${quote(input.description ?? `${proposal.name} from ${proposal.relation}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.${convertedNote(proposal)}${hiddenNote(proposal)}`)}`,
     '  tags = ["app-datasets", "from-table"]',
     '',
     '  grain = {',
@@ -443,6 +547,11 @@ export function renderTableDatasetBlock(input: {
     '  }',
     '',
     '  query = """',
+    // The duplicate-column answer stays with the Dataset's own SQL, so a later
+    // check (or a person reading the file) sees what was left out and why.
+    ...((proposal.hiddenColumns ?? []).length
+      ? [`/* Hidden duplicate columns: ${(proposal.hiddenColumns ?? []).map((entry) => `${entry.column} (${entry.keptColumn} is used)`).join(', ').replace(/\*\//g, '')} */`]
+      : []),
     // A cents column is read in dollars here, so every tile, KPI, table,
     // filter and export of this Dataset shows the same dollars.
     `SELECT ${proposal.fields.map((field) => (field.divideBy
@@ -477,5 +586,6 @@ export function tableDatasetCheckSentences(proposal: TableDatasetProposal, rows:
       return `${measure.label}: ${measure.format === 'currency' ? 'money' : measure.format === 'percent' ? 'a percent' : 'a number'}`;
     });
   if (formats.length) out.push(`Number formats: ${formats.join('; ')}`);
+  for (const entry of proposal.hiddenColumns ?? []) out.push(`Duplicate column: ${entry.reason}`);
   return out;
 }

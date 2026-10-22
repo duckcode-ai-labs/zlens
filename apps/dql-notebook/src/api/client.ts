@@ -19,16 +19,50 @@ export interface SavedQueryDatasetDraft {
 
 export interface SavedQueryDatasetResult {
   ok: boolean;
-  status?: 'certified' | 'review' | 'draft';
+  /** `checked`: its checks passed and it is Checked · Needs certifying (design Q1); never certified here. */
+  status?: 'checked' | 'review' | 'draft';
   previousStatus?: 'certified' | 'review' | 'draft';
   sourceId?: string;
   path?: string;
   blockers?: string[];
   keyChecked?: boolean;
-  /** Who certified it and the checks that passed, when it was certified. */
-  certification?: CertificationByline;
+  /** Who checked it and what the check found, when its checks passed. */
+  check?: CertificationByline;
   code?: string;
   error?: string;
+}
+
+/**
+ * Who checked data that nobody certified yet ("Checked · Needs certifying",
+ * design Q1), what the check found and which columns it hid as duplicates.
+ */
+export interface AppDataCheck extends CertificationByline {
+  hiddenColumns?: Array<{ column: string; keptColumn: string; reason: string }>;
+}
+
+/** The short review before "I vouch for this — certify" (design Q1). */
+export interface CertifyReview {
+  sourceId: string;
+  sourceRevision: string;
+  name: string;
+  kind: 'dataset' | 'saved_query' | 'metrics';
+  origin: 'table' | 'saved_query' | 'metrics';
+  lifecycle: string;
+  certified: boolean;
+  certification?: CertificationByline;
+  check?: AppDataCheck;
+  /** "Each row is one order (order_id)." */
+  row?: string;
+  /** The row key, checked again against the complete data just now. */
+  keyCheck?: { ok: true; sentence: string } | { ok: false; error: string };
+  numbers: Array<{ name: string; label: string; format: string; aggregation: string; note?: string }>;
+  joins: Array<{ label: string; sentence: string; trust: 'certified' | 'review_required' }>;
+  hiddenColumns: Array<{ column: string; keptColumn: string; reason: string }>;
+  checks: string[];
+  /** A Dataset nobody certified yet: "I vouch for this — certify" applies. */
+  canVouch: boolean;
+  /** A saved query without a row-level definition certifies in Block Studio. */
+  blockStudioPath?: string;
 }
 
 /** Guided Setup progress (design D7), saved by the server in `.dql/local/setup-progress.json`. */
@@ -2839,6 +2873,8 @@ export interface DashboardRunResponse {
       sourceRevision?: string;
       contractFingerprint?: string;
       trust?: 'certified' | 'review_required';
+      /** Checked · Needs certifying (design Q1). */
+      checked?: boolean;
       lifecycle?: string;
       binding?: DatasetDescriptor['binding'];
       proofState?: string;
@@ -3210,6 +3246,8 @@ export interface AppBlockRecommendation {
   };
   /** Who certified it and when, for a certified block (D5). */
   certification?: CertificationByline;
+  /** Checked · Needs certifying (design Q1): who checked it, and what the check found. */
+  check?: AppDataCheck;
 }
 
 export interface AppSourceCandidatePage {
@@ -3252,6 +3290,7 @@ interface AppSourceCandidateWire {
   score?: number;
   reasons: string[];
   certification?: CertificationByline;
+  check?: AppDataCheck;
 }
 
 export interface CreateAppRequest {
@@ -3535,6 +3574,8 @@ export interface AppStudioBuildDraft {
     capabilities?: NonNullable<AppBlockRecommendation['capabilities']>;
     trustState: 'certified' | 'review_required' | 'draft_ready';
     reviewStatus: 'not_required' | 'required' | 'approved';
+    /** Checked · Needs certifying (design Q1), set by the App API from the catalog. */
+    checked?: boolean;
   }>;
   pages: DashboardDocumentResponse['dashboard'][];
   reviewTasks: Array<{ id: string; message: string; status: 'open' | 'resolved'; sourceId?: string; pageId?: string; tileId?: string }>;
@@ -4999,6 +5040,7 @@ function appSourceCandidateToRecommendation(source: AppSourceCandidateWire): App
     score: source.score ?? 0,
     reasons: source.reasons,
     ...(source.certification ? { certification: source.certification } : {}),
+    ...(source.check ? { check: source.check } : {}),
   };
 }
 
@@ -8827,12 +8869,34 @@ export const api = {
     }
   },
 
-  /** Save the author's choice as a Dataset they own. */
-  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }> }): Promise<{ ok: boolean; status?: 'certified' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; certification?: CertificationByline; error?: string }> {
+  /**
+   * "Check and use" (design Q1): save the author's choice as a Dataset they
+   * own. Its checks passing makes it Checked · Needs certifying (`checked`);
+   * it is never certified here.
+   */
+  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; duplicates?: Array<{ name: string; use: 'minor' | 'plain' }> }): Promise<{ ok: boolean; status?: 'checked' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; check?: CertificationByline; error?: string }> {
     try {
       return await request('/api/app-datasets/tables/create', { method: 'POST', body: JSON.stringify(input) });
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  },
+
+  /** The short review before certifying data on purpose (design Q1). */
+  async getCertifyReview(sourceId: string): Promise<{ ok: boolean; review?: CertifyReview; error?: string; code?: string }> {
+    try {
+      return await request(`/api/app-datasets/certify-review?sourceId=${encodeURIComponent(sourceId)}`);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** "I vouch for this — certify" (design Q1): the same certification rules as Block Studio's Certify. */
+  async certifyAppData(sourceId: string, sourceRevision?: string): Promise<{ ok: boolean; status?: 'certified'; sourceId?: string; sourceRevision?: string; certification?: CertificationByline; blockers?: string[]; error?: string; code?: string }> {
+    try {
+      return await request('/api/app-datasets/certify', { method: 'POST', body: JSON.stringify({ sourceId, ...(sourceRevision ? { sourceRevision } : {}) }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
     }
   },
 

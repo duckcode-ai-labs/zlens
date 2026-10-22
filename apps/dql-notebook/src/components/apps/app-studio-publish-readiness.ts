@@ -3,6 +3,7 @@ import { appSourceIdsUsedByTiles } from '@zlens/core/apps/app-data-sources';
 import { appTilesNeedingJoinReview, type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
 import { removeField } from '@zlens/core/apps/viz-encoding';
 import type { DatasetDescriptor } from '@zlens/core/datasets/descriptor';
+import { sourceKindLabel } from './builder/app-data';
 
 export type AppPublicationStepKind = 'questions' | 'review' | 'preview' | 'sources';
 
@@ -19,7 +20,8 @@ export interface AppPublicationStep {
 export type AppPublicationIssueAction = 'sources' | 'refresh_sources' | 'filters' | 'preview' | 'tile_review';
 
 export function publicationIssueSummaries(issues: string[]): Array<{ id: string; title: string; detail: string; action: AppPublicationIssueAction }> {
-  const known = /Required App question is unresolved|Review task is still open|Run a current settled preview|requires snapshot-bound semantic approval|is review-required and cannot be published|references app-scoped exploratory DQL|Resolve required Build Frame clarifications/i;
+  // Data not certified yet is listed by the publish check itself (design Q1), once.
+  const known = /Required App question is unresolved|Review task is still open|Run a current settled preview|requires snapshot-bound semantic approval|is review-required and cannot be published|references app-scoped exploratory DQL|Resolve required Build Frame clarifications|APP_BUILD_DATASET_NOT_CERTIFIED|APP_BUILD_DATASET_PUBLICATION_INELIGIBLE/i;
   const summaries = issues.filter((issue) => !known.test(issue)).map((issue) => {
     const choiceMatch = issue.match(/^[^/]+\/[^ ]+ has no choice for filter (.+?)\. Open the Filters tab/i);
     if (choiceMatch) {
@@ -292,6 +294,30 @@ export function publicationBlockingSources(draft: AppStudioBuildDraft): AppStudi
     }
     return source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql';
   });
+}
+
+/**
+ * The App's data that nobody certified yet (design Q1): tables (checked or
+ * not) and saved queries. Each is certified on purpose before publishing —
+ * a table through a short review ("I vouch for this — certify"), a saved
+ * query in Block Studio. Metrics and AI drafts have their own items.
+ */
+export function uncertifiedPublicationSources(sources: AppStudioBuildDraft['sources']): AppStudioBuildDraft['sources'] {
+  return sources.filter((source) => (source.kind === 'block' || source.kind === 'certified_block')
+    && source.capabilities?.dataset?.kind !== 'semantic'
+    && !source.capabilities?.semanticModelId
+    && (source.lifecycle !== 'certified' || source.trustState !== 'certified'));
+}
+
+/** "2 tables not certified yet", "1 saved query not certified yet", "1 table and 1 saved query not certified yet". */
+export function notCertifiedYetTitle(sources: AppStudioBuildDraft['sources']): string {
+  const tables = sources.filter((source) => sourceKindLabel(source.kind, source.capabilities) === 'Table').length;
+  const queries = sources.length - tables;
+  const parts = [
+    tables ? `${tables} ${tables === 1 ? 'table' : 'tables'}` : '',
+    queries ? `${queries} ${queries === 1 ? 'saved query' : 'saved queries'}` : '',
+  ].filter(Boolean);
+  return `${parts.join(' and ')} not certified yet`;
 }
 
 /**

@@ -65,13 +65,15 @@ test.beforeAll(async () => {
   const listing = await call<{ tables: Array<{ id: string; name: string }> }>('/api/app-datasets/tables');
   const table = listing.tables.find((candidate) => candidate.name === 'dim_customers')!;
   const drafted = await call<{ proposal: { measures: Array<{ name: string; include: boolean; format: string }> } }>('/api/app-datasets/tables/draft', { tableId: table.id });
-  const created = await call<{ status: string }>('/api/app-datasets/tables/create', {
+  const created = await call<{ status: string; sourceId: string }>('/api/app-datasets/tables/create', {
     tableId: table.id,
     name: 'Customers',
     domain: 'orders',
     measures: drafted.proposal.measures.map((measure) => ({ name: measure.name, include: measure.include, format: measure.format })),
   });
-  expect(created.status).toBe('certified');
+  // "Check and use", then "I vouch for this — certify" (design Q1).
+  expect(created.status).toBe('checked');
+  expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: created.sourceId })).status).toBe('certified');
 
   // A manual App whose data is the Customers Dataset, with one KPI on the page.
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {

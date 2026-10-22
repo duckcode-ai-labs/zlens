@@ -100,8 +100,10 @@ import {
   type QuickChoice,
 } from './builder/quick-choices';
 import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
+import { CertifyReviewDialog } from './builder/CertifyReviewDialog';
 import { appStudioAiDataResume } from './app-studio-handoff';
 import {
+  CHECKED_NEEDS_CERTIFYING,
   FIELD_TILES_OFF_MESSAGE,
   appDataItems,
   initialStudioStage,
@@ -217,7 +219,9 @@ import {
   publicationIssueSummaries,
   publicationTileKey,
   publicationTilesNeedingReview,
+  notCertifiedYetTitle,
   tilePatchWithoutRelatedFields,
+  uncertifiedPublicationSources,
   unresolvedPublicationRequirements,
 } from './app-studio-publish-readiness';
 import { tileJoinReviewSentence, type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
@@ -640,6 +644,8 @@ export function AppStudioV2({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
+  const publishReviewOpenRef = useRef(publishReviewOpen);
+  publishReviewOpenRef.current = publishReviewOpen;
   /** Whether the project folder is a git repository; Publish mentions git only then. Unknown until asked. */
   const [projectInGit, setProjectInGit] = useState<boolean | undefined>(undefined);
   useEffect(() => {
@@ -654,6 +660,8 @@ export function AppStudioV2({
   const [datasetRebindPrompt, setDatasetRebindPrompt] = useState<{ sourceId: string; title: string } | null>(null);
   /** The saved query "Make row-level" is open for (Data pane). */
   const [savedQueryFields, setSavedQueryFields] = useState<AppBlockRecommendation | null>(null);
+  /** The short review before "I vouch for this — certify" (design Q1). */
+  const [certifyReview, setCertifyReview] = useState<{ sourceId: string; name: string } | null>(null);
   /** Saved queries whose result columns are being read as fields, or could not be (design D1). */
   const [savedQueryFieldReads, setSavedQueryFieldReads] = useState<Record<string, { state: 'reading' } | { state: 'failed'; error: string }>>({});
   const [copilotOpen, setCopilotOpen] = useState(false);
@@ -1742,15 +1750,85 @@ export function AppStudioV2({
    * reloads; when the saved query is already this App's data, its copy in
    * the App is replaced with the new one so the Data pane shows its fields.
    */
-  const savedQueryFieldsAdded = async (sourceId: string, status: 'certified' | 'review' | 'draft') => {
+  const savedQueryFieldsAdded = async (sourceId: string, status: 'checked' | 'review' | 'draft') => {
     setSavedQueryFields(null);
     setCatalogRefreshNonce((current) => current + 1);
     const current = latestDraftRef.current;
     const inApp = Boolean(current?.sources.some((source) => source.id === sourceId));
     if (inApp && !(await addDataSource(sourceId, { allowReview: false }))) return;
-    setSavedMessage(status === 'certified'
-      ? 'Row-level now · certified'
+    setSavedMessage(status === 'checked'
+      ? 'Row-level now · checked, certify it before you publish'
       : 'Row-level now · it needs review before tiles from it can be published');
+  };
+
+  /**
+   * Data was certified on purpose (design Q1: "I vouch for this — certify",
+   * from the publish check or a Data list ⋯ menu). Certifying writes a new
+   * revision of its file, so the App's copy and the tiles that use it are
+   * refreshed to that revision. When the publish check is open, its pages
+   * run again so the check can say "Ready to publish".
+   */
+  const afterDataCertified = async (sourceId: string) => {
+    setCertifyReview(null);
+    setCatalogRefreshNonce((value) => value + 1);
+    const current = latestDraftRef.current;
+    if (!current) return;
+    const usedByTiles = current.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === sourceId));
+    if (!usedByTiles) {
+      if (current.sources.some((source) => source.id === sourceId)) await addDataSource(sourceId, { allowReview: false, refresh: true });
+      setSavedMessage('Certified');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    let next: AppStudioBuildDraft | null = null;
+    try {
+      const result = await runDatasetSourceRebindAction({
+        draft: current,
+        sourceId,
+        resolveCandidates: (draftId, sourceIds, options) => api.resolveAppSourceCandidates(draftId, sourceIds, options),
+        patchDraft: (draftId, expectedRevision, operations, expectedProposalHash) => api.patchAppBuild(draftId, expectedRevision, operations, expectedProposalHash),
+        onPreviewInvalidated: () => {
+          previewSequenceRef.current += 1;
+          setPreviewRunsByPage({});
+          setFilterOptionsByPage({});
+          setPreviewing(false);
+        },
+      });
+      if (!result.ok) {
+        setError(result.error);
+        return;
+      }
+      next = result.draft;
+      latestDraftRef.current = next;
+      setDraft(next);
+      setUndoStack((items) => [...items.slice(-29), current]);
+      setRedoStack([]);
+      setPublishIssues([]);
+      setSavedMessage('Certified · running the page again');
+    } catch (cause) {
+      setError(messageOf(cause));
+      return;
+    } finally {
+      setBusy(false);
+    }
+    if (!next || !publishReviewOpenRef.current) return;
+    let refreshed = next;
+    for (const page of refreshed.pages.filter((candidate) => pageHasDataTiles(candidate))) {
+      const recorded = await runPreviewForDraft(refreshed, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+      if (!recorded) return;
+      refreshed = recorded;
+    }
+    await publish(false, refreshed);
+  };
+
+  /** Open a saved query in Block Studio, where saved queries certify (design Q1). */
+  const openSavedQueryInBlockStudio = (path: string) => {
+    setCertifyReview(null);
+    setPublishReviewOpen(false);
+    const file = { name: path.split('/').pop() ?? path, path, type: 'block' as const, folder: 'blocks' };
+    dispatchNotebook({ type: 'FILE_ADDED', file });
+    void api.openBlockStudio(path).then((payload) => dispatchNotebook({ type: 'OPEN_BLOCK_STUDIO', file, payload }));
   };
 
   /**
@@ -3100,7 +3178,8 @@ export function AppStudioV2({
     onRemove: (sourceId: string) => void removeDataSource(sourceId),
     onChangePolicy: changeSourcePolicy,
     fieldsEnabled: datasetTilesEnabled,
-    onFieldsAdded: (sourceId: string, status: 'certified' | 'review' | 'draft') => void savedQueryFieldsAdded(sourceId, status),
+    onFieldsAdded: (sourceId: string, status: 'checked' | 'review' | 'draft') => void savedQueryFieldsAdded(sourceId, status),
+    onCertified: (sourceId: string) => void afterDataCertified(sourceId),
   };
   /**
    * Quick choices → tiles (round-2 Q2): exactly the chosen tiles, composed as
@@ -3783,6 +3862,7 @@ export function AppStudioV2({
             {...(activeDatasetItem && datasetSourceAuthoringModel(activeDatasetItem) ? { onAuthorDataset: openDatasetAuthoring } : {})}
             {...(activeDatasetItem?.sourceId && draft.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === activeDatasetItem.sourceId)) ? { onRefreshBinding: (item: AppBlockRecommendation) => { if (item.sourceId) void refreshDatasetBinding(item.sourceId); } } : {})}
             {...(datasetTilesEnabled ? { onMakeRowLevel: setSavedQueryFields } : {})}
+            onCertify={(item: AppBlockRecommendation) => setCertifyReview({ sourceId: item.sourceId ?? item.id, name: item.name })}
             {...(activeAppData && savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] ? { fieldsStatus: savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] } : {})}
             pickerRequest={dataPickerRequest}
           /> : null}
@@ -4059,6 +4139,15 @@ export function AppStudioV2({
         onRefreshSources={() => void refreshCertifiedSourceTrust()}
         onApproveSemantic={() => void approveSemanticPreview()}
         onRemoveLocalAnalysis={() => void removeLocalAnalysisForPublication()}
+        onCertifySource={(source) => setCertifyReview({ sourceId: source.id, name: appData.find((item) => (item.sourceId ?? item.id) === source.id)?.name ?? source.capabilities?.dataset?.label ?? source.sourceRef })}
+        sourceName={(source) => appData.find((item) => (item.sourceId ?? item.id) === source.id)?.name ?? source.capabilities?.dataset?.label ?? source.sourceRef}
+      /> : null}
+      {certifyReview ? <CertifyReviewDialog
+        sourceId={certifyReview.sourceId}
+        name={certifyReview.name}
+        onClose={() => setCertifyReview(null)}
+        onCertified={(sourceId) => void afterDataCertified(sourceId)}
+        onOpenBlockStudio={openSavedQueryInBlockStudio}
       /> : null}
       {datasetAuthoringSource ? <DatasetSourceAuthoringDialog
         source={datasetAuthoringSource}
@@ -4131,9 +4220,15 @@ export function PublishReadinessDialog({
   onAllowReviewData = () => undefined,
   onRemoveRelatedFields = () => undefined,
   onCertifyJoin = () => undefined,
+  onCertifySource = () => undefined,
+  sourceName,
   inGitRepo,
 }: {
   draft: AppStudioBuildDraft;
+  /** Open the short review before "I vouch for this — certify" for data not certified yet (design Q1). */
+  onCertifySource?: (source: AppStudioBuildDraft['sources'][number]) => void;
+  /** How the App's data names a source ("Orders"), when known. */
+  sourceName?: (source: AppStudioBuildDraft['sources'][number]) => string;
   /** Whether the project folder is a git repository (undefined: not known yet). */
   inGitRepo?: boolean;
   serverIssues: string[];
@@ -4169,8 +4264,13 @@ export function PublishReadinessDialog({
   const previewPages = pagesNeedingSettledPreview(draft);
   const sources = publicationBlockingSources(draft);
   const semanticTiles = legacySemanticTilesNeedingApproval(draft);
-  const datasetSources = sources.filter(isDatasetBackedAppSource);
+  // Data nobody certified yet (design Q1): tables and saved queries. Each
+  // opens a short review; "Only certified data" holds publishing until done.
+  const uncertifiedSources = uncertifiedPublicationSources(sources);
+  const uncertifiedIds = new Set(uncertifiedSources.map((source) => source.id));
+  const datasetSources = sources.filter((source) => isDatasetBackedAppSource(source) && !uncertifiedIds.has(source.id));
   const localOnlySources = sources.filter((source) => !isDatasetBackedAppSource(source)
+    && !uncertifiedIds.has(source.id)
     && source.kind !== 'governed_semantic'
     && source.kind !== 'semantic_query');
   // Tiles marked Needs review (a join nobody certified yet) count under
@@ -4216,6 +4316,19 @@ export function PublishReadinessDialog({
         {semanticTiles.length ? <section className="readiness-item">
           <span className="step-mark"><ShieldCheck size={15} /></span>
           <div><strong>Approve Metrics results</strong><p>{semanticTiles.map(({ page, tile, source }) => `${page.metadata.title || page.id}/${tile.title || source?.sourceRef || tile.i}`).join(', ')}</p><small>Approval binds each tile to the settled snapshot and receipt you reviewed.</small><div className="readiness-actions">{previewRun ? <button type="button" className="primary" onClick={onApproveSemantic} disabled={busy}><ShieldCheck size={13} /> Approve settled result</button> : <button type="button" onClick={() => onRunPreview(draft.pages[0]?.id ?? '')} disabled={busy}><Play size={13} /> Run preview first</button>}<button type="button" onClick={onOpenSources}>Open Sources</button></div></div>
+        </section> : null}
+        {uncertifiedSources.length ? <section className="readiness-item warning" aria-label={notCertifiedYetTitle(uncertifiedSources)}>
+          <span className="step-mark"><ShieldCheck size={15} /></span>
+          <div><strong>{notCertifiedYetTitle(uncertifiedSources)}</strong><small>{draft.sourcePolicy === 'governed_only' ? 'This App uses only certified data. ' : ''}Published Apps show certified data only: review each one and certify it, or remove the tiles that use it.</small>
+            <ul className="readiness-uncertified-list">{uncertifiedSources.map((source) => {
+              const name = humanize(sourceName?.(source) ?? source.capabilities?.dataset?.label ?? source.sourceRef);
+              const kind = sourceKindLabel(source.kind, source.capabilities);
+              return <li key={source.id}>
+                <span><strong>{name}</strong><small>{kind} · {source.checked ? CHECKED_NEEDS_CERTIFYING : 'Needs review'}</small></span>
+                <button type="button" onClick={() => onCertifySource(source)} disabled={busy} aria-label={`Review and certify ${name}`}>Review and certify</button>
+              </li>;
+            })}</ul>
+          </div>
         </section> : null}
         {datasetSources.length ? <section className="readiness-item warning">
           <span className="step-mark"><ShieldCheck size={15} /></span>

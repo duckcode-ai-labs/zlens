@@ -59,8 +59,10 @@ test.beforeAll(async () => {
   expect(listing.tables.find((table) => table.name === 'orders')?.joins).toEqual(['customers']);
   for (const name of ['orders', 'customers']) {
     const table = listing.tables.find((candidate) => candidate.name === name)!;
-    const created = await call<{ status: string }>('/api/app-datasets/tables/create', { tableId: table.id, name: name === 'orders' ? 'Orders' : 'Customers', domain: 'shop' });
-    expect(created.status).toBe('certified');
+    const created = await call<{ status: string; sourceId: string }>('/api/app-datasets/tables/create', { tableId: table.id, name: name === 'orders' ? 'Orders' : 'Customers', domain: 'shop' });
+    // "Check and use", then "I vouch for this — certify" (design Q1).
+    expect(created.status).toBe('checked');
+    expect((await call<{ status: string }>('/api/app-datasets/certify', { sourceId: created.sourceId })).status).toBe('certified');
   }
 
   const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {

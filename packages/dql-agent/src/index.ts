@@ -321,6 +321,7 @@ export type {
   AppSourceCatalogPage,
   AppSourceCatalogQuery,
   AppSourceCatalogRecord,
+  AppSourceCheck,
   AppSourceEligibility,
   AppSourceRecordDecorator,
   AppSourceTrust,

@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hostActor, hostActorDisplayName } from './host/request-context.js';
-import { blockCertificationByline, gitUserName, localPersonAliases, personDisplayName, type CertificationByline } from './certification-receipt.js';
+import { blockCertificationByline, bylineForViewer, gitUserName, localPersonAliases, personDisplayName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -2077,7 +2077,7 @@ type AppListEntry = {
  * Catalog items with who certified each certified block and when (D5), read
  * from its receipt, so the Data list says "Certified by <name> · <date>".
  */
-function withCertificationBylines<Item extends { trust?: string; kind?: string; sourcePath?: string; owner?: string | null }>(
+function withCertificationBylines<Item extends { trust?: string; kind?: string; sourcePath?: string; owner?: string | null; check?: { by: string; name?: string; at: string; checks?: string[] } }>(
   projectRoot: string,
   items: Item[],
 ): Array<Item & { certification?: CertificationByline; ownerName?: string }> {
@@ -2085,10 +2085,13 @@ function withCertificationBylines<Item extends { trust?: string; kind?: string; 
   return items.map((item) => {
     // The owner as one person reads everywhere ("DuckCode AI Labs", not their noreply email).
     const ownerName = personDisplayName(item.owner, person);
-    const named = ownerName && ownerName !== item.owner ? { ...item, ownerName } : item;
+    let named = ownerName && ownerName !== item.owner ? { ...item, ownerName } : item;
+    // "Checked by you · 22 Oct" for data ZLens checked that nobody certified yet (design Q1).
+    if (item.check) named = { ...named, check: bylineForViewer(item.check, person) };
     if (item.trust !== 'certified' || item.kind === 'semantic' || !item.sourcePath) return named;
     const certification = blockCertificationByline(projectRoot, item.sourcePath);
-    return certification ? { ...named, certification } : named;
+    // "Certified by you" when the person reading certified it (design Q1).
+    return certification ? { ...named, certification: bylineForViewer(certification, person) } : named;
   });
 }
 
@@ -2098,7 +2101,7 @@ function withCertificationBylines<Item extends { trust?: string; kind?: string; 
  * Read once a minute (git is asked at most that often).
  */
 const localPersonCache = new Map<string, { at: number; person: { name?: string; aliases: ReadonlySet<string> } }>();
-function thisPerson(projectRoot: string): { name?: string; aliases: ReadonlySet<string> } {
+export function thisPerson(projectRoot: string): { name?: string; aliases: ReadonlySet<string> } {
   const actor = hostActor();
   if (actor) return { name: hostActorDisplayName() ?? actor, aliases: new Set([actor.toLowerCase()]) };
   const cached = localPersonCache.get(projectRoot);
@@ -3430,6 +3433,8 @@ function appDraftSourceFromCatalog(source: AppSourceCatalogRecord): AppBuildDraf
     capabilities: source.capabilities,
     trustState: certified ? 'certified' : 'review_required',
     reviewStatus: certified ? 'not_required' : 'required',
+    // Checked · Needs certifying (design Q1): from the catalog, never the browser.
+    ...(!certified && source.check ? { checked: true } : {}),
   };
 }
 
@@ -3570,8 +3575,11 @@ async function datasetDraftCurrentAuthorityErrors(
     // candidates so a stale App can explain and repair itself. Discovery is
     // not an opt-in: the resulting draft must carry the explicit local review
     // policy before a review-required Dataset can be previewed.
+    // Data ZLens checked that nobody certified yet (design Q1) previews under
+    // any data rule; it never publishes until it is certified (below).
     if ((source!.lifecycle !== 'certified' || source!.trust !== 'certified')
-      && draft.sourcePolicy !== 'include_review_required') {
+      && draft.sourcePolicy !== 'include_review_required'
+      && !source!.check) {
       errors.push(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${reference.tile.title || reference.tile.i} uses a ${source!.lifecycle} Dataset source. Enable review-required sources explicitly before local preview.`);
       continue;
     }
@@ -3583,7 +3591,9 @@ async function datasetDraftCurrentAuthorityErrors(
       && (source!.lifecycle !== 'certified'
         || source!.trust !== 'certified'
         || !source!.eligibility.projectPublish)) {
-      errors.push(`APP_BUILD_DATASET_PUBLICATION_INELIGIBLE: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and cannot be published until its governed Dataset source is certified and eligible.`);
+      errors.push(source!.check
+        ? `APP_BUILD_DATASET_NOT_CERTIFIED: ${reference.tile.title || reference.tile.i} uses ${source!.title}, which is checked but not certified yet. Certify it before publishing.`
+        : `APP_BUILD_DATASET_PUBLICATION_INELIGIBLE: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and cannot be published until its governed Dataset source is certified and eligible.`);
     }
   }
   // "Only certified data" is about every tile, not only every source: a tile
@@ -8329,7 +8339,7 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     if ((source.kind === 'block' && source.trustState !== 'certified') || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') {
       errors.push(`Source ${source.id} is review-required and cannot be published to the Project.`);
     }
-    if (((source.kind === 'block' && source.trustState !== 'certified') || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') && draft.sourcePolicy !== 'include_review_required') {
+    if (((source.kind === 'block' && source.trustState !== 'certified' && !(source.checked && source.capabilities?.dataset)) || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') && draft.sourcePolicy !== 'include_review_required') {
       errors.push(`Source ${source.id} requires include_review_required policy.`);
     }
   }

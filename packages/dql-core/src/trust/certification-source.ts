@@ -119,3 +119,87 @@ export function changedSinceCertifiedMessage(blockName: string, companionPath: s
   return `certified saved query "${blockName}" was edited after it was certified: its source no longer matches ${receipt}. `
     + 'Ask treats it as needing recertification until it is certified again.';
 }
+
+/**
+ * The record "Check and use" leaves in a block's companion YAML (`check:`):
+ * ZLens checked the data (it compiles, runs, what one row is, number formats)
+ * and the person added it, but nobody vouched for it yet. A checked block is
+ * **Checked · Needs certifying**: tiles can use it while an App is edited, and
+ * it never publishes under any data rule until someone certifies it. Like a
+ * certification receipt it names the exact source it checked, so an edit made
+ * afterwards makes it an ordinary block that needs review again.
+ */
+export interface BlockCheckRecord {
+  /** Who ran the check: the host's signed-in person, else the local owner. */
+  checkedBy: string;
+  /** Their display name, when one is known. */
+  checkedByName?: string;
+  /** ISO-8601 time of the check. */
+  checkedAt: string;
+  /** sha256 of the checked `.dql` source ({@link certifiedSourceSha256}). */
+  sourceSha256: string;
+  /** What the check found, in plain words ("Row key: …", "Number formats: …"). */
+  checks?: string[];
+  /** Columns left out because another column holds the same number in other units. */
+  hiddenColumns?: Array<{ column: string; keptColumn: string; reason: string }>;
+}
+
+/** The `check:` record a companion YAML holds, when it holds a valid one. */
+export function readCompanionCheck(companion: string | null | undefined): BlockCheckRecord | null {
+  if (!companion) return null;
+  try {
+    const parsed = yaml.load(companion) as { check?: Record<string, unknown> } | null;
+    const record = parsed?.check;
+    if (!record || typeof record !== 'object' || typeof record.checkedBy !== 'string') return null;
+    const at = record.checkedAt as unknown;
+    const sha = typeof record.sourceSha256 === 'string' ? record.sourceSha256.trim().toLowerCase() : '';
+    if (at === undefined || !/^[0-9a-f]{64}$/.test(sha)) return null;
+    const hidden = Array.isArray(record.hiddenColumns)
+      ? record.hiddenColumns.flatMap((entry) => {
+        if (!entry || typeof entry !== 'object') return [];
+        const item = entry as Record<string, unknown>;
+        return typeof item.column === 'string' && typeof item.keptColumn === 'string'
+          ? [{ column: item.column, keptColumn: item.keptColumn, reason: typeof item.reason === 'string' ? item.reason : '' }]
+          : [];
+      })
+      : [];
+    return {
+      checkedBy: record.checkedBy,
+      ...(typeof record.checkedByName === 'string' && record.checkedByName.trim() ? { checkedByName: record.checkedByName.trim() } : {}),
+      checkedAt: at instanceof Date ? at.toISOString() : String(at),
+      sourceSha256: sha,
+      ...(Array.isArray(record.checks) ? { checks: record.checks.map(String) } : {}),
+      ...(hidden.length ? { hiddenColumns: hidden } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** The check record of a source, only while the source is still the one that was checked. */
+export function currentCheckForSource(source: string, companion: string | null | undefined): BlockCheckRecord | null {
+  const check = readCompanionCheck(companion);
+  if (!check) return null;
+  const matches = certifiedSourceSha256(source) === check.sourceSha256
+    || certifiedSourceSha256(source.replace(/\r\n/g, '\n')) === check.sourceSha256;
+  return matches ? check : null;
+}
+
+/** {@link currentCheckForSource} for a block file, reading its companion YAML; null when unreadable. */
+export function currentBlockFileCheck(
+  projectRoot: string,
+  blockPath: string,
+  source?: string,
+  registry?: Pick<DomainPackageRegistryResult, 'packageForPath'>,
+): BlockCheckRecord | null {
+  try {
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath, registry);
+    if (!companionPath) return null;
+    const absolute = join(projectRoot, companionPath);
+    if (!existsSync(absolute)) return null;
+    const text = source ?? readFileSync(join(projectRoot, normalize(blockPath).replace(/^\/+/, '')), 'utf-8');
+    return currentCheckForSource(text, readFileSync(absolute, 'utf-8'));
+  } catch {
+    return null;
+  }
+}
