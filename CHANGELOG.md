@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.6 - 2026-10-23
+
+A patch for honest answers over MCP and Ask.
+- **Semantic route:** a semantic answer covers the whole question or none of
+  it; it never drops a breakdown, a filter or a date range.
+- **From Metrics:** "Governed" is now **From Metrics** everywhere people read
+  it, and it applies only when every join is a certified relationship.
+- **MCP:** every answer starts with a ready-made trust line, and empty
+  discovery results point back to `ask_dql`.
+- **Apps:** certified saved queries are adopted in place.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.6` in each project.
+
 ### The semantic route answers the whole question or not at all
 
 - **`query_semantic_model` no longer drops a breakdown or a filter the question
