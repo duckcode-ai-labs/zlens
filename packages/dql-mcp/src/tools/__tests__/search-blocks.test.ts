@@ -12,6 +12,15 @@ describe('searchBlocks tool', () => {
     expect(Array.isArray((result as { blocks: unknown[] }).blocks ?? result)).toBe(true);
   });
 
+  it('points an empty search at ask_dql when the project has certified blocks', () => {
+    const ctx = makeCtx(
+      { monthly_revenue: makeManifestBlock({ name: 'monthly_revenue', status: 'certified', description: 'Monthly gross revenue' }) },
+      { semanticLayer: { listMetrics: () => [] } } as unknown as Partial<import('../../context.js').DQLContext>,
+    );
+    expect(searchBlocks(ctx, { query: 'unrelated-keyword' })).toMatchObject({ returned: 0, nextTool: 'ask_dql' });
+    expect(searchBlocks(ctx, { query: 'revenue' })).not.toHaveProperty('nextTool');
+  });
+
   it('returns matching blocks for a query token', () => {
     const ctx = makeCtx({
       'Customer Segments': makeManifestBlock({

@@ -1,6 +1,7 @@
 import type { DQLContext } from '../context.js';
 import type { ManifestBlock } from '@zlens/core';
 import { zodInputShapeForTool } from '../tool-schema.js';
+import { governedAnswerPointer } from './next-step.js';
 
 export const searchBlocksInput = zodInputShapeForTool('search_blocks');
 
@@ -24,10 +25,14 @@ export function searchBlocks(
 
   const ranked = needle ? rankBlocksByQuery(scoped, needle) : scoped;
   const results = ranked.slice(0, limit).map(summarize);
+  const pointer = results.length === 0 && needle
+    ? governedAnswerPointer(ctx, 'No saved query names or descriptions match this search text.')
+    : undefined;
   return {
     total: ranked.length,
     returned: results.length,
     blocks: results,
+    ...(pointer ?? {}),
   };
 }
 

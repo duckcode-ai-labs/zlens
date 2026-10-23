@@ -126,6 +126,8 @@ function mapRun(run: AgentRunLike) {
       status: run.status,
       trustState: run.trustState,
       error: `ZLens has no AI model set up, so answer_question could not answer. ${MODEL_UNAVAILABLE_NEXT_STEP}`,
+      nextTool: 'ask_dql' as const,
+      nextArgs: { question: run.question },
     };
   }
   const primary = (run.artifacts ?? [])[0];
