@@ -166,3 +166,66 @@ test('a just-published App opens on its results: real numbers, all tiles certifi
   await expect(card.getByText(/Books|local insights|Shared Project/)).toHaveCount(0);
   await expect(card.getByText(/\d+ of 3 tiles certified/i)).toHaveCount(0);
 });
+
+/**
+ * C1: Publish clicked while a change is still saving waits for it. Choosing
+ * data and adding a tile saves in the background; Publish used to be disabled
+ * meanwhile, so a click right after did nothing and said nothing. Here the
+ * save is held in transit for a few seconds: the Publish click is taken at
+ * once (well before the save lands), the button says "Saving changes…", and
+ * the review opens on the saved draft, new tile included.
+ */
+test('Publish right after choosing data waits for the save, then opens the review (no silent no-op)', async ({ page }) => {
+  test.setTimeout(150_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const app = await call<{ draft: { id: string; revision: number; proposalHash: string } }>('/api/app-builds', {
+    name: 'Saving Review', goal: 'Review spend', domain: 'orders', authoringMode: 'manual', template: 'blank',
+  });
+  const candidates = await call<{ items: Array<{ sourceId: string; name: string }> }>(`/api/app-builds/${app.draft.id}/source-candidates?limit=50`);
+  const customers = candidates.items.find((candidate) => candidate.name === 'Customers')!.sourceId;
+  await call(`/api/app-builds/${app.draft.id}/compose`, {
+    expectedRevision: app.draft.revision,
+    expectedProposalHash: app.draft.proposalHash,
+    mode: 'manual',
+    selections: [{ sourceId: customers, view: 'kpi', title: 'Total spend', query: { dimensions: [], measures: [{ measure: 'lifetime_spend' }] } }],
+  });
+  await page.goto(`${server!.baseUrl}/?appDraft=${app.draft.id}`);
+  await expect(page.getByText('Total spend').first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.data-panel button.data-field').filter({ hasText: 'Lifetime Spend' })).toBeVisible({ timeout: 60_000 });
+
+  // Every save from here is held in transit, so it is still saving when Publish is clicked.
+  let release: () => void = () => undefined;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  let heldSaves = 0;
+  await page.route(`**/api/app-builds/${app.draft.id}**`, async (route) => {
+    const request = route.request();
+    if (request.method() === 'PATCH' || request.url().endsWith('/compose')) {
+      heldSaves += 1;
+      await held;
+    }
+    await route.continue();
+  });
+
+  // Choose data in the Data panel and add it to the page.
+  const dataPane = page.locator('.data-panel');
+  await dataPane.locator('button.data-field').filter({ hasText: 'Customer Name' }).click();
+  await dataPane.locator('button.data-field').filter({ hasText: 'Lifetime Spend' }).click();
+  await page.getByRole('button', { name: 'Add to page' }).click();
+  await expect.poll(() => heldSaves, { timeout: 15_000 }).toBeGreaterThan(0);
+
+  // Publish while it is saving: the click is taken, never ignored.
+  const publish = page.getByRole('button', { name: /^Review and publish to Project/ });
+  await publish.click({ timeout: 3_000 });
+  await expect(publish).toHaveText(/Saving changes…/);
+  await expect(page.getByRole('dialog', { name: /publish|Run the page/ })).toHaveCount(0);
+
+  release();
+  const review = page.getByRole('dialog', { name: /publish|Run the page/ });
+  await expect(review).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.studio-error')).toHaveCount(0);
+  // The review is of the saved draft: the tile added just before Publish is in it.
+  const saved = await call<{ drafts: Array<{ id: string; pages: Array<{ layout: { items: Array<{ title?: string }> } }> }> }>('/api/app-builds');
+  const tiles = saved.drafts.find((candidate) => candidate.id === app.draft.id)!.pages[0]!.layout.items.map((item) => item.title);
+  expect(tiles).toHaveLength(2);
+  await expect(review).toContainText(/2 tiles|All tiles certified|of 2 tiles/);
+});

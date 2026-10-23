@@ -20,13 +20,23 @@ export function PanelTitle({ title, detail, action }: { title: string; detail: s
  * Refresh when the App changed in another tab; the server's own words stay
  * under Technical details.
  */
-export function StudioErrorBanner({ error, floating = false, onDismiss, onRefresh }: { error: string; floating?: boolean; onDismiss?: () => void; onRefresh?: () => void }): JSX.Element {
+export function StudioErrorBanner({ error, floating = false, onDismiss, onRefresh, lead, action }: {
+  error: string;
+  floating?: boolean;
+  onDismiss?: () => void;
+  onRefresh?: () => void;
+  /** A sentence said before the error, e.g. what did not happen because of it. */
+  lead?: string;
+  /** One more way out, e.g. Try again. */
+  action?: { label: string; onClick: () => void };
+}): JSX.Element {
   const words = studioErrorWords(error);
   return <div className={`studio-error ${floating ? 'floating' : ''}`} role="alert">
     <div className="studio-error-body">
-      <span>{words.message}</span>
+      <span>{lead ? `${lead} ${words.message}` : words.message}</span>
       {words.technical ? <details className="studio-error-technical"><summary>Technical details</summary><code>{words.technical}</code></details> : null}
     </div>
+    {action ? <button type="button" className="studio-error-refresh" onClick={action.onClick}>{action.label}</button> : null}
     {words.refresh && onRefresh ? <button type="button" className="studio-error-refresh" onClick={onRefresh}>Refresh</button> : null}
     {onDismiss ? <button type="button" aria-label="Dismiss" onClick={onDismiss}>×</button> : null}
   </div>;
