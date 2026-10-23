@@ -52,6 +52,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   instructions use the new word. The `id` stays `governed` and tool names
   are unchanged; match on `id`, not on the display text.
 
+### MCP: empty results point back to ask_dql
+
+- An MCP client that skipped `ask_dql` could stop at an empty `list_datasets`
+  and tell the user the project had no governed data, though it had certified
+  saved queries. When `list_datasets`, `search_blocks`, `search_metadata` or
+  `kg_search` comes back empty and the project has certified saved queries or
+  semantic metrics, the result now adds a `note` with their counts and
+  `nextTool: "ask_dql"`. Results with data are unchanged.
+- `answer_question` without an AI model set up in ZLens now also returns
+  `nextTool: "ask_dql"` and `nextArgs: { question }`, besides its message.
+- `list_datasets`' description says Datasets are warehouse tables approved for
+  App tiles and that business questions go to `ask_dql`.
+
 ### Apps: certified saved queries are adopted in place, plain recovery words, certifier on every row
 
 - **A saved query certified from its App moves the App to the certified

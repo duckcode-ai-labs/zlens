@@ -30,6 +30,7 @@ import {
 } from '@zlens/agent';
 import type { DQLContext } from '../context.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
+import { governedAnswerPointer } from './next-step.js';
 
 /**
  * The schema the grounding tools read: the dbt manifest when the project has
@@ -63,7 +64,11 @@ export async function searchMetadata(ctx: DQLContext, args: { query: string; lim
   const topK = args.limit ?? 12;
   const relevant = await selectRelevantModels(artifacts, args.query, { topK });
   const grounding = buildSchemaGrounding(artifacts, relevant, { limit: topK });
+  const pointer = grounding.tables.length === 0
+    ? governedAnswerPointer(ctx, 'No dbt tables match this search text.')
+    : undefined;
   return {
+    ...(pointer ?? {}),
     total: grounding.tables.length,
     tables: grounding.tables.map((table) => ({
       name: table.name,

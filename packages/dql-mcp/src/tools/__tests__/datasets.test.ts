@@ -53,6 +53,30 @@ describe('Dataset MCP runtime adapter', () => {
     expect(String(fetchMock.mock.calls[1]?.[0])).toBe('http://runtime/api/app-datasets?sourceId=source%3Aorders');
   });
 
+  it('points an empty Dataset list at ask_dql when the project has certified blocks or semantic metrics', async () => {
+    mockFetch(200, { version: 1, snapshotId: 'snapshot-a', datasets: [], total: 0 });
+    const governedCtx = {
+      projectRoot: '/tmp/project',
+      manifest: { blocks: { monthly_revenue: { status: 'certified' }, scratch: { status: 'draft' } } },
+      semanticLayer: { listMetrics: () => [{ name: 'large_orders' }, { name: 'revenue' }] },
+    } as unknown as DQLContext;
+    const listed = await listDatasets(governedCtx, {});
+    expect(listed).toMatchObject({ ok: true, datasets: [], total: 0, nextTool: 'ask_dql' });
+    expect((listed as { note?: string }).note).toContain('1 certified block and 2 semantic metrics');
+
+    const bareCtx = {
+      projectRoot: '/tmp/project',
+      manifest: { blocks: {} },
+      semanticLayer: { listMetrics: () => [] },
+    } as unknown as DQLContext;
+    mockFetch(200, { version: 1, snapshotId: 'snapshot-a', datasets: [], total: 0 });
+    expect(await listDatasets(bareCtx, {})).not.toHaveProperty('nextTool');
+
+    // A non-empty list stays exactly as the runtime sent it.
+    mockFetch(200, { version: 1, snapshotId: 'snapshot-a', datasets: [{ sourceId: 'source:orders' }], total: 1 });
+    expect(await listDatasets(governedCtx, {})).not.toHaveProperty('nextTool');
+  });
+
   it('forwards only typed Dataset query input and strips non-contract runtime payload fields', async () => {
     const fetchMock = mockFetch(200, {
       ok: true,

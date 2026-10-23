@@ -792,7 +792,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'list_datasets',
     description:
-      'List current approved governed App Datasets available to the local Dataset runtime. Returns source identity, capability, lifecycle, and trust metadata only; it does not execute SQL.',
+      'List current approved governed App Datasets available to the local Dataset runtime (warehouse tables approved for App tiles). Returns source identity, capability, lifecycle, and trust metadata only; it does not execute SQL. Not the way to answer a business question: call ask_dql for that. An empty list does not mean the project has no governed answers; when it has certified blocks or semantic metrics, the result says so with nextTool ask_dql.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

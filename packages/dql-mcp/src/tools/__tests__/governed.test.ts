@@ -121,6 +121,8 @@ describe('answerQuestion (governed answer via runtime proxy)', () => {
     expect(out.error).toMatch(/no AI model/);
     expect(out.error).toMatch(/ask_dql/);
     expect(out.error).toMatch(/query_via_metadata/);
+    // Structured, so a client that skims past the prose still sees where to go.
+    expect(out).toMatchObject({ nextTool: 'ask_dql', nextArgs: { question: 'How has revenue changed by month?' } });
   });
 
   it('rejects an empty question without calling the runtime', async () => {

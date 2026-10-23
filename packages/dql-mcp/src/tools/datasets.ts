@@ -3,6 +3,7 @@ import type { DQLContext } from '../context.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
 import { readEnv } from '@zlens/core';
 import { fetchRuntime, runtimeUnreachableMessage } from '../runtime-fetch.js';
+import { governedAnswerPointer } from './next-step.js';
 
 const DEFAULT_RUNTIME_URL = 'http://127.0.0.1:3474';
 
@@ -98,12 +99,17 @@ export async function listDatasets(
   );
   if (isUnavailable(response)) return response;
   if (response.status < 200 || response.status >= 300) return runtimeError(response.status, response.payload);
+  const datasets = (response.payload.datasets ?? []) as unknown[];
+  const pointer = datasets.length === 0
+    ? governedAnswerPointer(ctx, 'No App Datasets are approved here; Datasets are warehouse tables approved for App tiles, not the governed answers.')
+    : undefined;
   return {
     ok: true as const,
     version: response.payload.version,
     snapshotId: response.payload.snapshotId,
-    datasets: response.payload.datasets ?? [],
+    datasets,
     total: response.payload.total ?? 0,
+    ...(pointer ?? {}),
   };
 }
 
