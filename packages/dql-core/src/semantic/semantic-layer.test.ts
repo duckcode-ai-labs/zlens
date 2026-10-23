@@ -744,6 +744,47 @@ describe('SemanticLayer', () => {
   });
 });
 
+describe('composeQuery reports the joins it took', () => {
+  // A host checks these against its relationship model before it labels a
+  // compile From Metrics (2026-10-23: a compile through a draft relationship
+  // was labelled Governed).
+  const layerWithJoin = (joinSql: string) => {
+    const layer = new SemanticLayer();
+    layer.addCube({
+      name: 'orders', label: 'Orders', description: '', sql: 'SELECT * FROM dev.orders', table: 'dev.orders', domain: 'revenue',
+      measures: [{ name: 'total_revenue', label: 'Total Revenue', description: '', domain: 'revenue', sql: 'SUM(amount)', type: 'sum', table: 'dev.orders', cube: 'orders' }],
+      dimensions: [{ name: 'order_status', label: 'Order Status', description: '', domain: 'revenue', sql: 'status', type: 'string', table: 'dev.orders', cube: 'orders' }],
+      timeDimensions: [],
+      joins: [{ name: 'customers', left: 'orders', right: 'customers', type: 'left', sql: joinSql }],
+      segments: [], preAggregations: [],
+    });
+    layer.addCube({
+      name: 'customers', label: 'Customers', description: '', sql: 'SELECT * FROM dev.customers', table: 'dev.customers', domain: 'revenue',
+      measures: [],
+      dimensions: [{ name: 'customer_country', label: 'Customer Country', description: '', domain: 'revenue', sql: 'country', type: 'string', table: 'dev.customers', cube: 'customers' }],
+      timeDimensions: [], joins: [], segments: [], preAggregations: [],
+    });
+    return layer;
+  };
+
+  it('names the cubes, tables and key pairs of a join', () => {
+    const composed = layerWithJoin('${left}.customer_id = ${right}.id').composeQuery({ metrics: ['total_revenue'], dimensions: ['customer_country'] });
+    expect(composed?.joinPath).toEqual([{ left: 'orders', right: 'customers', leftTable: 'dev.orders', rightTable: 'dev.customers', keys: [{ from: 'customer_id', to: 'id' }] }]);
+  });
+
+  it('reads keys written right-to-left, and none from an ON clause that is not plain key equalities', () => {
+    const reversed = layerWithJoin('${right}.id = ${left}.customer_id AND ${right}.region = ${left}.region').composeQuery({ metrics: ['total_revenue'], dimensions: ['customer_country'] });
+    expect(reversed?.joinPath?.[0]?.keys).toEqual([{ from: 'customer_id', to: 'id' }, { from: 'region', to: 'region' }]);
+    const conditional = layerWithJoin("${left}.customer_id = ${right}.id AND ${right}.status = 'active'").composeQuery({ metrics: ['total_revenue'], dimensions: ['customer_country'] });
+    expect(conditional?.joinPath?.[0]?.keys).toEqual([]);
+  });
+
+  it('reports no join for a single-table compile', () => {
+    const composed = layerWithJoin('${left}.customer_id = ${right}.id').composeQuery({ metrics: ['total_revenue'], dimensions: ['order_status'] });
+    expect(composed?.joinPath).toEqual([]);
+  });
+});
+
 describe('parseMetricDefinition', () => {
   it('parses a raw object into MetricDefinition', () => {
     const metric = parseMetricDefinition({

@@ -1,6 +1,6 @@
 import type { AnalyticalIntentV1, IntentPredicate } from '../intent.js';
 import type { VocabularyEntry, VocabularyIndex } from '../vocabulary.js';
-import type { PrepareDeps, PreparedCandidate, PreparedRefusal, SemanticCompileRequest } from './types.js';
+import type { PrepareDeps, PreparedCandidate, PreparedRefusal, SemanticCompileOutput, SemanticCompileRequest } from './types.js';
 import { semanticAnswerArtifact } from './dql-artifacts.js';
 
 /**
@@ -401,6 +401,28 @@ export function bindSemanticExecutionProgram(
   };
 }
 
+/**
+ * A semantic answer is From Metrics (`governed`) only when every join the
+ * compile took is a certified relationship; a draft or unmodeled join makes it
+ * review-required, and the caveat naming the join is said in the answer.
+ */
+function semanticTrust(compiled: SemanticCompileOutput): Pick<PreparedCandidate, 'trust' | 'trustCaveat'> {
+  if (!compiled.joinTrust || compiled.joinTrust.certified) return { trust: 'governed' };
+  return { trust: 'review_required', ...(compiled.joinTrust.caveat ? { trustCaveat: compiled.joinTrust.caveat } : {}) };
+}
+
+/** The answer's DQL artifact carries the same trust as the answer. */
+function withArtifactTrust(artifact: unknown, compiled: SemanticCompileOutput): unknown {
+  if (semanticTrust(compiled).trust === 'governed' || !artifact || typeof artifact !== 'object') return artifact;
+  return { ...(artifact as Record<string, unknown>), trustState: 'review_required' };
+}
+
+function semanticJoinProof(compiled: SemanticCompileOutput): string[] {
+  if (!compiled.joinTrust) return [];
+  if (!compiled.joinTrust.certified) return [`joins: ${compiled.joinTrust.caveat ?? 'a join is not a certified relationship'}`];
+  return (compiled.joinPath?.length ?? 0) > 0 ? ['joins: every join is a certified relationship'] : [];
+}
+
 export async function prepareSemantic(intent: AnalyticalIntentV1, vocabulary: VocabularyIndex, deps: PrepareDeps): Promise<{ candidates: PreparedCandidate[]; refusals: PreparedRefusal[] }> {
   if (!deps.compileSemantic) return { candidates: [], refusals: [{ tier: 'semantic', code: 'semantic_runtime_unavailable', message: 'no semantic layer is loaded for this project', repairable: false }] };
   // The bounded branch program exists for metrics ONLY the semantic engine can
@@ -434,10 +456,10 @@ export async function prepareSemantic(intent: AnalyticalIntentV1, vocabulary: Vo
       }
       return {
         candidates: [{
-          tier: 'semantic', trust: 'governed', sql: compiled.sql, engine: compiled.engine,
+          tier: 'semantic', ...semanticTrust(compiled), sql: compiled.sql, engine: compiled.engine,
           semanticProgram: program,
           // One semantic block over every metric the periods read.
-          artifact: semanticAnswerArtifact({ ...program.branches[0]!.request, metrics: [...new Set(program.branches.flatMap((branch) => branch.request.metrics))] }, intent.reading, compiled.sql),
+          artifact: withArtifactTrust(semanticAnswerArtifact({ ...program.branches[0]!.request, metrics: [...new Set(program.branches.flatMap((branch) => branch.request.metrics))] }, intent.reading, compiled.sql), compiled),
           ...(programBound.derived ? { derived: programBound.derived } : {}),
           ...(programBound.changes ? { changes: programBound.changes } : {}),
           compileRequest: programBound.program,
@@ -446,6 +468,7 @@ export async function prepareSemantic(intent: AnalyticalIntentV1, vocabulary: Vo
             ...program.branches.map((branch) => `${branch.id}: metrics ${branch.request.metrics.join(', ')}${branch.request.filters?.length ? ` with ${branch.request.filters.length} semantic filter${branch.request.filters.length === 1 ? '' : 's'}` : ''}`),
             ...(programBound.derived ?? []).map((item) => `${item.alias} = ${item.numerator} / ${item.denominator}, computed from aligned semantic metrics (null when the denominator is 0)`),
             ...(programBound.changes ?? []).map((item) => `${item.alias} = ${item.comparison} - ${item.base}${item.as === 'percent' ? `, over ${item.base}` : ''}, computed after the authored semantic metrics return${item.as === 'percent' ? ' (null when the earlier value is 0)' : ''}`),
+            ...semanticJoinProof(compiled),
           ],
         }],
         refusals: [],
@@ -461,10 +484,10 @@ export async function prepareSemantic(intent: AnalyticalIntentV1, vocabulary: Vo
     const compiled = await deps.compileSemantic(bound.request);
     return {
       candidates: [{
-        tier: 'semantic', trust: 'governed', sql: compiled.sql, engine: compiled.engine,
+        tier: 'semantic', ...semanticTrust(compiled), sql: compiled.sql, engine: compiled.engine,
         ...(compiled.columns ? { columns: compiled.columns } : {}),
         ...(compiled.fanoutProbeSql ? { fanoutProbeSql: compiled.fanoutProbeSql } : {}),
-        artifact: compiled.artifact !== undefined ? compiled.artifact : semanticAnswerArtifact(bound.request, intent.reading, compiled.sql),
+        artifact: withArtifactTrust(compiled.artifact !== undefined ? compiled.artifact : semanticAnswerArtifact(bound.request, intent.reading, compiled.sql), compiled),
         ...(bound.derived ? { derived: bound.derived } : {}),
         ...(bound.changes ? { changes: bound.changes } : {}),
         compileRequest: bound.request,
@@ -473,6 +496,7 @@ export async function prepareSemantic(intent: AnalyticalIntentV1, vocabulary: Vo
           ...(bound.derived ?? []).map((item) => `${item.alias} = ${item.numerator} / ${item.denominator}, computed from the executed metrics (null when the denominator is 0)`),
           ...(bound.changes ?? []).map((item) => `${item.alias} = ${item.comparison} - ${item.base}${item.as === 'percent' ? `, over ${item.base}` : ''}, computed from the semantic metrics${item.as === 'percent' ? ' (null when the earlier value is 0)' : ''}`),
           ...(compiled.warnings ?? []).slice(0, 3).map((warning) => `engine note: ${warning}`),
+          ...semanticJoinProof(compiled),
         ],
       }],
       refusals: [],

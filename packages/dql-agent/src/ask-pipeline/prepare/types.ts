@@ -1,4 +1,4 @@
-import type { ManifestRelationshipValidationEvidence } from '@zlens/core';
+import type { ManifestRelationshipValidationEvidence, SemanticJoinStep } from '@zlens/core';
 import type { AnalyticalIntentV1 } from '../intent.js';
 import type { VocabularyIndex } from '../vocabulary.js';
 
@@ -66,6 +66,8 @@ export interface PreparedCandidate {
   semanticProgram?: SemanticExecutionProgram;
   /** The join steps this candidate's SQL takes, with their authority (relational tier). */
   joins?: RelationalJoinStep[];
+  /** Why the candidate carries less trust than its tier would (a semantic compile joining through an uncertified relationship); said in the answer. */
+  trustCaveat?: string;
   /**
    * A superlative fetched ONE MORE ROW than it will show, so that a tie at the
    * boundary can be seen rather than silently resolved by whatever order the
@@ -165,6 +167,14 @@ export interface SemanticCompileOutput {
   program?: SemanticExecutionProgram;
   /** What the engine noted while compiling (a profile target it could not verify, a clamped grain); recorded on the candidate's proof. */
   warnings?: string[];
+  /** The cube-to-cube joins the compile took, when the engine reports them (native). */
+  joinPath?: SemanticJoinStep[];
+  /**
+   * Whether every join the compile took is a certified DQL relationship
+   * (`assessSemanticJoinTrust`), set by the host that holds the manifest.
+   * Absent: the host could not tell, and the compile keeps its governed trust.
+   */
+  joinTrust?: { certified: boolean; caveat?: string };
 }
 
 export interface RelationalJoinStep {

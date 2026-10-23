@@ -69,7 +69,8 @@ const REQUIRED_TEST_FILES = [
 // 187 with the lexical reading of a governed metric and its dimensions (+2 files, +19 tests).
 // 188 with the identity-key warning of a labels-only block (+1 file, +6 tests).
 // 189 with a question that names a certified block (named-block.test.ts, +1 file, +13 tests).
-const EXPECTED_TEST_FILES = 189;
+// 190 with the certified-join check of a semantic compile (semantic-join-trust.test.ts, +1 file, +8 tests).
+const EXPECTED_TEST_FILES = 190;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -152,7 +153,8 @@ const EXPECTED_TEST_FILES = 189;
 // 2574 with a qualified semantic metric the question names kept out of a certified block that does not
 // return it (block-fit.test.ts, +4) and the closest semantic metric by name or label (compose.test.ts, +7)
 // (MCP routing 23 Oct 2026).
-const EXPECTED_TESTS = 2574;
+// 2584 with From Metrics only through certified joins (semantic-join-trust.test.ts, +8; prepare.test.ts, +2).
+const EXPECTED_TESTS = 2584;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2497.

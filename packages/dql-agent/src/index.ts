@@ -1219,6 +1219,11 @@ export {
   type AnalyticalExploratoryPath,
 } from "./metadata/analytical-policy.js";
 export {
+  assessSemanticJoinTrust,
+  type SemanticJoinProof,
+  type SemanticJoinTrust,
+} from "./metadata/semantic-join-trust.js";
+export {
   deriveGeneratedDraftSlug,
   deriveSemanticDraftName,
   renderGeneratedSqlDqlArtifact,

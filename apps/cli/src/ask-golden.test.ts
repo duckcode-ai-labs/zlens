@@ -45,8 +45,12 @@ import { readEnv } from '@zlens/core';
  */
 
 type Outcome = 'rows' | 'clarify_or_rows' | 'gap' | 'conversation' | 'answered_with_caveat' | 'gap_or_caveat';
-/** `reviewable`: the rows must be right, and the answer may be certified, governed or review-required (AI-drafted SQL over the schema). */
-type Tier = 'certified' | 'governed' | 'any' | 'reviewable' | 'none';
+/**
+ * `reviewable`: the rows must be right, and the answer may be certified, governed or review-required (AI-drafted SQL over the schema).
+ * `review_required`: the rows must be right, and the answer must be labelled for review: a semantic compile through a join that is
+ * not a certified relationship (every jaffle-golden relationship is a draft), never From Metrics.
+ */
+type Tier = 'certified' | 'governed' | 'any' | 'reviewable' | 'review_required' | 'none';
 interface Reference { sql: string; columns: Record<string, string[]>; identity?: string[] }
 interface GoldenCase extends Reference {
   id: string; question: string; outcome?: Outcome; tier: Tier;
@@ -293,8 +297,9 @@ const userText = (run: any): string => [run?.answer, run?.summary, run?.business
   .filter((value) => typeof value === 'string').join('\n');
 const trustOk = (tier: Tier, trust: string | undefined) => tier === 'none' ? true
   : tier === 'certified' ? trust === 'certified'
-    : tier === 'reviewable' ? ['certified', 'governed', 'review_required'].includes(trust ?? '')
-      : ['certified', 'governed'].includes(trust ?? '');
+    : tier === 'review_required' ? trust === 'review_required'
+      : tier === 'reviewable' ? ['certified', 'governed', 'review_required'].includes(trust ?? '')
+        : ['certified', 'governed'].includes(trust ?? '');
 
 interface Verdict { pass: boolean; reasons: string[]; observed: Record<string, unknown> }
 

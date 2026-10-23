@@ -307,7 +307,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'query_semantic_model',
     description:
-      'Semantic-layer compiler and bounded preview runner. Use only after ask_dql returned no certified block, when a governed metric/dimension/time-grain selection can answer the question before deep dbt/warehouse SQL search. When a certified block already answers the requested metric and grain, the result names it under certifiedBlock with nextTool query_via_block. Accepts explicit semantic members or a question, returns selected members, compiled SQL, bounded preview rows when runtime execution is available, and a reviewable DQL semantic artifact.',
+      'Semantic-layer compiler and bounded preview runner. Use only after ask_dql returned no certified block, when a governed metric/dimension/time-grain selection can answer the question before deep dbt/warehouse SQL search. When a certified block already answers the requested metric and grain, the result names it under certifiedBlock with nextTool query_via_block. Accepts explicit semantic members or a question, returns selected members, compiled SQL, bounded preview rows when runtime execution is available, and a reviewable DQL semantic artifact. Labelled From Metrics when every join it takes is a certified relationship (or it takes none), AI-Generated when a join is a draft or unmodeled relationship (relationshipProof lists the joins). uncertified: true means no certified block backs the result, not that it is AI-generated; report trustLabelInfo.display.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

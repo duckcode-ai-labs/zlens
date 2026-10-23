@@ -8,6 +8,31 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### From Metrics only through certified joins
+
+- **A semantic compile that joins through a draft relationship is no longer
+  labelled From Metrics.** In 0.2.5, `query_semantic_model` labelled "How many
+  large orders did each location get?" Governed although it joins orders to
+  locations through `order_to_location`, a draft relationship. A semantic
+  compile is now From Metrics only when every join it takes is a certified
+  relationship that passes the check `resolve_analytical_path` and
+  `explain_relationship_proof` apply. A compile through a draft relationship,
+  or a join no relationship models, is **AI-Generated** in MCP
+  (`certification: 'ai_generated'`, display `AI-Generated · uncertified join`),
+  and its caveat names the relationship. A single-table compile ("How many
+  large orders did we get each month?") stays From Metrics. `ask_dql`'s
+  `semanticCandidate` carries the same label.
+- **Ask follows the same rule**: such an answer is headed **Answer to review,
+  from governed definitions**, and the answer and its Trust & evidence name
+  the join. The figures still come from the semantic layer, not from AI-written
+  SQL.
+- **Note for MCP clients:** `query_semantic_model` adds `aiGenerated` (boolean)
+  and `relationshipProof` (each join and the relationship it matched).
+  `uncertified: true` is unchanged and means no certified saved query backs
+  the result and the draft needs review; it does not mean AI-generated. Read
+  the label from `trustLabelInfo.display`, `certification` or `aiGenerated`.
+  The server instructions say so.
+
 ### Wording
 
 - **Ask's "Governed" label is now "From Metrics"**, so Ask matches Help. The

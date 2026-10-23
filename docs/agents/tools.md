@@ -4,8 +4,11 @@ The ZLens MCP server (`zlens mcp`) offers tools only: no resources and no
 prompts. Every result is JSON. The server's instructions tell the agent to
 use the trust labels it returns (Certified, From Metrics, Reviewed, AI-Generated,
 Insufficient-Context, Conflict) as given, and never upgrade them. From Metrics
-means the answer was compiled from semantic metrics and dimensions, as the
-Ask page's "Answer from Metrics"; it is not certified.
+means the answer was compiled from semantic metrics and dimensions, and every
+join the compile took is a certified relationship, as the Ask page's "Answer
+from Metrics"; it is not certified. A semantic compile that joins through a
+draft relationship, or a join no relationship models, is AI-Generated, and its
+caveat names the join.
 
 The default profile serves 27 tools. Set `ZLENS_MCP_TOOL_PROFILE=full` in the
 server's environment for 8 more, for maintenance and governance sessions.
@@ -76,7 +79,7 @@ file), so these tools keep `block` in their names.
 | `explain_relationship_proof` | Why two entities may (or may not) be joined: keys, cardinality, warehouse evidence. Takes a relationship id or its short name. | yes |
 | `expand_context` | Adds missing tables to the context so a failed query can be retried. | yes |
 | `query_via_metadata` | Runs one read-only `SELECT` or `WITH` query as a bounded preview. Marks the result `uncertified` (AI-Generated) and saves a draft saved query unless asked not to. | no (saves a draft) |
-| `query_semantic_model` | Compiles and previews a semantic-layer query, labels it From Metrics, and saves it as a draft. It picks the metric whose name or label the question uses, and says "No semantic match" rather than answer with a different metric. | no (saves a draft) |
+| `query_semantic_model` | Compiles and previews a semantic-layer query, labels it, and saves it as a draft. The label is From Metrics when every join it takes is a certified relationship (or it takes none), and AI-Generated when a join is a draft or unmodeled relationship; `relationshipProof` lists each join and the relationship it matched. `uncertified: true` means no certified saved query backs the result and the draft needs review; it does not mean AI-generated, so read the label from `trustLabelInfo.display` (or `certification`, `aiGenerated`). It picks the metric whose name or label the question uses, and says "No semantic match" rather than answer with a different metric. | no (saves a draft) |
 | `kg_search` | Searches the project's knowledge graph: saved queries, terms, metrics, Apps, notebooks, dbt models, entities, relationships, skills. | yes |
 
 ### Saved queries, lineage and checks

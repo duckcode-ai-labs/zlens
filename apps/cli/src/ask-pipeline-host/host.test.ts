@@ -4,8 +4,8 @@ import type { QueryExecutor } from '@zlens/connectors';
 import type { AgentMessage, AgentProvider, AgentRunRequest } from '@zlens/agent';
 import type { ConnectionConfig } from '@zlens/connectors';
 import { buildVocabularyIndex, classifyWarehouseError, createAgentRunBudget, parseIntent, physicalRelationBinding, type AnalyticalIntentV1 } from '@zlens/agent';
-import { SemanticLayer } from '@zlens/core';
-import { preferredJoinHints, resultShapeForReview, preferredJoinLine, skillsForDraft, mentionsName, joinHintUsed, hintsForQuestion, joinsAnyRelation, sharedKeyPair, relationsFromCatalogHits, missingFieldWords, relationsWithColumnWords, columnProbeBudgetMs, columnsForPhysicalEntry, connectionKey, physicalRelationName, relationColumnsProbeSql, relationDatabases, relationsFromProbeRows, relevantRelationsForQuestion, snowflakeShowColumnsRows, underAskedNames, coverageEvaluations, governedCoverageDoubt, effectiveAnsweredTrust, createAskPipelineRouteExecutor, explainOutOfScope, explainOutOfScopeWords, gapPresentation, groundIntentLiterals, knownMissingRelation, memberCandidatesSql, normalizeExecutedRow, prepareBlockForAsk, recordRelationEvidence, resetRelationEvidence, runtimeSchemaForVocabulary, toExecutorResult, tracedProbes, vocabularyViewKey } from './host.js';
+import { SemanticLayer, type DQLManifest } from '@zlens/core';
+import { preferredJoinHints, resultShapeForReview, preferredJoinLine, skillsForDraft, mentionsName, joinHintUsed, hintsForQuestion, joinsAnyRelation, sharedKeyPair, relationsFromCatalogHits, missingFieldWords, relationsWithColumnWords, columnProbeBudgetMs, columnsForPhysicalEntry, connectionKey, physicalRelationName, relationColumnsProbeSql, relationDatabases, relationsFromProbeRows, relevantRelationsForQuestion, snowflakeShowColumnsRows, underAskedNames, coverageEvaluations, governedCoverageDoubt, effectiveAnsweredTrust, withJoinTrust, createAskPipelineRouteExecutor, explainOutOfScope, explainOutOfScopeWords, gapPresentation, groundIntentLiterals, knownMissingRelation, memberCandidatesSql, normalizeExecutedRow, prepareBlockForAsk, recordRelationEvidence, resetRelationEvidence, runtimeSchemaForVocabulary, toExecutorResult, tracedProbes, vocabularyViewKey } from './host.js';
 
 function scripted(replies: string[]): AgentProvider & { calls: AgentMessage[][] } {
   const calls: AgentMessage[][] = [];
@@ -128,6 +128,42 @@ describe('a ref outside the envelope is explained as out of scope, never as none
     const governed = toExecutorResult('run:governed', outcome([]), Date.now());
     expect(governed).toMatchObject({ trustState: 'governed', stopReason: 'governed_semantic_answer' });
     expect(governed.artifacts![0]!.payload).toMatchObject({ trustState: 'governed', certification: 'governed', reviewStatus: 'governed' });
+  });
+
+  // From Metrics means certified joins (2026-10-23: "How many large orders did
+  // each location get?" joined orders to locations through the draft
+  // order_to_location and was labelled Governed).
+  it('a semantic answer through an uncertified join is labelled for review, keeps its semantic source, and says which join', () => {
+    const intent = { version: 1, kind: 'analytics', reading: 'Large orders by location.', measures: [{ ref: 'metric:orders.large_orders' }], groupBy: [], display: [], filters: [], expectedShape: 'grouped', unresolved: [], provenance: {} } as unknown as AnalyticalIntentV1;
+    const caveat = 'Orders → locations joins through relationship "order_to_location", which is draft, not certified. Certify the relationship in Modeling, with warehouse validation, for a From Metrics answer.';
+    const outcome = {
+      kind: 'answered', intent, text: 'Large orders by location.',
+      result: { columns: ['location_name', 'large_orders'], rows: [{ location_name: 'Philadelphia', large_orders: 12 }], rowCount: 1, executionTimeMs: 1 },
+      candidate: { tier: 'semantic', trust: 'review_required', trustCaveat: caveat, sql: 'SELECT 1', proof: [`joins: ${caveat}`] },
+      receipt: { version: 1, vocabularyFingerprint: 'test', dispatches: [], candidates: [], refusals: [], tiers: [], timings: {}, uncovered: [], coverage: [] },
+    } as unknown as Parameters<typeof toExecutorResult>[1];
+    const run = toExecutorResult('run:draft-join', outcome, Date.now());
+    const card = run.artifacts![0]!;
+    expect(run).toMatchObject({ trustState: 'review_required', resolvedRoute: 'semantic_answer' });
+    expect(card).toMatchObject({ title: 'Answer to review, from governed definitions', trustState: 'review_required' });
+    // No AI wrote this SQL: never routed or titled as AI-drafted.
+    expect(card.payload).toMatchObject({ route: { tier: 'semantic_metric' }, sourceTier: 'semantic_layer', certification: 'review_required' });
+    expect(run.evaluations?.find((evaluation) => evaluation.id === 'pipeline-governed-joins')?.message).toContain('order_to_location');
+  });
+
+  it('a semantic compile is judged on the joins it took against the DQL relationships', () => {
+    const relationship = { id: 'r', localId: 'order_to_location', qualifiedId: 'commerce::relationship::order_to_location', from: 'order', to: 'location', keys: [{ from: 'location_id', to: 'location_id' }], cardinality: 'many_to_one', fanout: 'safe', status: 'draft' };
+    const manifest = {
+      dbtProvenance: { nodes: { 'model.j.orders': { relation: '"j"."dev"."orders"' }, 'model.j.locations': { relation: '"j"."dev"."locations"' } } },
+      modeling: { entities: { order: { dbtUniqueId: 'model.j.orders' }, location: { dbtUniqueId: 'model.j.locations' } }, relationships: { r: relationship } },
+    } as unknown as DQLManifest;
+    const joinPath = [{ left: 'orders', right: 'locations', leftTable: '"j"."dev"."orders"', rightTable: '"j"."dev"."locations"', keys: [{ from: 'location_id', to: 'location_id' }] }];
+    const judged = withJoinTrust({ sql: 'SELECT 1', engine: 'native', joinPath }, manifest);
+    expect(judged.joinTrust?.certified).toBe(false);
+    expect(judged.joinTrust?.caveat).toContain('order_to_location');
+    expect(withJoinTrust({ sql: 'SELECT 1', engine: 'native', joinPath: [] }, manifest).joinTrust).toEqual({ certified: true });
+    // An engine that reports no joins is not judged here.
+    expect(withJoinTrust({ sql: 'SELECT 1', engine: 'metricflow-cli' }, manifest).joinTrust).toBeUndefined();
   });
 
   // Launch blocker: an App Ask ("What is beverage revenue by product?" on the

@@ -87,12 +87,66 @@ describe('MCP routing, metric choice and trust labels on jaffle-golden', () => {
   });
 
   describe('a semantic compile reads From Metrics, as the Ask page does', () => {
-    it('labels the compile and its DQL artifact From Metrics, and never Certified', async () => {
-      const out = await semantic({ question: 'What is the average order value by customer type?' });
-      expect(out.trustLabelInfo).toMatchObject({ id: 'governed', base: 'From Metrics' });
+    it('labels a single-table compile and its DQL artifact From Metrics, and never Certified', async () => {
+      const out = await semantic({ question: 'How many large orders did we get each month?' });
+      expect(out.metrics).toEqual(['large_orders']);
+      expect(out.composeResult.joinPath).toEqual([]);
+      expect(out.trustLabelInfo).toMatchObject({ id: 'governed', base: 'From Metrics', display: 'From Metrics' });
       expect(out.dqlArtifact.trustState).toBe('governed');
       expect(out.certification).toBe('governed');
+      expect(out.aiGenerated).toBe(false);
+      expect(out.relationshipProof).toEqual({ certified: true, joins: [] });
+      // uncertified: no certified block backs it; it does not make the answer AI-generated.
       expect(out.uncertified).toBe(true);
+    }, 60_000);
+  });
+
+  // Found on 2026-10-23 in a Claude Desktop recording on 0.2.5: the compile
+  // joined orders to locations through order_to_location, a draft
+  // relationship, and was labelled Governed; Claude itself called it "an
+  // uncertified, AI-generated semantic compile".
+  describe('a semantic compile is From Metrics only when every join is a certified relationship', () => {
+    it('labels a compile through the draft order_to_location join AI-Generated, and names the relationship', async () => {
+      const out = await semantic({ question: 'How many large orders did each location get?' });
+      expect(out.metrics).toEqual(['large_orders']);
+      expect(out.dimensions).toEqual(['location_name']);
+      expect(out.composeResult.joinPath).toHaveLength(1);
+      expect(out.certification).toBe('ai_generated');
+      expect(out.aiGenerated).toBe(true);
+      expect(out.trustLabelInfo).toMatchObject({ id: 'ai_generated', base: 'AI-Generated', display: 'AI-Generated · uncertified join' });
+      expect(out.trustStatus.label).toBe('AI-Generated: semantic compile through an uncertified join');
+      expect(out.dqlArtifact.trustState).toBe('review_required');
+      expect(out.relationshipProof.certified).toBe(false);
+      expect(out.relationshipProof.joins[0]).toMatchObject({ from: 'orders', to: 'locations', relationshipName: 'order_to_location', status: 'draft', certified: false });
+      expect(out.trustStatus.caveats.join(' ')).toContain('relationship "order_to_location", which is draft, not certified');
+    }, 60_000);
+
+    it('labels the same explicit-member compile the same way', async () => {
+      const out = await semantic({ metrics: ['large_orders'], dimensions: ['location_name'] });
+      expect(out.certification).toBe('ai_generated');
+      expect(out.trustLabelInfo.base).toBe('AI-Generated');
+    }, 60_000);
+
+    it('names every draft join of a two-hop compile', async () => {
+      const out = await semantic({ question: 'How much revenue did each location make?' });
+      expect(out.certification).toBe('ai_generated');
+      expect(out.relationshipProof.joins.map((join: { relationshipName: string }) => join.relationshipName)).toEqual(['order_item_to_order', 'order_to_location']);
+      expect(out.trustStatus.caveats.join(' ')).toContain('order_item_to_order');
+    }, 60_000);
+
+    it('keeps From Metrics for a ratio compiled from one table (average order value by customer type reads customers only)', async () => {
+      const out = await semantic({ question: 'What is the average order value by customer type?' });
+      expect(out.metric).toBe('average_order_value');
+      expect(out.composeResult.joinPath).toEqual([]);
+      expect(out.certification).toBe('governed');
+    }, 60_000);
+
+    it('ask_dql names the AI-Generated label for a compile that needs a draft join', async () => {
+      const out = await askDql(ctx, { question: 'How many large orders did each location get?' }) as Record<string, any>;
+      expect(out.nextTool).toBe('query_semantic_model');
+      expect(out.semanticCandidate.trustLabel).toMatchObject({ id: 'ai_generated', base: 'AI-Generated' });
+      expect(out.semanticCandidate.joinCaveat).toContain('order_to_location');
+      expect(out.recommendedAction).toContain('AI-Generated');
     }, 60_000);
 
     it('ask_dql sends a question the semantic layer answers to query_semantic_model, not to AI SQL', async () => {

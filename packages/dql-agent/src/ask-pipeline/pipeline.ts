@@ -1774,5 +1774,6 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     ? { source: step.authority.source, ...(step.authority.relationshipId ? { relationshipId: step.authority.relationshipId } : {}), authority: step.authority.authority, scope: step.authority.scope }
     : { source: 'declared', authority: 'unknown' });
   receipt.context = { ...receipt.context!, used: { joins: usedJoins, relations: [...new Set([...(candidate.relations ?? []), ...(candidate.joins ?? []).map((step) => step.relation)])], tier: candidate.tier, ...(candidate.engine ? { engine: candidate.engine } : {}) } };
-  return { kind: 'answered', intent, candidate, result, text: composeAnsweredText(intent, result, input.vocabulary, candidate.trust, { notes: [...(receipt.grounding ?? []), ...textMatches], caveats }), receipt };
+  if (candidate.trustCaveat) caveats.push(candidate.trustCaveat);
+  return { kind: 'answered', intent, candidate, result, text: composeAnsweredText(intent, result, input.vocabulary, candidate.trust, { notes: [...(receipt.grounding ?? []), ...textMatches], caveats, tier: candidate.tier }), receipt };
 }

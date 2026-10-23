@@ -7,6 +7,7 @@ import {
   type MetricDefinition,
   type SemanticLayer,
   type SemanticExecutionReceiptV1,
+  type SemanticJoinStep,
   type SemanticTargetBindingV1,
   type WarehouseTargetIdentityV1,
 } from '@zlens/core';
@@ -1234,6 +1235,28 @@ export function semanticPathAmbiguityFromError(input: {
     runtimeReference,
     candidates,
   });
+}
+
+/**
+ * The semantic-model joins a request needs, as the native composer would take
+ * them: for an engine (MetricFlow, dbt Cloud) that does not report its own.
+ * Undefined when the native composer cannot plan the request.
+ */
+export function structuralSemanticJoinPath(
+  semanticLayer: SemanticLayer,
+  request: Pick<SemanticRuntimeQueryRequest, 'metrics' | 'dimensions' | 'filters' | 'timeDimension'>,
+): SemanticJoinStep[] | undefined {
+  try {
+    const nativeRequest = semanticRequestWithoutPathSelectors({ ...request } as SemanticRuntimeQueryRequest);
+    return semanticLayer.composeQuery({
+      metrics: nativeRequest.metrics,
+      dimensions: nativeRequest.dimensions,
+      filters: nativeRequest.filters as Array<{ dimension: string; operator: string; values: string[] }> | undefined,
+      timeDimension: nativeRequest.timeDimension,
+    })?.joinPath;
+  } catch {
+    return undefined;
+  }
 }
 
 function semanticRequestWithoutPathSelectors(

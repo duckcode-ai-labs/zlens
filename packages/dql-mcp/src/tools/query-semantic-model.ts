@@ -5,12 +5,14 @@ import {
   type SemanticLayer,
 } from '@zlens/core';
 import {
+  assessSemanticJoinTrust,
   buildAnalysisQuestionPlan,
   composeSemanticQueryForQuestion,
   semanticDqlArtifactName,
   renderSemanticDqlArtifact,
   upsertGeneratedDqlArtifactDraft,
   type GeneratedDraftBlock,
+  type SemanticJoinTrust,
 } from '@zlens/agent';
 import type { DQLContext } from '../context.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
@@ -109,6 +111,7 @@ export async function querySemanticModel(
       question: args.question?.trim() || undefined,
       members: { metrics: explicitMetrics, dimensions: args.dimensions ?? [], timeDimension: args.timeDimension, filters: args.filters },
     });
+    const joins = assessSemanticJoinTrust(composed.joinPath, ctx.manifest);
     const draftBlock = saveSemanticDraft(ctx.projectRoot, {
       saveDraft: args.saveDraft ?? (certified.block ? false : undefined),
       name: artifactName,
@@ -116,6 +119,7 @@ export async function querySemanticModel(
       domain,
       dqlArtifact,
       outputs: semanticArtifactOutputs(dqlArtifact),
+      joinCertified: joins.certified,
     });
     const preview = await previewSemanticQuery(ctx, {
       sql: composed.sql,
@@ -124,15 +128,11 @@ export async function querySemanticModel(
       serverUrl: args.serverUrl,
       rowLimit: args.rowLimit,
     });
-    const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified);
+    const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified, joins);
     return {
       ...certifiedCoverageFields(certified),
       matched: true,
-      uncertified: true,
-      reviewStatus: 'draft_ready',
-      certification: 'governed',
-      trustLabelInfo: trust.trustLabelInfo,
-      trustStatus: trust,
+      ...semanticTrustFields(trust),
       mode: 'explicit_members',
       metrics: explicitMetrics,
       dimensions: args.dimensions ?? [],
@@ -144,9 +144,11 @@ export async function querySemanticModel(
       composeResult: composed,
       ...preview,
       draftBlock,
-      dqlArtifact: draftBlock
-        ? { ...dqlArtifact, sourcePath: dqlArtifact.sourcePath ?? draftBlock.path }
-        : dqlArtifact,
+      dqlArtifact: {
+        ...dqlArtifact,
+        trustState: artifactTrustState(trust),
+        ...(draftBlock ? { sourcePath: dqlArtifact.sourcePath ?? draftBlock.path } : {}),
+      },
     };
   }
 
@@ -181,6 +183,7 @@ export async function querySemanticModel(
     };
   }
 
+  const joins = assessSemanticJoinTrust(result.composeResult.joinPath, ctx.manifest);
   const draftBlock = saveSemanticDraft(ctx.projectRoot, {
     saveDraft: args.saveDraft ?? (certified.block ? false : undefined),
     name: result.dqlArtifact.name ?? result.metric,
@@ -188,6 +191,7 @@ export async function querySemanticModel(
     domain: layer.listMetrics().find((metric) => metric.name === result.metric)?.domain,
     dqlArtifact: result.dqlArtifact,
     outputs: semanticArtifactOutputs(result.dqlArtifact),
+    joinCertified: joins.certified,
   });
   const preview = await previewSemanticQuery(ctx, {
     sql: result.sql,
@@ -196,16 +200,12 @@ export async function querySemanticModel(
     serverUrl: args.serverUrl,
     rowLimit: args.rowLimit,
   });
-  const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified);
+  const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified, joins);
 
   return {
     ...certifiedCoverageFields(certified),
     matched: true,
-    uncertified: true,
-    reviewStatus: 'draft_ready',
-    certification: 'governed',
-    trustLabelInfo: trust.trustLabelInfo,
-    trustStatus: trust,
+    ...semanticTrustFields(trust),
     mode: 'question_selection',
     metric: result.metric,
     metrics: result.metrics,
@@ -218,9 +218,11 @@ export async function querySemanticModel(
     composeResult: result.composeResult,
     ...preview,
     draftBlock,
-    dqlArtifact: draftBlock
-      ? { ...result.dqlArtifact, sourcePath: result.dqlArtifact.sourcePath ?? draftBlock.path }
-      : result.dqlArtifact,
+    dqlArtifact: {
+      ...result.dqlArtifact,
+      trustState: artifactTrustState(trust),
+      ...(draftBlock ? { sourcePath: result.dqlArtifact.sourcePath ?? draftBlock.path } : {}),
+    },
   };
 }
 
@@ -261,26 +263,58 @@ function certifiedCoverageFields(certified: CertifiedCoverageResult) {
 
 /**
  * A semantic compile reads only governed metrics and dimensions, and the
- * compiler (not a model) writes its SQL. The Ask page heads the same answer
- * "Answer from Metrics" (`trustState: governed`), so MCP labels it From Metrics too:
- * above AI-Generated, below Certified. The saved draft still needs review
- * before it can be certified.
+ * compiler (not a model) writes its SQL. When every join it takes is a
+ * certified DQL relationship (or it takes none), the Ask page heads the same
+ * answer "Answer from Metrics" (`trustState: governed`), so MCP labels it From
+ * Metrics too: above AI-Generated, below Certified. A compile that joins
+ * through a draft relationship, or one no relationship models, is
+ * AI-Generated, and the caveat names the join. Either way the saved draft
+ * still needs review before it can be certified.
  */
-function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionError?: string, certified?: CertifiedCoverageResult) {
+function semanticCompileTrustStatus(draftBlock: GeneratedDraftBlock | undefined, executionError: string | undefined, certified: CertifiedCoverageResult | undefined, joins: SemanticJoinTrust) {
+  const governed = joins.certified;
   return {
-    label: 'From Metrics: semantic compile',
+    label: governed ? 'From Metrics: semantic compile' : 'AI-Generated: semantic compile through an uncertified join',
     uncertified: true,
+    aiGenerated: !governed,
     reviewStatus: 'draft_ready',
-    certification: 'governed',
-    trustLabelInfo: resolveTrustLabel('governed'),
+    certification: governed ? 'governed' as const : 'ai_generated' as const,
+    trustLabelInfo: governed ? resolveTrustLabel('governed') : resolveTrustLabel('ai_generated', 'uncertified join'),
+    relationshipProof: { certified: joins.certified, joins: joins.joins },
     draftPath: draftBlock?.path,
     promotionPath: draftBlock ? 'zlens certify --from-draft' : undefined,
     caveats: [
       certifiedCaveat(certified),
-      'From Metrics: semantic-layer members were compiled deterministically. Not certified: review the DQL artifact before certifying it.',
+      ...(joins.caveat ? [`AI-Generated: ${joins.caveat}`] : []),
+      governed
+        ? 'From Metrics: semantic-layer members were compiled deterministically. Not certified: review the DQL artifact before certifying it.'
+        : 'Semantic-layer members were compiled deterministically, but a join is not certified. Not certified: review the DQL artifact before certifying it.',
       'semantic_draft_review_required',
       ...(executionError ? [`Execution caveat: ${executionError}`] : []),
     ],
+  };
+}
+
+/**
+ * The trust fields every matched result leads with. `uncertified: true` means
+ * no certified block backs this result and its draft needs review; it does not
+ * mean AI-generated. The label is `trustLabelInfo.display` (`certification`
+ * 'governed' = From Metrics, 'ai_generated' = AI-Generated), and `aiGenerated`
+ * says the same as a boolean.
+ */
+function artifactTrustState(trust: ReturnType<typeof semanticCompileTrustStatus>): 'governed' | 'review_required' {
+  return trust.certification === 'governed' ? 'governed' : 'review_required';
+}
+
+function semanticTrustFields(trust: ReturnType<typeof semanticCompileTrustStatus>) {
+  return {
+    uncertified: true,
+    aiGenerated: trust.aiGenerated,
+    reviewStatus: 'draft_ready',
+    certification: trust.certification,
+    trustLabelInfo: trust.trustLabelInfo,
+    relationshipProof: trust.relationshipProof,
+    trustStatus: trust,
   };
 }
 
@@ -496,6 +530,7 @@ function saveSemanticDraft(
     domain?: string;
     dqlArtifact: DqlArtifactReference & { kind: 'semantic_block' };
     outputs: string[];
+    joinCertified: boolean;
   },
 ): GeneratedDraftBlock | undefined {
   if (input.saveDraft === false) return undefined;
@@ -507,7 +542,7 @@ function saveSemanticDraft(
     dqlArtifact: input.dqlArtifact,
     outputs: input.outputs,
     routeIntent: 'semantic_compile',
-    validationWarnings: ['semantic_draft_review_required'],
+    validationWarnings: ['semantic_draft_review_required', ...(input.joinCertified ? [] : ['semantic_join_not_certified'])],
   });
 }
 
