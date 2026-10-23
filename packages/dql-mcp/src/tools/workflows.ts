@@ -6,7 +6,7 @@ import {
   appBuildHandoffSourceSummary,
   assessSemanticJoinTrust,
   buildAnalysisQuestionPlan,
-  composeSemanticQueryForQuestion,
+  composeSemanticQueryForQuestionWithCoverage,
   appStudioDraftPath,
   askScopeFromWorkspace,
   createAppBuildHandoffDraft,
@@ -80,7 +80,8 @@ export async function askDql(
   // with the agent answer-loop and the UI badge. Derived from the route so MCP
   // clients always see the same label set.
   const trustLabel = resolveTrustLabel(trustLabelIdForRoute(route.route));
-  const semanticCandidate = route.route === 'generated_sql' ? semanticCandidateFor(ctx, args.question) : undefined;
+  const semantic = route.route === 'generated_sql' ? semanticCandidateFor(ctx, args.question) : undefined;
+  const semanticCandidate = semantic?.candidate;
 
   return {
     question: args.question,
@@ -98,7 +99,10 @@ export async function askDql(
     grainGate: route.grainGate,
     recommendedAction: semanticCandidate
       ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled ${semanticCandidate.trustLabel.display}${semanticCandidate.joinCaveat ? ` (${semanticCandidate.joinCaveat})` : ''}. Write SQL for query_via_metadata only if it returns matched: false.`
-      : recommendedAction(route.route),
+      : semantic?.gap
+        ? `The semantic metric "${semantic.gap.nearestMetric}" cannot express ${semantic.gap.unexpressed.join(', ')}, so query_semantic_model would not answer this. ${recommendedAction(route.route)} Apply every part of the question in the SQL.`
+        : recommendedAction(route.route),
+    ...(semantic?.gap ? { semanticGap: semantic.gap } : {}),
     ...(semanticCandidate
       ? { nextTool: 'query_semantic_model', semanticCandidate }
       : nextTool(route.route) ? { nextTool: nextTool(route.route) } : {}),
@@ -385,26 +389,33 @@ export function buildDqlBlock(
  * semantic layer has the metric it names. Sends the agent to
  * query_semantic_model (From Metrics, or AI-Generated when it joins through an
  * uncertified relationship) before it writes its own SQL (AI-Generated), the
- * order the Ask page follows.
+ * order the Ask page follows. When the metric matches but the question also
+ * asks for a breakdown or filter it cannot express, returns that gap instead.
  */
 function semanticCandidateFor(ctx: DQLContext, question: string) {
   try {
-    const result = composeSemanticQueryForQuestion({
+    const coverage = composeSemanticQueryForQuestionWithCoverage({
       semanticLayer: ctx.semanticLayer,
       question,
       questionPlan: buildAnalysisQuestionPlan(question),
     });
+    // A metric that matches while a breakdown or filter in the question does
+    // not is no candidate: the agent writes SQL, told what the metric misses.
+    if (coverage.unexpressed.length > 0 && coverage.metric) {
+      return { gap: { nearestMetric: coverage.metric, unexpressed: coverage.unexpressed } };
+    }
+    const result = coverage.result;
     if (!result) return undefined;
     // From Metrics only when every join the compile takes is a certified relationship.
     const joins = assessSemanticJoinTrust(result.composeResult.joinPath, ctx.manifest);
-    return {
+    return { candidate: {
       metric: result.metric,
       metrics: result.metrics,
       dimensions: result.dimensions,
       ...(result.timeDimension ? { timeDimension: result.timeDimension } : {}),
       trustLabel: joins.certified ? resolveTrustLabel('governed') : resolveTrustLabel('ai_generated', 'uncertified join'),
       ...(joins.caveat ? { joinCaveat: joins.caveat } : {}),
-    };
+    } };
   } catch {
     return undefined;
   }

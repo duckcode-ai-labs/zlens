@@ -8,6 +8,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### The semantic route answers the whole question or not at all
+
+- **`query_semantic_model` no longer drops a breakdown or a filter the question
+  asks for.** In 0.2.5, "What was the busiest hour of the day for orders in
+  Philadelphia?" compiled the `orders` metric with no breakdown and no filter:
+  one total of all orders, labelled Governed. A question-mode compile now
+  checks that its members express every breakdown ("hour of the day", "by
+  customer type"), named member ("in Philadelphia") and date range ("in March
+  2025", "last quarter") in the question. When one is missing it returns
+  `matched: false` with `unexpressed` (the missing parts), `nearestMetric` and
+  `nextTool: query_via_metadata`. Explicit `metrics[]` passed with a `question`
+  get the same check. `ask_dql` no longer offers such a question to
+  `query_semantic_model`: it sends it to `query_via_metadata` and adds
+  `semanticGap` with the same parts. "How many orders at the Philadelphia
+  location?" now compiles `location_name = 'Philadelphia'`.
+
 ### From Metrics only through certified joins
 
 - **A semantic compile that joins through a draft relationship is no longer

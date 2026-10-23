@@ -169,4 +169,51 @@ describe('MCP routing, metric choice and trust labels on jaffle-golden', () => {
       expect(out.answerContract.trustLabels).toEqual(['Certified', 'From Metrics', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict']);
     }, 60_000);
   });
+
+  describe('the semantic route answers only when it expresses every breakdown and filter in the question', () => {
+    const busiestHour = 'What was the busiest hour of the day for orders in Philadelphia?';
+
+    it('query_semantic_model does not answer the busiest hour of the day in Philadelphia with the orders total', async () => {
+      const out = await semantic({ question: busiestHour });
+      expect(out.matched).toBe(false);
+      expect(out.sql).toBeUndefined();
+      expect(out.trustLabelInfo).toBeUndefined();
+      expect(out.nearestMetric).toBe('orders');
+      expect(out.unexpressed).toEqual(['filter "Philadelphia"', 'breakdown "hour of the day"']);
+      expect(out.nextTool).toBe('query_via_metadata');
+      expect(out.reason).toMatch(/^No semantic match/);
+    }, 60_000);
+
+    it('query_semantic_model does not answer large orders in Brooklyn in March 2025 with all large orders', async () => {
+      const out = await semantic({ question: 'How many large orders in Brooklyn in March 2025?' });
+      expect(out.matched).toBe(false);
+      expect(out.unexpressed).toEqual(['date range "in March 2025"', 'filter "Brooklyn"']);
+    }, 60_000);
+
+    it('refuses explicit members that leave out part of the question they come with', async () => {
+      const out = await semantic({
+        question: busiestHour,
+        metrics: ['orders'],
+        filters: [{ dimension: 'location_name', operator: 'equals', values: ['Philadelphia'] }],
+      });
+      expect(out.matched).toBe(false);
+      expect(out.unexpressed).toEqual(['breakdown "hour of the day"']);
+    }, 60_000);
+
+    it('compiles the location filter when the question names it with its dimension', async () => {
+      const out = await semantic({ question: 'How many orders at the Philadelphia location?' });
+      expect(out.matched).toBe(true);
+      expect(out.metrics).toEqual(['orders']);
+      expect(out.filters).toEqual([{ dimension: 'location_name', operator: 'equals', values: ['Philadelphia'] }]);
+      expect(out.sql).toContain("location_name = 'Philadelphia'");
+    }, 60_000);
+
+    it('ask_dql sends the question to query_via_metadata and says what the metric cannot express', async () => {
+      const out = await askDql(ctx, { question: busiestHour }) as Record<string, any>;
+      expect(out.nextTool).toBe('query_via_metadata');
+      expect(out.semanticCandidate).toBeUndefined();
+      expect(out.semanticGap).toEqual({ nearestMetric: 'orders', unexpressed: ['filter "Philadelphia"', 'breakdown "hour of the day"'] });
+      expect(out.recommendedAction).toContain('hour of the day');
+    }, 60_000);
+  });
 });

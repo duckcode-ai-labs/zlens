@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { SemanticLayer } from '@zlens/core';
-import { composeSemanticQueryForQuestion, composeSemanticQueryFromMembers } from './compose.js';
+import { composeSemanticQueryForQuestion, composeSemanticQueryForQuestionWithCoverage, composeSemanticQueryFromMembers } from './compose.js';
 import { buildAnalysisQuestionPlan } from '../metadata/analysis-planner.js';
 
 function layer(): SemanticLayer {
@@ -620,5 +620,75 @@ describe('composeSemanticQueryForQuestion — closest metric by name or label (M
   it('returns no match instead of an unrelated metric when the named metric cannot compile', () => {
     // An offset window is MetricFlow-only; drink_orders shares only the word "order".
     expect(compose('What is the average order value by customer type?', jaffleLayer({ averageOrderValueOffset: true }))).toBeUndefined();
+  });
+});
+
+describe('composeSemanticQueryForQuestion — every breakdown and filter the question asks for (MCP 2026-10-23)', () => {
+  // jaffle-shop shape: orders reach the location through the order_to_location join.
+  function ordersLayer(): SemanticLayer {
+    return new SemanticLayer({
+      metrics: [
+        { name: 'orders', label: 'Orders', description: 'Count of orders.', domain: 'orders', sql: '1', type: 'sum', table: 'orders', aggTimeDimension: 'ordered_at' },
+        { name: 'large_orders', label: 'Large Orders', description: 'Count of orders with order total over 20.', domain: 'orders', sql: '1', type: 'sum', table: 'orders', aggTimeDimension: 'ordered_at' },
+        { name: 'revenue', label: 'Revenue', description: 'Sum of order revenue.', domain: 'orders', sql: 'order_total', type: 'sum', table: 'orders', aggTimeDimension: 'ordered_at' },
+      ],
+      dimensions: [
+        { name: 'location_name', label: 'location_name', description: 'The name of the store location.', sql: 'location_name', type: 'string', table: 'orders' },
+        { name: 'customer_type', label: 'customer_type', description: "Options are 'new' or 'returning'.", sql: 'customer_type', type: 'string', table: 'orders' },
+        { name: 'ordered_at', label: 'ordered_at', description: '', sql: 'ordered_at', type: 'time', table: 'orders', isTimeDimension: true },
+      ],
+    } as never);
+  }
+  const coverage = (question: string) => composeSemanticQueryForQuestionWithCoverage({
+    semanticLayer: ordersLayer(),
+    question,
+    questionPlan: buildAnalysisQuestionPlan(question),
+  });
+
+  it('refuses the all-orders total for the busiest hour of the day in Philadelphia, and names both missing parts', () => {
+    const out = coverage('What was the busiest hour of the day for orders in Philadelphia?');
+    expect(out.result).toBeUndefined();
+    expect(out.metric).toBe('orders');
+    expect(out.unexpressed).toEqual(['filter "Philadelphia"', 'breakdown "hour of the day"']);
+    expect(composeSemanticQueryForQuestion({
+      semanticLayer: ordersLayer(),
+      question: 'What was the busiest hour of the day for orders in Philadelphia?',
+      questionPlan: buildAnalysisQuestionPlan('What was the busiest hour of the day for orders in Philadelphia?'),
+    })).toBeUndefined();
+  });
+
+  it('refuses large orders in Brooklyn in March 2025, naming the member and the date range', () => {
+    const out = coverage('How many large orders in Brooklyn in March 2025?');
+    expect(out.result).toBeUndefined();
+    expect(out.metric).toBe('large_orders');
+    expect(out.unexpressed).toEqual(['date range "in March 2025"', 'filter "Brooklyn"']);
+  });
+
+  it('refuses a named member, a month with no year, or a relative window it cannot filter on', () => {
+    expect(coverage('What is total revenue in Brooklyn?').unexpressed).toEqual(['filter "Brooklyn"']);
+    expect(coverage('How many large orders in March?').unexpressed).toEqual(['date range "in March"']);
+    expect(coverage('What was revenue this year?').result).toBeUndefined();
+    expect(coverage('What was revenue last quarter?').result).toBeUndefined();
+    expect(coverage('How many orders on weekends?').unexpressed).toEqual(['breakdown "weekends"']);
+    expect(coverage('How many orders per hour?').unexpressed).toEqual(['breakdown "hour"']);
+  });
+
+  it('compiles the filter when the question names the member with its dimension', () => {
+    const out = coverage('How many orders at the Philadelphia location?');
+    expect(out.unexpressed).toEqual([]);
+    expect(out.result?.filters).toEqual([{ dimension: 'location_name', operator: 'equals', values: ['Philadelphia'] }]);
+    expect(out.result?.sql).toContain("'Philadelphia'");
+  });
+
+  it('keeps answering questions whose breakdowns the members express', () => {
+    expect(coverage('How many large orders did we get each month?').result?.timeDimension).toEqual({ name: 'ordered_at', granularity: 'month' });
+    expect(coverage('What is revenue by customer type?').result?.dimensions).toEqual(['customer_type']);
+    expect(coverage('Which store location had the most orders?').result?.dimensions).toEqual(['location_name']);
+    expect(coverage('How many orders by location?').unexpressed).toEqual([]);
+  });
+
+  it('does not read a lower-case word as a member value', () => {
+    // "new" and "returning" are customer_type values the dimension already groups by.
+    expect(coverage('What is revenue for new versus returning customers?').unexpressed).toEqual([]);
   });
 });

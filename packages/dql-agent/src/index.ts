@@ -886,11 +886,15 @@ export {
 } from "./agentic/assumptions.js";
 export {
   composeSemanticQueryForQuestion,
+  composeSemanticQueryForQuestionWithCoverage,
   composeSemanticQueryFromCompiledMembers,
   composeSemanticQueryFromMembers,
   renderSemanticDqlArtifact,
   semanticDqlArtifactName,
+  unexpressedSemanticQuestionParts,
   type ComposeSemanticQueryInput,
+  type SemanticQuestionCoverage,
+  type SemanticQuestionMembers,
   type SemanticBridgeFilter,
   type SemanticBridgeOrderBy,
   type SemanticBridgeQueryResult,
