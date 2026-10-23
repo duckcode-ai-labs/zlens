@@ -8612,11 +8612,17 @@ export const api = {
     }
   },
 
-  /** Distinct values for a block column → categorical dashboard-filter dropdowns. */
-  async dashboardFilterOptions(block: string, column: string): Promise<{ options: string[]; truncated: boolean } | null> {
+  /**
+   * Distinct values for a block column → categorical dashboard-filter dropdowns
+   * and the reader's "Filter by…" picker. `search` finds every value that
+   * contains the text on the server; a capped browse list says how many exist.
+   */
+  async dashboardFilterOptions(block: string, column: string, options: { search?: string; limit?: number } = {}): Promise<{ options: string[]; truncated: boolean; valueCount?: number; valueCountCapped?: boolean } | null> {
     try {
       const search = new URLSearchParams({ block, column });
-      return await request<{ options: string[]; truncated: boolean }>(`/api/dashboard/filter-options?${search.toString()}`);
+      if (options.search?.trim()) search.set('search', options.search.trim());
+      if (options.limit) search.set('limit', String(options.limit));
+      return await request<{ options: string[]; truncated: boolean; valueCount?: number; valueCountCapped?: boolean }>(`/api/dashboard/filter-options?${search.toString()}`);
     } catch {
       return null;
     }

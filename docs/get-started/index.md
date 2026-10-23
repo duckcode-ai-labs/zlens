@@ -104,17 +104,16 @@ opens it. Leave the terminal running.
 The first time, ZLens opens **Guided Setup** in four steps.
 
 1. **Where does your data model live?** The sample is already a ZLens
-   project on a dbt project, so **dbt project** is selected, and below it,
-   under **Connect your dbt project**, you see **dbt project ready** with
-   the path field showing `.` (this folder). Click **Preview**. ZLens shows
-   the models, sources and metrics it found and says **Nothing has changed
-   yet**. Click **Apply project**, then **Continue to database**. The
-   semantic execution adapters are under **Advanced**; you don't need them
-   here. (No dbt project of your own? See
+   project on a dbt project, so **Open an existing ZLens project** is
+   selected. Its card names the dbt project in this folder and the
+   connection `jaffle_shop_dev` (duckdb). Click **Continue to credentials**.
+   (No dbt project of your own? See
    [No dbt? Start from your database](no-dbt.md).)
-2. **Connect your database.** The sample's DuckDB connection is already set
-   up: you see **DuckDB · configured** and **Test passed**. Click
-   **Continue to optional AI**.
+2. **Check the connection.** The sample's DuckDB connection is already set
+   up: you see **DuckDB · configured** and **Test passed**. You already ran
+   `npm run sync`, so you don't need **Refresh dbt data**. Extra warehouse
+   schemas are under **Advanced** ("Optional: add warehouse schemas dbt
+   doesn't cover"); the sample needs none. Click **Continue to optional AI**.
 3. **Set up an AI provider.** This step is optional. Ask needs a model, but
    notebooks, saved queries, Apps and lineage do not. Set one up now
    ([how](ai-provider.md)) or click **Continue to finish**.

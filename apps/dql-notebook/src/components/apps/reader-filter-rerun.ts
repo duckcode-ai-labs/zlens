@@ -1,5 +1,6 @@
 import type { DashboardDocumentResponse, DashboardRunResponse } from '../../api/client';
 import { filterLinkedTileIds } from './app-studio-filter-values';
+import { formatBusinessLabel } from './app-text';
 
 type Page = DashboardDocumentResponse['dashboard'];
 type RunTile = DashboardRunResponse['tiles'][number];
@@ -60,7 +61,7 @@ export function withUnrunTileFilterNotices(input: {
   const executed = new Set(input.executedTileIds);
   const changed = new Set(input.changedFilterIds);
   if (!changed.size) return input.run;
-  const labelOf = (filterId: string) => input.page.filters?.find((filter) => filter.id === filterId)?.label?.trim() || filterId;
+  const labelOf = (filterId: string) => input.page.filters?.find((filter) => filter.id === filterId)?.label?.trim() || formatBusinessLabel(filterId);
   const items = new Map(input.page.layout.items.map((item) => [item.i, item]));
   const tiles = input.run.tiles.map((tile): RunTile => {
     if (executed.has(tile.tileId) || tile.status !== 'ok') return tile;

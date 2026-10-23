@@ -7,7 +7,7 @@ import { describeDashboardDateRange } from '@zlens/core/apps/filter-dates';
 import { studioFilterValue } from './app-studio-filter-values';
 import { plainSourceText } from './source-names';
 import { DateRangePresetSelect, filterTimezone } from './date-range-presets';
-import { filterValueCapHint, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
+import { filterValueCapHint, loadBlockFilterValues, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
 
 /**
  * The App dashboard filter row: the controls, their value coercion, and the
@@ -72,8 +72,10 @@ export function DashboardFilterControls({
  *
  * This is the viewer's control, not the author's — the same move as adding an
  * input to an Ask or Notebook result, at page scale. Columns come from the
- * server's parse of each tile's executed SQL, and values from the rows those
- * tiles actually returned, so nothing here is guessed in the browser.
+ * server's parse of each tile's executed SQL. Values come from the server:
+ * the column's first page, and typed text searches every value, as for a
+ * declared filter. Only a column the server cannot list falls back to the
+ * values the tiles returned (Codex F02: 24 sampled names hid most customers).
  *
  * Choosing one is session-only. A viewer exploring a number must never rewrite
  * the page's saved scope for everyone; an author promotes a choice explicitly
@@ -91,8 +93,24 @@ export function DashboardFilterPicker({
   const [column, setColumn] = useState('');
   const [value, setValue] = useState('');
   const active = candidates.find((candidate) => candidate.column === column);
+  const valueSource = active?.valueSource;
+  // The column's values from the server: null while loading, 'failed' when it cannot list them.
+  const [serverList, setServerList] = useState<{ key: string; list: FilterValueList | 'failed' } | null>(null);
+  const sourceKey = valueSource ? `${valueSource.blockId}\u0000${valueSource.column}` : '';
+  useEffect(() => {
+    if (!valueSource) return;
+    let cancelled = false;
+    void loadBlockFilterValues(valueSource).then((list) => {
+      if (!cancelled) setServerList({ key: sourceKey, list: list && list.values.length > 0 ? list : 'failed' });
+    }).catch(() => { if (!cancelled) setServerList({ key: sourceKey, list: 'failed' }); });
+    return () => { cancelled = true; };
+  }, [sourceKey]);
   if (candidates.length === 0) return null;
   const coverage = active ? coverageFor(active.column) : null;
+  const loaded = valueSource && serverList?.key === sourceKey ? serverList.list : null;
+  const loadingValues = Boolean(valueSource) && !loaded;
+  const searchable = loaded && loaded !== 'failed' ? loaded : null;
+  const label = active ? formatBusinessLabel(active.column) : '';
   return (
     <div className="dql-app-filter-picker">
       <select
@@ -109,8 +127,20 @@ export function DashboardFilterPicker({
       </select>
       {active ? (
         <>
-          {active.sampleValues.length > 0 ? (
-            <select aria-label={`${formatBusinessLabel(active.column)} value`} value={value} onChange={(event) => setValue(event.target.value)}>
+          {searchable && valueSource ? (
+            <SearchableFilterSelect
+              icon={<List size={13} />}
+              label={label}
+              value={value}
+              list={searchable}
+              source={valueSource}
+              allowAll={false}
+              onChange={setValue}
+            />
+          ) : loadingValues ? (
+            <span className="dql-app-filter-coverage-hint" role="status">Loading {label.toLowerCase()} values…</span>
+          ) : active.sampleValues.length > 0 ? (
+            <select aria-label={`${label} value`} value={value} onChange={(event) => setValue(event.target.value)}>
               <option value="">Choose a value…</option>
               {active.sampleValues.map((sample) => <option key={sample} value={sample}>{sample}</option>)}
             </select>
@@ -472,6 +502,7 @@ export function SearchableFilterSelect({
   value,
   list,
   source,
+  allowAll = true,
   onChange,
 }: {
   label: string;
@@ -479,6 +510,8 @@ export function SearchableFilterSelect({
   value: string;
   list: FilterValueList;
   source?: FilterValueSource;
+  /** false: choosing a value is the point (the reader's "Filter by…" picker), so there is no "All". */
+  allowAll?: boolean;
   onChange: (value: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -488,17 +521,17 @@ export function SearchableFilterSelect({
   const choose = (next: string) => { onChange(next); setOpen(false); setQuery(''); };
   return (
     <div className={`dql-app-filter-select dql-app-filter-multi dql-app-filter-searchable ${value ? 'is-set' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}>
-      <button type="button" className="dql-app-filter-multi-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${value || 'All'}`} onClick={() => setOpen((current) => !current)}>
+      <button type="button" className="dql-app-filter-multi-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${value || (allowAll ? 'All' : 'choose a value')}`} onClick={() => setOpen((current) => !current)}>
         <span className="dql-app-filter-icon">{icon}</span>
         <span className="dql-app-filter-multi-label">{label}:</span>
-        <b>{value || 'All'}</b>
+        <b>{value || (allowAll ? 'All' : 'Choose a value…')}</b>
         <ChevronDown size={13} aria-hidden="true" />
       </button>
       {open ? (
         <div className="dql-app-filter-multi-menu dql-app-filter-search-menu">
           <input type="search" autoFocus value={query} placeholder={`Search ${label.toLowerCase()}`} aria-label={`Search ${label}`} autoComplete="off" onChange={(event) => setQuery(event.target.value)} />
           <div role="listbox" aria-label={label}>
-            <button type="button" role="option" aria-selected={!value} className={!value ? 'on' : ''} onClick={() => choose('')}>All</button>
+            {allowAll ? <button type="button" role="option" aria-selected={!value} className={!value ? 'on' : ''} onClick={() => choose('')}>All</button> : null}
             {search.values.map((option) => (
               <button key={option} type="button" role="option" aria-selected={option === value} className={option === value ? 'on' : ''} onClick={() => choose(option)}>{option}</button>
             ))}

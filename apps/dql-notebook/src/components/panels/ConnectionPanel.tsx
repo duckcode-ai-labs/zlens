@@ -17,7 +17,7 @@ import {
 import { PanelFrame } from '@zlens/ui';
 import { DriverLogo } from './DriverLogo';
 import { isStagingSchema, splitStagingSchemas } from '@zlens/core/staging-tables';
-import { rowsPrivacy } from '../modals/setup-model-source';
+import { EXTRA_SCHEMAS_HINT, rowsPrivacy } from '../modals/setup-model-source';
 import {
   CONNECTOR_SCHEMAS,
   CONNECTOR_SCHEMA_BY_DRIVER,
@@ -170,6 +170,7 @@ function chooseFallbackDefault(connections: Record<string, any>): string | undef
 export function ConnectionPanel({
   variant = 'panel',
   setupSource = null,
+  setupPrimaryAction,
   initialInfo,
   onConfigured,
   onMetadataSynced,
@@ -177,6 +178,8 @@ export function ConnectionPanel({
   variant?: 'panel' | 'page' | 'setup';
   /** Guided Setup's answer to "Where does your data model live?": Database only hides dbt profiles (design D7). */
   setupSource?: 'dbt' | 'warehouse' | 'both' | 'existing' | null;
+  /** Guided Setup: the step's main action, shown right under the connection test (an existing project's Refresh). */
+  setupPrimaryAction?: React.ReactNode;
   /** Connections to show before the server answers (and in tests). */
   initialInfo?: ConnectionInfo;
   onConfigured?: (detail: string) => void;
@@ -1164,7 +1167,10 @@ export function ConnectionPanel({
   const warehouseFirst = info?.modelingMode === 'warehouse-first';
   // Guided Setup asks one plain question; index mode, the typed list and the
   // index details sit under Advanced (design D7).
-  const setupSchemaQuestion = isSetup && setupSource !== 'dbt';
+  // A dbt project (new, or an existing one) reads its own schemas; extra
+  // warehouse schemas are optional there and sit under Advanced (Codex F06).
+  const setupDbtProject = isSetup && (setupSource === 'dbt' || (setupSource === 'existing' && !warehouseFirst));
+  const setupSchemaQuestion = isSetup && !setupDbtProject;
   const observedTarget = metadataStatus?.observedTarget
     ? [
       metadataStatus.observedTarget.accountOrWorkspace,
@@ -1390,7 +1396,7 @@ export function ConnectionPanel({
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
           {isSetup && setupSource === 'warehouse'
             ? 'Connect the database directly. ZLens tests it before it replaces the active connection.'
-            : 'Import a dbt profile or configure the warehouse directly. The candidate is tested before it replaces the active connection.'}
+            : 'Import a dbt profile or enter the warehouse details. A new connection replaces the current one only after its test passes.'}
         </div>
       </div>
       <div style={{ border: `1px solid ${testResult?.ok ? 'var(--status-success-border)' : 'var(--border-subtle)'}`, borderRadius: 12, background: t.cellBg, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 12, maxWidth: 640 }}>
@@ -1410,6 +1416,7 @@ export function ConnectionPanel({
           {testing ? 'Testing…' : 'Test connection'}
         </button>
       </div>
+      {isSetup && setupPrimaryAction ? setupPrimaryAction : null}
       {/* Database only has no dbt: personal ~/.dbt profiles never show there (design D7). */}
       {isSetup && setupSource === 'warehouse' ? null : (
         <AdvancedDisclosure enabled={isSetup} label="Import from a dbt profile" hint="profiles.yml" t={t}>
@@ -1432,8 +1439,8 @@ export function ConnectionPanel({
         installing={installingDriver === primaryDriver}
         onInstall={() => void handleInstallConnector(primaryDriver)}
       />
-      {isSetup && setupSource === 'dbt' && metadataScopeEditor
-        ? <AdvancedDisclosure enabled label="Advanced" hint="warehouse schemas outside dbt" t={t}>{metadataScopeEditor}</AdvancedDisclosure>
+      {setupDbtProject && metadataScopeEditor
+        ? <AdvancedDisclosure enabled label="Advanced" hint={EXTRA_SCHEMAS_HINT} t={t}>{metadataScopeEditor}</AdvancedDisclosure>
         : metadataScopeEditor}
     </div>
   );

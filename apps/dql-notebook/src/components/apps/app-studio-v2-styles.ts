@@ -1797,6 +1797,16 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-component-card:hover .dataset-link-hint.hover-only,
 .studio-component-card:focus-within .dataset-link-hint.hover-only,
 .studio-component-card.selected .dataset-link-hint.hover-only { display:flex; }
+/* On the placed canvas the click-to-filter hint keeps its own row under the
+   chart (the chart is sized to what is left) and only shows on hover or
+   selection. Floating it over the chart covered the axis labels (Codex F10,
+   Top 10 at 1440x900). */
+.studio-page-grid.placed .dataset-link-hint.hover-only { display:flex; position:static; visibility:hidden; box-shadow:none; flex-wrap:nowrap; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.studio-page-grid.placed .dataset-link-hint.hover-only > span { overflow:hidden; text-overflow:ellipsis; min-width:0; }
+.studio-page-grid.placed .dataset-link-hint.hover-only > button { flex:none; }
+.studio-page-grid.placed .studio-component-card:hover .dataset-link-hint.hover-only,
+.studio-page-grid.placed .studio-component-card:focus-within .dataset-link-hint.hover-only,
+.studio-page-grid.placed .studio-component-card.selected .dataset-link-hint.hover-only { visibility:visible; }
 /* Long text stays inside its card when the canvas narrows. */
 .studio-component-card .live-component-preview, .studio-component-card .tile-text { overflow:hidden; overflow-wrap:anywhere; }
 /* A text tile's heading is its own line above the sentence, as readers see it. */

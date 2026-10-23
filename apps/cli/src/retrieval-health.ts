@@ -80,9 +80,9 @@ export function resolveRetrievalHealthStatus(input: {
   let embeddingUpgrade: string | undefined;
   if (!semantic) {
     warnings.push('Embeddings are the deterministic hashed fallback: paraphrase matching is lexical-only. Run a local Ollama embedding model or set an OpenAI key for semantic recall.');
-    embeddingUpgrade = 'Install an Ollama embedding model (for example `ollama pull nomic-embed-text`) and restart the server:'
-      + ' ZLens detects it, switches to it, and re-embeds the index automatically. Set ai.embeddings in dql.config.json to choose'
-      + ' explicitly, or ZLENS_EMBEDDINGS_AUTODETECT=off to stay on the lexical fallback.';
+    embeddingUpgrade = 'Turn on local Ollama embeddings in Settings → AI provider → Search (it pulls nomic-embed-text and re-embeds'
+      + ' the index; nothing leaves this computer), or set ai.embeddings in dql.config.json. ZLens never switches by itself;'
+      + ' ZLENS_EMBEDDINGS_AUTODETECT=on lets a server adopt a local model it finds.';
   }
 
   const catalog = readMetadataCatalogHealth(defaultMetadataPath(input.projectRoot));

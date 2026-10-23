@@ -97,7 +97,7 @@ test('Check and add asks about cents once, leaves junk counts off, and the table
   await expect(page.getByRole('tab', { name: 'Start manually' }).or(buildNew).first()).toBeVisible({ timeout: 30_000 });
   if (await buildNew.isVisible()) await buildNew.click();
   await page.getByRole('tab', { name: 'Start manually' }).click();
-  await page.getByRole('button', { name: /Open blank Studio/ }).click();
+  await page.getByRole('button', { name: /^Continue to data/ }).click();
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
 
   const browser = page.getByRole('region', { name: 'Add data' });

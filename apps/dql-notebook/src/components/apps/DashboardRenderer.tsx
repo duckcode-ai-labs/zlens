@@ -38,6 +38,7 @@ import {
 import { autoLayoutDashboardItems, autoLayoutRank, layoutScore, packDashboardItems, reorderTileForDrop } from './dashboard-layout';
 import { READER_TRUST_LABELS, readerTileFreshness, readerTileReceipt, readerTileTrust, readerTrustCounts } from './reader-trust';
 import { pageShowsSummary } from './reader-page-structure';
+import { formatBusinessLabel } from './app-text';
 import { appTrustSummary, type AppTrustSummary, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
 import { dashboardTileFilterChoice, isDashboardNarrativeTile } from '@zlens/core/apps/filter-reach';
 import { plainDescription, ReaderTrustBadge, TrustLensBar } from './ReaderTrust';
@@ -1651,7 +1652,8 @@ export function dashboardTileFilterNotices(input: {
   /** Page filter labels by id; a pill names the filter the reader sees. */
   filterLabels?: Record<string, string>;
 }) {
-  const label = (filterId: string) => input.filterLabels?.[filterId] ?? filterId;
+  // The reader sees "Customer Name", never the column id customer_name (Codex F05).
+  const label = (filterId: string) => input.filterLabels?.[filterId] ?? formatBusinessLabel(filterId);
   if (isDashboardNarrativeTile(input.item)) return { unfilteredNotice: null, datasetUnboundNotices: [] };
   const datasetUnboundNotices = input.tile?.dataset?.unboundFilters ?? [];
   // A viewer filter is never in the page document, so only the server's
@@ -1659,7 +1661,7 @@ export function dashboardTileFilterNotices(input: {
   const viewerIds = new Set(input.viewerFilterIds ?? []);
   const serverApplied = new Set((input.tile?.filters?.applied ?? []).map((entry) => entry.filter));
   const viewerIgnored = input.tile?.status === 'ok' && input.tile.tileType !== 'text'
-    ? [...viewerIds].filter((filterId) => !serverApplied.has(filterId))
+    ? [...viewerIds].filter((filterId) => !serverApplied.has(filterId)).map(label)
     : [];
   // Driver tiles run Dataset comparisons with the same page filters.
   if (input.item.query || input.item.driver) {
@@ -2888,6 +2890,9 @@ export function TileBody({
 }): JSX.Element {
   const [markActionId, setMarkActionId] = useState<string>('filter');
   const [barShowAll, setBarShowAll] = useState(false);
+  // An empty tile says why in plain words, not "Query executed successfully.
+  // No columns to display." (Codex G2).
+  const emptyMessage = (tile?.filters?.applied?.length ?? 0) > 0 ? 'No matching rows for these filters.' : 'No rows to show.';
   if (loading && !tile) return <span>Loading data...</span>;
   if (tile?.tileType === 'text') {
     if (genUi) {
@@ -2991,7 +2996,7 @@ export function TileBody({
     dataView = (
       <div style={{ width: '100%', alignSelf: 'stretch', display: 'grid', gap: 6 }}>
         <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>This tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.</small>
-        <TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} />
+        <TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} emptyMessage={emptyMessage} />
       </div>
     );
   } else if (item.viz.type === 'pivot' && item.query && !item.query.detail) {
@@ -3002,7 +3007,7 @@ export function TileBody({
     if (tile.tileType !== 'aiPin' && (genUi?.component === 'EvidenceTable' || genUi?.component === 'PivotTable')) {
       dataView = <GeneratedEvidenceTable result={displayResult} genUi={genUi} themeMode={themeMode} />;
     } else {
-      dataView = <div style={{ width: '100%', alignSelf: 'stretch' }}><TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} conditionalFormats={item.viz.style?.conditional} /></div>;
+      dataView = <div style={{ width: '100%', alignSelf: 'stretch' }}><TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} conditionalFormats={item.viz.style?.conditional} emptyMessage={emptyMessage} /></div>;
     }
   } else {
     // Above 50 categories a bar chart draws the top 25 until the reader asks for all.

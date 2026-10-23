@@ -25,6 +25,31 @@ export function readAppPageLink(href: string): AppPageLink | null {
   return { appId, pageId };
 }
 
+/**
+ * The page an App opens on: its dashboard homepage, else its first page.
+ * `null` when it has no page. An app-only link (`?app=<id>`) opens here.
+ */
+export function appHomePageId(app: {
+  homepage?: { type: string; id?: string } | null;
+  dashboards?: ReadonlyArray<{ id: string }>;
+} | null | undefined): string | null {
+  if (!app) return null;
+  const homepage = app.homepage;
+  if (homepage?.type === 'dashboard' && homepage.id && (!app.dashboards || app.dashboards.some((page) => page.id === homepage.id))) {
+    return homepage.id;
+  }
+  return app.dashboards?.[0]?.id ?? null;
+}
+
+/** The relative link an App card's title carries: the App and the page it opens on. */
+export function appCardHref(app: {
+  id: string;
+  homepage?: { type: string; id?: string } | null;
+  dashboards?: ReadonlyArray<{ id: string }>;
+}): string {
+  return withAppPageLink('http://zlens.local/', { appId: app.id, pageId: appHomePageId(app) });
+}
+
 const DRAFT_PARAM = 'appDraft';
 
 /**

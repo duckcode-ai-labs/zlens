@@ -147,10 +147,12 @@ const EXPECTED_TEST_FILES = 189;
 // (one trust model T3, app-source-catalog.test.ts, +1).
 // 2559 with editing a published App: its saved-query references found by id, name or path
 // (app-source-catalog.test.ts, +1) and picks named like the Add data list (app-builder-orchestrator.test.ts, +1) (F07, F09).
-const EXPECTED_TESTS = 2559;
+// 2563 with local embeddings only when the project chooses them (Codex 23 Oct 2026,
+// project-embeddings.test.ts, +4).
+const EXPECTED_TESTS = 2563;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2482.
+// The ordinary lane's share is the difference: 2486.
 const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];

@@ -85,10 +85,12 @@ test('an App viewer filter narrows the tile, shows a chip, and clears back to th
   await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole('combobox', { name: 'Filter this page by' }).selectOption('customer_name');
-  const value = page.getByRole('combobox', { name: 'Customer Name value' });
-  const firstCustomer = await value.locator('option').nth(1).getAttribute('value');
+  // The values come from the server, searchable (Codex F02), not a sample of the tile's rows.
+  await page.getByRole('button', { name: 'Customer Name: choose a value' }).click();
+  const firstOption = page.getByRole('listbox', { name: 'Customer Name' }).getByRole('option').first();
+  const firstCustomer = (await firstOption.innerText()).trim();
   expect(firstCustomer).toBeTruthy();
-  await value.selectOption(firstCustomer!);
+  await firstOption.click();
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
 
   const chip = page.getByTestId('app-viewer-filter-chip');

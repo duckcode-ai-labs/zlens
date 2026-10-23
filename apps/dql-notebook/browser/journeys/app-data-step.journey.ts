@@ -8,7 +8,7 @@ import { run, startNotebookServer, type NotebookServer } from '../support/server
 /**
  * Choose the App's data first (design D3), against the built `zlens notebook`
  * CLI on the jaffle-supply-chain fixture: Apps → Build new App → Start manually
- * → Open blank Studio → the Data step → add one certified Dataset → Open canvas
+ * → Continue to data → the Data step → add one certified Dataset → Open canvas
  * → the Data pane shows it → click a measure → a new tile is drafted.
  *
  * Everything you add has fields (design D1): the Data step is one list with
@@ -70,7 +70,7 @@ async function openDataStep(page: Page): Promise<void> {
   await page.getByRole('button', { name: 'Apps', exact: true }).click();
   await page.getByRole('button', { name: 'Build new App' }).click();
   await page.getByRole('tab', { name: 'Start manually' }).click();
-  await page.getByRole('button', { name: /Open blank Studio/ }).click();
+  await page.getByRole('button', { name: /^Continue to data/ }).click();
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
 }
 
@@ -136,7 +136,7 @@ test('a new manual App picks its data first, then builds a tile from a measure',
   await page.getByRole('button', { name: 'Build new App' }).click();
   await page.getByRole('tab', { name: 'Start manually' }).click();
   await expect(page.getByRole('combobox', { name: 'Domain' })).toHaveValue('');
-  await page.getByRole('button', { name: /Open blank Studio/ }).click();
+  await page.getByRole('button', { name: /^Continue to data/ }).click();
 
   // The Data step comes before the canvas.
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });

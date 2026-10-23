@@ -43,16 +43,25 @@ With **Ollama — local**, questions and data never leave your network:
    routing**, the **Model** name.
 4. Click **Test, save & activate**.
 
-## Embeddings (optional)
+## Search (optional)
 
-**Embeddings**, on the same page, decide whether a question can match a
-metric by meaning or only by shared words.
+**Search**, on the same page, decides whether a question can match a metric
+by meaning or only by shared words. It reads **Search: word-based** until you
+choose otherwise; ZLens never switches by itself, even when Ollama is
+running.
 
-- **Offline (Default)** matches words only. It cannot connect "drinks" to a
-  `beverage_revenue` metric.
-- **Ollama (Local)** and **OpenAI** match by meaning.
+- **Word-based** (the default) matches words only. It cannot connect "drinks"
+  to a `beverage_revenue` metric.
+- **Use local Ollama embeddings (nomic-embed-text)** matches by meaning. It
+  runs on this computer and nothing leaves it. Turning it on downloads the
+  model into Ollama if needed and re-embeds the catalog; turning it off goes
+  back to word-based search.
+- **Technical details** has the other models, **OpenAI**, **Test** and
+  **Re-index catalog**, and the embedder in use.
 
-After you change it, click **Re-index catalog**.
+When Ollama serves an embedding model and the project has not chosen one,
+`zlens notebook` says so once in the terminal. A server operator can set
+`ZLENS_EMBEDDINGS_AUTODETECT=on` to adopt a local model automatically.
 
 ## Where the settings are stored
 

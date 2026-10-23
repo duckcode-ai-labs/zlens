@@ -125,7 +125,11 @@ export function DataStep({
       <button type="button" onClick={onSkip}>Skip, start empty</button>
       {next
         ? <>{next.hint ? <small className="data-step-next-hint">{next.hint}</small> : null}<button type="button" className="primary" disabled={next.disabled} onClick={next.onClick}>{next.label} <ArrowRight size={14} /></button></>
-        : <button type="button" className="primary" onClick={onOpenCanvas}>{openCanvasLabel(items.length)} <ArrowRight size={14} /></button>}
+        : items.length > 0
+          ? <button type="button" className="primary" onClick={onOpenCanvas}>{openCanvasLabel(items.length)} <ArrowRight size={14} /></button>
+          // With no data yet, "Skip, start empty" is the way on; a second
+          // "Open blank Studio" did the same thing under another name.
+          : null}
     </footer>
   </section>;
 }

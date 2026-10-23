@@ -25,7 +25,7 @@ describe('Data step (design D3)', () => {
     expect(markup).toContain('This App&#x27;s data');
     expect(markup).toContain('No data yet');
     expect(markup).toContain('Skip, start empty');
-    expect(markup).toContain('Open blank Studio');
+    expect(markup).not.toContain('Open blank Studio');
     expect(markup).not.toContain('Open canvas with');
     expect(markup).toContain('aria-label="Kind of data"');
   });

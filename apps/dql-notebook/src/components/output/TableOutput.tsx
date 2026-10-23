@@ -32,6 +32,8 @@ interface TableOutputProps {
    * table offers none; without a host, CSV and JSON are saved from the table.
    */
   onExport?: (format: ExportFormat) => Promise<unknown>;
+  /** What an empty result says; an App tile says "No matching rows for these filters." */
+  emptyMessage?: string;
 }
 
 const TONE_COLORS: Record<ConditionalTone, string> = {
@@ -160,7 +162,7 @@ export function tableRowCountLabel(input: { rangeStart: number; rangeEnd: number
   return `Showing ${rangeStart}–${rangeEnd} of ${loaded} ${loaded === 1 ? 'row' : 'rows'}`;
 }
 
-export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport }: TableOutputProps) {
+export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport, emptyMessage }: TableOutputProps) {
   const hosted = useHostUi().host;
   const [exportNote, setExportNote] = useState<string | null>(null);
   const serverExport = (format: ExportFormat) => {
@@ -242,7 +244,7 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
   if (result.columns.length === 0) {
     return (
       <div style={{ padding: '12px 16px', color: t.textMuted, fontSize: 12, fontFamily: t.font, fontStyle: 'italic' }}>
-        Query executed successfully. No columns to display.
+        {emptyMessage ?? 'Query executed successfully. No columns to display.'}
       </div>
     );
   }

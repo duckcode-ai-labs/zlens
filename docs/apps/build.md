@@ -31,9 +31,9 @@ in [Words used in App Studio](index.md#words-used-in-app-studio).
    **Operational Dashboard**, **Investigation** or **Blank page**. A layout
    other than Blank puts one intro at the top of the page for you to edit (its
    wording differs by layout); you add the tiles. Starting manually, the button
-   then reads **Open Studio with an intro**.
+   then reads **Continue to data (with an intro)**.
 6. Click **Generate editable App** (AI), **Choose data** (Quick start) or
-   **Open blank Studio** (manual).
+   **Continue to data** (manual).
 
 Until you publish it, only you can see the App; the header says **Not
 published yet (only you can see it)**. Editing an App you already published,

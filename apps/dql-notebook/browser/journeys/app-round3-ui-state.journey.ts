@@ -109,7 +109,7 @@ test('a new App is on the Apps list as soon as you go Back, with one wording for
   if (!(await launcher.isVisible())) await page.getByRole('button', { name: 'Build new App' }).click();
   await launcher.getByRole('tab', { name: 'Start manually' }).click();
   await launcher.getByPlaceholder('Revenue Operations').fill('Sales Manager Manual');
-  await launcher.getByRole('button', { name: /Open blank Studio/ }).click();
+  await launcher.getByRole('button', { name: /^Continue to data/ }).click();
   await page.getByRole('button', { name: 'Skip, start empty' }).click();
   // A new App says "Not published yet" in Studio, never "Unpublished changes" or "local draft".
   await expect(page.locator('.studio-brand small')).toHaveText(/^(Saved · )?Not published yet \(only you can see it\)$/, { timeout: 30_000 });

@@ -39,6 +39,40 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - The saved-query review says "One row per beverage product.", not "Each row
   is one one row per beverage product."
 
+### Setup, App links, reader filters and search (Codex end-to-end report)
+
+- **The Jaffle sample opens as an existing project.** Guided Setup selects
+  **Open an existing ZLens project** when the folder's `dql.config.json`
+  already configures a built dbt project (or dbt + database), instead of
+  **dbt project**, and the dbt card no longer flashes "dbt project missing"
+  while it loads. Step 2, **Check the connection**, has **Refresh dbt data** as
+  its action; extra warehouse schemas are under **Advanced** ("Optional: add
+  warehouse schemas dbt doesn't cover").
+- **App links open a page.** The Apps card title links to the App's home page
+  (`?app=jaffle-growth&page=overview`), and an app-only link opens that page
+  instead of "Pages 0 · No dashboard page selected".
+- **Readers can pick any value in Filter by….** The ad-hoc picker lists the
+  column's values from the server with "Type to search all 930 values", and
+  typed text searches every value, so a customer past the first 500 is found.
+  It no longer offers only the 24 names the tiles happened to return.
+  `/api/dashboard/filter-options` takes `search` and reports `valueCount`.
+- **Local embeddings only when you choose them.** Search is word-based unless
+  the project turns on **Use local Ollama embeddings (nomic-embed-text) — runs
+  on this computer, nothing leaves it** in Settings → AI provider → Search. A
+  running Ollama is offered (once, in the terminal and in Settings), never
+  adopted silently; an index an earlier version switched by itself goes back to
+  word-based search. Projects that set `ai.embeddings` keep it.
+  `ZLENS_EMBEDDINGS_AUTODETECT=on` is the operator's opt-in to the old
+  automatic switch. Provider ids sit under **Technical details**.
+- **Plain words.** "Not filtered by Customer Name", not `customer_name`;
+  "Date range", not "Daterange"; "Continue to data", not "Open blank Studio";
+  "No matching rows for these filters." on an empty filtered tile; "Choose which
+  tiles each filter affects."; "AI answers questions and helps you build. You
+  can run queries and build Apps without AI."; no "candidate" or "synchronize"
+  on the existing-project step.
+- **The click-to-filter hint keeps its own row** under a chart in App Studio,
+  so it no longer covers the axis labels at 1440×900.
+
 ## v0.2.4 - 2026-10-22
 
 A patch for Apps: a total over a Top N saved query is no longer labelled

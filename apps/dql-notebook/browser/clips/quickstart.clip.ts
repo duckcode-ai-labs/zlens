@@ -82,14 +82,14 @@ clip('quickstart', async ({ page, sample, director }) => {
     await terminal.print(server.output, 2);
     await director.beat(1500);
 
-    // The workbench opens on Guided Setup: the dbt project is this folder.
+    // The workbench opens on Guided Setup: this folder is already a ZLens project on its dbt project.
     await page.goto(server.match[1]!);
-    await expect(page.getByText('Connect your dbt project')).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByRole('radio', { name: /Open an existing ZLens project/ })).toBeChecked({ timeout: 60_000 });
     await director.settlePointer();
     await director.beat(1600);
-    await director.point(page.getByText('dbt project ready').first());
+    await director.point(page.getByText(/already sets up the data model/).first());
     await director.beat(1200);
-    await director.click(page.getByRole('button', { name: 'Continue to database' }));
+    await director.click(page.getByRole('button', { name: 'Continue to credentials' }));
 
     // The sample's DuckDB connection is already configured and tested.
     await director.fastForward(() => expect(page.getByText(/Test passed/).first()).toBeVisible({ timeout: 60_000 }));

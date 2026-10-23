@@ -25,7 +25,7 @@ describe('reader filter pills come from what the server applied', () => {
       filterReport: { applied: [], notApplied: [{ filter: 'region', code: 'invalid_value', reason: 'The value could not become a condition.' }] },
     } as unknown as Tile;
     expect(dashboardTileFilterNotices({ item: savedQuery, tile, activeVariables: { region: 'East' } }).unfilteredNotice)
-      .toEqual({ label: 'Not filtered by region', detail: 'region: The value could not become a condition.' });
+      .toEqual({ label: 'Not filtered by Region', detail: 'Region: The value could not become a condition.' });
     expect(dashboardTileFilterNotices({ item: savedQuery, tile, activeVariables: { region: 'East' }, filterLabels: { region: 'Region' } }).unfilteredNotice)
       .toMatchObject({ label: 'Not filtered by Region' });
     const applied = { ...tile, filterReport: { applied: ['region'], notApplied: [] } } as unknown as Tile;
@@ -37,7 +37,7 @@ describe('reader filter pills come from what the server applied', () => {
     expect(dashboardTileFilterNotices({ item: savedQuery, activeVariables: { region: 'East' } }).unfilteredNotice).toBeNull();
     const excluded = { ...savedQuery, filterBindings: [{ filter: 'region', capability: 'unsupported', unsupportedReason: 'Author: does not apply' }] } as unknown as Item;
     expect(dashboardTileFilterNotices({ item: excluded, activeVariables: { region: 'East' } }).unfilteredNotice)
-      .toMatchObject({ label: 'Not filtered by region' });
+      .toMatchObject({ label: 'Not filtered by Region' });
   });
 
   it('never shows filter pills on text tiles', async () => {

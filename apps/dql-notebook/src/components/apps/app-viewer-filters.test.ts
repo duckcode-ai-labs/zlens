@@ -105,7 +105,7 @@ describe('App viewer filters: each tile says whether it was filtered', () => {
       tile: { tileId: 'monthly-revenue', status: 'ok', tileType: 'block', filters: { applied: [], skipped: [{ filter: 'product_name', reason: 'no binding' }] } } as never,
       activeVariables: { product_name: 'tangaroo' },
       viewerFilterIds: ['product_name'],
-    }).unfilteredNotice).toMatchObject({ label: 'Not filtered by product_name' });
+    }).unfilteredNotice).toMatchObject({ label: 'Not filtered by Product Name' });
   });
 
   it('says so on a Dataset tile, which a viewer filter never reaches', async () => {
@@ -115,6 +115,6 @@ describe('App viewer filters: each tile says whether it was filtered', () => {
       tile: { tileId: 'monthly-revenue', status: 'ok', tileType: 'dataset', dataset: { unboundFilters: [] } } as never,
       activeVariables: { product_name: 'tangaroo' },
       viewerFilterIds: ['product_name'],
-    }).unfilteredNotice).toMatchObject({ label: 'Not filtered by product_name' });
+    }).unfilteredNotice).toMatchObject({ label: 'Not filtered by Product Name' });
   });
 });

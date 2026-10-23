@@ -939,6 +939,12 @@ it('upgrades the vector index to a real embedder after the sync write, and is id
 
     // Re-running must not re-embed the whole catalog.
     expect(await upgradeVectorIndexForProject(projectRoot, remote)).toMatchObject({ upgraded: false });
+
+    // Turning embeddings off (or an index nobody chose, Codex 23 Oct 2026)
+    // goes back to word-based search, once.
+    expect(await upgradeVectorIndexForProject(projectRoot, new HashedTokenEmbeddingProvider())).toMatchObject({ upgraded: true, providerId: 'hashed-token-v1' });
+    expect(readProvider()).toBe('hashed-token-v1');
+    expect(await upgradeVectorIndexForProject(projectRoot, new HashedTokenEmbeddingProvider())).toMatchObject({ upgraded: false });
   });
 
   it('embeds the ACTIVE snapshot, not just the working database, so the vector lane is live', async () => {

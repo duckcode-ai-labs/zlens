@@ -11,7 +11,18 @@ import { api } from '../../api/client';
  * governed field; an uncapped list is matched in the browser. The editor's
  * dropdown and the reader's control share this.
  */
-export type FilterValueSource = { sourceId: string; field: string };
+export type FilterValueSource =
+  /** A governed Dataset field (`/api/app-datasets/field-values`). */
+  | { sourceId: string; field: string }
+  /** A saved query's output column (`/api/dashboard/filter-options`): the reader's ad-hoc "Filter by…" picker. */
+  | { blockId: string; column: string };
+
+/** A server search: the source plus the typed text. */
+export type FilterValueSearchRequest = FilterValueSource & { search: string };
+
+function sourceKey(source: FilterValueSource): string {
+  return 'sourceId' in source ? `dataset\u0000${source.sourceId}\u0000${source.field}` : `block\u0000${source.blockId}\u0000${source.column}`;
+}
 
 export type FilterValueList = {
   values: string[];
@@ -63,19 +74,48 @@ export function filterValueSearchRequest(
   source: FilterValueSource | undefined,
   list: FilterValueList,
   query: string,
-): { sourceId: string; field: string; search: string } | null {
+): FilterValueSearchRequest | null {
   const search = query.trim();
   if (!source || !search || !filterValuesCapped(list)) return null;
-  return { sourceId: source.sourceId, field: source.field, search };
+  return 'sourceId' in source
+    ? { sourceId: source.sourceId, field: source.field, search }
+    : { blockId: source.blockId, column: source.column, search };
 }
 
 /** Ask the server for every value that contains the text. */
 export async function searchFilterValues(
-  request: { sourceId: string; field: string; search: string },
+  request: FilterValueSearchRequest,
   fetchValues: typeof api.datasetFieldValues = (sourceId, field, options) => api.datasetFieldValues(sourceId, field, options),
+  fetchBlockValues: typeof api.dashboardFilterOptions = (block, column, options) => api.dashboardFilterOptions(block, column, options),
 ): Promise<{ values: string[]; truncated: boolean; failed: boolean }> {
+  if ('blockId' in request) {
+    const response = await fetchBlockValues(request.blockId, request.column, { search: request.search, limit: FILTER_VALUE_PAGE });
+    return { values: response?.options ?? [], truncated: Boolean(response?.truncated), failed: !response };
+  }
   const response = await fetchValues(request.sourceId, request.field, { search: request.search });
   return { values: response.ok ? response.values : [], truncated: Boolean(response.ok && response.truncated), failed: !response.ok };
+}
+
+/** How many values one request lists for browsing or a search. */
+export const FILTER_VALUE_PAGE = 200;
+
+/**
+ * A saved query column's first page of values and how many exist, for the
+ * reader's "Filter by…" picker. `null` when the server cannot list them (the
+ * picker then offers the values the tiles returned).
+ */
+export async function loadBlockFilterValues(
+  source: { blockId: string; column: string },
+  fetchBlockValues: typeof api.dashboardFilterOptions = (block, column, options) => api.dashboardFilterOptions(block, column, options),
+): Promise<FilterValueList | null> {
+  const response = await fetchBlockValues(source.blockId, source.column, { limit: FILTER_VALUE_PAGE });
+  if (!response) return null;
+  return {
+    values: response.options,
+    truncated: response.truncated,
+    ...(response.valueCount !== undefined ? { valueCount: response.valueCount } : {}),
+    ...(response.valueCountCapped ? { valueCountCapped: true } : {}),
+  };
 }
 
 /**
@@ -90,7 +130,7 @@ export function useFilterValueSearch(
   delayMs = 250,
 ): FilterValueSearchState {
   const request = filterValueSearchRequest(source, list, query);
-  const key = request ? `${request.sourceId}\u0000${request.field}\u0000${request.search.toLowerCase()}` : '';
+  const key = request ? `${sourceKey(request)}\u0000${request.search.toLowerCase()}` : '';
   const [result, setResult] = useState<{ key: string; values: string[]; truncated: boolean; failed: boolean } | null>(null);
   useEffect(() => {
     if (!request) return;

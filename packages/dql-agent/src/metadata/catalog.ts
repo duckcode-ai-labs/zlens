@@ -1226,7 +1226,14 @@ async function upgradeVectorIndexOnCatalog(
   provider: EmbeddingProvider,
 ): Promise<{ upgraded: boolean; providerId: string; reason?: string }> {
   if (provider.id.startsWith('hashed-token')) {
-    return { upgraded: false, providerId: provider.id, reason: 'project uses the offline hashed embedder' };
+    // Word-based search is what a fresh snapshot already holds. Rebuild only
+    // to come back from a semantic index (the person turned local embeddings
+    // off, or an earlier version switched to them by itself): otherwise the
+    // hashed query vectors would find nothing in the semantic index.
+    const indexed = catalog.state('vector_provider');
+    if (!indexed || indexed === provider.id) {
+      return { upgraded: false, providerId: provider.id, reason: 'project uses the offline hashed embedder' };
+    }
   }
   if (catalog.state('vector_provider') === provider.id) {
     return { upgraded: false, providerId: provider.id, reason: 'index already embedded with this provider' };

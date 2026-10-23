@@ -148,6 +148,12 @@ export type DashboardFilterCandidate = {
   /** How many tiles return this column — its reach if made a global filter. */
   tiles: number;
   sampleValues: string[];
+  /**
+   * The saved query whose output column lists every value, for a server
+   * search (the tile with the most rows for this column). The sample values
+   * are only what the tiles happened to return (Codex F02).
+   */
+  valueSource?: { blockId: string; column: string };
 };
 
 type DashboardRunFilterEvidence = {
@@ -240,18 +246,23 @@ export function dashboardFilterCandidates(
   dashboard: DashboardDocumentResponse['dashboard'] | null,
   run: {
     tiles?: Array<{
+      blockId?: string;
       filterableColumns?: Array<{ column: string; predicateTarget: string }>;
-      result?: { columns?: string[]; rows?: Array<Record<string, unknown>> };
+      result?: { columns?: string[]; rows?: Array<Record<string, unknown>>; rowCount?: number };
     }>;
   } | null,
 ): DashboardFilterCandidate[] {
   const existing = new Set((dashboard?.filters ?? []).map((filter) => filter.id));
-  const byColumn = new Map<string, { tiles: number; values: Set<string> }>();
+  const byColumn = new Map<string, { tiles: number; values: Set<string>; source?: { blockId: string; column: string; rows: number } }>();
   for (const tile of run?.tiles ?? []) {
     for (const candidate of tile.filterableColumns ?? []) {
       if (existing.has(candidate.column)) continue;
       const entry = byColumn.get(candidate.column) ?? { tiles: 0, values: new Set<string>() };
       entry.tiles += 1;
+      if (tile.blockId && (tile.result?.columns ?? []).includes(candidate.column)) {
+        const rows = Number(tile.result?.rowCount ?? tile.result?.rows?.length ?? 0);
+        if (!entry.source || rows > entry.source.rows) entry.source = { blockId: tile.blockId, column: candidate.column, rows };
+      }
       for (const row of (tile.result?.rows ?? []).slice(0, 24)) {
         const value = row?.[candidate.column];
         if ((typeof value === 'string' || typeof value === 'number') && String(value).trim() && entry.values.size < 24) {
@@ -262,7 +273,12 @@ export function dashboardFilterCandidates(
     }
   }
   return Array.from(byColumn.entries())
-    .map(([column, entry]) => ({ column, tiles: entry.tiles, sampleValues: Array.from(entry.values).sort() }))
+    .map(([column, entry]) => ({
+      column,
+      tiles: entry.tiles,
+      sampleValues: Array.from(entry.values).sort(),
+      ...(entry.source ? { valueSource: { blockId: entry.source.blockId, column: entry.source.column } } : {}),
+    }))
     .sort((a, b) => b.tiles - a.tiles || a.column.localeCompare(b.column));
 }
 

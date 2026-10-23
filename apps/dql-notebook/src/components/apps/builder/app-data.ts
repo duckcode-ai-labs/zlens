@@ -380,7 +380,7 @@ export function appDataItems(sources: readonly DraftSource[], known: readonly Ap
 }
 
 export function openCanvasLabel(count: number): string {
-  if (count === 0) return 'Open blank Studio';
+  if (count === 0) return 'Skip, start empty';
   return `Open Studio with ${count} ${count === 1 ? 'source' : 'sources'}`;
 }
 
