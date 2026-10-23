@@ -55,7 +55,7 @@ import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
 import { ReaderPreviewParts } from './ReaderPreviewParts';
 import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
 import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
-import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords } from './app-studio-words';
+import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -624,6 +624,12 @@ export function AppStudioV2({
   /** The error a Publish stopped by a failed save shows; its banner offers Try again. */
   const [publishBlockedBy, setPublishBlockedBy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /**
+   * The App could not move to a newer version of one of its data sources
+   * (R03). `message` is what the banner says (it is also `error`), with the
+   * planner's reason under Technical details and the ways out as buttons.
+   */
+  const [sourceSwitchProblem, setSourceSwitchProblem] = useState<{ sourceId: string; message: string; technical: string; after: 'certified' | 'refresh' } | null>(null);
   const [savedMessage, setSavedMessage] = useState<string>(() => draftStatusWords({ published: Boolean(baseAppId) }));
   const [previewRunsByPage, setPreviewRunsByPage] = useState<Record<string, DashboardRunResponse>>({});
   const [previewing, setPreviewing] = useState(false);
@@ -1679,6 +1685,21 @@ export function AppStudioV2({
    * available after a browser or CLI restart rather than depending on a
    * transient "just accepted" proposal state.
    */
+  /** The data's name as the author knows it: "Rerun Cert Probe", never its file or id. */
+  const sourceDisplayName = (sourceId: string): string => {
+    const item = knownSourceItems[sourceId] ?? catalog.find((candidate) => (candidate.sourceId ?? candidate.id) === sourceId);
+    if (item?.name) return humanize(item.name);
+    const stored = latestDraftRef.current?.sources.find((source) => source.id === sourceId);
+    const fileName = stored?.sourceRef?.split('/').pop()?.replace(/\.[a-z]+$/i, '');
+    return fileName ? humanize(fileName) : 'this data';
+  };
+  const showSourceSwitchProblem = (sourceId: string, technical: string, after: 'certified' | 'refresh') => {
+    const message = sourceSwitchWords(sourceDisplayName(sourceId), after);
+    setSourceSwitchProblem({ sourceId, message, technical, after });
+    setSavedMessage('Data still needs attention');
+    setError(message);
+  };
+
   const refreshDatasetBinding = async (sourceId: string, enableReviewPreview = false) => {
     if (!draft) return;
     setBusy(true);
@@ -1708,8 +1729,7 @@ export function AppStudioV2({
           setDatasetRebindPrompt({ sourceId, title });
           setSavedMessage('Review policy choice required');
         } else {
-          setSavedMessage('Data still needs attention');
-          setError(result.error);
+          showSourceSwitchProblem(sourceId, result.error, 'refresh');
         }
         return;
       }
@@ -1873,7 +1893,7 @@ export function AppStudioV2({
         },
       });
       if (!result.ok) {
-        setError(result.error);
+        showSourceSwitchProblem(sourceId, result.error, 'certified');
         return;
       }
       next = result.draft;
@@ -2649,7 +2669,7 @@ export function AppStudioV2({
       setPublishReviewOpen(false);
       setPanel('sources');
       setPanelOpen(true);
-      setError(`${unavailableSources.map((source) => humanize(source.sourceRef)).join(', ')} ${unavailableSources.length === 1 ? 'is' : 'are'} no longer certified. Replace or remove ${unavailableSources.length === 1 ? 'this source' : 'these sources'} before publication.`);
+      setError(`${unavailableSources.map((source) => sourceDisplayName(source.id)).join(', ')} ${unavailableSources.length === 1 ? 'is' : 'are'} no longer certified. Replace or remove ${unavailableSources.length === 1 ? 'this source' : 'these sources'} before publication.`);
       return;
     }
     operations.push(...certifiedBlockOperations(draft, blockSources, byId));
@@ -2699,8 +2719,7 @@ export function AppStudioV2({
         },
       });
       if (!recovery.ok) {
-        setSavedMessage('Data source still needs repair');
-        setError(recovery.error);
+        showSourceSwitchProblem(task.sourceId, recovery.error, 'refresh');
         setPanel('sources');
         setPanelOpen(true);
         return;
@@ -2979,6 +2998,12 @@ export function AppStudioV2({
   };
   const publishFromToolbarRef = useRef(publishFromToolbar);
   publishFromToolbarRef.current = publishFromToolbar;
+  /** The ways out of a source that could not switch (R03): refresh it again, or choose it again from Add data. */
+  const sourceSwitchActions = (problem: NonNullable<typeof sourceSwitchProblem>) => [
+    ...(problem.after === 'certified' ? [{ label: 'Refresh this data', onClick: () => { setSourceSwitchProblem(null); setError(null); void refreshDatasetBinding(problem.sourceId); } }] : []),
+    { label: 'Choose it again from Add data', onClick: () => { setSourceSwitchProblem(null); setError(null); setPublishReviewOpen(false); setAddDataOpen(true); } },
+  ];
+
   const dismissStudioError = () => {
     // Dismissing a failed-save message is the author's choice to go on without that change.
     if (publishBlockedBy !== null) saveGate.clearFailure();
@@ -4024,7 +4049,7 @@ export function AppStudioV2({
       </aside> : null}
 
       <main ref={workspaceRef} className="studio-workspace">
-        {error ? <StudioErrorBanner error={error} floating onDismiss={dismissStudioError} onRefresh={() => void reloadLatestDraft()} {...(publishBlockedBy !== null && publishBlockedBy === error ? { lead: PUBLISH_SAVE_FAILED_LEAD, action: { label: 'Try again', onClick: () => void retrySaveThenPublish() } } : {})} /> : null}
+        {error ? <StudioErrorBanner error={error} floating onDismiss={dismissStudioError} onRefresh={() => void reloadLatestDraft()} {...(publishBlockedBy !== null && publishBlockedBy === error ? { lead: PUBLISH_SAVE_FAILED_LEAD, action: { label: 'Try again', onClick: () => void retrySaveThenPublish() } } : {})} {...(sourceSwitchProblem && sourceSwitchProblem.message === error ? { technical: sourceSwitchProblem.technical, actions: sourceSwitchActions(sourceSwitchProblem) } : {})} /> : null}
         <div className={`studio-canvas-frame ${breakpoint} preview-mode-${previewMode}`}>
           <section ref={canvasRef} className="studio-canvas" aria-label="App page" onClick={(event) => { if (event.target === event.currentTarget) { setSelectedTileId(null); setTileMenuId(null); } }}>
             <header className="studio-page-heading">

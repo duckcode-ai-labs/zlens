@@ -577,7 +577,21 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         body.sourceIds ?? [],
         APP_SOURCE_POLICY,
       );
-      sendJson(res, 200, { ok: true, ...result, items: withCertificationBylines(projectRoot, result.items) });
+      // A saved query's fields (design D1) are read once per revision of its
+      // file. Certifying it (or any edit) writes a new revision, so the App's
+      // field tiles could not move to it until something read its columns
+      // again (R01). Read them here for the saved queries this App already
+      // uses as fields, so adopting or refreshing them works in place.
+      const items = ctx.datasetsEnabled === false
+        ? result.items
+        : await withSavedQueryResultFields(
+          projectRoot,
+          result.items,
+          APP_SOURCE_POLICY,
+          ctx.readSavedQueryFields,
+          (record) => draftUsesSourceAsFields(current, record.sourceId),
+        );
+      sendJson(res, 200, { ok: true, ...result, items: withCertificationBylines(projectRoot, items) });
     } catch (err) {
       const error = err as Error & { code?: string };
       sendJson(res, 400, { ok: false, code: error.code, error: error.message });
@@ -4294,6 +4308,13 @@ function plannerNoteTitle(title: string): string {
   return /\s/.test(trimmed) ? trimmed : trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+/** Whether this App reads the source through fields: a field tile, a page binding, or a stored field descriptor. */
+function draftUsesSourceAsFields(draft: AppBuildDraft, sourceId: string): boolean {
+  if (draft.sources.some((source) => source.id === sourceId && source.capabilities?.dataset)) return true;
+  return draft.pages.some((page) => page.datasets?.some((binding) => binding.sourceId === sourceId)
+    || page.layout.items.some((tile) => Boolean(tile.query) && tile.sourceId === sourceId));
+}
+
 /**
  * Give the plain saved queries among these catalog records their result
  * fields (design D1) through the runtime's once-per-revision read, then
@@ -4305,9 +4326,10 @@ async function withSavedQueryResultFields(
   records: AppSourceCatalogRecord[],
   sourcePolicy: AppBuildSourcePolicy,
   read: AppBuildHooks['readSavedQueryFields'],
+  include: (record: AppSourceCatalogRecord) => boolean = () => true,
 ): Promise<AppSourceCatalogRecord[]> {
   if (!read) return records;
-  const plain = records.filter((record) => record.kind === 'block' && !record.capabilities.dataset && !record.capabilities.semanticModelId);
+  const plain = records.filter((record) => record.kind === 'block' && !record.capabilities.dataset && !record.capabilities.semanticModelId && include(record));
   if (plain.length === 0) return records;
   try {
     await read(plain.map((record) => record.sourceId));

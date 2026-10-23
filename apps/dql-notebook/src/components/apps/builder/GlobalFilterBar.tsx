@@ -351,7 +351,7 @@ export function filterControlTypeLabel(type: string | undefined): string {
   const labels: Record<string, string> = {
     daterange: 'Date range',
     date: 'Single date',
-    select: 'Dropdown',
+    select: 'Searchable list',
     multiselect: 'Multi-select',
     search: 'Search',
     number: 'Number',
@@ -365,7 +365,7 @@ export function filterControlTypeLabel(type: string | undefined): string {
 
 export function filterControlOptions(fieldId: string): Array<{ value: StudioFilterControlType; label: string }> {
   const common: Array<{ value: StudioFilterControlType; label: string }> = [
-    { value: 'select', label: 'Searchable dropdown' },
+    { value: 'select', label: 'Searchable list' },
     { value: 'multiselect', label: 'Searchable multi-select' },
   ];
   if (defaultStudioFilterType(fieldId) === 'daterange') {

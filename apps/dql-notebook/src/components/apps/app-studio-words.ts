@@ -40,6 +40,17 @@ export function rowCountWords(rows: number): string {
 /** What App Studio says when the App changed in another tab (F11). */
 export const CHANGED_IN_ANOTHER_TAB = 'This App changed in another tab. Refresh to review the latest version.';
 
+/**
+ * What App Studio says when the App could not move to a newer version of its
+ * data (R03): what did not happen and what to do, by the data's name. The
+ * reason, with any ids, goes under Technical details.
+ */
+export function sourceSwitchWords(title: string, after: 'certified' | 'refresh'): string {
+  return after === 'certified'
+    ? `This App couldn’t switch to the newly certified version of ${title}. Refresh its data, or choose it again from Add data.`
+    : `This App couldn’t switch to the current version of ${title}. Choose it again from Add data, or keep the App on its current data.`;
+}
+
 export interface StudioErrorWords {
   /** One plain sentence a person can act on. */
   message: string;

@@ -49,6 +49,30 @@ test.beforeAll(async () => {
     '  rules: oss',
     '',
   ].join('\n'));
+  // R01: a saved query nobody certified yet, used through its result fields.
+  writeFileSync(join(projectDir, 'blocks', 'product_probe.dql'), [
+    '// dql-format: 1',
+    '',
+    'block "product_probe" {',
+    '  domain = "orders"',
+    '  type = "custom"',
+    '  status = "draft"',
+    '  description = "Revenue and items sold for each product."',
+    '  owner = "analytics@example.com"',
+    '  grain = "one row per product"',
+    '  outputs = ["product_name", "probe_revenue", "items_sold"]',
+    '  dimensions = ["product_name"]',
+    '  query = """',
+    '    SELECT product_name, SUM(product_price) AS probe_revenue, COUNT(*) AS items_sold',
+    '    FROM order_items',
+    '    GROUP BY product_name',
+    '  """',
+    '  tests {',
+    '    assert row_count > 0',
+    '  }',
+    '}',
+    '',
+  ].join('\n'));
   server = await startNotebookServer({ projectDir, workDir });
 });
 
@@ -145,4 +169,53 @@ test('checking a table does not certify it; certifying is a short review from th
   await expect(page.locator('.dql-trust-summary')).toHaveText('All tiles certified', { timeout: 60_000 });
   await expect(page.locator('.dql-app-view-topbar .dql-app-seal').first()).toHaveText('All tiles certified');
   await expect(page.locator('.dql-trust-badge.certified').filter({ hasText: /^Certified by you · \d{1,2} [A-Z][a-z]{2}/ }).first()).toBeVisible();
+});
+
+test('a saved query certified from the publish check is adopted in place: 0 of 1 becomes All tiles certified (R01)', async ({ page }) => {
+  test.setTimeout(240_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(server!.baseUrl);
+  await expect(page.getByRole('button', { name: 'Apps', exact: true })).toBeVisible({ timeout: 60_000 });
+  await page.getByRole('button', { name: 'Apps', exact: true }).click();
+  await page.getByRole('button', { name: 'Build new App' }).click();
+  await page.getByRole('tab', { name: 'Start manually' }).click();
+  await page.getByRole('button', { name: /^Continue to data/ }).click();
+  await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
+
+  const browser = page.getByRole('region', { name: 'Add data' });
+  await browser.getByRole('group', { name: 'Kind of data' }).getByRole('button', { name: /^Saved queries/ }).click();
+  const probeRow = browser.locator('article.add-data-row').filter({ hasText: 'Product Probe' }).first();
+  await expect(probeRow).toContainText('Not certified yet', { timeout: 30_000 });
+  await browser.getByRole('button', { name: 'Add to App: Product Probe' }).click();
+  await expect(browser.getByRole('button', { name: 'Remove Product Probe from this App' })).toBeVisible({ timeout: 30_000 });
+  await page.getByRole('button', { name: /Open Studio with 1 source/ }).click();
+
+  // A KPI from one of its result fields.
+  const dataPane = page.locator('.data-panel');
+  await expect(dataPane.locator('.dataset-current')).toContainText('Product Probe');
+  await dataPane.locator('button.data-field').filter({ hasText: 'Probe Revenue' }).click();
+  await expect(page.locator('article.draft-tile')).toBeVisible();
+  await page.getByRole('button', { name: 'Add to page' }).click();
+  await expect(page.locator('article.draft-tile')).toHaveCount(0);
+  const card = page.locator('.studio-page-grid .studio-component-card').filter({ hasText: 'Probe Revenue' }).first();
+  await expect(card.locator('.dql-kpi-value')).toBeVisible({ timeout: 60_000 });
+  const before = (await card.locator('.dql-kpi-value').textContent())?.trim();
+
+  // Publish → Certify now → the passing review → I vouch for this — certify.
+  await page.getByRole('button', { name: 'Review and publish to Project' }).click();
+  const ready = page.getByRole('dialog', { name: 'Ready to publish' });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('0 of 1 tile certified', { timeout: 90_000 });
+  await ready.getByRole('button', { name: 'Certify now: Product Probe' }).click();
+  const review = page.getByRole('dialog', { name: 'Certify Product Probe' });
+  const vouch = review.getByRole('button', { name: 'I vouch for this — certify' });
+  await expect(vouch).toBeEnabled({ timeout: 90_000 });
+  await vouch.click();
+  await expect(review).toBeHidden({ timeout: 90_000 });
+
+  // The App moves to the certified version in place: no refusal, the count is 1 of 1.
+  await expect(ready.getByText('All checks passed')).toBeVisible({ timeout: 120_000 });
+  await expect(ready.locator('.readiness-trust-count')).toHaveText('All tiles certified');
+  await expect(page.getByText(/data version and contract|couldn.t switch to the newly certified/)).toHaveCount(0);
+  await expect(page.locator('.studio-trust-count')).toHaveText('All tiles certified');
+  await expect(card.locator('.dql-kpi-value')).toHaveText(before ?? '');
 });

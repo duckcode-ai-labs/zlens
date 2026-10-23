@@ -8,6 +8,45 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Apps: certified saved queries are adopted in place, plain recovery words, certifier on every row
+
+- **A saved query certified from its App moves the App to the certified
+  version.** Certifying writes a new version of the saved query's file, and
+  a saved query's fields are read once per version, so the App's catalog card
+  had no fields for the certified version and the App refused it ("does not
+  expose one complete current data version and contract"); the count stayed
+  0 of 1. The App now reads the fields of the new version when it adopts or
+  refreshes a saved query it uses through fields, so "I vouch for this —
+  certify" turns 0 of 1 into All tiles certified in place, for result-field
+  and row-level saved queries alike. **Refresh this data** recovers the same
+  case.
+- **When the App can't switch, it says what to do.** "This App couldn't
+  switch to the newly certified version of Rerun Cert Probe. Refresh its
+  data, or choose it again from Add data.", with **Refresh this data** and
+  **Choose it again from Add data** buttons. File names, ids and "data version
+  and contract" are under **Technical details** only. A tile over data that
+  changed says "This data changed after the tile was made. Refresh this data
+  in the Data pane, or choose it again from Add data."
+- **A database table says who certified the data made from it.** Add data
+  showed "Table · Certified" on the table while the data made from it said
+  "Certified by you · 23 Oct"; both now say "Certified by you · 23 Oct".
+- **Help explains Ask without "governed".** Saved queries are "questions you
+  save once and reuse"; the middle kind of Ask answer is described as built
+  from your Metrics and checked joins. Ask's own labels are unchanged.
+- **A one-value filter control is a "Searchable list"**, not "Dropdown": it
+  searches every value.
+- **`zlens doctor` no longer reports drift for working App tiles.** Its
+  output-contract check compared a tile's fields only with fields a saved
+  query's file declares. A saved query used through its result columns
+  declares none, and a field from a related table (`customer__customer_name`)
+  comes through the model's joins, so every such tile was reported as
+  "no longer declared". The check now accepts a saved query's result columns
+  (with the Min, Max and row-count measures ZLens adds) and leaves related
+  fields to the runtime, which checks them on every run. A column a saved
+  query no longer returns is still reported.
+- Reading a saved query's columns works when its SQL ends with a line
+  comment.
+
 ## v0.2.5 - 2026-10-23
 
 A patch for MCP and Apps.

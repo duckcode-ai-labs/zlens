@@ -50,6 +50,12 @@ describe('Help guide matches the first start (D7)', () => {
     expect(html).toContain('Database only');
   });
 
+  it('explains Ask and saved queries without the word "governed" (R03)', () => {
+    expect(html).toContain('Saved queries are questions you save once and reuse');
+    expect(html).toContain('certified saved queries first');
+    expect(html).not.toMatch(/governed/i);
+  });
+
   it('covers Apps', () => {
     expect(html).toContain('Build your first App');
     expect(html).toContain('Not certified yet');

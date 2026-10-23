@@ -133,6 +133,22 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('1 drafted model waiting for review.');
   });
 
+  it('a table made into certified data says who certified it and when, the same words as that data (R02)', () => {
+    const certification = { by: 'me@example.com', name: 'Me', at: '2026-10-23T15:00:00.000Z', byYou: true };
+    const certifiedOrders = { ...ordersTableDataset, certification } as typeof ordersTableDataset;
+    const madeTables = [
+      { id: 'dev.orders', name: 'orders', schema: 'dev', relation: 'dev.orders', columnCount: 9, datasets: [{ sourceId: ordersTableDataset.sourceId, name: 'orders', state: 'certified' }] },
+    ] as unknown as WarehouseTableSummary[];
+    const markup = render({ initialItems: [certifiedOrders], initialTables: madeTables });
+    expect(markup).toMatch(/Table · Certified by you · 23 Oct · dev · 9 columns/);
+    expect(markup).not.toMatch(/Table · Certified · dev/);
+    // In this App: the same words, then "added".
+    const added = render({ initialItems: [certifiedOrders], initialTables: madeTables, draft: draftWith({ sources: [appDataSourceFromCandidate(certifiedOrders)] }) });
+    expect(added).toMatch(/Table · Certified by you · 23 Oct · added · dev · 9 columns/);
+    // Nothing known about who certified it: plain Certified, as before.
+    expect(render({ initialItems: [], initialTables: madeTables })).toContain('Table · Certified · dev · 9 columns');
+  });
+
   it('hides staging copies of a listed table behind Show staging tables (new-user round 2, Q3)', () => {
     const layered = [
       { id: 'dev.customers', name: 'customers', schema: 'dev', relation: 'dev.customers', columnCount: 7 },

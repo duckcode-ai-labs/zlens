@@ -56,9 +56,10 @@ export function tableTrustLine(table: Pick<WarehouseTableSummary, 'modeled'>, op
  * trust words: "Certified" or "Not certified yet", with "added" when it is
  * in this App. Whether it was checked or saved as a draft is tooltip detail.
  */
-export function madeTableTrustWords(state: 'certified' | 'checked' | 'draft' | string, options: { added?: boolean } = {}): { label: string; detail: string } {
+export function madeTableTrustWords(state: 'certified' | 'checked' | 'draft' | string, options: { added?: boolean; certifiedLabel?: string } = {}): { label: string; detail: string } {
   const certified = state === 'certified';
-  const label = [certified ? 'Certified' : NOT_CERTIFIED_YET, options.added ? 'added' : ''].filter(Boolean).join(' · ');
+  // Who certified it and when, the same words as the data made from it (R02): "Certified by you · 23 Oct".
+  const label = [certified ? options.certifiedLabel || 'Certified' : NOT_CERTIFIED_YET, options.added ? 'added' : ''].filter(Boolean).join(' · ');
   const detail = certified
     ? 'Certified: someone vouched for these numbers.'
     : state === 'checked'

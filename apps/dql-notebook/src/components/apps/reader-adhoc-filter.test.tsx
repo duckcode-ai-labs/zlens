@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { dashboardFilterCandidates } from './dashboard-filters';
 import { filterValueCapHint, filterValueSearchRequest, loadBlockFilterValues, searchFilterValues } from './filter-value-search';
 import { SearchableFilterSelect } from './app-dashboard-filters';
-import { filterControlTypeLabel } from './builder/GlobalFilterBar';
+import { filterControlOptions, filterControlTypeLabel } from './builder/GlobalFilterBar';
 import { TableOutput } from '../output/TableOutput';
 
 /**
@@ -57,6 +57,10 @@ describe('plain words (Codex F05, G2)', () => {
     expect(filterControlTypeLabel('daterange')).toBe('Date range');
     expect(filterControlTypeLabel('multiselect')).toBe('Multi-select');
     expect(filterControlTypeLabel('relative_date')).toBe('Relative date');
+    // A one-value list searches every value, so it says so: never "Dropdown" (Codex rerun words).
+    expect(filterControlTypeLabel('select')).toBe('Searchable list');
+    expect(filterControlOptions('customer_name').map((option) => option.label)).toContain('Searchable list');
+    expect(filterControlOptions('customer_name').map((option) => option.label).join(' ')).not.toMatch(/dropdown/i);
   });
 
   it('an empty App tile says why', () => {

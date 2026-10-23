@@ -177,7 +177,7 @@ export function HelpDocsPage() {
 
           <div ref={setSectionRef(4)} style={{ marginTop: 44 }}>
             {h2('05', 'Create your first saved query')}
-            <p style={para}>Saved queries are reusable, governed questions — &quot;total revenue&quot;, &quot;churn by tier&quot;. Answers route through certified saved queries before anything is generated, so every saved query you certify makes the whole workspace more trustworthy.</p>
+            <p style={para}>Saved queries are questions you save once and reuse — &quot;total revenue&quot;, &quot;churn by tier&quot;. Ask answers from certified saved queries before it writes any new SQL, so every saved query you certify makes more answers ones you can trust.</p>
             <ol style={{ margin: '12px 0 0', paddingLeft: 22, display: 'flex', flexDirection: 'column', gap: 8 }}>
               <li>Open <strong>Saved queries</strong> and hit <strong>+</strong>, or start from an Ask AI answer with <em>Save as saved query</em>.</li>
               <li>In the Visual Builder, pick measures and dimensions from the semantic picker — or paste raw SQL and convert it.</li>
@@ -193,8 +193,8 @@ export function HelpDocsPage() {
               <div style={{ display: 'grid', gridTemplateColumns: '110px 1fr', fontSize: 12.5 }}>
                 <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-1)', fontWeight: 650, color: 'var(--status-success)' }}>Certified</div>
                 <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', color: t.textSecondary }}>Answered from a certified saved query — instant and trusted.</div>
-                <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-1)', fontWeight: 650, color: t.accent }}>Governed</div>
-                <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', color: t.textSecondary }}>Composed from semantic metrics and proven joins.</div>
+                <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', background: 'var(--bg-1)', fontWeight: 650, color: t.accent }}>From Metrics</div>
+                <div style={{ padding: '9px 13px', borderBottom: '1px solid var(--border-subtle)', color: t.textSecondary }}>Built from your Metrics and checked joins.</div>
                 <div style={{ padding: '9px 13px', background: 'var(--bg-1)', fontWeight: 650, color: 'var(--status-warning)' }}>AI-generated</div>
                 <div style={{ padding: '9px 13px', color: t.textSecondary }}>Fresh SQL grounded in your schema, verified, and clearly labeled.</div>
               </div>

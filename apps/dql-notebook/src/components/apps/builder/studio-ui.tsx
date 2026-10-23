@@ -20,7 +20,7 @@ export function PanelTitle({ title, detail, action }: { title: string; detail: s
  * Refresh when the App changed in another tab; the server's own words stay
  * under Technical details.
  */
-export function StudioErrorBanner({ error, floating = false, onDismiss, onRefresh, lead, action }: {
+export function StudioErrorBanner({ error, floating = false, onDismiss, onRefresh, lead, action, actions, technical }: {
   error: string;
   floating?: boolean;
   onDismiss?: () => void;
@@ -29,14 +29,19 @@ export function StudioErrorBanner({ error, floating = false, onDismiss, onRefres
   lead?: string;
   /** One more way out, e.g. Try again. */
   action?: { label: string; onClick: () => void };
+  /** More ways out, in order (e.g. Refresh this data, Choose it again). */
+  actions?: Array<{ label: string; onClick: () => void }>;
+  /** `error` is already plain words; this is the reason, shown only under Technical details. */
+  technical?: string;
 }): JSX.Element {
-  const words = studioErrorWords(error);
+  const words = technical !== undefined ? { message: error, technical, refresh: false } : studioErrorWords(error);
+  const buttons = [...(action ? [action] : []), ...(actions ?? [])];
   return <div className={`studio-error ${floating ? 'floating' : ''}`} role="alert">
     <div className="studio-error-body">
       <span>{lead ? `${lead} ${words.message}` : words.message}</span>
       {words.technical ? <details className="studio-error-technical"><summary>Technical details</summary><code>{words.technical}</code></details> : null}
     </div>
-    {action ? <button type="button" className="studio-error-refresh" onClick={action.onClick}>{action.label}</button> : null}
+    {buttons.map((button) => <button key={button.label} type="button" className="studio-error-refresh" onClick={button.onClick}>{button.label}</button>)}
     {words.refresh && onRefresh ? <button type="button" className="studio-error-refresh" onClick={onRefresh}>Refresh</button> : null}
     {onDismiss ? <button type="button" aria-label="Dismiss" onClick={onDismiss}>×</button> : null}
   </div>;
