@@ -22599,6 +22599,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const executedParameterEvidence = datasetBoundParameterEvidence(invocation.values);
                 const executedParameterFingerprint = `sha256:${fingerprintDashboardRuntimeState(invocation.values)}`;
                 const rolledUp = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup');
+                // A total over a Top N saved query's rows is not certified, whatever the saved query is.
+                const topRowsOnly = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup' && adaptation.topRowsOnly);
+                const savedQueryTileTrust = topRowsOnly ? 'review_required' as const : descriptor.trust;
                 datasetEffectiveQueries.set(item.i, structuredClone(effectiveDatasetQuery));
                 tiles.push({
                   tileId: item.i,
@@ -22611,7 +22614,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   compiledSqlFingerprint: execution.compiledSqlFingerprint,
                   resultFingerprint: execution.resultFingerprint,
                   executionFingerprint: tileExecutionFingerprint,
-                  trustState: descriptor.trust,
+                  trustState: savedQueryTileTrust,
                   citation: { kind: 'dataset_query', name: descriptor.label, path: block.filePath },
                   filters: {
                     applied: compiled.appliedFilters,
@@ -22675,12 +22678,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                       parameters: datasetSourceParameters,
                     }),
                     sql: execution.preparation.executedSql.slice(0, 40_000),
-                    trustState: descriptor.trust,
+                    trustState: savedQueryTileTrust,
                     explanation: [
                       rolledUp
                         ? (compiled.validation.adaptations.find((adaptation) => adaptation.kind === 'saved_query_rollup')?.message ?? `Rolled up from the result of ${savedQueryResult.savedQuery}.`)
                         : `Shows the rows of ${savedQueryResult.savedQuery} as they are.`,
-                      `This tile ran as one query over the complete result of the saved query ${savedQueryResult.savedQuery}; its trust is the saved query's own.`,
+                      topRowsOnly
+                        ? `This tile ran as one query over the result of the saved query ${savedQueryResult.savedQuery}, which keeps only its top rows; a total of them is not certified.`
+                        : `This tile ran as one query over the complete result of the saved query ${savedQueryResult.savedQuery}; its trust is the saved query's own.`,
                       filterResolution.unbound.length > 0 ? `${filterResolution.unbound.length} explicitly unmapped dashboard filter(s) did not apply.` : 'All mapped dashboard filters were bound through the saved query\'s result columns.',
                     ],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -44579,8 +44584,29 @@ export function setBlockStudioStatus(
   const companionPath = blockCompanionRelativePath(projectRoot, normalizedPath);
   if (!companionPath) return;
   const absCompanionPath = join(projectRoot, companionPath);
-  if (!existsSync(absCompanionPath)) return;
   const status = blockSourceStatus(source);
+  if (!existsSync(absCompanionPath)) {
+    // A hand-written block has no companion YAML yet. Certify used to pass and
+    // record nothing, so the tile could not say who certified it or notice a
+    // later edit; write the companion a Block Studio save would, with the receipt.
+    if (status === 'certified' && certification) {
+      const metadata = parseBlockSourceMetadata(source);
+      const slug = normalizedPath.split('/').pop()!.replace(/\.dql$/, '');
+      writeBlockCompanionFile(projectRoot, {
+        slug,
+        name: metadata.name || slug,
+        domain: metadata.domain || 'uncategorized',
+        description: metadata.description,
+        owner: metadata.owner,
+        tags: metadata.tags,
+        provider: 'dql',
+        content: source,
+        certification: { ...certification, sourceSha256: sourceSha256(source) },
+        companionRelativePath: companionPath,
+      });
+    }
+    return;
+  }
   const previousStatus = blockSourceStatus(previousSource);
   const receipt = status === 'certified' && certification
     ? { ...certification, sourceSha256: sourceSha256(source) }

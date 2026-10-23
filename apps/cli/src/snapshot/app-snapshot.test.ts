@@ -55,7 +55,9 @@ describe('signed App snapshots', () => {
     const { html, manifest } = signSnapshot(input(), key);
     expect(html).toContain("script-src 'none'");
     expect(html).toContain('Sales &lt;review&gt;');
-    expect(html).toContain('All 3 tiles certified');
+    // The same words as the App's trust line (#168): no tile count when all are certified.
+    expect(html).toContain('All tiles certified');
+    expect(html).not.toContain('All 3 tiles certified');
     expect(manifest.figures[0]).toMatchObject({ key: 'revenue.revenue', display: '$1.2M' });
     const result = verifySnapshot(html);
     expect(result).toMatchObject({ ok: true, contentIntact: true, signatureValid: true });

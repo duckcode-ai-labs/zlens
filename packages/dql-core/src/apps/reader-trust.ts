@@ -71,7 +71,7 @@ export interface ReaderTrustTile {
     trust?: string;
     /** ZLens checked the data and someone added it, but nobody certified it yet (receipt: "Checked, not certified yet"). */
     checked?: boolean | null;
-    validation?: { outcome?: string } | null;
+    validation?: { outcome?: string; adaptations?: Array<{ kind?: string; message?: string; topRowsOnly?: number }> } | null;
     /** Joins to related tables the tile used (design D2), in plain words. */
     joins?: Array<{ trust?: string; sentence?: string; changedSinceCertified?: { at?: string | null } | null }> | null;
   } | null;
@@ -278,6 +278,9 @@ export function readerTileTrust(item: ReaderTrustItem, tile?: ReaderTrustTile): 
       const changed = dataset.joins.find((join) => join.trust !== 'certified' && join.changedSinceCertified?.at);
       return trust('review', changedJoinDetail(changed?.changedSinceCertified?.at) ?? UNCERTIFIED_JOIN_DETAIL);
     }
+    // A total over a Top N saved query's rows is not a total of the data.
+    const topRows = dataset.validation?.adaptations?.find((adaptation) => adaptation.topRowsOnly);
+    if (outcome === 'adapted' && topRows) return trust('review', topRows.message ?? 'Totals only the top rows of a saved query, so it is not a certified total.');
     const calculated = Boolean((item.query as { calculations?: unknown[] } | undefined)?.calculations?.length);
     if (dataset.trust === 'certified' && outcome !== 'needs_review') {
       // A calculation is certified when every input is (T2): checked

@@ -33,18 +33,32 @@ Everything is a file, so the whole surface is reviewable in a PR.
 
 ## Step 1 — Create the App
 
-```bash
-zlens app new revenue-ops --domain revenue --owner you@your-company.com
+Create the App folder and its manifest, `apps/revenue-ops/dql.app.json`:
+
+```json
+{
+  "version": 1,
+  "id": "revenue-ops",
+  "name": "Revenue Ops",
+  "domain": "revenue",
+  "owners": ["you@your-company.com"],
+  "homepage": { "type": "dashboard", "id": "overview" }
+}
 ```
 
-> **You should see** `apps/revenue-ops/` created with a `dql.app.json`
-> manifest and a scaffolded `dashboards/overview.dqld`.
+`id`, `name`, `domain` and at least one entry in `owners` are required.
+
+!!! note
+    `zlens app new revenue-ops --domain revenue` does not write these files.
+    It creates a local App draft that you continue in **Apps** under
+    **Not published yet**; the files are written when you publish the draft.
+    This tutorial writes the files by hand so every step is a reviewable file.
 
 ---
 
 ## Step 2 — Lay out the dashboard
 
-Replace `apps/revenue-ops/dashboards/overview.dqld` with:
+Create `apps/revenue-ops/dashboards/overview.dqld` with:
 
 ```json
 {
@@ -122,14 +136,16 @@ zlens notebook
 ```
 
 1. Click **Apps** in the activity bar.
-2. Open **Revenue — Ops**. The `overview` page is the App homepage.
+2. Open **Revenue Ops**. The `overview` page is the App homepage.
 
 > **You should see** the grid render the three certified tiles. Tiles can be
-> dragged and resized in **Build** mode; stakeholders use **View** mode.
+> dragged and resized in **Edit**; stakeholders use **View**.
 
-You can also attach the welcome notebook to the App (read-only preview) from
-the App's **Build** panel — useful for analysis narratives that accompany
-the dashboard.
+You can also attach a notebook to the App, for analysis narratives that
+accompany the dashboard: list its path from the project root under
+`notebooks` in `dql.app.json`, for example
+`{ "path": "notebooks/welcome.dqlnb", "role": "analysis" }`. In
+**Edit**, **Context** → **Source notebooks** lists the App's notebooks.
 
 ---
 

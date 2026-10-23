@@ -143,7 +143,8 @@ publish, and publishing goes through the same checks.
 - **An MCP client** (Claude Code, Codex, Cursor). `build_dql_app` picks
   data for your description, certified first, and returns a link to the draft, for
   example `http://127.0.0.1:3474/?appDraft=build_…`. Open it to continue in
-  App Studio. The draft is also listed in **Apps** under **Drafts**.
+  App Studio. The draft is also listed in **Apps** under **Not published
+  yet**.
 
 ## 2. Choose the data
 
@@ -351,20 +352,48 @@ follow joins.
 - Add a page with **+** next to the page tabs, or **New page** on the
   **Pages** tab.
 - Use **Undo** and **Redo** freely.
-- A tile's **⋯** menu has **View DQL and SQL**, **Change with AI** (with an
-  AI provider), **Tile settings**, **Duplicate** and **Remove tile**.
 - A new tile is scrolled into view where it lands, and clicks on fields wait
   for the tile being added, so they start the next tile instead of changing
   this one.
 
+A tile's **⋯** menu lists only the items that fit the tile and the mode
+(**Edit** or **Preview**):
+
+| Item | Shown when |
+|---|---|
+| **View DQL and SQL** | The tile is built from fields. |
+| **Change with AI** | In **Edit**, for a tile built from fields, when an AI provider is connected. |
+| **Ask about this tile** | The same item in **Preview**. |
+| **Tile settings** | In **Edit**. |
+| **Explain the latest change** | In **Edit**, for a tile built from fields that adds up a measure by day, week, month, quarter or year and has a preview result. It adds a tile that explains the change. |
+| **Duplicate** | In **Edit**. |
+| **Remove tile** | In **Edit**. |
+
 ## 5. Add filters
 
-1. Open the **Filters** tab and click **New filter**.
-2. Set a **Display label** and a **Control**: **Searchable dropdown**,
-   **Searchable multi-select**, **Date range** or **Single date**.
+1. Open the **Filters** tab and click **New filter**, then pick a field.
+2. Set a **Display label** and a **Control**. Every field offers
+   **Searchable dropdown** and **Searchable multi-select**. ZLens reads the
+   field's name to offer one more kind of control, checked in this order:
+    - A name that reads like a date (it has `date`, `time`, `month`, `week`,
+      `quarter`, `year`, `created`, `updated` or `ordered` in it, or ends with
+      `_at` or `_on`) also offers **Date range** and **Single date**, listed
+      first.
+    - Otherwise, a name that reads like a number to compare (it has `count`,
+      `amount`, `total`, `score`, `quantity`, `price`, `revenue`, `cost`,
+      `limit` or `top_n` in it) also offers **Number**, listed first.
+    - Otherwise, a name that reads like a flag (it starts with `is_` or
+      `has_`, ends with `_flag`, or has `enabled` or `active` in it) also
+      offers **Yes / no**, listed first.
 3. Choose **Apply to**: **This page** or **All compatible pages**.
-4. Under **Tiles**, set each tile to **Applies** or **Does not apply**.
-5. Click **Create filter**.
+4. Under **Tiles**, set each tile to **Applies** or **Does not apply**. The
+   header counts them, for example **Applies to 2 of 3 tiles**. **Apply to
+   all** links every tile that can take the field; when all of those apply,
+   the button reads **Apply to none** and unlinks them.
+5. To make readers set the filter, check **Require a value**. Publishing and
+   runs then need a value for it.
+6. Click **Create filter** (**Save filter** when you change one). It needs a
+   label and at least one tile that applies.
 
 A date control needs no list of values, so you can create it before the page
 has run.

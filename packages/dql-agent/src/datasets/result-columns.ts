@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import { dirname, join } from 'node:path';
 import {
   savedQueryGroupByFromOutputs,
+  savedQueryKeepsFirstRows,
   savedQueryResultDescriptor,
   type DatasetDescriptor,
   type ManifestBlock,
@@ -102,6 +103,7 @@ export function savedQueryResultDescriptorFromManifestBlock(input: {
     columns,
     groupBy: savedQueryGroupByFromOutputs(block.outputs),
     typesFrom: contractTyped ? 'contract' : observed!.typesFrom,
+    keepsFirstRows: savedQueryKeepsFirstRows(block.sql),
   });
 }
 

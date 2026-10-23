@@ -218,6 +218,8 @@ export function savedQueryResultDescriptor(input: {
   columns: ReadonlyArray<SavedQueryResultColumn>;
   groupBy?: ReadonlyArray<string>;
   typesFrom: DatasetResultOrigin['typesFrom'];
+  /** The saved query's outer `LIMIT`, from {@link savedQueryKeepsFirstRows}. */
+  keepsFirstRows?: number;
 }): DatasetDescriptor | undefined {
   const derived = savedQueryResultFields({ sourceId: input.sourceId, columns: input.columns, groupBy: input.groupBy });
   if (!derived.fields.some((field) => field.kind === 'physical')) return undefined;
@@ -255,7 +257,13 @@ export function savedQueryResultDescriptor(input: {
     fields: derived.fields,
     operations,
     execution: { route: input.certified ? 'certified' : 'governed_sql' },
-    result: { savedQuery: input.savedQuery, groupBy: derived.groupBy, asIs: derived.asIs, typesFrom: input.typesFrom },
+    result: {
+      savedQuery: input.savedQuery,
+      groupBy: derived.groupBy,
+      asIs: derived.asIs,
+      typesFrom: input.typesFrom,
+      ...(input.keepsFirstRows ? { keepsFirstRows: input.keepsFirstRows } : {}),
+    },
   };
 }
 
@@ -265,7 +273,7 @@ export interface SavedQueryRollupCheck {
   /** Average or ratio measures the tile would have to sum. */
   blocked: Array<{ measure: string; message: string }>;
   /** What the receipt says when the tile rolls rows up. */
-  adaptation?: { kind: 'saved_query_rollup'; message: string };
+  adaptation?: { kind: 'saved_query_rollup'; message: string; topRowsOnly?: number };
 }
 
 /**
@@ -303,6 +311,23 @@ export function savedQueryResultRollup(
         message: `${NON_ADDITIVE_REASON}: ${label} is worked out on each row of ${result.savedQuery}, so it can't be summed. Use Min ${label.toLowerCase()} or Max ${label.toLowerCase()}${grouping.length ? `, or group by ${grouping.join(' and ')} to show it as it is` : ''}.`,
       };
     });
+  // A Top N keeps its first N rows: a total over them is not a total of
+  // everything, and nobody certified it as one. Without declared grouping
+  // columns only a grand total is known to add rows up (a bar per row of a
+  // Top N still shows those rows).
+  const totalsTopRows = Boolean(result.keepsFirstRows)
+    && (result.groupBy.length > 0 || query.dimensions.length === 0 || Boolean(query.rollups?.length));
+  if (result.keepsFirstRows && totalsTopRows) {
+    return {
+      rollsUp: true,
+      blocked,
+      adaptation: {
+        kind: 'saved_query_rollup',
+        message: topRowsOnlyMessage(result.savedQuery, result.keepsFirstRows),
+        topRowsOnly: result.keepsFirstRows,
+      },
+    };
+  }
   return {
     rollsUp: true,
     blocked,
@@ -313,4 +338,32 @@ export function savedQueryResultRollup(
         : `Rolled up from the result of ${result.savedQuery}, which needs review.`,
     },
   };
+}
+
+/** The receipt line for a roll-up over a Top N saved query's rows. */
+export function topRowsOnlyMessage(savedQuery: string, rows: number): string {
+  return `Totals only the ${rows} rows ${savedQuery} keeps (it is a Top ${rows}), not all of the data, so it is not a certified total.`;
+}
+
+/**
+ * N when a saved query keeps only its first N rows: an outermost `LIMIT N`
+ * or `FETCH FIRST N ROWS ONLY`. A limit inside a subquery or CTE is not the
+ * result's limit and is ignored.
+ */
+export function savedQueryKeepsFirstRows(sql: string | undefined): number | undefined {
+  if (!sql?.trim()) return undefined;
+  const scan = sql
+    .replace(/--[^\n]*/g, ' ')
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/'(?:[^']|'')*'/g, "''");
+  let depth = 0;
+  let outer = '';
+  for (const char of scan) {
+    if (char === '(') depth += 1;
+    else if (char === ')') depth = Math.max(0, depth - 1);
+    else if (depth === 0) outer += char;
+  }
+  const match = outer.match(/\blimit\s+(\d+)\b/i) ?? outer.match(/\bfetch\s+(?:first|next)\s+(\d+)\s+rows?\s+only\b/i);
+  const rows = match ? Number(match[1]) : NaN;
+  return Number.isSafeInteger(rows) && rows > 0 ? rows : undefined;
 }

@@ -64,7 +64,7 @@ import { APP_STYLES } from './app-styles';
 import { appHeaderTitle, cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
 import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, SettingsPanel, StatusSeal } from './AppSidePanels';
 import { FollowPageButton } from './FollowPageButton';
-import { AskAboutApp } from './AskAboutApp';
+import { AskAboutApp, askAboutAppScopeLine } from './AskAboutApp';
 import { ResearchPanel } from './ResearchPanel';
 import { formatVariableEntryValue, formatVariableValue } from './app-variables';
 import type { AppAnalysisHandoff, AppResearchSeed, CreateInvestigationResult } from './app-research-types';
@@ -1922,7 +1922,7 @@ function AppWorkspaceSurface({
       audience: 'stakeholder',
       context: {
         title: `Ask about ${appTitle}`,
-        scopeHint: `Scoped to ${appTitle}${dashboardDoc?.dashboard.metadata.title ? ` · ${dashboardDoc.dashboard.metadata.title}` : ''}`,
+        scopeHint: askAboutAppScopeLine(appTitle, dashboardDoc?.dashboard.metadata.title),
         selectedObject: { kind: 'app', id: workspaceAppId ?? undefined, title: appTitle },
         workspaceContext: {
           surface: 'apps',
@@ -2004,7 +2004,7 @@ function AppWorkspaceSurface({
     setActiveInvestigation(null);
   }, [workspaceAppId, dashboardDoc?.dashboard.id]);
   // A read-only link does not ask the owner's AI provider anything.
-  const copilotAvailable = !readOnlyLink && Boolean(workspaceAppId && dashboardDoc && (section === 'dashboards' || section === 'research'));
+  const copilotAvailable = appCopilotAvailable({ readOnlyLink, hasApp: Boolean(workspaceAppId && dashboardDoc), section, aiConnected });
   const copilotVisible = copilotAvailable && explainOpen;
   const markAction = (status: 'copied' | 'downloaded' | 'ready') => {
     setShareStatus(status);
@@ -3151,6 +3151,16 @@ function isSharedProjectApp(app: Pick<AppSummary, 'publicationIntent' | 'visibil
 }
 
 /** The library tab counts: `drafts` are the new Apps not published yet, the cards the library shows for them. */
+/**
+ * The header's "Show AI copilot" button: an App page or research in the
+ * workspace, not a viewer link, and an AI provider connected. Without one the
+ * copilot cannot answer, so the button is hidden like the other AI controls
+ * (#174). `undefined` (settings still loading) keeps it.
+ */
+export function appCopilotAvailable(input: { readOnlyLink: boolean; hasApp: boolean; section: string; aiConnected?: boolean }): boolean {
+  return input.aiConnected !== false && !input.readOnlyLink && input.hasApp && (input.section === 'dashboards' || input.section === 'research');
+}
+
 export function libraryCounts(apps: Array<Pick<AppSummary, 'id' | 'publicationIntent' | 'visibility' | 'storage'>>, drafts: unknown[], favorites: Set<string>): Record<LibraryFilter, number> {
   const shared = apps.filter(isSharedProjectApp).length;
   return {

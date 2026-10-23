@@ -28,7 +28,8 @@ clip('overview', async ({ page, sample, director }) => {
   // 2. The App built from the same certified blocks.
   await director.click(page.getByRole('button', { name: 'Apps', exact: true }).first(), { after: 500 });
   await director.click(page.getByText('Jaffle Growth Review').first(), { after: 300 });
-  const seal = page.getByText(/ALL DATA CERTIFIED/i).first();
+  // The header seal and the page's trust line both read "All tiles certified" (#168, #170).
+  const seal = page.locator('.dql-app-view-topbar .dql-app-seal').filter({ hasText: 'All tiles certified' }).first();
   await director.fastForward(() => expect(seal).toBeVisible({ timeout: 60_000 }));
   await director.beat(500);
   await director.point(seal);

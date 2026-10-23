@@ -162,11 +162,15 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 
 | Command | What it does |
 | --- | --- |
-| `zlens app new <name>` | Create a local App package |
-| `zlens app generate "<prompt>"` | Generate a governed App draft from certified blocks plus review placeholders |
+| `zlens app new <id> --domain <domain> [--owner <user>]` | Create a local App draft. `--domain` is required; `--owner` defaults to `<your user name>@local`. The draft is stored in `.dql/local/apps.sqlite` and no App files are written: open **Apps** in `zlens notebook`, continue the draft under **Not published yet**, and publish it to write `apps/<id>/` |
+| `zlens app generate "<prompt>"` | Create an AI-assisted local App draft from certified blocks plus review placeholders. Like `app new`, it writes no App files until you publish the draft |
 | `zlens app generate "<prompt>" --ai-layout` | Store richer GenUI layout metadata for dynamic visualization/layout decisions |
 | `zlens app ls\|show\|reindex` | List, inspect, or reindex local Apps |
 | `zlens app build [path]` | Build every App in the project at `path` (default `.`) into `dql-manifest.json`. It takes a project path, not an App id: `zlens app build .` |
+| `zlens app check <id> [--format json]` | Run the checks publishing runs on an App already in the project: each tile's source, whether it passes, and what stops publishing. Exits 1 when the App is not ready to publish |
+| `zlens app diff [base] [head] [--html <file>] [--markdown <file>] [--check] [--format json]` | Review what a change does to every App page: compares `dql.app.json` and `.dqld` files between two git revisions, or a revision and the working tree (default: `HEAD` against the working tree). Names the tiles added, removed and changed, flags changes that can move numbers, lists schedule and alert changes, and re-checks each changed page. Runs no query, so it works in CI |
+| `zlens app verify <snapshot.html> [--trust-key <public.pem>] [--format json]` | Check a signed App snapshot offline: the file is unchanged since it was signed and the signature matches. With `--trust-key`, or inside the project that signed it, it also checks the signing key. Exits 1 when a check fails |
+| `zlens app key [--format json]` | Print this project's snapshot signing public key, to share with people who verify its snapshots |
 | `zlens promote notebook <path> --to shared` | Strip local run/UI state and mark a notebook as shared source |
 | `zlens promote app <app-id> --to shared` | Mark an App manifest as shared/reviewed source |
 | `zlens promote dashboard <app-id>/<dashboard-id> --to shared` | Strip AI pins/local state and mark a dashboard as shared source |
@@ -238,8 +242,8 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--to shared` | Target for `zlens promote` |
 | `--port <n>` | Preferred local port for `preview`/`serve` |
 | `--chart <type>` | Primary chart type for `new` scaffolds |
-| `--domain <name>` | Domain for new block scaffolds |
-| `--owner <name>` | Owner for new block scaffolds |
+| `--domain <name>` | Domain for new block scaffolds; required for `zlens app new` |
+| `--owner <name>` | Owner for new block scaffolds and `zlens app new` |
 | `--purpose <text>` | Governed purpose for an authorized cross-domain import |
 | `--pattern <name>` | Block scaffold pattern, such as `metric_wrapper`, `entity_profile`, `entity_rollup`, `ranking`, `trend`, `bridge`, `drilldown`, or `replacement` |
 | `--template <name>` | Alias for `--pattern` on scaffold commands |
@@ -282,6 +286,10 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--max-provider-dispatches <n>` | For `zlens agent eval`: maximum provider round trips for the worst question |
 | `--max-latency-p95-ms <ms>` | For `zlens agent eval`: maximum p95 latency for answerable cases |
 | `--case-timeout-ms <ms>` | For `zlens agent eval`: how long one question may take before it is recorded as failed |
+| `--trust-key <public.pem>` | For `zlens app verify`: require the snapshot to be signed by this public key |
+| `--html <file>` | For `zlens app diff`: also write an HTML report |
+| `--markdown <file>` | For `zlens app diff`: also write a pull request comment in Markdown |
+| `--check` (with `zlens app diff`) | Exit 1 when a changed App file has problems |
 | `--impact` | Include downstream impact in `zlens diff` |
 | `--write-recertification` | Mark impacted semantic YAML pending recertification |
 
@@ -295,6 +303,6 @@ a threshold that no case measures (for example `--min-refusal` with no
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Any failure: an error, an invalid flag value, a missed `eval`/`agent eval` threshold, drift found by `zlens verify`, or differences found by `zlens diff` (see its `--impact` rule above), `zlens fmt --check` or `zlens migrate format --check` |
+| `1` | Any failure: an error, an invalid flag value, a missed `eval`/`agent eval` threshold, drift found by `zlens verify`, an App that is not ready to publish in `zlens app check`, a failed `zlens app verify`, problems found by `zlens app diff --check`, or differences found by `zlens diff` (see its `--impact` rule above), `zlens fmt --check` or `zlens migrate format --check` |
 
 There is no separate exit code for usage errors.

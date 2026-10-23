@@ -5,8 +5,8 @@ import type { DatasetDescriptor, DatasetField } from '@zlens/core/datasets/descr
 import type { AppStudioBuildDraft, DashboardRunResponse } from '../../api/client';
 import { appLibraryWords, withDraftListed } from './app-library-words';
 import { NOT_PUBLISHED_YET, NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords } from './app-studio-words';
-import { ASK_NEEDS_AI_PROVIDER, AskAboutApp } from './AskAboutApp';
-import { libraryCounts, mergeDraftsIntoAppCards } from './AppsView';
+import { ASK_NEEDS_AI_PROVIDER, AskAboutApp, askAboutAppScopeLine } from './AskAboutApp';
+import { appCopilotAvailable, libraryCounts, mergeDraftsIntoAppCards } from './AppsView';
 import { tableTrustLine, tableTrustWords } from './builder/app-data-names';
 import { tableModelLabel } from './builder/AddDataBrowser';
 import { orderLinesDataset } from './builder/app-data.fixtures';
@@ -218,5 +218,29 @@ describe('a field click lands on the tile as saved, so quick clicks add up (roun
 
   it('refuses to take away the last measure', () => {
     expect(tileFieldClickPatch(kpi, field('revenue'), descriptor)).toEqual({ message: 'A tile needs at least one measure' });
+  });
+});
+
+describe('0.2.4 Apps rough edges', () => {
+  it('names the page in the Ask scope line only when it is not the App\'s own name', () => {
+    // The Jaffle sample read "Scoped to Jaffle Growth Review · Jaffle Growth Review".
+    expect(askAboutAppScopeLine('Jaffle Growth Review', 'Jaffle Growth Review')).toBe('Scoped to Jaffle Growth Review');
+    expect(askAboutAppScopeLine('Jaffle Growth Review', ' jaffle growth review ')).toBe('Scoped to Jaffle Growth Review');
+    expect(askAboutAppScopeLine('Jaffle Growth Review', 'Overview')).toBe('Scoped to Jaffle Growth Review · Overview');
+    expect(askAboutAppScopeLine('Jaffle Growth Review')).toBe('Scoped to Jaffle Growth Review');
+    const html = renderToStaticMarkup(createElement(AskAboutApp, { scope: { appId: 'a', appName: 'Sales', pageTitle: 'Sales', filters: [] }, onAsk: () => undefined, aiConnected: true }));
+    expect(html).toContain('Scoped to Sales<');
+    expect(html).not.toContain('Sales · Sales');
+  });
+
+  it('hides the "Show AI copilot" button when no AI provider is connected', () => {
+    const base = { readOnlyLink: false, hasApp: true, section: 'dashboards' };
+    expect(appCopilotAvailable({ ...base, aiConnected: false })).toBe(false);
+    expect(appCopilotAvailable({ ...base, aiConnected: true })).toBe(true);
+    // Settings still loading: keep it, like the other AI controls.
+    expect(appCopilotAvailable({ ...base })).toBe(true);
+    expect(appCopilotAvailable({ ...base, aiConnected: true, readOnlyLink: true })).toBe(false);
+    expect(appCopilotAvailable({ ...base, aiConnected: true, section: 'settings' })).toBe(false);
+    expect(appCopilotAvailable({ ...base, aiConnected: true, hasApp: false })).toBe(false);
   });
 });

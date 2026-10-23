@@ -8,6 +8,28 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Apps: honest totals, one scope line, no AI controls without AI
+
+- **A total over a Top N saved query is not labelled Certified.** A saved
+  query that keeps only its first N rows (an outer `LIMIT N`, such as
+  `top_beverage_customers`) gave a Total or a KPI over its result the label
+  Certified, though it summed the top 10 only. Such a tile still runs, but it
+  reads **Not certified yet**: "Totals only the 10 rows top_beverage_customers
+  keeps (it is a Top 10), not all of the data, so it is not a certified
+  total." A tile that shows the rows as they are keeps its label.
+- **Certify records a receipt for a block with no companion YAML.** A
+  hand-written block certified in Saved queries passed the rules and recorded
+  nothing, so its tile could not say who certified it or notice a later edit.
+  Certify now writes the companion YAML with the receipt, as a save would.
+- **Ask about this App cites "saved query"**, not "block": "“Monthly gross
+  revenue” reads saved query monthly_revenue (domains/commerce/blocks/…)".
+- **The Ask scope line names the page only when it differs from the App**:
+  "Scoped to Jaffle Growth Review", not "Scoped to Jaffle Growth Review ·
+  Jaffle Growth Review".
+- **No "Show AI copilot" button without an AI provider**, like the other AI
+  controls since 0.2.3.
+- The docs clips and README screenshots wait for "All tiles certified".
+
 ## v0.2.3 - 2026-10-22
 
 Apps are built from the data you choose, with one trust answer on every

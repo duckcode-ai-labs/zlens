@@ -6,12 +6,13 @@ clip('app-ask', async ({ page, sample, director }) => {
   await openAndRecord(page, director, server.baseUrl);
 
   await director.click(page.getByText('Jaffle Growth Review').first(), { after: 300 });
-  const seal = page.getByText(/ALL DATA CERTIFIED/i).first();
+  // The header seal and the page's trust line both read "All tiles certified" (#168, #170).
+  const seal = page.locator('.dql-app-view-topbar .dql-app-seal').filter({ hasText: 'All tiles certified' }).first();
   await director.fastForward(() => expect(seal).toBeVisible({ timeout: 60_000 }));
   await director.beat(600);
   await director.point(seal);
   await director.beat(1300);
-  await director.point(page.getByText('All 4 tiles certified'));
+  await director.point(page.locator('.dql-trust-summary').filter({ hasText: 'All tiles certified' }).first());
   await director.beat(1000);
   await director.point(page.getByText('Certified', { exact: true }).first());
   await director.beat(1000);

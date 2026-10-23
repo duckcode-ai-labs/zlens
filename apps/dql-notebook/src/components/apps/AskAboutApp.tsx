@@ -11,6 +11,16 @@ import { MessageSquare, SendHorizontal } from 'lucide-react';
  * answer carries the trust label of the tiles it read and is never wider than
  * the view it was asked from.
  */
+/**
+ * "Scoped to <App> · <page>", naming the page only when its title is not the
+ * App's own name (a one-page App titles its page after the App).
+ */
+export function askAboutAppScopeLine(appName: string, pageTitle?: string): string {
+  const page = pageTitle?.trim();
+  const samePage = !page || page.toLowerCase() === appName.trim().toLowerCase();
+  return `Scoped to ${appName}${samePage ? '' : ` · ${page}`}`;
+}
+
 export interface AskAboutAppScope {
   appId: string;
   appName: string;
@@ -88,7 +98,7 @@ export function AskAboutApp({ scope, onAsk, aiConnected }: {
         </button>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11.5, color: 'var(--text-secondary)' }} aria-label="What the question is scoped to">
-        <span>Scoped to {scope.appName}{scope.pageTitle ? ` · ${scope.pageTitle}` : ''}</span>
+        <span>{askAboutAppScopeLine(scope.appName, scope.pageTitle)}</span>
         {chips.map((chip) => (
           <span key={chip} style={{ padding: '1px 7px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'var(--bg-1)' }}>{chip}</span>
         ))}

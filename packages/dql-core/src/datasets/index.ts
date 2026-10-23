@@ -123,8 +123,10 @@ export {
   isNonAdditiveColumnName,
   savedQueryColumnKind,
   savedQueryGroupByFromOutputs,
+  savedQueryKeepsFirstRows,
   savedQueryResultDescriptor,
   savedQueryResultFields,
   savedQueryResultRollup,
+  topRowsOnlyMessage,
 } from './result-fields.js';
 export type { SavedQueryResultColumn, SavedQueryRollupCheck } from './result-fields.js';

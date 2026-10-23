@@ -150,6 +150,8 @@ export interface TileQueryDiagnostic {
 export interface TileQueryAdaptation {
   kind: 'aggregate_time_rollup' | 'aggregate_entity_rollup' | 'saved_query_rollup';
   message: string;
+  /** A roll-up over a Top N saved query's N rows: it runs, but it is not a certified total. */
+  topRowsOnly?: number;
 }
 
 export interface TileQueryValidation {

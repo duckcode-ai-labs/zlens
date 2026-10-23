@@ -5,6 +5,11 @@ describe('shared reader trust (RFC 0008 steps 6 and 10)', () => {
   it('gives the server and the reader one answer for the same run tile', () => {
     expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'adapted' } } })?.state).toBe('certified');
     expect(readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'needs_review' } } })?.state).toBe('review');
+    // A total over a Top N saved query's rows runs, but is not a certified total (0.2.4).
+    const topRows = readerTileTrust({ query: {} }, { status: 'ok', dataset: { trust: 'certified', validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Totals only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data, so it is not a certified total.', topRowsOnly: 10 }] } } });
+    expect(topRows?.state).toBe('review');
+    expect(topRows?.label).toBe(NOT_CERTIFIED_YET);
+    expect(topRows?.detail).toContain('Totals only the 10 rows top_beverage_customers keeps');
     expect(readerTileTrust({ semantic: {} }, { status: 'ok', tileType: 'semantic' })?.state).toBe('governed');
     expect(readerTileTrust({ block: {} }, { status: 'error' })?.state).toBe('blocked');
     expect(readerTileTrust({ text: { markdown: 'x' } }, { status: 'ok', tileType: 'text' })).toBeNull();

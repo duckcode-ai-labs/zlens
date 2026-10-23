@@ -183,6 +183,11 @@ export interface DatasetResultOrigin {
   asIs: string[];
   /** Where the column types came from: the block's declared contract, a run, or a one-row read. */
   typesFrom: 'contract' | 'run' | 'probe';
+  /**
+   * The saved query keeps only its first N rows (an outer `LIMIT N`, a Top N).
+   * A tile that rolls those rows up totals the top N only, never everything.
+   */
+  keepsFirstRows?: number;
 }
 
 export interface DatasetDescriptor {
@@ -351,7 +356,10 @@ function normalizeDatasetResultOrigin(value: unknown): DatasetResultOrigin | und
   const savedQuery = text(record?.savedQuery);
   const typesFrom = enumValue(record?.typesFrom, ['contract', 'run', 'probe'] as const);
   if (!record || !savedQuery || !typesFrom || !Array.isArray(record.groupBy) || !Array.isArray(record.asIs)) return undefined;
-  return { savedQuery, groupBy: strings(record.groupBy), asIs: strings(record.asIs), typesFrom };
+  const keepsFirstRows = typeof record.keepsFirstRows === 'number' && Number.isSafeInteger(record.keepsFirstRows) && record.keepsFirstRows > 0
+    ? record.keepsFirstRows
+    : undefined;
+  return { savedQuery, groupBy: strings(record.groupBy), asIs: strings(record.asIs), typesFrom, ...(keepsFirstRows ? { keepsFirstRows } : {}) };
 }
 
 function normalizeDatasetSourceBinding(value: unknown): DatasetSourceBinding | undefined {
