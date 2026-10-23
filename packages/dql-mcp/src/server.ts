@@ -52,6 +52,7 @@ import {
 import { listApps, listNotebooks } from './tools/apps-notebooks.js';
 import { mcpToolAnnotations } from './tool-annotations.js';
 import { readEnv } from '@zlens/core';
+import { withTrustLine } from './trust-line.js';
 
 export interface CreateServerOptions {
   projectRoot?: string;
@@ -149,6 +150,11 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'AI-Generated, Insufficient-Context, Conflict (a base label plus an optional ' +
   'qualifier, e.g. "Certified · invariant violated"). Report the trust label ' +
   'verbatim and never upgrade it.\n' +
+  'Trust line: every answer result with rows starts with `trustLine`, e.g. ' +
+  '"🟢 Certified · saved query monthly_revenue · owner analytics@jaffle.shop". ' +
+  'Start your answer with it, word for word, in bold on its own line, before any ' +
+  'number, table or chart. When one answer uses several results, give each its ' +
+  'own line. Never write a trust line yourself for a result that has none.\n' +
   'Conflict route: when two certified terms or blocks claim the same concept ' +
   'but disagree, `ask_dql` returns route `conflict` with BOTH definitions and ' +
   'owners. Present both sides and ask the user which is authoritative — never ' +
@@ -206,7 +212,7 @@ export function createDQLMCPServer(options: CreateServerOptions = {}): McpServer
         inputSchema: tool.inputSchema,
         annotations,
       },
-      async (args: any) => wrap(await tool.run(args), tool.name),
+      async (args: any) => wrap(withTrustLine(ctx, tool.name, await tool.run(args)), tool.name),
     );
   }
 

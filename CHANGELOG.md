@@ -8,6 +8,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### MCP: every answer starts with its trust line
+
+- Claude Desktop and other MCP clients show a ZLens answer as their own text,
+  so the trust label reached the reader only when the model happened to write
+  it, often halfway down. Every answer result with rows (`query_via_block`,
+  `query_semantic_model`, `query_via_metadata`, `answer_question`) now starts
+  with a ready-made `trustLine`, and the server instructions tell the client to
+  open its answer with it, word for word:
+  - `🟢 Certified · saved query monthly_revenue · owner analytics@jaffle.shop`
+    (`🟡` when a certified saved query is downgraded, e.g. `Certified · stale data`)
+  - `🔵 From Metrics · metric large_orders · not certified`
+  - `🟠 AI-Generated · SQL written for this question · needs review · draft saved for review at …`
+  Failures, dry runs and non-answer tools get no line. The other fields are unchanged.
+
 ### From Metrics only through certified joins
 
 - **A semantic compile that joins through a draft relationship is no longer
