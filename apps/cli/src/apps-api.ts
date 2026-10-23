@@ -457,21 +457,24 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       // serialized capability/trust claim from the published document.
       let datasetCatalogError: string | undefined;
       let resolvePublishedDatasetSources: CreateStoredAppBuildDraftOptions['resolvePublishedDatasetSources'];
+      let resolvePublishedBlockSources: CreateStoredAppBuildDraftOptions['resolvePublishedBlockSources'];
       if (body.baseAppId) {
         try {
-          const { ensureAgentProjectReady, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
+          const { ensureAgentProjectReady, matchAppBlockSourceRefs, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
           await ensureAgentProjectReady(projectRoot);
           resolvePublishedDatasetSources = (sourceIds, sourcePolicy) => resolveAppSourceCatalogRecords(
             projectRoot,
             sourceIds,
             sourcePolicy,
           );
+          resolvePublishedBlockSources = (refs) => matchAppBlockSourceRefs(projectRoot, refs, APP_SOURCE_POLICY);
         } catch (error) {
           datasetCatalogError = error instanceof Error ? error.message : String(error);
         }
       }
       const draft = createStoredAppBuildDraft(projectRoot, body, {
         ...(resolvePublishedDatasetSources ? { resolvePublishedDatasetSources } : {}),
+        ...(resolvePublishedBlockSources ? { resolvePublishedBlockSources } : {}),
         ...(datasetCatalogError ? { datasetCatalogError } : {}),
       });
       sendJson(res, 201, { ok: true, draft });
@@ -484,11 +487,29 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
   if (req.method === 'GET' && path === '/api/app-builds') {
     const storage = openAppStorage(projectRoot);
     try {
-      const drafts = storage.listAppBuildDrafts().flatMap((stored) => {
+      const listed = storage.listAppBuildDrafts().flatMap((stored) => {
         const migrated = migrateLegacyAppBuildDraft(projectRoot, stored);
         if (!migrated) return [];
         if (stored.version !== migrated.version) storage.saveAppBuildDraft(migrated);
         return [migrated];
+      });
+      // Edit drafts made before saved-query tiles were read from the current
+      // catalog hold placeholders nobody can certify (F07): rebind them.
+      let resolveBlocks: ((refs: string[]) => ReadonlyMap<string, AppSourceCatalogRecord>) | undefined;
+      if (listed.some(hasPublishedBlockPlaceholders)) {
+        try {
+          const { ensureAgentProjectReady, matchAppBlockSourceRefs } = await import('@zlens/agent');
+          await ensureAgentProjectReady(projectRoot);
+          resolveBlocks = (refs) => matchAppBlockSourceRefs(projectRoot, refs, APP_SOURCE_POLICY);
+        } catch {
+          resolveBlocks = undefined;
+        }
+      }
+      const drafts = listed.map((draft) => {
+        const rebound = resolveBlocks && hasPublishedBlockPlaceholders(draft) ? rebindPublishedBlockPlaceholders(draft, resolveBlocks) : null;
+        if (!rebound) return draft;
+        storage.saveAppBuildDraft(rebound);
+        return rebound;
       });
       sendJson(res, 200, { ok: true, drafts });
     } finally {
@@ -7264,6 +7285,13 @@ export type CreateStoredAppBuildDraftOptions = {
   /** A catalog refresh failed before rehydration. Persist a repairable source
    * placeholder instead of treating stale published metadata as current. */
   datasetCatalogError?: string;
+  /**
+   * The current catalog record for each saved-query reference on the
+   * published pages (a catalog source id, a block name or a block path).
+   * Editing an App reads trust and receipts from these, never from the
+   * tile's own stored claims (F07).
+   */
+  resolvePublishedBlockSources?: (refs: string[]) => ReadonlyMap<string, AppSourceCatalogRecord>;
 };
 
 type PublishedDatasetSourceReference = {
@@ -7416,6 +7444,23 @@ function rehydratePublishedAppSources(
     }
   }
   const recordsBySourceId = new Map((resolution?.items ?? []).map((source) => [source.sourceId, source]));
+  // Saved-query tiles: the project's current record is the authority for
+  // their trust (F07). A legacy page names a block only (`blockId`), and a
+  // Studio page names its catalog source id; both resolve here.
+  const blockRefsOf = (tile: DashboardGridItem): string[] => {
+    if (!tile.block || tile.query) return [];
+    const blockRef = 'ref' in tile.block ? tile.block.ref : tile.block.blockId;
+    return [tile.sourceId, blockRef].filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  };
+  let blockRecords: ReadonlyMap<string, AppSourceCatalogRecord> = new Map();
+  const blockRefs = Array.from(new Set(pages.flatMap((page) => page.layout.items.flatMap(blockRefsOf))));
+  if (blockRefs.length && options.resolvePublishedBlockSources) {
+    try {
+      blockRecords = options.resolvePublishedBlockSources(blockRefs);
+    } catch {
+      blockRecords = new Map();
+    }
+  }
   for (const [sourceId, references] of datasetReferencesBySourceId) {
     const source = recordsBySourceId.get(sourceId);
     const issue = publishedDatasetRestoreIssue(references, source, catalogError);
@@ -7442,6 +7487,17 @@ function rehydratePublishedAppSources(
         if (tile.query) return tile;
         const hasDataSource = Boolean(tile.block || tile.semantic || tile.draftAnalysis || tile.aiPin);
         if (!hasDataSource) return tile;
+        const current = blockRefsOf(tile).map((ref) => blockRecords.get(ref)).find(Boolean);
+        if (current) {
+          // Changed since it was certified, certified again, or never
+          // certified: the catalog says which, and the receipt follows it.
+          sources.set(current.sourceId, appDraftSourceFromCatalog(current));
+          return {
+            ...tile,
+            sourceId: current.sourceId,
+            ...(tile.sourceRevision ? {} : { sourceRevision: current.sourceRevision }),
+          };
+        }
         const blockRef = tile.block ? ('ref' in tile.block ? tile.block.ref : tile.block.blockId) : undefined;
         const sourceRef = blockRef
           ?? tile.draftAnalysis?.ref
@@ -7540,6 +7596,80 @@ function rehydratePublishedAppSources(
     reviewTasks: Array.from(reviewTasks.values()),
     requiresReviewPolicy,
   };
+}
+
+const PUBLISHED_PLACEHOLDER_PREFIX = 'published:';
+
+function hasPublishedBlockPlaceholders(draft: AppBuildDraft): boolean {
+  return Boolean(draft.baseApp) && draft.sources.some((source) => source.kind === 'block' && source.id.startsWith(PUBLISHED_PLACEHOLDER_PREFIX));
+}
+
+/**
+ * An edit draft made before saved-query tiles were read from the current
+ * catalog (0.2.4 and earlier) holds placeholder sources ("published:…")
+ * that read "Nobody has certified this saved query yet" and cannot be
+ * certified (F07). Point each such tile at the project's current record for
+ * its saved query, drop the placeholder and the "no published source
+ * revision" check it opened. Null when nothing changes.
+ */
+export function rebindPublishedBlockPlaceholders(
+  draft: AppBuildDraft,
+  resolve: (refs: string[]) => ReadonlyMap<string, AppSourceCatalogRecord>,
+): AppBuildDraft | null {
+  const placeholders = new Set(draft.sources
+    .filter((source) => source.kind === 'block' && source.id.startsWith(PUBLISHED_PLACEHOLDER_PREFIX))
+    .map((source) => source.id));
+  if (!placeholders.size) return null;
+  const blockRef = (tile: DashboardGridItem): string | undefined => (tile.block ? ('ref' in tile.block ? tile.block.ref : tile.block.blockId) : undefined);
+  const refs = draft.pages.flatMap((page) => page.layout.items.flatMap((tile) => {
+    const ref = tile.sourceId && placeholders.has(tile.sourceId) && !tile.query ? blockRef(tile) : undefined;
+    return ref ? [ref] : [];
+  }));
+  let records: ReadonlyMap<string, AppSourceCatalogRecord>;
+  try {
+    records = resolve(Array.from(new Set(refs)));
+  } catch {
+    return null;
+  }
+  if (!records.size) return null;
+  const added = new Map<string, AppBuildDraftSource>();
+  const stillUsed = new Set<string>();
+  const pages = draft.pages.map((page) => ({
+    ...page,
+    layout: {
+      ...page.layout,
+      items: page.layout.items.map((tile) => {
+        if (!tile.sourceId || !placeholders.has(tile.sourceId)) return tile;
+        const ref = tile.query ? undefined : blockRef(tile);
+        const record = ref ? records.get(ref) : undefined;
+        if (!record) {
+          stillUsed.add(tile.sourceId);
+          return tile;
+        }
+        added.set(record.sourceId, appDraftSourceFromCatalog(record));
+        return { ...tile, sourceId: record.sourceId, ...(tile.sourceRevision ? {} : { sourceRevision: record.sourceRevision }) };
+      }),
+    },
+  }));
+  if (!added.size) return null;
+  const rebound = new Set(Array.from(placeholders).filter((id) => !stillUsed.has(id)));
+  const sources = [
+    ...draft.sources.filter((source) => !rebound.has(source.id) && !added.has(source.id)),
+    ...added.values(),
+  ];
+  const reviewTasks = draft.reviewTasks.filter((task) => !(task.sourceId && rebound.has(task.sourceId)));
+  // A content change like any other: a new revision, and the page runs again.
+  const { previewReceipts: _receipts, previewReceipt: _receipt, preflightReceipt: _preflight, ...rest } = draft;
+  const next = {
+    ...rest,
+    pages,
+    sources,
+    reviewTasks,
+    revision: draft.revision + 1,
+    state: draft.state === 'preflight_ready' ? 'local_draft' as const : draft.state,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...next, proposalHash: appBuildDraftHash({ ...next, proposalHash: undefined }) };
 }
 
 export function createStoredAppBuildDraft(

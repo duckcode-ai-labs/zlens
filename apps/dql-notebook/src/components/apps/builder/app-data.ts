@@ -194,6 +194,17 @@ export function dataTrustLabel(item: Pick<AppBlockRecommendation, 'trust' | 'sta
 }
 
 /**
+ * Who owns a piece of data, said as an owner (F03): "Owner: Analytics
+ * (jaffle.shop)". A bare address next to "Certified" read as the certifier;
+ * the owner keeps the data, the certifier vouched for it, and they are often
+ * not the same person. Empty when no owner is recorded.
+ */
+export function ownerWords(item: Pick<AppBlockRecommendation, 'owner'> & { ownerName?: string | null }): string {
+  const owner = item.ownerName?.trim() || certifierDisplayName(item.owner) || item.owner?.trim();
+  return owner ? `Owner: ${owner}` : '';
+}
+
+/**
  * The detail behind "Not certified yet", for a tooltip or receipt: "Checked by
  * you, not certified yet", "Changed since it was certified on 22 Oct", or
  * "Nobody has certified it yet". Undefined for certified data.

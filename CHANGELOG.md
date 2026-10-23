@@ -8,6 +8,37 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Apps: editing a changed App keeps its data, every Certified says who and when
+
+- **Editing a published App keeps its saved queries and their receipts.** An
+  App whose tiles name saved queries by name (as the sample's Jaffle Growth
+  Review does) opened in Edit with every tile "Not certified yet", "Nobody has
+  certified this saved query yet", and Certify now answered "That data is not
+  in this project any more". Edit now reads each saved query from the project
+  as it is now: certified ones stay certified, one changed since it was
+  certified reads **Not certified yet** with "Changed since it was certified
+  on 15 Oct", and Certify now opens its short review right in the publish
+  dialog. Edit drafts opened with 0.2.4 are repaired the next time Studio
+  lists them.
+- **Every Certified in App Studio says who and when**: tiles, the Data panel
+  and the publish dialog read "Certified by Analytics (jaffle.shop) · 15 Oct"
+  or "Certified by you · 23 Oct". Data rows show the owner as
+  "Owner: Analytics (jaffle.shop)", so it is not read as the certifier.
+- **The tile count is everywhere**: the App Studio header shows "3 of 4 tiles
+  certified", and a draft's Apps card "Not published yet · 3 of 5 tiles
+  certified".
+- **The Data panel's byline wraps** instead of cutting a word ("Certified by
+  yo…") at 1280 and 1440 wide.
+- **An App changed in another tab says so**: "This App changed in another tab.
+  Refresh to review the latest version.", with a Refresh button; the code
+  (`APP_BUILD_REVISION_CONFLICT`) moves under Technical details. Other common
+  App build codes in App Studio read as plain sentences too.
+- **Keyword suggestions say "Certified saved query"**, never "Certified
+  Dataset", and the MCP `build_dql_app` tool says "Check the suggested data"
+  (or "the data you named"), not "the data AI picked".
+- The saved-query review says "One row per beverage product.", not "Each row
+  is one one row per beverage product."
+
 ## v0.2.4 - 2026-10-22
 
 A patch for Apps: a total over a Top N saved query is no longer labelled

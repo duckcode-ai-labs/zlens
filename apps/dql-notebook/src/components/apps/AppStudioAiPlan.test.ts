@@ -250,6 +250,9 @@ describe('AI Data step model (design D3, AI path)', () => {
       ['Order Lines', 'Table · Certified · Commerce', 'Order lines carries revenue by order date.', ['Revenue trend']],
     ]);
     expect(model.suggestions.map((pick) => [pick.label, pick.meta])).toEqual([['Margin', 'Metrics · Certified']]);
+    // With the catalog's receipt, a pick says who certified it and when (F03).
+    const receipted = appStudioAiDataModel(proposal, summary, new Set([ordersId]), [{ ...orderLinesDataset, certification: { by: 'analytics@jaffle.shop', at: '2026-10-15T12:00:00.000Z' } }]);
+    expect(receipted.picked[0]!.meta).toMatch(/^Table · Certified by Analytics \(jaffle\.shop\) · 15 Oct.* · Commerce$/);
     expect(model.warnings).toEqual(['Revenue by channel was not added because no Dataset has a channel field.']);
     expect(model.uncovered).toEqual([{ id: 'channel', question: 'Which channel drives revenue?' }]);
     expect(model.clarifications.map((item) => item.id)).toEqual(['period']);

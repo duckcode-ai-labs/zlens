@@ -32,8 +32,8 @@ describe('Add data browser: one list (design D1)', () => {
     expect(markup).toContain('role="group" aria-label="Kind of data"');
     for (const chip of ['>All<', '>Tables<', '>Saved queries<', '>Metrics<']) expect(markup).toContain(chip);
     expect(markup).toContain('Search tables, saved queries and Metrics');
-    expect(markup).toContain('Table · Certified · Commerce · analytics@example.com');
-    expect(markup).toContain('Saved query · Certified · Commerce · analytics@example.com');
+    expect(markup).toContain('Table · Certified · Commerce · Owner: Analytics (example.com)');
+    expect(markup).toContain('Saved query · Certified · Commerce · Owner: Analytics (example.com)');
     expect(markup).toContain('Metrics · Certified · Finance');
     expect(markup).toContain('Saved query · Certified · Orders');
     expect(markup).toContain('Saved query · Not certified yet · Growth');

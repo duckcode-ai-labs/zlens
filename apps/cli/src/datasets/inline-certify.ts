@@ -43,6 +43,8 @@ export interface SavedQueryReview {
 /** What one row of a saved query is: its declared grain, else its grouping columns, else its key fields. */
 export function savedQueryRowSentence(input: { grain?: string; dimensions?: readonly string[]; keyFields?: readonly string[] }): string | undefined {
   const grain = input.grain?.trim();
+  // A grain written as a sentence ("one row per beverage product") is said as written.
+  if (grain && /^(?:one|each|a) row\b/i.test(grain)) return `${grain.charAt(0).toUpperCase()}${grain.slice(1).replace(/[.\s]+$/, '')}.`;
   if (grain) return `Each row is one ${words(grain)}.`;
   const groups = (input.dimensions ?? []).map((value) => value.trim()).filter(Boolean);
   if (groups.length) return `One row for each ${groups.map(words).join(' and ')}.`;

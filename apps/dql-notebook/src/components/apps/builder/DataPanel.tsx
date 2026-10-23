@@ -123,7 +123,7 @@ export function DataPanel({
         <span className="dataset-icon"><TableGlyph /></span>
         <span className="dataset-text">
           <strong>{active ? humanize(active.name) : appData.length ? 'Choose your data' : 'No data yet'}{active && sameNames.get(active.id) ? <em className="same-name-origin"> · {sameNames.get(active.id)}</em> : null}</strong>
-          {active ? <small className={activeCertified ? 'certified' : 'review'}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceOriginLabel(active)} · {dataTrustLabel(active)}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
+          {active ? <small className={activeCertified ? 'certified' : 'review'} title={[sourceOriginLabel(active), dataTrustLabel(active), descriptor ? `${descriptor.fields.length} fields` : ''].filter(Boolean).join(' · ')}>{activeCertified ? <ShieldCheck size={11} /> : null} {sourceOriginLabel(active)} · {dataTrustLabel(active)}{descriptor ? ` · ${descriptor.fields.length} fields` : ''}</small> : <small>{appData.length ? `${appData.length} in this App` : 'Add data to start'}</small>}
         </span>
         <ChevronDown size={14} />
       </button>

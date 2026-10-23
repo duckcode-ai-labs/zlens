@@ -86,6 +86,8 @@ describe('build_dql_app (design D9: AI builds open in App Studio)', () => {
     expect(draft?.pages[0]?.metadata.domain).toBe('revenue');
     expect(draft?.pages.every((page) => page.layout.items.length === 0)).toBe(true);
     expect(draft?.sources.map((source) => source.trustState)).toEqual(['certified', 'certified']);
+    // Honest about who chose the data (F09): the caller named it.
+    expect(out.nextActions[1]).toBe('Check the data you named, build the pages, then publish. Nothing is written to the project until you publish.');
   });
 
   it('picks data for the request with a reason for each pick, certified first, and keeps data nobody certified as Not certified yet (T3)', async () => {
@@ -101,6 +103,9 @@ describe('build_dql_app (design D9: AI builds open in App Studio)', () => {
     expect(trusts.indexOf('Not certified yet') === -1 || trusts.lastIndexOf('Certified') < trusts.indexOf('Not certified yet')).toBe(true);
     expect(storedDraft(ctx.projectRoot, out.draftId)?.sources.length).toBe(out.sources.length);
     expect(existsSync(join(ctx.projectRoot, 'apps'))).toBe(false);
+    // Picked from keywords, not by AI (F09), and never called a "Dataset".
+    expect(out.nextActions[1]).toBe('Check the suggested data, build the pages, then publish. Nothing is written to the project until you publish.');
+    expect(JSON.stringify(out)).not.toMatch(/data AI picked|Certified Dataset/);
   });
 
   it('returns the picks only when saveDraft is false, and refuses blocks that are not certified', async () => {

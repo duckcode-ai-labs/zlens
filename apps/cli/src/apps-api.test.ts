@@ -7,7 +7,7 @@ import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppPlan, AppSourceCatalogRecord } from '@zlens/agent';
 import type { AppBuildDraft, AppBuildDraftSource, DashboardDocument, DatasetDescriptor } from '@zlens/core';
-import { appBuildPreviewIntentFingerprint, loadDashboardDocument, publishedTileTrustText } from '@zlens/core';
+import { appBuildPreviewIntentFingerprint, appTrustAnswer, blockCompanionRelativePath, certifiedSourceSha256, loadDashboardDocument, publishedTileTrustText } from '@zlens/core';
 import { defaultLocalAppsDbPath, defaultPersonaRegistry, LocalAppStorage } from '@zlens/project';
 import {
   __test__,
@@ -41,6 +41,7 @@ import {
   openAppAiBuildInStudio,
   writeDashboardForTest,
   readAppsPublishSettings,
+  rebindPublishedBlockPlaceholders,
 } from './apps-api.js';
 
 const tempDirs: string[] = [];
@@ -5785,5 +5786,143 @@ describe('writeDashboard cross-app guard', () => {
     });
     expect(sameApp.ok).toBe(true);
     expect(readFileSync(join(root, 'apps', 'beta', 'dashboards', 'overview.dqld'), 'utf-8')).toContain('region');
+  });
+});
+
+describe('editing a published App keeps its saved queries and their receipts (F07)', () => {
+  const CERTIFIED_AT = '2026-10-15T12:00:00.000Z';
+  const certifiedBlock = (root: string, name: string, query: string) => {
+    writeDomainBlock(root, 'commerce', `${name}.dql`, {
+      name, domain: 'commerce', status: 'certified', tags: ['revenue'], description: `${name} for the review.`, chart: 'table', query,
+    });
+    const relPath = `domains/commerce/blocks/${name}.dql`;
+    const source = readFileSync(join(root, relPath), 'utf-8');
+    const companion = blockCompanionRelativePath(root, relPath)!;
+    mkdirSync(join(root, companion, '..'), { recursive: true });
+    writeFileSync(join(root, companion), [
+      `name: ${name}`,
+      `block: ${name}`,
+      'domain: commerce',
+      'reviewStatus: certified',
+      'certification:',
+      '  certifiedBy: analytics@jaffle.shop',
+      `  certifiedAt: '${CERTIFIED_AT}'`,
+      '  via: cli',
+      '  rules: oss',
+      `  sourceSha256: ${certifiedSourceSha256(source)}`,
+      '  checks:',
+      '    - run',
+      '    - tests',
+      '',
+    ].join('\n'));
+    return relPath;
+  };
+  /** A published App written before Studio: its tiles name saved queries by name only. */
+  const legacyApp = (root: string) => {
+    const appDir = join(root, 'apps', 'growth-review');
+    mkdirSync(join(appDir, 'dashboards'), { recursive: true });
+    writeFileSync(join(appDir, 'dql.app.json'), `${JSON.stringify({
+      version: 1, id: 'growth-review', name: 'Growth Review', domain: 'commerce', visibility: 'shared',
+      lifecycle: 'certified', owners: ['analytics@jaffle.shop'], homepage: { type: 'dashboard', id: 'overview' },
+    }, null, 2)}\n`);
+    writeFileSync(join(appDir, 'dashboards', 'overview.dqld'), `${JSON.stringify({
+      version: 1,
+      id: 'overview',
+      metadata: { title: 'Growth Review', domain: 'commerce', visibility: 'shared', lifecycle: 'certified' },
+      layout: {
+        kind: 'grid', cols: 12, rowHeight: 80,
+        items: [
+          { i: 'monthly', x: 0, y: 0, w: 6, h: 4, block: { blockId: 'monthly_revenue' }, viz: { type: 'table' }, title: 'Monthly revenue' },
+          { i: 'beverage', x: 6, y: 0, w: 6, h: 4, block: { blockId: 'beverage_revenue' }, viz: { type: 'table' }, title: 'Top beverage products' },
+        ],
+      },
+    }, null, 2)}\n`);
+  };
+  const editDraft = async (root: string): Promise<AppBuildDraft> => {
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', { baseAppId: 'growth-review', authoringMode: 'manual', template: 'blank' });
+    expect(created.status, JSON.stringify(created.payload)).toBe(201);
+    return (created.payload as { draft: AppBuildDraft }).draft;
+  };
+  const receiptsFor = async (root: string, draft: AppBuildDraft) => {
+    const resolved = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates`, 'POST', { sourceIds: draft.sources.map((source) => source.id), includeReviewRequired: true });
+    const items = (resolved.payload as { items: Array<{ sourceId: string; certification?: { by?: string; at?: string } }> }).items;
+    return new Map(items.map((item) => [item.sourceId, item.certification]));
+  };
+  const trustOf = (draft: AppBuildDraft, receipts: Map<string, unknown>) => appTrustAnswer({
+    pages: draft.pages as never,
+    sourceFor: (sourceId) => {
+      const source = draft.sources.find((candidate) => candidate.id === sourceId);
+      return source ? { ...source, certification: receipts.get(sourceId) as never } : undefined;
+    },
+  });
+
+  it('binds legacy saved-query tiles to the current catalog: certified stays certified, with no fix to make', async () => {
+    const root = createProject();
+    certifiedBlock(root, 'monthly_revenue', 'SELECT 1 AS revenue');
+    certifiedBlock(root, 'beverage_revenue', 'SELECT 2 AS revenue');
+    legacyApp(root);
+
+    const draft = await editDraft(root);
+    expect(draft.sources).toHaveLength(2);
+    for (const source of draft.sources) {
+      expect(source.id).toMatch(/^app:block:/);
+      expect(source).toMatchObject({ kind: 'block', lifecycle: 'certified', trustState: 'certified' });
+    }
+    const tiles = draft.pages[0]!.layout.items;
+    expect(new Set(tiles.map((tile) => tile.sourceId))).toEqual(new Set(draft.sources.map((source) => source.id)));
+    expect(tiles.every((tile) => tile.block && 'blockId' in tile.block)).toBe(true);
+    expect(draft.reviewTasks).toEqual([]);
+
+    const receipts = await receiptsFor(root, draft);
+    const trust = trustOf(draft, receipts);
+    expect(trust.text).toBe('All tiles certified');
+    // Who certified each and when (F03), never a bare "Certified".
+    for (const tile of trust.tiles) expect(tile.trust.byline).toMatch(/^Certified by Analytics \(jaffle\.shop\) · 15 Oct/);
+  });
+
+  it('a saved query changed outside ZLens is the only tile not certified, and says since when', async () => {
+    const root = createProject();
+    certifiedBlock(root, 'monthly_revenue', 'SELECT 1 AS revenue');
+    const beverage = certifiedBlock(root, 'beverage_revenue', 'SELECT 2 AS revenue');
+    legacyApp(root);
+    writeFileSync(join(root, beverage), readFileSync(join(root, beverage), 'utf-8').replace('SELECT 2 AS revenue', 'SELECT 2 * 1.01 AS revenue'));
+
+    const draft = await editDraft(root);
+    const changed = draft.sources.find((source) => source.sourceRef.includes('beverage_revenue'));
+    expect(changed).toMatchObject({ id: expect.stringMatching(/^app:block:/), lifecycle: 'pending_recertification', trustState: 'review_required' });
+    expect(draft.sources.find((source) => source.sourceRef.includes('monthly_revenue'))).toMatchObject({ lifecycle: 'certified' });
+    // Certify now resolves it: it is in the project, with who certified it before.
+    const receipts = await receiptsFor(root, draft);
+    expect(receipts.get(changed!.id)).toMatchObject({ by: 'analytics@jaffle.shop', at: CERTIFIED_AT });
+    const trust = trustOf(draft, receipts);
+    expect(trust.text).toBe('1 of 2 tiles certified');
+    const beverageTile = trust.tiles.find((tile) => tile.tileId === 'beverage')!;
+    expect(beverageTile.trust.label).toBe('Not certified yet');
+    expect(beverageTile.trust.detail).toMatch(/^Changed since it was certified on 15 Oct/);
+    expect(draft.reviewTasks).toEqual([]);
+  });
+
+  it('rebinds an older edit draft whose saved queries were left as placeholders nobody could certify', async () => {
+    const root = createProject();
+    certifiedBlock(root, 'monthly_revenue', 'SELECT 1 AS revenue');
+    certifiedBlock(root, 'beverage_revenue', 'SELECT 2 AS revenue');
+    legacyApp(root);
+    // What 0.2.4 stored: no catalog resolver, so "published:" placeholders and a fix to make.
+    const old = createStoredAppBuildDraft(root, { baseAppId: 'growth-review', authoringMode: 'manual' });
+    expect(old.sources.every((source) => source.id.startsWith('published:'))).toBe(true);
+    expect(old.reviewTasks.length).toBeGreaterThan(0);
+
+    const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
+    const rebound = (listed.payload as { drafts: AppBuildDraft[] }).drafts.find((draft) => draft.id === old.id)!;
+    expect(rebound.sources.map((source) => source.id).every((id) => id.startsWith('app:block:'))).toBe(true);
+    expect(rebound.sources.every((source) => source.lifecycle === 'certified')).toBe(true);
+    expect(rebound.reviewTasks).toEqual([]);
+    expect(rebound.revision).toBe(old.revision + 1);
+    expect(rebound.proposalHash).not.toBe(old.proposalHash);
+    // Stored: the next PATCH starts from the rebound revision.
+    const patched = await invokeAppsApi(root, `/api/app-builds/${old.id}`, 'PATCH', { expectedRevision: rebound.revision, expectedProposalHash: rebound.proposalHash, operations: [{ type: 'set_name', name: 'Growth Review v2' }] });
+    expect(patched.status, JSON.stringify(patched.payload)).toBe(200);
+    // Nothing to do for a draft without placeholders.
+    expect(rebindPublishedBlockPlaceholders(rebound, () => new Map())).toBeNull();
   });
 });

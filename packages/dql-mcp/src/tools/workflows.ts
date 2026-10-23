@@ -226,7 +226,7 @@ async function buildDqlAppOnce(
     sources: picks.map((pick) => pick.source),
   });
   const nothingPicked = sources.length === 0
-    ? ['No certified data matched this request. App Studio shows what AI finds and lists what is not covered yet.']
+    ? ['No certified data matched this request. App Studio suggests data again and lists what is not covered yet.']
     : [];
   if (args.saveDraft === false) {
     return {
@@ -267,7 +267,8 @@ async function buildDqlAppOnce(
       notebook
         ? `Open ${notebook}${openPath} to review the App in App Studio. It opens at the Data step.`
         : `Start the workbench (zlens notebook) and open ${openPath} to review the App in App Studio. It opens at the Data step.`,
-      'Check the data AI picked, build the pages, then publish. Nothing is written to the project until you publish.',
+      // Honest about who chose the data (F09): this tool plans from keywords, never with an AI provider.
+      `${args.blocks?.length ? 'Check the data you named' : 'Check the suggested data'}, build the pages, then publish. Nothing is written to the project until you publish.`,
     ],
   };
 }

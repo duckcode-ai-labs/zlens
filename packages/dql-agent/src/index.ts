@@ -246,6 +246,7 @@ export {
   AppSourceCatalogError,
   appSourceTrustTier,
   matchAppSourceCatalogRecords,
+  matchAppBlockSourceRefs,
   queryAppSourceCatalog,
   rankAppSourcesByTrust,
   registerAppSourceRecordDecorator,

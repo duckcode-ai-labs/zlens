@@ -120,6 +120,8 @@ export const APP_STUDIO_V2_STYLES = `
 .page-nav > button:not(.icon) { border:0; background:transparent; padding:8px 11px; border-radius:8px; color:var(--text-tertiary); font-size:14px; font-weight:600; white-space:nowrap; }
 .page-nav > button.on { background:var(--bg-0); color:var(--text-primary); }
 .studio-actions { position:relative; display:flex; align-items:center; gap:6px; padding-right:12px; }
+.studio-trust-count { display:inline-flex; align-items:center; gap:5px; padding:4px 9px; border:1px solid var(--border-subtle); border-radius:999px; background:var(--bg-1); color:var(--status-warning); font-size:12px; font-weight:600; white-space:nowrap; }
+.studio-trust-count.certified { color:var(--status-success); }
 .breakpoints { display:flex; background:var(--bg-0); border-radius:8px; padding:3px; }
 .breakpoints button { width:29px; height:27px; border:0; border-radius:8px; background:transparent; display:flex; align-items:center; justify-content:center; color:var(--text-tertiary); }
 .breakpoints button.on { background:var(--bg-2); color:var(--accent); box-shadow:0 1px 4px color-mix(in srgb,var(--text-primary) 10%,transparent); }
@@ -571,6 +573,11 @@ export const APP_STUDIO_V2_STYLES = `
 .studio-error { border:1px solid color-mix(in srgb,var(--status-error) 35%,var(--border-default)); background:color-mix(in srgb,var(--status-error) 8%,var(--bg-2)); color:var(--status-error); border-radius:8px; padding:10px 12px; font-size:13px; }
 .studio-error.floating { position:sticky; top:0; z-index:4; margin:0 auto 10px; max-width:800px; display:flex; justify-content:space-between; }
 .studio-error button { border:0; background:transparent; color:inherit; }
+.studio-error { display:flex; align-items:flex-start; gap:10px; }
+.studio-error-body { flex:1; min-width:0; display:grid; gap:4px; }
+.studio-error-technical summary { cursor:pointer; color:var(--text-secondary); font-size:12px; }
+.studio-error-technical code { display:block; margin-top:4px; color:var(--text-secondary); font-size:11px; overflow-wrap:anywhere; white-space:pre-wrap; }
+.studio-error button.studio-error-refresh { flex:none; border:1px solid currentColor; border-radius:8px; padding:4px 10px; font-size:12px; font-weight:600; }
 
 .studio-right { grid-column:3; grid-row:2; min-width:0; border-left:1px solid var(--border-subtle); overflow-y:auto; overflow-x:hidden; }
 .studio-right > header { height:46px; border-bottom:1px solid var(--border-subtle); padding:0 12px; display:flex; align-items:center; justify-content:space-between; }
@@ -1096,7 +1103,9 @@ export const APP_STUDIO_V2_STYLES = `
 .dataset-icon { width:30px; height:30px; flex:none; border-radius:8px; display:grid; place-items:center; color:var(--accent); background:var(--accent-dim); }
 .dataset-text { min-width:0; flex:1; display:grid; gap:2px; }
 .dataset-text strong { font-size:14px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.dataset-text small { display:flex; align-items:center; gap:4px; color:var(--text-tertiary); font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* The byline wraps rather than cutting a word ("Certified by yo…", F10). */
+.dataset-text small { display:block; color:var(--text-tertiary); font-size:12px; line-height:1.35; white-space:normal; overflow-wrap:normal; word-break:normal; }
+.dataset-text small svg { display:inline-block; vertical-align:-1px; margin-right:4px; }
 .dataset-text small.certified { color:var(--status-success); font-weight:600; }
 .dataset-text small.review { color:var(--status-warning); font-weight:600; }
 .dataset-menu { position:absolute; z-index:15; top:calc(100% + 4px); left:0; right:0; padding:6px; border:1px solid var(--border-default); border-radius:8px; background:var(--bg-2); box-shadow:0 12px 32px color-mix(in srgb,var(--text-primary) 14%,transparent); display:grid; max-height:320px; overflow:auto; }

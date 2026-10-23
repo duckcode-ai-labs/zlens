@@ -95,6 +95,7 @@ import {
 import { semanticApprovalState } from './app-semantic-approval';
 import { relativeAge } from './reader-trust';
 import { NOT_PUBLISHED_YET, NOT_PUBLISHED_YET_ONLY_YOU, UNPUBLISHED_CHANGES } from './app-studio-words';
+import { draftCardTrustText } from './app-studio-publish-readiness';
 import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, unpublishedChangesText, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
@@ -1399,6 +1400,9 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
   // One wording (round 3): a new App is "Not published yet"; a draft of a
   // published App has "Unpublished changes (only you can see them)".
   const ofPublishedApp = Boolean(draft.baseApp);
+  // The same tile count the editor header and Publish show (F04).
+  const trustText = draftCardTrustText(draft);
+  const status = openChecks ? 'Checks to finish' : ofPublishedApp ? 'Unpublished changes' : NOT_PUBLISHED_YET;
   return (
     <article className="dql-app-card dql-app-draft-card">
       <div className="dql-app-card-body" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(); }}>
@@ -1406,7 +1410,7 @@ function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: (
           <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private" title="Only you can see it until you publish it"><ShieldCheck size={12} /> Only you</span></div>
           <span className="dql-app-draft-mark"><LayoutDashboard size={15} /></span>
         </div>
-        <StatusSeal tone={openChecks ? 'draft' : 'agentic'}>{openChecks ? 'Checks to finish' : ofPublishedApp ? 'Unpublished changes' : NOT_PUBLISHED_YET}</StatusSeal>
+        <StatusSeal tone={openChecks ? 'draft' : 'agentic'} title={trustText ? 'How many of this App\'s tiles are certified. Each tile says Certified (by whom, and when) or Not certified yet.' : undefined}>{trustText ? `${status} · ${trustText}` : status}</StatusSeal>
         <h3>{draft.name}</h3>
         <p>{cleanStakeholderCopy(draft.frame.goal || 'A private App draft ready to shape in Studio.')}</p>
         <div className="dql-app-card-mini">
