@@ -884,7 +884,8 @@ describe('warehouse-first project (no dbt project)', () => {
           type: 'custom',
           table: '',
           metricType: 'derived',
-          typeParams: { expr: 'written_premium * 2', metrics: ['written_premium'] },
+          // An offset window (prior period) is MetricFlow-only; arithmetic alone is native.
+          typeParams: { expr: 'written_premium - prior_premium', metrics: ['written_premium', { name: 'written_premium', alias: 'prior_premium', offset_window: '1 year' }] },
           source: { provider: 'dbt', objectType: 'metric', objectId: 'premium_growth' },
         },
       ],

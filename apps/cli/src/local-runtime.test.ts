@@ -2686,7 +2686,7 @@ describe('dbt-first onboarding runtime API', () => {
       }],
       metrics: [
         { name: 'total_order_revenue', type: 'simple', type_params: { measure: { name: 'order_revenue' } } },
-        { name: 'revenue_growth', type: 'derived', type_params: { expr: 'total_order_revenue', metrics: [{ name: 'total_order_revenue' }] } },
+        { name: 'revenue_growth', type: 'derived', type_params: { expr: 'total_order_revenue - prior_revenue', metrics: [{ name: 'total_order_revenue' }, { name: 'total_order_revenue', alias: 'prior_revenue', offset_window: '1 month' }] } },
       ],
     }));
     let server: Server | undefined;

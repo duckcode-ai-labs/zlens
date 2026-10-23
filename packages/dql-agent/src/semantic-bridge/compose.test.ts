@@ -534,3 +534,91 @@ describe('time-sliced answers default to most recent first', () => {
     expect(compiled?.sql).not.toContain('ORDER BY');
   });
 });
+
+describe('composeSemanticQueryForQuestion — closest metric by name or label (MCP 2026-10-23)', () => {
+  // The jaffle-shop shape the Claude Desktop recording asked about.
+  function jaffleLayer(options: { averageOrderValueOffset?: boolean } = {}): SemanticLayer {
+    return new SemanticLayer({
+      metrics: [
+        { name: 'orders', label: 'Orders', description: 'Count of orders.', domain: 'orders', sql: '1', type: 'sum', table: 'orders', aggTimeDimension: 'order_date' },
+        { name: 'drink_orders', label: 'Drink Orders', description: 'Count of orders that contain drink order items', domain: 'orders', sql: '1', type: 'sum', table: 'orders', aggTimeDimension: 'order_date' },
+        { name: 'large_orders', label: 'Large Orders', description: 'Count of orders with order total over 20.', domain: 'orders', sql: '1', type: 'sum', table: 'orders', aggTimeDimension: 'order_date' },
+        { name: 'revenue', label: 'Revenue', description: 'Sum of the product revenue for each order item.', domain: 'order_item', sql: 'product_price', type: 'sum', table: 'order_items', aggTimeDimension: 'ordered_at' },
+        { name: 'food_revenue', label: 'Food Revenue', description: 'The revenue from food in each order', domain: 'order_item', sql: 'case when is_food_item then product_price else 0 end', type: 'sum', table: 'order_items', aggTimeDimension: 'ordered_at' },
+        {
+          name: 'food_revenue_pct', label: 'Food Revenue %', description: 'The % of order revenue from food.', domain: 'order_item', sql: '', type: 'custom', table: '', cube: 'order_items',
+          metricType: 'ratio', typeParams: { numerator: 'food_revenue', denominator: 'revenue' },
+        },
+        { name: 'count_lifetime_orders', label: 'Count Lifetime Orders', description: 'Count of lifetime orders', domain: 'customers', sql: 'count_lifetime_orders', type: 'sum', table: 'customers' },
+        { name: 'lifetime_spend_pretax', label: 'LTV Pre-tax', description: "Customer's lifetime spend before tax", domain: 'customers', sql: 'lifetime_spend_pretax', type: 'sum', table: 'customers' },
+        { name: 'customers', label: 'customers', description: 'Count of unique customers', domain: 'customers', sql: 'customer_id', type: 'count_distinct', table: 'customers' },
+        {
+          name: 'average_order_value', label: 'Average Order Value', description: 'LTV pre-tax / number of orders', domain: 'customers', sql: '', type: 'custom', table: '', cube: 'customers',
+          metricType: 'derived',
+          typeParams: {
+            expr: 'lifetime_spend_pretax / count_lifetime_orders',
+            metrics: [
+              { name: 'count_lifetime_orders' },
+              options.averageOrderValueOffset
+                ? { name: 'lifetime_spend_pretax', offset_window: '1 month' }
+                : { name: 'lifetime_spend_pretax' },
+            ],
+          },
+        },
+      ],
+      dimensions: [
+        { name: 'customer_name', label: 'customer_name', description: "Customers' full name.", sql: 'customer_name', type: 'string', table: 'customers' },
+        { name: 'customer_type', label: 'customer_type', description: "Options are 'new' or 'returning', indicating if a customer has ordered more than once.", sql: 'customer_type', type: 'string', table: 'customers' },
+        { name: 'ordered_at', label: 'ordered_at', description: '', sql: 'ordered_at', type: 'time', table: 'order_items', isTimeDimension: true },
+        { name: 'order_date', label: 'order_date', description: '', sql: 'ordered_at', type: 'time', table: 'orders', isTimeDimension: true },
+        { name: 'first_ordered_at', label: 'first_ordered_at', description: '', sql: 'first_ordered_at', type: 'time', table: 'customers', isTimeDimension: true },
+      ],
+    } as never);
+  }
+  const compose = (question: string, semanticLayer = jaffleLayer()) => composeSemanticQueryForQuestion({
+    semanticLayer,
+    question,
+    questionPlan: buildAnalysisQuestionPlan(question),
+  });
+
+  it('answers average order value by customer type with average_order_value, a derived metric', () => {
+    const result = compose('What is the average order value by customer type?');
+    expect(result?.metrics).toEqual(['average_order_value']);
+    expect(result?.dimensions).toEqual(['customer_type']);
+    expect(result?.sql).toContain('lifetime_spend_pretax / ratio_inputs.count_lifetime_orders AS average_order_value');
+  });
+
+  it('reads "new versus returning customers" as the documented values of customer_type, not a customers count', () => {
+    const result = compose('What is the average order value for new versus returning customers?');
+    expect(result?.metrics).toEqual(['average_order_value']);
+    expect(result?.dimensions).toEqual(['customer_type']);
+  });
+
+  it('answers a share question with the share metric, per month on its own time dimension', () => {
+    const result = compose('What share of revenue comes from food each month?');
+    expect(result?.metrics).toEqual(['food_revenue_pct']);
+    expect(result?.timeDimension).toEqual({ name: 'ordered_at', granularity: 'month' });
+  });
+
+  it('keeps the month grain of "each month" when no time column is named', () => {
+    const result = compose('How many large orders did we get each month?');
+    expect(result?.metrics).toEqual(['large_orders']);
+    expect(result?.timeDimension).toEqual({ name: 'order_date', granularity: 'month' });
+  });
+
+  it('returns no match rather than drop a year or date range it cannot filter on', () => {
+    expect(compose('How many large orders did we get each month in 2025?')).toBeUndefined();
+    expect(compose('How many large orders since March 2025?')).toBeUndefined();
+    expect(compose('How many large orders did we get each month?')?.metrics).toEqual(['large_orders']);
+  });
+
+  it('names no metric from generic words alone', () => {
+    // "employees" is unknown, so the plan is just `count`; count_lifetime_orders is not an answer.
+    expect(compose('How many employees work at each store?')).toBeUndefined();
+  });
+
+  it('returns no match instead of an unrelated metric when the named metric cannot compile', () => {
+    // An offset window is MetricFlow-only; drink_orders shares only the word "order".
+    expect(compose('What is the average order value by customer type?', jaffleLayer({ averageOrderValueOffset: true }))).toBeUndefined();
+  });
+});

@@ -862,7 +862,7 @@ export async function explainMissingSemanticRuntime(projectRoot: string, dbtProj
   // dbt Cloud compiles remotely and needs no local dbt project; otherwise a
   // project without one has no runtime to set up, only metrics to reshape.
   if (!dbtProjectPath && !projectHasDbtProject(projectRoot) && !getEffectiveDbtCloudSemanticSettings(projectRoot).configured) {
-    return 'This metric is not one the DQL native engine runs, and this project has no dbt project for MetricFlow or dbt Cloud to run it. The native engine runs simple metrics and ratios of two simple metrics; define the metric as one of those.';
+    return 'This metric is not one the DQL native engine runs, and this project has no dbt project for MetricFlow or dbt Cloud to run it. The native engine runs simple metrics, ratios of two simple metrics, and derived metrics that do arithmetic over simple metrics with no offset window; define the metric as one of those.';
   }
   const status = await getSemanticRuntimeStatus(projectRoot, { probeConfiguredCloud: true });
   const cloud = status.adapters.find((adapter) => adapter.id === 'dbt-cloud');

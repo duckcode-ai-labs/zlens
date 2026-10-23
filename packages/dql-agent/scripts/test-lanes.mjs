@@ -149,10 +149,13 @@ const EXPECTED_TEST_FILES = 189;
 // (app-source-catalog.test.ts, +1) and picks named like the Add data list (app-builder-orchestrator.test.ts, +1) (F07, F09).
 // 2563 with local embeddings only when the project chooses them (Codex 23 Oct 2026,
 // project-embeddings.test.ts, +4).
-const EXPECTED_TESTS = 2563;
+// 2574 with a qualified semantic metric the question names kept out of a certified block that does not
+// return it (block-fit.test.ts, +4) and the closest semantic metric by name or label (compose.test.ts, +7)
+// (MCP routing 23 Oct 2026).
+const EXPECTED_TESTS = 2574;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2486.
+// The ordinary lane's share is the difference: 2497.
 const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];

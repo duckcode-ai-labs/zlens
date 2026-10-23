@@ -70,16 +70,16 @@ describe('agentic analytics tools', () => {
       matched: true,
       uncertified: true,
       reviewStatus: 'draft_ready',
-      certification: 'uncertified',
+      certification: 'governed',
       trustLabelInfo: {
-        id: 'ai_generated',
-        display: 'AI-Generated',
+        id: 'governed',
+        display: 'Governed',
       },
       trustStatus: {
-        label: 'AI-generated semantic compile',
+        label: 'Governed semantic compile',
         uncertified: true,
         reviewStatus: 'draft_ready',
-        certification: 'uncertified',
+        certification: 'governed',
         draftPath: 'blocks/_drafts/monthly_revenue_by_order_channel.dql',
         promotionPath: 'zlens certify --from-draft',
       },
@@ -240,9 +240,9 @@ describe('agentic analytics tools', () => {
       matched: true,
       uncertified: true,
       reviewStatus: 'draft_ready',
-      certification: 'uncertified',
+      certification: 'governed',
       trustStatus: {
-        label: 'AI-generated semantic compile',
+        label: 'Governed semantic compile',
         caveats: expect.arrayContaining(['semantic_draft_review_required']),
       },
       mode: 'question_selection',
@@ -330,7 +330,7 @@ describe('agentic analytics tools', () => {
 
     expect(out).toMatchObject({
       matched: false,
-      reason: 'No compatible semantic metric/dimension/time-grain selection was found for the question.',
+      reason: expect.stringContaining('No semantic match'),
     });
   });
 

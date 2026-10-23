@@ -2,8 +2,10 @@
 
 The ZLens MCP server (`zlens mcp`) offers tools only: no resources and no
 prompts. Every result is JSON. The server's instructions tell the agent to
-use the trust labels it returns (Certified, Reviewed, AI-Generated,
-Insufficient-Context, Conflict) as given, and never upgrade them.
+use the trust labels it returns (Certified, Governed, Reviewed, AI-Generated,
+Insufficient-Context, Conflict) as given, and never upgrade them. Governed
+means the answer was compiled from semantic metrics and dimensions, as the
+Ask page's "Governed answer"; it is not certified.
 
 The default profile serves 27 tools. Set `ZLENS_MCP_TOOL_PROFILE=full` in the
 server's environment for 8 more, for maintenance and governance sessions.
@@ -74,7 +76,7 @@ file), so these tools keep `block` in their names.
 | `explain_relationship_proof` | Why two entities may (or may not) be joined: keys, cardinality, warehouse evidence. Takes a relationship id or its short name. | yes |
 | `expand_context` | Adds missing tables to the context so a failed query can be retried. | yes |
 | `query_via_metadata` | Runs one read-only `SELECT` or `WITH` query as a bounded preview. Marks the result `uncertified` (AI-Generated) and saves a draft saved query unless asked not to. | no (saves a draft) |
-| `query_semantic_model` | Compiles and previews a semantic-layer query, labels it AI-Generated, and saves it as a draft. | no (saves a draft) |
+| `query_semantic_model` | Compiles and previews a semantic-layer query, labels it Governed, and saves it as a draft. It picks the metric whose name or label the question uses, and says "No semantic match" rather than answer with a different metric. | no (saves a draft) |
 | `kg_search` | Searches the project's knowledge graph: saved queries, terms, metrics, Apps, notebooks, dbt models, entities, relationships, skills. | yes |
 
 ### Saved queries, lineage and checks

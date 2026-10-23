@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import {
   APP_BUILD_HANDOFF_SOURCE_LIMIT,
   appBuildHandoffSourceSummary,
+  buildAnalysisQuestionPlan,
+  composeSemanticQueryForQuestion,
   appStudioDraftPath,
   askScopeFromWorkspace,
   createAppBuildHandoffDraft,
@@ -77,6 +79,7 @@ export async function askDql(
   // with the agent answer-loop and the UI badge. Derived from the route so MCP
   // clients always see the same label set.
   const trustLabel = resolveTrustLabel(trustLabelIdForRoute(route.route));
+  const semanticCandidate = route.route === 'generated_sql' ? semanticCandidateFor(ctx, args.question) : undefined;
 
   return {
     question: args.question,
@@ -92,8 +95,12 @@ export async function askDql(
     reason: route.reason,
     routeReason: route.routeReason,
     grainGate: route.grainGate,
-    recommendedAction: recommendedAction(route.route),
-    ...(nextTool(route.route) ? { nextTool: nextTool(route.route) } : {}),
+    recommendedAction: semanticCandidate
+      ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled Governed. Write SQL for query_via_metadata only if it returns matched: false.`
+      : recommendedAction(route.route),
+    ...(semanticCandidate
+      ? { nextTool: 'query_semantic_model', semanticCandidate }
+      : nextTool(route.route) ? { nextTool: nextTool(route.route) } : {}),
     exactCertifiedBlock: exact && exact.objectType === 'dql_block' ? summarizeObject(exact) : undefined,
     certifiedCandidates,
     // Conflict route: surface BOTH sides + owners + the disambiguation prompt.
@@ -117,8 +124,8 @@ export async function askDql(
         'nextReviewAction',
       ],
       // Canonical vocabulary the answer must report under `trustStatus`.
-      trustLabels: ['Certified', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
-      rule: 'Never present generated SQL or Tier-2 preview rows as certified. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
+      trustLabels: ['Certified', 'Governed', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
+      rule: 'Never present generated SQL or Tier-2 preview rows as certified. Governed is the label query_semantic_model returns for a compile from semantic metrics and dimensions; it is not Certified. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
     },
   };
 }
@@ -370,6 +377,32 @@ export function buildDqlBlock(
   args: Parameters<typeof suggestBlock>[1],
 ) {
   return suggestBlock(ctx, args);
+}
+
+/**
+ * The semantic compile a generated-route question would get, when the
+ * semantic layer has the metric it names. Sends the agent to
+ * query_semantic_model (Governed) before it writes its own SQL (AI-Generated),
+ * the order the Ask page follows.
+ */
+function semanticCandidateFor(ctx: DQLContext, question: string) {
+  try {
+    const result = composeSemanticQueryForQuestion({
+      semanticLayer: ctx.semanticLayer,
+      question,
+      questionPlan: buildAnalysisQuestionPlan(question),
+    });
+    if (!result) return undefined;
+    return {
+      metric: result.metric,
+      metrics: result.metrics,
+      dimensions: result.dimensions,
+      ...(result.timeDimension ? { timeDimension: result.timeDimension } : {}),
+      trustLabel: resolveTrustLabel('governed'),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function recommendedAction(route: string): string {

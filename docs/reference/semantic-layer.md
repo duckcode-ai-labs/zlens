@@ -54,13 +54,24 @@ dimensions appear in the **Semantic** panel alongside DQL-local ones.
 | Project | Engine | Runs |
 | --- | --- | --- |
 | dbt project with MetricFlow installed, or dbt Cloud configured | MetricFlow / dbt Cloud | every dbt metric type |
-| Everything else, including warehouse-first projects with no dbt | DQL native compiler | simple metrics, and ratios of two simple metrics |
+| Everything else, including warehouse-first projects with no dbt | DQL native compiler | simple metrics, ratios of two simple metrics, and derived metrics that do arithmetic over simple metrics with no offset window |
 
 An `mf` executable on the PATH does not make a project a MetricFlow project:
 without a `dbt_project.yml` (or a dbt setting in `dql.config.json`) the native
 compiler serves it. When the native compiler cannot run a metric it says why
-(for example "premium_growth is a derived metric; the DQL native semantic engine
-runs simple and ratio metrics only") instead of asking for `dbt parse`.
+(for example "revenue_growth_mom is a derived metric; the DQL native semantic
+engine runs a derived metric only when its expression is arithmetic over simple
+metrics with no offset window") instead of asking for `dbt parse`.
+
+### Derived metrics
+
+A derived metric such as `average_order_value`
+(`lifetime_spend_pretax / count_lifetime_orders`) runs natively when every
+input is a simple metric and none has an `offset_window` or `offset_to_grain`.
+Each input is summed at the requested grain first, and the expression is then
+evaluated once per output row, as MetricFlow does. The expression may use
+`+ - * /`, parentheses, numbers, and `NULLIF`, `COALESCE`, `ROUND` and `ABS`.
+Anything else, such as a prior-period comparison, needs MetricFlow or dbt Cloud.
 
 ### Ratio metrics
 

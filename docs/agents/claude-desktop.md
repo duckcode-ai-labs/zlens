@@ -66,7 +66,11 @@ always.
 - *"How has revenue changed by month?"*: Claude routes the question with
   `ask_dql`, runs the certified saved query with `query_via_block`, and labels the
   answer **Certified**.
-- A question no certified saved query answers is run as one read-only query with
+- *"What is the average order value by customer type?"*: no certified saved
+  query returns that measure, so Claude compiles the semantic metric
+  `average_order_value` with `query_semantic_model`, and the answer is labelled
+  **Governed**, as on the Ask page.
+- A question neither answers is run as one read-only query with
   `query_via_metadata` and labelled **AI-Generated (review required)**, with
   the path of the draft saved query ZLens kept.
 - *"What Apps do we have, and are their tiles certified?"* uses `list_apps`;
