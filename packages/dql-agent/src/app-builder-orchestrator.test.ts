@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { deterministicDatasetQuery, planAppBuildBrief } from './app-builder-orchestrator.js';
+import { deterministicDatasetQuery, deterministicRationale, planAppBuildBrief, sourceKindAndTrust } from './app-builder-orchestrator.js';
 import type { AppSourceCatalogRecord } from './app-source-catalog.js';
 import { savedQueryResultDescriptor, type AppBuildRequirement, type DatasetDescriptor } from '@zlens/core';
 
@@ -255,6 +255,18 @@ describe('App Builder orchestrator', () => {
     const byId = new Map(brief.components.map((component) => [component.sourceId, component.rationale]));
     expect(byId.get(topCustomers.sourceId)).toBe('Its name, description and fields match “customers”, “value” · Certified saved query');
     expect(byId.get(candidates[1].sourceId)).toBe('One of the closest matches in the data you can use · Saved query · Not certified yet');
+  });
+
+  it('names a pick the way the Add data list does: never "Dataset" (F09)', () => {
+    const descriptor = datasetDescriptor('app:block:commerce:orders');
+    const base = source('app:block:commerce:orders', 'orders', 'certified');
+    const withFields = { ...base, capabilities: { ...base.capabilities, dataset: descriptor } };
+    expect(sourceKindAndTrust(withFields)).toBe('Certified saved query');
+    expect(sourceKindAndTrust({ ...withFields, tags: ['from-table'] })).toBe('Certified table');
+    expect(sourceKindAndTrust({ ...withFields, trust: 'review_required', tags: ['from-table'] })).toBe('Table · Not certified yet');
+    expect(sourceKindAndTrust({ ...base, kind: 'semantic' })).toBe('Certified Metrics');
+    expect(sourceKindAndTrust({ ...base, trust: 'review_required' })).toBe('Saved query · Not certified yet');
+    expect(deterministicRationale('orders by region', withFields)).not.toMatch(/Dataset/);
   });
 
   it('AGT-026 plans several source-bound Dataset tiles, falls back from invented query authority, and keeps coverage query-specific', async () => {

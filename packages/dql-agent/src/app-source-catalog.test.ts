@@ -7,6 +7,7 @@ import {
   createAppBuildHandoffDraft,
   ensureAgentProjectReady,
   matchAppSourceCatalogRecords,
+  matchAppBlockSourceRefs,
   MetadataCatalog,
   queryAppSourceCatalog,
   rankAppSourcesByTrust,
@@ -319,6 +320,17 @@ describe('AppSourceCatalogService', () => {
     expect(matched.items).toHaveLength(1);
     expect(matched.items[0]).toMatchObject({ name: 'Performance', domain: 'sales', trust: 'certified' });
     expect(matched.unmatched).toEqual(['No Such Block']);
+  });
+
+  it('F07 finds the current record behind a published saved-query reference: by source id, block name or file path', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const byName = matchAppBlockSourceRefs(projectRoot, ['performance'], 'include_review_required').get('performance');
+    expect(byName).toMatchObject({ name: 'Performance', kind: 'block', trust: 'certified' });
+    const matched = matchAppBlockSourceRefs(projectRoot, [byName!.sourceId, `./${byName!.sourcePath}`, 'No Such Block'], 'include_review_required');
+    expect(matched.get(byName!.sourceId)?.sourceId).toBe(byName!.sourceId);
+    expect(matched.get(`./${byName!.sourcePath}`)?.sourceId).toBe(byName!.sourceId);
+    expect(matched.has('No Such Block')).toBe(false);
+    expect(matchAppBlockSourceRefs(projectRoot, [], 'include_review_required').size).toBe(0);
   });
 
   it('D9 makes an AI App draft with the picked data, certified first, and its gaps — no per-App data rule (T3)', async () => {

@@ -1,6 +1,7 @@
 import type { AppBlockRecommendation, AppStudioAiProposal, AppStudioBuildDraft, AppStudioDraftOperation } from '../../api/client';
 import { sourceKindLabel, trustLabel } from './builder/app-data';
 import { KEYWORD_SUGGESTIONS_LABEL } from './app-studio-ai-voice';
+import { certifiedByLabel } from '@zlens/core/apps/reader-trust';
 
 export interface AppStudioAiPlanSummary {
   frame?: AppStudioBuildDraft['frame'];
@@ -299,9 +300,11 @@ export function appStudioAiDataModel(
   known: readonly AppBlockRecommendation[] = [],
 ): AppStudioAiDataModel {
   const domains = new Map<string, string>();
+  const receipts = new Map<string, NonNullable<AppBlockRecommendation['certification']>>();
   for (const item of known) {
     const id = item.sourceId ?? item.id;
     if (item.domain && item.domain !== 'Unassigned' && !domains.has(id)) domains.set(id, item.domain);
+    if (item.certification && !receipts.has(id)) receipts.set(id, item.certification);
   }
   const pick = (source: AppStudioAiPlanSummary['sources'][number]): AppStudioAiPick => {
     const certified = source.trustState === 'certified';
@@ -309,7 +312,8 @@ export function appStudioAiDataModel(
     return {
       id: source.id,
       label: source.label,
-      meta: [sourceKindLabel(source.kind, source.capabilities), trustLabel(source.trustState), domain ? businessLabel(domain) : ''].filter(Boolean).join(' · '),
+      // "Certified by Analytics (jaffle.shop) · 15 Oct" (F03): who and when, from the catalog's receipt.
+      meta: [sourceKindLabel(source.kind, source.capabilities), certified ? certifiedByLabel(receipts.get(source.id)) : trustLabel(source.trustState), domain ? businessLabel(domain) : ''].filter(Boolean).join(' · '),
       certified,
       ...(source.rationale ? { rationale: source.rationale } : {}),
       tileTitles: summary.components.filter((component) => component.sourceId === source.id).map((component) => component.title),

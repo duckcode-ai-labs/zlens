@@ -133,7 +133,7 @@ import { DateRangePresetSelect, filterTimezone } from './date-range-presets';
 import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, studioFilterMappingOptions, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
 import { studioDateControlHint, studioFilterRunPlan, studioFilterValue } from './app-studio-filter-values';
 import { DatasetInteractionInspector, DatasetTileQueryInspector } from './builder/InteractionLayer';
-import { humanize, messageOf } from './builder/studio-ui';
+import { StudioErrorBanner, humanize, messageOf } from './builder/studio-ui';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { ContextProposalReviewDrawer } from '../modeling/ContextProposalReviewDrawer';
 import { ChartOutput } from '../output/ChartOutput';
@@ -215,6 +215,7 @@ import {
   pagesNeedingSettledPreview,
   planLegacySemanticApproval,
   draftTrust,
+  draftWithSourceReceipts,
   plainReviewTaskMessage,
   publicationBlockingSources,
   publicationReadiness,
@@ -476,7 +477,7 @@ export function AppStudioLaunchSurface({
           {TEMPLATE_OPTIONS.map((option) => <button key={option.id} type="button" className={config.template === option.id ? 'on' : ''} onClick={() => onChange({ template: option.id })}><span>{templateIcon(option.id)}</span><strong>{option.title}</strong><small>{option.description}</small></button>)}
         </div>
       </details>}
-      {error ? <div className="studio-error" role="alert">{error}</div> : null}
+      {error ? <StudioErrorBanner error={error} /> : null}
       <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing…' : mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : mode === 'quick' ? <><Database size={17} /> Choose data</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>
       <small className="launch-next-step">Only you can see it until you publish · preview with live data · publish when ready</small>
     </div>
@@ -949,13 +950,19 @@ export function AppStudioV2({
   }, [proposal, autopilotReview]);
   // The same list the publish dialog shows (B6). Pages that only need a
   // fresh run are run by Publish itself, so they are not counted as fixes.
+  // Who certified each of the App's data and when (D5, F03): the draft holds
+  // no receipts, so they come from the current catalog records Studio holds.
+  const trustDraft = useMemo(
+    () => draft ? draftWithSourceReceipts(draft, [...Object.values(knownSourceItems), ...catalog]) : null,
+    [catalog, draft, knownSourceItems],
+  );
   const publishStepCount = useMemo(
-    () => draft ? publicationReadiness(draft, publishIssues, previewRunsByPage, { requireCertifiedToPublish }).fixCount : 0,
-    [draft, previewRunsByPage, publishIssues, requireCertifiedToPublish],
+    () => trustDraft ? publicationReadiness(trustDraft, publishIssues, previewRunsByPage, { requireCertifiedToPublish }).fixCount : 0,
+    [trustDraft, previewRunsByPage, publishIssues, requireCertifiedToPublish],
   );
   // Each tile's trust from the same answer Publish uses (B6): the editor's dot
   // never says certified while Publish says the tile is not certified yet.
-  const studioTrust = useMemo(() => draft ? draftTrust(draft, previewRunsByPage) : null, [draft, previewRunsByPage]);
+  const studioTrust = useMemo(() => trustDraft ? draftTrust(trustDraft, previewRunsByPage) : null, [trustDraft, previewRunsByPage]);
 
   useEffect(() => {
     setSelectedProposalSourceIds(new Set(proposal?.defaultSelectedSourceIds ?? proposalSummary?.sources.map((source) => source.id) ?? []));
@@ -974,6 +981,25 @@ export function AppStudioV2({
     }).catch(() => undefined);
     return () => { active = false; };
   }, [aiDataFlow, draft?.id, proposalSummary]);
+
+  // The App's own data, resolved by id whatever the Data list's page shows,
+  // and again whenever a source changes (certified, refreshed): each tile's
+  // byline says who certified it and when (F03), and a saved query changed
+  // since it was certified says so (F07).
+  const appSourceKey = (draft?.sources ?? [])
+    .filter((source) => source.kind === 'block' || source.kind === 'certified_block' || source.kind === 'review_block')
+    .map((source) => `${source.id}@${source.sourceRevision ?? ''}:${source.lifecycle ?? ''}:${source.trustState}`)
+    .join('|');
+  useEffect(() => {
+    if (!draft || !appSourceKey) return;
+    const ids = appSourceKey.split('|').map((entry) => entry.slice(0, entry.lastIndexOf('@')));
+    let active = true;
+    void api.resolveAppSourceCandidates(draft.id, ids, { includeReviewRequired: true }).then((resolved) => {
+      if (!active || !resolved.items.length) return;
+      setKnownSourceItems((items) => ({ ...items, ...Object.fromEntries(resolved.items.map((item) => [item.sourceId ?? item.id, item])) }));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [appSourceKey, draft?.id]);
 
   useEffect(() => {
     if (!proposalSummary || selectedSource || catalog.length === 0) return;
@@ -2470,6 +2496,41 @@ export function AppStudioV2({
     await publish(false, refreshed);
   };
 
+  /**
+   * The saved draft, read again (F11): after the App changed in another tab,
+   * the page shows the latest version and runs again before Publish.
+   */
+  const reloadLatestDraft = async () => {
+    const current = latestDraftRef.current;
+    if (!current) return;
+    setBusy(true);
+    try {
+      const { drafts } = await api.listAppBuilds();
+      const latest = drafts.find((candidate) => candidate.id === current.id);
+      if (!latest) {
+        setError('This draft is not here any more. Go back to Apps to see the latest version.');
+        return;
+      }
+      latestDraftRef.current = latest;
+      previewSequenceRef.current += 1;
+      setDraft(latest);
+      setName(latest.name);
+      setPreviewing(false);
+      setPreviewRunsByPage({});
+      setFilterOptionsByPage({});
+      setPublishIssues([]);
+      setPublishReviewOpen(false);
+      setUndoStack([]);
+      setRedoStack([]);
+      setError(null);
+      setSavedMessage('Refreshed · this is the latest version');
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const publish = async (publishWhenReady = true, targetDraft = draft) => {
     if (!targetDraft) return;
     setBusy(true);
@@ -3765,7 +3826,9 @@ export function AppStudioV2({
                       const trust = studioTrust && activePage ? appTileTrustFor(studioTrust, activePage.id, tile.i)?.trust : undefined;
                       if (!trust) return tile.text ? null : <span className={`trust-dot ${tile.trustState === 'certified' ? 'certified' : 'review_required'}`} title={trustLabel(tile.trustState)} />;
                       const tone = trust.state === 'certified' ? 'certified' : 'review_required';
-                      return <span className={`trust-dot ${tone}`} data-trust={trust.state} role="img" aria-label={trust.label} title={`${trust.label}: ${trust.detail}`} />;
+                      // "Certified by Kranthi · 21 Oct", never a bare "Certified" (F03).
+                      const words = trust.state === 'certified' ? trust.byline ?? trust.label : trust.label;
+                      return <span className={`trust-dot ${tone}`} data-trust={trust.state} role="img" aria-label={words} title={`${words}: ${trust.detail}`} />;
                     })()}
                     <div className={`tile-tools ${tileMenuId === tile.i ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
                       {editing && tileAiAvailable && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
@@ -3825,6 +3888,8 @@ export function AppStudioV2({
           {editing && !projectedPages ? <button type="button" className="ghost-icon" onClick={() => void addPage()} aria-label="Add page" title="Add page"><Plus size={15} /></button> : null}
         </nav>
         <div className="studio-actions">
+          {/* The App's one tile count (F04): the same answer as Publish, the Apps card and the reader. */}
+          {studioTrust?.text ? <span className={`studio-trust-count ${studioTrust.allCertified ? 'certified' : 'partial'}`} role="status" title="How many of this App's tiles are certified. Each tile says Certified (by whom, and when) or Not certified yet."><ShieldCheck size={13} aria-hidden="true" />{studioTrust.text}</span> : null}
           {editing ? <div className="history">
             <button type="button" className="ghost-icon" disabled={!undoStack.length || busy} onClick={() => void undo()} aria-label="Undo" title="Undo"><Undo2 size={15} /></button>
             <button type="button" className="ghost-icon" disabled={!redoStack.length || busy} onClick={() => void redo()} aria-label="Redo" title="Redo"><Redo2 size={15} /></button>
@@ -3885,7 +3950,7 @@ export function AppStudioV2({
       </aside> : null}
 
       <main ref={workspaceRef} className="studio-workspace">
-        {error ? <div className="studio-error floating" role="alert">{error}<button type="button" onClick={() => setError(null)}>×</button></div> : null}
+        {error ? <StudioErrorBanner error={error} floating onDismiss={() => setError(null)} onRefresh={() => void reloadLatestDraft()} /> : null}
         <div className={`studio-canvas-frame ${breakpoint} preview-mode-${previewMode}`}>
           <section ref={canvasRef} className="studio-canvas" aria-label="App page" onClick={(event) => { if (event.target === event.currentTarget) { setSelectedTileId(null); setTileMenuId(null); } }}>
             <header className="studio-page-heading">
@@ -4131,7 +4196,7 @@ export function AppStudioV2({
         </Suspense> : null}
       </AiSidePanel> : null}
       {publishReviewOpen ? <PublishReadinessDialog
-        draft={draft}
+        draft={trustDraft ?? draft}
         {...(projectInGit !== undefined ? { inGitRepo: projectInGit } : {})}
         serverIssues={publishIssues}
         busy={busy || previewing}
@@ -4200,7 +4265,7 @@ export function AppStudioV2({
       {addDataOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="studio-add-data-title" onKeyDown={(event) => { if (event.key === 'Escape' && !(event.target as HTMLElement).closest('.table-dataset-card')) setAddDataOpen(false); }}>
         <section className="studio-add-data-card">
           <header><div><h2 id="studio-add-data-title">Add data</h2><p>Connect a table, Metrics or a saved query to this App.</p></div><button type="button" className="icon" onClick={() => setAddDataOpen(false)} aria-label="Close"><X size={15} /></button></header>
-          {error ? <div className="studio-error" role="alert">{error}</div> : null}
+          {error ? <StudioErrorBanner error={error} onRefresh={() => void reloadLatestDraft()} /> : null}
           <AddDataBrowser {...addDataBrowserProps} draftId={draft.id} draft={draft} />
           <footer><button type="button" className="primary" onClick={() => setAddDataOpen(false)}>Done</button></footer>
         </section>
@@ -4759,7 +4824,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, trust, page
     </> : null}
     {dataTile && tab === 'data' ? <>
     {tile.query && dataset && tileEncoding ? <DatasetTileQueryInspector descriptor={dataset} query={tile.query} visualization={tile.viz.type} encoding={tileEncoding} disabled={disabled} onChange={updateDatasetQuery} onShelves={updateShelves} onOpenSources={onOpenSources} result={run?.status === 'ok' ? run.result : undefined} /> : null}
-    <section className="data-trust"><label>Data & trust</label>{trust ? <div><span className={`trust-dot ${trust.state === 'certified' ? 'certified' : 'review_required'}`} /><strong>{trust.state === 'certified' ? (run?.certification ? certifiedByLabel(run.certification) : trust.byline ?? trust.label) : trust.label}</strong></div> : <div><span className={`trust-dot ${tile.trustState === 'certified' ? 'certified' : 'review_required'}`} /><strong>{tile.trustState === 'certified' && run?.certification ? certifiedByLabel(run.certification) : trustLabel(tile.trustState)}</strong></div>}{trust && trust.state !== 'certified' ? <small>{trust.detail}</small> : null}{tile.trustState === 'certified' && plainCertificationChecks(run?.certification?.checks).length ? <small>Checks passed: {plainCertificationChecks(run?.certification?.checks).join(' · ')}</small> : null}{calculatedTrust ? <small>Calculated from certified data: every input is certified.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Data'}: ${dataset.label}` : tile.block ? `Saved query · ${trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Not certified yet: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? rowCountWords(run.result?.rowCount ?? run.result?.rows.length ?? 0) : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable saved query</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new saved query is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
+    <section className="data-trust"><label>Data & trust</label>{trust ? <div><span className={`trust-dot ${trust.state === 'certified' ? 'certified' : 'review_required'}`} /><strong>{trust.state === 'certified' ? (run?.certification ? certifiedByLabel(run.certification) : trust.byline ?? trust.label) : trust.label}</strong></div> : <div><span className={`trust-dot ${tile.trustState === 'certified' ? 'certified' : 'review_required'}`} /><strong>{tile.trustState === 'certified' && run?.certification ? certifiedByLabel(run.certification) : trustLabel(tile.trustState)}</strong></div>}{trust && trust.state !== 'certified' ? <small>{trust.detail}</small> : null}{tile.trustState === 'certified' && plainCertificationChecks(run?.certification?.checks).length ? <small>Checks passed: {plainCertificationChecks(run?.certification?.checks).join(' · ')}</small> : null}{calculatedTrust ? <small>Calculated from certified data: every input is certified.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Data'}: ${dataset.label}` : tile.block ? `Saved query · ${trust ? (trust.state === 'certified' ? (run?.certification ? certifiedByLabel(run.certification) : trust.byline ?? trust.label) : trust.label) : trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Not certified yet: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? rowCountWords(run.result?.rowCount ?? run.result?.rows.length ?? 0) : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable saved query</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new saved query is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
     {tile.semantic && !tile.query ? <section className="dataset-reusable-block"><strong>Convert to a field query</strong><p>Preview an exact field-query mapping for this legacy semantic tile. ZLens runs both paths in one fresh read scope before it can apply the change. The original semantic payload is retained as provenance; this does not certify the source.</p><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onPreviewLegacySemanticConversion}>{previewingLegacySemanticConversion ? 'Proving conversion…' : 'Preview Dataset conversion'}</button>{semanticTileConversionPreview ? <div className="dataset-review-replacement"><small>Mapped source: {semanticTileConversionPreview.candidate.sourceId}</small><small>Mapped query: {semanticTileConversionPreview.candidate.query.measures.map((measure) => measure.measure).join(', ')}{semanticTileConversionPreview.candidate.query.dimensions.length ? ` by ${semanticTileConversionPreview.candidate.query.dimensions.map((dimension) => dimension.field).join(', ')}` : ''}</small><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onAcceptLegacySemanticConversion}>{acceptingLegacySemanticConversion ? 'Rechecking and applying…' : 'Apply Dataset conversion'}</button></div> : <small>Preview first. Unsupported bindings, source drift, or an incomplete comparison stay with the original semantic tile.</small>}</section> : null}
     </> : null}
     {dataTile && tab === 'visual' ? <>
@@ -5446,3 +5511,4 @@ function createAppStudioPreviewRunScope(): string {
 }
 
 const MemoStudioTilePreview = memo(StudioTilePreview, (previous, next) => sameTilePreviewProps(previous as Record<string, unknown>, next as Record<string, unknown>));
+

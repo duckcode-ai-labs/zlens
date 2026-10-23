@@ -65,6 +65,8 @@ describe('saved query review (T4)', () => {
 
   it('reads one row from the grain, the grouping columns or the key fields', () => {
     expect(savedQueryRowSentence({ grain: 'order_line' })).toBe('Each row is one order line.');
+    // Never "Each row is one one row per beverage product."
+    expect(savedQueryRowSentence({ grain: 'one row per beverage product' })).toBe('One row per beverage product.');
     expect(savedQueryRowSentence({ dimensions: ['region', 'order_month'] })).toBe('One row for each region and order month.');
     expect(savedQueryRowSentence({ keyFields: ['order_id'] })).toBe('Each row is one order id.');
     expect(savedQueryRowSentence({})).toBeUndefined();

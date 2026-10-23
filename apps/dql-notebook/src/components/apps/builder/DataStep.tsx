@@ -2,7 +2,7 @@ import { ArrowLeft, ArrowRight, Database, FileText, Plus, ShieldCheck, Sparkles,
 import { certifiedByLabel } from '../reader-trust';
 import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../../api/client';
 import { AddDataBrowser, RemoveDataButton, type AddDataBrowserProps } from './AddDataBrowser';
-import { humanize } from './studio-ui';
+import { StudioErrorBanner, humanize } from './studio-ui';
 import { appDataItems, openCanvasLabel, sourceOriginLabel, tilesUsingSource, trustLabel } from './app-data';
 import {
   appStudioBuildPagesLabel,
@@ -101,7 +101,7 @@ export function DataStep({
         <p>Pick the data this App will use. You can add more later from the Data panel.</p>
       </div>
     </header>
-    {error ? <div className="studio-error" role="alert">{error}{onDismissError ? <button type="button" onClick={onDismissError} aria-label="Dismiss">×</button> : null}</div> : null}
+    {error ? <StudioErrorBanner error={error} {...(onDismissError ? { onDismiss: onDismissError } : {})} /> : null}
     <div className="data-step-body">
       <aside className="data-step-list" aria-labelledby="data-step-list-title">
         <div className="data-step-list-head"><h2 id="data-step-list-title">This App's data</h2><small>{items.length} {items.length === 1 ? 'source' : 'sources'}</small></div>
@@ -178,7 +178,7 @@ function AiDataStep({
           : ai.plannerLabel ? <small className="data-step-provenance">{ai.plannerLabel}</small> : null}
       </div>
     </header>
-    {error ? <div className="studio-error" role="alert">{error}{onDismissError ? <button type="button" onClick={onDismissError} aria-label="Dismiss">×</button> : null}</div> : null}
+    {error ? <StudioErrorBanner error={error} {...(onDismissError ? { onDismiss: onDismissError } : {})} /> : null}
     {running ? <div className="data-step-activity" role="status" aria-live="polite">
       <span className="loading-mark"><Sparkles size={15} /></span>
       <div>

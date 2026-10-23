@@ -11,6 +11,7 @@ import {
   type AppTrustPageLike,
   type AppTrustSourceLike,
 } from '@zlens/core/apps/app-trust';
+import type { CertificationByline } from '@zlens/core/apps/reader-trust';
 import { removeField } from '@zlens/core/apps/viz-encoding';
 import type { DatasetDescriptor, DatasetJoin } from '@zlens/core/datasets/descriptor';
 import { sourceKindLabel } from './builder/app-data';
@@ -354,6 +355,42 @@ export function notCertifiedYetTitle(sources: AppStudioBuildDraft['sources']): s
     queries ? `${queries} ${queries === 1 ? 'saved query' : 'saved queries'}` : '',
   ].filter(Boolean);
   return `${parts.join(' and ')} not certified yet`;
+}
+
+/**
+ * The draft with who certified each of its sources and when (D5), from the
+ * current catalog records Studio holds (the Data list's, and those resolved
+ * for this App). A draft stores no receipts of its own, so without this
+ * every certified tile read a bare "Certified" (F03), and a saved query
+ * changed since it was certified read "Nobody has certified it yet" (F07).
+ * Only the receipt is taken from the catalog: trust stays the draft's.
+ */
+export function draftWithSourceReceipts(
+  draft: AppStudioBuildDraft,
+  items: ReadonlyArray<{ id: string; sourceId?: string; certification?: CertificationByline | null }>,
+): AppStudioBuildDraft {
+  const receipts = new Map<string, CertificationByline>();
+  for (const item of items) {
+    const id = item.sourceId ?? item.id;
+    if (item.certification && !receipts.has(id)) receipts.set(id, item.certification);
+  }
+  if (!receipts.size) return draft;
+  let changed = false;
+  const sources = draft.sources.map((source) => {
+    const certification = receipts.get(source.id);
+    if (!certification) return source;
+    changed = true;
+    return { ...source, certification } as AppStudioSource;
+  });
+  return changed ? { ...draft, sources } : draft;
+}
+
+/**
+ * The count a draft's Apps card shows next to its status (F04):
+ * "Not published yet · 3 of 5 tiles certified". Empty with no data tiles.
+ */
+export function draftCardTrustText(draft: AppStudioBuildDraft): string {
+  return draftTrust(draft).text;
 }
 
 /**

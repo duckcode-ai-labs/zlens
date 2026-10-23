@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, BarChart3, Database, Gauge, LineChart, Plus, Sparkles, X } from 'lucide-react';
+import { StudioErrorBanner } from './studio-ui';
 import {
   QUICK_CHOICE_KIND_LABELS,
   QUICK_CHOICE_LIMIT,
@@ -103,7 +104,7 @@ export function QuickChoices({
       <span>{full ? `Up to ${QUICK_CHOICE_LIMIT} tiles at once` : 'Add another tile'}</span>
       {(['kpi', 'trend', 'top'] as const).map((kind) => <button key={kind} type="button" disabled={busy || full || !quickKindAvailable(data, kind)} onClick={() => add(kind)} aria-label={`Add a ${QUICK_CHOICE_KIND_LABELS[kind]} tile`}><Plus size={12} /> {QUICK_CHOICE_KIND_LABELS[kind]}</button>)}
     </div>
-    {error ? <div className="studio-error" role="alert">{error}</div> : null}
+    {error ? <StudioErrorBanner error={error} /> : null}
     <button type="button" className="primary quick-choice-submit" disabled={busy || choices.length === 0} onClick={() => onSubmit(choices)}>{busy ? 'Building…' : submitLabel(choices.length)}</button>
   </div>;
 }

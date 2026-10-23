@@ -798,15 +798,19 @@ export function plannerSourceName(title: string): string {
   return /\s/.test(trimmed) ? trimmed : humanizePlannerId(trimmed);
 }
 
-/** "Certified saved query", "Certified Dataset", "Metrics · Not certified yet" (the App glossary, T1). */
-export function sourceKindAndTrust(candidate: Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>): string {
-  const kind = candidate.capabilities.dataset?.kind === 'semantic'
+/**
+ * "Certified saved query", "Certified table", "Metrics · Not certified yet":
+ * the kinds the Add data list names (Table, Saved query, Metrics; T1, F09).
+ * A saved query given fields (a Dataset) is still a saved query; "Dataset"
+ * is never said to a person.
+ */
+export function sourceKindAndTrust(candidate: Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'> & { tags?: readonly string[] }): string {
+  const dataset = candidate.capabilities.dataset;
+  const kind = dataset?.kind === 'semantic' || candidate.capabilities.semanticModelId || candidate.kind === 'semantic'
     ? 'Metrics'
-    : candidate.capabilities.dataset
-      ? 'Dataset'
-      : candidate.capabilities.semanticModelId || candidate.kind === 'semantic'
-        ? 'Metrics'
-        : 'saved query';
+    : dataset && !dataset.result && (candidate.tags ?? []).includes('from-table')
+      ? 'table'
+      : 'saved query';
   return candidate.trust === 'certified'
     ? `Certified ${kind}`
     : `${kind.charAt(0).toUpperCase()}${kind.slice(1)} · Not certified yet`;

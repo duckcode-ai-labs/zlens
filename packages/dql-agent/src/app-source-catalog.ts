@@ -333,6 +333,42 @@ export function matchAppSourceCatalogRecords(
 }
 
 /**
+ * The current catalog record behind each saved-query reference a published
+ * App page holds, so editing the App reads trust from the project as it is
+ * now (F07). A reference is a catalog source id, a block name (`blockId`) or
+ * a block file path (`ref`). Certified records win when a name is declared
+ * more than once. References that match nothing are left out.
+ */
+export function matchAppBlockSourceRefs(
+  projectRoot: string,
+  refs: string[],
+  sourcePolicy: AppBuildSourcePolicy = 'governed_only',
+): Map<string, AppSourceCatalogRecord> {
+  const wanted = Array.from(new Set(refs.map((ref) => ref.trim()).filter(Boolean)));
+  const matched = new Map<string, AppSourceCatalogRecord>();
+  if (!wanted.length) return matched;
+  const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+  try {
+    const inventory = rankAppSourcesByTrust(lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
+      .filter((object) => object.status !== 'deprecated')
+      .map((object) => appSourceFromMetadata(object, lease.snapshotId, sourcePolicy))
+      .filter((record) => record.kind === 'block'));
+    const path = (value: string) => value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+    for (const ref of wanted) {
+      const lower = ref.toLowerCase();
+      const record = inventory.find((candidate) => candidate.sourceId === ref)
+        ?? inventory.find((candidate) => candidate.name.toLowerCase() === lower)
+        ?? inventory.find((candidate) => Boolean(candidate.sourcePath) && path(candidate.sourcePath) === path(ref))
+        ?? inventory.find((candidate) => Boolean(candidate.executionRef) && path(candidate.executionRef) === path(ref));
+      if (record) matched.set(ref, decorateRecord(projectRoot, record));
+    }
+    return matched;
+  } finally {
+    lease.release();
+  }
+}
+
+/**
  * Return a bounded candidate-card set for one App-specific planning call.
  *
  * Certified data comes first, but data nobody certified is never excluded

@@ -3599,18 +3599,41 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       expect(published.body.tiles[0].result.rows).toHaveLength(8);
       expect(JSON.parse(readFileSync(pagePath, 'utf-8'))).toEqual(legacyPage);
 
-      // A version-1 tile has no recorded source revision. Opening it for edit
-      // raises exactly the refresh task it raised before Datasets existed.
-      const openedLegacy = await request(base, '/api/app-builds', 'POST', { baseAppId: 'legacy-sales', name: 'Legacy sales', authoringMode: 'manual', sourcePolicy: 'governed_only' });
-      expect(openedLegacy.status, openedLegacy.text).toBe(201);
-      expect(openedLegacy.body.draft.reviewTasks).toEqual([expect.objectContaining({ tileId: 'order-lines', message: expect.stringContaining('has no published source revision') })]);
-
-      // A Studio-published whole-block tile carries its exact source binding.
-      // Open for edit, preview, preflight, republish: no Dataset-era blocker.
       const blockPath = 'domains/commerce/blocks/order-lines-dataset.dql';
       const blockSource = readFileSync(join(projectRoot, blockPath), 'utf-8');
       const sourceId = `app:block:commerce:${createHash('sha256').update(`${blockPath}\u0000Order lines Dataset`).digest('hex').slice(0, 20)}`;
       const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+      // Open for edit, preview, preflight, republish: no blocker, and the published rows are unchanged.
+      const republish = async (draft: any) => {
+        const preview = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/dashboards/overview/run`, 'POST', { fullRun: true });
+        expect(preview.status, preview.text).toBe(200);
+        expect(preview.body.tiles.every((tile: any) => tile.status === 'ok')).toBe(true);
+        const receipt = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}`, 'PATCH', {
+          expectedRevision: draft.revision,
+          expectedProposalHash: draft.proposalHash,
+          operations: [{ type: 'set_preview_receipt', receipt: { id: preview.body.runId, pageId: 'overview', revision: draft.revision, snapshotId: preview.body.snapshotId, filterFingerprint: preview.body.filterFingerprint, resultFingerprint: preview.body.resultFingerprint, createdAt: new Date().toISOString() } }],
+        });
+        expect(receipt.status, receipt.text).toBe(200);
+        const preflight = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/preflight`, 'POST', { expectedRevision: receipt.body.draft.revision, proposalHash: receipt.body.draft.proposalHash });
+        expect(preflight.status, preflight.text).toBe(200);
+        const republished = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/publish-to-project`, 'POST', { expectedRevision: preflight.body.draft.revision, proposalHash: preflight.body.draft.proposalHash });
+        expect(republished.status, republished.text).toBe(201);
+        const after = await request(base, '/api/apps/legacy-sales/dashboards/overview/run', 'POST', { fullRun: true });
+        expect(after.status, after.text).toBe(200);
+        expect(after.body.tiles[0].result.rows).toEqual(published.body.tiles[0].result.rows);
+      };
+
+      // A version-1 tile names its saved query only. Opening it for edit binds
+      // it to the project's current record (F07): certified, with no task.
+      const openedLegacy = await request(base, '/api/app-builds', 'POST', { baseAppId: 'legacy-sales', name: 'Legacy sales', authoringMode: 'manual', sourcePolicy: 'governed_only' });
+      expect(openedLegacy.status, openedLegacy.text).toBe(201);
+      expect(openedLegacy.body.draft.reviewTasks).toEqual([]);
+      expect(openedLegacy.body.draft.pages[0].layout.items[0]).toMatchObject({ sourceId, sourceRevision, block: { blockId: 'Order lines Dataset' } });
+      expect(openedLegacy.body.draft.sources).toEqual([expect.objectContaining({ id: sourceId, lifecycle: 'certified', trustState: 'certified' })]);
+      await republish(openedLegacy.body.draft);
+
+      // A Studio-published whole-block tile carries its exact source binding.
+      // Open for edit, preview, preflight, republish: no Dataset-era blocker.
       const studioPage = {
         version: 2, id: 'overview',
         metadata: { title: 'Overview', domain: 'commerce', lifecycle: 'certified' },
@@ -3624,26 +3647,8 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       writeFileSync(pagePath, `${JSON.stringify(studioPage, null, 2)}\n`);
       const opened = await request(base, '/api/app-builds', 'POST', { baseAppId: 'legacy-sales', name: 'Legacy sales', authoringMode: 'manual', sourcePolicy: 'governed_only' });
       expect(opened.status, opened.text).toBe(201);
-      let draft = opened.body.draft;
-      expect(draft.reviewTasks).toEqual([]);
-      const preview = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/dashboards/overview/run`, 'POST', { fullRun: true });
-      expect(preview.status, preview.text).toBe(200);
-      expect(preview.body.tiles.every((tile: any) => tile.status === 'ok')).toBe(true);
-      const receipt = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}`, 'PATCH', {
-        expectedRevision: draft.revision,
-        expectedProposalHash: draft.proposalHash,
-        operations: [{ type: 'set_preview_receipt', receipt: { id: preview.body.runId, pageId: 'overview', revision: draft.revision, snapshotId: preview.body.snapshotId, filterFingerprint: preview.body.filterFingerprint, resultFingerprint: preview.body.resultFingerprint, createdAt: new Date().toISOString() } }],
-      });
-      expect(receipt.status, receipt.text).toBe(200);
-      draft = receipt.body.draft;
-      const preflight = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/preflight`, 'POST', { expectedRevision: draft.revision, proposalHash: draft.proposalHash });
-      expect(preflight.status, preflight.text).toBe(200);
-      draft = preflight.body.draft;
-      const republished = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/publish-to-project`, 'POST', { expectedRevision: draft.revision, proposalHash: draft.proposalHash });
-      expect(republished.status, republished.text).toBe(201);
-      const after = await request(base, '/api/apps/legacy-sales/dashboards/overview/run', 'POST', { fullRun: true });
-      expect(after.status, after.text).toBe(200);
-      expect(after.body.tiles[0].result.rows).toEqual(published.body.tiles[0].result.rows);
+      expect(opened.body.draft.reviewTasks).toEqual([]);
+      await republish(opened.body.draft);
     } finally {
       await pilot.stop();
     }
