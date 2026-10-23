@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.5 - 2026-10-23
+
+A patch for MCP and Apps.
+- **MCP:** a certified route only when the block returns the requested
+  measure; `query_semantic_model` picks the metric the question names (derived
+  metrics now compile); a semantic compile is labelled Governed, as on the Ask
+  page.
+- **Apps:** editing a changed App keeps its saved queries and receipts, every
+  Certified says who and when, Publish waits for pending changes, the Jaffle
+  sample opens as an existing project, and App links open a page.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.5` in each project.
+
 ### MCP: truthful certified routes, the metric the question names, and Governed
 
 - **A certified block answers only a measure it returns.** `ask_dql` sent
