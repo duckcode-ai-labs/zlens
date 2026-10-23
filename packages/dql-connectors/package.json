@@ -1,6 +1,6 @@
 {
   "name": "@zlens/connectors",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "ZLens database connectors for local files, SQL warehouses, and lakehouse engines",
   "license": "Apache-2.0",
   "type": "module",
