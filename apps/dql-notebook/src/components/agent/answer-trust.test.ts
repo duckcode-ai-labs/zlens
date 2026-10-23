@@ -33,11 +33,11 @@ describe('one trust decision for the heading, the badge, the note and the card',
   // heading said "AI-generated answer", the badge "AI-generated" and the note
   // "Built from semantic metrics", over a "Certified block answer" card.
   it('a certified block served as evidence is never headed or badged AI-generated', () => {
-    const run = answered('governed', 'certified_block', 'Governed answer from a certified block');
+    const run = answered('governed', 'certified_block', 'Answer from a certified saved query, not certified for this question');
     expect(answerSourceOf(run)).toBe('block_as_evidence');
-    expect(answerTrustHeading(run)).toBe('Governed answer');
-    expect(simpleRunTitle(run)).toBe('Governed answer');
-    expect(answerTrustBadge(run)).toBe('Governed');
+    expect(answerTrustHeading(run)).toBe(run.artifacts[0].title);
+    expect(simpleRunTitle(run)).toBe(run.artifacts[0].title);
+    expect(answerTrustBadge(run)).toBe('From Metrics');
     expect(trustExplainer(run)).toMatch(/certified saved query as published/);
     expect(askArtifactMeta(run.artifacts[0], run.artifacts[0].payload)).toContain('governed');
   });
@@ -69,7 +69,7 @@ describe('one trust decision for the heading, the badge, the note and the card',
     const certified = answered('certified', 'certified_block', 'Certified answer', 'certified_answer');
     expect([answerTrustHeading(certified), simpleRunTitle(certified), answerTrustBadge(certified)]).toEqual(['Certified answer', 'Certified answer', 'Certified']);
     const semantic = answered('governed', 'semantic_metric', 'Semantic answer', 'semantic_answer');
-    expect([answerTrustHeading(semantic), simpleRunTitle(semantic), answerTrustBadge(semantic)]).toEqual(['Governed answer', 'Governed answer', 'Governed']);
+    expect([answerTrustHeading(semantic), simpleRunTitle(semantic), answerTrustBadge(semantic)]).toEqual(['Answer from Metrics', 'Answer from Metrics', 'From Metrics']);
   });
 
   it('a run that names no source falls back to its route', () => {

@@ -39,7 +39,7 @@ const answerExecutor = ((input: { request: { question: string } }) => ({
   status: 'completed',
   trustState: 'governed',
   stopReason: 'governed_semantic_answer',
-  artifacts: [{ id: 'answer-1', kind: 'answer', title: 'Governed answer', trustState: 'governed', payload: { text: 'ok', result: { columns: ['q'], rows: [{ q: 1 }], rowCount: 1 } } }],
+  artifacts: [{ id: 'answer-1', kind: 'answer', title: 'Answer from Metrics', trustState: 'governed', payload: { text: 'ok', result: { columns: ['q'], rows: [{ q: 1 }], rowCount: 1 } } }],
   evaluations: [],
   nextActions: [],
 })) as unknown as NonNullable<AgentRunExecutors['generated_answer']>;

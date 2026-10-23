@@ -11,7 +11,7 @@ ZLens is an open-source analytics workbench. It works on top of your dbt
 project, or straight on your database's own tables. You build
 **saved queries** (reviewed, reusable queries), turn them into **Apps**, and **Ask**
 questions in plain English. Every answer and every tile says how far to trust
-it: **Certified**, **Governed**, **Needs review**, or a refusal with the
+it: **Certified**, **From Metrics**, **Needs review**, or a refusal with the
 reason.
 
 Using dbt? ZLens reads your models, tests and lineage. Not using dbt? Start straight from your database.

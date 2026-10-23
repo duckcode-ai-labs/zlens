@@ -190,7 +190,9 @@ every tile badge read the same value (`appTrustSummary` in `@zlens/core`).
 ran from a certified source and no App draft is pending; before the page runs,
 the badge says *Trust not checked yet* — a saved dashboard's own fields are
 never enough to claim certified. The tile and story vocabulary is the same:
-Certified, Governed, Needs review, Blocked.
+Certified, Not certified yet, Blocked (`READER_TRUST_LABELS`; a legacy
+`governed` tile reads Not certified yet). Ask's own label for an answer built
+from semantic metrics is From Metrics.
 
 An App's **lifecycle** (draft, in review, certified) is a separate axis. The
 App library card shows lifecycle only, worded *App draft* / *App in review* /

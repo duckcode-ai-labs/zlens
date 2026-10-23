@@ -171,7 +171,7 @@ export function AskObservabilityPage(): JSX.Element {
             <FilterSelect label="Trust" value={filters.trustState} onChange={(trustState) => updateFilters({ trustState: trustState as AskObservabilityFilters['trustState'] })} t={t}>
               <option value="all">All trust states</option>
               <option value="certified">Certified</option>
-              <option value="governed">Governed</option>
+              <option value="governed">From Metrics</option>
               <option value="review_required">Review required</option>
               <option value="blocked">Blocked</option>
             </FilterSelect>

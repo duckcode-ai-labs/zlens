@@ -9,7 +9,7 @@ question" system.
 1. **Certified block** — execute a suitable certified block first. A block is
    selected only when its measure, grain, filters, and requested shape fit the
    question.
-2. **Governed semantic answer** — when no block fits, resolve one or more
+2. **Answer from Metrics** — when no block fits, resolve one or more
    semantic metrics and compile them deterministically. This is a completed,
    governed answer, but it does not certify a newly saved DQL block.
 3. **Review-required generated answer** — generate SQL only when the semantic

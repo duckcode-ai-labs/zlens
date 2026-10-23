@@ -171,7 +171,7 @@ test('publishing is never blocked by trust: one tile reads Not certified yet, an
   await expect(page.locator('.dql-trust-badge.review')).toHaveCount(1);
   await expect(page.locator('.dql-trust-badge.review')).toHaveText(/Not certified yet/);
   await expect(page.locator('.dql-trust-badge.certified').filter({ hasText: /^Certified by you · \d{1,2} [A-Z][a-z]{2}/ })).toHaveCount(3);
-  await expect(page.getByText(/Needs review|Governed|All data certified/)).toHaveCount(0);
+  await expect(page.getByText(/Needs review|Governed|From Metrics|All data certified/)).toHaveCount(0);
   if (shotsDir) await page.screenshot({ path: join(shotsDir, '21-reader-not-certified.png') });
 
   // The stored file records the same count, and the Apps card reads it.

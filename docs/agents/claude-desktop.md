@@ -69,7 +69,7 @@ always.
 - *"What is the average order value by customer type?"*: no certified saved
   query returns that measure, so Claude compiles the semantic metric
   `average_order_value` with `query_semantic_model`, and the answer is labelled
-  **Governed**, as on the Ask page.
+  **From Metrics**, as on the Ask page.
 - A question neither answers is run as one read-only query with
   `query_via_metadata` and labelled **AI-Generated (review required)**, with
   the path of the draft saved query ZLens kept.

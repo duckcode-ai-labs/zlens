@@ -147,7 +147,7 @@ describe('AskTraceSqliteStoreV1 and observer', () => {
       payload: {
         id: 'answer:result-fingerprint',
         kind: 'answer',
-        title: 'Governed semantic answer',
+        title: 'Answer from Metrics',
         trustState: 'governed',
         payload: {
           result: {

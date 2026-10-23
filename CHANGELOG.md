@@ -8,6 +8,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Wording
+
+- **Ask's "Governed" label is now "From Metrics"**, so Ask matches Help. The
+  answer heading reads **Answer from Metrics** (**Answer from Metrics, in this
+  App** on an App page), the badge, the run card and the Ask observability
+  Trust filter read **From Metrics**, and `zlens agent ask` prints
+  `· From Metrics` instead of `· Reply` for such an answer. A certified saved
+  query served as evidence for a question it is not certified for is headed
+  **Answer from a certified saved query, not certified for this question**,
+  since its figures do not come from Metrics. The `trustState: 'governed'`
+  value, the `governed` filter value, API and JSON field names and test ids
+  are unchanged.
+- **Note for MCP clients:** `trustLabelInfo.base` and `.display` for the
+  `governed` id are now `"From Metrics"` (were `"Governed"`); `ask_dql`'s
+  `answerContract.trustLabels` lists `From Metrics`; the semantic compile's
+  `trustStatus.label` is `"From Metrics: semantic compile"`; the server
+  instructions use the new word. The `id` stays `governed` and tool names
+  are unchanged; match on `id`, not on the display text.
+
 ### Apps: certified saved queries are adopted in place, plain recovery words, certifier on every row
 
 - **A saved query certified from its App moves the App to the certified

@@ -37,7 +37,7 @@ Filter the list by:
 - **Mode**: Ask or Research.
 - **Selected tier**: **Certified**, **Semantic**, **Governed relational**,
   **Exploratory SQL**, **Clarify or gap**.
-- **Trust**: **Certified**, **Governed**, **Review required**, **Blocked**.
+- **Trust**: **Certified**, **From Metrics**, **Review required**, **Blocked**.
 
 Click **Open trace** on a run. The trace page has three views: **Trace Tree**
 (the steps, nested), **Agent Graph** (how the steps depend on each other) and

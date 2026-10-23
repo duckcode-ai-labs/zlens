@@ -1178,7 +1178,7 @@ export function answeredArtifactTitle(
 ): string {
   if (trustState === 'certified') return 'Certified answer';
   if (source === 'ai_sql') return 'AI-drafted answer';
-  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Governed answer from a certified saved query' : 'Answer to review, from a certified saved query';
+  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Answer from a certified saved query, not certified for this question' : 'Answer to review, from a certified saved query';
   return trustState === 'governed' ? 'Semantic answer' : 'Answer to review, from governed definitions';
 }
 
@@ -3534,7 +3534,7 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
       // A restriction the reading did not apply is a warning; a word it may
       // cover under another name is a question, never a claim of omission.
       ...coverageEvaluations(receipt),
-      ...(coverageDoubt ? [{ id: 'pipeline-governed-coverage', label: 'Governed label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: the reading does not account for ${doubt.reasons.join('; ')}.` }] : []),
+      ...(coverageDoubt ? [{ id: 'pipeline-governed-coverage', label: 'From Metrics label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: the reading does not account for ${doubt.reasons.join('; ')}.` }] : []),
       ...(receipt.grounding ?? []).filter((note) => note.startsWith('identity:') && /share the name/.test(note)).map((note, index) => ({ id: `pipeline-identity-${index + 1}`, label: 'Identity', passed: true, severity: 'warning' as const, message: note.slice('identity:'.length).trim() })),
       // A certified block served as published with a label-only grouping
       // says so: the answer cannot keep two same-named entities apart.

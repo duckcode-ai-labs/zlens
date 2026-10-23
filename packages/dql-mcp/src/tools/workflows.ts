@@ -96,7 +96,7 @@ export async function askDql(
     routeReason: route.routeReason,
     grainGate: route.grainGate,
     recommendedAction: semanticCandidate
-      ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled Governed. Write SQL for query_via_metadata only if it returns matched: false.`
+      ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled From Metrics. Write SQL for query_via_metadata only if it returns matched: false.`
       : recommendedAction(route.route),
     ...(semanticCandidate
       ? { nextTool: 'query_semantic_model', semanticCandidate }
@@ -124,8 +124,8 @@ export async function askDql(
         'nextReviewAction',
       ],
       // Canonical vocabulary the answer must report under `trustStatus`.
-      trustLabels: ['Certified', 'Governed', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
-      rule: 'Never present generated SQL or Tier-2 preview rows as certified. Governed is the label query_semantic_model returns for a compile from semantic metrics and dimensions; it is not Certified. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
+      trustLabels: ['Certified', 'From Metrics', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
+      rule: 'Never present generated SQL or Tier-2 preview rows as certified. From Metrics is the label query_semantic_model returns for a compile from semantic metrics and dimensions; it is not Certified. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
     },
   };
 }
@@ -382,7 +382,7 @@ export function buildDqlBlock(
 /**
  * The semantic compile a generated-route question would get, when the
  * semantic layer has the metric it names. Sends the agent to
- * query_semantic_model (Governed) before it writes its own SQL (AI-Generated),
+ * query_semantic_model (From Metrics) before it writes its own SQL (AI-Generated),
  * the order the Ask page follows.
  */
 function semanticCandidateFor(ctx: DQLContext, question: string) {

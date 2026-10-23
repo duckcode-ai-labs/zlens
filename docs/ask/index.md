@@ -43,7 +43,7 @@ Other trust lines:
 | Trust line | Means |
 |---|---|
 | **Certified answer** | Ran a certified saved query exactly as reviewed. |
-| **Governed answer** | Built from semantic metrics and dimensions. |
+| **Answer from Metrics** | Built from semantic metrics and dimensions. Not certified. |
 | **AI-generated answer** | AI wrote the SQL from your tables. Check it before relying on it. ZLens saves it as a draft saved query for review; see [Answers that need review](needs-review.md). |
 | **Needs clarification** | Ask needs one more detail. Answer the question it asks. |
 | **Couldn't run this query** or **No matching data** | Ask refused or found nothing, and says why. See [When Ask refuses](refusals.md). |

@@ -10,7 +10,7 @@ import { askDql } from '../workflows.js';
 
 // Found on 2026-10-23 by calling the MCP tools (ZLens 0.2.3) against the
 // jaffle-shop demo, for a Claude Desktop recording that shows Certified,
-// Governed and needs-review answers. jaffle-golden has the same blocks and
+// From Metrics and needs-review answers. jaffle-golden has the same blocks and
 // semantic layer, and reproduces each case on 0.2.4.
 
 const jaffleGolden = resolve(dirname(fileURLToPath(import.meta.url)), '../../../../../apps/cli/test/fixtures/jaffle-golden');
@@ -86,10 +86,10 @@ describe('MCP routing, metric choice and trust labels on jaffle-golden', () => {
     }, 60_000);
   });
 
-  describe('a semantic compile reads Governed, as the Ask page does', () => {
-    it('labels the compile and its DQL artifact Governed, and never Certified', async () => {
+  describe('a semantic compile reads From Metrics, as the Ask page does', () => {
+    it('labels the compile and its DQL artifact From Metrics, and never Certified', async () => {
       const out = await semantic({ question: 'What is the average order value by customer type?' });
-      expect(out.trustLabelInfo).toMatchObject({ id: 'governed', base: 'Governed' });
+      expect(out.trustLabelInfo).toMatchObject({ id: 'governed', base: 'From Metrics' });
       expect(out.dqlArtifact.trustState).toBe('governed');
       expect(out.certification).toBe('governed');
       expect(out.uncertified).toBe(true);
@@ -98,7 +98,7 @@ describe('MCP routing, metric choice and trust labels on jaffle-golden', () => {
     it('ask_dql sends a question the semantic layer answers to query_semantic_model, not to AI SQL', async () => {
       const out = await askDql(ctx, { question: 'How many large orders did we get each month?' }) as Record<string, any>;
       expect(out.nextTool).toBe('query_semantic_model');
-      expect(out.semanticCandidate).toMatchObject({ metric: 'large_orders', trustLabel: { base: 'Governed' } });
+      expect(out.semanticCandidate).toMatchObject({ metric: 'large_orders', trustLabel: { base: 'From Metrics' } });
       expect(out.recommendedAction).toContain('query_semantic_model');
     }, 60_000);
 
@@ -110,9 +110,9 @@ describe('MCP routing, metric choice and trust labels on jaffle-golden', () => {
       }
     }, 60_000);
 
-    it('lists Governed in the ask_dql answer contract', async () => {
+    it('lists From Metrics in the ask_dql answer contract', async () => {
       const out = await askDql(ctx, { question: 'What is the average order value by customer type?' }) as Record<string, any>;
-      expect(out.answerContract.trustLabels).toEqual(['Certified', 'Governed', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict']);
+      expect(out.answerContract.trustLabels).toEqual(['Certified', 'From Metrics', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict']);
     }, 60_000);
   });
 });

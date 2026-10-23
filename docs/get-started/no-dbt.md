@@ -376,7 +376,7 @@ Ask works from the synced schema and the joins you modeled. It labels the
 answer with what it used, as it does in a dbt project. SQL that AI wrote is
 labelled for review and saved as a draft saved query; certify that saved query, and Ask can
 answer the question from it as **Certified**. Metrics you add with
-**Modeling → New metric** give **Governed** answers. See
+**Modeling → New metric** give **From Metrics** answers. See
 [Ask a question](../ask/index.md).
 
 ## Or use Guided Setup

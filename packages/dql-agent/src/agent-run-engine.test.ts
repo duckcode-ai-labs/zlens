@@ -1742,7 +1742,7 @@ describe("AgentRunEngine", () => {
       trustState: "governed",
       stopReason: "governed_semantic_answer",
     });
-    expect(run.artifacts[0]).toMatchObject({ title: "Governed semantic answer", trustState: "governed" });
+    expect(run.artifacts[0]).toMatchObject({ title: "Answer from Metrics", trustState: "governed" });
   });
 
   it("escalates a shape-failed certified answer to generated_answer", async () => {
@@ -2466,7 +2466,7 @@ describe("AgentRunEngine loop (plan → build → evaluate → modify)", () => {
       artifacts: [{ id: "a", kind: "answer" as const, title: "A", trustState: "review_required" as const, payload: {} }],
     });
 
-    // Governed semantic answer → research step is skipped.
+    // Semantic answer (From Metrics) → research step is skipped.
     let semanticResearch = 0;
     const semanticEngine = new AgentRunEngine({
       idGenerator: () => "run-semantic-terminal",

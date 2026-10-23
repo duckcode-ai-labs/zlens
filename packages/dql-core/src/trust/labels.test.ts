@@ -26,7 +26,7 @@ describe('canonical trust-label vocabulary', () => {
     ]);
     expect(Object.keys(TRUST_LABELS).sort()).toEqual([...TRUST_LABEL_ORDER].sort());
     expect(TRUST_LABELS.certified.base).toBe('Certified');
-    expect(TRUST_LABELS.governed.base).toBe('Governed');
+    expect(TRUST_LABELS.governed.base).toBe('From Metrics');
     expect(TRUST_LABELS.reviewed.base).toBe('Reviewed');
     expect(TRUST_LABELS.ai_generated.base).toBe('AI-Generated');
     expect(TRUST_LABELS.insufficient_context.base).toBe('Insufficient-Context');

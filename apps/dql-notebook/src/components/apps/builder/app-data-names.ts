@@ -27,7 +27,8 @@ export function appDataSameNameOrigins(items: Array<Pick<AppBlockRecommendation,
  * certified data until it is added and certified — with one plain hint when
  * it helps ("added", "drafted — review in Modeling"). How the project's model
  * knows the table is detail for a tooltip, never another status word
- * ("Modeled", "Drafted", "Not checked yet", "Checked", "Governed").
+ * ("Modeled", "Drafted", "Not checked yet", "Checked", "Governed",
+ * "From Metrics").
  */
 export function tableTrustWords(
   table: Pick<WarehouseTableSummary, 'modeled'>,

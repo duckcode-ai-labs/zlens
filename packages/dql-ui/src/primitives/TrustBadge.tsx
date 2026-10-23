@@ -10,7 +10,7 @@ type Tone = React.ComponentProps<typeof StatusPill>['tone'];
  *
  * This MIRRORS the single source of truth in
  * `@zlens/core` (`src/trust/labels.ts`): the same six base
- * labels (Certified · Governed · Reviewed · AI-Generated ·
+ * labels (Certified · From Metrics · Reviewed · AI-Generated ·
  * Insufficient-Context · Conflict), each with a base label + optional qualifier shape and a color
  * token. `dql-ui` is a browser-only leaf package with no ZLens workspace
  * dependencies, so it cannot import dql-core (which carries node-only deps)
@@ -30,7 +30,7 @@ export type CanonicalTrustLabelId =
 
 const CANONICAL_TRUST_LABELS: Record<CanonicalTrustLabelId, { base: string; tone: Tone }> = {
   certified: { base: 'Certified', tone: 'success' },
-  governed: { base: 'Governed', tone: 'info' },
+  governed: { base: 'From Metrics', tone: 'info' },
   reviewed: { base: 'Reviewed', tone: 'info' },
   ai_generated: { base: 'AI-Generated', tone: 'warning' },
   insufficient_context: { base: 'Insufficient-Context', tone: 'neutral' },

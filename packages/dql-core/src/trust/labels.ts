@@ -43,7 +43,7 @@ export type TrustLabelColor = 'green' | 'blue' | 'amber' | 'slate' | 'red';
 export interface TrustLabelDefinition {
   /** Stable machine id. */
   id: TrustLabelId;
-  /** Human-facing base label, e.g. "Certified". */
+  /** Human-facing base label, e.g. "Certified" or "From Metrics". */
   base: string;
   /** Severity bucket (drives color + ordering). */
   severity: TrustLabelSeverity;
@@ -80,10 +80,10 @@ export const TRUST_LABELS: Record<TrustLabelId, TrustLabelDefinition> = {
   },
   governed: {
     id: 'governed',
-    base: 'Governed',
+    base: 'From Metrics',
     severity: 'info',
     color: 'blue',
-    description: 'Compiled from governed semantic metrics and dimensions, not certified; the Ask page shows it as "Governed answer".',
+    description: 'Built from semantic metrics and dimensions, not certified; the Ask page shows it as "Answer from Metrics".',
   },
   reviewed: {
     id: 'reviewed',

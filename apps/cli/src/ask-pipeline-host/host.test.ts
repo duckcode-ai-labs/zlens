@@ -145,7 +145,7 @@ describe('a ref outside the envelope is explained as out of scope, never as none
     const governed = toExecutorResult('run:evidence', outcome([]), Date.now());
     const governedCard = governed.artifacts![0]!;
     expect(governed.trustState).toBe('governed');
-    expect(governedCard).toMatchObject({ title: 'Governed answer from a certified saved query', trustState: 'governed' });
+    expect(governedCard).toMatchObject({ title: 'Answer from a certified saved query, not certified for this question', trustState: 'governed' });
     expect(governedCard.payload).toMatchObject({ route: { tier: 'certified_block' }, sourceTier: 'certified_artifact', certification: 'governed' });
     const doubted = toExecutorResult('run:evidence-doubt', outcome(['beverage']), Date.now());
     const doubtedCard = doubted.artifacts![0]!;
@@ -159,7 +159,7 @@ describe('a ref outside the envelope is explained as out of scope, never as none
     expect(answeredArtifactTitle('review_required', 'ai_sql')).toBe('AI-drafted answer');
     expect(answeredArtifactTitle('governed', 'governed_definitions')).toBe('Semantic answer');
     expect(answeredArtifactTitle('review_required', 'governed_definitions')).toBe('Answer to review, from governed definitions');
-    expect(answeredArtifactTitle('governed', 'block_as_evidence')).toBe('Governed answer from a certified saved query');
+    expect(answeredArtifactTitle('governed', 'block_as_evidence')).toBe('Answer from a certified saved query, not certified for this question');
     expect(answeredArtifactTitle('review_required', 'block_as_evidence')).toBe('Answer to review, from a certified saved query');
   });
 });

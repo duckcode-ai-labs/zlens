@@ -679,11 +679,14 @@ function printCanonicalCliAskRun(run: AgentThreadRun, threadId?: string): void {
     ? '✓ Certified'
     : run.trustState === 'grounded'
       ? '✓ Verified (grounded)'
-      : run.trustState === 'review_required'
-        ? '! AI-generated · review required'
-        : run.trustState === 'blocked'
-          ? '✕ Blocked'
-          : '· Reply';
+      : run.trustState === 'governed'
+        // The Ask page's "Answer from Metrics": built from Metrics, not certified.
+        ? '· From Metrics'
+        : run.trustState === 'review_required'
+          ? '! AI-generated · review required'
+          : run.trustState === 'blocked'
+            ? '✕ Blocked'
+            : '· Reply';
   console.log(`${badge}\n\n${(run.answer ?? run.summary ?? '').trim()}`);
   if (run.reviewDraft?.path) {
     // Tier 2: the review-required answer was saved as a draft (never certified).
