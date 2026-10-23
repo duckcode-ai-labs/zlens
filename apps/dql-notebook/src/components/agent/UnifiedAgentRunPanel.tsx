@@ -339,7 +339,7 @@ export interface InsertDqlPayload {
 const ROUTE_LABEL: Record<AgentRunRoute, string> = {
   conversation: 'Chat',
   certified_answer: 'Certified answer',
-  semantic_answer: 'Governed semantic answer',
+  semantic_answer: 'Answer from Metrics',
   generated_answer: 'Generated answer',
   research: 'Research plan',
   sql_cell: 'SQL cell',
@@ -5029,7 +5029,7 @@ function AskInspector({
   });
   const activeTab = tabs.some((x) => x.id === tab) ? tab : tabs[0].id;
 
-  const badgeLabel = cancelled ? 'Cancelled' : blocked ? 'Blocked' : certified ? 'Certified' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'Governed' : investigationReport ? 'Review required' : isAppViewPayload(payload) ? 'Needs review' : 'AI-generated';
+  const badgeLabel = cancelled ? 'Cancelled' : blocked ? 'Blocked' : certified ? 'Certified' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'From Metrics' : investigationReport ? 'Review required' : isAppViewPayload(payload) ? 'Needs review' : 'AI-generated';
   const badgeColor = cancelled ? 'var(--text-tertiary)' : blocked ? 'var(--status-error)' : certified ? 'var(--status-success)' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'var(--accent)' : 'var(--status-warning)';
   const badgeBg = cancelled ? 'var(--bg-3)' : blocked ? 'var(--status-error-bg)' : certified ? 'var(--status-success-bg)' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'var(--accent-dim)' : 'var(--status-warning-bg)';
 

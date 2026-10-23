@@ -6424,7 +6424,7 @@ function defaultArtifacts(
         title: route === "certified_answer"
           ? "Certified answer"
           : route === "semantic_answer"
-            ? "Governed semantic answer"
+            ? "Answer from Metrics"
             : "Generated answer",
         trustState,
         payload: { question: request.question, answer: result.answer },

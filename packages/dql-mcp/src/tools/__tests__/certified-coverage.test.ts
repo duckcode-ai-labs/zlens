@@ -92,7 +92,7 @@ describe('certified blocks come first for clients without a guide file', () => {
     expect(out.recommendedAction).toContain('do not say that no certified block exists');
     // The compile itself stays an uncertified draft, and never says "no certified block".
     expect(out.uncertified).toBe(true);
-    expect(out.trustLabelInfo.base).toBe('Governed');
+    expect(out.trustLabelInfo.base).toBe('From Metrics');
     expect(out.trustStatus.caveats[0]).toBe('Certified block "monthly_revenue" answers this; use query_via_block for the certified answer.');
     expect(JSON.stringify(out)).not.toContain('No certified block exactly answered');
     expect(out.draftBlock).toBeUndefined();

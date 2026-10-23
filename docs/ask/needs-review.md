@@ -90,7 +90,7 @@ saves a draft and opens it in the saved query editor.
 
 ## Other labels you may see
 
-- **Governed answer**: built from semantic metrics and dimensions, with no
+- **Answer from Metrics**: built from semantic metrics and dimensions, with no
   AI-written SQL. If ZLens had to guess how to group a dimension, the note says
   **Review required** and asks you to check the mapping.
 - **Needs review** on an App page answer: the answer read an App tile whose

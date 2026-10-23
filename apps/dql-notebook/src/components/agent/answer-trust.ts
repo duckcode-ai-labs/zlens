@@ -8,7 +8,8 @@ import type { AgentRun } from '../../api/client';
  * (`trustState`) and says where the figures came from (the answer payload's
  * `route.tier`). Every label is read from those two here, so the heading can
  * never say "AI-generated answer" over a card that says it came from a
- * certified block, and a governed answer is never badged "AI-generated".
+ * certified block, and an answer from Metrics (`governed`) is never badged
+ * "AI-generated".
  *
  * The run's `route` is not a source: a certified block served as evidence and
  * an answer composed from declared relationships both resolve to the
@@ -81,8 +82,11 @@ export function answerTrustHeading(run: RunTrust & { status?: string; summary?: 
   if (isRefusedRun(run)) return askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : 'No answer';
   const source = answerSourceOf(run);
   if (run.trustState === 'certified') return 'Certified answer';
-  if (source === 'app_view') return run.trustState === 'governed' ? 'Governed answer from this App' : 'Answer from this App · needs review';
-  if (run.trustState === 'governed' || run.trustState === 'grounded') return 'Governed answer';
+  if (source === 'app_view') return run.trustState === 'governed' ? 'Answer from Metrics, in this App' : 'Answer from this App · needs review';
+  // A certified saved query served as evidence is not built from Metrics: the
+  // heading names its real source, as the answer card does.
+  if (run.trustState === 'governed' && source === 'block_as_evidence') return 'Answer from a certified saved query, not certified for this question';
+  if (run.trustState === 'governed' || run.trustState === 'grounded') return 'Answer from Metrics';
   if (source === 'block_as_evidence') return 'Answer to review, from a certified saved query';
   if (source === 'governed_definitions') return 'Answer to review, from governed definitions';
   return 'AI-generated answer';
@@ -92,7 +96,7 @@ export function answerTrustHeading(run: RunTrust & { status?: string; summary?: 
 export function answerTrustBadge(run: RunTrust & { status?: string; summary?: string; answer?: string }): string {
   if (isRefusedRun(run)) return askNeedsAiProvider(run) ? 'Not answered' : 'Refused';
   if (run.trustState === 'certified') return 'Certified';
-  if (run.trustState === 'governed' || run.trustState === 'grounded') return 'Governed';
+  if (run.trustState === 'governed' || run.trustState === 'grounded') return 'From Metrics';
   const source = answerSourceOf(run);
   if (source === 'app_view' || source === 'block_as_evidence' || source === 'governed_definitions') return 'Needs review';
   return 'AI-generated';

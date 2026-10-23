@@ -73,10 +73,10 @@ describe('agentic analytics tools', () => {
       certification: 'governed',
       trustLabelInfo: {
         id: 'governed',
-        display: 'Governed',
+        display: 'From Metrics',
       },
       trustStatus: {
-        label: 'Governed semantic compile',
+        label: 'From Metrics: semantic compile',
         uncertified: true,
         reviewStatus: 'draft_ready',
         certification: 'governed',
@@ -242,7 +242,7 @@ describe('agentic analytics tools', () => {
       reviewStatus: 'draft_ready',
       certification: 'governed',
       trustStatus: {
-        label: 'Governed semantic compile',
+        label: 'From Metrics: semantic compile',
         caveats: expect.arrayContaining(['semantic_draft_review_required']),
       },
       mode: 'question_selection',

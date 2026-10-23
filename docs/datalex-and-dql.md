@@ -183,7 +183,7 @@ what it needs from the database itself:
    [Review and certify relationships](#review-and-certify-relationships).
 4. **Add metrics.** **Modeling → New metric** writes a metric to ZLens's own
    semantic layer: an aggregation of one catalog column. Ask answers from it
-   with the **Governed** label.
+   with the **From Metrics** label.
 
 Each re-sync compares the new catalog with the previous one. It reports new
 and removed tables and columns and changed types, and names the entities and

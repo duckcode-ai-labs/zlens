@@ -262,13 +262,13 @@ function certifiedCoverageFields(certified: CertifiedCoverageResult) {
 /**
  * A semantic compile reads only governed metrics and dimensions, and the
  * compiler (not a model) writes its SQL. The Ask page heads the same answer
- * "Governed answer" (`trustState: governed`), so MCP labels it Governed too:
+ * "Answer from Metrics" (`trustState: governed`), so MCP labels it From Metrics too:
  * above AI-Generated, below Certified. The saved draft still needs review
  * before it can be certified.
  */
 function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionError?: string, certified?: CertifiedCoverageResult) {
   return {
-    label: 'Governed semantic compile',
+    label: 'From Metrics: semantic compile',
     uncertified: true,
     reviewStatus: 'draft_ready',
     certification: 'governed',
@@ -277,7 +277,7 @@ function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionE
     promotionPath: draftBlock ? 'zlens certify --from-draft' : undefined,
     caveats: [
       certifiedCaveat(certified),
-      'Governed: semantic-layer members were compiled deterministically. Not certified: review the DQL artifact before certifying it.',
+      'From Metrics: semantic-layer members were compiled deterministically. Not certified: review the DQL artifact before certifying it.',
       'semantic_draft_review_required',
       ...(executionError ? [`Execution caveat: ${executionError}`] : []),
     ],

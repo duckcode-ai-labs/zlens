@@ -66,7 +66,7 @@ badge, and the result card is titled, for example, **Answer from this App
 | Badge | Means |
 |---|---|
 | **Certified** | Every tile it read runs a certified source. |
-| **Governed** | It read governed tiles. |
+| **From Metrics** | It read tiles built from Metrics, none of them certified. |
 | **Needs review** | A tile it read needs review. Check that tile's source before relying on the answer. |
 
 The AI model writes the answer only when the App's values may reach it. When

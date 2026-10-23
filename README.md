@@ -46,7 +46,7 @@ labels what it used:
 | Label | Answered from | Means |
 |---|---|---|
 | ● **Certified** | a certified saved query | Ran a saved query a person reviewed and certified, exactly as certified. |
-| ◐ **Governed** | your semantic layer | Built from approved metrics and dimensions. |
+| ◐ **From Metrics** | your semantic layer | Built from approved metrics and dimensions. Not certified. |
 | ○ **Needs review** | SQL written by AI | Grounded in your schema and checked before it runs, then saved as a draft saved query until someone certifies it. |
 
 If none of these can answer safely, Ask refuses and says why. It never dresses

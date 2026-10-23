@@ -62,7 +62,7 @@ Every answer and every App tile says how far to trust it:
 | Label | Means |
 |---|---|
 | **Certified** | It ran a certified saved query exactly as reviewed. |
-| **Governed** | It was built from semantic metrics and dimensions. |
+| **From Metrics** | An Ask answer built from semantic metrics and dimensions, not certified. |
 | **Needs review** / **AI-generated** | AI wrote the SQL. Check it before relying on it. |
 | A refusal | ZLens could not answer safely and says why, instead of guessing. |
 

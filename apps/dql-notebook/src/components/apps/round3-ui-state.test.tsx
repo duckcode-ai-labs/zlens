@@ -92,7 +92,7 @@ describe('two trust words in the Data list (round 3, problem 5)', () => {
   it('keeps how the model knows the table in the tooltip, never as another status word', () => {
     const words = [tableTrustWords({}), tableTrustWords({ modeled: { state: 'modeled' } } as never), tableTrustWords({ modeled: { state: 'drafted' } } as never), tableTrustWords({}, { added: true })];
     for (const word of words) {
-      expect(`${word.label} ${word.hint ?? ''}`).not.toMatch(/\b(Modeled|Not checked yet|Checked|Governed)\b/);
+      expect(`${word.label} ${word.hint ?? ''}`).not.toMatch(/\b(Modeled|Not checked yet|Checked|Governed|From Metrics)\b/);
       expect(word.detail.length).toBeGreaterThan(10);
     }
   });

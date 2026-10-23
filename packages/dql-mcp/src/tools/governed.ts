@@ -139,7 +139,7 @@ function mapRun(run: AgentRunLike) {
     // Canonical trust — report VERBATIM. Generated answers are review-required,
     // semantic answers governed, and neither is certified.
     trustState: run.trustState,
-    // The same words the Ask page shows: governed → Governed.
+    // The same words the Ask page shows: governed → From Metrics.
     trustLabelInfo: resolveTrustLabel(trustLabelIdForStatus(run.trustState)),
     answerKind: run.answerKind,
     answer: run.answer ?? run.summary,
