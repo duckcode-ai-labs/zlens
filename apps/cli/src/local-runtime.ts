@@ -22015,14 +22015,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             for (const sourceId of resolvedSources.missingSourceIds) {
               datasetSourceErrors.set(
                 sourceId,
-                `Dataset source ${sourceId} no longer resolves in the active project catalog. Refresh or reselect the Dataset before running it.`,
+                'This data is no longer in the project. Choose current data from Add data before running this tile.',
               );
             }
             for (const source of resolvedSources.items) {
               if (!source.capabilities.dataset) {
                 datasetSourceErrors.set(
                   source.sourceId,
-                  `Dataset source ${source.title} no longer exposes an approved field contract. Refresh or reselect the Dataset before running it.`,
+                  `ZLens can't read the fields of ${source.title} right now. Refresh this data in the Data pane, or choose it again from Add data.`,
                 );
               } else if (!source.eligibility.localPreview) {
                 datasetSourceErrors.set(
@@ -22419,10 +22419,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               const currentAuthorityError = datasetSourceErrors.get(item.sourceId);
               if (currentAuthorityError) throw new Error(currentAuthorityError);
               if (!source || !discoveryDescriptor) {
-                throw new Error(`Dataset source ${item.sourceId} no longer exposes an approved field contract.`);
+                throw new Error('ZLens can\'t read the fields of this data right now. Refresh this data in the Data pane, or choose it again from Add data.');
               }
               if (source.sourceRevision !== item.sourceRevision) {
-                throw new Error('This Dataset changed after the tile was authored. Choose the current Dataset and reselect its fields.');
+                throw new Error('This data changed after the tile was made. Refresh this data in the Data pane, or choose it again from Add data.');
               }
               // The persisted draft card and page binding establish authoring
               // provenance; the catalog establishes current capability. Both

@@ -19,6 +19,7 @@ import { appDataSameNameOrigins, madeTableTrustWords, tableTrustLine, tableTrust
 import { useDispatch } from '../../../store/NotebookStore';
 import { rememberProposalForModeling } from '../../modals/setup-model-source';
 import { splitStagingTables } from '@zlens/core/staging-tables';
+import { certifiedByLabel } from '@zlens/core/apps/reader-trust';
 import {
   ADD_DATA_KINDS,
   MAKE_ROW_LEVEL_HINT,
@@ -359,7 +360,7 @@ export function AddDataBrowser({
       {(kind === 'all' || kind === 'tables') && !domain && stagingSplit.hidden.length ? <label className="add-data-hint add-data-staging"><input type="checkbox" checked={showStaging} onChange={(event) => setShowStaging(event.target.checked)} /> Show staging tables <small>· {stagingSplit.hidden.length} staging cop{stagingSplit.hidden.length === 1 ? 'y' : 'ies'} of tables listed here {showStaging ? 'shown' : 'hidden'}</small></label> : null}
       {shownTables.map((table) => {
         // What became of the table (new-user round 3, problem 7): already in this App, made into a Dataset, or not checked yet.
-        const state = tableAppState({ ...table, datasets: [...(table.datasets ?? []), ...(madeFromTables[table.id] ?? []).filter((made) => !(table.datasets ?? []).some((known) => known.sourceId === made.sourceId))] }, draft.sources);
+        const state = tableAppState({ ...table, datasets: [...(table.datasets ?? []), ...(madeFromTables[table.id] ?? []).filter((made) => !(table.datasets ?? []).some((known) => known.sourceId === made.sourceId))] }, draft.sources, (sourceId) => items.find((item) => (item.sourceId ?? item.id) === sourceId));
         return <article key={table.id} className={`add-data-row table${table.modeled ? ` ${table.modeled.state}` : ''}${state.kind === 'added' ? ' added' : ''}`} role="listitem" data-table-id={table.id} data-table-state={state.kind} {...(table.modeled ? { 'data-modeled': table.modeled.state } : {})}>
           <div className="add-data-summary static">
             <span className="add-data-mark"><Table2 size={14} /></span>
@@ -537,12 +538,21 @@ export type TableAppState =
   | { kind: 'new'; label: string; detail: string };
 
 /** What became of a table, in the two trust words (madeTableTrustWords / tableTrustWords). */
-export function tableAppState(table: Pick<WarehouseTableSummary, 'modeled' | 'datasets'>, sources: ReadonlyArray<{ id: string }>): TableAppState {
+export function tableAppState(
+  table: Pick<WarehouseTableSummary, 'modeled' | 'datasets'>,
+  sources: ReadonlyArray<{ id: string }>,
+  /** The data made from the table as the list knows it, for who certified it and when (R02). */
+  madeItem: (sourceId: string) => Pick<AppBlockRecommendation, 'certification'> | undefined = () => undefined,
+): TableAppState {
   const made = table.datasets ?? [];
+  const certifiedLabel = (sourceId: string) => {
+    const certification = madeItem(sourceId)?.certification;
+    return certification ? certifiedByLabel(certification) : undefined;
+  };
   const added = made.find((dataset) => sources.some((source) => source.id === dataset.sourceId));
-  if (added) return { kind: 'added', ...madeTableTrustWords(added.state, { added: true }), dataset: added };
+  if (added) return { kind: 'added', ...madeTableTrustWords(added.state, { added: true, certifiedLabel: certifiedLabel(added.sourceId) }), dataset: added };
   const best = [...made].sort((left, right) => rank(left.state) - rank(right.state))[0];
-  if (best) return { kind: 'made', ...madeTableTrustWords(best.state), dataset: best };
+  if (best) return { kind: 'made', ...madeTableTrustWords(best.state, { certifiedLabel: certifiedLabel(best.sourceId) }), dataset: best };
   return { kind: 'new', label: tableModelLabel(table), detail: tableTrustWords(table).detail };
   function rank(state: string) { return state === 'certified' ? 0 : state === 'checked' ? 1 : 2; }
 }

@@ -373,7 +373,7 @@ A tile's **⋯** menu lists only the items that fit the tile and the mode
 
 1. Open the **Filters** tab and click **New filter**, then pick a field.
 2. Set a **Display label** and a **Control**. Every field offers
-   **Searchable dropdown** and **Searchable multi-select**. ZLens reads the
+   **Searchable list** and **Searchable multi-select**. ZLens reads the
    field's name to offer one more kind of control, checked in this order:
     - A name that reads like a date (it has `date`, `time`, `month`, `week`,
       `quarter`, `year`, `created`, `updated` or `ordered` in it, or ends with

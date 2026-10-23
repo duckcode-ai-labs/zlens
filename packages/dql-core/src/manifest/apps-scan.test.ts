@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildManifest } from './builder.js';
@@ -282,6 +282,69 @@ describe('buildManifest with apps + dashboards', () => {
       expect.objectContaining({ kind: 'drift', severity: 'error', message: expect.stringContaining('APP_DATASET_SOURCE_DRIFT') }),
       expect.objectContaining({ kind: 'drift', severity: 'error', message: expect.stringContaining('APP_DATASET_FIELD_DRIFT') }),
     ]));
+  });
+
+  it('does not report drift for a saved query\'s result fields or a related table\'s fields, and still reports a column that went away (doctor)', () => {
+    writeBlock('monthly_revenue', `block "monthly_revenue" {
+  domain = "growth"
+  type = "custom"
+  status = "certified"
+  query = """SELECT date_trunc('month', order_date) AS month, SUM(net_amount) AS gross_revenue, AVG(net_amount) AS avg_line FROM order_lines GROUP BY 1"""
+}`);
+    writeBlock('orders_dataset', `block "Orders Dataset" {
+  domain = "growth"
+  type = "custom"
+  status = "certified"
+  grain = {
+    entities = ["order_line"]
+    keys = ["order_line_id"]
+    keyEvidence = "proof.orders"
+  }
+  fields {
+    order_line_id { role = "key", type = "string" }
+    customer_id { role = "dimension", type = "string" }
+    net_amount { role = "attribute", type = "number" }
+  }
+  measures {
+    revenue { agg = "sum", from = "net_amount", additive = "additive", allowedAggs = ["sum"] }
+  }
+  query = """SELECT order_line_id, customer_id, net_amount FROM order_lines"""
+}`);
+    const idOf = (path: string, name: string) => `app:block:growth:${createHash('sha256').update(`${path}\u0000${name}`).digest('hex').slice(0, 20)}`;
+    const revisionOf = (file: string) => `sha256:${createHash('sha256').update(readFileSync(join(projectRoot, 'blocks', file), 'utf8')).digest('hex')}`;
+    const monthlyId = idOf('blocks/monthly_revenue.dql', 'monthly_revenue');
+    const ordersId = idOf('blocks/orders_dataset.dql', 'Orders Dataset');
+    const appDir = join(projectRoot, 'apps', 'growth');
+    mkdirSync(join(appDir, 'dashboards'), { recursive: true });
+    writeFileSync(join(appDir, 'dql.app.json'), JSON.stringify({
+      version: 1, id: 'growth', name: 'Growth', domain: 'growth', owners: ['owner@example.test'],
+      members: [{ userId: 'owner@example.test', roles: ['owner'] }], roles: [{ id: 'owner' }], policies: [],
+      homepage: { type: 'dashboard', id: 'overview' },
+    }));
+    const tile = (i: string, sourceId: string, revision: string, query: Record<string, unknown>) => ({ i, x: 0, y: 0, w: 6, h: 3, sourceId, sourceRevision: revision, query, viz: { type: 'bar' } });
+    const page = (items: unknown[]) => JSON.stringify({
+      version: 3, id: 'overview', metadata: { title: 'Overview', domain: 'growth' },
+      datasets: [
+        { id: 'monthly', sourceId: monthlyId, sourceRevision: revisionOf('monthly_revenue.dql'), snapshotId: 's', contractFingerprint: 'c' },
+        { id: 'orders', sourceId: ordersId, sourceRevision: revisionOf('orders_dataset.dql'), snapshotId: 's', contractFingerprint: 'c' },
+      ],
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items },
+    });
+    writeFileSync(join(appDir, 'dashboards', 'overview.dqld'), page([
+      tile('by-month', monthlyId, revisionOf('monthly_revenue.dql'), { dimensions: [{ field: 'month', timeGrain: 'quarter' }], measures: [{ measure: 'gross_revenue' }, { measure: 'max_avg_line' }, { measure: 'count_of_rows' }] }),
+      tile('by-customer', ordersId, revisionOf('orders_dataset.dql'), { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }),
+    ]));
+    const drift = () => (buildManifest({ projectRoot, dqlVersion: 'test' }).diagnostics ?? []).filter((d) => d.kind === 'drift').map((d) => d.message);
+    expect(drift()).toEqual([]);
+
+    // A column the saved query no longer returns is still drift.
+    writeFileSync(join(appDir, 'dashboards', 'overview.dqld'), page([
+      tile('gone', monthlyId, revisionOf('monthly_revenue.dql'), { dimensions: [{ field: 'region' }], measures: [{ measure: 'net_revenue' }] }),
+    ]));
+    expect(drift()).toEqual([
+      expect.stringContaining('APP_DATASET_FIELD_DRIFT: Tile gone selects dimension region'),
+      expect.stringContaining('APP_DATASET_FIELD_DRIFT: Tile gone selects measure net_revenue'),
+    ]);
   });
 
   it('records virtual v3 App Dataset tile lineage without fabricating offline SQL', () => {

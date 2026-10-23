@@ -10,7 +10,9 @@ name: App Datasets pilot (real DuckDB)
 # server past the first page (dataset-field-values test), and follow checked
 # many-to-one joins to related tables' fields with totals unchanged
 # (related-fields.duckdb test), and keep two customers who share a name apart
-# by grouping names by their key (name-keys.duckdb test). It also holds
+# by grouping names by their key (name-keys.duckdb test), and move an App's
+# field tiles to a saved query certified from inside it (saved-query-adopt-
+# after-certify.duckdb test). It also holds
 # the parity checks: tile results equal hand-written SQL, and the block and
 # semantic routes agree on shared metrics.
 #
@@ -69,7 +71,7 @@ jobs:
         # masked by tee.
         shell: bash
         run: |
-          npx vitest run src/datasets/dataset-runtime-pilot.test.ts src/datasets/table-dataset.test.ts src/datasets/saved-query-dataset.test.ts src/datasets/saved-query-result-fields.test.ts src/datasets/dataset-field-values.test.ts src/dashboard-filter-dates.duckdb.test.ts src/datasets/related-fields.duckdb.test.ts src/datasets/name-keys.duckdb.test.ts src/saved-query-filter-values.duckdb.test.ts --reporter=verbose | tee "$RUNNER_TEMP/pilot.log"
+          npx vitest run src/datasets/dataset-runtime-pilot.test.ts src/datasets/table-dataset.test.ts src/datasets/saved-query-dataset.test.ts src/datasets/saved-query-result-fields.test.ts src/datasets/dataset-field-values.test.ts src/dashboard-filter-dates.duckdb.test.ts src/datasets/related-fields.duckdb.test.ts src/datasets/name-keys.duckdb.test.ts src/saved-query-filter-values.duckdb.test.ts src/datasets/saved-query-adopt-after-certify.duckdb.test.ts --reporter=verbose | tee "$RUNNER_TEMP/pilot.log"
           # A configured root must run every case; a skipped case here means the
           # connector root was not picked up.
           if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/pilot.log"; then

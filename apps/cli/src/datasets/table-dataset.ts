@@ -298,7 +298,9 @@ export async function draftSavedQueryDataset(input: {
 export function savedQueryRelation(sql: string, driver: string): string {
   const body = sql.trim().replace(/;\s*$/, '');
   if (!body) throw new TableDatasetError('SAVED_QUERY_HAS_NO_SQL', 'This saved query has no SQL to read columns from.');
-  return `(${body}) AS ${getDialect(driver).quoteIdentifier('dql_saved_query')}`;
+  // A newline before the closing parenthesis: SQL that ends in a line comment
+  // (`GROUP BY region -- by region`) would otherwise comment it out.
+  return `(${body}\n) AS ${getDialect(driver).quoteIdentifier('dql_saved_query')}`;
 }
 
 /** Counts rows, and distinct and non-empty values of the key candidates, in one scan. */

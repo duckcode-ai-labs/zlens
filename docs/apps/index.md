@@ -109,7 +109,7 @@ query is a *block*.
 
 Filters sit above the tiles.
 
-- Pick values in a dropdown, or set **from** and **to** dates.
+- Pick values from a searchable list, or set **from** and **to** dates.
 - **Reset** puts a filter back to its default.
 - If a filter does not apply to every tile, it says so, for example
   **Region affects 2 of 3 tiles**.

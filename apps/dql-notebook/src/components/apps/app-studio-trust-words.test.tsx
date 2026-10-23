@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { AppStudioBuildDraft } from '../../api/client';
 import { appTileTrustFor } from '@zlens/core/apps/app-trust';
 import { draftCardTrustText, draftTrust, draftWithSourceReceipts } from './app-studio-publish-readiness';
-import { CHANGED_IN_ANOTHER_TAB, studioErrorWords } from './app-studio-words';
+import { CHANGED_IN_ANOTHER_TAB, sourceSwitchWords, studioErrorWords } from './app-studio-words';
 import { StudioErrorBanner } from './builder/studio-ui';
 import { ownerWords } from './builder/app-data';
 
@@ -114,6 +114,24 @@ describe('App Studio errors in plain words (F11)', () => {
     for (const raw of ['APP_BUILD_REVISION_CONFLICT: x', 'APP_BUILD_NOT_READY: y', 'SOME_CODE: z']) {
       expect(studioErrorWords(raw).message).not.toMatch(/[A-Z]+_[A-Z_]+/);
     }
+  });
+
+  it('a source that could not switch says what to do by its name, with buttons; ids and contracts stay under Technical details (R03)', () => {
+    const message = sourceSwitchWords('Rerun Cert Probe', 'certified');
+    expect(message).toBe('This App couldn’t switch to the newly certified version of Rerun Cert Probe. Refresh its data, or choose it again from Add data.');
+    expect(sourceSwitchWords('Orders', 'refresh')).toBe('This App couldn’t switch to the current version of Orders. Choose it again from Add data, or keep the App on its current data.');
+    const technical = 'rerun_cert_probe does not expose one complete current data version and contract.';
+    const markup = renderToStaticMarkup(<StudioErrorBanner
+      error={message}
+      technical={technical}
+      actions={[{ label: 'Refresh this data', onClick: () => undefined }, { label: 'Choose it again from Add data', onClick: () => undefined }]}
+    />);
+    expect(markup).toContain('>Refresh this data</button>');
+    expect(markup).toContain('>Choose it again from Add data</button>');
+    const visible = markup.slice(0, markup.indexOf('<details'));
+    expect(visible).toContain('newly certified version of Rerun Cert Probe');
+    expect(visible).not.toMatch(/rerun_cert_probe|data version and contract/);
+    expect(markup.indexOf('data version and contract')).toBeGreaterThan(markup.indexOf('Technical details'));
   });
 
   it('without a Refresh handler, the banner offers none', () => {
