@@ -92,7 +92,7 @@ describe('certified blocks come first for clients without a guide file', () => {
     expect(out.recommendedAction).toContain('do not say that no certified block exists');
     // The compile itself stays an uncertified draft, and never says "no certified block".
     expect(out.uncertified).toBe(true);
-    expect(out.trustLabelInfo.base).toBe('AI-Generated');
+    expect(out.trustLabelInfo.base).toBe('Governed');
     expect(out.trustStatus.caveats[0]).toBe('Certified block "monthly_revenue" answers this; use query_via_block for the certified answer.');
     expect(JSON.stringify(out)).not.toContain('No certified block exactly answered');
     expect(out.draftBlock).toBeUndefined();
@@ -159,7 +159,7 @@ describe('certified blocks come first for clients without a guide file', () => {
 
     it('a question with no certified answer says the check ran and found none', async () => {
       const out = await querySemanticModel(new DQLContext({ projectRoot: project }), {
-        question: 'Which store location had the most orders in 2025?',
+        question: 'Which store location had the most orders?',
         dryRun: true,
         saveDraft: false,
       }) as Record<string, any>;

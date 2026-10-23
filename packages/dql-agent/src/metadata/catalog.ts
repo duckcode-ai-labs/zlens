@@ -82,6 +82,7 @@ import {
   certifiedFitAllowsTier1,
   certifiedTerminationVerdict,
   evaluateCertifiedBlockFit,
+  namedQualifiedSemanticMeasures,
   type CertifiedBlockFit,
 } from './block-fit.js';
 import { retrieveScopedHints } from '../hints/retrieval.js';
@@ -6418,6 +6419,7 @@ async function planContextPackRoute(input: {
   }
 
   const applicabilityByKey = certifiedApplicabilities(input.objects, input.questionPlan);
+  const namedSemanticMeasures = namedQualifiedSemanticMeasures(input.request.question, input.objects);
   const exactByApplicability = [...applicabilityByKey.values()]
     .filter((item) => item.kind === 'exact_answer' || item.kind === 'safe_parameterized')
     .sort((a, b) => b.score - a.score)[0];
@@ -6442,6 +6444,7 @@ async function planContextPackRoute(input: {
         exactExampleMatch: hasExactExampleQuestion(input.request.question, object),
         uniqueExactExampleContract: hasUniqueExactCertifiedExample(input.request.question, input.objects, object),
         definitionLookup: intent === 'definition_lookup' && objectNameInQuestion(input.request.question, object),
+        namedSemanticMeasures,
       }),
       applicabilityScore: applicabilityByKey.get(object.objectKey)?.score ?? 0,
     }))
@@ -6512,6 +6515,7 @@ async function planContextPackRoute(input: {
         )),
         definitionLookup: Boolean(exact && intent === 'definition_lookup'
           && objectNameInQuestion(input.request.question, blockFitObject)),
+        namedSemanticMeasures,
       })
     : undefined;
   const blockFit = rawBlockFit && blockFitObject
@@ -6817,6 +6821,7 @@ function buildCertifiedCandidateFitDiagnostics(input: {
   questionPlan: AnalysisQuestionPlan;
   routeDecision: MetadataRouteDecision;
 }): LocalContextPack['retrievalDiagnostics']['certifiedCandidateFits'] {
+  const namedSemanticMeasures = namedQualifiedSemanticMeasures(input.request.question, input.objects);
   return input.objects
     .filter((object) => object.objectType === 'dql_block' && isCertifiedMetadataObject(object))
     .map((object) => {
@@ -6830,6 +6835,7 @@ function buildCertifiedCandidateFitDiagnostics(input: {
         exactExampleMatch: hasExactExampleQuestion(input.request.question, object),
         uniqueExactExampleContract: exactExampleContract,
         definitionLookup: input.routeDecision.intent === 'definition_lookup',
+        namedSemanticMeasures,
       });
       return {
         objectKey: object.objectKey,

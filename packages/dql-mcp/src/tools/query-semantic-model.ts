@@ -66,7 +66,7 @@ export async function querySemanticModel(
     if (!composed) {
       return {
         matched: false,
-        reason: 'SemanticLayer.composeQuery could not compile the requested metric/dimension selection.',
+        reason: semanticCompileGap(layer, composeOptions),
         requested: composeOptions,
         available,
       };
@@ -130,7 +130,7 @@ export async function querySemanticModel(
       matched: true,
       uncertified: true,
       reviewStatus: 'draft_ready',
-      certification: 'uncertified',
+      certification: 'governed',
       trustLabelInfo: trust.trustLabelInfo,
       trustStatus: trust,
       mode: 'explicit_members',
@@ -176,7 +176,7 @@ export async function querySemanticModel(
     return {
       ...certifiedCoverageFields(certified),
       matched: false,
-      reason: 'No compatible semantic metric/dimension/time-grain selection was found for the question.',
+      reason: 'No semantic match: no semantic metric with a compatible dimension and time grain matches the question by name or label. Do not substitute another metric; answer through ask_dql\'s generated route instead.',
       available,
     };
   }
@@ -203,7 +203,7 @@ export async function querySemanticModel(
     matched: true,
     uncertified: true,
     reviewStatus: 'draft_ready',
-    certification: 'uncertified',
+    certification: 'governed',
     trustLabelInfo: trust.trustLabelInfo,
     trustStatus: trust,
     mode: 'question_selection',
@@ -225,6 +225,23 @@ export async function querySemanticModel(
 }
 
 /**
+ * Why an explicit selection did not compile, in the modeler's words: the
+ * metric the native engine cannot run (an offset-window derived metric, say)
+ * or the dimension the metrics cannot reach. Falls back to a generic sentence.
+ */
+function semanticCompileGap(layer: SemanticLayer, options: ComposeQueryOptions): string {
+  const gaps = [
+    ...options.metrics.map((metric) => layer.explainNativeMetricGap?.(metric)),
+    ...(options.metrics.every((metric) => !layer.explainNativeMetricGap?.(metric))
+      ? (options.dimensions ?? []).map((dimension) => layer.explainDimensionGap?.(options.metrics, dimension))
+      : []),
+  ].filter((gap): gap is string => Boolean(gap));
+  return gaps.length > 0
+    ? `No semantic match: ${gaps.join(' ')}`
+    : 'No semantic match: the semantic layer could not compile the requested metric/dimension selection.';
+}
+
+/**
  * Leads the result, so an agent reads it before the compiled draft: the
  * certified block that answers this, or what the certified check found.
  */
@@ -242,18 +259,25 @@ function certifiedCoverageFields(certified: CertifiedCoverageResult) {
   };
 }
 
+/**
+ * A semantic compile reads only governed metrics and dimensions, and the
+ * compiler (not a model) writes its SQL. The Ask page heads the same answer
+ * "Governed answer" (`trustState: governed`), so MCP labels it Governed too:
+ * above AI-Generated, below Certified. The saved draft still needs review
+ * before it can be certified.
+ */
 function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionError?: string, certified?: CertifiedCoverageResult) {
   return {
-    label: 'AI-generated semantic compile',
+    label: 'Governed semantic compile',
     uncertified: true,
     reviewStatus: 'draft_ready',
-    certification: 'uncertified',
-    trustLabelInfo: resolveTrustLabel('ai_generated'),
+    certification: 'governed',
+    trustLabelInfo: resolveTrustLabel('governed'),
     draftPath: draftBlock?.path,
     promotionPath: draftBlock ? 'zlens certify --from-draft' : undefined,
     caveats: [
       certifiedCaveat(certified),
-      'Semantic-layer members were compiled deterministically, but the generated DQL artifact must be reviewed before certification.',
+      'Governed: semantic-layer members were compiled deterministically. Not certified: review the DQL artifact before certifying it.',
       'semantic_draft_review_required',
       ...(executionError ? [`Execution caveat: ${executionError}`] : []),
     ],

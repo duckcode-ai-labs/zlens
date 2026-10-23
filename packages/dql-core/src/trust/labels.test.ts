@@ -15,9 +15,10 @@ import {
 } from './labels.js';
 
 describe('canonical trust-label vocabulary', () => {
-  it('defines exactly the five canonical base labels', () => {
+  it('defines exactly the six canonical base labels', () => {
     expect(TRUST_LABEL_ORDER).toEqual([
       'certified',
+      'governed',
       'reviewed',
       'ai_generated',
       'insufficient_context',
@@ -25,6 +26,7 @@ describe('canonical trust-label vocabulary', () => {
     ]);
     expect(Object.keys(TRUST_LABELS).sort()).toEqual([...TRUST_LABEL_ORDER].sort());
     expect(TRUST_LABELS.certified.base).toBe('Certified');
+    expect(TRUST_LABELS.governed.base).toBe('Governed');
     expect(TRUST_LABELS.reviewed.base).toBe('Reviewed');
     expect(TRUST_LABELS.ai_generated.base).toBe('AI-Generated');
     expect(TRUST_LABELS.insufficient_context.base).toBe('Insufficient-Context');
@@ -52,6 +54,8 @@ describe('canonical trust-label vocabulary', () => {
   it('maps every agent/MCP route to a canonical label id', () => {
     const map: Record<string, TrustLabelId> = {
       certified: 'certified',
+      semantic_answer: 'governed',
+      semantic_compile: 'governed',
       research: 'reviewed',
       generated_sql: 'ai_generated',
       clarify: 'insufficient_context',
@@ -67,6 +71,9 @@ describe('canonical trust-label vocabulary', () => {
   it('maps legacy status strings to canonical labels, additively', () => {
     expect(trustLabelIdForStatus('certified')).toBe('certified');
     expect(trustLabelIdForStatus('approved')).toBe('certified');
+    // The Ask page's run trust states read the same words over MCP.
+    expect(trustLabelIdForStatus('governed')).toBe('governed');
+    expect(trustLabelIdForStatus('review_required')).toBe('ai_generated');
     expect(trustLabelIdForStatus('draft')).toBe('ai_generated');
     expect(trustLabelIdForStatus('pending_recertification')).toBe('ai_generated');
     expect(trustLabelIdForStatus('conflict')).toBe('conflict');

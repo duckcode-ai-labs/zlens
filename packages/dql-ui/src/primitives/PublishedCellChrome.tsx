@@ -29,6 +29,7 @@ export interface PublishedCellChromeProps {
 const TRUST_DOT: Record<NonNullable<TrustState>, string> = {
   // Canonical vocabulary (mirrors dql-core).
   certified: 'var(--color-accent-green, #3fb950)',
+  governed: 'var(--color-accent-blue, #58a6ff)',
   reviewed: 'var(--color-accent-blue, #58a6ff)',
   ai_generated: 'var(--color-accent-yellow, #e3b341)',
   insufficient_context: 'var(--color-text-muted, #9aa4b2)',

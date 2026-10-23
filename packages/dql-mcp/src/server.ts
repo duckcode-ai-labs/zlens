@@ -82,6 +82,8 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   '3. Only when `ask_dql` returns no certified block, use the semantic layer or ' +
   'the generated paths below. Never tell the user that no certified block answers ' +
   'a question unless `ask_dql` said so.\n' +
+  '4. When `ask_dql` returns `nextTool: query_semantic_model`, call it with the ' +
+  'question before writing any SQL; its answer is Governed.\n' +
   'Two ways to answer: `answer_question` runs ZLens\'s FULL governed cascade and ' +
   'returns the executed answer + rows + canonical trust label + a reviewable ' +
   'draft — use it when you want ZLens to generate for you (same engine + trust ' +
@@ -100,8 +102,10 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'semantic layer contains the requested metric, dimension, or time grain, use ' +
   '`query_semantic_model` before deep dbt or warehouse search. If its result names ' +
   'a `certifiedBlock`, call `query_via_block` with that block instead. Otherwise return ' +
-  'the DQL semantic artifact, draft path when present, and generated SQL as ' +
-  'reviewable context, labelled uncertified.\n' +
+  'the DQL semantic artifact, draft path when present, and compiled SQL, ' +
+  'labelled Governed (built from semantic metrics and dimensions, not certified). ' +
+  'When it returns `matched: false`, say there is no semantic match; never ' +
+  'answer with a different metric.\n' +
   'Tier 1 certified: for an exact saved block or direct KPI, use ' +
   '`search_blocks`/`get_block` for discovery and `query_via_block` only when ' +
   'a certified block grain exactly answers the question.\n' +
@@ -135,7 +139,7 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'a typed TileQuery. These tools accept no SQL and execute through the same local ' +
   'governed Dataset runtime as App Builder; their results are ephemeral and cannot ' +
   'create App publication evidence.\n' +
-  'Trust labels are one canonical vocabulary: Certified, Reviewed, ' +
+  'Trust labels are one canonical vocabulary: Certified, Governed, Reviewed, ' +
   'AI-Generated, Insufficient-Context, Conflict (a base label plus an optional ' +
   'qualifier, e.g. "Certified · invariant violated"). Report the trust label ' +
   'verbatim and never upgrade it.\n' +

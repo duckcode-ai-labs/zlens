@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { buildAnalysisQuestionPlan } from './analysis-planner.js';
-import { certifiedFitAllowsTier1, certifiedTerminationVerdict, evaluateCertifiedBlockFit } from './block-fit.js';
+import {
+  certifiedFitAllowsTier1,
+  certifiedTerminationVerdict,
+  evaluateCertifiedBlockFit,
+  namedQualifiedSemanticMeasures,
+} from './block-fit.js';
 import type { MetadataObject } from './catalog.js';
 
 function certifiedBlock(name: string, payload: Record<string, unknown>): MetadataObject {
@@ -485,5 +490,69 @@ describe('authored scope of a certified block', () => {
     const result = fit('top customers', beverage());
     expect(result.reasons?.some((reason) => reason.includes('static scope is not requested'))).toBe(true);
     expect(certifiedFitAllowsTier1(result)).toBe(false);
+  });
+
+  describe('a qualified semantic metric the question names (MCP 2026-10-23)', () => {
+    const monthlyRevenue = certifiedBlock('monthly_revenue', {
+      grain: 'one row per calendar month',
+      declaredOutputs: ['month', 'gross_revenue', 'order_count'],
+      dimensions: ['month'],
+      tags: ['revenue', 'trend', 'growth'],
+      sql: "SELECT date_trunc('month', ordered_at) AS month, SUM(order_total) AS gross_revenue, COUNT(*) AS order_count FROM dev.orders GROUP BY 1",
+    });
+    const semanticMetric = (name: string, label: string): MetadataObject => ({
+      objectKey: `semantic:metric:orders.${name}`,
+      objectType: 'semantic_metric',
+      name: `orders.${name}`,
+      payload: { localId: name, label },
+    });
+    const metrics = [
+      semanticMetric('orders', 'Orders'),
+      semanticMetric('large_orders', 'Large Orders'),
+      semanticMetric('drink_orders', 'Drink Orders'),
+      semanticMetric('order_total', 'Order Total'),
+    ];
+    const fitWithSemantic = (question: string, block: MetadataObject) => evaluateCertifiedBlockFit({
+      question,
+      plan: buildAnalysisQuestionPlan(question),
+      block,
+      namedSemanticMeasures: namedQualifiedSemanticMeasures(question, metrics),
+    });
+
+    it('names large_orders for "large orders", and nothing for plain orders or order total', () => {
+      expect(namedQualifiedSemanticMeasures('How many large orders did we get each month?', metrics))
+        .toEqual([{ metric: 'large_orders', identity: 'large_order', qualifiers: ['large'] }]);
+      expect(namedQualifiedSemanticMeasures('How many orders did we get each month?', metrics)).toEqual([]);
+      expect(namedQualifiedSemanticMeasures('What is the order total by month?', metrics)).toEqual([]);
+    });
+
+    it('keeps monthly_revenue out of Tier 1 for large orders: its order_count counts every order', () => {
+      // The planner drops "large" (measures: count, order), which order_count covers.
+      const result = fitWithSemantic('How many large orders did we get each month?', monthlyRevenue);
+      expect(result.missingMeasures).toEqual(['large_orders']);
+      expect(certifiedFitAllowsTier1(result)).toBe(false);
+      // Not even a directly named block may answer a measure it does not return.
+      expect(certifiedTerminationVerdict({ fit: result, bypass: 'named_block' })).toMatchObject({ allow: false });
+    });
+
+    it('still lets monthly_revenue answer plain monthly orders and revenue', () => {
+      for (const question of ['How many orders did we get each month?', 'How has revenue changed by month?']) {
+        const result = fitWithSemantic(question, monthlyRevenue);
+        expect(result.missingMeasures ?? []).toEqual([]);
+        expect(certifiedTerminationVerdict({ fit: result })).toMatchObject({ allow: true });
+      }
+    });
+
+    it('lets a block whose own output or scope declares the qualifier answer it', () => {
+      const largeOrders = certifiedBlock('monthly_large_orders', {
+        grain: 'one row per calendar month',
+        declaredOutputs: ['month', 'large_order_count'],
+        dimensions: ['month'],
+        sql: "SELECT date_trunc('month', ordered_at) AS month, COUNT(*) AS large_order_count FROM dev.orders WHERE order_total >= 20 GROUP BY 1",
+      });
+      const result = fitWithSemantic('How many large orders did we get each month?', largeOrders);
+      expect(result.missingMeasures ?? []).toEqual([]);
+      expect(certifiedTerminationVerdict({ fit: result })).toMatchObject({ allow: true });
+    });
   });
 });

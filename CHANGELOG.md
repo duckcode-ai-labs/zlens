@@ -8,6 +8,39 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### MCP: truthful certified routes, the metric the question names, and Governed
+
+- **A certified block answers only a measure it returns.** `ask_dql` sent
+  "How many large orders did we get each month?" to `monthly_revenue` as
+  Certified, although its `order_count` counts every order. A semantic metric
+  the question names whose name carries a qualifier (`large_orders`,
+  `food_revenue_pct`, `new_customer_orders`) is now a required measure. A block
+  answers it only when an output or the block's own scope (WHERE, name, tags)
+  says so. Otherwise the question goes to the semantic or generated route.
+  "How has revenue changed by month?" still answers from `monthly_revenue`.
+- **`query_semantic_model` picks the metric the question names.**
+  - "Average order value by customer type" now answers with
+    `average_order_value`, not `drink_orders`.
+  - "New versus returning customers" groups by `customer_type`, whose
+    description lists those values.
+  - "What share of revenue comes from food each month?" answers with
+    `food_revenue_pct` by month.
+  - "Each month" keeps the month grain on the metric's own time dimension.
+  - When the named metric cannot compile, the result says "No semantic match"
+    and why, and never answers with a metric that only shares a word.
+- **Derived metrics compile natively** when their expression is arithmetic
+  over simple metrics with no offset window (`average_order_value`,
+  `order_gross_profit`). Explicit
+  `metrics: ["average_order_value"], dimensions: ["customer_type"]` now
+  compiles. Offset-window metrics such as `revenue_growth_mom` are still
+  refused, with the reason.
+- **Governed is a trust label over MCP too.** The canonical labels are now
+  Certified, Governed, Reviewed, AI-Generated, Insufficient-Context and
+  Conflict. A `query_semantic_model` compile is labelled **Governed** (built
+  from semantic metrics and dimensions, not certified), matching its
+  `dqlArtifact.trustState` and the Ask page's "Governed answer".
+  `answer_question` adds the same label for the run's `trustState`.
+
 ### Apps: Publish waits for pending changes
 
 - **Publish no longer does nothing while a change is saving.** Clicking

@@ -1,4 +1,5 @@
 import { askScopeFromWorkspace, workspaceContextForScope } from '@zlens/agent';
+import { resolveTrustLabel, trustLabelIdForStatus } from '@zlens/core';
 import type { DQLContext } from '../context.js';
 import { fetchRuntime, readRuntimeJson, runtimeBaseUrl, runtimeTimeoutMs, runtimeUnreachableMessage } from '../runtime-fetch.js';
 
@@ -135,9 +136,11 @@ function mapRun(run: AgentRunLike) {
     question: run.question,
     route: run.route,
     status: run.status,
-    // Canonical trust — report VERBATIM. Generated/semantic answers are
-    // review-required, never certified.
+    // Canonical trust — report VERBATIM. Generated answers are review-required,
+    // semantic answers governed, and neither is certified.
     trustState: run.trustState,
+    // The same words the Ask page shows: governed → Governed.
+    trustLabelInfo: resolveTrustLabel(trustLabelIdForStatus(run.trustState)),
     answerKind: run.answerKind,
     answer: run.answer ?? run.summary,
     summary: run.summary,
@@ -162,7 +165,7 @@ function mapRun(run: AgentRunLike) {
     ...(investigation ? { investigation } : {}),
     ...(run.reviewDraft ? { reviewDraft: run.reviewDraft } : {}),
     trustNote:
-      'Report trustState verbatim and never upgrade it. A review-required answer is generated/semantic-layer backed and must be reviewed before it is trusted as certified.',
+      'Report trustState verbatim and never upgrade it. A governed answer is built from semantic metrics and dimensions; a review-required answer must be reviewed before it is trusted. Neither is certified.',
   };
 }
 
