@@ -151,15 +151,14 @@ JSON document for a local-first App package.
 {
   "version": 1,
   "id": "cards-ops",
-  "title": "Cards Operations",
+  "name": "Cards Operations",
   "domain": "cards",
+  "owners": ["cards-analytics@example.com"],
   "subdomain": "fraud",
   "groups": ["daily-ops"],
   "visibility": "shared",
   "lifecycle": "draft",
-  "dashboards": [
-    { "id": "daily-ops", "path": "dashboards/daily-ops.dqld", "title": "Daily Ops" }
-  ],
+  "homepage": { "type": "dashboard", "id": "daily-ops" },
   "notebooks": [
     {
       "path": "notebooks/investigation.dqlnb",
@@ -170,6 +169,12 @@ JSON document for a local-first App package.
   ]
 }
 ```
+
+The App loader requires `id` (letters, digits, `-` and `_`, starting with a
+letter or digit), `name`, a domain (`ownerDomain`, or the older `domain`) and
+at least one entry in `owners`. An App missing any of them is not loaded. `version` is optional and must be `1`.
+Pages are not listed here: each `.dqld` file under the App's `dashboards/`
+folder is a page. A notebook `path` is relative to the project root.
 
 In OSS, `visibility`, `domain`, `subdomain`, `groups`, `audience`, and
 `lifecycle` are organization metadata and trust labels. They are not hosted

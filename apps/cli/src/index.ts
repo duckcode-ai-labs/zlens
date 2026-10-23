@@ -113,6 +113,10 @@ const HELP = `
     zlens connect <target> [path]   Configure Codex, Claude Code, Claude Desktop, or Cursor MCP
     zlens app new|generate|ls|show|build|reindex <name-or-path>
                                     Manage App artifacts (metadata, policies, dashboards, schedules)
+    zlens app check <id>            Run publish checks on an App (exits 1 if not ready)
+    zlens app diff [base] [head]    Review what a change does to every App page (git revisions)
+    zlens app verify <snapshot.html>  Check a signed App snapshot offline (exits 1 if it fails)
+    zlens app key                   Print this project's snapshot signing public key
     zlens schedule list|run|start|status  Local scheduler for @schedule'd blocks (alerts + notifications)
       zlens agent ask "<question>"    Block-first agent loop (certified blocks → fallback LLM SQL)
       zlens agent threads             List persisted conversation threads (resume with --thread)
@@ -255,14 +259,26 @@ const COMMAND_HELP: Record<string, string> = {
   zlens app — Manage local App artifacts
 
   Usage:
-    zlens app new <name>
+    zlens app new <id> --domain <domain> [--owner <user>]
     zlens app generate "<prompt>" [--domain <domain>] [--owner <user>] [--ai-layout]
     zlens app ls [path]
     zlens app show <name> [path]
     zlens app build [path]       Build every App in the project at path (default: .)
     zlens app reindex [path]
+    zlens app check <id> [--format json]
+                                 Run the checks publishing runs; exits 1 if not ready
+    zlens app diff [base] [head] [--html <file>] [--markdown <file>] [--check] [--format json]
+                                 Review App page changes between git revisions
+                                 (default: HEAD against the working tree); --check
+                                 exits 1 when a changed page has problems
+    zlens app verify <snapshot.html> [--trust-key <public.pem>] [--format json]
+                                 Check a signed App snapshot offline; exits 1 if a check fails
+    zlens app key [--format json]
+                                 Print this project's snapshot signing public key
 
   Notes:
+    app new and app generate create a local App draft only; no App files are
+    written until you publish the draft from Apps in zlens notebook.
     app build takes a project path, not an App id: zlens app build .
     --ai-layout stores DQL-native GenUI metadata for dynamic visualization and
     layout decisions while preserving certified block trust boundaries.

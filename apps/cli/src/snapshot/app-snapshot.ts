@@ -222,7 +222,7 @@ export function buildSnapshotDocument(input: SnapshotInput, key: Pick<SnapshotKe
     : 'No page filters';
   const trust = input.trust.total
     ? input.trust.certified === input.trust.total
-      ? `All ${input.trust.total} tiles certified`
+      ? 'All tiles certified'
       : `${input.trust.certified} of ${input.trust.total} tiles certified`
     : '';
   const figureRows = input.figures.slice(0, 400).map((figure) => (

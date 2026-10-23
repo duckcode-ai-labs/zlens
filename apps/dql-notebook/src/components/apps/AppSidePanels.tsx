@@ -32,7 +32,7 @@ export function EmptyPanel({ title, detail, compact = false }: { title: string; 
 
 export function NotebookListPanel({ appDoc }: { appDoc: AppDocumentSummary | null }) {
   const notebooks = appDoc?.notebooks ?? appDoc?.app.notebooks ?? [];
-  if (!notebooks.length) return <EmptyPanel title="No notebooks attached." detail="Attach analysis notebooks in Build mode when this App needs supporting work." />;
+  if (!notebooks.length) return <EmptyPanel title="No notebooks attached." detail="List supporting notebooks under notebooks in the App's dql.app.json." />;
   return (
     <div className="dql-app-simple-list">
       {notebooks.map((notebook) => (

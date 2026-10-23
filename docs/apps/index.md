@@ -44,10 +44,18 @@ or just **Certified**. Other labels also say how fresh the result is, such as
 **Updated just now**.
 
 Click the label to open the tile's receipt. It shows the **Source**, the
-**Checks passed** when the data was certified (for example what one row is,
-how numbers are shown, and its tests), the **Owner**, the **Filters** applied,
-the number of **Rows**, and when it was **Last refreshed**. Ids, the source
-file and the fingerprints of the result and the SQL are under
+**Filters** applied (or **None applied**), the number of **Rows**, and when it
+was **Last refreshed**. Some rows appear only when there is something to show:
+
+- **Certified** names who certified the tile's data and when. It appears on a
+  certified tile.
+- **Checks passed** lists the checks recorded when the data was certified, for
+  example what one row is, how numbers are shown, and its tests. It appears
+  only on a certified tile whose certification recorded checks.
+- **Owner** appears only when the page's author filled in the tile's **Owner**
+  in App Studio's tile settings.
+
+Ids, the source file and the fingerprints of the result and the SQL are under
 **Technical details**, which starts closed. **Show the query and SQL** opens
 what ran.
 
@@ -113,14 +121,26 @@ session only.
 ## Ask about the App
 
 Type a question in **Ask about** *App name*… above the tiles and click
-**Ask**. The answer uses this page's results and filters. See
+**Ask**. A question about what the page shows is answered from this page's
+results; other questions go through Ask, limited to this App's domain and
+filters. The box needs an AI provider. See
 [Ask about an App](ask-about-an-app.md).
 
 ## More on each tile
 
-A tile's **⋯** menu has **How this was computed**, **View DQL**,
-**Why did it move?**, **Ask about this chart**, **Open in notebook**,
-**Show as** and **Download CSV**.
+Point at a tile and click **⋯** to open its menu. The menu is there when you
+read the page, not in **Edit**. It lists only the items that fit the tile:
+
+| Item | Shown when |
+|---|---|
+| **How this was computed** | The tile is not a text tile and has run or names its source. |
+| **View DQL** | As above, and the tile is built from fields or shows a saved query. |
+| **Why did it move?** | The tile is built from fields, adds up a measure by day, week, month, quarter or year, and has results. |
+| **Ask about this chart** | The tile is built from fields and ran. It reads the chart's rows and needs no AI provider. |
+| **Ask AI about this** | The tile shows a saved query and an AI provider is connected. |
+| **Open in notebook** | The tile is not built from fields, for example it shows a saved query. |
+| **Show as** | The tile has a result and more than one chart type fits it. |
+| **Download CSV** | The tile has a result. With a host, the menu has **Download CSV**, **Download JSON** and **Download Excel** instead, made on the server, and a read-only link has no download. |
 
 ## Follow, share and export
 
@@ -133,6 +153,9 @@ A tile's **⋯** menu has **How this was computed**, **View DQL**,
 
 ## See where the numbers come from
 
-Click **Lineage** in the dashboard toolbar, or the lineage icon in the App
-header, to see the page's sources: tiles, saved queries, dbt models and tables. See
-[Lineage](../lineage/index.md).
+To see the page's sources (tiles, saved queries, dbt models and tables),
+click the lineage icon (**Open dashboard lineage**) in the App header. The App
+toolbar has no **Lineage** button. Lineage opens on this page;
+**Back to** *App name* returns to the App. The icon is not on a read-only
+link. When the page has a **Summary**, its **View evidence** button opens the
+same lineage. See [Lineage](../lineage/index.md).

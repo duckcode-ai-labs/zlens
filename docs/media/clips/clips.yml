@@ -93,7 +93,7 @@ app-ask:
     certified block.
   steps:
     - Open the Jaffle Growth Review App from Apps.
-    - The header reads All data certified, and the page reads All 4 tiles certified.
+    - The header and the page both read All tiles certified.
     - Scroll through the tiles; each one is labelled Certified.
     - Ask "How has revenue changed by month?" in the App's Ask box.
     - The answer opens beside the page, scoped to Jaffle Growth Review, labelled Certified answer, answered from a certified block.

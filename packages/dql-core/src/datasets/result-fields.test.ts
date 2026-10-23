@@ -5,6 +5,7 @@ import {
   savedQueryGroupByFromOutputs,
   savedQueryResultDescriptor,
   savedQueryResultFields,
+  savedQueryKeepsFirstRows,
   savedQueryResultRollup,
 } from './result-fields.js';
 import { validateTileQuery } from '../apps/tile-query.js';
@@ -161,5 +162,60 @@ describe('roll-up rules over a saved query result', () => {
   it('never applies to a row-level Dataset', () => {
     const { result: _result, ...rowLevel } = monthly();
     expect(savedQueryResultRollup(rowLevel, { dimensions: [] }, ['gross_revenue'])).toEqual({ rollsUp: false, blocked: [] });
+  });
+});
+
+describe('a Top N saved query (0.2.4)', () => {
+  // top_beverage_customers keeps its first 10 rows; a Total over it summed
+  // those 10 and was labelled Certified.
+  const topBeverage = (groupBy: string[]) => savedQueryResultDescriptor({
+    sourceId: 'app:block:commerce:top_beverage_customers',
+    sourceRevision: 'sha256:rev3',
+    savedQuery: 'top_beverage_customers',
+    qualifiedId: 'commerce::block::top_beverage_customers',
+    domain: 'commerce',
+    lifecycle: 'certified',
+    certified: true,
+    columns: [
+      { name: 'customer_name', type: 'VARCHAR' },
+      { name: 'beverage_revenue', type: 'DOUBLE' },
+    ],
+    groupBy,
+    typesFrom: 'contract',
+    keepsFirstRows: savedQueryKeepsFirstRows('SELECT customer_name, SUM(x) AS beverage_revenue FROM t GROUP BY 1 ORDER BY 2 DESC LIMIT 10'),
+  })!;
+
+  it('reads the outer LIMIT and ignores one inside a subquery', () => {
+    expect(savedQueryKeepsFirstRows('select a from t order by a desc\n  LIMIT 10\n')).toBe(10);
+    expect(savedQueryKeepsFirstRows('select a from t fetch first 5 rows only')).toBe(5);
+    expect(savedQueryKeepsFirstRows('select * from (select a from t limit 3) s')).toBeUndefined();
+    expect(savedQueryKeepsFirstRows("with top as (select a from t limit 3) select a from top where note = 'limit 9'")).toBeUndefined();
+    expect(savedQueryKeepsFirstRows('select a from t -- limit 4')).toBeUndefined();
+    expect(savedQueryKeepsFirstRows('select a from t')).toBeUndefined();
+    expect(topBeverage(['customer_name']).result?.keepsFirstRows).toBe(10);
+  });
+
+  it('marks a total over its rows as not a certified total', () => {
+    const total = validateTileQuery(topBeverage(['customer_name']), { dimensions: [], measures: [{ measure: 'beverage_revenue' }] });
+    expect(total.outcome).toBe('adapted');
+    expect(total.adaptations).toEqual([{
+      kind: 'saved_query_rollup',
+      message: 'Totals only the 10 rows top_beverage_customers keeps (it is a Top 10), not all of the data, so it is not a certified total.',
+      topRowsOnly: 10,
+    }]);
+  });
+
+  it('leaves the rows as they are certified', () => {
+    const asIs = validateTileQuery(topBeverage(['customer_name']), { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'beverage_revenue' }] });
+    expect(asIs).toEqual({ outcome: 'covered', diagnostics: [], adaptations: [] });
+    // No declared grouping: a bar per row still shows those rows, so only a grand total is flagged.
+    const bar = validateTileQuery(topBeverage([]), { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'beverage_revenue' }] });
+    expect(bar.adaptations[0]?.topRowsOnly).toBeUndefined();
+    const kpi = validateTileQuery(topBeverage([]), { dimensions: [], measures: [{ measure: 'beverage_revenue' }] });
+    expect(kpi.adaptations[0]?.topRowsOnly).toBe(10);
+  });
+
+  it('survives a round trip through the descriptor normalizer', () => {
+    expect(normalizeDatasetDescriptor(JSON.parse(JSON.stringify(topBeverage(['customer_name']))))?.result?.keepsFirstRows).toBe(10);
   });
 });

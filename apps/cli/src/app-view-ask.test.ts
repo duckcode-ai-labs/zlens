@@ -274,6 +274,9 @@ describe('Ask from an App sees that App (N3)', () => {
     // The answer reads the App's result, cites the tile's block, and is labelled for review, not certified.
     expect(run.answer).toContain('James Harden');
     expect(run.answer).toContain('blocks/_drafts/top_5_players_points_2016_2017.dql');
+    // It names the block the way readers know it: a saved query (#165).
+    expect(run.answer).toMatch(/reads saved query \S+ \(blocks\/_drafts\/top_5_players_points_2016_2017\.dql\)/);
+    expect(run.answer).not.toContain('reads block');
     // It cites the tile's own trust words; the answer itself stays labelled for review (Ask's labels are unchanged).
     expect(run.answer).toContain('Not certified yet');
     expect(run.trustState).toBe('review_required');

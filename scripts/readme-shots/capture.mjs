@@ -207,7 +207,7 @@ const SHOTS = {
     await page.goto(`${baseUrl}/?app=jaffle-growth&page=overview`);
     await waitForWorkbench(page);
     await expectText(page, 'Answers read this page', 120_000);
-    await expectText(page, 'All 4 tiles certified', 120_000);
+    await expectText(page, 'All tiles certified', 120_000);
     await settle(page, 2500);
     return { clip: { x: 44, y: 48, width: VIEWPORT.width - 44, height: VIEWPORT.height - 48 } };
   },
@@ -292,7 +292,7 @@ const SHOTS = {
     await page.goto(`${baseUrl}/?app=jaffle-growth&page=overview`);
     await waitForWorkbench(page);
     await expectText(page, 'Answers read this page', 120_000);
-    await expectText(page, 'All 4 tiles certified', 120_000);
+    await expectText(page, 'All tiles certified', 120_000);
     await page.getByPlaceholder(/Ask about Jaffle Growth Review/).first().fill('Which customer leads the top beverage customers table on this page?');
     await page.getByRole('button', { name: 'Ask', exact: true }).last().click();
     await expectText(page, /every tile it read runs a certified source/, ASK_TIMEOUT);

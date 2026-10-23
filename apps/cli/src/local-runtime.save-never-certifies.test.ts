@@ -249,6 +249,29 @@ describe('Saving never certifies; certifying is explicit and leaves a receipt', 
     expect(readCompanionCertification(readFileSync(companionPath, 'utf-8'))).toEqual(receipt);
   });
 
+  it('Certify writes the companion and its receipt for a block that has none (0.2.4)', () => {
+    // The Jaffle sample's hand-written blocks had no companion YAML: Certify
+    // passed and recorded nothing, so their tiles never read "Certified by …".
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-certify-no-companion-'));
+    roots.push(projectRoot);
+    mkdirSync(join(projectRoot, 'domains/commerce/blocks'), { recursive: true });
+    const source = 'block "monthly_revenue" {\n  domain = "commerce"\n  status = "certified"\n  description = "Monthly gross order revenue."\n  owner = "analytics@jaffle.shop"\n  query = """SELECT 1 AS month"""\n}\n';
+    writeFileSync(join(projectRoot, 'domains/commerce/blocks/monthly_revenue.dql'), source);
+    const receipt = { certifiedBy: 'analytics@jaffle.shop', certifiedAt: '2026-10-23T00:00:00.000Z', via: 'block-studio' as const, rules: 'oss' as const, sourceSha256: 'stale' };
+
+    setBlockStudioStatus(projectRoot, 'domains/commerce/blocks/monthly_revenue.dql', 'certified', receipt);
+
+    const companion = readFileSync(join(projectRoot, 'semantic-layer/blocks/commerce/monthly_revenue.yaml'), 'utf-8');
+    expect(companion).toContain('name: monthly_revenue');
+    expect(companion).toContain('owner: "analytics@jaffle.shop"');
+    expect(companion).toContain('reviewStatus: certified');
+    const written = readCompanionCertification(companion);
+    expect(written).toMatchObject({ certifiedBy: 'analytics@jaffle.shop', via: 'block-studio', rules: 'oss' });
+    // The receipt is for exactly the source on disk, so a later edit shows.
+    expect(written?.sourceSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(written?.sourceSha256).not.toBe('stale');
+  });
+
   it('a status flip to certified without a Certify receipt is refused', () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-status-flip-'));
     roots.push(projectRoot);
