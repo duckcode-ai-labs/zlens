@@ -135,20 +135,21 @@ describe('Draft my models card', () => {
   });
 });
 
-describe('Synchronize card (existing project)', () => {
+describe('Refresh card (existing project)', () => {
   it('says what it reads again and shows each part', () => {
     const html = renderToStaticMarkup(
       <ExistingProjectSyncCard
         project={warehouseProject!}
         busy={false}
-        steps={[{ kind: 'warehouse', ok: true, message: 'Warehouse synchronized · 6 tables and views.' }]}
+        steps={[{ kind: 'warehouse', ok: true, message: 'Warehouse tables refreshed · 6 tables and views.' }]}
         onSync={noop}
         t={t}
       />,
     );
     expect(html).toContain('Reads the saved warehouse schemas again');
-    expect(html).toContain('Warehouse synchronized · 6 tables and views.');
-    expect(html).toMatch(/<button[^>]*>Synchronize<\/button>/);
+    expect(html).toContain('Warehouse tables refreshed · 6 tables and views.');
+    expect(html).toMatch(/<button[^>]*>Refresh warehouse tables<\/button>/);
+    expect(html).not.toMatch(/Synchroniz/);
   });
 
   it('names the environment variables the connection reads and which are missing', () => {

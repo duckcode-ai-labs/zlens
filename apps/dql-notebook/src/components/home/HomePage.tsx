@@ -219,7 +219,7 @@ export function HomePage() {
       secondaryLabel: 'Open settings',
       onSecondary: () => openSettingsTab('ai'),
       evidence: [
-        aiReady ? 'Provider configured — test in Settings to verify' : 'Optional · limited-AI mode',
+        aiReady ? 'Provider configured — test in Settings to verify' : 'Optional · works without AI',
       ],
     },
     {

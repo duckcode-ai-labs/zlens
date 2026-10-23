@@ -66,8 +66,8 @@ Ask answered by a live model.
    - `npm run notebook`, after which the DuckDB driver in `.dql/connectors`
      must load (on npm 12, ZLens has rebuilt it by then);
    - then, in the browser (`apps/dql-notebook/browser/gate/dbt-sample.gate.ts`):
-     - Guided Setup with the dbt project (Preview, Apply project, DuckDB
-       configured and tested, Finish setup);
+     - Guided Setup opening the sample as an existing ZLens project (DuckDB
+       configured and tested, Refresh dbt data, Finish setup);
      - the quickstart's notebook query;
      - the **Jaffle Growth Review** App and its trust labels;
      - lineage of `monthly_revenue` (dbt source → dbt model → block → App);

@@ -197,6 +197,29 @@ test('Orders shows its related tables\' fields; a bar by Location Name reads sto
   expect(Number(trend?.result?.rows?.[0]?.order_total)).toBe(150);
 });
 
+test('at 1440x900 the click-to-filter hint has its own row under the chart and never covers the axis labels (Codex F10)', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto(`${server!.baseUrl}/?appDraft=${draftId}`);
+  await expect(page.getByText(/tiles up to date/)).toBeVisible({ timeout: 60_000 });
+  const card = page.locator('.studio-component-card').filter({ has: page.locator('.dataset-link-hint') }).first();
+  await expect(card).toBeVisible({ timeout: 60_000 });
+  await card.hover();
+  const hint = card.locator('.dataset-link-hint');
+  await expect(hint).toBeVisible();
+  await expect(hint).toContainText(/Clicking a (bar|point|row|slice)/);
+  const chart = card.locator('.live-component-body').first();
+  const [hintBox, chartBox] = [await hint.boundingBox(), await chart.boundingBox()];
+  expect(hintBox && chartBox).toBeTruthy();
+  // The hint starts below the chart area (the axis labels live inside it).
+  expect(hintBox!.y).toBeGreaterThanOrEqual(chartBox!.y + chartBox!.height - 1);
+  // Away from the card it is hidden but keeps its row, so the chart does not jump.
+  await page.mouse.move(5, 5);
+  await expect(hint).toBeHidden();
+  const chartAfter = await chart.boundingBox();
+  expect(Math.abs(chartAfter!.height - chartBox!.height)).toBeLessThanOrEqual(1);
+});
+
 test('a tile on a join nobody certified publishes as Not certified yet: the dialog lists it with its join action, and the count agrees everywhere (T3)', async ({ page }) => {
   test.setTimeout(180_000);
   // A Revenue by store tile reads Location Name through the join setup drafted (not certified).

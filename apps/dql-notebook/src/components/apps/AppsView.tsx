@@ -57,7 +57,7 @@ import type { AppSummary, AppWorkspaceExperience, AppWorkspaceSection } from '..
 import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
-import { appPageUrl } from './app-links';
+import { appCardHref, appHomePageId, appPageUrl } from './app-links';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
 import { appStudioAiConnected, appStudioDefaultLaunchMode, appStudioLaunchTab } from './app-studio-ai-voice';
 import { APP_STYLES } from './app-styles';
@@ -464,6 +464,21 @@ export function AppsView(): JSX.Element {
       },
     });
   }, [state.activeAppId, state.activeDashboardId, surface, workspaceLoadAttempt]);
+
+  // An App opened without a page (an app-only link, `?app=<id>`, or an App
+  // list that did not know its pages yet) opens on its home page. Without
+  // this the reader stayed on "Pages 0 · No dashboard page selected" (Codex F08).
+  useEffect(() => {
+    const appId = state.activeAppId;
+    if (!appId || state.activeDashboardId || state.activeAppDraftId || surface !== 'workspace' || state.activeAppExperience !== 'view') return;
+    let cancelled = false;
+    void api.getApp(appId).then((document) => {
+      if (cancelled || !document) return;
+      const home = appHomePageId({ homepage: document.app.homepage, dashboards: document.dashboards });
+      if (home) dispatch({ type: 'OPEN_APP', appId, dashboardId: home, experience: 'view', section: state.activeAppSection });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [dispatch, state.activeAppDraftId, state.activeAppExperience, state.activeAppId, state.activeAppSection, state.activeDashboardId, surface]);
 
   const retryWorkspaceLoad = useCallback(() => {
     setWorkspaceLoadAttempt((attempt) => attempt + 1);
@@ -1494,7 +1509,7 @@ function AppCard({
         <h3>
           <a
             className="dql-app-card-link"
-            href={`/?app=${encodeURIComponent(app.id)}`}
+            href={appCardHref(app)}
             onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpen(); }}
           >
             {app.name}

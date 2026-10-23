@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appPageUrl, isLoopbackOrigin, readAppDraftLink, readAppPageLink, withAppPageLink, withoutAppDraftLink } from './app-links';
+import { appPageUrl, isLoopbackOrigin, readAppDraftLink, readAppPageLink, withAppPageLink, withoutAppDraftLink, appCardHref, appHomePageId } from './app-links';
 
 describe('App page links (RFC 0008 step 10)', () => {
   it('reads and writes the page link, keeping other location state', () => {
@@ -27,5 +27,20 @@ describe('App Studio draft links (design D9: MCP build_dql_app)', () => {
     expect(readAppDraftLink('http://127.0.0.1:3474/?app=sales')).toBeNull();
     expect(readAppDraftLink('not a url')).toBeNull();
     expect(withoutAppDraftLink('http://h/?appDraft=build_1&theme=x#dql_token=t')).toBe('/?theme=x#dql_token=t');
+  });
+});
+
+describe('an app-only link opens a page (Codex F08)', () => {
+  it('picks the dashboard homepage, else the first page, else none', () => {
+    expect(appHomePageId({ homepage: { type: 'dashboard', id: 'overview' }, dashboards: [{ id: 'detail' }, { id: 'overview' }] })).toBe('overview');
+    expect(appHomePageId({ homepage: { type: 'notebook' }, dashboards: [{ id: 'detail' }] })).toBe('detail');
+    expect(appHomePageId({ homepage: { type: 'dashboard', id: 'gone' }, dashboards: [{ id: 'detail' }] })).toBe('detail');
+    expect(appHomePageId({ dashboards: [] })).toBeNull();
+    expect(appHomePageId(null)).toBeNull();
+  });
+
+  it("the card title's link names the page, like the View button", () => {
+    expect(appCardHref({ id: 'jaffle-growth', homepage: { type: 'dashboard', id: 'overview' }, dashboards: [{ id: 'overview' }] })).toBe('/?app=jaffle-growth&page=overview');
+    expect(appCardHref({ id: 'empty', dashboards: [] })).toBe('/?app=empty');
   });
 });

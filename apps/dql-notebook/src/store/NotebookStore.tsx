@@ -18,6 +18,7 @@ import { create, type StoreApi, type UseBoundStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
 import type { NotebookState, NotebookAction, Cell } from "./types";
 import { downstreamCellIds } from "../utils/notebook-dependencies";
+import { appHomePageId } from "../components/apps/app-links";
 
 // Apps now live in the sidebar, so the notebook shell always starts in the
 // full authoring surface. Clear the legacy mode preference so users do not get
@@ -910,7 +911,7 @@ function notebookReducer(state: NotebookState, action: NotebookAction): Notebook
       // An App opened by link without a page lands on its home page once Apps are known.
       if (state.activeAppId && !state.activeDashboardId && !state.activeAppDraftId) {
         const app = action.apps.find((candidate) => candidate.id === state.activeAppId);
-        const home = app ? (app.homepage?.type === 'dashboard' ? app.homepage.id : (app.dashboards[0]?.id ?? null)) : null;
+        const home = appHomePageId(app);
         if (home) return { ...state, apps: action.apps, activeDashboardId: home };
       }
       return { ...state, apps: action.apps };
@@ -923,7 +924,7 @@ function notebookReducer(state: NotebookState, action: NotebookAction): Notebook
       const app = state.apps.find((a) => a.id === action.appId) ?? null;
       const dashboardId = action.dashboardId !== undefined
         ? action.dashboardId
-        : (app?.homepage?.type === 'dashboard' ? app.homepage.id : (app?.dashboards[0]?.id ?? null));
+        : appHomePageId(app);
       const sameApp = state.activeAppId === action.appId;
       return {
         ...state,

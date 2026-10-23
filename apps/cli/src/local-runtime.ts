@@ -5276,20 +5276,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // built with. Before this, library call sites without a project root fell
   // back to hashed embeddings while the catalog itself was semantic.
   setProcessDefaultEmbeddingProvider(projectEmbeddingProvider(projectRoot));
-  // ZERO-CONFIG SEMANTIC RETRIEVAL.
+  // LOCAL EMBEDDINGS ARE A CHOICE.
   //
-  // The hashed provider is a token hash: it matches shared words and nothing
-  // else, so "customer accounts" cannot find a model documented as "billing
-  // entities" no matter how good the ranking is. It was the default for every
-  // project because turning it off required an environment variable no product
-  // surface mentioned. When the machine already runs Ollama with an embedding
-  // model pulled, use it — the data stays local, and a warehouse question
-  // finally matches on meaning.
-  //
-  // Re-embedding the index is not optional here: `searchVectorObjects` returns
-  // NOTHING when the requested provider disagrees with the one the index was
-  // built with, so upgrading the provider without upgrading the index would
-  // make retrieval strictly worse. Both move together or neither does.
+  // Search is word-based unless the project chose embeddings (Settings → AI
+  // provider → Search, or ai.embeddings in dql.config.json). A running Ollama
+  // is offered, never adopted silently (Codex end-to-end report, 23 Oct 2026);
+  // ZLENS_EMBEDDINGS_AUTODETECT=on is an operator's opt-in to adopt it. An
+  // index an earlier version switched by itself is rebuilt word-based, since
+  // `searchVectorObjects` returns NOTHING when the requested provider
+  // disagrees with the one the index was built with.
   void (async () => {
     const upgrade = await autoUpgradeProjectEmbeddings(projectRoot, {
       probeLocalOllamaEmbeddings,
@@ -5297,7 +5292,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       setProcessDefaultEmbeddingProvider,
     });
     if (upgrade.model && upgrade.providerId !== 'hashed-token-v1') {
-      console.log(`ZLens: semantic retrieval enabled with local Ollama embeddings (${upgrade.model}).`);
+      console.log(`ZLens: search uses local Ollama embeddings (${upgrade.model}), as ZLENS_EMBEDDINGS_AUTODETECT=on asks.`);
+    } else if (upgrade.reason === 'not_chosen') {
+      if (upgrade.restored) console.log('ZLens: search is word-based again. Local embeddings were never chosen for this project.');
+      if (upgrade.localModel) {
+        console.log(`ZLens: search is word-based. Local Ollama embeddings (${upgrade.localModel}) are available on this computer: turn them on in Settings → AI provider → Search.`);
+      }
     }
   })();
   // A slow provider needs a longer Ask window, and DQL already knows which
@@ -27072,7 +27072,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const prepared = prepareLocalExecution(baseSql, activeConnection, projectRoot, projectConfig);
         const q = quoteAgentIdentifier(column, prepared.connection);
-        const wrapped = `SELECT DISTINCT ${q} AS value FROM (${stripSqlTerminator(prepared.sql)}) _dql_opt WHERE ${q} IS NOT NULL ORDER BY 1 LIMIT ${limit + 1}`;
+        const inner = stripSqlTerminator(prepared.sql);
+        // Typed text searches every value of the column on the server (a
+        // reader's "Filter by…" picker and a block filter's dropdown), so a
+        // customer past the first page is still found (Codex F02).
+        const search = datasetFieldValueSearchText(url.searchParams.get('search'));
+        const searchClause = search ? ` AND ${savedQueryValueContains(q, search, prepared.connection.driver)}` : '';
+        const wrapped = `SELECT DISTINCT ${q} AS value FROM (${inner}) _dql_opt WHERE ${q} IS NOT NULL${searchClause} ORDER BY 1 LIMIT ${limit + 1}`;
         const result = await executor.executeQuery(wrapped, [], runtimeVariables({}), prepared.connection);
         const rows = Array.isArray(result?.rows) ? result.rows : [];
         const truncated = rows.length > limit;
@@ -27081,8 +27087,35 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           .map((row: any) => row?.value)
           .filter((value: any) => value !== null && value !== undefined)
           .map((value: any) => String(value));
+        // Browsing a capped list says how many values exist ("Type to search all 935 values").
+        let valueCount: number | undefined;
+        let valueCountCapped = false;
+        if (!search && truncated) {
+          try {
+            const counted = await executor.executeQuery(
+              `SELECT COUNT(*) AS value_count FROM (SELECT DISTINCT ${q} AS value FROM (${inner}) _dql_opt WHERE ${q} IS NOT NULL LIMIT ${DATASET_FIELD_VALUE_COUNT_LIMIT + 1}) _dql_count`,
+              [],
+              runtimeVariables({}),
+              prepared.connection,
+            );
+            const total = Number((counted?.rows?.[0] as Record<string, unknown> | undefined)?.value_count ?? NaN);
+            if (Number.isFinite(total)) {
+              valueCount = Math.min(total, DATASET_FIELD_VALUE_COUNT_LIMIT);
+              valueCountCapped = total > DATASET_FIELD_VALUE_COUNT_LIMIT;
+            }
+          } catch {
+            // The count is a hint; the list still works without it.
+          }
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ column, options, truncated }));
+        res.end(serializeJSON({
+          column,
+          options,
+          truncated,
+          ...(search ? { search } : {}),
+          ...(valueCount !== undefined ? { valueCount } : {}),
+          ...(valueCountCapped ? { valueCountCapped: true } : {}),
+        }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
@@ -33882,6 +33915,24 @@ const DATASET_FIELD_VALUE_LIMIT = 200;
 const DATASET_FIELD_VALUE_COUNT_LIMIT = 5_000;
 
 /** A filter's typed search text: trimmed, bounded, or empty for none. */
+/**
+ * `column` contains `search`, ignoring case, as literal text: `%`, `_` and
+ * quotes in the search are data, never a pattern. The value is at most 200
+ * characters (datasetFieldValueSearchText) and is written as an escaped
+ * string literal. BigQuery's LIKE escapes with a backslash and has no ESCAPE
+ * clause; every other dialect takes an explicit escape character.
+ */
+export function savedQueryValueContains(column: string, search: string, driver: string): string {
+  const bigquery = driver.trim().toLowerCase() === 'bigquery';
+  const escape = bigquery ? '\\' : '!';
+  const pattern = `%${search.replaceAll(escape, `${escape}${escape}`).replaceAll('%', `${escape}%`).replaceAll('_', `${escape}_`)}%`;
+  const literal = bigquery
+    ? `'${pattern.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
+    : `'${pattern.replaceAll("'", "''")}'`;
+  const like = getDialect(driver).ilike(column, literal);
+  return bigquery ? like : `${like} ESCAPE '!'`;
+}
+
 export function datasetFieldValueSearchText(value: unknown): string {
   return typeof value === 'string' ? value.trim().slice(0, 200) : '';
 }

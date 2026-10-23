@@ -290,13 +290,13 @@ export function FiltersPanel({
   }
 
   return <>
-    <PanelTitle title="Filters" detail="Controls linked to certified fields" action={<button type="button" disabled={disabled || candidates.length === 0} onClick={() => setConfiguration({ id: '', fieldId: '', label: '', type: 'select', scope: 'app', required: false, selectedMappingKeys: [] })} aria-label="Create filter"><Plus size={14} /></button>} />
+    <PanelTitle title="Filters" detail="Choose which tiles each filter affects." action={<button type="button" disabled={disabled || candidates.length === 0} onClick={() => setConfiguration({ id: '', fieldId: '', label: '', type: 'select', scope: 'app', required: false, selectedMappingKeys: [] })} aria-label="Create filter"><Plus size={14} /></button>} />
     <div className="filter-workflow" aria-label="How App filters work"><span><b>1</b>Choose a field</span><span><b>2</b>Link all or selected tiles</span><span><b>3</b>Use the control directly on the page</span><small>Changing a filter refreshes every linked tile together.</small></div>
     {logicalFilters.length > 0 ? <div className="panel-section-label"><span>Dashboard filters</span><small>{logicalFilters.length} configured</small></div> : null}
     <div className="filter-contract-list">{logicalFilters.map((item) => {
       const fieldId = item.filter.field?.name ?? item.filter.bindsTo ?? item.filter.id;
       const linked = linkedComponentCount(draft, item.filter.id);
-      return <article key={item.filter.id}><button type="button" className="filter-contract-summary" onClick={() => editFilter(item)}><span><Filter size={14} /></span><div><strong>{item.filter.label ?? humanize(item.filter.id)}</strong><small>{humanize(fieldId)} · {humanize(item.filter.type)}</small><em>{linked} linked {linked === 1 ? 'tile' : 'tiles'} · {item.pageIds.length > 1 ? 'App-wide' : humanize(draft.pages.find((page) => page.id === item.pageIds[0])?.metadata.title ?? 'Page')}</em></div><Settings2 size={14} /></button><button type="button" className="filter-remove" onClick={() => onRemove(item.filter.id)} aria-label={`Delete ${item.filter.label ?? humanize(item.filter.id)} filter`} title="Delete filter"><Trash2 size={13} /></button></article>;
+      return <article key={item.filter.id}><button type="button" className="filter-contract-summary" onClick={() => editFilter(item)}><span><Filter size={14} /></span><div><strong>{item.filter.label ?? humanize(item.filter.id)}</strong><small>{humanize(fieldId)} · {filterControlTypeLabel(item.filter.type)}</small><em>{linked} linked {linked === 1 ? 'tile' : 'tiles'} · {item.pageIds.length > 1 ? 'App-wide' : humanize(draft.pages.find((page) => page.id === item.pageIds[0])?.metadata.title ?? 'Page')}</em></div><Settings2 size={14} /></button><button type="button" className="filter-remove" onClick={() => onRemove(item.filter.id)} aria-label={`Delete ${item.filter.label ?? humanize(item.filter.id)} filter`} title="Delete filter"><Trash2 size={13} /></button></article>;
     })}</div>
     {logicalFilters.length === 0 ? <div className="filter-empty"><span><Filter size={18} /></span><strong>Create a dashboard filter</strong><p>Pick a field, choose a dropdown or search control, then link every compatible tile.</p><button type="button" disabled={disabled || candidates.length === 0} onClick={() => setConfiguration({ id: '', fieldId: '', label: '', type: 'select', scope: 'app', required: false, selectedMappingKeys: [] })}><Plus size={13} /> New filter</button></div> : null}
     {candidates.length === 0 ? <p className="panel-empty">Add a KPI, chart, or table from certified data first. Its filter fields and Metrics dimensions will appear here.</p> : logicalFilters.length > 0 ? <button type="button" className="filter-add-another" disabled={disabled} onClick={() => setConfiguration({ id: '', fieldId: '', label: '', type: 'select', scope: 'app', required: false, selectedMappingKeys: [] })}><Plus size={13} /> Add another filter</button> : null}
@@ -344,6 +344,23 @@ export function differentDateLabel(sourceName: string, field: string): string {
   const words = sourceName.trim().toLowerCase();
   const one = words.endsWith('ies') ? `${words.slice(0, -3)}y` : words.endsWith('s') && !words.endsWith('ss') ? words.slice(0, -1) : words;
   return `Different meaning: the ${one}’s ${humanize(field)}`;
+}
+
+/** A filter control's kind in words: "Date range", never "Daterange" (Codex G2). */
+export function filterControlTypeLabel(type: string | undefined): string {
+  const labels: Record<string, string> = {
+    daterange: 'Date range',
+    date: 'Single date',
+    select: 'Dropdown',
+    multiselect: 'Multi-select',
+    search: 'Search',
+    number: 'Number',
+    number_range: 'Number range',
+    relative_date: 'Relative date',
+    boolean: 'Yes / no',
+    string: 'Text',
+  };
+  return labels[type ?? ''] ?? humanize(type ?? '');
 }
 
 export function filterControlOptions(fieldId: string): Array<{ value: StudioFilterControlType; label: string }> {

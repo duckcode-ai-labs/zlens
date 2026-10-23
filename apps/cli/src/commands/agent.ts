@@ -872,6 +872,9 @@ async function runReindex(rest: string[], flags: CLIFlags): Promise<void> {
   console.log(`  ✓ ${kgStatus}; ${catalogStatus} — ${stats.nodes} nodes, ${stats.edges} edges, ${stats.skills} skill(s).`);
   if (embeddings.upgraded) {
     console.log(`  ✓ Semantic retrieval re-embedded with local Ollama (${embeddings.model}).`);
+  } else if (embeddings.reason === 'not_chosen') {
+    const local = (embeddings as { localModel?: string }).localModel;
+    console.log(`  · Search: word-based.${local ? ` Local Ollama embeddings (${local}) are available on this computer:` : ''} Turn on local embeddings in Settings → AI provider → Search for meaning-based search.`);
   } else if (embeddings.reason === 'no_local_model') {
     console.log('  · Embeddings: token-hash fallback (lexical only). Install Ollama and pull an embedding'
       + ' model such as nomic-embed-text, then rerun, for meaning-based retrieval.');

@@ -14,7 +14,7 @@ import type {
  *   - `warehouse` → warehouse-first: the warehouse's own tables, no dbt;
  *   - `both`      → hybrid: a dbt project plus schemas dbt doesn't cover;
  *   - `existing`  → the folder's dql.config.json already says; Setup asks only
- *                   for credentials, tests the connection and synchronizes.
+ *                   for credentials, tests the connection and refreshes it.
  */
 export type ModelSource = 'dbt' | 'warehouse' | 'both' | 'existing';
 
@@ -147,17 +147,24 @@ export function existingProjectFromStatus(
 
 /**
  * The card selected when step 1 opens, read from what the folder holds
- * (design D7). An update that must reapply the dbt project, a configured
- * project and a detected dbt project keep today's dbt card (#143). A Database
- * only project whose model is already written (it has Domains) opens as an
- * existing project; a new one, or a folder whose only data is a database file,
- * opens on Database only. A folder with neither asks.
+ * (design D7). An update that must reapply the dbt project keeps the dbt card.
+ * A folder whose dql.config.json already configures its data model opens as
+ * an existing project: a dbt (or dbt + database) project whose dbt manifest is
+ * built, and a Database only project whose model is already written (it has
+ * Domains). The Jaffle sample is such a folder; offering "dbt project" there
+ * asked people to locate the project they were already in (Codex F01). A dbt
+ * project that is configured but not built yet keeps the dbt card (Preview and
+ * Apply build it), a new Database only project opens on Database only, a
+ * detected dbt project on dbt, a folder whose only data is a database file on
+ * Database only. A folder with neither asks.
  */
 export function initialModelSource(input: {
   requested?: ModelSource | null;
   requiresDbtReapply?: boolean;
   existing: ExistingProject | null;
   dbtProjectFound?: boolean;
+  /** The configured dbt project's manifest exists (`dbt build` or `zlens sync dbt` ran). */
+  dbtManifestFound?: boolean;
   /** The project already has Domains (its model is written in the repository). */
   hasDomains?: boolean;
   /** The project's connection is a database file (DuckDB), and there is no dbt project. */
@@ -167,6 +174,7 @@ export function initialModelSource(input: {
   if (input.requested && (input.requested !== 'existing' || input.existing)) return input.requested;
   if (input.existing) {
     if (input.existing.mode === 'warehouse-first') return input.hasDomains ? 'existing' : 'warehouse';
+    if (input.existing.dbtConfigured && input.dbtManifestFound) return 'existing';
     if (input.existing.mode === 'hybrid') return 'both';
     return 'dbt';
   }
@@ -216,15 +224,30 @@ export function setupFinishTarget(input: { drafted: boolean }): { target: SetupS
 }
 
 export function setupStepTitles(source: ModelSource | null): string {
-  if (source === 'existing') return 'Data model → Credentials and sync → optional AI → Finish';
+  if (source === 'existing') return 'Data model → Connection → optional AI → Finish';
   return 'Data model → Database → optional AI → Finish';
 }
+
+/**
+ * The main action on an existing project's step 2, in plain words: what it
+ * reads again. "Synchronize" and "candidate" were engineering words (Codex G2).
+ */
+export function existingRefreshLabel(project: Pick<ExistingProject, 'mode' | 'dbtConfigured' | 'warehouseModeling'> | null | undefined): string {
+  const dbt = !project || (project.mode !== 'warehouse-first' && project.dbtConfigured);
+  const warehouse = Boolean(project?.warehouseModeling);
+  if (dbt && warehouse) return 'Refresh dbt and warehouse data';
+  if (warehouse) return 'Refresh warehouse tables';
+  return 'Refresh dbt data';
+}
+
+/** The optional line over the extra-schema picker on a dbt project's connection step. */
+export const EXTRA_SCHEMAS_HINT = "Optional: add warehouse schemas dbt doesn't cover";
 
 export function stepTwoCopy(source: ModelSource | null, existing: ExistingProject | null, valueProfileOn = false): { title: string; description: string } {
   if (source === 'existing') {
     return {
-      title: 'Connect and synchronize',
-      description: `This project's data model is already set (${existing?.label ?? 'configured'}). Enter the credentials its connection needs — values written as \${NAME} are read from environment variables — test the connection, then synchronize.`,
+      title: 'Check the connection',
+      description: `This project's data model is already set (${existing?.label ?? 'configured'}). Test the connection — values written as \${NAME} are read from environment variables. Then ${existingRefreshLabel(existing).toLowerCase()} if the project changed since you last ran zlens sync.`,
     };
   }
   if (source === 'warehouse') {
@@ -331,7 +354,7 @@ export async function synchronizeExistingProject(
 ): Promise<ProjectSyncStep[]> {
   const unset = missingEnvironment(environment);
   if (unset.length) {
-    return [{ kind: project.warehouseModeling ? 'warehouse' : 'dbt', ok: false, message: `Set ${unset.join(', ')} in the shell that starts zlens notebook, restart it, then synchronize.` }];
+    return [{ kind: project.warehouseModeling ? 'warehouse' : 'dbt', ok: false, message: `Set ${unset.join(', ')} in the shell that starts zlens notebook, restart it, then refresh.` }];
   }
   const steps: ProjectSyncStep[] = [];
   if (project.dbtConfigured && project.mode !== 'warehouse-first') {
@@ -339,7 +362,7 @@ export async function synchronizeExistingProject(
       const preview = await syncApi.previewDbtOnboarding({});
       await syncApi.refreshDbtOnboarding({ expectedFingerprint: preview.fingerprint });
       const models = preview.counts?.models;
-      steps.push({ kind: 'dbt', ok: true, message: `dbt project synchronized${typeof models === 'number' ? ` · ${models} models` : ''}. Search indexes update in the background.` });
+      steps.push({ kind: 'dbt', ok: true, message: `dbt data refreshed${typeof models === 'number' ? ` · ${models} models` : ''}. Search indexes update in the background.` });
     } catch (error) {
       steps.push({ kind: 'dbt', ok: false, message: `dbt project: ${error instanceof Error ? error.message : String(error)}` });
     }
@@ -362,7 +385,7 @@ export async function synchronizeExistingProject(
         steps.push({ kind: 'warehouse', ok: false, message: `Warehouse catalog: ${catalog.error}` });
       } else {
         const tables = catalog?.relations ?? synced.status.relationCount;
-        steps.push({ kind: 'warehouse', ok: true, message: `Warehouse synchronized · ${tables.toLocaleString()} tables and views.` });
+        steps.push({ kind: 'warehouse', ok: true, message: `Warehouse tables refreshed · ${tables.toLocaleString()} tables and views.` });
       }
     } catch (error) {
       steps.push({ kind: 'warehouse', ok: false, message: `Warehouse: ${error instanceof Error ? error.message : String(error)}` });

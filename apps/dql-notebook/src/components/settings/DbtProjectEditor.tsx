@@ -338,19 +338,33 @@ export function DbtProjectEditor({
   const metricFlowFailed = metricFlowJob?.state === 'failed';
   const preparing = preparation?.status === 'queued' || preparation?.status === 'running';
   const preparationFailed = preparation?.status === 'failed' || preparation?.status === 'cancelled';
+  // Until the status has loaded, say so: "dbt project missing" flashed on
+  // first start in a folder that already is a configured dbt project (Codex F01).
+  const checking = busy === 'loading' && !status;
+  const foundUnapplied = !configured && Boolean(status?.dbt?.projectFound);
   const projectStatusTitle = reapplyRequired
     ? 'Reapply required after ZLens update'
+    : checking
+    ? 'Checking the dbt project…'
     : preparationFailed
     ? 'dbt project needs attention'
     : preparing
       ? 'Preparing governed search'
       : configured
         ? 'dbt project ready'
-        : 'dbt project missing';
+        : foundUnapplied
+          ? 'dbt project found in this folder'
+          : 'No dbt project yet';
   const projectStatusDetail = reapplyRequired
     ? 'Review the prefilled project, choose Preview, then Reapply project.'
+    : checking
+    ? "Reading this folder's dbt settings."
     : preparation?.message
-    ?? (configured ? status?.dbt?.repoUrl || status?.dbt?.projectDir || 'Configured dbt project.' : 'Choose a local path or Git repository.');
+    ?? (configured
+      ? status?.dbt?.repoUrl || status?.dbt?.projectDir || 'Configured dbt project.'
+      : foundUnapplied
+        ? 'Preview it, then apply it.'
+        : 'Choose a local path or Git repository.');
   const input: React.CSSProperties = {
     width: '100%', boxSizing: 'border-box', height: 36, borderRadius: 8,
     border: `1px solid ${t.inputBorder}`, background: t.inputBg, color: t.textPrimary,

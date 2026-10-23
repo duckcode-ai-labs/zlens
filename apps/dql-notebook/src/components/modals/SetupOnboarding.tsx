@@ -156,6 +156,7 @@ export function SetupOnboarding({
         requiresDbtReapply: Boolean(launch?.requiresDbtReapply),
         existing: project,
         dbtProjectFound: Boolean(onboarding?.dbt?.projectFound),
+        dbtManifestFound: Boolean(onboarding?.dbt?.manifestFound || dbt?.artifacts.manifest.exists),
         hasDomains: (onboarding?.domains?.count ?? 0) > 0,
         databaseFileConnection: Boolean(connectionInfo && databaseFileConnection(connectionInfo)),
       }));
@@ -320,7 +321,7 @@ export function SetupOnboarding({
       if (draftsFromWarehouse(source) && draft?.ok && draft.proposalId) return 'Models drafted · review and certify them in Modeling.';
       return databaseState === 'passed' ? `Test passed · ${databaseDetail}` : databaseState === 'configured' ? databaseDetail : 'A failed test rolls back to the previous connection.';
     }
-    if (step === 3) return aiSkipped ? 'AI skipped · limited-AI mode remains available.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
+    if (step === 3) return aiSkipped ? 'AI skipped · connect a provider later in Settings.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
     return 'Setup complete';
   }, [aiProvider, aiSkipped, aiState, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
 
@@ -412,6 +413,9 @@ export function SetupOnboarding({
               <ConnectionPanel
                 variant="setup"
                 setupSource={source}
+                setupPrimaryAction={source === 'existing' && existing
+                  ? <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
+                  : undefined}
                 onConfigured={(detail) => {
                   setDatabaseState('passed');
                   setDatabaseDetail(detail);
@@ -433,17 +437,14 @@ export function SetupOnboarding({
                   t={t}
                 />
               ) : null}
-              {source === 'existing' && existing ? (
-                <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
-              ) : null}
             </SetupSection>
           ) : null}
 
           {step === 3 ? (
-            <SetupSection eyebrow="Step 3 of 4" title="Set up an AI provider" description="Optional. AI powers governed Ask and assisted authoring; deterministic queries and non-AI product paths remain available without it." badge="Optional" t={t}>
+            <SetupSection eyebrow="Step 3 of 4" title="Set up an AI provider" description="Optional. AI answers questions and helps you build. You can run queries and build Apps without AI." badge="Optional" t={t}>
               <ConnectionRuntimeSettings embedded includeMemory={false} section="providers" editorMode="setup" onProviderConfigured={onProviderConfigured} />
               <div style={{ border: '1px solid var(--status-info-border)', background: 'var(--status-info-bg)', borderRadius: 10, padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ flex: 1, fontSize: 11.5, color: supportingText, lineHeight: 1.5 }}>Continue in limited-AI mode and configure a provider later in Settings.</div>
+                <div style={{ flex: 1, fontSize: 11.5, color: supportingText, lineHeight: 1.5 }}>Continue without AI. You can connect a provider later in Settings.</div>
                 <button type="button" onClick={() => { setAiSkipped(true); setStep(4); }} style={secondaryButton}>Skip AI for now</button>
               </div>
             </SetupSection>
@@ -454,7 +455,7 @@ export function SetupOnboarding({
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 11, fontWeight: 750, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.accent }}>Step 4 of 4 · Setup complete</div>
                 <h2 style={{ margin: '7px 0 0', fontSize: 22, color: t.textPrimary }}>Where do you want to start?</h2>
-                {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not configured. Deterministic and non-AI workflows remain available; return to Settings when you want governed Ask.</div> : null}
+                {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 11 }}>
                 {drafted ? (
@@ -464,7 +465,7 @@ export function SetupOnboarding({
                 {drafted ? null : (
                   <StartCard icon={<Boxes size={17} />} title="Build your domain" body="Add models, relationships, business terms, and skills." action="Open Modeling" onClick={() => finishTo('domains')} t={t} />
                 )}
-                <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={aiState === 'missing' || aiSkipped ? 'Open Ask in limited mode; configure AI before a governed model answer.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} />
+                <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={aiState === 'missing' || aiSkipped ? 'Ask needs an AI provider. Connect one in Settings to get answers.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} />
                 <StartCard icon={<FileText size={17} />} title="Research notebook" body="Work with SQL, DQL, and charts, then save reusable queries." action="New notebook" onClick={() => finishTo('notebook')} t={t} />
               </div>
             </div>

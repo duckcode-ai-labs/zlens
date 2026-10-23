@@ -156,7 +156,7 @@ describe('App data: one list per App (design D1, D3, D4)', () => {
     expect(initialStudioStage({ mode: 'ai', resumingDraft: false, editingPublishedApp: true })).toBe('canvas');
     expect(initialStudioStage({ mode: 'manual', resumingDraft: true, editingPublishedApp: false })).toBe('canvas');
     expect(initialStudioStage({ mode: 'manual', resumingDraft: false, editingPublishedApp: true })).toBe('canvas');
-    expect(openCanvasLabel(0)).toBe('Open blank Studio');
+    expect(openCanvasLabel(0)).toBe('Skip, start empty');
     expect(openCanvasLabel(1)).toBe('Open Studio with 1 source');
     expect(openCanvasLabel(2)).toBe('Open Studio with 2 sources');
   });

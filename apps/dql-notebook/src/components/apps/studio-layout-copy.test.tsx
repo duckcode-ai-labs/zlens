@@ -37,8 +37,8 @@ describe('App Studio layout and copy (phase-4 review)', () => {
   });
 
   it('a starting layout says what it opens, and an intro keeps its title on its own line', () => {
-    expect(studio.manualLaunchLabel('blank')).toBe('Open blank Studio');
-    expect(studio.manualLaunchLabel('operational_dashboard')).toBe('Open Studio with an intro');
+    expect(studio.manualLaunchLabel('blank')).toBe('Continue to data');
+    expect(studio.manualLaunchLabel('operational_dashboard')).toBe('Continue to data (with an intro)');
     expect(studio.studioTextTileLines('# Sales Manager Overview\n\nMonitor current performance.')).toEqual([
       { text: 'Sales Manager Overview', heading: true },
       { text: 'Monitor current performance.', heading: false },

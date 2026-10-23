@@ -396,14 +396,18 @@ step asks **Where does your data model live?**:
   credentials and tests it. It lists the environment variables the
   connection reads (`${NAME}` values) and which are not set yet. Export those
   in the shell that starts `zlens notebook` and restart it. Then click
-  **Synchronize**, which reads the dbt project and the saved schemas again;
-  the models and certifications come from the repository, so there are no
-  modeling questions.
+  **Refresh dbt data** (or **Refresh warehouse tables** for a Database only
+  project), which reads the dbt project and the saved schemas again; the
+  models and certifications come from the repository, so there are no
+  modeling questions. For a dbt project, extra warehouse schemas are under
+  **Advanced** ("Optional: add warehouse schemas dbt doesn't cover").
 
 Setup chooses the card from what the folder holds: **Database only** for a
 folder with a database file and no dbt project, **dbt project** when it finds
-`dbt_project.yml`, and **Open an existing ZLens project** for a Database only
-project whose model is already written.
+`dbt_project.yml` that ZLens does not read yet, and **Open an existing ZLens
+project** when `dql.config.json` already sets up the data model: a dbt project
+whose manifest is built, or a Database only project whose model is already
+written.
 
 With **Database only**, Setup walks through the steps above:
 

@@ -13,6 +13,7 @@ import {
   draftOutcome,
   draftsFromWarehouse,
   existingProjectFromStatus,
+  existingRefreshLabel,
   initialModelSource,
   missingEnvironment,
   modelingModeForSource,
@@ -56,11 +57,12 @@ describe('where the data model lives', () => {
     expect(initialModelSource({ existing: null, dbtProjectFound: true })).toBe('dbt');
   });
 
-  it('dbt project: an existing dbt project sees the dbt card, and continuing turns nothing on', () => {
+  it('dbt project: a configured dbt project not built yet sees the dbt card, and continuing turns nothing on', () => {
     const existing = existingProjectFromStatus(dbtProject, connections);
     expect(existing).toMatchObject({ mode: 'dbt-first', label: 'dbt project', dbtConfigured: true, warehouseModeling: false });
     expect(existing?.detail).toBe('dbt project at ../jaffle-shop · connection "warehouse" (postgres)');
     expect(initialModelSource({ existing })).toBe('dbt');
+    expect(initialModelSource({ existing, dbtManifestFound: false })).toBe('dbt');
     expect(modelingModeForSource('dbt')).toBeNull();
     expect(draftsFromWarehouse('dbt')).toBe(false);
     expect(stepTwoCopy('dbt', existing).title).toBe('Connect your database');
@@ -85,9 +87,29 @@ describe('where the data model lives', () => {
     expect(initialModelSource({ existing: warehouse, hasDomains: true })).toBe('existing');
     // A folder with only a database connection and no dbt project: Database only.
     expect(initialModelSource({ existing: null, databaseFileConnection: true })).toBe('warehouse');
-    // dbt keeps #143's card, even with Domains or a database file.
+    // A configured dbt project not built yet keeps #143's card, even with Domains or a database file.
     expect(initialModelSource({ existing: existingProjectFromStatus(dbtProject), hasDomains: true, databaseFileConnection: true })).toBe('dbt');
     expect(initialModelSource({ existing: null, dbtProjectFound: true, databaseFileConnection: true })).toBe('dbt');
+  });
+
+  it('a configured, built dbt project (the Jaffle sample) opens as an existing project (Codex F01)', () => {
+    const sample = existingProjectFromStatus({ ...dbtProject, dbt: { ...dbtProject.dbt, projectDir: '.', manifestFound: true } } as typeof dbtProject, connections);
+    expect(sample?.detail).toContain('dbt project in this folder');
+    expect(initialModelSource({ existing: sample, dbtProjectFound: true, dbtManifestFound: true, hasDomains: true, databaseFileConnection: true })).toBe('existing');
+    // dbt + database too, once its dbt project is built.
+    expect(initialModelSource({ existing: existingProjectFromStatus(hybridProject), dbtManifestFound: true })).toBe('existing');
+    // A detected dbt project that ZLens does not configure yet still opens on dbt.
+    expect(initialModelSource({ existing: null, dbtProjectFound: true, dbtManifestFound: true })).toBe('dbt');
+    // An update that must reapply the project still wins.
+    expect(initialModelSource({ existing: sample, dbtManifestFound: true, requiresDbtReapply: true })).toBe('dbt');
+    // Step 2 names the refresh in plain words.
+    expect(existingRefreshLabel(sample)).toBe('Refresh dbt data');
+    expect(existingRefreshLabel(existingProjectFromStatus(warehouseProject))).toBe('Refresh warehouse tables');
+    expect(existingRefreshLabel(existingProjectFromStatus(hybridProject))).toBe('Refresh dbt and warehouse data');
+    const copy = stepTwoCopy('existing', sample);
+    expect(copy.title).toBe('Check the connection');
+    expect(copy.description).toContain('refresh dbt data');
+    expect(`${copy.title} ${copy.description}`).not.toMatch(/synchroniz|candidate/i);
   });
 
   it('Database only is unavailable for a folder that already reads dbt, and says to choose Both', () => {
@@ -121,9 +143,9 @@ describe('where the data model lives', () => {
     expect(initialModelSource({ requested: 'existing', existing })).toBe('existing');
     expect(modelingModeForSource('existing')).toBeNull();
     expect(draftsFromWarehouse('existing')).toBe(false);
-    expect(setupStepTitles('existing')).toBe('Data model → Credentials and sync → optional AI → Finish');
+    expect(setupStepTitles('existing')).toBe('Data model → Connection → optional AI → Finish');
     const copy = stepTwoCopy('existing', existing);
-    expect(copy.title).toBe('Connect and synchronize');
+    expect(copy.title).toBe('Check the connection');
     expect(copy.description).toContain('${NAME}');
     // Nothing to open in a folder without a data model: fall back to asking.
     expect(initialModelSource({ requested: 'existing', existing: null })).toBeNull();
@@ -203,7 +225,7 @@ describe('synchronize an existing project', () => {
   it('a warehouse-first project re-reads its saved schemas only', async () => {
     const syncApi = fakeApi();
     const steps = await synchronizeExistingProject(existingProjectFromStatus(warehouseProject)!, 'warehouse', syncApi);
-    expect(steps).toEqual([{ kind: 'warehouse', ok: true, message: 'Warehouse synchronized · 12 tables and views.' }]);
+    expect(steps).toEqual([{ kind: 'warehouse', ok: true, message: 'Warehouse tables refreshed · 12 tables and views.' }]);
     expect(syncApi.previewDbtOnboarding).not.toHaveBeenCalled();
     expect(syncApi.refreshConnectionMetadata).toHaveBeenCalledWith('warehouse');
   });
@@ -211,7 +233,7 @@ describe('synchronize an existing project', () => {
   it('a dbt project rebuilds its snapshot from the configured project', async () => {
     const syncApi = fakeApi();
     const steps = await synchronizeExistingProject(existingProjectFromStatus(dbtProject)!, 'warehouse', syncApi);
-    expect(steps).toEqual([{ kind: 'dbt', ok: true, message: 'dbt project synchronized · 9 models. Search indexes update in the background.' }]);
+    expect(steps).toEqual([{ kind: 'dbt', ok: true, message: 'dbt data refreshed · 9 models. Search indexes update in the background.' }]);
     expect(syncApi.refreshDbtOnboarding).toHaveBeenCalledWith({ expectedFingerprint: 'fp' });
     expect(syncApi.refreshConnectionMetadata).not.toHaveBeenCalled();
   });
@@ -221,7 +243,7 @@ describe('synchronize an existing project', () => {
     const steps = await synchronizeExistingProject(existingProjectFromStatus(hybridProject)!, 'warehouse', syncApi);
     expect(steps).toEqual([
       { kind: 'dbt', ok: false, message: 'dbt project: dbt manifest.json is missing' },
-      { kind: 'warehouse', ok: true, message: 'Warehouse synchronized · 12 tables and views.' },
+      { kind: 'warehouse', ok: true, message: 'Warehouse tables refreshed · 12 tables and views.' },
     ]);
   });
 
@@ -239,7 +261,7 @@ describe('synchronize an existing project', () => {
       { name: 'PGHOST', set: true },
       { name: 'PGPASSWORD', set: false },
     ]);
-    expect(steps).toEqual([{ kind: 'warehouse', ok: false, message: 'Set PGPASSWORD in the shell that starts zlens notebook, restart it, then synchronize.' }]);
+    expect(steps).toEqual([{ kind: 'warehouse', ok: false, message: 'Set PGPASSWORD in the shell that starts zlens notebook, restart it, then refresh.' }]);
     expect(syncApi.getConnectionMetadataScope).not.toHaveBeenCalled();
     expect(missingEnvironment([{ name: 'A', set: true }, { name: 'B', set: false }])).toEqual(['B']);
     expect(missingEnvironment(undefined)).toEqual([]);

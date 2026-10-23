@@ -6,6 +6,7 @@ import { stagingLeftOutSentence, waitingDraftsSentence } from '../modeling/propo
 import {
   databaseOnlyUnavailable,
   EXISTING_PROJECT_TITLE,
+  existingRefreshLabel,
   MODEL_SOURCE_OPTIONS,
   type DraftOutcome,
   type ExistingProject,
@@ -105,7 +106,7 @@ export function ModelSourceChooser({
         'existing',
         EXISTING_PROJECT_TITLE,
         existing
-          ? <>This folder&apos;s <code style={{ fontFamily: t.fontMono }}>dql.config.json</code> already sets up the data model: <strong style={{ color: t.textPrimary }}>{existing.label}</strong>{existing.detail ? ` · ${existing.detail}` : ''}. Enter credentials, test the connection and synchronize — no modeling questions.</>
+          ? <>This folder&apos;s <code style={{ fontFamily: t.fontMono }}>dql.config.json</code> already sets up the data model: <strong style={{ color: t.textPrimary }}>{existing.label}</strong>{existing.detail ? ` · ${existing.detail}` : ''}. Test the connection and continue — no modeling questions.</>
           : <>For a folder whose <code style={{ fontFamily: t.fontMono }}>dql.config.json</code> already sets up the data model, such as a teammate&apos;s repository: start ZLens in that folder (<code style={{ fontFamily: t.fontMono }}>zlens notebook path/to/project</code>). This folder has no data model yet.</>,
         dbtOnly || !existing,
       )}
@@ -216,7 +217,7 @@ export function DraftModelsCard({
   );
 }
 
-/** Open an existing ZLens project: synchronize what its dql.config.json already names. */
+/** Open an existing ZLens project: refresh what its dql.config.json already names. */
 export function ExistingProjectSyncCard({
   project,
   busy,
@@ -234,14 +235,15 @@ export function ExistingProjectSyncCard({
   t: Theme;
 }) {
   const parts = [project.mode !== 'warehouse-first' && project.dbtConfigured ? 'the dbt project' : null, project.warehouseModeling ? 'the saved warehouse schemas' : null].filter(Boolean);
+  const action = existingRefreshLabel(project);
   return (
-    <section aria-label="Synchronize project" style={{ maxWidth: 640, border: `1px solid ${steps && steps.length > 0 && steps.every((step) => step.ok) ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
+    <section aria-label={action} style={{ maxWidth: 640, border: `1px solid ${steps && steps.length > 0 && steps.every((step) => step.ok) ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--accent-dim)', color: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><RefreshCw size={16} aria-hidden="true" /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Synchronize</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>{action}</div>
           <div style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5, marginTop: 2 }}>
-            {parts.length ? `Reads ${parts.join(' and ')} again, as this project is configured.` : 'Reads this project’s sources again, as it is configured.'} Its models and certifications come from the repository.
+            {parts.length ? `Reads ${parts.join(' and ')} again.` : 'Reads this project’s sources again.'} Only needed when the project changed since you last ran zlens sync. Its models and certifications come from the repository.
           </div>
         </div>
         <button
@@ -250,7 +252,7 @@ export function ExistingProjectSyncCard({
           disabled={busy}
           style={{ height: 32, padding: '0 13px', borderRadius: 8, border: 'none', background: t.accent, color: 'var(--accent-fg)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.55 : 1, fontFamily: t.font, flexShrink: 0 }}
         >
-          {busy ? 'Synchronizing…' : 'Synchronize'}
+          {busy ? 'Refreshing…' : action}
         </button>
       </div>
       {environment.length ? (
@@ -266,7 +268,7 @@ export function ExistingProjectSyncCard({
             ))}
           </ul>
           {environment.some((reference) => !reference.set)
-            ? <div style={{ marginTop: 4 }}>Export the missing ones in the shell that starts <code style={{ fontFamily: t.fontMono }}>zlens notebook</code>, restart it, then test and synchronize. Passwords can also be entered above; they stay in the private secrets file.</div>
+            ? <div style={{ marginTop: 4 }}>Export the missing ones in the shell that starts <code style={{ fontFamily: t.fontMono }}>zlens notebook</code>, restart it, then test and refresh. Passwords can also be entered above; they stay in the private secrets file.</div>
             : null}
         </div>
       ) : null}

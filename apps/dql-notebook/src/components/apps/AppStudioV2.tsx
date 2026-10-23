@@ -406,9 +406,12 @@ export function studioTextTileLines(markdown: string): Array<{ text: string; hea
   });
 }
 
-/** The manual start button says what it opens: an empty page, or one with an intro to edit. */
+/**
+ * The manual start button says where it goes: the Data step comes first, so
+ * "Open blank Studio" promised a canvas it did not open (Codex G2).
+ */
 export function manualLaunchLabel(template: StudioTemplate): string {
-  return template === 'blank' ? 'Open blank Studio' : 'Open Studio with an intro';
+  return template === 'blank' ? 'Continue to data' : 'Continue to data (with an intro)';
 }
 
 export function AppStudioLaunchSurface({

@@ -109,7 +109,7 @@ app-builder:
     used, and nothing guesses from your words.
   steps:
     - Open Apps and click Build new App.
-    - Choose Start manually, name the App, pick the Commerce domain and click Open blank Studio.
+    - Choose Start manually, name the App, pick the Commerce domain and click Continue to data.
     - In Data for this App, the Customers row reads Table · Certified · Commerce; open it to see its Measures, Dimensions and Time.
     - Click Add to App, then Open Studio with 1 source.
     - Click the Lifetime Spend measure; a new tile shows the total. Click Add to page.
@@ -136,17 +136,17 @@ quickstart:
   caption: >-
     The Jaffle Shop sample is already a ZLens workspace: in its folder, npm
     install adds ZLens and the DuckDB driver, npm run sync imports the dbt
-    project and npm run notebook starts the workbench. Guided Setup finds the
-    dbt project, shows the sample's DuckDB connection already configured and
-    tested, skips the optional AI step, and a first query runs in the starter
-    notebook.
+    project and npm run notebook starts the workbench. Guided Setup opens the
+    folder as an existing ZLens project, shows the sample's DuckDB connection
+    already configured and tested, skips the optional AI step, and a first
+    query runs in the starter notebook.
   steps:
     - In the jaffle-shop-duckdb folder, run npm install; it installs the ZLens CLI into the folder.
     - Run npm install --prefix .dql/connectors duckdb to install the DuckDB driver.
     - Run npm run sync; it imports the dbt project and ends with dbt sync complete.
     - Run npm run notebook; it prints the local URL.
-    - In the browser, Guided Setup shows the dbt project is ready.
-    - On the database step, the sample's DuckDB connection is already configured and the test has passed.
+    - In the browser, Guided Setup has Open an existing ZLens project selected; its card names the dbt project in this folder.
+    - On Check the connection, the sample's DuckDB connection is already configured and the test has passed.
     - Skip the optional AI step and finish setup.
     - Open the welcome notebook, query dev.customers for the top five customers by lifetime spend, and run the cell; the result shows as a bar chart.
 

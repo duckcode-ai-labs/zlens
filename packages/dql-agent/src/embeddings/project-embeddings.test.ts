@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  autoUpgradeProjectEmbeddings,
   clearProjectEmbeddingCache,
   embeddingOptionsFromSettings,
   isHashedEmbeddingProvider,
@@ -71,5 +72,67 @@ describe('project embedding provider', () => {
     expect(embeddingOptionsFromSettings({ provider: 'openai', apiKey: 'k', model: 'text-embedding-3-small' }))
       .toEqual({ openaiApiKey: 'k', model: 'text-embedding-3-small' });
     expect(embeddingOptionsFromSettings({ provider: 'hashed' })).toEqual({});
+  });
+});
+
+/**
+ * Codex end-to-end report, 23 Oct 2026: a database-only project switched to
+ * local Ollama embeddings (nomic-embed-text) by itself because Ollama was
+ * running. Local embeddings are now the person's choice.
+ */
+describe('local embeddings only when the project chooses them', () => {
+  const deps = (local: { endpoint: string; model: string } | null, indexed = 'hashed-token-v1') => ({
+    probeLocalOllamaEmbeddings: vi.fn(async () => local),
+    upgradeVectorIndexForProject: vi.fn(async (_root: string, provider: { id: string }) => ({
+      upgraded: provider.id !== indexed,
+      providerId: provider.id,
+    })),
+    setProcessDefaultEmbeddingProvider: vi.fn(),
+  });
+  afterEach(() => vi.unstubAllEnvs());
+  const outsideTests = () => {
+    vi.stubEnv('VITEST', '');
+    vi.stubEnv('ZLENS_EMBEDDINGS_AUTODETECT', undefined as unknown as string);
+    vi.stubEnv('DQL_EMBEDDINGS_AUTODETECT', undefined as unknown as string);
+    vi.stubEnv('ZLENS_OLLAMA_EMBED_URL', undefined as unknown as string);
+    vi.stubEnv('ZLENS_OPENAI_API_KEY', undefined as unknown as string);
+  };
+
+  it('a new project stays word-based with Ollama running, and only offers the local model', async () => {
+    outsideTests();
+    const mocks = deps({ endpoint: 'http://127.0.0.1:11434', model: 'nomic-embed-text' });
+    const result = await autoUpgradeProjectEmbeddings(project({ project: 'p' }), mocks);
+    expect(result).toEqual({ providerId: 'hashed-token-v1', upgraded: false, reason: 'not_chosen', localModel: 'nomic-embed-text' });
+    expect(mocks.setProcessDefaultEmbeddingProvider).not.toHaveBeenCalled();
+    // Only the word-based index is ever asked for.
+    expect(mocks.upgradeVectorIndexForProject.mock.calls.map(([, provider]) => (provider as { id: string }).id)).toEqual(['hashed-token-v1']);
+  });
+
+  it('an index an earlier version switched by itself goes back to word-based search', async () => {
+    outsideTests();
+    const mocks = deps(null, 'ollama:nomic-embed-text');
+    const result = await autoUpgradeProjectEmbeddings(project({ project: 'p' }), mocks);
+    expect(result).toEqual({ providerId: 'hashed-token-v1', upgraded: false, reason: 'not_chosen', restored: true });
+  });
+
+  it('a project that chose embeddings keeps them unchanged', async () => {
+    outsideTests();
+    const mocks = deps({ endpoint: 'http://127.0.0.1:11434', model: 'nomic-embed-text' });
+    const root = project({ ai: { embeddings: { provider: 'ollama', endpoint: 'http://127.0.0.1:11434', model: 'nomic-embed-text' } } });
+    expect(await autoUpgradeProjectEmbeddings(root, mocks)).toMatchObject({ providerId: 'ollama', upgraded: false, reason: 'configured' });
+    expect(mocks.probeLocalOllamaEmbeddings).not.toHaveBeenCalled();
+    expect(mocks.upgradeVectorIndexForProject).not.toHaveBeenCalled();
+  });
+
+  it('an operator can opt in to automatic local embeddings, or turn the probe off', async () => {
+    outsideTests();
+    vi.stubEnv('ZLENS_EMBEDDINGS_AUTODETECT', 'on');
+    const on = deps({ endpoint: 'http://127.0.0.1:11434', model: 'nomic-embed-text' });
+    expect(await autoUpgradeProjectEmbeddings(project({ project: 'p' }), on)).toMatchObject({ upgraded: true, model: 'nomic-embed-text' });
+    expect(on.setProcessDefaultEmbeddingProvider).toHaveBeenCalledTimes(1);
+    vi.stubEnv('ZLENS_EMBEDDINGS_AUTODETECT', 'off');
+    const off = deps({ endpoint: 'http://127.0.0.1:11434', model: 'nomic-embed-text' });
+    expect(await autoUpgradeProjectEmbeddings(project({ project: 'p' }), off)).toMatchObject({ reason: 'disabled' });
+    expect(off.probeLocalOllamaEmbeddings).not.toHaveBeenCalled();
   });
 });

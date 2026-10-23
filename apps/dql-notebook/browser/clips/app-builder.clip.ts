@@ -50,7 +50,7 @@ clip('app-builder', async ({ page, sample, director }) => {
   await director.point(domain);
   await domain.selectOption({ label: 'Commerce' });
   await director.beat(700);
-  await director.click(page.getByRole('button', { name: /Open blank Studio/ }), { after: 300 });
+  await director.click(page.getByRole('button', { name: /^Continue to data/ }), { after: 300 });
 
   // 2. Data for this App: add a certified Dataset and see its fields.
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });

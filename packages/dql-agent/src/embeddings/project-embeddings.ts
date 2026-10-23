@@ -129,14 +129,35 @@ export interface EmbeddingAutoUpgradeResult {
     | 'no_local_model'
     | 'already_current'
     | 'reembed_failed'
+    | 'not_chosen'
     | 'error';
   /** The local model adopted, when one was. */
   model?: string;
+  /**
+   * A local Ollama embedding model this computer serves, offered but not used
+   * because the project has not chosen embeddings (reason `not_chosen`).
+   */
+  localModel?: string;
+  /** The index held semantic vectors nobody chose and is back on word-based search. */
+  restored?: boolean;
 }
 
 /**
- * Adopt local Ollama embeddings for a project when the machine already serves
- * them, re-embedding the vector index in the same step.
+ * Local embeddings are a choice, never a silent switch (Codex end-to-end
+ * report, 23 Oct 2026): a database-only project started using Ollama's
+ * nomic-embed-text only because Ollama happened to be running. Now:
+ *
+ *   - a project setting (`ai.embeddings`, Settings → AI provider → Search) or
+ *     an environment override is the person's decision and is kept as it is;
+ *   - otherwise search stays word-based (`not_chosen`). A local model is only
+ *     reported (`localModel`) so the server and Settings can offer it, and an
+ *     index an earlier version switched by itself is rebuilt word-based
+ *     (`restored`), since retrieval must use the provider the index holds;
+ *   - `ZLENS_EMBEDDINGS_AUTODETECT=on` is an operator's explicit opt-in to the
+ *     old behaviour below; `off` skips even the probe.
+ *
+ * With the opt-in: adopt local Ollama embeddings for a project when the
+ * machine already serves them, re-embedding the vector index in the same step.
  *
  * The hashed provider is a token hash: it matches shared words and nothing
  * else, so "customer accounts" cannot find a model documented as "billing
@@ -179,8 +200,21 @@ export async function autoUpgradeProjectEmbeddings(
       || readEnv('ZLENS_OPENAI_API_KEY')) {
       return { providerId: configured.provider ?? 'configured', upgraded: false, reason: 'configured' };
     }
-    if (readEnv('ZLENS_EMBEDDINGS_AUTODETECT') === 'off') {
+    const autodetect = readEnv('ZLENS_EMBEDDINGS_AUTODETECT');
+    if (autodetect === 'off') {
       return { providerId: 'hashed-token-v1', upgraded: false, reason: 'disabled' };
+    }
+    if (autodetect !== 'on') {
+      const wordBased = resolveEmbeddingProvider({});
+      const restore = await deps.upgradeVectorIndexForProject(projectRoot, wordBased).catch(() => ({ upgraded: false, providerId: wordBased.id }));
+      const offered = await deps.probeLocalOllamaEmbeddings().catch(() => null);
+      return {
+        providerId: wordBased.id,
+        upgraded: false,
+        reason: 'not_chosen',
+        ...(offered?.model ? { localModel: offered.model } : {}),
+        ...(restore.upgraded ? { restored: true } : {}),
+      };
     }
     const local = await deps.probeLocalOllamaEmbeddings();
     if (!local) return { providerId: 'hashed-token-v1', upgraded: false, reason: 'no_local_model' };

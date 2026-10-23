@@ -65,7 +65,7 @@ test('checking a table does not certify it; certifying is a short review from th
   await page.getByRole('button', { name: 'Apps', exact: true }).click();
   await page.getByRole('button', { name: 'Build new App' }).click();
   await page.getByRole('tab', { name: 'Start manually' }).click();
-  await page.getByRole('button', { name: /Open blank Studio/ }).click();
+  await page.getByRole('button', { name: /^Continue to data/ }).click();
   await expect(page.getByRole('heading', { name: 'Data for this App' })).toBeVisible({ timeout: 30_000 });
 
   const browser = page.getByRole('region', { name: 'Add data' });

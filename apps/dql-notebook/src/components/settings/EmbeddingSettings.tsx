@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Check, Download, Loader2, ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react';
 import { api, type EmbeddingSettingsResponse } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
-import { embeddingReindexOutcome } from './embedding-reindex-model';
+import { embeddingReindexOutcome, LOCAL_EMBEDDING_MODEL, LOCAL_EMBEDDINGS_OPTION, localEmbeddingsHint, searchModeLabel } from './embedding-reindex-model';
 
 type ProviderId = 'hashed' | 'ollama' | 'openai';
 interface ModelOption {
@@ -12,6 +12,12 @@ interface ModelOption {
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
 
 /**
+ * Search: word-based by default, local Ollama embeddings when the person turns
+ * them on. ZLens never switches by itself (Codex end-to-end report, 23 Oct
+ * 2026: a project started using nomic-embed-text only because Ollama was
+ * running). The provider ids, other models, Test and Re-index sit under
+ * Technical details.
+ *
  * Embeddings decide whether Ask can match MEANING or only shared words.
  *
  * With the offline hashed default, "how are we doing on drinks" cannot reach a
@@ -91,8 +97,31 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
     setActive({ id: result.activeProviderId, semantic: result.semantic, reindexRequired: result.reindexRequired });
     onStatus?.(result.semantic
       ? 'Semantic embeddings enabled. Re-index to apply them to your catalog.'
-      : 'Using the offline hashed embedder — retrieval stays lexical.');
+      : 'Search is word-based.');
   });
+
+  /** One switch: local Ollama embeddings on (pull the model if needed, save, re-embed) or off (word-based, re-embed). */
+  const setLocalEmbeddings = (on: boolean) => run('local', async () => {
+    if (on) {
+      if (!ollamaReachable) throw new Error('Ollama is not running on this computer. Start it, then turn this on.');
+      if (!installed.includes(LOCAL_EMBEDDING_MODEL)) {
+        await api.installEmbeddingModel(LOCAL_EMBEDDING_MODEL, endpoint);
+        await refreshModels(endpoint);
+      }
+      await api.saveEmbeddingSettings({ provider: 'ollama', endpoint, model: LOCAL_EMBEDDING_MODEL });
+    } else {
+      await api.saveEmbeddingSettings({ provider: 'hashed' });
+    }
+    const result = await api.reindexEmbeddings();
+    const current = await api.getEmbeddingSettings();
+    applyCurrentSettings(current);
+    const outcome = embeddingReindexOutcome(result, current);
+    setOperationStatus(outcome.ok
+      ? { ok: true, message: on ? `Search is meaning-based, with ${LOCAL_EMBEDDING_MODEL} on this computer.` : 'Search is word-based.' }
+      : outcome);
+    onStatus?.(on ? `Local Ollama embeddings on (${LOCAL_EMBEDDING_MODEL}).` : 'Local embeddings off: search is word-based.');
+  });
+  const localOn = provider === 'ollama' && model === LOCAL_EMBEDDING_MODEL && active.semantic;
 
   const options = provider === 'openai' ? catalog.openai : catalog.ollama;
   const card: React.CSSProperties = {
@@ -113,10 +142,10 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
     <div style={card}>
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
         <div>
-          <div style={{ fontSize: 13.5, fontWeight: 700, color: t.textPrimary }}>Embeddings</div>
+          <div style={{ fontSize: 13.5, fontWeight: 700, color: t.textPrimary }}>Search</div>
           <div style={{ fontSize: 12, color: t.textSecondary, marginTop: 4, lineHeight: 1.5, maxWidth: 620 }}>
-            Decides whether a plain-English question can match a metric by <em>meaning</em> or only by shared words.
-            The offline default is lexical — it cannot connect "drinks" to a <code>beverage_revenue</code> metric.
+            Word-based search matches the words in a question. Meaning-based search also connects "drinks" to a
+            <code> beverage_revenue</code> metric. ZLens never switches by itself.
           </div>
         </div>
         <span style={{
@@ -127,9 +156,30 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
           border: `1px solid ${active.semantic ? 'var(--status-success-border)' : 'var(--status-warning-border)'}`,
         }}>
           {active.semantic ? <ShieldCheck size={11} /> : <ShieldAlert size={11} />}
-          {active.semantic ? 'Semantic' : 'Lexical only'}
+          {searchModeLabel({ provider, model }, active.semantic)}
         </span>
       </div>
+
+      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, cursor: busy ? 'wait' : 'pointer' }}>
+        <input
+          type="checkbox"
+          role="switch"
+          aria-checked={localOn}
+          checked={localOn}
+          disabled={busy !== null}
+          onChange={(event) => void setLocalEmbeddings(event.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          <span style={{ fontSize: 12.5, fontWeight: 650, color: t.textPrimary }}>{LOCAL_EMBEDDINGS_OPTION}</span>
+          <span style={{ display: 'block', fontSize: 11.5, color: t.textMuted, marginTop: 2, lineHeight: 1.45 }}>
+            {busy === 'local' ? <><Loader2 size={11} className="dql-spin" /> Re-embedding the catalog…</> : localEmbeddingsHint({ reachable: ollamaReachable, installed })}
+          </span>
+        </span>
+      </label>
+
+      <details style={{ marginTop: 12 }}>
+        <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 650, color: t.textSecondary }}>Technical details</summary>
 
       <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
         {(['hashed', 'ollama', 'openai'] as ProviderId[]).map((id) => (
@@ -139,7 +189,7 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
             onClick={() => { setProvider(id); if (id === 'hashed') void save('hashed', ''); }}
             style={{ ...button(provider === id), textTransform: 'capitalize' }}
           >
-            {id === 'hashed' ? 'Offline (default)' : id === 'ollama' ? 'Ollama (local)' : 'OpenAI'}
+            {id === 'hashed' ? 'Word-based (default)' : id === 'ollama' ? 'Ollama (local)' : 'OpenAI'}
           </button>
         ))}
       </div>
@@ -247,8 +297,9 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
           {busy === 'reindex' ? <Loader2 size={12} className="dql-spin" /> : <RefreshCw size={12} />}
           {busy === 'reindex' ? 'Re-indexing…' : 'Re-index catalog'}
         </button>
-        <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.fontMono }}>active: {active.id || '—'}</span>
+        <span style={{ fontSize: 11, color: t.textMuted }}>Embedder in use: <code style={{ fontFamily: t.fontMono }}>{active.id || '—'}</code></span>
       </div>
+      </details>
 
       {active.reindexRequired && (
         <div style={{ fontSize: 11.5, color: 'var(--status-warning)', marginTop: 8, lineHeight: 1.5 }}>

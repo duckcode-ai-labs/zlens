@@ -13,24 +13,25 @@ test('Guided Setup: dbt project', async ({ page, notes }) => {
   await page.goto(baseUrl());
   const setup = page.getByRole('dialog', { name: 'Guided Setup' });
   await expect(setup.getByRole('heading', { name: 'Where does your data model live?' })).toBeVisible({ timeout: 60_000 });
-  // The sample is already a ZLens project on a dbt project: dbt project is selected.
-  await expect(setup.getByRole('radio', { name: 'dbt project' })).toBeChecked();
-  await expect(setup.getByText('dbt project ready').first()).toBeVisible();
-  await setup.getByRole('button', { name: 'Preview', exact: true }).click();
-  await expect(setup.getByText(/Nothing has changed yet/).first()).toBeVisible({ timeout: 120_000 });
-  await setup.getByRole('button', { name: 'Apply project', exact: true }).click();
-  const next = setup.getByRole('button', { name: /Continue to database/ });
-  await expect(next).toBeEnabled({ timeout: 120_000 });
-  await next.click();
+  // The sample is already a ZLens project on a built dbt project: it opens as
+  // an existing project, never as "dbt project missing" (Codex F01).
+  await expect(setup.getByRole('radio', { name: /Open an existing ZLens project/ })).toBeChecked();
+  await expect(setup.getByText(/already sets up the data model:\s*dbt project/).first()).toBeVisible();
+  await expect(setup.getByText('dbt project missing')).toHaveCount(0);
+  await setup.getByRole('button', { name: /Continue to credentials/ }).click();
 
   await expect(setup.getByText(/DuckDB · configured/).first()).toBeVisible({ timeout: 60_000 });
   await expect(setup.getByText(/Test passed/).first()).toBeVisible({ timeout: 60_000 });
+  // The dbt refresh is the step's action; extra schemas wait under Advanced.
+  await setup.getByRole('button', { name: 'Refresh dbt data', exact: true }).click();
+  await expect(setup.getByText(/dbt data refreshed/).first()).toBeVisible({ timeout: 120_000 });
+  await expect(setup.getByText('Find available databases & schemas')).toBeHidden();
   await setup.getByRole('button', { name: /Continue to optional AI/ }).click();
   // Step 3 is optional; the gate sets the provider in Settings (next checks).
   await setup.getByRole('button', { name: 'Skip AI for now' }).click();
   await setup.getByRole('button', { name: /Finish setup/ }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
-  notes.push('Preview → Apply project → DuckDB · configured, Test passed → Finish setup');
+  notes.push('Open an existing ZLens project → DuckDB · configured, Test passed → Refresh dbt data → Finish setup');
 });
 
 test('Notebook: first query from the quickstart', async ({ page, notes }) => {
