@@ -7,9 +7,10 @@ import {
 import {
   assessSemanticJoinTrust,
   buildAnalysisQuestionPlan,
-  composeSemanticQueryForQuestion,
+  composeSemanticQueryForQuestionWithCoverage,
   semanticDqlArtifactName,
   renderSemanticDqlArtifact,
+  unexpressedSemanticQuestionParts,
   upsertGeneratedDqlArtifactDraft,
   type GeneratedDraftBlock,
   type SemanticJoinTrust,
@@ -64,6 +65,20 @@ export async function querySemanticModel(
       ...(args.driver ? { driver: args.driver } : {}),
       ...(args.tableMapping ? { tableMapping: args.tableMapping } : {}),
     };
+    // The members an agent picked must still answer the question it passes:
+    // `orders` alone is not "the busiest hour for orders in Philadelphia".
+    const explicitQuestion = args.question?.trim();
+    const unexpressed = explicitQuestion
+      ? unexpressedSemanticQuestionParts({
+        semanticLayer: layer,
+        question: explicitQuestion,
+        questionPlan: buildAnalysisQuestionPlan(explicitQuestion),
+        members: { metrics: explicitMetrics, dimensions: args.dimensions ?? [], filters: args.filters, timeDimension: args.timeDimension },
+      })
+      : [];
+    if (unexpressed.length > 0) {
+      return unexpressedResult(unexpressed, explicitMetrics[0]!, { requested: composeOptions, available });
+    }
     const composed = layer.composeQuery(composeOptions);
     if (!composed) {
       return {
@@ -161,19 +176,26 @@ export async function querySemanticModel(
     };
   }
 
-  const result = composeSemanticQueryForQuestion({
+  const coverage = composeSemanticQueryForQuestionWithCoverage({
     semanticLayer: layer,
     question,
     questionPlan: buildAnalysisQuestionPlan(question),
     driver: args.driver,
     tableMapping: args.tableMapping,
   });
+  const result = coverage.result;
   const certified = await findCertifiedBlockCoverage(ctx, {
     question,
     members: result
       ? { metrics: result.metrics, dimensions: result.dimensions, timeDimension: result.timeDimension, filters: result.filters }
       : { metrics: [], dimensions: [] },
   });
+  if (!result && coverage.unexpressed.length > 0) {
+    return {
+      ...certifiedCoverageFields(certified),
+      ...unexpressedResult(coverage.unexpressed, coverage.metric!, { available }),
+    };
+  }
   if (!result) {
     return {
       ...certifiedCoverageFields(certified),
@@ -223,6 +245,23 @@ export async function querySemanticModel(
       trustState: artifactTrustState(trust),
       ...(draftBlock ? { sourcePath: result.dqlArtifact.sourcePath ?? draftBlock.path } : {}),
     },
+  };
+}
+
+/**
+ * A metric matched, but the question also asks for a breakdown, a member or a
+ * date range the selected members cannot express. Answering with the metric
+ * alone would put an unrelated number under a From Metrics label, so this is
+ * no match, with the missing parts listed for the SQL the agent writes next.
+ */
+function unexpressedResult(unexpressed: string[], metric: string, extra: Record<string, unknown>) {
+  return {
+    matched: false as const,
+    reason: `No semantic match: the semantic layer has "${metric}" but cannot express ${unexpressed.join(', ')} from this question. Do not answer with "${metric}" alone; answer through query_via_metadata with SQL that applies every part of the question.`,
+    unexpressed,
+    nearestMetric: metric,
+    nextTool: 'query_via_metadata' as const,
+    ...extra,
   };
 }
 
