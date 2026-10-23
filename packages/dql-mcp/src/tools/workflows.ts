@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   APP_BUILD_HANDOFF_SOURCE_LIMIT,
   appBuildHandoffSourceSummary,
+  assessSemanticJoinTrust,
   buildAnalysisQuestionPlan,
   composeSemanticQueryForQuestion,
   appStudioDraftPath,
@@ -96,7 +97,7 @@ export async function askDql(
     routeReason: route.routeReason,
     grainGate: route.grainGate,
     recommendedAction: semanticCandidate
-      ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled From Metrics. Write SQL for query_via_metadata only if it returns matched: false.`
+      ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled ${semanticCandidate.trustLabel.display}${semanticCandidate.joinCaveat ? ` (${semanticCandidate.joinCaveat})` : ''}. Write SQL for query_via_metadata only if it returns matched: false.`
       : recommendedAction(route.route),
     ...(semanticCandidate
       ? { nextTool: 'query_semantic_model', semanticCandidate }
@@ -125,7 +126,7 @@ export async function askDql(
       ],
       // Canonical vocabulary the answer must report under `trustStatus`.
       trustLabels: ['Certified', 'From Metrics', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
-      rule: 'Never present generated SQL or Tier-2 preview rows as certified. From Metrics is the label query_semantic_model returns for a compile from semantic metrics and dimensions; it is not Certified. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
+      rule: 'Never present generated SQL or Tier-2 preview rows as certified. From Metrics is the label query_semantic_model returns for a compile from semantic metrics and dimensions whose joins are all certified relationships; it is not Certified. A compile that joins through a draft or unmodeled relationship is AI-Generated. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
     },
   };
 }
@@ -382,8 +383,9 @@ export function buildDqlBlock(
 /**
  * The semantic compile a generated-route question would get, when the
  * semantic layer has the metric it names. Sends the agent to
- * query_semantic_model (From Metrics) before it writes its own SQL (AI-Generated),
- * the order the Ask page follows.
+ * query_semantic_model (From Metrics, or AI-Generated when it joins through an
+ * uncertified relationship) before it writes its own SQL (AI-Generated), the
+ * order the Ask page follows.
  */
 function semanticCandidateFor(ctx: DQLContext, question: string) {
   try {
@@ -393,12 +395,15 @@ function semanticCandidateFor(ctx: DQLContext, question: string) {
       questionPlan: buildAnalysisQuestionPlan(question),
     });
     if (!result) return undefined;
+    // From Metrics only when every join the compile takes is a certified relationship.
+    const joins = assessSemanticJoinTrust(result.composeResult.joinPath, ctx.manifest);
     return {
       metric: result.metric,
       metrics: result.metrics,
       dimensions: result.dimensions,
       ...(result.timeDimension ? { timeDimension: result.timeDimension } : {}),
-      trustLabel: resolveTrustLabel('governed'),
+      trustLabel: joins.certified ? resolveTrustLabel('governed') : resolveTrustLabel('ai_generated', 'uncertified join'),
+      ...(joins.caveat ? { joinCaveat: joins.caveat } : {}),
     };
   } catch {
     return undefined;

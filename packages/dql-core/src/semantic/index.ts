@@ -36,6 +36,7 @@ export type {
   CubeDefinition,
   ComposeQueryOptions,
   ComposeQueryResult,
+  SemanticJoinStep,
   SemanticSearchOptions,
   SemanticSearchResults,
 } from './semantic-layer.js';

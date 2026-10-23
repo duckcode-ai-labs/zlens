@@ -83,7 +83,8 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'the generated paths below. Never tell the user that no certified block answers ' +
   'a question unless `ask_dql` said so.\n' +
   '4. When `ask_dql` returns `nextTool: query_semantic_model`, call it with the ' +
-  'question before writing any SQL; its answer is labelled From Metrics.\n' +
+  'question before writing any SQL; its answer is labelled From Metrics, or ' +
+  'AI-Generated when it joins through a relationship that is not certified.\n' +
   'Two ways to answer: `answer_question` runs ZLens\'s FULL governed cascade and ' +
   'returns the executed answer + rows + canonical trust label + a reviewable ' +
   'draft — use it when you want ZLens to generate for you (same engine + trust ' +
@@ -103,7 +104,12 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   '`query_semantic_model` before deep dbt or warehouse search. If its result names ' +
   'a `certifiedBlock`, call `query_via_block` with that block instead. Otherwise return ' +
   'the DQL semantic artifact, draft path when present, and compiled SQL, ' +
-  'labelled From Metrics (built from semantic metrics and dimensions, not certified). ' +
+  'labelled with its `trustLabelInfo.display`: From Metrics (built from semantic ' +
+  'metrics and dimensions, every join a certified relationship), or AI-Generated ' +
+  'when a join is a draft or unmodeled relationship (its caveat names the join). ' +
+  'Its `uncertified: true` means no certified block backs the result and the ' +
+  'draft needs review before certification; it does not make a From Metrics ' +
+  'answer AI-generated. ' +
   'When it returns `matched: false`, say there is no semantic match; never ' +
   'answer with a different metric.\n' +
   'Tier 1 certified: for an exact saved block or direct KPI, use ' +

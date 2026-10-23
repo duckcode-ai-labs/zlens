@@ -806,6 +806,7 @@ import {
   semanticRuntimeErrorCode,
   semanticMetricExecutionCapability as runtimeMetricExecutionCapability,
   SemanticRuntimeRequiredError,
+  structuralSemanticJoinPath,
   testSemanticRuntimeDraft,
   type SemanticRuntimeTrace,
   type SemanticRuntimeAdapterId,
@@ -7692,12 +7693,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // Say WHY the native composer was the engine when a fuller one was planned.
         throw new Error(`the ${plannedAdapter} semantic engine could not compose metrics ${request.metrics.join(', ')}${planned.downgraded ? ` (${planned.downgraded})` : ''}${request.dimensions.length ? ` by ${request.dimensions.join(', ')}` : ''}: no join path or grouping satisfied every metric`);
       }
+      // The joins the compile took, for the From Metrics check. MetricFlow and
+      // dbt Cloud do not report theirs; the native composer's join path for
+      // the same request names the same semantic-model joins.
+      const joinPath = compiled.joinPath ?? structuralSemanticJoinPath(semanticLayer, request);
       return {
         sql: compiled.sql.trim(),
         engine: compiled.engine,
         ...(compiled.fanoutProbeSql ? { fanoutProbeSql: compiled.fanoutProbeSql } : {}),
         ...(compiled.strategy ? { strategy: compiled.strategy } : {}),
         ...(compiled.warnings?.length ? { warnings: compiled.warnings } : {}),
+        ...(joinPath ? { joinPath } : {}),
       };
     },
     dispatchOptions: askDispatchOptions,
@@ -7716,7 +7722,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const executed = !turn.runStatus || ['completed', 'needs_review'].includes(turn.runStatus);
         // An answer whose SQL the AI drafted carries that statement forward, so
         // the next turn edits it; a governed answer is edited through its reading.
-        const drafted = executed && Boolean(turn.sql) && [turn.certification, turn.trustLabel].includes('review_required');
+        // So is a semantic answer labelled for review (a join that is not
+        // certified): the compiler wrote its SQL, not the AI.
+        const drafted = executed && Boolean(turn.sql) && [turn.certification, turn.trustLabel].includes('review_required')
+          && turn.dqlArtifact?.kind !== 'semantic_block';
         return {
           intent: intent as AnalyticalIntentV1,
           ...(executed ? {} : { executed: false }),

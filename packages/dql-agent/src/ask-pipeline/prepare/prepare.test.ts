@@ -782,3 +782,27 @@ describe('the composer writes physical names as the warehouse reads them and ali
     expect(composed.refusal).toMatchObject({ code: 'join_path_required' });
   });
 });
+
+// From Metrics means certified joins: the host checks the joins a semantic
+// compile took against the DQL relationships (`joinTrust`); one that is a
+// draft makes the answer review-required, said in its proof and caveat.
+describe('a semantic answer through an uncertified join is labelled for review', () => {
+  const grouped = () => intent({ measures: [{ ref: 'metric:order_item.revenue' }], groupBy: [{ ref: 'dimension:customers.customer_name', role: 'categorical' }], expectedShape: 'grouped' });
+  const compiled = { sql: 'SELECT customer_name, SUM(product_price) AS revenue FROM dev.order_items JOIN dev.orders USING (order_id) JOIN dev.customers USING (customer_id) GROUP BY 1', engine: 'native' };
+
+  it('keeps From Metrics (governed) when every join is certified, or the host could not tell', async () => {
+    for (const output of [{ ...compiled, joinTrust: { certified: true } }, compiled]) {
+      const result = await prepare({ intent: grouped(), vocabulary, deps: { compileSemantic: async () => output } });
+      expect(result.chosen).toMatchObject({ tier: 'semantic', trust: 'governed' });
+      expect(result.chosen!.trustCaveat).toBeUndefined();
+    }
+  });
+
+  it('is review-required when a join is a draft relationship, and names it', async () => {
+    const caveat = 'Orders → customers joins through relationship "order_to_customer", which is draft, not certified. Certify the relationship in Modeling, with warehouse validation, for a From Metrics answer.';
+    const result = await prepare({ intent: grouped(), vocabulary, deps: { compileSemantic: async () => ({ ...compiled, joinTrust: { certified: false, caveat } }) } });
+    expect(result.chosen).toMatchObject({ tier: 'semantic', trust: 'review_required', trustCaveat: caveat });
+    expect(result.chosen!.proof).toContain(`joins: ${caveat}`);
+    expect((result.chosen!.artifact as { trustState?: string }).trustState).toBe('review_required');
+  });
+});

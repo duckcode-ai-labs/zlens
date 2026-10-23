@@ -14,6 +14,7 @@ import {
   classifyWarehouseError,
   hostedWarehouseError,
   assessAnalyticalRelationship,
+  assessSemanticJoinTrust,
   parseMemberOption,
   projectVocabularySource,
   rankedRefsFromPack,
@@ -1167,6 +1168,20 @@ export function effectiveAnsweredTrust(input: {
 }
 
 /**
+ * FROM METRICS MEANS CERTIFIED JOINS. A semantic compile's joins (the native
+ * engine's own, or for MetricFlow and dbt Cloud the native composer's join
+ * path for the same request) are checked against the DQL relationships the
+ * way `resolve_analytical_path` checks them; a draft or unmodeled join makes
+ * the answer review-required. A compile with no join path at all is not
+ * judged here.
+ */
+export function withJoinTrust(compiled: SemanticCompileOutput, manifest: DQLManifest | undefined): SemanticCompileOutput {
+  if (!compiled.joinPath) return compiled;
+  const joins = assessSemanticJoinTrust(compiled.joinPath, manifest);
+  return { ...compiled, joinTrust: { certified: joins.certified, ...(joins.caveat ? { caveat: joins.caveat } : {}) } };
+}
+
+/**
  * The answer card's title, from the ONE trust decision and the source of the
  * figures. A certified block served as evidence is never headed "certified"
  * unless the run is, and nothing but SQL the AI wrote is headed AI-drafted:
@@ -1818,13 +1833,14 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     };
     return {
       ...(layer ? {
-        compileSemantic: (request) => deps.compileSemantic({ ...request, ...(signal ? { signal } : {}) }, connection, semanticCompileContext(request)),
+        compileSemantic: async (request) => withJoinTrust(await deps.compileSemantic({ ...request, ...(signal ? { signal } : {}) }, connection, semanticCompileContext(request)), deps.getManifest().manifest),
         // Different periods are separate MetricFlow/dbt semantic requests, but
         // every branch retains the same selected adapter, connection and
         // cancellation signal.  The host returns executable SQL per branch;
         // the pipeline aligns rows only after the engine has produced them.
         compileSemanticProgram: async (program) => {
           let selectedEngine: string | undefined;
+          let joinPath: SemanticCompileOutput['joinPath'] = [];
           const branches: typeof program.branches = [];
           for (const branch of program.branches) {
             if (signal?.aborted) throw new Error('the semantic execution program was cancelled before every period compiled');
@@ -1834,17 +1850,19 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
               throw new Error(`semantic execution program selected more than one adapter (${selectedEngine}, ${compiled.engine}); all periods must compile on one target`);
             }
             selectedEngine = compiled.engine;
+            joinPath = compiled.joinPath && joinPath ? [...joinPath, ...compiled.joinPath] : undefined;
             branches.push({ ...branch, sql: compiled.sql, engine: compiled.engine });
           }
           if (!selectedEngine) throw new Error('the semantic execution program had no compiled branches');
-          return {
+          return withJoinTrust({
             // `executeCandidate` executes branches, not this marker. Keeping a
             // deterministic SQL fingerprint retains existing receipts/caches.
             sql: branches.map((branch) => `-- ${branch.id}\n${branch.sql ?? ''}`).join('\n'),
             engine: selectedEngine,
             program: { ...program, branches },
             strategy: `${branches.length} bounded semantic period branches`,
-          };
+            ...(joinPath ? { joinPath } : {}),
+          }, deps.getManifest().manifest);
         },
       } : {}),
       // Joins over raw tables are the AI's to write (preferred joins are hints
@@ -3472,7 +3490,11 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
   if (outcome.kind !== 'answered') throw new Error(`unreachable pipeline outcome ${String((outcome as { kind: string }).kind)}`);
   const { candidate, result } = outcome;
   const certified = candidate.trust === 'certified';
-  const reviewRequired = candidate.trust === 'review_required';
+  // A semantic compile that joins through a draft or unmodeled relationship:
+  // the figures still come from governed definitions (no AI wrote the SQL),
+  // but the answer is labelled for review, not From Metrics, and says which join.
+  const joinDoubt = candidate.tier === 'semantic' && candidate.trust === 'review_required';
+  const reviewRequired = candidate.trust === 'review_required' && !joinDoubt;
   // A certified block served as published for a question it cannot answer
   // with identity is evidence: governed trust, the block as its source.
   const blockAsEvidence = candidate.tier === 'certified' && !certified;
@@ -3484,7 +3506,7 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
   // governed definitions answered a question near the one asked: the numbers
   // are shown, labelled for review, with the reason.
   const doubt = governedCoverageDoubt(receipt);
-  const coverageDoubt = !certified && !reviewRequired && doubt.reasons.length > 0;
+  const coverageDoubt = !certified && !reviewRequired && (doubt.reasons.length > 0 || joinDoubt);
   const effectiveTrust = effectiveAnsweredTrust({ certified, reviewRequired, coverageDoubt });
   const trustState = effectiveTrust.trustState;
   const payload = {
@@ -3534,7 +3556,8 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
       // A restriction the reading did not apply is a warning; a word it may
       // cover under another name is a question, never a claim of omission.
       ...coverageEvaluations(receipt),
-      ...(coverageDoubt ? [{ id: 'pipeline-governed-coverage', label: 'From Metrics label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: the reading does not account for ${doubt.reasons.join('; ')}.` }] : []),
+      ...(coverageDoubt && doubt.reasons.length > 0 ? [{ id: 'pipeline-governed-coverage', label: 'From Metrics label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: the reading does not account for ${doubt.reasons.join('; ')}.` }] : []),
+      ...(joinDoubt ? [{ id: 'pipeline-governed-joins', label: 'From Metrics label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: ${candidate.trustCaveat ?? 'a join it takes is not a certified relationship'}` }] : []),
       ...(receipt.grounding ?? []).filter((note) => note.startsWith('identity:') && /share the name/.test(note)).map((note, index) => ({ id: `pipeline-identity-${index + 1}`, label: 'Identity', passed: true, severity: 'warning' as const, message: note.slice('identity:'.length).trim() })),
       // A certified block served as published with a label-only grouping
       // says so: the answer cannot keep two same-named entities apart.

@@ -295,9 +295,27 @@ export interface ComposeQueryOptions {
   tableMapping?: Record<string, string>;
 }
 
+/**
+ * One cube-to-cube join a composition took. A host matches it against its
+ * relationship model (DQL relationships) to decide whether the join is
+ * certified; the compiler itself never decides that.
+ */
+export interface SemanticJoinStep {
+  /** Cube names, in the direction the join was taken. */
+  left: string;
+  right: string;
+  /** The cubes' tables as modeled (before any tableMapping). */
+  leftTable: string;
+  rightTable: string;
+  /** Column pairs read from `${left}.a = ${right}.b [AND ...]`; empty when the ON clause is not plain key equalities. */
+  keys: Array<{ from: string; to: string }>;
+}
+
 export interface ComposeQueryResult {
   sql: string;
   joins: string[];
+  /** The cube-to-cube joins behind `joins`, in order; empty for a single-table composition. */
+  joinPath?: SemanticJoinStep[];
   tables: string[];
   /** Compilation strategy used to protect multi-fact metric grain. */
   strategy?: 'direct_join' | 'aggregate_islands';
@@ -1258,6 +1276,13 @@ export class SemanticLayer {
     return {
       sql,
       joins: joinClauses,
+      joinPath: joinsUsed.map((join) => ({
+        left: join.left,
+        right: join.right,
+        leftTable: this.cubes.get(join.left)?.table ?? join.left,
+        rightTable: this.cubes.get(join.right)?.table ?? join.right,
+        keys: semanticJoinKeys(join.sql),
+      })),
       tables: Array.from(new Set([
         ...allTables,
         ...joinsUsed.map((join) => this.cubes.get(join.right)?.table ?? join.right),
@@ -1791,6 +1816,8 @@ export class SemanticLayer {
     return {
       sql: `WITH ${ctes.join(',\n')}\n${body}`,
       joins: joinClauses,
+      // The grain-key joins between islands touch no table; the islands' own joins do.
+      joinPath: compiled.flatMap((island) => island.joinPath ?? []),
       tables: Array.from(new Set(compiled.flatMap((island) => island.tables))),
       strategy: 'aggregate_islands',
       grainKeys,
@@ -2495,6 +2522,22 @@ export class SemanticLayer {
     }
     return sql;
   }
+}
+
+/** `${left}.a = ${right}.b AND ...` as left→right column pairs; empty when any conjunct is not a plain key equality. */
+function semanticJoinKeys(sql: string): Array<{ from: string; to: string }> {
+  const column = String.raw`"?([A-Za-z_][\w$]*)"?`;
+  const forward = new RegExp(String.raw`^\(?\s*\$\{left\}\.${column}\s*=\s*\$\{right\}\.${column}\s*\)?$`);
+  const backward = new RegExp(String.raw`^\(?\s*\$\{right\}\.${column}\s*=\s*\$\{left\}\.${column}\s*\)?$`);
+  const keys: Array<{ from: string; to: string }> = [];
+  for (const part of sql.trim().split(/\s+and\s+/i)) {
+    const ahead = part.trim().match(forward);
+    const behind = ahead ? undefined : part.trim().match(backward);
+    if (ahead) keys.push({ from: ahead[1]!, to: ahead[2]! });
+    else if (behind) keys.push({ from: behind[2]!, to: behind[1]! });
+    else return [];
+  }
+  return keys;
 }
 
 function renderMetricExpression(metric: MetricDefinition): string {
