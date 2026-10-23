@@ -29,13 +29,15 @@ test('Guided Setup: Database only', async ({ page, notes }) => {
   await page.goto(baseUrl());
   const setup = page.getByRole('dialog', { name: 'Guided Setup' });
   await expect(setup.getByRole('heading', { name: 'Where does your data model live?' })).toBeVisible({ timeout: 60_000 });
-  // This folder is a database-only workspace, so Database only is already selected.
-  await expect(setup.getByRole('radio', { name: 'Database only' })).toBeChecked();
-  await setup.getByRole('button', { name: /Continue to database/ }).click();
+  // The sample already has a dql.config.json, so Guided Setup opens it as an
+  // existing project whose data model is Database only (0.2.3, #159).
+  await expect(setup.getByRole('radio', { name: /Open an existing ZLens project/ })).toBeChecked();
+  await expect(setup.getByText(/already sets up the data model:\s*Database only/).first()).toBeVisible();
+  await setup.getByRole('button', { name: /Continue to credentials/ }).click();
   await expect(setup.getByText(/DuckDB · configured/).first()).toBeVisible({ timeout: 60_000 });
   await expect(setup.getByText(/Test passed/).first()).toBeVisible({ timeout: 60_000 });
   await expect(setup.getByText(/Modeling catalog · 13 tables and views/).first()).toBeVisible({ timeout: 60_000 });
-  notes.push('Database only → DuckDB · configured, Test passed, Modeling catalog · 13 tables and views');
+  notes.push('Open an existing ZLens project (Database only) → DuckDB · configured, Test passed, Modeling catalog · 13 tables and views');
   await setup.getByRole('button', { name: /Continue to optional AI/ }).click();
   await setup.getByRole('button', { name: 'Skip AI for now' }).click();
   await setup.getByRole('button', { name: /Finish setup/ }).click();
