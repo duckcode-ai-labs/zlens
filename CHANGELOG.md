@@ -8,6 +8,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.4 - 2026-10-22
+
+A patch for Apps: a total over a Top N saved query is no longer labelled
+Certified, Certify always leaves a receipt, and the Apps docs match the
+product. The Jaffle Shop sample now has a certification receipt for every
+Jaffle Growth tile.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.4` in each project.
+
 ### Apps: honest totals, one scope line, no AI controls without AI
 
 - **A total over a Top N saved query is not labelled Certified.** A saved

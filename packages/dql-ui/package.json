@@ -1,6 +1,6 @@
 {
   "name": "@zlens/ui",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Design tokens, theme provider, and headless primitives for the ZLens notebook + dashboard shell",
   "license": "Apache-2.0",
   "type": "module",
