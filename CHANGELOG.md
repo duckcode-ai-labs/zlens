@@ -8,6 +8,15 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Apps: Publish waits for pending changes
+
+- **Publish no longer does nothing while a change is saving.** Clicking
+  Publish right after choosing data or adding a tile was ignored without a
+  word, because the button was disabled until the save landed. Publish now
+  takes the click, says "Saving changes…", and opens the review on the saved
+  draft. If the save fails it says "Your last change was not saved, so Publish
+  did not start." with **Try again**. Run waits the same way ("Saving…").
+
 ### Apps: editing a changed App keeps its data, every Certified says who and when
 
 - **Editing a published App keeps its saved queries and their receipts.** An

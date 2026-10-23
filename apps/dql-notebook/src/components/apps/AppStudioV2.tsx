@@ -225,6 +225,7 @@ import {
   uncertifiedPublicationSources,
   unresolvedPublicationRequirements,
 } from './app-studio-publish-readiness';
+import { PUBLISH_SAVE_FAILED_LEAD, createDraftSaveGate, runAfterPendingSaves } from './app-studio-save-gate';
 import { type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
 import { appTileTrustFor, readersWillSeeText, tilesNotCertifiedText } from '@zlens/core/apps/app-trust';
 import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
@@ -612,6 +613,16 @@ export function AppStudioV2({
   const [undoStack, setUndoStack] = useState<AppStudioBuildDraft[]>([]);
   const [redoStack, setRedoStack] = useState<AppStudioBuildDraft[]>([]);
   const [busy, setBusy] = useState(false);
+  // Saves in flight (C1): Publish and Run wait for them instead of ignoring the click.
+  const [saveGate] = useState(createDraftSaveGate);
+  useEffect(() => { saveGate.setBusy(busy); }, [saveGate, busy]);
+  /** What the Publish button is doing after a click: waiting for saves, then checking. */
+  const [publishPhase, setPublishPhase] = useState<'saving' | 'checking' | null>(null);
+  const publishPhaseRef = useRef(publishPhase);
+  publishPhaseRef.current = publishPhase;
+  const [runWaitingForSaves, setRunWaitingForSaves] = useState(false);
+  /** The error a Publish stopped by a failed save shows; its banner offers Try again. */
+  const [publishBlockedBy, setPublishBlockedBy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedMessage, setSavedMessage] = useState<string>(() => draftStatusWords({ published: Boolean(baseAppId) }));
   const [previewRunsByPage, setPreviewRunsByPage] = useState<Record<string, DashboardRunResponse>>({});
@@ -1228,7 +1239,7 @@ export function AppStudioV2({
   const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   /** Runs `work` after every save already queued, so it always starts from the newest draft. */
   const enqueueDraftWork = <T,>(work: () => Promise<T>): Promise<T> => {
-    const queued = mutationQueueRef.current.then(work);
+    const queued = saveGate.track(mutationQueueRef.current.then(work));
     mutationQueueRef.current = queued.catch(() => undefined);
     return queued;
   };
@@ -1300,10 +1311,12 @@ export function AppStudioV2({
         setRedoStack([]);
       }
       setSavedMessage(draftStatusWords({ published: Boolean(latestDraftRef.current?.baseApp), saved: true }));
+      saveGate.clearFailure();
       return result.draft;
     } catch (cause) {
       setSavedMessage('Save failed');
       setError(messageOf(cause));
+      saveGate.recordFailure({ message: messageOf(cause), retry: () => enqueueDraftWork(() => applyMutation(operations, recordHistory, rerunTileIds)) });
       return null;
     } finally {
       setBusy(false);
@@ -2032,6 +2045,7 @@ export function AppStudioV2({
           return { result, addedTileId };
         });
         const { result, addedTileId } = composedAdd;
+        saveGate.clearFailure();
         // A tile built from field clicks leaves the selection alone: the author
         // may already be on the next tile.
         if (origin !== 'field_draft') setSelectedTileId(selectionAfterAdd(origin, result.tileIds[0]));
@@ -2057,6 +2071,7 @@ export function AppStudioV2({
         setSavedMessage('Compose failed');
         setSourceFeedback({ sourceId, status: 'error', view, pageTitle: activePage.metadata.title, message });
         setError(message);
+        saveGate.recordFailure({ message, retry: () => addComponent(kind, source, datasetQuery, datasetTitle, datasetVisualization, datasetEncoding, origin) });
         return false;
       } finally {
         setBusy(false);
@@ -2526,6 +2541,8 @@ export function AppStudioV2({
       setUndoStack([]);
       setRedoStack([]);
       setError(null);
+      saveGate.clearFailure();
+      setPublishBlockedBy(null);
       setSavedMessage('Refreshed · this is the latest version');
     } catch (cause) {
       setError(messageOf(cause));
@@ -2873,7 +2890,12 @@ export function AppStudioV2({
 
   const runPreview = async (pageId = activePage?.id, refresh = false) => {
     if (!draft || !pageId) return;
-    await runPreviewForDraft(draft, pageId, undefined, undefined, refresh ? { refresh: true } : undefined);
+    // A save still in flight is waited for, never a reason to ignore the click (C1).
+    await runAfterPendingSaves(saveGate, async () => {
+      const current = latestDraftRef.current;
+      if (!current) return;
+      await runPreviewForDraftRef.current(current, pageId, undefined, undefined, refresh ? { refresh: true } : undefined);
+    }, { onWaiting: setRunWaitingForSaves });
   };
 
   const runPreviewAndReview = async (pageId: string) => {
@@ -2898,22 +2920,70 @@ export function AppStudioV2({
   };
 
   // One Publish button: pages that only need a fresh run are run first, so
-  // the review lists only what needs the author.
+  // the review lists only what needs the author. A click made while a change
+  // is still saving waits for it ("Saving changes…") and then opens the
+  // review on the saved draft; it is never dropped (C1). A save that fails
+  // stops here with a plain message and Try again.
   const publishFromToolbar = async () => {
-    if (!draft) return;
-    const stale = pagesNeedingSettledPreview(draft);
+    if (!draft || publishPhaseRef.current) return;
+    publishPhaseRef.current = 'checking';
+    setPublishPhase('checking');
+    setPublishBlockedBy(null);
+    try {
+      const outcome = await runAfterPendingSaves(saveGate, async () => {
+        const current = latestDraftRef.current;
+        if (!current) return;
+        await publishDraftFromToolbarRef.current(current);
+      }, {
+        stopOnFailure: true,
+        onWaiting: (waiting) => {
+          publishPhaseRef.current = waiting ? 'saving' : 'checking';
+          setPublishPhase(waiting ? 'saving' : 'checking');
+        },
+      });
+      if (outcome.status === 'save_failed') {
+        setError(outcome.failure.message);
+        setPublishBlockedBy(outcome.failure.message);
+      }
+    } finally {
+      publishPhaseRef.current = null;
+      setPublishPhase(null);
+    }
+  };
+  /** Publish, from the saved draft `start`: run pages that need a fresh run, then open the review. */
+  const publishDraftFromToolbar = async (start: AppStudioBuildDraft) => {
+    const stale = pagesNeedingSettledPreview(start);
     if (!stale.length) {
-      await publish(false);
+      await publish(false, start);
       return;
     }
-    let current = draft;
+    let current = start;
     for (const page of stale) {
-      const recorded = await runPreviewForDraft(current, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+      const recorded = await runPreviewForDraftRef.current(current, page.id, previewVariablesForPage(page), undefined, { refresh: true });
       if (!recorded) return;
       current = recorded;
     }
     setPublishIssues([]);
     await publish(false, current);
+  };
+  const publishDraftFromToolbarRef = useRef(publishDraftFromToolbar);
+  publishDraftFromToolbarRef.current = publishDraftFromToolbar;
+  /** Try again after a failed save stopped Publish: save the change again, then Publish. */
+  const retrySaveThenPublish = async () => {
+    const failure = saveGate.failure();
+    saveGate.clearFailure();
+    setPublishBlockedBy(null);
+    setError(null);
+    if (failure?.retry) await saveGate.track(failure.retry());
+    await publishFromToolbarRef.current();
+  };
+  const publishFromToolbarRef = useRef(publishFromToolbar);
+  publishFromToolbarRef.current = publishFromToolbar;
+  const dismissStudioError = () => {
+    // Dismissing a failed-save message is the author's choice to go on without that change.
+    if (publishBlockedBy !== null) saveGate.clearFailure();
+    setPublishBlockedBy(null);
+    setError(null);
   };
 
   /**
@@ -3761,7 +3831,8 @@ export function AppStudioV2({
   };
   const chooseDataset = (item: AppBlockRecommendation) => {
     setChosenDatasetKey(item.id);
-    if (datasetTilesEnabled && savedQueryNeedsFields(item) && !savedQueryFieldReads[item.sourceId ?? item.id]) void readSavedQueryFieldsIntoApp(item);
+    // Counted as a save in flight: Publish waits for the App's copy to refresh (C1).
+    if (datasetTilesEnabled && savedQueryNeedsFields(item) && !savedQueryFieldReads[item.sourceId ?? item.id]) void saveGate.track(readSavedQueryFieldsIntoApp(item).catch(() => undefined));
     setSelectedTileId(null);
     setDraftTile((current) => current && item.capabilities?.dataset ? emptyDraft(item) : null);
   };
@@ -3901,9 +3972,9 @@ export function AppStudioV2({
             <button type="button" className={editing ? 'on' : ''} aria-pressed={editing} onClick={() => setStudioView('edit')}>Edit</button>
             <button type="button" className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => { setStudioView('view'); setSelectedTileId(null); setSettingsOpen(false); setTileMenuId(null); }} title="See the page exactly as readers will">Preview</button>
           </div>
-          <button type="button" className="preview" onClick={() => void runPreview()} disabled={previewing || busy} aria-label={previewing ? 'Running preview' : 'Run preview'} title="Run every tile on this page again"><Play size={13} /><span>{previewing ? 'Running…' : 'Run'}</span></button>
+          <button type="button" className="preview" onClick={() => void runPreview()} disabled={previewing || runWaitingForSaves} aria-busy={previewing || runWaitingForSaves} aria-label={previewing ? 'Running preview' : runWaitingForSaves ? 'Saving changes, then running preview' : 'Run preview'} title="Run every tile on this page again"><Play size={13} /><span>{previewing ? 'Running…' : runWaitingForSaves ? 'Saving…' : 'Run'}</span></button>
           <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile && askVoice !== 'keywords' ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label={askWords.toolbar} title={askVoice === 'keywords' ? 'Add a total, a trend or a top list from this App’s data' : undefined}>{askVoice === 'keywords' ? <LayoutGrid size={14} /> : <Sparkles size={14} />}<span>{askWords.toolbar}</span></button>
-          <button type="button" className="publish" onClick={() => void publishFromToolbar()} disabled={busy} aria-label={`Review and publish to Project${publishStepCount ? `, ${publishStepCount} ${publishStepCount === 1 ? 'fix' : 'fixes'} needed` : ''}`}><span>Publish</span>{publishStepCount ? <small>{publishStepCount} {publishStepCount === 1 ? 'fix' : 'fixes'}</small> : null}</button>
+          <button type="button" className="publish" onClick={() => void publishFromToolbar()} disabled={publishPhase !== null} aria-busy={publishPhase !== null} aria-label={`Review and publish to Project${publishStepCount ? `, ${publishStepCount} ${publishStepCount === 1 ? 'fix' : 'fixes'} needed` : ''}`}><span>{publishPhase === 'saving' ? 'Saving changes…' : publishPhase === 'checking' ? 'Checking…' : 'Publish'}</span>{publishStepCount && !publishPhase ? <small>{publishStepCount} {publishStepCount === 1 ? 'fix' : 'fixes'}</small> : null}</button>
           <button type="button" className="ghost-icon overflow-button" aria-label="More draft actions" aria-expanded={actionsOpen} onClick={() => setActionsOpen((open) => !open)}><MoreHorizontal size={17} /></button>
           {actionsOpen ? <div className="studio-overflow-menu" role="menu">
             <small>Preview size</small>
@@ -3953,7 +4024,7 @@ export function AppStudioV2({
       </aside> : null}
 
       <main ref={workspaceRef} className="studio-workspace">
-        {error ? <StudioErrorBanner error={error} floating onDismiss={() => setError(null)} onRefresh={() => void reloadLatestDraft()} /> : null}
+        {error ? <StudioErrorBanner error={error} floating onDismiss={dismissStudioError} onRefresh={() => void reloadLatestDraft()} {...(publishBlockedBy !== null && publishBlockedBy === error ? { lead: PUBLISH_SAVE_FAILED_LEAD, action: { label: 'Try again', onClick: () => void retrySaveThenPublish() } } : {})} /> : null}
         <div className={`studio-canvas-frame ${breakpoint} preview-mode-${previewMode}`}>
           <section ref={canvasRef} className="studio-canvas" aria-label="App page" onClick={(event) => { if (event.target === event.currentTarget) { setSelectedTileId(null); setTileMenuId(null); } }}>
             <header className="studio-page-heading">
