@@ -259,6 +259,42 @@ describe('review-required answer drafts (graduated trust, Tier 2)', () => {
     expect(existsSync(join(projectRoot, first.path))).toBe(true);
   });
 
+  describe('the Ask draft from the recording (average order value at each store)', () => {
+    const question = 'What is the average order value at each store?';
+    const aovSql = 'SELECT l.location_id, l.location_name, SUM(o.order_total) / COUNT(*) AS average_order_value FROM "jaffle_shop"."dev"."orders" AS o JOIN "jaffle_shop"."dev"."locations" AS l ON o.location_id = l.location_id GROUP BY l.location_id, l.location_name';
+    // The AI names the transient artifact after its restatement of the question.
+    const aiName = 'for_each_jaffle_shop_location_store_the_average_';
+    const aovArtifact = { kind: 'sql_block', name: aiName, source: `block "${aiName}" {\n  type = "custom"\n  status = "draft"\n  description = "For each Jaffle Shop location (store), the average order value"\n  query = """\n    ${aovSql}\n  """\n}` };
+    const domain = (id: string, sourceSystems: string[]) => {
+      mkdirSync(join(projectRoot, 'domains', id), { recursive: true });
+      writeFileSync(join(projectRoot, 'domains', id, 'domain.dql'), `domain "${id}" {\n  id = "${id}"\n  owner = "analytics@jaffle.shop"\n  sourceSystems = [${sourceSystems.map((system) => `"${system}"`).join(', ')}]\n}\n`);
+    };
+
+    it('names the block after the draft id and proposes the one Domain its tables belong to', () => {
+      domain('commerce', ['dbt:orders', 'dbt:order_items', 'dbt:locations']);
+      domain('marketing', ['dbt:campaigns']);
+      const saved = upsertReviewRequiredAnswerDraft(projectRoot, { question, sql: aovSql, dqlArtifact: aovArtifact });
+      expect(saved.path).toBe('domains/commerce/blocks/_drafts/average_order_value_each_store.dql');
+      const source = readFileSync(join(projectRoot, saved.path), 'utf-8');
+      expect(source).toMatch(/^block "average_order_value_each_store" \{/);
+      expect(source).not.toContain(aiName);
+      expect(source).toMatch(/^\s*domain = "commerce"$/m);
+      expect(source).toContain('proposed_domain = "commerce"');
+      expect(() => parse(source, saved.path)).not.toThrow();
+    });
+
+    it('proposes no Domain when the tables span Domains or one is in none', () => {
+      domain('commerce', ['dbt:orders']);
+      domain('stores', ['dbt:locations']);
+      const spans = upsertReviewRequiredAnswerDraft(projectRoot, { question, sql: aovSql, dqlArtifact: aovArtifact });
+      expect(spans.path).toBe('blocks/_drafts/average_order_value_each_store.dql');
+      const source = readFileSync(join(projectRoot, spans.path), 'utf-8');
+      expect(source).toMatch(/^block "average_order_value_each_store" \{/);
+      expect(source).not.toMatch(/^\s*domain\s*=/m);
+      expect(source).toContain('proposed_domain = ""');
+    });
+  });
+
   it('MCP query_via_metadata drafts share the fingerprint, so an Ask repeat reuses them', () => {
     const mcp = upsertGeneratedDraft(projectRoot, { slug: 'top_team_wins', question: 'Top team by wins in 2017', proposedSql: sql, proposedContractId: 'nba.Team.top_team_wins' });
     const ask = upsertReviewRequiredAnswerDraft(projectRoot, { question: 'Which team had the most wins in season 2017?', sql });

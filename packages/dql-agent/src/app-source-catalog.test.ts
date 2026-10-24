@@ -3,11 +3,20 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  appStudioDraftPath,
+  createAppBuildHandoffDraft,
   ensureAgentProjectReady,
+  matchAppSourceCatalogRecords,
+  matchAppBlockSourceRefs,
   MetadataCatalog,
   queryAppSourceCatalog,
+  rankAppSourcesByTrust,
+  registerAppSourceRecordDecorator,
   resolveAppSourceCatalogRecords,
+  shortlistAppSources,
 } from './index.js';
+import type { AppSourceCatalogRecord } from './index.js';
+import { blockCompanionRelativePath, certifiedSourceSha256, renderTableDatasetBlock } from '@zlens/core';
 
 describe('AppSourceCatalogService', () => {
   let projectRoot: string;
@@ -77,6 +86,27 @@ describe('AppSourceCatalogService', () => {
     })).toThrow(/catalog changed/i);
   });
 
+  it('applies the runtime\'s record decorator to every catalog read, and a failing one changes nothing (D2)', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const unregister = registerAppSourceRecordDecorator(projectRoot, (record) => ({ ...record, reasons: [...record.reasons, 'decorated'] }));
+    try {
+      const page = queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' });
+      expect(page.items.every((item) => item.reasons.includes('decorated'))).toBe(true);
+      const resolved = resolveAppSourceCatalogRecords(projectRoot, page.items.map((item) => item.sourceId), 'include_review_required');
+      expect(resolved.items.every((item) => item.reasons.includes('decorated'))).toBe(true);
+      expect(matchAppSourceCatalogRecords(projectRoot, { blockNames: ['Performance'] }, 'include_review_required').items[0]!.reasons).toContain('decorated');
+    } finally {
+      unregister();
+    }
+    expect(queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items.some((item) => item.reasons.includes('decorated'))).toBe(false);
+    const removeFailing = registerAppSourceRecordDecorator(projectRoot, () => { throw new Error('boom'); });
+    try {
+      expect(queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items).toHaveLength(2);
+    } finally {
+      removeFailing();
+    }
+  });
+
   it('PRD-007 excludes generated legacy drafts until an explicit reusable tag is present', async () => {
     writeFileSync(join(projectRoot, 'domains', 'sales', 'blocks', 'legacy-analysis.dql'), `block "Legacy generated analysis" {
   domain = "sales"
@@ -133,6 +163,112 @@ describe('AppSourceCatalogService', () => {
     });
   });
 
+  it('puts certified sources first in the AI shortlist and never drops data nobody certified (T3)', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const shortlist = shortlistAppSources(projectRoot, 'performance customer growth revenue');
+    expect(shortlist.items.map((source) => source.lifecycle)).toEqual(['certified', 'draft']);
+  });
+
+  it('a legacy certified-only caller still sees only certified data', async () => {
+    await ensureAgentProjectReady(projectRoot);
+
+    const certifiedOnly = shortlistAppSources(projectRoot, 'performance customer growth revenue', { sourcePolicy: 'governed_only' });
+    expect(certifiedOnly.items.length).toBeGreaterThan(0);
+    expect(certifiedOnly.items.every((source) => source.trust === 'certified')).toBe(true);
+    expect(certifiedOnly.items.map((source) => source.domain)).toEqual(['sales']);
+
+    const reviewAllowed = shortlistAppSources(projectRoot, 'performance customer growth revenue', { sourcePolicy: 'include_review_required' });
+    expect(reviewAllowed.items.map((source) => source.lifecycle).sort()).toEqual(['certified', 'draft']);
+
+    // An explicitly required source still resolves; its own policy check is the caller's.
+    const draftId = reviewAllowed.items.find((source) => source.lifecycle === 'draft')!.sourceId;
+    const required = resolveAppSourceCatalogRecords(projectRoot, [draftId], 'governed_only');
+    expect(required.items).toHaveLength(1);
+    expect(required.items[0]).toMatchObject({ trust: 'review_required', eligibility: { localPreview: false } });
+  });
+
+  it('lets checked data preview under "Only certified data" and never publish until it is certified (design Q1)', async () => {
+    const source = renderTableDatasetBlock({
+      proposal: {
+        name: 'Orders', relation: 'orders', keyCandidates: ['order_id'], key: { column: 'order_id', entity: 'order' },
+        fields: [{ name: 'order_id', label: 'Order id', role: 'key', type: 'string' }, { name: 'region', label: 'Region', role: 'dimension', type: 'string' }],
+        measures: [{ name: 'order_count', label: 'Order count', aggregation: 'count_distinct', from: 'order_id', format: 'number', include: true, reason: '' }],
+      },
+      blockName: 'Checked orders', domain: 'sales', owner: 'kranthi@example.test', columnSql: (name) => name,
+    }).replace('status = "draft"', 'status = "review"');
+    const blockPath = 'domains/sales/blocks/checked-orders.dql';
+    writeFileSync(join(projectRoot, blockPath), source);
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath)!;
+    mkdirSync(join(projectRoot, companionPath, '..'), { recursive: true });
+    const companion = (sha: string) => `name: Checked orders\nreviewStatus: review\ncheck:\n  checkedBy: kranthi@example.test\n  checkedAt: '2026-10-22T09:00:00.000Z'\n  sourceSha256: ${sha}\n  checks:\n    - 'Row key: each row is one order'\n`;
+    writeFileSync(join(projectRoot, companionPath), companion(certifiedSourceSha256(source)));
+    await ensureAgentProjectReady(projectRoot);
+
+    const page = queryAppSourceCatalog(projectRoot, { query: 'checked orders', sourcePolicy: 'governed_only' });
+    const checked = page.items.find((item) => item.name === 'Checked orders');
+    expect(checked).toMatchObject({
+      lifecycle: 'review',
+      trust: 'review_required',
+      check: { by: 'kranthi@example.test', at: '2026-10-22T09:00:00.000Z', checks: ['Row key: each row is one order'] },
+      eligibility: { localPreview: true, projectPublish: false, reasonCodes: expect.arrayContaining(['CHECKED_NEEDS_CERTIFYING']) },
+    });
+    // The planner may build with it while the App is edited.
+    expect(shortlistAppSources(projectRoot, 'checked orders', { sourcePolicy: 'governed_only' }).items.map((item) => item.name)).toContain('Checked orders');
+  });
+
+  it('orders catalog pages and the AI shortlist by trust after relevance', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    // The draft matches the prompt best, yet a certified source leads the page.
+    const page = queryAppSourceCatalog(projectRoot, { query: 'performance', sourcePolicy: 'include_review_required' });
+    expect(page.items.map((source) => source.trust)).toEqual(['certified', 'review_required']);
+    const shortlist = shortlistAppSources(projectRoot, 'performance', { sourcePolicy: 'include_review_required' });
+    expect(shortlist.items.map((source) => source.trust)).toEqual(['certified', 'review_required']);
+  });
+
+  it('ranks certified Datasets, then Metrics, then saved queries, then sources that need review', () => {
+    const source = (id: string, patch: Partial<AppSourceCatalogRecord>): AppSourceCatalogRecord => ({
+      sourceId: id,
+      qualifiedIdentity: id,
+      sourceRevision: 'r1',
+      snapshotId: 's1',
+      kind: 'block',
+      lifecycle: 'certified',
+      trust: 'certified',
+      executable: true,
+      name: id,
+      title: id,
+      sourcePath: `${id}.dql`,
+      executionRef: `${id}.dql`,
+      tags: [],
+      capabilities: { measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [] },
+      eligibility: { discoverable: true, localPreview: true, projectPublish: true, reasonCodes: [] },
+      reasons: [],
+      ...patch,
+    });
+    const dataset = { kind: 'block' } as unknown as NonNullable<AppSourceCatalogRecord['capabilities']['dataset']>;
+    const fields = { ...source('x', {}).capabilities, dataset };
+    const ranked = rankAppSourcesByTrust([
+      source('review-dataset', { trust: 'review_required', lifecycle: 'draft', capabilities: fields }),
+      source('saved-query-a', {}),
+      source('metrics', { kind: 'semantic' }),
+      source('dataset-a', { capabilities: fields }),
+      source('review-query', { trust: 'review_required', lifecycle: 'review' }),
+      source('saved-query-b', {}),
+      source('dataset-b', { capabilities: fields }),
+      source('metrics-model', { capabilities: { ...source('x', {}).capabilities, semanticModelId: 'orders' } }),
+    ]);
+    expect(ranked.map((item) => item.sourceId)).toEqual([
+      'dataset-a',
+      'dataset-b',
+      'metrics',
+      'metrics-model',
+      'saved-query-a',
+      'saved-query-b',
+      'review-dataset',
+      'review-query',
+    ]);
+  });
+
   it('PERF-003 pages and exact-searches a 4,000-source warm index within response budgets', () => {
     const catalog = new MetadataCatalog(join(projectRoot, '.dql', 'cache', 'app-scale.sqlite'));
     try {
@@ -176,5 +312,54 @@ describe('AppSourceCatalogService', () => {
     } finally {
       catalog.close();
     }
+  });
+
+  it('D9 matches the blocks an Ask or MCP build named, certified first, and reports names it cannot find', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const matched = matchAppSourceCatalogRecords(projectRoot, { blockNames: ['performance', 'No Such Block'] }, 'include_review_required');
+    expect(matched.items).toHaveLength(1);
+    expect(matched.items[0]).toMatchObject({ name: 'Performance', domain: 'sales', trust: 'certified' });
+    expect(matched.unmatched).toEqual(['No Such Block']);
+  });
+
+  it('F07 finds the current record behind a published saved-query reference: by source id, block name or file path', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const byName = matchAppBlockSourceRefs(projectRoot, ['performance'], 'include_review_required').get('performance');
+    expect(byName).toMatchObject({ name: 'Performance', kind: 'block', trust: 'certified' });
+    const matched = matchAppBlockSourceRefs(projectRoot, [byName!.sourceId, `./${byName!.sourcePath}`, 'No Such Block'], 'include_review_required');
+    expect(matched.get(byName!.sourceId)?.sourceId).toBe(byName!.sourceId);
+    expect(matched.get(`./${byName!.sourcePath}`)?.sourceId).toBe(byName!.sourceId);
+    expect(matched.has('No Such Block')).toBe(false);
+    expect(matchAppBlockSourceRefs(projectRoot, [], 'include_review_required').size).toBe(0);
+  });
+
+  it('D9 makes an AI App draft with the picked data, certified first, and its gaps — no per-App data rule (T3)', async () => {
+    await ensureAgentProjectReady(projectRoot);
+    const all = queryAppSourceCatalog(projectRoot, { sourcePolicy: 'include_review_required' }).items;
+    const certified = all.filter((source) => source.trust === 'certified');
+    const draft = createAppBuildHandoffDraft({
+      goal: 'Sales performance for leadership',
+      domain: 'sales',
+      sources: all,
+      gaps: [{ question: 'Why is churn rising?' }, { question: 'why is churn rising?' }],
+    });
+    expect(draft).toMatchObject({
+      appId: 'sales-performance-for-leadership',
+      authoringMode: 'ai',
+      frame: expect.objectContaining({ goal: 'Sales performance for leadership' }),
+    });
+    expect(draft).not.toHaveProperty('sourcePolicy');
+    // Every picked source is kept, certified ones first.
+    expect(draft.sources).toHaveLength(all.length);
+    expect(draft.sources.slice(0, certified.length).map((source) => source.id)).toEqual(certified.map((source) => source.sourceId));
+    expect(draft.pages).toHaveLength(1);
+    expect(draft.pages[0]).toMatchObject({ metadata: expect.objectContaining({ domain: 'sales' }), layout: expect.objectContaining({ items: [] }) });
+    expect(draft.requirements.map((requirement) => requirement.question)).toEqual(['Why is churn rising?']);
+    expect(draft.coverage).toEqual([expect.objectContaining({ status: 'gap', sourceIds: [] })]);
+    expect(appStudioDraftPath(draft.id)).toBe(`/?appDraft=${draft.id}`);
+
+    const withReview = createAppBuildHandoffDraft({ goal: 'Sales and customers', sources: all, sourcePolicy: 'include_review_required' });
+    expect(withReview.sources).toHaveLength(all.length);
+    expect(withReview.sources.find((source) => source.trustState === 'review_required')).toMatchObject({ reviewStatus: 'required' });
   });
 });

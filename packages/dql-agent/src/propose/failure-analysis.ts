@@ -50,11 +50,11 @@ const KIND_TO_PROPOSAL: Record<FailureSignalKind, ImprovementProposalKind> = {
 function summarize(kind: ImprovementProposalKind, scopeKey: string, count: number): string {
   switch (kind) {
     case 'review_block':
-      return `${count} downvotes concentrated on ${scopeKey} — review this block's SQL/grain or recertify.`;
+      return `${count} downvotes concentrated on ${scopeKey} — review this saved query's SQL/grain or recertify.`;
     case 'consolidate_corrections':
       return `${count} corrections share ${scopeKey} — consolidate into a governed hint or metric definition.`;
     case 'investigate_refusals':
-      return `${count} refusals share ${scopeKey} — the catalog likely lacks coverage; add a metric, block, or synonym.`;
+      return `${count} refusals share ${scopeKey} — the catalog likely lacks coverage; add a metric, saved query, or synonym.`;
   }
 }
 

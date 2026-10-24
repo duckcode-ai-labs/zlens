@@ -1,9 +1,11 @@
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import {
   DataLexContractRegistry,
   Parser,
   analyze,
+  certifiedBlockFileState,
+  changedSinceCertifiedMessage,
   resolveDataLexManifestPath,
   resolveSemanticLayerWithDiagnostics,
   type Diagnostic as CoreDiagnostic,
@@ -16,8 +18,8 @@ import { loadProjectConfig, prepareLocalExecution, normalizeProjectConnection, r
 import type { ProjectConfig } from '../local-runtime.js';
 import type { CLIFlags } from '../args.js';
 import { promoteFromDraft } from '../promote-from-draft.js';
-import { passedCheckNames } from '../certification-receipt.js';
-import { resolveLocalOwner } from '@zlens/agent';
+import { localPersonIdentity, passedCheckNames } from '../certification-receipt.js';
+import { blockTestAssertionName, evaluateBlockTestAssertion, formatBlockTestExpected } from '../block-test-assertions.js';
 import { startProjectRuntime } from './notebook.js';
 import { WorkbenchRoutedQueryExecutor } from '../workbench-query-route.js';
 import { findRunningNotebook, serverTokenFor } from '../schedule/notebook-runtime.js';
@@ -89,36 +91,11 @@ function resolveConnection(flags: CLIFlags, projectConfig: ProjectConfig): Conne
   return { driver: 'file', filepath: ':memory:' };
 }
 
-function compareValues(actual: unknown, operator: string, expected: unknown): boolean {
-  const a = Number(actual);
-  const e = Number(expected);
-  switch (operator) {
-    case '>': return a > e;
-    case '>=': return a >= e;
-    case '<': return a < e;
-    case '<=': return a <= e;
-    case '==': case '=': return actual == expected;
-    case '!=': return actual != expected;
-    default: return false;
-  }
-}
-
-function formatExpected(expr: any): string {
-  if (expr === null || expr === undefined) return 'null';
-  if (typeof expr !== 'object') return String(expr);
-  if (Object.prototype.hasOwnProperty.call(expr, 'value')) return String(expr.value);
-  if (Object.prototype.hasOwnProperty.call(expr, 'name')) return String(expr.name);
-  if (expr.kind === 'ArrayLiteral' && Array.isArray(expr.elements)) {
-    return `[${expr.elements.map((e: any) => formatExpected(e)).join(', ')}]`;
-  }
-  return JSON.stringify(expr);
-}
-
 function formatDeclaredTest(test: any): string {
   const field = test?.field ?? test?.left?.name ?? test?.name ?? 'assertion';
   const operator = test?.operator ?? 'passes';
   const expected = Object.prototype.hasOwnProperty.call(test ?? {}, 'expected')
-    ? ` ${formatExpected(test.expected)}`
+    ? ` ${formatBlockTestExpected(test.expected)}`
     : '';
   return `assert ${field} ${operator}${expected}`.trim();
 }
@@ -184,7 +161,7 @@ async function runBlockTests(
           skipped: 0,
           duration: Date.now() - start,
           assertions: tests.map((t: any) => ({
-            name: `assert ${t.field} ${t.operator} ${formatExpected(t.expected)}`,
+            name: `assert ${t.field} ${t.operator} ${formatBlockTestExpected(t.expected)}`,
             passed: false,
             error: 'Could not build execution plan for block',
           })),
@@ -201,39 +178,18 @@ async function runBlockTests(
       ? rawResult.columns.map((c: any) => typeof c === 'string' ? c : c?.name ?? String(c))
       : [];
     const rows = Array.isArray(rawResult?.rows) ? rawResult.rows : [];
-    const rowCount = rows.length;
 
     // Evaluate declared invariants against the same result the tests run on.
     invariantResults = evaluateInvariants(invariants, { columns, rows });
 
     for (const test of plan.tests) {
-      const name = `assert ${test.field} ${test.operator} ${formatExpected(test.expected)}`;
-      let actual: unknown;
-      let pass: boolean;
-
-      if (test.field === 'row_count') {
-        actual = rowCount;
-        pass = compareValues(actual, test.operator, test.expected);
-      } else if (!columns.includes(test.field)) {
-        assertions.push({ name, passed: false, error: `Column '${test.field}' not found in results` });
-        failed++;
-        continue;
-      } else {
-        actual = rows[0]?.[test.field];
-        pass = compareValues(actual, test.operator, test.expected);
-      }
-
-      if (pass) {
-        assertions.push({ name, passed: true, actual });
+      const name = blockTestAssertionName(test);
+      const outcome = evaluateBlockTestAssertion(test, { rows, columns });
+      if (outcome.passed) {
+        assertions.push({ name, passed: true, actual: outcome.actual });
         passed++;
       } else {
-        assertions.push({
-          name,
-          passed: false,
-          actual,
-          expected: test.expected,
-          error: `${String(actual)} ${test.operator} ${formatExpected(test.expected)} is false`,
-        });
+        assertions.push({ name, passed: false, actual: outcome.actual, expected: test.expected, error: outcome.error });
         failed++;
       }
     }
@@ -241,7 +197,7 @@ async function runBlockTests(
     const msg = err instanceof Error ? err.message : String(err);
     for (const test of tests) {
       assertions.push({
-        name: `assert ${test.field} ${test.operator} ${formatExpected(test.expected)}`,
+        name: `assert ${test.field} ${test.operator} ${formatBlockTestExpected(test.expected)}`,
         passed: false,
         error: msg,
       });
@@ -304,7 +260,8 @@ export async function runCertify(filePath: string, flags: CLIFlags): Promise<voi
     const projectRoot = process.cwd();
     const result = await promoteFromDraft(projectRoot, flags, {
       gate: (input) => runtimeCertificationGate(projectRoot, flags, input.source),
-      certifiedBy: resolveLocalOwner(projectRoot, { persist: false }),
+      // The person certifying, never the project's configured owner (B6).
+      certifiedBy: localPersonIdentity(projectRoot),
     });
     if (flags.format === 'json') {
       console.log(JSON.stringify(result, null, 2));
@@ -346,6 +303,8 @@ export async function runCertify(filePath: string, flags: CLIFlags): Promise<voi
 
   const certifier = flags.enterprise ? new Certifier(ENTERPRISE_RULES) : new Certifier();
   let anyFailed = false;
+  const projectRoot = realpathSync(process.cwd());
+  const receiptState = certifiedBlockFileState(projectRoot, relative(projectRoot, realpathSync(resolve(filePath))), source);
 
   for (const block of blocks) {
     const b = block as any;
@@ -411,7 +370,18 @@ export async function runCertify(filePath: string, flags: CLIFlags): Promise<voi
       }
     }
 
-    const result = certifier.evaluate(record, testResults ?? undefined, { invariantResults });
+    // Tests are optional under OSS rules, as in every other Certify (Block
+    // Studio, SQL import, App Dataset, --from-draft): a block that declares none
+    // is checked against an empty test run, and "Block has tests" warns
+    // (enterprise rules make it an error). Declared tests must run and pass.
+    const evaluatedTests = testResults ?? (testAssertions.length === 0 ? skippedTestSummary([]) : undefined);
+    const result = certifier.evaluate(record, evaluatedTests, { invariantResults });
+    if (record.status === 'certified' && receiptState.state === 'changed') {
+      result.warnings.push({
+        rule: 'Certification receipt',
+        message: changedSinceCertifiedMessage(record.name, receiptState.companionPath),
+      });
+    }
     const blockDataLexDiagnostics = datalexDiagnostics.filter((diag) =>
       diag.message.includes(`Block "${record.name}"`) || !diag.message.startsWith('Block "'),
     );

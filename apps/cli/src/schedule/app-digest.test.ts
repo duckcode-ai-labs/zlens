@@ -76,7 +76,7 @@ describe('rendered App digests and monitors (RFC 0008 step 10)', () => {
     // US fell the most among the members; derived keys (leader, driver) are not "changes".
     expect(digest.changes[0]).toMatchObject({ key: 'by_region.revenue[US]', display: '$20', previous: '$60' });
     expect(digest.changes.some((figure) => /\.(leader|current|prior)/.test(figure.key))).toBe(false);
-    expect(digest.trust).toEqual({ certified: 4, total: 4, text: 'All 4 tiles certified' });
+    expect(digest.trust).toEqual({ certified: 4, total: 4, text: 'All tiles certified' });
     // A driver is related context with its own title, never stated as the cause.
     expect(digest.markdown).toContain('## Alerts\n- **Revenue is $85, below $100.**\n  From “Why revenue moved”: Revenue fell by 40. The largest move was US (region): -40, 100% of the change.');
     expect(digest.markdown).toContain('- Revenue: **$85** ▼ 32% (was $125)');

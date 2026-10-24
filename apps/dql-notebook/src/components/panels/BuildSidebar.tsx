@@ -31,7 +31,7 @@ const TABS: { id: BuildTab; label: string; icon: React.ComponentType<any> }[] = 
   { id: 'notebooks', label: 'Notebooks', icon: FileText },
   { id: 'semantic', label: 'Semantic', icon: Layers },
   { id: 'database', label: 'Database', icon: Database },
-  { id: 'blocks', label: 'Blocks', icon: Blocks },
+  { id: 'blocks', label: 'Saved queries', icon: Blocks },
 ];
 
 // Paper-handoff status dots: certified green · draft amber · review blue.
@@ -174,7 +174,7 @@ export function BuildSidebar({ defaultTab, onOpenFile, tabs, onInsertText, onSem
             <button
               type="button"
               onClick={onNewBlock}
-              title="New block"
+              title="New saved query"
               style={{ width: 28, height: 28, flexShrink: 0, borderRadius: 6, border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}
             >
               <Plus size={14} strokeWidth={2} />
@@ -564,7 +564,7 @@ function DeleteNotebookDialog({
       >
         <div style={{ fontSize: 14, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Delete this notebook?</div>
         <div style={{ fontSize: 12.5, color: t.textSecondary, fontFamily: t.font, lineHeight: 1.5 }}>
-          <code style={{ fontFamily: t.fontMono, fontSize: 12 }}>{file.path}</code> moves to a recovery bundle under <code style={{ fontFamily: t.fontMono, fontSize: 12 }}>.dql/local/trash/</code>, so it can be fetched back. Blocks and metrics it referenced are not affected.
+          <code style={{ fontFamily: t.fontMono, fontSize: 12 }}>{file.path}</code> moves to a recovery bundle under <code style={{ fontFamily: t.fontMono, fontSize: 12 }}>.dql/local/trash/</code>, so it can be fetched back. Saved queries and metrics it referenced are not affected.
         </div>
         {error ? <div style={{ fontSize: 12, color: t.error, fontFamily: t.font }}>{error}</div> : null}
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
@@ -799,8 +799,8 @@ function SemanticList({ t, search, onInsert, notebookMode, onSemanticCompose }: 
           <button type="button" onClick={() => void runPreview()} disabled={previewing || selectedMetrics.size === 0} style={{ border: `1px solid ${t.btnBorder}`, background: t.btnBg, color: t.textSecondary, borderRadius: 5, padding: '4px 7px', fontSize: 10, cursor: selectedMetrics.size ? 'pointer' : 'not-allowed', opacity: selectedMetrics.size ? 1 : .5 }}>
             {previewing ? 'Running…' : 'Preview & run'}
           </button>
-          <button type="button" onClick={addSemanticCell} disabled={!canAddSemanticCell} title={canAddSemanticCell ? (onSemanticCompose ? 'Apply this governed selection to the Block Studio visual builder' : preview ? 'Add the previewed semantic query to the notebook' : 'Add the governed semantic selection now; preview is optional') : 'Select an executable metric and wait for governed compatibility'} style={{ border: 'none', background: t.accent, color: '#fff', borderRadius: 5, padding: '5px 7px', fontSize: 10, fontWeight: 700, cursor: canAddSemanticCell ? 'pointer' : 'not-allowed', opacity: canAddSemanticCell ? 1 : .5 }}>
-            {onSemanticCompose ? 'Apply to block' : 'Add to cell'}
+          <button type="button" onClick={addSemanticCell} disabled={!canAddSemanticCell} title={canAddSemanticCell ? (onSemanticCompose ? 'Apply this governed selection to the saved query visual builder' : preview ? 'Add the previewed semantic query to the notebook' : 'Add the governed semantic selection now; preview is optional') : 'Select an executable metric and wait for governed compatibility'} style={{ border: 'none', background: t.accent, color: '#fff', borderRadius: 5, padding: '5px 7px', fontSize: 10, fontWeight: 700, cursor: canAddSemanticCell ? 'pointer' : 'not-allowed', opacity: canAddSemanticCell ? 1 : .5 }}>
+            {onSemanticCompose ? 'Apply to saved query' : 'Add to cell'}
           </button>
         </div>
         {preview && (
@@ -882,7 +882,7 @@ function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBl
     try {
       const result = await api.publishBlock(block.path);
       if (!result.ok) {
-        setPublishError(result.error ?? 'Could not publish this block.');
+        setPublishError(result.error ?? 'Could not publish this saved query.');
         return;
       }
       setRetryKey((current) => current + 1);
@@ -898,24 +898,24 @@ function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBl
   const retry = <button type="button" onClick={() => setRetryKey((current) => current + 1)} style={{ marginLeft: 10, border: 'none', background: 'transparent', color: t.accent, cursor: 'pointer', fontSize: 11.5, fontWeight: 650, padding: 0, fontFamily: t.font }}>Retry</button>;
 
   // Keep the list on screen while it refreshes; only the first load shows a loading note.
-  if (loading && blocks.length === 0) return <EmptyNote text="Loading blocks…" t={t} />;
+  if (loading && blocks.length === 0) return <EmptyNote text="Loading saved queries…" t={t} />;
   if (loadError && blocks.length === 0) {
-    return <div role="alert" style={{ padding: '14px 12px', fontSize: 12, color: t.textSecondary, lineHeight: 1.45 }}>Couldn't load blocks: {loadError}{retry}</div>;
+    return <div role="alert" style={{ padding: '14px 12px', fontSize: 12, color: t.textSecondary, lineHeight: 1.45 }}>Couldn't load saved queries: {loadError}{retry}</div>;
   }
-  if (blocks.length === 0) return <EmptyNote text="No blocks yet." t={t} />;
+  if (blocks.length === 0) return <EmptyNote text="No saved queries yet." t={t} />;
   return <div>
     {loadError ? <div role="status" style={{ padding: '6px 12px', fontSize: 11, color: t.warning }}>Showing the last list: {loadError}{retry}</div> : null}
     <DomainScopeSelect
       id="block-domain-filter"
-      ariaLabel="Block domain"
+      ariaLabel="Saved query domain"
       value={selectedDomain}
       options={domainOptions}
       onChange={(value) => onDomainChange?.(value)}
-      summary={<>{filtered.length} block{filtered.length === 1 ? '' : 's'}{draftCount ? ` · ${draftCount} draft${draftCount === 1 ? '' : 's'}` : ''} · {scopeLabel}</>}
+      summary={<>{filtered.length} {filtered.length === 1 ? 'saved query' : 'saved queries'}{draftCount ? ` · ${draftCount} draft${draftCount === 1 ? '' : 's'}` : ''} · {scopeLabel}</>}
       t={t}
     />
     {filtered.length === 0
-      ? <EmptyNote text={search ? `No ${scopeLabel} blocks match this search.` : selectedDomain ? `No blocks in ${selectedDomain} yet.` : 'No blocks yet.'} t={t} />
+      ? <EmptyNote text={search ? `No ${scopeLabel} saved queries match this search.` : selectedDomain ? `No saved queries in ${selectedDomain} yet.` : 'No saved queries yet.'} t={t} />
       : <BlockTree
           nodes={tree}
           depth={0}
@@ -1021,7 +1021,7 @@ function BlockRow({ block, depth = 0, t, onOpen, onDelete, onPublish, publishing
         <Blocks size={14} color={t.textMuted} strokeWidth={1.75} style={{ flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{block.name}</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[block.domain, editsCertified ? 'draft · edits to the certified block' : status, status === 'deprecated' && (block.replacement?.name ?? block.replacedBy) ? `replaced by ${block.replacement?.name ?? block.replacedBy}` : null].filter(Boolean).join(' · ')}</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[block.domain, editsCertified ? 'draft · edits to the certified saved query' : status, status === 'deprecated' && (block.replacement?.name ?? block.replacedBy) ? `replaced by ${block.replacement?.name ?? block.replacedBy}` : null].filter(Boolean).join(' · ')}</span>
         </span>
       </button>
       {isPrivate ? (

@@ -31,6 +31,14 @@ const minimal: DashboardDocument = {
   },
 };
 
+describe('the auto-written Summary (D6)', () => {
+  it('is off unless the author added it, and old pages stay unchanged', () => {
+    expect(parseDashboardDocument(JSON.stringify(minimal)).document?.metadata).toEqual({ title: 'Weekly Overview' });
+    expect(parseDashboardDocument(JSON.stringify({ ...minimal, metadata: { title: 'W', summary: true } })).document?.metadata.summary).toBe(true);
+    expect(parseDashboardDocument(JSON.stringify({ ...minimal, metadata: { title: 'W', summary: 'yes' } })).document?.metadata).not.toHaveProperty('summary');
+  });
+});
+
 describe('parseDashboardDocument', () => {
   it('parses both blockId and ref forms', () => {
     const { document, errors } = parseDashboardDocument(JSON.stringify(minimal));

@@ -155,12 +155,23 @@ export type {
 } from './tile-query.js';
 
 export {
+  appNameFromGoal,
+  APP_NAME_FROM_GOAL_MAX,
+  APP_SOURCE_POLICY,
   createAppBuildDraft,
+  createBlankAppBuildPage,
+  newAppBuildDraftId,
   applyAppBuildDraftOperations,
   appBuildDraftHash,
   appBuildPreviewIntentFingerprint,
   packDashboardLayoutItems,
 } from './app-build-draft.js';
+export { appSourceIdsUsedByTiles, appSourcesNotUsedByTiles } from './app-data-sources.js';
+export type { AppDataSourceLike, AppDataTileLike, AppDataDraftLike } from './app-data-sources.js';
+export { appTilesNeedingJoinReview, tileJoinReviewSentence, tileJoinsReachable } from './app-tile-join-trust.js';
+export { DEFAULT_APPS_PUBLISH_SETTINGS, REQUIRE_CERTIFIED_TO_PUBLISH_CODE, appTileTrustFor, appTrustAnswer, appsPublishSettings, appsPublishSettingsProblems, isTrustReminderTaskId, notCertifiedTiles, publishReadyLine, publishedAppTileTrust, publishedTileTrustText, readersWillSeeText, requireCertifiedToPublishMessage, tilesNeedReviewText, tilesNotCertifiedText } from './app-trust.js';
+export type { AppsPublishSettings, AppTileTrust, AppTrustAnswer, AppTrustInput, AppTrustPageLike, AppTrustSourceLike, AppTrustTileLike, PublishedAppTileTrust } from './app-trust.js';
+export type { AppTileNeedingJoinReview, JoinTrustPageLike, JoinTrustTileLike } from './app-tile-join-trust.js';
 export type {
   AppBuildDraft,
   AppBuildFrame,
@@ -244,8 +255,8 @@ export {
   insertCanvasNodes, moveCanvasNode, parseCanvasHtml, rebindCanvasValue, removeCanvasNode, replaceCanvasNode, serializeCanvasNodes,
 } from './canvas-page.js';
 export type { CanvasIssue, CanvasNode, CanvasPath, CanvasPieceKind, CheckedCanvas } from './canvas-page.js';
-export { READER_TRUST_LABELS, appTrustSummary, isDataTileForTrust, readerTileTrust, readerTrustCounts, readerTrustSummary } from './reader-trust.js';
-export type { AppTrustState, AppTrustSummary, ReaderTrust, ReaderTrustItem, ReaderTrustState, ReaderTrustTile } from './reader-trust.js';
+export { ALL_TILES_CERTIFIED, CHECKED_NEEDS_CERTIFYING_LABEL, CHECKED_NOT_CERTIFIED_DETAIL, NOT_CERTIFIED_YET, READER_TRUST_LABELS, UNCERTIFIED_JOIN_DETAIL, changedJoinDetail, changedSinceCertifiedDetail, checkedNotCertifiedDetail, appTrustSummary, certifiedByAcross, certifiedByLabel, certifiedDateLabel, certifierDisplayName, isDataTileForTrust, plainCertificationChecks, readerTileTrust, readerTrustCounts, readerTrustSummary, tileTrustCountText } from './reader-trust.js';
+export type { AppTrustState, AppTrustSummary, CertificationByline, ReaderTrust, ReaderTrustItem, ReaderTrustState, ReaderTrustTile } from './reader-trust.js';
 export { evaluateMonitors, readAppMonitors, MAX_MONITORS_PER_SCHEDULE } from './monitors.js';
 export type { AppMonitor, AppMonitorCondition, MonitorEvaluation, MonitorPreviousValue, MonitorStatus } from './monitors.js';
 export { diffDashboardPages, diffAppDeliveries, renderLayoutDiffSvg, NUMBER_ASPECTS } from './app-diff.js';
@@ -260,3 +271,34 @@ export {
   showMeInputFromEncoding, showMeInputFromQuery,
 } from './show-me.js';
 export type { ShowMeChart, ShowMeDimension, ShowMeFacts, ShowMeInput, ShowMeMeasure, ShowMeSuggestion, ShowMeVizType } from './show-me.js';
+
+export {
+  resolveDashboardDateFilter,
+  dashboardDateBoundsForColumn,
+  isDashboardDateFilterType,
+  resolveRelativeDateRange,
+  calendarDateInTimezone,
+  calendarDateBoundaryInTimezone,
+  isCalendarDate,
+  nextCalendarDate,
+  dateRangeParts,
+  dateRangeEnds,
+  isEmptyDashboardDateValue,
+  describeDashboardDateRange,
+  formatDashboardCalendarDate,
+  DASHBOARD_DATE_OPEN_START,
+  DASHBOARD_DATE_OPEN_END,
+} from './filter-dates.js';
+export type { DashboardDateFilterBounds, DashboardDateFilterResolution, DashboardDateFilterType } from './filter-dates.js';
+export {
+  DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  dashboardTileFilterChoice,
+  dashboardFilterDoesNotApplyBinding,
+  isDashboardNarrativeTile,
+} from './filter-reach.js';
+export type {
+  DashboardTileFilterChoice,
+  DashboardFilterReachItem,
+  DashboardFilterReachFilter,
+  DashboardFilterReachPage,
+} from './filter-reach.js';

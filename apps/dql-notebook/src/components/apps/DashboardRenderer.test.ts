@@ -193,7 +193,7 @@ describe('App dashboard interaction contract', () => {
     expect(how).toContain('1 explicitly unmapped dashboard filter');
     expect(how).toContain('Period comparison');
     expect(how).toContain('2026-03-01 to before 2026-04-01');
-    expect(how).toContain('Dataset queries cannot be opened in Notebook yet.');
+    expect(how).toContain('Field queries cannot be opened in Notebook yet.');
     expect(how).not.toContain('Open in Notebook');
     // The same predicate guards the click handler, so direct callers cannot
     // turn a declarative Dataset TileQuery into a fake sql_block handoff.
@@ -258,7 +258,7 @@ describe('App dashboard interaction contract', () => {
       } as any,
       tab: 'how', onTab: () => undefined, onClose: () => undefined,
     }));
-    expect(semantic).toContain('Semantic Dataset execution');
+    expect(semantic).toContain('Metrics run');
     expect(semantic).toContain('native');
     expect(semantic).toContain('region (eq)');
   });
@@ -407,8 +407,32 @@ describe('App dashboard interaction contract', () => {
     } as any);
 
     expect(insight).toContain('60%');
-    expect(insight).toContain('grouped Dataset result');
+    expect(insight).toBe('Highest month: Jan 2026, 60% margin rate.');
     expect(insight).not.toContain('(55%)');
+  });
+});
+
+describe('tile captions read as a person would say them (new-user round 3, problem 9)', () => {
+  it('names the top row and what it is, and leaves a KPI to its own title', async () => {
+    const { computeTileInsight } = await dashboardHelpers();
+    const top = computeTileInsight({
+      status: 'ok',
+      tileType: 'dataset',
+      result: {
+        columns: ['customer__customer_name', 'lifetime_spend'],
+        columnsMeta: [{ name: 'lifetime_spend', kind: 'currency', currency: 'USD' }],
+        rows: [{ customer__customer_name: 'Maria Lopez', lifetime_spend: 3100 }, { customer__customer_name: 'Bob', lifetime_spend: 900 }],
+        rowCount: 2,
+        executionTime: 1,
+      },
+    } as any, { i: 'top', x: 0, y: 0, w: 6, h: 4, query: { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'lifetime_spend' }] }, viz: { type: 'bar' } } as any);
+    expect(top).toBe('Top customer: Maria Lopez, $3.1K lifetime spend.');
+    const kpi = computeTileInsight({
+      status: 'ok',
+      tileType: 'dataset',
+      result: { columns: ['lifetime_spend'], rows: [{ lifetime_spend: 671425 }], rowCount: 1, executionTime: 1 },
+    } as any, { i: 'kpi', x: 0, y: 0, w: 3, h: 2, title: 'Total revenue', query: { dimensions: [], measures: [{ measure: 'lifetime_spend' }] }, viz: { type: 'single_value' } } as any);
+    expect(kpi).toBeNull();
   });
 });
 
@@ -541,7 +565,7 @@ describe('App story wording follows source trust (F2)', () => {
   it('says verified only when every source behind the story is certified', async () => {
     const { storySourceChipLabel } = await dashboardHelpers();
     expect(storySourceChipLabel({ generatedBy: 'deterministic', trustState: 'certified' })).toBe('Verified result summary');
-    expect(storySourceChipLabel({ generatedBy: 'deterministic', trustState: 'review_required' })).toBe('Result summary · sources need review');
+    expect(storySourceChipLabel({ generatedBy: 'deterministic', trustState: 'review_required' })).toBe('Result summary · some sources not certified yet');
     expect(storySourceChipLabel({ generatedBy: 'ai', trustState: 'review_required' })).not.toMatch(/verified/i);
   });
 });

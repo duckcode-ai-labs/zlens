@@ -63,7 +63,7 @@ export function deriveBlockSource(cell: Cell, cells: Cell[]): DerivedBlockSource
     return {
       content: '',
       derivedFromUpstream: false,
-      blocker: `${cell.type} cells cannot be promoted to blocks yet.`,
+      blocker: `${cell.type} cells cannot be promoted to saved queries yet.`,
     };
   }
 
@@ -72,7 +72,7 @@ export function deriveBlockSource(cell: Cell, cells: Cell[]): DerivedBlockSource
     return {
       content: '',
       derivedFromUpstream: true,
-      blocker: 'No upstream SQL cell is wired — pick an upstream dataframe before saving as a block.',
+      blocker: 'No upstream SQL cell is wired — pick an upstream dataframe before saving as a saved query.',
     };
   }
 

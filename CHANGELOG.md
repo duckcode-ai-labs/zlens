@@ -8,6 +8,1240 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.7 - 2026-10-23
+
+A patch for MCP clients. Every answer's trust line now arrives as its own text
+block, so Claude Desktop, Codex and other clients start their answer with
+`🟢 Certified`, `🔵 From Metrics` or `🟠 AI-Generated` rather than burying it.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.7` in each project.
+
+### MCP: the trust line is its own text block
+
+- In Claude Desktop the `trustLine` inside the JSON result was easy to miss:
+  the model wrote the label somewhere in its prose, or not at all. Answer
+  results with a trust line now also send it as a second plain-text block,
+  `**🟢 Certified · saved query …**`, with the rule to start the answer with
+  it, and the MCP descriptions of `query_via_block`, `query_semantic_model`,
+  `query_via_metadata` and `answer_question` say the same. The JSON is still
+  the first block, unchanged; a client that joins every text block before
+  parsing JSON should parse the first block only.
+
+## v0.2.6 - 2026-10-23
+
+A patch for honest answers over MCP and Ask.
+- **Semantic route:** a semantic answer covers the whole question or none of
+  it; it never drops a breakdown, a filter or a date range.
+- **From Metrics:** "Governed" is now **From Metrics** everywhere people read
+  it, and it applies only when every join is a certified relationship.
+- **MCP:** every answer starts with a ready-made trust line, and empty
+  discovery results point back to `ask_dql`.
+- **Apps:** certified saved queries are adopted in place.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.6` in each project.
+
+### The semantic route answers the whole question or not at all
+
+- **`query_semantic_model` no longer drops a breakdown or a filter the question
+  asks for.** In 0.2.5, "What was the busiest hour of the day for orders in
+  Philadelphia?" compiled the `orders` metric with no breakdown and no filter:
+  one total of all orders, labelled Governed. A question-mode compile now
+  checks that its members express every breakdown ("hour of the day", "by
+  customer type"), named member ("in Philadelphia") and date range ("in March
+  2025", "last quarter") in the question. When one is missing it returns
+  `matched: false` with `unexpressed` (the missing parts), `nearestMetric` and
+  `nextTool: query_via_metadata`. Explicit `metrics[]` passed with a `question`
+  get the same check. `ask_dql` no longer offers such a question to
+  `query_semantic_model`: it sends it to `query_via_metadata` and adds
+  `semanticGap` with the same parts. "How many orders at the Philadelphia
+  location?" now compiles `location_name = 'Philadelphia'`.
+
+### MCP: every answer starts with its trust line
+
+- Claude Desktop and other MCP clients show a ZLens answer as their own text,
+  so the trust label reached the reader only when the model happened to write
+  it, often halfway down. Every answer result with rows (`query_via_block`,
+  `query_semantic_model`, `query_via_metadata`, `answer_question`) now starts
+  with a ready-made `trustLine`, and the server instructions tell the client to
+  open its answer with it, word for word:
+  - `🟢 Certified · saved query monthly_revenue · owner analytics@jaffle.shop`
+    (`🟡` when a certified saved query is downgraded, e.g. `Certified · stale data`)
+  - `🔵 From Metrics · metric large_orders · not certified`
+  - `🟠 AI-Generated · SQL written for this question · needs review · draft saved for review at …`
+  Failures, dry runs and non-answer tools get no line. The other fields are unchanged.
+
+### From Metrics only through certified joins
+
+- **A semantic compile that joins through a draft relationship is no longer
+  labelled From Metrics.** In 0.2.5, `query_semantic_model` labelled "How many
+  large orders did each location get?" Governed although it joins orders to
+  locations through `order_to_location`, a draft relationship. A semantic
+  compile is now From Metrics only when every join it takes is a certified
+  relationship that passes the check `resolve_analytical_path` and
+  `explain_relationship_proof` apply. A compile through a draft relationship,
+  or a join no relationship models, is **AI-Generated** in MCP
+  (`certification: 'ai_generated'`, display `AI-Generated · uncertified join`),
+  and its caveat names the relationship. A single-table compile ("How many
+  large orders did we get each month?") stays From Metrics. `ask_dql`'s
+  `semanticCandidate` carries the same label.
+- **Ask follows the same rule**: such an answer is headed **Answer to review,
+  from governed definitions**, and the answer and its Trust & evidence name
+  the join. The figures still come from the semantic layer, not from AI-written
+  SQL.
+- **Note for MCP clients:** `query_semantic_model` adds `aiGenerated` (boolean)
+  and `relationshipProof` (each join and the relationship it matched).
+  `uncertified: true` is unchanged and means no certified saved query backs
+  the result and the draft needs review; it does not mean AI-generated. Read
+  the label from `trustLabelInfo.display`, `certification` or `aiGenerated`.
+  The server instructions say so.
+
+### Wording
+
+- **Ask's "Governed" label is now "From Metrics"**, so Ask matches Help. The
+  answer heading reads **Answer from Metrics** (**Answer from Metrics, in this
+  App** on an App page), the badge, the run card and the Ask observability
+  Trust filter read **From Metrics**, and `zlens agent ask` prints
+  `· From Metrics` instead of `· Reply` for such an answer. A certified saved
+  query served as evidence for a question it is not certified for is headed
+  **Answer from a certified saved query, not certified for this question**,
+  since its figures do not come from Metrics. The `trustState: 'governed'`
+  value, the `governed` filter value, API and JSON field names and test ids
+  are unchanged.
+- **Note for MCP clients:** `trustLabelInfo.base` and `.display` for the
+  `governed` id are now `"From Metrics"` (were `"Governed"`); `ask_dql`'s
+  `answerContract.trustLabels` lists `From Metrics`; the semantic compile's
+  `trustStatus.label` is `"From Metrics: semantic compile"`; the server
+  instructions use the new word. The `id` stays `governed` and tool names
+  are unchanged; match on `id`, not on the display text.
+
+### MCP: empty results point back to ask_dql
+
+- An MCP client that skipped `ask_dql` could stop at an empty `list_datasets`
+  and tell the user the project had no governed data, though it had certified
+  saved queries. When `list_datasets`, `search_blocks`, `search_metadata` or
+  `kg_search` comes back empty and the project has certified saved queries or
+  semantic metrics, the result now adds a `note` with their counts and
+  `nextTool: "ask_dql"`. Results with data are unchanged.
+- `answer_question` without an AI model set up in ZLens now also returns
+  `nextTool: "ask_dql"` and `nextArgs: { question }`, besides its message.
+- `list_datasets`' description says Datasets are warehouse tables approved for
+  App tiles and that business questions go to `ask_dql`.
+
+### Apps: certified saved queries are adopted in place, plain recovery words, certifier on every row
+
+- **A saved query certified from its App moves the App to the certified
+  version.** Certifying writes a new version of the saved query's file, and
+  a saved query's fields are read once per version, so the App's catalog card
+  had no fields for the certified version and the App refused it ("does not
+  expose one complete current data version and contract"); the count stayed
+  0 of 1. The App now reads the fields of the new version when it adopts or
+  refreshes a saved query it uses through fields, so "I vouch for this —
+  certify" turns 0 of 1 into All tiles certified in place, for result-field
+  and row-level saved queries alike. **Refresh this data** recovers the same
+  case.
+- **When the App can't switch, it says what to do.** "This App couldn't
+  switch to the newly certified version of Rerun Cert Probe. Refresh its
+  data, or choose it again from Add data.", with **Refresh this data** and
+  **Choose it again from Add data** buttons. File names, ids and "data version
+  and contract" are under **Technical details** only. A tile over data that
+  changed says "This data changed after the tile was made. Refresh this data
+  in the Data pane, or choose it again from Add data."
+- **A database table says who certified the data made from it.** Add data
+  showed "Table · Certified" on the table while the data made from it said
+  "Certified by you · 23 Oct"; both now say "Certified by you · 23 Oct".
+- **Help explains Ask without "governed".** Saved queries are "questions you
+  save once and reuse"; the middle kind of Ask answer is described as built
+  from your Metrics and checked joins. Ask's own labels are unchanged.
+- **A one-value filter control is a "Searchable list"**, not "Dropdown": it
+  searches every value.
+- **`zlens doctor` no longer reports drift for working App tiles.** Its
+  output-contract check compared a tile's fields only with fields a saved
+  query's file declares. A saved query used through its result columns
+  declares none, and a field from a related table (`customer__customer_name`)
+  comes through the model's joins, so every such tile was reported as
+  "no longer declared". The check now accepts a saved query's result columns
+  (with the Min, Max and row-count measures ZLens adds) and leaves related
+  fields to the runtime, which checks them on every run. A column a saved
+  query no longer returns is still reported.
+- Reading a saved query's columns works when its SQL ends with a line
+  comment.
+
+## v0.2.5 - 2026-10-23
+
+A patch for MCP and Apps.
+- **MCP:** a certified route only when the block returns the requested
+  measure; `query_semantic_model` picks the metric the question names (derived
+  metrics now compile); a semantic compile is labelled Governed, as on the Ask
+  page.
+- **Apps:** editing a changed App keeps its saved queries and receipts, every
+  Certified says who and when, Publish waits for pending changes, the Jaffle
+  sample opens as an existing project, and App links open a page.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.5` in each project.
+
+### MCP: truthful certified routes, the metric the question names, and Governed
+
+- **A certified block answers only a measure it returns.** `ask_dql` sent
+  "How many large orders did we get each month?" to `monthly_revenue` as
+  Certified, although its `order_count` counts every order. A semantic metric
+  the question names whose name carries a qualifier (`large_orders`,
+  `food_revenue_pct`, `new_customer_orders`) is now a required measure. A block
+  answers it only when an output or the block's own scope (WHERE, name, tags)
+  says so. Otherwise the question goes to the semantic or generated route.
+  "How has revenue changed by month?" still answers from `monthly_revenue`.
+- **`query_semantic_model` picks the metric the question names.**
+  - "Average order value by customer type" now answers with
+    `average_order_value`, not `drink_orders`.
+  - "New versus returning customers" groups by `customer_type`, whose
+    description lists those values.
+  - "What share of revenue comes from food each month?" answers with
+    `food_revenue_pct` by month.
+  - "Each month" keeps the month grain on the metric's own time dimension.
+  - When the named metric cannot compile, the result says "No semantic match"
+    and why, and never answers with a metric that only shares a word.
+- **Derived metrics compile natively** when their expression is arithmetic
+  over simple metrics with no offset window (`average_order_value`,
+  `order_gross_profit`). Explicit
+  `metrics: ["average_order_value"], dimensions: ["customer_type"]` now
+  compiles. Offset-window metrics such as `revenue_growth_mom` are still
+  refused, with the reason.
+- **Governed is a trust label over MCP too.** The canonical labels are now
+  Certified, Governed, Reviewed, AI-Generated, Insufficient-Context and
+  Conflict. A `query_semantic_model` compile is labelled **Governed** (built
+  from semantic metrics and dimensions, not certified), matching its
+  `dqlArtifact.trustState` and the Ask page's "Governed answer".
+  `answer_question` adds the same label for the run's `trustState`.
+
+### Apps: Publish waits for pending changes
+
+- **Publish no longer does nothing while a change is saving.** Clicking
+  Publish right after choosing data or adding a tile was ignored without a
+  word, because the button was disabled until the save landed. Publish now
+  takes the click, says "Saving changes…", and opens the review on the saved
+  draft. If the save fails it says "Your last change was not saved, so Publish
+  did not start." with **Try again**. Run waits the same way ("Saving…").
+
+### Apps: editing a changed App keeps its data, every Certified says who and when
+
+- **Editing a published App keeps its saved queries and their receipts.** An
+  App whose tiles name saved queries by name (as the sample's Jaffle Growth
+  Review does) opened in Edit with every tile "Not certified yet", "Nobody has
+  certified this saved query yet", and Certify now answered "That data is not
+  in this project any more". Edit now reads each saved query from the project
+  as it is now: certified ones stay certified, one changed since it was
+  certified reads **Not certified yet** with "Changed since it was certified
+  on 15 Oct", and Certify now opens its short review right in the publish
+  dialog. Edit drafts opened with 0.2.4 are repaired the next time Studio
+  lists them.
+- **Every Certified in App Studio says who and when**: tiles, the Data panel
+  and the publish dialog read "Certified by Analytics (jaffle.shop) · 15 Oct"
+  or "Certified by you · 23 Oct". Data rows show the owner as
+  "Owner: Analytics (jaffle.shop)", so it is not read as the certifier.
+- **The tile count is everywhere**: the App Studio header shows "3 of 4 tiles
+  certified", and a draft's Apps card "Not published yet · 3 of 5 tiles
+  certified".
+- **The Data panel's byline wraps** instead of cutting a word ("Certified by
+  yo…") at 1280 and 1440 wide.
+- **An App changed in another tab says so**: "This App changed in another tab.
+  Refresh to review the latest version.", with a Refresh button; the code
+  (`APP_BUILD_REVISION_CONFLICT`) moves under Technical details. Other common
+  App build codes in App Studio read as plain sentences too.
+- **Keyword suggestions say "Certified saved query"**, never "Certified
+  Dataset", and the MCP `build_dql_app` tool says "Check the suggested data"
+  (or "the data you named"), not "the data AI picked".
+- The saved-query review says "One row per beverage product.", not "Each row
+  is one one row per beverage product."
+
+### Setup, App links, reader filters and search (Codex end-to-end report)
+
+- **The Jaffle sample opens as an existing project.** Guided Setup selects
+  **Open an existing ZLens project** when the folder's `dql.config.json`
+  already configures a built dbt project (or dbt + database), instead of
+  **dbt project**, and the dbt card no longer flashes "dbt project missing"
+  while it loads. Step 2, **Check the connection**, has **Refresh dbt data** as
+  its action; extra warehouse schemas are under **Advanced** ("Optional: add
+  warehouse schemas dbt doesn't cover").
+- **App links open a page.** The Apps card title links to the App's home page
+  (`?app=jaffle-growth&page=overview`), and an app-only link opens that page
+  instead of "Pages 0 · No dashboard page selected".
+- **Readers can pick any value in Filter by….** The ad-hoc picker lists the
+  column's values from the server with "Type to search all 930 values", and
+  typed text searches every value, so a customer past the first 500 is found.
+  It no longer offers only the 24 names the tiles happened to return.
+  `/api/dashboard/filter-options` takes `search` and reports `valueCount`.
+- **Local embeddings only when you choose them.** Search is word-based unless
+  the project turns on **Use local Ollama embeddings (nomic-embed-text) — runs
+  on this computer, nothing leaves it** in Settings → AI provider → Search. A
+  running Ollama is offered (once, in the terminal and in Settings), never
+  adopted silently; an index an earlier version switched by itself goes back to
+  word-based search. Projects that set `ai.embeddings` keep it.
+  `ZLENS_EMBEDDINGS_AUTODETECT=on` is the operator's opt-in to the old
+  automatic switch. Provider ids sit under **Technical details**.
+- **Plain words.** "Not filtered by Customer Name", not `customer_name`;
+  "Date range", not "Daterange"; "Continue to data", not "Open blank Studio";
+  "No matching rows for these filters." on an empty filtered tile; "Choose which
+  tiles each filter affects."; "AI answers questions and helps you build. You
+  can run queries and build Apps without AI."; no "candidate" or "synchronize"
+  on the existing-project step.
+- **The click-to-filter hint keeps its own row** under a chart in App Studio,
+  so it no longer covers the axis labels at 1440×900.
+
+## v0.2.4 - 2026-10-22
+
+A patch for Apps: a total over a Top N saved query is no longer labelled
+Certified, Certify always leaves a receipt, and the Apps docs match the
+product. The Jaffle Shop sample now has a certification receipt for every
+Jaffle Growth tile.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.4` in each project.
+
+### Apps: honest totals, one scope line, no AI controls without AI
+
+- **A total over a Top N saved query is not labelled Certified.** A saved
+  query that keeps only its first N rows (an outer `LIMIT N`, such as
+  `top_beverage_customers`) gave a Total or a KPI over its result the label
+  Certified, though it summed the top 10 only. Such a tile still runs, but it
+  reads **Not certified yet**: "Totals only the 10 rows top_beverage_customers
+  keeps (it is a Top 10), not all of the data, so it is not a certified
+  total." A tile that shows the rows as they are keeps its label.
+- **Certify records a receipt for a block with no companion YAML.** A
+  hand-written block certified in Saved queries passed the rules and recorded
+  nothing, so its tile could not say who certified it or notice a later edit.
+  Certify now writes the companion YAML with the receipt, as a save would.
+- **Ask about this App cites "saved query"**, not "block": "“Monthly gross
+  revenue” reads saved query monthly_revenue (domains/commerce/blocks/…)".
+- **The Ask scope line names the page only when it differs from the App**:
+  "Scoped to Jaffle Growth Review", not "Scoped to Jaffle Growth Review ·
+  Jaffle Growth Review".
+- **No "Show AI copilot" button without an AI provider**, like the other AI
+  controls since 0.2.3.
+- The docs clips and README screenshots wait for "All tiles certified".
+
+## v0.2.3 - 2026-10-22
+
+Apps are built from the data you choose, with one trust answer on every
+screen: a tile is Certified or Not certified yet, and publishing never blocks
+unless the project requires it. A database-only first run reads plainly,
+`zlens ci init` writes a CI check that works on a clean clone, and chat
+clients with no guide file, such as Claude Desktop, answer from certified
+blocks first.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.3` in each project. Use Node 20, 22
+or 24 (Node 24 LTS recommended). `build_dql_app` over MCP has a breaking
+change: see AI agents (MCP) below.
+
+### CI that works on a clean clone: `zlens ci init`, honest eval and verify docs
+
+- **`zlens ci init [path] [--force]`** writes
+  `.github/workflows/zlens-eval.yml` at the git root. On every pull request it
+  runs `npx -y --package=@zlens/cli@<this version> zlens eval .
+  --min-route-accuracy 1 --min-refusal 1`. It has no install step (samples ship
+  no lockfile) and no compile or verify step. A project in a subfolder gets a
+  `working-directory`. `zlens eval` needs no `*.duckdb`, dbt `target/`,
+  `dql-manifest.json` or API key.
+- **Threshold flags refuse out-of-range values.** `--min-route-accuracy 90`
+  used to be silently dropped, leaving the gate off. Every `<0..1>` flag on
+  `zlens eval` and `zlens agent eval` now prints "expects a share between 0
+  and 1 (for 90% use 0.9)" and exits 1. The text report says when a
+  threshold is not applied because no case measures it.
+- **`zlens agent eval --judge` is parsed**, so `--min-judge-pass` has judge
+  scores to gate on. `--via loop` (the removed in-process driver) and any
+  `--via` or `--cassette` value that is not supported are rejected when the
+  arguments are parsed. Help now lists `--via runtime` only.
+- **`zlens eval --init`** writes examples for the Jaffle Shop sample's blocks
+  (`monthly_revenue`, a member-filter generated case, a follow-up, a refusal).
+  The old examples came from another project. The no-cases message no longer
+  says to run `zlens compile`; eval builds the manifest itself.
+- **`zlens eval` scores line up.** Every Scores and Cascade distribution value
+  starts in one column; "Block-selection accuracy:" no longer pushes its value
+  out of line.
+- **`zlens agent eval` in cassette replay mode no longer says "Real-provider
+  quality evidence: eligible."** No provider was called, so it now says "none
+  from this run — every provider call was replayed from N recorded
+  response(s)". The JSON `cassetteEvidence` gains `mode`. Record mode still
+  reports eligible when every entry came from a real provider.
+- **`zlens agent eval --cassette <mode>` checks the workbench's mode.** The
+  workbench makes the provider calls, and it replays only when started with
+  `ZLENS_EVAL_CASSETTE_DIR` / `ZLENS_EVAL_CASSETTE_MODE`. So `--cassette replay`
+  against a normally started workbench used to make live calls while the
+  report claimed cassette evidence. `/api/health` now reports
+  `evalCassetteMode` (`off`, `record`, `replay` or `live`). When it differs
+  from `--cassette`, or is missing, the eval stops before any case and prints
+  the command to start the workbench in that mode.
+- **`zlens verify`** prints its drift report to stdout, like its success line.
+  Its help says what it compares, and that it is a local check because
+  `dql-manifest.json` is gitignored.
+- **Docs.** Tutorial 05 is now "CI with `zlens eval`". The old workflow could
+  not run or always passed: `npm ci` with no lockfile, a wrong
+  `working-directory: dql`, `^dql/blocks/` filters that miss
+  `domains/<d>/blocks/`, `git add` of an ignored manifest, and compile-then-verify.
+  The tutorial now shows the generated workflow, how to fix a block example
+  that routes to generated, `agent eval` in replay mode, and verify as a
+  local check. The CLI reference documents `zlens ci`,
+  `--min-candidate-recall`, `--init`, `--via`, `--cassette`, `--judge`,
+  `--max-false-refusal`, `--min-refusal-recall` and the other agent eval
+  gates. It also corrects the `diff --impact` exit rule and the certify JSON,
+  and removes exit code 2, which no command returns. The troubleshooting
+  section on CI is rewritten to match.
+
+### New Apps show after Back, no AI controls without AI, two trust words, steadier canvas
+
+Round-3 new-user review, problems 1, 5, 6 and 10.
+
+- **Back to Apps lists the new App at once.** Back from App Studio puts the
+  draft you just left on the Apps list straight away and reads the list again
+  (it used to show the list from before the App existed until a reload);
+  deleting an App re-reads the drafts too.
+- **One wording for Apps nobody else can see yet.** A new App says **Not
+  published yet** (Studio header: *Not published yet (only you can see it)*;
+  card: **Only you**, **Not published yet**); a published App you are editing
+  says **Unpublished changes (only you can see them)**, and right after you
+  open it **No changes yet · readers see the published App**. "Local draft"
+  and "Private draft" are gone; the library tab is **Not published yet** and
+  its counters count the cards it shows (a published App's draft is not
+  counted as a second App).
+- **Two trust words in the Data list.** A database table reads **Not
+  certified yet**, with **drafted — review in Modeling** when setup drafted it;
+  "Modeled", "Drafted — review to use" and "Not checked yet" are gone (how the
+  model knows the table is in the tooltip). "Governed" no longer appears in
+  App page text (stories, custom layouts, driver and explore notes).
+- **No AI controls without an AI provider.** Tiles have no **Edit with AI** /
+  **Change with AI** / **Ask about this tile**, and block tiles in the reader
+  no **Ask AI**; Quick tiles and Tile settings stay. The reader's Ask box (and
+  its Preview) says *Ask needs an AI provider. The owner can connect one in
+  Settings.* A run refused because no model is configured is marked
+  `providerMissing` and headed **Ask needs an AI provider** · **Not
+  answered**; any other refusal reads **No answer** · **Refused**. Neither is
+  ever called "AI-generated".
+- **Steadier canvas.** A new tile's preview never draws the previous query's
+  result as the new chart (a KPI's total drawn as a one-row trend); it shows
+  *Running…* until the matching result arrives, and runs sooner after a click.
+  **Add to page** clears the tile at once, so a field clicked right after
+  starts the next tile instead of changing this one. Field clicks on a saved
+  tile and adds queue behind earlier saves and work from the newest draft.
+  The tile being built and a tile just added are scrolled into view. Tile
+  charts redraw only when their own data changes (no long tasks on a field
+  click at 6x CPU throttling, down from 75–125 ms).
+- **Filters re-run only the tiles they reach.** Applying a filter offer to a
+  new tile re-runs that tile; the rest keep their results. In the reader, a
+  filter change re-runs only the tiles linked to the filters that changed
+  (pages with a Summary still run whole); tiles that did not run say *Not
+  filtered by …* for the new value. Asking about the App or a chart after such
+  a change runs the whole page once first, so Ask reads every tile's result.
+- Setup's status reads *Indexed N items from your project for search* instead
+  of "governed objects".
+
+### No customers merged by name, the order date first, honest table states, one cents question, date presets
+
+New-user review, round 3 (problems 2, 4, 7, 8, 9 and the Show Me "does not add
+up" explanation).
+
+- **Names group by their key.** A tile grouped by a name (Customer Name)
+  groups by the key of what the name belongs to and shows the name, so two
+  customers called Maria Lopez stay two bars, told apart by their key only
+  when they share a name ("Maria Lopez (#1043)"). A related table's name uses
+  the join's own key column (Orders → Customer Name groups by
+  `orders.customer_id`); a name of the row uses the row key; `store_name`
+  beside `store_id` uses that id. Quick start's Top list, field clicks and Show
+  Me all compile through it. Clicking a bar told apart by its key (Keep only,
+  Exclude, cross-filter) filters that one key; a filter's value list still
+  reads plain names. A name whose key ZLens does not know carries a **Names may
+  repeat** notice on the tile ("Store Name may not be unique: …"; run
+  responses add `dataset.nameWarnings`). Period comparisons keep grouping by
+  the name alone.
+- **The order date first.** The filter field list ranks the date of the rows
+  the tiles count first (the date a trend groups by, a Dataset's own main
+  date), then other own dates, then a related table's dates, labelled by their
+  table (**Customer · First Ordered At**, "the customer's date"), however many
+  tiles a join lets them reach. A tile without the filter's date no longer
+  offers one-click **Use First Ordered At on Customers**: a picker offers other
+  dates as **Different meaning: the customer's First Ordered At**, and a mapped
+  tile says "uses First Ordered At, a different date".
+- **Added tables say so.** `GET /api/app-datasets/tables` lists the Datasets
+  made from each table (`datasets: [{ sourceId, name, state }]`). Add data
+  shows **Not certified yet · added** (or **Certified · added**) for a table in
+  this App, **Not certified yet** with **Add to App** for one made elsewhere (added as that Dataset, never checked
+  into a second copy), and **Check and add** only for a table not made into a
+  Dataset yet. Check and add opens straight on the check, without flashing the
+  table list.
+- **One cents question per table.** "These columns are stored twice, in
+  dollars and in cents: Subtotal, Tax paid and Order total. ZLens will use the
+  dollar columns and hide the cents copies." **[OK] [Show both]** replaces a
+  Yes/No per column whose answers both gave dollars. OK uses the dollar column
+  when the rows show it is the same amount (else reads the cents in dollars);
+  Show both keeps the cents copies as plain numbers. Counts of dates
+  ("Ordered at count") and of running numbers ("Customer order count") are
+  offered but no longer ticked.
+- **Date presets and labels.** Date range controls in Studio and the reader
+  offer **Last 7 days, Last 30 days, This month, This quarter, This year,
+  Custom**; the reader's date control shows its name. A new bar of names (930
+  customers) starts as an explicit **Top 10** on the measure pill. Tile
+  captions read "Top customer: Maria Lopez, $3.1K lifetime spend" and "Highest
+  month: Aug 2025, $94.2K order total"; a KPI no longer repeats its number
+  under the raw field name.
+- **Show Me's "does not add up" fixed.** A table's measure shares its column's
+  name (`lifetime_spend` is the column and its sum); Show Me read the column
+  and called a summed amount non-additive ("Lifetime Spend does not add up
+  across Customer Name"). It now reads the measure. Its value count uses the
+  result's full row count (930), not the rows loaded (500).
+
+### Certify tables, saved queries and joins without leaving the publish dialog
+
+Trust and publishing design, phase 2 (T4).
+
+- **Saved queries certify inline.** **Certify now** on a saved query tile in
+  the publish dialog (and **⋯ → Certify…** on a saved query in the Data tab or
+  Add data) opens the same short review as a table instead of Block Studio:
+  **It runs** (run now), **Its tests pass** (each test and its result), **Who
+  owns it** and **What one row is** (its grain or grouping columns), then **I
+  vouch for this — certify**. When the saved query names no owner, the review
+  asks for one and writes `owner = "…"` into the `.dql` with the
+  certification. It goes through the same certification rules and receipt as
+  Block Studio's **Certify** (`POST /api/app-datasets/certify`, with an
+  optional `owner`); a failing test or a query that does not run refuses and
+  writes nothing (`OWNER_REQUIRED`, `CERTIFICATION_CHECKS_FAILED`). The saved
+  query editor stays one small link away.
+- **Joins certify inline.** **Certify this join** (publish dialog) and **⋯ →
+  Certify the join to …** (Data tab) open a join review: the keys, *each order
+  has one location — checked on N rows* from a fresh bounded check (Modeling's
+  one validation statement), and what would double-count if the join were
+  wrong. When Modeling lacks a side's grain or key columns they are filled from
+  the checks just run — the "one" side's join key (unique and filled on every
+  row) and the Dataset's own row key — never from anything a check did not
+  prove. **I vouch for this join — certify** writes through Modeling's own
+  path (a modeling proposal, saved at once: the entities' grain and keys and
+  the relationship certified against them, with who and when), so Modeling
+  shows it certified; a setup draft's join leaves the draft. A failing check
+  says why and writes nothing. New routes: `GET
+  /api/app-datasets/joins/certify-review` and `POST
+  /api/app-datasets/joins/certify` (a host gates the POST as `dataset.certify`).
+- **The count updates in place.** After any certification in the dialog the
+  pages run again, the count updates ("All tiles certified") and the item
+  leaves the list, without closing the dialog or reloading.
+- **"Changed since it was certified on 22 Oct" keeps its date.** A certified
+  table or saved query edited afterwards (sha256 mismatch) and a certified join
+  whose keys or a side's grain changed now keep who certified them and when on
+  the catalog, run and review records, so receipts and the publish list say
+  *Changed since it was certified on …* (for a join, *Uses a join that changed
+  since it was certified on …*) instead of *Nobody has certified it yet*. A
+  block ZLens sends back to draft or review keeps a `previousCertification`
+  record in its companion YAML; a join keeps `certifiedAt`, `certifiedBy` and
+  `certifiedByName` inside `certifiedAgainst` (not part of the proof).
+
+### One trust model: Certified or Not certified yet, per tile, and publishing that never blocks unless the project requires it
+
+Trust and publishing design, phase 1 (T1–T3).
+
+- **Two words.** Every App, Data, publish and reader surface says a tile,
+  table, saved query or join is **Certified by** *name* **·** *date* (or **by
+  you**) or **Not certified yet**. "Needs review", "Checked · Needs
+  certifying", "Needs certifying", "Governed", "draft" as a trust word, the
+  "review lane" and the data rule's "Only certified data" / "Also allow data
+  that needs review" are gone from these screens. Why a tile is not certified
+  is detail in its receipt or tooltip: *Checked by you, not certified yet*,
+  *Changed since it was certified on 22 Oct*, *Uses a join nobody has
+  certified*. Ask's answer labels are unchanged.
+- **Trust lives at the tile.** A tile is certified only when everything it
+  can use is: its data, every join it can reach (also through a filter) and,
+  for a calculation, every input — a calculation over certified data is now
+  **Certified**, not "Governed". The App header, the trust line, the Apps card
+  ("App certified" is gone), the publish dialog and the published
+  `dql.app.json` (`tileTrust`) all show one count from one shared function:
+  **All tiles certified** or **3 of 4 tiles certified**.
+- **Per-App data rules are gone.** The Start form's "Only certified data"
+  switch, App settings' **Data rule**, the Data step's "Data rule: … Change"
+  line and the publish dialog's **Allow data that needs review** button are
+  removed. Every App can use any data, certified first; data nobody certified
+  is added with the same **Add to App**, and the AI, keyword and quick-choice
+  planners prefer certified data without leaving the rest out. An older App's
+  stored `sourcePolicy` is read and ignored (old files still open); new Apps
+  no longer write it. ZLens no longer opens "needs certifying" review tasks,
+  and the ones older drafts kept never block publishing.
+- **Publishing never blocks on trust by default.** The publish dialog shows
+  the count, lists the tiles not certified yet with **Certify now
+  (recommended)** (each opens its short review in the dialog; see phase 2
+  above), and a **Publish** button
+  that says *Readers will see 'Not certified yet' on N tiles*. Readers see
+  **Not certified yet** on those tiles. The button is **Publish**, no longer
+  "Publish to Project".
+- **New project setting: `apps.requireCertifiedToPublish`.** `true` in
+  `dql.config.json` makes every tile need to be certified before an App is
+  published: the dialog says *This project requires every tile to be
+  certified before an App is published.* with the certify actions and no
+  Publish button, and the server refuses with one message
+  (`APP_BUILD_REQUIRES_CERTIFIED`). It is read at every publish
+  (`GET /api/apps/settings`), validated by `zlens doctor` (**App publishing**),
+  and off by default in the open-source edition. A host's admin policy can
+  turn it on for a project.
+
+### Drafted models save the first time, revenue first, plain names, no joins on names
+
+New-user review round 2, problems 4, 7, 8, 9 and 10.
+
+- **Drafted models save the first time.** Save no longer fails with "Project
+  sources changed after this proposal was reviewed" because something else
+  changed after drafting (certifying a table in an App, a setup step writing
+  `dql.config.json`). Save previews the reviewed changes again on the current
+  project and writes them as they are when every file they write is exactly
+  as reviewed; it asks only when a drafted file changed, in plain words that
+  name the tables ("…was edited after you reviewed them (Orders). Update the
+  drafts to the latest project and review them again before saving."). The
+  button is **Update drafts and review again**, never "Rebase proposal".
+  Draft my models says "Not saved yet: review and save them in Modeling."
+- **Cents questions say what the data shows.** "Subtotal is stored twice:
+  Subtotal (dollars) and Subtotal cents. Use Subtotal in dollars?" The check
+  reads the rows: the same amount in two units (×100), or the same number
+  twice (both in cents, where keeping the plain column shows a number, never
+  Money 100 times too large). Columns are named as people read them.
+- **Quick start leads with money.** Default measures rank Money-formatted
+  measures first, then money names (revenue, sales, amount, total, spend…),
+  then other sums, then counts, and counts of yes/no flags ("Count Drink
+  Items") last. The trend is that measure by month; the top list ranks the
+  most name-like field (Customer Name, never an id).
+- **Plain names.** "Customer Name affects 3 of 4 tiles", never "Customer
+  Customer Name"; "not mapped to Beverage Revenue By Product" and "Also filter
+  Beverage Revenue By Product", never the saved query's id — in filter chips,
+  "Not filtered by" reasons (also ones older Apps stored) and the Filters tab.
+- **No joins on names.** Database-only setup drafts joins only on key-like
+  columns (`*_id`, declared keys, whole-number or uuid keys the data proves
+  unique), and never a second join between two tables that already have one:
+  no more `order_item → product` on `product_name` next to `product_id`. The
+  field list never shows two groups that read the same: one join per related
+  table and name, a key join over a label join, a certified one over a draft
+  (an older descriptor's twins are named by their keys).
+- **Smaller fixes.** Closing the relationship editor asks "Discard your changes? The
+  relationship stays as it was." **Finish setup · Build an App** opens the new
+  App form, also when Apps already exist. **View as** is hidden for a
+  one-person App without row rules, where every role sees the same rows
+  ("Sees all rows" replaces "no RLS narrowing"). Publishing keeps the
+  description the author wrote, or the App's existing one, and fills "A
+  dashboard of live numbers for <Domain>." only when there is none — never
+  "Governed analytical App for …". `zlens doctor` says "19 metrics and 5
+  measures" where it said "24 metrics", matching `zlens sync` and Setup;
+  `zlens sync` reads `semantic_manifest.json` when the manifest lists no
+  metrics, and says so when the manifest cannot be read instead of "0
+  metric(s)".
+
+### Trust: one answer on every screen
+
+- **One trust answer for an App.** The publish check, the editor's tile dots
+  and Data & trust panel, the App header, the reader's trust line, the Apps
+  card and the `dql.app.json` written at publish now read the same answer
+  (`appTrustAnswer` in `@zlens/core/apps/app-trust`): every tile's source,
+  every join it can run through (its own fields, and page filters that reach
+  it through a related field), its calculations, and whether data that needs
+  review was allowed. An App is published as certified only when every data
+  tile is; `dql.app.json` records `tileTrust: { certified, total }` and the
+  Apps card shows the App header's words ("1 of 3 tiles certified"), after a
+  reload too, never "App certified" over a tile that needs review.
+- **Ready, with review data allowed, says so.** After **Allow data that needs
+  review** the publish dialog reads "Ready to publish · 2 tiles need review
+  (allowed)" and what the App will say; "All checks passed" / "Every check
+  passed" only appear when every tile is certified.
+- **A reader's filter no longer changes trust.** A tile a page filter reaches
+  through a join nobody certified is Needs review whether or not a value is
+  picked, so picking a customer no longer flips "3 of 4" to "1 of 4". The run
+  receipt says "A page filter can join it to customers on customer_id; the
+  join is not certified yet" for a join the run did not read.
+- **"Certified by you" means you.** Only your own identity (git `user.email`,
+  `$USER@local`, or the host's signed-in person) makes a certification "by
+  you"; the project's `identity.owner` (a sample's "analytics@jaffle.shop")
+  no longer does, and is no longer shown under your name. New certifications
+  and checks record your identity, not the project owner. A team mailbox is
+  named with its domain: "Certified by Analytics (jaffle.shop)".
+- **An honest fix count.** The Publish button and the publish dialog count
+  one list, so "5 fixes" no longer opens "9 fixes": a review task or a server
+  message about data or a tile already listed is not repeated, and the page
+  Publish runs itself is not counted. Plain words replace "Scoped review",
+  "Orders is review" ("Orders needs certifying before this App is
+  published…") and "Complete governed validation" ("Run the page once to
+  check it", with the server's words under **Technical details**).
+- **A checked draft join reads Draft** in Modeling, the level its editor
+  opens on, instead of "Validated".
+
+
+### Trust: checking is not certifying
+
+- **Adding a table no longer certifies it.** **Check and add** runs the same
+  checks as before and adds the table as **Checked · Needs certifying**; its
+  main button is **Check and use** (there is no "Certify and use this data").
+  Tiles work right away, under "Only certified data" too. **Make row-level**
+  on a saved query does the same. The block is written `status = "review"`
+  with a `check:` record (who, when, what was found, for exactly that source)
+  in its companion YAML.
+- **Certify on purpose, at publish.** The publish check lists data that is
+  not certified yet ("2 tables not certified yet"); each opens a short review
+  — what one row is, the row key checked again, number formats (cents in
+  dollars), joins used, columns hidden as duplicates — and one button, **I
+  vouch for this — certify**. The same review is under the data's **⋯ →
+  Certify…**. Saved queries keep their own **Certify** in Block Studio and are
+  listed too. "Only certified data" still blocks publishing until it is done,
+  and the server's preflight and publish refuse uncertified data
+  (`APP_BUILD_DATASET_NOT_CERTIFIED`). New route: `POST /api/app-datasets/certify`
+  (gated as `dataset.certify` with a host, so steward rules are unchanged);
+  `GET /api/app-datasets/certify-review`. `tables/create` and
+  `saved-queries/create` are authoring (`dataset.author`) now and answer
+  `status: "checked"` with `check` instead of `certification`.
+- **Who certified, from the reader's side.** "Certified by you · 22 Oct" when
+  you certified it, "Certified by Kranthi · 22 Oct" for anyone else, and the
+  App header reads "All data certified by you". A checked tile says **Needs
+  certifying**.
+- **Duplicate columns, one question.** When a table has `order_total` and
+  `order_total_cents`, the check asks once, "Use Order total in dollars?"
+  (recommended), and hides the other column; the choice is kept in the
+  Dataset's definition.
+- Data certified before this change stays certified.
+
+### Wording
+
+- **Blocks are now called Saved queries** everywhere people read: the left
+  rail, the saved query editor and library, notebooks, Ask, Apps, the App
+  reader's receipts ("Runs a certified saved query exactly as it was
+  reviewed"), in-app Help and the user guides. Nothing changes on disk:
+  `.dql` block files, the DQL `block` keyword, the `zlens block` CLI, MCP tool
+  names, the API and the reference docs keep the word `block`. Where a page
+  needs the file or the CLI, it says so once: "saved query (a `.dql` block
+  file)".
+- **Fewer nouns in Apps.** App Studio and the reader say "data" instead of
+  "Dataset" ("Choose data", "This App's data", "Define fields"), and no
+  longer show "Model area", "Binding" or "Canvas" ("Refresh this data",
+  "Pages"). Files, the API and the reference docs still say Dataset.
+- **Domain is explained once.** The App Start form's Domain field says "A
+  Domain groups data by business area, like Sales or Finance"; the domain
+  chips in Add data carry the same line as a tooltip.
+
+### Setup and first start
+
+- **A database-only first run in plain words** (new-user round 2, Q3):
+  - **Grouped notes.** Drafting no longer adds one `MODEL_AREA_DEFAULTED`
+    note per table: one line says *13 tables placed in the default area*.
+    The review drawer is titled **Review the models ZLens drafted**, shows one
+    plain line per kind of note and says what each change does (*Add orders
+    as Order in Jaffle shop*). Codes, operation ids (`scope:domain:…`), patch
+    counts and the proposal hash are under **Technical details**.
+  - **A real Domain name.** The first Domain is named after the database
+    file or catalog (`jaffle_shop.duckdb` → **Jaffle shop**), never a schema
+    named for a layer or environment (`dev`, `main`, `public`); schemas like
+    those map into it. A business-area schema (`sales`) keeps its own Domain,
+    and so does a schema Domain the project already has. Setup offers
+    **Rename**; `zlens model discover --domain` still names one.
+  - **No staging clutter.** When a staging copy (`stg_*`, or a table in a
+    `staging`, `stg` or `raw` schema) and a final table hold the same thing,
+    the final one is shown and drafted. **Show staging tables** brings them
+    back in setup's schema list, **Draft my models** and Modeling's
+    **Draft from warehouse**, and **Apps → Data**. `zlens model discover`
+    leaves them out too; `--include-staging` drafts them.
+  - **Drafts kept.** What **Draft my models** drafted waits until you save
+    or discard it: leaving Setup or Modeling without Save, or reloading, loses
+    nothing. Modeling, Setup and Apps say *N drafted models waiting for
+    review*, with **Review drafts** and **Discard** (**Keep for later** in the
+    review). A newer draft replaces the one before it. New endpoints:
+    `GET /api/modeling/warehouse/drafts` and
+    `POST /api/context-proposals/:id/discard` (a proposal's status can now
+    be `discarded`).
+  - **Honest wording about rows.** "never their rows" is gone: *ZLens reads
+    table structure and counts rows to check keys. Sample rows are shown only
+    to you, on this computer. Nothing is sent anywhere unless you turn on
+    value profiles for AI answers.* With value profiles on, Setup says *Value
+    profiles are on: a few column values are sent to your AI provider*
+    (`GET /api/connections` reports `valueProfile`). Setup's sync line reads
+    *Read 13 tables (86 columns)*.
+  - The welcome screen, Guided Setup and Modeling's **Saved queries** tab say
+    "saved query" where they still said "block" (**Save a query** / **New
+    saved query**, "certified saved queries").
+
+- **Start from any folder.** `zlens notebook <folder>` on a folder with no
+  ZLens project asks **No ZLens project here. Create one? [Y/n]** and creates
+  it. A database file and no dbt project make a **Database only** project
+  with a connection to the file; `dbt_project.yml` makes a dbt project.
+  Without a terminal it prints the one command to run
+  (`npx zlens notebook <folder> --yes`); `--yes` creates without asking.
+- `zlens init` on a folder with only a database file now creates a Database
+  only (`warehouse-first`) project, and no longer suggests rerunning with
+  `--warehouse-first`. An empty folder leaves the choice to Guided Setup.
+  `zlens init --help` and `zlens notebook --help` explain both.
+- **Two plain setup questions.** Guided Setup picks the card from what the
+  folder holds (Database only, dbt project as before, or an existing
+  project whose model is written). Step 2 asks **Which schemas should ZLens
+  read?** and lists the schemas as soon as the connection test passes.
+  Semantic execution adapters, Index mode, the typed schema list, index
+  details and dbt profile import are under a closed **Advanced**; Database
+  only never shows the dbt profiles from your home folder, never says
+  "outside the dbt project", and no generated ids (`LOCAL_88B5…`) are printed.
+- Setup progress is saved in `.dql/local/setup-progress.json`: a restart
+  resumes at the same step with your answers and drafted models. Finishing or
+  closing setup clears it.
+- The connection test no longer races a save on the same DuckDB file, so
+  **Find available databases & schemas** is never left disabled (it once
+  hung a browser journey for four minutes). The footer says **Test passed**
+  after an automatic test too.
+- **Drafted tables are ready to use.** In **Apps → Data**, tables Setup
+  drafted show **Drafted — review to use** with a link to Modeling, and tables
+  the model binds show **Modeled**; both come first. **Check and add** reuses
+  the row key the draft checked, so the check counts one column.
+- New projects no longer get the **Example Customer Rollup** placeholder block
+  (`SELECT 1`); an untouched copy in an older welcome notebook is no longer a
+  block, so it leaves the Data step.
+- In-app **Help** starts from a folder (database file or dbt project), covers
+  Guided Setup and Apps, and has no image placeholders.
+
+### Blocks
+
+- **The SQL block builder saves.** Every edit lands inside the block also
+  when the file opens with the `// dql-format: 1` header or has a comment
+  after its closing brace, so Save draft no longer writes `owner = …` after
+  `}`. SQL typed in the Visual Builder is kept in the draft, so it survives
+  switching to DQL Source and back. Run, Save draft and Certify stay on
+  screen at 1280 px. **Global / cross-domain** stays global instead of coming
+  back as "uncategorized (missing Domain page)".
+- A parse error names the line, column and token of the first problem
+  (`Parse errors in <block-invocation>: line 14, column 3: Unexpected token
+  'owner' …`).
+
+### Apps
+
+- **Without AI, build an App from three quick choices.** With no AI provider
+  connected, **Build new App** opens on **Quick start** instead of a
+  "Describe with AI" tab that matched the words of a request (it picked the
+  wrong data and measure, made no KPI, gave tiles snake_case titles and named
+  the App after the whole sentence). Pick the data, then **KPI** (Total of a
+  measure), **Trend** (a measure by month, week, …, over the data's main
+  date) and **Top** (Top 10 of a field by a measure); **Add another tile** goes
+  up to six. **Build App** adds exactly those tiles as ordinary field tiles —
+  a single value, a line, and a bar sorted by the measure showing the top N —
+  with plain titles ("Total Lifetime Spend", "Order Total by month", "Top 10
+  customers by Lifetime Spend"). The pickers list this App's fields as the
+  Data pane names them, related fields included, Domain first and certified
+  first. An App left unnamed is called "<Domain> overview". In the Studio,
+  **Quick tiles** replaces "Suggest tiles" and adds the same choices to the
+  open page. Free text and AI planning are unchanged with an AI provider;
+  "Connect an AI provider to describe an App in your own words" links to
+  Settings.
+- **Filters follow dbt relationships.** In a dbt project, a Customer Name
+  filter reaches the Orders tiles "via Customer", as in a database-only
+  project. The jaffle-shop sample has a dbt `relationships` test from
+  `orders.customer_id` to `stg_customers`, while its semantic model joins
+  the same column to `customers`; Orders followed both, so its field
+  list showed "Customer · 8 fields" and "Customer · 1 field", and Customer
+  Name was ambiguous ("Orders has no Customer Name field"). Each foreign key
+  is now followed to one table: a certified or model join wins over a dbt
+  test, and a mart over its staging copy. **Add data** also lists a dbt
+  project's joins ("joins customers, locations"), which it missed when the
+  warehouse named the table without its database.
+- **New tiles can join existing filters.** A tile added after a filter says
+  **Customer Name filter can apply to this tile** with **Apply** and **Not
+  now** when it has the field or reaches it through a join. Nothing links on
+  its own.
+- **Dates rank by the tile's own main date.** In the filter field list a
+  Dataset's main date comes first (Orders → **Ordered At**), and counts say
+  how many tiles a field reaches only through a join, so a customer's
+  **First Ordered At** no longer looks like the best date for Orders. A tile
+  without the filter's date offers its own main date first.
+- **Steadier editor.** The Data pane's field list no longer moves down a line
+  when a new tile starts (a click meant for Customer Name landed on Customer
+  Id). A measure pill shows **Top 10 ▾** or **Sorted ↓**, and **Sort & top**
+  is first in its menu. A KPI's figure fits its tile when a **Not filtered
+  by** pill sits above it (no scrollbar), and bar-chart value ticks never run
+  together (`$500`, `$1K`, `$1.5K`, not `$500.0$1.0K`).
+- Readers no longer see a tile's source id or **text** under a text tile's
+  title. A text tile's heading is its own line in the editor ("Sales Manager
+  Overview" above the sentence). Starting layouts say what they make (an
+  intro to edit; you add the tiles), and the manual button reads **Open
+  Studio with an intro** unless the layout is Blank. The intro tile is named
+  **Intro**.
+- **Plainer copy and state.** A value list counts the field's values ("Type
+  to search all 930 values", not the first run's 500 rows), and a search
+  under it says "4 matches", not "200+ available values". The filter field
+  search starts empty for each new filter. Publish says the App is saved as
+  files in your project folder, and mentions git only in a git repository. A
+  published App with an unpublished draft is one card (**Unpublished
+  changes**, **View**, **Continue editing**), not two of the same name. Apps
+  cards and the Data list show this machine's person by one name (the
+  "Certified by" name: git `user.name`), not a noreply email or
+  `name@local`.
+- A table's caption talks about the measure it is sorted by: the sample's
+  "Customer lifetime profiles" (sorted by spend) said "Melissa Lopez leads
+  Count Lifetime Orders at 231", naming someone not in view; it now names the
+  top spender.
+
+- **Fields from related tables (design D2).** A table Dataset now shows the
+  fields of the tables its rows point to through a checked many-to-one join:
+  under **Orders**, **Orders → Customer → Customer Name** and **Orders →
+  Location → Location Name**, up to two steps when each is many-to-one. A bar
+  of **Order Total** by **Location Name** reads store names, not UUIDs. The
+  tile query adds a LEFT JOIN on the join's keys only for the related fields
+  it uses, and only when the related table holds each key once: current
+  warehouse evidence covers that, otherwise one bounded query checks it before
+  the tile runs, and a repeated key stops the tile with a plain message. A
+  test checks that totals and counts are identical with and without a joined
+  field. One-to-many joins are never followed; the field list says *Orders per
+  customer: add it from Orders*. Joins come from Modeling relationships (with
+  the ones imported from dbt and MetricFlow), joins **Draft my models**
+  drafted in setup, and dbt `relationships` tests. A certified join keeps the
+  tile's trust; a drafted one shows **Needs review** on its group and makes a
+  tile that uses it **Needs review**. The receipt lists each join: *Joined to
+  customers on customer_id (each order has one customer — checked)*. **Add
+  data** says which tables a table reaches (*joins: customers, locations*).
+  - **Filters reach joined tiles.** A **Customer Name** filter offers the
+    Orders trend as *Orders · via Customer* under **Also filter these
+    tiles?** (still unchecked until you check it), and the field appears once
+    in the filter list. Unlinked tiles still say **Not filtered by**.
+  - Descriptors gain optional `joins`, `joinNotes` and a field's `related`
+    (read, checked and round-tripped by the descriptor reader); existing
+    Datasets and tiles are unchanged, and a tile on a Dataset's own fields
+    compiles to the same SQL as before. The App source catalog takes a
+    runtime record decorator (`registerAppSourceRecordDecorator`), so the Data
+    pane, planner, previews and runs read one descriptor.
+- **Honest when no AI is connected.** With no AI provider, **Build new App**
+  opens on **Start manually**, and **Describe with AI** says **Connect an AI
+  provider to describe an App** (to Settings → AI provider) with **Try keyword
+  suggestions** as the second choice. The built-in keyword matcher is never
+  called AI: its Data step says **Suggested from keywords · no AI connected**,
+  and its activity steps, notes, canvas tile review and the Studio's **Suggest
+  tiles** entry point say the same. What only an AI can do (changing one tile,
+  designing a layout) says **Connect an AI provider**. With a provider
+  connected, nothing changes. The providers settings answer now includes
+  `assistAvailable`, so this also holds under a host's model.
+  - Parts of a request the keywords did not match are notes under **Not
+    covered yet**, never publish fixes: no more **Unanswered App question** for
+    *Keep it short and clear*.
+  - A proposal never adds a tile the page already shows (it says so in its
+    notes), and the review counts only the tiles it adds, so a revise no longer
+    duplicates tiles.
+- **Filters say where they don't apply while you edit.** The builder and
+  Preview now mark every tile a filter skips with "Not filtered by <filter>",
+  the same notice readers see: pick a customer, and a revenue KPI the customer
+  filter doesn't reach says so. The notice comes from the run's own report of
+  which filters applied, and from the page's link choices before a tile has
+  run with the new value. Edit also shows each tile's reach before a value is
+  set; Preview shows notices only for filters that have a value, as readers
+  see them.
+- **The page summary describes filters correctly.** A date range reads
+  "1 Jan 2025 – 30 Jun 2025" (not `[object Object]`), filters use their
+  labels, and tiles narrowed by different filters are each described with the
+  filters that reached them ("For Month … (not filtered by Customer Name)")
+  instead of claiming no tile was filtered.
+- **Search every value in a filter.** A filter's value list loads the first
+  200 values and says "Type to search all 930 values"; typing searches every
+  value of the field on the server (a bound, escaped match through the
+  governed query compiler), in the builder and in the published App, where the
+  long native list is now a searchable control. `POST
+  /api/app-datasets/field-values` takes an optional `search` and returns
+  `valueCount` when browsing.
+- **Map a date filter to a tile's own date field.** When a date filter's field
+  isn't on a tile's data, the Filters tab offers that data's date and time
+  fields ("Use Ordered At on Order Items"). Nothing maps on its own; the choice
+  is saved as that data's filter binding and kept when the filter is reopened.
+- **Numbers and labels stay visible.** "Rolled up from a saved query" moved to
+  an info icon in the tile header, so a KPI's value shows at the default tile
+  size; "Not filtered by" notices are one line. Bar charts name every bar
+  (long names are shortened, with the full name in the tooltip; crowded
+  columns rotate their labels), draw every bar a "Showing top 25" note counts
+  (they drew only 20), and a top-25 list gets one row per bar, scrolling in a
+  short tile. The click-to-filter hint under a chart shows on hover or while a
+  click-filter is active, not all the time.
+
+- **"Certified by <name> · <date>" everywhere.** "Certified" now always says
+  who and when: on tiles and their receipts, the Data list and Add data rows,
+  the App header (**All data certified by Kranthi · 21 Oct**), the Apps card
+  (**App certified by Kranthi · 21 Oct**), block pages, and the result of
+  **Certify and use this data** and **Make row-level**. Certifying records the
+  person's display name (the host's signed-in person, else git `user.name`)
+  beside the identity and time it already recorded, and publishing an App as
+  certified records who and when in `dql.app.json` (`certifiedBy`,
+  `certifiedAt`). Data certified before this shows **Certified · date** or
+  **Certified**. Receipts list the **Checks passed** in plain words: what one
+  row is (the row key), how each number is shown (money stored as cents is
+  shown in dollars), and the Certify checklist (ran without errors, tests
+  passed). Enterprise steward rules are unchanged.
+- **Plain words; technical details on request.** App Studio and the reader say
+  **All tiles up to date** (not "Preview settled · 3/3 ready"),
+  **Unpublished changes (only you can see them)** (not "Safe local edit draft"
+  or "LOCAL DRAFT · Not in Project source · Revision N"), **Page style:
+  Dashboard**, **Summarise / Show rows**, **12 rows**, and
+  **Clicking a bar filters other Customers tiles** instead of "Keep only
+  reaches tiles on this Dataset". Ids, hashes, run and snapshot ids, raw trust
+  states and fingerprints in tile receipts, the evidence appendix, block
+  receipts and the Dataset definition dialog sit under a **Technical details**
+  toggle that starts closed. Table headers show column types as icons with
+  **Number**, **Text** and **Date** tooltips.
+- **The auto-written Summary is off by default.** Reader pages, new and
+  existing, show the Summary (formerly "Business Story") only when the
+  page's author added it with **Summary** under **Page elements**
+  (`metadata.summary` on the page). Preview now shows exactly what readers
+  see: the Ask box, the trust line, the Summary when added, then the tiles.
+- **Apps cards show Pages and Updated.** "Books", zero "analysis" and
+  "local insights" counts and "Shared Project" are gone; counts appear only
+  when they are above zero.
+- **Everything you add has fields.** A saved query's result columns are now
+  fields on the same shelves as any other data, with no review step: numbers
+  are Measures, text and true/false columns are Dimensions, dates are Time
+  fields by day, week or month, and Count of rows is always there. Month +
+  Gross Revenue on a monthly saved query is one line; Customer Name +
+  Lifetime Spend is a bar that adds up.
+  - Tiles run as one query over the saved query's complete result. Grouped by
+    the saved query's own columns, values show as they are; any other tile
+    rolls rows up with Sum, says **Rolled up from a saved query**, and its
+    receipt says "Rolled up from the certified result of <name>". A column
+    named like an average or a ratio (`avg_`, `pct`, `rate`, `ratio`,
+    `_share`, `margin`) is never summed: ZLens offers Min and Max instead.
+  - Trust is unchanged: a certified saved query's tiles are Certified, and
+    ones that need review stay Needs review. Page filters and click-to-filter
+    reach these tiles like any Dataset tile, and they publish like one.
+  - The column types are read once per saved query revision (a one-row read
+    through the usual execution path) and kept in `.dql/local`; a fresh
+    checkout reads them again on first use. Existing pages with fixed saved
+    query tiles keep working unchanged.
+  - **Data for this App** is one list: each row says where it comes from
+    (Table · Saved query · Metrics), its trust and domain, and shows its fields
+    when opened. Chips (All · Tables · Saved queries · Metrics) replace the
+    three tabs; tables not checked yet are in the same list.
+  - "Add fields" is now **⋯ → Make row-level**, only needed for row-safe
+    measures such as distinct counts.
+  - **Describe with AI** (the planner and the AI Data step) and Ask's **Open
+    in App Studio** read a saved query's fields the same way, so AI-built tiles
+    use them; a saved query whose fields can't answer is shown as it is.
+- **Sort and Top N on the field menu.** A measure pill's **⋯** menu now has
+  **Show top** **5**, **10**, **25**, **All** or another number, next to
+  **Ascending** and **Descending**. It writes the same sort and row limit as
+  **Filters, sort and more**, so the two always agree.
+  - A new bar chart over categories is sorted by its measure, highest first.
+    Saved tiles are unchanged.
+  - A bar chart with more than 50 categories draws the top 25 with
+    "Showing top 25 of 935 · Show all", in the editor and for readers. A tile
+    with its own **Show top** number is drawn as set.
+- **Source names instead of internal IDs.** The filter field list says
+  "from Customers", not `General::Block::Customers::8f7f…`. A tile a filter
+  can't reach says "Monthly Revenue has no Customer Name field." instead of
+  "not exposed by commerce::block::monthly_revenue::88e1…" or "approved
+  physical field", in the editor, the Filters tab and for readers (older Apps'
+  stored reasons read the same way). Filter field search ignores spaces,
+  underscores and capitals: "customer name" finds Customer Name.
+- **Smaller editor fixes.**
+  - After **Add to page** the new tile is not selected, so the next field
+    click starts a new tile instead of changing the one just added.
+  - **Delete** removes the selected tile while focus is in its **Tile
+    settings** (not while typing in a field).
+  - A tile's **⋯** menu opens above its own table and the tiles after it.
+  - Tile titles wrap to a second line instead of "Lif…", and a KPI figure
+    shrinks to fit its tile instead of "$2,880.…". A tile's tools keep their
+    own room in the header (on their own row in a narrow tile), so they never
+    cover the title or the trust dot.
+  - A table holding the first 500 of 935 rows says "Showing 1–10 of the first
+    500 rows · 935 in total", and **Tile settings** says "Live · 935 rows ·
+    first 500 loaded".
+  - **Add data** shows "Finding data…" while it loads, not "No certified data
+    yet" and a 0 count.
+  - The App editor's top bar no longer scrolls out of view.
+  - The reader's top bar shows the App's name, not its id.
+  - Two items with the same name show where they come from: "Orders · Table"
+    and "Orders · Metrics".
+
+- **Editor filters apply at once, to linked tiles only.** Changing a filter
+  in App Studio re-runs just the tiles it applies to, without pressing
+  **Run**; other tiles keep their result. A second change now runs the new
+  choice (before, an App-wide filter ran the previous one).
+  - A date range can have one end: only a start means "from that day"
+    (**From 1 Mar 2025**), only an end "until that day". This works on every
+    tile type, in the editor and for readers.
+  - Date filters compare calendar days on timestamp columns too, the same
+    calendar a chart's day or month buckets use, so a range ending 30 June no
+    longer plots a July point.
+  - No more "No date values exist for this field" when values just weren't
+    read yet, and no "could not be converted into a predicate" from a
+    half-filled range. A date filter can be created before the page has run.
+- **A just-published App opens on its results.** It no longer opens on
+  "0 of N tiles certified", "No result." and "A newer dashboard interaction
+  superseded this run." An App page runs once when it opens, also when it has
+  filters, and runs again only when the page or a filter value changes. The
+  local server orders one viewer's runs by when they were asked for, not when
+  they arrived, and an identical request shares the run already in progress
+  instead of cancelling it. If a run still comes back stale, the reader runs
+  it again by itself. The Apps card no longer says "App certified" while the
+  App's last run in that session found tiles that are not certified.
+  - Page-run requests take an optional `runSequence`; a stale response says
+    why in `staleCause` (`superseded` or `project_changed`).
+
+- **Smaller App builder fixes for a first-time user.**
+  - A line or area chart plots only the field chosen as **Y / value**, as bars
+    already did.
+  - **Check the numbers** reads `…_cents` and `…_pennies` columns divided by
+    100 in the Dataset's own SQL and shows them as Money, with "Shown in
+    dollars (stored as cents)", so tiles, KPIs, tables and filters agree.
+    **Add fields** on a saved query keeps them a plain number, because it
+    does not change the saved query's SQL.
+  - **Add fields** accepts a month (or another period, or a date) that is
+    filled and different on every row as the row key. It stays a time field,
+    and tiles can roll it up to quarters, years and one total.
+  - Every field the check confirms is written as approved, and the keyword
+    planner (no AI) builds tiles from a table checked a moment ago: it picks
+    the number and the grouping your request names, and no longer says the
+    table "can't answer".
+  - **Describe with AI** starts empty; its example is a placeholder. The App
+    is named from the first line of the request (at most 60 characters), and
+    you can rename it.
+  - **Finish setup** goes where the highlighted card says: **Build an App**,
+    or Modeling when models were drafted.
+
+- **App filters work the same on every tile.** Each tile on a filter's page
+  is now **Applies** or **Does not apply** in the Filters tab, and both
+  choices are saved. **Does not apply** no longer blocks publishing; only a
+  tile with neither choice does, and the publish check points to the Filters
+  tab. Readers see **Not filtered by** *filter* on those tiles.
+  - Metrics tiles filter on any dimension of the metric's model, so a KPI is
+    filtered too. A date range is no longer sent as a list of two days.
+  - One date rule everywhere: a date range runs from the start date through
+    the whole end date, a single date is that whole day, and a relative date
+    becomes a range first. Saved query `_end` parameters still receive the
+    last day you picked.
+  - Draft tiles take linked filters the same way Saved query tiles do, and
+    their evidence says which filters applied and which didn't.
+  - A Saved query tile marked **Does not apply** is not filtered through a
+    parameter with the filter's name.
+  - Each tile in a page-run response has `filterReport`: the page filters
+    that applied and the ones that didn't, with why. Readers' pills use it.
+  - The publish message for a tile with no choice is now *page/tile* **has no
+    choice for filter** *Label*.
+
+- **Field-based tiles are on by default.** App Studio builds tiles from a
+  Dataset's measures and dimensions without first asking you to turn the
+  feature on, and the "Turn on field-based tiles" banner is gone. To turn
+  them off for a project, set `"apps": { "datasets": false }` in
+  `dql.config.json`; Studio then says so in one line.
+- **Apps that AI builds in Ask open in App Studio.** The Ask Build Brief's
+  button is now **Open in App Studio**. It makes a local App Studio draft that
+  opens at the Data step: the data behind the tiles you kept becomes the
+  App's data, and it uses **Only certified data** unless you kept data that
+  needs review. No App files are written until you publish, and publishing
+  goes through the publish checks. AI-written SQL is never added as a tile;
+  its question is listed under **Not covered yet**. The Build Brief says
+  **Certified**, **Metrics · Needs review** and **Draft SQL · Needs review**.
+- **Removed: `POST /api/apps/ai-builds/:id/commit`.** It wrote an Ask
+  proposal straight into `apps/<id>`. Use
+  `POST /api/apps/ai-builds/:id/open-in-studio`, which returns the App Studio
+  draft instead.
+
+### AI agents (MCP)
+
+- **Breaking: `build_dql_app` starts an App Studio draft and writes no App
+  files.** It used to write a draft App under `apps/`. It now returns
+  `draftId`, `appId`, `name`, `domain`, `sourcePolicy`, `openPath`
+  (`/?appDraft=<id>`), `openUrl` when `zlens notebook` is running on the
+  project, `sources` (each with its kind, trust and the reason it was picked),
+  `notCoveredYet`, `warnings` and `nextActions`. Open the link to check the
+  data, build the pages and publish in App Studio.
+  - Removed from the result: `plan`, `generated`, `validation`,
+    `certifiedTiles`, `draftTiles` and `lifecycle`.
+  - `owner`, `aiLayout` and `overwrite` are still accepted but ignored.
+  - `saveDraft: false` returns the picked data without creating a draft.
+  - `blocks` still names the exact certified blocks to use, now as the App's
+    data.
+- **Certified blocks first for chat clients with no guide file.** Claude
+  Desktop reads only the MCP server instructions; asked "How has revenue
+  changed by month?" it called `query_semantic_model` and said no certified
+  block answered, while `monthly_revenue` did. The instructions now give one
+  order: `ask_dql` first, a `certified` route goes to `query_via_block`, and
+  the semantic layer only when `ask_dql` finds no certified block.
+  - `inspect_dql_project` lists `certifiedBlocks` (name, domain, grain,
+    description) and returns `nextTool: "ask_dql"`.
+  - `query_semantic_model` checks for a certified block first: through the
+    `ask_dql` router for a question, and by measure, table and time grain for
+    explicit members. When one answers, the result leads with
+    `certifiedBlock` and `nextTool: "query_via_block"`, and no duplicate
+    draft is saved. It no longer says "No certified block exactly answered
+    this question" unless the check ran and found none.
+
+## v0.2.2 - 2026-10-19
+
+Sharing through your own git repository now works from the workbench without
+a terminal, and the DuckDB driver says which Node to use instead of failing
+on Node 25 and 26.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.2` in each project. Use Node 20, 22
+or 24 (Node 24 LTS recommended).
+
+### Source control
+
+- **Connecting your own repository works on the first send.** A repository
+  the host created with a README, licence or `.gitignore` no longer loops
+  between "Get updates first" and "Send the branch first": ZLens brings those
+  files in (your project's README wins; missing `.gitignore` lines are added)
+  and sends. A repository holding other, unrelated work is never combined
+  with the project; the message says how to add ZLens to it instead.
+- **Know before you send.** The Source control page checks the remote in the
+  background and says "3 new on the remote · 1 of yours not sent", "Up to
+  date" or "Can't reach the remote". Send asks you to get updates first
+  instead of failing.
+- **Send from the main branch goes to a new branch by default**, ready for a
+  pull request, and leaves the main branch as the team has it. Sending
+  straight to the main branch asks again.
+- **Get updates works when you and the remote both changed.** Your unsent
+  changes are replayed on top of the team's; changes you already sent are
+  never rewritten. Files changed on both sides get Compare, Keep mine and Keep
+  theirs, then Continue, or Cancel update to put everything back. Undo update
+  reverses a finished update.
+- **Review branches stay current.** Get updates on a review branch also brings
+  in what the team merged into the main branch.
+- **The ZLens sample is read-only.** In a folder cloned from
+  `jaffle-shop-duckdb` or `jaffle-shop-warehouse`, Send is not offered;
+  Connect your own repository keeps the sample as `upstream`.
+- **Pull requests target your repository's default branch** (`main`,
+  `master`, `develop`…), not a guess.
+- **New projects start on `main`** (or your `init.defaultBranch`), not git's
+  `master` fallback.
+- New guide: [Share your work with your team](docs/notebooks/share-with-your-team.md).
+
+### Fixed
+
+- **Remembered filter values are checked before they apply.** A reader's App
+  filter values are kept in the browser between visits. A value left by an
+  earlier App with the same id (same port), or by a filter that was since
+  re-created or moved to another field, was applied without a check: the
+  control said **All** while a tile was narrowed to a customer the reader
+  never picked. Each remembered value now carries the filter it was chosen
+  for (id, control type and field, including each Dataset's mapped field) and
+  applies only to that same filter, as a value its control can show; anything
+  else is dropped and forgotten. A value that does come back is shown in the
+  control, with **Opened with your last filters** and **Reset** beside it. A
+  multi-select given a single name shows that name, never **All**. The Share
+  note now says the link does not carry your filter choices.
+- **The review appendix reads plainly.** The reader's **Evidence & review
+  appendix** printed `ordered_at: [object Object]` for a date range and
+  "1 sources" for two data sources. Filters now read by their label and in
+  words (**Ordered At: 1 Jan 2025 – 30 Jun 2025**, **From 1 Jan 2025**,
+  **At least 500**), and the count is of distinct data sources ("1 data
+  source", "2 data sources"; two tiles on one Dataset are one). The same
+  wording is used by the summary story (which used to leave a date range
+  out), tile receipts (**Ordered At from 1 Jan 2025** instead of `ordered_at
+  gte 2025-01-01`), result-mark chips, Ask's filter chips and Research.
+- **Joins count in the publish check.** Under **Only certified data**, an App
+  published with a tile marked Needs review because it read a field through a
+  join nobody certified yet (drafted in setup), and the check said **Every
+  check passed**: it looked only at sources. Publish readiness, in App Studio
+  and on the server (preflight and publish), now looks at every Dataset tile:
+  its groupings, filters, detail columns, calculations, driver, and the page
+  filters mapped to it through a related field. Each such tile is a fix,
+  **Tile needs review**, with **Certify the join in Modeling**, **Remove the
+  related field** and **Allow data that needs review**; the server refuses with
+  `APP_BUILD_TILE_NEEDS_REVIEW`. A join certified since passes, and with
+  **Also allow data that needs review** the tile publishes as Needs review.
+
+- **DuckDB on Node 25 and 26.** ZLens's DuckDB driver has no prebuilt binary
+  for those versions, so its install fell back to a 10-minute source build
+  that usually failed, and the Connections test said the driver was missing.
+  Startup, Connections (Test and Install) and `zlens doctor` now say "use Node
+  24 LTS or 22" and never start that build on their own
+  (`ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` opts in). `@zlens/cli` declares Node 20,
+  22 or 24 in `engines`. Moving to `@duckdb/node-api` is proposed in
+  [RFC 0011](docs/rfcs/0011-duckdb-node-api.md).
+- **A DuckDB file written by DuckDB 2.0 says how to fix it.** ZLens reads
+  DuckDB files with DuckDB 1.4, and Python `duckdb` 2.0 (which `dbt-duckdb`
+  now installs) writes files 1.4 can't open. Instead of only DuckDB's "version
+  number 999 … newer version of DuckDB", the connection Test and `zlens
+  doctor` now say the file came from DuckDB 2.x and to rebuild it with
+  `pip install 'duckdb<1.5'` (then rerun dbt), with DuckDB's message
+  underneath. Both samples now pin Python `duckdb` to 1.4.
+
 ## v0.2.1 - 2026-10-16
 
 ZLens on npm 12. npm 12 (the current `latest`) runs a dependency's install

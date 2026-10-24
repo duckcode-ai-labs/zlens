@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join, relative } from 'node:path';
-import type { DqlArtifactFilter, DqlArtifactOrderBy, DqlArtifactReference } from '@zlens/core';
+import { extractTablesFromSql, loadDomainPackageRegistry, type DqlArtifactFilter, type DqlArtifactOrderBy, type DqlArtifactReference } from '@zlens/core';
 import { resolveLocalOwner } from './identity.js';
 
 export type GeneratedDraftSourceDqlArtifact = DqlArtifactReference;
@@ -387,28 +387,73 @@ export function upsertReviewRequiredAnswerDraft(
   if (byFingerprint) {
     return { path: byFingerprint, askedTimes: bumpAskedTimes(projectRoot, byFingerprint, owner), proposedContractId, created: false, fingerprint };
   }
-  const { filePath, relativePath } = resolveGeneratedDraftPath(projectRoot, { slug, proposedDomain: rec.proposedDomain });
+  const proposedDomain = rec.proposedDomain?.trim() || proposeAnswerDomain(projectRoot, rec.sql);
+  const { filePath, relativePath } = resolveGeneratedDraftPath(projectRoot, { slug, proposedDomain });
   if (existsSync(filePath)) {
     return { path: relativePath, askedTimes: bumpAskedTimes(projectRoot, relativePath, owner), proposedContractId, created: false, fingerprint };
   }
   const artifactSource = rec.dqlArtifact?.source?.trim();
+  // The draft is named after its own id (the file name), not after the AI's
+  // restatement of the question that named the transient artifact.
   const body = artifactSource
     ? stampGeneratedDqlArtifactDraft({
         slug,
         question: rec.question,
         proposedContractId,
-        proposedDomain: rec.proposedDomain,
+        proposedDomain,
         sourceQuestion: rec.question,
         dqlArtifact: {
           kind: (rec.dqlArtifact?.kind ?? 'sql_block'),
-          source: forceDraftStatus(artifactSource),
+          source: withProposedDomain(renameDraftBlock(forceDraftStatus(artifactSource), slug), proposedDomain),
           ...(rec.dqlArtifact?.name ? { name: rec.dqlArtifact.name } : {}),
         } as GeneratedDraftSourceDqlArtifact,
       }, relativePath, owner, { answerFingerprint: fingerprint, sourceRunId: rec.runId })
-    : renderGeneratedDraft({ slug, question: rec.question, proposedSql: rec.sql, proposedContractId, proposedDomain: rec.proposedDomain, owner, answerFingerprint: fingerprint, sourceRunId: rec.runId }, relativePath);
+    : renderGeneratedDraft({ slug, question: rec.question, proposedSql: rec.sql, proposedContractId, proposedDomain, owner, answerFingerprint: fingerprint, sourceRunId: rec.runId }, relativePath);
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, body);
   return { path: relativePath, askedTimes: 1, proposedContractId, created: true, fingerprint };
+}
+
+/**
+ * The Domain an answer's tables belong to, when there is exactly one: every
+ * table the SQL reads is listed in the `sourceSystems` of one Domain and of no
+ * other (`dbt:orders`, `orders` and `analytics.orders` all name `orders`).
+ * Undefined otherwise, and the reviewer picks the Domain before certifying.
+ */
+export function proposeAnswerDomain(projectRoot: string, sql: string): string | undefined {
+  let tables: string[];
+  try {
+    tables = Array.from(new Set(extractTablesFromSql(sql).tables.map(relationLeaf).filter(Boolean)));
+  } catch {
+    return undefined;
+  }
+  if (tables.length === 0) return undefined;
+  let domains: Array<{ id: string; sourceSystems: string[] }>;
+  try {
+    domains = loadDomainPackageRegistry(projectRoot).values().map((pkg) => ({ id: pkg.id, sourceSystems: pkg.domain.sourceSystems ?? [] }));
+  } catch {
+    return undefined;
+  }
+  const owners = tables.map((table) => domains.filter((domain) => domain.sourceSystems.some((system) => relationLeaf(system) === table)));
+  if (owners.some((claimed) => claimed.length !== 1)) return undefined;
+  const ids = new Set(owners.map((claimed) => claimed[0]!.id));
+  return ids.size === 1 ? [...ids][0] : undefined;
+}
+
+/** `dbt:orders`, `"db"."dev"."orders"`, `model.shop.orders` → `orders`. */
+function relationLeaf(value: string): string {
+  const withoutSystem = value.includes(':') ? value.slice(value.lastIndexOf(':') + 1) : value;
+  return (withoutSystem.split('.').pop() ?? '').replace(/["'`\[\]]/g, '').trim().toLowerCase();
+}
+
+function renameDraftBlock(source: string, name: string): string {
+  return source.replace(/(\bblock\s+)"(?:[^"\\]|\\.)*"/, `$1"${escapeDqlString(name)}"`);
+}
+
+/** Writes the proposed Domain as the block's own `domain`, unless it declares one. */
+function withProposedDomain(source: string, domain: string | undefined): string {
+  if (!domain || /^\s*domain\s*=/m.test(source)) return source;
+  return source.replace(/(\bblock\s+"[^"]*"\s*\{)/, `$1\n  domain = "${escapeDqlString(domain)}"`);
 }
 
 /** A captured answer is never certified, whatever status its source claims. */

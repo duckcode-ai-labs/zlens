@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { isSnowflakeSupportedNodeVersion, runDoctor } from './doctor.js';
+import { checkAppsPublishing, checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -14,6 +14,57 @@ describe('Snowflake Node runtime support', () => {
     expect(isSnowflakeSupportedNodeVersion('22.18.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('24.4.1')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(false);
+  });
+});
+
+describe('App publishing check (T3)', () => {
+  afterEach(() => {
+    while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  });
+  const project = (config: unknown) => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-doctor-apps-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, 'dql.config.json'), typeof config === 'string' ? config : JSON.stringify(config));
+    return root;
+  };
+
+  it('says publishing is not blocked by trust by default, and when the project requires certified tiles', () => {
+    expect(checkAppsPublishing(project({ project: 'p' }))).toMatchObject({ name: 'App publishing', ok: true, detail: expect.stringContaining('not blocked by trust') });
+    expect(checkAppsPublishing(project({ apps: { requireCertifiedToPublish: true } }))).toMatchObject({ ok: true, detail: expect.stringContaining('every tile must be certified to publish') });
+  });
+
+  it('flags a setting that is not true or false', () => {
+    expect(checkAppsPublishing(project({ apps: { requireCertifiedToPublish: 'yes' } }))).toMatchObject({ ok: false, detail: expect.stringContaining('apps.requireCertifiedToPublish must be true or false.') });
+  });
+});
+
+describe('Node.js check', () => {
+  it('passes Node 20, 22 and 24, warns on a newer Node, fails below 20', () => {
+    for (const version of ['20.19.0', '22.18.0', '24.15.0']) {
+      expect(checkNodeVersion(version)).toEqual({ name: 'Node.js', ok: true, detail: `version=${version} (supported: Node 20, 22 or 24)` });
+    }
+    const node26 = checkNodeVersion('26.12.0');
+    expect(node26.ok).toBe(true);
+    expect(node26.advisory).toBe(true);
+    expect(node26.detail).toContain('not supported yet');
+    expect(node26.detail).toContain("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+    expect(checkNodeVersion('18.20.4').ok).toBe(false);
+  });
+});
+
+describe('DuckDB connector check', () => {
+  it('names the Node to use when DuckDB has no prebuilt binary for this one', () => {
+    const projectDir = makeProject('dql-doctor-duckdb-node26-');
+    const check = checkDuckDBDependency(projectDir, '26.12.0');
+    expect(check.ok).toBe(false);
+    expect(check.detail.split('\n')[0]).toBe("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+  });
+
+  it('still says "missing; install" on Node 24', () => {
+    const projectDir = makeProject('dql-doctor-duckdb-node24-');
+    const check = checkDuckDBDependency(projectDir, '24.15.0');
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain('missing; install from the notebook Connections page');
   });
 });
 
@@ -407,5 +458,17 @@ type: string
     ]));
     expect(report.commitPolicy.durable).toContain('.dql/hints/**/*.hint.yaml');
     expect(report.commitPolicy.durable).toContain('.dql/evaluations/**/*.hint-evaluation.yaml');
+  });
+});
+
+// New-user round 2, problem 10: sync said 19 metrics, Setup 19, doctor 24 (19 metrics + 5 measures).
+describe('metric counts read the same as sync and Setup', () => {
+  it('names dbt metrics and the measures ZLens adds separately', () => {
+    const metric = { source: { objectType: 'metric' } };
+    const measure = { source: { objectType: 'measure' } };
+    expect(semanticMetricWords([...Array(19)].map(() => metric).concat([...Array(5)].map(() => measure)))).toBe('19 metrics and 5 measures');
+    expect(semanticMetricWords([metric])).toBe('1 metric');
+    expect(semanticMetricWords([metric, metric, {}])).toBe('3 metrics');
+    expect(semanticMetricWords([metric, measure])).toBe('1 metric and 1 measure');
   });
 });

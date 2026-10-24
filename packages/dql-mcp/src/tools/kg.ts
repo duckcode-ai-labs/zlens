@@ -21,6 +21,7 @@ import {
   type KGNodeKind,
 } from '@zlens/agent';
 import { zodInputShapeForTool } from '../tool-schema.js';
+import { governedAnswerPointer } from './next-step.js';
 
 export const kgSearchInput = zodInputShapeForTool('kg_search');
 
@@ -46,7 +47,11 @@ export async function kgSearch(
       domain: args.domain,
       limit: args.limit ?? 10,
     });
+    const pointer = hits.length === 0
+      ? governedAnswerPointer(ctx, 'No knowledge-graph nodes match this search text.')
+      : undefined;
     return {
+      ...(pointer ?? {}),
       hits: hits.map((h) => ({
         nodeId: h.node.nodeId,
         kind: h.node.kind,

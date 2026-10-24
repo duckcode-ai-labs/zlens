@@ -847,105 +847,6 @@ export const APP_STYLES = `
   background: var(--dql-app-canvas);
 }
 
-.dql-app-ai-start {
-  max-width: 1260px;
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
-  gap: 18px;
-  align-items: start;
-}
-
-.dql-app-ai-start-main {
-  min-width: 0;
-  display: grid;
-  gap: 14px;
-}
-
-.dql-app-ai-start-copy h1 {
-  margin: 0 0 7px;
-  color: var(--dql-app-ink);
-  font-size: clamp(30px, 4vw, 52px);
-  line-height: 0.98;
-  letter-spacing: 0;
-}
-
-.dql-app-ai-start-copy p {
-  margin: 0;
-  max-width: 650px;
-  color: var(--dql-app-muted);
-  font-size: 14px;
-  line-height: 1.55;
-}
-
-.dql-app-ai-start-card {
-  position: relative;
-  border: 1px solid rgba(79, 99, 215, 0.32);
-  border-radius: 12px;
-  background: var(--dql-app-surface);
-  box-shadow: var(--dql-app-shadow);
-  padding: 18px 76px 18px 18px;
-}
-
-.dql-app-ai-start-card textarea {
-  width: 100%;
-  min-height: 124px;
-  resize: vertical;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--dql-app-ink);
-  padding: 0;
-  font: 500 20px/1.45 var(--font-ui);
-}
-
-.dql-app-ai-start-send {
-  position: absolute;
-  right: 18px;
-  bottom: 18px;
-  width: 46px;
-  height: 46px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--dql-app-accent);
-  color: white;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  box-shadow: 0 14px 30px rgba(79, 99, 215, 0.24);
-}
-
-.dql-app-ai-start-send:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.dql-app-ai-start-examples {
-  padding-left: 2px;
-}
-
-.dql-app-ai-start-advanced {
-  border: 1px solid var(--dql-app-line);
-  border-radius: 8px;
-  background: var(--dql-app-surface);
-  padding: 0 12px;
-}
-
-.dql-app-ai-start-advanced .dql-app-palette {
-  max-height: 340px;
-  margin: 0 0 12px;
-}
-
-.dql-app-ai-start-result {
-  margin: 0;
-}
-
-.dql-app-ai-start-context {
-  display: grid;
-  gap: 12px;
-}
-
 .dql-app-ai-context-card {
   border: 1px solid var(--dql-app-line);
   border-radius: 8px;
@@ -1845,6 +1746,24 @@ export const APP_STYLES = `
 
 .dql-app-filter-select input[type="number"] {
   width: 64px;
+}
+
+.dql-app-filter-select .dql-app-filter-label {
+  color: var(--dql-app-muted, var(--dql-app-faint));
+  font: 600 12px var(--font-ui);
+  white-space: nowrap;
+}
+
+.dql-app-filter-select select.dql-app-filter-presets {
+  max-width: 120px;
+  color: var(--dql-app-ink);
+}
+
+.dql-app-filter-select .dql-app-filter-range-note {
+  color: var(--dql-app-ink);
+  font: 600 12px var(--font-ui);
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .dql-app-filter-empty {
@@ -3059,36 +2978,6 @@ export const APP_STYLES = `
 
 .dql-app-block-cite span { flex: 1; min-width: 0; font-family: var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dql-app-block-cite b { color: var(--dql-app-faint); font: 10px var(--font-mono); }
-.dql-app-flow { margin-top: 8px; }
-.dql-app-flow-node {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 0;
-  font-size: 12px;
-}
-
-.dql-app-flow-node span {
-  width: 28px;
-  height: 23px;
-  border-radius: 8px;
-  background: var(--dql-app-accent-soft);
-  color: var(--dql-app-accent);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font: 600 11px var(--font-mono);
-}
-
-.dql-app-flow-node b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dql-app-flow-node small { color: var(--dql-app-faint); font: 9px var(--font-mono); }
-.dql-app-flow i {
-  display: block;
-  width: 2px;
-  height: 9px;
-  background: var(--dql-app-accent);
-  margin-left: 13px;
-}
 
 .dql-app-suggests { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
 .dql-app-focus-list {
@@ -4258,7 +4147,6 @@ export const APP_STYLES = `
     border-right: 0;
     border-bottom: 1px solid var(--dql-app-line);
   }
-  .dql-app-ai-start,
   .dql-app-ai-generated-grid {
     grid-template-columns: 1fr;
   }
@@ -4428,18 +4316,6 @@ export const APP_STYLES = `
   .dql-app-create-workspace.clean {
     padding: 16px;
   }
-  .dql-app-ai-start-card {
-    padding: 15px;
-  }
-  .dql-app-ai-start-card textarea {
-    min-height: 150px;
-    font-size: 16px;
-    padding-bottom: 48px;
-  }
-  .dql-app-ai-start-send {
-    right: 14px;
-    bottom: 14px;
-  }
   .dql-app-ai-generated-head {
     align-items: stretch;
     flex-direction: column;
@@ -4557,28 +4433,6 @@ export const APP_STYLES = `
 @keyframes dql-app-orb { 0%, 100% { box-shadow: 0 0 0 0 rgba(107, 93, 211, 0); } 50% { box-shadow: 0 0 13px 1px rgba(107, 93, 211, 0.4); } }
 @keyframes dql-app-step { from { opacity: 0; transform: translateX(-4px); } to { opacity: 1; transform: none; } }
 
-.dql-app-flow-scroll { min-height: 100%; }
-.dql-app-flow {
-  width: min(880px, calc(100% - 48px));
-  margin: 0 auto;
-  padding: 28px 0 40px;
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-.dql-app-flow-head h2 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.01em; color: var(--dql-app-ink); }
-.dql-app-flow-head p { margin: 3px 0 0; font-size: 13px; color: var(--dql-app-faint); }
-.dql-app-flow-bubble {
-  align-self: flex-end;
-  max-width: 78%;
-  background: var(--dql-app-surface-muted);
-  color: var(--dql-app-ink);
-  border-radius: 12px 12px 4px 12px;
-  padding: 10px 14px;
-  font-size: 13px;
-  line-height: 1.5;
-  animation: dql-app-fadein 0.2s ease-out;
-}
 .dql-app-buildstream { display: flex; gap: 12px; animation: dql-app-fadein 0.25s ease-out; }
 .dql-app-buildorb {
   width: 30px; height: 30px; border-radius: 50%;
@@ -4733,26 +4587,6 @@ export const APP_STYLES = `
 }
 .dql-app-detected-pill.selected { border-color: var(--dql-app-accent); background: var(--dql-app-accent-soft); color: var(--dql-app-accent); }
 .dql-app-detected-pill.off { opacity: 0.64; text-decoration: line-through; }
-.dql-app-flow-gaps { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--dql-app-orange); }
-.dql-app-flow-gaps span { display: inline-flex; align-items: center; gap: 6px; }
-.dql-app-flow-actions { display: flex; align-items: center; gap: 8px; }
-.dql-app-flow-build {
-  display: inline-flex; align-items: center; gap: 7px;
-  height: 34px; padding: 0 16px;
-  border-radius: 8px; border: 0;
-  background: var(--dql-app-accent); color: #fff;
-  font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit;
-  box-shadow: 0 1px 5px rgba(107, 93, 211, 0.3);
-}
-.dql-app-flow-build:hover { filter: brightness(0.95); }
-.dql-app-flow-build:disabled { opacity: 0.55; cursor: default; }
-.dql-app-flow-reset {
-  height: 34px; padding: 0 13px;
-  border-radius: 8px; border: 1px solid var(--dql-app-line);
-  background: var(--dql-app-surface); color: var(--dql-app-muted);
-  font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
-}
-.dql-app-flow-reset:hover { background: var(--dql-app-surface-muted); }
 /* View / Edit segmented toggle (app workspace top bar) */
 .dql-app-modeseg {
   display: inline-flex; align-items: center; gap: 2px;
@@ -4884,6 +4718,7 @@ export const APP_STYLES = `
 .dql-app-filter-row .dql-app-filter-select span { font: 500 13px var(--font-ui); text-transform: none; color: var(--dql-app-muted); }
 .dql-app-filter-row .dql-app-filter-select select, .dql-app-filter-row .dql-app-filter-select input { font: 600 13px var(--font-ui); max-width: 160px; }
 .dql-app-filter-reset { height: 32px; padding: 0 8px; border: 0; background: transparent; color: var(--dql-app-accent); font: 600 13px var(--font-ui); cursor: pointer; }
+.dql-app-filter-remembered { display: inline-flex; align-items: center; height: 32px; color: var(--text-secondary); font: 500 12px var(--font-ui); }
 /* RFC 0008 step 6: trust labels, receipts and the Trust Lens in the reader. */
 .dql-trust-anchor { position: relative; display: inline-flex; }
 .dql-trust-badge { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 8px; border: 1px solid var(--dql-app-line-2); border-radius: 999px; background: var(--dql-app-surface); color: var(--dql-app-ink); font: 500 11px var(--font-ui); font-variant-numeric: tabular-nums; cursor: pointer; white-space: nowrap; }
@@ -4906,6 +4741,10 @@ export const APP_STYLES = `
 .dql-receipt dt { color: var(--dql-app-muted); }
 .dql-receipt dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .dql-receipt dd.code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11px; user-select: all; }
+.dql-receipt-list { margin: 0; padding-left: 14px; display: grid; gap: 2px; }
+.dql-technical-details { margin-top: 10px; }
+.dql-technical-details > summary { cursor: pointer; color: var(--dql-app-muted, var(--text-secondary)); font-size: 12px; font-weight: 600; }
+.dql-technical-details[open] > summary { margin-bottom: 6px; }
 .dql-receipt-more { margin-top: 10px; height: 28px; padding: 0 10px; border: 1px solid var(--dql-app-line-2); border-radius: 8px; background: var(--dql-app-surface); color: var(--dql-app-accent); font: 600 12px var(--font-ui); cursor: pointer; }
 .dql-receipt-more:hover { background: var(--dql-app-accent-soft); }
 .dql-trust-lens-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--dql-app-muted); font: 400 12px var(--font-ui); font-variant-numeric: tabular-nums; }
@@ -4979,5 +4818,11 @@ export const APP_STYLES = `
 .dql-app-filter-multi-menu label:hover, .dql-app-filter-multi-menu label.on { background: var(--dql-app-control); }
 .dql-app-filter-multi-menu input { accent-color: var(--dql-app-accent); }
 .dql-app-filter-multi-menu button { justify-self: start; margin-top: 4px; border: 0; background: transparent; color: var(--dql-app-accent); font: 600 13px var(--font-ui); cursor: pointer; }
+.dql-app-filter-search-menu { min-width: 240px; max-width: 320px; }
+.dql-app-filter-search-menu input[type="search"] { height: 30px; padding: 0 8px; border: 1px solid var(--dql-app-line); border-radius: 8px; background: var(--dql-app-surface); color: var(--dql-app-ink); font: 13px var(--font-ui); max-width: none; }
+.dql-app-filter-search-menu [role="listbox"] { display: grid; gap: 1px; max-height: 260px; overflow-y: auto; }
+.dql-app-filter-search-menu [role="listbox"] button { justify-self: stretch; margin: 0; height: 28px; padding: 0 8px; border-radius: 8px; text-align: left; color: var(--dql-app-ink); font: 13px var(--font-ui); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dql-app-filter-search-menu [role="listbox"] button:hover, .dql-app-filter-search-menu [role="listbox"] button.on { background: var(--dql-app-control); }
+.dql-app-filter-search-menu small { padding: 2px 8px; color: var(--dql-app-muted); font: 12px var(--font-ui); }
 .dql-apps-waterline .dql-kpi-value { font-family: var(--font-ui) !important; font-weight: 600 !important; letter-spacing: -.02em; color: var(--dql-app-ink) !important; }
 `;

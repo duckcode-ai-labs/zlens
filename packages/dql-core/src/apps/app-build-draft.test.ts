@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { appBuildPreviewIntentFingerprint, applyAppBuildDraftOperations, createAppBuildDraft, packDashboardLayoutItems } from './app-build-draft.js';
+import { appBuildPreviewIntentFingerprint, appNameFromGoal, applyAppBuildDraftOperations, createAppBuildDraft, packDashboardLayoutItems } from './app-build-draft.js';
 import { parseDashboardDocument } from './dashboard-document.js';
 
 describe('AppBuildDraft', () => {
@@ -8,11 +8,16 @@ describe('AppBuildDraft', () => {
       id: 'build-1', appId: 'revenue-app', authoringMode: 'manual', now: '2026-08-08T00:00:00.000Z',
       frame: { goal: 'Monitor revenue', metrics: ['revenue'], dimensions: [], filters: [] },
     });
-    const next = applyAppBuildDraftOperations(draft, 1, [{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }], '2026-08-08T00:01:00.000Z');
+    // A new App has no per-App data rule (T3), and an older client's change to one is ignored.
+    expect(draft).not.toHaveProperty('sourcePolicy');
+    const next = applyAppBuildDraftOperations(draft, 1, [
+      { type: 'set_source_policy', sourcePolicy: 'include_review_required' },
+      { type: 'set_name', name: 'Revenue' },
+    ], '2026-08-08T00:01:00.000Z');
     expect(next.version).toBe(3);
     expect(next.state).toBe('local_draft');
     expect(next.revision).toBe(2);
-    expect(next.sourcePolicy).toBe('include_review_required');
+    expect(next).not.toHaveProperty('sourcePolicy');
     expect(next.proposalHash).not.toBe(draft.proposalHash);
   });
 
@@ -24,7 +29,14 @@ describe('AppBuildDraft', () => {
     expect(() => applyAppBuildDraftOperations(draft, 0, [])).toThrow(/APP_BUILD_REVISION_CONFLICT/);
   });
 
-  it('requires explicit review-required source policy for exploratory SQL', () => {
+  it('keeps an old draft readable with its stored data rule, and needs no rule for data nobody certified (T3)', () => {
+    const old = createAppBuildDraft({
+      id: 'build-old', appId: 'revenue-app', authoringMode: 'manual', sourcePolicy: 'governed_only',
+      frame: { goal: 'Investigate revenue', metrics: ['revenue'], dimensions: [], filters: [] },
+    });
+    expect(old).not.toHaveProperty('sourcePolicy');
+    const stored = { ...old, sourcePolicy: 'governed_only' as const };
+    expect(applyAppBuildDraftOperations(stored, 1, [{ type: 'set_name', name: 'Old' }]).sourcePolicy).toBe('governed_only');
     expect(() => createAppBuildDraft({
       id: 'build-1', appId: 'revenue-app', authoringMode: 'manual',
       frame: { goal: 'Investigate revenue', metrics: ['revenue'], dimensions: [], filters: [] },
@@ -32,7 +44,7 @@ describe('AppBuildDraft', () => {
         id: 'draft-1', kind: 'exploratory_sql', sourceRef: 'drafts/revenue.dql',
         trustState: 'review_required', reviewStatus: 'required',
       }],
-    })).toThrow(/include_review_required/);
+    })).not.toThrow();
   });
 
   it('invalidates preview and preflight receipts after a content edit', () => {
@@ -514,5 +526,25 @@ describe('AppBuildDraft', () => {
     expect(() => applyAppBuildDraftOperations(restoredMalformed, restoredMalformed.revision, [{
       type: 'update_tile', pageId: page.id, tileId: 'revenue', patch: { title: 'Revenue' },
     }])).toThrow(/exactly one selected measure/);
+  });
+});
+
+describe('appNameFromGoal', () => {
+  it('names an App from the first line of its description, at most 60 characters', () => {
+    expect(appNameFromGoal('Sales manager review\nMonthly revenue, top 10 customers and total revenue.')).toBe('Sales manager review');
+    expect(appNameFromGoal('\n\n  Weekly   health  \nmore')).toBe('Weekly health');
+    const long = 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders. A page for a sales manager.';
+    const name = appNameFromGoal(long);
+    expect(name.length).toBeLessThanOrEqual(60);
+    expect(name).toBe('A weekly revenue dashboard: revenue by month, the top');
+    expect(appNameFromGoal('x'.repeat(80))).toHaveLength(60);
+    expect(appNameFromGoal('')).toBe('');
+    expect(appNameFromGoal(undefined)).toBe('');
+  });
+
+  it('is the draft name when no name was given; a given name wins', () => {
+    const frame = { goal: 'Sales manager review\nwith a date filter', metrics: [], dimensions: [], filters: [] };
+    expect(createAppBuildDraft({ id: 'd1', appId: 'sales', authoringMode: 'ai', frame }).name).toBe('Sales manager review');
+    expect(createAppBuildDraft({ id: 'd2', appId: 'sales', name: 'Mine', authoringMode: 'ai', frame }).name).toBe('Mine');
   });
 });

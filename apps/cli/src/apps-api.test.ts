@@ -1,20 +1,19 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { AppSourceCatalogRecord } from '@zlens/agent';
+import type { AppPlan, AppSourceCatalogRecord } from '@zlens/agent';
 import type { AppBuildDraft, AppBuildDraftSource, DashboardDocument, DatasetDescriptor } from '@zlens/core';
-import { appBuildPreviewIntentFingerprint, loadDashboardDocument } from '@zlens/core';
+import { appBuildPreviewIntentFingerprint, appTrustAnswer, blockCompanionRelativePath, certifiedSourceSha256, loadDashboardDocument, publishedTileTrustText } from '@zlens/core';
 import { defaultLocalAppsDbPath, defaultPersonaRegistry, LocalAppStorage } from '@zlens/project';
 import {
   __test__,
   addAskResultToAppBuildDraft,
   approveAppSemanticTiles,
   applyAppAutopilotChange,
-  commitAppAiBuild,
   createAppAiBuildSession,
   createAppPackage,
   createStoredAppBuildDraft,
@@ -25,6 +24,7 @@ import {
   generateAppPackage,
   getAppAiBuildSession,
   handleAppsApi,
+  appBuildDraftTrust,
   markStoredAppBuildDraftPreflighted,
   publishStoredAppBuildDraft,
   promoteAppForStakeholders,
@@ -38,7 +38,10 @@ import {
   recommendDashboardTile,
   recommendVisualization,
   matchAppDraftForQuestion,
+  openAppAiBuildInStudio,
   writeDashboardForTest,
+  readAppsPublishSettings,
+  rebindPublishedBlockPlaceholders,
 } from './apps-api.js';
 
 const tempDirs: string[] = [];
@@ -64,6 +67,18 @@ afterEach(() => {
     if (dir) rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/** Writes the App an AI build session planned, the way the App generator does. */
+async function generateAppFromSessionPlan(root: string, session: Awaited<ReturnType<typeof proposeAppAiBuild>>, plan = session.plan as AppPlan) {
+  const { KGStore, defaultKgPath, generateAppFromPlan, reindexProject } = await import('@zlens/agent');
+  await reindexProject(root, { kgPath: defaultKgPath(root) });
+  const kg = new KGStore(defaultKgPath(root));
+  try {
+    return generateAppFromPlan(root, plan, kg, { overwrite: true });
+  } finally {
+    kg.close();
+  }
+}
 
 function publishedDatasetDescriptor(
   sourceId: string,
@@ -401,8 +416,19 @@ describe('Apps command center API helpers', () => {
     });
 
     expect(result).toMatchObject({ ok: false });
-    if (!result.ok) expect(result.error).toMatch(/certified blocks only/i);
+    if (!result.ok) expect(result.error).toMatch(/certified saved queries only/i);
     expect(existsSync(join(root, 'apps/unsafe-growth'))).toBe(false);
+  });
+
+  it('names a described App from the first line of the description, at most 60 characters (B9)', () => {
+    const root = createProject();
+    const draft = createStoredAppBuildDraft(root, {
+      goal: 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders.\nA page for a sales manager.',
+      authoringMode: 'ai',
+    });
+    expect(draft.name).toBe('A weekly revenue dashboard: revenue by month, the top');
+    expect(draft.name.length).toBeLessThanOrEqual(60);
+    expect(draft.frame.goal).toContain('A page for a sales manager.');
   });
 
   it('keeps the unified manual draft local until atomic Publish to Project', () => {
@@ -469,6 +495,29 @@ describe('Apps command center API helpers', () => {
     // Pages belong to the draft: one removed there is removed here.
     expect(existsSync(join(appDir, 'dashboards', 'retired.dqld'))).toBe(false);
     expect(existsSync(join(appDir, 'dashboards', 'overview.dqld'))).toBe(true);
+  });
+
+  // New-user round 2, problem 10: the card read "Governed analytical App for Sales Manager Manual", never written by anyone.
+  it('keeps the description the author wrote, and fills a plain one only when there is none', () => {
+    const root = createProject();
+    const plain = createStoredAppBuildDraft(root, { appId: 'sales-manual', name: 'Sales Manager Manual', domain: 'finance', authoringMode: 'manual', sourcePolicy: 'governed_only' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, plain));
+    const appPath = join(root, 'apps/sales-manual/dql.app.json');
+    expect(JSON.parse(readFileSync(appPath, 'utf-8')).description).toBe('A dashboard of live numbers for Finance.');
+
+    // The author writes a description; a republish without a new one keeps it.
+    const app = JSON.parse(readFileSync(appPath, 'utf-8'));
+    writeFileSync(appPath, JSON.stringify({ ...app, description: 'Weekly numbers for the sales managers.' }, null, 2) + '\n');
+    const edit = createStoredAppBuildDraft(root, { baseAppId: 'sales-manual', name: 'Sales Manager Manual', authoringMode: 'manual', sourcePolicy: 'governed_only' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, edit));
+    expect(JSON.parse(readFileSync(appPath, 'utf-8')).description).toBe('Weekly numbers for the sales managers.');
+
+    // What the author typed for the App is its description.
+    const typed = createStoredAppBuildDraft(root, { appId: 'typed', name: 'Revenue', goal: 'Revenue by month for the weekly review', authoringMode: 'ai', sourcePolicy: 'governed_only' });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, typed));
+    const description = JSON.parse(readFileSync(join(root, 'apps/typed/dql.app.json'), 'utf-8')).description;
+    expect(description).toBe('Revenue by month for the weekly review');
+    expect(description).not.toMatch(/Governed analytical/);
   });
 
   it('rehydrates published source bindings for safe editing and returns every page from the App route', async () => {
@@ -840,8 +889,10 @@ describe('Apps command center API helpers', () => {
       sourcePolicy: 'governed_only',
       template: 'blank',
     });
+    // An App saved before T3 with "Only certified data".
     const stored: AppBuildDraft = {
       ...initial,
+      sourcePolicy: 'governed_only',
       sources: [publishedDatasetDraftSource(oldCatalog)],
       pages: [oldPage],
       reviewTasks: [{
@@ -863,17 +914,8 @@ describe('Apps command center API helpers', () => {
       expect(sourceIds).toEqual([sourceId]);
       return [currentCatalog];
     };
-    // Browser policy alone cannot opt a governed-only App into a review source.
-    const withoutPolicy = await invokeAppsApi(root, `/api/app-builds/${stored.id}`, 'PATCH', {
-      expectedRevision: stored.revision,
-      operations: [
-        { type: 'upsert_source', source: { ...publishedDatasetDraftSource(oldCatalog), lifecycle: 'certified', trustState: 'certified', reviewStatus: 'not_required' } },
-        { type: 'upsert_page', page: currentPage },
-      ],
-    }, { resolveDatasetSourceAuthority: sourceAuthority });
-    expect(withoutPolicy).toMatchObject({ handled: true, status: 400 });
-    expect((withoutPolicy.payload as any).error).toContain('include_review_required policy');
-
+    // The old App's "Only certified data" rule is read and ignored (T3): the
+    // refresh needs no rule, and an older client's set_source_policy changes nothing.
     const refreshed = await invokeAppsApi(root, `/api/app-builds/${stored.id}`, 'PATCH', {
       expectedRevision: stored.revision,
       operations: [
@@ -897,7 +939,7 @@ describe('Apps command center API helpers', () => {
     }, { resolveDatasetSourceAuthority: sourceAuthority });
     expect(refreshed).toMatchObject({ handled: true, status: 200 });
     const rebound = (refreshed.payload as any).draft as AppBuildDraft;
-    expect(rebound).toMatchObject({ sourcePolicy: 'include_review_required' });
+    expect(rebound.sourcePolicy).toBe('governed_only');
     expect(rebound.sources).toEqual([expect.objectContaining({
       id: sourceId,
       sourceRevision: currentRevision,
@@ -937,7 +979,106 @@ describe('Apps command center API helpers', () => {
     }
   });
 
-  it('allows opted-in review Dataset preview evidence but refuses governed-only preview and Project publication (APP-058)', async () => {
+  it('reads apps.requireCertifiedToPublish fresh from dql.config.json for the publish dialog (T3)', async () => {
+    const root = createProject();
+    expect((await invokeAppsApi(root, '/api/apps/settings', 'GET', {})).payload).toEqual({ ok: true, requireCertifiedToPublish: false });
+    expect(readAppsPublishSettings(root)).toEqual({ requireCertifiedToPublish: false });
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    expect((await invokeAppsApi(root, '/api/apps/settings', 'GET', {})).payload).toEqual({ ok: true, requireCertifiedToPublish: true });
+    writeFileSync(join(root, 'dql.config.json'), '{ not json');
+    expect(readAppsPublishSettings(root)).toEqual({ requireCertifiedToPublish: false });
+  });
+
+  it('publishes a tile on a join nobody certified by default, and refuses it when the project requires certified data (T3)', async () => {
+    const root = createProject();
+    const sourceId = 'app:block:commerce:orders-with-location';
+    const sourceRevision = 'sha256:orders-with-location';
+    const contractFingerprint = 'sha256:orders-with-location-contract';
+    const withJoin = (trust: 'certified' | 'review_required'): DatasetDescriptor => {
+      const base = publishedDatasetDescriptor(sourceId, 'block', sourceRevision, contractFingerprint);
+      return {
+        ...base,
+        fields: [
+          ...base.fields,
+          { kind: 'physical', name: 'location__location_name', qualifiedId: `${sourceId}:location__location_name`, type: 'string', role: 'dimension', status: 'approved', related: { join: 'location', column: 'location_name' } },
+        ],
+        joins: [{
+          id: 'location',
+          label: 'Location',
+          table: 'locations',
+          relation: 'main.locations',
+          keys: [{ from: 'location_id', to: 'location_id' }],
+          cardinality: 'many_to_one',
+          trust,
+          origin: 'drafted',
+          relationshipId: 'proposal_setup:rel_orders_locations',
+          uniqueness: 'current',
+          sentence: 'each order has one location',
+        }],
+      };
+    };
+    const draftedCatalog = publishedDatasetCatalogRecord(sourceId, 'block', sourceRevision, withJoin('review_required'));
+    const certifiedCatalog = publishedDatasetCatalogRecord(sourceId, 'block', sourceRevision, withJoin('certified'));
+    const page = publishedDatasetPage({
+      id: 'overview',
+      title: 'Orders',
+      sourceId,
+      sourceRevision,
+      contractFingerprint,
+      tileId: 'revenue-by-location',
+      tileTitle: 'Revenue by location',
+      query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true },
+      viz: 'bar',
+    });
+    const saveDraft = (sourcePolicy: 'governed_only' | 'include_review_required') => {
+      const initial = createStoredAppBuildDraft(root, {
+        name: `Joined orders ${sourcePolicy}`,
+        goal: 'Revenue by location.',
+        authoringMode: 'manual',
+        sourcePolicy,
+        template: 'blank',
+      });
+      const draft: AppBuildDraft = { ...initial, sources: [publishedDatasetDraftSource(draftedCatalog)], pages: [page] };
+      const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+      try {
+        storage.saveAppBuildDraft(draft);
+      } finally {
+        storage.close();
+      }
+      return draft;
+    };
+    const preflight = async (draft: AppBuildDraft, catalog: AppSourceCatalogRecord, route = 'preflight') => {
+      const response = await invokeAppsApi(root, `/api/app-builds/${draft.id}/${route}`, 'POST', {
+        expectedRevision: draft.revision,
+        proposalHash: draft.proposalHash,
+      }, { resolveDatasetSourceAuthority: async () => [catalog] });
+      return { status: response.status, errors: ((response.payload as { errors?: string[]; error?: string }).errors ?? []) };
+    };
+
+    // No per-App data rule (T3): even an old "Only certified data" App is not
+    // held back by a join nobody certified; its tile reads Not certified yet.
+    const governed = saveDraft('governed_only');
+    const open = await preflight(governed, draftedCatalog);
+    expect(open.errors.filter((error) => /APP_BUILD_TILE_NEEDS_REVIEW|APP_BUILD_REQUIRES_CERTIFIED/.test(error))).toEqual([]);
+
+    // The project requires certified data: one plain message naming the tile.
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    const refused = await preflight(governed, draftedCatalog);
+    expect(refused.status).toBe(400);
+    expect(refused.errors.filter((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toEqual([
+      'APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Revenue by location.',
+    ]);
+    // Publish repeats the same check; it never publishes past it.
+    const publishRefused = await preflight(governed, draftedCatalog, 'publish-to-project');
+    expect(publishRefused.status).toBe(400);
+    expect(publishRefused.errors.some((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toBe(true);
+
+    // Certified in Modeling since: the current model decides, so it passes this check.
+    const afterCertify = await preflight(governed, certifiedCatalog);
+    expect(afterCertify.errors.some((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toBe(false);
+  });
+
+  it('previews a Dataset nobody certified in any App, publishes it as Not certified yet, and refuses it only when the project requires certified data (APP-058, T3)', async () => {
     const root = createProject();
     const sourceId = 'app:block:commerce:review-orders';
     const sourceRevision = 'sha256:review-orders-source';
@@ -1021,9 +1162,6 @@ describe('Apps command center API helpers', () => {
       intentFingerprint: string;
     }) => {
       purposes.push(input.purpose);
-      if (input.purpose === 'project_publish') {
-        return { ok: false as const, error: 'Dataset is review-required and cannot be published.' };
-      }
       return {
         ok: true as const,
         snapshotId: 'snapshot-review',
@@ -1064,9 +1202,18 @@ describe('Apps command center API helpers', () => {
       expectedRevision: savedDraft.revision,
       proposalHash: savedDraft.proposalHash,
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(publication).toMatchObject({ handled: true, status: 400 });
-    expect((publication.payload as { errors: string[] }).errors.join('\n')).toContain('APP_BUILD_DATASET_PUBLICATION_INELIGIBLE');
+    // Not a trust error: an old review task and the fixture's missing block file are what remain.
+    const openErrors = ((publication.payload as { errors?: string[] }).errors ?? []).join('\n');
+    expect(openErrors).not.toMatch(/APP_BUILD_DATASET_PUBLICATION_INELIGIBLE|APP_BUILD_DATASET_NOT_CERTIFIED|APP_BUILD_REQUIRES_CERTIFIED|review-required and cannot be published/);
     expect(purposes).toContain('project_publish');
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    const required = await invokeAppsApi(root, `/api/app-builds/${reviewDraft.id}/preflight`, 'POST', {
+      expectedRevision: savedDraft.revision,
+      proposalHash: savedDraft.proposalHash,
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(required).toMatchObject({ handled: true, status: 400 });
+    expect((required.payload as { errors: string[] }).errors).toContain('APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Review revenue.');
+    writeFileSync(join(root, 'dql.config.json'), '{}\n');
 
     const governedInitial = createStoredAppBuildDraft(root, {
       name: 'Governed-only review refusal',
@@ -1091,12 +1238,132 @@ describe('Apps command center API helpers', () => {
       id: 'governed-only-review-preview',
       revision: governedDraft.revision,
     };
-    const rejectedPreview = await invokeAppsApi(root, `/api/app-builds/${governedDraft.id}`, 'PATCH', {
+    // An old "Only certified data" App previews it too: the rule is read and ignored.
+    const oldRulePreview = await invokeAppsApi(root, `/api/app-builds/${governedDraft.id}`, 'PATCH', {
       expectedRevision: governedDraft.revision,
       operations: [{ type: 'set_preview_receipt', receipt: governedReceipt }],
     }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
-    expect(rejectedPreview).toMatchObject({ handled: true, status: 400 });
-    expect((rejectedPreview.payload as { error: string }).error).toContain('requires include_review_required policy');
+    expect(oldRulePreview).toMatchObject({ handled: true, status: 200 });
+  });
+
+  it('previews a checked Dataset in an old "Only certified data" App and publishes it as Not certified yet unless the project requires certified data (design Q1, T3)', async () => {
+    const root = createProject();
+    const sourceId = 'app:block:commerce:checked-orders';
+    const sourceRevision = 'sha256:checked-orders-source';
+    const contractFingerprint = 'sha256:checked-orders-contract';
+    const checkedDataset: DatasetDescriptor = {
+      ...publishedDatasetDescriptor(sourceId, 'block', sourceRevision, contractFingerprint),
+      lifecycle: 'review',
+      trust: 'review_required',
+    };
+    const checkedCatalog: AppSourceCatalogRecord = {
+      ...publishedDatasetCatalogRecord(sourceId, 'block', sourceRevision, checkedDataset),
+      lifecycle: 'review',
+      trust: 'review_required',
+      eligibility: { discoverable: true, localPreview: true, projectPublish: false, reasonCodes: ['CHECKED_NEEDS_CERTIFYING'] },
+      check: { by: 'kranthi@example.test', name: 'Kranthi', at: '2026-10-22T09:00:00.000Z', checks: ['Row key: each row is one order'] },
+    };
+    // The same Dataset without a check record: plain "needs review" data.
+    const uncheckedCatalog: AppSourceCatalogRecord = { ...checkedCatalog, eligibility: { ...checkedCatalog.eligibility, reasonCodes: ['REVIEW_REQUIRED_SOURCE'] } };
+    delete (uncheckedCatalog as { check?: unknown }).check;
+    const base = publishedDatasetPage({
+      id: 'overview',
+      title: 'Checked orders',
+      sourceId,
+      sourceRevision,
+      contractFingerprint,
+      tileId: 'checked-revenue',
+      tileTitle: 'Checked revenue',
+      query: { dimensions: [], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true },
+      viz: 'kpi',
+    });
+    const page: DashboardDocument = {
+      ...base,
+      layout: {
+        ...base.layout,
+        items: base.layout.items.map((tile) => ({
+          ...tile,
+          sourceClass: 'exploratory_analysis',
+          trustState: 'review_required',
+          reviewStatus: 'review_required',
+          review: { status: 'required', sourceFingerprint: sourceRevision },
+        })),
+      },
+    };
+    const initial = createStoredAppBuildDraft(root, {
+      name: 'Checked data',
+      goal: 'Build with checked data, certify before publishing.',
+      authoringMode: 'manual',
+      sourcePolicy: 'governed_only',
+      template: 'blank',
+    });
+    // An App saved before T3 with "Only certified data".
+    const draft: AppBuildDraft = {
+      ...initial,
+      sourcePolicy: 'governed_only',
+      sources: [{ ...publishedDatasetDraftSource(checkedCatalog), checked: true }],
+      pages: [page],
+    };
+    const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+    try {
+      storage.saveAppBuildDraft(draft);
+    } finally {
+      storage.close();
+    }
+    let current = checkedCatalog;
+    const sourceAuthority = async () => [current];
+    const verifyPreview = async (input: { purpose: 'local_preview' | 'project_publish'; intentFingerprint: string }) => ({
+      ok: true as const,
+      snapshotId: 'snapshot-checked',
+      filterFingerprint: 'filters-checked',
+      resultFingerprint: 'results-checked',
+      intentFingerprint: input.intentFingerprint,
+    });
+    const receipt = {
+      id: 'checked-local-preview',
+      pageId: page.id,
+      revision: draft.revision,
+      snapshotId: 'snapshot-checked',
+      filterFingerprint: 'filters-checked',
+      resultFingerprint: 'results-checked',
+      createdAt: '2026-10-22T09:05:00.000Z',
+    };
+    // Tiles work right away: the preview is accepted under "Only certified data".
+    const savedPreview = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: draft.revision,
+      operations: [{ type: 'set_preview_receipt', receipt }],
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(savedPreview, JSON.stringify(savedPreview.payload)).toMatchObject({ handled: true, status: 200 });
+    const saved = (savedPreview.payload as { draft: AppBuildDraft }).draft;
+    // The old App keeps its stored rule (read and ignored).
+    expect(saved.sourcePolicy).toBe('governed_only');
+    expect(saved.sources).toEqual([expect.objectContaining({ id: sourceId, checked: true, trustState: 'review_required' })]);
+
+    // Publishing is not refused for trust: nothing asks to certify first.
+    const preflight = await invokeAppsApi(root, `/api/app-builds/${draft.id}/preflight`, 'POST', {
+      expectedRevision: saved.revision,
+      proposalHash: saved.proposalHash,
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    const trustErrors = /APP_BUILD_DATASET_NOT_CERTIFIED|APP_BUILD_DATASET_PUBLICATION_INELIGIBLE|APP_BUILD_REQUIRES_CERTIFIED|APP_BUILD_REVIEW_POLICY_REQUIRED/;
+    expect(((preflight.payload as { errors?: string[] }).errors ?? []).join('\n')).not.toMatch(trustErrors);
+
+    // The project requires certified data: refused with the one plain message.
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    const required = await invokeAppsApi(root, `/api/app-builds/${draft.id}/publish-to-project`, 'POST', {
+      expectedRevision: saved.revision,
+      proposalHash: saved.proposalHash,
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(required.status).toBe(400);
+    expect((required.payload as { errors: string[] }).errors).toContain('APP_BUILD_REQUIRES_CERTIFIED: This project requires every tile to be certified before an App is published. Not certified yet: Checked revenue.');
+    writeFileSync(join(root, 'dql.config.json'), '{}\n');
+
+    // Data nobody checked previews too: there is no per-App data rule.
+    current = uncheckedCatalog;
+    const unchecked = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: saved.revision,
+      operations: [{ type: 'set_preview_receipt', receipt: { ...receipt, id: 'unchecked-preview', revision: saved.revision } }],
+    }, { resolveDatasetSourceAuthority: sourceAuthority, verifyAppBuildPreview: verifyPreview });
+    expect(unchecked).toMatchObject({ handled: true, status: 200 });
   });
 
   it('refuses a client-issued preview receipt invalidation', async () => {
@@ -1424,7 +1691,7 @@ describe('Apps command center API helpers', () => {
 
     const source = result.draft.sources.find((candidate) => candidate.kind === 'review_dql');
     expect(source).toMatchObject({ trustState: 'review_required', reviewStatus: 'required' });
-    expect(result.draft.sourcePolicy).toBe('include_review_required');
+    expect(result.draft).not.toHaveProperty('sourcePolicy');
     expect(result.draft.reviewTasks).toEqual(expect.arrayContaining([
       expect.objectContaining({ sourceId: source?.id, tileId: result.tileId, status: 'open' }),
     ]));
@@ -1463,6 +1730,13 @@ describe('Apps command center API helpers', () => {
       reviewTasks: [{ id: 'review-overview', message: 'Confirm the Overview evidence.', status: 'open' as const, pageId: draft.pages[0].id }],
     };
     expect(preflightStoredAppBuildDraft(root, scopedTask)).toContain('Review task is still open: Confirm the Overview evidence.');
+
+    // "X needs certifying" reminders older drafts stored are not gates (T3): trust is per tile.
+    const trustReminder = {
+      ...draft,
+      reviewTasks: [{ id: 'review-source-0123456789ab', message: 'Orders needs certifying before this App is published.', status: 'open' as const, pageId: draft.pages[0].id }],
+    };
+    expect(preflightStoredAppBuildDraft(root, trustReminder)).toEqual([]);
   });
 
   it('accepts an explicitly unsupported tile as a governed filter exclusion', () => {
@@ -1536,7 +1810,7 @@ describe('Apps command center API helpers', () => {
     };
     const unversionedErrors = preflightStoredAppBuildDraft(root, unversionedDraft);
     expect(unversionedErrors).toContain(`Source block:${block.id} has no bound source revision; refresh it before Project publication.`);
-    expect(unversionedErrors).toContain('overview/customer-profile has no bound source revision; refresh the certified block before publication.');
+    expect(unversionedErrors).toContain('overview/customer-profile has no bound source revision; refresh the saved query before publication.');
     expect(() => publishStoredAppBuildDraft(root, {
       ...unversionedDraft,
       state: 'preflight_ready' as const,
@@ -1553,7 +1827,19 @@ describe('Apps command center API helpers', () => {
       ...readyDraft,
       pages: [{ ...page, layout: { ...page.layout, items: page.layout.items.map((tile) => tile.i === 'revenue-trend' ? { ...tile, filterBindings: [] } : tile) } }],
     };
-    expect(preflightStoredAppBuildDraft(root, missingExclusion)).toContain('overview/revenue-trend does not have a preflighted binding for filter Customer Name.');
+    expect(preflightStoredAppBuildDraft(root, missingExclusion)).toContain('overview/revenue-trend has no choice for filter Customer Name. Open the Filters tab and set this tile to Applies or Does not apply.');
+    // The Filters tab's "Does not apply" choice is stored and resolves the tile.
+    const authorDoesNotApply = {
+      ...readyDraft,
+      pages: [{ ...page, layout: { ...page.layout, items: page.layout.items.map((tile) => tile.i === 'revenue-trend'
+        ? { ...tile, filterBindings: [{ filter: 'customer_name', capability: 'unsupported' as const, unsupportedReason: 'Author: does not apply' }] }
+        : tile) } }],
+    };
+    expect(preflightStoredAppBuildDraft(root, authorDoesNotApply)).toEqual([]);
+    // A linked tile that has not run in a settled preview still needs one.
+    expect(preflightStoredAppBuildDraft(root, { ...readyDraft, previewReceipts: [] }).some((issue) => (
+      issue.includes('overview/customer-profile does not have a preflighted binding for filter Customer Name.')
+    ))).toBe(true);
   });
 
   it('deletes only the selected App package and moves it to recoverable local trash', () => {
@@ -1706,7 +1992,7 @@ describe('Apps command center API helpers', () => {
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error).toContain('No certified DQL blocks matched strongly enough');
+    expect(result.error).toContain('No certified saved queries matched strongly enough');
     expect(result.error).toContain('ZLens did not write an empty dashboard');
     expect(existsSync(join(root, 'apps/revenue-app-for-leadership-without-any-certified-blocks'))).toBe(false);
   });
@@ -1749,8 +2035,8 @@ describe('Apps command center API helpers', () => {
 
     expect(session.status).toBe('error');
     expect(session.generatedPaths).toEqual([]);
-    expect(session.error).toContain('No certified DQL blocks matched strongly enough');
-    expect(session.warnings.join(' ')).toContain('No certified DQL blocks matched strongly enough');
+    expect(session.error).toContain('No certified saved queries matched strongly enough');
+    expect(session.warnings.join(' ')).toContain('No certified saved queries matched strongly enough');
     const loaded = getAppAiBuildSession(root, session.id);
     expect(loaded?.status).toBe('error');
   });
@@ -1784,64 +2070,6 @@ describe('Apps command center API helpers', () => {
     expect(existsSync(join(root, 'apps'))).toBe(false);
     const loaded = getAppAiBuildSession(root, session.id);
     expect(loaded?.status).toBe('proposed');
-  });
-
-  it('commits a confirmed proposal into app files and marks the session ready', async () => {
-    const root = createProject();
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue',
-      domain: 'revenue',
-      status: 'certified',
-      tags: ['revenue', 'kpi'],
-      description: 'Executive revenue KPI',
-      chart: 'single_value',
-      allowedFilters: ['region'],
-      filterBindings: [{ filter: 'region', binding: 'customer_region' }],
-    });
-
-    const session = await proposeAppAiBuild(root, {
-      prompt: 'Build a revenue app for leadership.',
-      domain: 'revenue',
-      owner: 'owner@local',
-    });
-    expect(session.status).toBe('proposed');
-    const selected = session.proposal!.tiles.map((tile) => tile.id);
-
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds: selected,
-      expectedProposalHash: session.proposalHash,
-      appName: 'Leadership Revenue Brief',
-      audience: 'Finance leadership',
-      filterIds: [],
-      tileOverrides: { [selected[0]]: { title: 'Revenue pulse', viz: 'bar' } },
-    });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-    expect(committed.session.status).toBe('ready');
-    expect(committed.session.committedTileIds).toEqual(selected);
-    expect(committed.session.committedBrief).toMatchObject({
-      appName: 'Leadership Revenue Brief',
-      audience: 'Finance leadership',
-      filterIds: [],
-    });
-    expect(committed.session.generatedPaths.some((path) => path.endsWith('dql.app.json'))).toBe(true);
-    for (const path of committed.session.generatedPaths) {
-      expect(existsSync(join(root, path))).toBe(true);
-    }
-    const manifestPath = committed.session.generatedPaths.find((path) => path.endsWith('dql.app.json'))!;
-    expect(JSON.parse(readFileSync(join(root, manifestPath), 'utf-8'))).toMatchObject({ name: 'Leadership Revenue Brief', audience: 'Finance leadership' });
-    const dashboardPath = committed.session.generatedPaths.find((path) => path.endsWith('.dqld'))!;
-    const dashboard = JSON.parse(readFileSync(join(root, dashboardPath), 'utf-8'));
-    expect(dashboard.filters).toEqual([]);
-    expect(dashboard.layout.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({ i: selected[0], title: 'Revenue pulse', viz: expect.objectContaining({ type: 'bar' }) }),
-    ]));
-    expect(dashboard.layout.items.find((item: { i: string }) => item.i === selected[0]).filterBindings ?? []).toEqual([]);
-
-    // Double-commit is refused — the app already exists.
-    const again = await commitAppAiBuild(root, session.id, { selectedTileIds: selected, expectedProposalHash: session.proposalHash });
-    expect(again.ok).toBe(false);
-    if (!again.ok) expect(again.status).toBe(409);
   });
 
   it('keeps uncovered requirements as visible gaps and never persists generated SQL or local aiPins', async () => {
@@ -1889,12 +2117,8 @@ describe('Apps command center API helpers', () => {
     expect(session.proposal!.coverage.generatedTiles).toBe(0);
     expect(session.proposal!.gaps.length).toBeGreaterThan(0);
 
-    const selected = session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id);
-    const committed = await commitAppAiBuild(root, session.id, { selectedTileIds: selected, expectedProposalHash: session.proposalHash });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-
-    const dashboardPath = committed.session.generatedPaths.find((path) => path.endsWith('.dqld'));
+    const generated = await generateAppFromSessionPlan(root, session);
+    const dashboardPath = generated.paths.find((path) => path.endsWith('.dqld'));
     expect(dashboardPath).toBeTruthy();
     const doc = JSON.parse(readFileSync(join(root, dashboardPath!), 'utf-8')) as {
       story?: { goal: string; eligibleTileIds?: string[] };
@@ -1906,7 +2130,7 @@ describe('Apps command center API helpers', () => {
     expect(doc.layout.items.some((item) => item.text?.markdown?.includes('SELECT '))).toBe(false);
   });
 
-  it('materializes explicitly accepted Personal Draft exploration as app-scoped review DQL', async () => {
+  it('proposes Personal Draft exploration as an unselected review tile and writes no App', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', {
       name: 'Total Revenue',
@@ -1947,33 +2171,6 @@ describe('Apps command center API helpers', () => {
       preflight: { status: 'passed' },
     });
     expect(existsSync(join(root, 'apps'))).toBe(false);
-
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds: [exploratory!.id],
-      expectedProposalHash: session.proposalHash,
-    });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-
-    const manifestPath = committed.session.generatedPaths.find((path) => path.endsWith('dql.app.json'))!;
-    const manifest = JSON.parse(readFileSync(join(root, manifestPath), 'utf-8')) as { visibility: string; publicationIntent: string };
-    expect(manifest).toMatchObject({ visibility: 'private', publicationIntent: 'personal' });
-    const draftPath = committed.session.generatedPaths.find((path) => path.includes('/drafts/') && path.endsWith('.dql'));
-    expect(draftPath).toBeTruthy();
-    expect(readFileSync(join(root, draftPath!), 'utf-8')).toContain('status = "review"');
-
-    const dashboardPath = committed.session.generatedPaths.find((path) => path.endsWith('.dqld'))!;
-    const dashboard = JSON.parse(readFileSync(join(root, dashboardPath), 'utf-8')) as {
-      layout: { items: Array<{ draftAnalysis?: { ref: string }; sourceClass?: string; review?: { status: string }; text?: { markdown: string } }> };
-    };
-    expect(dashboard.layout.items).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        draftAnalysis: expect.objectContaining({ ref: expect.stringMatching(/^drafts\/.+\.dql$/) }),
-        sourceClass: 'exploratory_analysis',
-        review: expect.objectContaining({ status: 'required' }),
-      }),
-    ]));
-    expect(dashboard.layout.items.some((item) => item.text?.markdown?.includes('SELECT '))).toBe(false);
   });
 
   it('does not generate uncovered SQL unless the user explicitly requests the gap action', async () => {
@@ -2018,6 +2215,55 @@ describe('Apps command center API helpers', () => {
       expect.objectContaining({ sourceId: expect.stringMatching(/^app:block:/) }),
     ]));
     expect(JSON.stringify(page)).not.toContain('SELECT region');
+  });
+
+  it('carries the planner reason onto each AI tile and offers certified data first without leaving other data out (T3)', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', {
+      name: 'Total Revenue',
+      domain: 'revenue',
+      status: 'certified',
+      tags: ['revenue', 'kpi'],
+      description: 'Executive revenue KPI',
+      chart: 'single_value',
+    });
+    writeBlock(root, 'revenue/draft_revenue.dql', {
+      name: 'Draft Revenue Split',
+      domain: 'revenue',
+      status: 'draft',
+      tags: ['revenue'],
+      description: 'Draft revenue split by region',
+      chart: 'bar',
+    });
+    const draft = createStoredAppBuildDraft(root, {
+      name: 'Revenue',
+      goal: 'Track revenue',
+      domain: 'revenue',
+      authoringMode: 'ai',
+      sourcePolicy: 'governed_only',
+      template: 'operational_dashboard',
+    });
+
+    const proposal = await proposeAppBuildDraftOperations(root, draft, { prompt: 'Build a revenue app.' });
+
+    const sources = proposal.operations.flatMap((operation) => operation.type === 'upsert_source' ? [operation.source] : []);
+    expect(sources.length).toBeGreaterThan(0);
+    // Certified data first, never only certified data (T3): the old App's rule is ignored.
+    const candidates = proposal.candidateSourceIds ?? [];
+    expect(candidates).toHaveLength(2);
+    expect(sources.filter((source) => source.trustState === 'certified').map((source) => source.id)).toContain(candidates[0]);
+    const page = proposal.operations.find((operation) => operation.type === 'upsert_page');
+    const tiles = page?.type === 'upsert_page' ? page.page.layout.items.filter((item) => item.sourceId) : [];
+    expect(tiles.length).toBeGreaterThan(0);
+    for (const tile of tiles) {
+      expect(tile.sourceEvidence).toEqual([expect.objectContaining({
+        source: tile.sourceId,
+        kind: 'planner_rationale',
+        reason: expect.stringMatching(/\S/),
+        trustState: sources.find((source) => source.id === tile.sourceId)?.trustState,
+      })]);
+    }
+    expect(proposal.summary).toMatchObject({ certifiedSources: sources.filter((source) => source.trustState === 'certified').length, semanticSources: 0 });
   });
 
   it('uses one catalog for all-draft AI and manual composition, with explicit gap generation (PRD-007, API-014)', async () => {
@@ -2075,7 +2321,8 @@ describe('Apps command center API helpers', () => {
       selections: [{ sourceId: draftSource.sourceId, pageId: 'overview', view: 'chart' }],
     });
     const composedManual = (manualCompose.payload as any).draft;
-    expect(composedManual).toMatchObject({ version: 3, sourcePolicy: 'include_review_required' });
+    expect(composedManual).toMatchObject({ version: 3 });
+    expect(composedManual).not.toHaveProperty('sourcePolicy');
     expect(composedManual.sources[0]).toMatchObject({
       id: draftSource.sourceId, kind: 'block', lifecycle: 'draft', trustState: 'review_required',
     });
@@ -2169,6 +2416,161 @@ describe('Apps command center API helpers', () => {
     expect((gapResponse.payload as any).proposal).toBeUndefined();
     expect(gapInput).toMatchObject({ appBuildId: aiDraft.id, requirement: { id: 'r-growth' } });
     expect(existsSync(join(root, '.dql', 'local', 'app-builds', aiDraft.id, 'order-growth.dql'))).toBe(false);
+  });
+
+  it('PR3 keeps the Start form domain on the draft and the Add data catalog filters by it', async () => {
+    const root = createProject();
+    writeBlock(root, 'sales/orders.dql', {
+      name: 'Sales Orders', domain: 'sales', status: 'certified', tags: ['orders'], description: 'Orders by region', chart: 'bar',
+    });
+    writeBlock(root, 'finance/margin.dql', {
+      name: 'Finance Margin', domain: 'finance', status: 'certified', tags: ['margin'], description: 'Gross margin', chart: 'bar',
+    });
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Sales App', goal: 'Sales health', authoringMode: 'manual', sourcePolicy: 'governed_only', domain: 'sales',
+    });
+    expect(created.status, JSON.stringify(created.payload)).toBe(201);
+    const draft = (created.payload as any).draft;
+    const domain = draft.pages[0].metadata.domain;
+    expect(domain).toBe('sales');
+
+    const scoped = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100&domain=${encodeURIComponent(domain)}`, 'GET', {});
+    expect((scoped.payload as any).items.map((item: any) => item.name)).toEqual(['Sales Orders']);
+    const all = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100`, 'GET', {});
+    expect((all.payload as any).items.map((item: any) => item.name).sort()).toEqual(['Finance Margin', 'Sales Orders']);
+
+    // "All domains" on the Start form sends no domain; the server keeps `general`.
+    const unscoped = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Any App', goal: 'Anything', authoringMode: 'manual', sourcePolicy: 'governed_only',
+    });
+    expect((unscoped.payload as any).draft.pages[0].metadata.domain).toBe('general');
+  });
+
+  it('records the App\'s tile trust at publish, and is certified only when every tile is — joins from the current model included (B6)', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const publishWith = async (appId: string, sourcePolicy: 'governed_only' | 'include_review_required', descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined) => {
+      const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+        appId, name: appId, goal: 'Revenue by region', authoringMode: 'manual', sourcePolicy, domain: 'commerce',
+      });
+      const draft = (created.payload as any).draft;
+      const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100`, 'GET', {});
+      const dataset = ((catalog.payload as any).items as any[]).find((item) => item.capabilities?.dataset);
+      const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+        mode: 'manual', expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+        selections: [{ sourceId: dataset.sourceId, pageId: 'overview', view: 'chart', title: 'Revenue by region', query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] } }],
+      });
+      expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
+      const composedDraft = (composed.payload as any).draft as AppBuildDraft;
+      // A settled preview of the page, as the Studio records before Publish.
+      const settled: AppBuildDraft = { ...composedDraft, previewReceipts: [{ id: 'run-1', pageId: 'overview', revision: composedDraft.revision, snapshotId: 'snapshot', filterFingerprint: 'filters', resultFingerprint: 'results', createdAt: composedDraft.updatedAt }] };
+      const storage = new LocalAppStorage(defaultLocalAppsDbPath(root));
+      try {
+        storage.saveAppBuildDraft(settled);
+      } finally {
+        storage.close();
+      }
+      expect(preflightStoredAppBuildDraft(root, settled)).toEqual([]);
+      publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, settled), { descriptorFor });
+      return { dataset, settled, written: JSON.parse(readFileSync(join(root, `apps/${appId}/dql.app.json`), 'utf-8')) };
+    };
+
+    // Every tile certified: the App is certified and records 1 of 1.
+    const all = await publishWith('all-certified', 'governed_only');
+    expect(all.written).toMatchObject({ lifecycle: 'certified', tileTrust: { certified: 1, total: 1 } });
+    expect(__test__.collectAppsList(root).find((entry) => entry.id === 'all-certified')).toMatchObject({ certification: 'certified', tileTrust: { certified: 1, total: 1 } });
+
+    // The current model reads Region through a join nobody certified, allowed
+    // with "Allow data that needs review": the App is not certified.
+    const withReviewJoin = (descriptor: DatasetDescriptor): DatasetDescriptor => ({
+      ...descriptor,
+      fields: descriptor.fields.map((field) => (field.name === 'region' ? { ...field, related: { join: 'region', column: 'region' } } as typeof field : field)),
+      joins: [{ id: 'region', label: 'Region', table: 'regions', relation: 'main.regions', keys: [{ from: 'region', to: 'region' }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: 'proposal:rel', uniqueness: 'current', sentence: 'each order line has one region' }],
+    });
+    const allowed = await publishWith('review-allowed', 'include_review_required', (sourceId) => {
+      const stored = all.settled.sources.find((source) => source.id === sourceId)?.capabilities?.dataset as DatasetDescriptor | undefined;
+      return stored ? withReviewJoin(stored) : undefined;
+    });
+    expect(allowed.written.lifecycle).toBe('review');
+    expect(allowed.written.certifiedBy).toBeUndefined();
+    expect(allowed.written.tileTrust).toEqual({ certified: 0, total: 1 });
+    expect(__test__.collectAppsList(root).find((entry) => entry.id === 'review-allowed')).toMatchObject({ certification: 'uncertified', tileTrust: { certified: 0, total: 1 } });
+    // The same answer the Studio and the App header give.
+    const trust = appBuildDraftTrust(allowed.settled, (sourceId) => withReviewJoin(allowed.settled.sources.find((source) => source.id === sourceId)!.capabilities!.dataset as DatasetDescriptor));
+    expect([trust.label, trust.notCertified]).toEqual(['0 of 1 tile certified', 1]);
+    // Its stored count reads back in the same words the header and the Apps card use.
+    expect(publishedTileTrustText(allowed.written.tileTrust)).toBe(trust.label);
+  });
+
+  it('PR3 connects data before any tile; data no tile uses never blocks Publish and is not written (design D4)', async () => {
+    const root = createProject();
+    writeBlock(root, 'sales/draft-orders.dql', {
+      name: 'Draft Orders', domain: 'sales', status: 'draft', tags: ['orders'], description: 'Unreviewed orders', chart: 'bar',
+    });
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      appId: 'data-first', name: 'Data First', goal: 'Order health', authoringMode: 'manual', sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=100`, 'GET', {});
+    const items = (catalog.payload as any).items as any[];
+    const dataset = items.find((item) => item.capabilities?.dataset);
+    const review = items.find((item) => item.name === 'Draft Orders');
+    expect(dataset).toMatchObject({ trust: 'certified' });
+    // No per-App data rule (T3): data nobody certified is listed and usable.
+    expect(review).toMatchObject({ trust: 'review_required', eligibility: { localPreview: true } });
+    // The Add data browser sends the catalog card as the API builds it for a composed tile.
+    const draftSource = (item: any) => ({
+      id: item.sourceId, kind: item.kind === 'semantic' ? 'governed_semantic' : 'block',
+      sourceRef: item.executionRef, qualifiedIdentity: item.qualifiedIdentity, sourcePath: item.sourcePath, executionRef: item.executionRef,
+      snapshotId: item.snapshotId, sourceRevision: item.sourceRevision, sourceFingerprint: item.sourceRevision,
+      lifecycle: item.lifecycle, capabilities: item.capabilities,
+      trustState: item.trust === 'certified' ? 'certified' : 'review_required',
+      reviewStatus: item.trust === 'certified' ? 'not_required' : 'required',
+    });
+
+    const patched = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
+      expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+      operations: [
+        { type: 'upsert_source', source: draftSource(dataset) },
+        { type: 'upsert_source', source: draftSource(review) },
+      ],
+    });
+    expect(patched.status, JSON.stringify(patched.payload)).toBe(200);
+    const connected = (patched.payload as any).draft as AppBuildDraft;
+    expect(connected.sources.map((source) => source.id).sort()).toEqual([dataset.sourceId, review.sourceId].sort());
+    expect(connected.sources.find((source) => source.id === dataset.sourceId)?.capabilities?.dataset).toBeTruthy();
+    expect(connected.pages[0]!.layout.items).toEqual([]);
+
+    expect(preflightStoredAppBuildDraft(root, connected)).toEqual([]);
+    const result = publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, connected));
+    expect(result.draft.state).toBe('project_published');
+    const page = readFileSync(join(root, 'apps/data-first/dashboards/overview.dqld'), 'utf-8');
+    expect(page).not.toContain(review.sourceId);
+    expect(page).not.toContain(dataset.sourceId);
+
+    // A tile on data nobody certified publishes as Not certified yet, unless
+    // the project requires certified data.
+    const second = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      appId: 'data-second', name: 'Data Second', goal: 'Orders', authoringMode: 'manual', sourcePolicy: 'include_review_required',
+    });
+    const secondDraft = (second.payload as any).draft;
+    const composed = await invokeAppsApi(root, `/api/app-builds/${secondDraft.id}/compose`, 'POST', {
+      mode: 'manual', expectedRevision: secondDraft.revision, expectedProposalHash: secondDraft.proposalHash,
+      selections: [{ sourceId: review.sourceId, pageId: 'overview', view: 'table' }],
+    });
+    expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
+    const composedDraft = (composed.payload as any).draft as AppBuildDraft;
+    expect(preflightStoredAppBuildDraft(root, composedDraft).join(' ')).not.toMatch(/review-required|not certified|APP_BUILD_REQUIRES_CERTIFIED/);
+    writeFileSync(join(root, 'dql.config.json'), `${JSON.stringify({ apps: { requireCertifiedToPublish: true } })}\n`);
+    expect(preflightStoredAppBuildDraft(root, composedDraft).filter((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toHaveLength(1);
+    // The HTTP preflight says it too, for a page of saved-query tiles only.
+    const required = await invokeAppsApi(root, `/api/app-builds/${composedDraft.id}/preflight`, 'POST', {
+      expectedRevision: composedDraft.revision, proposalHash: composedDraft.proposalHash,
+    });
+    expect(required.status).toBe(400);
+    expect(((required.payload as { errors?: string[] }).errors ?? []).filter((error) => error.startsWith('APP_BUILD_REQUIRES_CERTIFIED'))).toHaveLength(1);
+    writeFileSync(join(root, 'dql.config.json'), '{}\n');
   });
 
   it('stores a field-builder query with its v3 Dataset binding atomically (APP-031)', async () => {
@@ -2549,6 +2951,92 @@ describe('Apps command center API helpers', () => {
   });
 
 
+  it('D4 keyword suggestions note what they did not match, and never block publishing with it', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Keyword App', goal: 'Revenue by region', authoringMode: 'ai', sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    // No planAppBuild hook: no AI provider, so the keyword matcher plans.
+    const proposed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: 'Revenue by region. Keep it short and clear.', expectedRevision: draft.revision, proposalHash: draft.proposalHash,
+    });
+    expect(proposed.status).toBe(201);
+    const proposal = (proposed.payload as any).proposal;
+    expect(proposal.plannerProvenance).toMatchObject({ mode: 'deterministic', providerInvocation: 'not_attempted' });
+    const requirements = proposal.operations.find((operation: any) => operation.type === 'set_requirements');
+    expect(requirements.requirements.length).toBeGreaterThan(0);
+    expect(requirements.requirements.every((requirement: any) => requirement.required === false)).toBe(true);
+    expect(requirements.coverage.some((item: any) => item.status === 'gap')).toBe(true);
+
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'ai', proposalId: proposal.id, selectedSourceIds: proposal.defaultSelectedSourceIds,
+      expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+    });
+    expect(composed.status).toBe(200);
+    const saved = (composed.payload as any).draft;
+    // The gap is still there to read ("Not covered yet"), but it is no publish fix.
+    expect(saved.coverage.some((item: any) => item.status === 'gap')).toBe(true);
+    expect(preflightStoredAppBuildDraft(root, saved).join('\n')).not.toContain('Required App question is unresolved');
+  });
+
+  it('D4 a proposal never adds a tile the page already shows, and its question stays covered', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Revise App', goal: 'Revenue by region', authoringMode: 'manual', sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    const catalog = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {});
+    const source = (catalog.payload as any).items.find((item: any) => item.capabilities?.dataset?.id);
+    const manual = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'manual', expectedRevision: draft.revision, expectedProposalHash: draft.proposalHash,
+      selections: [{
+        sourceId: source.sourceId, pageId: 'overview', view: 'chart', title: 'Revenue by region',
+        query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] },
+      }],
+    });
+    expect(manual.status).toBe(200);
+    const before = (manual.payload as any).draft;
+    const handTileId = before.pages[0].layout.items[0].i;
+    // The plan asks for the same chart again (sorted differently) and one new KPI.
+    const provider = async () => JSON.stringify({
+      frame: { goal: 'Revenue by region' },
+      requirements: [
+        { id: 'by-region', question: 'Revenue by region', role: 'breakdown', required: true, measures: ['revenue'], dimensions: ['region'], filters: [] },
+        { id: 'orders', question: 'Order count', role: 'kpi', required: true, measures: ['order_count'], dimensions: [], filters: [] },
+      ],
+      components: [
+        { id: 'region-again', title: 'Revenue by region', sourceId: source.sourceId, requirementIds: ['by-region'], role: 'breakdown', view: 'bar', rationale: 'Regions',
+          query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }], orderBy: [{ alias: 'revenue', direction: 'desc' }] } },
+        { id: 'orders-kpi', title: 'Order count', sourceId: source.sourceId, requirementIds: ['orders'], role: 'kpi', view: 'kpi', rationale: 'Count', query: { dimensions: [], measures: [{ measure: 'order_count' }] } },
+      ],
+      pages: [{ id: 'overview', title: 'Overview', componentIds: ['region-again', 'orders-kpi'], sections: [] }],
+      filters: [], navigation: [], crossFilters: [], detailDrills: [],
+    });
+    const proposed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: 'Revise the page', expectedRevision: before.revision, proposalHash: before.proposalHash, pageId: 'overview',
+    }, { planAppBuild: provider });
+    expect(proposed.status).toBe(201);
+    const proposal = (proposed.payload as any).proposal;
+    expect(proposal.proposedTileIds).toEqual(['orders-kpi']);
+    const page = proposal.operations.find((operation: any) => operation.type === 'upsert_page').page;
+    expect(page.layout.items.map((item: any) => item.i)).toEqual([handTileId, 'orders-kpi']);
+    expect(proposal.warnings).toContain('Revenue by region is already on this page, so it wasn\'t added again.');
+    const coverage = proposal.operations.find((operation: any) => operation.type === 'set_requirements').coverage;
+    expect(coverage.find((item: any) => item.requirementId === 'by-region')).toMatchObject({ status: 'covered', componentIds: [handTileId] });
+
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
+      mode: 'ai', proposalId: proposal.id, selectedSourceIds: proposal.defaultSelectedSourceIds,
+      expectedRevision: before.revision, expectedProposalHash: before.proposalHash,
+    });
+    expect(composed.status).toBe(200);
+    const saved = (composed.payload as any).draft;
+    expect(saved.pages[0].layout.items.map((item: any) => item.i)).toEqual([handTileId, 'orders-kpi']);
+    expect(new Map(saved.coverage.map((item: any) => [item.requirementId, item.status])).get('by-region')).toBe('covered');
+  });
+
   it('APP-065 prepares and atomically applies a source-pinned universal App Autopilot Dataset change', async () => {
     const root = createProject();
     writeDatasetBlock(root, 'commerce/order-lines.dql');
@@ -2803,7 +3291,21 @@ describe('Apps command center API helpers', () => {
     expect((stale.payload as any).error).toContain('APP_BUILD_PROPOSAL_CONFLICT');
   });
 
-  it('reports and enforces the explicit local Dataset feature opt-in (APP-007)', async () => {
+  it('reports field-based Dataset tiles as on when the runtime does not turn them off (APP-007)', async () => {
+    const root = createProject();
+    writeDatasetBlock(root, 'commerce/order-lines.dql');
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
+      name: 'Default Dataset App', goal: 'Explore revenue by region', authoringMode: 'manual',
+      sourcePolicy: 'governed_only', domain: 'commerce',
+    });
+    const draft = (created.payload as any).draft;
+    const unset = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {});
+    expect(unset).toMatchObject({ status: 200, payload: { features: { datasets: true } } });
+    const on = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates?limit=50`, 'GET', {}, { datasetsEnabled: true });
+    expect(on).toMatchObject({ status: 200, payload: { features: { datasets: true } } });
+  });
+
+  it('reports and enforces apps.datasets: false as the off-switch (APP-007)', async () => {
     const root = createProject();
     writeDatasetBlock(root, 'commerce/order-lines.dql');
     const created = await invokeAppsApi(root, '/api/app-builds', 'POST', {
@@ -2883,21 +3385,17 @@ describe('Apps command center API helpers', () => {
       expect.objectContaining({ requirementId: 'margin', status: 'gap', sourceIds: [], componentIds: [] }),
     ]));
 
-    const blocked = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals/${revisedProposal.id}/revisions`, 'POST', {
+    // Data nobody certified is added without any data rule (T3), even to an
+    // App created with the old "Only certified data" request field.
+    const added = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals/${revisedProposal.id}/revisions`, 'POST', {
       expectedRevision: draft.revision,
       expectedProposalHash: draft.proposalHash,
       selectedSourceIds: [revenue.sourceId, orders.sourceId],
       additionalSourceIds: [margin.sourceId],
     }, { planAppBuild: provider });
-    expect(blocked).toMatchObject({ status: 400, payload: { ok: false } });
-    expect((blocked.payload as any).error).toContain('APP_BUILD_REVIEW_POLICY_REQUIRED');
+    expect(added).toMatchObject({ status: 201, payload: { ok: true } });
 
-    const enabled = await invokeAppsApi(root, `/api/app-builds/${draft.id}`, 'PATCH', {
-      expectedRevision: draft.revision,
-      expectedProposalHash: draft.proposalHash,
-      operations: [{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }],
-    });
-    const reviewDraft = (enabled.payload as any).draft;
+    const reviewDraft = draft;
     const reviewProposalResponse = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
       prompt: reviewDraft.frame.goal,
       expectedRevision: reviewDraft.revision,
@@ -2913,7 +3411,7 @@ describe('Apps command center API helpers', () => {
     ]));
   });
 
-  it('atomically enables the review lane during manual draft composition (API-014, UI-023)', async () => {
+  it('composes data nobody certified with no data rule to change (API-014, UI-023, T3)', async () => {
     const root = createProject();
     writeBlock(root, 'sales/margin.dql', {
       name: 'Margin Review', domain: 'sales', status: 'draft', tags: ['margin'],
@@ -2931,19 +3429,16 @@ describe('Apps command center API helpers', () => {
       selections: [{ sourceId: source.sourceId, pageId: 'overview', view: 'chart' }],
     };
 
-    const blocked = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', request);
-    expect((blocked.payload as any).error).toContain('APP_BUILD_REVIEW_POLICY_REQUIRED');
-
-    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', {
-      ...request,
-      enableReviewRequired: true,
-    });
-    expect(composed.status).toBe(200);
-    expect((composed.payload as any).draft).toMatchObject({
-      sourcePolicy: 'include_review_required',
+    // An older client's enableReviewRequired flag is accepted and changes nothing.
+    const composed = await invokeAppsApi(root, `/api/app-builds/${draft.id}/compose`, 'POST', request);
+    expect(composed.status, JSON.stringify(composed.payload)).toBe(200);
+    const composedDraft = (composed.payload as any).draft;
+    expect(composedDraft).toMatchObject({
       sources: [expect.objectContaining({ id: source.sourceId, lifecycle: 'draft', trustState: 'review_required' })],
-      reviewTasks: [expect.objectContaining({ sourceId: source.sourceId, status: 'open' })],
+      // No "needs certifying" task: the tile reads Not certified yet instead.
+      reviewTasks: [],
     });
+    expect(composedDraft).not.toHaveProperty('sourcePolicy');
   });
 
   it('lazily migrates v2 only when source identity is unique and exposes ambiguity as a blocker', async () => {
@@ -3102,7 +3597,7 @@ describe('Apps command center API helpers', () => {
     expect(failed.proposal!.gaps.length).toBeGreaterThan(0);
   });
 
-  it('refuses to commit a proposal with no certified tiles (apps need a certified anchor)', async () => {
+  it('proposes no certified tiles and writes no App when nothing certified matches (apps need a certified anchor)', async () => {
     const root = createProject();
     // No certified blocks in the project → the proposal has 0 certified tiles.
     const session = await proposeAppAiBuild(root, {
@@ -3115,58 +3610,10 @@ describe('Apps command center API helpers', () => {
       expect(session.proposal!.coverage.certifiedTiles).toBe(0);
       const certifiedIds = session.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id);
       expect(certifiedIds).toEqual([]);
-      const committed = await commitAppAiBuild(root, session.id, {
-        selectedTileIds: session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id),
-        expectedProposalHash: session.proposalHash,
-      });
-      // Rejected either way (no selectable tiles → 400, or the certified-coverage
-      // guard → 409). What matters: no certified-less app is ever created.
-      expect(committed.ok).toBe(false);
-      if (!committed.ok) expect([400, 409]).toContain(committed.status);
     } else {
       // Or propose itself reports the coverage error — either way, no app is created.
       expect(session.status).toBe('error');
     }
-    expect(existsSync(join(root, 'apps'))).toBe(false);
-  });
-
-  it('refuses to commit an empty selection', async () => {
-    const root = createProject();
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue',
-      domain: 'revenue',
-      status: 'certified',
-      tags: ['revenue', 'kpi'],
-      description: 'Executive revenue KPI',
-      chart: 'single_value',
-    });
-
-    const session = await proposeAppAiBuild(root, {
-      prompt: 'Build a revenue app for leadership.',
-      domain: 'revenue',
-      owner: 'owner@local',
-    });
-    const rejected = await commitAppAiBuild(root, session.id, { selectedTileIds: [], expectedProposalHash: session.proposalHash });
-    expect(rejected.ok).toBe(false);
-    if (!rejected.ok) expect(rejected.error).toContain('at least one tile');
-  });
-
-  it('rejects stale proposal hashes and source drift without writing an App', async () => {
-    const root = createProject();
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI', chart: 'single_value',
-    });
-    const session = await proposeAppAiBuild(root, { prompt: 'Build a revenue app', domain: 'revenue', owner: 'owner@local' });
-    expect(session.status).toBe('proposed');
-    const ids = session.proposal!.tiles.map((tile) => tile.id);
-    const staleHash = await commitAppAiBuild(root, session.id, { selectedTileIds: ids, expectedProposalHash: 'wrong' });
-    expect(staleHash.ok).toBe(false);
-    writeBlock(root, 'revenue/total_revenue.dql', {
-      name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI changed after proposal', chart: 'single_value',
-    });
-    const drifted = await commitAppAiBuild(root, session.id, { selectedTileIds: ids, expectedProposalHash: session.proposalHash });
-    expect(drifted.ok).toBe(false);
-    if (!drifted.ok) expect(drifted.status).toBe(409);
     expect(existsSync(join(root, 'apps'))).toBe(false);
   });
 
@@ -3178,22 +3625,22 @@ describe('Apps command center API helpers', () => {
       name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI', chart: 'single_value',
     });
 
-    // 1. Build, editing the brief on the way through.
+    // 1. Build from the AI plan, editing the brief on the way through.
     const session = await proposeAppAiBuild(root, { prompt: 'Build a revenue app for leadership.', domain: 'revenue', owner: 'owner@local' });
     expect(session.status).toBe('proposed');
-    const tiles = session.proposal!.tiles.filter((tile) => !tile.error);
-    expect(tiles.length).toBeGreaterThan(0);
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds: tiles.map((tile) => tile.id),
-      expectedProposalHash: session.proposalHash,
-      appName: 'Leadership Revenue',
-      tileOverrides: { [tiles[0].id]: { title: 'Revenue right now' } },
+    const plan = session.plan as AppPlan;
+    const firstTileId = plan.pages[0].tiles.find((tile) => tile.kind === 'certified_block')!.id;
+    const generated = await generateAppFromSessionPlan(root, session, {
+      ...plan,
+      name: 'Leadership Revenue',
+      pages: plan.pages.map((page) => ({
+        ...page,
+        tiles: page.tiles.map((tile) => (tile.id === firstTileId ? { ...tile, title: 'Revenue right now' } : tile)),
+      })),
     });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-    const appId = committed.app!.id;
+    const appId = plan.appId;
     const appPath = join(root, `apps/${appId}/dql.app.json`);
-    const dashboardPath = join(root, committed.session.generatedPaths.find((path) => path.endsWith('.dqld'))!);
+    const dashboardPath = join(root, generated.paths.find((path) => path.endsWith('.dqld'))!);
 
     // The brief's edits reached disk.
     expect(JSON.parse(readFileSync(appPath, 'utf-8')).name).toBe('Leadership Revenue');
@@ -3265,7 +3712,7 @@ describe('Apps command center API helpers', () => {
     expect(renameApp(root, 'revenue-app', {}).ok).toBe(false);
   });
 
-  it('adds one approved AI page without rewriting existing App content and rejects stale App drift (API-009, UI-017, E2E-016)', async () => {
+  it('proposes an AI page for an existing App without rewriting its content (API-009, UI-017)', async () => {
     const root = createProject();
     writeBlock(root, 'revenue/total_revenue.dql', {
       name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue'], description: 'Revenue KPI', chart: 'single_value',
@@ -3288,52 +3735,6 @@ describe('Apps command center API helpers', () => {
     expect(session.dashboardId).not.toBe('overview');
     expect(readFileSync(appPath, 'utf-8')).toBe(originalAppSource);
     expect(readFileSync(originalDashboardPath, 'utf-8')).toBe(originalDashboardSource);
-
-    const selectedTileIds = session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id);
-    const committed = await commitAppAiBuild(root, session.id, {
-      selectedTileIds,
-      expectedProposalHash: session.proposalHash,
-      pageTitle: 'Leadership Revenue Drivers',
-      appName: 'This must not rename the App',
-    });
-    expect(committed.ok).toBe(true);
-    if (!committed.ok) return;
-    expect(readFileSync(appPath, 'utf-8')).toBe(originalAppSource);
-    expect(readFileSync(originalDashboardPath, 'utf-8')).toBe(originalDashboardSource);
-    expect(committed.session.generatedPaths).toEqual([
-      `apps/revenue-app/dashboards/${committed.dashboardId}.dqld`,
-    ]);
-    const added = loadDashboardDocument(join(root, committed.session.generatedPaths[0]));
-    expect(added.document?.metadata.title).toBe('Leadership Revenue Drivers');
-
-    // Drift detection covers what a page add can actually conflict with: the
-    // App manifest and its dashboard documents. Generated prose and notebook
-    // output do not participate — hashing them made an unrelated edit fail the
-    // commit with an unexplained conflict.
-    const tolerantSession = await proposeAppAiBuild(root, {
-      prompt: 'Add a revenue driver page for leadership', existingAppId: 'revenue-app',
-    });
-    expect(tolerantSession.status).toBe('proposed');
-    writeFileSync(join(root, 'apps/revenue-app/README.md'), '# Concurrent edit\n', 'utf-8');
-    const tolerantCommit = await commitAppAiBuild(root, tolerantSession.id, {
-      selectedTileIds: tolerantSession.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id),
-      expectedProposalHash: tolerantSession.proposalHash,
-    });
-    expect(tolerantCommit.ok).toBe(true);
-
-    const staleSession = await proposeAppAiBuild(root, {
-      prompt: 'Add a quarterly revenue outlook page', existingAppId: 'revenue-app',
-    });
-    expect(staleSession.status).toBe('proposed');
-    // A real conflict: the page this proposal was built against changed.
-    writeFileSync(originalDashboardPath, `${readFileSync(originalDashboardPath, 'utf-8')}\n`, 'utf-8');
-    const staleCommit = await commitAppAiBuild(root, staleSession.id, {
-      selectedTileIds: staleSession.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id),
-      expectedProposalHash: staleSession.proposalHash,
-    });
-    expect(staleCommit.ok).toBe(false);
-    if (!staleCommit.ok) expect(staleCommit.status).toBe(409);
-    expect(existsSync(join(root, `apps/revenue-app/dashboards/${staleSession.dashboardId}.dqld`))).toBe(false);
   });
 
   it('returns a research proposal without creating an investigation when context is required', async () => {
@@ -3374,7 +3775,7 @@ describe('Apps command center API helpers', () => {
     expect(result.route).toBe('investigation');
     expect(result.investigation).toBeUndefined();
     expect(result.answer).toContain('Add the comparison, filters, timeframe, and decision context');
-    expect(result.followUps).toEqual(expect.arrayContaining(['Add analysis context', 'Create block draft']));
+    expect(result.followUps).toEqual(expect.arrayContaining(['Add analysis context', 'Create saved query draft']));
     expect(result.decision).toMatchObject({
       mode: 'analysis',
       requiresContext: true,
@@ -3893,6 +4294,28 @@ describe('Apps command center API helpers', () => {
     expect(promotedApp.lifecycle).toBe('review');
     expect(promotedDashboard.layout.items).toHaveLength(0);
     expect(promotedDashboard.metadata.lifecycle).toBe('review');
+  });
+
+  it('records who certified an App and when, drops it on any other lifecycle, and lists it with the last update (D5, D6)', () => {
+    const root = createProject();
+    const app = createAppPackage(root, { name: 'Certified App', domain: 'revenue', owners: ['owner@local'], tags: [], selectedBlockIds: [] });
+    expect(app.ok).toBe(true);
+    const appPath = join(root, 'apps/certified-app/dql.app.json');
+
+    const certified = promoteAppForStakeholders(root, 'certified-app', { lifecycle: 'certified' });
+    expect(certified.ok).toBe(true);
+    const written = JSON.parse(readFileSync(appPath, 'utf-8'));
+    expect(written).toMatchObject({ lifecycle: 'certified', certifiedBy: expect.any(String), certifiedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
+    expect(written.certifiedBy.trim()).not.toBe('');
+    const listed = __test__.collectAppsList(root).find((entry) => entry.id === 'certified-app')!;
+    expect(listed).toMatchObject({ certification: 'certified', certifiedBy: written.certifiedBy, certifiedAt: written.certifiedAt, updatedAt: expect.stringMatching(/^\d{4}-/) });
+
+    const reviewed = promoteAppForStakeholders(root, 'certified-app', { lifecycle: 'review' });
+    expect(reviewed.ok).toBe(true);
+    const after = JSON.parse(readFileSync(appPath, 'utf-8'));
+    expect(after.lifecycle).toBe('review');
+    expect(after.certifiedBy).toBeUndefined();
+    expect(after.certifiedAt).toBeUndefined();
   });
 
   it('blocks shared publication while an app contains exploratory draft analysis', () => {
@@ -4817,6 +5240,146 @@ SELECT * FROM hidden_trace
   });
 });
 
+describe('Ask App proposals open in App Studio (design D9)', () => {
+  const revenueBlock = {
+    name: 'Total Revenue', domain: 'revenue', status: 'certified', tags: ['revenue', 'kpi'], description: 'Executive revenue KPI', chart: 'single_value',
+  };
+
+  it('opens the proposal as an App Studio draft with the kept data required, and writes no App files', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
+    const prompt = 'Build a revenue app for leadership and explain why revenue is changing.';
+    const session = await proposeAppAiBuild(root, { prompt, domain: 'revenue', owner: 'owner@local' });
+    expect(session.status).toBe('proposed');
+    const kept = session.proposal!.tiles.filter((tile) => !tile.error).map((tile) => tile.id);
+    expect(session.proposal!.gaps.length).toBeGreaterThan(0);
+
+    const opened = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/open-in-studio`, 'POST', {
+      selectedTileIds: kept,
+      expectedProposalHash: session.proposalHash,
+      appName: 'Leadership Revenue',
+    });
+    expect(opened.status).toBe(201);
+    const payload = opened.payload as { ok: true; draft: AppBuildDraft; sources: Array<{ title: string; kind: string; trust: string; reason: string }>; notCoveredYet: string[] };
+    const draft = payload.draft;
+    expect(draft).toMatchObject({
+      name: 'Leadership Revenue',
+      authoringMode: 'ai',
+      frame: expect.objectContaining({ goal: prompt }),
+    });
+    expect(draft).not.toHaveProperty('sourcePolicy');
+    expect(draft.pages[0]?.metadata.domain).toBe('revenue');
+    // The page is empty: App Studio builds the tiles after the Data step.
+    expect(draft.pages.every((page) => page.layout.items.length === 0)).toBe(true);
+    expect(draft.sources).toEqual([expect.objectContaining({ kind: 'block', trustState: 'certified', qualifiedIdentity: expect.stringContaining('Total Revenue') })]);
+    expect(payload.sources).toEqual([expect.objectContaining({ title: 'Total Revenue', trust: 'Certified', reason: expect.stringContaining('Ask picked it') })]);
+    // Ask's own gaps are not copied: App Studio plans again from the goal.
+    expect(payload.notCoveredYet).toEqual([]);
+    expect(draft.requirements).toEqual([]);
+
+    // Nothing reached the project; the draft is in the local App Studio store.
+    expect(existsSync(join(root, 'apps'))).toBe(false);
+    expect(getAppAiBuildSession(root, session.id)).toMatchObject({ status: 'ready', studioDraftId: draft.id });
+    const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
+    expect((listed.payload as { drafts: AppBuildDraft[] }).drafts.map((candidate) => candidate.id)).toContain(draft.id);
+
+    // The App Studio planner proposes the kept data (it is required) and
+    // finds what it does not cover itself.
+    const proposal = await invokeAppsApi(root, `/api/app-builds/${draft.id}/ai-proposals`, 'POST', {
+      prompt: draft.frame.goal,
+      expectedRevision: draft.revision,
+      proposalHash: draft.proposalHash,
+      selectedBlockIds: draft.sources.map((source) => source.id),
+      mode: 'add',
+    });
+    expect(proposal.status).toBe(201);
+    const operations = (proposal.payload as { proposal: { operations: Array<Record<string, any>> } }).proposal.operations;
+    expect(operations.some((operation) => operation.type === 'upsert_source' && operation.source.id === draft.sources[0]!.id)).toBe(true);
+    const requirements = operations.find((operation) => operation.type === 'set_requirements')!;
+    expect(requirements.requirements.length).toBeGreaterThan(0);
+
+    // Opening the same proposal again returns the same draft.
+    const again = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/open-in-studio`, 'POST', {
+      selectedTileIds: kept,
+      expectedProposalHash: session.proposalHash,
+    });
+    expect(again.status).toBe(200);
+    expect((again.payload as { draft: AppBuildDraft }).draft.id).toBe(draft.id);
+  });
+
+  it('lists AI-written SQL under Not covered yet, with no per-App data rule (T3)', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
+    const propose = () => proposeAppAiBuild(root, {
+      prompt: 'Build a revenue app and explain why revenue is changing.',
+      domain: 'revenue', owner: 'owner@local', mode: 'personal', exploreGaps: true, maxGeneratedTiles: 1,
+    }, {
+      generateGovernedAnswer: async (question) => ({
+        text: `Exploration for ${question}`,
+        sql: 'SELECT region, SUM(revenue) AS revenue FROM analytics.orders GROUP BY region',
+        suggestedViz: 'bar',
+        result: { columns: ['region', 'revenue'], rows: [{ region: 'NA', revenue: 100 }], rowCount: 1 },
+      } as never),
+    });
+
+    const session = await propose();
+    const draftSql = session.proposal!.tiles.find((tile) => tile.source === 'ai_generated' && !tile.error)!;
+    expect(draftSql).toBeTruthy();
+    const certified = session.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id);
+    const opened = await openAppAiBuildInStudio(root, session.id, {
+      selectedTileIds: [...certified, draftSql.id],
+      expectedProposalHash: session.proposalHash,
+    });
+    expect(opened.ok).toBe(true);
+    if (!opened.ok) return;
+    expect(opened.draft).not.toHaveProperty('sourcePolicy');
+    expect(opened.notCoveredYet).toContain(draftSql.question || draftSql.title);
+    // No AI-written SQL became an App tile, a draft source or a file.
+    expect(opened.draft.pages.flatMap((page) => page.layout.items)).toEqual([]);
+    expect(opened.draft.sources.some((source) => source.kind === 'review_dql' || source.kind === 'exploratory_sql')).toBe(false);
+    expect(existsSync(join(root, 'apps'))).toBe(false);
+    expect(existsSync(join(root, '.dql', 'local', 'app-builds', opened.draft.id))).toBe(false);
+    // App Studio keeps the question under "Not covered yet" when it plans pages.
+    const planned = await invokeAppsApi(root, `/api/app-builds/${opened.draft.id}/ai-proposals`, 'POST', {
+      prompt: opened.draft.frame.goal,
+      expectedRevision: opened.draft.revision,
+      proposalHash: opened.draft.proposalHash,
+      selectedBlockIds: opened.draft.sources.map((source) => source.id),
+      mode: 'add',
+    });
+    expect(planned.status).toBe(201);
+    const setRequirements = (planned.payload as { proposal: { operations: Array<Record<string, any>> } }).proposal.operations
+      .find((operation) => operation.type === 'set_requirements')!;
+    const carried = setRequirements.requirements.find((candidate: { question: string }) => candidate.question === (draftSql.question || draftSql.title));
+    expect(carried).toBeTruthy();
+    expect(setRequirements.coverage.find((candidate: { requirementId: string }) => candidate.requirementId === carried.id)?.status).toBe('gap');
+
+    // Not kept: the draft has no data rule either (T3).
+    const second = await propose();
+    // The saved queries Ask kept get their result fields read first (design D1).
+    const readSavedQueryFields = vi.fn(async (_sourceIds: string[]) => undefined);
+    const notKept = await openAppAiBuildInStudio(root, second.id, {
+      selectedTileIds: second.proposal!.tiles.filter((tile) => tile.certification === 'certified').map((tile) => tile.id),
+      expectedProposalHash: second.proposalHash,
+    }, { readSavedQueryFields });
+    expect(notKept.ok && notKept.draft.sourcePolicy).toBeUndefined();
+    expect(readSavedQueryFields).toHaveBeenCalledTimes(1);
+    expect(readSavedQueryFields.mock.calls[0]![0]).toEqual(notKept.ok ? notKept.draft.sources.map((source) => source.id) : []);
+  });
+
+  it('refuses a stale proposal and no longer serves the direct App write route', async () => {
+    const root = createProject();
+    writeBlock(root, 'revenue/total_revenue.dql', revenueBlock);
+    const session = await proposeAppAiBuild(root, { prompt: 'Build a revenue app for leadership.', domain: 'revenue', owner: 'owner@local' });
+    const ids = session.proposal!.tiles.map((tile) => tile.id);
+    const stale = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/open-in-studio`, 'POST', { selectedTileIds: ids, expectedProposalHash: 'wrong' });
+    expect(stale.status).toBe(409);
+    const commit = await invokeAppsApi(root, `/api/apps/ai-builds/${session.id}/commit`, 'POST', { selectedTileIds: ids, expectedProposalHash: session.proposalHash });
+    expect(commit.status).not.toBe(201);
+    expect(existsSync(join(root, 'apps'))).toBe(false);
+  });
+});
+
 function createProject(): string {
   const root = mkdtempSync(join(tmpdir(), 'dql-app-api-'));
   tempDirs.push(root);
@@ -5223,5 +5786,143 @@ describe('writeDashboard cross-app guard', () => {
     });
     expect(sameApp.ok).toBe(true);
     expect(readFileSync(join(root, 'apps', 'beta', 'dashboards', 'overview.dqld'), 'utf-8')).toContain('region');
+  });
+});
+
+describe('editing a published App keeps its saved queries and their receipts (F07)', () => {
+  const CERTIFIED_AT = '2026-10-15T12:00:00.000Z';
+  const certifiedBlock = (root: string, name: string, query: string) => {
+    writeDomainBlock(root, 'commerce', `${name}.dql`, {
+      name, domain: 'commerce', status: 'certified', tags: ['revenue'], description: `${name} for the review.`, chart: 'table', query,
+    });
+    const relPath = `domains/commerce/blocks/${name}.dql`;
+    const source = readFileSync(join(root, relPath), 'utf-8');
+    const companion = blockCompanionRelativePath(root, relPath)!;
+    mkdirSync(join(root, companion, '..'), { recursive: true });
+    writeFileSync(join(root, companion), [
+      `name: ${name}`,
+      `block: ${name}`,
+      'domain: commerce',
+      'reviewStatus: certified',
+      'certification:',
+      '  certifiedBy: analytics@jaffle.shop',
+      `  certifiedAt: '${CERTIFIED_AT}'`,
+      '  via: cli',
+      '  rules: oss',
+      `  sourceSha256: ${certifiedSourceSha256(source)}`,
+      '  checks:',
+      '    - run',
+      '    - tests',
+      '',
+    ].join('\n'));
+    return relPath;
+  };
+  /** A published App written before Studio: its tiles name saved queries by name only. */
+  const legacyApp = (root: string) => {
+    const appDir = join(root, 'apps', 'growth-review');
+    mkdirSync(join(appDir, 'dashboards'), { recursive: true });
+    writeFileSync(join(appDir, 'dql.app.json'), `${JSON.stringify({
+      version: 1, id: 'growth-review', name: 'Growth Review', domain: 'commerce', visibility: 'shared',
+      lifecycle: 'certified', owners: ['analytics@jaffle.shop'], homepage: { type: 'dashboard', id: 'overview' },
+    }, null, 2)}\n`);
+    writeFileSync(join(appDir, 'dashboards', 'overview.dqld'), `${JSON.stringify({
+      version: 1,
+      id: 'overview',
+      metadata: { title: 'Growth Review', domain: 'commerce', visibility: 'shared', lifecycle: 'certified' },
+      layout: {
+        kind: 'grid', cols: 12, rowHeight: 80,
+        items: [
+          { i: 'monthly', x: 0, y: 0, w: 6, h: 4, block: { blockId: 'monthly_revenue' }, viz: { type: 'table' }, title: 'Monthly revenue' },
+          { i: 'beverage', x: 6, y: 0, w: 6, h: 4, block: { blockId: 'beverage_revenue' }, viz: { type: 'table' }, title: 'Top beverage products' },
+        ],
+      },
+    }, null, 2)}\n`);
+  };
+  const editDraft = async (root: string): Promise<AppBuildDraft> => {
+    const created = await invokeAppsApi(root, '/api/app-builds', 'POST', { baseAppId: 'growth-review', authoringMode: 'manual', template: 'blank' });
+    expect(created.status, JSON.stringify(created.payload)).toBe(201);
+    return (created.payload as { draft: AppBuildDraft }).draft;
+  };
+  const receiptsFor = async (root: string, draft: AppBuildDraft) => {
+    const resolved = await invokeAppsApi(root, `/api/app-builds/${draft.id}/source-candidates`, 'POST', { sourceIds: draft.sources.map((source) => source.id), includeReviewRequired: true });
+    const items = (resolved.payload as { items: Array<{ sourceId: string; certification?: { by?: string; at?: string } }> }).items;
+    return new Map(items.map((item) => [item.sourceId, item.certification]));
+  };
+  const trustOf = (draft: AppBuildDraft, receipts: Map<string, unknown>) => appTrustAnswer({
+    pages: draft.pages as never,
+    sourceFor: (sourceId) => {
+      const source = draft.sources.find((candidate) => candidate.id === sourceId);
+      return source ? { ...source, certification: receipts.get(sourceId) as never } : undefined;
+    },
+  });
+
+  it('binds legacy saved-query tiles to the current catalog: certified stays certified, with no fix to make', async () => {
+    const root = createProject();
+    certifiedBlock(root, 'monthly_revenue', 'SELECT 1 AS revenue');
+    certifiedBlock(root, 'beverage_revenue', 'SELECT 2 AS revenue');
+    legacyApp(root);
+
+    const draft = await editDraft(root);
+    expect(draft.sources).toHaveLength(2);
+    for (const source of draft.sources) {
+      expect(source.id).toMatch(/^app:block:/);
+      expect(source).toMatchObject({ kind: 'block', lifecycle: 'certified', trustState: 'certified' });
+    }
+    const tiles = draft.pages[0]!.layout.items;
+    expect(new Set(tiles.map((tile) => tile.sourceId))).toEqual(new Set(draft.sources.map((source) => source.id)));
+    expect(tiles.every((tile) => tile.block && 'blockId' in tile.block)).toBe(true);
+    expect(draft.reviewTasks).toEqual([]);
+
+    const receipts = await receiptsFor(root, draft);
+    const trust = trustOf(draft, receipts);
+    expect(trust.text).toBe('All tiles certified');
+    // Who certified each and when (F03), never a bare "Certified".
+    for (const tile of trust.tiles) expect(tile.trust.byline).toMatch(/^Certified by Analytics \(jaffle\.shop\) · 15 Oct/);
+  });
+
+  it('a saved query changed outside ZLens is the only tile not certified, and says since when', async () => {
+    const root = createProject();
+    certifiedBlock(root, 'monthly_revenue', 'SELECT 1 AS revenue');
+    const beverage = certifiedBlock(root, 'beverage_revenue', 'SELECT 2 AS revenue');
+    legacyApp(root);
+    writeFileSync(join(root, beverage), readFileSync(join(root, beverage), 'utf-8').replace('SELECT 2 AS revenue', 'SELECT 2 * 1.01 AS revenue'));
+
+    const draft = await editDraft(root);
+    const changed = draft.sources.find((source) => source.sourceRef.includes('beverage_revenue'));
+    expect(changed).toMatchObject({ id: expect.stringMatching(/^app:block:/), lifecycle: 'pending_recertification', trustState: 'review_required' });
+    expect(draft.sources.find((source) => source.sourceRef.includes('monthly_revenue'))).toMatchObject({ lifecycle: 'certified' });
+    // Certify now resolves it: it is in the project, with who certified it before.
+    const receipts = await receiptsFor(root, draft);
+    expect(receipts.get(changed!.id)).toMatchObject({ by: 'analytics@jaffle.shop', at: CERTIFIED_AT });
+    const trust = trustOf(draft, receipts);
+    expect(trust.text).toBe('1 of 2 tiles certified');
+    const beverageTile = trust.tiles.find((tile) => tile.tileId === 'beverage')!;
+    expect(beverageTile.trust.label).toBe('Not certified yet');
+    expect(beverageTile.trust.detail).toMatch(/^Changed since it was certified on 15 Oct/);
+    expect(draft.reviewTasks).toEqual([]);
+  });
+
+  it('rebinds an older edit draft whose saved queries were left as placeholders nobody could certify', async () => {
+    const root = createProject();
+    certifiedBlock(root, 'monthly_revenue', 'SELECT 1 AS revenue');
+    certifiedBlock(root, 'beverage_revenue', 'SELECT 2 AS revenue');
+    legacyApp(root);
+    // What 0.2.4 stored: no catalog resolver, so "published:" placeholders and a fix to make.
+    const old = createStoredAppBuildDraft(root, { baseAppId: 'growth-review', authoringMode: 'manual' });
+    expect(old.sources.every((source) => source.id.startsWith('published:'))).toBe(true);
+    expect(old.reviewTasks.length).toBeGreaterThan(0);
+
+    const listed = await invokeAppsApi(root, '/api/app-builds', 'GET', {});
+    const rebound = (listed.payload as { drafts: AppBuildDraft[] }).drafts.find((draft) => draft.id === old.id)!;
+    expect(rebound.sources.map((source) => source.id).every((id) => id.startsWith('app:block:'))).toBe(true);
+    expect(rebound.sources.every((source) => source.lifecycle === 'certified')).toBe(true);
+    expect(rebound.reviewTasks).toEqual([]);
+    expect(rebound.revision).toBe(old.revision + 1);
+    expect(rebound.proposalHash).not.toBe(old.proposalHash);
+    // Stored: the next PATCH starts from the rebound revision.
+    const patched = await invokeAppsApi(root, `/api/app-builds/${old.id}`, 'PATCH', { expectedRevision: rebound.revision, expectedProposalHash: rebound.proposalHash, operations: [{ type: 'set_name', name: 'Growth Review v2' }] });
+    expect(patched.status, JSON.stringify(patched.payload)).toBe(200);
+    // Nothing to do for a draft without placeholders.
+    expect(rebindPublishedBlockPlaceholders(rebound, () => new Map())).toBeNull();
   });
 });

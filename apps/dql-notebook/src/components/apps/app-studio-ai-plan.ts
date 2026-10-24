@@ -1,4 +1,7 @@
 import type { AppBlockRecommendation, AppStudioAiProposal, AppStudioBuildDraft, AppStudioDraftOperation } from '../../api/client';
+import { sourceKindLabel, trustLabel } from './builder/app-data';
+import { KEYWORD_SUGGESTIONS_LABEL } from './app-studio-ai-voice';
+import { certifiedByLabel } from '@zlens/core/apps/reader-trust';
 
 export interface AppStudioAiPlanSummary {
   frame?: AppStudioBuildDraft['frame'];
@@ -12,6 +15,8 @@ export interface AppStudioAiPlanSummary {
     trustState: AppStudioBuildDraft['sources'][number]['trustState'];
     reviewStatus: AppStudioBuildDraft['sources'][number]['reviewStatus'];
     componentIds: string[];
+    /** Source capabilities, so the review can tell a Dataset from a saved query. */
+    capabilities?: AppStudioBuildDraft['sources'][number]['capabilities'];
     rationale?: string;
   }>;
 }
@@ -33,7 +38,8 @@ export function appStudioPlannerProvenanceLabel(
       : 'AI planner response';
   }
   if (provenance.mode === 'deterministic' && provenance.providerInvocation === 'not_attempted') {
-    return 'Deterministic planner fallback';
+    // The built-in keyword matcher, never called AI (design D4).
+    return KEYWORD_SUGGESTIONS_LABEL;
   }
   return undefined;
 }
@@ -56,12 +62,17 @@ export function appStudioProposalRequestSourceIds(
   return Array.from(new Set(sourceIds.map((sourceId) => sourceId.trim()).filter(Boolean)));
 }
 
+/**
+ * Adding data to AI's picks: select it when AI proposed it, else plan again
+ * with it required. Data nobody certified is added the same way (T3: no
+ * per-App data rule); `reviewRequired` and `sourcePolicy` are kept for older
+ * callers and ignored.
+ */
 export function appStudioProposalSourceAddMode(input: {
   alreadyProposed: boolean;
-  reviewRequired: boolean;
-  sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
+  reviewRequired?: boolean;
+  sourcePolicy?: AppStudioBuildDraft['sourcePolicy'];
 }): AppStudioProposalSourceAddMode {
-  if (input.reviewRequired && input.sourcePolicy === 'governed_only') return 'enable_review_and_replan';
   return input.alreadyProposed ? 'select_existing' : 'replan';
 }
 
@@ -74,7 +85,11 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
   const sourceOperations = proposal.operations
     .filter((operation): operation is Extract<AppStudioDraftOperation, { type: 'upsert_source' }> => operation.type === 'upsert_source')
     .map((operation) => operation.source);
+  // An add-mode proposal carries the page's existing tiles too; only the tiles
+  // it adds are proposed tiles ("3 tiles to add", never the page's own count).
+  const proposedTileIds = proposal.proposedTileIds ? new Set(proposal.proposedTileIds) : undefined;
   const addTile = (tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]) => {
+    if (proposedTileIds && !proposedTileIds.has(tile.i)) return;
     const blockRef = tile.block
       ? ('blockId' in tile.block ? tile.block.blockId : tile.block.ref)
       : undefined;
@@ -86,7 +101,7 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
       id: tile.i,
       title: tile.title || businessLabel(tile.i),
       visualization: businessLabel(tile.viz.type),
-      source: blockRef || semanticRef || draftRef || (tile.text ? 'Page content' : 'Governed source'),
+      source: blockRef || semanticRef || draftRef || (tile.text ? 'Page content' : 'Data source'),
       ...(sourceId ? { sourceId } : {}),
       ...(rationale ? { rationale } : {}),
     });
@@ -97,12 +112,13 @@ export function summarizeAppStudioAiPlan(proposal: AppStudioAiProposal): AppStud
     } else if (operation.type === 'upsert_source') {
       sources.set(operation.source.id, {
         id: operation.source.id,
-        label: businessLabel(operation.source.qualifiedIdentity || operation.source.sourceRef),
+        label: businessLabel(sourceDisplayName(operation.source.qualifiedIdentity || operation.source.sourceRef)),
         sourceRef: operation.source.sourceRef,
         kind: operation.source.kind,
         trustState: operation.source.trustState,
         reviewStatus: operation.source.reviewStatus,
         componentIds: [],
+        ...(operation.source.capabilities ? { capabilities: operation.source.capabilities } : {}),
       });
     } else if (operation.type === 'upsert_page') {
       pages.set(operation.page.id, { id: operation.page.id, title: operation.page.metadata.title });
@@ -211,6 +227,154 @@ export function availableAppStudioProposalSources(
   });
 }
 
+// ── The AI Data step and the tile review (design D3 AI path) ─────────────────
+
+/** One source the AI picked, as the Data step lists it. */
+export interface AppStudioAiPick {
+  id: string;
+  label: string;
+  /** Type and trust, then the domain when the catalog knows it: "Dataset · Certified · Commerce". */
+  meta: string;
+  certified: boolean;
+  /** The planner's own reason, carried on its tiles; never a new planner call. */
+  rationale?: string;
+  tileTitles: string[];
+}
+
+/** What the AI Data step shows for one proposal. */
+export interface AppStudioAiDataModel {
+  picked: AppStudioAiPick[];
+  /** Picks the author removed; they can be added back. */
+  suggestions: AppStudioAiPick[];
+  warnings: string[];
+  uncovered: Array<{ id: string; question: string }>;
+  clarifications: AppStudioAiProposal['clarifications'];
+}
+
+export function appStudioAiPickedHeading(count: number): string {
+  return `AI picked ${count} ${count === 1 ? 'source' : 'sources'}`;
+}
+
+export function appStudioBuildPagesLabel(count: number): string {
+  return `Build pages with ${count} ${count === 1 ? 'source' : 'sources'}`;
+}
+
+export function appStudioCreatesTilesLabel(count: number): string {
+  if (count === 0) return 'AI will use this data as context.';
+  return `Creates ${count} ${count === 1 ? 'tile' : 'tiles'}`;
+}
+
+/**
+ * Requirements the proposal could not cover with the data it found. A
+ * question asked twice (an Ask or MCP gap the planner finds again) is listed once.
+ */
+export function appStudioUncoveredRequirements(proposal: AppStudioAiProposal): Array<{ id: string; question: string }> {
+  const operation = proposal.operations.find((candidate) => candidate.type === 'set_requirements');
+  if (operation?.type !== 'set_requirements') return [];
+  const seen = new Set<string>();
+  return operation.requirements
+    .filter((requirement) => operation.coverage?.some((coverage) => coverage.requirementId === requirement.id && coverage.status === 'gap'))
+    .filter((requirement) => {
+      const key = requirement.question.trim().toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((requirement) => ({ id: requirement.id, question: requirement.question }));
+}
+
+/** Questions AI must have answered before it can build pages. */
+export function appStudioUnresolvedClarifications(proposal: AppStudioAiProposal): AppStudioAiProposal['clarifications'] {
+  return proposal.clarifications.filter((item) => item.required && !item.answerId);
+}
+
+/**
+ * The Data step's view of a proposal: the picked sources (selected), the
+ * removed ones (AI suggestions), the planner's notes and the gaps. `known`
+ * catalog records add each source's domain.
+ */
+export function appStudioAiDataModel(
+  proposal: AppStudioAiProposal,
+  summary: AppStudioAiPlanSummary,
+  selectedSourceIds: ReadonlySet<string>,
+  known: readonly AppBlockRecommendation[] = [],
+): AppStudioAiDataModel {
+  const domains = new Map<string, string>();
+  const receipts = new Map<string, NonNullable<AppBlockRecommendation['certification']>>();
+  for (const item of known) {
+    const id = item.sourceId ?? item.id;
+    if (item.domain && item.domain !== 'Unassigned' && !domains.has(id)) domains.set(id, item.domain);
+    if (item.certification && !receipts.has(id)) receipts.set(id, item.certification);
+  }
+  const pick = (source: AppStudioAiPlanSummary['sources'][number]): AppStudioAiPick => {
+    const certified = source.trustState === 'certified';
+    const domain = domains.get(source.id);
+    return {
+      id: source.id,
+      label: source.label,
+      // "Certified by Analytics (jaffle.shop) · 15 Oct" (F03): who and when, from the catalog's receipt.
+      meta: [sourceKindLabel(source.kind, source.capabilities), certified ? certifiedByLabel(receipts.get(source.id)) : trustLabel(source.trustState), domain ? businessLabel(domain) : ''].filter(Boolean).join(' · '),
+      certified,
+      ...(source.rationale ? { rationale: source.rationale } : {}),
+      tileTitles: summary.components.filter((component) => component.sourceId === source.id).map((component) => component.title),
+    };
+  };
+  return {
+    picked: summary.sources.filter((source) => selectedSourceIds.has(source.id)).map(pick),
+    suggestions: summary.sources.filter((source) => !selectedSourceIds.has(source.id)).map(pick),
+    warnings: proposal.warnings ?? [],
+    uncovered: appStudioUncoveredRequirements(proposal),
+    clarifications: appStudioUnresolvedClarifications(proposal),
+  };
+}
+
+/**
+ * The picked sources as draft sources, so the Add data browser can mark them
+ * Added while the proposal is open. Nothing is saved until pages are applied.
+ */
+export function appStudioPickedDraftSources(
+  proposal: AppStudioAiProposal,
+  selectedSourceIds: ReadonlySet<string>,
+): AppStudioBuildDraft['sources'] {
+  return proposal.operations.flatMap((operation) => (
+    operation.type === 'upsert_source' && selectedSourceIds.has(operation.source.id) ? [operation.source] : []
+  ));
+}
+
+/**
+ * Sources a canvas AI proposal (Ask AI, Draft with AI, App settings) brings
+ * that the App does not have yet. Applying adds them with their proposal's
+ * `upsert_source` operation, the same operation the Data step uses.
+ */
+export function appStudioNewDataSources(
+  summary: AppStudioAiPlanSummary,
+  selectedSourceIds: ReadonlySet<string>,
+  appSources: readonly Pick<AppStudioBuildDraft['sources'][number], 'id'>[],
+): AppStudioAiPlanSummary['sources'] {
+  const existing = new Set(appSources.map((source) => source.id));
+  return summary.sources.filter((source) => selectedSourceIds.has(source.id) && !existing.has(source.id) && source.kind !== 'text');
+}
+
+/**
+ * The one compose call that applies an AI proposal: the sources the author
+ * kept in the Data step and the proposed tiles they skipped on the canvas.
+ */
+export function appStudioAiComposeRequest(
+  draft: Pick<AppStudioBuildDraft, 'revision' | 'proposalHash'>,
+  proposalId: string,
+  selectedSourceIds: ReadonlySet<string>,
+  rejectedTileIds: ReadonlySet<string> = new Set(),
+): { mode: 'ai'; expectedRevision: number; expectedProposalHash: string; proposalId: string; selectedSourceIds: string[]; rejectedTileIds?: string[] } {
+  return {
+    mode: 'ai',
+    expectedRevision: draft.revision,
+    expectedProposalHash: draft.proposalHash,
+    proposalId,
+    selectedSourceIds: Array.from(selectedSourceIds),
+    ...(rejectedTileIds.size > 0 ? { rejectedTileIds: Array.from(rejectedTileIds) } : {}),
+  };
+}
+
 function sourceIdForTile(
   tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number],
   sources: AppStudioBuildDraft['sources'],
@@ -229,6 +393,16 @@ function sourceIdForTile(
     return sources.find((source) => ['review_block', 'review_dql', 'exploratory_sql'].includes(source.kind) && source.sourceRef === tile.draftAnalysis?.ref)?.id;
   }
   return undefined;
+}
+
+/**
+ * A qualified identity such as `orders::block::top_customers::<hash>` reads as
+ * its name, `top_customers`; other identities are shown as they are.
+ */
+function sourceDisplayName(identity: string): string {
+  const parts = identity.split('::').map((part) => part.trim()).filter(Boolean);
+  if (parts.length >= 3 && ['block', 'semantic', 'dataset', 'metric'].includes(parts[1]!.toLowerCase())) return parts[2]!;
+  return identity;
 }
 
 function businessLabel(value: string): string {

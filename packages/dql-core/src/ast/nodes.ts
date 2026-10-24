@@ -352,6 +352,10 @@ export interface BlockDeclNode extends BaseNode {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  /** Question aliases: other words people use for what the block answers. Ask matches on them. */
+  synonyms?: string[];
+  /** Business terms in the block's own words; unlike `terms` they need not name a declared term. */
+  primaryTerms?: string[];
   /**
    * v1.4 — block certification status declared in source. Recognised values
    * are 'draft' | 'review' | 'certified' | 'deprecated' | 'pending_recertification'

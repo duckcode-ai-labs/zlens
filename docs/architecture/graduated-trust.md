@@ -142,10 +142,19 @@ certification:
 ```
 
 The explicit Certify actions are Block Studio's **Certify**, the import
-candidate's **Certify**, App Studio's **Certify and use this data** (a Dataset
-from a table), and `zlens certify --from-draft`. Block Studio shows the receipt
+candidate's **Certify**, App Studio's **I vouch for this — certify** (a Dataset
+from a table, after **Check and use** left it Checked · Needs certifying), and `zlens certify --from-draft`. Block Studio shows the receipt
 as *Certified by … · when · via …*. Changing a block's status away from
 certified removes the receipt.
+
+A receipt certifies one exact source. When a certified `.dql` no longer
+matches its receipt's `sourceSha256` (it was edited outside ZLens, since
+saving an edit through ZLens writes a draft), the manifest reports the block
+as `pending_recertification` with a warning, so Ask, Apps, the knowledge graph
+and MCP stop serving it as certified; Block Studio shows **Recertify** with the
+reason, and `zlens verify` / `zlens certify` warn. Re-certifying writes a
+receipt for the new source. A block certified before receipts existed has no
+fingerprint to compare and stays certified.
 
 Certifying is the review, so it also removes the `review-required` lifecycle
 tag that SQL import, AI drafts and notebook research put on a draft (in the
@@ -181,7 +190,9 @@ every tile badge read the same value (`appTrustSummary` in `@zlens/core`).
 ran from a certified source and no App draft is pending; before the page runs,
 the badge says *Trust not checked yet* — a saved dashboard's own fields are
 never enough to claim certified. The tile and story vocabulary is the same:
-Certified, Governed, Needs review, Blocked.
+Certified, Not certified yet, Blocked (`READER_TRUST_LABELS`; a legacy
+`governed` tile reads Not certified yet). Ask's own label for an answer built
+from semantic metrics is From Metrics.
 
 An App's **lifecycle** (draft, in review, certified) is a separate axis. The
 App library card shows lifecycle only, worded *App draft* / *App in review* /

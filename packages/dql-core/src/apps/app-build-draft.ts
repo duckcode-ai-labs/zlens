@@ -10,7 +10,21 @@ import type { DatasetDescriptor } from '../datasets/descriptor.js';
 import type { MetricCapabilityContract } from '../contracts/analytical.js';
 
 export type AppBuildAuthoringMode = 'ai' | 'manual';
+/**
+ * @deprecated The per-App data rule ("Only certified data" / "Also allow data
+ * that needs review") is gone (T3). Old drafts keep the stored value; it is
+ * read and ignored. Every App can use every source, and trust is shown per
+ * tile. Publishing is gated only by the project setting
+ * `apps.requireCertifiedToPublish`.
+ */
 export type AppBuildSourcePolicy = 'governed_only' | 'include_review_required';
+
+/**
+ * The source policy every catalog lookup for an App uses since the per-App
+ * rule is gone (T3): certified and not-certified sources are both usable,
+ * certified first. Deprecated sources stay out.
+ */
+export const APP_SOURCE_POLICY: AppBuildSourcePolicy = 'include_review_required';
 export type AppBuildTemplateId = 'executive_brief' | 'operational_dashboard' | 'investigation' | 'blank';
 
 export interface AppBuildClarification {
@@ -117,6 +131,12 @@ export type AppBuildDraftSource = {
   capabilities?: AppBuildSourceCapabilities;
   trustState: 'certified' | 'review_required' | 'draft_ready';
   reviewStatus: 'not_required' | 'required' | 'approved';
+  /**
+   * Checked, not certified yet (design Q1): a field Dataset ZLens checked
+   * that nobody certified yet. The App API sets it from the current catalog,
+   * never from a browser. Readers see "Not certified yet" on its tiles.
+   */
+  checked?: boolean;
 };
 
 export interface AppBuildReviewTask {
@@ -167,7 +187,8 @@ export interface AppBuildDraft {
   proposalHash: string;
   authoringMode: AppBuildAuthoringMode;
   template: AppBuildTemplateId;
-  sourcePolicy: AppBuildSourcePolicy;
+  /** @deprecated Read and ignored (T3); never written for new Apps. */
+  sourcePolicy?: AppBuildSourcePolicy;
   state: 'local_draft' | 'clarification_required' | 'preflight_ready' | 'project_published';
   frame: AppBuildFrame;
   requirements: AppBuildRequirement[];
@@ -189,6 +210,7 @@ export type AppBuildDraftOperation =
   | { type: 'set_name'; name: string }
   | { type: 'set_template'; template: AppBuildTemplateId }
   | { type: 'set_frame'; frame: AppBuildFrame }
+  /** @deprecated Accepted from older clients and ignored (T3). */
   | { type: 'set_source_policy'; sourcePolicy: AppBuildSourcePolicy }
   | { type: 'set_requirements'; requirements: AppBuildRequirement[]; coverage?: AppBuildRequirementCoverage[] }
   | { type: 'set_coverage'; coverage: AppBuildRequirementCoverage[] }
@@ -219,6 +241,23 @@ export type AppBuildDraftOperation =
    */
   | { type: 'clear_preview_receipt'; pageId: string; expectedReceiptId?: string };
 
+/** The longest App name drawn from a description; the author can rename it. */
+export const APP_NAME_FROM_GOAL_MAX = 60;
+
+/**
+ * An App name from what the App is for: the first line of the description,
+ * at most 60 characters, cut at a word where it can be. A whole paragraph is
+ * not a name.
+ */
+export function appNameFromGoal(goal: string | undefined | null, max = APP_NAME_FROM_GOAL_MAX): string {
+  const firstLine = String(goal ?? '').split(/\r?\n/).map((line) => line.replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  if (firstLine.length <= max) return firstLine;
+  const cut = firstLine.slice(0, max + 1);
+  const atWord = cut.lastIndexOf(' ');
+  const name = (atWord >= Math.floor(max / 2) ? cut.slice(0, atWord) : firstLine.slice(0, max)).replace(/[\s,;:.\-–—]+$/, '');
+  return name;
+}
+
 export function createAppBuildDraft(input: {
   id: string;
   appId: string;
@@ -226,6 +265,7 @@ export function createAppBuildDraft(input: {
   baseApp?: AppBuildDraft['baseApp'];
   authoringMode: AppBuildAuthoringMode;
   template?: AppBuildTemplateId;
+  /** @deprecated Ignored (T3): new Apps have no per-App data rule. */
   sourcePolicy?: AppBuildSourcePolicy;
   frame: AppBuildFrame;
   requirements?: AppBuildRequirement[];
@@ -242,12 +282,11 @@ export function createAppBuildDraft(input: {
     version: 3 as const,
     id: input.id,
     appId: input.appId,
-    name: input.name?.trim() || input.frame.goal.trim() || input.appId,
+    name: input.name?.trim() || appNameFromGoal(input.frame.goal) || input.appId,
     ...(input.baseApp ? { baseApp: input.baseApp } : {}),
     revision: 1,
     authoringMode: input.authoringMode,
     template: input.template ?? 'blank',
-    sourcePolicy: input.sourcePolicy ?? 'governed_only',
     state: needsClarification ? 'clarification_required' as const : 'local_draft' as const,
     frame: input.frame,
     requirements: input.requirements ?? [],
@@ -260,6 +299,44 @@ export function createAppBuildDraft(input: {
   };
   assertAppBuildDraftPolicy(draftWithoutHash);
   return { ...draftWithoutHash, proposalHash: appBuildDraftHash(draftWithoutHash) };
+}
+
+/** A new local App Build Draft id, in the one format every entry point uses. */
+export function newAppBuildDraftId(now = Date.now()): string {
+  return `build_${now}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * The empty first page of a new local App Build Draft. App Studio, Ask and
+ * MCP all start from this page; its domain is the App's domain.
+ */
+export function createBlankAppBuildPage(input: {
+  name: string;
+  goal?: string;
+  domain?: string;
+  audience?: string;
+}): DashboardDocument {
+  const items: DashboardGridItem[] = [];
+  return {
+    version: 2,
+    id: 'overview',
+    metadata: {
+      title: 'Overview',
+      description: input.goal?.trim() || `Local draft canvas for ${input.name}`,
+      domain: input.domain?.trim() || 'general',
+      audience: input.audience?.trim() || 'stakeholders',
+      visibility: 'private',
+      lifecycle: 'draft',
+    },
+    layout: {
+      kind: 'grid', cols: 12, rowHeight: 80, items,
+      responsive: {
+        wide: { kind: 'grid', cols: 12, rowHeight: 80, items },
+        medium: { kind: 'grid', cols: 6, rowHeight: 80, items },
+        narrow: { kind: 'grid', cols: 1, rowHeight: 80, items },
+      },
+    },
+  };
 }
 
 export function applyAppBuildDraftOperations(
@@ -399,7 +476,8 @@ function applyOperation(draft: AppBuildDraft, operation: AppBuildDraftOperation)
     }
     case 'set_template': return { ...draft, template: operation.template };
     case 'set_frame': return { ...draft, frame: operation.frame };
-    case 'set_source_policy': return { ...draft, sourcePolicy: operation.sourcePolicy };
+    // The per-App data rule is gone (T3): an older client's change is ignored.
+    case 'set_source_policy': return draft;
     case 'set_requirements': return { ...draft, requirements: operation.requirements, coverage: operation.coverage ?? draft.coverage };
     case 'set_coverage': return { ...draft, coverage: operation.coverage };
     case 'upsert_source': return { ...draft, sources: upsertById(draft.sources, operation.source) };
@@ -699,14 +777,6 @@ function assertAppBuildDraftPolicy(draft: Omit<AppBuildDraft, 'proposalHash'> | 
         }
       }
     }
-  }
-  if (draft.sourcePolicy === 'governed_only') {
-    const reviewSource = draft.sources.find((source) =>
-      (source.kind === 'block' && source.trustState !== 'certified')
-      || source.kind === 'review_block'
-      || source.kind === 'review_dql'
-      || source.kind === 'exploratory_sql');
-    if (reviewSource) throw new Error(`Source ${reviewSource.id} requires include_review_required policy`);
   }
 }
 

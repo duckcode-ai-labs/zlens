@@ -349,7 +349,7 @@ describe('Dataset chart answer presentation (APP-066)', () => {
   });
 });
 
-describe('Build Brief: tiles the commit will not build', () => {
+describe('Build Brief: tiles App Studio will not build', () => {
   const proposal = (target: 'personal' | 'shared_project', tiles: Array<Partial<AppBuildProposalTile>>) => ({
     intent: { target, initialVisibility: 'private' as const },
     tiles: tiles.map((tile, index) => ({
@@ -362,22 +362,20 @@ describe('Build Brief: tiles the commit will not build', () => {
   } as unknown as AppBuildProposal);
   const all = (p: AppBuildProposal) => new Set(p.tiles.map((tile) => tile.id));
 
-  it('flags an AI tile with no query, which becomes an appendix question rather than a tile', () => {
+  it('lists an AI tile with no query under Not covered yet rather than as a tile', () => {
     const p = proposal('personal', [{ title: 'What is the decision story behind this?' }]);
     const [first, ...rest] = unbuildableSelectedTiles(p, all(p));
     expect(rest).toEqual([]);
     expect(first?.title).toBe('What is the decision story behind this?');
     expect(first?.reason).toMatch(/nothing to show/i);
+    expect(first?.reason).toMatch(/Not covered yet/);
   });
 
-  it('flags exploratory SQL in a Shared Project and names the way out', () => {
-    const p = proposal('shared_project', [{ title: 'Revenue by region', sql: 'select 1' }]);
-    expect(unbuildableSelectedTiles(p, all(p))[0]?.reason).toMatch(/Personal Draft/);
-  });
-
-  it('accepts the same exploratory tile in a Personal Draft', () => {
-    const p = proposal('personal', [{ title: 'Revenue by region', sql: 'select 1' }]);
-    expect(unbuildableSelectedTiles(p, all(p))).toEqual([]);
+  it('never adds Draft SQL to an App, in a Personal Draft or a Shared Project, and names the way forward', () => {
+    for (const target of ['personal', 'shared_project'] as const) {
+      const p = proposal(target, [{ title: 'Revenue by region', sql: 'select 1' }]);
+      expect(unbuildableSelectedTiles(p, all(p))[0]?.reason).toMatch(/Draft SQL is not added to an App.*Not covered yet.*draft DQL/);
+    }
   });
 
   it('never flags a certified block, and never flags a tile the author deselected', () => {
@@ -530,12 +528,12 @@ describe('the app header badge is the one aggregate page trust, from the current
     expect(rollup).toMatchObject({ certified: 0, total: 1, allCertified: false, state: 'review', label: '0 of 1 tile certified' });
   });
 
-  it('says All data certified only when every data tile ran from a certified source and no App draft is pending', () => {
+  it('says All tiles certified only when every data tile ran from a certified source and no App change is pending (T2)', () => {
     const items = [tile('a', { block: { blockId: 'b1' } }), tile('b', { block: { blockId: 'b2' } }), tile('c', { text: { markdown: 'Summary' } })];
     const certifiedRun = [ran('a', { certificationStatus: 'certified' }), ran('b', { trustState: 'certified' } as never)];
-    expect(appCertificationRollup(items, 0, certifiedRun)).toMatchObject({ certified: 2, total: 2, allCertified: true, label: 'All data certified' });
-    // A pending App draft is a review state of its own.
-    expect(appCertificationRollup(items, 1, certifiedRun)).toMatchObject({ allCertified: false, label: 'All 2 tiles certified · 1 draft pending' });
+    expect(appCertificationRollup(items, 0, certifiedRun)).toMatchObject({ certified: 2, total: 2, allCertified: true, label: 'All tiles certified' });
+    // A pending App change is named as one, never as a trust word.
+    expect(appCertificationRollup(items, 1, certifiedRun)).toMatchObject({ allCertified: false, label: 'All tiles certified · 1 unpublished change' });
     // One tile that is not certified is enough.
     const mixed = [ran('a', { certificationStatus: 'certified' }), ran('b', { trustState: 'review_required' } as never)];
     expect(appCertificationRollup(items, 0, mixed)).toMatchObject({ certified: 1, total: 2, allCertified: false, state: 'partial', label: '1 of 2 tiles certified' });
@@ -546,9 +544,10 @@ describe('the app header badge is the one aggregate page trust, from the current
     expect(appCertificationRollup(pinned, 0, [ran('p', { aiPin: { certification: 'review_required' } } as never)]).allCertified).toBe(false);
   });
 
-  it('labels the library card as App lifecycle, not data trust', () => {
-    expect(appLifecycleLabel('draft', false, 0)).toBe('App draft');
-    expect(appLifecycleLabel('review', false, 2)).toBe('App in review · 2 changes pending');
-    expect(appLifecycleLabel(undefined, true, 0)).toBe('App certified');
+  it('labels a library card with no stored count in the two words, never "App certified" (T2)', () => {
+    expect(appLifecycleLabel('draft', false, 0)).toBe('Not certified yet');
+    expect(appLifecycleLabel('review', false, 2)).toBe('Not certified yet · 2 unpublished changes');
+    expect(appLifecycleLabel(undefined, true, 0)).toBe('All tiles certified');
+    expect(appLifecycleLabel('deprecated', false, 0)).toBe('Retired');
   });
 });

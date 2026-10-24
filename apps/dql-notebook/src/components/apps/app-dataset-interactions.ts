@@ -6,6 +6,7 @@ import {
   type TileQuery,
 } from '@zlens/core/apps/tile-query';
 import type { DatasetDescriptor, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
+import { sourceDisplayName } from './source-names';
 import type {
   DashboardDatasetCrossFilter,
   DashboardDatasetHierarchyDrill,
@@ -207,11 +208,11 @@ export function buildDatasetCrossFilter(
   options: { exclude?: boolean } = {},
 ): { crossFilter?: DashboardDatasetCrossFilter; error?: string } {
   if (!tile.query || !tile.sourceId || !tile.sourceRevision) {
-    return { error: 'This result is not backed by a source-qualified Dataset tile.' };
+    return { error: 'This result is not backed by a source-qualified tile.' };
   }
   const output = tileQueryOutputAliases(tile.query)
     .find((candidate) => candidate.kind === 'dimension' && candidate.alias === field);
-  if (!output) return { error: `“${field}” is not a selectable Dataset dimension on this tile.` };
+  if (!output) return { error: `“${field}” is not a selectable dimension on this tile.` };
   const mappings = page.interactions?.crossFilter?.mappings.filter((mapping) => (
     mapping.fromTileId === tile.i && mapping.fromField === output.alias
   )) ?? [];
@@ -219,9 +220,9 @@ export function buildDatasetCrossFilter(
   // same Dataset and the same field (RFC 0009 step 6a). A period is not a value.
   const own = tile.query.dimensions.some((dimension) => !dimension.timeGrain && (dimension.alias ?? dimension.field) === output.alias)
     && Boolean(ownDatasetBinding(page, tile));
-  if (mappings.length === 0 && !own) return { error: `No explicit Dataset mapping is configured for ${field}.` };
+  if (mappings.length === 0 && !own) return { error: `No filter link is set up for ${field}.` };
   const unknownTarget = mappings.find((mapping) => !page.datasets?.some((dataset) => dataset.id === mapping.toDataset));
-  if (unknownTarget) return { error: `The mapping for ${field} refers to a Dataset that is no longer on this page.` };
+  if (unknownTarget) return { error: `The mapping for ${field} refers to data that is no longer on this page.` };
   const selected = uniqueDatasetMarkValues(values);
   if (selected.length === 0) return { error: `Select a concrete ${field} value to filter mapped tiles.` };
   return {
@@ -346,7 +347,8 @@ export function proposeDatasetCrossFilterLinks(input: {
       ));
       if (!descriptor || !target) continue;
       mappings.push({ fromTileId: tile.i, fromField: alias, toDataset: binding.id, toField: target.name });
-      targetLabels.push(descriptor.label);
+      // "Beverage Revenue By Product", never the saved query's id (new-user round 2, problem 9).
+      targetLabels.push(sourceDisplayName(descriptor.id, descriptor.label));
     }
     if (mappings.length) return { fromField: alias, fieldLabel: field.name, mappings, targetLabels };
   }

@@ -188,8 +188,24 @@ describe('top-N results without a rank column', () => {
       source: { sql: 'SELECT team, SUM(pts) AS points FROM games GROUP BY team ORDER BY points DESC', title: 'Points by team' },
     });
     // The SQL says it is the whole population, so five sorted rows are not second-guessed.
-    expect(sourced.ordering).toEqual({ kind: 'complete', reason: 'sql' });
+    expect(sourced.ordering).toEqual({ kind: 'complete', reason: 'sql', orderColumn: 'points', direction: 'desc' });
     expect(sourced.ranked).toBe(false);
     expect(sourced.limited).toBe(false);
+  });
+
+  it('a whole table sorted by one measure is summarised on that measure, not the first numeric column (sample "Customer lifetime profiles")', () => {
+    const rows = [
+      { customer_name: 'Amy Spend', count_lifetime_orders: 40, lifetime_spend: 900 },
+      { customer_name: 'Bo Middle', count_lifetime_orders: 12, lifetime_spend: 500 },
+      { customer_name: 'Melissa Lopez', count_lifetime_orders: 231, lifetime_spend: 300 },
+    ];
+    const selection = selectResultMeasures({
+      columns: ['customer_name', 'count_lifetime_orders', 'lifetime_spend'],
+      rows,
+      source: { sql: 'SELECT customer_name, count_lifetime_orders, lifetime_spend FROM dev.customers ORDER BY lifetime_spend DESC, customer_name' },
+    });
+    expect(selection.ordering).toMatchObject({ kind: 'complete', orderColumn: 'lifetime_spend', direction: 'desc' });
+    expect(selection.primary).toBe('lifetime_spend');
+    expect(resultLeaderRow({ rows }, selection)?.customer_name).toBe('Amy Spend');
   });
 });

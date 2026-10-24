@@ -13,24 +13,25 @@ test('Guided Setup: dbt project', async ({ page, notes }) => {
   await page.goto(baseUrl());
   const setup = page.getByRole('dialog', { name: 'Guided Setup' });
   await expect(setup.getByRole('heading', { name: 'Where does your data model live?' })).toBeVisible({ timeout: 60_000 });
-  // The sample is already a ZLens project on a dbt project: dbt project is selected.
-  await expect(setup.getByRole('radio', { name: 'dbt project' })).toBeChecked();
-  await expect(setup.getByText('dbt project ready').first()).toBeVisible();
-  await setup.getByRole('button', { name: 'Preview', exact: true }).click();
-  await expect(setup.getByText(/Nothing has changed yet/).first()).toBeVisible({ timeout: 120_000 });
-  await setup.getByRole('button', { name: 'Apply project', exact: true }).click();
-  const next = setup.getByRole('button', { name: /Continue to database/ });
-  await expect(next).toBeEnabled({ timeout: 120_000 });
-  await next.click();
+  // The sample is already a ZLens project on a built dbt project: it opens as
+  // an existing project, never as "dbt project missing" (Codex F01).
+  await expect(setup.getByRole('radio', { name: /Open an existing ZLens project/ })).toBeChecked();
+  await expect(setup.getByText(/already sets up the data model:\s*dbt project/).first()).toBeVisible();
+  await expect(setup.getByText('dbt project missing')).toHaveCount(0);
+  await setup.getByRole('button', { name: /Continue to credentials/ }).click();
 
   await expect(setup.getByText(/DuckDB · configured/).first()).toBeVisible({ timeout: 60_000 });
   await expect(setup.getByText(/Test passed/).first()).toBeVisible({ timeout: 60_000 });
+  // The dbt refresh is the step's action; extra schemas wait under Advanced.
+  await setup.getByRole('button', { name: 'Refresh dbt data', exact: true }).click();
+  await expect(setup.getByText(/dbt data refreshed/).first()).toBeVisible({ timeout: 120_000 });
+  await expect(setup.getByText('Find available databases & schemas')).toBeHidden();
   await setup.getByRole('button', { name: /Continue to optional AI/ }).click();
   // Step 3 is optional; the gate sets the provider in Settings (next checks).
   await setup.getByRole('button', { name: 'Skip AI for now' }).click();
   await setup.getByRole('button', { name: /Finish setup/ }).click();
   await expect(setup).toBeHidden({ timeout: 30_000 });
-  notes.push('Preview → Apply project → DuckDB · configured, Test passed → Finish setup');
+  notes.push('Open an existing ZLens project → DuckDB · configured, Test passed → Refresh dbt data → Finish setup');
 });
 
 test('Notebook: first query from the quickstart', async ({ page, notes }) => {
@@ -61,12 +62,12 @@ test('App: Jaffle Growth Review renders with its trust labels', async ({ page, n
   await openWorkbench(page);
   await openRail(page, 'Apps');
   await page.getByText('Jaffle Growth Review').first().click();
-  await expect(page.getByText(/ALL DATA CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
-  await expect(page.getByText(/All 4 tiles certified/).first()).toBeVisible();
+  await expect(page.getByText(/ALL TILES CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
+  await expect(page.getByText(/All tiles certified/).first()).toBeVisible();
   // No tile on an all-certified page may say it needs review or failed.
   const body = await page.locator('main').first().innerText();
-  expect(body).not.toMatch(/Needs review|AI-drafted|Couldn.t run/);
-  notes.push('ALL DATA CERTIFIED; All 4 tiles certified; no review/failed label on the page');
+  expect(body).not.toMatch(/Needs review|Not certified yet|AI-drafted|Couldn.t run/);
+  notes.push('All tiles certified (header and trust line); no Not certified yet/failed label on the page');
 });
 
 test('Lineage: monthly_revenue from the dbt model to the App', async ({ page, notes }) => {
@@ -78,8 +79,8 @@ test('Lineage: monthly_revenue from the dbt model to the App', async ({ page, no
   await expect(nodes.filter({ hasText: 'monthly_revenue' }).first()).toBeVisible({ timeout: 60_000 });
   const labels = (await nodes.allInnerTexts()).map((label) => label.replace(/\s+/g, ' ').trim());
   notes.push(`nodes: ${labels.join(' | ')}`);
-  // The chain the quickstart promises: dbt source → dbt model → certified block → App.
-  for (const expected of [/^raw_orders DBT SOURCE/i, /^orders DBT MODEL/i, /^monthly_revenue DQL BLOCK/i, /^Jaffle Growth Review APP/i]) {
+  // The chain the quickstart promises: dbt source → dbt model → certified block (a "Saved query" node since #165) → App.
+  for (const expected of [/^raw_orders DBT SOURCE/i, /^orders DBT MODEL/i, /^monthly_revenue SAVED QUERY/i, /^Jaffle Growth Review APP/i]) {
     expect(labels.some((label) => expected.test(label)), `a lineage node matching ${expected}`).toBe(true);
   }
   notes.push(`footer: ${(await page.getByText(/End-to-end lineage of monthly_revenue/).first().innerText()).trim()}`);
@@ -110,7 +111,7 @@ for (const question of ['How has revenue changed by month?', 'What is beverage r
     await openWorkbench(page);
     await openRail(page, 'Apps');
     await page.getByText('Jaffle Growth Review').first().click();
-    await expect(page.getByText(/ALL DATA CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
+    await expect(page.getByText(/ALL TILES CERTIFIED/i).first()).toBeVisible({ timeout: 120_000 });
     const box = page.getByPlaceholder(/Ask about Jaffle Growth Review/);
     const answer = await askAndWait(page, box, question, page.getByRole('button', { name: 'Ask', exact: true }).last());
     const text = await answer.innerText();

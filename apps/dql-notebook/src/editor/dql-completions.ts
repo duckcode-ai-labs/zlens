@@ -31,7 +31,7 @@ const BLOCK_FIELDS: Array<{ name: string; detail: string; snippet?: string }> = 
   { name: 'parameterPolicy', detail: 'per-parameter reuse policy', snippet: 'parameterPolicy {\n    $0\n  }' },
   { name: 'identifiers', detail: 'identifier columns' },
   { name: 'synonyms', detail: 'alternate names' },
-  { name: 'primaryTerms', detail: 'governed terms this block defines' },
+  { name: 'primaryTerms', detail: 'business terms (free text)' },
   { name: 'replacementFor', detail: 'block this supersedes' },
   { name: 'boundedContext', detail: 'bounded context' },
   { name: 'businessOwner', detail: 'business (non-technical) owner' },

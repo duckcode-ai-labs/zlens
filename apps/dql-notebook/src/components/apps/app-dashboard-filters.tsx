@@ -3,6 +3,11 @@ import { CalendarDays, ChevronDown, Hash, List, ToggleLeft, Type } from 'lucide-
 import { api, type DashboardDocumentResponse } from '../../api/client';
 import { defaultParameterFilterValue, type DashboardFilterCandidate, type DashboardFilterCoverage } from './dashboard-filters';
 import { formatBusinessLabel } from './app-text';
+import { describeDashboardDateRange } from '@zlens/core/apps/filter-dates';
+import { studioFilterValue } from './app-studio-filter-values';
+import { plainSourceText } from './source-names';
+import { DateRangePresetSelect, filterTimezone } from './date-range-presets';
+import { filterValueCapHint, loadBlockFilterValues, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
 
 /**
  * The App dashboard filter row: the controls, their value coercion, and the
@@ -67,8 +72,10 @@ export function DashboardFilterControls({
  *
  * This is the viewer's control, not the author's — the same move as adding an
  * input to an Ask or Notebook result, at page scale. Columns come from the
- * server's parse of each tile's executed SQL, and values from the rows those
- * tiles actually returned, so nothing here is guessed in the browser.
+ * server's parse of each tile's executed SQL. Values come from the server:
+ * the column's first page, and typed text searches every value, as for a
+ * declared filter. Only a column the server cannot list falls back to the
+ * values the tiles returned (Codex F02: 24 sampled names hid most customers).
  *
  * Choosing one is session-only. A viewer exploring a number must never rewrite
  * the page's saved scope for everyone; an author promotes a choice explicitly
@@ -86,8 +93,24 @@ export function DashboardFilterPicker({
   const [column, setColumn] = useState('');
   const [value, setValue] = useState('');
   const active = candidates.find((candidate) => candidate.column === column);
+  const valueSource = active?.valueSource;
+  // The column's values from the server: null while loading, 'failed' when it cannot list them.
+  const [serverList, setServerList] = useState<{ key: string; list: FilterValueList | 'failed' } | null>(null);
+  const sourceKey = valueSource ? `${valueSource.blockId}\u0000${valueSource.column}` : '';
+  useEffect(() => {
+    if (!valueSource) return;
+    let cancelled = false;
+    void loadBlockFilterValues(valueSource).then((list) => {
+      if (!cancelled) setServerList({ key: sourceKey, list: list && list.values.length > 0 ? list : 'failed' });
+    }).catch(() => { if (!cancelled) setServerList({ key: sourceKey, list: 'failed' }); });
+    return () => { cancelled = true; };
+  }, [sourceKey]);
   if (candidates.length === 0) return null;
   const coverage = active ? coverageFor(active.column) : null;
+  const loaded = valueSource && serverList?.key === sourceKey ? serverList.list : null;
+  const loadingValues = Boolean(valueSource) && !loaded;
+  const searchable = loaded && loaded !== 'failed' ? loaded : null;
+  const label = active ? formatBusinessLabel(active.column) : '';
   return (
     <div className="dql-app-filter-picker">
       <select
@@ -104,8 +127,20 @@ export function DashboardFilterPicker({
       </select>
       {active ? (
         <>
-          {active.sampleValues.length > 0 ? (
-            <select aria-label={`${formatBusinessLabel(active.column)} value`} value={value} onChange={(event) => setValue(event.target.value)}>
+          {searchable && valueSource ? (
+            <SearchableFilterSelect
+              icon={<List size={13} />}
+              label={label}
+              value={value}
+              list={searchable}
+              source={valueSource}
+              allowAll={false}
+              onChange={setValue}
+            />
+          ) : loadingValues ? (
+            <span className="dql-app-filter-coverage-hint" role="status">Loading {label.toLowerCase()} values…</span>
+          ) : active.sampleValues.length > 0 ? (
+            <select aria-label={`${label} value`} value={value} onChange={(event) => setValue(event.target.value)}>
               <option value="">Choose a value…</option>
               {active.sampleValues.map((sample) => <option key={sample} value={sample}>{sample}</option>)}
             </select>
@@ -166,7 +201,7 @@ export function DashboardFilterEditor({
             <span
               className={`dql-app-filter-coverage${partial ? ' is-partial' : ''}${none ? ' is-none' : ''}`}
               title={coverage.unaffected.length
-                ? `Not applied to: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${tile.reason}` : ''}`).join('; ')}`
+                ? `Not applied to: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${plainSourceText(tile.reason)}` : ''}`).join('; ')}`
                 : 'Applies to every tile on this page.'}
             >
               {none
@@ -237,13 +272,18 @@ function DashboardFilterInput({
   const column = filter.bindsTo || filter.id;
   const wantsOptions = (filter.type === 'string' || filter.type === 'select' || filter.type === 'multiselect' || filter.type === 'search') && Boolean(sourceBlockId) && !filter.options?.length;
   const [fetchedOptions, setFetchedOptions] = useState<string[] | null>(null);
+  // A Dataset field's first page of values, and how many exist: a capped
+  // list is searched on the server (every value), never only the page.
+  const [datasetList, setDatasetList] = useState<FilterValueList | null>(null);
   const wantsDatasetOptions = (filter.type === 'select' || filter.type === 'multiselect' || filter.type === 'string')
     && Boolean(datasetSource) && !filter.options?.length;
   useEffect(() => {
     if (!wantsDatasetOptions || !datasetSource) return;
     let cancelled = false;
     void api.datasetFieldValues(datasetSource.sourceId, datasetSource.field).then((res) => {
-      if (!cancelled) setFetchedOptions(res.ok ? res.values : []);
+      if (cancelled) return;
+      setFetchedOptions(res.ok ? res.values : []);
+      setDatasetList(res.ok ? { values: res.values, truncated: res.truncated, ...(res.valueCount !== undefined ? { valueCount: res.valueCount } : {}), ...(res.valueCountCapped ? { valueCountCapped: true } : {}) } : null);
     });
     return () => { cancelled = true; };
   }, [datasetSource?.sourceId, datasetSource?.field, wantsDatasetOptions]);
@@ -255,6 +295,18 @@ function DashboardFilterInput({
     });
     return () => { cancelled = true; };
   }, [sourceBlockId, column, wantsOptions]);
+  if (filter.type !== 'multiselect' && datasetSource && datasetList && datasetList.values.length > 0) {
+    return (
+      <SearchableFilterSelect
+        icon={filterIconForDashboardFilter(filter)}
+        label={label}
+        value={typeof value === 'string' ? value : value === undefined || value === null ? '' : String(value)}
+        list={datasetList}
+        source={datasetSource}
+        onChange={onChange}
+      />
+    );
+  }
   if (filter.type !== 'multiselect' && fetchedOptions && fetchedOptions.length > 0) {
     return (
       <FilterSelect
@@ -278,7 +330,9 @@ function DashboardFilterInput({
     );
   }
   if (filter.type === 'multiselect') {
-    const selected = Array.isArray(value) ? value.map(String) : [];
+    // A single name is still a selection: showing "All" for it would hide a
+    // filter that narrows the tiles.
+    const selected = Array.isArray(value) ? value.map(String) : typeof value === 'string' && value ? [value] : [];
     const options = (filter.options ?? fetchedOptions ?? []).map(String);
     return <MultiSelectFilterChip label={label} icon={filterIconForDashboardFilter(filter)} options={options} selected={selected} onChange={onChange} />;
   }
@@ -314,16 +368,20 @@ function DashboardFilterInput({
       : {};
     const start = typeof range.start === 'string' ? range.start : '';
     const end = typeof range.end === 'string' ? range.end : '';
-    // Emit a range ONLY when both ends are set (runtime needs both for BETWEEN);
-    // a partial range is sent as undefined so the filter is simply skipped.
-    const emit = (nextStart: string, nextEnd: string) =>
-      onChange(nextStart && nextEnd ? { start: nextStart, end: nextEnd } : undefined);
+    // One end is a "from" / "until" range (the runtime keeps rows from the
+    // start, or up to the end); neither end clears the filter.
+    const emit = (nextStart: string, nextEnd: string) => onChange(studioFilterValue(filter, { start: nextStart, end: nextEnd }));
+    const oneSided = Boolean(start) !== Boolean(end);
     return (
       <label className="dql-app-filter-select dql-app-filter-range" title={filter.bindsTo ? `${label} -> ${filter.bindsTo}` : label} aria-label={label}>
         <span className="dql-app-filter-icon">{filterIconForDashboardFilter(filter)}</span>
+        {/* The reader sees which date this is (new-user round 3, problem 9). */}
+        <span className="dql-app-filter-label">{label}</span>
+        <DateRangePresetSelect label={label} value={value} timezone={filterTimezone(filter)} className="dql-app-filter-presets" onChange={(next) => (next ? emit(next.start, next.end) : emit('', ''))} />
         <input type="date" value={start} aria-label={`${label} from`} onChange={(event) => emit(event.target.value, end)} />
         <span className="dql-app-filter-range-sep">–</span>
         <input type="date" value={end} aria-label={`${label} to`} onChange={(event) => emit(start, event.target.value)} />
+        {oneSided ? <span className="dql-app-filter-range-note">{describeDashboardDateRange({ start, end })}</span> : null}
       </label>
     );
   }
@@ -430,6 +488,59 @@ function FilterSelect({
         {options.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
       </select>
     </label>
+  );
+}
+
+/**
+ * One value from a long list, with search. The reader's version of the
+ * editor's dropdown: the first page is listed for browsing, and typed text
+ * searches every value of the field when the list is capped.
+ */
+export function SearchableFilterSelect({
+  label,
+  icon,
+  value,
+  list,
+  source,
+  allowAll = true,
+  onChange,
+}: {
+  label: string;
+  icon: ReactNode;
+  value: string;
+  list: FilterValueList;
+  source?: FilterValueSource;
+  /** false: choosing a value is the point (the reader's "Filter by…" picker), so there is no "All". */
+  allowAll?: boolean;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const search = useFilterValueSearch(source, list, query);
+  const capHint = filterValueCapHint(list);
+  const choose = (next: string) => { onChange(next); setOpen(false); setQuery(''); };
+  return (
+    <div className={`dql-app-filter-select dql-app-filter-multi dql-app-filter-searchable ${value ? 'is-set' : ''}`} onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false); }} onKeyDown={(event) => { if (event.key === 'Escape') setOpen(false); }}>
+      <button type="button" className="dql-app-filter-multi-trigger" aria-haspopup="listbox" aria-expanded={open} aria-label={`${label}: ${value || (allowAll ? 'All' : 'choose a value')}`} onClick={() => setOpen((current) => !current)}>
+        <span className="dql-app-filter-icon">{icon}</span>
+        <span className="dql-app-filter-multi-label">{label}:</span>
+        <b>{value || (allowAll ? 'All' : 'Choose a value…')}</b>
+        <ChevronDown size={13} aria-hidden="true" />
+      </button>
+      {open ? (
+        <div className="dql-app-filter-multi-menu dql-app-filter-search-menu">
+          <input type="search" autoFocus value={query} placeholder={`Search ${label.toLowerCase()}`} aria-label={`Search ${label}`} autoComplete="off" onChange={(event) => setQuery(event.target.value)} />
+          <div role="listbox" aria-label={label}>
+            {allowAll ? <button type="button" role="option" aria-selected={!value} className={!value ? 'on' : ''} onClick={() => choose('')}>All</button> : null}
+            {search.values.map((option) => (
+              <button key={option} type="button" role="option" aria-selected={option === value} className={option === value ? 'on' : ''} onClick={() => choose(option)}>{option}</button>
+            ))}
+          </div>
+          {search.values.length === 0 ? <small>{search.searching ? 'Searching all values…' : 'No matching values'}</small> : null}
+          <small className="dql-app-filter-search-hint">{query.trim() ? search.searching ? 'Searching all values…' : search.truncated ? `First ${search.values.length} matches · type more to narrow` : `${search.values.length} ${search.values.length === 1 ? 'match' : 'matches'}` : capHint ?? `${list.values.length} values`}</small>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

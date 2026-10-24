@@ -155,14 +155,41 @@ export function networkAccessUrls(input: {
   return [...new Set(hosts)].map((host) => withAccessToken(`http://${host}:${input.port}`, input.token));
 }
 
+/**
+ * A folder with no ZLens project (design D7): ask to create one in a terminal,
+ * create it with `--yes`, otherwise explain with the single command to run.
+ * Returns the project root to open, or throws with that explanation.
+ */
+export async function ensureNotebookProject(
+  baseDir: string,
+  flags: CLIFlags,
+  io: { interactive?: boolean; ask?: (question: string) => Promise<string> } = {},
+): Promise<string> {
+  const projectRoot = findProjectRoot(baseDir);
+  if (existsSync(join(projectRoot, 'dql.config.json'))) return projectRoot;
+  if (!existsSync(baseDir)) {
+    throw new Error(`There is no folder at "${baseDir}". Pass the folder that holds your database file or dbt project.`);
+  }
+  const [{ detectFolderContents, runInit }, bare] = await Promise.all([import('./init.js'), import('./bare-folder.js')]);
+  const interactive = io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
+  const decision = await bare.decideBareFolder({
+    folder: baseDir,
+    contents: detectFolderContents(baseDir),
+    yes: flags.yes === true,
+    interactive,
+    ask: io.ask ?? bare.askInTerminal,
+  });
+  if (decision.action !== 'create') {
+    throw Object.assign(new Error(decision.message), { code: decision.action === 'declined' ? 'NOTEBOOK_PROJECT_DECLINED' : 'NOTEBOOK_PROJECT_MISSING' });
+  }
+  await runInit(baseDir, { ...flags, open: false, format: 'text', force: false }, { output: 'summary' });
+  if (!existsSync(join(baseDir, 'dql.config.json'))) throw new Error(`ZLens could not create a project in "${baseDir}".`);
+  return baseDir;
+}
+
 export async function runNotebook(targetArg: string | null, flags: CLIFlags): Promise<void> {
   const baseDir = resolve(targetArg ?? '.');
-  const projectRoot = findProjectRoot(baseDir);
-  if (!existsSync(join(projectRoot, 'dql.config.json'))) {
-    throw new Error(
-      `No ZLens project was found at "${baseDir}". Run "zlens notebook" from a project root, or pass a project path such as "zlens notebook ./my-dql-project".`,
-    );
-  }
+  const projectRoot = await ensureNotebookProject(baseDir, flags);
   const config = loadProjectConfig(projectRoot);
   const host = flags.host ?? readEnv('ZLENS_HOST') ?? '127.0.0.1';
   // Validate the flag here so a typo fails before a server starts, but pass it

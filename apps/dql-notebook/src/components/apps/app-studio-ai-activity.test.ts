@@ -12,7 +12,7 @@ describe('App Studio AI activity and source actions (UI-022, UI-023, E2E-020)', 
   it('uses honest non-percentage planning labels in a deterministic rotation', () => {
     expect(APP_STUDIO_AI_ACTIVITY_LABELS).toEqual([
       'Understanding your decision',
-      'Finding certified and draft blocks',
+      'Finding certified tables, Metrics and saved queries',
       'Checking trust and capabilities',
       'Preparing source review',
     ]);
@@ -21,8 +21,9 @@ describe('App Studio AI activity and source actions (UI-022, UI-023, E2E-020)', 
   });
 
   it('makes review-lane activation and row-local compose feedback explicit', () => {
+    // Data nobody certified is added the same way (T3): no "allow" step.
     expect(appStudioSourceActionLabel({ view: 'Chart', status: 'idle', reviewRequired: true, alreadyUsed: false }))
-      .toBe('Enable review lane & add Chart');
+      .toBe('Add Chart');
     expect(appStudioSourceActionLabel({ view: 'Chart', status: 'adding', reviewRequired: false, alreadyUsed: false }))
       .toBe('Adding…');
     expect(appStudioSourceActionLabel({ view: 'Chart', status: 'added', reviewRequired: false, alreadyUsed: true, pageTitle: 'Overview' }))

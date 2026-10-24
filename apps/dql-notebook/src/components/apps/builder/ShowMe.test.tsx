@@ -36,6 +36,18 @@ describe('Show Me in Studio (RFC 0009 step 2)', () => {
     expect(tileShowMe(descriptor, overTime, overTimeQuery)[0]?.chart).toBe('line');
   });
 
+  it('counts every value of a field the tile groups by alone, not only the rows it loaded (new-user round 3)', () => {
+    const query = { dimensions: [{ field: 'customer' }], measures: [{ measure: 'revenue' }] };
+    const bars: DashboardVizEncoding = { version: 1, columns: [{ measure: 'revenue' }], rows: [{ dimension: 'customer' }] };
+    const result: QueryResult = {
+      columns: ['customer', 'revenue'],
+      rows: Array.from({ length: 500 }, (_, index) => ({ customer: `C-${index}`, revenue: 10 })),
+      rowCount: 935, executionTime: 1,
+    };
+    const pie = tileShowMe(descriptor, bars, query, result).find((entry) => entry.chart === 'pie');
+    expect(pie?.reason).toContain('Customer has 935 values');
+  });
+
   it('names fields as the author renamed them', () => {
     const renamed = { ...overTime, fields: { 'measure:revenue': { label: 'Net sales' } } };
     expect(tileShowMe(descriptor, renamed, overTimeQuery)[0]?.reason).toContain('Net sales over Order Date');

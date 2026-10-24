@@ -35,7 +35,7 @@ type PaletteEntry = {
 const CORE_PALETTE: PaletteEntry[] = [
   {
     type: "block",
-    label: "Block",
+    label: "Saved query",
     Icon: BlockIcon,
     color: "#6b8afd",
   },
@@ -114,7 +114,7 @@ export function AddCellBar({ afterId }: AddCellBarProps) {
       await api.openBlockStudio(block.path);
     } catch (error) {
       console.error('Failed to bind block cell', error);
-      window.alert(`Couldn't load block ${block.path}. Check the console for details.`);
+      window.alert(`Couldn't load saved query ${block.path}. Check the console for details.`);
       closeAll();
       return;
     }

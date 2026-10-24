@@ -12,12 +12,12 @@ import { fileURLToPath } from 'node:url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN = resolve(__dirname, '..', 'bin', 'create-zlens-app.mjs');
 
-function scaffold(template, name) {
+function scaffold(template, name, extraEnv = {}) {
   const base = mkdtempSync(join(tmpdir(), 'create-zlens-app-test-'));
   const target = join(base, name);
   const result = spawnSync('node', [BIN, target, '--template', template], {
     encoding: 'utf-8',
-    env: { ...process.env, CI: '1' },
+    env: { ...process.env, CI: '1', ...extraEnv },
   });
   return { base, target, result };
 }
@@ -84,6 +84,26 @@ function assertGitContract(target) {
   assert(!lines.includes('.dql/hints/'), '.gitignore leaves approved hint source visible to Git');
 }
 
+// A new project's repository starts on `main` (or the user's init.defaultBranch),
+// never git's `master` fallback: a first send would land beside GitHub's `main`.
+function runDefaultBranchTest() {
+  console.log('\n▸ git default branch');
+  for (const [configured, expected] of [['', 'main'], ['trunk', 'trunk']]) {
+    const home = mkdtempSync(join(tmpdir(), 'create-zlens-app-gitcfg-'));
+    const gitconfig = join(home, '.gitconfig');
+    writeFileSync(gitconfig, configured ? `[init]\n\tdefaultBranch = ${configured}\n` : '');
+    const { base, target, result } = scaffold('starter', `branch-${expected}`, { GIT_CONFIG_GLOBAL: gitconfig, GIT_CONFIG_NOSYSTEM: '1' });
+    try {
+      assert(result.status === 0, `scaffold exits 0 with init.defaultBranch ${configured || 'unset'}`);
+      const head = spawnSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: target, encoding: 'utf-8' });
+      assert(head.status === 0 && head.stdout.trim() === expected, `new repository starts on ${expected} (got ${head.stdout.trim()})`);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(home, { recursive: true, force: true });
+    }
+  }
+}
+
 function runTest(template, name, expected, placeholderFile) {
   console.log(`\n▸ template: ${template}`);
   const { base, target, result } = scaffold(template, name);
@@ -102,6 +122,8 @@ function runTest(template, name, expected, placeholderFile) {
     rmSync(base, { recursive: true, force: true });
   }
 }
+
+runDefaultBranchTest();
 
 runTest('starter', 'smoke-starter', [
   'apps/.gitkeep',

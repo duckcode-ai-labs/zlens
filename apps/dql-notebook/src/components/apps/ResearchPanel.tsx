@@ -265,7 +265,7 @@ export function ResearchPanel({
   const promoteResearch = async (investigation: LocalAppInvestigation) => {
     if (!appId) return;
     if (!investigation.generatedSql) {
-      setError('Add reviewed SQL before creating a draft block.');
+      setError('Add reviewed SQL before creating a draft saved query.');
       return;
     }
     const pinned = investigation.pinnedAiPinId ? investigation : await pinResearch(investigation);
@@ -276,7 +276,7 @@ export function ResearchPanel({
     const result = await api.promoteAiPin(appId, pinId);
     setBusy(null);
     if (!result.ok) {
-      setError(result.error ?? 'Draft block could not be created.');
+      setError(result.error ?? 'Draft saved query could not be created.');
       return;
     }
     const refreshed = await api.getAppInvestigation(appId, investigation.id);
@@ -393,7 +393,7 @@ export function ResearchPanel({
               <p>ZLens is opening a scoped memo for "{pendingAnalysisTitle}". The previous memo stays in history while this answer is built from the typed context, active filters, certified block evidence, and preview proof.</p>
               <div className="dql-app-research-creating-steps">
                 <small>Reading current filters</small>
-                <small>Checking certified block context</small>
+                <small>Checking certified saved query context</small>
                 <small>Building narrative and proof appendix</small>
               </div>
             </div>
@@ -438,7 +438,7 @@ export function ResearchPanel({
                     <MapPin size={13} /> {selected.pinnedAiPinId ? 'Added to App' : 'Add reviewed insight to App'}
                   </button>
                   <button type="button" className="dql-apps-btn dql-apps-btn-primary" onClick={() => void promoteReviewedResearch(selected)} disabled={!(sqlDraft.trim() || selected.generatedSql) || busy === `promote:${selected.id}`}>
-                    <FileText size={13} /> {busy === `promote:${selected.id}` ? 'Drafting...' : 'Create draft block'}
+                    <FileText size={13} /> {busy === `promote:${selected.id}` ? 'Drafting...' : 'Create draft saved query'}
                   </button>
                   <details className="dql-app-report-review-actions">
                     <summary>Reviewer tools</summary>
@@ -531,7 +531,7 @@ export function ResearchPanel({
                 <Workflow size={22} />
                 <span>Preparing business memo</span>
                 <h2>Writing business memo...</h2>
-                <p>{pendingAnalysisTitle ? `ZLens is opening a scoped memo for "${pendingAnalysisTitle}".` : 'ZLens is using the Copilot context, active filters, certified block evidence, and any available preview proof to create the main-canvas memo.'}</p>
+                <p>{pendingAnalysisTitle ? `ZLens is opening a scoped memo for "${pendingAnalysisTitle}".` : 'ZLens is using the Copilot context, active filters, certified saved query evidence, and any available preview proof to create the main-canvas memo.'}</p>
               </div>
             ) : (
               <EmptyPanel title="Start analysis from Copilot." detail="Ask a follow-up, add context, then review the analysis here." />
@@ -624,7 +624,7 @@ function buildResearchReport(investigation: LocalAppInvestigation) {
   const summary = investigation.summary?.trim()
     || `ZLens wrote review-required analysis for ${sourceName}: ${investigation.question}. The selected app result is available, but this analysis still needs human review before it becomes governed business logic.`;
   const recommendation = investigation.recommendation?.trim()
-    || 'Use this as analyst-reviewed analysis first. Confirm the metric grain, filters, source tables, and caveats before adding it to the app or drafting a reusable DQL block.';
+    || 'Use this as analyst-reviewed analysis first. Confirm the metric grain, filters, source tables, and caveats before adding it to the app or drafting a reusable saved query.';
   const keyNumbers = [
     {
       label: String(metrics.currentLabel ?? 'Current'),
@@ -745,12 +745,12 @@ function previewIssueForReport(error?: string, kind?: string, hasCertifiedEviden
   }
   if (kind === 'safety') {
     return {
-      message: 'DQL blocked this preview because the SQL is not safe read-only analytical SQL. Rebuild from the certified block or edit it as a SELECT/WITH query before refreshing.',
+      message: 'DQL blocked this preview because the SQL is not safe read-only analytical SQL. Rebuild from the certified saved query or edit it as a SELECT/WITH query before refreshing.',
       canRebuild: true,
     };
   }
   return {
-    message: 'SQL preview needs review. Edit the SQL in the trace appendix or rebuild it from the certified block context before promoting this report.',
+    message: 'SQL preview needs review. Edit the SQL in the trace appendix or rebuild it from the certified saved query context before promoting this report.',
     canRebuild: true,
   };
 }
@@ -902,7 +902,7 @@ function buildResearchMemo(report: ReturnType<typeof buildResearchReport>): stri
       ? '## Validation result'
       : '## Business interpretation';
   const decisionText = report.actionMode === 'block'
-    ? 'This is a candidate reusable block design, not a certified answer yet. Preserve the business question, parameter defaults, allowed filters, output grain, and proof path before certification.'
+    ? 'This is a candidate reusable saved query design, not a certified answer yet. Preserve the business question, parameter defaults, allowed filters, output grain, and proof path before certification.'
     : report.actionMode === 'evidence' || report.intent === 'trust_gap_review'
       ? `The claim should be treated as validated only inside this bounded analysis context${contextLine ? ` (${contextLine})` : ''}. Use the appendix when a reviewer needs SQL, preview rows, caveats, or source trace.`
       : `${driverLine} Treat the conclusion as a directional stakeholder explanation until the analyst confirms SQL, grain, filters, joins, and lineage.`;
@@ -919,7 +919,7 @@ function buildResearchMemo(report: ReturnType<typeof buildResearchReport>): stri
     '## Recommended next step',
     report.recommendation,
     '## Review boundary',
-    'This report is AI-generated and review-required. Use it to guide analysis, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable DQL block.',
+    'This report is AI-generated and review-required. Use it to guide analysis, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable saved query.',
   );
   return sections.join('\n\n');
 }

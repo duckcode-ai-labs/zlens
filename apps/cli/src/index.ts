@@ -33,6 +33,7 @@ import { runImport } from "./commands/import.js";
 import { runConnect } from "./commands/connect.js";
 import { runPromote } from "./commands/promote.js";
 import { runEval } from "./commands/eval.js";
+import { runCi } from "./commands/ci.js";
 import { runPropose } from "./commands/propose.js";
 import { runModel } from "./commands/model.js";
 import { explainNativeDependencyError, sqlitePreflightMessage } from "./native-deps.js";
@@ -41,7 +42,7 @@ const HELP = `
   zlens — ZLens CLI
 
   Usage:
-    zlens init [directory]           Initialize ZLens in a project (auto-detects dbt)
+    zlens init [directory]           Initialize ZLens in a project (auto-detects dbt or a DuckDB file)
     zlens new <type> <name>         Create a domain, block, semantic block, view, term, dashboard, or workbook
     zlens build <file.dql>          Compile a DQL file to a static HTML bundle
     zlens doctor [path]             Run local setup checks for a ZLens project
@@ -88,6 +89,7 @@ const HELP = `
     zlens diff <path> --impact --write-recertification
                                     Mark impacted semantic YAML pending recertification
     zlens notebook [path]           Launch the browser-first notebook for a project
+                                    (offers to create one in a folder without a project)
     zlens semantic <sub> [path]     Semantic layer: list, validate, query, pull
     zlens compile [path]            Generate project manifest (dql-manifest.json)
     zlens sync dbt [path]           Diff, compile, and reindex dbt-backed DQL state
@@ -111,6 +113,10 @@ const HELP = `
     zlens connect <target> [path]   Configure Codex, Claude Code, Claude Desktop, or Cursor MCP
     zlens app new|generate|ls|show|build|reindex <name-or-path>
                                     Manage App artifacts (metadata, policies, dashboards, schedules)
+    zlens app check <id>            Run publish checks on an App (exits 1 if not ready)
+    zlens app diff [base] [head]    Review what a change does to every App page (git revisions)
+    zlens app verify <snapshot.html>  Check a signed App snapshot offline (exits 1 if it fails)
+    zlens app key                   Print this project's snapshot signing public key
     zlens schedule list|run|start|status  Local scheduler for @schedule'd blocks (alerts + notifications)
       zlens agent ask "<question>"    Block-first agent loop (certified blocks → fallback LLM SQL)
       zlens agent threads             List persisted conversation threads (resume with --thread)
@@ -120,9 +126,10 @@ const HELP = `
       zlens agent feedback up|down    Record local answer-quality telemetry for later review
       zlens agent eval agent-evals.yml  Measure certified/follow-up/refusal accuracy
     zlens slack serve               Slack slash-command bot (forwards to the answer loop)
-    zlens verify                    Verify dql-manifest.json is reproducible from source
+    zlens verify [path]             Check the local dql-manifest.json still matches the source
     zlens eval [path]               Replay block examples + eval/*.yaml through the agent
                                     router and score routing accuracy (CI-gateable)
+    zlens ci init [path]            Write a GitHub Actions workflow that runs zlens eval on every PR
     zlens --version                  Show version
     zlens --help                    Show this help
 
@@ -132,6 +139,7 @@ const HELP = `
     --open                          Open the preview or served bundle in a browser
     --no-open                       Do not open the browser automatically
     --no-schedules                  For "notebook": do not run App schedules while it is open
+    --yes, -y                       For "notebook": create a project in a folder without one, without asking
     --check                         For "fmt": check-only and exit 1 if changes needed
     --input <path>                  Source path for scaffold-style migration commands
     --out-dir <path>                Output directory for "build"
@@ -163,8 +171,11 @@ const HELP = `
       --execute                       For "agent eval": run bounded SQL previews
       --min-answer-rate <0..1>        For "eval": fail below non-refusal rate on answerable cases
       --min-tool-requirement <0..1>    For "agent eval": fail below required tool-call pass rate
-      --via runtime|loop               For "agent eval": drive a running server (routing + gates) or the answer loop only
-      --cassette record|replay         For "agent eval": record provider responses once, then replay offline
+      --via runtime                    For "agent eval": drive a running workbench (routing + gates); the default and only driver
+      --cassette record|replay         For "agent eval": require the workbench to run in this cassette mode (it is started
+                                       with ZLENS_EVAL_CASSETTE_DIR and ZLENS_EVAL_CASSETTE_MODE); also the --judge calls' mode
+      --judge                          For "agent eval": score each answer with the LLM judge (needs a provider)
+      --min-judge-pass <0..1>          For "agent eval": fail below this judge pass rate (needs --judge)
       --max-false-refusal <0..1>       For "agent eval": fail above this share of ANSWERABLE cases refused
       --min-refusal-recall <0..1>      For "agent eval": fail below this share of must-refuse cases that refused
       --thread <id>                   For "agent ask": continue a persisted conversation thread
@@ -172,6 +183,32 @@ const HELP = `
   `;
 
 const COMMAND_HELP: Record<string, string> = {
+  init: `
+  zlens init — Create a ZLens project in a folder
+
+  Usage:
+    zlens init [folder] [--force] [--open]
+
+  Notes:
+    ZLens looks at what the folder holds. A dbt project (here or a level up)
+    makes a dbt project. A DuckDB file and no dbt project makes a Database
+    only project that reads the database's own tables. An empty folder gets a
+    project, and Guided Setup asks where your data lives.
+    --force patches missing folders of an existing project; it never
+    overwrites dql.config.json or your files. --open starts the notebook.
+  `,
+  notebook: `
+  zlens notebook — Open the ZLens workbench in your browser
+
+  Usage:
+    zlens notebook [folder] [--port <n>] [--no-open] [--yes]
+
+  Notes:
+    Opens the project in the folder (or the nearest one above it). In a
+    folder with no ZLens project, it asks "No ZLens project here. Create
+    one? [Y/n]" and creates it the way zlens init would; --yes creates it
+    without asking. Without a terminal it prints the one command to run.
+  `,
   certify: `
   zlens certify — Evaluate local certification rules
 
@@ -182,8 +219,8 @@ const COMMAND_HELP: Record<string, string> = {
   Notes:
     \`zlens certify <file.dql>\` evaluates the certification rules and writes
     nothing. Saving a block never certifies it; a person certifies explicitly.
-    \`zlens certify --from-draft <path>\` runs the same rules Block Studio's
-    Certify runs (owner, a successful compile and run, passing tests) and only
+    \`zlens certify --from-draft <path>\` runs the same rules Certify runs
+    in Saved queries (owner, a successful compile and run, passing tests) and only
     when they pass promotes the draft to status = "certified", recording who
     certified it in the block's companion YAML (reviewStatus + certification).
     --enterprise makes grain, declared outputs, source-system lineage,
@@ -222,14 +259,26 @@ const COMMAND_HELP: Record<string, string> = {
   zlens app — Manage local App artifacts
 
   Usage:
-    zlens app new <name>
+    zlens app new <id> --domain <domain> [--owner <user>]
     zlens app generate "<prompt>" [--domain <domain>] [--owner <user>] [--ai-layout]
     zlens app ls [path]
     zlens app show <name> [path]
     zlens app build [path]       Build every App in the project at path (default: .)
     zlens app reindex [path]
+    zlens app check <id> [--format json]
+                                 Run the checks publishing runs; exits 1 if not ready
+    zlens app diff [base] [head] [--html <file>] [--markdown <file>] [--check] [--format json]
+                                 Review App page changes between git revisions
+                                 (default: HEAD against the working tree); --check
+                                 exits 1 when a changed page has problems
+    zlens app verify <snapshot.html> [--trust-key <public.pem>] [--format json]
+                                 Check a signed App snapshot offline; exits 1 if a check fails
+    zlens app key [--format json]
+                                 Print this project's snapshot signing public key
 
   Notes:
+    app new and app generate create a local App draft only; no App files are
+    written until you publish the draft from Apps in zlens notebook.
     app build takes a project path, not an App id: zlens app build .
     --ai-layout stores DQL-native GenUI metadata for dynamic visualization and
     layout decisions while preserving certified block trust boundaries.
@@ -293,6 +342,12 @@ const COMMAND_HELP: Record<string, string> = {
     zlens eval [path] --min-route-accuracy <0..1> --min-refusal <0..1> --min-candidate-recall <0..1>
     zlens eval [path] --no-examples
     zlens eval [path] --init        Write a starter eval/golden.yaml template
+    zlens eval [path] --min-answer-rate <0..1>
+
+  Thresholds are shares between 0 and 1 (90% is 0.9); a value outside that
+  range is an error. A threshold that no case measures (for example
+  --min-refusal with no expectRefuse case) is reported as n/a and not applied.
+  The manifest is built from source in memory: no zlens compile needed.
 
   Replays every certified block's examples[].question plus any eval/*.yaml
   cases through the existing agent router (no warehouse, no LLM judging) and
@@ -316,12 +371,30 @@ const COMMAND_HELP: Record<string, string> = {
       priorMeasures: ["<measure>"]       # optional; prior turn's answered measures
   `,
   verify: `
-  zlens verify — Verify dql-manifest.json is reproducible
+  zlens verify — Check the local dql-manifest.json still matches the source
 
   Usage:
     zlens verify [path] [--dbt-manifest <path>] [--dbt-hops <n>] [--datalex-manifest <path>] [--format json]
 
-  Run after zlens compile in CI or before release commits.
+  Recompiles in memory and compares block SQL, status and domain, plus added
+  or removed blocks, notebooks, Apps, dashboards, metrics, dimensions and
+  sources. Exits 1 on drift. dql-manifest.json is gitignored, so this is a
+  local check after zlens compile; in CI, gate on zlens eval (zlens ci init).
+  `,
+  ci: `
+  zlens ci — Continuous-integration setup
+
+  Usage:
+    zlens ci init [path] [--force]
+
+  Writes .github/workflows/zlens-eval.yml at the git root. On every pull
+  request it runs, with the CLI pinned to this version:
+
+    npx -y --package=@zlens/cli@<version> zlens eval . --min-route-accuracy 1 --min-refusal 1
+
+  zlens eval reads no warehouse and calls no model, so the job needs no
+  database file, dbt target/, dql-manifest.json, lockfile or API key. A
+  project in a subfolder gets a working-directory. --force overwrites.
   `,
 };
 
@@ -352,6 +425,11 @@ async function main() {
     process.exit(0);
   }
 
+  if (flags.argErrors?.length) {
+    for (const message of flags.argErrors) console.error(`Error: ${message}`);
+    process.exit(1);
+  }
+
   const commandAllowsNoFile =
     command === "init" ||
     command === "serve" ||
@@ -369,6 +447,7 @@ async function main() {
     command === "schedule" ||
     command === "verify" ||
     command === "eval" ||
+    command === "ci" ||
     command === "propose" ||
     (command === "certify" && Boolean(flags.fromDraft));
   if (!file && !commandAllowsNoFile) {
@@ -481,6 +560,9 @@ async function main() {
         break;
       case "eval":
         await runEval(file, rest, flags);
+        break;
+      case "ci":
+        await runCi(file, rest, flags);
         break;
       default:
         console.error(

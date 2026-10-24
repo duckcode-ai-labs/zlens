@@ -30,7 +30,7 @@ describe('adaptCertifiedSqlWithFilter (W2.2)', () => {
     expect(adaptation!.sql).toContain('FROM (');
     expect(adaptation!.sql).toContain('AS certified_derived');
     expect(adaptation!.sql).toContain("WHERE product_type = 'food'");
-    expect(adaptation!.trustQualifier).toBe('adapted from certified block revenue_by_product_type');
+    expect(adaptation!.trustQualifier).toBe('adapted from certified saved query revenue_by_product_type');
   });
 
   it('quotes string values and leaves numeric values unquoted', () => {

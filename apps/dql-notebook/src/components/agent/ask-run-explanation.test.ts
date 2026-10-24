@@ -71,7 +71,7 @@ describe('how an Ask run was answered, as steps in plain words', () => {
     expect(explanation.steps.map((step) => [step.kind, step.outcome])).toEqual([
       ['read', 'done'], ['certified', 'skipped'], ['semantic', 'done'], ['warehouse', 'done'], ['answer', 'done'],
     ]);
-    expect(explanation.steps[1]!.reason).toBe('No certified block matches this question.');
+    expect(explanation.steps[1]!.reason).toBe('No certified saved query matches this question.');
     expect(explanation.steps[3]!.reason).toBe('30 rows.');
     expect(explanation.headline).toBe('Answered from the semantic layer.');
     expect(explanation.totalMs).toBe(26_800);

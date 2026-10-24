@@ -76,6 +76,10 @@ import {
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
+  DuckDBNodeUnsupportedError,
+  duckdbHasPrebuiltBinary,
+  duckdbNoPrebuiltHelp,
+  duckdbSourceBuildAllowed,
 } from "@zlens/connectors";
 import {
   buildExecutionPlan,
@@ -96,6 +100,7 @@ import {
   normalizeDqlArtifactReference,
   applyAppBuildDraftOperations,
   appBuildPreviewIntentFingerprint,
+  APP_SOURCE_POLICY,
   serializeMetricDefinitionToYaml,
   resolveSemanticLayerAsync,
   resolveRepoSource,
@@ -146,6 +151,13 @@ import {
   type DashboardDisplayTrustState,
   type DashboardGridItem,
   type DatasetDescriptor,
+  type DatasetJoin,
+  adoptDatasetJoins,
+  datasetJoinReceiptSentence,
+  datasetJoinsTrust,
+  datasetJoinsUsed,
+  tileJoinsReachable,
+  relatedFieldWords,
   type StoryBindingCatalog,
   type StoryBindingTileInput,
   type ReaderTrustItem,
@@ -198,6 +210,7 @@ import {
   type DbtSourceAuthoringInput,
   type DbtMetricAuthoringInput,
   type RelationshipAuthoringInput,
+  type EntityBindingAuthoringInput,
   type ManifestRelationshipValidationEvidence,
   normalizeAnalyticalFailureV1,
   normalizeAnalyticalRepairCapabilityV1,
@@ -225,25 +238,69 @@ import {
   validateDatasetGrainProof,
   checkTileCalculations,
   renderTableDatasetBlock,
+  tableDatasetDeclaration,
+  tableDatasetCheckSentences,
+  currentBlockFileCheck,
+  isSavedQueryResultDataset,
+  wordsFor,
+  singularWords,
+  bareRelation,
+  type BlockCheckRecord,
   resolveBlockReplacement,
   groupingIdentityGapOfSql,
   detectResultOrdering,
   type RelationKeyKnowledge,
   type ResultOrdering,
+  DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  DASHBOARD_DATE_OPEN_END,
+  DASHBOARD_DATE_OPEN_START,
+  dashboardDateBoundsForColumn,
+  isEmptyDashboardDateValue,
+  dashboardFilterDoesNotApplyBinding,
+  isDashboardDateFilterType,
+  resolveDashboardDateFilter,
+  blockCompanionRelativePath as coreBlockCompanionRelativePath,
+  certifiedBlockFileState,
+  meaningfulDatabaseName,
 } from '@zlens/core';
 import {
+  dashboardSemanticFiltersForTile,
+  dashboardTileFilterExplanation,
+  dashboardTileFilterReport,
+  dashboardTileFiltersAllApplied,
+  dashboardValuesForTile,
+  dashboardFilterValuesForTile,
+  type DashboardTileFilterSkip,
+} from './dashboard-tile-filters.js';
+import {
+  addDatasetDefinitionToBlockSource,
+  DatasetDeclarationPatchError,
   prepareDatasetDeclarationPatch,
   type DatasetDeclarationPatch,
 } from '@zlens/core/datasets/source-authoring.node';
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml';
+import { blockTestAssertionName, evaluateBlockTestAssertion } from './block-test-assertions.js';
 import {
   applyCompanionCertification,
+  applyCompanionCheck,
+  blockCertificationByline,
+  blockPreviousCertificationByline,
   blockSourceStatus,
   buildCertificationReceipt,
+  buildCheckRecord,
+  bylineForViewer,
+  certificationByline,
+  checkByline,
+  gitUserName,
+  localPersonIdentity,
+  buildDeprecationRecord,
   demoteCertifiedSource,
   passedCheckNames,
   readCompanionCertification,
+  readCompanionDeprecation,
+  personDisplayName,
   sourceSha256,
+  withBlockOwner,
   withBlockStatus,
   describesReviewPending,
   withoutReviewPendingWording,
@@ -284,8 +341,9 @@ import {
   type ExploratoryExecutionFreezeV1,
   type SqlAuthorizationCheck,
   setProviderUsageListener,
+  hasGeneratedAppSourceOrigin,
 } from '@zlens/agent';
-import { applyEvalCassette, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, resolveAgentFollowUpContext } from './llm/providers/provider-runner.js';
+import { applyEvalCassette, createDqlAgentProviderRunner, createEvalCassetteReplayProvider, evalCassetteRuntimeMode, resolveAgentFollowUpContext } from './llm/providers/provider-runner.js';
 import type {
   AgentConversationContext,
   AgentRunRequest as LlmAgentRunRequest,
@@ -337,11 +395,14 @@ import {
   currentMetadataFingerprint,
   ensureMetadataCatalogFresh,
   queryAppSourceCatalog,
+  registerAppSourceRecordDecorator,
   resolveAppSourceCatalogRecords,
   datasetBindingAuthorityForManifestBlock,
   datasetBlockProofMaterial,
   datasetDescriptorFromManifestBlock,
   loadDatasetGrainProofs,
+  isPlainSavedQueryBlock,
+  recordSavedQueryResultColumns,
   readIndexedDomainKnowledge,
   readIndexedKnowledge360,
   compactSemanticRuntimeFailure,
@@ -572,6 +633,14 @@ import {
   viewerFilterPageFilters,
   viewerFilterVariables,
 } from './app-viewer-filters.js';
+import {
+  admitDashboardRun,
+  DASHBOARD_RUN_SUPERSEDED_REASON,
+  dashboardRunRequestKey,
+  parseDashboardRunSequence,
+  sharedDashboardRunResponse,
+  supersededDashboardRunBody,
+} from './dashboard-run-admission.js';
 import { gatherProposeEnrichment } from './propose-enrich.js';
 import {
   applyAppAutopilotChange,
@@ -594,13 +663,16 @@ import {
   type SemanticTileConversionPreviewRequest,
   type SemanticTileConversionPreviewResponse,
   setAppAudience,
+  thisPerson,
 } from './apps-api.js';
 import { listStoryEditions, recordStoryEdition, storyEditionScope } from './story/story-editions.js';
 import { editionFingerprint, followsPage, homePersonKey, movedOnPage, pageFiguresFrom, readHomeState, readPublishedEdition, recordPageVisit, recordPublishedEdition, setLocalFollow } from './home/home-state.js';
 import { addPageMonitor, listPageMonitors, MonitorStoreError, removePageMonitor } from './schedule/app-monitor-store.js';
 import { loadOrCreateSnapshotKey, localSnapshotSigner, readSnapshotPublicKey, signSnapshotWith, snapshotBodyIssues, snapshotFigures, snapshotFileName, verifySnapshot } from './snapshot/app-snapshot.js';
 import { dashboardDriverProbeItem, dashboardExploreProbeItem, expandDashboardDriverItems, foldDashboardDriverTiles, withDriverFilterScopes } from './datasets/dashboard-drivers.js';
-import { compileDatasetTileQuery, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
+import { compileDatasetTileQuery, sourceColumnReference, type CompiledDatasetTileQuery } from './datasets/tile-query-compiler.js';
+import { decorateDatasetDescriptor, joinableTables, joinRepeatsKeyMessage, joinUniquenessSql, readDbtArtifacts, relatedTablesContext, type RelatedTablesContext } from './datasets/related-tables.js';
+import { joinCertifyDecision, nextRelationshipId, savedQueryReview, type RowKeyCheck } from './datasets/inline-certify.js';
 import { summarizeDatasetChartFacts } from './datasets/dataset-chart-fact-summary.js';
 import { planDatasetTilePromotion, type DatasetTileBoundParameter } from './datasets/dataset-tile-promotion.js';
 import { proveDatasetResultEquivalence } from './datasets/result-equivalence.js';
@@ -734,6 +806,7 @@ import {
   semanticRuntimeErrorCode,
   semanticMetricExecutionCapability as runtimeMetricExecutionCapability,
   SemanticRuntimeRequiredError,
+  structuralSemanticJoinPath,
   testSemanticRuntimeDraft,
   type SemanticRuntimeTrace,
   type SemanticRuntimeAdapterId,
@@ -775,7 +848,7 @@ import {
 import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
 import { refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
 import { resolveResultReviewMode } from './result-review-setting.js';
-import { TableDatasetError, applyTableDatasetChoices, draftTableDataset, listWarehouseTables } from './datasets/table-dataset.js';
+import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import {
   discoverWarehouseModel,
   observedJoinsFromQueries,
@@ -794,7 +867,7 @@ import {
 import { prepareBlockInvocation } from './block-invocation.js';
 import { readPrivateConnections, redactConnections, resolveSecretReferences, storeConnectionSecrets } from './connection-secrets.js';
 import { connectionEnvironmentReferences } from './connection-env.js';
-import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPrincipal, currentRequestContext, destinationForRequest, hostActor, hostAllowedSources, hostFiguresDependOnReader, hostGitAuthor, anyHostedServer, hostModelProvider, HOST_IDENTITY_UNAVAILABLE, installHostPersonaSlots, processHostHooks, registerServerHooks, resolveHostPrincipal, resolveHostPrincipalOutcome, resultValuesMayReachModel, safeAppNotFound, safeHomeCards, safeHostBanner, safeNextLink, scopedHostHooks, setHostGitHooks, setHostModelHooks, setProcessToolHooks, currentToolHooks, unregisterServerHooks, withRequestContext, withServerScope, type DqlServerScope, type DqlFollow, type DqlHostHooks, type DqlRunStoreLike } from './host/request-context.js';
+import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPrincipal, currentRequestContext, destinationForRequest, hostActor, hostActorDisplayName, hostAllowedSources, hostFiguresDependOnReader, hostGitAuthor, anyHostedServer, hostModelProvider, HOST_IDENTITY_UNAVAILABLE, installHostPersonaSlots, processHostHooks, registerServerHooks, resolveHostPrincipal, resolveHostPrincipalOutcome, resultValuesMayReachModel, safeAppNotFound, safeHomeCards, safeHostBanner, safeNextLink, scopedHostHooks, setHostGitHooks, setHostModelHooks, setProcessToolHooks, currentToolHooks, unregisterServerHooks, withRequestContext, withServerScope, type DqlServerScope, type DqlFollow, type DqlHostHooks, type DqlRunStoreLike } from './host/request-context.js';
 import { isRunPass, issueRunPass, redeemRunPass, revokeRunPass } from './host/schedule-runs.js';
 import { setDeliverySink } from './schedule/notifiers/index.js';
 import { routeAction, type DqlAction } from './host/route-actions.js';
@@ -894,13 +967,20 @@ export interface ProjectConfig {
   manifestVersion?: 1 | 2 | 3;
   modeling?: { mode?: ManifestModelingMode };
   /**
-   * Explicit opt-ins for locally evolving App authoring surfaces. Dataset
-   * field queries remain off until the project owner enables them, so an
-   * existing App keeps its legacy block semantics after an upgrade. New
-   * projects are created with `datasets: true` (APP-007).
+   * Switches for App authoring surfaces. Field-based Dataset tiles are on
+   * unless `datasets` is explicitly `false`, which turns them off for the
+   * project (APP-007).
    */
   apps?: {
     datasets?: boolean;
+    /**
+     * Require every App tile to be certified before an App is published
+     * (T3). Off by default in the open-source edition: publishing is never
+     * blocked by trust, and readers see "Not certified yet" on tiles nobody
+     * certified. Read fresh at each publish (`readAppsPublishSettings`). An
+     * Enterprise host turns it on through its admin policy.
+     */
+    requireCertifiedToPublish?: boolean;
     /**
      * Default-off local delivery cache for complete Dataset results. It is
      * deliberately separate from semantic preparation and App persistence.
@@ -1685,7 +1765,7 @@ export function askTraceReason(run: Pick<AgentRun, 'stopReason' | 'status' | 'ar
     ? (typeof gap?.kind === 'string' ? ASK_TRACE_GAP_SENTENCES[gap.kind] ?? '' : '')
     : typeof gap?.message === 'string' ? gap.message.trim().slice(0, 300) : '';
   const byStop: Record<AgentRun['stopReason'], string> = {
-    certified_answer_found: 'Answered from a certified block.',
+    certified_answer_found: 'Answered from a certified saved query.',
     governed_semantic_answer: 'Answered from the governed semantic layer.',
     governed_compound_answer: 'Answered from the governed semantic layer.',
     generated_review_required: 'Answered with SQL that needs review before it is trusted.',
@@ -5197,20 +5277,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   // built with. Before this, library call sites without a project root fell
   // back to hashed embeddings while the catalog itself was semantic.
   setProcessDefaultEmbeddingProvider(projectEmbeddingProvider(projectRoot));
-  // ZERO-CONFIG SEMANTIC RETRIEVAL.
+  // LOCAL EMBEDDINGS ARE A CHOICE.
   //
-  // The hashed provider is a token hash: it matches shared words and nothing
-  // else, so "customer accounts" cannot find a model documented as "billing
-  // entities" no matter how good the ranking is. It was the default for every
-  // project because turning it off required an environment variable no product
-  // surface mentioned. When the machine already runs Ollama with an embedding
-  // model pulled, use it — the data stays local, and a warehouse question
-  // finally matches on meaning.
-  //
-  // Re-embedding the index is not optional here: `searchVectorObjects` returns
-  // NOTHING when the requested provider disagrees with the one the index was
-  // built with, so upgrading the provider without upgrading the index would
-  // make retrieval strictly worse. Both move together or neither does.
+  // Search is word-based unless the project chose embeddings (Settings → AI
+  // provider → Search, or ai.embeddings in dql.config.json). A running Ollama
+  // is offered, never adopted silently (Codex end-to-end report, 23 Oct 2026);
+  // ZLENS_EMBEDDINGS_AUTODETECT=on is an operator's opt-in to adopt it. An
+  // index an earlier version switched by itself is rebuilt word-based, since
+  // `searchVectorObjects` returns NOTHING when the requested provider
+  // disagrees with the one the index was built with.
   void (async () => {
     const upgrade = await autoUpgradeProjectEmbeddings(projectRoot, {
       probeLocalOllamaEmbeddings,
@@ -5218,7 +5293,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       setProcessDefaultEmbeddingProvider,
     });
     if (upgrade.model && upgrade.providerId !== 'hashed-token-v1') {
-      console.log(`ZLens: semantic retrieval enabled with local Ollama embeddings (${upgrade.model}).`);
+      console.log(`ZLens: search uses local Ollama embeddings (${upgrade.model}), as ZLENS_EMBEDDINGS_AUTODETECT=on asks.`);
+    } else if (upgrade.reason === 'not_chosen') {
+      if (upgrade.restored) console.log('ZLens: search is word-based again. Local embeddings were never chosen for this project.');
+      if (upgrade.localModel) {
+        console.log(`ZLens: search is word-based. Local Ollama embeddings (${upgrade.localModel}) are available on this computer: turn them on in Settings → AI provider → Search.`);
+      }
     }
   })();
   // A slow provider needs a longer Ask window, and DQL already knows which
@@ -5403,10 +5483,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
    * same mounted viewer scope. A second browser tab has its own scope and
    * must never cancel the first tab's warehouse request.
    */
-  const activeDashboardRuns = new Map<string, {
-    generation: number;
-    controller: AbortController;
-  }>();
+  const activeDashboardRuns = new Map<string, ActiveDashboardRun>();
+  /**
+   * The highest request number each mounted viewer has sent (B1). A request
+   * that reaches the server after a newer one from the same viewer must not
+   * cancel it: arrival order is not the order the viewer asked in.
+   */
+  const dashboardRunSequences = new Map<string, { sequence: number; at: number }>();
   /**
    * M4-CONV-01 keeps a semantic-to-Dataset preview entirely server-local.
    * The browser receives the reviewed candidate, but never owns the source
@@ -5533,7 +5616,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       status: 'running',
       stage: 'indexing',
       progress: 65,
-      message: 'Indexing dbt models, columns, semantic metrics, certified blocks, and governed relationships.',
+      message: 'Indexing dbt models, columns, semantic metrics, certified saved queries, and governed relationships.',
       createdAt: now,
       updatedAt: now,
       snapshotId: input.snapshotId,
@@ -5574,7 +5657,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             status: 'completed',
             stage: 'ready',
             progress: 100,
-            message: `Ready. Indexed ${prepared.nodes.toLocaleString()} governed objects for fast search.`,
+            message: `Ready. Indexed ${prepared.nodes.toLocaleString()} items from your project for search.`,
             updatedAt: completedAt,
             phases: current.phases.map((phase) => phase.id === 'search_index'
               ? { ...phase, status: 'completed', durationMs: indexDurationMs }
@@ -6240,6 +6323,31 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const values = raw.filter((item): item is string => typeof item === 'string' && Boolean(item.trim())).map((item) => item.trim());
     return values.length > 0 ? [...new Set(values)] : undefined;
   };
+  /**
+   * Notebook AI opened from a cell's Ask AI: "Fix this query" is about that
+   * cell, so the question the model reads carries the cell's SQL and its last
+   * error. Routing and the saved turn keep the question as it was asked; only
+   * the copy handed to the answer pipeline changes.
+   */
+  const withSelectedCellContext = (request: AgentRunRequest): AgentRunRequest => {
+    if (request.selectedObject?.kind !== 'cell') return request;
+    const sql = agentRunWorkspaceValue(request, 'cellSql');
+    if (!sql) return request;
+    const error = agentRunWorkspaceValue(request, 'cellError');
+    const name = agentRunWorkspaceValue(request, 'sourceCellName') ?? request.selectedObject.title;
+    const type = agentRunWorkspaceValue(request, 'sourceCellType') === 'dql' ? 'DQL' : 'SQL';
+    const clip = (value: string, limit: number) => (value.length > limit ? `${value.slice(0, limit)}\n…` : value);
+    const question = [
+      request.question,
+      '',
+      `This question is about the selected notebook ${type} cell${name ? ` "${name}"` : ''}. Its query:`,
+      '```sql',
+      clip(sql, 8_000),
+      '```',
+      ...(error ? [`Its last run failed: ${clip(error, 1_000)}`] : []),
+    ].join('\n');
+    return attachAskTraceObserverV1({ ...request, question }, askTraceObserverForV1(request));
+  };
 
   type AppAutopilotScope = {
     draftId: string;
@@ -6393,7 +6501,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!page || !tile || !tile.sourceId || !tile.query) {
       throw new Error('APP_AUTOPILOT_DATASET_TILE_REQUIRED: select one saved Dataset tile before asking App Autopilot to make a change.');
     }
-    const resolved = resolveAppSourceCatalogRecords(projectRoot, [tile.sourceId], draft.sourcePolicy);
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [tile.sourceId], APP_SOURCE_POLICY);
     const source = resolved.items.find((candidate) => candidate.sourceId === tile.sourceId);
     const dataset = source?.capabilities.dataset;
     if (!source || !dataset || resolved.missingSourceIds.length > 0) {
@@ -6417,7 +6525,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         revision: draft.revision,
         title: draft.name,
         goal: draft.frame.goal,
-        sourcePolicy: draft.sourcePolicy,
         openReviewTasks: draft.reviewTasks.filter((task) => task.status === 'open').map((task) => task.message).slice(0, 8),
       },
       page: {
@@ -6587,7 +6694,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       try {
         await ensureMetadataCatalogFresh(projectRoot, { manifest: currentSnapshot.manifest, semanticLayer });
-        const currentSources = resolveAppSourceCatalogRecords(projectRoot, [heldSource.sourceId], currentDraft.sourcePolicy);
+        const currentSources = resolveAppSourceCatalogRecords(projectRoot, [heldSource.sourceId], APP_SOURCE_POLICY);
         const currentSource = currentSources.items[0];
         const descriptor = currentSource?.capabilities.dataset;
         if (!currentSource || !descriptor || currentSources.missingSourceIds.length > 0
@@ -7586,12 +7693,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // Say WHY the native composer was the engine when a fuller one was planned.
         throw new Error(`the ${plannedAdapter} semantic engine could not compose metrics ${request.metrics.join(', ')}${planned.downgraded ? ` (${planned.downgraded})` : ''}${request.dimensions.length ? ` by ${request.dimensions.join(', ')}` : ''}: no join path or grouping satisfied every metric`);
       }
+      // The joins the compile took, for the From Metrics check. MetricFlow and
+      // dbt Cloud do not report theirs; the native composer's join path for
+      // the same request names the same semantic-model joins.
+      const joinPath = compiled.joinPath ?? structuralSemanticJoinPath(semanticLayer, request);
       return {
         sql: compiled.sql.trim(),
         engine: compiled.engine,
         ...(compiled.fanoutProbeSql ? { fanoutProbeSql: compiled.fanoutProbeSql } : {}),
         ...(compiled.strategy ? { strategy: compiled.strategy } : {}),
         ...(compiled.warnings?.length ? { warnings: compiled.warnings } : {}),
+        ...(joinPath ? { joinPath } : {}),
       };
     },
     dispatchOptions: askDispatchOptions,
@@ -7610,7 +7722,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const executed = !turn.runStatus || ['completed', 'needs_review'].includes(turn.runStatus);
         // An answer whose SQL the AI drafted carries that statement forward, so
         // the next turn edits it; a governed answer is edited through its reading.
-        const drafted = executed && Boolean(turn.sql) && [turn.certification, turn.trustLabel].includes('review_required');
+        // So is a semantic answer labelled for review (a join that is not
+        // certified): the compiler wrote its SQL, not the AI.
+        const drafted = executed && Boolean(turn.sql) && [turn.certification, turn.trustLabel].includes('review_required')
+          && turn.dqlArtifact?.kind !== 'semantic_block';
         return {
           intent: intent as AnalyticalIntentV1,
           ...(executed ? {} : { executed: false }),
@@ -7847,7 +7962,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // A question about what the App page shows is answered from that page's own results first.
     const fromAppView = await answerFromAskedAppView(request.runId ?? runId, request, (step) => executionContext.emit({ type: 'executor.started', message: step.title, route: executionContext.route, payload: { askStep: step } }));
     if (fromAppView) return fromAppView;
-    const result = await askPipelineExecutor(executionContext);
+    const cellRequest = withSelectedCellContext(request);
+    const result = await askPipelineExecutor(cellRequest === request ? executionContext : { ...executionContext, request: cellRequest });
     // Then, when the person has knowledge sources, the team documents that
     // explain the question's terms — cited beside the answer, never a figure
     // source and never part of its trust.
@@ -8024,6 +8140,103 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const contextProposalStore = new FileContextAuthoringProposalStore(projectRoot);
 
   /**
+   * Drafts are kept automatically (new-user round 2, Q3): what "Draft my
+   * models" drafted waits in the proposal store until a person saves it in
+   * Modeling or discards it. Leaving setup or Modeling, or reloading, loses
+   * nothing. Newest first.
+   */
+  const waitingWarehouseDrafts = (): ContextAuthoringProposalV1[] =>
+    contextProposalStore.list().filter((proposal) => proposal.origin === 'warehouse_discovery' && proposal.status === 'proposed');
+  /** Close the waiting drafts: a newer draft, revision or save replaced them, or a person discarded them. */
+  const closeWaitingWarehouseDrafts = (options: { supersededBy?: string } = {}): void => {
+    const at = new Date().toISOString();
+    for (const proposal of waitingWarehouseDrafts()) {
+      if (proposal.id === options.supersededBy) continue;
+      contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: at, ...(options.supersededBy ? { supersededBy: options.supersededBy } : {}) });
+    }
+  };
+
+  /**
+   * Fields from related tables (design D2). Every App source record the
+   * catalog returns (Data pane, planner, previews, runs) carries the related
+   * fields its table Dataset reaches through checked many-to-one joins. The
+   * relationships are re-read from the model, open setup drafts and dbt tests
+   * when any of them changes (checked at most every two seconds).
+   */
+  const datasetQuote = (driver: string) => {
+    const dialect = getDialect(driver);
+    return (name: string) => sourceColumnReference(name, driver, dialect.quoteIdentifier.bind(dialect));
+  };
+  let relatedTablesState: { checkedAt: number; key: string; context: RelatedTablesContext; manifest: DQLManifest } | undefined;
+  const currentRelatedTables = (fresh = false): { context: RelatedTablesContext; manifest: DQLManifest } => {
+    if (!fresh && relatedTablesState && Date.now() - relatedTablesState.checkedAt < 2_000) return relatedTablesState;
+    const snapshot = projectSnapshot();
+    const proposalSignature = (() => {
+      try {
+        return readdirSync(contextProposalStore.directory)
+          .filter((name) => name.endsWith('.json'))
+          .map((name) => `${name}:${statSync(join(contextProposalStore.directory, name)).mtimeMs}`)
+          .sort()
+          .join('|');
+      } catch {
+        return '';
+      }
+    })();
+    const catalog = readWarehouseCatalog(projectRoot);
+    const key = `${snapshot.snapshotId}\u0000${proposalSignature}\u0000${catalog.snapshot?.fingerprint ?? ''}`;
+    if (relatedTablesState?.key === key) {
+      relatedTablesState = { ...relatedTablesState, checkedAt: Date.now() };
+      return relatedTablesState;
+    }
+    const context = relatedTablesContext({
+      manifest: snapshot.manifest,
+      proposals: contextProposalStore.list(),
+      ...(catalog.snapshot ? { warehouseCatalog: catalog.snapshot } : {}),
+      ...(readDbtArtifacts(snapshot.manifest.dbtProvenance) ? { dbt: readDbtArtifacts(snapshot.manifest.dbtProvenance)! } : {}),
+    });
+    relatedTablesState = { checkedAt: Date.now(), key, context, manifest: snapshot.manifest };
+    return relatedTablesState;
+  };
+  const unregisterRelatedFields = registerAppSourceRecordDecorator(projectRoot, (record) => {
+    const descriptor = record.capabilities.dataset;
+    if (record.kind !== 'block' || !descriptor || descriptor.kind !== 'block' || descriptor.result) return record;
+    let state = currentRelatedTables();
+    let block = resolveDatasetSourceManifestBlock(state.manifest, record.executionRef);
+    // A Dataset saved a moment ago is not in the state read before it.
+    if (!block) {
+      state = currentRelatedTables(true);
+      block = resolveDatasetSourceManifestBlock(state.manifest, record.executionRef);
+    }
+    const { context } = state;
+    if (!block || !context.edges.length) return record;
+    const decorated = decorateDatasetDescriptor({ descriptor, block, context, quote: datasetQuote(connection?.driver ?? 'duckdb') });
+    return decorated === descriptor ? record : { ...record, capabilities: { ...record.capabilities, dataset: decorated } };
+  });
+
+  /**
+   * Before a tile joins a related table whose key uniqueness no current
+   * evidence covers (a drafted join, a dbt test, evidence gone stale), one
+   * bounded query checks that no key value repeats there. The answer is kept
+   * for one minute per warehouse target.
+   */
+  const joinUniquenessChecks = new Map<string, { at: number; check: Promise<boolean> }>();
+  const ensureJoinsAddNoRows = async (joins: DatasetJoin[], target: ConnectionConfig, targetFingerprint: string, datasetLabel: string): Promise<void> => {
+    for (const join of joins) {
+      if (join.uniqueness === 'current') continue;
+      const sql = joinUniquenessSql(join, datasetQuote(target.driver));
+      const key = `${targetFingerprint}\u0000${sql}`;
+      let entry = joinUniquenessChecks.get(key);
+      if (!entry || Date.now() - entry.at > 60_000) {
+        const check = executor.executeQuery(sql, [], {}, target).then((result) => result.rows.length === 0);
+        entry = { at: Date.now(), check };
+        joinUniquenessChecks.set(key, entry);
+        check.catch(() => joinUniquenessChecks.delete(key));
+      }
+      if (!(await entry.check)) throw new Error(joinRepeatsKeyMessage(join, datasetLabel));
+    }
+  };
+
+  /**
    * UI-019: authoring must never dead-end on a Domain/Area that does not exist
    * yet. Every modeling operation still belongs to exactly one Domain and Area
    * (`11-context-authoring-and-ai.md`); the difference is that ZLens now creates
@@ -8035,6 +8248,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   const ensureAuthoringScopeOperations = (
     operations: ContextAuthoringOperation[],
     manifest: DQLManifest,
+    /** Names for Domains this batch creates ("Jaffle shop"), by id; otherwise the id in title case. */
+    domainNames?: Record<string, string>,
   ): ContextAuthoringOperation[] => {
     const modeling = manifest.modeling;
     if (!modeling) return operations;
@@ -8073,7 +8288,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             id,
             kind: 'modeling_change',
             evidence: ['created automatically so the requested modeling scope exists'],
-            change: { operation: 'upsert_domain', value: { id: domain, name: titleCaseAuthoring(domain) } },
+            change: { operation: 'upsert_domain', value: { id: domain, name: domainNames?.[domain] || titleCaseAuthoring(domain) } },
           });
         }
         if (!dependsOn.includes(id)) dependsOn.push(id);
@@ -8196,6 +8411,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     sourceArtifactId?: string;
     revision?: number;
     diagnostics?: ContextAuthoringDiagnosticV1[];
+    /** Names for the Domains the proposal creates, by id. */
+    domainNames?: Record<string, string>;
+    /** False: build it without keeping it (Save checks a reviewed proposal against the current project this way). */
+    persist?: boolean;
   }): ContextAuthoringProposalV1 => {
     const snapshot = projectSnapshot();
     if (input.expectedSnapshotId && input.expectedSnapshotId !== snapshot.snapshotId) {
@@ -8211,6 +8430,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const requested = input.baseOperations?.length
       ? mergeAuthoringOperations(input.baseOperations, input.operations)
       : input.operations;
+    const areaDefaulted: string[] = [];
     const operations = requested.map((operation): ContextAuthoringOperation => {
       if (operation.kind === 'dataset_change') {
         const prepared = prepareDatasetAuthoringChangeForProposal(projectRoot, snapshot.manifest, operation.change);
@@ -8273,17 +8493,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // Every model still belongs to exactly one Domain and subject area. An
         // omitted area is filled with the default rather than blocking the
         // author; `ensureAuthoringScopeOperations` creates it if it is new.
-        diagnostics.push({ code: 'MODEL_AREA_DEFAULTED', severity: 'info', operationId: operation.id, message: `No subject area was selected, so these models were placed in "${DEFAULT_MODEL_AREA_ID}". You can rename or move them later.` });
+        // One plain note covers them all (below), not one line per table.
+        areaDefaulted.push(operation.id);
         return { ...operation, change: { ...operation.change, value: { ...operation.change.value, areaId: DEFAULT_MODEL_AREA_ID } } };
       }
       return operation;
     });
+    if (areaDefaulted.length) diagnostics.push(modelAreaDefaultedDiagnostic(areaDefaulted, input.origin));
     // dbt discovery and Modeling AI bind models; give them the edges dbt already
     // declares. Manual authoring and YAML import bring their own relationships.
     const withDeclaredEdges = input.origin === 'dbt_discovery' || input.origin === 'ai'
       ? appendDbtDeclaredRelationships(operations, snapshot.manifest)
       : operations;
-    const scopedOperations = ensureAuthoringScopeOperations(withDeclaredEdges, snapshot.manifest);
+    const scopedOperations = ensureAuthoringScopeOperations(withDeclaredEdges, snapshot.manifest, input.domainNames);
     const operationIds = new Set(scopedOperations.map((operation) => operation.id));
     for (const operation of scopedOperations) {
       for (const dependency of operation.dependsOn ?? []) {
@@ -8385,8 +8607,361 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       sourceArtifactId: input.sourceArtifactId,
       revision: input.revision,
     });
-    contextProposalStore.save(proposal);
+    if (input.persist !== false) contextProposalStore.save(proposal);
     return proposal;
+  };
+
+
+  /**
+   * Save a reviewed proposal: write its patches (all or none), refresh the
+   * project, and record the commit. The Modeling drafts' Save and the
+   * inline join certification (T4) both save through here, so a join
+   * certified from an App is written exactly as Modeling writes it.
+   */
+  const commitContextProposal = async (proposal: ContextAuthoringProposalV1, idempotencyKey: string): Promise<{ committed: ContextAuthoringProposalV1; snapshotId: string; modeling: DQLManifest['modeling']; rebased: boolean }> => {
+    if (proposal.status !== 'proposed') throw Object.assign(new Error('Only a proposed change can be committed.'), { code: 'PROPOSAL_STALE' });
+    if (proposal.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) throw Object.assign(new Error('Resolve all blocking proposal diagnostics before saving.'), { code: 'PROPOSAL_BLOCKED' });
+    const beforeSnapshot = projectSnapshot();
+    // Something else changed in the project since review: save the
+    // reviewed changes as they are when none of their files moved, and
+    // ask only when one did.
+    const reviewed = beforeSnapshot.snapshotId === proposal.baseSnapshotId ? proposal : rebaseReviewedProposal(proposal);
+    const resolvedPatches = reviewed.patches.map((patch) => ({ patch, absolute: resolveContextPatchPath(projectRoot, gitRoot, patch.path) }));
+    for (const { patch, absolute } of resolvedPatches) {
+      const current = existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
+      if (current !== patch.before) throw Object.assign(new Error(`Source changed after preview: ${patch.path}`), { code: 'SOURCE_CHANGED' });
+    }
+    const written: Array<{ patch: ContextAuthoringPatchV1; absolute: string }> = [];
+    try {
+      for (const item of resolvedPatches) {
+        if (!item.patch.changed) continue;
+        if (!item.patch.after) rmSync(item.absolute, { force: true });
+        else {
+          mkdirSync(dirname(item.absolute), { recursive: true });
+          writeFileSync(item.absolute, item.patch.after, 'utf8');
+        }
+        written.push(item);
+      }
+      projectSnapshots.invalidate();
+      invalidateAgentProjectState(projectRoot);
+      const nextSnapshot = projectSnapshot();
+      if (nextSnapshot.error) throw Object.assign(new Error(nextSnapshot.error), { code: 'COMPILE_FAILED' });
+      await refreshUnifiedProjectIndexes(projectRoot);
+      const committedAt = new Date().toISOString();
+      const committed: ContextAuthoringProposalV1 = { ...reviewed, status: 'committed', committedAt, committedSnapshotId: nextSnapshot.snapshotId };
+      contextProposalStore.save(committed);
+      // The reviewed proposal was saved as its rebased copy: it waits for no one now.
+      if (reviewed !== proposal) contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: committedAt, supersededBy: committed.id });
+      contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
+      // Saved drafts are reviewed: older copies of them wait for no one.
+      if (proposal.origin === 'warehouse_discovery') closeWaitingWarehouseDrafts({ supersededBy: committed.id });
+      return { committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling, rebased: reviewed !== proposal };
+    } catch (error) {
+      for (const { patch, absolute } of written.reverse()) {
+        if (!patch.before) rmSync(absolute, { force: true });
+        else {
+          mkdirSync(dirname(absolute), { recursive: true });
+          writeFileSync(absolute, patch.before, 'utf8');
+        }
+      }
+      projectSnapshots.invalidate();
+      invalidateAgentProjectState(projectRoot);
+      contextProposalStore.save(proposal);
+      contextProposalStore.deleteCommitReceipt(idempotencyKey);
+      throw error;
+    }
+  };
+
+
+  /**
+   * Certify a join from where the author is (T4): the publish dialog and the
+   * Data list's ⋯ menu. A fresh, bounded check runs on the warehouse (the
+   * Modeling page's one validation statement); when the model lacks the
+   * grain or key columns Modeling wants, they are filled only from what a
+   * check just proved — the "one" side's join key, unique and filled on
+   * every row, and the Dataset's own row key, checked now. Nothing is
+   * written when a check fails. Writing goes through Modeling's own path: a
+   * proposal of modeling changes (the entities' grain and keys, the
+   * relationship certified against them, with who and when), saved at once,
+   * so Modeling shows it certified afterwards.
+   */
+  const coded = (code: string, message: string) => Object.assign(new Error(message), { code });
+  const planJoinCertification = async (sourceId: string, joinId: string, requestBody: Record<string, unknown>) => {
+    const snapshot = projectSnapshot();
+    const manifest = snapshot.manifest;
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
+    const source = resolved.items[0];
+    if (!source || resolved.missingSourceIds.length > 0) throw coded('DATASET_SOURCE_NOT_FOUND', 'That data is not in this project any more. Refresh the list.');
+    const descriptor = source.capabilities.dataset;
+    const join = descriptor?.joins?.find((candidate) => candidate.id === joinId);
+    if (!descriptor || !join) throw coded('JOIN_NOT_FOUND', `${source.title} has no join "${joinId}" any more. Refresh this App's data.`);
+    if (!manifest.modeling) throw coded('MODELING_NOT_ENABLED', 'Joins are certified in the project\'s model, and this project has none yet. Set up Modeling first.');
+    const { context } = currentRelatedTables(true);
+    const edge = context.edges.find((candidate) => candidate.id === join.relationshipId);
+    if (!edge) throw coded('JOIN_NOT_FOUND', `ZLens no longer finds where the join ${source.title} → ${join.label} comes from. Refresh this App's data.`);
+    const modeling = manifest.modeling;
+    const nodes = manifest.dbtProvenance?.nodes ?? {};
+    const sameRelation = (left: string | undefined, right: string) => Boolean(left) && bareRelation(left!).toLowerCase() === bareRelation(right).toLowerCase();
+    const relationshipOperations: ContextAuthoringOperation[] = [];
+    const draftedProposal = edge.origin === 'drafted'
+      ? contextProposalStore.list().find((candidate) => candidate.status === 'proposed' && edge.id.startsWith(`${candidate.id}:`))
+      : undefined;
+    type Endpoint = {
+      side: 'from' | 'to';
+      key?: string;
+      localId: string;
+      domain: string;
+      areaId?: string;
+      dbtModel: string;
+      table: string;
+      grain?: string;
+      keys: string[];
+      businessName?: string;
+      /** The entity as a setup draft holds it, written with the certification. */
+      drafted?: EntityBindingAuthoringInput;
+    };
+    const endpoint = (side: 'from' | 'to', relation: string, table: string, fallbackDomain?: string): Endpoint => {
+      const modeled = Object.entries(modeling.entities).find(([, entity]) => sameRelation(nodes[entity.dbtUniqueId]?.relation, relation));
+      if (modeled) {
+        const [key, entity] = modeled;
+        return { side, key, localId: entity.localId, domain: entity.domain, ...(entity.areaId ? { areaId: modelAreaLocalId(entity.areaId) } : {}), dbtModel: entity.dbtUniqueId, table, ...(entity.grain ? { grain: entity.grain } : {}), keys: entity.keys ?? [] };
+      }
+      const node = Object.values(nodes).find((candidate) => sameRelation(candidate.relation, relation));
+      if (!node) throw coded('JOIN_TABLE_NOT_MODELED', `${table} is not in the project's model or its warehouse listing. Sync the warehouse schema, then try again.`);
+      const draftedEntity = (draftedProposal?.operations ?? []).flatMap((operation) => (
+        operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' && operation.change.value.dbtModel === node.uniqueId ? [operation.change.value] : []
+      ))[0];
+      if (draftedEntity) {
+        return { side, localId: draftedEntity.id, domain: draftedEntity.domain, ...(draftedEntity.areaId ? { areaId: draftedEntity.areaId } : {}), dbtModel: node.uniqueId, table, ...(draftedEntity.grain ? { grain: draftedEntity.grain } : {}), keys: draftedEntity.keys ?? [], drafted: draftedEntity };
+      }
+      const localId = (node.name || table).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `${side}_table`;
+      return { side, localId, domain: fallbackDomain ?? defaultAuthoringDomainId(manifest), dbtModel: node.uniqueId, table, keys: [], businessName: wordsFor(table) };
+    };
+    const fromSide = endpoint('from', edge.fromRelation, edge.fromTable);
+    const toSide = endpoint('to', edge.toRelation, edge.toTable, fromSide.domain);
+
+    // The relationship as its source holds it.
+    const modelRelationship = edge.origin === 'model'
+      ? Object.values(modeling.relationships).find((candidate) => (candidate.qualifiedId ?? candidate.id) === edge.id || candidate.id === edge.id)
+      : undefined;
+    const draftedOperation = draftedProposal?.operations.find((operation) => operation.kind === 'modeling_change'
+      && operation.change.operation === 'upsert_relationship'
+      && `${draftedProposal.id}:${operation.id ?? operation.change.value.id}` === edge.id);
+    const draftedRelationship = draftedOperation?.kind === 'modeling_change' && draftedOperation.change.operation === 'upsert_relationship' ? draftedOperation.change.value : undefined;
+    if (edge.origin === 'model' && !modelRelationship) throw coded('JOIN_NOT_FOUND', `The relationship behind ${source.title} → ${join.label} is not in the model any more. Refresh this App's data.`);
+    if (edge.origin === 'drafted' && !draftedRelationship) throw coded('JOIN_NOT_FOUND', `The setup draft of ${source.title} → ${join.label} is not waiting any more. Refresh this App's data.`);
+    if (modelRelationship?.status === 'certified' && !modelRelationship.staleCertification) throw coded('ALREADY_CERTIFIED', `The join ${source.title} → ${join.label} is already certified.`);
+    const cardinality = modelRelationship?.cardinality ?? draftedRelationship?.cardinality ?? edge.cardinality;
+    const maxUnmatchedShare = modelRelationship?.maxUnmatchedShare ?? draftedRelationship?.maxUnmatchedShare;
+    const validationScope = modelRelationship?.validationScope ?? draftedRelationship?.validationScope;
+    const crossDomain = fromSide.domain !== toSide.domain;
+    if (edge.origin === 'dbt_test' && crossDomain) {
+      throw coded('JOIN_CROSS_DOMAIN', `${edge.fromTable} and ${edge.toTable} belong to different domains; a join across domains is certified in Modeling, with its export and import.`);
+    }
+
+    // The fresh check: the Modeling page's one validation statement, bounded (aggregates only).
+    const spec = {
+      fromRelation: edge.fromRelation,
+      toRelation: edge.toRelation,
+      keys: edge.keys,
+      cardinality,
+      fanout: 'safe' as const,
+      ...(maxUnmatchedShare !== undefined ? { maxUnmatchedShare } : {}),
+      ...(validationScope ? { scope: validationScope } : {}),
+    };
+    const connection = await resolveExecutionConnection(requestBody);
+    const evidence = await validateRelationshipOnWarehouse(
+      { ...spec, keyTypes: catalogKeyTypes(manifest, spec, undefined, projectRoot) },
+      (sql) => executor.executeQuery(sql, [], {}, connection),
+      (identifier) => getDialect(connection.driver).quoteIdentifier(identifier),
+      new Date(),
+      connection.driver,
+    );
+
+    // The Dataset's own row key, checked now, proves the grain of its table when the model lacks it.
+    const rowKeyChecks: { from?: RowKeyCheck; to?: RowKeyCheck } = {};
+    const datasetSide: 'from' | 'to' | undefined = join.parent
+      ? undefined
+      : sameRelation(edge.toRelation, join.relation) ? 'from' : sameRelation(edge.fromRelation, join.relation) ? 'to' : undefined;
+    const datasetEndpoint = datasetSide === 'from' ? fromSide : datasetSide === 'to' ? toSide : undefined;
+    const rowKeys = descriptor.grain.keyFields ?? [];
+    if (datasetSide && datasetEndpoint && !(datasetEndpoint.grain && datasetEndpoint.keys.length) && rowKeys.length && !descriptor.grain.aggregate) {
+      const checkSource = `the row key of ${source.title}, checked just now`;
+      try {
+        await validateDatasetSourceGrain({ sourceId: source.sourceId, sourceRevision: source.sourceRevision });
+        rowKeyChecks[datasetSide] = { keys: rowKeys, ok: true, source: checkSource };
+      } catch (error) {
+        rowKeyChecks[datasetSide] = { keys: rowKeys, ok: false, error: `${rowKeys.join(', ')} did not pass its check: ${error instanceof Error ? error.message.replace(/^[A-Z_]+:\s*/, '') : String(error)}`, source: checkSource };
+      }
+    }
+    const noun = (table: string) => singularWords(table).toLowerCase();
+    const decision = joinCertifyDecision({
+      from: { table: edge.fromTable, noun: noun(edge.fromTable), ...(fromSide.grain ? { grain: fromSide.grain } : {}), keys: fromSide.keys },
+      to: { table: edge.toTable, noun: noun(edge.toTable), ...(toSide.grain ? { grain: toSide.grain } : {}), keys: toSide.keys },
+      keys: edge.keys,
+      cardinality,
+      evidence,
+      sentence: join.sentence,
+      rowKeyChecks,
+      // Totals a wrong join would inflate: sums first, then the other approved measures.
+      measures: descriptor.fields
+        .flatMap((field) => (field.kind === 'measure' && field.status === 'approved' ? [field] : []))
+        .sort((left, right) => Number(right.aggregation === 'sum') - Number(left.aggregation === 'sum'))
+        .map((field) => field.name),
+    });
+
+    // What certifying writes: each side's entity (grain and keys filled from
+    // the checks, or as the setup draft holds it), then the relationship
+    // certified against them, with the fresh evidence and who certified it.
+    const operations: ContextAuthoringOperation[] = [];
+    const entityOperationIds: string[] = [];
+    if (decision.ok && decision.certifiedAgainst) {
+      for (const side of [fromSide, toSide]) {
+        const fill = decision.fills.find((candidate) => candidate.side === side.side);
+        if (!fill && side.key) continue;
+        const value: EntityBindingAuthoringInput = {
+          ...(side.drafted ?? {}),
+          id: side.localId,
+          domain: side.domain,
+          dbtModel: side.dbtModel,
+          ...(side.areaId ? { areaId: side.areaId } : {}),
+          ...(!side.key && !side.drafted && side.businessName ? { businessName: side.businessName, status: 'draft' as const } : {}),
+          ...(fill ? { grain: fill.grain, keys: fill.keys } : {}),
+        };
+        const id = `app-certify-join:entity:${side.domain}:${side.localId}`;
+        if (operations.some((operation) => operation.id === id)) continue;
+        operations.push({ id, kind: 'modeling_change', change: { operation: 'upsert_entity', value }, evidence: [fill ? fill.because : 'Drafted in setup; written with the join it belongs to.'] });
+        entityOperationIds.push(id);
+      }
+      const certifiedBy = hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot));
+      const certifiedByName = hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot);
+      const certifiedAgainst = {
+        ...decision.certifiedAgainst,
+        certifiedAt: new Date().toISOString(),
+        ...(certifiedBy ? { certifiedBy } : {}),
+        ...(certifiedByName && certifiedByName !== certifiedBy ? { certifiedByName } : {}),
+      };
+      const reference = (side: Endpoint) => (side.domain === fromSide.domain ? side.localId : `${side.domain}::entity::${side.localId}`);
+      if (modelRelationship && modelRelationship.fanout === 'safe') {
+        relationshipOperations.push({
+          id: `app-certify-join:relationship:${modelRelationship.ownerDomain ?? fromSide.domain}:${modelRelationship.localId}`,
+          kind: 'modeling_change',
+          dependsOn: entityOperationIds,
+          change: { operation: 'record_relationship_validation', value: { id: modelRelationship.localId, domain: modelRelationship.ownerDomain ?? fromSide.domain, sourcePath: modelRelationship.sourcePath, validation: evidence, certifiedAgainst } },
+          evidence: [`warehouse check passed ${evidence.checkedAt}`],
+        });
+      } else {
+        const base: RelationshipAuthoringInput = modelRelationship
+          ? { id: modelRelationship.localId, domain: modelRelationship.ownerDomain ?? fromSide.domain, ...(modelRelationship.areaId ? { areaId: modelAreaLocalId(modelRelationship.areaId) } : {}), from: reference(fromSide), to: reference(toSide), keys: modelRelationship.keys, cardinality, fanout: 'safe' }
+          : draftedRelationship
+            ? { ...draftedRelationship }
+            : {
+              id: nextRelationshipId(fromSide.localId, toSide.localId, Object.values(modeling.relationships).filter((candidate) => (candidate.ownerDomain ?? '') === fromSide.domain).map((candidate) => candidate.localId)),
+              domain: fromSide.domain,
+              from: fromSide.localId,
+              to: reference(toSide),
+              keys: edge.keys,
+              cardinality,
+              fanout: 'safe',
+              rationale: `Declared by the dbt relationships test ${edge.id}; checked on the warehouse and certified from an App.`,
+            };
+        relationshipOperations.push({
+          id: `app-certify-join:relationship:${base.domain}:${base.id}`,
+          kind: 'modeling_change',
+          dependsOn: entityOperationIds,
+          change: { operation: 'upsert_relationship', value: { ...base, cardinality, fanout: 'safe', status: 'certified', validation: evidence, certifiedAgainst } },
+          evidence: [`warehouse check passed ${evidence.checkedAt}`],
+        });
+      }
+      operations.push(...relationshipOperations);
+    }
+    const relationshipId = (() => {
+      const change = relationshipOperations[0]?.kind === 'modeling_change' ? relationshipOperations[0].change : undefined;
+      const value = change && (change.operation === 'upsert_relationship' || change.operation === 'record_relationship_validation') ? change.value : undefined;
+      return value ? `${value.domain}::relationship::${value.id}` : modelRelationship?.qualifiedId ?? edge.id;
+    })();
+    const review = {
+      sourceId: source.sourceId,
+      joinId: join.id,
+      name: `${source.title} → ${join.label}`,
+      from: edge.fromTable,
+      to: edge.toTable,
+      keysSentence: decision.keysSentence,
+      ...(decision.checkedSentence ? { checkedSentence: decision.checkedSentence } : {}),
+      checkLines: decision.checkLines,
+      doubleCount: decision.doubleCount,
+      blockers: decision.blockers,
+      fills: decision.fills,
+      canVouch: decision.ok,
+      origin: edge.origin,
+      relationshipId,
+      ...(join.changedSinceCertified ? { previousCertification: bylineForViewer({ by: join.changedSinceCertified.by, name: join.changedSinceCertified.name, at: join.changedSinceCertified.at }, thisPerson(projectRoot)) } : {}),
+      checkedAt: evidence.checkedAt,
+    };
+    return { source, join, edge, decision, operations, review, draftedProposal, draftedOperation, snapshotId: snapshot.snapshotId, relationshipId };
+  };
+
+  /**
+   * After a setup draft's join is certified, the draft waits only for the
+   * rest of what it holds: the certified relationship and the entities
+   * written with it leave it, so saving the draft later never writes the
+   * join back as a draft.
+   */
+  const withoutCertifiedJoin = (proposal: ContextAuthoringProposalV1, written: ReadonlyArray<ContextAuthoringOperation>, relationshipOperationId: string | undefined): void => {
+    const writtenEntities = new Set(written.flatMap((operation) => (
+      operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' ? [`${operation.change.value.domain}::${operation.change.value.id}`] : []
+    )));
+    const removed = new Set<string>();
+    const remaining = proposal.operations.filter((operation) => {
+      const drop = operation.id === relationshipOperationId
+        || (operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' && writtenEntities.has(`${operation.change.value.domain}::${operation.change.value.id}`));
+      if (drop) removed.add(operation.id);
+      return !drop;
+    }).map((operation) => (operation.dependsOn?.some((id) => removed.has(id)) ? { ...operation, dependsOn: operation.dependsOn.filter((id) => !removed.has(id)) } : operation));
+    const at = new Date().toISOString();
+    const keepsSomething = remaining.some((operation) => operation.kind === 'modeling_change' && operation.change.operation !== 'upsert_domain' && operation.change.operation !== 'upsert_area');
+    if (!keepsSomething) {
+      contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: at });
+      return;
+    }
+    const next = previewContextAuthoring({
+      origin: proposal.origin,
+      operations: remaining,
+      sourceRunId: proposal.sourceRunId,
+      sourceArtifactId: proposal.sourceArtifactId,
+      revision: (proposal.revision ?? 1) + 1,
+    });
+    contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: at, supersededBy: next.id });
+  };
+
+  /**
+   * Save after something else in the project changed (new-user round 2,
+   * problem 4): certifying a table in an App, a setup step writing
+   * dql.config.json, a block edit. The reviewed changes are previewed again
+   * on the current project. When every file they write comes out exactly as
+   * reviewed, nothing the person looked at moved, so they are saved as they
+   * are. When a drafted table or join comes out differently, the person is
+   * asked, in plain words naming what changed.
+   */
+  const rebaseReviewedProposal = (reviewed: ContextAuthoringProposalV1): ContextAuthoringProposalV1 => {
+    let rebased: ContextAuthoringProposalV1;
+    try {
+      rebased = previewContextAuthoring({
+        origin: reviewed.origin,
+        operations: reviewed.operations,
+        sourceRunId: reviewed.sourceRunId,
+        sourceArtifactId: reviewed.sourceArtifactId,
+        revision: (reviewed.revision ?? 1) + 1,
+        persist: false,
+      });
+    } catch {
+      throw Object.assign(new Error(staleProposalMessage(reviewed, reviewed.operations.map((operation) => operation.id))), { code: 'PROPOSAL_STALE' });
+    }
+    const changed = proposalRebaseConflicts(reviewed, rebased);
+    if (changed.length || rebased.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) {
+      throw Object.assign(new Error(staleProposalMessage(reviewed, changed)), { code: 'PROPOSAL_STALE' });
+    }
+    return rebased;
   };
 
   /**
@@ -8608,16 +9183,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         request.question,
         datasetWorkspace.list(),
       );
+      const cellRequest = withSelectedCellContext(request);
       const authoringRequest: AgentRunRequest = requestedNotebookDataset
         ? {
-            ...request,
+            ...cellRequest,
             question: [
-              request.question,
+              cellRequest.question,
               '',
               `Notebook SQL fallback contract: ${requestedNotebookDataset.alias} is a local dataset, not a warehouse table. Produce the warehouse-only row-level extraction needed for the requested analysis. Include the warehouse join key that corresponds to the local dataset identifier, plus the requested order/detail columns. Do not return an aggregate certified answer and do not reference ${requestedNotebookDataset.alias} in the warehouse SQL. The UI will stage this bounded result and create the local join cell after confirmation.`,
             ].join('\n'),
           }
-        : request;
+        : cellRequest;
       // P4: route Notebook SQL-cell generation through the SAME tool-rich governed
       // pipeline Ask AI uses (schema-discovery tools P3 + declined-retry P1 + budget
       // recovery P2), instead of the tool-less buildFromPrompt path. A SQL cell only
@@ -8726,7 +9302,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // Add to Block Studio.
       const governedResult: AgentRouteExecutorResult = carriedDqlArtifact && (attempt ?? 0) === 0
         ? {
-            summary: 'Reused the governed answer artifact as a transient Block AI draft.',
+            summary: 'Reused the governed answer artifact as a transient saved query draft.',
             answer: 'Prepared the existing governed DQL as an ownerless review draft. No file was changed.',
             artifacts: [agentRunArtifact(
               'answer',
@@ -8741,7 +9317,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 'Reused governed DQL artifact',
                 true,
                 'info',
-                'Reused the exact answer artifact without regenerating SQL or writing a block file.',
+                'Reused the exact answer artifact without regenerating SQL or writing a saved query file.',
               ),
             ],
           }
@@ -8800,7 +9376,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         },
       };
       return {
-        summary: 'Prepared an ownerless, review-required DQL block draft. No file was changed.',
+        summary: 'Prepared an ownerless, review-required saved query draft. No file was changed.',
         answer: governedResult.answer,
         status: 'needs_review',
         trustState: 'review_required',
@@ -8816,15 +9392,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ...(governedResult.evaluations ?? []),
           agentRunEvaluation(
             'block-commit-boundary',
-            'Explicit Block Studio commit',
+            'Explicit save from Saved queries',
             true,
             'warning',
-            'Generation produced an ownerless transient DQL artifact. Add to Block Studio is the only action that writes the review draft.',
+            'Generation produced an ownerless transient DQL artifact. Add to saved queries is the only action that writes the review draft.',
             result,
           ),
         ],
         nextActions: [
-          { id: 'add-to-block-studio', label: 'Add to Block Studio', artifactKind: 'dql_block_draft' },
+          { id: 'add-to-block-studio', label: 'Add to saved queries', artifactKind: 'dql_block_draft' },
         ],
       };
     },
@@ -9038,7 +9614,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       emit({
         type: 'executor.started',
-        message: 'Planning the app: matching certified blocks and finding coverage gaps.',
+        message: 'Planning the app: matching certified saved queries and finding coverage gaps.',
         route: 'app_build',
       });
       // Two-phase build: this run only PROPOSES the content list (no files). The
@@ -9102,10 +9678,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return {
         summary: proposed
           ? `Proposed ${certifiedCount} certified tile${certifiedCount === 1 ? '' : 's'}`
-            + (semanticCount > 0 ? ` + ${semanticCount} reviewed semantic tile${semanticCount === 1 ? '' : 's'}` : '')
-            + (generatedCount > 0 ? ` + ${generatedCount} AI-generated (review required)` : '')
+            + (semanticCount > 0 ? ` + ${semanticCount} Metrics tile${semanticCount === 1 ? '' : 's'} that need${semanticCount === 1 ? 's' : ''} review` : '')
+            + (generatedCount > 0 ? ` + ${generatedCount} Draft SQL tile${generatedCount === 1 ? '' : 's'} that need${generatedCount === 1 ? 's' : ''} review` : '')
             + (gapCount > 0 ? `; ${gapCount} question${gapCount === 1 ? '' : 's'} still uncovered` : '')
-            + '. Review the list and confirm to create the app.'
+            + '. Review the list, then open it in App Studio to check the data before AI builds pages.'
           : 'App build needs more certified DQL coverage before a proposal can be assembled.',
         status: proposed ? 'needs_review' : undefined,
         trustState: proposed ? 'review_required' : undefined,
@@ -9127,14 +9703,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             proposed,
             proposed ? 'info' : 'blocking',
             proposed
-              ? `Proposal is backed by ${certifiedCount} certified tile${certifiedCount === 1 ? '' : 's'}; nothing is created until you confirm.`
+              ? `Proposal is backed by ${certifiedCount} certified tile${certifiedCount === 1 ? '' : 's'}; it opens as an App Studio draft and nothing is written to the project until you publish.`
               : session.error ?? 'No certified app tiles matched the request.',
             session,
           ),
         ],
         nextActions: proposed
           ? [
-              { id: 'confirm-app-build', label: 'Create this app', artifactKind: 'app_proposal' },
+              { id: 'confirm-app-build', label: 'Open in App Studio', artifactKind: 'app_proposal' },
               { id: 'adjust-app-build', label: 'Adjust the plan', route: 'app_build', artifactKind: 'app_proposal' },
             ]
           : [
@@ -9834,6 +10410,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       parameters?: Record<string, unknown>;
       parameterSources?: Record<string, 'policy' | 'explicit' | 'question' | 'prior_result' | 'surface' | 'default'>;
       rowLimit?: number;
+      /**
+       * App page filters for a draft tile: wraps the compiled SQL with the
+       * same governed wrapper and parameter rules as a Saved query tile.
+       */
+      applyFilters?: (input: {
+        sql: string;
+        sqlParams: SQLParamSpec[];
+        variables: Record<string, unknown>;
+      }) => { sql: string; sqlParams: SQLParamSpec[]; variables: Record<string, unknown> };
     },
     executionConnection?: ConnectionConfig,
     executionConnectionName?: string,
@@ -9914,7 +10499,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // joins, aggregation, aliases, or any other frozen artifact semantics.
     const compiledSql = semanticCompose?.sql ?? plan!.sql;
     const qualificationRepairs: string[] = [];
-    const executableSql = !semanticCompose?.sql && metadata.qualifiedSchemaContext?.length
+    const qualifiedSql = !semanticCompose?.sql && metadata.qualifiedSchemaContext?.length
       ? qualifyUnambiguousSqlRelationsFromSchema(
           compiledSql,
           metadata.qualifiedSchemaContext,
@@ -9922,6 +10507,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           activeConnection.driver,
         )
       : compiledSql;
+    const filtered = invocationInput?.applyFilters?.({
+      sql: qualifiedSql,
+      sqlParams: [...(plan?.sqlParams ?? [])],
+      variables: { ...(plan?.variables ?? {}), ...invocation.values },
+    });
+    const executableSql = filtered?.sql ?? qualifiedSql;
+    const executionSqlParams = filtered?.sqlParams ?? plan?.sqlParams;
+    const executionVariables = filtered?.variables ?? { ...(plan?.variables ?? {}), ...invocation.values };
 
     if (metadata.askV2Closure) {
       const closureValidation = validateAuthorizedSqlReferences(executableSql, metadata.askV2Closure.contextPack, {
@@ -9982,8 +10575,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       // governed behavior when no preview bound was requested.
       enforceReadOnly: invocationInput?.rowLimit !== undefined,
       rowLimit: invocationInput?.rowLimit,
-      sqlParams: plan?.sqlParams,
-      variables: { ...(plan?.variables ?? {}), ...invocation.values },
+      sqlParams: executionSqlParams,
+      variables: executionVariables,
       executePrepared: async (preparation) => {
         return executePreparedArtifactTraceBoundary({
           preparedSql: preparation.executedSql,
@@ -10009,8 +10602,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             }
             return executor.executeQuery(
               preparation.executedSql,
-              plan?.sqlParams ?? [],
-              runtimeVariables({ ...(plan?.variables ?? {}), ...invocation.values }),
+              executionSqlParams ?? [],
+              runtimeVariables(executionVariables),
               preparation.connection,
             );
           }
@@ -10270,7 +10863,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     try {
       artifact = generatedSqlArtifactContract(question, sql, seed);
     } catch (error) {
-      warnings.push(`This answer could not be captured as a reusable DQL block: ${apiErrorMessage(error)}`);
+      warnings.push(`This answer could not be captured as a reusable saved query: ${apiErrorMessage(error)}`);
       return undefined;
     }
 
@@ -10282,7 +10875,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ? `it still needs values for ${invocation.unresolvedParameters.join(', ')}`
           : undefined;
       if (divergence) {
-        warnings.push(`The reusable DQL block for this answer needs review before reuse: ${divergence}`);
+        warnings.push(`The reusable saved query for this answer needs review before reuse: ${divergence}`);
         // Keep the declared parameter contract even when the block cannot run
         // as-is. This branch is precisely "it still needs values for X", so the
         // parameter-input surface needs the list in order to ASK for them —
@@ -10303,7 +10896,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         ...(Object.keys(invocation.values).length > 0 ? { parameterValues: invocation.values } : {}),
       });
     } catch (error) {
-      warnings.push(`The reusable DQL block for this answer needs review before reuse: ${apiErrorMessage(error)}`);
+      warnings.push(`The reusable saved query for this answer needs review before reuse: ${apiErrorMessage(error)}`);
       return withCandidates({ ...artifact, trustState: 'review_required', compiledSql: executedSql });
     }
   };
@@ -12602,7 +13195,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       || replacementFor.has(match.name.toLowerCase())
       || (match.objectKey && replacementFor.has(match.objectKey.toLowerCase()));
     if (documentedReplacement) return null;
-    return `Likely duplicate of ${match.name} (${match.kind}, ${Math.round(match.score * 100)}% match). Reuse the existing block, extend it, or document this draft as a replacement before certification.`;
+    return `Likely duplicate of ${match.name} (${match.kind}, ${Math.round(match.score * 100)}% match). Reuse the existing saved query, extend it, or document this draft as a replacement before certification.`;
   };
 
   const runBlockStudioPreviewSource = async (
@@ -12653,7 +13246,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!executableSql) {
       const message = semanticCompose?.diagnostics.find((item) => item.severity === 'error')?.message
         ?? validation.diagnostics.find((item) => item.severity === 'error')?.message
-        ?? 'No executable SQL found in block source.';
+        ?? 'No executable SQL found in the saved query.';
       throw new Error(message);
     }
     const plan = buildExecutionPlan(
@@ -12735,7 +13328,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           name: 'build execution plan',
           passed: false,
           error: semanticCompose?.diagnostics.find((diagnostic) => diagnostic.severity === 'error')?.message
-            ?? 'Could not build an execution plan for this block.',
+            ?? 'Could not build an execution plan for this saved query.',
         }],
         runAt: new Date(),
       };
@@ -12831,7 +13424,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     options.reportProgress?.({
       phase: 'previewing',
       progress: 30,
-      message: 'Compiling and previewing the saved block.',
+      message: 'Compiling and previewing the saved query.',
     });
     try {
       preview = await runBlockStudioPreviewSource(source, undefined, {}, timer);
@@ -12843,7 +13436,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     options.reportProgress?.({
       phase: 'testing',
       progress: 60,
-      message: 'Evaluating declared block tests.',
+      message: 'Evaluating the saved query tests.',
     });
     try {
       testResults = preview
@@ -12948,14 +13541,47 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     via: CertificationSurface;
     enterprise: boolean;
     verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>>;
+    /** Plain-word checks this surface ran beyond the Certify checklist (row key, number formats). */
+    extraChecks?: string[];
   }): CertificationReceipt => buildCertificationReceipt({
     source: input.source,
-    certifiedBy: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false })) ?? parseBlockSourceMetadata(input.source).owner,
+    // The person certifying, never the project's configured owner (B6).
+    certifiedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(input.source).owner,
+    // The name "Certified by" shows: the host's display name, else git user.name.
+    certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
     via: input.via,
     enterprise: input.enterprise,
-    checks: passedCheckNames(input.verdict.checklist),
+    checks: [...(input.extraChecks ?? []), ...passedCheckNames(input.verdict.checklist)],
     warnings: input.verdict.certification.warnings.map((warning) => `${warning.rule}: ${warning.message}`),
   });
+
+  /**
+   * "Check and use" (design Q1): the block passed the same checks as Certify,
+   * so it becomes `review` with a `check:` record beside it in the companion
+   * YAML — who checked it, when, what the check found, for exactly this
+   * source. That is **Checked · Needs certifying**, never certified.
+   */
+  const recordBlockCheck = (blockPath: string, input: { checks: string[]; verdict?: Awaited<ReturnType<typeof certifyBlockStudioSource>>; hiddenColumns?: BlockCheckRecord['hiddenColumns'] }): BlockCheckRecord | null => {
+    setBlockStudioStatus(projectRoot, blockPath, 'review');
+    const companionPath = blockCompanionRelativePath(projectRoot, blockPath);
+    if (!companionPath) return null;
+    const source = readFileSync(join(projectRoot, blockPath), 'utf-8');
+    // A hand-written saved query may have no companion YAML yet: the check needs one to live in.
+    if (!existsSync(join(projectRoot, companionPath))) {
+      const meta = parseBlockSourceMetadata(source);
+      mkdirSync(dirname(join(projectRoot, companionPath)), { recursive: true });
+      writeFileSync(join(projectRoot, companionPath), dumpYaml({ name: meta.name, block: meta.name, ...(meta.domain ? { domain: meta.domain } : {}), reviewStatus: 'review' }, { lineWidth: 200, noRefs: true }), 'utf-8');
+    }
+    const record = buildCheckRecord({
+      source,
+      checkedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(source).owner,
+      checkedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
+      checks: [...input.checks, ...(input.verdict ? passedCheckNames(input.verdict.checklist) : [])],
+      ...(input.hiddenColumns?.length ? { hiddenColumns: input.hiddenColumns } : {}),
+    });
+    writeFileSync(join(projectRoot, companionPath), applyCompanionCheck(readFileSync(join(projectRoot, companionPath), 'utf-8'), record), 'utf-8');
+    return record;
+  };
 
   /**
    * Execute one already-resolved complete-source grain probe and retain only
@@ -13125,6 +13751,117 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       localPath: relative(projectRoot, prepared.persisted.path),
       eligible: prepared.evidence.status === 'passed',
     };
+  };
+
+  /**
+   * Fields for a saved query (design D1): read the column names and types of
+   * its result once per revision, through the ordinary execution preparation
+   * (dbt refs, read-only) and a one-row read, and keep them as local runtime
+   * state. The catalog then offers the result's columns as fields on the same
+   * shelves as a Dataset. Nothing is written to the block and its trust is
+   * unchanged. Reads of one source revision share one in-flight read.
+   */
+  type SavedQueryFieldsOutcome =
+    | { ok: true; source: ReturnType<typeof resolveAppSourceCatalogRecords>['items'][number]; read: boolean }
+    | { ok: false; status: number; code: string; error: string };
+  const savedQueryFieldReads = new Map<string, Promise<SavedQueryFieldsOutcome>>();
+  const readSavedQueryResultFields = async (input: { sourceId: string; connection?: ConnectionConfig; refresh?: boolean }): Promise<SavedQueryFieldsOutcome> => {
+    const snapshot = projectSnapshot();
+    if (input.refresh !== false) await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [input.sourceId], 'include_review_required');
+    const source = resolved.items[0];
+    if (!source || resolved.missingSourceIds.length > 0) {
+      return { ok: false, status: 404, code: 'DATASET_SOURCE_NOT_FOUND', error: 'That saved query is not in this project any more. Refresh the list.' };
+    }
+    if (source.capabilities.dataset) return { ok: true, source, read: false };
+    const block = source.kind === 'block' ? resolveDatasetSourceManifestBlock(snapshot.manifest, source.executionRef) : null;
+    if (!block || block.blockType === 'semantic' || source.capabilities.semanticModelId) {
+      return { ok: false, status: 409, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query. Only a saved query's result columns can be read as fields.` };
+    }
+    if (!isPlainSavedQueryBlock(block)) {
+      return { ok: false, status: 409, code: 'SAVED_QUERY_ALREADY_DATASET', error: `${source.title} already has fields.` };
+    }
+    if ((block.parameters?.length ?? 0) > 0) {
+      return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens can't read its columns. Add it as a table, chart or KPI.` };
+    }
+    const key = `${source.sourceId}\u0000${source.sourceRevision}`;
+    const pending = savedQueryFieldReads.get(key);
+    if (pending) return pending;
+    const reading = (async (): Promise<SavedQueryFieldsOutcome> => {
+      const blockSource = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+      const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+      if (sourceRevision !== source.sourceRevision) {
+        return { ok: false, status: 409, code: 'SOURCE_CHANGED', error: `${source.title} changed while ZLens was reading it. Try again.` };
+      }
+      const connection = input.connection ?? requireActiveConnection();
+      const tableMapping = await resolveSemanticTableMapping(executor, connection, semanticLayer, projectRoot);
+      const semanticCompose = semanticLayer
+        ? await composeSemanticBlockSqlForRuntime(blockSource, semanticLayer, {
+            driver: connection.driver,
+            tableMapping,
+            projectRoot,
+            projectConfig,
+            detectedProvider: semanticDetectedProvider,
+          })
+        : null;
+      const plan = buildExecutionPlan(
+        { id: `saved-query-result-${source.sourceId}`, type: 'dql', source: blockSource, title: block.name },
+        { semanticLayer, driver: connection.driver, tableMapping, semanticSql: semanticCompose?.sql ?? undefined },
+      );
+      const sql = semanticCompose?.sql ?? plan?.sql;
+      if (!sql) return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_NO_SQL', error: `${source.title} has no SQL ZLens can run to read its columns.` };
+      if ((plan?.sqlParams?.length ?? 0) > 0) {
+        return { ok: false, status: 409, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens can't read its columns. Add it as a table, chart or KPI.` };
+      }
+      const preparation = await prepareAnalyticalExecutionSql({
+        // One row: some drivers report no columns for an empty result.
+        sql: `SELECT * FROM ${savedQueryRelation(sql, connection.driver)} LIMIT 1`,
+        subject: 'Saved query result fields',
+        executor,
+        connection,
+        projectRoot,
+        projectConfig,
+        enforceReadOnly: true,
+      });
+      const shape = await executor.executePositional(preparation.executedSql, [], preparation.connection, {
+        maxRows: 1, maxBytes: 4 * 1024 * 1024, batchSize: 1, deadlineMs: 60_000, purpose: 'metadata',
+      });
+      const columns = shape.columns
+        .filter((column) => Boolean(column.name))
+        .map((column) => ({ name: column.name, ...(column.type && column.type !== 'unknown' && column.type !== 'null' ? { type: column.type } : {}) }));
+      if (!columns.length) return { ok: false, status: 409, code: 'SAVED_QUERY_NO_COLUMNS', error: `${source.title} returned no columns ZLens could read.` };
+      recordSavedQueryResultColumns(projectRoot, { sourceId: source.sourceId, sourceRevision, columns, typesFrom: 'probe' });
+      // A batch refreshes the catalog once, after its last read.
+      if (input.refresh === false) return { ok: true, source, read: true };
+      await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+      const refreshed = resolveAppSourceCatalogRecords(projectRoot, [source.sourceId], 'include_review_required').items[0];
+      if (!refreshed?.capabilities.dataset) {
+        return { ok: false, status: 409, code: 'SAVED_QUERY_NO_FIELDS', error: `None of the columns of ${source.title} can be used as fields (names must be plain words like gross_revenue).` };
+      }
+      return { ok: true, source: refreshed, read: true };
+    })();
+    savedQueryFieldReads.set(key, reading);
+    try {
+      return await reading;
+    } finally {
+      savedQueryFieldReads.delete(key);
+    }
+  };
+  /**
+   * The AI paths (the App planner, the Ask handoff): read the result fields
+   * of a bounded set of saved queries, one after another, then refresh the
+   * catalog once. A saved query that can't be read stays as it is.
+   */
+  const readSavedQueryResultFieldsBatch = async (sourceIds: string[]): Promise<void> => {
+    if (!datasetsAppFeatureEnabled(projectConfig)) return;
+    const snapshot = projectSnapshot();
+    await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+    let readAny = false;
+    for (const sourceId of Array.from(new Set(sourceIds)).slice(0, 12)) {
+      const outcome = await readSavedQueryResultFields({ sourceId, refresh: false }).catch(() => undefined);
+      if (outcome?.ok && outcome.read) readAny = true;
+    }
+    if (readAny) await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
   };
 
   /**
@@ -13311,7 +14048,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   ): Promise<DatasetTileSaveAsBlockResponse> => {
     const refuse = (code: string, error: string, status = 409): DatasetTileSaveAsBlockResponse => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('DATASET_TILE_SAVE_DISABLED', 'Dataset tile authoring is disabled for this project. Enable apps.datasets before saving a reusable block.');
+      return refuse('DATASET_TILE_SAVE_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before saving a reusable saved query.');
     }
     const run = dashboardRunEvidence.get(input.runId);
     if (!run || run.expiresAt < Date.now()) {
@@ -13355,7 +14092,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (currentPersonaFingerprint !== execution.personaPolicyFingerprint) {
       return refuse('DATASET_TILE_SAVE_POLICY_STALE', 'The active App persona changed after this Dataset result ran. Run the current tile again before saving it.');
     }
-    const storedAuthorityErrors = datasetDraftStoredAuthorityErrors(dashboard, draft.sources, draft.sourcePolicy);
+    const storedAuthorityErrors = datasetDraftStoredAuthorityErrors(dashboard, draft.sources, APP_SOURCE_POLICY);
     if (storedAuthorityErrors.has(execution.sourceId)) {
       return refuse('DATASET_TILE_SAVE_SOURCE_REPAIR_REQUIRED', storedAuthorityErrors.get(execution.sourceId)!);
     }
@@ -13376,7 +14113,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
     try {
       await ensureMetadataCatalogFresh(projectRoot, { manifest: currentSnapshot.manifest, semanticLayer });
-      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], draft.sourcePolicy);
+      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], APP_SOURCE_POLICY);
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0
@@ -13440,7 +14177,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const message = error instanceof Error ? error.message : String(error);
       return refuse(message === 'BLOCK_EXISTS' ? 'DATASET_TILE_SAVE_PATH_EXISTS' : 'DATASET_TILE_SAVE_FAILED',
         message === 'BLOCK_EXISTS'
-          ? 'A review draft already uses that block path. Choose a different name.'
+          ? 'A review draft already uses that name. Choose a different name.'
           : `ZLens could not save this Dataset tile as a review draft: ${message}`,
         message === 'BLOCK_EXISTS' ? 409 : 400);
     }
@@ -13456,7 +14193,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   ): Promise<DatasetTileReplaceWithBlockResponse> => {
     const refuse = (code: string, error: string, status = 409): DatasetTileReplaceWithBlockResponse => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('DATASET_TILE_REPLACE_DISABLED', 'Dataset tile authoring is disabled for this project. Enable apps.datasets before replacing a tile.');
+      return refuse('DATASET_TILE_REPLACE_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before replacing a tile.');
     }
     const run = dashboardRunEvidence.get(input.runId);
     if (!run || run.expiresAt < Date.now()) {
@@ -13471,10 +14208,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return refuse('DATASET_TILE_REPLACE_NOT_SETTLED', 'This tile has no complete current Dataset execution evidence. Run the current tile again before replacing it.');
     }
     if (execution.comparison) {
-      return refuse('comparison_not_representable_as_single_block', 'This comparison uses multiple executions and result graph arithmetic, so it cannot replace the tile with one reusable SQL block. The Dataset tile remains runnable.');
+      return refuse('comparison_not_representable_as_single_block', 'This comparison uses multiple executions and result graph arithmetic, so it cannot replace the tile with one reusable saved query. The Dataset tile remains runnable.');
     }
     if (!execution.futureBindingsRepresentable || !execution.sql.trim() || execution.sql.includes('?')) {
-      return refuse('dataset_tile_dynamic_binding_not_representable', 'This tile has filters, parameters, or interactions that the saved fixed-value review block cannot represent. The Dataset tile remains unchanged.');
+      return refuse('dataset_tile_dynamic_binding_not_representable', 'This tile has filters, parameters, or interactions that the saved fixed-value review draft cannot represent. The Dataset tile remains unchanged.');
     }
 
     const normalizedBlockPath = normalize(input.blockPath).replaceAll('\\', '/').replace(/^\/+/, '');
@@ -13508,9 +14245,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!run.intentFingerprint || run.intentFingerprint !== currentIntent) {
       return refuse('DATASET_TILE_REPLACE_INTENT_STALE', 'The App page content changed after this result ran. Run the current tile again before replacing it.');
     }
-    if (draft.sourcePolicy !== 'include_review_required' && input.enableReviewRequired !== true) {
-      return refuse('DATASET_TILE_REPLACE_REVIEW_POLICY_REQUIRED', 'Replacing this tile uses a review-required block. Choose the explicit review-required replacement action to keep that source policy visible.');
-    }
 
     let blockSource: string;
     let blockSourceRevision: string;
@@ -13536,7 +14270,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         return refuse('DATASET_TILE_REPLACE_BLOCK_STALE', 'The selected review draft does not match this current Dataset tile and execution. Save a new review draft before replacing it.');
       }
     } catch (error) {
-      return refuse('DATASET_TILE_REPLACE_BLOCK_INVALID', `ZLens could not read this review draft as one executable block: ${error instanceof Error ? error.message : String(error)}`, 400);
+      return refuse('DATASET_TILE_REPLACE_BLOCK_INVALID', `ZLens could not read this review draft as one executable saved query: ${error instanceof Error ? error.message : String(error)}`, 400);
     }
 
     const snapshot = projectSnapshot();
@@ -13547,7 +14281,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (personaFingerprint !== execution.personaPolicyFingerprint) {
       return refuse('DATASET_TILE_REPLACE_POLICY_STALE', 'The active App persona changed after this Dataset result ran. Run the current tile again before replacing it.');
     }
-    if (datasetDraftStoredAuthorityErrors(dashboard, draft.sources, draft.sourcePolicy).has(execution.sourceId)) {
+    if (datasetDraftStoredAuthorityErrors(dashboard, draft.sources, APP_SOURCE_POLICY).has(execution.sourceId)) {
       return refuse('DATASET_TILE_REPLACE_SOURCE_REPAIR_REQUIRED', 'The selected Dataset source needs repair before this tile can be replaced.');
     }
     const binding = dashboard.datasets?.find((candidate) => candidate.sourceId === execution.sourceId && candidate.sourceRevision === execution.sourceRevision);
@@ -13560,7 +14294,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
     try {
       await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
-      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], draft.sourcePolicy);
+      const resolved = resolveAppSourceCatalogRecords(projectRoot, [execution.sourceId], APP_SOURCE_POLICY);
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0 || source.sourceRevision !== execution.sourceRevision
@@ -13696,9 +14430,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         layout: { ...dashboard.layout, items: dashboard.layout.items.map((item) => item.i === tile.i ? replacementTile : item) },
       };
       const operations: AppBuildDraftOperation[] = [];
-      if (draft.sourcePolicy !== 'include_review_required') {
-        operations.push({ type: 'set_source_policy', sourcePolicy: 'include_review_required' });
-      }
       operations.push({ type: 'upsert_source', source: reviewSource });
       operations.push({ type: 'upsert_page', page: replacementPage });
       operations.push({
@@ -13749,7 +14480,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   }): Promise<SemanticConversionPrepared | Extract<SemanticTileConversionPreviewResponse, { ok: false }>> => {
     const refuse = (code: string, error: string, status = 409): Extract<SemanticTileConversionPreviewResponse, { ok: false }> => ({ ok: false, code, error, status });
     if (!datasetsAppFeatureEnabled(projectConfig)) {
-      return refuse('SEMANTIC_TILE_CONVERSION_DISABLED', 'Dataset tile authoring is disabled for this project. Enable apps.datasets before converting this semantic tile.');
+      return refuse('SEMANTIC_TILE_CONVERSION_DISABLED', 'Dataset tile authoring is turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before converting this semantic tile.');
     }
     const storage = new LocalAppStorage(defaultLocalAppsDbPath(projectRoot), { owner: currentRecordOwner() });
     let draft: AppBuildDraft | null;
@@ -13784,17 +14515,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     } catch (error) {
       return refuse('SEMANTIC_TILE_CONVERSION_SOURCE_STALE', `ZLens could not refresh the governed source catalog: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], draft.sourcePolicy);
+    const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], APP_SOURCE_POLICY);
     const source = resolved.items[0];
     const descriptor = source?.capabilities.dataset;
     if (!source || !descriptor || resolved.missingSourceIds.length > 0 || source.kind !== 'semantic') {
       return refuse('SEMANTIC_TILE_CONVERSION_SOURCE_STALE', 'The legacy semantic tile no longer resolves to one current governed semantic Dataset source. Refresh or keep the original tile.');
     }
     if (!source.eligibility.localPreview) {
-      return refuse('APP_BUILD_REVIEW_POLICY_REQUIRED', 'The current governed semantic source is not eligible for this local preview under the App source policy.');
-    }
-    if (draft.sourcePolicy === 'governed_only' && (source.lifecycle !== 'certified' || source.trust !== 'certified')) {
-      return refuse('APP_BUILD_REVIEW_POLICY_REQUIRED', 'This conversion keeps the source review-required. Enable review-required sources explicitly or select a certified source.');
+      return refuse('APP_BUILD_DATASET_RETIRED', 'The current semantic source is retired. Keep the original tile or choose current data.');
     }
     const semanticModelName = tile.semantic.semanticModelRefs.length === 1
       ? tile.semantic.semanticModelRefs[0]!.trim()
@@ -13877,15 +14605,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const latestTile = latestDashboard?.layout.items.find((item) => item.i === input.tileId);
       if (!latestDraft || latestDraft.revision !== draft.revision || latestDraft.proposalHash !== draft.proposalHash
         || !latestTile?.semantic || fingerprintDashboardRuntimeState(latestTile.semantic) !== fingerprintDashboardRuntimeState(legacySemantic)) return undefined;
-      const latestResolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], latestDraft.sourcePolicy);
+      const latestResolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], APP_SOURCE_POLICY);
       const latestSource = latestResolved.items[0];
       const latestDescriptor = latestSource?.capabilities.dataset;
       if (!latestSource || !latestDescriptor || latestResolved.missingSourceIds.length > 0
         || latestSource.kind !== 'semantic' || latestSource.sourceRevision !== source.sourceRevision
         || latestSource.snapshotId !== source.snapshotId
         || latestDescriptor.contractRef.fingerprint !== descriptor.contractRef.fingerprint
-        || !latestSource.eligibility.localPreview
-        || (latestDraft.sourcePolicy === 'governed_only' && (latestSource.lifecycle !== 'certified' || latestSource.trust !== 'certified'))) return undefined;
+        || !latestSource.eligibility.localPreview) return undefined;
       const latestPersona = activePersonaPolicyFingerprint();
       return {
         datasetId: source.sourceId,
@@ -14316,6 +15043,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         versionStatus,
         retrievalHealth,
         askRuntimeMode: askAgentRuntimeMode,
+        evalCassetteMode: evalCassetteRuntimeMode(),
         ...(opts.instanceId ? { instanceId: opts.instanceId } : {}),
       }));
       return;
@@ -14425,8 +15153,45 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         acknowledgedAt: new Date().toISOString(),
       };
       writeUserPrefs(singleUserPrefsPath, prefs);
+      // Setup is finished or closed: the next start does not resume it.
+      rmSync(setupProgressPath(projectRoot), { force: true });
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(serializeJSON({ requestId, version: runtimeVersion, acknowledged: true }));
+      return;
+    }
+
+    // Guided Setup progress (design D7): the step and answers so far, so a
+    // restart resumes where the person left off. Local state, never in Git;
+    // finishing or closing setup clears it.
+    if (path === '/api/onboarding/progress') {
+      const requestId = apiRequestId('onboarding-progress');
+      const progressPath = setupProgressPath(projectRoot);
+      if (req.method === 'GET') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, progress: readSetupProgress(projectRoot) }));
+        return;
+      }
+      if (req.method === 'PUT') {
+        const progress = normalizeSetupProgress(await readJSON(req).catch(() => null));
+        if (!progress) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'SETUP_PROGRESS_INVALID', message: 'Setup progress needs a step from 1 to 4.' })));
+          return;
+        }
+        mkdirSync(dirname(progressPath), { recursive: true });
+        writeFileSync(progressPath, `${JSON.stringify(progress, null, 2)}\n`, 'utf-8');
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, progress }));
+        return;
+      }
+      if (req.method === 'DELETE') {
+        rmSync(progressPath, { force: true });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, progress: null }));
+        return;
+      }
+      res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'METHOD_NOT_ALLOWED', message: 'Use GET, PUT or DELETE.' })));
       return;
     }
 
@@ -15269,6 +16034,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           sourceArtifactId: current.sourceArtifactId,
           revision: (current.revision ?? 1) + 1,
         });
+        // The reviewed revision is the draft that waits now.
+        if (current.origin === 'warehouse_discovery' && current.status === 'proposed') closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
         res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, proposal }));
       } catch (error) {
@@ -15276,6 +16043,29 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.writeHead(['PROPOSAL_STALE', 'SOURCE_CHANGED', 'DATASET_SOURCE_TARGET_NOT_FOUND', 'DATASET_SOURCE_TARGET_AMBIGUOUS'].includes(code) ? 409 : code === 'PROPOSAL_NOT_FOUND' ? 404 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: ['Refresh the proposal against the latest project snapshot.'] })));
       }
+      return;
+    }
+
+    // Discard a proposal nobody will save ("Discard drafts"). Nothing in the
+    // project changes; the draft stops waiting for review.
+    const contextDiscardMatch = path.match(/^\/api\/context-proposals\/([^/]+)\/discard$/);
+    if (req.method === 'POST' && contextDiscardMatch) {
+      const requestId = apiRequestId('context-discard');
+      const proposal = contextProposalStore.get(decodeURIComponent(contextDiscardMatch[1]!));
+      if (!proposal) {
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'PROPOSAL_NOT_FOUND', message: 'Context proposal not found.' })));
+        return;
+      }
+      if (proposal.status !== 'proposed' && proposal.status !== 'discarded') {
+        res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code: 'PROPOSAL_STALE', message: 'Only a proposal that is still waiting can be discarded.' })));
+        return;
+      }
+      const discarded: ContextAuthoringProposalV1 = proposal.status === 'discarded' ? proposal : { ...proposal, status: 'discarded', discardedAt: new Date().toISOString() };
+      contextProposalStore.save(discarded);
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ requestId, proposal: discarded }));
       return;
     }
 
@@ -15295,60 +16085,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const receipt = contextProposalStore.getCommitReceipt(idempotencyKey);
         if (receipt) {
           if (receipt.proposalId !== proposal.id || receipt.proposalHash !== expectedProposalHash) throw Object.assign(new Error('The idempotency key belongs to another reviewed proposal request.'), { code: 'IDEMPOTENCY_CONFLICT' });
+          const saved = contextProposalStore.get(proposal.id);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ requestId, proposal: contextProposalStore.get(proposal.id), snapshotId: receipt.snapshotId, idempotent: true }));
+          res.end(serializeJSON({ requestId, proposal: (saved?.supersededBy ? contextProposalStore.get(saved.supersededBy) : undefined) ?? saved, snapshotId: receipt.snapshotId, idempotent: true }));
           return;
         }
         if (proposal.status !== 'proposed') throw Object.assign(new Error('Only a proposed change can be committed.'), { code: 'PROPOSAL_STALE' });
         if (proposal.proposalHash !== expectedProposalHash) throw Object.assign(new Error('The proposal changed after review.'), { code: 'PROPOSAL_STALE' });
-        if (proposal.diagnostics.some((diagnostic) => diagnostic.severity === 'blocking')) throw Object.assign(new Error('Resolve all blocking proposal diagnostics before saving.'), { code: 'PROPOSAL_BLOCKED' });
-        const beforeSnapshot = projectSnapshot();
-        if (beforeSnapshot.snapshotId !== proposal.baseSnapshotId) throw Object.assign(new Error('Project sources changed after this proposal was reviewed.'), { code: 'PROPOSAL_STALE' });
-        const resolvedPatches = proposal.patches.map((patch) => ({ patch, absolute: resolveContextPatchPath(projectRoot, gitRoot, patch.path) }));
-        for (const { patch, absolute } of resolvedPatches) {
-          const current = existsSync(absolute) ? readFileSync(absolute, 'utf8') : '';
-          if (current !== patch.before) throw Object.assign(new Error(`Source changed after preview: ${patch.path}`), { code: 'SOURCE_CHANGED' });
-        }
-        const written: Array<{ patch: ContextAuthoringPatchV1; absolute: string }> = [];
-        try {
-          for (const item of resolvedPatches) {
-            if (!item.patch.changed) continue;
-            if (!item.patch.after) rmSync(item.absolute, { force: true });
-            else {
-              mkdirSync(dirname(item.absolute), { recursive: true });
-              writeFileSync(item.absolute, item.patch.after, 'utf8');
-            }
-            written.push(item);
-          }
-          projectSnapshots.invalidate();
-          invalidateAgentProjectState(projectRoot);
-          const nextSnapshot = projectSnapshot();
-          if (nextSnapshot.error) throw Object.assign(new Error(nextSnapshot.error), { code: 'COMPILE_FAILED' });
-          await refreshUnifiedProjectIndexes(projectRoot);
-          const committed: ContextAuthoringProposalV1 = { ...proposal, status: 'committed', committedAt: new Date().toISOString(), committedSnapshotId: nextSnapshot.snapshotId };
-          contextProposalStore.save(committed);
-          contextProposalStore.saveCommitReceipt(idempotencyKey, { proposalId: proposal.id, proposalHash: proposal.proposalHash, snapshotId: nextSnapshot.snapshotId });
-          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ requestId, proposal: committed, snapshotId: nextSnapshot.snapshotId, modeling: nextSnapshot.manifest.modeling }));
-        } catch (error) {
-          for (const { patch, absolute } of written.reverse()) {
-            if (!patch.before) rmSync(absolute, { force: true });
-            else {
-              mkdirSync(dirname(absolute), { recursive: true });
-              writeFileSync(absolute, patch.before, 'utf8');
-            }
-          }
-          projectSnapshots.invalidate();
-          invalidateAgentProjectState(projectRoot);
-          contextProposalStore.save(proposal);
-          contextProposalStore.deleteCommitReceipt(idempotencyKey);
-          throw error;
-        }
+        const saved = await commitContextProposal(proposal, idempotencyKey);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ requestId, proposal: saved.committed, snapshotId: saved.snapshotId, modeling: saved.modeling, ...(saved.rebased ? { rebased: true } : {}) }));
       } catch (error) {
         const code = apiErrorCode(error, /changed after/i.test(apiErrorMessage(error)) ? 'SOURCE_CHANGED' : 'PROPOSAL_COMMIT_FAILED');
         const status = code === 'PROPOSAL_NOT_FOUND' ? 404 : ['PROPOSAL_STALE', 'SOURCE_CHANGED', 'IDEMPOTENCY_CONFLICT', 'OWNERSHIP_CONFLICT', 'DEPENDENCY_CONFLICT'].includes(code) ? 409 : code === 'PROPOSAL_BLOCKED' ? 422 : 400;
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: ['Rebase or repreview the proposal before saving.'] })));
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: ['Update the drafts to the latest project, review them again, then save.'] })));
       }
       return;
     }
@@ -15587,14 +16338,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const current = modelingModeOf(currentConfig);
         const requested = body.mode === 'hybrid' ? 'hybrid' : 'warehouse-first';
         if (current === 'dbt-first' && requested !== 'hybrid') {
-          throw Object.assign(new Error('This project models dbt. Choose hybrid to add warehouse tables that dbt does not cover.'), { code: 'MODELING_MODE_CONFLICT' });
+          throw Object.assign(new Error("This folder is a dbt project, so ZLens keeps its dbt models. Choose Both (hybrid) to add warehouse tables dbt doesn't cover. For a database-only project, run npx create-zlens-app my-analytics --warehouse <driver> in a new folder."), { code: 'MODELING_MODE_CONFLICT' });
         }
         // A project that already reads its dbt models is not "without dbt":
         // warehouse-first modeling replaces them with the warehouse catalog,
         // which is empty until a sync, and Ask, lineage and blocks lose every
         // table (ZLens 0.1.0 e2e, F3). Only an explicit hybrid choice adds to them.
         if (current === undefined && requested !== 'hybrid' && projectReadsDbtModels(projectRoot, currentConfig)) {
-          throw Object.assign(new Error('This project already reads a dbt project (its dbt manifest is imported). Warehouse-first modeling would replace those dbt models with warehouse tables only. Model it from Settings → Project & dbt, or choose hybrid to add warehouse tables dbt does not cover.'), { code: 'MODELING_MODE_CONFLICT' });
+          throw Object.assign(new Error("This folder already reads a dbt project (its dbt manifest is imported). Database only would replace those dbt models with warehouse tables only. Model it from Settings → Project & dbt, or choose Both (hybrid) to add warehouse tables dbt doesn't cover."), { code: 'MODELING_MODE_CONFLICT' });
         }
         const next = current === 'warehouse-first' || current === 'hybrid' ? current : requested;
         if (next !== current) {
@@ -15619,6 +16370,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
+    // Drafts kept automatically: the newest "Draft my models" proposal that
+    // waits for review, in a few words, for setup, Modeling and Apps.
+    if (req.method === 'GET' && path === '/api/modeling/warehouse/drafts') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ waiting: waitingWarehouseDraftSummary(waitingWarehouseDrafts()[0], projectSnapshot().snapshotId) }));
+      return;
+    }
+
     // Modeling → Draft from warehouse: the runtime drafts the map and opens it
     // as an ordinary reviewable proposal. The operations, and any validation
     // evidence on them, come from this server's own discovery run, never from
@@ -15627,11 +16386,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const requestId = apiRequestId('modeling-warehouse-proposal');
       const snapshot = projectSnapshot();
       try {
-        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string };
+        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean };
         if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
           throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
         }
-        const report = await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain: body.domain, validate: body.validate === true, queryHistory: body.queryHistory === true, executor });
+        // Staging copies of a final table are left out unless the person asks
+        // for them ("Show staging tables"), so the map has one Customer.
+        const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
+        const report = await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
         // New Domains and subject areas are created by the proposal's own scope
         // step, as for dbt discovery, so the batch stays in dependency order.
         // A drafted join lives in the subject area of the entity it starts
@@ -15670,7 +16432,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           change,
           evidence: evidenceFor(change),
         }));
-        const proposal = previewContextAuthoring({ origin: 'warehouse_discovery', operations, expectedSnapshotId: snapshot.snapshotId });
+        const proposal = previewContextAuthoring({
+          origin: 'warehouse_discovery',
+          operations,
+          expectedSnapshotId: snapshot.snapshotId,
+          domainNames: Object.fromEntries(report.domains.map((item) => [item.id, item.name])),
+        });
+        // The newest draft replaces the ones before it; they wait for no one now.
+        closeWaitingWarehouseDrafts({ supersededBy: proposal.id });
         res.writeHead(201, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, report, proposal }));
       } catch (error) {
@@ -17507,19 +18276,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           hostedOwner = hostActor() ?? currentPrincipal()?.displayName ?? currentPrincipal()?.id;
           if (mode === 'create' && hostHooks?.onePerson !== true) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(serializeJSON({ error: 'A block built with AI is a draft for you alone: build it in your private workspace (your own copy of this project), where it goes to review.', code: 'BUILD_IN_DRAFT_SPACE' }));
+            res.end(serializeJSON({ error: 'A saved query built with AI is a draft for you alone: build it in your private workspace (your own copy of this project), where it goes to review.', code: 'BUILD_IN_DRAFT_SPACE' }));
             return;
           }
           if (mode === 'edit') {
             const file = blockPath && blockPath.endsWith('.dql') ? hostedProjectFile(projectRoot, blockPath, { privateDrafts: privateDraftsAllowed() }) : null;
             if (!file || !existsSync(file)) {
               res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
-              res.end(serializeJSON({ error: 'That block was not found in this project.' }));
+              res.end(serializeJSON({ error: 'That saved query was not found in this project.' }));
               return;
             }
             if (/\bstatus\s*=\s*"certified"/i.test(readFileSync(file, 'utf-8'))) {
               res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-              res.end(serializeJSON({ error: 'A certified block changes only through review. Build a new draft from it instead, in your private workspace; a steward approves the change before it replaces the certified one.', code: 'CERTIFIED_BLOCK' }));
+              res.end(serializeJSON({ error: 'A certified saved query changes only through review. Build a new draft from it instead, in your private workspace; a steward approves the change before it replaces the certified one.', code: 'CERTIFIED_BLOCK' }));
               return;
             }
           }
@@ -18552,7 +19321,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (req.method === 'GET' && path === '/api/settings/providers') {
       const manages = await hostedMay('settings.manage');
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ providers: manages ? listProviderSettings(projectRoot) : listProviderSettings(projectRoot).map(({ apiKeyPreview: _preview, ...provider }) => ({ ...provider, hasApiKey: false, baseUrl: undefined, ...(provider.source === 'env' ? { source: 'none' as const, configured: false, enabled: false } : {}) })) }));
+      res.end(serializeJSON({
+        providers: manages ? listProviderSettings(projectRoot) : listProviderSettings(projectRoot).map(({ apiKeyPreview: _preview, ...provider }) => ({ ...provider, hasApiKey: false, baseUrl: undefined, ...(provider.source === 'env' ? { source: 'none' as const, configured: false, enabled: false } : {}) })),
+        // Whether a model can be asked at all (design D4), so App Studio can be
+        // honest without seeing which keys the server holds.
+        assistAvailable: assistProviderAvailable(projectRoot),
+      }));
       return;
     }
 
@@ -18891,10 +19665,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (req.method === 'GET' && path === '/api/agent/threads') {
           const limit = Number(url.searchParams.get('limit') ?? '50');
           const includeArchived = url.searchParams.get('archived') === '1';
+          // Notebook AI's History lists the conversations held in one notebook.
+          const notebookPath = url.searchParams.get('notebookPath') || undefined;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({
-            // A host's own store may not honour ownerId: what it returns is filtered again here.
-            threads: conversationOwnerId() === null ? [] : (await store.listThreads({ limit: Number.isFinite(limit) ? limit : 50, includeArchived, ...(conversationOwnerId() ? { ownerId: conversationOwnerId()! } : {}) })).filter((thread) => conversationVisibleToCaller(thread)),
+            // A host's own store may not honour ownerId or notebookPath: what it returns is filtered again here.
+            threads: conversationOwnerId() === null ? [] : (await store.listThreads({ limit: Number.isFinite(limit) ? limit : 50, includeArchived, ...(conversationOwnerId() ? { ownerId: conversationOwnerId()! } : {}), ...(notebookPath ? { notebookPath } : {}) }))
+              .filter((thread) => conversationVisibleToCaller(thread) && (!notebookPath || thread.notebookPath === notebookPath)),
             // Browser cache identity only. It is an opaque one-way fingerprint
             // and intentionally does not become conversation/trace evidence.
             projectIdentity: conversationProjectIdentity,
@@ -19803,13 +20580,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       const measure = descriptor.fields.find((candidate) => candidate.kind === 'measure' && candidate.status === 'approved');
       if (!measure) throw new DashboardRunRequestError(`${descriptor.label} has no approved measure to group ${field} by.`);
+      // Typed search runs on the server over every value of the field (a
+      // bound, escaped ILIKE through the governed compiler), so a value past
+      // the first page is still found. Only text fields are searched this way.
+      const search = datasetFieldValueSearchText(body.search);
+      const searching = Boolean(search) && physical.type === 'string';
       return {
         sourceId,
         query: {
           dimensions: [{ field: physical.name }],
           measures: [{ measure: measure.name }],
+          ...(searching ? { filters: [{ field: physical.name, op: 'contains' as const, values: [search] }] } : {}),
           orderBy: [{ alias: physical.name, direction: 'asc' }],
-          limit: DATASET_FIELD_VALUE_LIMIT + 1,
+          // Browsing reads up to the count limit so the control can say how
+          // many values exist ("Type to search all 930 values"); it still
+          // returns only the first page.
+          limit: (searching ? DATASET_FIELD_VALUE_LIMIT : DATASET_FIELD_VALUE_COUNT_LIMIT) + 1,
         },
       };
     };
@@ -19838,7 +20624,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       }
       const snapshot = projectSnapshot();
       await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
-      const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      let resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      // A saved query's result fields (design D1) are read on first use.
+      if (resolved.items[0]?.kind === 'block' && !resolved.items[0].capabilities.dataset) {
+        const outcome = await readSavedQueryResultFields({ sourceId }).catch(() => undefined);
+        if (outcome?.ok && outcome.read) resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'governed_only');
+      }
       const source = resolved.items[0];
       const descriptor = source?.capabilities.dataset;
       if (!source || !descriptor || resolved.missingSourceIds.length > 0) {
@@ -19994,9 +20785,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
-    // One explicit author action turns field-based Dataset tiles on for this
-    // project, instead of asking them to hand-edit dql.config.json. It only
-    // sets `apps.datasets`; every other key is preserved.
+    // One explicit author action turns field-based Dataset tiles back on for a
+    // project that set `apps.datasets: false`, instead of asking them to
+    // hand-edit dql.config.json. It only sets `apps.datasets`; every other key
+    // is preserved. When the feature is already on (the default) it writes
+    // nothing.
     if (req.method === 'POST' && path === '/api/app-datasets/enable') {
       try {
         const configPath = join(projectRoot, 'dql.config.json');
@@ -20006,7 +20799,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const apps = raw.apps && typeof raw.apps === 'object' && !Array.isArray(raw.apps)
           ? raw.apps as Record<string, unknown>
           : {};
-        if (apps.datasets !== true) {
+        if (apps.datasets === false) {
           raw.apps = { ...apps, datasets: true };
           writeFileSync(configPath, `${JSON.stringify(raw, null, 2)}\n`, 'utf-8');
           projectConfig = loadProjectConfig(projectRoot);
@@ -20053,11 +20846,49 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const active = requireActiveConnection();
         const run = async (sql: string, purpose: 'data' | 'metadata' = 'data') => (await executor.executePositional(sql, [], active, { maxRows: 5_000, maxBytes: 16 * 1024 * 1024, batchSize: 1_000, deadlineMs: 60_000, purpose })).rows as Array<Record<string, unknown>>;
         const listing = await listWarehouseTables({ projectRoot, driver: active.driver, run });
+        // Tables setup drafted, or Modeling models, say so and reuse their checked key (design D7).
+        const modelStates = (() => {
+          try {
+            return tableModelStates({
+              tables: listing.tables,
+              entities: Object.values(projectSnapshot().manifest.modeling?.entities ?? {}),
+              proposals: contextProposalStore.list(),
+            });
+          } catch {
+            return new Map<string, TableModelState>();
+          }
+        })();
         if (req.method === 'GET' && path === '/api/app-datasets/tables') {
+          // Datasets already made from each table (new-user round 3, problem 7).
+          const datasets = (() => {
+            try {
+              const sources: Parameters<typeof tableDatasetLinks>[0]['sources'] = [];
+              let cursor: string | undefined;
+              for (let pageIndex = 0; pageIndex < 50; pageIndex += 1) {
+                const page = queryAppSourceCatalog(projectRoot, { kinds: ['block'], sourcePolicy: 'include_review_required', limit: 100, ...(cursor ? { cursor } : {}) });
+                sources.push(...page.items.map((item) => ({ sourceId: item.sourceId, name: item.title || item.name, tags: item.tags, trust: item.trust, lifecycle: item.lifecycle, ...(item.check ? { check: item.check } : {}), sourcePath: item.sourcePath })));
+                cursor = page.nextCursor;
+                if (!cursor) break;
+              }
+              return tableDatasetLinks({
+                tables: listing.tables,
+                sources,
+                readSource: (sourcePath) => { try { return readFileSync(join(projectRoot, sourcePath), 'utf-8'); } catch { return undefined; } },
+              });
+            } catch {
+              return new Map<string, TableDatasetLink[]>();
+            }
+          })();
           reply(200, {
             ok: true,
             source: listing.source,
-            tables: listing.tables.map(({ columns, ...table }) => ({ ...table, columnCount: columns.length })),
+            tables: listing.tables.map(({ columns, ...table }) => {
+              const modeled = modelStates.get(table.id);
+              // The tables its rows point to (design D2): their fields come with it.
+              const joins = (() => { try { return joinableTables(currentRelatedTables().context, table.relation); } catch { return []; } })();
+              const made = datasets.get(table.id) ?? [];
+              return { ...table, columnCount: columns.length, ...(modeled ? { modeled } : {}), ...(joins.length ? { joins } : {}), ...(made.length ? { datasets: made } : {}) };
+            }),
           });
           return;
         }
@@ -20071,12 +20902,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           reply(404, { ok: false, error: 'That table is not in this database any more. Refresh the list.' });
           return;
         }
-        const drafted = await draftTableDataset({ table, driver: active.driver, run });
+        const modeledKey = modelStates.get(table.id)?.key;
+        const drafted = await draftTableDataset({ table, driver: active.driver, run, ...(modeledKey ? { modeledKey } : {}) });
         if (path === '/api/app-datasets/tables/draft') {
           reply(200, { ok: true, table: { id: table.id, name: table.name, relation: table.relation }, rows: drafted.rows, proposal: drafted.proposal });
           return;
         }
-        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures);
+        // The duplicate-column answers first (design Q1.4), then the number choices.
+        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures, body.duplicates);
         if (!proposal.key) {
           reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${table.name} is filled and different on every row, so ZLens cannot count its rows safely. Choose a table with an id column.` });
           return;
@@ -20091,18 +20924,22 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           domain,
           owner,
           content: source,
-          description: `${proposal.name} from ${table.name}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.`,
+          // A duplicate-column answer (design Q1.4) is said in the description too.
+          description: `${proposal.name} from ${table.name}, one row per ${proposal.key.entity.replace(/_/g, ' ')}.${(proposal.hiddenColumns ?? []).map((entry) => ` ${entry.column} is hidden (${entry.keptColumn} holds the same ${entry.relation === 'same' ? 'number' : 'amount'}).`).join('')}`,
           tags: ['app-datasets', 'from-table'],
           gitMetadata: readGitMetadata(projectRoot),
         });
-        // This route is the explicit "Certify and use this data" action of the
-        // App table-to-Dataset dialog (a host gates it as `dataset.certify`):
-        // the block is written as a draft, the same certification rules as
-        // Block Studio's Certify run against it, and only a pass certifies it,
-        // with a receipt naming who certified. Its row identity is checked
-        // against the complete table before any tile trusts it.
-        let status: 'certified' | 'draft' = 'draft';
+        // "Check and use" (design Q1): the block is written as a draft and the
+        // same rules as Block Studio's Certify run against it (it compiles,
+        // runs, has an owner). A pass makes it **Checked · Needs certifying**:
+        // `review`, with a check record naming who checked it and what the
+        // check found. It is never certified here: certifying is its own
+        // deliberate step ("I vouch for this — certify"), at publish or from
+        // the Data list. Its row identity is checked against the complete
+        // table before any tile trusts it.
+        let status: 'checked' | 'draft' = 'draft';
         let blockers: string[] = [];
+        let check: BlockCheckRecord | null = null;
         try {
           const saved = readFileSync(join(projectRoot, created.path), 'utf-8');
           // With a host, the host decides whether every enterprise gate applies (as for Block Studio).
@@ -20110,8 +20947,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const verdict = await certifyBlockStudioSource(saved, created.path, { enterprise });
           blockers = Array.from(new Set(verdict.checklist.blockers));
           if (verdict.certification.certified && blockers.length === 0) {
-            setBlockStudioStatus(projectRoot, created.path, 'certified', explicitCertificationReceipt({ source: saved, via: 'app-dataset', enterprise, verdict }));
-            status = 'certified';
+            check = recordBlockCheck(created.path, { checks: tableDatasetCheckSentences(proposal, drafted.rows), verdict, ...(proposal.hiddenColumns?.length ? { hiddenColumns: proposal.hiddenColumns } : {}) });
+            status = 'checked';
           }
         } catch (error) {
           blockers = [error instanceof Error ? error.message : String(error)];
@@ -20120,7 +20957,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const found = queryAppSourceCatalog(projectRoot, { query: blockName, sourcePolicy: 'include_review_required', limit: 50 })
           .items.find((item) => item.sourcePath === created.path);
         let keyChecked = false;
-        if (found && status === 'certified') {
+        if (found && status === 'checked') {
           try {
             await validateDatasetSourceGrain({ sourceId: found.sourceId });
             keyChecked = true;
@@ -20128,7 +20965,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // The first tile run checks it again; a failed check keeps the Dataset in review.
           }
         }
-        reply(201, { ok: true, path: created.path, status, blockers, keyChecked, ...(found ? { sourceId: found.sourceId } : {}) });
+        reply(201, {
+          ok: true,
+          path: created.path,
+          status,
+          blockers,
+          keyChecked,
+          ...(found ? { sourceId: found.sourceId } : {}),
+          // Who checked it and what the check found, for "Checked by you · <date>".
+          ...(check ? { check: bylineForViewer(checkByline(check), thisPerson(projectRoot)) } : {}),
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         reply(error instanceof TableDatasetError ? 409 : message === 'BLOCK_EXISTS' ? 409 : 400, {
@@ -20136,6 +20982,521 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ...(error instanceof TableDatasetError ? { code: error.code } : {}),
           error: message === 'BLOCK_EXISTS' ? 'A Dataset with that name already exists. Choose another name.' : message,
         });
+      }
+      return;
+    }
+
+    // Make a saved query row-level (design D1, formerly "Add fields"): a saved query (a block with no
+    // Dataset definition) gets one from its own output columns, checked
+    // against its rows like "Start from a table", written onto the same block
+    // file (same name, same id). Governance: a Dataset definition is a material
+    // change, so a certified saved query goes back to review, and only the
+    // same certification check as the table path certifies it again. A
+    // certified saved query whose check fails is left untouched unless the
+    // author explicitly sends it for review (`allowReview`).
+    if (path === '/api/app-datasets/saved-queries/draft' || path === '/api/app-datasets/saved-queries/create' || path === '/api/app-datasets/saved-queries/fields') {
+      const reply = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      if (req.method !== 'POST') {
+        reply(405, { ok: false, error: 'Use POST.' });
+        return;
+      }
+      try {
+        if (!datasetsAppFeatureEnabled(projectConfig)) {
+          reply(409, { ok: false, code: 'APP_DATASETS_FEATURE_DISABLED', error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before adding fields.' });
+          return;
+        }
+        const body = await readJSON(req) as Record<string, unknown>;
+        const sourceId = typeof body.sourceId === 'string' ? body.sourceId.trim() : '';
+        if (!sourceId) {
+          reply(400, { ok: false, code: 'SAVED_QUERY_SOURCE_REQUIRED', error: 'Choose the saved query to add fields to.' });
+          return;
+        }
+        // Read a saved query's result columns as fields (design D1). It
+        // writes local runtime state only: the block and its trust stay as
+        // they are.
+        if (path === '/api/app-datasets/saved-queries/fields') {
+          const outcome = await readSavedQueryResultFields({ sourceId, ...(requestConnection(body) ? { connection: await resolveExecutionConnection(body) } : {}) });
+          if (!outcome.ok) {
+            reply(outcome.status, { ok: false, code: outcome.code, error: outcome.error });
+            return;
+          }
+          reply(200, {
+            ok: true,
+            sourceId: outcome.source.sourceId,
+            sourceRevision: outcome.source.sourceRevision,
+            read: outcome.read,
+            ...(outcome.source.capabilities.dataset ? { descriptor: outcome.source.capabilities.dataset } : {}),
+          });
+          return;
+        }
+        const snapshot = projectSnapshot();
+        await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+        const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
+        const source = resolved.items[0];
+        if (!source || resolved.missingSourceIds.length > 0) {
+          reply(404, { ok: false, code: 'DATASET_SOURCE_NOT_FOUND', error: 'That saved query is not in this project any more. Refresh the list.' });
+          return;
+        }
+        const block = source.kind === 'block' ? resolveDatasetSourceManifestBlock(snapshot.manifest, source.executionRef) : null;
+        if (!block || block.blockType === 'semantic' || source.capabilities.dataset?.kind === 'semantic' || source.capabilities.semanticModelId) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query. Only a saved query can get fields; Metrics already have them.` });
+          return;
+        }
+        // Fields read from its result (design D1) are not a Dataset definition:
+        // "Make row-level" still adds one.
+        if (block.datasetGrain || block.datasetFields?.length || block.datasetMeasures?.length || (source.capabilities.dataset && !source.capabilities.dataset.result)) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_ALREADY_DATASET', error: `${source.title} already has fields. Use its Measures and Dimensions in the Data pane.` });
+          return;
+        }
+        const blockPath = normalize(block.filePath).replace(/^\/+/, '');
+        const absolute = isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
+        if (!absolute || !existsSync(absolute)) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_NOT_A_BLOCK', error: `${source.title} is not a saved query file ZLens can change.` });
+          return;
+        }
+        const blockSource = readFileSync(absolute, 'utf-8');
+        const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+        const requestedRevision = typeof body.sourceRevision === 'string' ? body.sourceRevision.trim() : '';
+        if (requestedRevision && requestedRevision !== sourceRevision) {
+          reply(409, { ok: false, code: 'SOURCE_CHANGED', error: `${source.title} changed after you opened it. Close this and try again.` });
+          return;
+        }
+        const previousStatus = blockSourceStatus(blockSource);
+        if (previousStatus === 'deprecated') {
+          reply(409, { ok: false, code: 'SAVED_QUERY_DEPRECATED', error: `${source.title} is retired, so it cannot get fields.` });
+          return;
+        }
+        const active = requireActiveConnection();
+        const tableMapping = await resolveSemanticTableMapping(executor, active, semanticLayer, projectRoot);
+        const semanticCompose = semanticLayer
+          ? await composeSemanticBlockSqlForRuntime(blockSource, semanticLayer, {
+              driver: active.driver,
+              tableMapping,
+              projectRoot,
+              projectConfig,
+              detectedProvider: semanticDetectedProvider,
+            })
+          : null;
+        const plan = buildExecutionPlan(
+          { id: `saved-query-fields-${source.sourceId}`, type: 'dql', source: blockSource, title: block.name },
+          { semanticLayer, driver: active.driver, tableMapping, semanticSql: semanticCompose?.sql ?? undefined },
+        );
+        const sql = semanticCompose?.sql ?? plan?.sql;
+        if (!sql) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_HAS_NO_SQL', error: `${source.title} has no SQL ZLens can run to read its columns.` });
+          return;
+        }
+        if ((plan?.sqlParams?.length ?? 0) > 0 || (block.parameters?.length ?? 0) > 0) {
+          reply(409, { ok: false, code: 'SAVED_QUERY_HAS_PARAMETERS', error: `${source.title} asks for values before it runs, so ZLens cannot check its rows. Make row-level works on saved queries without parameters.` });
+          return;
+        }
+        const relation = savedQueryRelation(sql, active.driver);
+        const limits = { maxRows: 5_000, maxBytes: 16 * 1024 * 1024, batchSize: 1_000, deadlineMs: 60_000 };
+        // One row: some drivers report no columns for an empty result.
+        const shape = await executor.executePositional(`SELECT * FROM ${relation} LIMIT 1`, [], active, { ...limits, purpose: 'metadata' });
+        const run = async (statement: string, purpose: 'data' | 'metadata' = 'data') => (await executor.executePositional(statement, [], active, { ...limits, purpose })).rows as Array<Record<string, unknown>>;
+        const legacyGrain = typeof block.grain === 'string' ? block.grain : undefined;
+        const drafted = await draftSavedQueryDataset({
+          blockName: block.name,
+          ...(legacyGrain ? { grain: legacyGrain } : {}),
+          relation,
+          // The connector's normalised kind (number, date, datetime…); `driverType` names the driver on some connectors.
+          columns: shape.columns.map((column) => ({ name: column.name, ...(column.type && column.type !== 'unknown' && column.type !== 'null' ? { type: column.type } : {}) })),
+          driver: active.driver,
+          run,
+        });
+        const certified = previousStatus === 'certified';
+        if (path === '/api/app-datasets/saved-queries/draft') {
+          reply(200, {
+            ok: true,
+            source: { sourceId: source.sourceId, name: block.name, sourceRevision, status: previousStatus },
+            rows: drafted.rows,
+            proposal: drafted.proposal,
+            sendsBackForReview: certified,
+          });
+          return;
+        }
+        const proposal = applyTableDatasetChoices(drafted.proposal, body.measures, body.duplicates);
+        if (!proposal.key) {
+          reply(422, { ok: false, code: 'TABLE_DATASET_KEY_REQUIRED', error: `No column in ${source.title} is filled and different on every row, so ZLens cannot count its rows safely.` });
+          return;
+        }
+        const declaration = tableDatasetDeclaration(proposal, block.name);
+        const pendingStatus: 'draft' | 'review' = certified || previousStatus === 'review' ? 'review' : 'draft';
+        const { after } = addDatasetDefinitionToBlockSource({
+          source: blockSource,
+          filePath: blockPath,
+          blockName: block.name,
+          grain: declaration.grain,
+          fields: declaration.fields,
+          measures: declaration.measures,
+          status: pendingStatus,
+        });
+        // The same check as "Check and use" (and Block Studio's Certify), run
+        // on the new source before anything is written. A pass makes it
+        // Checked · Needs certifying, never certified (design Q1).
+        const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+        let blockers: string[] = [];
+        let passed = false;
+        let verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>> | undefined;
+        try {
+          verdict = await certifyBlockStudioSource(after, blockPath, { enterprise });
+          blockers = Array.from(new Set(verdict.checklist.blockers));
+          passed = verdict.certification.certified && blockers.length === 0;
+        } catch (error) {
+          blockers = [error instanceof Error ? error.message : String(error)];
+        }
+        if (!passed && certified && body.allowReview !== true) {
+          reply(409, {
+            ok: false,
+            code: 'SAVED_QUERY_REVIEW_REQUIRED',
+            blockers,
+            details: { blockers },
+            error: `${source.title} is certified, and with these fields it did not pass its checks, so nothing changed. Send it for review to add the fields anyway.`,
+          });
+          return;
+        }
+        writeFileSync(absolute, after, 'utf-8');
+        let status: 'checked' | 'review' | 'draft' = pendingStatus;
+        let check: BlockCheckRecord | null = null;
+        if (passed && verdict) {
+          check = recordBlockCheck(blockPath, { checks: tableDatasetCheckSentences(proposal, drafted.rows), verdict });
+          status = 'checked';
+        } else {
+          // Drops a certification receipt the companion file may still hold.
+          setBlockStudioStatus(projectRoot, blockPath, pendingStatus);
+        }
+        await refreshLocalMetadataCatalog(projectRoot);
+        const found = queryAppSourceCatalog(projectRoot, { query: block.name, sourcePolicy: 'include_review_required', limit: 50 })
+          .items.find((item) => normalize(item.sourcePath).replace(/^\/+/, '') === blockPath);
+        let keyChecked = false;
+        if (found && status === 'checked') {
+          try {
+            await validateDatasetSourceGrain({ sourceId: found.sourceId });
+            keyChecked = true;
+          } catch {
+            // The first tile run checks it again; a failed check keeps the Dataset out of tiles.
+          }
+        }
+        reply(200, { ok: true, path: blockPath, previousStatus, status, blockers, keyChecked, sourceId: found?.sourceId ?? source.sourceId, ...(check ? { check: bylineForViewer(checkByline(check), thisPerson(projectRoot)) } : {}) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const code = error instanceof TableDatasetError || error instanceof DatasetDeclarationPatchError ? error.code : undefined;
+        reply(code ? 409 : 400, { ok: false, ...(code ? { code } : {}), error: message });
+      }
+      return;
+    }
+
+    // Certify on purpose (design Q1). "Check and use" leaves data Checked ·
+    // Needs certifying; certifying is a separate, deliberate step: a short
+    // review (what one row is, the row key check run again now, number
+    // formats, joins used, columns hidden as duplicates), then "I vouch for
+    // this — certify". The same certification rules as Block Studio's
+    // Certify run against the file, and a host gates the POST as
+    // `dataset.certify` (route-actions), so a steward rule stays a steward
+    // rule. A saved query without a row-level Dataset definition keeps its
+    // own Certify in Block Studio; Metrics come from the semantic model.
+    if (path === '/api/app-datasets/certify-review' || path === '/api/app-datasets/certify') {
+      const reply = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      const reviewing = path === '/api/app-datasets/certify-review';
+      if (reviewing ? req.method !== 'GET' : req.method !== 'POST') {
+        reply(405, { ok: false, error: reviewing ? 'Use GET.' : 'Use POST.' });
+        return;
+      }
+      try {
+        const body = reviewing ? {} as Record<string, unknown> : await readJSON(req) as Record<string, unknown>;
+        const sourceId = (reviewing ? url.searchParams.get('sourceId') ?? '' : typeof body.sourceId === 'string' ? body.sourceId : '').trim();
+        if (!sourceId) {
+          reply(400, { ok: false, code: 'DATASET_SOURCE_REQUIRED', error: 'Choose the data to certify.' });
+          return;
+        }
+        const snapshot = projectSnapshot();
+        await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+        const resolved = resolveAppSourceCatalogRecords(projectRoot, [sourceId], 'include_review_required');
+        const source = resolved.items[0];
+        if (!source || resolved.missingSourceIds.length > 0) {
+          reply(404, { ok: false, code: 'DATASET_SOURCE_NOT_FOUND', error: 'That data is not in this project any more. Refresh the list.' });
+          return;
+        }
+        const person = thisPerson(projectRoot);
+        const descriptor = source.capabilities.dataset;
+        // Certified once, changed since (T4): "Changed since it was certified on 22 Oct".
+        const previousCertification = source.sourcePath ? blockPreviousCertificationByline(projectRoot, source.sourcePath) : null;
+        const kind: 'dataset' | 'saved_query' | 'metrics' = source.kind === 'semantic' || descriptor?.kind === 'semantic' || source.capabilities.semanticModelId
+          ? 'metrics'
+          : !descriptor || isSavedQueryResultDataset(descriptor) ? 'saved_query' : 'dataset';
+        const certified = source.lifecycle === 'certified' && source.trust === 'certified';
+        const blockPath = normalize(source.sourcePath || source.executionRef).replace(/^\/+/, '');
+        const check = source.check ?? (kind === 'dataset' && isBlockStudioBlockPath(blockPath) ? (() => {
+          const record = currentBlockFileCheck(projectRoot, blockPath);
+          return record ? { by: record.checkedBy, ...(record.checkedByName ? { name: record.checkedByName } : {}), at: record.checkedAt, ...(record.checks ? { checks: record.checks } : {}), ...(record.hiddenColumns ? { hiddenColumns: record.hiddenColumns } : {}) } : undefined;
+        })() : undefined);
+        // The row key, checked again against the complete data now.
+        const runKeyCheck = async (): Promise<{ ok: true; sentence: string } | { ok: false; error: string } | undefined> => {
+          if (kind !== 'dataset' || !descriptor) return undefined;
+          const keys = descriptor.grain.keyFields.join(', ');
+          try {
+            await validateDatasetSourceGrain({ sourceId: source.sourceId, sourceRevision: source.sourceRevision });
+            return { ok: true, sentence: `${keys || 'The row key'} is filled and different on every row, checked just now.` };
+          } catch (error) {
+            return { ok: false, error: `${keys || 'The row key'} did not pass its check: ${error instanceof Error ? error.message.replace(/^[A-Z_]+:\s*/, '') : String(error)}` };
+          }
+        };
+        // A saved query certifies here too (T4): it runs and its tests run
+        // now, through the same certification path as Block Studio's Certify.
+        const savedQueryAbsolute = kind === 'saved_query' && isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
+        const savedQueryFile = savedQueryAbsolute && existsSync(savedQueryAbsolute) ? savedQueryAbsolute : null;
+        const savedQueryReviewOf = (blockSource: string, verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>>) => {
+          const parsedBlock = parseBlockSourceMetadata(blockSource);
+          const owner = parsedBlock.owner?.trim();
+          return savedQueryReview({
+            verdict,
+            ...(owner ? { owner: personDisplayName(owner, person) ?? owner } : {}),
+            ...(parsedBlock.grain ? { grain: parsedBlock.grain } : {}),
+            dimensions: parsedBlock.dimensions ?? [],
+            keyFields: descriptor?.grain.keyFields ?? [],
+          });
+        };
+        if (reviewing) {
+          const grain = descriptor?.grain;
+          const entity = grain?.timeGrain ?? (grain?.entityIds[0] ?? '').split(/[.:]/).pop()?.replace(/_/g, ' ');
+          const keyCheck = await runKeyCheck();
+          const savedQuery = savedQueryFile && !certified
+            ? await (async () => {
+              const blockSource = readFileSync(savedQueryFile, 'utf-8');
+              const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+              return savedQueryReviewOf(blockSource, await certifyBlockStudioSource(blockSource, blockPath, { enterprise }));
+            })()
+            : undefined;
+          const formatNotes = (check?.checks ?? [])
+            .filter((line) => line.startsWith('Number formats: '))
+            .flatMap((line) => line.slice('Number formats: '.length).split('; '));
+          reply(200, {
+            ok: true,
+            review: {
+              sourceId: source.sourceId,
+              sourceRevision: source.sourceRevision,
+              name: source.title,
+              kind,
+              origin: source.tags.includes('from-table') ? 'table' : kind === 'metrics' ? 'metrics' : 'saved_query',
+              lifecycle: source.lifecycle,
+              certified,
+              ...(certified && source.sourcePath ? (() => { const byline = blockCertificationByline(projectRoot, source.sourcePath); return byline ? { certification: bylineForViewer(byline, person) } : {}; })() : {}),
+              ...(check ? { check: bylineForViewer(check, person) } : {}),
+              ...(grain && kind === 'dataset' ? { row: `Each row is one ${entity || 'row'}${grain.keyFields.length ? ` (${grain.keyFields.join(', ')})` : ''}.` } : {}),
+              ...(keyCheck ? { keyCheck } : {}),
+              numbers: (descriptor?.fields ?? []).flatMap((field) => {
+                if (field.kind !== 'measure' || field.status !== 'approved') return [];
+                const format = field.format?.kind === 'currency' ? `Money${field.format.currency ? ` (${field.format.currency})` : ''}` : field.format?.kind === 'percent' ? 'Percent' : 'Number';
+                const label = wordsFor(field.name);
+                const note = formatNotes.find((line) => line.toLowerCase().startsWith(`${label.toLowerCase()}:`))?.slice(label.length + 1).trim();
+                // Only notes that add something ("shown in dollars (stored as cents)"), not the format again.
+                const useful = note && !/^(money|a number|a percent)$/i.test(note) ? note : undefined;
+                return [{ name: field.name, label, format, aggregation: field.aggregation, ...(useful ? { note: useful } : {}) }];
+              }),
+              joins: (descriptor?.joins ?? []).map((join) => ({ label: join.label, sentence: join.sentence, trust: join.trust })),
+              hiddenColumns: check?.hiddenColumns ?? [],
+              checks: check?.checks ?? [],
+              canVouch: (kind === 'dataset' || Boolean(savedQuery)) && !certified && source.lifecycle !== 'deprecated' && !(savedQuery && savedQuery.blockers.length),
+              ...(savedQuery ? { savedQuery } : {}),
+              ...(previousCertification ? { previousCertification: bylineForViewer(previousCertification, person) } : {}),
+              ...(kind === 'saved_query' && isBlockStudioBlockPath(blockPath) ? { blockStudioPath: blockPath } : {}),
+            },
+          });
+          return;
+        }
+        if (kind === 'metrics' || (kind === 'saved_query' && !savedQueryFile)) {
+          reply(409, {
+            ok: false,
+            code: kind === 'metrics' ? 'METRICS_CERTIFIED_IN_MODEL' : 'SAVED_QUERY_CERTIFIES_IN_BLOCK_STUDIO',
+            error: kind === 'metrics'
+              ? `${source.title} comes from the semantic model; it is governed there.`
+              : `${source.title} is a saved query ZLens cannot open as a file here: certify it in the saved query editor.`,
+          });
+          return;
+        }
+        if (certified) {
+          reply(409, { ok: false, code: 'ALREADY_CERTIFIED', error: `${source.title} is already certified.` });
+          return;
+        }
+        if (source.lifecycle === 'deprecated') {
+          reply(409, { ok: false, code: 'SOURCE_DEPRECATED', error: `${source.title} is retired, so it cannot be certified.` });
+          return;
+        }
+        const requestedRevision = typeof body.sourceRevision === 'string' ? body.sourceRevision.trim() : '';
+        if (requestedRevision && requestedRevision !== source.sourceRevision) {
+          reply(409, { ok: false, code: 'SOURCE_CHANGED', error: `${source.title} changed after you opened the review. Close it and review again.` });
+          return;
+        }
+        const absolute = isBlockStudioBlockPath(blockPath) ? safeJoin(projectRoot, blockPath) : null;
+        if (!absolute || !existsSync(absolute)) {
+          reply(409, { ok: false, code: 'SOURCE_NOT_A_BLOCK', error: `${source.title} is not a file ZLens can certify.` });
+          return;
+        }
+        if (kind === 'saved_query') {
+          // T4: it runs, its tests pass, someone owns it — checked again now,
+          // by the same rules as Block Studio's Certify. Nothing is written
+          // unless every check passes; a missing owner is asked for and
+          // written into the saved query with the certification.
+          const onDisk = readFileSync(absolute, 'utf-8');
+          const declaredOwner = parseBlockSourceMetadata(onDisk).owner?.trim();
+          const requestedOwner = typeof body.owner === 'string' ? body.owner.replace(/[\r\n]/g, ' ').trim().slice(0, 120) : '';
+          if (!declaredOwner && !requestedOwner) {
+            reply(422, { ok: false, code: 'OWNER_REQUIRED', blockers: ['Who owns it? Name the person or team who answers for these numbers.'], details: { blockers: ['Who owns it? Name the person or team who answers for these numbers.'] }, error: `${source.title} needs an owner before it can be certified.` });
+            return;
+          }
+          const candidate = declaredOwner ? onDisk : withBlockOwner(onDisk, requestedOwner);
+          const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+          const verdict = await certifyBlockStudioSource(candidate, blockPath, { enterprise });
+          const review = savedQueryReviewOf(candidate, verdict);
+          const blockers = Array.from(new Set(verdict.checklist.blockers));
+          if (!verdict.certification.certified || blockers.length > 0) {
+            reply(422, { ok: false, code: 'CERTIFICATION_CHECKS_FAILED', blockers, details: { blockers }, review, error: `${source.title} did not pass its certification checks. ${blockers.join(' ')}`.trim() });
+            return;
+          }
+          if (candidate !== onDisk) writeFileSync(absolute, candidate, 'utf-8');
+          // A hand-written saved query may have no companion YAML yet: the receipt needs one to live in.
+          const savedQueryCompanion = blockCompanionRelativePath(projectRoot, blockPath);
+          if (savedQueryCompanion && !existsSync(join(projectRoot, savedQueryCompanion))) {
+            const meta = parseBlockSourceMetadata(candidate);
+            mkdirSync(dirname(join(projectRoot, savedQueryCompanion)), { recursive: true });
+            writeFileSync(join(projectRoot, savedQueryCompanion), dumpYaml({ name: meta.name, block: meta.name, ...(meta.domain ? { domain: meta.domain } : {}), ...(meta.owner ? { owner: meta.owner } : {}), reviewStatus: 'draft' }, { lineWidth: 200, noRefs: true }), 'utf-8');
+          }
+          const certifiedSource = setBlockStudioStatusInSource(candidate, 'certified');
+          const receipt = explicitCertificationReceipt({ source: certifiedSource, via: 'app-dataset', enterprise, verdict, extraChecks: review.checks });
+          setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
+          if (verdict.preview) writeBlockStudioRunSummary(projectRoot, blockPath, certifiedSource, verdict.preview.result);
+          await refreshLocalMetadataCatalog(projectRoot);
+          const after = resolveAppSourceCatalogRecords(projectRoot, [source.sourceId], 'include_review_required').items[0];
+          reply(200, {
+            ok: true,
+            status: 'certified',
+            sourceId: source.sourceId,
+            ...(after ? { sourceRevision: after.sourceRevision } : {}),
+            path: blockPath,
+            ...(candidate !== onDisk ? { ownerWritten: requestedOwner } : {}),
+            certification: bylineForViewer(certificationByline(receipt), person),
+          });
+          return;
+        }
+        const keyCheck = await runKeyCheck();
+        if (keyCheck && !keyCheck.ok) {
+          reply(422, { ok: false, code: 'DATASET_KEY_CHECK_FAILED', blockers: [keyCheck.error], error: keyCheck.error });
+          return;
+        }
+        const blockSource = readFileSync(absolute, 'utf-8');
+        const enterprise = hostIdentity ? hostHooks?.enterpriseCertification === true : false;
+        const verdict = await certifyBlockStudioSource(blockSource, blockPath, { enterprise });
+        const blockers = Array.from(new Set(verdict.checklist.blockers));
+        if (!verdict.certification.certified || blockers.length > 0) {
+          reply(422, { ok: false, code: 'CERTIFICATION_CHECKS_FAILED', blockers, error: `${source.title} did not pass its certification checks. ${blockers.join(' ')}`.trim() });
+          return;
+        }
+        const certifiedSource = setBlockStudioStatusInSource(blockSource, 'certified');
+        const plainChecks = (check?.checks ?? []).filter((line) => /\s/.test(line));
+        const receipt = explicitCertificationReceipt({
+          source: certifiedSource,
+          via: 'app-dataset',
+          enterprise,
+          verdict,
+          extraChecks: [...plainChecks.filter((line) => !line.startsWith('Row key: ')), ...(keyCheck?.ok ? [`Row key: ${keyCheck.sentence}`] : plainChecks.filter((line) => line.startsWith('Row key: ')))],
+        });
+        setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
+        // The check record has done its job: the receipt now says who vouched and what passed.
+        const companionPath = blockCompanionRelativePath(projectRoot, blockPath);
+        if (companionPath && existsSync(join(projectRoot, companionPath))) {
+          writeFileSync(join(projectRoot, companionPath), applyCompanionCheck(readFileSync(join(projectRoot, companionPath), 'utf-8'), null), 'utf-8');
+        }
+        await refreshLocalMetadataCatalog(projectRoot);
+        const after = resolveAppSourceCatalogRecords(projectRoot, [source.sourceId], 'include_review_required').items[0];
+        reply(200, {
+          ok: true,
+          status: 'certified',
+          sourceId: source.sourceId,
+          ...(after ? { sourceRevision: after.sourceRevision } : {}),
+          path: blockPath,
+          certification: bylineForViewer(certificationByline(receipt), person),
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        reply(400, { ok: false, error: message });
+      }
+      return;
+    }
+
+    // Certify a join without leaving the App (T4): the short review (its
+    // keys, a fresh bounded check, what would double-count if it were
+    // wrong, the grain and keys it fills), then "I vouch for this join —
+    // certify". A host gates the POST as `dataset.certify` (route-actions).
+    if (path === '/api/app-datasets/joins/certify-review' || path === '/api/app-datasets/joins/certify') {
+      const reply = (status: number, body: Record<string, unknown>) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      const reviewing = path === '/api/app-datasets/joins/certify-review';
+      if (reviewing ? req.method !== 'GET' : req.method !== 'POST') {
+        reply(405, { ok: false, error: reviewing ? 'Use GET.' : 'Use POST.' });
+        return;
+      }
+      try {
+        const body = reviewing ? {} as Record<string, unknown> : await readJSON(req) as Record<string, unknown>;
+        const read = (name: string) => (reviewing ? url.searchParams.get(name) ?? '' : typeof body[name] === 'string' ? body[name] as string : '').trim();
+        const sourceId = read('sourceId');
+        const joinId = read('joinId');
+        if (!sourceId || !joinId) {
+          reply(400, { ok: false, code: 'JOIN_REQUIRED', error: 'Choose the data and the join to certify.' });
+          return;
+        }
+        const snapshot = projectSnapshot();
+        await ensureMetadataCatalogFresh(projectRoot, { manifest: snapshot.manifest, semanticLayer });
+        const plan = await planJoinCertification(sourceId, joinId, body);
+        if (reviewing) {
+          reply(200, { ok: true, review: plan.review });
+          return;
+        }
+        if (!plan.decision.ok) {
+          reply(422, { ok: false, code: 'JOIN_CHECK_FAILED', blockers: plan.decision.blockers, details: { blockers: plan.decision.blockers }, review: plan.review, error: `${plan.review.name} cannot be certified: ${plan.decision.blockers.join(' ')}` });
+          return;
+        }
+        const proposal = previewContextAuthoring({ origin: 'manual', operations: plan.operations, expectedSnapshotId: plan.snapshotId });
+        const blocking = proposal.diagnostics.filter((diagnostic) => diagnostic.severity === 'blocking');
+        if (blocking.length) {
+          contextProposalStore.save({ ...proposal, status: 'discarded', discardedAt: new Date().toISOString() });
+          reply(422, { ok: false, code: 'JOIN_CERTIFY_BLOCKED', blockers: blocking.map((diagnostic) => diagnostic.message), review: plan.review, error: `${plan.review.name} cannot be certified: ${blocking.map((diagnostic) => diagnostic.message).join(' ')}` });
+          return;
+        }
+        await commitContextProposal(proposal, `app-certify-join:${proposal.id}`);
+        if (plan.draftedProposal) {
+          try {
+            withoutCertifiedJoin(plan.draftedProposal, plan.operations, plan.draftedOperation?.id);
+          } catch {
+            // Best effort: the certified join is saved; the rest of the draft waits as it was.
+          }
+        }
+        await refreshLocalMetadataCatalog(projectRoot);
+        currentRelatedTables(true);
+        const relationship = Object.values(projectSnapshot().manifest.modeling?.relationships ?? {}).find((candidate) => (candidate.qualifiedId ?? candidate.id) === plan.relationshipId);
+        reply(200, {
+          ok: true,
+          status: 'certified',
+          sourceId: plan.source.sourceId,
+          joinId: plan.join.id,
+          relationshipId: plan.relationshipId,
+          filled: plan.decision.fills,
+          ...(relationship?.certification ? { certification: bylineForViewer(relationship.certification, thisPerson(projectRoot)) } : {}),
+          proposalId: proposal.id,
+        });
+      } catch (error) {
+        const code = error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string' ? (error as { code: string }).code : undefined;
+        const message = error instanceof Error ? error.message : String(error);
+        const status = code === 'DATASET_SOURCE_NOT_FOUND' || code === 'JOIN_NOT_FOUND' ? 404 : code === 'ALREADY_CERTIFIED' || code === 'PROPOSAL_STALE' || code === 'SOURCE_CHANGED' ? 409 : code ? 422 : 400;
+        reply(status, { ok: false, ...(code ? { code } : {}), error: message });
       }
       return;
     }
@@ -20148,14 +21509,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const mcpDatasetRun = (req.method === 'POST' && path === '/api/app-datasets/run') || datasetFieldValuesRun;
     if (req.method === 'POST' && (appDashRun || mcpDatasetRun)) {
       let activeDashboardRunKey: string | undefined;
-      let activeDashboardRun: { generation: number; controller: AbortController } | undefined;
+      let activeDashboardRun: ActiveDashboardRun | undefined;
       let chartRunScopeKey: string | undefined;
       let chartRunScopeGeneration: number | undefined;
       let dashboardRequestAbortHandler: (() => void) | undefined;
       try {
+        const fieldValuesBody = datasetFieldValuesRun ? await readJSON(req) : undefined;
         const mcpRequest = mcpDatasetRun
           ? await resolveMcpDatasetRuntimeRequest(datasetFieldValuesRun
-            ? datasetFieldValuesQuery(await readJSON(req))
+            ? datasetFieldValuesQuery(fieldValuesBody)
             : await readJSON(req))
           : undefined;
         const runSurface = mcpRequest ? 'dataset-mcp' as const : appDashRun![1] as 'apps' | 'app-builds';
@@ -20307,8 +21669,64 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const supersessionKey = dashboardRunSupersessionKey(runSurface, appId, dashboardId, body.runScope);
         // One viewer's newer interaction supersedes only that person's own runs.
-        activeDashboardRunKey = supersessionKey ? `${currentPrincipal()?.id ?? ''}\u0000${supersessionKey}` : undefined;
-        const priorDashboardRun = activeDashboardRunKey ? activeDashboardRuns.get(activeDashboardRunKey) : undefined;
+        const viewerRunKey = supersessionKey ? `${currentPrincipal()?.id ?? ''}\u0000${supersessionKey}` : undefined;
+        const priorDashboardRun = viewerRunKey ? activeDashboardRuns.get(viewerRunKey) : undefined;
+        const requestSequence = viewerRunKey ? parseDashboardRunSequence((body as Record<string, unknown>).runSequence) : undefined;
+        const now = Date.now();
+        for (const [key, seen] of dashboardRunSequences) {
+          if (now - seen.at > 60 * 60_000) dashboardRunSequences.delete(key);
+        }
+        // B1: a published reader's identical request joins the run in flight
+        // instead of cancelling it. App Studio previews keep their own rule (an
+        // explicit preview is always a fresh run), and so do a forced refresh,
+        // a probe and an export.
+        const requestBody = body as Record<string, unknown>;
+        const shareableRun = Boolean(viewerRunKey)
+          && runSurface === 'apps'
+          && !mcpRequest
+          && !appDashExport
+          && requestBody.refresh !== true
+          && requestBody.driverProbe === undefined
+          && requestBody.exploreProbe === undefined;
+        const requestKey = shareableRun
+          ? dashboardRunRequestKey({
+            surface: runSurface,
+            appId,
+            dashboardId,
+            dashboard: loaded.dashboard,
+            snapshotId: runSnapshot.snapshotId,
+            person: { principal: currentPrincipal()?.id ?? null, persona: activePersonaAppId() ?? null, owner: activePersonaRunOwnerFingerprint() },
+            variables: dashboardVariables,
+            viewerFilters,
+            crossFilters: requestBody.crossFilters,
+            datasetDrills: requestBody.datasetDrills,
+            tileId: requestedTileId,
+            visibleTileIds: requestedVisibleTileIds,
+            affectedTileIds: requestedAffectedTileIds,
+            fullRun: fullDashboardRun,
+          })
+          : undefined;
+        const admission = admitDashboardRun({
+          prior: priorDashboardRun,
+          lastSequence: viewerRunKey ? dashboardRunSequences.get(viewerRunKey)?.sequence : undefined,
+          requestKey,
+          sequence: requestSequence,
+        });
+        if (admission.kind === 'refuse_older') {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON(supersededDashboardRunBody(appId, dashboardId)));
+          return;
+        }
+        if (admission.kind === 'reuse' && priorDashboardRun) {
+          priorDashboardRun.followers += 1;
+          if (viewerRunKey && requestSequence !== undefined) dashboardRunSequences.set(viewerRunKey, { sequence: requestSequence, at: now });
+          const shared = await priorDashboardRun.shared.promise;
+          res.writeHead(shared?.status ?? 200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(shared?.body ?? serializeJSON(supersededDashboardRunBody(appId, dashboardId)));
+          return;
+        }
+        activeDashboardRunKey = viewerRunKey;
+        if (viewerRunKey && requestSequence !== undefined) dashboardRunSequences.set(viewerRunKey, { sequence: requestSequence, at: now });
         // The newest interaction owns this mounted viewer scope. A caller
         // that does not provide a scope retains legacy independent-request
         // behavior rather than accidentally cancelling another viewer.
@@ -20316,6 +21734,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         activeDashboardRun = {
           generation: (priorDashboardRun?.generation ?? 0) + 1,
           controller: new AbortController(),
+          ...(requestKey ? { requestKey } : {}),
+          ...(requestSequence !== undefined ? { sequence: requestSequence } : {}),
+          followers: 0,
+          shared: sharedDashboardRunResponse(),
         };
         if (activeDashboardRunKey) activeDashboardRuns.set(activeDashboardRunKey, activeDashboardRun);
         // A chart answer is tied to a settled server result, but the result is
@@ -20330,7 +21752,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           chartRunScopeGeneration = (datasetChartScopeGenerations.get(chartRunScopeKey) ?? 0) + 1;
           datasetChartScopeGenerations.set(chartRunScopeKey, chartRunScopeGeneration);
         }
-        dashboardRequestAbortHandler = () => activeDashboardRun?.controller.abort(new Error('Dashboard request was disconnected.'));
+        // A viewer that joined this run still wants its result, so one caller
+        // going away does not cancel it for the other.
+        dashboardRequestAbortHandler = () => {
+          if (activeDashboardRun && activeDashboardRun.followers > 0) return;
+          activeDashboardRun?.controller.abort(new Error('Dashboard request was disconnected.'));
+        };
         req.once('aborted', dashboardRequestAbortHandler);
         const dashboardRunIsCurrent = () => Boolean(
           activeDashboardRun
@@ -20565,14 +21992,27 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // then exact source ids are resolved once for all four workers.
             // A catalog discovery state is never treated as target authority.
             await ensureMetadataCatalogFresh(projectRoot, { manifest, semanticLayer });
-            const sourcePolicy: AppBuildSourcePolicy = loadedDraftDashboard
-              ? loaded.draftSourcePolicy
-              : 'governed_only';
-            const resolvedSources = resolveAppSourceCatalogRecords(
+            // Draft or published, an App runs certified and not-certified
+            // data alike (T3); each tile's trust is labelled from the run.
+            const sourcePolicy: AppBuildSourcePolicy = APP_SOURCE_POLICY;
+            let resolvedSources = resolveAppSourceCatalogRecords(
               projectRoot,
               datasetSourceIds,
               sourcePolicy,
             );
+            // A field tile over a saved query (design D1) needs its result
+            // columns. They are local runtime state, so a fresh checkout or
+            // a changed saved query reads them again here, once.
+            const savedQueriesWithoutFields = resolvedSources.items.filter((source) => source.kind === 'block' && !source.capabilities.dataset);
+            if (savedQueriesWithoutFields.length > 0) {
+              const fieldsConnection = await resolveExecutionConnection(body as Record<string, unknown>);
+              let readAny = false;
+              for (const source of savedQueriesWithoutFields) {
+                const outcome = await readSavedQueryResultFields({ sourceId: source.sourceId, connection: fieldsConnection }).catch(() => undefined);
+                if (outcome?.ok && outcome.read) readAny = true;
+              }
+              if (readAny) resolvedSources = resolveAppSourceCatalogRecords(projectRoot, datasetSourceIds, sourcePolicy);
+            }
             for (const source of resolvedSources.items) datasetSourceById.set(source.sourceId, source);
             // HH-13: a Dataset this person may not use refuses its tiles only, not the page.
             const allowed = await hostAllowedSources(hostHooks, currentPrincipal(), resolvedSources.items.map((source) => ({ id: source.sourceId, kind: 'dataset' as const, name: source.title, ...(source.domain ? { domain: source.domain } : {}) })));
@@ -20584,14 +22024,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             for (const sourceId of resolvedSources.missingSourceIds) {
               datasetSourceErrors.set(
                 sourceId,
-                `Dataset source ${sourceId} no longer resolves in the active project catalog. Refresh or reselect the Dataset before running it.`,
+                'This data is no longer in the project. Choose current data from Add data before running this tile.',
               );
             }
             for (const source of resolvedSources.items) {
               if (!source.capabilities.dataset) {
                 datasetSourceErrors.set(
                   source.sourceId,
-                  `Dataset source ${source.title} no longer exposes an approved field contract. Refresh or reselect the Dataset before running it.`,
+                  `ZLens can't read the fields of ${source.title} right now. Refresh this data in the Data pane, or choose it again from Add data.`,
                 );
               } else if (!source.eligibility.localPreview) {
                 datasetSourceErrors.set(
@@ -20755,6 +22195,33 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             let draftParameters: Record<string, unknown> = {};
             let draftTargetConnection: ConnectionConfig | undefined;
             let draftRepairPlan: ReturnType<typeof buildExecutionPlan> | undefined;
+            // Linked page filters reach a draft tile the same way they reach a
+            // Saved query tile: the same governed wrapper and parameter rules.
+            // What applied and what did not is reported with the result.
+            let draftFilterApplication: DashboardFilterApplicationResult | undefined;
+            const applyDraftFilters = (input: { sql: string; sqlParams: SQLParamSpec[]; variables: Record<string, unknown> }) => {
+              draftFilterApplication = applyDashboardFiltersToBlockExecution({
+                sql: input.sql,
+                sqlParams: input.sqlParams,
+                variables: { ...input.variables, ...dashboardFilterValuesForTile(executionDashboard, item, dashboardVariables) },
+                block: { name: item.title ?? item.i },
+                dashboard: executionDashboard,
+                tileId: item.i,
+                tileFilterBindings: item.filterBindings,
+              });
+              return draftFilterApplication;
+            };
+            const draftFilterSummary = () => draftFilterApplication
+              ? { applied: draftFilterApplication.appliedFilters, skipped: draftFilterApplication.skippedFilters }
+              : undefined;
+            const draftExecutedLine = (repaired: boolean) => {
+              if (repaired) return 'A bounded repair ran on the original data target without changing the saved source file.';
+              const summary = draftFilterSummary();
+              const anyApplied = Boolean(summary?.applied.some((entry) => (executionDashboard.filters ?? []).some((filter) => filter.id === entry.filter)));
+              return summary && anyApplied && dashboardTileFiltersAllApplied(executionDashboard, summary)
+                ? 'The saved App-scoped DQL was executed with the current filters.'
+                : 'The saved App-scoped DQL was executed.';
+            };
             try {
               const localDraftPath = loaded.draftArtifactsDir
                 ? join(loaded.draftArtifactsDir, item.draftAnalysis.ref)
@@ -20795,20 +22262,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 result = await executeDqlArtifactSourceForAgent(
                   draftSource,
                   { name: item.title ?? item.i, path: draftAppRelativePath },
-                  { question: item.title, parameters: draftParameters },
+                  { question: item.title, parameters: draftParameters, applyFilters: applyDraftFilters },
                 );
               } catch (executionError) {
                 const repaired = await repairFailedAppTileExecution({
                   source: 'draft_analysis',
                   question: item.title ?? item.i,
-                  sourceSql: draftRepairPlan?.sql,
+                  sourceSql: draftFilterApplication?.sql ?? draftRepairPlan?.sql,
                   sourceDql: draftSource,
                   artifactName: item.title ?? item.i,
                   error: executionError,
                   targetConnection: draftTargetConnection,
                   targetConnectionName: projectConfig.defaultConnectionName,
-                  sqlParams: draftRepairPlan?.sqlParams,
-                  variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters },
+                  sqlParams: draftFilterApplication?.sqlParams ?? draftRepairPlan?.sqlParams,
+                  variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters, ...(draftFilterApplication?.variables ?? {}) },
                 });
                 if (!repaired.ok) {
                   tiles.push({
@@ -20838,6 +22305,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 repairedSql = repaired.repairedSql;
                 repairedDql = repaired.repairedDql;
               }
+              // Which columns a viewer may filter is a property of the draft's
+              // own SQL, not of the page-filtered statement that wrapped it.
+              if (draftRepairPlan?.sql && !repair) unfilteredBlockSql.set(item.i, draftRepairPlan.sql);
               tiles.push({
                 tileId: item.i,
                 status: 'ok',
@@ -20846,6 +22316,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 viz: item.viz,
                 chartConfig: mergeDashboardChartConfig(result.chartConfig as object | undefined, item),
                 result,
+                ...(draftFilterSummary() ? { filters: draftFilterSummary() } : {}),
                 trustState: 'review_required',
                 citation: { kind: repair ? 'app_draft_analysis_repaired' : 'app_draft_analysis', name: item.title ?? item.i, path: draftAppRelativePath },
                 ...(repair ? { repair } : {}),
@@ -20855,11 +22326,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   name: item.title ?? item.i,
                   sourcePath: draftAppRelativePath,
                   dql: (repairedDql ?? draftSource).slice(0, 40_000),
-                  ...(repairedSql ?? draftRepairPlan?.sql ? { sql: (repairedSql ?? draftRepairPlan!.sql).slice(0, 40_000) } : {}),
+                  ...(repairedSql ?? result.sql ?? draftRepairPlan?.sql ? { sql: (repairedSql ?? result.sql ?? draftRepairPlan!.sql).slice(0, 40_000) } : {}),
                   trustState: 'review_required',
                   explanation: [
                     'This is private App analysis and remains review-required.',
-                    repair ? 'A bounded repair ran on the original data target without changing the saved source file.' : 'The saved App-scoped DQL was executed with the current filters.',
+                    draftExecutedLine(Boolean(repair)),
+                    ...(draftFilterSummary() ? dashboardTileFilterExplanation(executionDashboard, draftFilterSummary()!) : []),
                   ],
                   executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
                 },
@@ -20868,14 +22340,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               const repaired = await repairFailedAppTileExecution({
                 source: 'draft_analysis',
                 question: item.title ?? item.i,
-                sourceSql: draftRepairPlan?.sql,
+                sourceSql: draftFilterApplication?.sql ?? draftRepairPlan?.sql,
                 sourceDql: draftSource,
                 artifactName: item.title ?? item.i,
                 error: err,
                 targetConnection: draftTargetConnection,
                 targetConnectionName: projectConfig.defaultConnectionName,
-                sqlParams: draftRepairPlan?.sqlParams,
-                variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters },
+                sqlParams: draftFilterApplication?.sqlParams ?? draftRepairPlan?.sqlParams,
+                variables: { ...(draftRepairPlan?.variables ?? {}), ...draftParameters, ...(draftFilterApplication?.variables ?? {}) },
               });
               if (repaired.ok && draftSource) {
                 tiles.push({
@@ -20889,6 +22361,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   trustState: 'review_required',
                   citation: { kind: 'app_draft_analysis_repaired', name: item.title ?? item.i, path: draftAppRelativePath },
                   repair: repaired.repair,
+                  ...(draftFilterSummary() ? { filters: draftFilterSummary() } : {}),
                   artifact: {
                     version: 1,
                     sourceKind: 'draft_analysis',
@@ -20897,7 +22370,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     dql: (repaired.repairedDql ?? draftSource).slice(0, 40_000),
                     sql: repaired.repairedSql.slice(0, 40_000),
                     trustState: 'review_required',
-                    explanation: ['A bounded DQL repair executed on the original data target. The saved App analysis was not changed.'],
+                    explanation: [
+                      'A bounded DQL repair executed on the original data target. The saved App analysis was not changed.',
+                      ...(draftFilterSummary() ? dashboardTileFilterExplanation(executionDashboard, draftFilterSummary()!) : []),
+                    ],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
                   },
                 });
@@ -20936,7 +22412,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 tileType: 'dataset',
                 title: item.title,
                 trustState: 'review_required',
-                error: 'APP_DATASETS_FEATURE_DISABLED: enable apps.datasets in dql.config.json before running field-based Dataset tiles.',
+                error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before running them.',
               });
               continue;
             }
@@ -20952,10 +22428,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               const currentAuthorityError = datasetSourceErrors.get(item.sourceId);
               if (currentAuthorityError) throw new Error(currentAuthorityError);
               if (!source || !discoveryDescriptor) {
-                throw new Error(`Dataset source ${item.sourceId} no longer exposes an approved field contract.`);
+                throw new Error('ZLens can\'t read the fields of this data right now. Refresh this data in the Data pane, or choose it again from Add data.');
               }
               if (source.sourceRevision !== item.sourceRevision) {
-                throw new Error('This Dataset changed after the tile was authored. Choose the current Dataset and reselect its fields.');
+                throw new Error('This data changed after the tile was made. Refresh this data in the Data pane, or choose it again from Add data.');
               }
               // The persisted draft card and page binding establish authoring
               // provenance; the catalog establishes current capability. Both
@@ -21013,7 +22489,218 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 dashboardValues: dashboardVariables,
                 boundParameters,
               });
-              if (source.kind === 'block') {
+              if (source.kind === 'block' && discoveryDescriptor.result) {
+                // Fields of a saved query's result (design D1): one query over
+                // the saved query's complete result, through the same compiler,
+                // filters and execution boundary as a Dataset tile. There is no
+                // row-level grain to prove: the result's own rows are the grain,
+                // and the contract check says whether the tile shows them as
+                // they are or rolls them up (with the receipt saying so).
+                const savedQueryResult = discoveryDescriptor.result;
+                const block = resolveDatasetSourceManifestBlock(manifest, source.executionRef);
+                if (!block || !isPlainSavedQueryBlock(block)) {
+                  throw new Error(`Saved query ${source.title} no longer resolves to its file. Refresh it in the Data pane.`);
+                }
+                assertAppAccess({
+                  app: loaded.app,
+                  domain: block.domain ?? loaded.dashboard.metadata.domain ?? loaded.app.domain,
+                  level: 'read',
+                });
+                const blockSource = readFileSync(join(projectRoot, block.filePath), 'utf-8');
+                const currentSourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+                if (currentSourceRevision !== source.sourceRevision || currentSourceRevision !== item.sourceRevision) {
+                  throw new Error('This saved query changed after the tile was made. Refresh it in the Data pane and pick its fields again.');
+                }
+                if (datasetDrills.get(item.i)) {
+                  throw new DashboardRunRequestError('A saved query\'s fields have no drill levels.');
+                }
+                if (item.query.comparison) {
+                  throw new Error('Period comparisons need row-level data. Use "Make row-level" on this saved query first.');
+                }
+                const descriptor = discoveryDescriptor;
+                const effectiveDatasetQuery = item.query;
+                const invocation = prepareBlockInvocation({
+                  block: block.name,
+                  source: blockSource,
+                  parameters: datasetSourceParameters,
+                  parameterSources: Object.fromEntries(Object.keys(boundParameters).map((name) => [name, 'surface' as const])),
+                  surface: 'app',
+                });
+                if (invocation.errors.length || invocation.unresolvedParameters.length) {
+                  throw new Error(invocation.errors[0] ?? `Needs values for: ${invocation.unresolvedParameters.join(', ')}`);
+                }
+                const tableMapping = await resolveSemanticTableMapping(executor, datasetTargetConnection, semanticLayer, projectRoot);
+                const semanticCompose = semanticLayer
+                  ? await composeSemanticBlockSqlForRuntime(blockSource, semanticLayer, {
+                      driver: datasetTargetConnection.driver,
+                      tableMapping,
+                      projectRoot,
+                      projectConfig,
+                      detectedProvider: semanticDetectedProvider,
+                      parameters: invocation.values,
+                    })
+                  : null;
+                const blockPlan = buildExecutionPlan(
+                  { id: item.i, type: 'dql', source: blockSource, title: item.title ?? block.name },
+                  {
+                    semanticLayer,
+                    driver: datasetTargetConnection.driver,
+                    tableMapping,
+                    parameters: invocation.values,
+                    semanticSql: semanticCompose?.sql ?? undefined,
+                  },
+                );
+                const sourceSql = semanticCompose?.sql ?? blockPlan?.sql;
+                if (!sourceSql) {
+                  throw new Error(semanticCompose?.diagnostics.find((diagnostic) => diagnostic.severity === 'error')?.message ?? 'The saved query produced no SQL to run.');
+                }
+                const compiled = compileDatasetTileQuery({
+                  descriptor,
+                  query: effectiveDatasetQuery,
+                  sourceSql,
+                  sourceSqlParams: blockPlan?.sqlParams,
+                  sourceVariables: blockPlan?.variables,
+                  filters: filterResolution.filters,
+                  parameters: datasetSourceParameters,
+                  // A filter's value list reads the names themselves, never "Maria Lopez (#1043)".
+                  groupNamesByKey: !datasetFieldValuesRun,
+                  driver: datasetTargetConnection.driver,
+                });
+                const boundValues: Record<string, unknown> = { ...compiled.variables, ...invocation.values };
+                datasetBoundParameters.set(item.i, compiled.sqlParams.map((parameter) => ({
+                  position: parameter.position,
+                  name: parameter.name,
+                  ...(Object.prototype.hasOwnProperty.call(boundValues, parameter.name) ? { value: boundValues[parameter.name] } : {}),
+                }) as DatasetTileBoundParameter));
+                const queryExecutionKey = fingerprintDashboardRuntimeState({
+                  sourceId: source.sourceId,
+                  sourceRevision: currentSourceRevision,
+                  target: datasetTargetFingerprint,
+                  query: compiled.queryFingerprint,
+                  filters: compiled.filterFingerprint,
+                  parameters: boundValues,
+                });
+                let queryExecution = datasetQueryExecutions.get(queryExecutionKey);
+                if (!queryExecution) {
+                  queryExecution = analyticalExecutionService.execute({
+                    sql: compiled.sql,
+                    subject: 'App saved query field query',
+                    connection: datasetTargetConnection,
+                    sqlParams: compiled.sqlParams,
+                    variables: boundValues,
+                    signal: activeDashboardRun!.controller.signal,
+                  });
+                  datasetQueryExecutions.set(queryExecutionKey, queryExecution);
+                }
+                const execution = await queryExecution;
+                const datasetResult = decorateDatasetResult(execution.result, descriptor, effectiveDatasetQuery);
+                const tileExecutionFingerprint = fingerprintDashboardRuntimeState({
+                  runInput: datasetRunInputFingerprint,
+                  snapshotId: runSnapshot.snapshotId,
+                  tileId: item.i,
+                  sourceId: source.sourceId,
+                  sourceRevision: currentSourceRevision,
+                  query: compiled.queryFingerprint,
+                  filters: compiled.filterFingerprint,
+                  unboundFilters: filterResolution.unbound,
+                  parameters: datasetSourceParameters,
+                });
+                const executedParameterEvidence = datasetBoundParameterEvidence(invocation.values);
+                const executedParameterFingerprint = `sha256:${fingerprintDashboardRuntimeState(invocation.values)}`;
+                const rolledUp = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup');
+                // A total over a Top N saved query's rows is not certified, whatever the saved query is.
+                const topRowsOnly = compiled.validation.adaptations.some((adaptation) => adaptation.kind === 'saved_query_rollup' && adaptation.topRowsOnly);
+                const savedQueryTileTrust = topRowsOnly ? 'review_required' as const : descriptor.trust;
+                datasetEffectiveQueries.set(item.i, structuredClone(effectiveDatasetQuery));
+                tiles.push({
+                  tileId: item.i,
+                  status: 'ok',
+                  tileType: 'dataset',
+                  title: item.title ?? descriptor.label,
+                  viz: item.viz,
+                  chartConfig: datasetChartConfig(blockPlan?.chartConfig, item, descriptor, effectiveDatasetQuery),
+                  result: datasetResult,
+                  compiledSqlFingerprint: execution.compiledSqlFingerprint,
+                  resultFingerprint: execution.resultFingerprint,
+                  executionFingerprint: tileExecutionFingerprint,
+                  trustState: savedQueryTileTrust,
+                  citation: { kind: 'dataset_query', name: descriptor.label, path: block.filePath },
+                  filters: {
+                    applied: compiled.appliedFilters,
+                    unbound: filterResolution.unbound,
+                  },
+                  dataset: {
+                    sourceId: source.sourceId,
+                    sourceRevision: currentSourceRevision,
+                    contractFingerprint: descriptor.contractRef.fingerprint,
+                    validation: compiled.validation,
+                    ...(compiled.nameWarnings.length ? { nameWarnings: compiled.nameWarnings } : {}),
+                    trust: descriptor.trust,
+                    lifecycle: descriptor.lifecycle,
+                    binding: {
+                      ...descriptor.binding,
+                      state: 'valid',
+                      activeSnapshotId: runSnapshot.snapshotId,
+                      activeTargetFingerprint: datasetTargetFingerprint,
+                    },
+                    savedQueryResult: { savedQuery: savedQueryResult.savedQuery, rolledUp },
+                    authoredQueryFingerprint: tileQueryHash(item.query),
+                    hierarchy: { activeSteps: [], candidates: [] },
+                    explore: { fields: datasetExploreFields(descriptor) },
+                    queryFingerprint: compiled.queryFingerprint,
+                    filterFingerprint: compiled.filterFingerprint,
+                    executionFingerprint: tileExecutionFingerprint,
+                    parameterEvidence: executedParameterEvidence,
+                    executionProvenance: {
+                      version: 1,
+                      kind: 'block_runtime',
+                      sourceId: source.sourceId,
+                      sourceRevision: currentSourceRevision,
+                      contractFingerprint: descriptor.contractRef.fingerprint,
+                      queryFingerprint: compiled.queryFingerprint,
+                      filterFingerprint: compiled.filterFingerprint,
+                      executionFingerprint: tileExecutionFingerprint,
+                      parameterFingerprint: executedParameterFingerprint,
+                      compiledSqlFingerprint: execution.compiledSqlFingerprint,
+                      executedSqlFingerprint: executionFingerprint(execution.preparation.executedSql),
+                      resultFingerprint: execution.resultFingerprint,
+                      targetFingerprint: datasetTargetFingerprint,
+                    },
+                    appliedFilters: compiled.appliedFilters,
+                    unboundFilters: filterResolution.unbound,
+                  },
+                  artifact: {
+                    version: 1,
+                    sourceKind: 'dataset_query',
+                    name: item.title ?? descriptor.label,
+                    sourcePath: block.filePath,
+                    authoredQuerySpec: renderDatasetTileAuthoredQuerySpec({
+                      descriptor,
+                      query: item.query,
+                      filters: compiled.appliedFilters,
+                      parameterEvidence: executedParameterEvidence,
+                    }),
+                    dql: renderDatasetTileDql({
+                      descriptor,
+                      query: effectiveDatasetQuery,
+                      filters: compiled.appliedFilters,
+                      parameters: datasetSourceParameters,
+                    }),
+                    sql: execution.preparation.executedSql.slice(0, 40_000),
+                    trustState: savedQueryTileTrust,
+                    explanation: [
+                      rolledUp
+                        ? (compiled.validation.adaptations.find((adaptation) => adaptation.kind === 'saved_query_rollup')?.message ?? `Rolled up from the result of ${savedQueryResult.savedQuery}.`)
+                        : `Shows the rows of ${savedQueryResult.savedQuery} as they are.`,
+                      topRowsOnly
+                        ? `This tile ran as one query over the result of the saved query ${savedQueryResult.savedQuery}, which keeps only its top rows; a total of them is not certified.`
+                        : `This tile ran as one query over the complete result of the saved query ${savedQueryResult.savedQuery}; its trust is the saved query's own.`,
+                      filterResolution.unbound.length > 0 ? `${filterResolution.unbound.length} explicitly unmapped dashboard filter(s) did not apply.` : 'All mapped dashboard filters were bound through the saved query\'s result columns.',
+                    ],
+                    executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
+                  },
+                });
+              } else if (source.kind === 'block') {
                 const block = resolveDatasetSourceManifestBlock(manifest, source.executionRef);
                 if (!block) {
                   throw new Error(`Dataset source ${source.qualifiedIdentity} no longer resolves to its authored block path.`);
@@ -21078,7 +22765,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   authority,
                   parameterValues: invocation.values,
                 });
-                const grainDescriptor = provisionalDataset.descriptor;
+                // Related fields (design D2) are the server's own discovery, adopted onto the rebuilt descriptor.
+                const grainDescriptor = provisionalDataset.descriptor ? adoptDatasetJoins(provisionalDataset.descriptor, discoveryDescriptor) : undefined;
                 const declaredProofId = grainDescriptor?.grain.keyEvidence?.trim();
                 if (!grainDescriptor || !declaredProofId) {
                   throw new Error('This Dataset no longer has a complete declaration-derived grain proof scope. Refresh and revalidate the source.');
@@ -21248,10 +22936,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   authority,
                   parameterValues: invocation.values,
                 });
-                const descriptor = runtimeDataset.descriptor;
-                if (!descriptor || runtimeDataset.proofState !== 'valid' || descriptor.binding.state !== 'valid') {
+                const ownDescriptor = runtimeDataset.descriptor;
+                if (!ownDescriptor || runtimeDataset.proofState !== 'valid' || ownDescriptor.binding.state !== 'valid') {
                   throw new Error(datasetProofFailureMessage(runtimeDataset.proofState));
                 }
+                const descriptor = adoptDatasetJoins(ownDescriptor, discoveryDescriptor);
                 // Revalidate the exact interaction against the proof-bound
                 // descriptor. The provisional descriptor above only exists to
                 // prepare a fresh full-source grain check.
@@ -21362,6 +23051,32 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   }
                   aggregatePreparation = await componentProof;
                 }
+                // Fields from related tables (design D2): the joins this tile
+                // reads, each checked to hold one related row per key before
+                // it runs. A drafted join keeps the tile Needs review.
+                const tileJoins = datasetJoinsUsed(descriptor, {
+                  ...effectiveDatasetQuery,
+                  filters: [...(effectiveDatasetQuery.filters ?? []), ...filterResolution.filters],
+                });
+                await ensureJoinsAddNoRows(tileJoins, datasetTargetConnection, datasetTargetFingerprint, descriptor.label);
+                // Trust is a property of the page, not of the reader's filter
+                // values (B6): a page filter mapped to this tile through a
+                // related field counts its join whether or not a value is
+                // picked, so picking a customer never flips the label.
+                const reachableJoinIds = new Set(tileJoinsReachable(executionDashboard, item, descriptor).joins.map((join) => join.id));
+                const trustJoins = (descriptor.joins ?? []).filter((join) => reachableJoinIds.has(join.id) || tileJoins.some((used) => used.id === join.id));
+                const tileTrust = descriptor.trust === 'certified' && datasetJoinsTrust(trustJoins) === 'certified' ? 'certified' as const : 'review_required' as const;
+                const joinReceipts = trustJoins.map((join) => ({
+                  id: join.id,
+                  table: join.table,
+                  trust: join.trust,
+                  // A join this run did not read (no filter value picked) says so.
+                  sentence: tileJoins.some((used) => used.id === join.id)
+                    ? datasetJoinReceiptSentence(join, trustJoins)
+                    : `A page filter can join it to ${join.table} on ${join.keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(' and ')}${join.trust === 'certified' ? '' : '; the join is not certified yet'}`,
+                  // Certified once, changed since (T4): the receipt keeps the date.
+                  ...(join.trust !== 'certified' && join.changedSinceCertified ? { changedSinceCertified: join.changedSinceCertified } : {}),
+                }));
                 const executionSourceSql = aggregateScope?.preparedSourceSql ?? sourceSql;
                 const executionSourceSqlParams = aggregateScope?.sourceSqlParams ?? blockPlan?.sqlParams;
                 const executionSourceVariables = aggregateScope?.sourceVariables ?? blockPlan?.variables;
@@ -21374,6 +23089,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 let appliedFilters: Array<{ field: string; op: TileFilterOperator; values: unknown[]; placement: 'where' | 'having' }>;
                 /** C8 outcome the executed SQL was compiled under; recorded on the receipt. */
                 let tileValidation: CompiledDatasetTileQuery['validation'];
+                /** Names grouped without a key (new-user round 3, problem 4): the tile says they may merge namesakes. */
+                let tileNameWarnings: CompiledDatasetTileQuery['nameWarnings'] = [];
                 let comparisonEvidence: Record<string, unknown> | undefined;
                 /** A cache delivery is display-only and never fresh execution authority. */
                 let cacheDelivery: DatasetCacheDeliveryReceiptV1 | undefined;
@@ -21397,6 +23114,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                       const periodCompiled = compileDatasetTileQuery({
                         descriptor,
                         query: period.query,
+                        // Periods are matched by their labels; a name told apart in one period only would not match.
+                        groupNamesByKey: false,
                         sourceSql: executionSourceSql,
                         sourceSqlParams: executionSourceSqlParams,
                         sourceVariables: executionSourceVariables,
@@ -21487,12 +23206,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     parameters: datasetSourceParameters,
                     aggregateComponentProof: aggregatePreparation?.componentProof,
                     aggregateComponentBinding: { sourceId: source.sourceId, sourceRevision: currentSourceRevision, targetFingerprint: datasetTargetFingerprint },
+                    // A filter's value list reads the names themselves, never "Maria Lopez (#1043)".
+                    groupNamesByKey: !datasetFieldValuesRun,
                     driver: datasetTargetConnection.driver,
                   });
                   queryFingerprint = compiled.queryFingerprint;
                   filterFingerprint = compiled.filterFingerprint;
                   appliedFilters = compiled.appliedFilters;
                   tileValidation = compiled.validation;
+                  tileNameWarnings = compiled.nameWarnings;
                   const boundValues: Record<string, unknown> = { ...compiled.variables, ...invocation.values };
                   datasetBoundParameters.set(item.i, compiled.sqlParams.map((parameter) => ({
                     position: parameter.position,
@@ -21538,7 +23260,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                         })}`,
                         dialect: datasetTargetConnection.driver,
                         adapterFingerprint: 'dataset_block_runtime_v1',
-                        compilerFingerprint: 'dataset_tile_compiler_v1',
+                        // A joined tile's result also depends on the joins it read.
+                        compilerFingerprint: tileJoins.length
+                          ? `dataset_tile_compiler_v2+joins:${fingerprintDashboardRuntimeState(tileJoins.map((join) => ({ relation: join.relation, keys: join.keys, parent: join.parent ?? null })))}`
+                          : 'dataset_tile_compiler_v2',
                         rowBoundFingerprint: `normalized_result_rows:${NOTEBOOK_EXECUTE_PREVIEW_ROW_LIMIT}`,
                         personaPolicyFingerprint: personaFingerprint,
                       }
@@ -21635,7 +23360,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   compiledSqlFingerprint,
                   resultFingerprint,
                   executionFingerprint: tileExecutionFingerprint,
-                  trustState: descriptor.trust,
+                  trustState: tileTrust,
                   citation: { kind: 'dataset_query', name: descriptor.label, path: block.filePath },
                   filters: {
                     applied: appliedFilters,
@@ -21646,7 +23371,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     sourceRevision: currentSourceRevision,
                     contractFingerprint: descriptor.contractRef.fingerprint,
                     validation: tileValidation,
+                    ...(tileNameWarnings.length ? { nameWarnings: tileNameWarnings } : {}),
                     trust: descriptor.trust,
+                    ...(joinReceipts.length ? { joins: joinReceipts } : {}),
                     lifecycle: descriptor.lifecycle,
                     binding: descriptor.binding,
                     proofState: runtimeDataset.proofState,
@@ -21711,8 +23438,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                       parameters: datasetSourceParameters,
                     }),
                     ...(cacheDelivery ? {} : { sql: executedSql.slice(0, 40_000) }),
-                    trustState: descriptor.trust,
+                    trustState: tileTrust,
                     explanation: [
+                      ...joinReceipts.map((join) => `${join.sentence}.`),
                       ...(cacheDelivery
                         ? ['Cached local Dataset delivery. It did not dispatch fresh SQL and cannot save, replace, prove equivalence, or publish this App page.', `Cached at ${String(cacheDelivery.cachedAt ?? 'an unknown time')}; use Refresh for a live execution.`]
                         : ['This field tile compiled over the complete governed Dataset source at run time.', `Source proof ${descriptor.binding.proofId ?? 'is'} valid for the active target and source revision.`]),
@@ -21985,7 +23713,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               if (missingModels.length) throw new Error(`Semantic definition changed; missing model(s): ${missingModels.join(', ')}`);
               const targetConnection = requireActiveConnection(requestConnection(body as Record<string, unknown>) ?? connection);
               const tableMapping = await resolveSemanticTableMapping(executor, targetConnection, semanticLayer, projectRoot);
-              const activeFilters = dashboardSemanticFiltersForTile(executionDashboard, item, dashboardVariables);
+              // A page filter reaches any dimension the tile's metrics can be
+              // filtered on — including ones a KPI does not group by.
+              const filterLayer = semanticLayer;
+              const semanticFilterResolution = dashboardSemanticFiltersForTile(executionDashboard, item, dashboardVariables, {
+                dimensionAvailable: (dimension) => Boolean(filterLayer.resolveDimension(
+                  parseSemanticDimensionSelection(dimension).reference,
+                  item.semantic!.metrics,
+                )),
+              });
+              const activeFilters = semanticFilterResolution.filters;
+              const semanticFilterSummary = {
+                applied: semanticFilterResolution.applied,
+                skipped: semanticFilterResolution.skipped,
+              };
               const staticFilters = (item.semantic.filters ?? []).map((filter) => ({
                 dimension: filter.field,
                 operator: filter.operator,
@@ -22064,6 +23805,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 title: item.title ?? item.semantic.id,
                 viz: item.viz,
                 result: normalizedResult,
+                filters: semanticFilterSummary,
                 ...(executionFingerprints ?? {}),
                 trustState: 'review_required',
                 citation: { kind: repair ? 'semantic_query_repaired' : 'semantic_query', name: item.semantic.id },
@@ -22077,6 +23819,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   explanation: [
                     `Metrics: ${item.semantic.metrics.join(', ') || 'none'}.`,
                     `Dimensions: ${item.semantic.dimensions?.join(', ') || 'none'}.`,
+                    ...dashboardTileFilterExplanation(executionDashboard, semanticFilterSummary),
                     repair ? 'The composed SQL needed bounded repair and therefore remains review-required.' : 'The governed semantic intent was composed for the active warehouse and remains review-required until approval.',
                   ],
                   executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -22142,10 +23885,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               dashboardValues: dashboardVariables,
               requestValues: variables,
             });
+            // A filter the author marked "Does not apply" for this tile must not
+            // reach it through a block parameter of the same name either.
+            const tileDashboardVariables = dashboardValuesForTile(executionDashboard, item, dashboardVariables);
             blockInvocation = prepareBlockInvocation({
               block: block.name,
               source: blockSource,
-              parameters: { ...dashboardVariables, ...boundParameters },
+              parameters: { ...tileDashboardVariables, ...boundParameters },
               parameterSources: Object.fromEntries(
                 Object.keys(boundParameters).map((name) => [name, 'surface' as const]),
               ),
@@ -22209,7 +23955,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             blockFilterApplication = applyDashboardFiltersToBlockExecution({
               sql: blockBaseSql,
               sqlParams: blockPlan?.sqlParams ?? [],
-              variables: { ...(blockPlan?.variables ?? {}), ...dashboardVariables },
+              variables: { ...(blockPlan?.variables ?? {}), ...tileDashboardVariables },
               block,
               dashboard: viewerExecutionDashboard,
               tileId: item.i,
@@ -22261,7 +24007,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 sql: blockFilterApplication.sql.slice(0, 40_000),
                 trustState: block.status === 'certified' ? 'certified' : 'review_required',
                 explanation: [
-                  block.status === 'certified' ? 'This tile executed a certified project block.' : 'This project block is not certified and remains review-required.',
+                  block.status === 'certified' ? 'This tile executed a certified saved query.' : 'This saved query is not certified and remains review-required.',
                   'Dashboard filters and typed parameters were bound before read-only execution.',
                 ],
                 executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -22330,7 +24076,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     sql: repaired.repairedSql.slice(0, 40_000),
                     trustState: 'review_required',
                     explanation: [
-                      'The saved certified block was not changed.',
+                      'The certified saved query was not changed.',
                       'A bounded repair executed on the original data target; this repaired result requires human review.',
                     ],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
@@ -22354,7 +24100,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     dql: blockSource.slice(0, 40_000),
                     ...(blockFilterApplication?.sql ?? blockPlan?.sql ? { sql: (blockFilterApplication?.sql ?? blockPlan!.sql).slice(0, 40_000) } : {}),
                     trustState: 'review_required',
-                    explanation: ['Automatic repair could not produce a safe executable result. The saved block was not changed.'],
+                    explanation: ['Automatic repair could not produce a safe executable result. The saved query was not changed.'],
                     executionTarget: executionTargetDescriptor(body as Record<string, unknown>),
                   },
                 } : {}),
@@ -22396,6 +24142,33 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           // population, so a top 5 with no rank column is never summed.
           const ordering = block ? blockResultOrdering(block, typeof tile.title === 'string' ? tile.title : undefined) : undefined;
           if (ordering) tile.ordering = ordering;
+        }
+        // Who certified each certified tile's source, and when (D5): every
+        // surface shows "Certified by <name> · <date>" from the receipt the
+        // explicit Certify action wrote. Old certifications carry `{}`.
+        const viewer = thisPerson(projectRoot);
+        for (const tile of tiles) {
+          if (tile.status !== 'ok') continue;
+          const datasetSourceId = typeof tile.dataset?.sourceId === 'string' ? tile.dataset.sourceId : undefined;
+          // Checked · Needs certifying (design Q1): the tile says so, not just "Needs review".
+          if (tile.dataset && tile.dataset.trust !== 'certified' && datasetSourceId && datasetSourceById.get(datasetSourceId)?.check) {
+            tile.dataset.checked = true;
+          }
+          const certifiedPath = tile.dataset
+            ? (tile.dataset.trust === 'certified' && datasetSourceId ? datasetSourceById.get(datasetSourceId)?.sourcePath : undefined)
+            : tile.certificationStatus === 'certified' && typeof tile.blockPath === 'string' ? tile.blockPath : undefined;
+          if (!certifiedPath) {
+            // Certified once, changed since (T4): the receipt keeps the date it was certified.
+            const changedPath = tile.dataset
+              ? (datasetSourceId ? datasetSourceById.get(datasetSourceId)?.sourcePath : undefined)
+              : typeof tile.blockPath === 'string' ? tile.blockPath : undefined;
+            const previous = changedPath && !tile.dataset?.checked ? blockPreviousCertificationByline(projectRoot, changedPath) : null;
+            if (previous) tile.certification = previous;
+            continue;
+          }
+          const certification = blockCertificationByline(projectRoot, certifiedPath);
+          // "Certified by you" when the person reading certified it (design Q1).
+          if (certification) tile.certification = bylineForViewer(certification, viewer);
         }
         tiles.sort((left, right) => (tileOrder.get(left.tileId) ?? 0) - (tileOrder.get(right.tileId) ?? 0));
         localApps.current?.close();
@@ -22458,7 +24231,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const runDialect = (() => {
           try { return requireActiveConnection().driver || 'duckdb'; } catch { return 'duckdb'; }
         })();
-        const tilesWithFilters = settledTiles.map((tile) => {
+        const tilesWithFilterColumns = settledTiles.map((tile) => {
           const executedSql = unfilteredBlockSql.get(tile.tileId) ?? (tile as { artifact?: { sql?: unknown } }).artifact?.sql;
           const columns = (tile as { result?: { columns?: string[] } }).result?.columns ?? [];
           if (typeof executedSql !== 'string' || columns.length === 0) return tile;
@@ -22471,6 +24244,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           } catch {
             return tile; // Unparseable SQL simply offers no filter candidates.
           }
+        });
+        // Per tile, which page filters actually applied and which did not
+        // (with why), from what each tile's own execution path did — for every
+        // tile type. Readers' "Not filtered by …" pills come from this, not
+        // from the page document.
+        const tilesWithFilters = tilesWithFilterColumns.map((tile) => {
+          const item = loaded.dashboard.layout.items.find((candidate) => candidate.i === tile.tileId);
+          const filterReport = item
+            ? dashboardTileFilterReport({ dashboard: loaded.dashboard, item, tile, values: dashboardVariables })
+            : undefined;
+          return filterReport ? { ...tile, filterReport } : tile;
         });
         const filterOptions = collectDashboardFilterOptions(loaded.dashboard, tilesWithFilters);
         const filterFingerprint = fingerprintDashboardRuntimeState({
@@ -22667,11 +24451,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           goal: loaded.dashboard.story?.goal ?? loaded.dashboard.metadata.businessOutcome ?? loaded.dashboard.metadata.title,
           audience: loaded.dashboard.story?.audience ?? loaded.dashboard.metadata.audience,
           filters: dashboardVariables,
+          filterLabels: Object.fromEntries((loaded.dashboard.filters ?? []).flatMap((filter) => filter.label?.trim() ? [[filter.id, filter.label.trim()]] : [])),
           tiles: settledTiles.map((tile) => {
             const dashboardItem = loaded.dashboard.layout.items.find((item) => item.i === tile.tileId);
-            const effectiveStoryFilters = dashboardItem?.block && !dashboardItem.query
+            // The tile's own filter report is the server's word on which page
+            // filters reached it; a filter it did not apply never scopes its facts.
+            const filterReport = (tilesWithFilters.find((candidate) => candidate.tileId === tile.tileId) as { filterReport?: { notApplied?: Array<{ filter: string }> } } | undefined)?.filterReport;
+            const effectiveStoryFilters = withoutNotAppliedStoryFilters(dashboardItem?.block && !dashboardItem.query
               ? dashboardStoryFiltersForBlockTile(dashboardVariables, tile, dashboardItem)
-              : dashboardStoryFiltersForTile(loaded.dashboard, dashboardVariables, tile.dataset);
+              : dashboardStoryFiltersForTile(loaded.dashboard, dashboardVariables, tile.dataset), filterReport);
             const datasetScope = dashboardItem?.query
               ? {
                   // A Dataset tile is a whole-scope value only when its query
@@ -22957,14 +24745,36 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (mcpRequest && datasetFieldValuesRun) {
           const tile = tilesWithFilters.find((candidate) => candidate.tileId === mcpRequest.tileId);
           const field = mcpRequest.query.dimensions[0]?.field ?? '';
-          const result = tile?.status === 'ok' && !staleRun ? tile.result as { rows?: Array<Record<string, unknown>> } | undefined : undefined;
+          const result = tile?.status === 'ok' && !staleRun ? tile.result as { rows?: Array<Record<string, unknown>>; rowCount?: number; truncated?: boolean } | undefined : undefined;
           const values = Array.from(new Set((result?.rows ?? [])
             .map((row) => row[field])
             .filter((value) => value !== null && value !== undefined && value !== '')
             .map(String)));
+          // The run returns at most its screen row cap (500) but counts every
+          // grouped row: the field has that many values ("all 930"), not 500.
+          // A cut result without a count says only "500+".
+          const countedRows = Number(result?.rowCount ?? 0);
+          const totalValues = Math.max(values.length, Number.isFinite(countedRows) ? countedRows : 0);
+          const rowsCut = Boolean(result?.truncated) && totalValues <= (result?.rows?.length ?? 0);
+          const searched = Boolean(mcpRequest.query.filters?.length);
+          const search = datasetFieldValueSearchText((fieldValuesBody as Record<string, unknown> | undefined)?.search);
+          // A non-text field has no server search: its values are matched here.
+          const matched = search && !searched
+            ? values.filter((value) => value.toLowerCase().includes(search.toLowerCase()))
+            : values;
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON(tile?.status === 'ok' && !staleRun
-            ? { ok: true, field, values: values.slice(0, DATASET_FIELD_VALUE_LIMIT), truncated: values.length > DATASET_FIELD_VALUE_LIMIT }
+            ? {
+                ok: true,
+                field,
+                values: matched.slice(0, DATASET_FIELD_VALUE_LIMIT),
+                truncated: matched.length > DATASET_FIELD_VALUE_LIMIT,
+                ...(search ? { search } : {
+                  // How many values the field has, up to the count limit.
+                  valueCount: Math.min(totalValues, DATASET_FIELD_VALUE_COUNT_LIMIT),
+                  ...(totalValues > DATASET_FIELD_VALUE_COUNT_LIMIT || rowsCut ? { valueCountCapped: true } : {}),
+                }),
+              }
             : { ok: false, field, values: [], error: tile?.error ?? 'The field values did not settle. Retry the page.' }));
           return;
         }
@@ -23006,6 +24816,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   result: tile.result,
                   trustState: tile.trustState,
                   filters: tile.filters,
+                  // The joins to related tables it used, in plain words (design D2).
+                  ...(Array.isArray(dataset?.joins) ? { joins: dataset.joins } : {}),
+                  // A name grouped without a key may merge namesakes (new-user round 3, problem 4).
+                  ...(Array.isArray(dataset?.nameWarnings) ? { nameWarnings: dataset.nameWarnings } : {}),
                   receipt,
                 }
               : {
@@ -23039,8 +24853,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           sendExportFile(res, exportFile({ columns, rows }, tileExport, typeof tile?.title === 'string' ? tile.title : dashboardId));
           return;
         }
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({
+        const runResponseBody = serializeJSON({
           appId,
           dashboardId,
           persona: activePersonaAppId() ? { appId: activePersonaAppId() } : null,
@@ -23064,18 +24877,29 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           } : {}),
           ...(staleRun ? {
             stale: true,
+            // The viewer re-runs a stale page by itself; say why it went stale.
+            staleCause: supersededRun ? 'superseded' : 'project_changed',
             staleReason: !supersededRun
               ? 'The project changed while this dashboard was running. Results and story were invalidated; run the current dashboard again.'
-              : 'A newer dashboard interaction superseded this run. Results and story were invalidated; run the current dashboard again.',
+              : DASHBOARD_RUN_SUPERSEDED_REASON,
           } : {}),
-        }));
+        });
+        activeDashboardRun?.shared.settle({ status: 200, body: runResponseBody });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(runResponseBody);
       } catch (err) {
         if (dashboardRequestAbortHandler) req.off('aborted', dashboardRequestAbortHandler);
         if (activeDashboardRunKey && activeDashboardRun && activeDashboardRuns.get(activeDashboardRunKey) === activeDashboardRun) {
           activeDashboardRuns.delete(activeDashboardRunKey);
         }
-        res.writeHead(err instanceof DashboardRunRequestError ? 400 : 500, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ error: err instanceof Error ? err.message : String(err) }));
+        const status = err instanceof DashboardRunRequestError ? 400 : 500;
+        const errorBody = serializeJSON({ error: err instanceof Error ? err.message : String(err) });
+        activeDashboardRun?.shared.settle({ status, body: errorBody });
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(errorBody);
+      } finally {
+        // Any other way out (an export, a Dataset MCP answer) leaves nothing to share.
+        activeDashboardRun?.shared.settle(null);
       }
       return;
     }
@@ -23095,6 +24919,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           path,
           projectRoot,
           datasetsEnabled: datasetsAppFeatureEnabled(projectConfig),
+          readSavedQueryFields: readSavedQueryResultFieldsBatch,
           answerFiguresRule: figuresRuleForRequest,
           // With a host, an Ask answer's text is not shown to others where its figures depend on the reader.
           ...(hostHooks ? {
@@ -23301,7 +25126,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             // current persisted draft, not from a browser value or from a
             // successful SQL result. Publication follows the stricter branch
             // below and never treats this local policy as a trust upgrade.
-            let currentDraftSourcePolicy: AppBuildSourcePolicy | undefined;
             if (purpose === 'local_preview') {
               const storage = new LocalAppStorage(defaultLocalAppsDbPath(projectRoot), { owner: currentRecordOwner() });
               try {
@@ -23312,7 +25136,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 if (appBuildPreviewIntentFingerprint(currentDraft, dashboardId) !== intentFingerprint) {
                   return { ok: false, error: 'The App preview receipt was produced by different draft content. Run the current draft again.' };
                 }
-                currentDraftSourcePolicy = currentDraft.sourcePolicy;
               } finally {
                 storage.close();
               }
@@ -23359,40 +25182,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                     || descriptor.contractRef.fingerprint !== record.contractFingerprint) {
                     return { ok: false, error: `Dataset tile ${record.tileId} changed source, revision, or field contract after its preview. Refresh the Dataset and run the draft again.` };
                   }
-                  if (purpose === 'project_publish') {
-                    // A settled result is never a trust upgrade. Publishing
-                    // must re-check current catalog lifecycle and explicit
-                    // project-publish eligibility even when id, revision, and
-                    // contract happen to remain unchanged after a review-state
-                    // downgrade.
-                    if (source.lifecycle !== 'certified'
-                      || source.trust !== 'certified'
-                      || !source.eligibility.projectPublish) {
-                      return {
-                        ok: false,
-                        error: `Dataset tile ${record.tileId} is currently ${source.lifecycle} and is not eligible for Project publication. Refresh the governed source and run the draft again after certification.`,
-                      };
-                    }
-                  } else {
-                    // Local review preview is allowed only when the *current
-                    // persisted* draft explicitly opted into review-required
-                    // sources and the canonical catalog says that exact
-                    // source remains locally executable. It never changes
-                    // the receipt's truthful review lifecycle or grants
-                    // publication eligibility.
-                    if (!source.eligibility.localPreview) {
-                      return {
-                        ok: false,
-                        error: `Dataset tile ${record.tileId} is currently ${source.lifecycle} and is not eligible for this local preview policy. Enable review-required sources or select a certified Dataset.`,
-                      };
-                    }
-                    if ((source.lifecycle !== 'certified' || source.trust !== 'certified')
-                      && currentDraftSourcePolicy !== 'include_review_required') {
-                      return {
-                        ok: false,
-                        error: `Dataset tile ${record.tileId} is currently ${source.lifecycle}. Enable review-required sources explicitly before saving its local preview evidence.`,
-                      };
-                    }
+                  // A settled result is never a trust upgrade: the receipt keeps
+                  // the source's own lifecycle, and readers see "Not certified
+                  // yet" on tiles nobody certified. There is no per-App data
+                  // rule (T3); whether the project requires certified data to
+                  // publish is checked once, per tile, by the publish check.
+                  // A retired source is never executable.
+                  if (!source.eligibility.localPreview) {
+                    return {
+                      ok: false,
+                      error: `Dataset tile ${record.tileId} uses ${source.title}, which is ${source.lifecycle}. Replace it with current data and run the draft again.`,
+                    };
                   }
                   // Connection targets are always re-derived from the current
                   // server configuration. Do not reconnect to the historical
@@ -23409,7 +25209,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   if (currentTargetFingerprint !== record.targetFingerprint) {
                     return { ok: false, error: `Dataset tile ${record.tileId} was previewed against a different warehouse target. Run the draft again after validating the current source.` };
                   }
-                  if (record.kind === 'block') {
+                  if (record.savedQueryResult) {
+                    // Fields of a saved query's result: still a saved query
+                    // with the same field contract (checked above), and no
+                    // grain proof to recheck.
+                    if (!descriptor.result) {
+                      return { ok: false, error: `Dataset tile ${record.tileId} was previewed over a saved query's result, and that source is not one any more. Run the draft again.` };
+                    }
+                  } else if (record.kind === 'block') {
                     const grainProof = record.grainProof;
                     if (!grainProof) {
                       return { ok: false, error: `Dataset tile ${record.tileId} has no persisted declared grain proof scope. Run the current draft again after validating the source.` };
@@ -24384,7 +26191,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           paths: body.paths ?? [],
           title: body.title ?? '',
           body: body.body ?? '',
-          base: body.base ?? 'main',
+          base: typeof body.base === 'string' ? body.base : '',
         });
         res.writeHead(result.ok ? 201 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
@@ -24400,9 +26207,84 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const result = await gitOpenReview(projectRoot, {
           title: body.title ?? '',
           body: body.body ?? '',
-          base: body.base ?? 'main',
+          base: typeof body.base === 'string' ? body.base : '',
         });
         res.writeHead(result.ok ? 201 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
+    // POST /api/git/fetch — the Git page's background check: fetch only.
+    if (req.method === 'POST' && path === '/api/git/fetch') {
+      try {
+        const result = await gitFetch(projectRoot);
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, code: 'error', error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
+    // POST /api/git/send-as-branch { name? } — send from the base branch to a new branch.
+    if (req.method === 'POST' && path === '/api/git/send-as-branch') {
+      try {
+        const body = (await readJSON(req)) as { name?: unknown };
+        const result = await gitSendAsBranch(projectRoot, body ?? {});
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
+    // POST /api/git/remote/connect-own { url } — keep the sample as upstream, your repository becomes origin.
+    if (req.method === 'POST' && path === '/api/git/remote/connect-own') {
+      try {
+        const body = (await readJSON(req)) as { url?: unknown };
+        const result = await gitConnectOwnRemote(projectRoot, body ?? {});
+        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(result));
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ ok: false, error: e instanceof Error ? e.message : String(e) }));
+      }
+      return;
+    }
+    // Get updates, mid-way: conflicts, per-file choices, continue, cancel, undo.
+    if (req.method === 'GET' && path === '/api/git/update/state') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON(await readGitUpdateState(projectRoot)));
+      return;
+    }
+    if (req.method === 'GET' && path === '/api/git/update/versions') {
+      const result = await readGitConflictVersions(projectRoot, url.searchParams.get('path') ?? '');
+      res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON(result));
+      return;
+    }
+    if (req.method === 'POST' && (path === '/api/git/update/resolve' || path === '/api/git/update/continue' || path === '/api/git/update/cancel' || path === '/api/git/update/undo')) {
+      try {
+        const body = path === '/api/git/update/resolve' ? ((await readJSON(req)) as { path?: unknown; keep?: unknown }) : {};
+        const result = path === '/api/git/update/resolve'
+          ? await resolveGitConflict(projectRoot, body ?? {})
+          : path === '/api/git/update/continue'
+            ? await continueGitUpdate(projectRoot)
+            : path === '/api/git/update/cancel'
+              ? await cancelGitUpdate(projectRoot)
+              : await undoGitUpdate(projectRoot);
+        if (result.ok && path !== '/api/git/update/resolve') {
+          try {
+            await refreshUnifiedProjectIndexes(projectRoot);
+          } catch {
+            // The update itself succeeded; indexes refresh on the next change.
+          }
+        }
+        res.writeHead(result.ok || result.code === 'conflicts' ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -24421,7 +26303,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             result.output = [result.output, refreshWarning].filter(Boolean).join('\n');
           }
         }
-        res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.writeHead(result.ok || result.code === 'conflicts' ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
       } catch (e) {
         res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -24708,7 +26590,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (missing.length > 0) {
           res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({
-            error: `Block is missing required governance fields: ${missing.join(', ')}`,
+            error: `Saved query is missing required fields: ${missing.join(', ')}`,
             missing,
           }));
           return;
@@ -24880,6 +26762,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           replacement?: { name: string; path: string } | null;
         }> = [];
         const seen = new Set<string>();
+        let packageRegistry: ReturnType<typeof loadDomainPackageRegistry> | undefined;
+        const companionRegistry = {
+          packageForPath: (filePath: string) => (packageRegistry ??= loadDomainPackageRegistry(projectRoot)).packageForPath(filePath),
+        };
         const scanDir = (dir: string) => {
           if (!existsSync(dir)) return;
           for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -24911,10 +26797,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const llmMatch = /^\s*llmContext\s*=\s*"((?:[^"\\]|\\.)*)"/m.exec(source);
                 const replacedByMatch = /^\s*replacedBy\s*=\s*"([^"]+)"/m.exec(source);
                 const deprecatedOnMatch = /^\s*deprecatedOn\s*=\s*"([^"]+)"/m.exec(source);
+                // A certified block edited after its receipt is listed as Ask
+                // sees it: waiting to be certified again.
+                const declaredStatus = statusMatch?.[1] ?? 'draft';
+                const status = declaredStatus === 'certified' && certifiedBlockFileState(projectRoot, relPath, source, companionRegistry).state === 'changed'
+                  ? 'pending_recertification'
+                  : declaredStatus;
                 blocks.push({
                   name: nameMatch?.[1] ?? entry.name.replace('.dql', ''),
                   domain: (domainMatch?.[1] ?? inferBlockStudioPathDomain(projectRoot, relPath)) || 'uncategorized',
-                  status: statusMatch?.[1] ?? 'draft',
+                  status,
                   owner: ownerMatch?.[1] ?? null,
                   tags: parsedTags,
                   path: relPath,
@@ -25042,7 +26934,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ error: 'Use /api/block-studio/certify so validation, run, and tests gate certification.' }));
           return;
         }
-        setBlockStudioStatus(projectRoot, blockPath, newStatus);
+        setBlockStudioStatus(
+          projectRoot,
+          blockPath,
+          newStatus,
+          undefined,
+          newStatus === 'deprecated'
+            ? hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot, { persist: false }))
+            : undefined,
+        );
         await refreshLocalMetadataCatalog(projectRoot);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ ok: true, status: newStatus }));
@@ -25159,7 +27059,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const parameterNames = new Set((validation.parameters ?? []).map((parameter) => parameter.name));
         if (parameterNames.has(column) || (parsedMeta.outputs.length > 0 && !parsedMeta.outputs.includes(column))) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: `"${column}" is not a declared output of this block` }));
+          res.end(serializeJSON({ error: `"${column}" is not a declared output of this saved query` }));
           return;
         }
         const activeConnection = requireActiveConnection();
@@ -25181,7 +27081,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const prepared = prepareLocalExecution(baseSql, activeConnection, projectRoot, projectConfig);
         const q = quoteAgentIdentifier(column, prepared.connection);
-        const wrapped = `SELECT DISTINCT ${q} AS value FROM (${stripSqlTerminator(prepared.sql)}) _dql_opt WHERE ${q} IS NOT NULL ORDER BY 1 LIMIT ${limit + 1}`;
+        const inner = stripSqlTerminator(prepared.sql);
+        // Typed text searches every value of the column on the server (a
+        // reader's "Filter by…" picker and a block filter's dropdown), so a
+        // customer past the first page is still found (Codex F02).
+        const search = datasetFieldValueSearchText(url.searchParams.get('search'));
+        const searchClause = search ? ` AND ${savedQueryValueContains(q, search, prepared.connection.driver)}` : '';
+        const wrapped = `SELECT DISTINCT ${q} AS value FROM (${inner}) _dql_opt WHERE ${q} IS NOT NULL${searchClause} ORDER BY 1 LIMIT ${limit + 1}`;
         const result = await executor.executeQuery(wrapped, [], runtimeVariables({}), prepared.connection);
         const rows = Array.isArray(result?.rows) ? result.rows : [];
         const truncated = rows.length > limit;
@@ -25190,8 +27096,35 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           .map((row: any) => row?.value)
           .filter((value: any) => value !== null && value !== undefined)
           .map((value: any) => String(value));
+        // Browsing a capped list says how many values exist ("Type to search all 935 values").
+        let valueCount: number | undefined;
+        let valueCountCapped = false;
+        if (!search && truncated) {
+          try {
+            const counted = await executor.executeQuery(
+              `SELECT COUNT(*) AS value_count FROM (SELECT DISTINCT ${q} AS value FROM (${inner}) _dql_opt WHERE ${q} IS NOT NULL LIMIT ${DATASET_FIELD_VALUE_COUNT_LIMIT + 1}) _dql_count`,
+              [],
+              runtimeVariables({}),
+              prepared.connection,
+            );
+            const total = Number((counted?.rows?.[0] as Record<string, unknown> | undefined)?.value_count ?? NaN);
+            if (Number.isFinite(total)) {
+              valueCount = Math.min(total, DATASET_FIELD_VALUE_COUNT_LIMIT);
+              valueCountCapped = total > DATASET_FIELD_VALUE_COUNT_LIMIT;
+            }
+          } catch {
+            // The count is a hint; the list still works without it.
+          }
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ column, options, truncated }));
+        res.end(serializeJSON({
+          column,
+          options,
+          truncated,
+          ...(search ? { search } : {}),
+          ...(valueCount !== undefined ? { valueCount } : {}),
+          ...(valueCountCapped ? { valueCountCapped: true } : {}),
+        }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
@@ -25346,7 +27279,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const absoluteCurrentPath = safeJoin(projectRoot, currentPath);
           if (!absoluteCurrentPath || !existsSync(absoluteCurrentPath)) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(serializeJSON({ error: 'The block changed or moved. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
+            res.end(serializeJSON({ error: 'The saved query changed or moved. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
             return;
           }
           const actualFingerprint = createHash('sha256')
@@ -25354,7 +27287,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             .digest('hex');
           if (actualFingerprint !== expectedSourceFingerprint) {
             res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-            res.end(serializeJSON({ error: 'The block changed after it was opened. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
+            res.end(serializeJSON({ error: 'The saved query changed after it was opened. Reopen it before certifying.', code: 'SOURCE_CHANGED' }));
             return;
           }
         }
@@ -25366,7 +27299,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           : parsed.name;
         if (!name) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Block name is required.' }));
+          res.end(serializeJSON({ error: 'Saved query name is required.' }));
           return;
         }
         const existingCanonical = Boolean(currentPath && !isDraftBlockPath(currentPath));
@@ -25473,9 +27406,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             };
           }
 
-          report({ phase: 'publishing', progress: 82, message: 'Publishing the certified block.' });
+          report({ phase: 'publishing', progress: 82, message: 'Publishing the certified saved query.' });
           const publishedDraftSource = certifiedBesideDraft ? stripDraftEditName(draftSource) : draftSource;
-          const certifiedSource = setBlockStudioStatusInSource(publishedDraftSource, 'certified');
+          const certifiedSource = setBlockStudioStatusInSource(withoutAskOriginReuseTag(publishedDraftSource), 'certified');
           const certifiedMetadata = parseBlockSourceMetadata(certifiedSource);
           const savedPath = saveBlockStudioArtifacts(projectRoot, {
             currentPath: canonicalPath ?? draftPath,
@@ -25650,17 +27583,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           const normalizedBlockPath = normalize(blockPath).replace(/^\/+/, '');
           const parsed = parseBlockSourceMetadata(certifiedSource);
           if (isDraftBlockPath(normalizedBlockPath)) {
+            const publishedSource = withoutAskOriginReuseTag(certifiedSource);
+            const published = parseBlockSourceMetadata(publishedSource);
             const savedPath = saveBlockStudioArtifacts(projectRoot, {
               currentPath: normalizedBlockPath,
-              source: certifiedSource,
-              name: parsed.name,
-              domain: parsed.domain,
-              description: parsed.description,
-              owner: parsed.owner,
-              tags: parsed.tags,
+              source: publishedSource,
+              name: published.name,
+              domain: published.domain,
+              description: published.description,
+              owner: published.owner,
+              tags: published.tags,
               certification: receipt,
             });
-            if (result.preview) writeBlockStudioRunSummary(projectRoot, savedPath, certifiedSource, result.preview.result);
+            if (result.preview) writeBlockStudioRunSummary(projectRoot, savedPath, publishedSource, result.preview.result);
             return openBlockStudioDocument(projectRoot, savedPath, semanticLayer);
           }
           // Certify exactly what was evaluated: flipping the status of a file
@@ -25668,7 +27603,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           // something no rule looked at.
           const onDisk = existsSync(join(projectRoot, normalizedBlockPath)) ? readFileSync(join(projectRoot, normalizedBlockPath), 'utf-8') : '';
           if (setBlockStudioStatusInSource(onDisk, 'draft').trim() !== setBlockStudioStatusInSource(source, 'draft').trim()) {
-            throw Object.assign(new Error('The saved block differs from the source that was checked. Save it, then certify again.'), { code: 'SOURCE_CHANGED' });
+            throw Object.assign(new Error('The saved query differs from the version that was checked. Save it, then certify again.'), { code: 'SOURCE_CHANGED' });
           }
           setBlockStudioStatus(projectRoot, normalizedBlockPath, 'certified', receipt);
           if (result.preview) writeBlockStudioRunSummary(projectRoot, normalizedBlockPath, certifiedSource, result.preview.result);
@@ -25819,7 +27754,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               results.push({
                 candidateId,
                 status: 'error',
-                blockers: ['An equivalent governed block already exists. Open and reuse it instead of saving a duplicate.'],
+                blockers: ['An equivalent saved query already exists. Open and reuse it instead of saving a duplicate.'],
                 candidate: candidate as DqlGenerationCandidate,
               });
               continue;
@@ -26638,9 +28573,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ error: 'Block source is required.' }));
           return;
         }
-        if (!metadata.name || typeof metadata.name !== 'string') {
+        if (typeof metadata.name !== 'string' || !metadata.name.trim()) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Block name is required.' }));
+          res.end(serializeJSON({ error: 'A name is required. Type a name, then save.' }));
           return;
         }
         const validation = validateBlockStudioSource(source, semanticLayer);
@@ -26651,7 +28586,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           );
           res.writeHead(422, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({
-            error: errors[0]?.message ?? 'Fix the block errors before saving.',
+            error: errors[0]?.message ?? 'Fix the errors in this saved query before saving.',
             code: 'BLOCK_VALIDATION_FAILED',
             recoverable: true,
             details: { validation: { ...validation, saveable: false } },
@@ -26726,7 +28661,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch (error) {
         if (error instanceof Error && error.message === 'BLOCK_EXISTS') {
           res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'A block with this name already exists in this folder. Rename it and try again.', code: 'BLOCK_EXISTS' }));
+          res.end(serializeJSON({ error: 'A saved query with this name already exists in this folder. Rename it and try again.', code: 'BLOCK_EXISTS' }));
           return;
         }
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -26952,6 +28887,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           : warehouseMetadataStatus(projectRoot),
         // The environment variables the default connection reads, by name, and whether each is set.
         environmentReferences: manages ? connectionEnvironmentReferences(connections[defaultKey]) : [],
+        // Opt-in value profiles send a few column values to the AI provider; setup says so when they are on.
+        valueProfile: valueProfileAllowed(cfg, Boolean(hostHooks)),
         // Present only in warehouse-first and hybrid modeling (RFC 0007).
         ...(() => {
           const warehouseCatalog = warehouseCatalogStatus(projectRoot, cfg, defaultKey);
@@ -28669,7 +30606,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         if (cell.type === 'dql' && /^\s*@block\(/i.test(cell.source)) {
           res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
-          res.end(serializeJSON({ error: 'Customize the bound block as a notebook copy before repairing it.' }));
+          res.end(serializeJSON({ error: 'Customize the bound saved query as a notebook copy before repairing it.' }));
           return;
         }
         const embeddedSourceSql = notebookCellRepairSql(cell);
@@ -29950,7 +31887,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (!block) {
           res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
           // With a host, a request's own text is not repeated back.
-          res.end(serializeJSON({ error: hostedRequest() ? 'That block was not found. Pick a certified block from the list.' : `Block "${blockName}" was not found.` }));
+          res.end(serializeJSON({ error: hostedRequest() ? 'That saved query was not found. Pick a certified saved query from the list.' : `Saved query "${blockName}" was not found.` }));
           return;
         }
         if (block.status !== 'certified') throw new Error(`Block "${blockName}" is not certified.`);
@@ -30369,6 +32306,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   server.once('close', () => {
     runtimeClosing = true;
     unregisterServerHooks(scope.id);
+    unregisterRelatedFields();
     syncProcessHostHooks();
     datasetResultCache?.close();
     for (const watcher of [...projectWatchers]) closeProjectWatcher(watcher);
@@ -30626,7 +32564,9 @@ export function formatLocalQueryRuntimeError(
     (driver === 'file' || driver === 'duckdb') &&
     detail.includes('duckdb.node')
   ) {
-    return `Local query runtime is unavailable for driver "${driver}": DuckDB native bindings could not be loaded. Current Node.js runtime: ${currentNode}. Reinstall dependencies with a supported LTS Node release (for example Node 18, 20, or 22), then rerun "pnpm install". Original error: ${detail}`;
+    const noPrebuilt = duckdbNoPrebuiltHelp(currentNode);
+    if (noPrebuilt) return `Local query runtime is unavailable for driver "${driver}": ${noPrebuilt}`;
+    return `Local query runtime is unavailable for driver "${driver}": DuckDB native bindings could not be loaded. Current Node.js runtime: ${currentNode}. Reinstall dependencies with a supported LTS Node release (Node 24, 22, or 20), then rerun "pnpm install". Original error: ${detail}`;
   }
 
   return `Local query runtime is unavailable for driver "${driver}": ${detail}`;
@@ -31108,7 +33048,8 @@ function loadAppBuildDraftDashboard(
       // explicit, previously approved capability that the later live-catalog
       // resolution may validate. A restore placeholder remains repair-only.
       draftSources: draft.sources,
-      draftSourcePolicy: draft.sourcePolicy,
+      // The per-App data rule is gone (T3): every draft previews alike.
+      draftSourcePolicy: APP_SOURCE_POLICY,
     };
   } finally {
     storage.close();
@@ -31121,14 +33062,13 @@ function loadAppBuildDraftDashboard(
  * capability; the persisted source registry establishes that the author chose
  * and approved this exact source/revision/contract for this editable draft.
  *
- * This deliberately permits a real review-required source when the local
- * draft opted into `include_review_required`. Publication is stricter and is
- * separately verified against current catalog lifecycle and eligibility.
+ * Data nobody certified runs like any other (T3); its tiles read "Not
+ * certified yet". `_sourcePolicy` is kept for call compatibility and ignored.
  */
 function datasetDraftStoredAuthorityErrors(
   dashboard: DashboardDocument,
   sources: AppBuildDraftSource[],
-  sourcePolicy: AppBuildSourcePolicy,
+  _sourcePolicy: AppBuildSourcePolicy,
 ): Map<string, string> {
   const errors = new Map<string, string>();
   const sourceById = new Map(sources.map((source) => [source.id, source]));
@@ -31158,13 +33098,6 @@ function datasetDraftStoredAuthorityErrors(
         `APP_BUILD_DATASET_SOURCE_REPAIR_REQUIRED: ${item.title || item.i} does not have a matching stored Dataset revision and field contract. Refresh or reselect this Dataset before running it.`,
       );
       continue;
-    }
-    if (sourcePolicy === 'governed_only'
-      && (source.lifecycle !== 'certified' || source.trustState !== 'certified')) {
-      errors.set(
-        item.sourceId,
-        `APP_BUILD_REVIEW_POLICY_REQUIRED: ${item.title || item.i} uses a ${source.lifecycle ?? 'unknown'} Dataset source. Enable review-required sources or select a certified Dataset before running it.`,
-      );
     }
   }
   return errors;
@@ -31336,6 +33269,19 @@ function resolveDatasetSourceManifestBlock(
  * scripts and old clients: their requests are independent rather than sharing
  * a process-global page cancellation slot.
  */
+/** A page run in flight for one mounted viewer. */
+type ActiveDashboardRun = {
+  generation: number;
+  controller: AbortController;
+  /** What it computes (dashboardRunRequestKey), when an identical request may join it. */
+  requestKey?: string;
+  /** The browser's number for the request that started it. */
+  sequence?: number;
+  /** Requests that joined it and wait for its result. */
+  followers: number;
+  shared: ReturnType<typeof sharedDashboardRunResponse>;
+};
+
 export function dashboardRunSupersessionKey(
   surface: 'apps' | 'app-builds' | 'dataset-mcp',
   appId: string,
@@ -31402,6 +33348,16 @@ export function dashboardStoryFiltersForTile(
   if (excluded.size === 0) return dashboardFilters;
   return Object.fromEntries(Object.entries(dashboardFilters)
     .filter(([filterId]) => !excluded.has(filterId)));
+}
+
+/** Story filters minus the page filters the tile's run report says it did not apply. */
+export function withoutNotAppliedStoryFilters(
+  filters: Record<string, unknown>,
+  report: { notApplied?: Array<{ filter: string }> } | undefined,
+): Record<string, unknown> {
+  const skipped = new Set((report?.notApplied ?? []).map((entry) => entry.filter));
+  if (skipped.size === 0) return filters;
+  return Object.fromEntries(Object.entries(filters).filter(([filterId]) => !skipped.has(filterId)));
 }
 
 /**
@@ -31599,6 +33555,20 @@ function previewDatasetBindingEvidenceFromTile(tile: Record<string, unknown>): L
     target = { target: 'connection', ...(typeof executionTarget.connectionName === 'string' ? { connectionName: executionTarget.connectionName } : {}) };
   }
   if (!target) return undefined;
+  // A tile over a saved query's result fields (design D1) has no grain proof:
+  // its binding is the source revision, field contract and observed target.
+  if (agentRunRecord(dataset?.savedQueryResult)) {
+    return {
+      tileId,
+      kind: 'block',
+      sourceId,
+      sourceRevision,
+      contractFingerprint,
+      targetFingerprint,
+      executionTarget: target,
+      savedQueryResult: true,
+    };
+  }
   if (dataset?.semanticTargetBinding) {
     return {
       tileId,
@@ -31950,6 +33920,31 @@ function bindScopedStatement(
 
 /** Options offered for one Dataset-bound page filter. */
 const DATASET_FIELD_VALUE_LIMIT = 200;
+/** Values counted for "Type to search all N values"; more reads "5,000+". */
+const DATASET_FIELD_VALUE_COUNT_LIMIT = 5_000;
+
+/** A filter's typed search text: trimmed, bounded, or empty for none. */
+/**
+ * `column` contains `search`, ignoring case, as literal text: `%`, `_` and
+ * quotes in the search are data, never a pattern. The value is at most 200
+ * characters (datasetFieldValueSearchText) and is written as an escaped
+ * string literal. BigQuery's LIKE escapes with a backslash and has no ESCAPE
+ * clause; every other dialect takes an explicit escape character.
+ */
+export function savedQueryValueContains(column: string, search: string, driver: string): string {
+  const bigquery = driver.trim().toLowerCase() === 'bigquery';
+  const escape = bigquery ? '\\' : '!';
+  const pattern = `%${search.replaceAll(escape, `${escape}${escape}`).replaceAll('%', `${escape}%`).replaceAll('_', `${escape}_`)}%`;
+  const literal = bigquery
+    ? `'${pattern.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
+    : `'${pattern.replaceAll("'", "''")}'`;
+  const like = getDialect(driver).ilike(column, literal);
+  return bigquery ? like : `${like} ESCAPE '!'`;
+}
+
+export function datasetFieldValueSearchText(value: unknown): string {
+  return typeof value === 'string' ? value.trim().slice(0, 200) : '';
+}
 
 function errorCodeForDatasetTile(error: unknown): string {
   if (error && typeof error === 'object' && 'code' in error && typeof (error as { code?: unknown }).code === 'string') {
@@ -32011,6 +34006,8 @@ function decorateDatasetResult(
       kind: field.type === 'boolean' ? 'boolean' : field.type === 'date' || field.type === 'timestamp' ? 'date' : field.type === 'number' ? 'number' : 'text',
       ref: datasetPresentationDimensionRef(field.qualifiedId),
       ...(dimension.timeGrain ? { grain: dimension.timeGrain } : {}),
+      // A related table's field reads as words ("Location Name"), never its joined name (design D2).
+      ...(field.related ? { label: (relatedFieldWords(field.name) ?? field.related.column).replace(/\b\w/g, (letter) => letter.toUpperCase()) } : {}),
     };
     for (const name of [alias, field.name, field.qualifiedId]) expected.set(normalizeDatasetPresentationColumn(name), meta);
   }
@@ -34384,6 +36381,97 @@ function authoringSlug(value: string): string {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 }
 
+/**
+ * The operations of a reviewed proposal whose files come out differently when
+ * it is previewed again on the current project (new-user round 2, problem 4),
+ * or whose files were edited since. Empty: every file it writes is exactly
+ * as reviewed, before and after, so it can be saved as it is although other
+ * project files changed.
+ */
+export function proposalRebaseConflicts(reviewed: ContextAuthoringProposalV1, rebased: ContextAuthoringProposalV1): string[] {
+  const written = (proposal: ContextAuthoringProposalV1) => new Map(proposal.patches.filter((patch) => patch.changed).map((patch) => [patch.path, patch]));
+  const before = written(reviewed);
+  const after = written(rebased);
+  const changed = new Set<string>();
+  for (const [path, patch] of before) {
+    const next = after.get(path);
+    // A file it writes that was edited after review is asked about, even when the result would read the same.
+    if (!next || next.after !== patch.after || next.before !== patch.before) changed.add(patch.operationId);
+  }
+  for (const [path, patch] of after) if (!before.has(path)) changed.add(patch.operationId);
+  const reviewedIds = new Set(reviewed.operations.map((operation) => operation.id));
+  const rebasedIds = new Set(rebased.operations.map((operation) => operation.id));
+  for (const id of rebasedIds) if (!reviewedIds.has(id)) changed.add(id);
+  for (const id of reviewedIds) if (!rebasedIds.has(id)) changed.add(id);
+  return [...changed].sort();
+}
+
+/** What a changed operation is about, in words: "Orders", "the join from Order to Customer", a file. */
+function staleOperationWords(operation: ContextAuthoringOperation | undefined, id: string): string {
+  if (operation?.kind === 'modeling_change') {
+    const change = operation.change;
+    if (change.operation === 'upsert_entity') return change.value.businessName || titleCaseAuthoring(change.value.id);
+    if (change.operation === 'upsert_relationship') return `the join from ${titleCaseAuthoring(change.value.from.split('::').pop() ?? change.value.from)} to ${titleCaseAuthoring(change.value.to.split('::').pop() ?? change.value.to)}`;
+    if (change.operation === 'upsert_domain') return `the Domain ${change.value.name || titleCaseAuthoring(change.value.id)}`;
+    const value = change.value as { id?: string; name?: string };
+    return value.name || titleCaseAuthoring(value.id ?? id);
+  }
+  return titleCaseAuthoring(id.split(':').pop() ?? id);
+}
+
+/**
+ * Why a reviewed proposal cannot be saved as it is, in plain words: what
+ * changed, and what to do. Never "rebase".
+ */
+export function staleProposalMessage(reviewed: ContextAuthoringProposalV1, changedOperationIds: string[]): string {
+  const byId = new Map(reviewed.operations.map((operation) => [operation.id, operation]));
+  const names = [...new Set(changedOperationIds.map((id) => staleOperationWords(byId.get(id), id)))];
+  const what = reviewed.origin === 'warehouse_discovery' ? 'drafts' : 'changes';
+  const listed = names.length > 4 ? `${names.slice(0, 4).join(', ')} and ${names.length - 4} more` : names.join(', ');
+  return names.length
+    ? `Part of the project these ${what} change was edited after you reviewed them (${listed}). Update the ${what} to the latest project and review them again before saving.`
+    : `The project changed after you reviewed these ${what}. Update the ${what} to the latest project and review them again before saving.`;
+}
+
+/**
+ * One plain note for every model placed in the default subject area (new-user
+ * round 2, Q3): "13 tables placed in the default area", not thirteen
+ * identical lines. The operations it covers stay listed for the technical
+ * details.
+ */
+/** What a waiting "Draft my models" proposal holds, in counts a person reads ("9 drafted models waiting for review"). */
+export function waitingWarehouseDraftSummary(proposal: ContextAuthoringProposalV1 | undefined, snapshotId: string): {
+  proposalId: string;
+  createdAt: string;
+  models: number;
+  joins: number;
+  domains: string[];
+  stale: boolean;
+} | null {
+  if (!proposal) return null;
+  const changes = proposal.operations.flatMap((operation) => (operation.kind === 'modeling_change' ? [operation.change] : []));
+  return {
+    proposalId: proposal.id,
+    createdAt: proposal.createdAt,
+    models: changes.filter((change) => change.operation === 'upsert_entity').length,
+    joins: changes.filter((change) => change.operation === 'upsert_relationship').length,
+    domains: changes.flatMap((change) => (change.operation === 'upsert_domain' ? [change.value.name || change.value.id] : [])),
+    stale: proposal.baseSnapshotId !== snapshotId,
+  };
+}
+
+export function modelAreaDefaultedDiagnostic(operationIds: string[], origin: ContextAuthoringOrigin): ContextAuthoringDiagnosticV1 {
+  const noun = origin === 'warehouse_discovery' ? 'table' : 'model';
+  const count = operationIds.length;
+  return {
+    code: 'MODEL_AREA_DEFAULTED',
+    severity: 'info',
+    operationId: operationIds[0],
+    operationIds: [...operationIds],
+    message: `${count} ${noun}${count === 1 ? '' : 's'} placed in the default area. You can rename or move ${count === 1 ? 'it' : 'them'} later.`,
+  };
+}
+
 function titleCaseAuthoring(value: string): string {
   return value.replace(/[._-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
@@ -34671,9 +36759,12 @@ export function loadProjectConfig(projectRoot: string): ProjectConfig {
   return config;
 }
 
-/** Dataset-backed field tiles are intentionally an explicit local project opt-in. */
+/**
+ * Dataset-backed field tiles are on by default. `apps.datasets: false` in
+ * dql.config.json is the only way to turn them off for a project (APP-007).
+ */
 export function datasetsAppFeatureEnabled(config: Pick<ProjectConfig, 'apps'>): boolean {
-  return config.apps?.datasets === true;
+  return config.apps?.datasets !== false;
 }
 
 /**
@@ -36082,6 +38173,8 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   validate?: boolean;
   /** Opt-in: also learn joins from recent query history (text read in memory, only join pairs kept). */
   queryHistory?: boolean;
+  /** Leave out staging copies of tables a final table already holds (setup and Modeling's drafts). */
+  hideStagingDuplicates?: boolean;
   executor?: QueryExecutor;
 }): Promise<WarehouseDiscoveryReport> {
   const cfg = loadProjectConfig(projectRoot);
@@ -36116,11 +38209,20 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
       }
     }
   }
+  // The first Domain takes the database's name: the DuckDB or SQLite file, or the catalog.
+  const catalogConnection = connection ?? projectConnectionById(projectRoot, cfg, connectionId);
+  const databaseName = meaningfulDatabaseName(
+    (catalogConnection as { filepath?: string } | null)?.filepath,
+    (catalogConnection as { database?: string } | null)?.database,
+    (catalogConnection as { catalog?: string } | null)?.catalog,
+  );
   const drafted = discoverWarehouseModel({
     snapshot,
     manifest,
     ...(options.domain ? { domain: options.domain } : {}),
     ...(cfg.project ? { projectName: cfg.project } : {}),
+    ...(databaseName ? { databaseName } : {}),
+    ...(options.hideStagingDuplicates ? { hideStagingDuplicates: true } : {}),
     existingDomains: loadDomainPackageRegistry(projectRoot).values().map((pkg) => pkg.id),
     ...(observedJoins ? { observedJoins } : {}),
     // A join a reviewer removed or rejected is not proposed again.
@@ -36589,11 +38691,31 @@ function runConnectorNpm(projectRoot: string, args: string[]): void {
   });
 }
 
+/**
+ * Why ZLens must not npm-install these packages on this Node, or null. Today
+ * that is `duckdb` on a Node it has no prebuilt binary for: the install would
+ * compile DuckDB from source (over ten minutes, and a failure without Python
+ * and a C++ toolchain) unless ZLENS_DUCKDB_BUILD_FROM_SOURCE=1 asks for that.
+ */
+export function connectorInstallBlockedReason(
+  packageNames: string[],
+  nodeVersion = process.versions.node,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (!packageNames.includes('duckdb') || duckdbHasPrebuiltBinary(nodeVersion) || duckdbSourceBuildAllowed(env)) return null;
+  return duckdbNoPrebuiltHelp(nodeVersion);
+}
+
+function logZlensLines(text: string): void {
+  for (const line of text.split('\n')) console.log(`[zlens] ${line}`);
+}
+
 function installPackages(projectRoot: string, packageSpecs: string[]): void {
   const installRoot = connectorInstallRoot(projectRoot);
   // npm 12 blocks a dependency's install script unless package.json allows it,
   // and duckdb downloads its native binary in that script: allow it here.
   const packageNames = packageSpecs.map(packageNameOf);
+  if (connectorInstallBlockedReason(packageNames)) throw new DuckDBNodeUnsupportedError();
   seedConnectorAllowScripts(installRoot, packageNames);
 
   runConnectorNpm(projectRoot, ['install', '--prefix', installRoot, '--no-audit', '--no-fund', ...packageSpecs]);
@@ -36617,13 +38739,23 @@ function installPackages(projectRoot: string, packageSpecs: string[]): void {
  * install/upgrade. Best-effort and non-fatal: an offline machine keeps the manual
  * "Install" button and a clear message rather than a failed startup.
  */
-export function ensureConnectorInstalledForStartup(projectRoot: string, driver: string | undefined): void {
+export function ensureConnectorInstalledForStartup(
+  projectRoot: string,
+  driver: string | undefined,
+  nodeVersion = process.versions.node,
+): void {
   if (!driver) return;
   const definition = CONNECTOR_INSTALLS[driver];
   // Built-in drivers (e.g. the local file driver) and unknown drivers need nothing.
   if (!definition || definition.builtIn || !definition.packageSpec || !definition.packageName) return;
   if (isConnectorPackageInstalled(projectRoot, definition.packageName)) {
-    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
+    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label, nodeVersion);
+    return;
+  }
+  // Never start a silent source build from startup: say which Node to use.
+  const blocked = connectorInstallBlockedReason([definition.packageName], nodeVersion);
+  if (blocked) {
+    logZlensLines(blocked);
     return;
   }
   console.log(`[zlens] Installing the ${definition.label} driver into .dql/connectors (first run after install/upgrade)…`);
@@ -36656,11 +38788,23 @@ function isInsideConnectorRoot(packageDir: string, installRoot: string): boolean
  * Best-effort; a driver ZLens does not manage (the project's own
  * node_modules) is left alone and its load error says how to fix it.
  */
-function repairBlockedConnectorBinding(projectRoot: string, packageName: string, label: string): void {
+function repairBlockedConnectorBinding(
+  projectRoot: string,
+  packageName: string,
+  label: string,
+  nodeVersion = process.versions.node,
+): void {
   if (!isNativeConnectorPackage(packageName)) return;
   const installRoot = connectorInstallRoot(projectRoot);
   const broken = connectorBindingError(connectorModuleSearchPaths(projectRoot), packageName);
-  if (!broken || !isInsideConnectorRoot(broken.packageDir, installRoot)) return;
+  if (!broken) return;
+  // Rebuilding here would be a source build (a copy installed under another Node).
+  const blocked = connectorInstallBlockedReason([packageName], nodeVersion);
+  if (blocked) {
+    logZlensLines(blocked);
+    return;
+  }
+  if (!isInsideConnectorRoot(broken.packageDir, installRoot)) return;
   console.log(`[zlens] The ${label} driver in .dql/connectors has no native binary (npm 12 blocks install scripts that package.json does not allow); rebuilding it…`);
   try {
     if (repairConnectorBinding(installRoot, packageName, (args) => runConnectorNpm(projectRoot, args))) {
@@ -37013,6 +39157,8 @@ export async function prepareAnalyticalExecutionSql(input: {
   };
 }
 
+export { dashboardSemanticFiltersForTile, dashboardTileFilterReport } from './dashboard-tile-filters.js';
+
 export interface DashboardFilterApplicationResult {
   sql: string;
   sqlParams: SQLParamSpec[];
@@ -37023,10 +39169,7 @@ export interface DashboardFilterApplicationResult {
     mode: 'parameter' | 'predicate';
     paramNames: string[];
   }>;
-  skippedFilters: Array<{
-    filter: string;
-    reason: string;
-  }>;
+  skippedFilters: DashboardTileFilterSkip[];
 }
 
 export function dashboardRuntimeVariables(
@@ -37054,28 +39197,6 @@ export interface DashboardFilterOptionSet {
    */
   valueCount?: number;
   dateRange?: { min: string; max: string };
-}
-
-/** Resolve semantic filters only through the component's explicit mapping. */
-export function dashboardSemanticFiltersForTile(
-  dashboard: Pick<DashboardDocument, 'filters'>,
-  item: Pick<DashboardGridItem, 'i' | 'semantic' | 'filterBindings'>,
-  dashboardValues: Record<string, unknown>,
-): Array<{ dimension: string; operator: string; values: string[] }> {
-  if (!item.semantic) return [];
-  return (dashboard.filters ?? []).flatMap((filter) => {
-    if (filter.scope?.tileIds && !filter.scope.tileIds.includes(item.i)) return [];
-    const binding = item.filterBindings?.find((candidate) =>
-      candidate.filter === filter.id
-      && candidate.capability !== 'unsupported'
-      && !candidate.unsupportedReason,
-    );
-    const dimension = binding?.binding;
-    const value = dashboardValues[filter.id];
-    if (!dimension || !item.semantic?.dimensions?.includes(dimension) || isEmptyDashboardFilterValue(value)) return [];
-    const values = Array.isArray(value) ? value.map(String) : [String(value)];
-    return [{ dimension, operator: values.length > 1 ? 'in' : 'equals', values }];
-  });
 }
 
 type DashboardFilterOptionTile = {
@@ -37127,7 +39248,11 @@ export function collectDashboardFilterOptions(
     }
 
     if (values.size === 0) {
-      if (dateControl) {
+      // "No values" only when a linked tile's column was actually read and
+      // held no dates. When no column could be read (no tile ran yet, or the
+      // tile shows the field bucketed under another name) nothing is known,
+      // so nothing is reported: "couldn't read" is not "none" (B4).
+      if (dateControl && sourceTileIds.length > 0) {
         optionSets.push({
           filterId: filter.id,
           values: [],
@@ -37261,6 +39386,8 @@ export function applyDashboardFiltersToBlockExecution(input: {
   dashboard: Pick<DashboardDocument, 'filters'>;
   tileId?: string;
   tileFilterBindings?: DashboardGridItem['filterBindings'];
+  /** Reference instant for relative dates; the run's clock by default. */
+  now?: Date;
 }): DashboardFilterApplicationResult {
   const variables = { ...input.variables };
   const sqlParams = [...input.sqlParams];
@@ -37269,18 +39396,39 @@ export function applyDashboardFiltersToBlockExecution(input: {
   const clauses: string[] = [];
   let nextPosition = sqlParams.reduce((max, param) => Math.max(max, param.position), 0);
 
+  // Decision order for one page filter on one Saved query (or draft) tile.
+  // An explicit author choice always wins over name matching:
+  //   1. The filter's own `scope.tileIds` leaves this tile out → skip.
+  //   2. The author marked this tile "Does not apply" (a tile filterBinding
+  //      with capability 'unsupported') → skip. No parameter-name or
+  //      allowedFilters matching may bind it after that.
+  //   3. No value right now → skip.
+  //   4. A block parameter named for the filter (id/bindsTo, `<base>_start` /
+  //      `<base>_end`, start_date/end_date, …) → bind the parameter.
+  //   5. A predicate binding (tile filterBindings → block filterBindings →
+  //      allowedFilters) → wrap the result in a WHERE clause.
+  //   6. Otherwise → skip as not linked.
   for (const filter of input.dashboard.filters ?? []) {
     if (filter.scope?.tileIds && input.tileId && !filter.scope.tileIds.includes(input.tileId)) {
-      skippedFilters.push({ filter: filter.id, reason: 'component is outside this filter scope' });
+      skippedFilters.push({ filter: filter.id, reason: 'component is outside this filter scope', code: 'does_not_apply' });
+      continue;
+    }
+    const doesNotApply = dashboardFilterDoesNotApplyBinding({ filterBindings: input.tileFilterBindings }, filter.id);
+    if (doesNotApply) {
+      skippedFilters.push({
+        filter: filter.id,
+        reason: doesNotApply.unsupportedReason?.trim() || DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+        code: 'does_not_apply',
+      });
       continue;
     }
     const value = dashboardFilterValue(filter, variables);
-    if (isEmptyDashboardFilterValue(value)) {
-      skippedFilters.push({ filter: filter.id, reason: 'no value supplied' });
+    if (isEmptyDashboardFilterValue(value) || (isDashboardDateFilterType(filter.type) && isEmptyDashboardDateValue(value))) {
+      skippedFilters.push({ filter: filter.id, reason: 'no value supplied', code: 'no_value' });
       continue;
     }
 
-    const paramNames = bindDashboardFilterToExistingParams(filter, value, input.block, sqlParams, variables);
+    const paramNames = bindDashboardFilterToExistingParams(filter, value, input.block, sqlParams, variables, input.now);
     if (paramNames.length > 0) {
       appliedFilters.push({
         filter: filter.id,
@@ -37292,18 +39440,20 @@ export function applyDashboardFiltersToBlockExecution(input: {
 
     const binding = resolveDashboardFilterBinding(filter, input.block, input.tileFilterBindings);
     if (!binding) {
-      skippedFilters.push({ filter: filter.id, reason: `block "${input.block.name}" does not declare a compatible filter binding` });
+      skippedFilters.push({ filter: filter.id, reason: `block "${input.block.name}" does not declare a compatible filter binding`, code: 'not_linked' });
       continue;
     }
     const expression = dashboardFilterExpression(binding);
     if (!expression) {
-      skippedFilters.push({ filter: filter.id, reason: `filter binding "${binding}" is not safe for runtime predicate injection` });
+      skippedFilters.push({ filter: filter.id, reason: `filter binding "${binding}" is not safe for runtime predicate injection`, code: 'unsupported' });
       continue;
     }
     const predicate = buildDashboardFilterPredicate({
       expression,
       filterId: filter.id,
       filterType: filter.type,
+      timezone: filter.timezone,
+      now: input.now,
       value,
       params: sqlParams,
       nextPosition: () => {
@@ -37313,7 +39463,14 @@ export function applyDashboardFiltersToBlockExecution(input: {
       variables,
     });
     if (!predicate) {
-      skippedFilters.push({ filter: filter.id, reason: 'filter value could not be converted into a predicate' });
+      const dateProblem = isDashboardDateFilterType(filter.type)
+        ? resolveDashboardDateFilter({ filterId: filter.label ?? filter.id, type: filter.type, value, timezone: filter.timezone, now: input.now })
+        : null;
+      skippedFilters.push({
+        filter: filter.id,
+        reason: dateProblem?.kind === 'error' ? dateProblem.message : 'filter value could not be converted into a predicate',
+        code: 'invalid_value',
+      });
       continue;
     }
     clauses.push(predicate);
@@ -37362,6 +39519,7 @@ function bindDashboardFilterToExistingParams(
   block: Pick<ManifestBlock, 'parameterPolicy'>,
   sqlParams: SQLParamSpec[],
   variables: Record<string, unknown>,
+  now?: Date,
 ): string[] {
   const availableParamNames = new Set(sqlParams.map((param) => param.name));
   const declaredParamNames = new Set((block.parameterPolicy ?? []).map((entry) => entry.name));
@@ -37379,7 +39537,19 @@ function bindDashboardFilterToExistingParams(
   }
   if (applied.length > 0) return applied;
 
-  const range = dashboardRangeValue(value);
+  // Range parameters receive the chosen calendar dates as-is: `_end` is the
+  // INCLUSIVE last day (what a hand-written `BETWEEN :start AND :end` on a DATE
+  // column expects). A single date fills both with that day and a relative
+  // date resolves to its range first. Only generated WHERE clauses use the
+  // exclusive next-day bound (see buildDashboardFilterPredicate).
+  // An open side of a one-sided calendar range receives the earliest or
+  // latest date, so `BETWEEN :start AND :end` still reads "from" / "until".
+  const resolvedDate = resolveDashboardDateFilter({ filterId: filter.id, type: filter.type, value, timezone: filter.timezone, now });
+  const range = resolvedDate?.kind === 'calendar'
+    ? { start: resolvedDate.bounds.startDate ?? DASHBOARD_DATE_OPEN_START, end: resolvedDate.bounds.endDate ?? DASHBOARD_DATE_OPEN_END }
+    : resolvedDate?.kind === 'explicit'
+      ? (resolvedDate.start !== undefined && resolvedDate.end !== undefined ? { start: resolvedDate.start, end: resolvedDate.end } : null)
+      : filter.type === 'date' || filter.type === 'relative_date' || filter.type === 'daterange' ? null : dashboardRangeValue(value);
   if (range) {
     const baseNames = uniqueDashboardStrings([
       filter.id,
@@ -37471,20 +39641,62 @@ function buildDashboardFilterPredicate(input: {
   expression: string;
   filterId: string;
   filterType: NonNullable<DashboardDocument['filters']>[number]['type'];
+  timezone?: string;
+  now?: Date;
   value: unknown;
   params: SQLParamSpec[];
   nextPosition: () => number;
   variables: Record<string, unknown>;
 }): string | null {
-  const range = input.filterType === 'daterange' ? dashboardRangeValue(input.value) : null;
-  if (range) {
-    const start = addDashboardFilterParam(input, 'start', range.start);
-    const end = addDashboardFilterParam(input, 'end', range.end);
-    return `${input.expression} BETWEEN $${start.position} AND $${end.position}`;
+  // Dates follow the one App date rule (@zlens/core filter-dates). The
+  // wrapped result's column type is not known here, so the calendar dates are
+  // compared as DATE values: `>= start AND < day after end`. The explicit CAST
+  // lets a TIMESTAMP column compare with them (DuckDB refuses TIMESTAMP vs a
+  // VARCHAR parameter); the warehouse reads them in its session zone.
+  const resolvedDate = resolveDashboardDateFilter({
+    filterId: input.filterId,
+    type: input.filterType,
+    value: input.value,
+    timezone: input.timezone,
+    now: input.now,
+  });
+  // A one-sided range compares only its own side ("from" / "until").
+  if (resolvedDate?.kind === 'calendar') {
+    const bounds = dashboardDateBoundsForColumn(resolvedDate.bounds, 'unknown');
+    const clauses: string[] = [];
+    if (bounds.start) {
+      const start = addDashboardFilterParam(input, 'start', bounds.start);
+      clauses.push(`${input.expression} >= CAST($${start.position} AS DATE)`);
+    }
+    if (bounds.endExclusive) {
+      const end = addDashboardFilterParam(input, 'end_exclusive', bounds.endExclusive);
+      clauses.push(`${input.expression} < CAST($${end.position} AS DATE)`);
+    }
+    return clauses.length ? clauses.join(' AND ') : null;
   }
-  // A daterange with only one bound set is incomplete — skip it rather than binding
-  // the partial object as a scalar equality (which would produce invalid SQL).
-  if (input.filterType === 'daterange') return null;
+  if (resolvedDate?.kind === 'explicit') {
+    if (resolvedDate.start !== undefined && resolvedDate.end !== undefined) {
+      const start = addDashboardFilterParam(input, 'start', resolvedDate.start);
+      const end = addDashboardFilterParam(input, 'end', resolvedDate.end);
+      return `${input.expression} BETWEEN $${start.position} AND $${end.position}`;
+    }
+    if (resolvedDate.start !== undefined) {
+      const start = addDashboardFilterParam(input, 'start', resolvedDate.start);
+      return `${input.expression} >= $${start.position}`;
+    }
+    const end = addDashboardFilterParam(input, 'end', resolvedDate.end);
+    return `${input.expression} <= $${end.position}`;
+  }
+  // An incomplete or invalid date value is skipped rather than bound as a
+  // scalar equality (which would produce invalid SQL or a wrong match).
+  if (isDashboardDateFilterType(input.filterType)) return null;
+  if (input.filterType === 'number_range') {
+    const range = dashboardRangeValue(input.value);
+    if (!range) return null;
+    const low = addDashboardFilterParam(input, 'min', range.start);
+    const high = addDashboardFilterParam(input, 'max', range.end);
+    return `${input.expression} BETWEEN $${low.position} AND $${high.position}`;
+  }
   const values = Array.isArray(input.value) ? input.value.filter((item) => !isEmptyDashboardFilterValue(item)) : [input.value];
   if (values.length === 0) return null;
   if (input.filterType === 'search' && values.length === 1) {
@@ -38906,7 +41118,6 @@ function normalizeNotebookPath(path: string): string {
  * thing. A private block is one nobody else can see yet.
  */
 const PRIVATE_BLOCK_PREFIX = '.dql/local/private/blocks';
-const PRIVATE_BLOCK_COMPANION_PREFIX = '.dql/local/private/semantic-layer/blocks';
 
 function privateBlockDir(projectRoot: string): string {
   return join(projectRoot, '.dql', 'local', 'private', 'blocks');
@@ -39125,6 +41336,57 @@ interface UserPrefs {
     dbtAppliedVersion?: string;
     dbtAppliedAt?: string;
   };
+}
+
+/** Guided Setup progress (design D7), kept in `.dql/local/setup-progress.json`. */
+export interface SetupProgress {
+  version: 1;
+  step: 1 | 2 | 3 | 4;
+  source?: 'dbt' | 'warehouse' | 'both' | 'existing';
+  aiSkipped?: boolean;
+  /** "Draft my models" ran: its plain-words outcome and the proposal Modeling opens. */
+  draft?: { ok: boolean; message: string; proposalId?: string };
+  updatedAt: string;
+}
+
+function setupProgressPath(projectRoot: string): string {
+  return join(projectRoot, '.dql', 'local', 'setup-progress.json');
+}
+
+export function normalizeSetupProgress(raw: unknown): SetupProgress | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  const step = Number(value.step);
+  if (!Number.isInteger(step) || step < 1 || step > 4) return null;
+  const source = value.source === 'dbt' || value.source === 'warehouse' || value.source === 'both' || value.source === 'existing' ? value.source : undefined;
+  const draftRaw = value.draft && typeof value.draft === 'object' ? value.draft as Record<string, unknown> : null;
+  const draft = draftRaw && typeof draftRaw.message === 'string'
+    ? {
+      ok: draftRaw.ok === true,
+      message: draftRaw.message.slice(0, 2_000),
+      ...(typeof draftRaw.proposalId === 'string' && /^[A-Za-z0-9_-]{1,200}$/.test(draftRaw.proposalId) ? { proposalId: draftRaw.proposalId } : {}),
+    }
+    : undefined;
+  return {
+    version: 1,
+    step: step as SetupProgress['step'],
+    ...(source ? { source } : {}),
+    ...(value.aiSkipped === true ? { aiSkipped: true } : {}),
+    ...(draft ? { draft } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function readSetupProgress(projectRoot: string): SetupProgress | null {
+  const path = setupProgressPath(projectRoot);
+  if (!existsSync(path)) return null;
+  try {
+    const raw = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    const progress = normalizeSetupProgress(raw);
+    return progress ? { ...progress, updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : progress.updatedAt } : null;
+  } catch {
+    return null;
+  }
 }
 
 function readUserPrefs(userPrefsPath: string): UserPrefs {
@@ -39407,6 +41669,8 @@ export function openBlockStudioDocument(
     owner: string;
     tags: string[];
     reviewStatus?: string;
+    /** A certified source edited after its certification receipt was written; Ask treats it as pending recertification. */
+    certificationSourceChanged?: boolean;
     sourceFingerprint: string;
     /** Retired blocks: the block named as the replacement, and the retirement date. */
     replacedBy?: string;
@@ -39437,7 +41701,11 @@ export function openBlockStudioDocument(
   const metadata = {
     name: parsedMetadata.name || companion?.name || fileName,
     path: normalizedPath,
-    domain: parsedMetadata.domain || companion?.domain || inferBlockStudioPathDomain(projectRoot, normalizedPath) || 'uncategorized',
+    // A drafts folder is never a domain: a draft with no domain of its own opens with none, so the reviewer picks one.
+    domain: parsedMetadata.domain
+      || withoutDraftsFolder(companion?.domain)
+      || withoutDraftsFolder(inferBlockStudioPathDomain(projectRoot, normalizedPath))
+      || (isDraftBlockPath(normalizedPath) ? '' : 'uncategorized'),
     folderPath: inferBlockStudioFolderPath(projectRoot, normalizedPath),
     description: parsedMetadata.description || companion?.description || '',
     owner: parsedMetadata.owner || companion?.owner || '',
@@ -39446,6 +41714,9 @@ export function openBlockStudioDocument(
     // Who certified this exact source, from the receipt the explicit Certify
     // action wrote. Absent for drafts and for blocks certified before receipts.
     ...(certificationReceipt ? { certification: certificationReceipt } : {}),
+    ...(certificationReceipt && certifiedBlockFileState(projectRoot, normalizedPath, source).state === 'changed'
+      ? { certificationSourceChanged: true }
+      : {}),
     sourceFingerprint: createHash('sha256').update(source).digest('hex'),
     ...blockStudioRetirement(projectRoot, normalizedPath, parsedMetadata),
   };
@@ -39692,7 +41963,7 @@ function presentBlockStudioDiagnostic(
         title: 'Semantic runtime is not ready',
         field: 'Runtime',
         references: semanticRefs.metrics,
-        message: 'This semantic block needs a configured dbt Cloud, local MetricFlow, or DQL semantic runtime before it can run or be certified.',
+        message: 'This saved query needs a configured dbt Cloud, local MetricFlow, or DQL semantic runtime before it can run or be certified.',
         correction: 'Open semantic runtime settings, connect the project runtime, then run the block again.',
         technicalDetails: raw,
         action: 'configure_runtime',
@@ -39702,7 +41973,7 @@ function presentBlockStudioDiagnostic(
         ...base,
         title: 'Choose at least one metric',
         field: 'Metrics',
-        message: 'This semantic block does not select a metric yet.',
+        message: 'This saved query does not select a metric yet.',
         correction: 'Add one or more governed metrics in the visual builder or DQL source.',
         action: 'review_metrics',
       };
@@ -40684,7 +42955,7 @@ export function validateBlockStudioSource(
     diagnostics.push({
       severity: 'warning',
       code: 'visualization_missing',
-      message: 'Block has no visualization section yet.',
+      message: 'This saved query has no visualization section yet.',
     });
   }
 
@@ -40693,7 +42964,7 @@ export function validateBlockStudioSource(
       ? {
           severity: 'warning',
           code: 'semantic_not_runnable',
-          message: 'Semantic block is not runnable yet. Select a metric and complete any required time settings.',
+          message: 'This saved query is not runnable yet. Select a metric and complete any required time settings.',
         }
       : {
           // A block that DECLARES a query section and leaves it blank is broken,
@@ -40703,8 +42974,8 @@ export function validateBlockStudioSource(
           severity: /query\s*=\s*"""/i.test(source) ? 'error' : 'warning',
           code: 'sql_missing',
           message: /query\s*=\s*"""/i.test(source)
-            ? 'The block declares a query section but it is empty. Add the SQL, or remove the query section and define metrics and dimensions instead.'
-            : 'No executable SQL found in the block source.',
+            ? 'The saved query declares a query section but it is empty. Add the SQL, or remove the query section and define metrics and dimensions instead.'
+            : 'No executable SQL found in the saved query.',
         });
   }
 
@@ -40716,7 +42987,7 @@ export function validateBlockStudioSource(
       diagnostics.push({
         severity: 'error',
         code: 'semantic_block_has_query',
-        message: 'Semantic blocks are defined by metrics and dimensions and must not contain a query section. Move the SQL into a custom block.',
+        message: 'A saved query built from metrics is defined by metrics and dimensions and must not contain a query section. Move the SQL into a SQL saved query.',
       });
     }
   }
@@ -41035,9 +43306,15 @@ async function processDqlGenerationSessionForProject(
       generationMode,
       generationProvider: generatorName,
     });
+    // The draft becomes a semantic block only when the SQL is exactly a metric
+    // query; otherwise it runs the imported SQL, and an output named like a
+    // metric is only noted.
+    const semanticSource = buildSemanticImportCandidateSource(enriched, patch, semanticLayer);
+    const metricNameNotes = semanticSource ? [] : semanticMetricNameNotes(enriched, semanticLayer);
     const validated: BlockStudioImportCandidate = {
       ...enriched,
-      dqlSource: buildSemanticImportCandidateSource(enriched, patch, semanticLayer) ?? enriched.dqlSource,
+      dqlSource: semanticSource ?? enriched.dqlSource,
+      ...(metricNameNotes.length > 0 ? { conversionNotes: [...(enriched.conversionNotes ?? []), ...metricNameNotes] } : {}),
       validation: validateBlockStudioSource(enriched.dqlSource, semanticLayer),
       analysisStatus: 'ready',
     };
@@ -41053,7 +43330,7 @@ async function processDqlGenerationSessionForProject(
           evidence: validated.evidence ?? [],
           draftSave: {
             status: validated.recommendedAction === 'reuse_existing' ? 'skipped' as const : 'pending' as const,
-            reason: validated.recommendedAction === 'reuse_existing' ? 'Reuse an existing governed block; no draft file was created.' : undefined,
+            reason: validated.recommendedAction === 'reuse_existing' ? 'Reuse an existing saved query; no draft file was created.' : undefined,
           },
         };
     writeBlockStudioImportCandidate(projectRoot, session.id, result);
@@ -41128,7 +43405,7 @@ function saveDqlGenerationDraftForProject(
         status: 'skipped',
         reason: topMatch
           ? `Reuse recommended: ${topMatch.name} (${topMatch.kind}, ${(topMatch.score * 100).toFixed(0)}%).`
-          : 'Reuse recommended; no new draft block was needed.',
+          : 'Reuse recommended; no new draft was needed.',
       },
       generationMode: candidate.generationMode ?? 'deterministic',
       generationProvider: candidate.generationProvider ?? 'local-deterministic',
@@ -41343,13 +43620,21 @@ export function saveBlockStudioArtifacts(
     && existsSync(previousAbsolute)
     && blockSourceStatus(readFileSync(previousAbsolute, 'utf-8')) === 'certified'
     && comparable(readFileSync(previousAbsolute, 'utf-8')) === comparable(options.source);
-  const source = options.certification || unchangedCertified ? options.source : demoteCertifiedSource(options.source);
+  const declared = withDeclaredBlockName(options.source, options.name);
+  const source = options.certification || unchangedCertified ? declared : demoteCertifiedSource(declared);
   const previousCompanion = unchangedCertified && !options.certification && previousPath
     ? blockCompanionRelativePath(projectRoot, previousPath)
     : null;
-  const carriedReceipt = previousCompanion && existsSync(join(projectRoot, previousCompanion))
+  const previousReceipt = previousCompanion && existsSync(join(projectRoot, previousCompanion))
     ? readCompanionCertification(readFileSync(join(projectRoot, previousCompanion), 'utf-8'))
     : null;
+  // The unchanged source may gain the metadata Block Studio adds on save, so the
+  // receipt follows it, but only when the file on disk was still the certified
+  // source: a hand edit made before this save must stay visible.
+  const carriedReceipt = previousReceipt && previousAbsolute
+    && certifiedBlockFileState(projectRoot, previousPath!, readFileSync(previousAbsolute, 'utf-8')).state === 'matches'
+    ? { ...previousReceipt, sourceSha256: sourceSha256(source) }
+    : previousReceipt;
   const certification = options.certification && blockSourceStatus(source) === 'certified'
     ? { ...options.certification, sourceSha256: sourceSha256(source) }
     : carriedReceipt ?? undefined;
@@ -41508,6 +43793,16 @@ export function canonicalForDraftBeside(projectRoot: string, draftPath: string):
   return found;
 }
 
+/**
+ * A block is never written as `block ""`: an empty declared name drops the block out of the block tree. The name the
+ * person saved under fills it. A declared name is otherwise left as it is.
+ */
+export function withDeclaredBlockName(source: string, name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return source;
+  return source.replace(/^(\s*block\s+)""/im, (_match, prefix: string) => `${prefix}"${trimmed.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
+}
+
 export function saveBlockStudioDraftArtifacts(
   projectRoot: string,
   options: {
@@ -41557,7 +43852,7 @@ export function saveBlockStudioDraftArtifacts(
   }
 
   // A draft is never certified, whatever status the incoming source claims.
-  const draftSource = demoteCertifiedSource(options.source);
+  const draftSource = demoteCertifiedSource(withDeclaredBlockName(options.source, options.name));
   mkdirSync(dirname(targetPath), { recursive: true });
   writeFileSync(targetPath, draftSource.trimEnd() + '\n', 'utf-8');
   const companionSlug = targetRelativePath.split('/').pop()?.replace(/\.dql$/, '') || slug;
@@ -41688,6 +43983,13 @@ function isBlockStudioBlockPath(value: string | null | undefined): boolean {
     || normalized.startsWith(`${PRIVATE_BLOCK_PREFIX}/`);
 }
 
+/** `_drafts/finance` → `finance`; `_drafts` alone names no domain. */
+function withoutDraftsFolder(domain: string | undefined): string {
+  const value = domain?.trim() ?? '';
+  if (value === '_drafts') return '';
+  return value.startsWith('_drafts/') ? value.slice('_drafts/'.length) : value;
+}
+
 function inferBlockStudioPathDomain(projectRoot: string, blockPath: string): string {
   const normalized = normalize(blockPath).replace(/^\/+/, '');
   if (normalized.startsWith('blocks/')) {
@@ -41717,35 +44019,7 @@ function inferBlockStudioFolderPath(projectRoot: string, blockPath: string): str
 }
 
 function blockCompanionRelativePath(projectRoot: string, blockPath: string): string | null {
-  const normalized = normalize(blockPath).replace(/^\/+/, '');
-  // The companion of a private block has to be private too, or the block hides
-  // while its YAML announces it in tracked source.
-  if (isPrivateBlockPath(normalized)) {
-    const withoutRoot = normalized.slice(`${PRIVATE_BLOCK_PREFIX}/`.length).replace(/\.dql$/, '.yaml');
-    return `${PRIVATE_BLOCK_COMPANION_PREFIX}/${withoutRoot}`;
-  }
-  if (normalized.startsWith('blocks/')) {
-    const withoutRoot = normalized.slice('blocks/'.length).replace(/\.dql$/, '.yaml');
-    return join('semantic-layer', 'blocks', withoutRoot).replaceAll('\\', '/');
-  }
-  const resolved = domainBlockPathParts(projectRoot, normalized);
-  if (resolved && resolved.subpath.endsWith('.dql')) {
-    const blockPath = resolved.subpath.replace(/\.dql$/, '');
-    const companionBlockPath = blockPath.startsWith('_drafts/')
-      ? join('_drafts', resolved.domain, blockPath.slice('_drafts/'.length))
-      : join(resolved.domain, blockPath);
-    return join('semantic-layer', 'blocks', `${companionBlockPath}.yaml`).replaceAll('\\', '/');
-  }
-  const domainFirst = normalized.match(/^domains\/([^/]+)\/blocks\/(.+)\.dql$/);
-  if (domainFirst) {
-    const domain = domainFirst[1];
-    const blockPath = domainFirst[2];
-    const companionBlockPath = blockPath.startsWith('_drafts/')
-      ? join('_drafts', domain, blockPath.slice('_drafts/'.length))
-      : join(domain, blockPath);
-    return join('semantic-layer', 'blocks', `${companionBlockPath}.yaml`).replaceAll('\\', '/');
-  }
-  return null;
+  return coreBlockCompanionRelativePath(projectRoot, blockPath);
 }
 
 function domainBlockPathParts(
@@ -42094,6 +44368,34 @@ export function markBlockStudioSourceReusable(source: string): string {
 }
 
 /**
+ * Certifying is the reuse decision for an Ask-origin (AI-generated) block: a
+ * certified block is an App source by its status, so the `app-source` marker
+ * that let the uncertified draft into the App catalog is dropped from the
+ * certified source. Blocks without generated origin keep their tags.
+ */
+export function withoutAskOriginReuseTag(source: string): string {
+  const parsed = parseBlockSourceMetadata(source);
+  if (!parsed.tags.some((tag) => tag.trim().toLowerCase() === APP_SOURCE_REUSABLE_TAG)) return source;
+  const field = (key: string) => source.match(new RegExp(`\\b${key}\\s*=\\s*"([^"]*)"`))?.[1];
+  const askedTimes = source.match(/\basked_times\s*=\s*(\d+)/)?.[1];
+  const generated = hasGeneratedAppSourceOrigin({
+    tags: parsed.tags,
+    draftMetadata: {
+      sourceQuestion: field('source_question'),
+      contextPackId: field('context_pack_id'),
+      routeIntent: field('route_intent'),
+      firstAsked: field('first_asked'),
+      lastAsked: field('last_asked'),
+      ...(askedTimes ? { askedTimes: Number(askedTimes) } : {}),
+    },
+  });
+  if (!generated) return source;
+  const remaining = parsed.tags.filter((tag) => tag.trim().toLowerCase() !== APP_SOURCE_REUSABLE_TAG);
+  if (remaining.length === 0) return source.replace(/^[ \t]*tags\s*=\s*\[[^\]]*\][ \t]*\r?\n/im, '');
+  return source.replace(/\btags\s*=\s*\[[\s\S]*?\]/i, `tags = [${remaining.map((tag) => JSON.stringify(tag)).join(', ')}]`);
+}
+
+/**
  * A block made in Block Studio declares a reusable pattern. The editor offers "custom" first, so a block saved without
  * choosing one is a custom block: write that down instead of leaving the field empty (a workspace that certifies
  * with enterprise rules refuses a block that declares none). A pattern the author chose is never changed.
@@ -42104,38 +44406,6 @@ export function ensureBlockStudioPattern(source: string): string {
     return source.replace(/^([ \t]*)pattern[ \t]*=[ \t]*"[ \t]*"[ \t]*$/m, '$1pattern = "custom"');
   }
   return source.replace(/(\bblock\s+"[^"]+"\s*\{)/i, '$1\n  pattern = "custom"');
-}
-
-function compareBlockStudioValues(actual: unknown, operator: string, expected: unknown): boolean {
-  const expectedValue = normalizeBlockStudioExpected(expected);
-  if (operator === '==' || operator === '=') return String(actual) === String(expectedValue);
-  if (operator === '!=') return String(actual) !== String(expectedValue);
-  const actualNumber = Number(actual);
-  const expectedNumber = Number(expectedValue);
-  switch (operator) {
-    case '>': return actualNumber > expectedNumber;
-    case '>=': return actualNumber >= expectedNumber;
-    case '<': return actualNumber < expectedNumber;
-    case '<=': return actualNumber <= expectedNumber;
-    default: return false;
-  }
-}
-
-function normalizeBlockStudioExpected(expected: unknown): unknown {
-  if (expected && typeof expected === 'object' && Object.prototype.hasOwnProperty.call(expected, 'value')) {
-    return (expected as { value: unknown }).value;
-  }
-  if (expected && typeof expected === 'object' && Object.prototype.hasOwnProperty.call(expected, 'name')) {
-    return (expected as { name: unknown }).name;
-  }
-  return expected;
-}
-
-function formatBlockStudioExpected(expected: unknown): string {
-  const normalized = normalizeBlockStudioExpected(expected);
-  if (normalized === null || normalized === undefined) return 'null';
-  if (typeof normalized === 'string' || typeof normalized === 'number' || typeof normalized === 'boolean') return String(normalized);
-  return JSON.stringify(normalized);
 }
 
 type BlockStudioExecutionTest = NonNullable<
@@ -42156,30 +44426,13 @@ function evaluateBlockStudioTests(
   let failed = 0;
 
   for (const test of tests) {
-    const name = `assert ${test.field} ${test.operator} ${formatBlockStudioExpected(test.expected)}`;
-    let actual: unknown;
-    if (test.field === 'row_count') {
-      actual = rows.length;
-    } else if (!columns.includes(test.field)) {
-      assertions.push({ name, passed: false, expected: test.expected, error: `Column '${test.field}' not found in results` });
-      failed += 1;
-      continue;
-    } else {
-      actual = rows[0]?.[test.field];
-    }
-
-    const ok = compareBlockStudioValues(actual, test.operator, test.expected);
-    if (ok) {
-      assertions.push({ name, passed: true, actual, expected: test.expected });
+    const name = blockTestAssertionName(test);
+    const outcome = evaluateBlockTestAssertion(test, { rows, columns });
+    if (outcome.passed) {
+      assertions.push({ name, passed: true, actual: outcome.actual, expected: test.expected });
       passed += 1;
     } else {
-      assertions.push({
-        name,
-        passed: false,
-        actual,
-        expected: test.expected,
-        error: `${String(actual)} ${test.operator} ${formatBlockStudioExpected(test.expected)} is false`,
-      });
+      assertions.push({ name, passed: false, actual: outcome.actual, expected: test.expected, error: outcome.error });
       failed += 1;
     }
   }
@@ -42217,7 +44470,7 @@ function buildBlockStudioCertificationChecklist(input: {
       issues.push({
         severity: 'error',
         code: 'tests_failed',
-        title: 'A block test failed',
+        title: 'A saved query test failed',
         field: 'Tests',
         message: 'One or more declared tests did not pass against the latest preview result.',
         correction: 'Review the failed assertion and result, correct the query or expectation, then run certification again.',
@@ -42231,7 +44484,7 @@ function buildBlockStudioCertificationChecklist(input: {
         title: 'Certification requirement is not ready',
         field: 'Metadata',
         message: compactSemanticRuntimeFailure(combined),
-        correction: 'Update the named block field, save the draft, and certify again.',
+        correction: 'Update the named field, save the draft, and certify again.',
         action: 'edit_source',
         technicalDetails: combined,
       });
@@ -42252,10 +44505,10 @@ function buildBlockStudioCertificationChecklist(input: {
       code: 'description_review_required',
       title: 'The description says it needs review',
       field: 'Metadata',
-      message: 'The description still says "review required". Certifying is the review: Ask never treats a block as certified while its own description says it still needs review, so the description has to say what the block returns instead.',
+      message: 'The description still says "review required". Certifying is the review: Ask never treats a saved query as certified while its own description says it still needs review, so the description has to say what the saved query returns instead.',
       correction: suggestedDescription
         ? `Remove "review required" from the description and certify. The description becomes: "${suggestedDescription}"`
-        : 'Describe what the block returns without "review required", save the draft, and certify again.',
+        : 'Describe what the saved query returns without "review required", save the draft, and certify again.',
       ...(suggestedDescription ? { suggestedDescription, action: 'fix_description' as const } : { action: 'edit_source' as const }),
     });
   }
@@ -42266,7 +44519,7 @@ function buildBlockStudioCertificationChecklist(input: {
       title: 'Preview did not finish',
       field: 'Run',
         message: compactBlockStudioRuntimeFailure(blocker),
-      correction: 'Correct the reported query or runtime problem, then run the block again before certification.',
+      correction: 'Correct the reported query or runtime problem, then run the saved query again before certification.',
       technicalDetails: blocker,
       action: 'run_again',
     });
@@ -42275,10 +44528,10 @@ function buildBlockStudioCertificationChecklist(input: {
     issues.push({
       severity: 'error',
       code: 'preview_required',
-      title: 'Run the block',
+      title: 'Run the saved query',
       field: 'Run',
-      message: 'The block needs a successful preview result before certification.',
-      correction: 'Run the block, resolve any preview error, then certify again.',
+      message: 'The saved query needs a successful preview result before certification.',
+      correction: 'Run the saved query, resolve any preview error, then certify again.',
       action: 'run_again',
     });
   }
@@ -42289,7 +44542,7 @@ function buildBlockStudioCertificationChecklist(input: {
     issues.push({
       severity: 'error',
       code: 'tests_failed',
-      title: 'A block test failed',
+      title: 'A saved query test failed',
       field: 'Tests',
       message: 'One or more declared tests did not pass against the latest preview result.',
       correction: 'Review the failed assertion and result, correct the query or expectation, then run certification again.',
@@ -42365,14 +44618,17 @@ function setBlockStudioStatusInSource(source: string, newStatus: string): string
  *
  * Certifying is never a plain status flip: `certified` requires the receipt of
  * an explicit Certify action that ran the certification rules, and that
- * receipt is written beside `reviewStatus: certified`. Any other status drops
+ * receipt is written beside `reviewStatus: certified`. Draft and review drop
  * the receipt, so the YAML never claims a certification the source lost.
+ * Deprecating keeps it as history and records who deprecated the block, and
+ * when, beside it (`reviewStatus: deprecated` tells every reader it no longer holds).
  */
 export function setBlockStudioStatus(
   projectRoot: string,
   blockPath: string,
   newStatus: string,
   certification?: CertificationReceipt,
+  deprecatedBy?: string | null,
 ): void {
   if (newStatus === 'certified' && !certification) {
     throw new Error('Certifying a block requires a certification receipt from an explicit Certify action.');
@@ -42381,18 +44637,45 @@ export function setBlockStudioStatus(
   if (!isBlockStudioBlockPath(normalizedPath)) throw new Error('Invalid block path');
   const absPath = join(projectRoot, normalizedPath);
   if (!existsSync(absPath)) throw new Error('Block file not found');
-  const source = setBlockStudioStatusInSource(readFileSync(absPath, 'utf-8'), newStatus);
+  const previousSource = readFileSync(absPath, 'utf-8');
+  const source = setBlockStudioStatusInSource(previousSource, newStatus);
   writeFileSync(absPath, source, 'utf-8');
 
   const companionPath = blockCompanionRelativePath(projectRoot, normalizedPath);
   if (!companionPath) return;
   const absCompanionPath = join(projectRoot, companionPath);
-  if (!existsSync(absCompanionPath)) return;
   const status = blockSourceStatus(source);
+  if (!existsSync(absCompanionPath)) {
+    // A hand-written block has no companion YAML yet. Certify used to pass and
+    // record nothing, so the tile could not say who certified it or notice a
+    // later edit; write the companion a Block Studio save would, with the receipt.
+    if (status === 'certified' && certification) {
+      const metadata = parseBlockSourceMetadata(source);
+      const slug = normalizedPath.split('/').pop()!.replace(/\.dql$/, '');
+      writeBlockCompanionFile(projectRoot, {
+        slug,
+        name: metadata.name || slug,
+        domain: metadata.domain || 'uncategorized',
+        description: metadata.description,
+        owner: metadata.owner,
+        tags: metadata.tags,
+        provider: 'dql',
+        content: source,
+        certification: { ...certification, sourceSha256: sourceSha256(source) },
+        companionRelativePath: companionPath,
+      });
+    }
+    return;
+  }
+  const previousStatus = blockSourceStatus(previousSource);
   const receipt = status === 'certified' && certification
     ? { ...certification, sourceSha256: sourceSha256(source) }
     : null;
-  writeFileSync(absCompanionPath, applyCompanionCertification(readFileSync(absCompanionPath, 'utf-8'), status, receipt), 'utf-8');
+  // Deprecating a block that is already deprecated keeps the first record.
+  const deprecation = status === 'deprecated' && previousStatus !== 'deprecated'
+    ? buildDeprecationRecord({ deprecatedBy, via: 'block-studio', previousStatus })
+    : null;
+  writeFileSync(absCompanionPath, applyCompanionCertification(readFileSync(absCompanionPath, 'utf-8'), status, receipt, deprecation), 'utf-8');
 }
 
 interface DqlGenerationPatch {
@@ -42664,29 +44947,19 @@ function deterministicDqlGenerationPatch(
   };
 }
 
+/**
+ * A semantic block for an imported query that is exactly a metric query, else
+ * null and the draft keeps the imported SQL. See {@link exactSemanticImportMatch}.
+ */
 function buildSemanticImportCandidateSource(
   candidate: BlockStudioImportCandidate,
   patch: DqlGenerationPatch,
   semanticLayer?: SemanticLayer,
 ): string | null {
   if (!semanticLayer || candidate.recommendedAction === 'reuse_existing') return null;
-  const aggregateAliases = Array.from(candidate.sql.matchAll(/\b(?:sum|count|avg|min|max)\s*\([^)]*\)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)/gi))
-    .map((match) => match[1]);
-  if (aggregateAliases.length === 0) return null;
-
-  const metrics = semanticLayer.listMetrics();
-  const matchedMetrics = aggregateAliases.map((alias) => metrics.find((metric) => normalizedTerm(metric.name) === normalizedTerm(alias)));
-  if (matchedMetrics.some((metric) => !metric)) return null;
-  const metricNames = Array.from(new Set(matchedMetrics.map((metric) => metric!.name)));
-  const compatibleDimensions = semanticLayer.listCompatibleDimensions(metricNames);
-  const compatibleByName = new Map(compatibleDimensions.map((dimension) => [normalizedTerm(dimension.name), dimension]));
-  const groupFields = extractDqlGenerationGroupByFields(candidate.sql)
-    .map((field) => field.split('.').pop() ?? field)
-    .filter((field) => !/^\d+$/.test(field));
-  const matchedDimensions = groupFields.map((field) => compatibleByName.get(normalizedTerm(field)));
-  if (groupFields.length > 0 && matchedDimensions.some((dimension) => !dimension)) return null;
-
-  const dimensionNames = Array.from(new Set(matchedDimensions.map((dimension) => dimension!.name)));
+  const match = exactSemanticImportMatch(candidate.sql, semanticLayer);
+  if (!match) return null;
+  const compatibleByName = new Map(semanticLayer.listCompatibleDimensions(match.metrics).map((dimension) => [normalizedTerm(dimension.name), dimension]));
   const allowedFilters = (patch.allowedFilters ?? [])
     .map((filter) => compatibleByName.get(normalizedTerm(filter))?.name)
     .filter((filter): filter is string => Boolean(filter));
@@ -42697,10 +44970,96 @@ function buildSemanticImportCandidateSource(
     description: candidate.description,
     owner: candidate.owner,
     tags: candidate.tags,
-    metrics: metricNames,
-    dimensions: dimensionNames,
+    metrics: match.metrics,
+    dimensions: match.dimensions,
     requestedFilters: allowedFilters,
-    visualization: { chart: dimensionNames.length > 0 ? 'bar' : 'kpi' },
+    visualization: { chart: match.dimensions.length > 0 ? 'bar' : 'kpi' },
+  });
+}
+
+/**
+ * The metrics and dimensions an imported query is exactly, or null. Nothing in
+ * the SQL may be lost: one table, no join, filter, HAVING, ORDER BY, LIMIT,
+ * DISTINCT, CTE, window or subquery; every aggregate output is a metric with
+ * the same aggregate over the same table and no filter of its own; every other
+ * output is a compatible dimension under its own name, and the query groups by
+ * exactly those (positions count). A same-named output is not enough:
+ * `count(*) as order_count` over a join is not the `order_count` metric.
+ */
+export function exactSemanticImportMatch(sql: string, semanticLayer: SemanticLayer): { metrics: string[]; dimensions: string[] } | null {
+  const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').trim().replace(/;\s*$/, '').replace(/\s+/g, ' ');
+  if (!text || text.includes(';')) return null;
+  if (/\b(?:join|where|having|order|limit|qualify|union|intersect|except|distinct|over|top|with)\b/i.test(text) || /\(\s*select\b/i.test(text)) return null;
+  const shape = /^select (.+?) from ([A-Za-z_][\w.]*)(?: (?:as )?(?!group\b)([A-Za-z_]\w*))?(?: group by (.+))?$/i.exec(text);
+  if (!shape) return null;
+  const table = normalizedTerm(shape[2]!.split('.').pop() ?? '');
+  const items = splitDqlGenerationSqlList(shape[1]!).map((item) => item.trim());
+  const sameExpression = (left: string, right: string) => {
+    const clean = (value: string) => value.toLowerCase().replace(/\b[a-z_]\w*\./g, '').replace(/\s+/g, '');
+    return clean(left) === clean(right);
+  };
+  const metricAggregate = (metric: MetricDefinition): string | null => {
+    if (/\(/.test(metric.sql)) return metric.sql;
+    if (metric.type === 'count_distinct') return `COUNT(DISTINCT ${metric.sql})`;
+    return metric.type === 'custom' ? null : `${metric.type}(${metric.sql})`;
+  };
+  const metrics = semanticLayer.listMetrics();
+  const metricNames: string[] = [];
+  const columns: string[] = [];
+  const columnAt = new Map<number, string>();
+  for (const [index, item] of items.entries()) {
+    const aggregate = /^((?:sum|count|avg|min|max) ?\(.*\)) (?:as )?([A-Za-z_]\w*)$/i.exec(item);
+    if (aggregate) {
+      const metric = metrics.find((candidate) => normalizedTerm(candidate.name) === normalizedTerm(aggregate[2]!));
+      const expected = metric ? metricAggregate(metric) : null;
+      if (!metric || !expected || !sameExpression(aggregate[1]!, expected)) return null;
+      if (normalizedTerm(metric.table.split('.').pop() ?? '') !== table) return null;
+      if ((metric.filters && Object.keys(metric.filters).length > 0) || metric.filter) return null;
+      metricNames.push(metric.name);
+      continue;
+    }
+    const column = /^(?:[A-Za-z_]\w*\.)?([A-Za-z_]\w*)(?: (?:as )?([A-Za-z_]\w*))?$/i.exec(item);
+    if (!column || (column[2] && normalizedTerm(column[2]) !== normalizedTerm(column[1]!))) return null;
+    columns.push(column[1]!);
+    columnAt.set(index + 1, column[1]!);
+  }
+  if (metricNames.length === 0) return null;
+  // GROUP BY 1 names the first selected item, which must be a plain column.
+  const grouped = (shape[4] ? splitDqlGenerationSqlList(shape[4]) : []).map((entry) => {
+    const field = entry.trim();
+    return normalizedTerm(/^\d+$/.test(field) ? columnAt.get(Number(field)) ?? '' : field.split('.').pop() ?? field);
+  });
+  const columnSet = new Set(columns.map(normalizedTerm));
+  if (grouped.length !== columnSet.size || grouped.some((field) => !columnSet.has(field))) return null;
+  const compatible = new Map(semanticLayer.listCompatibleDimensions(Array.from(new Set(metricNames))).map((dimension) => [normalizedTerm(dimension.name), dimension]));
+  const dimensions: string[] = [];
+  for (const name of columns) {
+    const dimension = compatible.get(normalizedTerm(name));
+    if (!dimension) return null;
+    const dimensionSql = (dimension.sql ?? '').trim();
+    if (dimensionSql && /^[A-Za-z_][\w.]*$/.test(dimensionSql) && normalizedTerm(dimensionSql.split('.').pop() ?? '') !== normalizedTerm(name)) return null;
+    dimensions.push(dimension.name);
+  }
+  return { metrics: Array.from(new Set(metricNames)), dimensions: Array.from(new Set(dimensions)) };
+}
+
+/**
+ * Notes for imported outputs that share a semantic metric's name when the
+ * draft keeps the imported SQL; the reviewer decides whether the two should agree.
+ */
+function semanticMetricNameNotes(
+  candidate: BlockStudioImportCandidate,
+  semanticLayer?: SemanticLayer,
+): string[] {
+  if (!semanticLayer || candidate.recommendedAction === 'reuse_existing') return [];
+  const metrics = semanticLayer.listMetrics();
+  const aliases = Array.from(candidate.sql.matchAll(/\b(?:sum|count|avg|min|max)\s*\([^)]*\)\s+(?:as\s+)?([A-Za-z_][A-Za-z0-9_]*)/gi))
+    .map((match) => match[1]!);
+  return Array.from(new Set(aliases)).flatMap((alias) => {
+    const metric = metrics.find((item) => normalizedTerm(item.name) === normalizedTerm(alias));
+    return metric
+      ? [`${alias} has the same name as the semantic metric ${metric.name}. The draft runs your SQL, not the metric; check that they agree, or use the metric instead.`]
+      : [];
   });
 }
 
@@ -43547,6 +45906,22 @@ async function createBlockStudioAssistProvider(
  * providers. Returns the settings id alongside the transport so callers keep
  * naming the provider the user actually configured.
  */
+/**
+ * Whether `selectAssistProvider` would find a model, without building one or
+ * reaching the network: replay cassettes, a host's model, or a local provider
+ * that is enabled and configured. App Studio reads it to open on
+ * Start manually and label keyword suggestions when there is none (design D4).
+ */
+export function assistProviderAvailable(projectRoot: string): boolean {
+  if (createEvalCassetteReplayProvider(projectRoot)) return true;
+  try {
+    if (hostModelProvider()) return true;
+  } catch {
+    return false;
+  }
+  return listProviderSettings(projectRoot).some((provider) => provider.enabled && provider.configured);
+}
+
 async function selectAssistProvider(
   projectRoot: string,
   requestedProvider?: ProviderSettingsId,
@@ -44943,10 +47318,13 @@ function writeBlockCompanionFile(
   // The companion's reviewStatus always mirrors the `.dql` status, so the
   // source and its YAML can never disagree about whether a block is certified.
   const status = blockSourceStatus(options.content);
-  const previousReceipt = status === 'certified' && options.certification === undefined && existsSync(companionPath)
-    ? readCompanionCertification(readFileSync(companionPath, 'utf-8'))
+  const previousCompanion = existsSync(companionPath) ? readFileSync(companionPath, 'utf-8') : null;
+  const previousReceipt = (status === 'certified' && options.certification === undefined) || status === 'deprecated'
+    ? readCompanionCertification(previousCompanion)
     : null;
-  const receipt = status === 'certified' ? (options.certification ?? previousReceipt) : null;
+  // A deprecated block keeps the receipt it was certified with, and its deprecation record.
+  const receipt = status === 'certified' ? (options.certification ?? previousReceipt) : status === 'deprecated' ? previousReceipt : null;
+  const deprecation = status === 'deprecated' ? readCompanionDeprecation(previousCompanion) : null;
   const lines = [
     `name: ${options.slug}`,
     `block: ${options.slug}`,
@@ -45000,7 +47378,7 @@ function writeBlockCompanionFile(
     if (options.importMeta.sourceKind) lines.push(`  sourceKind: ${yamlScalar(options.importMeta.sourceKind)}`);
     if (options.importMeta.sourcePath) lines.push(`  sourcePath: ${yamlScalar(options.importMeta.sourcePath)}`);
   }
-  writeFileSync(companionPath, applyCompanionCertification(lines.join('\n'), status, receipt), 'utf-8');
+  writeFileSync(companionPath, applyCompanionCertification(lines.join('\n'), status, receipt, deprecation), 'utf-8');
   return relative(projectRoot, companionPath).replaceAll('\\', '/');
 }
 
@@ -46581,6 +48959,14 @@ export interface GitStatusResult {
    * here, and the prefix is reported so the UI can say what it is showing.
    */
   projectPrefix?: string;
+  /** The branch reviews merge into (the remote's default branch). */
+  baseBranch?: string;
+  /** Whether the remote already has the base branch (an empty repository has none yet). */
+  baseOnRemote?: boolean;
+  /** The remote branch ahead/behind are counted against, when there is one. */
+  upstream?: string | null;
+  /** `origin` is a ZLens sample repository, which a user should never send to. */
+  sampleRemote?: boolean;
   error?: string;
 }
 
@@ -46628,6 +49014,37 @@ async function resolveGitRemoteName(gitRoot: string): Promise<string | null> {
   if (preferred && remotes.includes(preferred)) return preferred;
   if (remotes.includes('origin')) return 'origin';
   return remotes[0] ?? null;
+}
+
+/**
+ * The branch reviews merge into: the remote's default branch, not a guess.
+ * Order: the remote's HEAD as last fetched (`refs/remotes/<remote>/HEAD`, set by
+ * clone), then — when `network` is set — the remote itself (`ls-remote --symref`,
+ * for a remote added after clone or never fetched), then whichever of `main` /
+ * `master` exists on the remote or locally, then `main`. Repositories whose
+ * default is `master`, `develop` or `trunk` used to get reviews against `main`.
+ */
+export async function resolveGitBaseBranch(gitRoot: string, options: { network?: boolean } = {}): Promise<string> {
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (remote) {
+    const head = await execGit(gitRoot, ['symbolic-ref', '--quiet', '--short', `refs/remotes/${remote}/HEAD`]);
+    const fetched = head.code === 0 ? head.stdout.trim() : '';
+    if (fetched.startsWith(`${remote}/`) && fetched.length > remote.length + 1) return fetched.slice(remote.length + 1);
+    if (options.network) {
+      const symref = await execGit(gitRoot, ['ls-remote', '--symref', remote, 'HEAD'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+      const match = symref.code === 0 ? symref.stdout.match(/^ref: refs\/heads\/(\S+)\s+HEAD$/m) : null;
+      if (match?.[1]) return match[1];
+    }
+    for (const candidate of ['main', 'master']) {
+      const exists = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${candidate}`]);
+      if (exists.code === 0) return candidate;
+    }
+  }
+  for (const candidate of ['main', 'master']) {
+    const exists = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${candidate}`]);
+    if (exists.code === 0) return candidate;
+  }
+  return 'main';
 }
 
 /**
@@ -46844,13 +49261,29 @@ async function readGitStatus(cwd: string): Promise<GitStatusResult> {
   const branchRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const branch = branchRes.code === 0 ? branchRes.stdout.trim() : null;
 
-  const trackRes = await execGit(gitRoot, ['rev-list', '--left-right', '--count', '@{u}...HEAD']);
+  // Counted against the upstream; a branch not linked yet is counted against
+  // the remote branch of the same name, and a branch the remote has never seen
+  // counts every commit no remote has as "not sent yet".
+  const remoteName = await resolveGitRemoteName(gitRoot);
+  const remoteUrl = remoteName ? await execGit(gitRoot, ['remote', 'get-url', remoteName]) : null;
+  const upstreamRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  let upstream: string | null = upstreamRes.code === 0 ? upstreamRes.stdout.trim() : null;
+  if (!upstream && remoteName && branch && branch !== 'HEAD') {
+    const sameName = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remoteName}/${branch}`]);
+    if (sameName.code === 0) upstream = `${remoteName}/${branch}`;
+  }
   let ahead = 0;
   let behind = 0;
-  if (trackRes.code === 0) {
-    const match = trackRes.stdout.trim().split(/\s+/);
-    behind = Number(match[0] ?? 0);
-    ahead = Number(match[1] ?? 0);
+  if (upstream) {
+    const trackRes = await execGit(gitRoot, ['rev-list', '--left-right', '--count', `${upstream}...HEAD`]);
+    if (trackRes.code === 0) {
+      const match = trackRes.stdout.trim().split(/\s+/);
+      behind = Number(match[0] ?? 0);
+      ahead = Number(match[1] ?? 0);
+    }
+  } else if (remoteName) {
+    const unsent = await execGit(gitRoot, ['rev-list', '--count', 'HEAD', '--not', `--remotes=${remoteName}`]);
+    if (unsent.code === 0) ahead = Number(unsent.stdout.trim() || 0);
   }
 
   // UI-001, E2E-001: the Source Control surface is file-oriented. Git's
@@ -46870,7 +49303,12 @@ async function readGitStatus(cwd: string): Promise<GitStatusResult> {
       changes.push({ path: p, status: code });
     }
   }
-  return { inRepo: true, branch, ahead, behind, changes, projectPrefix };
+  const baseBranch = await resolveGitBaseBranch(gitRoot);
+  const baseOnRemote = remoteName
+    ? (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remoteName}/${baseBranch}`])).code === 0
+    : false;
+  const sampleRemote = remoteUrl?.code === 0 && isZLensSampleRemote(remoteUrl.stdout.trim());
+  return { inRepo: true, branch, ahead, behind, changes, projectPrefix, baseBranch, baseOnRemote, upstream, sampleRemote };
 }
 
 /**
@@ -47313,6 +49751,201 @@ async function gitCommit(
   return { ok: true, hash: hashRes.code === 0 ? hashRes.stdout.trim() : undefined };
 }
 
+/** Files a Git host can put in a brand-new repository ("Add a README", a licence, a .gitignore template). */
+const GIT_HOST_STARTER_FILE = /^(?:README|LICENSE|LICENCE|COPYING)(?:\.[A-Za-z0-9]+)?$|^\.git(?:ignore|attributes)$/i;
+
+export type GitRemoteBranchLink = 'absent' | 'linked' | 'merged_starter' | 'behind_or_diverged' | 'unrelated' | 'merge_failed';
+
+/**
+ * A local branch with no upstream whose name already exists on the remote: the
+ * usual first send after creating a repository on GitHub with a README. Plain
+ * `push -u` was rejected ("get updates first") and `pull` had no upstream ("send
+ * first"), so neither button could ever succeed. This fetches the remote branch
+ * and links the local branch to it. When the remote branch holds only the host's
+ * starter files and shares no history with the project, those files are merged
+ * in (the project's own copy wins a clash; a remote .gitignore adds its missing
+ * lines) so the next push goes through. Anything with real content is left for
+ * Get updates.
+ */
+export async function linkGitBranchToRemote(gitRoot: string, remote: string, branch: string): Promise<{ link: GitRemoteBranchLink; detail?: string }> {
+  const fetched = await execGit(gitRoot, ['fetch', remote, branch], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (fetched.code !== 0) {
+    const detail = gitErrorOutput(fetched);
+    // A remote without this branch is the normal first send.
+    if (/couldn't find remote ref|could not find remote ref/i.test(detail)) return { link: 'absent' };
+    return { link: 'merge_failed', detail };
+  }
+  const remoteRef = `refs/remotes/${remote}/${branch}`;
+  const tracked = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', remoteRef]);
+  if (tracked.code !== 0) return { link: 'absent' };
+  await execGit(gitRoot, ['branch', `--set-upstream-to=${remote}/${branch}`, branch]);
+  const contained = await execGit(gitRoot, ['merge-base', '--is-ancestor', remoteRef, 'HEAD']);
+  if (contained.code === 0) return { link: 'linked' };
+  const mergeBase = await execGit(gitRoot, ['merge-base', remoteRef, 'HEAD']);
+  const files = await execGit(gitRoot, ['ls-tree', '-r', '--name-only', remoteRef]);
+  const remoteFiles = files.code === 0 ? files.stdout.split('\n').map((f) => f.trim()).filter(Boolean) : [];
+  const starterOnly = mergeBase.code !== 0 && remoteFiles.length > 0 && remoteFiles.every((f) => GIT_HOST_STARTER_FILE.test(f));
+  if (!starterOnly) return { link: mergeBase.code !== 0 ? 'unrelated' : 'behind_or_diverged' };
+  const merged = await execGit(gitRoot, ['merge', '--allow-unrelated-histories', '--no-edit', '-X', 'ours', '-m', `Merge the repository's starter files from ${remote}/${branch}`, remoteRef]);
+  if (merged.code !== 0) {
+    await execGit(gitRoot, ['merge', '--abort']);
+    return { link: 'merge_failed', detail: gitErrorOutput(merged) };
+  }
+  if (remoteFiles.includes('.gitignore')) {
+    const theirs = await execGit(gitRoot, ['show', `${remoteRef}:.gitignore`]);
+    const oursPath = join(gitRoot, '.gitignore');
+    const ours = existsSync(oursPath) ? readFileSync(oursPath, 'utf-8') : '';
+    const have = new Set(ours.split(/\r?\n/).map((line) => line.trim()));
+    const missing = theirs.code === 0 ? theirs.stdout.split(/\r?\n/).filter((line) => line.trim() && !have.has(line.trim())) : [];
+    if (missing.length) {
+      writeFileSync(oursPath, `${ours.replace(/\n*$/, '\n')}\n# From the repository's .gitignore\n${missing.join('\n')}\n`);
+      await execGit(gitRoot, ['add', '--', '.gitignore']);
+      await execGit(gitRoot, ['commit', '--amend', '--no-edit']);
+    }
+  }
+  return { link: 'merged_starter' };
+}
+
+/**
+ * The ZLens sample repositories people clone to try ZLens. Sending to them is
+ * never what a user wants (and for a maintainer it would publish test work).
+ */
+const ZLENS_SAMPLE_REMOTE = /github\.com[/:](?:duckcode-ai|duckcode-ai-labs|zlens-app)\/jaffle-shop-(?:duckdb|warehouse)(?:\.git)?\/?$/i;
+
+export function isZLensSampleRemote(url: string | null | undefined): boolean {
+  return Boolean(url && ZLENS_SAMPLE_REMOTE.test(url.trim()));
+}
+
+const SAMPLE_REMOTE_MESSAGE = 'This folder is the ZLens sample, so its remote is the public sample repository. Connect your own repository to share your work.';
+
+/** Fetch only: updates what the page knows about the remote and never touches your branches or files. */
+export async function gitFetch(cwd: string): Promise<{ ok: boolean; code?: string; error?: string; detail?: string }> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet.' };
+  const res = await execGit(gitRoot, ['fetch', '--prune', remote], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (res.code !== 0) {
+    const detail = gitErrorOutput(res);
+    return { ok: false, code: 'unreachable', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
+  }
+  await rememberGitRemoteHead(gitRoot);
+  return { ok: true };
+}
+
+function sendBranchSlug(subject: string): string {
+  return subject.toLowerCase().trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '') || 'change';
+}
+
+/**
+ * Send from the base branch without touching it: your unsent commits move to a
+ * new branch (named from your last change, or `name`), the base branch goes
+ * back to where the remote has it, and the new branch is sent. Unsaved edits
+ * come along. The next step is a pull request into the base branch.
+ */
+export async function gitSendAsBranch(cwd: string, input: { name?: unknown }): Promise<{
+  ok: boolean; code?: string; error?: string; detail?: string; branch?: string; base?: string; sent?: number; subject?: string; prUrl?: string;
+}> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before sending changes.' };
+  const remoteUrl = await execGit(gitRoot, ['remote', 'get-url', remote]);
+  if (remoteUrl.code === 0 && isZLensSampleRemote(remoteUrl.stdout)) return { ok: false, code: 'sample_remote', error: SAMPLE_REMOTE_MESSAGE };
+  const current = (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  if (!current || current === 'HEAD') return { ok: false, code: 'detached', error: 'Switch to a branch before sending.' };
+  const unsentRes = await execGit(gitRoot, ['rev-list', '--count', 'HEAD', '--not', `--remotes=${remote}`]);
+  const unsent = unsentRes.code === 0 ? Number(unsentRes.stdout.trim() || 0) : 0;
+  if (unsent === 0) return { ok: false, code: 'nothing_to_send', error: 'Nothing to send yet. Keep your changes first.' };
+
+  const requested = typeof input.name === 'string' ? input.name.trim() : '';
+  const subject = (await execGit(gitRoot, ['log', '-1', '--format=%s'])).stdout.trim();
+  const stem = requested || `zlens/${sendBranchSlug(subject)}`;
+  if (stem.startsWith('-') || (await execGit(gitRoot, ['check-ref-format', '--branch', stem])).code !== 0) {
+    return { ok: false, code: 'invalid_name', error: `"${stem}" is not a valid branch name.` };
+  }
+  let branch = stem;
+  for (let n = 2; ; n += 1) {
+    const local = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`]);
+    const remoteRef = await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${branch}`]);
+    if (local.code !== 0 && remoteRef.code !== 0) break;
+    if (requested) return { ok: false, code: 'branch_exists', error: `A branch named ${requested} already exists. Choose another name.` };
+    branch = n <= 9 ? `${stem}-${n}` : `${stem}-${Date.now().toString(36)}`;
+    if (n > 9) break;
+  }
+
+  const upstreamRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', `${current}@{u}`]);
+  let previous = upstreamRes.code === 0 ? upstreamRes.stdout.trim() : '';
+  if (!previous && (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${current}`])).code === 0) {
+    previous = `${remote}/${current}`;
+  }
+  const switched = await execGit(gitRoot, ['checkout', '-b', branch]);
+  if (switched.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(switched) || 'Git could not create the branch.' };
+  // The commits now live on the new branch; put the base branch back where the
+  // remote has it, so it never diverges from the team's copy.
+  if (previous && (await execGit(gitRoot, ['merge-base', '--is-ancestor', previous, 'HEAD'])).code === 0) {
+    await execGit(gitRoot, ['branch', '-f', current, previous]);
+  }
+  const pushed = await gitPush(gitRoot);
+  const base = await resolveGitBaseBranch(gitRoot, { network: true });
+  if (!pushed.ok) return { ...pushed, branch, base };
+  return { ok: true, branch, base, sent: unsent, subject, prUrl: gitHubCompareUrl(remoteUrl.code === 0 ? remoteUrl.stdout.trim() : null, branch, base) };
+}
+
+/**
+ * Point the project at your own repository: the current `origin` (usually the
+ * ZLens sample) is kept as `upstream`, branches stop tracking it, and your
+ * repository becomes `origin`. Nothing is contacted until the next send.
+ */
+export async function gitConnectOwnRemote(cwd: string, input: { url?: unknown }): Promise<{ ok: boolean; code?: string; error?: string; url?: string; previous?: string }> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'This project is not a Git repository yet. Initialize Git first.' };
+  const url = validateGitRemoteUrl(input.url);
+  if (!url.ok) return { ok: false, code: 'invalid_url', error: url.error };
+  if (isZLensSampleRemote(url.url)) return { ok: false, code: 'sample_remote', error: 'That is the ZLens sample repository. Enter the address of a repository you own.' };
+  const remotes = (await execGit(gitRoot, ['remote'])).stdout.split('\n').map((r) => r.trim()).filter(Boolean);
+  let previous: string | undefined;
+  if (remotes.includes('origin')) {
+    previous = ['upstream', 'zlens-sample'].find((candidate) => !remotes.includes(candidate));
+    if (!previous) return { ok: false, code: 'remote_exists', error: 'This project already has remotes named origin, upstream and zlens-sample. Rename one in a terminal first.' };
+    const renamed = await execGit(gitRoot, ['remote', 'rename', 'origin', previous]);
+    if (renamed.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(renamed) || 'Git could not rename the remote.' };
+    const branches = (await execGit(gitRoot, ['for-each-ref', '--format=%(refname:short)', 'refs/heads'])).stdout.split('\n').map((b) => b.trim()).filter(Boolean);
+    for (const name of branches) {
+      const tracked = await execGit(gitRoot, ['config', '--get', `branch.${name}.remote`]);
+      if (tracked.code === 0 && tracked.stdout.trim() === previous) await execGit(gitRoot, ['branch', '--unset-upstream', name]);
+    }
+  }
+  const added = await execGit(gitRoot, ['remote', 'add', 'origin', url.url]);
+  if (added.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(added) || 'Git could not save the remote.' };
+  return { ok: true, url: url.url, ...(previous ? { previous } : {}) };
+}
+
+/**
+ * Record the remote's default branch (`refs/remotes/<remote>/HEAD`) when it is
+ * not known yet — a remote added in the app rather than cloned — so the status
+ * reports the right review base without asking the remote every time. Runs
+ * only after a send or get-updates already reached the remote; best effort.
+ */
+async function rememberGitRemoteHead(gitRoot: string): Promise<void> {
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return;
+  const known = await execGit(gitRoot, ['symbolic-ref', '--quiet', `refs/remotes/${remote}/HEAD`]);
+  if (known.code === 0) return;
+  // `set-head --auto` needs a local copy of that branch, which a project that
+  // only ever sent its own branch does not have: ask, fetch it, then record it.
+  const symref = await execGit(gitRoot, ['ls-remote', '--symref', remote, 'HEAD'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  const name = symref.code === 0 ? symref.stdout.match(/^ref: refs\/heads\/(\S+)\s+HEAD$/m)?.[1] : undefined;
+  if (!name) return;
+  const fetched = await execGit(gitRoot, ['fetch', remote, name], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (fetched.code !== 0) return;
+  await execGit(gitRoot, ['remote', 'set-head', remote, name]);
+}
+
 async function gitPush(cwd: string): Promise<{ ok: boolean; error?: string; output?: string; code?: string; detail?: string }> {
   const gitRoot = await resolveGitRoot(cwd);
   if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
@@ -47320,14 +49953,33 @@ async function gitPush(cwd: string): Promise<{ ok: boolean; error?: string; outp
   if (!remote) {
     return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before sending changes.' };
   }
+  const pushUrl = await execGit(gitRoot, ['remote', 'get-url', '--push', remote]);
+  if (pushUrl.code === 0 && isZLensSampleRemote(pushUrl.stdout)) return { ok: false, code: 'sample_remote', error: SAMPLE_REMOTE_MESSAGE };
   const branch = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
   const upstream = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
   const branchName = branch.code === 0 ? branch.stdout.trim() : '';
+  if (upstream.code !== 0 && branchName && branchName !== 'HEAD') {
+    const { link, detail } = await linkGitBranchToRemote(gitRoot, remote, branchName);
+    if (link === 'unrelated') return { ok: false, code: 'unrelated', error: UNRELATED_REMOTE_MESSAGE };
+    if (link === 'behind_or_diverged') {
+      return {
+        ok: false,
+        code: 'push_failed',
+        error: `${remote}/${branchName} already has changes you do not have yet. Your branch is now linked to it: get updates first, then send again.`,
+      };
+    }
+    if (link === 'merge_failed') {
+      return { ok: false, code: 'push_failed', error: friendlyGitRemoteError(detail ?? ''), ...(detail ? { detail } : {}) };
+    }
+  }
   const args = upstream.code === 0 || !branchName || branchName === 'HEAD'
     ? ['push']
     : ['push', '-u', remote, branchName];
   const res = await execGit(gitRoot, args, { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
-  if (res.code === 0) return { ok: true, output: gitErrorOutput(res) };
+  if (res.code === 0) {
+    await rememberGitRemoteHead(gitRoot);
+    return { ok: true, output: gitErrorOutput(res) };
+  }
   const detail = gitErrorOutput(res);
   return { ok: false, code: 'push_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
 }
@@ -47388,7 +50040,7 @@ export async function openHostPullRequest(input: { gitRoot: string; branch: stri
 }
 
 async function gitCreateReview(cwd: string, input: { paths: string[]; title: string; body: string; base: string }): Promise<{
-  ok: boolean; error?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
+  ok: boolean; error?: string; base?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
 }> {
   const gitRoot = await resolveGitRoot(cwd);
   if (!gitRoot) return { ok: false, error: 'Not a git repository' };
@@ -47396,7 +50048,7 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
   if (!title) return { ok: false, error: 'Review title required' };
   const validPaths = validatePaths(gitRoot, input.paths);
   if (!validPaths.ok) return { ok: false, error: validPaths.error };
-  const base = input.base.trim() || 'main';
+  const base = input.base.trim() || await resolveGitBaseBranch(gitRoot, { network: true });
   const status = await readGitStatus(gitRoot);
   const stagedOutsideReview = status.changes
     .filter((change) => change.status[0] !== ' ' && change.status[0] !== '?' && !validPaths.paths.includes(change.path))
@@ -47409,7 +50061,7 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
     return { ok: false, error: 'Add a Git remote before requesting review. No branch or commit was created.' };
   }
   let branch = status.branch;
-  if (!branch || branch === 'HEAD' || branch === base || branch === 'master') {
+  if (!branch || branch === 'HEAD' || branch === base || branch === 'main' || branch === 'master') {
     branch = gitReviewBranchName(title);
     const created = await gitCreateBranch(gitRoot, branch, true);
     if (!created.ok) return created;
@@ -47425,14 +50077,15 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
   const remote = await readGitRemote(gitRoot);
   const compareUrl = gitHubCompareUrl(remote.url, branch, base);
   const hostPr = await openHostPullRequest({ gitRoot, branch, base, title, body: input.body.trim() || `Review governed analytics changes: ${title}` });
-  if (hostPr) return hostPr.ok ? { ok: true, branch, hash: commit.hash, prUrl: hostPr.url } : { ok: true, branch, hash: commit.hash, prUrl: compareUrl, warning: `Branch pushed. The review request could not be opened: ${hostPr.error}` };
+  if (hostPr) return hostPr.ok ? { ok: true, base, branch, hash: commit.hash, prUrl: hostPr.url } : { ok: true, base, branch, hash: commit.hash, prUrl: compareUrl, warning: `Branch pushed. The review request could not be opened: ${hostPr.error}` };
   const pr = await execGh(gitRoot, ['pr', 'create', '--base', base, '--head', branch, '--title', title, '--body', input.body.trim() || `Review governed analytics changes: ${title}`]);
   if (pr.code === 0) {
     const prUrl = (pr.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0]) ?? compareUrl;
-    return { ok: true, branch, hash: commit.hash, prUrl };
+    return { ok: true, base, branch, hash: commit.hash, prUrl };
   }
   return {
     ok: true,
+    base,
     branch,
     hash: commit.hash,
     prUrl: compareUrl,
@@ -47442,33 +50095,34 @@ async function gitCreateReview(cwd: string, input: { paths: string[]; title: str
 
 /** UI-001, SEC-001, E2E-001: open a PR for a branch already committed and pushed by the guided share flow. */
 async function gitOpenReview(cwd: string, input: { title: string; body: string; base: string }): Promise<{
-  ok: boolean; error?: string; branch?: string; prUrl?: string; warning?: string;
+  ok: boolean; error?: string; base?: string; branch?: string; prUrl?: string; warning?: string;
 }> {
   const gitRoot = await resolveGitRoot(cwd);
   if (!gitRoot) return { ok: false, error: 'Not a git repository' };
   const title = input.title.trim();
   if (!title) return { ok: false, error: 'Review title required' };
-  const base = input.base.trim() || 'main';
+  const base = input.base.trim() || await resolveGitBaseBranch(gitRoot, { network: true });
   const status = await readGitStatus(gitRoot);
   const branch = status.branch;
-  if (!branch || branch === 'HEAD' || branch === base || branch === 'master') {
+  if (!branch || branch === 'HEAD' || branch === base || branch === 'main' || branch === 'master') {
     return { ok: false, error: 'Share the changes to a review branch before opening a review request.' };
   }
   const remote = await readGitRemote(gitRoot);
   if (!remote.url) return { ok: false, error: 'Add a Git remote before requesting review.' };
   const compareUrl = gitHubCompareUrl(remote.url, branch, base);
   const hostPr = await openHostPullRequest({ gitRoot, branch, base, title, body: input.body.trim() || `Review governed analytics changes: ${title}` });
-  if (hostPr) return hostPr.ok ? { ok: true, branch, prUrl: hostPr.url } : { ok: true, branch, prUrl: compareUrl, warning: `The review request could not be opened: ${hostPr.error}` };
+  if (hostPr) return hostPr.ok ? { ok: true, base, branch, prUrl: hostPr.url } : { ok: true, base, branch, prUrl: compareUrl, warning: `The review request could not be opened: ${hostPr.error}` };
   const pr = await execGh(gitRoot, [
     'pr', 'create', '--base', base, '--head', branch, '--title', title,
     '--body', input.body.trim() || `Review governed analytics changes: ${title}`,
   ]);
   if (pr.code === 0) {
     const prUrl = pr.stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/\d+/)?.[0] ?? compareUrl;
-    return { ok: true, branch, prUrl };
+    return { ok: true, base, branch, prUrl };
   }
   return {
     ok: true,
+    base,
     branch,
     prUrl: compareUrl,
     warning: `Branch is ready. Open the compare page to create the PR: ${gitErrorOutput(pr) || 'GitHub CLI is not available or authenticated.'}`,
@@ -47481,13 +50135,381 @@ async function gitPull(cwd: string): Promise<{ ok: boolean; error?: string; outp
   if (!(await resolveGitRemoteName(gitRoot))) {
     return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before getting updates.' };
   }
-  // `--ff-only` keeps the operation non-destructive: if the local branch has
-  // diverged from upstream, we surface the error rather than auto-merging.
-  // The user can resolve via the terminal or a future merge UI.
-  const res = await execGit(gitRoot, ['pull', '--ff-only'], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
-  if (res.code === 0) return { ok: true, output: gitErrorOutput(res) };
-  const detail = gitErrorOutput(res);
-  return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
+  // A branch with no upstream whose name exists on the remote (a repository
+  // created on the host with a README): link it instead of answering "send first".
+  const upstream = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  if (upstream.code !== 0) {
+    const remote = await resolveGitRemoteName(gitRoot);
+    const branch = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD']);
+    const branchName = branch.code === 0 ? branch.stdout.trim() : '';
+    if (remote && branchName && branchName !== 'HEAD') {
+      const { link, detail } = await linkGitBranchToRemote(gitRoot, remote, branchName);
+      if (link === 'linked') return { ok: true, output: `Linked ${branchName} to ${remote}/${branchName}. Already up to date.` };
+      if (link === 'merged_starter') return { ok: true, output: `Linked ${branchName} to ${remote}/${branchName} and added the repository's starter files.` };
+      if (link === 'merge_failed') return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail ?? ''), ...(detail ? { detail } : {}) };
+      if (link === 'unrelated') return { ok: false, code: 'unrelated', error: UNRELATED_REMOTE_MESSAGE };
+      // 'absent' falls through to the update below, which brings in the base
+      // branch for a branch the remote has never seen; 'behind_or_diverged'
+      // is now linked.
+    }
+  }
+  return await gitUpdate(gitRoot);
+}
+
+// ── Get updates (D1, D2) ──────────────────────────────────────────────────
+// One button brings the branch up to date: first with its own copy on the
+// remote, then — on a branch other than the base — with the base branch.
+// Unsent commits are replayed on top (rebase); anything already sent is merged,
+// never rewritten. Conflicts stop the update with the repository mid-operation;
+// the page resolves them file by file, then continues or cancels. Cancel puts
+// everything back as it was; Undo reverses a finished update until the next
+// action. A remote with unrelated work is never combined with the project (D6).
+
+const UNRELATED_REMOTE_MESSAGE = 'That repository already holds other work that is unrelated to this project, so ZLens will not combine them. To add ZLens to that repository, clone it and run "npx create-zlens-app dql" inside it. To share this project on its own, connect an empty repository instead.';
+
+export type GitUpdateOperation = 'rebase' | 'merge';
+
+export interface GitUpdateConflict {
+  path: string;
+  /** Present on this side: false when one side deleted the file. */
+  mine: boolean;
+  theirs: boolean;
+}
+
+export interface GitUpdateState {
+  inProgress: boolean;
+  operation?: GitUpdateOperation;
+  /** What is being brought in, e.g. origin/main. */
+  target?: string;
+  conflicts: GitUpdateConflict[];
+  /** Conflicted files not yet resolved. */
+  unresolved: string[];
+  /** A finished update that can still be undone. */
+  undoAvailable: boolean;
+}
+
+export interface GitUpdateResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  detail?: string;
+  output?: string;
+  state?: GitUpdateState;
+  files?: string[];
+  undoAvailable?: boolean;
+}
+
+interface GitUpdateRecord {
+  branch: string;
+  before: string;
+  after?: string;
+  operation?: GitUpdateOperation;
+  target?: string;
+  /** Targets left to bring in after the current one. */
+  pending?: string[];
+  summary?: string[];
+}
+
+async function gitPathOf(gitRoot: string, name: string): Promise<string> {
+  const res = await execGit(gitRoot, ['rev-parse', '--git-path', name]);
+  const rel = res.code === 0 ? res.stdout.trim() : join('.git', name);
+  return resolve(gitRoot, rel);
+}
+
+async function readUpdateRecord(gitRoot: string): Promise<GitUpdateRecord | null> {
+  try {
+    return JSON.parse(readFileSync(await gitPathOf(gitRoot, 'zlens-update.json'), 'utf-8')) as GitUpdateRecord;
+  } catch {
+    return null;
+  }
+}
+
+async function writeUpdateRecord(gitRoot: string, record: GitUpdateRecord | null): Promise<void> {
+  const file = await gitPathOf(gitRoot, 'zlens-update.json');
+  if (!record) {
+    rmSync(file, { force: true });
+    return;
+  }
+  writeFileSync(file, `${JSON.stringify(record)}\n`);
+}
+
+async function inProgressOperation(gitRoot: string): Promise<GitUpdateOperation | null> {
+  if (existsSync(await gitPathOf(gitRoot, 'rebase-merge')) || existsSync(await gitPathOf(gitRoot, 'rebase-apply'))) return 'rebase';
+  if (existsSync(await gitPathOf(gitRoot, 'MERGE_HEAD'))) return 'merge';
+  return null;
+}
+
+async function headSha(gitRoot: string): Promise<string> {
+  return (await execGit(gitRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+}
+
+async function countRange(gitRoot: string, range: string[]): Promise<number> {
+  const res = await execGit(gitRoot, ['rev-list', '--count', ...range]);
+  return res.code === 0 ? Number(res.stdout.trim() || 0) : 0;
+}
+
+export async function readGitUpdateState(cwd: string): Promise<GitUpdateState> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { inProgress: false, conflicts: [], unresolved: [], undoAvailable: false };
+  const operation = await inProgressOperation(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!operation) {
+    const branch = (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+    const undoAvailable = Boolean(record?.after && record.branch === branch && record.after === await headSha(gitRoot));
+    return { inProgress: false, conflicts: [], unresolved: [], undoAvailable };
+  }
+  // Stage 2 is the side being built on, stage 3 the side coming in. A rebase
+  // replays *your* commits onto the remote, so there "mine" is stage 3.
+  const mineStage = operation === 'rebase' ? '3' : '2';
+  const theirsStage = operation === 'rebase' ? '2' : '3';
+  const ls = await execGit(gitRoot, ['ls-files', '-u', '-z']);
+  const stages = new Map<string, Set<string>>();
+  for (const entry of ls.stdout.split('\0').filter(Boolean)) {
+    const tab = entry.indexOf('\t');
+    const meta = entry.slice(0, tab).split(/\s+/);
+    const path = entry.slice(tab + 1);
+    if (!stages.has(path)) stages.set(path, new Set());
+    stages.get(path)!.add(meta[2] ?? '');
+  }
+  const conflicts = [...stages.entries()].map(([path, set]) => ({ path, mine: set.has(mineStage), theirs: set.has(theirsStage) }));
+  const recorded = record?.operation === operation ? record : null;
+  return {
+    inProgress: true,
+    operation,
+    ...(recorded?.target ? { target: recorded.target } : {}),
+    conflicts,
+    unresolved: conflicts.map((c) => c.path),
+    undoAvailable: false,
+  };
+}
+
+/** Both versions of a conflicted file, for Compare. */
+export async function readGitConflictVersions(cwd: string, path: string): Promise<{ ok: boolean; error?: string; mine?: string | null; theirs?: string | null }> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, error: 'Not a git repository' };
+  const valid = validatePaths(gitRoot, [path]);
+  if (!valid.ok) return { ok: false, error: valid.error };
+  const operation = await inProgressOperation(gitRoot);
+  if (!operation) return { ok: false, error: 'No update is in progress.' };
+  const show = async (stage: string) => {
+    const res = await execGit(gitRoot, ['show', `:${stage}:${path}`]);
+    return res.code === 0 ? res.stdout : null;
+  };
+  return { ok: true, mine: await show(operation === 'rebase' ? '3' : '2'), theirs: await show(operation === 'rebase' ? '2' : '3') };
+}
+
+/** Keep your version or the remote's for one conflicted file. */
+export async function resolveGitConflict(cwd: string, input: { path?: unknown; keep?: unknown }): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const path = typeof input.path === 'string' ? input.path : '';
+  const valid = validatePaths(gitRoot, [path]);
+  if (!valid.ok) return { ok: false, code: 'invalid_path', error: valid.error };
+  if (input.keep !== 'mine' && input.keep !== 'theirs') return { ok: false, code: 'invalid_choice', error: 'Choose mine or theirs.' };
+  const state = await readGitUpdateState(gitRoot);
+  const conflict = state.conflicts.find((c) => c.path === path);
+  if (!state.inProgress || !conflict) return { ok: false, code: 'not_conflicted', error: `${path} has no conflict to resolve.`, state };
+  const keepMine = input.keep === 'mine';
+  const present = keepMine ? conflict.mine : conflict.theirs;
+  if (!present) {
+    // The chosen side deleted the file: keeping that side removes it.
+    const removed = await execGit(gitRoot, ['rm', '--quiet', '--', path]);
+    if (removed.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(removed) };
+  } else {
+    // In a rebase git's --ours is the remote side and --theirs is yours.
+    const side = (state.operation === 'rebase') === keepMine ? '--theirs' : '--ours';
+    const picked = await execGit(gitRoot, ['checkout', side, '--', path]);
+    if (picked.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(picked) };
+    const added = await execGit(gitRoot, ['add', '--', path]);
+    if (added.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(added) };
+  }
+  return { ok: true, state: await readGitUpdateState(gitRoot) };
+}
+
+/** Bring in one target: fast-forward, rebase unsent commits, or merge. Stops on conflicts. */
+async function integrateTarget(gitRoot: string, target: string, record: GitUpdateRecord, mode: 'rebase' | 'merge'): Promise<GitUpdateResult | null> {
+  const incoming = await countRange(gitRoot, [`HEAD..${target}`]);
+  if (incoming === 0) return null;
+  const mineCount = await countRange(gitRoot, [`${target}..HEAD`]);
+  if (mineCount === 0) {
+    const ff = await execGit(gitRoot, ['merge', '--ff-only', '--autostash', target]);
+    if (ff.code !== 0) return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(gitErrorOutput(ff)), detail: gitErrorOutput(ff) };
+    record.summary = [...(record.summary ?? []), `Brought in ${incoming} change${incoming === 1 ? '' : 's'} from ${target}.`];
+    return null;
+  }
+  record.operation = mode;
+  record.target = target;
+  await writeUpdateRecord(gitRoot, record);
+  const env = { ...process.env, GIT_EDITOR: 'true' };
+  const res = mode === 'rebase'
+    ? await execGit(gitRoot, ['rebase', '--autostash', target], { env })
+    : await execGit(gitRoot, ['merge', '--no-edit', '--autostash', '-m', `Merge ${target}`, target], { env });
+  if (res.code !== 0) {
+    if (await inProgressOperation(gitRoot)) {
+      return { ok: false, code: 'conflicts', error: `Some files changed on both sides. Choose which version to keep for each, then continue.`, state: await readGitUpdateState(gitRoot) };
+    }
+    return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(gitErrorOutput(res)), detail: gitErrorOutput(res) };
+  }
+  record.operation = undefined;
+  record.target = undefined;
+  record.summary = [...(record.summary ?? []), mode === 'rebase'
+    ? `Brought in ${incoming} change${incoming === 1 ? '' : 's'} from ${target}; your ${mineCount} unsent change${mineCount === 1 ? ' is' : 's are'} now on top.`
+    : `Brought in ${incoming} change${incoming === 1 ? '' : 's'} from ${target}.`];
+  return null;
+}
+
+/** Runs (or resumes) the update over the remaining targets. */
+async function runUpdateTargets(gitRoot: string, record: GitUpdateRecord): Promise<GitUpdateResult> {
+  while (record.pending && record.pending.length > 0) {
+    const [target, ...rest] = record.pending;
+    record.pending = rest;
+    const remote = target!.split('/')[0]!;
+    // Commits that any remote already has were sent: never rewrite those.
+    const unsent = await countRange(gitRoot, [`${target}..HEAD`, '--not', `--remotes=${remote}`]);
+    const mine = await countRange(gitRoot, [`${target}..HEAD`]);
+    const mode: 'rebase' | 'merge' = unsent === mine ? 'rebase' : 'merge';
+    const stopped = await integrateTarget(gitRoot, target!, record, mode);
+    if (stopped) {
+      await writeUpdateRecord(gitRoot, { ...record, pending: record.pending });
+      return stopped;
+    }
+  }
+  record.after = await headSha(gitRoot);
+  const changed = record.after !== record.before;
+  await writeUpdateRecord(gitRoot, changed ? record : null);
+  await rememberGitRemoteHead(gitRoot);
+  return {
+    ok: true,
+    output: changed ? (record.summary ?? []).join(' ') : 'Already up to date.',
+    undoAvailable: changed,
+  };
+}
+
+export async function gitUpdate(gitRoot: string): Promise<GitUpdateResult> {
+  if (await inProgressOperation(gitRoot)) {
+    return { ok: false, code: 'conflicts', error: 'An update is waiting for you to resolve conflicts. Finish or cancel it first.', state: await readGitUpdateState(gitRoot) };
+  }
+  const remote = await resolveGitRemoteName(gitRoot);
+  if (!remote) return { ok: false, code: 'no_remote', error: 'This project has no Git remote yet. Add a remote URL before getting updates.' };
+  const branch = (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim();
+  if (!branch || branch === 'HEAD') return { ok: false, code: 'detached', error: 'Switch to a branch before getting updates.' };
+  const fetched = await execGit(gitRoot, ['fetch', '--prune', remote], { env: nonInteractiveGitEnv(), timeoutMs: GIT_NETWORK_TIMEOUT_MS });
+  if (fetched.code !== 0) {
+    const detail = gitErrorOutput(fetched);
+    return { ok: false, code: 'pull_failed', error: friendlyGitRemoteError(detail), ...(detail ? { detail } : {}) };
+  }
+  await rememberGitRemoteHead(gitRoot);
+
+  const targets: string[] = [];
+  const upstreamRes = await execGit(gitRoot, ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  const upstream = upstreamRes.code === 0 ? upstreamRes.stdout.trim() : '';
+  if (upstream && (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', upstream])).code === 0) targets.push(upstream);
+  const base = await resolveGitBaseBranch(gitRoot);
+  const baseRef = `${remote}/${base}`;
+  if (branch !== base && baseRef !== upstream && (await execGit(gitRoot, ['rev-parse', '--verify', '--quiet', `refs/remotes/${baseRef}`])).code === 0) {
+    targets.push(baseRef);
+  }
+  if (targets.length === 0) {
+    return { ok: false, code: 'pull_failed', error: 'This branch is not linked to a remote branch yet. Send the branch first, then get updates.' };
+  }
+
+  // D6: never combine with unrelated history.
+  for (const target of targets) {
+    if ((await countRange(gitRoot, [`HEAD..${target}`])) > 0 && (await execGit(gitRoot, ['merge-base', 'HEAD', target])).code !== 0) {
+      return { ok: false, code: 'unrelated', error: UNRELATED_REMOTE_MESSAGE };
+    }
+  }
+
+  // Unsaved edits ride along unless the remote changed the same files.
+  const status = await execGit(gitRoot, ['status', '--porcelain=v1', '-z', '--untracked-files=all']);
+  const unsaved = status.stdout.split('\0').filter(Boolean).map((line) => line.slice(3)).filter(Boolean);
+  if (unsaved.length > 0) {
+    const remoteChanged = new Set<string>();
+    for (const target of targets) {
+      const diff = await execGit(gitRoot, ['diff', '--name-only', `HEAD...${target}`]);
+      for (const file of diff.stdout.split('\n').map((f) => f.trim()).filter(Boolean)) remoteChanged.add(file);
+    }
+    const overlap = unsaved.filter((file) => remoteChanged.has(file));
+    if (overlap.length > 0) {
+      return {
+        ok: false,
+        code: 'unsaved_overlap',
+        files: overlap,
+        error: `The remote also changed ${overlap.slice(0, 3).join(', ')}${overlap.length > 3 ? ` and ${overlap.length - 3} more` : ''}. Keep or discard your unsaved changes to ${overlap.length === 1 ? 'that file' : 'those files'} first, then get updates.`,
+      };
+    }
+  }
+
+  const record: GitUpdateRecord = { branch, before: await headSha(gitRoot), pending: targets, summary: [] };
+  await writeUpdateRecord(gitRoot, record);
+  return await runUpdateTargets(gitRoot, record);
+}
+
+/** After every conflict is resolved: finish the operation and carry on with what is left. */
+export async function continueGitUpdate(cwd: string): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const operation = await inProgressOperation(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!operation || !record) return { ok: false, code: 'nothing_in_progress', error: 'No update is waiting to continue.' };
+  const state = await readGitUpdateState(gitRoot);
+  if (state.unresolved.length > 0) {
+    return { ok: false, code: 'conflicts', error: `Choose a version for ${state.unresolved.length} more file${state.unresolved.length === 1 ? '' : 's'} first.`, state };
+  }
+  const env = { ...process.env, GIT_EDITOR: 'true' };
+  const res = operation === 'rebase'
+    ? await execGit(gitRoot, ['-c', 'core.editor=true', 'rebase', '--continue'], { env })
+    : await execGit(gitRoot, ['commit', '--no-edit'], { env });
+  if (await inProgressOperation(gitRoot)) {
+    const next = await readGitUpdateState(gitRoot);
+    if (next.unresolved.length > 0) {
+      return { ok: false, code: 'conflicts', error: 'The next change also conflicts. Choose which version to keep for each file, then continue.', state: next };
+    }
+    // A replayed commit that became empty after resolution: skip it.
+    if (operation === 'rebase') {
+      const skipped = await execGit(gitRoot, ['rebase', '--skip'], { env });
+      if (skipped.code !== 0 && await inProgressOperation(gitRoot)) {
+        return { ok: false, code: 'conflicts', error: 'The next change also conflicts. Choose which version to keep for each file, then continue.', state: await readGitUpdateState(gitRoot) };
+      }
+    }
+  } else if (res.code !== 0 && operation === 'merge') {
+    return { ok: false, code: 'error', error: gitErrorOutput(res) || 'Git could not finish the update.' };
+  }
+  const target = record.target ?? '';
+  record.summary = [...(record.summary ?? []), `Brought in the changes from ${target}, with your choices for the conflicting files.`];
+  record.operation = undefined;
+  record.target = undefined;
+  return await runUpdateTargets(gitRoot, record);
+}
+
+/** Put everything back exactly as it was before Get updates. */
+export async function cancelGitUpdate(cwd: string): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const operation = await inProgressOperation(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!operation) return { ok: false, code: 'nothing_in_progress', error: 'No update is in progress.' };
+  const aborted = await execGit(gitRoot, operation === 'rebase' ? ['rebase', '--abort'] : ['merge', '--abort']);
+  if (aborted.code !== 0) return { ok: false, code: 'error', error: gitErrorOutput(aborted) || 'Git could not cancel the update.' };
+  if (record?.before && record.branch === (await execGit(gitRoot, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() && await headSha(gitRoot) !== record.before) {
+    // An earlier step of this update finished before the one cancelled.
+    await execGit(gitRoot, ['reset', '--keep', record.before]);
+  }
+  await writeUpdateRecord(gitRoot, null);
+  return { ok: true, output: 'Update cancelled. Everything is as it was before.' };
+}
+
+/** Reverse a finished update, keeping unsaved edits, until anything else changes the branch. */
+export async function undoGitUpdate(cwd: string): Promise<GitUpdateResult> {
+  const gitRoot = await resolveGitRoot(cwd);
+  if (!gitRoot) return { ok: false, code: 'not_a_repo', error: 'Not a git repository' };
+  const state = await readGitUpdateState(gitRoot);
+  const record = await readUpdateRecord(gitRoot);
+  if (!state.undoAvailable || !record) return { ok: false, code: 'nothing_to_undo', error: 'There is no update to undo any more.' };
+  const reset = await execGit(gitRoot, ['reset', '--keep', record.before]);
+  if (reset.code !== 0) return { ok: false, code: 'error', error: `Git could not undo the update without touching your unsaved changes: ${gitErrorOutput(reset)}` };
+  await writeUpdateRecord(gitRoot, null);
+  return { ok: true, output: 'Update undone. Your branch is back where it was.' };
 }
 
 async function readGitBranches(cwd: string): Promise<{ inRepo: boolean; current: string | null; branches: string[] }> {
@@ -48334,11 +51356,11 @@ function buildNotebookResearchReviewChecklist(run: NotebookResearchRun): Noteboo
   if (!hasSql && !hasDqlArtifact && !reuseRecommended) blockers.push('Add reviewed SQL, generate SQL, or attach a DQL artifact before promotion.');
   if (run.status === 'error') blockers.push(run.error ? `Fix preview error: ${run.error}` : 'Fix the failed preview before promotion.');
   if (!previewReady && run.status !== 'error' && !reuseRecommended) warnings.push('Run a bounded preview before certification review.');
-  if (!evidenceReady && !reuseRecommended) warnings.push('Inspect metadata evidence before turning this into a reusable block.');
-  if (hasSql && dynamicParameters.length === 0) warnings.push('No dynamic parameters were detected; confirm this should be a static block before certification.');
+  if (!evidenceReady && !reuseRecommended) warnings.push('Inspect metadata evidence before turning this into a reusable saved query.');
+  if (hasSql && dynamicParameters.length === 0) warnings.push('No dynamic parameters were detected; confirm this should be a static saved query before certification.');
   for (const warning of parameterReview?.warnings ?? []) warnings.push(warning);
   if (promoted && !duplicateChecked) warnings.push('Promotion exists but duplicate/reuse evidence is missing.');
-  if (reuseRecommended && !reuseClosed) warnings.push('Reuse the matching block or explicitly document a replacement before certification.');
+  if (reuseRecommended && !reuseClosed) warnings.push('Reuse the matching saved query or explicitly document a replacement before certification.');
   if (promotionReviewRequired) warnings.push('Resolve the review-required promotion decision before certification.');
 
   const items: NotebookResearchReviewChecklist['items'] = [
@@ -48346,7 +51368,7 @@ function buildNotebookResearchReviewChecklist(run: NotebookResearchRun): Noteboo
       id: 'question',
       label: 'Question',
       status: questionReady ? 'passed' : 'blocked',
-      detail: questionReady ? 'Business question is captured.' : 'A reusable block needs a clear business question.',
+      detail: questionReady ? 'Business question is captured.' : 'A reusable saved query needs a clear business question.',
     },
     {
       id: 'sql',

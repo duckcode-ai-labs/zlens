@@ -4,7 +4,7 @@ import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { QueryExecutor } from '@zlens/connectors';
 import { WorkbenchRoutedQueryExecutor, type WorkbenchQueryRouteOptions } from '../workbench-query-route.js';
-import { buildManifest, collectInputFiles, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics } from '@zlens/core';
+import { appsPublishSettings, appsPublishSettingsProblems, buildManifest, collectInputFiles, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics } from '@zlens/core';
 import { buildLocalContextPack, defaultKgPath, defaultMetadataPath, openMetadataCatalog } from '@zlens/agent';
 import type { CLIFlags } from '../args.js';
 import {
@@ -21,7 +21,7 @@ import { listProviderSettings } from '../settings/provider-settings.js';
 import { describeNpmInvocation, resolveNpmInvocation } from '../npm-runtime.js';
 import { betterSqlite3Help, probeBetterSqlite3, type BetterSqlite3Probe } from '../native-deps.js';
 import { connectorBindingError } from '../connector-native.js';
-import { nativeBindingHelp, nativeInstallContextFor } from '@zlens/connectors';
+import { duckdbNoPrebuiltHelp, duckdbNoPrebuiltReason, nativeBindingHelp, nativeInstallContextFor } from '@zlens/connectors';
 import { fetchLatestPublishedDqlVersion, resolveDqlRuntimeVersionStatus } from '../version-status.js';
 import { resolveRetrievalHealthStatus } from '../retrieval-health.js';
 import { getSemanticRuntimeStatus, explainMissingSemanticRuntime } from '../semantic-runtime.js';
@@ -32,6 +32,24 @@ interface Check {
   ok: boolean;
   detail: string;
   advisory?: boolean;
+}
+
+/**
+ * How publishing an App treats trust (T3): never blocked by default, every
+ * tile certified when `apps.requireCertifiedToPublish` is true.
+ */
+export function checkAppsPublishing(projectRoot: string): Check {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8'));
+  } catch {
+    raw = undefined;
+  }
+  const problems = appsPublishSettingsProblems(raw);
+  if (problems.length) return { name: 'App publishing', ok: false, detail: `${problems.join(' ')} Publishing is not blocked until it is fixed.` };
+  return appsPublishSettings(raw).requireCertifiedToPublish
+    ? { name: 'App publishing', ok: true, detail: 'every tile must be certified to publish (apps.requireCertifiedToPublish: true)' }
+    : { name: 'App publishing', ok: true, detail: 'not blocked by trust; readers see "Not certified yet" on tiles nobody certified (set apps.requireCertifiedToPublish: true to require certified tiles)' };
 }
 
 export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest: string[] = []): Promise<void> {
@@ -111,6 +129,7 @@ export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest
   ];
 
   checks.push(checkNotebookAssets());
+  checks.push(checkAppsPublishing(projectRoot));
   checks.push(checkOutputContractDrift(projectRoot));
   checks.push(await checkDqlVersionDrift(projectRoot));
   checks.push(checkRetrievalHealth(projectRoot, config));
@@ -667,14 +686,18 @@ function formatBytes(value: number): string {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function checkNodeVersion(): Check {
-  const match = process.versions.node.match(/^(\d+)/);
+/** Node 20, 22 and 24 are supported; a newer Node runs, but the DuckDB driver has no prebuilt binary for it. */
+export function checkNodeVersion(version = process.versions.node): Check {
+  const match = version.match(/^(\d+)/);
   const major = match ? Number(match[1]) : 0;
-  return {
-    name: 'Node.js',
-    ok: major >= 20,
-    detail: `version=${process.versions.node} (requires Node 20 or newer)`,
-  };
+  if (major < 20) {
+    return { name: 'Node.js', ok: false, detail: `version=${version} (requires Node 20, 22 or 24)` };
+  }
+  const reason = duckdbNoPrebuiltReason(version);
+  if (reason) {
+    return { name: 'Node.js', ok: true, advisory: true, detail: `version=${version} is not supported yet (supported: Node 20, 22 or 24). ${reason}` };
+  }
+  return { name: 'Node.js', ok: true, detail: `version=${version} (supported: Node 20, 22 or 24)` };
 }
 
 export function isSnowflakeSupportedNodeVersion(version = process.versions.node): boolean {
@@ -817,8 +840,14 @@ function readRunningCliVersion(): string {
   }
 }
 
-function checkDuckDBDependency(projectRoot: string): Check {
+export function checkDuckDBDependency(projectRoot: string, nodeVersion = process.versions.node): Check {
   const status = getConnectorInstallStatuses(projectRoot).find((item) => item.driver === 'duckdb');
+  // No prebuilt binary for this Node: installing or rebuilding means a DuckDB
+  // source build, so name the Node to use instead (a copy that loads is fine).
+  const noPrebuilt = duckdbNoPrebuiltHelp(nodeVersion);
+  if (noPrebuilt && status && (!status.installed || connectorBindingError([status.installPath, projectRoot], 'duckdb'))) {
+    return { name: 'DuckDB connector package', ok: false, detail: noPrebuilt };
+  }
   if (!status) {
     return {
       name: 'DuckDB connector package',
@@ -894,13 +923,12 @@ function checkSemanticLayer(semanticConfig: unknown, projectRoot: string): Check
       };
     }
 
-    const metrics = result.layer.listMetrics().length;
     const dims = result.layer.listDimensions().length;
     const provider = result.detectedProvider ?? 'configured';
     return {
       name: 'Semantic layer',
       ok: true,
-      detail: `provider=${provider}, ${metrics} metrics, ${dims} dimensions`,
+      detail: `provider=${provider}, ${semanticMetricWords(result.layer.listMetrics())}, ${dims} dimensions`,
     };
   } catch (err) {
     return {
@@ -1155,7 +1183,7 @@ async function checkSemanticExecutionRuntime(projectRoot: string, semanticConfig
       : null;
     const summary = [
       `engine=${runtime.active}`,
-      `metrics=${metrics.length} (${composable} native-composable, ${runtimeOnly} need a full semantic runtime)`,
+      `${semanticMetricWords(metrics)} (${composable} native-composable, ${runtimeOnly} need a full semantic runtime)`,
       adapterDetail || undefined,
     ].filter(Boolean).join(', ');
     if (runtimeOnly === 0 || runtime.active !== 'native') {
@@ -1220,4 +1248,17 @@ function checkDbtArtifactFreshness(projectRoot: string): Check {
     return { name: 'dbt artifacts', ok: true, detail: summary };
   }
   return { name: 'dbt artifacts', ok: false, detail: `${summary}. ${problems.join(' ')} Note: avoid running dbt while Ask sessions are active — artifacts are read per question.` };
+}
+
+/**
+ * The semantic layer's metrics in the words `zlens sync` and Setup use
+ * (new-user round 2, problem 10): dbt's own metrics, and separately the
+ * measures ZLens also offers as metrics. "19 metrics and 5 measures", never
+ * "24 metrics" beside a sync that says 19.
+ */
+export function semanticMetricWords(metrics: Array<{ source?: { objectType?: string } }>): string {
+  const measures = metrics.filter((metric) => metric.source?.objectType === 'measure').length;
+  const own = metrics.length - measures;
+  const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`;
+  return measures ? `${plural(own, 'metric')} and ${plural(measures, 'measure')}` : plural(own, 'metric');
 }

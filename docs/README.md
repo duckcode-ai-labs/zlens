@@ -22,11 +22,11 @@ same pages are plain Markdown here.
 - [How Ask answered](./ask/how-it-answered.md)
 - [Cite your team's documents](./ask/team-documents.md)
 
-## Build blocks
+## Saved queries
 
-- [Blocks](./blocks/index.md)
+- [Saved queries](./blocks/index.md)
 - [Import SQL](./blocks/import-sql.md)
-- [Block Studio](./blocks/block-studio.md)
+- [Saved query editor](./blocks/block-studio.md)
 - [Save and certify](./blocks/certify.md)
 
 ## Notebooks
@@ -59,7 +59,7 @@ same pages are plain Markdown here.
 - [Semantic layer](./reference/semantic-layer.md)
 - [Modeling and Domain Packages](./datalex-and-dql.md)
 - [Ask traces](./reference/ask-traces.md)
-- [CI and `zlens verify`](./tutorials/05-ci-and-verify.md)
+- [CI with `zlens eval`](./tutorials/05-ci-and-verify.md)
 - [Migrate from other tools](./guides/migrate.md)
 - [Workbook to dashboard](./migrations/workbook-to-dashboard.md)
 - [Compatibility](./reference/compatibility.md)

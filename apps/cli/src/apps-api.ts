@@ -8,7 +8,8 @@ import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, readlinkSync,
 import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { hostActor } from './host/request-context.js';
+import { hostActor, hostActorDisplayName } from './host/request-context.js';
+import { blockCertificationByline, blockPreviousCertificationByline, bylineForViewer, gitUserName, localPersonAliases, localPersonSelf, personDisplayName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -17,6 +18,7 @@ import type {
   AppBuilderPlannerCompletion,
   AppBuilderPlannerProvenance,
   AppPlan,
+  AppBuildHandoffSourceSummary,
   AppSourceCatalogRecord,
   ContextAuthoringProposalV1,
   NarrateInput,
@@ -25,6 +27,7 @@ import type {
   ResearchPlan as AppResearchPlan,
 } from '@zlens/agent';
 import {
+  dashboardTileFilterChoice,
   loadAppDocument,
   findAppDocuments,
   loadDashboardDocument,
@@ -33,11 +36,23 @@ import {
   parseDashboardDocument,
   normalizeDqlArtifactReference,
   suggestAppId,
+  appNameFromGoal,
   createAppBuildDraft,
+  createBlankAppBuildPage,
+  newAppBuildDraftId,
   appBuildDraftHash,
   appBuildPreviewIntentFingerprint,
   applyAppBuildDraftOperations,
   packDashboardLayoutItems,
+  appSourceIdsUsedByTiles,
+  appTrustAnswer,
+  appsPublishSettings,
+  isTrustReminderTaskId,
+  notCertifiedTiles,
+  publishedAppTileTrust,
+  requireCertifiedToPublishMessage,
+  APP_SOURCE_POLICY,
+  type AppsPublishSettings,
   type AppDocument,
   type BlockParameterDefinition,
   type DashboardDisplayMetadata,
@@ -89,8 +104,10 @@ interface Ctx {
   url: URL;
   path: string;
   projectRoot: string;
-  /** Explicit local project opt-in for Dataset field-query authoring. */
+  /** Dataset field-query authoring; on unless explicitly `false` (`apps.datasets: false`). */
   datasetsEnabled?: boolean;
+  /** Read saved queries' result columns as fields, once per revision (design D1). */
+  readSavedQueryFields?: (sourceIds: string[]) => Promise<void>;
   /** With a host (RFC 0010): whether the person may open this App; the list shows only those. */
   mayViewApp?: (appId: string) => Promise<boolean>;
   /** HH-14: whether the host keeps needs-review figures from the person asking (the runtime's one decision). */
@@ -298,6 +315,12 @@ export interface AppBuildHooks {
   planAppBuild?: AppBuilderPlannerCompletion;
   /** The App feature gate also applies to AI-authored field-query tiles. */
   datasetsEnabled?: boolean;
+  /**
+   * Read the result columns of these saved queries as fields, once per
+   * revision (design D1), so the planner builds field tiles from them.
+   * Failures are not errors: such a saved query shows its result as it is.
+   */
+  readSavedQueryFields?: (sourceIds: string[]) => Promise<void>;
 }
 
 /**
@@ -364,12 +387,6 @@ export interface AppContextEnvelopeV1 {
   focus?: { dashboardId?: string; tileId?: string; blockId?: string };
 }
 
-/** Runtime hooks for the commit step (all optional — commit falls back to the
- *  deterministic narrator so story sections exist even offline). */
-export interface AppBuildCommitHooks {
-  narrate?: (input: NarrateInput) => Promise<NarrateResult>;
-}
-
 /**
  * The App storage for this request: analysis memos, App conversations and AI pins are each person's with a host (they
  * hold questions, answers and results computed under that person's row rules), read and kept only for them; Apps
@@ -419,6 +436,13 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
 
   // ── Apps ────────────────────────────────────────────────────────────────
 
+  // Project settings that decide publishing (T3), read fresh from
+  // dql.config.json so a change applies to the next publish.
+  if (req.method === 'GET' && path === '/api/apps/settings') {
+    sendJson(res, 200, { ok: true, ...readAppsPublishSettings(projectRoot) });
+    return true;
+  }
+
   if (req.method === 'POST' && path === '/api/app-builds') {
     try {
       const body = await readJson<{
@@ -433,21 +457,24 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       // serialized capability/trust claim from the published document.
       let datasetCatalogError: string | undefined;
       let resolvePublishedDatasetSources: CreateStoredAppBuildDraftOptions['resolvePublishedDatasetSources'];
+      let resolvePublishedBlockSources: CreateStoredAppBuildDraftOptions['resolvePublishedBlockSources'];
       if (body.baseAppId) {
         try {
-          const { ensureAgentProjectReady, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
+          const { ensureAgentProjectReady, matchAppBlockSourceRefs, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
           await ensureAgentProjectReady(projectRoot);
           resolvePublishedDatasetSources = (sourceIds, sourcePolicy) => resolveAppSourceCatalogRecords(
             projectRoot,
             sourceIds,
             sourcePolicy,
           );
+          resolvePublishedBlockSources = (refs) => matchAppBlockSourceRefs(projectRoot, refs, APP_SOURCE_POLICY);
         } catch (error) {
           datasetCatalogError = error instanceof Error ? error.message : String(error);
         }
       }
       const draft = createStoredAppBuildDraft(projectRoot, body, {
         ...(resolvePublishedDatasetSources ? { resolvePublishedDatasetSources } : {}),
+        ...(resolvePublishedBlockSources ? { resolvePublishedBlockSources } : {}),
         ...(datasetCatalogError ? { datasetCatalogError } : {}),
       });
       sendJson(res, 201, { ok: true, draft });
@@ -460,11 +487,29 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
   if (req.method === 'GET' && path === '/api/app-builds') {
     const storage = openAppStorage(projectRoot);
     try {
-      const drafts = storage.listAppBuildDrafts().flatMap((stored) => {
+      const listed = storage.listAppBuildDrafts().flatMap((stored) => {
         const migrated = migrateLegacyAppBuildDraft(projectRoot, stored);
         if (!migrated) return [];
         if (stored.version !== migrated.version) storage.saveAppBuildDraft(migrated);
         return [migrated];
+      });
+      // Edit drafts made before saved-query tiles were read from the current
+      // catalog hold placeholders nobody can certify (F07): rebind them.
+      let resolveBlocks: ((refs: string[]) => ReadonlyMap<string, AppSourceCatalogRecord>) | undefined;
+      if (listed.some(hasPublishedBlockPlaceholders)) {
+        try {
+          const { ensureAgentProjectReady, matchAppBlockSourceRefs } = await import('@zlens/agent');
+          await ensureAgentProjectReady(projectRoot);
+          resolveBlocks = (refs) => matchAppBlockSourceRefs(projectRoot, refs, APP_SOURCE_POLICY);
+        } catch {
+          resolveBlocks = undefined;
+        }
+      }
+      const drafts = listed.map((draft) => {
+        const rebound = resolveBlocks && hasPublishedBlockPlaceholders(draft) ? rebindPublishedBlockPlaceholders(draft, resolveBlocks) : null;
+        if (!rebound) return draft;
+        storage.saveAppBuildDraft(rebound);
+        return rebound;
       });
       sendJson(res, 200, { ok: true, drafts });
     } finally {
@@ -492,13 +537,15 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         limit: Number(ctx.url.searchParams.get('limit')) || 50,
         lifecycles: lifecycles.length ? lifecycles : undefined,
         domains: domains.length ? domains : undefined,
-        sourcePolicy: current.sourcePolicy,
+        // No per-App data rule (T3): certified and not-certified data are both listed, certified first.
+        sourcePolicy: APP_SOURCE_POLICY,
         includeDeprecated: ctx.url.searchParams.get('includeDeprecated') === 'true',
       });
       sendJson(res, 200, {
         ok: true,
-        features: { datasets: ctx.datasetsEnabled === true },
+        features: { datasets: ctx.datasetsEnabled !== false },
         ...page,
+        items: withCertificationBylines(projectRoot, page.items),
       });
     } catch (err) {
       const error = err as Error & { code?: string };
@@ -524,15 +571,27 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       }
       const { ensureAgentProjectReady, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
       await ensureAgentProjectReady(projectRoot);
-      // Reading a review-required candidate lets Studio present a deliberate
-      // local-policy choice after a source revision changes. It never alters
-      // the draft policy or grants execution/publication eligibility.
+      // No per-App data rule (T3): every source resolves; trust is shown per tile.
       const result = resolveAppSourceCatalogRecords(
         projectRoot,
         body.sourceIds ?? [],
-        body.includeReviewRequired === true ? 'include_review_required' : current.sourcePolicy,
+        APP_SOURCE_POLICY,
       );
-      sendJson(res, 200, { ok: true, ...result });
+      // A saved query's fields (design D1) are read once per revision of its
+      // file. Certifying it (or any edit) writes a new revision, so the App's
+      // field tiles could not move to it until something read its columns
+      // again (R01). Read them here for the saved queries this App already
+      // uses as fields, so adopting or refreshing them works in place.
+      const items = ctx.datasetsEnabled === false
+        ? result.items
+        : await withSavedQueryResultFields(
+          projectRoot,
+          result.items,
+          APP_SOURCE_POLICY,
+          ctx.readSavedQueryFields,
+          (record) => draftUsesSourceAsFields(current, record.sourceId),
+        );
+      sendJson(res, 200, { ok: true, ...result, items: withCertificationBylines(projectRoot, items) });
     } catch (err) {
       const error = err as Error & { code?: string };
       sendJson(res, 400, { ok: false, code: error.code, error: error.message });
@@ -885,7 +944,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         selectedBlockIds: body.selectedBlockIds,
         pageId: body.pageId,
         mode: body.mode,
-      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled });
+      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
       writeAppBuildDraftAiProposal(projectRoot, proposal);
       sendJson(res, 201, { ok: true, proposal });
     } catch (err) {
@@ -911,7 +970,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       if (ctx.datasetsEnabled === false && body.mode === 'manual' && body.selections.some((selection) => selection.query !== undefined)) {
         sendJson(res, 409, {
           ok: false,
-          error: 'APP_DATASETS_FEATURE_DISABLED: enable apps.datasets in dql.config.json before composing field-based Dataset tiles.',
+          error: 'APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before composing them.',
         });
         return true;
       }
@@ -963,7 +1022,7 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
         // A revision answers the same request: same page, same add/replace choice.
         pageId: previous.targetPageId,
         mode: previous.mode ?? 'replace',
-      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled });
+      }, { generateGovernedAnswer: ctx.generateGovernedAnswer, planAppBuild: ctx.planAppBuild, datasetsEnabled: ctx.datasetsEnabled, ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}) });
       proposal.defaultSelectedSourceIds = selectedSourceIds.filter((sourceId) => proposal.operations.some((operation) => (
         operation.type === 'upsert_source' && operation.source.id === sourceId
       )));
@@ -990,10 +1049,6 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       if (body.expectedRevision !== current.revision || body.expectedProposalHash !== current.proposalHash
         || previous.baseRevision !== current.revision || previous.baseProposalHash !== current.proposalHash) {
         sendJson(res, 409, { ok: false, error: 'APP_BUILD_PROPOSAL_CONFLICT: refresh before generating a gap.' });
-        return true;
-      }
-      if (current.sourcePolicy !== 'include_review_required') {
-        sendJson(res, 409, { ok: false, error: 'APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before generating a gap.' });
         return true;
       }
       const requirementOperation = previous.operations.find((operation) => operation.type === 'set_requirements');
@@ -1050,7 +1105,8 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       });
       return true;
     }
-    const next = markStoredAppBuildDraftPreflighted(projectRoot, current);
+    // The request check above already judged tile trust against the current catalog.
+    const next = markStoredAppBuildDraftPreflighted(projectRoot, current, { trust: false });
     sendJson(res, 200, { ok: true, draft: next, errors: [] });
     return true;
   }
@@ -1085,8 +1141,13 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
       // this same request so they cannot enter a client-side recheck loop.
       const prepared = hasCurrentAppBuildPreflightReceipt(current)
         ? current
-        : markStoredAppBuildDraftPreflighted(projectRoot, current);
-      const result = publishStoredAppBuildDraft(projectRoot, prepared);
+        : markStoredAppBuildDraftPreflighted(projectRoot, current, { trust: false });
+      // The App's trust is worked out against the current model's joins.
+      const records = await resolveCurrentDatasetSourceRecords(projectRoot, datasetDraftSourceIds(prepared), ctx.resolveDatasetSourceAuthority).catch(() => new Map<string, AppSourceCatalogRecord>());
+      const result = publishStoredAppBuildDraft(projectRoot, prepared, {
+        descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? undefined,
+        recordFor: (sourceId) => records.get(sourceId),
+      });
       await refreshGeneratedMetadata(projectRoot);
       sendJson(res, 201, { ...result, compatibilityRoute: buildMatch[2] === 'commit' });
     } catch (err) {
@@ -1236,19 +1297,21 @@ export async function handleAppsApi(ctx: Ctx): Promise<boolean> {
     return true;
   }
 
-  // … then commit (user confirmed the selection → write the app files).
-  const commitMatch = path.match(/^\/api\/apps\/ai-builds\/([^/]+)\/commit$/);
-  if (commitMatch && req.method === 'POST') {
+  // … then open it in App Studio (the author kept a selection → a local App
+  // Studio draft that opens at the AI Data step; no App files are written).
+  const openInStudioMatch = path.match(/^\/api\/apps\/ai-builds\/([^/]+)\/open-in-studio$/);
+  if (openInStudioMatch && req.method === 'POST') {
     try {
-      const body = await readJson<CommitAppAiBuildInput>(req);
-      const result = await commitAppAiBuild(projectRoot, decodeURIComponent(commitMatch[1]), body, {
-        narrate: ctx.narrate,
+      const body = await readJson<OpenAppAiBuildInStudioInput>(req);
+      const result = await openAppAiBuildInStudio(projectRoot, decodeURIComponent(openInStudioMatch[1]), body, {
+        datasetsEnabled: ctx.datasetsEnabled,
+        ...(ctx.readSavedQueryFields ? { readSavedQueryFields: ctx.readSavedQueryFields } : {}),
       });
       if (!result.ok) {
-        sendJson(res, result.status ?? 400, { ok: false, error: result.error });
+        sendJson(res, result.status, { ok: false, error: result.error });
         return true;
       }
-      sendJson(res, 201, { ok: true, session: result.session, app: result.app, dashboardId: result.dashboardId });
+      sendJson(res, result.reused ? 200 : 201, result);
     } catch (err) {
       sendJson(res, 500, { ok: false, error: (err as Error).message });
     }
@@ -2036,6 +2099,13 @@ type AppListEntry = {
   audience?: string;
   lifecycle: NonNullable<AppDocument['lifecycle']>;
   certification: 'certified' | 'uncertified';
+  /** Who published the App as certified, and when (D5). */
+  certifiedBy?: string;
+  certifiedAt?: string;
+  /** How many data tiles were certified at publish (B6): the card never says "App certified" over them. */
+  tileTrust?: { certified: number; total: number };
+  /** When the App's document or pages last changed. */
+  updatedAt?: string;
   status?: 'ready' | 'empty' | 'review';
   storage: 'shared' | 'mine' | 'template';
   visibility: NonNullable<AppDocument['visibility']>;
@@ -2054,6 +2124,81 @@ type AppListEntry = {
   homepage?: AppDocument['homepage'];
 };
 
+/**
+ * Catalog items with who certified each certified block and when (D5), read
+ * from its receipt, so the Data list says "Certified by <name> · <date>".
+ */
+function withCertificationBylines<Item extends { trust?: string; kind?: string; sourcePath?: string; owner?: string | null; check?: { by: string; name?: string; at: string; checks?: string[] } }>(
+  projectRoot: string,
+  items: Item[],
+): Array<Item & { certification?: CertificationByline; ownerName?: string }> {
+  const person = thisPerson(projectRoot);
+  return items.map((item) => {
+    // The owner as one person reads everywhere ("DuckCode AI Labs", not their noreply email).
+    const ownerName = personDisplayName(item.owner, person);
+    let named = ownerName && ownerName !== item.owner ? { ...item, ownerName } : item;
+    // "Checked by you · 22 Oct" for data ZLens checked that nobody certified yet (design Q1).
+    if (item.check) named = { ...named, check: bylineForViewer(item.check, person) };
+    if (item.kind === 'semantic' || !item.sourcePath) return named;
+    if (item.trust !== 'certified') {
+      // Certified once, changed since (T4): keep who certified it and when,
+      // so the Data list says "Changed since it was certified on 22 Oct".
+      const previous = blockPreviousCertificationByline(projectRoot, item.sourcePath);
+      return previous ? { ...named, certification: previous } : named;
+    }
+    const certification = blockCertificationByline(projectRoot, item.sourcePath);
+    // "Certified by you" when the person reading certified it (design Q1).
+    return certification ? { ...named, certification: bylineForViewer(certification, person) } : named;
+  });
+}
+
+/**
+ * The person using ZLens here, for showing names: the host's signed-in
+ * person, else git user.name with every local spelling of their identity.
+ * Read once a minute (git is asked at most that often).
+ */
+const localPersonCache = new Map<string, { at: number; person: { name?: string; aliases: ReadonlySet<string>; self: ReadonlySet<string> } }>();
+export function thisPerson(projectRoot: string): { name?: string; aliases: ReadonlySet<string>; self: ReadonlySet<string> } {
+  const actor = hostActor();
+  if (actor) {
+    const own = new Set([actor.toLowerCase()]);
+    return { name: hostActorDisplayName() ?? actor, aliases: own, self: own };
+  }
+  const cached = localPersonCache.get(projectRoot);
+  if (cached && Date.now() - cached.at < 60_000) return cached.person;
+  // `aliases` name this person by one display name; only `self` (their own
+  // git email and $USER@local) makes a certification "by you" (B6).
+  const person = { name: gitUserName(projectRoot), aliases: localPersonAliases(projectRoot), self: localPersonSelf(projectRoot) };
+  localPersonCache.set(projectRoot, { at: Date.now(), person });
+  return person;
+}
+
+/** An identity as a person reads it: this machine's person by their display name, anyone else as recorded. */
+export function appOwnerDisplayName(projectRoot: string, identity: string | null | undefined): string | undefined {
+  return personDisplayName(identity, thisPerson(projectRoot));
+}
+
+/**
+ * The name recorded when an App is published as certified: the host's
+ * signed-in person, else git `user.name`, else the publishing owner.
+ */
+function appCertifierName(projectRoot: string, owner: string): string {
+  return (hostActor() ? hostActorDisplayName() ?? hostActor() : gitUserName(projectRoot)) ?? owner;
+}
+
+/** When an App's files last changed: its document and its pages. */
+function appUpdatedAt(appDir: string, dashboardPaths: string[]): string | undefined {
+  let latest = 0;
+  for (const path of [join(appDir, 'dql.app.json'), ...dashboardPaths]) {
+    try {
+      latest = Math.max(latest, statSync(path).mtimeMs);
+    } catch {
+      // A file that vanished mid-listing just doesn't count.
+    }
+  }
+  return latest > 0 ? new Date(latest).toISOString() : undefined;
+}
+
 function collectAppsList(projectRoot: string): AppListEntry[] {
   const out: AppListEntry[] = [];
   for (const p of findAppDocuments(projectRoot)) {
@@ -2061,10 +2206,12 @@ function collectAppsList(projectRoot: string): AppListEntry[] {
     if (!document) continue;
     const appDir = p.slice(0, -'/dql.app.json'.length);
     const dashboards: Array<{ id: string; title: string }> = [];
-    for (const d of findDashboardsForApp(appDir)) {
+    const dashboardPaths = findDashboardsForApp(appDir);
+    for (const d of dashboardPaths) {
       const { document: dd } = loadDashboardDocument(d);
       if (dd) dashboards.push({ id: dd.id, title: dd.metadata.title });
     }
+    const updatedAt = appUpdatedAt(appDir, dashboardPaths);
     out.push({
       id: document.id,
       name: document.name,
@@ -2082,11 +2229,16 @@ function collectAppsList(projectRoot: string): AppListEntry[] {
       audience: document.audience ?? audienceFromTags(document.tags ?? []),
       lifecycle: document.lifecycle ?? 'draft',
       certification: document.lifecycle === 'certified' ? 'certified' : 'uncertified',
+      ...(document.certifiedBy ? { certifiedBy: document.certifiedBy } : {}),
+      ...(document.certifiedAt ? { certifiedAt: document.certifiedAt } : {}),
+      ...(document.tileTrust ? { tileTrust: document.tileTrust } : {}),
+      ...(updatedAt ? { updatedAt } : {}),
       status: document.lifecycle === 'review' ? 'review' : dashboards.length > 0 ? 'ready' : 'empty',
       storage: document.visibility === 'private' ? 'mine' : document.visibility === 'template' ? 'template' : 'shared',
       visibility: document.visibility ?? 'shared',
       publicationIntent: document.publicationIntent ?? (document.visibility === 'private' ? 'personal' : 'shared_project'),
       owners: document.owners,
+      ...(() => { const ownerName = appOwnerDisplayName(projectRoot, document.owners[0]); return ownerName && ownerName !== document.owners[0] ? { ownerName } : {}; })(),
       tags: document.tags ?? [],
       members: document.members.length,
       roles: document.roles.length,
@@ -2183,6 +2335,8 @@ interface AppAiBuildSession {
   proposalHash?: string;
   /** Tile ids the user confirmed at commit time (audit trail). */
   committedTileIds?: string[];
+  /** The App Studio draft this proposal was opened as (Ask builds open in App Studio). */
+  studioDraftId?: string;
   committedBrief?: {
     appName?: string;
     pageTitle?: string;
@@ -2822,13 +2976,13 @@ function buildAppProposal(plan: AppPlan): AppBuildProposal {
     const question = cleanString(report.question) || report.title;
     if (!question || seenGap.has(question.toLowerCase())) continue;
     seenGap.add(question.toLowerCase());
-    gaps.push({ id: report.id, question, reason: report.description || 'No certified block covers this question.' });
+    gaps.push({ id: report.id, question, reason: report.description || 'No certified saved query covers this question.' });
   }
   for (const evidence of plan.missingEvidence) {
     const question = cleanString(evidence);
     if (!question || seenGap.has(question.toLowerCase())) continue;
     seenGap.add(question.toLowerCase());
-    gaps.push({ id: `gap_${gaps.length + 1}`, question, reason: 'No certified block covers this question.' });
+    gaps.push({ id: `gap_${gaps.length + 1}`, question, reason: 'No certified saved query covers this question.' });
   }
   const metrics = Array.from(new Set(plan.requirements.flatMap((requirement) => requirement.measures)));
   const dimensions = Array.from(new Set(plan.requirements.flatMap((requirement) => requirement.dimensions)));
@@ -2838,7 +2992,7 @@ function buildAppProposal(plan: AppPlan): AppBuildProposal {
     clarifications.push({
       id: 'metric',
       question: 'Which governed business metric should lead this App?',
-      choices: ['Choose a certified block', 'Choose a semantic metric', 'Describe the calculation as review-required analysis'],
+      choices: ['Choose a certified saved query', 'Choose a semantic metric', 'Describe the calculation as review-required analysis'],
       required: true,
     });
   }
@@ -3038,7 +3192,7 @@ async function fillProposalGaps(
 /**
  * Phase 1 of the two-phase app build: plan + validate + build the confirmable
  * proposal, persist the session with status 'proposed'. Writes NO app files —
- * `commitAppAiBuild` does that after the user confirms the selection.
+ * `openAppAiBuildInStudio` turns the confirmed selection into an App Studio draft.
  */
 export async function proposeAppAiBuild(
   projectRoot: string,
@@ -3342,6 +3496,8 @@ function appDraftSourceFromCatalog(source: AppSourceCatalogRecord): AppBuildDraf
     capabilities: source.capabilities,
     trustState: certified ? 'certified' : 'review_required',
     reviewStatus: certified ? 'not_required' : 'required',
+    // Checked · Needs certifying (design Q1): from the catalog, never the browser.
+    ...(!certified && source.check ? { checked: true } : {}),
   };
 }
 
@@ -3478,24 +3634,12 @@ async function datasetDraftCurrentAuthorityErrors(
       errors.push(authorityIssue);
       continue;
     }
-    // `resolveCurrentDatasetSourceRecords` deliberately discovers review
-    // candidates so a stale App can explain and repair itself. Discovery is
-    // not an opt-in: the resulting draft must carry the explicit local review
-    // policy before a review-required Dataset can be previewed.
-    if ((source!.lifecycle !== 'certified' || source!.trust !== 'certified')
-      && draft.sourcePolicy !== 'include_review_required') {
-      errors.push(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${reference.tile.title || reference.tile.i} uses a ${source!.lifecycle} Dataset source. Enable review-required sources explicitly before local preview.`);
-      continue;
-    }
+    // There is no per-App data rule (T3): certified and not-certified data
+    // both preview and publish, and readers see "Not certified yet" on the
+    // tiles nobody certified. Only a retired (deprecated) source is refused.
     if (!source!.eligibility.localPreview) {
-      errors.push(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and is not eligible for this local preview policy.`);
+      errors.push(`APP_BUILD_DATASET_RETIRED: ${reference.tile.title || reference.tile.i} uses ${source!.title}, which is ${source!.lifecycle}. Replace it with current data.`);
       continue;
-    }
-    if (purpose === 'project_publish'
-      && (source!.lifecycle !== 'certified'
-        || source!.trust !== 'certified'
-        || !source!.eligibility.projectPublish)) {
-      errors.push(`APP_BUILD_DATASET_PUBLICATION_INELIGIBLE: ${reference.tile.title || reference.tile.i} is currently ${source!.lifecycle} and cannot be published until its governed Dataset source is certified and eligible.`);
     }
   }
   return Array.from(new Set(errors));
@@ -3911,6 +4055,36 @@ function uniqueAppSourceRecords(sources: AppSourceCatalogRecord[]): AppSourceCat
   });
 }
 
+/**
+ * What a tile shows, for spotting a proposed tile the page already has: the
+ * same source with the same fields (dimensions, measures, calculations,
+ * filters) as the same kind of visual, or the same saved query shown as it
+ * is. Sort, Top N and styling are left out: two tiles that differ only there
+ * show the same thing. A table and a chart of the same fields are different.
+ */
+function plannedTileContentKey(item: Pick<DashboardGridItem, 'sourceId' | 'query' | 'block' | 'viz'>): string | undefined {
+  const blockRef = item.block ? ('blockId' in item.block ? item.block.blockId : item.block.ref) : undefined;
+  const kind = item.viz?.type === 'single_value' ? 'kpi' : item.viz?.type ?? '';
+  if (item.query) {
+    const query = normalizeTileQuery(item.query);
+    if (!query || !item.sourceId) return undefined;
+    const { orderBy: _orderBy, limit: _limit, ...content } = query;
+    return `query:${item.sourceId}:${kind}:${stableTileJson(content)}`;
+  }
+  if (blockRef) return `block:${item.sourceId ?? ''}:${kind}:${blockRef}`;
+  return undefined;
+}
+
+function stableTileJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableTileJson).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value as Record<string, unknown>).sort()
+      .filter((key) => (value as Record<string, unknown>)[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stableTileJson((value as Record<string, unknown>)[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
 function uniqueTileId(existing: DashboardGridItem[], preferred: string): string {
   const base = slugify(preferred) || 'component';
   const ids = new Set(existing.map((item) => item.i));
@@ -4128,6 +4302,45 @@ function materializeAppBuildProposalReviewAnalyses(
   };
 }
 
+/** A tile or source name in a planner note: "top_customers" reads "Top Customers". */
+function plannerNoteTitle(title: string): string {
+  const trimmed = title.trim();
+  return /\s/.test(trimmed) ? trimmed : trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/** Whether this App reads the source through fields: a field tile, a page binding, or a stored field descriptor. */
+function draftUsesSourceAsFields(draft: AppBuildDraft, sourceId: string): boolean {
+  if (draft.sources.some((source) => source.id === sourceId && source.capabilities?.dataset)) return true;
+  return draft.pages.some((page) => page.datasets?.some((binding) => binding.sourceId === sourceId)
+    || page.layout.items.some((tile) => Boolean(tile.query) && tile.sourceId === sourceId));
+}
+
+/**
+ * Give the plain saved queries among these catalog records their result
+ * fields (design D1) through the runtime's once-per-revision read, then
+ * return the records as the catalog now has them. Bounded by the caller's
+ * candidate list; a read that fails leaves that saved query as it was.
+ */
+async function withSavedQueryResultFields(
+  projectRoot: string,
+  records: AppSourceCatalogRecord[],
+  sourcePolicy: AppBuildSourcePolicy,
+  read: AppBuildHooks['readSavedQueryFields'],
+  include: (record: AppSourceCatalogRecord) => boolean = () => true,
+): Promise<AppSourceCatalogRecord[]> {
+  if (!read) return records;
+  const plain = records.filter((record) => record.kind === 'block' && !record.capabilities.dataset && !record.capabilities.semanticModelId && include(record));
+  if (plain.length === 0) return records;
+  try {
+    await read(plain.map((record) => record.sourceId));
+  } catch {
+    return records;
+  }
+  const { resolveAppSourceCatalogRecords } = await import('@zlens/agent');
+  const refreshed = new Map(resolveAppSourceCatalogRecords(projectRoot, plain.map((record) => record.sourceId), sourcePolicy).items.map((record) => [record.sourceId, record]));
+  return records.map((record) => refreshed.get(record.sourceId) ?? record);
+}
+
 /**
  * AI is a coauthor of the same local AppBuildDraft used by manual authoring.
  * This adapter reuses the governed planner, compiles its result outside the
@@ -4163,36 +4376,42 @@ export async function proposeAppBuildDraftOperations(
     throw new Error('APP_BUILD_SOURCE_LIMIT: at most 12 required App sources can be planned at once.');
   }
   const resolvedRequired = requestedIds.length
-    ? resolveAppSourceCatalogRecords(projectRoot, requestedIds, draft.sourcePolicy)
+    ? resolveAppSourceCatalogRecords(projectRoot, requestedIds, APP_SOURCE_POLICY)
     : { items: [] as AppSourceCatalogRecord[], missingSourceIds: [] as string[] };
   if (resolvedRequired.missingSourceIds.length) {
     throw new Error(`APP_BUILD_SOURCE_DRIFT: these exact App sources no longer resolve: ${resolvedRequired.missingSourceIds.join(', ')}`);
   }
   const policyBlocked = resolvedRequired.items.filter((source) => !source.eligibility.localPreview);
   if (policyBlocked.length) {
-    throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before adding ${policyBlocked.map((source) => source.title).join(', ')}.`);
+    throw new Error(`APP_BUILD_DATASET_RETIRED: choose current data instead of ${policyBlocked.map((source) => source.title).join(', ')}.`);
   }
-  const candidates = uniqueAppSourceRecords([
+  let candidates = uniqueAppSourceRecords([
     ...resolvedRequired.items,
+    // Certified data first, never only certified data (T3).
     ...shortlistAppSources(projectRoot, prompt, {
-    sourcePolicy: draft.sourcePolicy,
+    sourcePolicy: APP_SOURCE_POLICY,
     domains: initialPage.metadata.domain && initialPage.metadata.domain !== 'general'
       ? [initialPage.metadata.domain]
       : undefined,
     }).items,
   ]).slice(0, 12);
+  // Saved queries in the (at most 12) candidates get their result fields
+  // first (design D1), so the planner composes field tiles from them.
+  if (hooks?.datasetsEnabled !== false) {
+    candidates = await withSavedQueryResultFields(projectRoot, candidates, APP_SOURCE_POLICY, hooks?.readSavedQueryFields);
+  }
   const brief = await planAppBuildBrief({
     prompt,
     candidates,
     requiredSourceIds: resolvedRequired.items.map((source) => source.sourceId),
-    sourcePolicy: draft.sourcePolicy,
+    sourcePolicy: APP_SOURCE_POLICY,
     domain: initialPage.metadata.domain,
     audience: draft.frame.audience,
     complete: hooks?.planAppBuild,
   });
   const byId = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
   if (hooks?.datasetsEnabled === false && brief.components.some((component) => byId.get(component.sourceId)?.capabilities.dataset)) {
-    throw new Error('APP_DATASETS_FEATURE_DISABLED: enable apps.datasets in dql.config.json before asking AI to author field-based Dataset tiles.');
+    throw new Error('APP_DATASETS_FEATURE_DISABLED: field-based Dataset tiles are turned off for this project (apps.datasets is false in dql.config.json). Remove it or set it to true before asking AI to author them.');
   }
   type PlannedPageState = {
     planId: string;
@@ -4284,12 +4503,13 @@ export async function proposeAppBuildDraftOperations(
     const descriptor = source.capabilities.dataset;
     let query: TileQuery | undefined;
     let viz: DashboardGridItem['viz'] = { type: component.view };
-    if (descriptor) {
+    // A saved query's result fields (design D1) without a field query show its result as it is.
+    if (descriptor && (component.query !== undefined || !descriptor.result)) {
       const normalized = normalizeTileQuery(component.query);
       const validation = normalized ? validateTileQuery(descriptor, normalized) : undefined;
       if (!normalized || !tileQueryValidationRuns(validation)) {
-        const detail = validation?.diagnostics.map((diagnostic) => diagnostic.message).join(' ') || 'The proposed Dataset field query is malformed or not approved.';
-        warnings.push(`${component.title} was not added because its Dataset query is not covered by the current source contract: ${detail}`);
+        // A plain note for the author; the field-level diagnostics stay out of it.
+        warnings.push(`${plannerNoteTitle(component.title)} wasn't added: it uses fields ${plannerNoteTitle(source.title)} doesn't have approved.`);
         continue;
       }
       // Show Me (RFC 0009) picks the chart for the fields and lays them on
@@ -4301,7 +4521,7 @@ export async function proposeAppBuildDraftOperations(
       viz = { type: choice?.viz ?? 'table', ...(choice?.encoding ? { encoding: choice.encoding } : {}) };
       const visualization = datasetTileVisualizationCompatibility(normalized, viz.type);
       if (!visualization.compatible) {
-        warnings.push(`${component.title} was not added because ${visualization.message}`);
+        warnings.push(`${plannerNoteTitle(component.title)} wasn't added. ${visualization.message}`);
         continue;
       }
       query = normalized;
@@ -4321,12 +4541,30 @@ export async function proposeAppBuildDraftOperations(
         pageState.datasetBindingBySource.set(source.sourceId, binding);
       }
     }
+    // A proposal never adds a tile the page already shows (design D4: "Revise"
+    // duplicated tiles). The component points at the existing tile instead, so
+    // its question still counts as covered and filters still reach it; its
+    // source stays in the proposal (already the App's) so that coverage holds.
+    // Only tiles already on the page count; a plan that repeats itself is left as planned.
+    const contentKey = plannedTileContentKey({ sourceId: source.sourceId, viz, ...(query ? { query } : { block: { ref: source.executionRef } }) });
+    const alreadyShown = contentKey
+      ? pageState.structuralItems.find((item) => plannedTileContentKey(item) === contentKey)
+      : undefined;
+    if (alreadyShown) {
+      componentTileIdById.set(component.id, alreadyShown.i);
+      componentPageIdById.set(component.id, pageState.pageId);
+      emittedComponents.push({ ...component, ...(query ? { query } : {}) });
+      warnings.push(`${plannerNoteTitle(alreadyShown.title || component.title)} is already on this page, so it wasn't added again.`);
+      continue;
+    }
     const itemIndex = pageState.plannedItems.length;
     const tileId = uniqueTileId(pageState.reservedItems, component.id || `component-${itemIndex + 1}`);
     componentTileIdById.set(component.id, tileId);
     componentPageIdById.set(component.id, pageState.pageId);
     const plannedPage = brief.pages.find((candidate) => candidate.id === pageState.planId);
     const sectionId = plannedPage?.sections.find((section) => section.componentIds.includes(component.id))?.id;
+    // The planner's one-line reason travels with the tile so the review can say why.
+    const rationale = cleanString(component.rationale).slice(0, 500);
     const tile: DashboardGridItem = {
       i: tileId,
       x: (itemIndex % 2) * 6,
@@ -4348,6 +4586,14 @@ export async function proposeAppBuildDraftOperations(
       review: { status: certified ? 'not_required' : 'required', sourceFingerprint: source.sourceRevision },
       trustState: certified ? 'certified' : 'review_required',
       reviewStatus: certified ? 'certified' : 'review_required',
+      ...(rationale ? {
+        sourceEvidence: [{
+          source: source.sourceId,
+          reason: rationale,
+          kind: 'planner_rationale',
+          trustState: certified ? 'certified' as const : 'review_required' as const,
+        }],
+      } : {}),
       ...(sectionId ? { sectionId } : {}),
     };
     pageState.reservedItems.push(tile);
@@ -4523,21 +4769,9 @@ export async function proposeAppBuildDraftOperations(
     };
   });
   const clarifications = brief.frame.clarificationQuestions ?? [];
-  const reviewTasks: AppBuildDraftOperation[] = plannedSources
-    .filter((source) => source.lifecycle !== 'certified')
-    .map((source) => {
-      const firstComponent = emittedComponents.find((component) => component.sourceId === source.sourceId);
-      return {
-      type: 'set_review_task',
-      task: {
-        id: `review-source-${createHash('sha256').update(source.sourceId).digest('hex').slice(0, 12)}`,
-        message: `${source.title} is ${source.lifecycle} and must be certified, replaced, or removed before Project publication.`,
-        status: 'open',
-        sourceId: source.sourceId,
-        pageId: firstComponent ? componentPageIdById.get(firstComponent.id) ?? initialPage.id : initialPage.id,
-      },
-      };
-    });
+  // Data nobody certified yet opens no review task (T3): its tiles read
+  // "Not certified yet", and the publish dialog offers to certify it.
+  const reviewTasks: AppBuildDraftOperation[] = [];
   // Add mode keeps the App's goal and earlier requirements; new requirement
   // ids that collide with existing ones are renamed rather than overwriting.
   const { frame: proposedFrame, requirements: proposedRequirements, coverage: proposedCoverage } = mode === 'add'
@@ -4581,411 +4815,143 @@ export async function proposeAppBuildDraftOperations(
       covered: coverage.filter((item) => item.status === 'covered').length,
       gaps: coverage.filter((item) => item.status === 'gap').length,
       certifiedSources: plannedSources.filter((source) => source.lifecycle === 'certified').length,
-      semanticSources: 0,
+      semanticSources: plannedSources.filter((source) => (
+        source.kind === 'semantic'
+        || source.capabilities.dataset?.kind === 'semantic'
+        || Boolean(source.capabilities.semanticModelId)
+      )).length,
     },
   };
 }
 
-/**
- * Materialize explicitly selected exploratory candidates as Git-owned, app-scoped
- * review DQL. They are never promoted into the shared block library and the
- * dashboard stores a fingerprinted reference instead of inline SQL.
- */
-function attachGeneratedDraftAnalyses(
-  projectRoot: string,
-  plan: AppPlan,
-  generatedPaths: string[],
-  candidates: AppBuildProposalTile[],
-): void {
-  const dashboardId = plan.pages[0]?.id ?? 'overview';
-  const dashboardPath = generatedPaths.find((path) => path.endsWith(`${dashboardId}.dqld`))
-    ?? generatedPaths.find((path) => path.endsWith('.dqld'));
-  if (!dashboardPath) return;
-  const absolutePath = join(projectRoot, dashboardPath);
-  if (!existsSync(absolutePath)) return;
-  const doc = JSON.parse(readFileSync(absolutePath, 'utf-8')) as DashboardDocument;
-  // Story layout: exploratory tiles live in the review appendix. Classic grids
-  // (no sections) just append at the bottom, untagged.
-  const storyMode = Array.isArray(doc.sections) && doc.sections.length > 0;
-  if (storyMode && !doc.sections!.some((section) => section.kind === 'appendix')) {
-    doc.sections!.push({
-      id: 'appendix',
-      title: 'AI-generated analysis — needs review',
-      kind: 'appendix',
-      order: doc.sections!.length,
-    });
-  }
-  let y = doc.layout.items.reduce((max, item) => Math.max(max, item.y + item.h), 0);
-  let x = 0;
-  const draftsDir = join(projectRoot, 'apps', plan.appId, 'drafts');
-  mkdirSync(draftsDir, { recursive: true });
-  for (const tile of candidates) {
-      if (!tile.sql) continue;
-      if (tile.sql.includes('"""')) throw new Error(`Exploratory SQL for "${tile.title}" contains an unsupported triple-quote delimiter.`);
-      const draftId = slugify(tile.title) || slugify(tile.id) || `analysis-${Date.now()}`;
-      const draftPath = join(draftsDir, `${draftId}.dql`);
-      const source = [
-        `block "${escapeDqlString(draftId)}" {`,
-        `  domain = "${escapeDqlString(plan.domain)}"`,
-        '  type = "custom"',
-        '  status = "review"',
-        `  owner = "${escapeDqlString(plan.owner)}"`,
-        // With a host, a draft block is project content: it says what it answers, not one person's figures.
-        `  description = "${escapeDqlString(((currentRecordOwner() !== undefined ? undefined : tile.answer) ?? tile.question ?? tile.title).slice(0, 240))}"`,
-        tile.question ? `  llmContext = "${escapeDqlString(`App-scoped exploratory analysis. Question: ${tile.question}`)}"` : '',
-        tile.question ? `  examples = [{ question = "${escapeDqlString(tile.question)}" }]` : '',
-        '  caveats = ["AI-generated app draft. Validate joins, filters, grain, and business interpretation before promotion or publication."]',
-        '  tags = ["app-scoped", "ai-generated", "needs-review"]',
-        '',
-        '  query = """',
-        tile.sql,
-        '  """',
-        '',
-        '  visualization {',
-        `    chart = "${escapeDqlString(normalizeGeneratedViz(tile.viz))}"`,
-        '  }',
-        '}',
-        '',
-      ].filter(Boolean).join('\n');
-      const fingerprint = `sha256:${createHash('sha256').update(source).digest('hex')}`;
-      writeFileSync(draftPath, source, 'utf-8');
-      generatedPaths.push(relative(projectRoot, draftPath));
-      const item: DashboardGridItem = {
-        i: `draft_${draftId}`,
-        x,
-        y,
-        w: 6,
-        h: 4,
-        draftAnalysis: {
-          ref: `drafts/${draftId}.dql`,
-          artifactFingerprint: fingerprint,
-          ...(plan.snapshotId ? { snapshotId: plan.snapshotId } : {}),
-          ...(tile.preflight.receiptId ? { executionReceiptId: tile.preflight.receiptId } : {}),
-        },
-        viz: { type: normalizeGeneratedViz(tile.viz) as DashboardGridItem['viz']['type'] },
-        title: tile.title,
-        sourceClass: 'exploratory_analysis',
-        review: {
-          status: 'required',
-          sourceFingerprint: fingerprint,
-          ...(tile.preflight.receiptId ? { preflightReceiptId: tile.preflight.receiptId } : {}),
-        },
-        trustState: 'review_required',
-        reviewStatus: 'review_required',
-        ...(storyMode ? { sectionId: 'appendix' } : {}),
-      };
-      doc.layout.items.push(item);
-      if (x === 0) {
-        x = 6;
-      } else {
-        x = 0;
-        y += 4;
-      }
-  }
-  const parsed = parseDashboardDocument(JSON.stringify(doc), absolutePath);
-  if (!parsed.document || parsed.errors.length > 0) {
-    throw new Error(`Exploratory App dashboard is invalid: ${parsed.errors.map((error) => error.message).join('; ')}`);
-  }
-  writeFileSync(absolutePath, JSON.stringify(doc, null, 2) + '\n', 'utf-8');
-}
-
-export interface CommitAppAiBuildInput {
-  /** Proposal tile ids to include; omitted = everything selectable. */
+export interface OpenAppAiBuildInStudioInput {
+  /** Proposal tile ids the author kept; omitted = the ones selected by default. */
   selectedTileIds?: string[];
-  force?: boolean;
   expectedProposalHash?: string;
-  /** User-approved Build Brief edits that do not alter governed source identity. */
   appName?: string;
-  /** Existing-App page builds may rename only the proposed page, never the App. */
-  pageTitle?: string;
   audience?: string;
-  /** User-approved page filter ids; omitted keeps every planned filter. */
-  filterIds?: string[];
-  tileOverrides?: Record<string, { title?: string; viz?: string }>;
 }
 
+export type OpenAppAiBuildInStudioResult =
+  | {
+    ok: true;
+    draft: AppBuildDraft;
+    /** The data the draft starts with, in the App Studio words. */
+    sources: AppBuildHandoffSourceSummary[];
+    /** Questions App Studio lists under "Not covered yet". */
+    notCoveredYet: string[];
+    /** True when this proposal was already opened and the same draft is returned. */
+    reused: boolean;
+  }
+  | { ok: false; error: string; status: number };
+
 /**
- * Phase 2 of the two-phase app build: the user confirmed the proposal — filter the
- * plan to the selected tiles, re-validate (fail closed on drift), write the app
- * files, and mark the session ready.
+ * Open an Ask `app_build` proposal in App Studio (design D9). The proposal
+ * becomes a local App Studio draft, never App files: the brief is the App's
+ * goal, the certified blocks and Metrics the author kept become the App's data
+ * (App Studio requires them when it plans pages), and the question behind any
+ * kept AI-written SQL tile is listed under "Not covered yet". App Studio
+ * plans again from the goal, so it finds the other gaps itself.
+ * App Studio then opens it at the AI Data step and publishing goes through
+ * the publish checks; data nobody certified reads "Not certified yet".
  */
-export async function commitAppAiBuild(
+export async function openAppAiBuildInStudio(
   projectRoot: string,
   sessionId: string,
-  input: CommitAppAiBuildInput = {},
-  hooks?: AppBuildCommitHooks,
-): Promise<
-  | { ok: true; session: AppAiBuildSession; app: ReturnType<typeof collectAppsList>[number] | null; dashboardId: string | null }
-  | { ok: false; error: string; status?: number }
-> {
+  input: OpenAppAiBuildInStudioInput = {},
+  hooks: Pick<AppBuildHooks, 'readSavedQueryFields' | 'datasetsEnabled'> = {},
+): Promise<OpenAppAiBuildInStudioResult> {
   const session = getAppAiBuildSession(projectRoot, sessionId);
   if (!session) return { ok: false, error: `AI build session "${sessionId}" not found`, status: 404 };
-  if (session.status === 'ready') return { ok: false, error: 'This app build was already created.', status: 409 };
-  if (session.status !== 'proposed' || !session.plan || !session.proposal) {
-    return { ok: false, error: session.error ?? 'Session has no proposal to commit.', status: 400 };
+  if (session.studioDraftId) {
+    const existing = loadStoredAppBuildDraft(projectRoot, session.studioDraftId);
+    if (existing && existing.state !== 'project_published') {
+      return { ok: true, draft: existing, sources: [], notCoveredYet: handoffGapQuestions(existing), reused: true };
+    }
+  }
+  if (session.status !== 'proposed' || !session.proposal) {
+    return { ok: false, error: session.error ?? 'This App build has no proposal to open.', status: 400 };
   }
   if (!input.expectedProposalHash || input.expectedProposalHash !== session.proposalHash) {
-    return { ok: false, error: 'The App proposal changed or is stale. Refresh the proposal before creating the App.', status: 409 };
+    return { ok: false, error: 'The App proposal changed or is stale. Ask again before opening it in App Studio.', status: 409 };
   }
-
-  const plan = session.plan as AppPlan;
-  const existingAppId = cleanString(session.inputs.existingAppId);
-  const isExistingPageBuild = Boolean(existingAppId);
-  const existingApp = existingAppId ? loadAppById(projectRoot, existingAppId) : null;
-  if (isExistingPageBuild) {
-    if (!existingApp) return { ok: false, error: `App "${existingAppId}" no longer exists.`, status: 409 };
-    if (!session.existingAppFingerprint
-      || fingerprintAppDirectory(existingApp.appDir) !== session.existingAppFingerprint) {
-      return {
-        ok: false,
-        error: 'The App changed after this page proposal was created. Refresh and review the page proposal again.',
-        status: 409,
-      };
-    }
+  if (session.inputs.existingAppId) {
+    return { ok: false, error: 'To add a page to an existing App, open that App in App Studio and describe the page with AI.', status: 400 };
   }
   const proposal = session.proposal;
-  const proposalTileIds = new Set(proposal.tiles.map((tile) => tile.id));
-  const tileOverrides = Object.fromEntries(Object.entries(input.tileOverrides ?? {})
-    .filter(([tileId, value]) => proposalTileIds.has(tileId) && value && typeof value === 'object')
-    .map(([tileId, value]) => [tileId, {
-      ...(cleanString(value.title) ? { title: cleanString(value.title).slice(0, 120) } : {}),
-      ...(cleanString(value.viz) ? { viz: normalizeGeneratedViz(value.viz) } : {}),
-    }]));
-  const selectable = new Set(proposal.tiles.filter((tile) => !tile.error).map((tile) => tile.id));
-  const selected = new Set(
-    (input.selectedTileIds ?? Array.from(selectable)).filter((tileId) => selectable.has(tileId)),
-  );
-  if (selected.size === 0) {
-    return { ok: false, error: 'Select at least one tile to create the app.', status: 400 };
-  }
-  const plannedFilterIds = new Set([
-    ...(plan.globalFilters ?? []).map((filter) => filter.id),
-    ...plan.pages.flatMap((page) => (page.filters ?? []).map((filter) => filter.id)),
-  ]);
-  const selectedFilterIds = new Set(
-    (input.filterIds ?? Array.from(plannedFilterIds)).filter((filterId) => plannedFilterIds.has(filterId)),
-  );
-
-  // Filter the plan's certified tiles down to the confirmed selection; structural
-  // tiles (narrative, draft placeholders) stay — they document the story + gaps.
-  const committedPlan: AppPlan = {
-    ...plan,
-    globalFilters: (plan.globalFilters ?? []).filter((filter) => selectedFilterIds.has(filter.id)),
-    // `+ Add page` must not rewrite the App it is adding to (`UI-017`), but the
-    // fields were dropped with no error, so a name typed in that brief silently
-    // vanished. Adding a page keeps the App's own name; use `PATCH /api/apps/:id`
-    // to rename, and see `appliedNameWarnings` below for the reported diagnostic.
-    ...(!isExistingPageBuild && cleanString(input.appName) ? { name: cleanString(input.appName).slice(0, 120) } : {}),
-    ...(!isExistingPageBuild && cleanString(input.audience) ? { audience: cleanString(input.audience).slice(0, 120) } : {}),
-    pages: plan.pages.map((page, pageIndex) => ({
-      ...page,
-      ...(isExistingPageBuild && pageIndex === 0 && cleanString(input.pageTitle)
-        ? { title: cleanString(input.pageTitle).slice(0, 120) }
-        : {}),
-      filters: (page.filters ?? []).filter((filter) => selectedFilterIds.has(filter.id)),
-      tiles: page.tiles
-        .filter((tile) => !['certified_block', 'semantic_query'].includes(tile.kind) || selected.has(tile.id))
-        .map((tile) => {
-          const override = tileOverrides[tile.id];
-          const filteredTile = {
-            ...tile,
-            filterBindings: (tile.filterBindings ?? []).filter((binding) => selectedFilterIds.has(binding.filter)),
-          };
-          if (!override) return filteredTile;
-          const viz = override.viz as AppPlan['pages'][number]['tiles'][number]['viz'] | undefined;
-          return {
-            ...filteredTile,
-            ...(override.title ? { title: override.title } : {}),
-            ...(viz ? { viz } : {}),
-            ...(viz && tile.display ? {
-              display: {
-                ...tile.display,
-                recommendedDisplayType: viz,
-                genUi: {
-                  ...tile.display.genUi,
-                  defaultVisualization: viz,
-                  allowedVisualizations: Array.from(new Set([viz, ...tile.display.genUi.allowedVisualizations])),
-                },
-              },
-            } : {}),
-          };
-        }),
-    })),
-  };
-  const selectedExploratory = proposal.tiles.filter((tile) => (
-    tile.source === 'ai_generated' && selected.has(tile.id) && !tile.error && Boolean(tile.sql)
-  )).map((tile) => ({ ...tile, ...tileOverrides[tile.id] }));
-  if (plan.mode !== 'personal' && selectedExploratory.length > 0) {
-    return { ok: false, error: 'Exploratory SQL can only be accepted into a Personal Draft.', status: 400 };
-  }
-
+  const selected = new Set(input.selectedTileIds
+    ?? proposal.tiles.filter((tile) => tile.selectedByDefault && !tile.error).map((tile) => tile.id));
+  const kept = proposal.tiles.filter((tile) => !tile.error && selected.has(tile.id));
+  const semanticTiles = kept.filter((tile) => tile.source === 'semantic_query' && tile.semantic);
+  // AI-written SQL is never written as an App tile: the question goes to
+  // "Not covered yet", where App Studio can generate draft DQL on request.
+  const draftSqlTiles = kept.filter((tile) => tile.source === 'ai_generated');
   const {
-    KGStore,
-    defaultKgPath,
-    ensureMetadataCatalogFresh,
-    generateAppFromPlan,
-    reindexProject,
-    validateAppPlan,
+    appBuildHandoffSourceSummary,
+    createAppBuildHandoffDraft,
+    ensureAgentProjectReady,
+    matchAppSourceCatalogRecords,
   } = await import('@zlens/agent');
-  const index = await reindexProject(projectRoot, { kgPath: defaultKgPath(projectRoot) });
-  if (!session.snapshotId || index.kgFingerprint !== session.snapshotId) {
-    // This compares a whole-project index, so an unrelated block or model edit
-    // invalidates a pending proposal. Kept deliberately strict — the proposal's
-    // preflight receipts are bound to that snapshot — but the message now says
-    // what to do instead of only reporting a conflict.
-    return {
-      ok: false,
-      error: 'Project sources changed after this proposal was created, so its preflight evidence no longer applies. Re-run the build request to get a fresh proposal.',
-      status: 409,
-    };
-  }
-  const kg = new KGStore(defaultKgPath(projectRoot));
+  await ensureAgentProjectReady(projectRoot);
+  const matchedRecords = matchAppSourceCatalogRecords(projectRoot, {
+    blockNames: kept.flatMap((tile) => tile.source === 'certified_block' && tile.blockId ? [tile.blockId] : []),
+    semanticModels: semanticTiles.flatMap((tile) => tile.semantic!.semanticModelRefs ?? []),
+    metrics: semanticTiles.flatMap((tile) => tile.semantic!.metrics ?? []),
+  }, 'include_review_required');
+  // The saved queries Ask picked carry their result fields into App Studio (design D1).
+  const matched = hooks.datasetsEnabled === false ? matchedRecords : {
+    ...matchedRecords,
+    items: await withSavedQueryResultFields(projectRoot, matchedRecords.items, 'include_review_required', hooks.readSavedQueryFields),
+  };
+  const plan = (session.plan ?? {}) as Partial<AppPlan>;
+  // Only the questions behind kept Draft SQL are carried. App Studio plans
+  // again from the same goal over its own catalog and finds the other gaps.
+  const gaps = draftSqlTiles.map((tile) => ({
+    question: cleanString(tile.question) || tile.title,
+    reason: 'Ask wrote SQL for this question. Draft SQL is not added to an App; generate draft DQL for it in App Studio instead.',
+  }));
+  let draft: AppBuildDraft;
   try {
-    // Re-validate against the live catalog: blocks may have changed since propose.
-    const validation = validateAppPlan(committedPlan, kg);
-    const governedTileCount = committedPlan.pages.flatMap((page) => page.tiles)
-      .filter((tile) => tile.kind === 'certified_block' || tile.kind === 'semantic_query').length;
-    if (governedTileCount === 0 && selectedExploratory.length === 0) {
-      return { ok: false, error: 'Select a certified block, governed semantic query, or explicitly accepted Personal Draft analysis.', status: 409 };
-    }
-    // Copilot follow-ups the created app carries: still-uncovered gaps first, then
-    // the questions behind any candidates the user chose to leave out.
-    const copilotQuestions = unique([
-      ...proposal.gaps.map((gap) => gap.question),
-      ...proposal.tiles
-        .filter((tile) => tile.source === 'ai_generated' && !selected.has(tile.id) && tile.question)
-        .map((tile) => tile.question as string),
-    ]).slice(0, 4);
-    let generated: ReturnType<typeof generateAppFromPlan>;
-    const stagingRoot = join(projectRoot, '.dql', 'local', 'app-build-staging', session.id);
-    const generatedRoot = isExistingPageBuild ? join(stagingRoot, 'generated') : stagingRoot;
-    const generatedAppDir = join(generatedRoot, 'apps', committedPlan.appId);
-    const stagedAppDir = isExistingPageBuild
-      ? join(stagingRoot, 'candidate', 'apps', committedPlan.appId)
-      : generatedAppDir;
-    // Apps also resolve under `domains/**/apps/<id>`. Hardcoding the canonical
-    // root meant a domain-hosted App always failed the existence check below
-    // and could never have a page added.
-    const targetAppDir = existingApp?.appDir ?? join(projectRoot, 'apps', committedPlan.appId);
-    const backupAppDir = join(projectRoot, '.dql', 'local', 'app-build-staging', `${session.id}-backup`);
-    rmSync(stagingRoot, { recursive: true, force: true });
-    try {
-      generated = generateAppFromPlan(generatedRoot, committedPlan, kg, { overwrite: true, copilotQuestions });
-      if (selectedExploratory.length > 0) {
-        attachGeneratedDraftAnalyses(generatedRoot, committedPlan, generated.paths, selectedExploratory);
-      }
-      mkdirSync(dirname(targetAppDir), { recursive: true });
-      if (isExistingPageBuild) {
-        if (!existingApp || !existsSync(targetAppDir)) {
-          return { ok: false, error: `App "${existingAppId}" no longer exists.`, status: 409 };
-        }
-        if (fingerprintAppDirectory(existingApp.appDir) !== session.existingAppFingerprint) {
-          return {
-            ok: false,
-            error: 'The App changed while this page was being prepared. Refresh and review the page proposal again.',
-            status: 409,
-          };
-        }
-        const page = committedPlan.pages[0];
-        if (!page) return { ok: false, error: 'The approved plan has no page to add.', status: 400 };
-        const generatedDashboardPath = join(generatedAppDir, 'dashboards', `${page.id}.dqld`);
-        const targetDashboardPath = join(stagedAppDir, 'dashboards', `${page.id}.dqld`);
-        if (existingApp.dashboards.some((dashboard) => dashboard.id === page.id)) {
-          return { ok: false, error: `Dashboard page already exists: ${page.id}`, status: 409 };
-        }
-        cpSync(existingApp.appDir, stagedAppDir, { recursive: true });
-        if (existsSync(targetDashboardPath)) {
-          return { ok: false, error: `Dashboard page already exists: ${page.id}`, status: 409 };
-        }
-        mkdirSync(dirname(targetDashboardPath), { recursive: true });
-        cpSync(generatedDashboardPath, targetDashboardPath);
-        const committedPaths = [relative(projectRoot, join(targetAppDir, 'dashboards', `${page.id}.dqld`))];
-        for (const generatedPath of generated.paths.filter((path) => path.includes('/drafts/') && path.endsWith('.dql'))) {
-          const sourcePath = join(generatedRoot, generatedPath);
-          const packageRelativePath = relative(generatedAppDir, sourcePath);
-          const candidatePath = join(stagedAppDir, packageRelativePath);
-          const finalPath = join(targetAppDir, packageRelativePath);
-          if (existsSync(candidatePath)) {
-            return { ok: false, error: `App draft already exists: ${relative(projectRoot, finalPath)}`, status: 409 };
-          }
-          mkdirSync(dirname(candidatePath), { recursive: true });
-          cpSync(sourcePath, candidatePath);
-          committedPaths.push(relative(projectRoot, finalPath));
-        }
-        generated = { ...generated, paths: committedPaths };
-        if (fingerprintAppDirectory(existingApp.appDir) !== session.existingAppFingerprint) {
-          return {
-            ok: false,
-            error: 'The App changed while this page was being staged. Refresh and review the page proposal again.',
-            status: 409,
-          };
-        }
-        rmSync(backupAppDir, { recursive: true, force: true });
-        renameSync(targetAppDir, backupAppDir);
-        try {
-          renameSync(stagedAppDir, targetAppDir);
-        } catch (error) {
-          if (!existsSync(targetAppDir) && existsSync(backupAppDir)) renameSync(backupAppDir, targetAppDir);
-          throw error;
-        }
-        rmSync(backupAppDir, { recursive: true, force: true });
-      } else if (existsSync(targetAppDir)) {
-        if (!input.force) return { ok: false, error: `App already exists: apps/${committedPlan.appId}`, status: 409 };
-        rmSync(backupAppDir, { recursive: true, force: true });
-        renameSync(targetAppDir, backupAppDir);
-        try {
-          renameSync(stagedAppDir, targetAppDir);
-          rmSync(backupAppDir, { recursive: true, force: true });
-        } catch (error) {
-          if (existsSync(backupAppDir) && !existsSync(targetAppDir)) renameSync(backupAppDir, targetAppDir);
-          throw error;
-        }
-      } else {
-        renameSync(stagedAppDir, targetAppDir);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return { ok: false, error: message, status: message.includes('already exists') ? 409 : 400 };
-    } finally {
-      rmSync(stagingRoot, { recursive: true, force: true });
-    }
-    const attachWarnings: string[] = [];
-    // Adding a page deliberately cannot rename or re-audience the App it joins.
-    // Say so instead of discarding the input silently — this array existed and
-    // was never written to, so the drop had no surface at all.
-    if (isExistingPageBuild && cleanString(input.appName)) {
-      attachWarnings.push('The App name was not changed: adding a page cannot rename the App. Rename it from the App header.');
-    }
-    if (isExistingPageBuild && cleanString(input.audience)) {
-      attachWarnings.push('The audience was not changed: adding a page keeps the App\'s existing audience.');
-    }
-    await ensureMetadataCatalogFresh(projectRoot, { force: true });
-    const app = collectAppsList(projectRoot).find((entry) => entry.id === committedPlan.appId) ?? null;
-    const next: AppAiBuildSession = {
-      ...session,
-      status: 'ready',
-      updatedAt: new Date().toISOString(),
-      appId: committedPlan.appId,
-      dashboardId: committedPlan.pages[0]?.id ?? app?.dashboards[0]?.id ?? null,
-      plan: committedPlan,
-      validation,
-      generatedPaths: generated.paths,
-      committedTileIds: Array.from(selected),
-      committedBrief: {
-        ...(isExistingPageBuild
-          ? { pageTitle: committedPlan.pages[0]?.title }
-          : { appName: committedPlan.name }),
-        audience: committedPlan.audience,
-        filterIds: Array.from(selectedFilterIds),
-        tileOverrides,
-      },
-      warnings: [...session.warnings, ...attachWarnings],
-    };
-    writeAppAiBuildSession(projectRoot, next);
-    return { ok: true, session: next, app, dashboardId: next.dashboardId ?? null };
-  } finally {
-    kg.close();
+    draft = createAppBuildHandoffDraft({
+      goal: session.prompt || proposal.buildFrame.goal,
+      name: cleanString(input.appName) || cleanString(plan.name) || undefined,
+      domain: session.inputs.domain || cleanString(plan.domain) || undefined,
+      audience: cleanString(input.audience) || session.inputs.audience || proposal.buildFrame.audience,
+      sources: matched.items,
+      gaps,
+    });
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error), status: 400 };
   }
+  writeStoredAppBuildDraft(projectRoot, draft);
+  writeAppAiBuildSession(projectRoot, {
+    ...session,
+    status: 'ready',
+    updatedAt: new Date().toISOString(),
+    committedTileIds: kept.map((tile) => tile.id),
+    studioDraftId: draft.id,
+  });
+  const reasonFor = (source: AppSourceCatalogRecord) => {
+    const tile = kept.find((candidate) => candidate.blockId?.toLowerCase() === source.name.toLowerCase())
+      ?? semanticTiles.find((candidate) => candidate.semantic!.metrics.some((metric) => source.capabilities.measures.includes(metric)));
+    return tile ? `Ask picked it for ${tile.title}.` : 'Ask picked it for this App.';
+  };
+  return {
+    ok: true,
+    draft,
+    sources: draft.sources.flatMap((draftSource) => {
+      const source = matched.items.find((item) => item.sourceId === draftSource.id);
+      return source ? [appBuildHandoffSourceSummary(source, reasonFor(source))] : [];
+    }),
+    notCoveredYet: handoffGapQuestions(draft),
+    reused: false,
+  };
+}
+
+function handoffGapQuestions(draft: AppBuildDraft): string[] {
+  return draft.requirements
+    .filter((requirement) => draft.coverage.some((coverage) => coverage.requirementId === requirement.id && coverage.status === 'gap'))
+    .map((requirement) => requirement.question);
 }
 
 interface AppAskSuccess {
@@ -5181,7 +5147,7 @@ async function routeAppAskQuestion(
         trustState: 'draft_ready',
         reviewStatus: 'draft_ready',
         citations,
-        followUps: ['Add analysis context', 'Check proof', 'Create block draft'],
+        followUps: ['Add analysis context', 'Check proof', 'Create saved query draft'],
         decision,
         proposal: investigationProposal,
       };
@@ -5220,7 +5186,7 @@ async function routeAppAskQuestion(
         trustState: 'draft_ready',
         reviewStatus: 'draft_ready',
         citations,
-        followUps: ['Review the memo', 'Add reviewed result to this app', 'Create a draft DQL block'],
+        followUps: ['Review the memo', 'Add reviewed result to this app', 'Create a draft saved query'],
         decision,
         investigation: investigationForReader(investigation, withheld),
       };
@@ -5248,7 +5214,7 @@ async function routeAppAskQuestion(
       trustState: tile?.trustState === 'certified' || tile?.display?.trustState === 'certified' ? 'certified' : 'review_required',
       reviewStatus: tile?.reviewStatus === 'certified' || tile?.display?.reviewStatus === 'certified' ? 'certified' : 'review_required',
       citations,
-      followUps: ['Explain the visible result', 'Investigate drivers', 'Create block draft from this result'],
+      followUps: ['Explain the visible result', 'Investigate drivers', 'Create saved query draft from this result'],
       decision: buildAppAskDecision('certified_answer', { question, blockId, selected, appName: loaded.app.name }),
     };
   };
@@ -5319,8 +5285,8 @@ function buildAppAskDecision(
   if (route === 'generated_answer') {
     return {
       mode: 'answer',
-      reason: 'Answered by routing the question through the governed answer loop (best-matching certified block, or review-required generated SQL).',
-      nextAction: 'Review the result; promote to a certified block when it should be reused.',
+      reason: 'Answered by routing the question through the governed answer loop (best-matching certified saved query, or review-required generated SQL).',
+      nextAction: 'Review the result; promote to a certified saved query when it should be reused.',
       requiresContext: false,
       usesCertifiedResult: false,
       confidence: 0.7,
@@ -5341,7 +5307,7 @@ function buildAppAskDecision(
     return {
       mode: 'app_change',
       reason: 'The question asks to change presentation or layout, not business logic.',
-      nextAction: 'Review the proposed app change in Build mode and keep certified block logic unchanged.',
+      nextAction: 'Review the proposed app change in Build mode and keep certified saved query logic unchanged.',
       requiresContext: false,
       usesCertifiedResult: Boolean(input.blockId || input.selected),
       confidence: 0.78,
@@ -5473,7 +5439,7 @@ function mapGovernedToAppAsk(
       ? [`Open the "${draft.name}" draft`, 'Review its join and grain', 'Certify it to make it governed']
       : noAnswer
         ? ['Name the metric and grain', 'Pick a certified tile', 'Start driver analysis']
-        : ['Investigate drivers', 'Break this down further', 'Create a draft DQL block'],
+        : ['Investigate drivers', 'Break this down further', 'Create a draft saved query'],
     decision: buildAppAskDecision(route, { question: input.question, blockId: input.blockId, appName: input.appName }),
   };
 }
@@ -5574,7 +5540,7 @@ function buildCertifiedAppAnswer(input: {
     ? `${label ? `${label} is the leading visible row and ` : 'The current visible result '}shows ${formatMetricValue(currentValue)} for ${formatBusinessColumn(metricName)}${baselineValue !== null ? ` versus ${formatMetricValue(baselineValue)} for the next comparison` : ''}${deltaValue !== null ? `, a gap of ${formatMetricValue(deltaValue)}` : ''}.`
     : rows.length > 0
       ? `The certified result is loaded with ${rows.length} sampled row${rows.length === 1 ? '' : 's'} across ${columns.length} field${columns.length === 1 ? '' : 's'}.`
-      : 'The certified block is selected, but this request did not include result rows for a numeric summary.';
+      : 'The certified saved query is selected, but this request did not include result rows for a numeric summary.';
   const rowDetails = firstRow && columns.length
     ? columns
       .slice(0, 5)
@@ -5583,14 +5549,14 @@ function buildCertifiedAppAnswer(input: {
     : '';
   const nextStep = /\bwhy|driver|change|changed|compare|segment|drill|root cause|because\b/i.test(input.question)
     ? 'This question asks for explanation beyond the current certified result. Use the copilot analysis flow with the exact comparison, timeframe, and segment so ZLens can create review-required analysis.'
-    : 'Use deeper analysis only when you need a new grain, driver breakdown, segment comparison, or reusable block that this certified tile does not already cover.';
+    : 'Use deeper analysis only when you need a new grain, driver breakdown, segment comparison, or reusable saved query that this certified tile does not already cover.';
 
   return [
     `## Answer`,
     `For **${resultTitle}**${filterSummary ? ` with ${filterSummary}` : ''}, ${currentLine}`,
     rowDetails ? `Visible row detail: ${rowDetails}.` : '',
     `## Trusted source`,
-    `This answer is grounded in certified DQL block **${input.blockId}**. The app can present this result directly; new SQL or new business logic still needs review before promotion.`,
+    `This answer is grounded in certified saved query **${input.blockId}**. The app can present this result directly; new SQL or new business logic still needs review before promotion.`,
     `## Next step`,
     nextStep,
   ].filter(Boolean).join('\n\n');
@@ -5671,7 +5637,7 @@ export function recommendDashboardTile(
     })),
     ...(block ? [{
       source: `block:${block.name}`,
-      reason: block.status === 'certified' ? 'Certified block can back this app tile.' : 'Block is not certified; keep review-required.',
+      reason: block.status === 'certified' ? 'Certified saved query can back this app tile.' : 'Saved query is not certified; keep review-required.',
       kind: 'block',
       path: block.path,
       trustState: block.status === 'certified' ? 'certified' as const : 'review_required' as const,
@@ -5826,11 +5792,16 @@ export function promoteAppForStakeholders(
     };
   }
   const lifecycle = input.lifecycle === 'certified' || input.lifecycle === 'deprecated' ? input.lifecycle : 'review';
+  const { certifiedBy: _priorCertifiedBy, certifiedAt: _priorCertifiedAt, ...withoutCertifier } = loaded.app;
   const app: AppDocument = {
-    ...loaded.app,
+    ...withoutCertifier,
     visibility: 'shared',
     publicationIntent: 'shared_project',
     lifecycle,
+    // Certifying records who did it and when; any other lifecycle drops the record.
+    ...(lifecycle === 'certified'
+      ? { certifiedBy: appCertifierName(projectRoot, hostActor() ?? loaded.app.owners[0] ?? 'local'), certifiedAt: new Date().toISOString() }
+      : {}),
   };
   const appPath = join(loaded.appDir, 'dql.app.json');
   const parsedApp = parseAppDocument(JSON.stringify(app), appPath);
@@ -5894,7 +5865,7 @@ export function promoteAppForStakeholders(
 export interface AppPublicationReadiness {
   ready: boolean;
   governedTiles: number;
-  blockers: Array<{ dashboardId: string; tileId: string; code: 'exploratory_source' | 'semantic_review' | 'semantic_preflight' | 'block_not_certified' | 'block_source_unversioned' | 'block_source_changed' | 'filter_not_preflighted' | 'dataset_binding_missing'; message: string }>;
+  blockers: Array<{ dashboardId: string; tileId: string; code: 'exploratory_source' | 'semantic_review' | 'semantic_preflight' | 'block_not_certified' | 'block_missing' | 'block_source_unversioned' | 'block_source_changed' | 'filter_not_preflighted' | 'dataset_binding_missing'; message: string }>;
 }
 
 export function approveAppSemanticTiles(
@@ -5951,9 +5922,11 @@ export function approveAppSemanticTiles(
 function appPublicationReadiness(
   projectRoot: string,
   dashboards: DashboardDocument[],
-  options: { settledPageIds?: Set<string> } = {},
+  options: { settledPageIds?: Set<string>; settings?: AppsPublishSettings } = {},
 ): AppPublicationReadiness {
   const blockers: AppPublicationReadiness['blockers'] = [];
+  // A saved query nobody certified blocks only when the project requires certified data (T3).
+  const requireCertified = (options.settings ?? readAppsPublishSettings(projectRoot)).requireCertifiedToPublish;
   let governedTiles = 0;
   const blocks = collectBlockCandidates(projectRoot, { preserveDuplicates: true });
   for (const dashboard of dashboards) {
@@ -5978,28 +5951,35 @@ function appPublicationReadiness(
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_not_certified',
-            message: `${dashboard.id}/${item.i} uses retired block ${block.name}${replacement ? `, replaced by ${replacement.name}` : ''}; it no longer resolves to a certified block.`,
+            message: `${dashboard.id}/${item.i} uses retired saved query ${block.name}${replacement ? `, replaced by ${replacement.name}` : ''}; it no longer resolves to a certified saved query.`,
           });
-        } else if (!block || block.status !== 'certified') {
+        } else if (!block) {
+          blockers.push({
+            dashboardId: dashboard.id,
+            tileId: item.i,
+            code: 'block_missing',
+            message: `${dashboard.id}/${item.i} no longer resolves to a saved query in the project.`,
+          });
+        } else if (block.status !== 'certified' && requireCertified) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_not_certified',
-            message: `${dashboard.id}/${item.i} no longer resolves to a certified block.`,
+            message: `${dashboard.id}/${item.i} uses a saved query that is not certified yet, and this project requires certified data to publish.`,
           });
         } else if (!boundRevision) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_source_unversioned',
-            message: `${dashboard.id}/${item.i} has no bound source revision; refresh the certified block before publication.`,
+            message: `${dashboard.id}/${item.i} has no bound source revision; refresh the saved query before publication.`,
           });
         } else if (boundRevision !== block.fingerprint) {
           blockers.push({
             dashboardId: dashboard.id,
             tileId: item.i,
             code: 'block_source_changed',
-            message: `${dashboard.id}/${item.i} changed after it was selected; review the current certified block before publication.`,
+            message: `${dashboard.id}/${item.i} changed after it was selected; refresh the saved query before publication.`,
           });
         }
       }
@@ -6008,7 +5988,7 @@ function appPublicationReadiness(
           dashboardId: dashboard.id,
           tileId: item.i,
           code: 'exploratory_source',
-          message: `${dashboard.id}/${item.i} references app-scoped exploratory DQL; promote it to governed semantic logic or a certified block first.`,
+          message: `${dashboard.id}/${item.i} references app-scoped exploratory DQL; promote it to governed semantic logic or a certified saved query first.`,
         });
       }
       if (item.semantic) {
@@ -6045,19 +6025,31 @@ function appPublicationReadiness(
       }
       if ((dashboard.version === 2 || dashboard.version === 3) && (item.block || item.semantic || item.draftAnalysis)) {
         for (const filter of dashboard.filters ?? []) {
-          if (filter.scope?.tileIds && !filter.scope.tileIds.includes(item.i)) continue;
-          const binding = item.filterBindings?.find((candidate) => candidate.filter === filter.id);
-          // An explicit unsupported binding is a governed exclusion, not a
-          // missing binding. Studio shows the reason on the affected tile and
-          // the filter deliberately leaves that tile unchanged.
-          if (binding?.capability === 'unsupported' && binding.unsupportedReason?.trim()) continue;
-          const settled = options.settledPageIds?.has(dashboard.id) ?? false;
-          if (!binding || (!binding.binding && binding.mode !== 'parameter') || (binding.capability === 'preflight_required' && !settled)) {
+          // Each tile needs an author choice for each page filter: "Applies"
+          // (a link) or "Does not apply" (an explicit, stored exclusion such
+          // as a filterBinding with capability 'unsupported'). "Does not
+          // apply" is resolved: readers see "Not filtered by …" on the tile.
+          // Only a tile with neither blocks publication.
+          const { choice } = dashboardTileFilterChoice(dashboard, item, filter);
+          if (choice === 'does_not_apply' || choice === 'not_applicable') continue;
+          const label = filter.label ?? filter.id;
+          if (choice === 'unlinked') {
             blockers.push({
               dashboardId: dashboard.id,
               tileId: item.i,
               code: 'filter_not_preflighted',
-              message: `${dashboard.id}/${item.i} does not have a preflighted binding for filter ${filter.label ?? filter.id}.`,
+              message: `${dashboard.id}/${item.i} has no choice for filter ${label}. Open the Filters tab and set this tile to Applies or Does not apply.`,
+            });
+            continue;
+          }
+          const binding = item.filterBindings?.find((candidate) => candidate.filter === filter.id);
+          const settled = options.settledPageIds?.has(dashboard.id) ?? false;
+          if (binding?.capability === 'preflight_required' && !settled) {
+            blockers.push({
+              dashboardId: dashboard.id,
+              tileId: item.i,
+              code: 'filter_not_preflighted',
+              message: `${dashboard.id}/${item.i} does not have a preflighted binding for filter ${label}.`,
             });
           }
         }
@@ -6981,12 +6973,6 @@ async function composeStoredAppBuildDraft(
     )));
     const missing = Array.from(selected).filter((sourceId) => !available.has(sourceId));
     if (missing.length) throw new Error(`APP_BUILD_SOURCE_NOT_IN_PROPOSAL: ${missing.join(', ')}`);
-    for (const sourceId of selected) {
-      const source = available.get(sourceId)!;
-      if (current.sourcePolicy === 'governed_only' && source.trustState !== 'certified') {
-        throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: enable review-required sources before adding ${source.qualifiedIdentity ?? source.sourceRef}.`);
-      }
-    }
     const rejected = new Set(unique((request.rejectedTileIds ?? []).map(cleanString).filter(Boolean)));
     if (proposal.proposedTileIds) {
       const unknown = Array.from(rejected).filter((tileId) => !proposal.proposedTileIds!.includes(tileId));
@@ -7027,13 +7013,11 @@ async function composeStoredAppBuildDraft(
   if (selections.length > 100) throw new Error('APP_BUILD_SOURCE_LIMIT: at most 100 components can be composed at once.');
   const { ensureAgentProjectReady, resolveAppSourceCatalogRecords } = await import('@zlens/agent');
   await ensureAgentProjectReady(projectRoot);
-  const effectiveSourcePolicy = request.enableReviewRequired === true
-    ? 'include_review_required'
-    : current.sourcePolicy;
+  // No per-App data rule (T3): certified and not-certified data are both addable.
   const resolved = resolveAppSourceCatalogRecords(
     projectRoot,
     selections.map((selection) => selection.sourceId),
-    effectiveSourcePolicy,
+    APP_SOURCE_POLICY,
   );
   if (resolved.missingSourceIds.length) {
     throw new Error(`APP_BUILD_SOURCE_DRIFT: these sources no longer resolve: ${resolved.missingSourceIds.join(', ')}`);
@@ -7043,10 +7027,7 @@ async function composeStoredAppBuildDraft(
   // it through one existing `upsert_page` operation. This keeps the dataset
   // registry and its query tiles atomic inside the local draft revision.
   const workingPages = new Map(current.pages.map((page) => [page.id, structuredClone(page)]));
-  const operations: AppBuildDraftOperation[] = request.enableReviewRequired === true
-    && current.sourcePolicy !== 'include_review_required'
-    ? [{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }]
-    : [];
+  const operations: AppBuildDraftOperation[] = [];
   const pageIds = new Set<string>();
   const tileIds: string[] = [];
   const coverageAdditions = new Map<string, { sourceIds: string[]; componentIds: string[] }>();
@@ -7054,7 +7035,7 @@ async function composeStoredAppBuildDraft(
     const source = byId.get(selection.sourceId);
     if (!source) throw new Error(`APP_BUILD_SOURCE_DRIFT: ${selection.sourceId} no longer resolves.`);
     if (!source.eligibility.localPreview) {
-      throw new Error(`APP_BUILD_REVIEW_POLICY_REQUIRED: ${source.title} is ${source.lifecycle}; enable review-required sources to add it locally.`);
+      throw new Error(`APP_BUILD_DATASET_RETIRED: ${source.title} is ${source.lifecycle}; choose current data instead.`);
     }
     const selectedPage = current.pages.find((candidate) => candidate.id === cleanString(selection.pageId)) ?? current.pages[0];
     const page = selectedPage ? workingPages.get(selectedPage.id) : undefined;
@@ -7127,19 +7108,6 @@ async function composeStoredAppBuildDraft(
     pageItems.push(tile);
     workingPages.set(page.id, page);
     operations.push({ type: 'upsert_source', source: appDraftSourceFromCatalog(source) });
-    if (!certified) {
-      operations.push({
-        type: 'set_review_task',
-        task: {
-          id: `review-source-${createHash('sha256').update(source.sourceId).digest('hex').slice(0, 12)}`,
-          message: `${source.title} is ${source.lifecycle} and must be certified, replaced, or removed before Project publication.`,
-          status: 'open',
-          sourceId: source.sourceId,
-          pageId: page.id,
-          tileId,
-        },
-      });
-    }
     pageIds.add(page.id);
     tileIds.push(tileId);
     for (const requirement of current.requirements) {
@@ -7339,6 +7307,13 @@ export type CreateStoredAppBuildDraftOptions = {
   /** A catalog refresh failed before rehydration. Persist a repairable source
    * placeholder instead of treating stale published metadata as current. */
   datasetCatalogError?: string;
+  /**
+   * The current catalog record for each saved-query reference on the
+   * published pages (a catalog source id, a block name or a block path).
+   * Editing an App reads trust and receipts from these, never from the
+   * tile's own stored claims (F07).
+   */
+  resolvePublishedBlockSources?: (refs: string[]) => ReadonlyMap<string, AppSourceCatalogRecord>;
 };
 
 type PublishedDatasetSourceReference = {
@@ -7485,12 +7460,29 @@ function rehydratePublishedAppSources(
   let catalogError = options.datasetCatalogError;
   if (datasetReferencesBySourceId.size > 0 && options.resolvePublishedDatasetSources && !catalogError) {
     try {
-      resolution = options.resolvePublishedDatasetSources(Array.from(datasetReferencesBySourceId.keys()), sourcePolicy);
+      resolution = options.resolvePublishedDatasetSources(Array.from(datasetReferencesBySourceId.keys()), APP_SOURCE_POLICY);
     } catch (error) {
       catalogError = error instanceof Error ? error.message : String(error);
     }
   }
   const recordsBySourceId = new Map((resolution?.items ?? []).map((source) => [source.sourceId, source]));
+  // Saved-query tiles: the project's current record is the authority for
+  // their trust (F07). A legacy page names a block only (`blockId`), and a
+  // Studio page names its catalog source id; both resolve here.
+  const blockRefsOf = (tile: DashboardGridItem): string[] => {
+    if (!tile.block || tile.query) return [];
+    const blockRef = 'ref' in tile.block ? tile.block.ref : tile.block.blockId;
+    return [tile.sourceId, blockRef].filter((value): value is string => typeof value === 'string' && Boolean(value.trim()));
+  };
+  let blockRecords: ReadonlyMap<string, AppSourceCatalogRecord> = new Map();
+  const blockRefs = Array.from(new Set(pages.flatMap((page) => page.layout.items.flatMap(blockRefsOf))));
+  if (blockRefs.length && options.resolvePublishedBlockSources) {
+    try {
+      blockRecords = options.resolvePublishedBlockSources(blockRefs);
+    } catch {
+      blockRecords = new Map();
+    }
+  }
   for (const [sourceId, references] of datasetReferencesBySourceId) {
     const source = recordsBySourceId.get(sourceId);
     const issue = publishedDatasetRestoreIssue(references, source, catalogError);
@@ -7504,16 +7496,8 @@ function rehydratePublishedAppSources(
       }
       continue;
     }
-    if (source!.trust !== 'certified') {
-      requiresReviewPolicy = true;
-      for (const reference of references) {
-        const task = publishedDatasetReviewTask(
-          reference,
-          `${source!.title} is currently ${source!.lifecycle}. Resolve its governed review state before Project publication.`,
-        );
-        reviewTasks.set(task.id, task);
-      }
-    }
+    // Data nobody certified reopens as it is (T3): its tiles read "Not
+    // certified yet" and the App can be published again without a task.
   }
   const normalizedPages = pages.map((page) => ({
     ...page,
@@ -7525,6 +7509,17 @@ function rehydratePublishedAppSources(
         if (tile.query) return tile;
         const hasDataSource = Boolean(tile.block || tile.semantic || tile.draftAnalysis || tile.aiPin);
         if (!hasDataSource) return tile;
+        const current = blockRefsOf(tile).map((ref) => blockRecords.get(ref)).find(Boolean);
+        if (current) {
+          // Changed since it was certified, certified again, or never
+          // certified: the catalog says which, and the receipt follows it.
+          sources.set(current.sourceId, appDraftSourceFromCatalog(current));
+          return {
+            ...tile,
+            sourceId: current.sourceId,
+            ...(tile.sourceRevision ? {} : { sourceRevision: current.sourceRevision }),
+          };
+        }
         const blockRef = tile.block ? ('ref' in tile.block ? tile.block.ref : tile.block.blockId) : undefined;
         const sourceRef = blockRef
           ?? tile.draftAnalysis?.ref
@@ -7598,7 +7593,9 @@ function rehydratePublishedAppSources(
             tileId: tile.i,
           });
         }
-        if (!certified) {
+        // A saved query nobody certified is not a task (T3); one with no
+        // published revision cannot be checked and must be refreshed.
+        if (tile.block && !sourceRevision) {
           requiresReviewPolicy = true;
           reviewTasks.set(`published-source-${sourceId}`, {
             id: `published-source-${createHash('sha256').update(sourceId).digest('hex').slice(0, 12)}`,
@@ -7623,6 +7620,80 @@ function rehydratePublishedAppSources(
   };
 }
 
+const PUBLISHED_PLACEHOLDER_PREFIX = 'published:';
+
+function hasPublishedBlockPlaceholders(draft: AppBuildDraft): boolean {
+  return Boolean(draft.baseApp) && draft.sources.some((source) => source.kind === 'block' && source.id.startsWith(PUBLISHED_PLACEHOLDER_PREFIX));
+}
+
+/**
+ * An edit draft made before saved-query tiles were read from the current
+ * catalog (0.2.4 and earlier) holds placeholder sources ("published:…")
+ * that read "Nobody has certified this saved query yet" and cannot be
+ * certified (F07). Point each such tile at the project's current record for
+ * its saved query, drop the placeholder and the "no published source
+ * revision" check it opened. Null when nothing changes.
+ */
+export function rebindPublishedBlockPlaceholders(
+  draft: AppBuildDraft,
+  resolve: (refs: string[]) => ReadonlyMap<string, AppSourceCatalogRecord>,
+): AppBuildDraft | null {
+  const placeholders = new Set(draft.sources
+    .filter((source) => source.kind === 'block' && source.id.startsWith(PUBLISHED_PLACEHOLDER_PREFIX))
+    .map((source) => source.id));
+  if (!placeholders.size) return null;
+  const blockRef = (tile: DashboardGridItem): string | undefined => (tile.block ? ('ref' in tile.block ? tile.block.ref : tile.block.blockId) : undefined);
+  const refs = draft.pages.flatMap((page) => page.layout.items.flatMap((tile) => {
+    const ref = tile.sourceId && placeholders.has(tile.sourceId) && !tile.query ? blockRef(tile) : undefined;
+    return ref ? [ref] : [];
+  }));
+  let records: ReadonlyMap<string, AppSourceCatalogRecord>;
+  try {
+    records = resolve(Array.from(new Set(refs)));
+  } catch {
+    return null;
+  }
+  if (!records.size) return null;
+  const added = new Map<string, AppBuildDraftSource>();
+  const stillUsed = new Set<string>();
+  const pages = draft.pages.map((page) => ({
+    ...page,
+    layout: {
+      ...page.layout,
+      items: page.layout.items.map((tile) => {
+        if (!tile.sourceId || !placeholders.has(tile.sourceId)) return tile;
+        const ref = tile.query ? undefined : blockRef(tile);
+        const record = ref ? records.get(ref) : undefined;
+        if (!record) {
+          stillUsed.add(tile.sourceId);
+          return tile;
+        }
+        added.set(record.sourceId, appDraftSourceFromCatalog(record));
+        return { ...tile, sourceId: record.sourceId, ...(tile.sourceRevision ? {} : { sourceRevision: record.sourceRevision }) };
+      }),
+    },
+  }));
+  if (!added.size) return null;
+  const rebound = new Set(Array.from(placeholders).filter((id) => !stillUsed.has(id)));
+  const sources = [
+    ...draft.sources.filter((source) => !rebound.has(source.id) && !added.has(source.id)),
+    ...added.values(),
+  ];
+  const reviewTasks = draft.reviewTasks.filter((task) => !(task.sourceId && rebound.has(task.sourceId)));
+  // A content change like any other: a new revision, and the page runs again.
+  const { previewReceipts: _receipts, previewReceipt: _receipt, preflightReceipt: _preflight, ...rest } = draft;
+  const next = {
+    ...rest,
+    pages,
+    sources,
+    reviewTasks,
+    revision: draft.revision + 1,
+    state: draft.state === 'preflight_ready' ? 'local_draft' as const : draft.state,
+    updatedAt: new Date().toISOString(),
+  };
+  return { ...next, proposalHash: appBuildDraftHash({ ...next, proposalHash: undefined }) };
+}
+
 export function createStoredAppBuildDraft(
   projectRoot: string,
   input: {
@@ -7636,40 +7707,26 @@ export function createStoredAppBuildDraft(
   const baseAppId = cleanString(input.baseAppId);
   const base = baseAppId ? loadAppById(projectRoot, baseAppId) : null;
   if (baseAppId && !base) throw new Error(`App "${baseAppId}" not found.`);
-  const name = cleanString(input.name) || base?.app.name || cleanString(input.goal) || 'Untitled App';
+  // A described App is named from the first line of its description.
+  const name = cleanString(input.name) || base?.app.name || appNameFromGoal(cleanString(input.goal)) || 'Untitled App';
   const appId = base?.app.id || cleanString(input.appId) || suggestAppId(name);
-  const id = `build_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const pageId = 'overview';
-  const emptyItems: DashboardGridItem[] = [];
-  const blankPage: DashboardDocument = {
-    version: 2,
-    id: pageId,
-    metadata: {
-      title: 'Overview',
-      description: cleanString(input.goal) || `Local draft canvas for ${name}`,
-      domain: cleanString(input.domain) || base?.app.domain || 'general',
-      audience: cleanString(input.audience) || base?.app.audience || 'stakeholders',
-      visibility: 'private',
-      lifecycle: 'draft',
-    },
-    layout: {
-      kind: 'grid', cols: 12, rowHeight: 80, items: emptyItems,
-      responsive: {
-        wide: { kind: 'grid', cols: 12, rowHeight: 80, items: emptyItems },
-        medium: { kind: 'grid', cols: 6, rowHeight: 80, items: emptyItems },
-        narrow: { kind: 'grid', cols: 1, rowHeight: 80, items: emptyItems },
-      },
-    },
-  };
+  const id = newAppBuildDraftId();
+  const blankPage = createBlankAppBuildPage({
+    name,
+    goal: cleanString(input.goal),
+    domain: cleanString(input.domain) || base?.app.domain,
+    audience: cleanString(input.audience) || base?.app.audience,
+  });
   const basePages = base
     ? findDashboardsForApp(base.appDir)
       .map((path) => loadDashboardDocument(path).document)
       .filter((page): page is DashboardDocument => Boolean(page))
     : [];
   const template = input.template ?? 'blank';
+  // An older client's data rule is ignored (T3).
   const published = rehydratePublishedAppSources(
     basePages,
-    input.sourcePolicy ?? 'governed_only',
+    APP_SOURCE_POLICY,
     options,
   );
   const pages = published.pages.length ? published.pages : [applyAppStudioTemplate(blankPage, template, name)];
@@ -7680,7 +7737,6 @@ export function createStoredAppBuildDraft(
     ...(base ? { baseApp: { appId: base.app.id, fingerprint: fingerprintAppDirectory(base.appDir) } } : {}),
     authoringMode: input.authoringMode === 'manual' ? 'manual' : 'ai',
     template,
-    sourcePolicy: published.requiresReviewPolicy ? 'include_review_required' : input.sourcePolicy,
     frame: {
       goal: cleanString(input.goal) || `Create ${name}`,
       audience: cleanString(input.audience) || base?.app.audience || 'stakeholders',
@@ -7875,7 +7931,7 @@ export function addAskResultToAppBuildDraft(
   if (requestedBlockId) {
     const block = collectBlockCandidates(projectRoot).find((candidate) => candidate.status === 'certified'
       && (candidate.id === requestedBlockId || candidate.name === requestedBlockId || candidate.path === requestedBlockId));
-    if (!block) throw new Error(`Certified block "${requestedBlockId}" is no longer available.`);
+    if (!block) throw new Error(`Certified saved query "${requestedBlockId}" is no longer available.`);
     const sourceId = `block:${block.id}`;
     operations.push({
       type: 'upsert_source',
@@ -7928,9 +7984,6 @@ export function addAskResultToAppBuildDraft(
     const fingerprint = `sha256:${createHash('sha256').update(source).digest('hex')}`;
     artifactPath = join(projectRoot, '.dql', 'local', 'app-builds', draft.id, sourceRef);
     operations.push(
-      ...(draft.sourcePolicy === 'include_review_required'
-        ? []
-        : [{ type: 'set_source_policy' as const, sourcePolicy: 'include_review_required' as const }]),
       {
         type: 'upsert_source',
         source: {
@@ -7974,9 +8027,6 @@ export function addAskResultToAppBuildDraft(
   } else {
     const sourceId = `text:ask-${identity}`;
     operations.push(
-      ...(draft.sourcePolicy === 'include_review_required'
-        ? []
-        : [{ type: 'set_source_policy' as const, sourcePolicy: 'include_review_required' as const }]),
       { type: 'upsert_source', source: { id: sourceId, kind: 'text', sourceRef: `ask:${identity}`, trustState: 'review_required', reviewStatus: 'required' } },
       { type: 'set_review_task', task: { id: `review-ask-${identity}`, message: `Review the Ask narrative ${title} before publication.`, status: 'open', sourceId, pageId: page.id, tileId } },
     );
@@ -8021,7 +8071,7 @@ function applyAppStudioTemplate(
       : `# ${appName}\n\nDocument the question, findings, caveats, and evidence for this investigation.`;
   const items: DashboardGridItem[] = [{
     i: 'template-introduction', x: 0, y: 0, w: 12, h: 2,
-    title: template === 'investigation' ? 'Investigation question' : 'Executive context',
+    title: template === 'investigation' ? 'Investigation question' : 'Intro',
     sectionId: 'exec_summary',
     text: { markdown: intro },
     viz: { type: 'text' },
@@ -8336,7 +8386,20 @@ function restoreStoredAppBuildDraft(
   return { ok: true, id: payload.draft.id, restoredPath: '.dql/local/apps.sqlite', draft: payload.draft };
 }
 
-export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuildDraft): string[] {
+/** Current evidence for the tile trust check: the current catalog and model, when the caller resolved them. */
+type AppBuildTrustEvidence = {
+  descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
+  recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
+};
+
+export function preflightStoredAppBuildDraft(
+  projectRoot: string,
+  draft: AppBuildDraft,
+  options: {
+    /** Current evidence for the project's require-certified check; `false` when the caller runs it against the current catalog itself. */
+    trust?: AppBuildTrustEvidence | false;
+  } = {},
+): string[] {
   const errors: string[] = [];
   const blocks = collectBlockCandidates(projectRoot);
   if (draft.state === 'clarification_required') errors.push('Resolve required Build Frame clarifications before publication.');
@@ -8364,15 +8427,18 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     const receipt = receipts.find((candidate) => candidate.pageId === page.id);
     if (!receipt || receipt.revision !== draft.revision) errors.push(`Run a current settled preview for page ${page.metadata.title || page.id} before Project publication.`);
   }
-  for (const source of draft.sources) {
+  // Publication writes pages only. A source connected from the Data step that
+  // no tile uses is not published, so it cannot block publishing (design D4).
+  for (const source of appBuildSourcesUsedByTiles(draft)) {
     if (source.kind === 'block' || source.kind === 'certified_block') {
       const block = blocks.find((candidate) => candidate.id === source.sourceRef || candidate.name === source.sourceRef || candidate.path === source.sourceRef);
       const lifecycle = source.lifecycle ?? (source.kind === 'certified_block' ? 'certified' : block?.status);
       const boundRevision = source.sourceRevision ?? source.sourceFingerprint;
       if (!block) errors.push(`Source ${source.id} no longer resolves at ${source.sourceRef}.`);
       if (block && canonicalAppBlockSourceId(block) !== source.id && source.kind === 'block') errors.push(`Source ${source.id} no longer matches its qualified path identity.`);
-      if (!block || block.status !== 'certified' || lifecycle !== 'certified' || source.trustState !== 'certified') {
-        errors.push(`Source ${source.qualifiedIdentity ?? source.id} is ${lifecycle ?? 'unknown'} and cannot be published to the Project.`);
+      // A saved query nobody certified publishes (T3); one that is gone cannot.
+      if (block?.status === 'deprecated') {
+        errors.push(`Source ${source.qualifiedIdentity ?? source.id} is retired and cannot be published to the Project. Replace it with current data.`);
       }
       if (block && !boundRevision) {
         errors.push(`Source ${source.qualifiedIdentity ?? source.id} has no bound source revision; refresh it before Project publication.`);
@@ -8382,8 +8448,8 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     }
     if (source.kind === 'governed_semantic' || source.kind === 'semantic_query') {
       if (source.capabilities?.dataset) {
-        if (source.lifecycle !== 'certified' || source.trustState !== 'certified') {
-          errors.push(`Dataset source ${source.qualifiedIdentity ?? source.id} is ${source.lifecycle ?? 'unknown'} and cannot be published to the Project.`);
+        if (source.lifecycle === 'deprecated') {
+          errors.push(`Dataset source ${source.qualifiedIdentity ?? source.id} is retired and cannot be published to the Project.`);
         }
         if (!source.sourceRevision) {
           errors.push(`Dataset source ${source.qualifiedIdentity ?? source.id} has no bound semantic source revision; refresh it before Project publication.`);
@@ -8392,11 +8458,10 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
         errors.push(`Source ${source.id} requires snapshot-bound semantic approval before Project publication.`);
       }
     }
-    if ((source.kind === 'block' && source.trustState !== 'certified') || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') {
-      errors.push(`Source ${source.id} is review-required and cannot be published to the Project.`);
-    }
-    if (((source.kind === 'block' && source.trustState !== 'certified') || source.kind === 'review_block' || source.kind === 'review_dql' || source.kind === 'exploratory_sql') && draft.sourcePolicy !== 'include_review_required') {
-      errors.push(`Source ${source.id} requires include_review_required policy.`);
+    // App-scoped draft DQL lives only on this machine, so it cannot publish
+    // (it is not a trust rule: a saved query nobody certified publishes).
+    if (source.kind === 'review_dql' || source.kind === 'exploratory_sql') {
+      errors.push(`Source ${source.id} is local draft analysis and cannot be published to the Project.`);
     }
   }
   for (const page of draft.pages) {
@@ -8422,8 +8487,8 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
       if (source.sourceRevision !== tile.sourceRevision) {
         errors.push(`${page.id}/${tile.i} changed Dataset source revision after the tile was authored.`);
       }
-      if (source.lifecycle !== 'certified' || source.trustState !== 'certified') {
-        errors.push(`${page.id}/${tile.i} uses a ${source.lifecycle ?? 'unknown'} Dataset source and cannot be published to the Project.`);
+      if (source.lifecycle === 'deprecated') {
+        errors.push(`${page.id}/${tile.i} uses a retired Dataset source and cannot be published to the Project.`);
       }
       const validation = validateTileQuery(dataset, tile.query);
       if (!tileQueryValidationRuns(validation)) {
@@ -8435,8 +8500,8 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
       }
       if (source.kind === 'block' || source.kind === 'certified_block') {
         const block = blocks.find((candidate) => candidate.path === source.executionRef || candidate.path === source.sourceRef);
-        if (!block || block.status !== 'certified' || block.fingerprint !== source.sourceRevision) {
-          errors.push(`${page.id}/${tile.i} does not resolve to its current certified Dataset block.`);
+        if (!block || block.fingerprint !== source.sourceRevision) {
+          errors.push(`${page.id}/${tile.i} does not resolve to its current saved query.`);
         }
       } else if (source.kind === 'governed_semantic' || source.kind === 'semantic_query') {
         if (dataset.kind !== 'semantic' || Object.keys(source.capabilities?.metricCapabilities ?? {}).length === 0) {
@@ -8448,8 +8513,16 @@ export function preflightStoredAppBuildDraft(projectRoot: string, draft: AppBuil
     }
   }
   const settledPageIds = new Set(receipts.filter((receipt) => receipt.revision === draft.revision).map((receipt) => receipt.pageId));
-  const readiness = appPublicationReadiness(projectRoot, draft.pages, { settledPageIds });
+  const settings = readAppsPublishSettings(projectRoot);
+  // Trust is reported once, per tile, below; readiness reports the rest.
+  const readiness = appPublicationReadiness(projectRoot, draft.pages, { settledPageIds, settings: { requireCertifiedToPublish: false } });
   errors.push(...readiness.blockers.map((blocker) => blocker.message));
+  // The project may require every tile to be certified (T3). The HTTP route
+  // repeats this against the current model; this keeps direct callers honest.
+  if (settings.requireCertifiedToPublish && options.trust !== false) {
+    const tiles = notCertifiedTiles(appBuildDraftTrust(draft, { ...(options.trust || {}), blocks }));
+    if (tiles.length) errors.push(requireCertifiedToPublishMessage(tiles));
+  }
   return Array.from(new Set(errors));
 }
 
@@ -8460,7 +8533,8 @@ async function preflightAppBuildRequestErrors(
   resolver?: Ctx['resolveDatasetSourceAuthority'],
   figuresDependOnReader?: Ctx['figuresDependOnReader'],
 ): Promise<string[]> {
-  const errors = preflightStoredAppBuildDraft(projectRoot, draft);
+  // The tile trust check runs once, below, against the current catalog.
+  const errors = preflightStoredAppBuildDraft(projectRoot, draft, { trust: false });
   // An Ask answer's text with its author's figures is not published where they depend on who is looking.
   for (const tile of await staticAnswerTilesShownToOthers(draft.pages, figuresDependOnReader)) {
     errors.push(`${tile.pageId}/${tile.tileId}: ${ANSWER_FIGURES_DEPEND_ON_READER}`);
@@ -8470,6 +8544,20 @@ async function preflightAppBuildRequestErrors(
   // downgraded after an earlier run cannot publish through a forged source
   // card, a removed review task, or an otherwise matching old receipt.
   errors.push(...await datasetDraftCurrentAuthorityErrors(projectRoot, draft, 'project_publish', resolver));
+  // When the project requires certified data (apps.requireCertifiedToPublish),
+  // every tile — its data, every join it can reach, its calculations' inputs —
+  // must be certified, judged against the current catalog, model and saved
+  // queries. One plain message, whatever kind of tile.
+  if (readAppsPublishSettings(projectRoot).requireCertifiedToPublish) {
+    const records = await resolveCurrentDatasetSourceRecords(projectRoot, datasetDraftSourceIds(draft), resolver)
+      .catch(() => new Map<string, AppSourceCatalogRecord>());
+    const tiles = notCertifiedTiles(appBuildDraftTrust(draft, {
+      descriptorFor: (sourceId) => records.get(sourceId)?.capabilities.dataset ?? undefined,
+      recordFor: (sourceId) => records.get(sourceId),
+      blocks: collectBlockCandidates(projectRoot),
+    }));
+    if (tiles.length) errors.push(requireCertifiedToPublishMessage(tiles));
+  }
   const analysisPages = draft.pages
     .map((page) => ({
       pageId: page.id,
@@ -8575,13 +8663,21 @@ function appBuildRequirementBlocksPublication(draft: AppBuildDraft, requirement:
 
 function appBuildReviewTaskBlocksPublication(draft: AppBuildDraft, task: AppBuildDraft['reviewTasks'][number]): boolean {
   if (task.status !== 'open') return false;
-  if (task.sourceId && draft.sources.some((source) => source.id === task.sourceId)) return true;
+  // "X needs certifying" reminders from older drafts: trust is per tile now (T3).
+  if (isTrustReminderTaskId(task.id)) return false;
+  if (task.sourceId && appSourceIdsUsedByTiles(draft).has(task.sourceId)) return true;
   if (task.tileId && draft.pages.some((page) => page.layout.items.some((tile) => tile.i === task.tileId))) return true;
   if (task.pageId && draft.pages.some((page) => page.id === task.pageId)) return true;
   // v2 AI plans previously persisted general guidance as open tasks without an
   // attached source, page, or tile. Keep those reminders readable, but do not
   // turn them into an unexplained hard publication gate.
   return false;
+}
+
+/** The draft sources a tile uses; only these are part of what Publish writes. */
+function appBuildSourcesUsedByTiles(draft: AppBuildDraft): AppBuildDraftSource[] {
+  const used = appSourceIdsUsedByTiles(draft);
+  return draft.sources.filter((source) => used.has(source.id));
 }
 
 function hasCurrentAppBuildPreflightReceipt(draft: AppBuildDraft): boolean {
@@ -8591,8 +8687,12 @@ function hasCurrentAppBuildPreflightReceipt(draft: AppBuildDraft): boolean {
     && draft.preflightReceipt.sourceFingerprint === appBuildSourceFingerprint(draft));
 }
 
-export function markStoredAppBuildDraftPreflighted(projectRoot: string, draft: AppBuildDraft): AppBuildDraft {
-  const errors = preflightStoredAppBuildDraft(projectRoot, draft);
+export function markStoredAppBuildDraftPreflighted(
+  projectRoot: string,
+  draft: AppBuildDraft,
+  options: Parameters<typeof preflightStoredAppBuildDraft>[2] = {},
+): AppBuildDraft {
+  const errors = preflightStoredAppBuildDraft(projectRoot, draft, options);
   if (errors.length) throw new Error(`App Build preflight failed: ${errors.join(' ')}`);
   const now = new Date().toISOString();
   const next: AppBuildDraft = {
@@ -8631,6 +8731,10 @@ function appBuildSourceFingerprint(draft: AppBuildDraft): string {
 const DRAFT_OWNED_APP_FIELDS = new Set([
   'version', 'id', 'name', 'description', 'visibility', 'publicationIntent', 'ownerDomain',
   'usesDomains', 'requiredExports', 'domain', 'audience', 'lifecycle', 'homepage',
+  // Recorded on every publish as certified, and dropped when it is not.
+  'certifiedBy', 'certifiedAt',
+  // The tile trust worked out at this publish (B6).
+  'tileTrust',
 ]);
 
 function mergeRepublishedAppDocument(appDir: string, generated: AppDocument): AppDocument {
@@ -8653,11 +8757,85 @@ function mergeRepublishedAppDocument(appDir: string, generated: AppDocument): Ap
   return merged as unknown as AppDocument;
 }
 
+/** Goals ZLens writes itself when the author typed none: never a description. */
+const GENERATED_APP_GOALS = /^(create .+|edit this governed app|a dashboard of live, checked numbers|build a governed analytics app)$/i;
+
+/**
+ * The App's description on publish (new-user round 2, problem 10): what the
+ * author wrote (the decision it supports, or the request they typed), else
+ * the description the published App already has, else a plain default only
+ * because there is nothing else. Never "Governed analytical App for …".
+ */
+export function appDescriptionFor(projectRoot: string, draft: Pick<AppBuildDraft, 'appId' | 'baseApp' | 'frame'>, name: string, domain: string): string {
+  const typed = cleanString(draft.frame.decision) || cleanString(draft.frame.goal);
+  if (typed && !GENERATED_APP_GOALS.test(typed) && typed.toLowerCase() !== name.trim().toLowerCase()) return typed;
+  if (draft.baseApp) {
+    const existing = cleanString(loadAppById(projectRoot, draft.appId)?.app.description);
+    if (existing && !/^Governed analytical App for /i.test(existing)) return existing;
+  }
+  const words = domain.replace(/[_-]+/g, ' ').trim();
+  const area = words && !['general', 'unassigned'].includes(words.toLowerCase()) ? ` for ${words.charAt(0).toUpperCase()}${words.slice(1)}` : '';
+  return `A dashboard of live numbers${area}.`;
+}
+
+/**
+ * The App's trust at publish (B6, T2): the same answer the publish check, the
+ * editor, the App header and the Apps card give — every tile's source, every
+ * join it can run through (filters included) and its calculations' inputs.
+ * `descriptorFor` gives the current model's Dataset (joins certified since
+ * the draft stored its card count); `recordFor` the current catalog record
+ * (data certified since the card was stored); `blocks` the project's saved
+ * queries as they are now.
+ */
+export function appBuildDraftTrust(
+  draft: AppBuildDraft,
+  current: {
+    descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
+    recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
+    blocks?: ReadonlyArray<{ id?: string; name?: string; path?: string; status?: string; fingerprint?: string }>;
+  } | ((sourceId: string) => DatasetDescriptor | undefined) = {},
+): ReturnType<typeof appTrustAnswer> {
+  const options = typeof current === 'function' ? { descriptorFor: current } : current;
+  const sources = new Map(draft.sources.map((source) => [source.id, source]));
+  return appTrustAnswer({
+    pages: draft.pages,
+    sourceFor: (sourceId) => {
+      const source = sources.get(sourceId);
+      if (!source) return undefined;
+      let next: AppBuildDraftSource = source;
+      const record = options.recordFor?.(sourceId);
+      if (record) {
+        const certified = record.lifecycle === 'certified' && record.trust === 'certified';
+        next = {
+          ...next,
+          lifecycle: record.lifecycle,
+          trustState: certified ? 'certified' : 'review_required',
+          reviewStatus: certified ? 'not_required' : next.reviewStatus === 'approved' ? 'approved' : 'required',
+          checked: Boolean(record.check),
+        };
+      } else if (options.blocks && (source.kind === 'block' || source.kind === 'certified_block') && !source.capabilities?.dataset) {
+        const block = options.blocks.find((candidate) => candidate.path === source.sourceRef || candidate.path === source.executionRef || candidate.id === source.sourceRef || candidate.name === source.sourceRef);
+        if (block) {
+          const revision = source.sourceRevision ?? source.sourceFingerprint;
+          const certified = block.status === 'certified' && (!revision || revision === block.fingerprint);
+          next = { ...next, lifecycle: certified ? 'certified' : next.lifecycle === 'certified' ? 'review' : next.lifecycle, trustState: certified ? 'certified' : 'review_required' };
+        }
+      }
+      const dataset = options.descriptorFor?.(sourceId);
+      return dataset ? { ...next, capabilities: { ...(next.capabilities ?? {}), dataset } } : next;
+    },
+  });
+}
+
 export function publishStoredAppBuildDraft(
   projectRoot: string,
   draft: AppBuildDraft,
+  options: {
+    descriptorFor?: (sourceId: string) => DatasetDescriptor | undefined;
+    recordFor?: (sourceId: string) => AppSourceCatalogRecord | undefined;
+  } = {},
 ): { ok: true; app: ReturnType<typeof collectAppsList>[number]; draft: AppBuildDraft; paths: string[] } {
-  const errors = preflightStoredAppBuildDraft(projectRoot, draft);
+  const errors = preflightStoredAppBuildDraft(projectRoot, draft, { trust: { descriptorFor: options.descriptorFor, recordFor: options.recordFor } });
   if (errors.length) throw new Error(`App Build preflight failed: ${errors.join(' ')}`);
   if (!hasCurrentAppBuildPreflightReceipt(draft)) {
     throw new Error('App Build Draft needs a current preflight receipt before publication.');
@@ -8674,20 +8852,25 @@ export function publishStoredAppBuildDraft(
   const owner = hostActor() ?? `${process.env.USER ?? 'owner'}@local`;
   const domain = draft.pages[0]?.metadata.domain || 'general';
   const name = draft.name.trim() || draft.appId;
-  const hasCertifiedAnalysis = draft.sources.some((source) => (
+  const publishedSources = appBuildSourcesUsedByTiles(draft);
+  const hasCertifiedAnalysis = publishedSources.some((source) => (
     (source.kind === 'block' || source.kind === 'certified_block')
     || ((source.kind === 'governed_semantic' || source.kind === 'semantic_query') && Boolean(source.capabilities?.dataset))
   ) && source.trustState === 'certified' && source.lifecycle === 'certified');
-  const hasReviewRequiredSource = draft.sources.some((source) => source.trustState !== 'certified'
+  const hasReviewRequiredSource = publishedSources.some((source) => source.trustState !== 'certified'
     || ((source.kind === 'governed_semantic' || source.kind === 'semantic_query')
       && !source.capabilities?.dataset
       && source.reviewStatus !== 'approved'));
-  const lifecycle = hasCertifiedAnalysis && !hasReviewRequiredSource ? 'certified' as const : 'review' as const;
+  // Certified only when every data tile is certified (B6, T2): a tile on a
+  // join nobody certified keeps the App from reading certified while its
+  // header says "3 of 4 tiles certified".
+  const trust = appBuildDraftTrust(draft, { descriptorFor: options.descriptorFor, recordFor: options.recordFor, blocks: collectBlockCandidates(projectRoot) });
+  const lifecycle = hasCertifiedAnalysis && !hasReviewRequiredSource && trust.allCertified ? 'certified' as const : 'review' as const;
   const app: AppDocument = {
     version: 1,
     id: draft.appId,
     name,
-    description: draft.frame.decision || `Governed analytical App for ${name}`,
+    description: appDescriptionFor(projectRoot, draft, name, domain),
     visibility: 'shared',
     publicationIntent: 'shared_project',
     ownerDomain: domain,
@@ -8696,6 +8879,9 @@ export function publishStoredAppBuildDraft(
     domain,
     audience: draft.frame.audience,
     lifecycle,
+    // Who published it as certified, and when: the card says "App certified by <name> · <date>".
+    ...(lifecycle === 'certified' ? { certifiedBy: appCertifierName(projectRoot, owner), certifiedAt: new Date().toISOString() } : {}),
+    ...(trust.total > 0 ? { tileTrust: publishedAppTileTrust(trust) } : {}),
     owners: [owner],
     members: [{ userId: owner, displayName: owner, roles: ['owner', 'analyst'] }],
     roles: [
@@ -8813,8 +8999,8 @@ function appBuildBlockedMessage(validation: unknown, plan: Record<string, unknow
   const warnings = appBuildWarnings(validation, plan).slice(0, 4);
   const reviewTasks = reviewTasksFromPlan(plan).slice(0, 4);
   return [
-    'No certified DQL blocks matched strongly enough to create a stakeholder app.',
-    'ZLens did not write an empty dashboard. Create or certify reusable blocks first, or select certified blocks explicitly.',
+    'No certified saved queries matched strongly enough to create a stakeholder app.',
+    'ZLens did not write an empty dashboard. Create or certify reusable saved queries first, or select certified saved queries explicitly.',
     warnings.length ? `Missing proof: ${warnings.join(' | ')}` : '',
     reviewTasks.length ? `Next review tasks: ${reviewTasks.join(' | ')}` : '',
   ].filter(Boolean).join(' ');
@@ -9274,10 +9460,10 @@ export function createAppPackage(
     .map((blockId) => blocks.find((block) => block.id === blockId || block.name === blockId))
     .filter((block): block is BlockCandidate => Boolean(block));
   const missingBlocks = selectedIds.filter((blockId) => !selectedBlocks.some((block) => block.id === blockId || block.name === blockId));
-  if (missingBlocks.length) return { ok: false, error: `Unknown block selection: ${missingBlocks.join(', ')}` };
+  if (missingBlocks.length) return { ok: false, error: `Unknown saved query selection: ${missingBlocks.join(', ')}` };
   const uncertifiedBlocks = selectedBlocks.filter((block) => block.status !== 'certified');
   if (uncertifiedBlocks.length) {
-    return { ok: false, error: `Manual App creation accepts certified blocks only: ${uncertifiedBlocks.map((block) => block.name).join(', ')}` };
+    return { ok: false, error: `Manual App creation accepts certified saved queries only: ${uncertifiedBlocks.map((block) => block.name).join(', ')}` };
   }
 
   const app: AppDocument = {
@@ -9402,9 +9588,9 @@ function createAppPackageViaBuildDraft(
     .map((id) => blocks.find((block) => block.id === id || block.name === id))
     .filter((block): block is BlockCandidate => Boolean(block));
   const missing = selectedIds.filter((id) => !selectedBlocks.some((block) => block.id === id || block.name === id));
-  if (missing.length) return { ok: false, error: `Unknown block selection: ${missing.join(', ')}` };
+  if (missing.length) return { ok: false, error: `Unknown saved query selection: ${missing.join(', ')}` };
   const uncertified = selectedBlocks.filter((block) => block.status !== 'certified');
-  if (uncertified.length) return { ok: false, error: `Manual App creation accepts certified blocks only: ${uncertified.map((block) => block.name).join(', ')}` };
+  if (uncertified.length) return { ok: false, error: `Manual App creation accepts certified saved queries only: ${uncertified.map((block) => block.name).join(', ')}` };
 
   const draft = createStoredAppBuildDraft(projectRoot, {
     appId,
@@ -9413,7 +9599,6 @@ function createAppPackageViaBuildDraft(
     audience: cleanString(input.audience),
     domain,
     authoringMode: 'manual',
-    sourcePolicy: 'governed_only',
   });
   const items = buildDashboardItems(projectRoot, selectedBlocks);
   const page = {
@@ -9634,7 +9819,7 @@ function displayForAiPin(
     defaultVisualization: chartType,
     allowedVisualizations: allowedVisualizationsForComponent(component, chartType),
     layoutIntent: layoutIntentForComponent(component),
-    rationale: 'AI-generated analysis pin saved as governed presentation metadata; promote the SQL to a draft block before treating it as reusable logic.',
+    rationale: 'AI-generated analysis pin saved as governed presentation metadata; promote the SQL to a draft saved query before treating it as reusable logic.',
     trustState: certified ? 'certified' : 'review_required',
     reviewStatus: certified ? 'certified' : 'review_required',
   };
@@ -9858,7 +10043,7 @@ function recommendationRationale(
   prompt: string,
 ): string {
   if (block) {
-    return `Recommended ${component} with ${viz} from the block display hint and result shape. The certified block remains the business logic source.`;
+    return `Recommended ${component} with ${viz} from the saved query display hint and result shape. The certified saved query remains the business logic source.`;
   }
   if (columns.length > 0) {
     return `Recommended ${component} with ${viz} from ${columns.length} output column(s) and the app prompt. This is consumer-level metadata pending review.`;
@@ -11102,7 +11287,7 @@ function buildInvestigationTrust(
     sourceBlockId: investigation.sourceBlockId ?? selectedString(selected, 'blockId'),
     sourceTileId: investigation.sourceTileId ?? selectedString(selected, 'tileId'),
     caveats: [
-      'Analysis output is not certified until a reviewer promotes or certifies the generated block.',
+      'Analysis output is not certified until a reviewer promotes or certifies the generated saved query.',
       ...(sqlError ? [`SQL preview caveat: ${sqlError}`] : []),
     ],
   };
@@ -11153,7 +11338,7 @@ function buildInvestigationSummary(
     ? `${currentLabel} leads on ${metricName} with ${formatMetricValue(currentValue)}${baselineValue !== null ? ` versus ${formatMetricValue(baselineValue)} for ${baselineLabel}` : ''}${deltaValue !== null ? `, a gap of ${formatMetricValue(deltaValue)}` : ''}.`
     : '';
   if (intent === 'trust_gap_review') {
-    return `This tile can be used as certified context only where its source block and lineage are certified. ${valueSentence || 'The deeper answer is AI-generated analysis and needs review before leaders rely on it.'}`;
+    return `This tile can be used as certified context only where its source saved query and lineage are certified. ${valueSentence || 'The deeper answer is AI-generated analysis and needs review before leaders rely on it.'}`;
   }
   const driverTitle = cleanString(drivers[0]?.title);
   const driver = driverTitle && driverTitle !== currentLabel
@@ -11187,7 +11372,7 @@ function buildMissingBaselineSummary(
 
 function buildMissingBaselineRecommendation(selected: Record<string, unknown> | null): string {
   const target = selectedString(selected, 'title') ?? 'this tile';
-  return `Use ${target} as current-state evidence. To explain change, add or select a block with a time grain, snapshot date, or prior-period baseline, then rerun the analysis.`;
+  return `Use ${target} as current-state evidence. To explain change, add or select a saved query with a time grain, snapshot date, or prior-period baseline, then rerun the analysis.`;
 }
 
 function buildInvestigationRecommendation(
@@ -11200,10 +11385,10 @@ function buildInvestigationRecommendation(
   if (sqlErrorKind === 'ai_generation_timeout') return 'Use the certified app result as the current answer, then retry AI SQL generation or draft the scoped SQL manually before promotion.';
   if (sqlErrorKind === 'timeout') return 'Simplify the generated SQL or narrow the app filters, then refresh the bounded preview before promotion.';
   if (sqlErrorKind === 'safety') return 'Rewrite the SQL as a read-only SELECT/WITH query before any preview or promotion.';
-  if (sqlError) return 'Review the generated SQL or add a certified drilldown block before promoting this result.';
-  if (intent === 'trust_gap_review') return 'Use the certified tile for stakeholder reporting, and promote only the reviewed gaps into a draft block.';
+  if (sqlError) return 'Review the generated SQL or add a certified drilldown saved query before promoting this result.';
+  if (intent === 'trust_gap_review') return 'Use the certified tile for stakeholder reporting, and promote only the reviewed gaps into a draft saved query.';
   if (!selected) return 'Select a dashboard tile or provide SQL so ZLens can rank drivers with stronger evidence.';
-  return 'Review the driver evidence, then pin the useful answer or promote the SQL path into a draft DQL block.';
+  return 'Review the driver evidence, then pin the useful answer or promote the SQL path into a draft saved query.';
 }
 
 function buildInvestigationReportSections(input: {
@@ -11290,7 +11475,7 @@ function buildInvestigationReportSections(input: {
         id: 'review-boundary',
         kind: 'review_boundary',
         title: 'Review boundary',
-        body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable DQL block.',
+        body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable saved query.',
         tone: 'review',
       });
     }
@@ -11363,7 +11548,7 @@ function buildInvestigationReportSections(input: {
       id: 'review-boundary',
       kind: 'review_boundary',
       title: 'Review boundary',
-      body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable DQL block.',
+      body: 'This analysis is AI-generated and review-required. Use it to guide decisions, then validate SQL, grain, filters, joins, and source proof before pinning it to the app or turning it into a reusable saved query.',
       tone: 'review',
     },
   );
@@ -11507,7 +11692,7 @@ function reportPreviewIssue(
   return {
     id: 'sql-repair-path',
     title: 'SQL repair path',
-    body: 'The generated SQL preview needs review before this analysis can be promoted. Open the trace appendix, edit the SQL against the selected block context, rerun the preview, then pin or draft reusable logic only after the row sample matches the business question.',
+    body: 'The generated SQL preview needs review before this analysis can be promoted. Open the trace appendix, edit the SQL against the selected saved query context, rerun the preview, then pin or draft reusable logic only after the row sample matches the business question.',
     tone: 'warning',
   };
 }
@@ -11553,7 +11738,7 @@ function reportInterpretationForIntent(input: {
     return 'This is a reusable-logic candidate. Preserve the business question, parameters, allowed filters, output grain, source proof, and review path before certification.';
   }
   if (input.actionMode === 'evidence' || input.intent === 'trust_gap_review') {
-    return `This validation is bounded to ${input.sourceName}. Treat the claim as trusted only after source block, lineage, filters, and preview rows are reviewed.`;
+    return `This validation is bounded to ${input.sourceName}. Treat the claim as trusted only after source saved query, lineage, filters, and preview rows are reviewed.`;
   }
   if (input.driver) {
     const driverSentence = `${input.driver} is the strongest visible driver${input.driverValue ? ` (${input.driverValue})` : ''}.`;
@@ -11566,10 +11751,10 @@ function reportInterpretationForIntent(input: {
     return `${driverSentence}${comparisonSentence}${reviewSentence}`;
   }
   if (input.intent === 'diagnose_change') {
-    return 'The analysis does not yet have a comparable baseline or ranked drivers. Add a time grain, prior-period block, or segment field before treating the change explanation as complete.';
+    return 'The analysis does not yet have a comparable baseline or ranked drivers. Add a time grain, prior-period saved query, or segment field before treating the change explanation as complete.';
   }
   if (input.intent === 'segment_compare') {
-    return 'The analysis does not yet have a clear segment grouping. Add a segment field or certified breakdown block before using this as a stakeholder segment comparison.';
+    return 'The analysis does not yet have a clear segment grouping. Add a segment field or certified breakdown saved query before using this as a stakeholder segment comparison.';
   }
   if (input.intent === 'entity_drilldown') {
     return 'The analysis does not yet have a stable entity identifier. Add the entity key and output grain before using this as a stakeholder drilldown.';
@@ -12732,3 +12917,18 @@ export const __test__ = {
 // reference unused parseAppDocument/readFileSync to keep import stable for forward use
 void parseAppDocument;
 void readFileSync;
+
+/**
+ * The project's App publish settings (T3), read fresh from `dql.config.json`
+ * on every call so a change applies to the next publish without a restart.
+ * Open source: off unless `apps.requireCertifiedToPublish` is `true`. An
+ * Enterprise host turns it on by writing that setting through its admin policy
+ * (or by overriding this read); there is no per-App rule.
+ */
+export function readAppsPublishSettings(projectRoot: string): AppsPublishSettings {
+  try {
+    return appsPublishSettings(JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf-8')));
+  } catch {
+    return appsPublishSettings(undefined);
+  }
+}

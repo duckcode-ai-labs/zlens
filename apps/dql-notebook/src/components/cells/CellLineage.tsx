@@ -754,7 +754,7 @@ export function CellLineage({ cellContent, cellType, compiledSql, cellId, cellNa
           ) : loading ? (
             <EmptyLineageText t={t}>Looking up scoped business context...</EmptyLineageText>
           ) : (
-            <EmptyLineageText t={t}>No matching business terms, metrics, or blocks found for these sources.</EmptyLineageText>
+            <EmptyLineageText t={t}>No matching business terms, metrics, or saved queries found for these sources.</EmptyLineageText>
           )}
         </LineageCard>
       )}
@@ -806,7 +806,7 @@ export function CellLineage({ cellContent, cellType, compiledSql, cellId, cellNa
           <line x1="6" y1="4" x2="10" y2="8" />
           <line x1="6" y1="12" x2="10" y2="8" />
         </svg>
-        <span>{isSqlCell ? 'Cell SQL lineage' : 'Project block lineage'}</span>
+        <span>{isSqlCell ? 'Cell SQL lineage' : 'Project saved query lineage'}</span>
         {expanded && (
           <span
             style={{

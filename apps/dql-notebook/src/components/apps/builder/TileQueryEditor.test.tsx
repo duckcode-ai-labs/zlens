@@ -26,9 +26,9 @@ const render = (query: Parameters<typeof TileQueryEditor>[0]['query']) => render
 describe('TileQueryEditor', () => {
   it('lists suggested fields as visible but unselectable, with a review badge', () => {
     const markup = render({ dimensions: [], measures: [{ measure: 'revenue' }] });
-    expect(markup).toContain('Suggested · needs review');
+    expect(markup).toContain('Suggested · not certified yet');
     expect(markup).toMatch(/<label class="is-suggested"[^>]*><input type="checkbox" disabled=""/);
-    expect(markup).toContain('Channel (suggested, needs review)');
+    expect(markup).toContain('Channel (suggested, not certified yet)');
     // Approved entries come first.
     expect(datasetEditorFields(descriptor).measures.map((measure) => measure.name)).toEqual(['revenue', 'unit_price']);
   });

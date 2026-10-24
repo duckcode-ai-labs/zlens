@@ -122,7 +122,7 @@ export function CalculationEditor({
           ? <>Use + - * / and brackets over measures. Restrict one with <code>where</code>, e.g. <code>(revenue where region = 'US') / revenue</code>.</>
           : verdict.state === 'error'
             ? verdict.message
-            : <><ShieldCheck size={12} aria-hidden="true" /> {resultWords(verdict.output)} Shown as <strong>Governed</strong>: checked arithmetic over certified measures.</>}
+            : <><ShieldCheck size={12} aria-hidden="true" /> {resultWords(verdict.output)} Certified when every measure it uses is certified: checked arithmetic, nothing new to certify.</>}
       </p>
       <div className="calc-editor-actions">
         <button type="button" onClick={onCancel}>Cancel</button>

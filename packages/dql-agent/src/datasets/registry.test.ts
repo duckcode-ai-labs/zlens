@@ -1,5 +1,15 @@
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { DatasetGrainProofV1, ManifestBlock, MetricCapabilityContract } from '@zlens/core';
+import {
+  SAVED_QUERY_RESULT_COLUMNS_RELATIVE_PATH,
+  loadSavedQueryResultColumns,
+  recordSavedQueryResultColumns,
+  savedQueryResultDescriptorFromManifestBlock,
+} from './result-columns.js';
+import { appSourceTrustTier } from '../app-source-catalog.js';
 import {
   datasetBindingAuthorityForManifestBlock,
   datasetBlockProofMaterial,
@@ -357,5 +367,61 @@ describe('dataset registry', () => {
       ],
     });
     expect(result).toEqual({ proofState: 'not_a_dataset', reason: 'semantic_field_ambiguous' });
+  });
+});
+
+describe('saved query result fields (design D1)', () => {
+  const savedQuery = (): ManifestBlock => ({
+    name: 'monthly_revenue',
+    filePath: 'blocks/monthly_revenue.dql',
+    domain: 'commerce',
+    status: 'certified',
+    blockType: 'custom',
+    sql: "SELECT date_trunc('month', order_date) AS month, SUM(net_amount) AS gross_revenue FROM order_lines GROUP BY 1",
+    rawTableRefs: ['order_lines'],
+    tableDependencies: [],
+    refDependencies: [],
+    allDependencies: [],
+    tests: [],
+    outputs: [{ name: 'month', sources: [] }, { name: 'gross_revenue', isAggregate: true, sources: [] }],
+  });
+
+  it('keeps the columns read for one revision as local state and offers them as fields of that revision only', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-result-columns-'));
+    try {
+      expect(loadSavedQueryResultColumns(root).size).toBe(0);
+      const columns = [{ name: 'month', type: 'date' }, { name: 'gross_revenue', type: 'number' }];
+      expect(recordSavedQueryResultColumns(root, { sourceId: 'app:block:commerce:m', sourceRevision: 'sha256:r1', columns, typesFrom: 'probe' })).toBe(true);
+      expect(recordSavedQueryResultColumns(root, { sourceId: 'app:block:commerce:m', sourceRevision: 'sha256:r1', columns, typesFrom: 'probe' })).toBe(false);
+      expect(JSON.parse(readFileSync(join(root, SAVED_QUERY_RESULT_COLUMNS_RELATIVE_PATH), 'utf8')).version).toBe(1);
+      const observed = loadSavedQueryResultColumns(root).get('app:block:commerce:m');
+      const descriptor = savedQueryResultDescriptorFromManifestBlock({ block: savedQuery(), sourceId: 'app:block:commerce:m', sourceRevision: 'sha256:r1', lifecycle: 'certified', observed });
+      expect(descriptor).toMatchObject({
+        id: 'app:block:commerce:m',
+        trust: 'certified',
+        contractRef: { kind: 'block_source', id: 'commerce::block::monthly_revenue' },
+        result: { savedQuery: 'monthly_revenue', groupBy: ['month'], asIs: [], typesFrom: 'probe' },
+      });
+      // A changed saved query is read again: the old columns never describe it.
+      expect(savedQueryResultDescriptorFromManifestBlock({ block: savedQuery(), sourceId: 'app:block:commerce:m', sourceRevision: 'sha256:r2', lifecycle: 'certified', observed })).toBeUndefined();
+      // A block with a Dataset definition, or a semantic block, is not a saved query.
+      expect(savedQueryResultDescriptorFromManifestBlock({ block: blockFixture(), sourceId: 'x', sourceRevision: 'sha256:r1', lifecycle: 'certified', observed })).toBeUndefined();
+      // A declared contract with every type needs no read.
+      const typed = { ...savedQuery(), outputContract: [{ name: 'month', type: 'date' }, { name: 'gross_revenue', type: 'number', role: 'metric' }] };
+      expect(savedQueryResultDescriptorFromManifestBlock({ block: typed, sourceId: 'x', sourceRevision: 'sha256:r9', lifecycle: 'review' })).toMatchObject({ trust: 'review_required', result: { typesFrom: 'contract' } });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a saved query with result fields in the saved query trust tier', () => {
+    const descriptor = savedQueryResultDescriptorFromManifestBlock({
+      block: { ...savedQuery(), outputContract: [{ name: 'month', type: 'date' }, { name: 'gross_revenue', type: 'number' }] },
+      sourceId: 'x', sourceRevision: 'sha256:r1', lifecycle: 'certified',
+    })!;
+    const capabilities = { measures: [], dimensions: [], outputs: [], filters: [], allowedVisualizations: [], parameters: [] };
+    expect(appSourceTrustTier({ kind: 'block', trust: 'certified', capabilities: { ...capabilities, dataset: descriptor } })).toBe(2);
+    const { result: _result, ...rowLevel } = descriptor;
+    expect(appSourceTrustTier({ kind: 'block', trust: 'certified', capabilities: { ...capabilities, dataset: rowLevel } })).toBe(0);
   });
 });

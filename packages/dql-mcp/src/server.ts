@@ -52,6 +52,7 @@ import {
 import { listApps, listNotebooks } from './tools/apps-notebooks.js';
 import { mcpToolAnnotations } from './tool-annotations.js';
 import { readEnv } from '@zlens/core';
+import { withTrustLine } from './trust-line.js';
 
 export interface CreateServerOptions {
   projectRoot?: string;
@@ -73,9 +74,18 @@ interface McpToolRegistration {
 
 const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'ZLens is a governed analytics MCP server. Start each session with ' +
-  '`inspect_dql_project`; route every analytics question through `ask_dql` ' +
-  'before writing SQL. It returns the safe route, trust label, certified ' +
-  'candidate when available, allowed SQL context, and next tool.\n' +
+  '`inspect_dql_project`; it lists the certified blocks and their grains.\n' +
+  'Answer order for every analytics question, always:\n' +
+  '1. Call `ask_dql` first, before `query_semantic_model`, `list_datasets`, or any SQL. ' +
+  'It returns the safe route, trust label, certified candidate when available, ' +
+  'allowed SQL context, and next tool.\n' +
+  '2. If it returns route `certified`, call `query_via_block` with that block and answer from it.\n' +
+  '3. Only when `ask_dql` returns no certified block, use the semantic layer or ' +
+  'the generated paths below. Never tell the user that no certified block answers ' +
+  'a question unless `ask_dql` said so.\n' +
+  '4. When `ask_dql` returns `nextTool: query_semantic_model`, call it with the ' +
+  'question before writing any SQL; its answer is labelled From Metrics, or ' +
+  'AI-Generated when it joins through a relationship that is not certified.\n' +
   'Two ways to answer: `answer_question` runs ZLens\'s FULL governed cascade and ' +
   'returns the executed answer + rows + canonical trust label + a reviewable ' +
   'draft — use it when you want ZLens to generate for you (same engine + trust ' +
@@ -90,10 +100,19 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'plan. Call `explain_relationship_proof` when the user needs the cardinality, ' +
   'fanout, export/import, warehouse evidence, owner, or stale-state rationale. ' +
   'A dbt dependency edge or an inferred key suggestion never authorizes a join.\n' +
-  'Semantic compile: when the semantic layer contains the requested metric, ' +
-  'dimension, or time grain, use `query_semantic_model` before deep dbt or ' +
-  'warehouse search. Return the DQL semantic artifact, draft path when present, and generated SQL as ' +
-  'reviewable context unless it is backed by a certified block.\n' +
+  'Semantic compile, only after `ask_dql` returned no certified block: when the ' +
+  'semantic layer contains the requested metric, dimension, or time grain, use ' +
+  '`query_semantic_model` before deep dbt or warehouse search. If its result names ' +
+  'a `certifiedBlock`, call `query_via_block` with that block instead. Otherwise return ' +
+  'the DQL semantic artifact, draft path when present, and compiled SQL, ' +
+  'labelled with its `trustLabelInfo.display`: From Metrics (built from semantic ' +
+  'metrics and dimensions, every join a certified relationship), or AI-Generated ' +
+  'when a join is a draft or unmodeled relationship (its caveat names the join). ' +
+  'Its `uncertified: true` means no certified block backs the result and the ' +
+  'draft needs review before certification; it does not make a From Metrics ' +
+  'answer AI-generated. ' +
+  'When it returns `matched: false`, say there is no semantic match; never ' +
+  'answer with a different metric.\n' +
   'Tier 1 certified: for an exact saved block or direct KPI, use ' +
   '`search_blocks`/`get_block` for discovery and `query_via_block` only when ' +
   'a certified block grain exactly answers the question.\n' +
@@ -121,15 +140,21 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'output is grounding evidence, never join authorization.\n' +
   'Tier 3 missing context: if metadata does not identify a safe table, metric, ' +
   'dimension, or grain, refuse and ask for what is missing.\n' +
-  'App Datasets: use `list_datasets` and `describe_dataset` to discover current ' +
+  'App Datasets (for App tiles; analytics questions still start with `ask_dql`): ' +
+  'use `list_datasets` and `describe_dataset` to discover current ' +
   'approved Dataset capability, then `preview_tile_query` or `query_dataset` with ' +
   'a typed TileQuery. These tools accept no SQL and execute through the same local ' +
   'governed Dataset runtime as App Builder; their results are ephemeral and cannot ' +
   'create App publication evidence.\n' +
-  'Trust labels are one canonical vocabulary: Certified, Reviewed, ' +
+  'Trust labels are one canonical vocabulary: Certified, From Metrics, Reviewed, ' +
   'AI-Generated, Insufficient-Context, Conflict (a base label plus an optional ' +
   'qualifier, e.g. "Certified · invariant violated"). Report the trust label ' +
   'verbatim and never upgrade it.\n' +
+  'Trust line: every answer result with rows starts with `trustLine`, e.g. ' +
+  '"🟢 Certified · saved query monthly_revenue · owner analytics@jaffle.shop". ' +
+  'Start your answer with it, word for word, in bold on its own line, before any ' +
+  'number, table or chart. When one answer uses several results, give each its ' +
+  'own line. Never write a trust line yourself for a result that has none.\n' +
   'Conflict route: when two certified terms or blocks claim the same concept ' +
   'but disagree, `ask_dql` returns route `conflict` with BOTH definitions and ' +
   'owners. Present both sides and ask the user which is authoritative — never ' +
@@ -138,8 +163,9 @@ const DQL_MCP_AGENTIC_INSTRUCTIONS =
   'the certification rules (a check only; people certify), `lineage_impact` for ' +
   'dependencies and impact, and `kg_search` for the knowledge graph.\n' +
   'Apps and notebooks: `list_apps` lists the Apps with their dashboards, tiles, the ' +
-  'block behind each tile and its trust; `build_dql_app` drafts a new App (certified ' +
-  'tiles first, review-only placeholders otherwise; never certifies); `list_notebooks` ' +
+  'block behind each tile and its trust; `build_dql_app` starts a new App as an App ' +
+  'Studio draft (certified data only, no App files; give the user its openUrl or openPath ' +
+  'so they check the data and publish there; never certifies); `list_notebooks` ' +
   'reads the notebooks.\n' +
   'Never present generated SQL or draft output as certified.';
 
@@ -186,7 +212,7 @@ export function createDQLMCPServer(options: CreateServerOptions = {}): McpServer
         inputSchema: tool.inputSchema,
         annotations,
       },
-      async (args: any) => wrap(await tool.run(args), tool.name),
+      async (args: any) => wrap(withTrustLine(ctx, tool.name, await tool.run(args)), tool.name),
     );
   }
 
@@ -323,8 +349,14 @@ function mcpToolHandlers(ctx: DQLContext): Partial<Record<DqlToolName, Pick<McpT
   };
 }
 
+/** MCP answer tools whose results carry a `trustLine` (see trust-line.ts). */
+const TRUST_LINE_TOOLS = new Set<string>(['query_via_block', 'query_semantic_model', 'query_via_metadata', 'answer_question']);
+
 function toolDescription(name: DqlToolName): string {
-  return getDqlToolDefinition(name).description;
+  const description = getDqlToolDefinition(name).description;
+  return TRUST_LINE_TOOLS.has(name)
+    ? `${description} A result with rows starts with a trustLine (e.g. "🟢 Certified · saved query …"); start your answer with that line, in bold, word for word.`
+    : description;
 }
 
 /**
@@ -346,12 +378,32 @@ export function isToolError(result: unknown, toolName?: string): boolean {
   return typeof record.error === 'string' && record.error.trim().length > 0;
 }
 
+/**
+ * A `trustLine` inside the JSON was easy to miss: in Claude Desktop the model
+ * wrote the label somewhere in its prose, or not at all. So the line also goes
+ * out as its own plain-text block, with the rule to show it first, right next
+ * to the data. The JSON stays the first block for clients that parse it.
+ */
+function trustLineBlock(result: unknown): string | undefined {
+  const trustLine = result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as { trustLine?: unknown }).trustLine
+    : undefined;
+  if (typeof trustLine !== 'string' || !trustLine.trim()) return undefined;
+  return 'Start your answer with this trust line, in bold on its own line, word for word, ' +
+    'before any number, table or chart:\n' +
+    `**${trustLine.trim()}**`;
+}
+
 function wrap(result: unknown, toolName?: string) {
   const text = readEnv('ZLENS_MCP_PRETTY_JSON') === '1'
     ? JSON.stringify(result, null, 2)
     : JSON.stringify(result);
+  const trust = trustLineBlock(result);
   return {
-    content: [{ type: 'text' as const, text }],
+    content: [
+      { type: 'text' as const, text },
+      ...(trust ? [{ type: 'text' as const, text: trust }] : []),
+    ],
     ...(isToolError(result, toolName) ? { isError: true } : {}),
   };
 }
@@ -361,6 +413,7 @@ export const __test__ = {
   isToolError,
   dqlMcpInstructionsForProfile,
   resolveMcpToolProfile,
+  toolDescription,
   wrap,
   zodRawShapeFromJsonSchema,
 };

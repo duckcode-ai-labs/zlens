@@ -5,6 +5,7 @@
   "tierPolicy": {
     "certified": "reviewable",
     "governed": "reviewable",
+    "review_required": "reviewable",
     "any": "reviewable"
   },
   "gate": "floor",

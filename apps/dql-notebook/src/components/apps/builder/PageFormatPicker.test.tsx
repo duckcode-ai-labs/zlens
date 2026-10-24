@@ -3,9 +3,10 @@ import { describe, expect, it } from 'vitest';
 import { PAGE_FORMATS, PageFormatPicker, pageFormatLabel } from './PageFormatPicker';
 
 describe('page format picker', () => {
-  it('says the choice is what readers see, not a tab to flip', () => {
+  it('names the page style in plain words, not a tab to flip', () => {
     const markup = renderToStaticMarkup(<PageFormatPicker value="story" disabled={false} onChange={() => undefined} />);
-    expect(markup).toContain('Readers see this page as');
+    expect(markup).toContain('Page style:');
+    expect(markup).not.toContain('Readers see this page as');
     expect(markup).toContain('<strong>Report</strong>');
     expect(markup).toContain('aria-haspopup="true"');
     expect(markup).not.toContain('Story');

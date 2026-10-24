@@ -165,7 +165,7 @@ const RESEARCH_PATTERNS: ResearchPattern[] = [
     id: 'trust_gap_review',
     label: 'Trust review',
     dqlTarget: 'replacement or validation block',
-    promptPlaceholder: 'Example: Does this query duplicate or conflict with an existing scoring block?',
+    promptPlaceholder: 'Example: Does this query duplicate or conflict with an existing scoring saved query?',
     focus: 'definitions, duplicates, lineage gaps',
   },
 ];
@@ -1369,7 +1369,7 @@ export function NotebookResearchPanel({ open, onClose, t, initialSourceCellId, i
   const checkDqlReuse = useCallback(async () => {
     if (!activeRun) return;
     if (!reviewedSql.trim() && !activeRun.reviewedSql?.trim() && !activeRun.generatedSql?.trim()) {
-      setError('Reviewed SQL is required before checking for reusable DQL blocks.');
+      setError('Reviewed SQL is required before checking for reusable saved queries.');
       setNotice(null);
       return;
     }
@@ -1403,7 +1403,7 @@ export function NotebookResearchPanel({ open, onClose, t, initialSourceCellId, i
       } else if (action === 'create_replacement' && topMatch) {
         setNotice(`Replacement review recommended: ${topMatch.name} (${Math.round(topMatch.score * 100)}% match).`);
       } else {
-        setNotice('Reuse check complete. No existing block was recommended for reuse.');
+        setNotice('Reuse check complete. No existing saved query was recommended for reuse.');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1829,7 +1829,7 @@ export function NotebookResearchPanel({ open, onClose, t, initialSourceCellId, i
     : sourceNeedsResolution
       ? 'Resolve source evidence before creating a DQL draft'
       : reuseBlocksDraft
-      ? 'Reuse the matching block or document a replacement before creating a new DQL draft'
+      ? 'Reuse the matching saved query or document a replacement before creating a new DQL draft'
     : !activeEvidenceReady
       ? 'Preview and save metadata context before creating a DQL draft'
       : undefined;
@@ -3193,7 +3193,7 @@ export function NotebookResearchPanel({ open, onClose, t, initialSourceCellId, i
                       'completed',
                       'Research marked complete.',
                       undefined,
-                      'Reviewer marked this notebook research complete without certifying a new DQL block.',
+                      'Reviewer marked this notebook research complete without certifying a new saved query.',
                     )}
                     disabled={busy || activeRun.reviewStatus === 'completed'}
                     style={secondaryButtonStyle(t, busy || activeRun.reviewStatus === 'completed')}
@@ -3257,7 +3257,7 @@ export function NotebookResearchPanel({ open, onClose, t, initialSourceCellId, i
                   onClick={checkDqlReuse}
                   disabled={reuseCheckDisabled}
                   style={secondaryButtonStyle(t, reuseCheckDisabled)}
-                  title={sourceNeedsResolution ? 'Resolve source evidence before checking reuse' : 'Check reviewed SQL against existing DQL blocks before creating a draft'}
+                  title={sourceNeedsResolution ? 'Resolve source evidence before checking reuse' : 'Check reviewed SQL against existing saved queries before creating a draft'}
                 >
                   {checkingReuse ? <Loader2 size={14} strokeWidth={2} /> : <Search size={14} strokeWidth={2} />}
                   Check reuse
@@ -3415,7 +3415,7 @@ function slugName(value: string): string {
 
 function seedQuestionForCell(cell: SourceCellOption): string {
   const cleanName = cell.name.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim();
-  return `What reusable business logic does ${cleanName || 'this query'} represent, and should it become a DQL block?`;
+  return `What reusable business logic does ${cleanName || 'this query'} represent, and should it become a saved query?`;
 }
 
 function researchQuestionFromInput(question: string, source: SourceCellOption | null): string {
@@ -3500,7 +3500,7 @@ function researchNoteMarkdown(run: NotebookResearchRun, sourceSync?: SourceSyncS
       `- Action: ${formatPromotionAction(promotion.recommendedAction)}`,
       candidate?.parameterPolicy.length ? `- Parameters: ${candidate.parameterPolicy.slice(0, 8).map((item) => `${item.name} (${item.policy})`).join(', ')}` : '',
       candidate?.allowedFilters.length ? `- Allowed filters: ${candidate.allowedFilters.slice(0, 8).join(', ')}` : '',
-      matches.length ? `- Similar blocks: ${matches.slice(0, 3).map((match) => `${match.name} (${formatMatchKind(match.kind)}, ${Math.round(match.score * 100)}%)`).join('; ')}` : '- Similar blocks: none found in selected context',
+      matches.length ? `- Similar saved queries: ${matches.slice(0, 3).map((match) => `${match.name} (${formatMatchKind(match.kind)}, ${Math.round(match.score * 100)}%)`).join('; ')}` : '- Similar saved queries: none found in selected context',
     ].filter(Boolean).join('\n') : '',
     checklist ? [
       '**Review checklist**',
@@ -5021,7 +5021,7 @@ function researchNextAction(run: NotebookResearchRun, syncStatus?: SourceSyncSta
     return {
       kind: 'review_sql',
       label: 'Review generated SQL',
-      detail: 'Save reviewed SQL before promoting this research into a reusable DQL block.',
+      detail: 'Save reviewed SQL before promoting this research into a reusable saved query.',
       tone: 'warning',
     };
   }
@@ -5052,8 +5052,8 @@ function researchNextAction(run: NotebookResearchRun, syncStatus?: SourceSyncSta
   if (run.dqlPromotionAction === 'reuse_existing') {
     return {
       kind: 'reuse_existing',
-      label: 'Reuse existing block',
-      detail: 'A similar reusable block was found. Mark complete if it should be reused, or document why this should become a replacement.',
+      label: 'Reuse existing saved query',
+      detail: 'A similar reusable saved query was found. Mark complete if it should be reused, or document why this should become a replacement.',
       tone: 'success',
     };
   }
@@ -5061,7 +5061,7 @@ function researchNextAction(run: NotebookResearchRun, syncStatus?: SourceSyncSta
     return {
       kind: 'create_dql_draft',
       label: 'Create DQL draft',
-      detail: 'Reviewed SQL and preview evidence are ready for duplicate checking and draft block creation.',
+      detail: 'Reviewed SQL and preview evidence are ready for duplicate checking and draft saved query creation.',
       tone: 'accent',
     };
   }
@@ -5069,7 +5069,7 @@ function researchNextAction(run: NotebookResearchRun, syncStatus?: SourceSyncSta
     return {
       kind: 'open_certification',
       label: 'Open draft for certification',
-      detail: 'Review metadata, tests, lineage, and duplicate evidence before certifying the block.',
+      detail: 'Review metadata, tests, lineage, and duplicate evidence before certifying the saved query.',
       tone: 'success',
     };
   }
@@ -5085,14 +5085,14 @@ function researchNextAction(run: NotebookResearchRun, syncStatus?: SourceSyncSta
     return {
       kind: 'complete_review',
       label: 'Review warnings',
-      detail: checklist.warnings[0] ?? 'Inspect warnings before creating a reusable block.',
+      detail: checklist.warnings[0] ?? 'Inspect warnings before creating a reusable saved query.',
       tone: 'warning',
     };
   }
   return {
     kind: 'continue_review',
     label: 'Continue research review',
-    detail: 'Review SQL, preview results, and evidence before deciding whether to create or reuse a DQL block.',
+    detail: 'Review SQL, preview results, and evidence before deciding whether to create or reuse a saved query.',
     tone: 'neutral',
   };
 }
@@ -5151,9 +5151,9 @@ function researchWorkflowStages(
           : 'pending';
 
   const dqlDetail = run.draftBlockPath
-    ? 'Draft block saved'
+    ? 'Draft saved'
     : run.dqlPromotionAction === 'reuse_existing'
-      ? 'Reuse existing block'
+      ? 'Reuse existing saved query'
       : 'Create or open DQL draft';
 
   return [
@@ -5416,7 +5416,7 @@ function formatResearchPlanPath(value: NonNullable<NotebookResearchRun['research
     case 'run_preview':
       return 'Run preview';
     case 'reuse_existing':
-      return 'Reuse block';
+      return 'Reuse saved query';
     case 'create_dql_draft':
       return 'Create draft';
     case 'open_certification':
@@ -5924,7 +5924,7 @@ function formatMatchKind(value?: string): string {
     case 'new_logic':
       return 'New logic';
     default:
-      return value ? value.replace(/_/g, ' ') : 'Similar block';
+      return value ? value.replace(/_/g, ' ') : 'Similar saved query';
   }
 }
 

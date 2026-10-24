@@ -5,17 +5,21 @@ import {
   type SemanticLayer,
 } from '@zlens/core';
 import {
+  assessSemanticJoinTrust,
   buildAnalysisQuestionPlan,
-  composeSemanticQueryForQuestion,
+  composeSemanticQueryForQuestionWithCoverage,
   semanticDqlArtifactName,
   renderSemanticDqlArtifact,
+  unexpressedSemanticQuestionParts,
   upsertGeneratedDqlArtifactDraft,
   type GeneratedDraftBlock,
+  type SemanticJoinTrust,
 } from '@zlens/agent';
 import type { DQLContext } from '../context.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
 import { readEnv } from '@zlens/core';
 import { fetchRuntime, runtimeUnreachableMessage } from '../runtime-fetch.js';
+import { findCertifiedBlockCoverage, type CertifiedCoverageResult } from './certified-coverage.js';
 
 export const querySemanticModelInput = zodInputShapeForTool('query_semantic_model');
 
@@ -61,11 +65,25 @@ export async function querySemanticModel(
       ...(args.driver ? { driver: args.driver } : {}),
       ...(args.tableMapping ? { tableMapping: args.tableMapping } : {}),
     };
+    // The members an agent picked must still answer the question it passes:
+    // `orders` alone is not "the busiest hour for orders in Philadelphia".
+    const explicitQuestion = args.question?.trim();
+    const unexpressed = explicitQuestion
+      ? unexpressedSemanticQuestionParts({
+        semanticLayer: layer,
+        question: explicitQuestion,
+        questionPlan: buildAnalysisQuestionPlan(explicitQuestion),
+        members: { metrics: explicitMetrics, dimensions: args.dimensions ?? [], filters: args.filters, timeDimension: args.timeDimension },
+      })
+      : [];
+    if (unexpressed.length > 0) {
+      return unexpressedResult(unexpressed, explicitMetrics[0]!, { requested: composeOptions, available });
+    }
     const composed = layer.composeQuery(composeOptions);
     if (!composed) {
       return {
         matched: false,
-        reason: 'SemanticLayer.composeQuery could not compile the requested metric/dimension selection.',
+        reason: semanticCompileGap(layer, composeOptions),
         requested: composeOptions,
         available,
       };
@@ -104,13 +122,19 @@ export async function querySemanticModel(
       ...(args.orderBy?.length ? { orderBy: args.orderBy } : {}),
       ...(args.limit ? { limit: args.limit } : {}),
     };
+    const certified = await findCertifiedBlockCoverage(ctx, {
+      question: args.question?.trim() || undefined,
+      members: { metrics: explicitMetrics, dimensions: args.dimensions ?? [], timeDimension: args.timeDimension, filters: args.filters },
+    });
+    const joins = assessSemanticJoinTrust(composed.joinPath, ctx.manifest);
     const draftBlock = saveSemanticDraft(ctx.projectRoot, {
-      saveDraft: args.saveDraft,
+      saveDraft: args.saveDraft ?? (certified.block ? false : undefined),
       name: artifactName,
       question: args.question ?? explicitMetrics.join(', '),
       domain,
       dqlArtifact,
       outputs: semanticArtifactOutputs(dqlArtifact),
+      joinCertified: joins.certified,
     });
     const preview = await previewSemanticQuery(ctx, {
       sql: composed.sql,
@@ -119,14 +143,11 @@ export async function querySemanticModel(
       serverUrl: args.serverUrl,
       rowLimit: args.rowLimit,
     });
-    const trust = semanticCompileTrustStatus(draftBlock, preview.error);
+    const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified, joins);
     return {
+      ...certifiedCoverageFields(certified),
       matched: true,
-      uncertified: true,
-      reviewStatus: 'draft_ready',
-      certification: 'uncertified',
-      trustLabelInfo: trust.trustLabelInfo,
-      trustStatus: trust,
+      ...semanticTrustFields(trust),
       mode: 'explicit_members',
       metrics: explicitMetrics,
       dimensions: args.dimensions ?? [],
@@ -138,9 +159,11 @@ export async function querySemanticModel(
       composeResult: composed,
       ...preview,
       draftBlock,
-      dqlArtifact: draftBlock
-        ? { ...dqlArtifact, sourcePath: dqlArtifact.sourcePath ?? draftBlock.path }
-        : dqlArtifact,
+      dqlArtifact: {
+        ...dqlArtifact,
+        trustState: artifactTrustState(trust),
+        ...(draftBlock ? { sourcePath: dqlArtifact.sourcePath ?? draftBlock.path } : {}),
+      },
     };
   }
 
@@ -153,28 +176,44 @@ export async function querySemanticModel(
     };
   }
 
-  const result = composeSemanticQueryForQuestion({
+  const coverage = composeSemanticQueryForQuestionWithCoverage({
     semanticLayer: layer,
     question,
     questionPlan: buildAnalysisQuestionPlan(question),
     driver: args.driver,
     tableMapping: args.tableMapping,
   });
+  const result = coverage.result;
+  const certified = await findCertifiedBlockCoverage(ctx, {
+    question,
+    members: result
+      ? { metrics: result.metrics, dimensions: result.dimensions, timeDimension: result.timeDimension, filters: result.filters }
+      : { metrics: [], dimensions: [] },
+  });
+  if (!result && coverage.unexpressed.length > 0) {
+    return {
+      ...certifiedCoverageFields(certified),
+      ...unexpressedResult(coverage.unexpressed, coverage.metric!, { available }),
+    };
+  }
   if (!result) {
     return {
+      ...certifiedCoverageFields(certified),
       matched: false,
-      reason: 'No compatible semantic metric/dimension/time-grain selection was found for the question.',
+      reason: 'No semantic match: no semantic metric with a compatible dimension and time grain matches the question by name or label. Do not substitute another metric; answer through ask_dql\'s generated route instead.',
       available,
     };
   }
 
+  const joins = assessSemanticJoinTrust(result.composeResult.joinPath, ctx.manifest);
   const draftBlock = saveSemanticDraft(ctx.projectRoot, {
-    saveDraft: args.saveDraft,
+    saveDraft: args.saveDraft ?? (certified.block ? false : undefined),
     name: result.dqlArtifact.name ?? result.metric,
     question,
     domain: layer.listMetrics().find((metric) => metric.name === result.metric)?.domain,
     dqlArtifact: result.dqlArtifact,
     outputs: semanticArtifactOutputs(result.dqlArtifact),
+    joinCertified: joins.certified,
   });
   const preview = await previewSemanticQuery(ctx, {
     sql: result.sql,
@@ -183,15 +222,12 @@ export async function querySemanticModel(
     serverUrl: args.serverUrl,
     rowLimit: args.rowLimit,
   });
-  const trust = semanticCompileTrustStatus(draftBlock, preview.error);
+  const trust = semanticCompileTrustStatus(draftBlock, preview.error, certified, joins);
 
   return {
+    ...certifiedCoverageFields(certified),
     matched: true,
-    uncertified: true,
-    reviewStatus: 'draft_ready',
-    certification: 'uncertified',
-    trustLabelInfo: trust.trustLabelInfo,
-    trustStatus: trust,
+    ...semanticTrustFields(trust),
     mode: 'question_selection',
     metric: result.metric,
     metrics: result.metrics,
@@ -204,28 +240,129 @@ export async function querySemanticModel(
     composeResult: result.composeResult,
     ...preview,
     draftBlock,
-    dqlArtifact: draftBlock
-      ? { ...result.dqlArtifact, sourcePath: result.dqlArtifact.sourcePath ?? draftBlock.path }
-      : result.dqlArtifact,
+    dqlArtifact: {
+      ...result.dqlArtifact,
+      trustState: artifactTrustState(trust),
+      ...(draftBlock ? { sourcePath: result.dqlArtifact.sourcePath ?? draftBlock.path } : {}),
+    },
   };
 }
 
-function semanticCompileTrustStatus(draftBlock?: GeneratedDraftBlock, executionError?: string) {
+/**
+ * A metric matched, but the question also asks for a breakdown, a member or a
+ * date range the selected members cannot express. Answering with the metric
+ * alone would put an unrelated number under a From Metrics label, so this is
+ * no match, with the missing parts listed for the SQL the agent writes next.
+ */
+function unexpressedResult(unexpressed: string[], metric: string, extra: Record<string, unknown>) {
   return {
-    label: 'AI-generated semantic compile',
+    matched: false as const,
+    reason: `No semantic match: the semantic layer has "${metric}" but cannot express ${unexpressed.join(', ')} from this question. Do not answer with "${metric}" alone; answer through query_via_metadata with SQL that applies every part of the question.`,
+    unexpressed,
+    nearestMetric: metric,
+    nextTool: 'query_via_metadata' as const,
+    ...extra,
+  };
+}
+
+/**
+ * Why an explicit selection did not compile, in the modeler's words: the
+ * metric the native engine cannot run (an offset-window derived metric, say)
+ * or the dimension the metrics cannot reach. Falls back to a generic sentence.
+ */
+function semanticCompileGap(layer: SemanticLayer, options: ComposeQueryOptions): string {
+  const gaps = [
+    ...options.metrics.map((metric) => layer.explainNativeMetricGap?.(metric)),
+    ...(options.metrics.every((metric) => !layer.explainNativeMetricGap?.(metric))
+      ? (options.dimensions ?? []).map((dimension) => layer.explainDimensionGap?.(options.metrics, dimension))
+      : []),
+  ].filter((gap): gap is string => Boolean(gap));
+  return gaps.length > 0
+    ? `No semantic match: ${gaps.join(' ')}`
+    : 'No semantic match: the semantic layer could not compile the requested metric/dimension selection.';
+}
+
+/**
+ * Leads the result, so an agent reads it before the compiled draft: the
+ * certified block that answers this, or what the certified check found.
+ */
+function certifiedCoverageFields(certified: CertifiedCoverageResult) {
+  if (certified.block) {
+    return {
+      certifiedBlock: certified.block,
+      nextTool: 'query_via_block' as const,
+      recommendedAction: `Certified block "${certified.block.name}"${certified.block.grain ? ` (${certified.block.grain})` : ''} answers this. Call query_via_block with { name: "${certified.block.name}" } and answer from it. This semantic compile is an uncertified draft; do not say that no certified block exists.`,
+    };
+  }
+  return {
+    certifiedCheck: { checked: certified.checked, ...(certified.route ? { askDqlRoute: certified.route } : {}) },
+    ...(certified.checked ? {} : { recommendedAction: 'Certified blocks were not checked for this request. Call ask_dql with the user\'s question before answering from this draft.' }),
+  };
+}
+
+/**
+ * A semantic compile reads only governed metrics and dimensions, and the
+ * compiler (not a model) writes its SQL. When every join it takes is a
+ * certified DQL relationship (or it takes none), the Ask page heads the same
+ * answer "Answer from Metrics" (`trustState: governed`), so MCP labels it From
+ * Metrics too: above AI-Generated, below Certified. A compile that joins
+ * through a draft relationship, or one no relationship models, is
+ * AI-Generated, and the caveat names the join. Either way the saved draft
+ * still needs review before it can be certified.
+ */
+function semanticCompileTrustStatus(draftBlock: GeneratedDraftBlock | undefined, executionError: string | undefined, certified: CertifiedCoverageResult | undefined, joins: SemanticJoinTrust) {
+  const governed = joins.certified;
+  return {
+    label: governed ? 'From Metrics: semantic compile' : 'AI-Generated: semantic compile through an uncertified join',
     uncertified: true,
+    aiGenerated: !governed,
     reviewStatus: 'draft_ready',
-    certification: 'uncertified',
-    trustLabelInfo: resolveTrustLabel('ai_generated'),
+    certification: governed ? 'governed' as const : 'ai_generated' as const,
+    trustLabelInfo: governed ? resolveTrustLabel('governed') : resolveTrustLabel('ai_generated', 'uncertified join'),
+    relationshipProof: { certified: joins.certified, joins: joins.joins },
     draftPath: draftBlock?.path,
     promotionPath: draftBlock ? 'zlens certify --from-draft' : undefined,
     caveats: [
-      'No certified block exactly answered this question.',
-      'Semantic-layer members were compiled deterministically, but the generated DQL artifact must be reviewed before certification.',
+      certifiedCaveat(certified),
+      ...(joins.caveat ? [`AI-Generated: ${joins.caveat}`] : []),
+      governed
+        ? 'From Metrics: semantic-layer members were compiled deterministically. Not certified: review the DQL artifact before certifying it.'
+        : 'Semantic-layer members were compiled deterministically, but a join is not certified. Not certified: review the DQL artifact before certifying it.',
       'semantic_draft_review_required',
       ...(executionError ? [`Execution caveat: ${executionError}`] : []),
     ],
   };
+}
+
+/**
+ * The trust fields every matched result leads with. `uncertified: true` means
+ * no certified block backs this result and its draft needs review; it does not
+ * mean AI-generated. The label is `trustLabelInfo.display` (`certification`
+ * 'governed' = From Metrics, 'ai_generated' = AI-Generated), and `aiGenerated`
+ * says the same as a boolean.
+ */
+function artifactTrustState(trust: ReturnType<typeof semanticCompileTrustStatus>): 'governed' | 'review_required' {
+  return trust.certification === 'governed' ? 'governed' : 'review_required';
+}
+
+function semanticTrustFields(trust: ReturnType<typeof semanticCompileTrustStatus>) {
+  return {
+    uncertified: true,
+    aiGenerated: trust.aiGenerated,
+    reviewStatus: 'draft_ready',
+    certification: trust.certification,
+    trustLabelInfo: trust.trustLabelInfo,
+    relationshipProof: trust.relationshipProof,
+    trustStatus: trust,
+  };
+}
+
+function certifiedCaveat(certified: CertifiedCoverageResult | undefined): string {
+  if (certified?.block) {
+    return `Certified block "${certified.block.name}" answers this; use query_via_block for the certified answer.`;
+  }
+  if (certified?.checked) return 'No certified block exactly answered this question.';
+  return 'Certified blocks were not checked; ask_dql decides whether a certified block answers the question.';
 }
 
 async function previewSemanticQuery(
@@ -432,6 +569,7 @@ function saveSemanticDraft(
     domain?: string;
     dqlArtifact: DqlArtifactReference & { kind: 'semantic_block' };
     outputs: string[];
+    joinCertified: boolean;
   },
 ): GeneratedDraftBlock | undefined {
   if (input.saveDraft === false) return undefined;
@@ -443,7 +581,7 @@ function saveSemanticDraft(
     dqlArtifact: input.dqlArtifact,
     outputs: input.outputs,
     routeIntent: 'semantic_compile',
-    validationWarnings: ['semantic_draft_review_required'],
+    validationWarnings: ['semantic_draft_review_required', ...(input.joinCertified ? [] : ['semantic_join_not_certified'])],
   });
 }
 

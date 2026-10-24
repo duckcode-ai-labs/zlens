@@ -97,7 +97,7 @@ export function BlockLibraryPanel() {
           color: '#fff', cursor: 'pointer', fontSize: 10, fontWeight: 700, fontFamily: t.font, padding: '4px 8px',
         }}
       >
-        <Plus size={11} strokeWidth={2.2} /> New block
+        <Plus size={11} strokeWidth={2.2} /> New saved query
       </button>
       <button
         onClick={refresh}
@@ -115,35 +115,35 @@ export function BlockLibraryPanel() {
     <input
       value={search}
       onChange={(e) => setSearch(e.target.value)}
-      placeholder="Search blocks..."
+      placeholder="Search saved queries..."
       style={inputStyle}
     />
   );
 
   return (
     <PanelFrame
-      title="Blocks"
+      title="Saved queries"
       status={<span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>{filtered.length}</span>}
       actions={actions}
       toolbar={toolbar}
       bodyPadding={0}
     >
       {loading ? (
-        <PanelEmpty title="Loading blocks…" />
+        <PanelEmpty title="Loading saved queries…" />
       ) : filtered.length === 0 ? (
         <PanelEmpty
-          title={blocks.length === 0 ? 'No blocks yet' : 'No matches'}
+          title={blocks.length === 0 ? 'No saved queries yet' : 'No matches'}
           description={
             blocks.length === 0
-              ? 'Open the builder to create your first review-ready DQL block.'
-              : 'No blocks match your search.'
+              ? 'Open the builder to create your first review-ready saved query.'
+              : 'No saved queries match your search.'
           }
           action={blocks.length === 0 ? (
             <button
               onClick={() => dispatch({ type: 'START_NEW_BLOCK_WORKSPACE' })}
               style={{ background: t.accent, border: 'none', borderRadius: 6, color: '#fff', cursor: 'pointer', fontSize: 11, fontWeight: 700, padding: '7px 11px' }}
             >
-              Create block
+              New saved query
             </button>
           ) : undefined}
         />
@@ -258,7 +258,7 @@ export function BlockLibraryPanel() {
                 padding: '10px 12px',
               }}
             >
-              Show all {filtered.length} blocks
+              Show all {filtered.length} saved queries
             </button>
           )}
         </>

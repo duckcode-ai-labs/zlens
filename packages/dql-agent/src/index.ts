@@ -244,10 +244,28 @@ export {
 } from './app-source-policy.js';
 export {
   AppSourceCatalogError,
+  appSourceTrustTier,
+  matchAppSourceCatalogRecords,
+  matchAppBlockSourceRefs,
   queryAppSourceCatalog,
+  rankAppSourcesByTrust,
+  registerAppSourceRecordDecorator,
   resolveAppSourceCatalogRecords,
   shortlistAppSources,
 } from './app-source-catalog.js';
+export {
+  APP_BUILD_HANDOFF_SOURCE_LIMIT,
+  appBuildHandoffSourceKind,
+  appBuildHandoffSourceSummary,
+  appDraftSourceFromCatalogRecord,
+  appStudioDraftPath,
+  createAppBuildHandoffDraft,
+} from './app-build-handoff.js';
+export type {
+  AppBuildHandoffGap,
+  AppBuildHandoffInput,
+  AppBuildHandoffSourceSummary,
+} from './app-build-handoff.js';
 export {
   planAppBuildBrief,
   deterministicDatasetQuery,
@@ -263,6 +281,11 @@ export {
   buildDatasetComparisonPlan,
   executeDatasetComparisonPlan,
   loadDatasetGrainProofs,
+  SAVED_QUERY_RESULT_COLUMNS_RELATIVE_PATH,
+  isPlainSavedQueryBlock,
+  loadSavedQueryResultColumns,
+  recordSavedQueryResultColumns,
+  savedQueryResultDescriptorFromManifestBlock,
   planDriverQueries,
   foldDriverAnalysis,
   driverTotalTileId,
@@ -299,7 +322,9 @@ export type {
   AppSourceCatalogPage,
   AppSourceCatalogQuery,
   AppSourceCatalogRecord,
+  AppSourceCheck,
   AppSourceEligibility,
+  AppSourceRecordDecorator,
   AppSourceTrust,
 } from './app-source-catalog.js';
 export { seedDomainSkills, buildDomainReferenceSkills } from "./skills/domain-skills.js";
@@ -861,11 +886,15 @@ export {
 } from "./agentic/assumptions.js";
 export {
   composeSemanticQueryForQuestion,
+  composeSemanticQueryForQuestionWithCoverage,
   composeSemanticQueryFromCompiledMembers,
   composeSemanticQueryFromMembers,
   renderSemanticDqlArtifact,
   semanticDqlArtifactName,
+  unexpressedSemanticQuestionParts,
   type ComposeSemanticQueryInput,
+  type SemanticQuestionCoverage,
+  type SemanticQuestionMembers,
   type SemanticBridgeFilter,
   type SemanticBridgeOrderBy,
   type SemanticBridgeQueryResult,
@@ -1193,6 +1222,11 @@ export {
   type AnalyticalExploratoryEdge,
   type AnalyticalExploratoryPath,
 } from "./metadata/analytical-policy.js";
+export {
+  assessSemanticJoinTrust,
+  type SemanticJoinProof,
+  type SemanticJoinTrust,
+} from "./metadata/semantic-join-trust.js";
 export {
   deriveGeneratedDraftSlug,
   deriveSemanticDraftName,

@@ -3,9 +3,9 @@
 | Field              | Value                                                                  |
 | ------------------ | ---------------------------------------------------------------------- |
 | **Author(s)**      | @KKranthi6881                                                          |
-| **Status**         | Accepted; implemented behind `apps.datasets` for the pilot             |
+| **Status**         | Accepted; implemented and on by default (`apps.datasets: false` turns it off) |
 | **Created**        | 2026-09-10 (revised 2026-09-17)                                        |
-| **Targets**        | DQL after `1.17.3`, local opt-in                                       |
+| **Targets**        | DQL after `1.17.3`; on by default after ZLens 0.2.2                    |
 | **Implementation** | landed on `main`, `b5a34727`..`8e0d3f4c`                               |
 | **Amends**         | `PRD-004`, `PRD-007`, `AGT-026` (adds a field-query tile kind)         |
 
@@ -405,11 +405,15 @@ published run, App Autopilot, Ask about this chart, and MCP.
    `last_N_days` (N is 1–3660), `today`, `yesterday`, `month_to_date`,
    `quarter_to_date`, or `year_to_date`. It resolves to an inclusive calendar
    range ending today in the filter's timezone; `last_7_days` is today and
-   the six days before it. A timestamp field requires a declared IANA
-   timezone. A date field uses UTC when none is declared. From there the
-   filter is exactly a `daterange`: `>= start` and `< day after end`. For a
-   timestamp field, both boundaries are local midnights converted to UTC
-   instants, which stays correct across daylight-saving changes.
+   the six days before it. "Today" uses UTC when no timezone is declared.
+   From there the filter is exactly a `daterange`: `>= start` and `< day
+   after end`. Both boundaries are compared as calendar dates on every field
+   type, timestamps included, so the filter uses the same calendar as the
+   time buckets that group the field (`DATE_TRUNC` on the column). An earlier
+   revision converted timestamp boundaries to instants in the filter's
+   timezone; that put 1 July rows into a range ending 30 June when the
+   buckets used the column's own clock (new-user fix B5). A `daterange` with
+   only a start means "from", with only an end "until" (D8).
 6. **Period comparison.** Periods come from the explicit `comparison`
    contract and the governed calendar. The completeness policy decides
    whether the current partial period is used, and a partial current period
@@ -630,8 +634,10 @@ organization approvals.
 ## Milestones
 
 The plan was journey-first. The implementation landed M1–M4 together.
-Everything is gated by `apps.datasets` (off by default). The result cache has
-a separate opt-in.
+Everything is gated by `apps.datasets`. It was off by default during the
+pilot; field-based tiles are now on by default, and `apps.datasets: false` in
+`dql.config.json` turns them off for a project. The result cache has a separate
+opt-in.
 
 | Milestone | Scope |
 | --------- | ----- |
@@ -680,7 +686,7 @@ New IDs for decisions this RFC locks:
 | `APP-076` | Committed M1 pilot App compiles without drift and runs from a clean checkout |
 | `APP-077` | Apps published before Datasets run and republish unchanged |
 | `APP-078` | Detail navigation carries a clicked mark into a carried filter bound to the same field; Dataset filters list their bound field's values |
-| `APP-079` | Field tiles can be turned on from Studio or the viewer in one action (`POST /api/app-datasets/enable`); the `APP-007` gate is unchanged |
+| `APP-079` | Field tiles can be turned back on from the viewer in one action (`POST /api/app-datasets/enable`); the `APP-007` gate is unchanged |
 
 All are recorded in
 [`00-decisions.md`](../specs/dql-2-domain-context/00-decisions.md) and

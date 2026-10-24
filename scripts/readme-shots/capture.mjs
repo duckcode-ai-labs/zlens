@@ -207,7 +207,7 @@ const SHOTS = {
     await page.goto(`${baseUrl}/?app=jaffle-growth&page=overview`);
     await waitForWorkbench(page);
     await expectText(page, 'Answers read this page', 120_000);
-    await expectText(page, 'All 4 tiles certified', 120_000);
+    await expectText(page, 'All tiles certified', 120_000);
     await settle(page, 2500);
     return { clip: { x: 44, y: 48, width: VIEWPORT.width - 44, height: VIEWPORT.height - 48 } };
   },
@@ -221,7 +221,7 @@ const SHOTS = {
     await expectText(page, 'Certified answer');
     await page.getByRole('button', { name: 'Visualization', exact: true }).last().click();
     await page.getByRole('button', { name: 'How it was answered' }).last().click();
-    await expectText(page, 'Answered from a certified block.');
+    await expectText(page, 'Answered from a certified saved query.');
     await settle(page, 2000);
     return {};
   },
@@ -233,7 +233,7 @@ const SHOTS = {
     await page.getByRole('button', { name: 'Ask', exact: true }).first().click();
     await ask(page, 'Which 5 products have the highest supply cost?');
     await expectText(page, 'AI-generated answer');
-    await expectText(page, /Saved for review as a draft block/);
+    await expectText(page, /Saved for review as a draft saved query/);
     // Scroll the thread so the answer's trust line sits at the top of the view.
     await page.getByText('AI-generated answer', { exact: true }).first().evaluate((el) => {
       for (let node = el.parentElement; node; node = node.parentElement) {
@@ -272,16 +272,16 @@ const SHOTS = {
     if (!state.notebookOpen) await SHOTS.notebook(page, state);
     // The cell toolbar shows on hover.
     await page.locator('.cm-content').first().hover();
-    await page.getByRole('button', { name: 'Save Block', exact: true }).first().click();
+    await page.getByRole('button', { name: 'Save as saved query', exact: true }).first().click();
     await page.locator('input[value="new_block"]').first().fill('top_customers_by_spend');
     await page.locator('select').filter({ hasText: 'Global / cross-domain' }).first().selectOption({ label: 'Commerce' });
     await page.getByPlaceholder('data-platform@company.com').fill(SAMPLE_OWNER);
     await page.getByPlaceholder('revenue, dashboard').fill('customers, revenue');
     await page.getByPlaceholder('revenue, dashboard').locator('xpath=following::input[1]').fill('Top 10 customers by lifetime spend, with their lifetime order count.');
-    await page.getByRole('button', { name: 'Save draft block' }).click();
+    await page.getByRole('button', { name: 'Save draft' }).click();
     await page.getByRole('button', { name: 'Certify', exact: true }).first().waitFor({ timeout: 60_000 });
     await page.getByRole('button', { name: 'Certify', exact: true }).first().click();
-    await expectText(page, 'Block certified', 120_000);
+    await expectText(page, 'Saved query certified', 120_000);
     await expectText(page, `Certified by ${SAMPLE_OWNER}`);
     await settle(page, 2000);
     return {};
@@ -292,7 +292,7 @@ const SHOTS = {
     await page.goto(`${baseUrl}/?app=jaffle-growth&page=overview`);
     await waitForWorkbench(page);
     await expectText(page, 'Answers read this page', 120_000);
-    await expectText(page, 'All 4 tiles certified', 120_000);
+    await expectText(page, 'All tiles certified', 120_000);
     await page.getByPlaceholder(/Ask about Jaffle Growth Review/).first().fill('Which customer leads the top beverage customers table on this page?');
     await page.getByRole('button', { name: 'Ask', exact: true }).last().click();
     await expectText(page, /every tile it read runs a certified source/, ASK_TIMEOUT);

@@ -23,6 +23,7 @@
 /** The canonical base trust labels. */
 export type TrustLabelId =
   | 'certified'
+  | 'governed'
   | 'reviewed'
   | 'ai_generated'
   | 'insufficient_context'
@@ -42,7 +43,7 @@ export type TrustLabelColor = 'green' | 'blue' | 'amber' | 'slate' | 'red';
 export interface TrustLabelDefinition {
   /** Stable machine id. */
   id: TrustLabelId;
-  /** Human-facing base label, e.g. "Certified". */
+  /** Human-facing base label, e.g. "Certified" or "From Metrics". */
   base: string;
   /** Severity bucket (drives color + ordering). */
   severity: TrustLabelSeverity;
@@ -77,6 +78,13 @@ export const TRUST_LABELS: Record<TrustLabelId, TrustLabelDefinition> = {
     color: 'green',
     description: 'Governed, human-certified artifact answering at the requested grain.',
   },
+  governed: {
+    id: 'governed',
+    base: 'From Metrics',
+    severity: 'info',
+    color: 'blue',
+    description: 'Built from semantic metrics and dimensions, not certified; the Ask page shows it as "Answer from Metrics".',
+  },
   reviewed: {
     id: 'reviewed',
     base: 'Reviewed',
@@ -110,6 +118,7 @@ export const TRUST_LABELS: Record<TrustLabelId, TrustLabelDefinition> = {
 /** Ordered list of canonical labels (best → worst). */
 export const TRUST_LABEL_ORDER: TrustLabelId[] = [
   'certified',
+  'governed',
   'reviewed',
   'ai_generated',
   'insufficient_context',
@@ -209,6 +218,10 @@ export function trustLabelIdForRoute(route: string | undefined): TrustLabelId {
       return 'certified';
     case 'conflict':
       return 'conflict';
+    case 'semantic':
+    case 'semantic_answer':
+    case 'semantic_compile':
+      return 'governed';
     case 'generated_sql':
       return 'ai_generated';
     case 'research':
@@ -230,6 +243,9 @@ export function trustLabelIdForStatus(status: string | undefined): TrustLabelId 
     case 'certified':
     case 'approved':
       return 'certified';
+    case 'governed':
+    case 'grounded':
+      return 'governed';
     case 'reviewed':
     case 'review':
     case 'research':
@@ -241,6 +257,7 @@ export function trustLabelIdForStatus(status: string | undefined): TrustLabelId 
     case 'pending':
     case 'pending_recertification':
     case 'analyst_review_required':
+    case 'review_required':
       return 'ai_generated';
     case 'conflict':
       return 'conflict';

@@ -69,7 +69,8 @@ const REQUIRED_TEST_FILES = [
 // 187 with the lexical reading of a governed metric and its dimensions (+2 files, +19 tests).
 // 188 with the identity-key warning of a labels-only block (+1 file, +6 tests).
 // 189 with a question that names a certified block (named-block.test.ts, +1 file, +13 tests).
-const EXPECTED_TEST_FILES = 189;
+// 190 with the certified-join check of a semantic compile (semantic-join-trust.test.ts, +1 file, +8 tests).
+const EXPECTED_TEST_FILES = 190;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -127,11 +128,39 @@ const EXPECTED_TEST_FILES = 189;
 // (port of c0e24814).
 // 2533 with the second look at an AI-drafted result (ask-pipeline.test.ts, +5) (port of 1f08af7e / 59683be5).
 // 2534 with Build grounded on the warehouse catalog in a project without dbt (build-from-prompt.test.ts, +1).
-const EXPECTED_TESTS = 2534;
-// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 72 + project-state.test.ts 4), pinned so
+// 2537 with the certified-only AI shortlist and trust-ordered App sources (app-source-catalog.test.ts, +3).
+// 2539 with planner notes in plain words and built-in pick reasons (app-builder-orchestrator.test.ts, +2).
+// 2541 with Ask and MCP App builds handed to App Studio drafts (design D9, app-source-catalog.test.ts, +2).
+// 2542 with one notebook's Notebook AI conversations listed for its History (session-store.test.ts, +1).
+// 2544 with the keyword planner building tiles from a just-checked table (B13, app-builder-orchestrator.test.ts, +2).
+// 2546 with saved query result fields kept per revision and in the saved query trust tier (design D1, registry.test.ts, +2).
+// 2548 with the keyword planner building field tiles from a saved query's result, and showing it as it is
+// when its fields cannot answer (design D1, app-builder-orchestrator.test.ts, +2).
+// 2549 with a block found by its Context panel question aliases and business terms (catalog.test.ts, +1).
+// 2550 with keyword planner request parts kept as notes, never publish blockers (design D4, app-builder-orchestrator.test.ts, +1).
+// 2552 with stories that describe tiles narrowed by different filters each with their own scope, and read
+// date ranges as dates (dashboard-story.test.ts, +2).
+// 2554 with an Ask review draft named after its own id and given the one Domain its tables belong to (drafts.test.ts, +2).
+// 2555 with the runtime's App source record decorator (fields from related tables, design D2,
+// app-source-catalog.test.ts, +1).
+// 2556 with checked data the App shortlist keeps, certified first (design Q1, app-source-catalog.test.ts, +1).
+// 2557 with the App shortlist putting certified data first and never dropping data nobody certified
+// (one trust model T3, app-source-catalog.test.ts, +1).
+// 2559 with editing a published App: its saved-query references found by id, name or path
+// (app-source-catalog.test.ts, +1) and picks named like the Add data list (app-builder-orchestrator.test.ts, +1) (F07, F09).
+// 2563 with local embeddings only when the project chooses them (Codex 23 Oct 2026,
+// project-embeddings.test.ts, +4).
+// 2574 with a qualified semantic metric the question names kept out of a certified block that does not
+// return it (block-fit.test.ts, +4) and the closest semantic metric by name or label (compose.test.ts, +7)
+// (MCP routing 23 Oct 2026).
+// 2584 with From Metrics only through certified joins (semantic-join-trust.test.ts, +8; prepare.test.ts, +2).
+// 2590 with a semantic compile refused when it leaves out a breakdown, member or date range the question
+// asks for (compose.test.ts, +6).
+const EXPECTED_TESTS = 2590;
+// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2458.
-const EXPECTED_HEAVY_TESTS = 76;
+// The ordinary lane's share is the difference: 2497.
+const EXPECTED_HEAVY_TESTS = 77;
 
 const LANES = ['all', 'ordinary', 'heavy'];
 function requestedLane() {

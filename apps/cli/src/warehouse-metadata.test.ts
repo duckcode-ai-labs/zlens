@@ -192,6 +192,20 @@ describe('warehouse metadata scope', () => {
     expect(executePositional).toHaveBeenCalledTimes(2);
   });
 
+  it('never says "outside the dbt project" in a project without dbt (D7)', async () => {
+    const executePositional = vi.fn(async (sql: string): Promise<QueryResult> => (sql.includes('CURRENT_ACCOUNT')
+      ? { columns: [], rows: [{ DQL_ACCOUNT: 'ACME-PROD', DQL_ACCOUNT_LOCATOR: 'XY123', DQL_ACCOUNT_NAME: 'PROD', DQL_ORGANIZATION: 'ACME', DQL_DATABASE: 'ANALYTICS_PROD', DQL_SCHEMA: 'SALES', DQL_ROLE: 'ANALYST', DQL_WAREHOUSE: 'REPORTING_WH' }], rowCount: 1, executionTimeMs: 1 }
+      : { columns: [], rows: [{ database_name: 'ANALYTICS_PROD', name: 'SALES' }, { database_name: 'ANALYTICS_PROD', name: 'GOLD' }], rowCount: 2, executionTimeMs: 1 }));
+    const discovery = await discoverWarehouseMetadataScopes({
+      connectionId: 'primary',
+      executor: { executePositional } as unknown as QueryExecutor,
+      connection: snowflakeConnection,
+      dbtRelations: [],
+    });
+    expect(discovery.message).toBe('Found 2 schemas. Choose the ones ZLens should read, then Apply and synchronize.');
+    expect(discovery.message).not.toContain('dbt');
+  });
+
   it('discovers Databricks catalogs and schemas only during explicit discovery', async () => {
     const connection: ConnectionConfig = {
       driver: 'databricks',

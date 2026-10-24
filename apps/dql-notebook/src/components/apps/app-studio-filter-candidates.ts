@@ -1,4 +1,8 @@
-import type { AppBlockRecommendation, AppStudioBuildDraft } from '../../api/client';
+import type { AppBlockRecommendation, AppStudioBuildDraft, AppStudioDraftOperation } from '../../api/client';
+import { DASHBOARD_FILTER_DOES_NOT_APPLY_REASON } from '@zlens/core/apps/filter-reach';
+import type { DatasetJoin, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
+import { datasetFieldForFilter, relatedFieldParts } from '@zlens/core/datasets/related-fields';
+import { missingFieldReason, sourceDisplayName } from './source-names';
 
 type StudioPage = AppStudioBuildDraft['pages'][number];
 type StudioTile = StudioPage['layout']['items'][number];
@@ -17,16 +21,86 @@ export type StudioFilterTileMapping = {
    * field name on another source. */
   datasetId?: string;
   datasetField?: string;
+  /** The approved physical field's type and role, for link suggestions (D10). */
+  datasetFieldType?: string;
+  datasetFieldRole?: string;
   sourceId?: string;
   sourceRevision?: string;
   reason?: string;
+  /**
+   * A date filter on a tile whose Dataset has no field of the filter's name:
+   * that Dataset's own date and time fields, so the author can map one
+   * ("Use Ordered At on Order Items"). Never applied on its own.
+   */
+  dateFieldOptions?: Array<{ field: string; type: string }>;
+  /** The filter field this tile's mapped field stands in for (an author's date mapping). */
+  mappedFrom?: string;
+  /**
+   * The join path the filter reaches this tile's Dataset through, in words
+   * ("Customer"): a Customer Name filter reaches the Orders trend through
+   * its Customer join (design D2). Still linked only when the author says so.
+   */
+  via?: string;
 };
+
+/**
+ * An author's explicit field choice per Dataset (by source id) for one
+ * filter, e.g. a "Month" date filter that uses `ordered_at` on Order Items.
+ */
+export type StudioFilterFieldOverrides = Record<string, string>;
+
+export type StudioFilterMappingOptions = {
+  fieldOverrides?: StudioFilterFieldOverrides;
+  /** The filter is a date control, so tiles without the field offer their own date fields. */
+  dateFilter?: boolean;
+};
+
+/** Whether a filter control type filters by date. */
+export function isStudioDateFilterType(type: string | undefined): boolean {
+  return type === 'daterange' || type === 'date' || type === 'relative_date';
+}
+
+/**
+ * The field overrides a saved filter already carries: each Dataset binding
+ * whose field is not the filter's own field (by name).
+ */
+export function studioFilterFieldOverrides(
+  pages: StudioPage[],
+  filterId: string,
+  fieldId: string,
+): StudioFilterFieldOverrides {
+  const overrides: StudioFilterFieldOverrides = {};
+  for (const page of pages) {
+    const filter = page.filters?.find((candidate) => candidate.id === filterId);
+    for (const [datasetId, binding] of Object.entries(filter?.datasetBindings ?? {})) {
+      const dataset = page.datasets?.find((candidate) => candidate.id === datasetId);
+      if (dataset && normalizeFieldId(binding.field) !== normalizeFieldId(fieldId)) overrides[dataset.sourceId] = binding.field;
+    }
+  }
+  return overrides;
+}
 
 export type StudioFilterCandidate = {
   id: string;
   sourceNames: string[];
   affectedTileCount: number;
   pageCount: number;
+  /** How many of those tiles reach the field only through a join ("2 via a join"). */
+  viaJoinCount?: number;
+  /** How many of those tiles use it as their Dataset's own main date (Orders → Ordered At). */
+  mainDateTileCount?: number;
+  /** How many tiles group by it as their own date (the trend's Ordered At by month). */
+  groupedTileCount?: number;
+  /** A date or time field. */
+  date?: boolean;
+  /**
+   * The related table a date belongs to, when another Dataset reaches it
+   * through a join ("Customer"): a customer's first order date is not the
+   * order's date, so the list says whose date it is (new-user round 3).
+   */
+  relatedTable?: string;
+  /** How the field list names it: "Customer · First Ordered At" for a related table's date. */
+  label?: string;
 };
 
 export type StudioRuntimeFilterFields = Record<string, Record<string, Array<{
@@ -65,6 +139,129 @@ export function datasetFilterBindingsForSelection(
     }]));
 }
 
+/**
+ * A Saved query, Metrics or draft tile's filter bindings after the author
+ * chose "Applies" or "Does not apply" for one filter in the Filters tab.
+ *
+ * Both choices are stored. "Applies" is a link the next preview checks;
+ * "Does not apply" is an explicit exclusion (`capability: 'unsupported'` with
+ * a reason) that readers see as "Not filtered by …" and that never blocks
+ * publishing. A tile that cannot take the field (an App-scope filter on a
+ * page whose tiles do not expose it) is stored as "Does not apply" with why.
+ * Dataset tiles keep their choice on the filter's `datasetBindings` instead.
+ */
+export function studioTileFilterBindings(input: {
+  tile: Pick<StudioTile, 'filterBindings'>;
+  filterId: string;
+  fieldId: string;
+  required: boolean;
+  /** Whether the filter is on this tile's page at all. */
+  filterOnPage: boolean;
+  applies: boolean;
+  mapping?: StudioFilterTileMapping;
+}): NonNullable<StudioTile['filterBindings']> {
+  const rest = (input.tile.filterBindings ?? []).filter((binding) => binding.filter !== input.filterId);
+  if (!input.filterOnPage) return rest;
+  if (input.applies && input.mapping?.supported) {
+    return [...rest, {
+      filter: input.filterId,
+      binding: input.mapping.binding ?? input.fieldId,
+      mode: input.mapping.mode ?? 'predicate',
+      required: input.required,
+      capability: 'preflight_required',
+    }];
+  }
+  return [...rest, {
+    filter: input.filterId,
+    capability: 'unsupported',
+    unsupportedReason: input.mapping && !input.mapping.supported && input.mapping.reason
+      ? input.mapping.reason
+      : DASHBOARD_FILTER_DOES_NOT_APPLY_REASON,
+  }];
+}
+
+/**
+ * Filter link suggestions (design D10). A new filter starts linked only to
+ * the Dataset whose field the author picked (the first Dataset tile using
+ * that field, on this page first) and to non-Dataset tiles that expose it.
+ * Other Datasets in the App with an approved dimension of the same name and
+ * kind are offered as "Also filter these tiles?", unchecked: nothing links
+ * across Datasets by name on its own.
+ */
+export type StudioFilterLinkSuggestion = {
+  sourceId: string;
+  datasetName: string;
+  field: string;
+  /** The join path the filter reaches this Dataset through ("Customer"), design D2. */
+  via?: string;
+  mappingKeys: string[];
+  tileCount: number;
+};
+
+/** The Dataset a new filter's field comes from: the first Dataset tile using it, on the active page first. */
+export function filterPrimarySourceId(mappings: StudioFilterTileMapping[], activePageId?: string): string | undefined {
+  // A Dataset with the field of its own comes before one that reaches it through a join.
+  const supported = mappings.filter((mapping) => mapping.supported && mapping.datasetId && mapping.sourceId);
+  const dataset = supported.some((mapping) => !mapping.via) ? supported.filter((mapping) => !mapping.via) : supported;
+  return (dataset.find((mapping) => mapping.pageId === activePageId) ?? dataset[0])?.sourceId;
+}
+
+/** What a new filter links at first: its own Dataset's tiles and non-Dataset tiles that expose the field. */
+export function initialFilterMappingKeys(mappings: StudioFilterTileMapping[], primarySourceId: string | undefined): string[] {
+  return mappings
+    .filter((mapping) => mapping.supported && (!mapping.datasetId || mapping.sourceId === primarySourceId))
+    .map((mapping) => mapping.key);
+}
+
+function fieldTypeFamily(type: string | undefined): string {
+  if (type === 'date' || type === 'timestamp') return 'time';
+  return type ?? 'unknown';
+}
+
+/** Other Datasets in the App with an approved dimension of the same name and kind (D10). */
+export function filterLinkSuggestions(
+  mappings: StudioFilterTileMapping[],
+  primarySourceId: string | undefined,
+  boundSources: AppStudioBuildDraft['sources'] = [],
+): StudioFilterLinkSuggestion[] {
+  if (!primarySourceId) return [];
+  const primary = mappings.find((mapping) => mapping.supported && mapping.sourceId === primarySourceId && mapping.datasetField);
+  if (!primary) return [];
+  const family = fieldTypeFamily(primary.datasetFieldType);
+  const groups = new Map<string, StudioFilterLinkSuggestion>();
+  for (const mapping of mappings) {
+    if (!mapping.supported || !mapping.datasetId || !mapping.datasetField || !mapping.sourceId || mapping.sourceId === primarySourceId) continue;
+    if (mapping.datasetFieldRole === 'attribute' || fieldTypeFamily(mapping.datasetFieldType) !== family) continue;
+    // The same column, whether the Dataset has it or reaches it through a join (design D2).
+    if (filterColumn(mapping.datasetField) !== filterColumn(primary.datasetField!)) continue;
+    const current = groups.get(mapping.sourceId);
+    if (current) {
+      current.mappingKeys.push(mapping.key);
+      current.tileCount += 1;
+      continue;
+    }
+    const source = boundSources.find((candidate) => candidate.id === mapping.sourceId);
+    groups.set(mapping.sourceId, {
+      sourceId: mapping.sourceId,
+      datasetName: datasetDisplayName(source, mapping.sourceName),
+      field: mapping.datasetField,
+      ...(mapping.via ? { via: mapping.via } : {}),
+      mappingKeys: [mapping.key],
+      tileCount: 1,
+    });
+  }
+  return [...groups.values()].sort((left, right) => left.datasetName.localeCompare(right.datasetName));
+}
+
+/** A filter field's column: a related field "customer__customer_name" reads the column customer_name. */
+function filterColumn(field: string): string {
+  return (relatedFieldParts(field)?.column ?? field).toLowerCase();
+}
+
+function datasetDisplayName(source: AppStudioBuildDraft['sources'][number] | undefined, fallback: string): string {
+  return sourceDisplayName(source?.qualifiedIdentity ?? fallback, source?.capabilities?.dataset?.label);
+}
+
 export function defaultStudioFilterType(fieldId: string): 'daterange' | 'number' | 'select' {
   if (/date|time|month|week|quarter|year|created|updated|ordered|(_at|_on)$/i.test(fieldId)) return 'daterange';
   if (/count|amount|limit|top_?n|score/i.test(fieldId)) return 'number';
@@ -96,18 +293,60 @@ export function discoverAppFilterCandidates(
       }
     }
   }
+  // A related field ("customer__customer_name") is the same filter as the
+  // column it reads when another source has that column: one candidate, which
+  // reaches the joined Dataset through its join.
+  const plainIds = new Set([...fieldIds].filter((id) => !relatedFieldParts(id)).map((id) => id.toLowerCase()));
+  for (const id of [...fieldIds]) {
+    const parts = relatedFieldParts(id);
+    if (parts && plainIds.has(parts.column.toLowerCase())) fieldIds.delete(id);
+  }
+  const tiles = new Map(pages.flatMap((page) => page.layout.items.map((tile) => [`${page.id}:${tile.i}`, tile] as const)));
   return [...fieldIds]
-    .map((id) => {
+    .map((id): StudioFilterCandidate => {
       const mappings = filterTileMappingsForField(pages, catalog, id, runtimeFields, boundSources).filter((mapping) => mapping.supported);
+      const viaJoinCount = mappings.filter((mapping) => mapping.via).length;
+      const mainDateTileCount = mappings.filter((mapping) => !mapping.via && mappingIsMainDate(mapping, boundSources)).length;
+      const date = mappings.some((mapping) => mapping.datasetFieldType === 'date' || mapping.datasetFieldType === 'timestamp');
+      // Tiles that group by it as their own date: the trend of Orders by month of Ordered At.
+      const groupedTileCount = mappings.filter((mapping) => !mapping.via && mapping.datasetField
+        && tiles.get(`${mapping.pageId}:${mapping.tileId}`)?.query?.dimensions.some((dimension) => dimension.timeGrain && dimension.field.toLowerCase() === mapping.datasetField!.toLowerCase())).length;
+      // A date another Dataset reaches through a join belongs to that related table (a customer's first order).
+      const via = mappings.find((mapping) => mapping.via)?.via;
+      const relatedTable = date && via ? via.split(' → ').pop() : undefined;
       return {
         id,
         sourceNames: [...new Set(mappings.map((mapping) => mapping.sourceName))].sort(),
         affectedTileCount: mappings.length,
         pageCount: new Set(mappings.map((mapping) => mapping.pageId)).size,
+        ...(viaJoinCount ? { viaJoinCount } : {}),
+        ...(mainDateTileCount ? { mainDateTileCount } : {}),
+        ...(groupedTileCount ? { groupedTileCount } : {}),
+        ...(date ? { date: true } : {}),
+        ...(relatedTable ? { relatedTable, label: `${relatedTable} · ${humanizeFieldId(id)}` } : {}),
       };
     })
     .filter((candidate) => candidate.affectedTileCount > 0)
-    .sort((left, right) => left.id.localeCompare(right.id));
+    // New-user round 3, problem 2: the date of the rows the tiles count comes
+    // first (Orders → Ordered At, the date the trend groups by), then other
+    // dates of a Dataset's own rows, then a related table's dates labelled
+    // with their table ("Customer · First Ordered At"), however many tiles a
+    // join lets them reach; other fields after, by name.
+    .sort((left, right) => candidateRank(left) - candidateRank(right)
+      || (right.groupedTileCount ?? 0) - (left.groupedTileCount ?? 0)
+      || (right.mainDateTileCount ?? 0) - (left.mainDateTileCount ?? 0)
+      || left.id.localeCompare(right.id));
+}
+
+function candidateRank(candidate: StudioFilterCandidate): number {
+  if (!candidate.date) return 3;
+  if (candidate.relatedTable) return 2;
+  return candidate.groupedTileCount || candidate.mainDateTileCount ? 0 : 1;
+}
+
+function humanizeFieldId(id: string): string {
+  const column = relatedFieldParts(id)?.column ?? id;
+  return column.replace(/[_-]+/g, ' ').trim().replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 export function discoverPageFilterCandidates(
@@ -126,9 +365,11 @@ export function filterTileMappingsForField(
   fieldId: string,
   runtimeFields: StudioRuntimeFilterFields = {},
   boundSources: AppStudioBuildDraft['sources'] = [],
+  options: StudioFilterMappingOptions = {},
 ): StudioFilterTileMapping[] {
   return pages.flatMap((page) => dataTiles(page).map((tile) => {
-    const datasetMapping = datasetMappingForTile(page, tile, fieldId, boundSources);
+    const datasetMapping: { datasetId: string; field: string; type: string; role: string; mappedFrom?: string; via?: string } | null = datasetMappingForTile(page, tile, fieldId, boundSources)
+      ?? overriddenDatasetMappingForTile(page, tile, fieldId, boundSources, options.fieldOverrides);
     if (tile.query || tile.driver) {
       const sourceName = sourceNameForTile(tile, catalog, boundSources);
       if (datasetMapping) {
@@ -144,10 +385,15 @@ export function filterTileMappingsForField(
           mode: 'predicate' as const,
           datasetId: datasetMapping.datasetId,
           datasetField: datasetMapping.field,
+          datasetFieldType: datasetMapping.type,
+          datasetFieldRole: datasetMapping.role,
           sourceId: tile.sourceId,
           sourceRevision: tile.sourceRevision,
+          ...(datasetMapping.mappedFrom ? { mappedFrom: datasetMapping.mappedFrom } : {}),
+          ...(datasetMapping.via ? { via: datasetMapping.via } : {}),
         };
       }
+      const dateFieldOptions = options.dateFilter ? datasetDateFieldsForTile(page, tile, boundSources) : [];
       return {
         key: studioFilterMappingKey(page.id, tile.i),
         pageId: page.id,
@@ -156,7 +402,9 @@ export function filterTileMappingsForField(
         tileTitle: tile.title || tile.i,
         sourceName,
         supported: false,
-        reason: `${fieldId.replace(/_/g, ' ')} is not an approved physical field on this Dataset source.`,
+        reason: missingFieldReason(sourceName, fieldId),
+        ...(tile.sourceId ? { sourceId: tile.sourceId } : {}),
+        ...(dateFieldOptions.length ? { dateFieldOptions } : {}),
       };
     }
     const fields = governedFieldsForTile(tile, catalog, boundSources);
@@ -183,7 +431,7 @@ export function filterTileMappingsForField(
         binding: runtimeField?.column ?? fieldId,
         mode: tile.semantic ? 'semantic' as const : existing?.mode ?? 'predicate' as const,
       } : {
-        reason: `${fieldId.replace(/_/g, ' ')} is not exposed by ${sourceName}.`,
+        reason: missingFieldReason(sourceName, fieldId),
       }),
     };
   }));
@@ -238,7 +486,7 @@ function datasetMappingForTile(
   tile: StudioTile,
   fieldId: string,
   boundSources: AppStudioBuildDraft['sources'],
-): { datasetId: string; field: string } | null {
+): { datasetId: string; field: string; type: string; role: string; via?: string } | null {
   if (!(tile.query || tile.driver) || !tile.sourceId || !tile.sourceRevision) return null;
   const source = boundSources.find((candidate) => candidate.id === tile.sourceId);
   const descriptor = source?.capabilities?.dataset;
@@ -247,13 +495,77 @@ function datasetMappingForTile(
     && candidate.sourceRevision === tile.sourceRevision
   ));
   if (!descriptor || !binding) return null;
-  const normalized = normalizeFieldId(fieldId);
-  const physical = descriptor.fields.find((field) => (
-    field.kind === 'physical'
-    && field.status === 'approved'
-    && (normalizeFieldId(field.name) === normalized || normalizeFieldId(field.qualifiedId) === normalized)
-  ));
-  return physical ? { datasetId: binding.id, field: physical.name } : null;
+  // Its own field of that name, else the one related field that reads the
+  // column through a checked join ("Orders · via Customer"), design D2.
+  const found = datasetFieldForFilter(descriptor, fieldId);
+  if (!found) return null;
+  const via = found.join ? joinPathWords(descriptor.joins ?? [], found.join.id) : undefined;
+  return { datasetId: binding.id, field: found.field.name, type: found.field.type, role: found.field.role, ...(via ? { via } : {}) };
+}
+
+/** "Customer" or "Customer → Region": a join's path from its Dataset. */
+function joinPathWords(joins: DatasetJoin[], joinId: string): string {
+  const chain: string[] = [];
+  let join = joins.find((candidate) => candidate.id === joinId);
+  while (join && chain.length < 4) {
+    chain.unshift(join.label);
+    const parent = join.parent;
+    join = parent ? joins.find((candidate) => candidate.id === parent) : undefined;
+  }
+  return chain.join(' → ');
+}
+
+/** The Dataset behind a tile and its page binding, when both are current. */
+function tileDataset(page: StudioPage, tile: StudioTile, boundSources: AppStudioBuildDraft['sources']) {
+  if (!(tile.query || tile.driver) || !tile.sourceId || !tile.sourceRevision) return null;
+  const descriptor = boundSources.find((candidate) => candidate.id === tile.sourceId)?.capabilities?.dataset;
+  const binding = page.datasets?.find((candidate) => candidate.sourceId === tile.sourceId && candidate.sourceRevision === tile.sourceRevision);
+  return descriptor && binding ? { descriptor, binding } : null;
+}
+
+/** A tile's Dataset field the author chose for this filter instead of a same-named one. */
+function overriddenDatasetMappingForTile(
+  page: StudioPage,
+  tile: StudioTile,
+  fieldId: string,
+  boundSources: AppStudioBuildDraft['sources'],
+  overrides: StudioFilterFieldOverrides | undefined,
+): { datasetId: string; field: string; type: string; role: string; mappedFrom: string } | null {
+  const chosen = tile.sourceId ? overrides?.[tile.sourceId] : undefined;
+  if (!chosen) return null;
+  const dataset = tileDataset(page, tile, boundSources);
+  if (!dataset) return null;
+  const physical = dataset.descriptor.fields.find((field) => field.kind === 'physical' && field.status === 'approved' && normalizeFieldId(field.name) === normalizeFieldId(chosen));
+  return physical && physical.kind === 'physical'
+    ? { datasetId: dataset.binding.id, field: physical.name, type: physical.type, role: physical.role, mappedFrom: fieldId }
+    : null;
+}
+
+/** Whether a mapping's field is its Dataset's own main date field (the time field marked primary). */
+function mappingIsMainDate(mapping: StudioFilterTileMapping, boundSources: AppStudioBuildDraft['sources']): boolean {
+  if (!mapping.datasetField || !mapping.sourceId) return false;
+  const descriptor = boundSources.find((source) => source.id === mapping.sourceId)?.capabilities?.dataset;
+  const field = descriptor?.fields.find((candidate) => candidate.kind === 'physical' && !candidate.related && candidate.name === mapping.datasetField);
+  return Boolean(field && field.kind === 'physical' && field.time?.primary);
+}
+
+/** A tile's approved date and time fields, for mapping a date filter by hand. */
+function datasetDateFieldsForTile(
+  page: StudioPage,
+  tile: StudioTile,
+  boundSources: AppStudioBuildDraft['sources'],
+): Array<{ field: string; type: string }> {
+  const dataset = tileDataset(page, tile, boundSources);
+  if (!dataset) return [];
+  // The Dataset's own main date first, then its other own dates, then dates of related tables.
+  const rank = (field: DatasetPhysicalField) => (field.time?.primary ? 0 : 1) + (field.related ? 2 : 0);
+  return dataset.descriptor.fields
+    .filter((field): field is DatasetPhysicalField => field.kind === 'physical'
+      && field.status === 'approved'
+      && (field.type === 'date' || field.type === 'timestamp' || field.role === 'time'))
+    .map((field, index) => ({ field, index }))
+    .sort((left, right) => rank(left.field) - rank(right.field) || left.index - right.index)
+    .map(({ field }) => ({ field: field.name, type: field.type }));
 }
 
 function normalizeFieldId(value: string): string {
@@ -265,12 +577,131 @@ function sourceNameForTile(
   catalog: AppBlockRecommendation[],
   boundSources: AppStudioBuildDraft['sources'],
 ): string {
+  // The name a person reads ("Customers"), never the internal identity.
   const bound = tile.sourceId ? boundSources.find((source) => source.id === tile.sourceId) : undefined;
-  if (bound) return bound.qualifiedIdentity ?? bound.sourceRef;
+  if (bound) return datasetDisplayName(bound, bound.sourceRef);
   const blockId = tile.block ? ('blockId' in tile.block ? tile.block.blockId : tile.block.ref) : null;
   const source = blockId ? catalog.find((item) => item.id === blockId || item.name === blockId) : null;
-  if (source) return source.name;
-  if (tile.semantic) return tile.semantic.id;
-  if (tile.draftAnalysis) return tile.draftAnalysis.ref;
+  if (source) return sourceDisplayName(source.qualifiedIdentity ?? source.name, source.capabilities?.dataset?.label ?? source.name);
+  if (tile.semantic) return sourceDisplayName(tile.semantic.id);
+  if (tile.draftAnalysis) return sourceDisplayName(tile.draftAnalysis.ref);
   return tile.title || tile.i;
+}
+
+/**
+ * A page filter a tile just added to the page can take: its field (or a
+ * checked join to it) is on the tile's data, but nothing linked it. The tile
+ * stays "Not filtered by …" until the author says Apply; this is only the
+ * one-click offer ("Customer Name filter can apply to this tile — Apply").
+ */
+export type StudioTileFilterOffer = {
+  filterId: string;
+  filterLabel: string;
+  pageId: string;
+  tileId: string;
+  /** The join the filter reaches the tile through ("Customer"), when it is not the tile's own field. */
+  via?: string;
+  mapping: StudioFilterTileMapping;
+};
+
+/** The page filters a tile can take but is not linked to. */
+export function tileFilterOffers(input: {
+  pages: StudioPage[];
+  pageId: string;
+  tileId: string;
+  catalog: AppBlockRecommendation[];
+  runtimeFields?: StudioRuntimeFilterFields;
+  boundSources?: AppStudioBuildDraft['sources'];
+}): StudioTileFilterOffer[] {
+  const page = input.pages.find((candidate) => candidate.id === input.pageId);
+  const tile = page?.layout.items.find((candidate) => candidate.i === input.tileId);
+  if (!page || !tile) return [];
+  const offers: StudioTileFilterOffer[] = [];
+  for (const filter of page.filters ?? []) {
+    if (studioTileTakesFilter(page, tile, filter.id)) continue;
+    const fieldId = filter.field?.name ?? filter.bindsTo ?? filter.id;
+    const dateFilter = isStudioDateFilterType(filter.type);
+    const fieldOverrides = dateFilter ? studioFilterFieldOverrides(input.pages, filter.id, fieldId) : {};
+    const mapping = filterTileMappingsForField([page], input.catalog, fieldId, input.runtimeFields, input.boundSources, {
+      dateFilter,
+      ...(Object.keys(fieldOverrides).length ? { fieldOverrides } : {}),
+    }).find((candidate) => candidate.tileId === tile.i);
+    if (!mapping?.supported) continue;
+    offers.push({
+      filterId: filter.id,
+      filterLabel: filter.label?.trim() || filter.id.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase()),
+      pageId: page.id,
+      tileId: tile.i,
+      ...(mapping.via ? { via: mapping.via } : {}),
+      mapping,
+    });
+  }
+  return offers;
+}
+
+/** Whether a tile already takes a page filter (a Dataset binding that includes it, or a field link). */
+function studioTileTakesFilter(page: StudioPage, tile: StudioTile, filterId: string): boolean {
+  const filter = page.filters?.find((candidate) => candidate.id === filterId);
+  if (!filter) return false;
+  if (filter.scope?.tileIds && !filter.scope.tileIds.includes(tile.i)) return false;
+  if ((tile.query || tile.driver) && tile.sourceId && tile.sourceRevision) {
+    return Boolean(page.datasets?.some((dataset) => {
+      if (dataset.sourceId !== tile.sourceId || dataset.sourceRevision !== tile.sourceRevision) return false;
+      const binding = filter.datasetBindings?.[dataset.id];
+      return Boolean(binding && (!binding.tileIds || binding.tileIds.includes(tile.i)));
+    }));
+  }
+  if (tile.parameterBindings?.some((binding) => binding.filter === filterId)) return true;
+  return tile.filterBindings?.some((binding) => binding.filter === filterId && binding.capability !== 'unsupported') ?? false;
+}
+
+/**
+ * The edits that link one tile to a page filter after the author accepted
+ * the offer: a Dataset tile joins the filter's binding for its Dataset (the
+ * field the binding already uses, else the tile's own or related field); any
+ * other tile gets a field link. An earlier "Does not apply" on the tile is
+ * replaced.
+ */
+export function tileFilterOfferOperations(page: StudioPage, offer: StudioTileFilterOffer): AppStudioDraftOperation[] {
+  const filter = page.filters?.find((candidate) => candidate.id === offer.filterId);
+  const tile = page.layout.items.find((candidate) => candidate.i === offer.tileId);
+  if (!filter || !tile || !offer.mapping.supported) return [];
+  const operations: AppStudioDraftOperation[] = [];
+  const scope = filter.scope?.tileIds && !filter.scope.tileIds.includes(tile.i)
+    ? { ...filter.scope, tileIds: [...filter.scope.tileIds, tile.i].sort() }
+    : filter.scope;
+  if (offer.mapping.datasetId && offer.mapping.datasetField) {
+    const current = filter.datasetBindings?.[offer.mapping.datasetId];
+    const binding = current
+      ? { ...current, ...(current.tileIds ? { tileIds: [...new Set([...current.tileIds, tile.i])].sort() } : {}) }
+      : { field: offer.mapping.datasetField, tileIds: [tile.i] };
+    operations.push({
+      type: 'set_filter',
+      pageId: page.id,
+      filter: { ...filter, ...(scope ? { scope } : {}), datasetBindings: { ...(filter.datasetBindings ?? {}), [offer.mapping.datasetId]: binding } },
+    });
+    const rest = (tile.filterBindings ?? []).filter((item) => item.filter !== filter.id);
+    if (rest.length !== (tile.filterBindings ?? []).length) {
+      operations.push({ type: 'update_tile', pageId: page.id, tileId: tile.i, patch: { filterBindings: rest } });
+    }
+    return operations;
+  }
+  if (scope !== filter.scope) operations.push({ type: 'set_filter', pageId: page.id, filter: { ...filter, scope } });
+  operations.push({
+    type: 'update_tile',
+    pageId: page.id,
+    tileId: tile.i,
+    patch: {
+      filterBindings: studioTileFilterBindings({
+        tile,
+        filterId: filter.id,
+        fieldId: filter.field?.name ?? filter.bindsTo ?? filter.id,
+        required: filter.required ?? false,
+        filterOnPage: true,
+        applies: true,
+        mapping: offer.mapping,
+      }),
+    },
+  });
+  return operations;
 }

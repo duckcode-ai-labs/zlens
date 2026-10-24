@@ -4,6 +4,8 @@ import type {
   DashboardDatasetParameterEvidence,
   DashboardRunResponse,
 } from '../../api/client';
+import { plainSourceText } from './source-names';
+import { formatBusinessLabel } from './app-text';
 
 type DashboardRunTile = DashboardRunResponse['tiles'][number];
 
@@ -17,25 +19,39 @@ export type DatasetEvidenceRow = { label: string; value: string };
  */
 export type DatasetTileNotice = {
   key: string;
-  kind: 'excluded' | 'not_linked' | 'adapted';
+  kind: 'excluded' | 'not_linked' | 'adapted' | 'names';
   label: string;
   detail: string;
 };
 
-export function datasetTileNotices(tile: DashboardRunTile | undefined): DatasetTileNotice[] {
+export function datasetTileNotices(tile: DashboardRunTile | undefined, options: { filterLabels?: Record<string, string> } = {}): DatasetTileNotice[] {
   const notices: DatasetTileNotice[] = [];
+  const nameOf = (filterId: string) => options.filterLabels?.[filterId] ?? formatBusinessLabel(filterId);
   for (const issue of tile?.dataset?.unboundFilters ?? []) {
-    const name = issue.filterId.replace(/[_-]+/g, ' ');
+    const name = nameOf(issue.filterId);
     notices.push(issue.code === 'DATASET_TILE_EXCLUDED'
-      ? { key: `${issue.filterId}:${issue.code}`, kind: 'excluded', label: `Excluded from ${name}`, detail: issue.message }
-      : { key: `${issue.filterId}:${issue.code}`, kind: 'not_linked', label: `Not filtered by ${name}`, detail: issue.message });
+      ? { key: `${issue.filterId}:${issue.code}`, kind: 'excluded', label: `Not filtered by ${name}`, detail: plainSourceText(issue.message) }
+      : { key: `${issue.filterId}:${issue.code}`, kind: 'not_linked', label: `Not filtered by ${name}`, detail: plainSourceText(issue.message) });
+  }
+  // Every other data tile reports what the server did with each page filter.
+  // A Dataset tile already said so above; text tiles never carry a report.
+  if (!tile?.dataset && tile?.tileType !== 'text') {
+    for (const entry of tile?.filterReport?.notApplied ?? []) {
+      notices.push({ key: `${entry.filter}:${entry.code}`, kind: 'not_linked', label: `Not filtered by ${nameOf(entry.filter)}`, detail: plainSourceText(entry.reason) });
+    }
+  }
+  // A name grouped without a key may merge namesakes (new-user round 3, problem 4).
+  for (const warning of tile?.dataset?.nameWarnings ?? []) {
+    notices.push({ key: `names:${warning.field}`, kind: 'names', label: 'Names may repeat', detail: warning.message });
   }
   if (tile?.dataset?.validation?.outcome === 'adapted') {
     for (const adaptation of tile.dataset.validation.adaptations) {
       notices.push({
         key: `adaptation:${adaptation.kind}`,
         kind: 'adapted',
-        label: adaptation.kind === 'aggregate_time_rollup' ? 'Rolled up over time' : 'Rolled up above Dataset grain',
+        label: adaptation.kind === 'aggregate_time_rollup'
+          ? 'Rolled up over time'
+          : adaptation.kind === 'saved_query_rollup' ? 'Rolled up from a saved query' : 'Rolled up above the data’s grain',
         detail: adaptation.message,
       });
     }
@@ -102,8 +118,8 @@ function parameterRows(evidence: DashboardDatasetParameterEvidence[] | undefined
 function provenanceRows(provenance: DashboardDatasetExecutionProvenance | undefined): DatasetEvidenceRow[] {
   if (!provenance) return [];
   const rows: DatasetEvidenceRow[] = [
-    { label: 'Runtime', value: provenance.kind === 'semantic_runtime' ? 'Semantic Dataset execution' : 'Block Dataset execution' },
-    { label: 'Dataset source', value: `${provenance.sourceId} · ${provenance.sourceRevision}` },
+    { label: 'Runtime', value: provenance.kind === 'semantic_runtime' ? 'Metrics run' : 'Saved query run' },
+    { label: 'Data source', value: `${provenance.sourceId} · ${provenance.sourceRevision}` },
     { label: 'Contract', value: provenance.contractFingerprint },
     { label: 'Query', value: provenance.queryFingerprint },
     { label: 'Filters', value: provenance.filterFingerprint },
@@ -122,7 +138,7 @@ function receiptPresentation(receipt: unknown): DatasetTileEvidencePresentation[
     return {
       kind: 'provider_receipt_unavailable',
       rows: [],
-      notice: 'No provider execution receipt was returned for this block Dataset run. Server execution provenance is shown instead.',
+      notice: 'No provider execution receipt was returned for this saved query run. Server execution provenance is shown instead.',
     };
   }
   const record = receipt as Record<string, unknown>;
@@ -254,7 +270,7 @@ export function presentDatasetTileEvidence(tile: DashboardRunTile): DatasetTileE
     : undefined;
   return {
     authoredQuerySpec,
-    authoredQuerySpecUnavailable: 'The server did not return a redacted authored Dataset query specification for this result.',
+    authoredQuerySpecUnavailable: 'The server did not return a redacted authored field query specification for this result.',
     executedSql,
     executedSqlUnavailable: 'Provider SQL was unavailable for this executed result. The provider returned no inspectable SQL; execution provenance is shown instead.',
     parameterEvidence: parameterRows(tile.dataset.parameterEvidence),

@@ -71,7 +71,7 @@ describe('host UI (RFC 0010 HH-9)', () => {
     expect(hostReader(hosted({ audience: 'reader' }))).toBe(true);
     const local = appLibraryWords(false);
     expect(local.filters).toEqual(['all', 'drafts', 'private', 'shared', 'fav']);
-    expect(local.label('drafts')).toBe('Local drafts');
+    expect(local.label('drafts')).toBe('Not published yet');
     expect(local.loadingDetail).toBe('Reading local app files from this ZLens project.');
     const reader = appLibraryWords(true);
     expect(reader.filters).toEqual(['all', 'shared', 'fav']);

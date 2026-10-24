@@ -2,6 +2,8 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { tileQueryHash } from '@zlens/core/apps/tile-query';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as AppStudioV2Module from './AppStudioV2';
+import { summarizeAppStudioAiPlan, appStudioNewDataSources } from './app-studio-ai-plan';
+import { aiProposal, marginMetrics, orderLinesDataset } from './builder/app-data.fixtures';
 
 // AppStudioV2 pulls in most of the Studio (charts, the AI panel, every builder
 // panel), so its first import can take several seconds on a busy machine. Load
@@ -24,10 +26,6 @@ async function datasetSourceAuthoringDialog() {
 
 async function datasetSourceRebindReviewDialog() {
   return studio.DatasetSourceRebindReviewDialog;
-}
-
-async function datasetTileBuilder() {
-  return studio.DatasetTileBuilder;
 }
 
 async function appAutopilotReviewCard() {
@@ -161,7 +159,7 @@ describe('Studio Dataset mark interaction (APP-041)', () => {
     // Result cardinality never makes two selected measures safe for a scalar
     // view; the author sees a repair path before a hidden value can render.
     for (const markup of [render([]), render([{ revenue: 130, order_count: 6 }])]) {
-      expect(markup).toContain('Dataset visualization needs attention');
+      expect(markup).toContain('Chart needs attention');
       expect(markup).toContain('exactly one selected measure');
       expect(markup).toContain('Choose Table');
     }
@@ -203,54 +201,56 @@ describe('Studio Dataset source authoring (APP-055)', () => {
       />,
     );
 
-    expect(markup).toContain('Native grain proposal');
-    expect(markup).toContain('Author Dataset definition');
-    expect(markup).toContain('proof.customer-day');
-    expect(markup).toContain('Physical field roles');
-    expect(markup).toContain('Dataset native time bucket');
+    expect(markup).toContain('What is one row?');
+    expect(markup).toContain('Define fields');
+    // Ids and proof references sit under a collapsed Technical details toggle (D6).
+    expect(markup).toMatch(/<details class="dql-technical-details"><summary>Technical details<\/summary>[\s\S]*proof\.customer-day[\s\S]*<\/details>/);
+    expect(markup).not.toMatch(/<details[^>]*open/);
+    expect(markup).not.toContain('Native grain proposal');
+    expect(markup).toContain('Column types');
+    expect(markup).toContain('Native time bucket');
     expect(markup).toContain('order_date role');
     expect(markup).toContain('Gross margin');
     expect(markup).toContain('SUM(daily_revenue) - SUM(daily_margin)');
     expect(markup).toContain('Aggregate formula');
     expect(markup).toContain('Review source change');
-    expect(markup).toContain('does not change this App’s Dataset binding');
+    expect(markup).toContain('does not change this App’s data');
   });
 
-  it('makes review-preview opt-in explicit before refreshing a changed Dataset binding', async () => {
+  it('asks before refreshing a changed Dataset binding, and says it does not certify the data', async () => {
     const DatasetSourceRebindReviewDialog = await datasetSourceRebindReviewDialog();
     const markup = renderToStaticMarkup(
       <DatasetSourceRebindReviewDialog title="Order lines Dataset" disabled={false} onCancel={() => undefined} onConfirm={() => undefined} />,
     );
-    expect(markup).toContain('Enable review preview &amp; refresh');
-    expect(markup).toContain('Project publication stays blocked');
-    expect(markup).toContain('does not certify the Dataset');
+    expect(markup).toContain('Refresh data');
+    expect(markup).toContain('not certified yet');
+    expect(markup).not.toMatch(/needs review/i);
+    expect(markup).toContain('does not certify the data');
   });
 });
 
 describe('Studio Dataset period comparison authoring (APP-060)', () => {
   it('offers an explicit calendar-period control from an approved Dataset time field', async () => {
-    const DatasetTileBuilder = await datasetTileBuilder();
+    const { TileQueryEditor } = await import('./builder/TileQueryEditor');
+    const descriptor = {
+      version: 1, id: 'source.orders', kind: 'block', sourceRevision: 'sha256:orders', snapshotId: 'snapshot-1',
+      contractRef: { kind: 'block_source', id: 'commerce::orders', fingerprint: 'sha256:contract' },
+      binding: { sourceQualifiedId: 'commerce::orders', sourceRevision: 'sha256:orders', contractFingerprint: 'sha256:contract', state: 'valid' },
+      label: 'Orders', lifecycle: 'certified', trust: 'certified',
+      grain: { entityIds: ['order_line'], keyFields: ['order_line_id'] },
+      fields: [
+        { kind: 'physical', name: 'order_date', qualifiedId: 'field:order_date', type: 'date', role: 'time', status: 'approved', time: { grains: ['day', 'month'], primary: true } },
+        { kind: 'measure', name: 'revenue', qualifiedId: 'measure:revenue', aggregation: 'sum', from: 'net_amount', dependsOn: ['net_amount'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
+      ],
+      operations: ['filter', 'group', 'compare', 'having'], execution: { route: 'governed_sql' },
+    } as any;
     const markup = renderToStaticMarkup(
-      <DatasetTileBuilder
-        source={{
-          id: 'source.orders', sourceId: 'source.orders', sourceRevision: 'sha256:orders', name: 'Orders', domain: 'commerce',
-          capabilities: {
-            dataset: {
-              version: 1, id: 'source.orders', kind: 'block', sourceRevision: 'sha256:orders', snapshotId: 'snapshot-1',
-              contractRef: { kind: 'block_source', id: 'commerce::orders', fingerprint: 'sha256:contract' },
-              binding: { sourceQualifiedId: 'commerce::orders', sourceRevision: 'sha256:orders', contractFingerprint: 'sha256:contract', state: 'valid' },
-              label: 'Orders', lifecycle: 'certified', trust: 'certified',
-              grain: { entityIds: ['order_line'], keyFields: ['order_line_id'] },
-              fields: [
-                { kind: 'physical', name: 'order_date', qualifiedId: 'field:order_date', type: 'date', role: 'time', status: 'approved', time: { grains: ['day', 'month'], primary: true } },
-                { kind: 'measure', name: 'revenue', qualifiedId: 'measure:revenue', aggregation: 'sum', from: 'net_amount', dependsOn: ['net_amount'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
-              ],
-              operations: ['filter', 'group', 'compare', 'having'], execution: { route: 'governed_sql' },
-            },
-          },
-        } as any}
+      <TileQueryEditor
+        descriptor={descriptor}
+        query={{ dimensions: [], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true }}
         disabled={false}
-        onAdd={vi.fn()}
+        onChange={vi.fn()}
+        idPrefix="period-comparison"
       />,
     );
 
@@ -544,11 +544,351 @@ describe('Studio legacy semantic conversion (M4-CONV-01)', () => {
       />,
     );
 
-    expect(markup).toContain('Convert to Dataset query');
+    expect(markup).toContain('Convert to a field query');
     expect(markup).toContain('Preview Dataset conversion');
     expect(markup).toContain('Mapped source: app:semantic:commerce:orders');
     expect(markup).toContain('Apply Dataset conversion');
     expect(markup).toContain('does not certify the source');
     expect(markup).not.toContain('Run SQL');
+  });
+});
+
+describe('Studio field-based tiles are on by default (APP-007)', () => {
+  const datasetSource = {
+    id: 'source.order-lines', sourceId: 'source.order-lines', name: 'order_lines', domain: 'commerce',
+    status: 'certified', trust: 'certified', owner: null, tags: [], path: 'blocks/commerce/order-lines.dql', fingerprint: 'sha256:a',
+    lastModified: '2026-10-01T00:00:00.000Z', description: 'Order lines', score: 1, reasons: [],
+    capabilities: {
+      measures: ['revenue'], dimensions: ['region'], outputs: ['region', 'revenue'], filters: [], parameters: [],
+      dataset: {
+        id: 'dataset.order-lines', kind: 'block', label: 'Order lines', operations: ['group'],
+        fields: [
+          { name: 'revenue', kind: 'measure', status: 'approved', aggregation: 'sum', dependsOn: ['net_amount'] },
+          { name: 'region', kind: 'physical', status: 'approved', role: 'dimension', type: 'string' },
+        ],
+      },
+    },
+  };
+
+  async function renderDataPanel(datasetTilesEnabled: boolean): Promise<string> {
+    const { DataPanel } = await import('./builder/DataPanel');
+    return renderToStaticMarkup(
+      <DataPanel
+        appData={[datasetSource] as any}
+        active={datasetSource as any}
+        target={{ kind: 'none' }}
+        disabled={false}
+        datasetTilesEnabled={datasetTilesEnabled}
+        onChoose={vi.fn()}
+        onPickField={vi.fn()}
+        onAddData={vi.fn()}
+        onAddSavedQuery={vi.fn()}
+        onAddContent={vi.fn()}
+      />,
+    );
+  }
+
+  it('shows no opt-in banner and lists the Dataset fields when the feature is on', async () => {
+    const markup = await renderDataPanel(true);
+    expect(markup).not.toContain('Build tiles from Dataset fields');
+    expect(markup).not.toContain('Turn on field-based tiles');
+    expect(markup).not.toContain('turned off for this project');
+    expect(markup).toContain('Measures');
+    expect(markup).toContain('Revenue');
+  });
+
+  it('shows one plain line and no fields when apps.datasets is false', async () => {
+    const markup = await renderDataPanel(false);
+    expect(markup).toContain('Field-based tiles are turned off for this project (apps.datasets is false in dql.config.json).');
+    expect(markup).not.toContain('Turn on field-based tiles');
+    expect(markup).not.toContain('Search fields');
+  });
+});
+
+describe('Studio honest AI review and App domain (D6, D7, D8)', () => {
+  it('uses the App domain from the draft, never the no-domain default', () => {
+    const page = (domain?: string) => ({ pages: [{ metadata: { title: 'Overview', ...(domain ? { domain } : {}) } }] }) as never;
+    expect(studio.appDraftDomain(page('finance'))).toBe('finance');
+    expect(studio.appDraftDomain(page('general'))).toBeUndefined();
+    expect(studio.appDraftDomain(page())).toBeUndefined();
+    expect(studio.appDraftDomain(null)).toBeUndefined();
+  });
+});
+
+describe('Canvas AI review keeps only the tiles (design D3, D5)', () => {
+  const review = (props: Partial<Parameters<typeof studio.AiPlanReview>[0]> = {}) => {
+    const proposal = aiProposal();
+    const summary = summarizeAppStudioAiPlan(proposal);
+    const AiPlanReview = studio.AiPlanReview;
+    return renderToStaticMarkup(
+      <AiPlanReview
+        proposal={proposal}
+        summary={summary}
+        sourcePolicy="governed_only"
+        selectedSourceIds={new Set(proposal.defaultSelectedSourceIds)}
+        busy={false}
+        changeCount={2}
+        onApply={vi.fn()}
+        onDismiss={vi.fn()}
+        onToggleTile={vi.fn()}
+        onRevise={vi.fn()}
+        onAnswerClarification={vi.fn()}
+        onGenerateGap={vi.fn()}
+        {...props}
+      />,
+    );
+  };
+
+  it('after Build pages: proposed tiles with keep or skip, Apply N changes, Discard and Back to data', () => {
+    const markup = review({ showPlanNotes: false, onBackToData: vi.fn(), skippedTileIds: new Set(['margin-kpi']) });
+    expect(markup).toContain('Review the tiles');
+    expect(markup).toContain('Back to data');
+    expect(markup).toContain('Revenue trend');
+    expect(markup).toContain('aria-label="Skip Revenue trend"');
+    expect(markup).toContain('aria-label="Keep Gross margin"');
+    expect(markup).toContain('1</strong> of 2 tiles kept');
+    expect(markup).toContain('Apply 2 changes');
+    expect(markup).toContain('>Discard</button>');
+    // The data lives in the Data step now.
+    expect(markup).not.toMatch(/Selected for this App|AI suggestions|More App sources|Apply with|Search proposed and available sources|New data for this App/);
+    expect(markup).not.toContain('Revenue by channel was not added');
+    expect(markup).not.toContain('Not covered yet');
+  });
+
+  it('has no Back to data link when the proposal did not come from the Data step', () => {
+    expect(review()).not.toContain('Back to data');
+  });
+
+  it('lists the data an Ask AI proposal adds as New data for this App, with the reason', () => {
+    const proposal = aiProposal();
+    const summary = summarizeAppStudioAiPlan(proposal);
+    const selected = new Set(proposal.defaultSelectedSourceIds);
+    const margin = proposal.operations.find((operation) => operation.type === 'upsert_source' && operation.source.id === marginMetrics.sourceId);
+    // The App already has Margin; only Order lines is new.
+    const newSources = appStudioNewDataSources(summary, selected, margin?.type === 'upsert_source' ? [margin.source] : []);
+    expect(newSources.map((source) => source.id)).toEqual([orderLinesDataset.sourceId]);
+    const markup = review({ newSources });
+    expect(markup).toContain('New data for this App: Order Lines');
+    expect(markup).toContain('Why: Order lines carries revenue by order date.');
+    expect(markup).toContain('Table · Certified');
+    expect(markup).not.toContain('New data for this App: Margin');
+    // Canvas proposals still show the planner notes and gaps.
+    expect(markup).toContain('Revenue by channel was not added because no Dataset has a channel field.');
+    expect(markup).toContain('Not covered yet');
+  });
+});
+
+describe('Publish leaves out data no tile uses (design D4)', () => {
+  it('notes connected sources that no tile uses and does not count them as fixes', () => {
+    const PublishReadinessDialog = studio.PublishReadinessDialog;
+    const unused = (id: string) => ({ id, kind: 'block' as const, sourceRef: `blocks/${id}.dql`, lifecycle: 'draft' as const, trustState: 'review_required' as const, reviewStatus: 'required' as const });
+    const draft = {
+      version: 3, id: 'build_1', appId: 'revenue-app', name: 'Revenue App', revision: 2, proposalHash: 'hash',
+      authoringMode: 'manual', template: 'blank', sourcePolicy: 'include_review_required', state: 'local_draft',
+      frame: { goal: 'Revenue', metrics: [], dimensions: [], filters: [] }, requirements: [], coverage: [],
+      sources: [unused('orders'), unused('customers')],
+      pages: [{ version: 2, id: 'overview', metadata: { title: 'Overview' }, layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [] } }],
+      reviewTasks: [], createdAt: '', updatedAt: '',
+    } as never;
+    const markup = renderToStaticMarkup(
+      <PublishReadinessDialog
+        draft={draft}
+        serverIssues={[]}
+        busy={false}
+        previewRun={null}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onRunPreview={vi.fn()}
+        onRunAllPreviews={vi.fn()}
+        onRemoveRequirement={vi.fn()}
+        onReviseRequirement={vi.fn()}
+        onAnswerQuestion={vi.fn()}
+        onResolveTask={vi.fn()}
+        onOpenSources={vi.fn()}
+        onOpenFilters={vi.fn()}
+        onRefreshSources={vi.fn()}
+        onApproveSemantic={vi.fn()}
+        onRemoveLocalAnalysis={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('2 data sources not used by any tile will not be saved with the App.');
+    expect(markup).toContain('Ready to publish');
+    expect(markup).not.toContain('Local analysis cannot publish');
+  });
+});
+
+describe('Publish lists tiles on a join nobody certified, and never blocks on them by default (design D2, T3)', () => {
+  const sourceId = 'app:block:commerce:orders';
+  const draftWith = (sourcePolicy: 'governed_only' | 'include_review_required') => ({
+    version: 3, id: 'build_1', appId: 'orders-app', name: 'Orders', revision: 2, proposalHash: 'hash',
+    authoringMode: 'manual', template: 'blank', sourcePolicy, state: 'local_draft',
+    frame: { goal: 'Orders', metrics: [], dimensions: [], filters: [] }, requirements: [], coverage: [],
+    sources: [{
+      id: sourceId, kind: 'block', sourceRef: 'orders', lifecycle: 'certified', trustState: 'certified', reviewStatus: 'not_required',
+      capabilities: { dataset: {
+        kind: 'block', trust: 'certified',
+        fields: [{ kind: 'physical', name: 'location__location_name', qualifiedId: 'o:location__location_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'location', column: 'location_name' } }],
+        joins: [{ id: 'location', label: 'Location', table: 'locations', relation: 'main.locations', keys: [{ from: 'location_id', to: 'location_id' }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: 'proposal_setup:rel_2', uniqueness: 'current', sentence: 'each order has one location' }],
+      } },
+    }],
+    pages: [{
+      version: 3, id: 'overview', metadata: { title: 'Overview' },
+      datasets: [{ id: 'orders_ds', sourceId, sourceRevision: 'r', snapshotId: 's', contractFingerprint: 'c' }],
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [{
+        i: 'by_location', x: 0, y: 0, w: 6, h: 4, title: 'Revenue by location', sourceId, sourceRevision: 'r',
+        query: { dimensions: [{ field: 'location__location_name' }], measures: [{ measure: 'revenue' }], respectsGlobalFilters: true }, viz: { type: 'bar' },
+      }] },
+    }],
+    previewReceipts: [{ id: 'run', pageId: 'overview', revision: 2, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'x', createdAt: '' }],
+    reviewTasks: [], createdAt: '', updatedAt: '',
+  }) as never;
+  const dialog = (draft: never, requireCertifiedToPublish = false) => renderToStaticMarkup(
+    <studio.PublishReadinessDialog
+      draft={draft}
+      requireCertifiedToPublish={requireCertifiedToPublish}
+      serverIssues={[]}
+      busy={false}
+      previewRun={null}
+      onClose={vi.fn()}
+      onRetry={vi.fn()}
+      onRunPreview={vi.fn()}
+      onRunAllPreviews={vi.fn()}
+      onRemoveRequirement={vi.fn()}
+      onReviseRequirement={vi.fn()}
+      onAnswerQuestion={vi.fn()}
+      onResolveTask={vi.fn()}
+      onOpenSources={vi.fn()}
+      onOpenFilters={vi.fn()}
+      onRefreshSources={vi.fn()}
+      onApproveSemantic={vi.fn()}
+      onRemoveLocalAnalysis={vi.fn()}
+    />,
+  );
+
+  it('is ready with the tile listed, its join actions, and what readers will see — whatever an old App\'s data rule said', () => {
+    for (const sourcePolicy of ['governed_only', 'include_review_required'] as const) {
+      const markup = dialog(draftWith(sourcePolicy));
+      expect(markup).toContain('Ready to publish');
+      expect(markup).toContain('0 of 1 tile certified');
+      expect(markup).toContain('aria-label="1 tile not certified yet"');
+      expect(markup).toContain('Revenue by location');
+      expect(markup).toContain('Uses a join nobody has certified.');
+      expect(markup).toContain('Certify this join (recommended)');
+      expect(markup).toContain('Remove the related field');
+      expect(markup).toContain('Readers will see \u2018Not certified yet\u2019 on 1 tile.');
+      expect(markup).toMatch(/<button type="button" class="primary">Publish<\/button>/);
+      expect(markup).not.toContain('All checks passed');
+      expect(markup).not.toMatch(/needs review|Allow data|data rule|Only certified data/i);
+    }
+  });
+
+  it('holds publishing with one plain sentence when the project requires certified data', () => {
+    const markup = dialog(draftWith('include_review_required'), true);
+    expect(markup).not.toContain('Ready to publish');
+    expect(markup).toContain('1 fix before publishing');
+    expect(markup).toContain('This project requires every tile to be certified before an App is published.');
+    expect(markup).toContain('Certify this join (recommended)');
+    expect(markup).not.toMatch(/>Publish<\/button>/);
+  });
+});
+
+describe('Certify at publish (design Q1)', () => {
+  const checkedTable = { id: 'app:block:shop:orders', kind: 'block' as const, sourceRef: 'domains/shop/blocks/orders.dql', lifecycle: 'review' as const, trustState: 'review_required' as const, reviewStatus: 'required' as const, checked: true, capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: { kind: 'block', label: 'Orders', trust: 'review_required', fields: [] } } };
+  const savedQuery = { id: 'app:block:shop:top', kind: 'block' as const, sourceRef: 'domains/shop/blocks/top.dql', lifecycle: 'draft' as const, trustState: 'review_required' as const, reviewStatus: 'required' as const };
+  const draftWith = (sources: unknown[]) => ({
+    version: 3, id: 'build_1', appId: 'orders-app', name: 'Orders', revision: 2, proposalHash: 'hash',
+    authoringMode: 'manual', template: 'blank', sourcePolicy: 'governed_only', state: 'local_draft',
+    frame: { goal: 'Orders', metrics: [], dimensions: [], filters: [] }, requirements: [], coverage: [],
+    sources,
+    pages: [{
+      version: 3, id: 'overview', metadata: { title: 'Overview' },
+      datasets: [{ id: 'orders_ds', sourceId: checkedTable.id, sourceRevision: 'r', snapshotId: 's', contractFingerprint: 'c' }],
+      layout: { kind: 'grid', cols: 12, rowHeight: 80, items: [
+        { i: 'kpi', x: 0, y: 0, w: 3, h: 2, title: 'Orders', sourceId: checkedTable.id, sourceRevision: 'r', query: { dimensions: [], measures: [{ measure: 'order_count' }], respectsGlobalFilters: true }, viz: { type: 'single_value' } },
+        { i: 'top', x: 3, y: 0, w: 3, h: 2, title: 'Top', block: { ref: 'domains/shop/blocks/top.dql' }, sourceId: savedQuery.id, viz: { type: 'table' } },
+      ] },
+    }],
+    previewReceipts: [{ id: 'run', pageId: 'overview', revision: 2, snapshotId: 's', filterFingerprint: 'f', resultFingerprint: 'x', createdAt: '' }],
+    reviewTasks: [], createdAt: '', updatedAt: '',
+  }) as never;
+  const dialog = (draft: never, onCertifySource = vi.fn()) => renderToStaticMarkup(
+    <studio.PublishReadinessDialog
+      draft={draft}
+      serverIssues={['APP_BUILD_DATASET_NOT_CERTIFIED: Orders uses Orders, which is checked but not certified yet. Certify it before publishing.']}
+      busy={false}
+      previewRun={null}
+      onClose={vi.fn()}
+      onRetry={vi.fn()}
+      onRunPreview={vi.fn()}
+      onRunAllPreviews={vi.fn()}
+      onRemoveRequirement={vi.fn()}
+      onReviseRequirement={vi.fn()}
+      onAnswerQuestion={vi.fn()}
+      onResolveTask={vi.fn()}
+      onOpenSources={vi.fn()}
+      onOpenFilters={vi.fn()}
+      onRefreshSources={vi.fn()}
+      onApproveSemantic={vi.fn()}
+      onRemoveLocalAnalysis={vi.fn()}
+      onCertifySource={onCertifySource}
+      sourceName={(source) => (source.id === checkedTable.id ? 'orders' : 'top_customers')}
+    />,
+  );
+
+  it('lists each tile not certified yet with "Certify now (recommended)", and still publishes (T3)', () => {
+    const markup = dialog(draftWith([checkedTable]));
+    expect(markup).toContain('Ready to publish');
+    expect(markup).toContain('aria-label="2 tiles not certified yet"');
+    expect(markup).toContain('Checked, not certified yet. Data: Orders.');
+    expect(markup).toContain('aria-label="Certify now: Orders"');
+    expect(markup).toContain('Certify now (recommended)');
+    expect(markup).toContain('Readers will see \u2018Not certified yet\u2019 on 2 tiles.');
+    // The server's old message about the same data is listed once, not again as a separate fix.
+    expect(markup).not.toContain('Complete governed validation');
+    expect(markup).not.toMatch(/fix before publishing|Only certified data|Needs certifying|Checked ·/);
+  });
+
+  it('a saved query not certified yet gets its own Certify now (its short review, here: T4)', () => {
+    const markup = dialog(draftWith([checkedTable, savedQuery]));
+    expect(markup).toContain('aria-label="Certify now: Top Customers"');
+    expect(markup).not.toContain('Local analysis cannot publish');
+  });
+
+  it('is ready once the data is certified', () => {
+    const certified = { ...checkedTable, lifecycle: 'certified' as const, trustState: 'certified' as const, reviewStatus: 'not_required' as const, checked: undefined };
+    const markup = renderToStaticMarkup(
+      <studio.PublishReadinessDialog
+        draft={draftWith([certified])}
+        serverIssues={[]}
+        busy={false}
+        previewRun={null}
+        onClose={vi.fn()}
+        onRetry={vi.fn()}
+        onRunPreview={vi.fn()}
+        onRunAllPreviews={vi.fn()}
+        onRemoveRequirement={vi.fn()}
+        onReviseRequirement={vi.fn()}
+        onAnswerQuestion={vi.fn()}
+        onResolveTask={vi.fn()}
+        onOpenSources={vi.fn()}
+        onOpenFilters={vi.fn()}
+        onRefreshSources={vi.fn()}
+        onApproveSemantic={vi.fn()}
+        onRemoveLocalAnalysis={vi.fn()}
+      />,
+    );
+    expect(markup).toContain('Ready to publish');
+    expect(markup).toContain('1 of 2 tiles certified');
+    // Only the saved query, whose card is not in this App's data, is still listed.
+    expect(markup).not.toContain('aria-label="Not certified yet: Orders"');
+    expect(markup).toContain('aria-label="Not certified yet: Top"');
+  });
+});
+
+describe('tile settings row count (B14)', () => {
+  it('says how many rows the tile holds when it holds only the first rows', () => {
+    expect(studio.liveRowsLabel(935, 500)).toBe('Live · 935 rows · first 500 loaded');
+    expect(studio.liveRowsLabel(10, 10)).toBe('Live · 10 rows');
+    expect(studio.liveRowsLabel(1)).toBe('Live · 1 row');
   });
 });

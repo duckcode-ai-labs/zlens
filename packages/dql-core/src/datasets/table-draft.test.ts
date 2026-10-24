@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Parser } from '../parser/parser.js';
-import { applyTableProfile, proposeTableDataset, renderTableDatasetBlock, tableColumnKind } from './table-draft.js';
+import { applyTableDuplicateChoices, applyTableProfile, duplicateColumnWords, duplicateColumnsQuestion, minorUnitOf, nativeTimeGrain, proposeTableDataset, renderTableDatasetBlock, tableColumnKind, tableDatasetCheckSentences, tableDatasetDeclaration, withDuplicateUnitRelations } from './table-draft.js';
 
 const columns = [
   { name: 'order_line_id', type: 'VARCHAR' },
@@ -53,5 +53,245 @@ describe('start from a table', () => {
     expect(block.datasetMeasures?.map((measure) => measure.name)).toEqual(['order_line_count', 'net_amount', 'quantity', 'customer_count']);
     expect(block.datasetFields).toHaveLength(8);
     expect(() => renderTableDatasetBlock({ proposal: { ...proposal, key: undefined }, blockName: 'x', domain: 'd', owner: 'o', columnSql: (name) => name })).toThrow('TABLE_DATASET_KEY_REQUIRED');
+  });
+
+  it('marks every field and number the check confirmed as approved', () => {
+    const proposal = applyTableProfile(proposeTableDataset({ table: 'order_lines', relation: 'main.order_lines', columns: columns.slice(0, 8) }), { rows: 5, columns: { order_line_id: { distinct: 5, nonNull: 5 } } }, 'order_lines');
+    const source = renderTableDatasetBlock({ proposal, blockName: 'Order lines', domain: 'sales', owner: 'ana@example.com', columnSql: (name) => `"${name}"` });
+    const block = new Parser(source, 'order-lines.dql').parse().statements[0] as { datasetMeasures?: Array<{ status?: string }>; datasetFields?: Array<{ status?: string }> };
+    expect(block.datasetFields?.every((field) => field.status === 'approved')).toBe(true);
+    expect(block.datasetMeasures?.every((measure) => measure.status === 'approved')).toBe(true);
+    const declaration = tableDatasetDeclaration(proposal, 'Order lines');
+    expect([...declaration.fields, ...declaration.measures].every((entry) => entry.status === 'approved')).toBe(true);
+  });
+});
+
+describe('money stored as cents (B11)', () => {
+  const orders = [
+    { name: 'order_id', type: 'VARCHAR' },
+    { name: 'ordered_at', type: 'TIMESTAMP' },
+    { name: 'subtotal_cents', type: 'BIGINT' },
+    { name: 'tax_paid_cents', type: 'BIGINT' },
+    { name: 'order_total_cents', type: 'BIGINT' },
+    { name: 'order_total', type: 'DECIMAL(12,2)' },
+    { name: 'tip_pennies', type: 'INTEGER' },
+    { name: 'discount_percent', type: 'DOUBLE' },
+  ];
+
+  it('finds cents and pennies as whole words only', () => {
+    expect(['subtotal_cents', 'cents', 'amountInCents', 'price_in_cents', 'tip_pennies', 'percent', 'centsus', 'discount_percent'].map(minorUnitOf))
+      .toEqual(['cents', 'cents', 'cents', 'cents', 'pennies', undefined, undefined, undefined]);
+  });
+
+  it('reads cents columns in dollars, as Money, and says so', () => {
+    const proposal = proposeTableDataset({ table: 'orders', relation: 'main.orders', columns: orders, convertMinorUnits: true });
+    const subtotal = proposal.fields.find((field) => field.column === 'subtotal_cents');
+    expect(subtotal).toMatchObject({ name: 'subtotal', label: 'Subtotal', role: 'attribute', divideBy: 100 });
+    // "order_total" already exists, so the dollars field keeps a distinct name.
+    expect(proposal.fields.find((field) => field.column === 'order_total_cents')?.name).toBe('order_total_dollars');
+    const measures = Object.fromEntries(proposal.measures.map((measure) => [measure.from, measure]));
+    expect(measures.subtotal).toMatchObject({ format: 'currency', currency: 'USD', unitNote: 'Shown in dollars (stored as cents)' });
+    expect(measures.tax_paid).toMatchObject({ format: 'currency', unitNote: 'Shown in dollars (stored as cents)' });
+    expect(measures.tip).toMatchObject({ format: 'currency', currency: 'GBP', unitNote: 'Shown in pounds (stored as pennies)' });
+    expect(measures.subtotal.minorUnits).toBeUndefined();
+
+    const profiled = applyTableProfile(proposal, { rows: 3, columns: { order_id: { distinct: 3, nonNull: 3 } } }, 'orders');
+    const source = renderTableDatasetBlock({ proposal: profiled, blockName: 'Orders', domain: 'sales', owner: 'ana@example.com', columnSql: (name) => `"${name}"` });
+    // The division is in the Dataset's SQL, so tiles, KPIs, tables, filters and exports all read dollars.
+    expect(source).toContain('"subtotal_cents" / 100.0 AS "subtotal"');
+    expect(source).toContain('"order_total_cents" / 100.0 AS "order_total_dollars"');
+    expect(source).toContain('"order_total", ');
+    expect(source).toContain('subtotal_cents, tax_paid_cents, order_total_cents are stored as cents and read in dollars; tip_pennies is stored as pennies and read in pounds.');
+    const block = new Parser(source, 'orders.dql').parse().statements[0] as { datasetFields?: Array<{ name: string }>; datasetMeasures?: Array<{ name: string; from?: string; format?: string }> };
+    expect(block.datasetFields?.map((field) => field.name)).toContain('subtotal');
+    expect(block.datasetMeasures?.find((measure) => measure.name === 'subtotal')).toMatchObject({ from: 'subtotal', format: 'currency' });
+    // A declaration on someone else's SQL cannot divide.
+    expect(() => tableDatasetDeclaration(profiled, 'Orders')).toThrow('TABLE_DATASET_CONVERSION_UNSUPPORTED');
+  });
+
+  it('keeps cents as a plain number where the Dataset cannot convert them', () => {
+    const proposal = proposeTableDataset({ table: 'orders', relation: '(SELECT 1) AS q', columns: orders });
+    expect(proposal.fields.find((field) => field.name === 'subtotal_cents')).toMatchObject({ role: 'attribute' });
+    expect(proposal.fields.some((field) => field.divideBy)).toBe(false);
+    const subtotal = proposal.measures.find((measure) => measure.from === 'subtotal_cents')!;
+    expect(subtotal).toMatchObject({ format: 'number', minorUnits: 'cents' });
+    expect(subtotal.currency).toBeUndefined();
+    expect(subtotal.unitNote).toMatch(/^Stored as cents, so it is shown as a plain number/);
+  });
+});
+
+describe('a period column as the row key (B12)', () => {
+  const monthly = [
+    { name: 'month', type: 'TIMESTAMP' },
+    { name: 'gross_revenue', type: 'DOUBLE' },
+    { name: 'order_count', type: 'BIGINT' },
+  ];
+
+  it('knows the period a date column stands for, and leaves instants alone', () => {
+    expect(nativeTimeGrain({ name: 'month', type: 'timestamp', role: 'time' })).toBe('month');
+    expect(nativeTimeGrain({ name: 'order_week', type: 'date', role: 'time' })).toBe('week');
+    expect(nativeTimeGrain({ name: 'fiscal_quarter', type: 'timestamp', role: 'time' })).toBe('quarter');
+    expect(nativeTimeGrain({ name: 'day', type: 'date', role: 'time' })).toBe('day');
+    expect(nativeTimeGrain({ name: 'shipped_on', type: 'date', role: 'time' })).toBe('day');
+    expect(nativeTimeGrain({ name: 'ordered_at', type: 'timestamp', role: 'time' })).toBeUndefined();
+  });
+
+  it('checks a month that is filled and different on every row as the key, and keeps it a time field', () => {
+    const proposal = proposeTableDataset({ table: 'monthly_revenue', relation: '(SELECT 1) AS q', columns: monthly });
+    expect(proposal.keyCandidates).toEqual(['month']);
+    const profiled = applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 12, nonNull: 12 } } }, 'monthly_revenue');
+    expect(profiled.key).toEqual({ column: 'month', entity: 'monthly_revenue', timeGrain: 'month' });
+    expect(profiled.fields.find((field) => field.name === 'month')).toMatchObject({ role: 'time', grains: ['month', 'quarter', 'year'], primary: true });
+    // Counting months is not a business number.
+    expect(profiled.measures.map((measure) => measure.name)).toEqual(['gross_revenue', 'order_count']);
+    const declaration = tableDatasetDeclaration(profiled, 'Monthly revenue');
+    expect(declaration.grain).toEqual({ entities: ['monthly_revenue'], keys: ['month'], keyEvidence: 'proof.monthly-revenue', aggregate: true, timeGrain: 'month', timeBucketBy: 'month' });
+    const source = renderTableDatasetBlock({ proposal: { ...profiled, relation: 'main.monthly' }, blockName: 'Monthly revenue', domain: 'sales', owner: 'ana@example.com', columnSql: (name) => `"${name}"` });
+    const block = new Parser(source, 'monthly.dql').parse().statements[0] as { datasetGrain?: Record<string, unknown> };
+    expect(block.datasetGrain).toMatchObject({ keys: ['month'], aggregate: true, timeGrain: 'month', timeBucketBy: 'month' });
+  });
+
+  it('does not take a repeated or partly empty month as the key', () => {
+    const proposal = proposeTableDataset({ table: 'monthly_revenue', relation: '(SELECT 1) AS q', columns: monthly });
+    expect(applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 11, nonNull: 12 } } }, 'monthly_revenue').key).toBeUndefined();
+    expect(applyTableProfile(proposal, { rows: 12, columns: { month: { distinct: 11, nonNull: 11 } } }, 'monthly_revenue').key).toBeUndefined();
+  });
+});
+
+describe('the checks a certification receipt lists (D5)', () => {
+  it('says what one row is and how each kept number is shown, including cents', () => {
+    const columns = [
+      { name: 'order_id', type: 'VARCHAR' },
+      { name: 'subtotal_cents', type: 'BIGINT' },
+      { name: 'tip_pennies', type: 'INTEGER' },
+      { name: 'order_total', type: 'DECIMAL(12,2)' },
+    ];
+    const converted = applyTableProfile(proposeTableDataset({ table: 'orders', relation: 'main.orders', columns, convertMinorUnits: true }), { rows: 1250, columns: { order_id: { distinct: 1250, nonNull: 1250 } } }, 'orders');
+    const sentences = tableDatasetCheckSentences(converted, 1250);
+    expect(sentences[0]).toBe('Row key: each row is one order (order_id is filled and different on all 1,250 rows)');
+    expect(sentences[1]).toMatch(/^Number formats: /);
+    expect(sentences[1]).toContain('Subtotal: shown in dollars (stored as cents)');
+    expect(sentences[1]).toContain('Order total: money');
+
+    const plain = applyTableProfile(proposeTableDataset({ table: 'orders', relation: 'main.orders', columns }), { rows: 3, columns: { order_id: { distinct: 3, nonNull: 3 } } }, 'orders');
+    expect(tableDatasetCheckSentences(plain, 3)[1]).toContain('Subtotal cents: a plain number (stored as cents)');
+    const withoutKey = { ...plain, key: undefined, measures: plain.measures.map((measure) => ({ ...measure, include: false })) };
+    expect(tableDatasetCheckSentences(withoutKey, 3)).toEqual([]);
+  });
+
+  it('asks one question when a table has the same number twice, and hides the other column (design Q1.4)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: '"main"."orders"',
+      columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'order_total', type: 'DOUBLE' }, { name: 'order_total_cents', type: 'INTEGER' }, { name: 'tax_pennies', type: 'INTEGER' }],
+      convertMinorUnits: true,
+    });
+    expect(raw.duplicates).toEqual([expect.objectContaining({ name: 'order_total', question: 'Order total is stored twice: Order total and Order total cents. Use Order total in dollars?', plainColumn: 'order_total', minorColumn: 'order_total_cents', convertedField: 'order_total_dollars' })]);
+    // A cents column with no twin is not a question.
+    expect(raw.duplicates).toHaveLength(1);
+    const profiled = applyTableProfile(raw, { rows: 3, columns: { order_id: { distinct: 3, nonNull: 3 } } }, 'orders');
+
+    // Recommended (no answer given): the cents column, read in dollars, under the plain name.
+    const recommended = applyTableDuplicateChoices(profiled);
+    expect(recommended.duplicates).toBeUndefined();
+    expect(recommended.fields.filter((field) => field.name.startsWith('order_total')).map((field) => [field.name, field.column, field.divideBy])).toEqual([['order_total', 'order_total_cents', 100]]);
+    expect(recommended.measures.filter((measure) => measure.from.startsWith('order_total')).map((measure) => [measure.name, measure.label, measure.format])).toEqual([['order_total', 'Order total', 'currency']]);
+    expect(recommended.hiddenColumns).toEqual([{ column: 'order_total', keptColumn: 'order_total_cents', reason: 'Order total uses order_total_cents, shown in dollars; order_total holds the same amount, so it is hidden.' }]);
+    // Applying again changes nothing.
+    expect(applyTableDuplicateChoices(recommended)).toBe(recommended);
+    const block = renderTableDatasetBlock({ proposal: recommended, blockName: 'Orders', domain: 'commerce', owner: 'a@example.test', columnSql: (name) => `"${name}"` });
+    expect(block).toContain('"order_total_cents" / 100.0 AS "order_total"');
+    expect(block).not.toContain('SELECT "order_id", "order_total",');
+    expect(block).toContain('/* Hidden duplicate columns: order_total (order_total_cents is used) */');
+    expect(block).toContain('order_total is hidden (order_total_cents holds the same amount).');
+    expect(new Parser(block).parse().statements).toHaveLength(1);
+    expect(tableDatasetCheckSentences(recommended, 3)).toContain('Duplicate column: Order total uses order_total_cents, shown in dollars; order_total holds the same amount, so it is hidden.');
+
+    // The other answer: the plain column as it is.
+    const plain = applyTableDuplicateChoices(profiled, [{ name: 'order_total', use: 'plain' }]);
+    expect(plain.fields.filter((field) => field.name.startsWith('order_total')).map((field) => [field.name, field.column])).toEqual([['order_total', undefined]]);
+    expect(plain.measures.some((measure) => measure.from === 'order_total_dollars')).toBe(false);
+    expect(plain.hiddenColumns).toEqual([expect.objectContaining({ column: 'order_total_cents', keptColumn: 'order_total' })]);
+  });
+
+  it('words the question for what the data showed: two units (×100), or the same number twice (new-user round 2, problem 7)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: 'orders',
+      columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'subtotal', type: 'DOUBLE' }, { name: 'subtotal_cents', type: 'INTEGER' }],
+      convertMinorUnits: true,
+    });
+    const pair = raw.duplicates![0]!;
+    expect(duplicateColumnWords(pair).question).toBe('Subtotal is stored twice: Subtotal and Subtotal cents. Use Subtotal in dollars?');
+    const hundredths = withDuplicateUnitRelations(raw, { subtotal: 'hundredths' });
+    expect(hundredths.duplicates![0]).toMatchObject({ relation: 'hundredths', question: 'Subtotal is stored twice: Subtotal (dollars) and Subtotal cents. Use Subtotal in dollars?' });
+    expect(duplicateColumnWords(hundredths.duplicates![0]!)).toMatchObject({
+      detail: 'Subtotal cents is Subtotal × 100: the same amount in cents. ZLens keeps one and hides the other.',
+      recommended: { title: 'Yes, use Subtotal in dollars' },
+      alternative: { title: 'No, use the Subtotal column as it is', detail: 'It is already in dollars. Subtotal cents is hidden.' },
+    });
+    // No answer means OK (new-user round 3): the data showed subtotal is the dollars, so it is used and the cents copy hidden.
+    expect(applyTableDuplicateChoices(hundredths).hiddenColumns).toEqual([{ column: 'subtotal_cents', keptColumn: 'subtotal', relation: 'hundredths', reason: 'Subtotal uses subtotal as it is; subtotal_cents is the same amount in cents, so it is hidden.' }]);
+    expect(applyTableDuplicateChoices(hundredths, [{ name: 'subtotal', use: 'minor' }]).hiddenColumns).toEqual([{ column: 'subtotal', keptColumn: 'subtotal_cents', relation: 'hundredths', reason: 'Subtotal uses subtotal_cents, shown in dollars; subtotal is the same amount in dollars, so it is hidden.' }]);
+
+    // Both in cents: kept as is, the plain column is a number, never Money 100 times too large.
+    const same = withDuplicateUnitRelations(raw, { subtotal: 'same' });
+    expect(same.duplicates![0]!.question).toBe('Subtotal is stored twice, both in cents: Subtotal and Subtotal cents. Use Subtotal in dollars?');
+    const keptPlain = applyTableDuplicateChoices(same, [{ name: 'subtotal', use: 'plain' }]);
+    expect(keptPlain.measures.find((measure) => measure.from === 'subtotal')).toMatchObject({ format: 'number', minorUnits: 'cents' });
+    expect(keptPlain.hiddenColumns![0]!.reason).toBe('Subtotal uses subtotal as it is; subtotal_cents holds the same number, so it is hidden.');
+    // Nothing to say when nothing was checked.
+    expect(withDuplicateUnitRelations(raw, {}).duplicates![0]!.relation).toBeUndefined();
+  });
+
+  it('asks once per table, OK uses the dollar columns, Show both keeps the cents copies as plain numbers (new-user round 3, problem 8)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: 'orders',
+      columns: [
+        { name: 'order_id', type: 'VARCHAR' }, { name: 'ordered_at', type: 'TIMESTAMP' },
+        { name: 'subtotal', type: 'DOUBLE' }, { name: 'subtotal_cents', type: 'INTEGER' },
+        { name: 'tax_paid', type: 'DOUBLE' }, { name: 'tax_paid_cents', type: 'INTEGER' },
+        { name: 'order_total', type: 'DOUBLE' }, { name: 'order_total_cents', type: 'INTEGER' },
+      ],
+      convertMinorUnits: true,
+    });
+    const checked = withDuplicateUnitRelations(raw, { subtotal: 'hundredths', tax_paid: 'hundredths', order_total: 'hundredths' });
+    const asked = duplicateColumnsQuestion(checked.duplicates!)!;
+    expect(asked.question).toBe('These columns are stored twice, in dollars and in cents: Subtotal, Tax paid and Order total.');
+    expect(asked.ok).toBe('ZLens will use the dollar columns and hide the cents copies.');
+    expect(asked.okChoices).toEqual([{ name: 'subtotal', use: 'plain' }, { name: 'tax_paid', use: 'plain' }, { name: 'order_total', use: 'plain' }]);
+
+    const ok = applyTableDuplicateChoices(checked, asked.okChoices);
+    expect(ok.fields.filter((field) => field.type === 'number').map((field) => [field.name, field.column ?? null])).toEqual([['subtotal', null], ['tax_paid', null], ['order_total', null]]);
+    expect(ok.measures.filter((measure) => measure.aggregation === 'sum').map((measure) => [measure.name, measure.format])).toEqual([['subtotal', 'currency'], ['tax_paid', 'currency'], ['order_total', 'currency']]);
+    expect(ok.hiddenColumns?.map((entry) => entry.column)).toEqual(['subtotal_cents', 'tax_paid_cents', 'order_total_cents']);
+
+    const both = applyTableDuplicateChoices(checked, asked.bothChoices);
+    expect(both.fields.filter((field) => field.type === 'number').map((field) => [field.name, field.column ?? null, field.divideBy ?? null])).toEqual([
+      ['subtotal', null, null], ['subtotal_cents', null, null], ['tax_paid', null, null], ['tax_paid_cents', null, null], ['order_total', null, null], ['order_total_cents', null, null],
+    ]);
+    expect(both.measures.find((measure) => measure.name === 'subtotal_cents')).toMatchObject({ from: 'subtotal_cents', format: 'number', minorUnits: 'cents' });
+    expect(both.measures.find((measure) => measure.name === 'subtotal')).toMatchObject({ format: 'currency' });
+    expect(both.hiddenColumns ?? []).toEqual([]);
+
+    // Not checked on the rows: OK reads the cents in dollars, and says so.
+    const unchecked = duplicateColumnsQuestion(raw.duplicates!)!;
+    expect(unchecked.question).toBe('These columns are stored twice: Subtotal, Tax paid and Order total, each with a copy in cents.');
+    expect(unchecked.ok).toBe('ZLens will read the cents columns in dollars and hide the other copies.');
+    expect(unchecked.okChoices.every((choice) => choice.use === 'minor')).toBe(true);
+    expect(duplicateColumnsQuestion([])).toBeUndefined();
+  });
+
+  it('never ticks counts of dates or running numbers by default (new-user round 3, problem 8)', () => {
+    const raw = proposeTableDataset({
+      table: 'orders',
+      relation: 'orders',
+      columns: [{ name: 'order_id', type: 'VARCHAR' }, { name: 'customer_id', type: 'VARCHAR' }, { name: 'customer_order_number', type: 'INTEGER' }, { name: 'ordered_at', type: 'DATE' }, { name: 'order_total', type: 'DOUBLE' }],
+    });
+    const profiled = applyTableProfile(raw, { rows: 4, columns: { order_id: { distinct: 4, nonNull: 4 }, customer_id: { distinct: 2, nonNull: 4 }, customer_order_number: { distinct: 3, nonNull: 4 }, ordered_at: { distinct: 3, nonNull: 4 } } }, 'orders');
+    const ticked = Object.fromEntries(profiled.measures.map((measure) => [measure.label, measure.include]));
+    expect(ticked).toMatchObject({ 'Order count': true, 'Customer count': true, 'Order total': true, 'Customer order count': false, 'Ordered at count': false });
+    expect(profiled.measures.find((measure) => measure.label === 'Ordered at count')?.reason).toContain('starts off');
   });
 });

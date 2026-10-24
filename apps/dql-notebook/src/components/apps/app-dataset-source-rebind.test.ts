@@ -80,25 +80,24 @@ function draftFixture(): AppStudioBuildDraft {
 }
 
 describe('Dataset source rebind plan (APP-056)', () => {
-  it('requires an explicit local review policy and then rewrites the complete current-App binding graph atomically', () => {
+  it('rewrites the complete current-App binding graph atomically for data nobody certified, with no data rule and no review task (T3)', () => {
     const draft = draftFixture();
-    const blocked = planDatasetSourceRebind(draft, candidate());
-    expect(blocked).toMatchObject({ ok: false, code: 'REVIEW_POLICY_REQUIRED' });
-
-    const plan = planDatasetSourceRebind(draft, candidate(), { enableReviewPreview: true });
-    expect(plan.ok).toBe(true);
-    if (!plan.ok) return;
-    expect(plan.operations[0]).toEqual({ type: 'set_source_policy', sourcePolicy: 'include_review_required' });
-    expect(plan.operations.filter((operation) => operation.type === 'upsert_source')).toHaveLength(1);
-    const pages = plan.operations.filter((operation): operation is Extract<AppStudioDraftOperation, { type: 'upsert_page' }> => operation.type === 'upsert_page');
-    expect(pages).toHaveLength(2);
-    expect(pages.flatMap((operation) => operation.page.datasets ?? []).map((binding) => [binding.sourceRevision, binding.contractFingerprint])).toEqual([
-      [newRevision, newContract], [newRevision, newContract],
-    ]);
-    expect(pages.flatMap((operation) => operation.page.layout.items).filter((tile) => tile.query).every((tile) => (
-      tile.sourceRevision === newRevision && tile.trustState === 'review_required' && tile.review?.status === 'required'
-    ))).toBe(true);
-    expect(plan.operations.filter((operation) => operation.type === 'set_review_task')).toHaveLength(2);
+    for (const options of [{}, { enableReviewPreview: true }]) {
+      const plan = planDatasetSourceRebind(draft, candidate(), options);
+      expect(plan.ok).toBe(true);
+      if (!plan.ok) return;
+      expect(plan.operations.some((operation) => operation.type === 'set_source_policy')).toBe(false);
+      expect(plan.operations.filter((operation) => operation.type === 'upsert_source')).toHaveLength(1);
+      const pages = plan.operations.filter((operation): operation is Extract<AppStudioDraftOperation, { type: 'upsert_page' }> => operation.type === 'upsert_page');
+      expect(pages).toHaveLength(2);
+      expect(pages.flatMap((operation) => operation.page.datasets ?? []).map((binding) => [binding.sourceRevision, binding.contractFingerprint])).toEqual([
+        [newRevision, newContract], [newRevision, newContract],
+      ]);
+      expect(pages.flatMap((operation) => operation.page.layout.items).filter((tile) => tile.query).every((tile) => (
+        tile.sourceRevision === newRevision && tile.trustState === 'review_required' && tile.review?.status === 'required'
+      ))).toBe(true);
+      expect(plan.operations.filter((operation) => operation.type === 'set_review_task')).toHaveLength(0);
+    }
     expect(draft.pages[0]!.datasets![0]!.sourceRevision).toBe(oldRevision);
   });
 

@@ -307,7 +307,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'query_semantic_model',
     description:
-      'Semantic-layer compiler and bounded preview runner. Use after ask_dql when a governed metric/dimension/time-grain selection can answer the question before deep dbt/warehouse SQL search. Accepts explicit semantic members or a question, returns selected members, compiled SQL, bounded preview rows when runtime execution is available, and a reviewable DQL semantic artifact.',
+      'Semantic-layer compiler and bounded preview runner. Use only after ask_dql returned no certified block, when a governed metric/dimension/time-grain selection can answer the question before deep dbt/warehouse SQL search. When a certified block already answers the requested metric and grain, the result names it under certifiedBlock with nextTool query_via_block. Accepts explicit semantic members or a question, returns selected members, compiled SQL, bounded preview rows when runtime execution is available, and a reviewable DQL semantic artifact. Labelled From Metrics when every join it takes is a certified relationship (or it takes none), AI-Generated when a join is a draft or unmodeled relationship (relationshipProof lists the joins). uncertified: true means no certified block backs the result, not that it is AI-generated; report trustLabelInfo.display.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -424,7 +424,7 @@ const CORE_TOOL_DEFINITIONS = [
   },
   {
     name: 'search_blocks',
-    description: 'Find blocks (certified and draft) by keyword, domain, or status. Each result carries its status; only a certified block is a certified answer.',
+    description: 'Find saved queries (blocks), certified and draft, by keyword, domain, or status. Each result carries its status; only a certified saved query is a certified answer.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -439,7 +439,7 @@ const CORE_TOOL_DEFINITIONS = [
   },
   {
     name: 'get_block',
-    description: 'Return full metadata, dependencies, and SQL for a block.',
+    description: 'Return full metadata, dependencies, and SQL for a saved query (block).',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -454,7 +454,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'query_via_block',
     description:
-      'Tier-1 of graduated trust. Execute a certified block against the local DQL runtime when the block grain exactly answers the user question. For named-entity filters, custom rankings, breakdowns, comparisons, or drill-throughs, use the block as context and call query_via_metadata instead.',
+      'Tier-1 of graduated trust. Execute a certified saved query (block) against the local DQL runtime when the block grain exactly answers the user question. For named-entity filters, custom rankings, breakdowns, comparisons, or drill-throughs, use the block as context and call query_via_metadata instead.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -614,7 +614,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'build_block_from_prompt',
     description:
-      "Governed block builder from a natural-language prompt. Runs DQL's buildFromPrompt (the same governed engine the UI uses) to draft a reusable, review-required DQL block — you do NOT author SQL. Symmetric with build_dql_app. Returns the draft path, generated SQL, and the Certifier verdict; NEVER auto-certifies. Requires the ZLens runtime (the workbench `zlens notebook` starts) with an AI model set up in ZLens; without one it returns modelUnavailable — then write the SQL yourself and save it with suggest_block.",
+      "Governed saved query (block) builder from a natural-language prompt. Runs DQL's buildFromPrompt (the same governed engine the UI uses) to draft a reusable, review-required DQL block — you do NOT author SQL. Symmetric with build_dql_app. Returns the draft path, generated SQL, and the Certifier verdict; NEVER auto-certifies. Requires the ZLens runtime (the workbench `zlens notebook` starts) with an AI model set up in ZLens; without one it returns modelUnavailable — then write the SQL yourself and save it with suggest_block.",
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -668,7 +668,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'certify',
     description:
-      'Check a block against the certification rules and report pass/fail with the blocking rules. With the workbench running it runs the same check as Block Studio (owner, compile, run, tests); otherwise it checks the declared metadata only and says tests were not run. Changes nothing: a person certifies in Block Studio or with `zlens certify --from-draft`.',
+      'Check a saved query (block) against the certification rules and report pass/fail with the blocking rules. With the workbench running it runs the same check as the Saved queries page (owner, compile, run, tests); otherwise it checks the declared metadata only and says tests were not run. Changes nothing: a person certifies in Saved queries or with `zlens certify --from-draft`.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -683,7 +683,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'suggest_block',
     description:
-      'Write a curated proposed block to the local draft queue with a hand-shaped name and structure, plus the governance gate result. Use when proposing a shared building block; for one-shot ad-hoc Tier-2 captures, use query_via_metadata instead.',
+      'Write a curated proposed saved query (block) to the local draft queue with a hand-shaped name and structure, plus the governance gate result. Use when proposing a shared building block; for one-shot ad-hoc Tier-2 captures, use query_via_metadata instead.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -779,7 +779,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'inspect_dql_project',
     description:
-      'Front-door project health/context tool for MCP clients. Refreshes metadata/index by default and returns block, app, dashboard, semantic, catalog, and recommended-next-step status.',
+      'Front-door project health/context tool for MCP clients. Refreshes metadata/index by default and returns block, app, dashboard, semantic, catalog, and recommended-next-step status, plus the certified blocks with their grains. Next step: ask_dql with the user\'s question.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -792,7 +792,7 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'list_datasets',
     description:
-      'List current approved governed App Datasets available to the local Dataset runtime. Returns source identity, capability, lifecycle, and trust metadata only; it does not execute SQL.',
+      'List current approved governed App Datasets available to the local Dataset runtime (warehouse tables approved for App tiles). Returns source identity, capability, lifecycle, and trust metadata only; it does not execute SQL. Not the way to answer a business question: call ask_dql for that. An empty list does not mean the project has no governed answers; when it has certified blocks or semantic metrics, the result says so with nextTool ask_dql.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -883,20 +883,20 @@ const CORE_TOOL_DEFINITIONS = [
   {
     name: 'build_dql_app',
     description:
-      'Draft a new App (dashboard) from a description. Uses certified blocks for tiles first and review-only placeholders where no certified block fits; writes a draft App under apps/ (saveDraft=false returns the plan only). Never certifies or publishes. Use list_apps to see existing Apps.',
+      'Start a new App from a description as an App Studio draft. Picks certified data (Datasets, Metrics, saved queries) for the request, lists questions no certified data covers, and returns the draft id, a link that opens it in App Studio at the Data step (openUrl when the workbench is running, always openPath) and the picked sources with reasons. Writes no App files: the user checks the data, builds the pages and publishes in App Studio. saveDraft=false returns the picks only. Never certifies or publishes. Use list_apps to see existing Apps.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       required: ['prompt'],
       properties: {
-        prompt: { type: 'string', description: 'App outcome request, e.g. "beverage performance for the growth team".' },
-        name: { type: 'string', description: 'App name. Default: derived from the prompt. The App folder id is derived from it.' },
-        blocks: { type: 'array', items: { type: 'string' }, description: 'Certified block names to use as the tiles, exactly (from search_blocks). Default: the planner picks matching certified blocks.' },
-        domain: { type: 'string', description: 'Optional business domain to prioritize.' },
-        owner: { type: 'string', description: 'Owner identity to store on the generated app.' },
-        aiLayout: { type: 'boolean', description: 'Store richer dynamic GenUI layout metadata.' },
-        saveDraft: { type: 'boolean', description: 'Write app draft files. Default true.' },
-        overwrite: { type: 'boolean', description: 'Overwrite an existing app folder. Default false.' },
+        prompt: { type: 'string', description: 'What the App is for, e.g. "beverage performance for the growth team". It becomes the App goal in App Studio.' },
+        name: { type: 'string', description: 'App name. Default: derived from the prompt. The App id is derived from it.' },
+        blocks: { type: 'array', items: { type: 'string' }, description: 'Certified block names to use as the App data, exactly (from search_blocks). Default: certified data is picked for the prompt.' },
+        domain: { type: 'string', description: 'Optional business domain; the App draft keeps it and picks data from it.' },
+        owner: { type: 'string', description: 'Ignored. The owner is set when the App is published from App Studio.' },
+        aiLayout: { type: 'boolean', description: 'Ignored. App Studio lays out the pages when the user builds them.' },
+        saveDraft: { type: 'boolean', description: 'Create the App Studio draft. Default true; false returns the picked data only.' },
+        overwrite: { type: 'boolean', description: 'Ignored. Each call creates a new App Studio draft; nothing is overwritten.' },
       },
     },
     surfaces: ['mcp', 'mcp_agentic', 'claude_code'],

@@ -4,6 +4,7 @@ export {
   datasetMeasures,
   datasetPhysicalField,
   datasetPhysicalFields,
+  isSavedQueryResultDataset,
   normalizeDatasetDescriptor,
 } from './descriptor.js';
 export type {
@@ -16,12 +17,14 @@ export type {
   DatasetFieldStatus,
   DatasetFieldType,
   DatasetGrain,
+  DatasetJoin,
   DatasetKind,
   DatasetLifecycle,
   DatasetMeasureAggregation,
   DatasetMeasureField,
   DatasetOperation,
   DatasetPhysicalField,
+  DatasetResultOrigin,
   DatasetSourceBinding,
   DatasetTrust,
 } from './descriptor.js';
@@ -79,11 +82,51 @@ export type {
   DatasetAggregateComponentRequirements,
 } from './component-proof.js';
 export {
+  applyTableDuplicateChoices,
   applyTableProfile,
+  defaultDuplicateUse,
+  duplicateColumnWords,
+  duplicateColumnsQuestion,
   proposeTableDataset,
   renderTableDatasetBlock,
   tableColumnKind,
+  tableDatasetCheckSentences,
+  tableDatasetDeclaration,
   tableProfileColumns,
+  singularWords,
+  withDuplicateUnitRelations,
   wordsFor,
 } from './table-draft.js';
-export type { TableColumnInput, TableColumnKind, TableDatasetField, TableDatasetMeasure, TableDatasetProposal, TableProfile } from './table-draft.js';
+export {
+  adoptDatasetJoins,
+  bareRelation,
+  datasetFieldForFilter,
+  datasetJoinReceiptSentence,
+  datasetJoinsTrust,
+  datasetJoinsUsed,
+  datasetNameIdentity,
+  datasetRelatedFieldsUsed,
+  isNameLikeField,
+  discoverDatasetJoins,
+  withoutSupersededEdges,
+  relatedFieldParts,
+  relatedFieldWords,
+  tileQueryFieldNames,
+  withDatasetJoins,
+  withoutDatasetJoins,
+} from './related-fields.js';
+export type { DatasetNameIdentity, DiscoveredDatasetJoins, RelatedRelationshipEdge } from './related-fields.js';
+export type { DuplicateColumnsQuestion, DuplicateColumnWords, DuplicateUnitRelation, TableColumnInput, TableColumnKind, TableDatasetDuplicate, TableDatasetField, TableDatasetHiddenColumn, TableDatasetMeasure, TableDatasetProposal, TableDuplicateChoice, TableProfile } from './table-draft.js';
+export {
+  NON_ADDITIVE_REASON,
+  SAVED_QUERY_ROW_COUNT,
+  isNonAdditiveColumnName,
+  savedQueryColumnKind,
+  savedQueryGroupByFromOutputs,
+  savedQueryKeepsFirstRows,
+  savedQueryResultDescriptor,
+  savedQueryResultFields,
+  savedQueryResultRollup,
+  topRowsOnlyMessage,
+} from './result-fields.js';
+export type { SavedQueryResultColumn, SavedQueryRollupCheck } from './result-fields.js';

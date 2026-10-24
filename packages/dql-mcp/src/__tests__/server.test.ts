@@ -44,6 +44,20 @@ describe('ZLens MCP server instructions', () => {
     expect(DQL_MCP_INSTRUCTIONS).toContain('suggest_block');
   });
 
+  it('put ask_dql first and the semantic layer only after it (Claude Desktop has no guide file)', () => {
+    // A Claude Desktop recording skipped ask_dql for query_semantic_model and
+    // said no certified block existed while monthly_revenue was certified.
+    const askFirst = DQL_MCP_INSTRUCTIONS.indexOf('1. Call `ask_dql` first');
+    expect(askFirst).toBeGreaterThan(-1);
+    expect(askFirst).toBeLessThan(DQL_MCP_INSTRUCTIONS.indexOf('`query_semantic_model` before deep dbt'));
+    expect(DQL_MCP_INSTRUCTIONS).toContain('before `query_semantic_model`, `list_datasets`, or any SQL');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('2. If it returns route `certified`, call `query_via_block`');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('Semantic compile, only after `ask_dql` returned no certified block');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('If its result names a `certifiedBlock`, call `query_via_block`');
+    expect(DQL_MCP_INSTRUCTIONS).toContain('Never tell the user that no certified block answers a question unless `ask_dql` said so');
+    expect(DQL_MCP_INSTRUCTIONS).not.toMatch(/use `query_semantic_model` before deep dbt or warehouse search\. Return/);
+  });
+
   it('name only tools the profile serves (agents were sent to tools they could not see)', () => {
     for (const profile of ['agentic', 'full'] as const) {
       const served = new Set(__test__.buildMcpToolRegistrations({} as DQLContext, profile).map((tool) => tool.name));
@@ -234,12 +248,30 @@ describe('ZLens MCP server instructions', () => {
     expect(__test__.dqlMcpInstructionsForProfile('full')).toContain('record_correction');
   });
 
+  it('tells MCP clients in the answer tools\' descriptions to lead with the trust line', () => {
+    const descriptions = Object.fromEntries(
+      __test__.buildMcpToolRegistrations({ projectRoot: '/tmp/p' } as never).map((tool) => [tool.name, __test__.toolDescription(tool.name)]),
+    );
+    for (const name of ['query_via_block', 'query_semantic_model', 'query_via_metadata', 'answer_question']) {
+      expect(descriptions[name]).toContain('start your answer with that line');
+    }
+    expect(descriptions.ask_dql).not.toContain('trustLine');
+  });
+
+  it('sends the trust line as its own plain-text block after the JSON, with the rule to show it first', () => {
+    const wrapped = __test__.wrap({ trustLine: '🟢 Certified · saved query monthly_revenue', rows: [] }, 'query_via_block');
+    expect(JSON.parse(wrapped.content[0]!.text)).toMatchObject({ trustLine: '🟢 Certified · saved query monthly_revenue' });
+    expect(wrapped.content[1]?.text).toContain('Start your answer with this trust line');
+    expect(wrapped.content[1]?.text).toContain('**🟢 Certified · saved query monthly_revenue**');
+  });
+
   it('compacts MCP tool JSON by default to reduce token load', () => {
     const previous = process.env.ZLENS_MCP_PRETTY_JSON;
     try {
       delete process.env.ZLENS_MCP_PRETTY_JSON;
       const wrapped = __test__.wrap({ answer: 'ok', rows: [{ id: 1 }] });
       expect(wrapped.content[0]?.text).toBe('{"answer":"ok","rows":[{"id":1}]}');
+      expect(wrapped.content).toHaveLength(1);
     } finally {
       if (previous === undefined) delete process.env.ZLENS_MCP_PRETTY_JSON;
       else process.env.ZLENS_MCP_PRETTY_JSON = previous;

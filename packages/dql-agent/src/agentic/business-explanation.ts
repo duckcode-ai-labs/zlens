@@ -70,7 +70,7 @@ function trustSentence(object: ExplainableObject): string {
   }
   if (status === 'draft') return 'It is a draft — not certified, so treat the numbers as provisional.';
   if (object.objectType.startsWith('dbt:') || object.objectType.startsWith('dbt_')) {
-    return 'This comes from the dbt project rather than a certified DQL block, so it describes the model, not an approved business definition.';
+    return 'This comes from the dbt project rather than a certified saved query, so it describes the model, not an approved business definition.';
   }
   return status ? `Status: ${status}.` : 'It has no certification status recorded.';
 }

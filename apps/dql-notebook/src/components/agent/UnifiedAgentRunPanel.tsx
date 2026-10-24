@@ -73,9 +73,10 @@ import {
 import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme';
 import { controlStyle } from '../../themes/control-tokens';
 import { AskComposerOptions } from './AskComposerOptions';
-import { answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading } from './answer-trust';
+import { ASK_NEEDS_AI_PROVIDER_HEADING, answerSourceOf, answerSourceOfPayload, answerTrustBadge, answerTrustHeading, askNeedsAiProvider } from './answer-trust';
 import { StructuredAnswerText } from './AgentAnswerCard';
-import { AppBuildProposalPanel, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
+import { AppBuildProposalPanel, OPEN_IN_APP_STUDIO_LABEL, defaultProposalSelection, type AppBuildBriefEdits } from '../apps/AppBuildProposalPanel';
+import { openAppProposalInStudio } from '../apps/app-studio-handoff';
 import { ResultView } from '../output/ResultView';
 import { DraftReviewCard } from '../blocks/DraftReviewCard';
 import { SaveAsBlockModal } from '../modals/SaveAsBlockModal';
@@ -338,11 +339,11 @@ export interface InsertDqlPayload {
 const ROUTE_LABEL: Record<AgentRunRoute, string> = {
   conversation: 'Chat',
   certified_answer: 'Certified answer',
-  semantic_answer: 'Governed semantic answer',
+  semantic_answer: 'Answer from Metrics',
   generated_answer: 'Generated answer',
   research: 'Research plan',
   sql_cell: 'SQL cell',
-  dql_block_draft: 'DQL block draft',
+  dql_block_draft: 'Saved query draft',
   modeling_draft: 'Modeling proposal',
   skill_draft: 'Skill proposal',
   app_build: 'App plan',
@@ -354,7 +355,7 @@ const ROUTE_LABEL: Record<AgentRunRoute, string> = {
 export function UnifiedAgentRunPanel({
   themeMode,
   title = 'AI Copilot',
-  scopeHint = 'Auto routes to answer, research, SQL, block, or app',
+  scopeHint = 'Auto routes to answer, research, SQL, saved query, or app',
   composerPlaceholder = 'Ask anything about your data…',
   onClearScope,
   scopeControl,
@@ -1265,7 +1266,7 @@ export function UnifiedAgentRunPanel({
             <span style={{ fontSize: 11, color: t.textMuted, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 }}>{reader ? 'Certified answers first, then approved metrics, then new SQL marked Needs review' : 'Certified first · semantic next · generated SQL last'}</span>
           </div>
 
-          <div ref={askScrollRef} onScroll={onThreadScroll} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <div ref={askScrollRef} data-testid="ask-thread-scroll" onScroll={onThreadScroll} style={{ flex: 1, minHeight: 0, overflowY: 'auto', overflowX: 'hidden', display: 'flex', flexDirection: 'column' }}>
             <div style={{ width: 'min(720px, 100% - 48px)', margin: '0 auto', padding: '26px 0 12px', display: 'flex', flexDirection: 'column', gap: 26 }}>
               {presentedItems.length === 0 && !running && askRefusal ? (
                 <div role="note" style={{ margin: 'auto 0', display: 'grid', gap: 12, justifyItems: 'center', textAlign: 'center', color: t.textSecondary, paddingTop: 40 }}>
@@ -1322,9 +1323,12 @@ export function UnifiedAgentRunPanel({
 
               {running && <RunProgress events={runningEvents} t={t} streamingAnswer={streamingAnswer} thinkingMode={thinkingMode} backgroundRun={backgroundRun} />}
             </div>
+          </div>
 
+            {/* The composer sits below the thread, not over it: the thread's scroll area ends where the scope chip
+                begins, so the end of an answer (its action row) is never covered. */}
             {askRefusal ? null : (
-            <div style={{ width: 'min(720px, 100% - 48px)', margin: 'auto auto 0', padding: '10px 0 16px', position: 'sticky', bottom: 0, background: 'linear-gradient(to top, var(--bg-canvas) 82%, transparent)' }}>
+            <div data-testid="ask-composer-dock" style={{ flexShrink: 0, width: 'min(720px, 100% - 48px)', margin: '0 auto', padding: '10px 0 16px', background: 'var(--bg-canvas)' }}>
               {error ? <div style={{ color: t.error, fontSize: 12, marginBottom: 8 }}>{error}</div> : null}
               {scopeControl ? <div style={{ marginBottom: 7 }}>{scopeControl}</div> : onClearScope ? (
                 <div style={{ width: 'fit-content', maxWidth: '100%', marginBottom: 7, padding: '4px 7px 4px 9px', border: '1px solid var(--border-default)', borderRadius: 999, background: 'var(--bg-2)', color: t.textMuted, fontSize: 11, display: 'flex', alignItems: 'center', gap: 5 }}>
@@ -1367,7 +1371,6 @@ export function UnifiedAgentRunPanel({
               <div style={{ textAlign: 'center', fontSize: 11, color: t.textMuted, marginTop: 8 }}>Each answer says what it is built on: certified, governed, or needs review.</div>
             </div>
             )}
-          </div>
         </div>
 
         {/* Inspector */}
@@ -1381,7 +1384,7 @@ export function UnifiedAgentRunPanel({
             onOpenApp={onOpenApp}
             onChangeTab={(tab) => setInspector((prev) => (prev ? { ...prev, tab } : prev))}
             onClose={() => setInspector(null)}
-            onSaveBlock={() => handleNextAction(activeInspector.run, { id: 'save-dql-block', label: 'Save as block', route: 'dql_block_draft' })}
+            onSaveBlock={() => handleNextAction(activeInspector.run, { id: 'save-dql-block', label: 'Save as saved query', route: 'dql_block_draft' })}
             onInsertSql={onInsertSql}
             onInsertDql={onInsertDql}
           />
@@ -1881,7 +1884,7 @@ function runFromConversationTurn(turn: AgentConversationTurn): AgentRun {
 
 function routeMatchLabel(route?: AgentRunRoute): string {
   switch (route) {
-    case 'certified_answer': return 'Found a compatible certified block';
+    case 'certified_answer': return 'Found a compatible certified saved query';
     case 'semantic_answer': return 'Found a compatible semantic metric';
     case 'generated_answer': return 'Identified the relevant tables and columns';
     case 'research': return 'Identified evidence for deeper analysis';
@@ -1943,7 +1946,7 @@ export function longRunGuidanceFor(
   if (route === 'research') {
     return {
       title: 'Deep research is validating the analysis',
-      detail: 'This can use several AI and SQL steps. Reusable relationships and semantic metrics make future investigations faster; reviewed repeat answers can be saved as blocks and certified.',
+      detail: 'This can use several AI and SQL steps. Reusable relationships and semantic metrics make future investigations faster; reviewed repeat answers can be saved and certified.',
     };
   }
   return {
@@ -1963,7 +1966,7 @@ export function completedRunGuidanceFor(
   if (route !== 'research' && route !== 'generated_answer') return null;
   return {
     title: route === 'research' ? 'Make future research faster' : 'Make this question faster next time',
-    detail: 'If this analysis is reusable, save it as a block, review it, then certify it. Add repeated joins to Domain Modeling and reusable measures to the semantic layer to reduce future AI work and token usage.',
+    detail: 'If this analysis is reusable, save it as a saved query, review it, then certify it. Add repeated joins to Domain Modeling and reusable measures to the semantic layer to reduce future AI work and token usage.',
   };
 }
 
@@ -2025,7 +2028,7 @@ export function askStoryActiveLabel(steps: AskStoryStep[]): string {
   if (title === 'Asked the AI to read the question' || title === 'Asked the AI to correct its reading' || title.startsWith('Asked the AI to read the question again')) return 'Checking the reading against the project';
   if (title.startsWith('Fetched ')) return 'Asking the AI to read the question with those fields';
   if (title.startsWith('Searched every table for the missing field: found')) return 'Asking the AI to draft SQL with those tables';
-  if (last.phase === 'read') return 'Looking for a certified block or semantic metric';
+  if (last.phase === 'read') return 'Looking for a certified saved query or semantic metric';
   // The first title is what runs stored before the two-governed-sources change say.
   if (title === 'Asking the AI to write SQL from the tables' || title === 'No governed answer: asking the tables directly' || (last.phase === 'schema' && title.startsWith('Chose '))) return 'Asking the AI to draft SQL from the tables';
   if (last.phase === 'schema' && /^(Re)?[Dd]rafted SQL/.test(title)) return 'Running the drafted query';
@@ -2033,7 +2036,7 @@ export function askStoryActiveLabel(steps: AskStoryStep[]): string {
   if (last.phase === 'tier' && last.state === 'done') return 'Running the query';
   if (last.phase === 'join') return 'Preparing the query again with the proven join';
   if (last.phase === 'execute') return 'Writing the answer';
-  return 'Looking for a certified block or semantic metric';
+  return 'Looking for a certified saved query or semantic metric';
 }
 
 export function formatStepDuration(ms: number | undefined): string {
@@ -2580,8 +2583,8 @@ function RunCard({
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
           {pinnable ? <AddToAppButton run={run} t={t} appContext={appContext} onOpenApp={onOpenApp} /> : null}
           {canSaveBlock ? (
-            <button type="button" className="dql-hover" onClick={() => onNextAction({ id: 'save-dql-block', label: 'Save as block', route: 'dql_block_draft' })} style={smallButtonStyle(t)}>
-              <Save size={11} /> Save as block
+            <button type="button" className="dql-hover" onClick={() => onNextAction({ id: 'save-dql-block', label: 'Save as saved query', route: 'dql_block_draft' })} style={smallButtonStyle(t)}>
+              <Save size={11} /> Save as saved query
             </button>
           ) : null}
           {showResearchDeeper ? (
@@ -2704,7 +2707,7 @@ export function askArtifactMeta(artifact: AgentRunArtifact, payload: Record<stri
   const result = extractResult(payload);
   const kindLabel = artifact.kind === 'answer' ? (result?.rows?.length ? 'Table' : 'Answer')
     : artifact.kind === 'sql_cell' ? 'SQL'
-    : artifact.kind === 'dql_block_draft' ? 'DQL block'
+    : artifact.kind === 'dql_block_draft' ? 'Saved query'
     : artifact.kind === 'research_run' ? 'Research'
     : 'Result';
   parts.push(kindLabel);
@@ -2717,7 +2720,7 @@ export function askArtifactMeta(artifact: AgentRunArtifact, payload: Record<stri
   }
   const compilationFailure = askCompilationFailureKind(payload);
   const provenance = artifact.trustState === 'certified'
-    ? 'certified block'
+    ? 'certified saved query'
     : artifact.trustState === 'governed' || artifact.trustState === 'grounded'
       ? 'governed'
       : artifact.trustState === 'blocked'
@@ -2732,7 +2735,7 @@ export function askArtifactMeta(artifact: AgentRunArtifact, payload: Record<stri
           : isAppViewPayload(payload)
             ? 'from this App · needs review'
             : answerSourceOfPayload(payload, artifact.trustState) === 'block_as_evidence'
-              ? 'certified block · needs review'
+              ? 'certified saved query · needs review'
               : answerSourceOfPayload(payload, artifact.trustState) === 'governed_definitions'
                 ? 'governed definitions · needs review'
                 : 'AI-generated';
@@ -3134,7 +3137,7 @@ function AskRunCard(props: AskRunCardProps) {
   const outcomeLabel = cancelled
     ? 'Stopped by user'
     : blocked
-    ? (askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query')
+    ? (askNeedsAiProvider(run) ? ASK_NEEDS_AI_PROVIDER_HEADING : askFailureOrigin(run) === 'no_data' ? 'No matching data' : 'Couldn’t run this query')
     : needsClarification
       ? 'Needs clarification'
       : !certified && !readFromAppView(run) && run.artifacts.some((artifact) => artifact.kind === 'research_run' && investigationReportOf(payloadOf(artifact)))
@@ -3323,7 +3326,7 @@ function AskRunCard(props: AskRunCardProps) {
       {run.reviewDraft?.path ? (
         <div data-testid="ask-review-draft" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 12, color: t.textMuted, marginTop: -2, marginBottom: 4 }}>
           <span>
-            Saved for review as a draft block (not certified): <code style={{ fontFamily: t.fontMono, fontSize: 11 }}>{run.reviewDraft.path}</code>
+            Saved for review as a draft saved query (not certified): <code style={{ fontFamily: t.fontMono, fontSize: 11 }}>{run.reviewDraft.path}</code>
             {run.reviewDraft.created ? '' : ` · asked ${run.reviewDraft.askedTimes} times`}
           </span>
           <button
@@ -3365,8 +3368,8 @@ function AskRunCard(props: AskRunCardProps) {
           ) : null}
           {pinnable ? <AddToAppButton run={run} t={t} appContext={appContext} onOpenApp={onOpenApp} /> : null}
           {canSaveBlock ? (
-            <button type="button" className="dql-ask-ghost" onClick={() => onNextAction({ id: 'save-dql-block', label: 'Save as block', route: 'dql_block_draft' })} style={askGhostBtnStyle(t)}>
-              <Blocks size={12} /> Save as block
+            <button type="button" className="dql-ask-ghost" onClick={() => onNextAction({ id: 'save-dql-block', label: 'Save as saved query', route: 'dql_block_draft' })} style={askGhostBtnStyle(t)}>
+              <Blocks size={12} /> Save as saved query
             </button>
           ) : null}
           {showResearchDeeper ? (
@@ -4546,7 +4549,7 @@ function AnalyticalHowAnswered({
           <div style={{ display: 'grid', gap: 8 }}>
             <InspectorEmpty t={t}>No failure was recorded for this run.</InspectorEmpty>
             {dqlArtifact?.sourcePath ? null : dqlArtifact?.source ? (
-              <button type="button" onClick={onSaveBlock} style={smallButtonStyle(t)}><Save size={12} /> Save as draft block</button>
+              <button type="button" onClick={onSaveBlock} style={smallButtonStyle(t)}><Save size={12} /> Save as draft saved query</button>
             ) : null}
           </div>
         )}
@@ -5026,7 +5029,7 @@ function AskInspector({
   });
   const activeTab = tabs.some((x) => x.id === tab) ? tab : tabs[0].id;
 
-  const badgeLabel = cancelled ? 'Cancelled' : blocked ? 'Blocked' : certified ? 'Certified' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'Governed' : investigationReport ? 'Review required' : isAppViewPayload(payload) ? 'Needs review' : 'AI-generated';
+  const badgeLabel = cancelled ? 'Cancelled' : blocked ? 'Blocked' : certified ? 'Certified' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'From Metrics' : investigationReport ? 'Review required' : isAppViewPayload(payload) ? 'Needs review' : 'AI-generated';
   const badgeColor = cancelled ? 'var(--text-tertiary)' : blocked ? 'var(--status-error)' : certified ? 'var(--status-success)' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'var(--accent)' : 'var(--status-warning)';
   const badgeBg = cancelled ? 'var(--bg-3)' : blocked ? 'var(--status-error-bg)' : certified ? 'var(--status-success-bg)' : artifact.trustState === 'governed' || artifact.trustState === 'grounded' ? 'var(--accent-dim)' : 'var(--status-warning-bg)';
 
@@ -5052,7 +5055,7 @@ function AskInspector({
         {pinnable ? <AddToAppButton run={run} t={t} appContext={appContext} onOpenApp={onOpenApp} /> : null}
         {pinnable && mayAuthorBlocks ? (
           <button type="button" className="dql-hover" onClick={onSaveBlock} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '7px 13px', borderRadius: 8, border: '1px solid var(--border-default)', background: 'var(--bg-2)', color: t.textSecondary, fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: t.font }}>
-            <Blocks size={13} /> Save as block
+            <Blocks size={13} /> Save as saved query
           </button>
         ) : null}
         <div style={{ flex: 1 }} />
@@ -5100,7 +5103,7 @@ function AskInspector({
           dqlArtifact?.source ? (
             <>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                <span style={{ fontSize: 11, color: t.textMuted }}>Reusable governed artifact — save it as a block to certify.</span>
+                <span style={{ fontSize: 11, color: t.textMuted }}>Reusable governed artifact — save it as a saved query to certify.</span>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {onInsertDql ? (
                     <button
@@ -5687,11 +5690,11 @@ export function trustExplainer(run: AgentRun): string | null {
     if (run.trustState === 'governed') return 'Read from this App’s current results, from governed tiles.';
     return 'Read from this App’s current results. A tile it read needs review: check its source before relying on it.';
   }
-  if (run.trustState === 'certified') return 'Answered from a certified block.';
-  if (run.route === 'dql_block_draft') return 'Prepared an ownerless review draft. Add it to Block Studio when you are ready to save it.';
-  if (run.trustState === 'governed' && answerSourceOf(run) === 'block_as_evidence') return 'Served from a certified block as published; the block is not certified for this exact question.';
+  if (run.trustState === 'certified') return 'Answered from a certified saved query.';
+  if (run.route === 'dql_block_draft') return 'Prepared an ownerless review draft. Add it to Saved queries when you are ready to save it.';
+  if (run.trustState === 'governed' && answerSourceOf(run) === 'block_as_evidence') return 'Served from a certified saved query as published; the saved query is not certified for this exact question.';
   if (run.trustState === 'governed') return 'Built from semantic metrics and dimensions.';
-  if (run.trustState === 'grounded') return 'Ran cleanly against your data. Save it as a block when it is reusable.';
+  if (run.trustState === 'grounded') return 'Ran cleanly against your data. Save it as a saved query when it is reusable.';
   if (isExploratoryDbtRun(run)) {
     const payloads = run.artifacts
       .map((artifact) => artifact.payload)
@@ -5714,9 +5717,9 @@ export function trustExplainer(run: AgentRun): string | null {
   // read as Ask AI: a modeling/skill draft is saved to its YAML after review.
   if (run.route === 'modeling_draft') return 'AI-drafted modeling proposal. Review the exact source diff, then save it as a draft — nothing is written or joinable yet.';
   if (run.route === 'skill_draft') return 'AI-drafted Skill proposal. Review it, then save it as a draft — it will not guide any agent until you activate it.';
-  if (run.trustState === 'review_required' && answerSourceOf(run) === 'block_as_evidence') return 'Computed by a certified block that is not certified for this question, and the reading does not cover all of it: review it before relying on it.';
+  if (run.trustState === 'review_required' && answerSourceOf(run) === 'block_as_evidence') return 'Computed by a certified saved query that is not certified for this question, and the reading does not cover all of it: review it before relying on it.';
   if (run.trustState === 'review_required' && answerSourceOf(run) === 'governed_definitions') return 'Computed from governed definitions, but the reading does not cover all of the question: review it before relying on it.';
-  if (run.trustState === 'review_required') return 'AI-generated answer. Save it as a block when you want to keep it.';
+  if (run.trustState === 'review_required') return 'AI-generated answer. Save it as a saved query when you want to keep it.';
   if (run.trustState === 'blocked') return null;
   return null;
 }
@@ -5731,8 +5734,10 @@ function isExploratoryDbtRun(run: AgentRun): boolean {
 
 export function simpleRunTitle(run: AgentRun): string {
   if (run.status === 'cancelled' || run.stopReason === 'cancelled' || run.route === 'cancelled') return 'Stopped by user';
+  // No model ran: say what Ask needs, never "AI-generated answer" (round 3).
+  if (askNeedsAiProvider(run)) return ASK_NEEDS_AI_PROVIDER_HEADING;
   if (run.trustState === 'certified' || readFromAppView(run)) return answerTrustHeading(run);
-  if (run.route === 'dql_block_draft') return 'Draft block';
+  if (run.route === 'dql_block_draft') return 'Draft saved query';
   if (isExploratoryDbtRun(run)) return 'Exploratory DBT-grounded answer';
   // The route is not the source: a certified block served as evidence runs on
   // the generated_answer route without any SQL the AI wrote.
@@ -5741,10 +5746,10 @@ export function simpleRunTitle(run: AgentRun): string {
 }
 
 /**
- * The `app_proposal` artifact card: the confirmable pre-create content list from the
- * two-phase app build. Owns the whole confirm flow — per-tile toggles, the Create
- * call to the commit endpoint (a plain REST call keyed by sessionId, same pattern as
- * AddToAppButton), and the created-app success state with an Open link.
+ * The `app_proposal` artifact card: the Ask App proposal before it opens in
+ * App Studio (design D9). Per-tile toggles choose the data the App keeps;
+ * "Open in App Studio" makes a local App Studio draft (no App files) and opens
+ * Apps on it at the AI Data step. Publishing goes through the publish checks.
  */
 function AppProposalArtifact({
   artifact,
@@ -5765,7 +5770,7 @@ function AppProposalArtifact({
   const [selected, setSelected] = useState<Set<string>>(() => (proposal ? defaultProposalSelection(proposal) : new Set()));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [created, setCreated] = useState<{ appId: string; dashboardId?: string; name: string } | null>(null);
+  const [opened, setOpened] = useState<{ appId: string; draftId: string; name: string } | null>(null);
 
   if (!proposal || !sessionId) {
     return (
@@ -5779,29 +5784,23 @@ function AppProposalArtifact({
     );
   }
 
-  const commit = async (edits: AppBuildBriefEdits) => {
+  const openInStudio = async (edits: AppBuildBriefEdits) => {
     setBusy(true);
     setError(null);
-    // The chat path used to send only the selection, so a name or tile title
-    // typed in this brief was silently discarded even though the API accepts it.
-    const result = await api.commitAppAiBuild(sessionId, {
-      selectedTileIds: Array.from(selected),
-      expectedProposalHash: proposalHash,
-      ...(edits.appName ? { appName: edits.appName } : {}),
-      ...(edits.pageTitle ? { pageTitle: edits.pageTitle } : {}),
-      ...(edits.audience ? { audience: edits.audience } : {}),
-      ...(Object.keys(edits.tileOverrides).length > 0 ? { tileOverrides: edits.tileOverrides } : {}),
+    const result = await openAppProposalInStudio({
+      sessionId,
+      selectedTileIds: selected,
+      proposalHash,
+      edits,
+      openInStudio: (id, input) => api.openAppAiBuildInStudio(id, input),
+      onOpenApp,
     });
     setBusy(false);
     if (!result.ok) {
       setError(result.error);
       return;
     }
-    setCreated({
-      appId: result.app?.id ?? result.session.appId ?? '',
-      dashboardId: result.dashboardId ?? undefined,
-      name: result.app?.name ?? artifact.title,
-    });
+    setOpened({ appId: result.appId, draftId: result.draftId, name: result.name });
   };
 
   return (
@@ -5812,16 +5811,18 @@ function AppProposalArtifact({
           {cleanPresentationText(artifact.title)}
         </div>
       </div>
-      {created ? (
+      {opened ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, color: t.success, fontSize: 12, fontWeight: 750 }}>
-            <CheckCircle2 size={13} /> Created {created.name}
+            <CheckCircle2 size={13} /> {opened.name} is a draft in App Studio
           </span>
-          {created.appId && onOpenApp ? (
-            <button type="button" className="dql-hover" onClick={() => onOpenApp(created.appId, created.dashboardId)} style={smallButtonStyle(t)}>
-              Open app
+          {onOpenApp ? (
+            <button type="button" className="dql-hover" onClick={() => onOpenApp(opened.appId, undefined, opened.draftId)} style={smallButtonStyle(t)}>
+              {OPEN_IN_APP_STUDIO_LABEL}
             </button>
-          ) : null}
+          ) : (
+            <span style={{ fontSize: 11.5, color: t.textMuted }}>Find it in Apps under Drafts.</span>
+          )}
         </div>
       ) : (
         <AppBuildProposalPanel
@@ -5836,7 +5837,7 @@ function AppProposalArtifact({
               return next;
             });
           }}
-          onCreate={(edits) => void commit(edits)}
+          onCreate={(edits) => void openInStudio(edits)}
           defaultName={artifact.title}
           busy={busy}
           error={error}
@@ -6042,7 +6043,7 @@ function ExecutableDqlResult({
           ) : null}
           {filterCandidates.length > 0 ? (
             <div style={{ fontSize: 9.5, color: t.textMuted }}>
-              Extra filters are available only for semantic dimensions in this result. They stay transient until you explicitly save a block.
+              Extra filters are available only for semantic dimensions in this result. They stay transient until you explicitly save a saved query.
             </div>
           ) : null}
         </div>
@@ -6321,11 +6322,11 @@ function ArtifactView({
                 <button
                   type="button"
                   className="dql-hover"
-                  title="Save this DQL as a reusable block"
-                  onClick={(event) => { event.preventDefault(); event.stopPropagation(); onNextAction({ id: 'save-dql-block', label: 'Save as DQL block', route: 'dql_block_draft' }); }}
+                  title="Save this DQL as a reusable saved query"
+                  onClick={(event) => { event.preventDefault(); event.stopPropagation(); onNextAction({ id: 'save-dql-block', label: 'Save as saved query', route: 'dql_block_draft' }); }}
                   style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: t.accent, display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 700, padding: '2px 4px' }}
                 >
-                  <Save size={12} /> Save as block
+                  <Save size={12} /> Save as saved query
                 </button>
               ) : null}
             </span>
@@ -6455,8 +6456,7 @@ function TrustBadge({ run, t }: { run: AgentRun; t: Theme }) {
       // it "Needs input" told people to supply something that was never named.
       : run.status === 'needs_clarification'
         ? 'Needs input'
-      : run.trustState === 'blocked'
-        ? 'Refused'
+        // A refusal reads "Refused", or "Not answered" when no model ran (answerTrustBadge).
         : answerTrustBadge(run);
   return (
     <span style={{ border: `1px solid ${color}55`, color, background: `${color}12`, borderRadius: 999, padding: '3px 7px', fontSize: 10, fontWeight: 850 }}>
@@ -6593,7 +6593,7 @@ function routeToMode(route?: AgentRunRoute): AgentRunRequestedMode | undefined {
 
 function nextPromptFor(run: AgentRun, route?: AgentRunRoute): string {
   if (route === 'sql_cell') return `Create a SQL cell for: ${run.question}`;
-  if (route === 'dql_block_draft') return `Create a DQL block draft for: ${run.question}`;
+  if (route === 'dql_block_draft') return `Create a saved query draft for: ${run.question}`;
   if (route === 'modeling_draft') return `Revise the modeling proposal for: ${run.question}`;
   if (route === 'skill_draft') return `Revise the Skill proposal for: ${run.question}`;
   if (route === 'app_build') return `Build an app for: ${run.question}`;
@@ -7538,8 +7538,8 @@ const ASK_FAILURE_PRESENTATION: Record<string, { title: string; hint: string }> 
     hint: 'ZLens froze the selected plan and began execution, but the current connection could not complete it. Review the connection or warehouse state, then retry.',
   },
   dql_compilation: {
-    title: 'ZLens could not build a reusable block',
-    hint: 'The query itself is fine \u2014 only saving this answer as a block is affected.',
+    title: 'ZLens could not build a reusable saved query',
+    hint: 'The query itself is fine \u2014 only saving this answer as a saved query is affected.',
   },
   governance_gate: {
     title: 'ZLens stopped this before running it',
@@ -7552,6 +7552,10 @@ const ASK_FAILURE_PRESENTATION: Record<string, { title: string; hint: string }> 
   ambiguity: {
     title: 'One detail is missing',
     hint: 'Answer the question above and ZLens will continue.',
+  },
+  provider_missing: {
+    title: ASK_NEEDS_AI_PROVIDER_HEADING,
+    hint: 'No AI model ran. The owner can connect one in Settings; everything else in ZLens works without AI.',
   },
   provider: {
     title: 'The AI provider failed',
@@ -7612,6 +7616,7 @@ function askFailureOrigin(run: AgentRun): string {
   if (run.status === 'cancelled' || run.stopReason === 'cancelled' || run.route === 'cancelled' || run.diagnosticReceipt?.failure?.code === 'RUN_CANCELLED') {
     return 'cancel';
   }
+  if (askNeedsAiProvider(run)) return 'provider_missing';
   // V4 is the canonical receipt for terminal Ask incidents. It must win over
   // a legacy compatibility refusal code carried in an answer artifact: after
   // `sql.execute`, this is no longer a retrieval/grounding problem.

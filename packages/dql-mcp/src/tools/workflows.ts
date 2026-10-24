@@ -1,21 +1,32 @@
 import type { DQLContext } from '../context.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
-  KGStore,
+  APP_BUILD_HANDOFF_SOURCE_LIMIT,
+  appBuildHandoffSourceSummary,
+  assessSemanticJoinTrust,
+  buildAnalysisQuestionPlan,
+  composeSemanticQueryForQuestionWithCoverage,
+  appStudioDraftPath,
   askScopeFromWorkspace,
+  createAppBuildHandoffDraft,
   defaultKgPath,
+  ensureAgentProjectReady,
   ensureMetadataCatalogFresh,
-  generateAppFromPlan,
+  matchAppSourceCatalogRecords,
   planAgentAnswer,
-  planAppFromPrompt,
+  planAppBuildBrief,
   reindexProject,
   resolveDomainContextEnvelope,
-  validateAppPlan,
+  shortlistAppSources,
+  type AppSourceCatalogRecord,
   type DomainContextEnvelope,
   type MetadataAllowedSqlContext,
   type MetadataObject,
   type ReindexProjectResult,
 } from '@zlens/agent';
 import { resolveTrustLabel, trustLabelIdForRoute } from '@zlens/core';
+import { LocalAppStorage, defaultLocalAppsDbPath } from '@zlens/project';
 import { suggestBlock } from './suggest-block.js';
 import { zodInputShapeForTool } from '../tool-schema.js';
 
@@ -69,6 +80,8 @@ export async function askDql(
   // with the agent answer-loop and the UI badge. Derived from the route so MCP
   // clients always see the same label set.
   const trustLabel = resolveTrustLabel(trustLabelIdForRoute(route.route));
+  const semantic = route.route === 'generated_sql' ? semanticCandidateFor(ctx, args.question) : undefined;
+  const semanticCandidate = semantic?.candidate;
 
   return {
     question: args.question,
@@ -84,8 +97,15 @@ export async function askDql(
     reason: route.reason,
     routeReason: route.routeReason,
     grainGate: route.grainGate,
-    recommendedAction: recommendedAction(route.route),
-    ...(nextTool(route.route) ? { nextTool: nextTool(route.route) } : {}),
+    recommendedAction: semanticCandidate
+      ? `The semantic metric "${semanticCandidate.metric}" answers this. Call query_semantic_model with { question }; its answer is labelled ${semanticCandidate.trustLabel.display}${semanticCandidate.joinCaveat ? ` (${semanticCandidate.joinCaveat})` : ''}. Write SQL for query_via_metadata only if it returns matched: false.`
+      : semantic?.gap
+        ? `The semantic metric "${semantic.gap.nearestMetric}" cannot express ${semantic.gap.unexpressed.join(', ')}, so query_semantic_model would not answer this. ${recommendedAction(route.route)} Apply every part of the question in the SQL.`
+        : recommendedAction(route.route),
+    ...(semantic?.gap ? { semanticGap: semantic.gap } : {}),
+    ...(semanticCandidate
+      ? { nextTool: 'query_semantic_model', semanticCandidate }
+      : nextTool(route.route) ? { nextTool: nextTool(route.route) } : {}),
     exactCertifiedBlock: exact && exact.objectType === 'dql_block' ? summarizeObject(exact) : undefined,
     certifiedCandidates,
     // Conflict route: surface BOTH sides + owners + the disambiguation prompt.
@@ -109,8 +129,8 @@ export async function askDql(
         'nextReviewAction',
       ],
       // Canonical vocabulary the answer must report under `trustStatus`.
-      trustLabels: ['Certified', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
-      rule: 'Never present generated SQL or Tier-2 preview rows as certified. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
+      trustLabels: ['Certified', 'From Metrics', 'Reviewed', 'AI-Generated', 'Insufficient-Context', 'Conflict'],
+      rule: 'Never present generated SQL or Tier-2 preview rows as certified. From Metrics is the label query_semantic_model returns for a compile from semantic metrics and dimensions whose joins are all certified relationships; it is not Certified. A compile that joins through a draft or unmodeled relationship is AI-Generated. On a Conflict route, present BOTH conflicting definitions with their owners and ask the user to choose — never silently pick one.',
     },
   };
 }
@@ -157,60 +177,130 @@ async function buildDqlAppOnce(
   ctx: DQLContext,
   args: Parameters<typeof buildDqlApp>[1],
 ) {
-  const kgPath = defaultKgPath(ctx.projectRoot);
-  await reindexProject(ctx.projectRoot, { kgPath });
-  const kg = new KGStore(kgPath);
-  try {
-    const unknownBlocks = (args.blocks ?? []).filter((name) => ctx.manifest.blocks[name]?.status !== 'certified');
-    if (unknownBlocks.length > 0) {
+  const prompt = args.prompt?.trim() ?? '';
+  if (!prompt) return { ok: false as const, error: 'prompt is required: describe what the App is for.' };
+  const unknownBlocks = (args.blocks ?? []).filter((name) => ctx.manifest.blocks[name]?.status !== 'certified');
+  if (unknownBlocks.length > 0) {
+    return {
+      ok: false as const,
+      error: `Only certified blocks can be App data; not certified or not found: ${unknownBlocks.join(', ')}. Use search_blocks with status "certified".`,
+    };
+  }
+  await ensureAgentProjectReady(ctx.projectRoot);
+  const domain = cleanOptional(args.domain);
+  // The App's data: the blocks the caller named exactly, or what the App
+  // Studio planner picks from certified data for the request.
+  let picks: Array<{ source: AppSourceCatalogRecord; reason: string }>;
+  let notCoveredYet: Array<{ question: string; reason?: string }> = [];
+  if (args.blocks?.length) {
+    const matched = matchAppSourceCatalogRecords(ctx.projectRoot, { blockNames: args.blocks }, 'governed_only');
+    if (matched.unmatched.length) {
       return {
         ok: false as const,
-        error: `Only certified blocks can be App tiles; not certified or not found: ${unknownBlocks.join(', ')}. Use search_blocks with status "certified".`,
+        error: `These certified blocks are not in the App data catalog yet: ${matched.unmatched.join(', ')}. Run inspect_dql_project with refresh, then retry.`,
       };
     }
-    const planned = planAppFromPrompt({
-      prompt: args.prompt,
-      kg,
-      domain: cleanOptional(args.domain),
-      owner: cleanOptional(args.owner),
-      plannerMode: args.aiLayout ? 'ai_assisted' : 'deterministic',
-      ...(args.blocks?.length ? { preferredBlockIds: args.blocks.map((name) => `block:${name}`), maxCertifiedTiles: args.blocks.length } : {}),
+    picks = matched.items.map((source) => ({ source, reason: 'You named this block.' }));
+  } else {
+    // Certified data first, never only certified data (T3): readers see
+    // "Not certified yet" on tiles nobody certified.
+    const candidates = shortlistAppSources(ctx.projectRoot, prompt, {
+      sourcePolicy: 'include_review_required',
+      ...(domain ? { domains: [domain] } : {}),
+    }).items;
+    const brief = await planAppBuildBrief({
+      prompt,
+      candidates,
+      requiredSourceIds: [],
+      sourcePolicy: 'include_review_required',
+      ...(domain ? { domain } : {}),
     });
-    const name = cleanOptional(args.name);
-    const plan = name ? { ...planned, name, appId: appIdFor(name) } : planned;
-    const validation = validateAppPlan(plan, kg);
-    const generated = args.saveDraft === false
-      ? undefined
-      : generateAppFromPlan(ctx.projectRoot, plan, kg, { overwrite: args.overwrite === true });
-    if (generated) {
-      ctx.refresh();
-      await ensureMetadataCatalogFresh(ctx.projectRoot, { force: true }).catch(() => undefined);
-    }
+    const byId = new Map(candidates.map((candidate) => [candidate.sourceId, candidate]));
+    picks = brief.selectedSourceIds.flatMap((sourceId) => {
+      const source = byId.get(sourceId);
+      const component = brief.components.find((candidate) => candidate.sourceId === sourceId);
+      return source ? [{ source, reason: component?.rationale || `Matched ${source.title} for this request.` }] : [];
+    });
+    const covered = new Set(brief.components.flatMap((component) => component.requirementIds));
+    notCoveredYet = brief.requirements
+      .filter((requirement) => !covered.has(requirement.id))
+      .map((requirement) => ({ question: requirement.question, reason: 'No certified data covers this question yet.' }));
+  }
+  picks = picks.slice(0, APP_BUILD_HANDOFF_SOURCE_LIMIT);
+  const name = cleanOptional(args.name) ?? appNameFromPrompt(prompt);
+  const sources = picks.map((pick) => appBuildHandoffSourceSummary(pick.source, pick.reason));
+  // The gaps are reported, not stored: App Studio plans again from the same
+  // goal and lists them under "Not covered yet" itself.
+  const draft = createAppBuildHandoffDraft({
+    goal: prompt,
+    name,
+    ...(domain ? { domain } : {}),
+    sources: picks.map((pick) => pick.source),
+  });
+  const nothingPicked = sources.length === 0
+    ? ['No certified data matched this request. App Studio suggests data again and lists what is not covered yet.']
+    : [];
+  if (args.saveDraft === false) {
     return {
-      ok: true,
-      appId: plan.appId,
-      name: plan.name,
-      domain: plan.domain,
-      audience: plan.audience,
-      lifecycle: plan.lifecycle,
-      certifiedTiles: validation.certifiedTiles,
-      draftTiles: validation.draftTiles,
-      validation,
-      plan,
-      generated,
-      nextActions: generated
-        ? [
-          'Open the generated app draft in DQL.',
-          'Review draft/research tiles before stakeholder use.',
-          'Run zlens app build after review.',
-        ]
-        : [
-          'Review the returned plan.',
-          'Call build_dql_app again with saveDraft=true to write files.',
-        ],
+      ok: true as const,
+      saved: false,
+      appId: draft.appId,
+      name: draft.name,
+      domain: domain ?? null,
+      sourcePolicy: 'Certified data first',
+      sources,
+      notCoveredYet: notCoveredYet.map((gap) => gap.question),
+      warnings: nothingPicked,
+      nextActions: ['Call build_dql_app again without saveDraft:false to create the App Studio draft.'],
     };
+  }
+  const storage = new LocalAppStorage(defaultLocalAppsDbPath(ctx.projectRoot));
+  try {
+    storage.saveAppBuildDraft(draft);
   } finally {
-    kg.close();
+    storage.close();
+  }
+  const openPath = appStudioDraftPath(draft.id);
+  const notebook = runningNotebookUrl(ctx.projectRoot);
+  return {
+    ok: true as const,
+    saved: true,
+    draftId: draft.id,
+    appId: draft.appId,
+    name: draft.name,
+    domain: domain ?? null,
+    sourcePolicy: 'Certified data first',
+    openPath,
+    ...(notebook ? { openUrl: `${notebook}${openPath}` } : {}),
+    sources,
+    notCoveredYet: notCoveredYet.map((gap) => gap.question),
+    warnings: nothingPicked,
+    nextActions: [
+      notebook
+        ? `Open ${notebook}${openPath} to review the App in App Studio. It opens at the Data step.`
+        : `Start the workbench (zlens notebook) and open ${openPath} to review the App in App Studio. It opens at the Data step.`,
+      // Honest about who chose the data (F09): this tool plans from keywords, never with an AI provider.
+      `${args.blocks?.length ? 'Check the data you named' : 'Check the suggested data'}, build the pages, then publish. Nothing is written to the project until you publish.`,
+    ],
+  };
+}
+
+/** A short App name from the request when the caller gives none. */
+function appNameFromPrompt(prompt: string): string {
+  const words = prompt.replace(/^(?:please\s+)?(?:build|create|make|draft|design)\s+(?:me\s+)?(?:an?\s+)?(?:app\s+(?:for|about|on)\s+)?/i, '').trim() || prompt;
+  const name = words.charAt(0).toUpperCase() + words.slice(1);
+  return name.length > 80 ? `${name.slice(0, 77).trimEnd()}…` : name;
+}
+
+/** The address of the `zlens notebook` running on this project, when there is one. */
+function runningNotebookUrl(projectRoot: string): string | undefined {
+  try {
+    const descriptor = JSON.parse(readFileSync(join(projectRoot, '.dql', 'local', 'notebook.json'), 'utf-8')) as { pid?: unknown; url?: unknown };
+    if (typeof descriptor.url !== 'string' || !/^https?:\/\//.test(descriptor.url)) return undefined;
+    if (typeof descriptor.pid === 'number') process.kill(descriptor.pid, 0);
+    return descriptor.url.replace(/\/$/, '');
+  } catch {
+    return undefined;
   }
 }
 
@@ -232,13 +322,26 @@ export async function inspectDqlProject(
   const dashboards = Object.values(manifest.dashboards ?? {});
   const apps = Object.values(manifest.apps ?? {});
   const knowledgeGraph = manifest.knowledgeGraph;
+  const certifiedBlocks = blocks.filter((block) => block.status === 'certified');
   return {
     projectRoot: ctx.projectRoot,
     blocks: {
       total: blocks.length,
-      certified: blocks.filter((block) => block.status === 'certified').length,
-      draft: blocks.filter((block) => block.status !== 'certified').length,
+      certified: certifiedBlocks.length,
+      draft: blocks.length - certifiedBlocks.length,
     },
+    // The certified answers come first: a client with no agent guide file
+    // (Claude Desktop) sees them before the semantic layer or the warehouse.
+    certifiedBlocks: certifiedBlocks.slice(0, INSPECT_CERTIFIED_BLOCK_LIMIT).map((block) => ({
+      name: block.name,
+      domain: block.domain ?? null,
+      grain: block.grain ?? null,
+      description: block.description ?? null,
+    })),
+    ...(certifiedBlocks.length > INSPECT_CERTIFIED_BLOCK_LIMIT
+      ? { certifiedBlocksTruncated: `${certifiedBlocks.length - INSPECT_CERTIFIED_BLOCK_LIMIT} more; search_blocks finds them.` }
+      : {}),
+    nextTool: 'ask_dql',
     apps: apps.length,
     dashboards: dashboards.length,
     semantic: {
@@ -264,9 +367,13 @@ export async function inspectDqlProject(
     } : undefined,
     index,
     catalog,
-    recommendedNextStep: 'Use ask_dql before writing SQL, then query_via_block or query_via_metadata based on the returned route.',
+    recommendedNextStep: certifiedBlocks.length > 0
+      ? 'Call ask_dql with the user\'s question next, before query_semantic_model, list_datasets or any SQL. When one of the certifiedBlocks answers it at its grain, ask_dql returns route "certified" and nextTool query_via_block; answer from that block.'
+      : 'Call ask_dql with the user\'s question next, before writing SQL, then query_via_block or query_via_metadata based on the returned route.',
   };
 }
+
+const INSPECT_CERTIFIED_BLOCK_LIMIT = 50;
 
 export const buildDqlBlockInput = zodInputShapeForTool('build_dql_block');
 
@@ -275,6 +382,43 @@ export function buildDqlBlock(
   args: Parameters<typeof suggestBlock>[1],
 ) {
   return suggestBlock(ctx, args);
+}
+
+/**
+ * The semantic compile a generated-route question would get, when the
+ * semantic layer has the metric it names. Sends the agent to
+ * query_semantic_model (From Metrics, or AI-Generated when it joins through an
+ * uncertified relationship) before it writes its own SQL (AI-Generated), the
+ * order the Ask page follows. When the metric matches but the question also
+ * asks for a breakdown or filter it cannot express, returns that gap instead.
+ */
+function semanticCandidateFor(ctx: DQLContext, question: string) {
+  try {
+    const coverage = composeSemanticQueryForQuestionWithCoverage({
+      semanticLayer: ctx.semanticLayer,
+      question,
+      questionPlan: buildAnalysisQuestionPlan(question),
+    });
+    // A metric that matches while a breakdown or filter in the question does
+    // not is no candidate: the agent writes SQL, told what the metric misses.
+    if (coverage.unexpressed.length > 0 && coverage.metric) {
+      return { gap: { nearestMetric: coverage.metric, unexpressed: coverage.unexpressed } };
+    }
+    const result = coverage.result;
+    if (!result) return undefined;
+    // From Metrics only when every join the compile takes is a certified relationship.
+    const joins = assessSemanticJoinTrust(result.composeResult.joinPath, ctx.manifest);
+    return { candidate: {
+      metric: result.metric,
+      metrics: result.metrics,
+      dimensions: result.dimensions,
+      ...(result.timeDimension ? { timeDimension: result.timeDimension } : {}),
+      trustLabel: joins.certified ? resolveTrustLabel('governed') : resolveTrustLabel('ai_generated', 'uncertified join'),
+      ...(joins.caveat ? { joinCaveat: joins.caveat } : {}),
+    } };
+  } catch {
+    return undefined;
+  }
 }
 
 function recommendedAction(route: string): string {
@@ -323,10 +467,6 @@ function summarizeObject(object: MetadataObject) {
 
 function isCertified(object: MetadataObject): boolean {
   return object.status === 'certified' || object.payload?.certification === 'certified';
-}
-
-function appIdFor(name: string): string {
-  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'app';
 }
 
 function cleanOptional(value: string | undefined): string | undefined {

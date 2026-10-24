@@ -180,6 +180,29 @@ function listTablesSQL(driver?: string): string {
   }
 }
 
+/**
+ * How a saved query looks, as text: the welcome notebook no longer carries a
+ * runnable placeholder block ("Example Customer Rollup", `SELECT 1`), which
+ * showed up in every new App's Data step as data to add (design D7).
+ */
+const SAVE_A_QUERY_MARKDOWN = [
+  '## Save a query',
+  '',
+  'When a query answers a question people ask again, choose **Save as saved query** on its cell. ZLens saves it as a saved query (a `.dql` block file) in `domains/`, and it appears in Apps under **Data** once it is certified:',
+  '',
+  '```dql',
+  'block "Revenue by month" {',
+  '  domain = "sales"',
+  '  owner = "you@example.com"',
+  '  query = """',
+  '    SELECT date_trunc(\'month\', ordered_at) AS month, SUM(order_total) AS revenue',
+  '    FROM orders',
+  '    GROUP BY 1',
+  '  """',
+  '}',
+  '```',
+].join('\n');
+
 export function createWelcomeNotebook(template: string, projectTitle: string, driver?: string): NotebookDocument {
   const normalized = template.toLowerCase();
   const showTablesQuery = listTablesSQL(driver);
@@ -205,16 +228,16 @@ export function createWelcomeNotebook(template: string, projectTitle: string, dr
         source: `-- Replace 'your_table' with a table name from the results above\n-- SELECT * FROM your_table LIMIT 20;`,
       },
       {
-        id: 'dql-example',
-        type: 'dql',
-        title: 'Example Domain Layer',
-        source: `term "Customer" {\n  domain = "Customer"\n  type = "entity"\n  status = "draft"\n  description = "A person or account that can place orders or receive service."\n  owner = "customer-analytics"\n  identifiers = ["customer_id"]\n}\n\nblock "Example Customer Rollup" {\n  domain = "Customer"\n  type = "custom"\n  status = "draft"\n  description = "Starter customer summary block. Replace this query with a dbt model query."\n  owner = "analytics"\n  terms = ["Customer"]\n  businessOutcome = "Understand customer value and activity."\n  decisionUse = "Account planning and retention review."\n\n  query = """\n    SELECT 1 AS customer_count\n  """\n\n  tests {\n    assert row_count == 1\n  }\n}\n\nbusiness_view "Customer 360" {\n  domain = "Customer"\n  status = "draft"\n  description = "Business composition for account review and customer health."\n  owner = "customer-analytics"\n  terms = ["Customer"]\n  businessOutcome = "See customer identity, value, activity, and service risk in one lineage path."\n  decisionUse = "Account planning, churn review, and expansion targeting."\n  reviewCadence = "weekly"\n\n  includes {\n    block "Example Customer Rollup"\n  }\n}`,
+        id: 'save-a-query',
+        type: 'markdown',
+        title: 'Save a query',
+        source: SAVE_A_QUERY_MARKDOWN,
       },
       {
         id: 'next-steps',
         type: 'markdown',
         title: 'Next Steps',
-        source: `## Next steps\n\n1. Query a dbt model and save the useful logic as a DQL block.\n2. Add business terms under \`terms/\` for the vocabulary stakeholders use.\n3. Compose blocks into \`business_view\` files under \`business-views/\`.\n4. Run \`zlens compile .\` to refresh \`dql-manifest.json\`.\n5. Open Lineage to trace source -> model -> block -> business view -> consumption.`,
+        source: `## Next steps\n\n1. Query a dbt model and save the useful logic as a saved query.\n2. Add business terms under \`terms/\` for the vocabulary stakeholders use.\n3. Compose saved queries into \`business_view\` files under \`business-views/\`.\n4. Run \`zlens compile .\` to refresh \`dql-manifest.json\`.\n5. Open Lineage to trace source -> model -> saved query -> business view -> consumption.`,
       },
     ], { description: 'ZLens workbench for turning a dbt project into business lineage.', template: 'dbt' });
   }
@@ -240,16 +263,16 @@ export function createWelcomeNotebook(template: string, projectTitle: string, dr
       source: `-- Write your SQL here after connecting a warehouse or local DuckDB/file source\n-- Example: SELECT * FROM analytics.customers LIMIT 10;`,
     },
     {
-      id: 'dql-example',
-      type: 'dql',
-      title: 'Example Domain Layer',
-      source: `term "Customer" {\n  domain = "Customer"\n  type = "entity"\n  status = "draft"\n  description = "A person or account that can place orders or receive service."\n  owner = "customer-analytics"\n  identifiers = ["customer_id"]\n}\n\nblock "Example Customer Rollup" {\n  domain = "Customer"\n  type = "custom"\n  status = "draft"\n  description = "Starter customer summary block. Replace this query with your own source table."\n  owner = "analytics"\n  terms = ["Customer"]\n  businessOutcome = "Understand customer value and activity."\n  decisionUse = "Account planning and retention review."\n\n  query = """\n    SELECT 1 AS customer_count\n  """\n\n  tests {\n    assert row_count == 1\n  }\n}\n\nbusiness_view "Customer 360" {\n  domain = "Customer"\n  status = "draft"\n  description = "Business composition for account review and customer health."\n  owner = "customer-analytics"\n  terms = ["Customer"]\n  businessOutcome = "See customer identity, value, activity, and service risk in one lineage path."\n  decisionUse = "Account planning, churn review, and expansion targeting."\n  reviewCadence = "weekly"\n\n  includes {\n    block "Example Customer Rollup"\n  }\n}`,
+      id: 'save-a-query',
+      type: 'markdown',
+      title: 'Save a query',
+      source: SAVE_A_QUERY_MARKDOWN,
     },
     {
       id: 'next-steps',
       type: 'markdown',
       title: 'Next Steps',
-      source: `## Next steps\n\n1. Add data by connecting a warehouse or adding a local DuckDB/file source.\n2. Save repeated SQL as DQL blocks under \`blocks/\`.\n3. Add business terms under \`terms/\` for shared vocabulary.\n4. Compose blocks into \`business_view\` files under \`business-views/\`.\n5. Run \`zlens compile .\` and open Lineage to inspect the business and technical path.`,
+      source: `## Next steps\n\n1. Add data by connecting a warehouse or adding a local DuckDB/file source.\n2. Save repeated SQL as saved queries (\`.dql\` block files) under \`blocks/\`.\n3. Add business terms under \`terms/\` for shared vocabulary.\n4. Compose saved queries into \`business_view\` files under \`business-views/\`.\n5. Run \`zlens compile .\` and open Lineage to inspect the business and technical path.`,
     },
   ], { description: 'DQL workbench for building a domain-first analytics project.', template: 'default' });
 }

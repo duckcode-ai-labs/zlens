@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, type CSSProperties } from 'react';
+import { Braces, CalendarDays, Hash, ToggleLeft, Type, type LucideIcon } from 'lucide-react';
 import { themes, type Theme, type ThemeMode } from '../../themes/notebook-theme';
 import type { QueryResult } from '../../store/types';
 import { inferColumnKind, type ColumnKind } from '../../utils/column-kind';
@@ -31,6 +32,8 @@ interface TableOutputProps {
    * table offers none; without a host, CSV and JSON are saved from the table.
    */
   onExport?: (format: ExportFormat) => Promise<unknown>;
+  /** What an empty result says; an App tile says "No matching rows for these filters." */
+  emptyMessage?: string;
 }
 
 const TONE_COLORS: Record<ConditionalTone, string> = {
@@ -64,14 +67,18 @@ function isNumeric(value: unknown): boolean {
   return false;
 }
 
-function columnKindBadge(kind: ColumnKind): { icon: string; color: string } {
+/**
+ * A column's type as an icon with a plain-word tooltip (D6): Number, Text,
+ * Date, Yes/No or Structured, instead of a bare "#", "A" or "D".
+ */
+export function columnKindBadge(kind: ColumnKind): { Icon: LucideIcon; label: string; color: string } {
   switch (kind) {
-    case 'numeric': return { icon: '#', color: '#79c0ff' };
-    case 'date': return { icon: 'D', color: '#e3b341' };
-    case 'bool': return { icon: 'B', color: '#a371f7' };
-    case 'json': return { icon: '{}', color: '#ff7b72' };
+    case 'numeric': return { Icon: Hash, label: 'Number', color: '#79c0ff' };
+    case 'date': return { Icon: CalendarDays, label: 'Date', color: '#e3b341' };
+    case 'bool': return { Icon: ToggleLeft, label: 'Yes/No', color: '#a371f7' };
+    case 'json': return { Icon: Braces, label: 'Structured', color: '#ff7b72' };
     case 'string':
-    default: return { icon: 'A', color: '#56d364' };
+    default: return { Icon: Type, label: 'Text', color: '#56d364' };
   }
 }
 
@@ -140,7 +147,22 @@ function SortArrow({ dir, color }: { dir: SortDir; color: string }) {
 
 // ─── TableOutput ──────────────────────────────────────────────────────────────
 
-export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport }: TableOutputProps) {
+/**
+ * The row count above a table. When the result holds only the first rows of
+ * a larger one (rowCount is the full count), it says so, so the table agrees
+ * with "Live · 935 rows" next to it.
+ */
+export function tableRowCountLabel(input: { rangeStart: number; rangeEnd: number; loaded: number; total?: number; matching?: number }): string {
+  const { rangeStart, rangeEnd, loaded, matching } = input;
+  const total = typeof input.total === 'number' && input.total > loaded ? input.total : undefined;
+  if (matching !== undefined) {
+    return `Showing ${rangeStart}–${rangeEnd} of ${matching} matching (${total ? `first ${loaded.toLocaleString('en-US')} of ${total.toLocaleString('en-US')}` : loaded} total)`;
+  }
+  if (total) return `Showing ${rangeStart}–${rangeEnd} of the first ${loaded.toLocaleString('en-US')} rows · ${total.toLocaleString('en-US')} in total`;
+  return `Showing ${rangeStart}–${rangeEnd} of ${loaded} ${loaded === 1 ? 'row' : 'rows'}`;
+}
+
+export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSize = 50, onRowClick, conditionalFormats, onExport, emptyMessage }: TableOutputProps) {
   const hosted = useHostUi().host;
   const [exportNote, setExportNote] = useState<string | null>(null);
   const serverExport = (format: ExportFormat) => {
@@ -222,7 +244,7 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
   if (result.columns.length === 0) {
     return (
       <div style={{ padding: '12px 16px', color: t.textMuted, fontSize: 12, fontFamily: t.font, fontStyle: 'italic' }}>
-        Query executed successfully. No columns to display.
+        {emptyMessage ?? 'Query executed successfully. No columns to display.'}
       </div>
     );
   }
@@ -259,9 +281,7 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
 
         {/* Row count */}
         <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
-          {filterText
-            ? `Showing ${rangeStart}–${rangeEnd} of ${sortedRows.length} matching (${result.rows.length} total)`
-            : `Showing ${rangeStart}–${rangeEnd} of ${result.rows.length} ${result.rows.length === 1 ? 'row' : 'rows'}`}
+          {tableRowCountLabel({ rangeStart, rangeEnd, loaded: result.rows.length, total: result.rowCount, matching: filterText ? sortedRows.length : undefined })}
         </span>
 
         <div style={{ flex: 1 }} />
@@ -342,23 +362,24 @@ export function TableOutput({ result, themeMode, maxHeight = 440, initialPageSiz
                         const badge = columnKindBadge(kind);
                         return (
                           <span
-                            title={kind}
+                            title={badge.label}
+                            aria-label={badge.label}
+                            role="img"
+                            className="dql-column-kind"
                             style={{
-                              fontSize: 11,
-                              fontFamily: t.fontMono,
-                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
                               color: `color-mix(in srgb, ${badge.color} 45%, var(--text-primary, currentColor))`,
                               background: `${badge.color}15`,
                               border: `1px solid ${badge.color}40`,
                               borderRadius: 3,
-                              padding: '0 4px',
-                              minWidth: 14,
-                              textAlign: 'center',
-                              lineHeight: '14px',
+                              width: 16,
+                              height: 16,
                               flexShrink: 0,
                             }}
                           >
-                            {badge.icon}
+                            <badge.Icon size={11} strokeWidth={2.2} aria-hidden="true" />
                           </span>
                         );
                       })()}

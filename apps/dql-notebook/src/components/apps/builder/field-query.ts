@@ -1,4 +1,4 @@
-import type { DatasetDescriptor, DatasetField, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
+import type { DatasetDescriptor, DatasetField, DatasetJoin, DatasetPhysicalField } from '@zlens/core/datasets/descriptor';
 import { datasetTileVisualizationCompatibility, type TileQuery } from '@zlens/core/apps/tile-query';
 import { chartFromEncoding, refName, type DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
 
@@ -12,29 +12,80 @@ export type TileView = 'kpi' | 'chart' | 'table';
 
 export const EMPTY_TILE_QUERY: TileQuery = { dimensions: [], measures: [], respectsGlobalFilters: true };
 
+/**
+ * The fields of one related table a Dataset reaches through a checked
+ * many-to-one join (design D2): "Orders → Customer". `review` is a join
+ * nobody certified yet (drafted in setup): its fields can be used, and a
+ * tile that uses them needs review.
+ */
+export type RelatedFieldGroup = {
+  join: DatasetJoin;
+  /** The join path in words: "Customer", "Customer → Region". */
+  path: string;
+  review: boolean;
+  fields: DatasetPhysicalField[];
+};
+
 export type FieldGroups = {
   measures: DatasetField[];
   time: DatasetPhysicalField[];
   dimensions: DatasetPhysicalField[];
   review: DatasetField[];
+  related: RelatedFieldGroup[];
 };
+
+/** A join's path from the Dataset in words, and whether any join on it needs review. */
+export function datasetJoinPath(descriptor: Pick<DatasetDescriptor, 'joins'>, joinId: string): { path: string; review: boolean } {
+  const chain: DatasetJoin[] = [];
+  let join = descriptor.joins?.find((candidate) => candidate.id === joinId);
+  while (join && !chain.includes(join)) {
+    chain.unshift(join);
+    join = join.parent ? descriptor.joins?.find((candidate) => candidate.id === join!.parent) : undefined;
+  }
+  return { path: chain.map((step) => step.label).join(' → '), review: chain.some((step) => step.trust !== 'certified') };
+}
 
 /** Fields in the order the Data panel lists them. Suggested fields are shown but cannot be used. */
 export function groupDatasetFields(descriptor: DatasetDescriptor, search = ''): FieldGroups {
-  const needle = search.trim().toLowerCase();
+  const needle = search.trim().toLowerCase().replace(/[\s_]+/g, ' ');
+  const words = (value: string) => value.replace(/_/g, ' ').toLowerCase();
   const matches = (field: DatasetField) => !needle
     || field.name.toLowerCase().includes(needle)
-    || field.name.replace(/_/g, ' ').toLowerCase().includes(needle);
-  const groups: FieldGroups = { measures: [], time: [], dimensions: [], review: [] };
+    || words(field.name).includes(needle)
+    || Boolean(field.kind === 'physical' && field.related && (
+      words(field.related.column).includes(needle)
+      || `${datasetJoinPath(descriptor, field.related.join).path.toLowerCase()} ${words(field.related.column)}`.includes(needle)
+    ));
+  const groups: FieldGroups = { measures: [], time: [], dimensions: [], review: [], related: [] };
   // A number column that a measure adds up is shown once, as that measure.
   const measureInputs = new Set(descriptor.fields.flatMap((field) => (field.kind === 'measure' ? field.dependsOn.map((name) => name.toLowerCase()) : [])));
   for (const field of descriptor.fields) {
     if (!matches(field)) continue;
+    if (field.kind === 'physical' && field.related) {
+      const join = descriptor.joins?.find((candidate) => candidate.id === field.related!.join);
+      if (!join) continue;
+      let group = groups.related.find((candidate) => candidate.join.id === join.id);
+      if (!group) {
+        group = { join, ...datasetJoinPath(descriptor, join.id), fields: [] };
+        groups.related.push(group);
+      }
+      group.fields.push(field);
+      continue;
+    }
     if (field.status !== 'approved') groups.review.push(field);
     else if (field.kind === 'measure') groups.measures.push(field);
     else if (field.role === 'time' || field.type === 'date' || field.type === 'timestamp') groups.time.push(field);
     else if (field.role === 'attribute' && field.type === 'number' && measureInputs.has(field.name.toLowerCase())) continue;
     else groups.dimensions.push(field);
+  }
+  // Never two groups that read the same (new-user round 2, problem 5): a
+  // descriptor stored before joins were deduplicated may still carry two
+  // joins to one table; each is named by its keys then ("Product (by product id)").
+  const paths = new Map<string, number>();
+  for (const group of groups.related) paths.set(group.path, (paths.get(group.path) ?? 0) + 1);
+  for (const group of groups.related) {
+    if ((paths.get(group.path) ?? 0) < 2) continue;
+    group.path = `${group.path} (by ${group.join.keys.map((pair) => pair.from.replace(/_/g, ' ').toLowerCase()).join(' and ')})`;
   }
   return groups;
 }
@@ -77,12 +128,28 @@ export function toggleFieldInQuery(query: TileQuery, field: DatasetField): TileQ
   // order on its own. Stale sort/limit keys never survive a field change.
   const { orderBy: _orderBy, limit: _limit, detail: _detail, detailColumns: _detailColumns, ...rest } = query;
   const categorical = dimensions.length > 0 && !dimensions.some((dimension) => dimension.timeGrain);
+  // A name has many values (930 customers): its bar chart starts as an
+  // explicit Top 10 the pill shows, not a silent cut (new-user round 3,
+  // problem 9). A Top N the author already chose for the same grouping stays.
+  const names = categorical && measures[0] && dimensions.length === 1 && isNameFieldName(dimensions[0]!.field);
+  const sameGrouping = query.dimensions.length === 1 && dimensions.length === 1 && query.dimensions[0]!.field.toLowerCase() === dimensions[0]!.field.toLowerCase();
+  const topN = names ? (sameGrouping && typeof query.limit === 'number' ? query.limit : DEFAULT_NAME_TOP_N) : undefined;
   return {
     ...rest,
     measures,
     dimensions,
     ...(categorical && measures[0] ? { orderBy: [{ alias: measures[0].alias ?? measures[0].measure, direction: 'desc' as const }] } : {}),
+    ...(topN ? { limit: topN } : {}),
   };
+}
+
+/** How many names a new bar chart of names shows: "Top 10". */
+export const DEFAULT_NAME_TOP_N = 10;
+
+/** "customer_name", "customer__customer_name", "name": a field of names a person reads. */
+export function isNameFieldName(name: string): boolean {
+  const column = name.includes('__') ? name.slice(name.lastIndexOf('__') + 2) : name;
+  return /^(?:.+_)?name$/i.test(column);
 }
 
 /** The view a picked set of fields reads best as; shelves decide when there are any. */

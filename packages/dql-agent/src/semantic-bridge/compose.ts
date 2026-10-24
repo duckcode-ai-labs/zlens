@@ -95,11 +95,40 @@ export interface SemanticVocabulary {
 }
 
 export function composeSemanticQueryForQuestion(input: ComposeSemanticQueryInput): SemanticBridgeQueryResult | undefined {
-  if (input.questionPlan.requestedShape.topN?.scope === 'per_group') return undefined;
+  return composeSemanticQueryForQuestionWithCoverage(input).result;
+}
+
+export interface SemanticQuestionCoverage {
+  /** The compile, only when its members express every part of the question. */
+  result: SemanticBridgeQueryResult | undefined;
+  /**
+   * What the question asks for that the selected members cannot express: a
+   * breakdown ("hour of the day"), a named member ("Philadelphia") or a date
+   * range ("in March 2025"). Non-empty only when a metric matched and the
+   * compile was refused for these parts.
+   */
+  unexpressed: string[];
+  /** The metric the refused compile would have used. */
+  metric?: string;
+}
+
+/**
+ * Like {@link composeSemanticQueryForQuestion}, and says why a matched metric
+ * was refused. A compile that drops a breakdown or a filter the question asks
+ * for answers a different question: "busiest hour of the day for orders in
+ * Philadelphia" compiled to the all-orders total under a From Metrics label.
+ */
+export function composeSemanticQueryForQuestionWithCoverage(input: ComposeSemanticQueryInput): SemanticQuestionCoverage {
+  if (input.questionPlan.requestedShape.topN?.scope === 'per_group') return { result: undefined, unexpressed: [] };
   activeProjectSynonyms = buildProjectSynonymIndex(input.vocabulary?.synonymClusters);
   activeMetricAliasPhrases = buildMetricAliasPhrases(input.vocabulary?.metricAliases);
   try {
-    return composeSemanticQueryForQuestionInner(input);
+    const result = composeSemanticQueryForQuestionInner(input);
+    if (!result) return { result: undefined, unexpressed: [] };
+    const unexpressed = unexpressedQuestionParts(input.semanticLayer, input.question, input.questionPlan, result, input.filterValueBindings);
+    return unexpressed.length > 0
+      ? { result: undefined, unexpressed, metric: result.metric }
+      : { result, unexpressed: [] };
   } finally {
     // Always clear: a leaked overlay would apply one project's vocabulary to
     // the next question in a long-lived server process.
@@ -130,9 +159,9 @@ function composeSemanticQueryForQuestionInner(input: ComposeSemanticQueryInput):
   const primaryMetric = metrics[0];
   if (!primaryMetric) return undefined;
 
-  const timeDimension = selectTimeDimension(input.semanticLayer, input.question, input.questionPlan);
+  const timeDimension = selectTimeDimension(input.semanticLayer, input.question, input.questionPlan, primaryMetric);
   const allDimensions = input.semanticLayer.listDimensions(undefined, { includeVariants: true });
-  const dimensionSelection = selectDimensions(allDimensions, input.questionPlan, timeDimension?.name);
+  const dimensionSelection = selectDimensions(allDimensions, input.questionPlan, timeDimension?.name, input.question);
   const dimensions = dimensionSelection.dimensions;
   const relativeComparison = entityRelativeComparisonSpec(input, allDimensions, dimensions);
   if (requiresEntityRelativeMeasureComparison(input.question)) {
@@ -167,6 +196,8 @@ function composeSemanticQueryForQuestionInner(input: ComposeSemanticQueryInput):
   // second physical dimension filter is both redundant and sometimes
   // impossible. Only treat an unresolved restriction as fatal when the selected
   // metric does not itself cover the qualifier.
+  // Date ranges, named members and breakdowns the selection leaves out are
+  // checked on the finished compile (unexpressedQuestionParts).
   const unresolvedMetricFilters = input.questionPlan.requestedShape.filters.length > 0 && filters.length === 0;
   if (unresolvedMetricFilters
     && !metricEncodesRequestedFilters(primaryMetric, input.questionPlan.requestedShape.filters)) return undefined;
@@ -590,10 +621,16 @@ function finalizeSemanticBridgeResult(input: {
 function selectMetrics(metrics: MetricDefinition[], input: ComposeSemanticQueryInput): MetricDefinition[] {
   if (metrics.length === 0) return [];
   const selected: MetricDefinition[] = [];
+  // "What share of revenue comes from food" names the parts of a governed
+  // share metric (`food_revenue_pct`), never its label. Without this the
+  // generic `revenue` won and the answer was total revenue.
+  const share = shareMetricForQuestion(metrics, input.question);
+  if (share) selected.push(share);
   // AGT-017 / E2E-012: preserve every metric the user names explicitly. The
   // catalog resolver may nominate one primary metric for routing, but that hint
   // must not collapse "revenue and refunds" into a one-metric answer.
-  for (const metric of explicitlyNamedMetrics(metrics, input.question)) {
+  for (const metric of explicitlyNamedMetrics(metrics, input.question, input.questionPlan)) {
+    if (share && metricPhraseTokens(metric).every((token) => metricPhraseTokens(share).includes(token))) continue;
     selected.push(metric);
   }
   const qualified = qualifiedMetricForQuestion(metrics, input.questionPlan);
@@ -630,7 +667,9 @@ function selectMetrics(metrics: MetricDefinition[], input: ComposeSemanticQueryI
 
   if (selected.length > 0) return selected;
 
-  const fallbackTerms = new Set([...input.questionPlan.metricTerms, ...input.questionPlan.requestedShape.measures].flatMap(tokenize));
+  const fallbackTerms = new Set([...input.questionPlan.metricTerms, ...input.questionPlan.requestedShape.measures]
+    .flatMap(tokenize)
+    .filter((token) => !GENERIC_METRIC_CONCEPTS.has(token)));
   if (fallbackTerms.size === 0) return [];
   return metrics
     .map((metric) => ({ metric, score: scoreMetric(metric, fallbackTerms) }))
@@ -645,8 +684,20 @@ function selectMetrics(metrics: MetricDefinition[], input: ComposeSemanticQueryI
  * accepted only when it identifies one catalog metric; shared labels such as
  * "Revenue" remain ambiguous and are left to the identifier-bound resolver.
  */
-function explicitlyNamedMetrics(metrics: MetricDefinition[], question: string): MetricDefinition[] {
+function explicitlyNamedMetrics(
+  metrics: MetricDefinition[],
+  question: string,
+  questionPlan?: AnalysisQuestionPlan,
+): MetricDefinition[] {
   const normalizedQuestion = ` ${normalizeMetricPhrase(question)} `;
+  // A phrase the question uses only as its grouping entity ("for new versus
+  // returning customers") is not a request for the `customers` count.
+  const entityOnlyTerms = new Set(questionPlan
+    ? [...questionPlan.dimensionTerms, ...questionPlan.requestedShape.dimensions]
+      .map((term) => singularMetricPhrase(normalizeMetricPhrase(term)))
+      .filter((term) => ![...questionPlan.metricTerms, ...questionPlan.requestedShape.measures]
+        .some((measure) => singularMetricPhrase(normalizeMetricPhrase(measure)) === term))
+    : []);
   const byPhrase = new Map<string, MetricDefinition[]>();
   for (const metric of metrics) {
     const base = [
@@ -669,6 +720,7 @@ function explicitlyNamedMetrics(metrics: MetricDefinition[], question: string): 
     const phrases = new Set([...base, ...aliasPhrases, ...[...base, ...aliasPhrases].flatMap(metricPhraseSynonymVariants)]);
     for (const phrase of phrases) {
       if (!normalizedQuestion.includes(` ${phrase} `)) continue;
+      if (entityOnlyTerms.has(singularMetricPhrase(phrase))) continue;
       const candidates = byPhrase.get(phrase) ?? [];
       candidates.push(metric);
       byPhrase.set(phrase, candidates);
@@ -731,6 +783,43 @@ function metricPhraseSynonymVariants(phrase: string): string[] {
     }
   });
   return out;
+}
+
+function singularMetricPhrase(phrase: string): string {
+  return phrase.split(' ').map((word) => word.length > 3 ? word.replace(/ies$/, 'y').replace(/s$/, '') : word).join(' ');
+}
+
+function metricPhraseTokens(metric: MetricDefinition): string[] {
+  return tokenize(leafName(metric.name)).map((token) => singularMetricPhrase(token));
+}
+
+const SHARE_QUESTION = /\b(?:share|percent|percentage|proportion|fraction|ratio|pct)\b|%/i;
+const SHARE_METRIC_TOKENS = new Set(['pct', 'percent', 'percentage', 'share', 'ratio', 'proportion', 'fraction', 'rate']);
+
+/**
+ * A share question ("what share of revenue comes from food") names the parts
+ * of a governed share metric rather than its label. Pick the metric whose
+ * name ends in a share word (`_pct`, `_share`, `_ratio`, ...) or which is a
+ * ratio, when every other word of its name appears in the question. The most
+ * specific such metric wins; ties stay unresolved.
+ */
+function shareMetricForQuestion(metrics: MetricDefinition[], question: string): MetricDefinition | undefined {
+  if (!SHARE_QUESTION.test(question)) return undefined;
+  const questionTokens = new Set(tokenize(question).map((token) => singularMetricPhrase(token)));
+  const candidates = metrics
+    .map((metric) => {
+      const tokens = metricPhraseTokens(metric);
+      const parts = tokens.filter((token) => !SHARE_METRIC_TOKENS.has(token));
+      const isShare = (metric.metricType ?? '').toLowerCase() === 'ratio' || tokens.some((token) => SHARE_METRIC_TOKENS.has(token));
+      return { metric, parts, isShare };
+    })
+    .filter((candidate) => candidate.isShare
+      && candidate.parts.length >= 2
+      && candidate.parts.every((token) => questionTokens.has(token)))
+    .sort((a, b) => b.parts.length - a.parts.length);
+  if (candidates.length === 0) return undefined;
+  if (candidates.length > 1 && candidates[1]!.parts.length === candidates[0]!.parts.length) return undefined;
+  return candidates[0]!.metric;
 }
 
 function normalizeMetricPhrase(value: string): string {
@@ -808,8 +897,18 @@ function alternativePrimaryMetrics(input: ComposeSemanticQueryInput, tried: Set<
   const concepts = metricSelectionConcepts(input.questionPlan);
   const conceptTokens = new Set(concepts.flatMap((concept) => tokenize(concept)));
   if (conceptTokens.size === 0) return [];
+  // An alternative must carry every word of at least one requested concept
+  // ("revenue" → product_revenue). Sharing one word is not enough: when
+  // average_order_value could not compile, `drink_orders` matched on "order"
+  // and answered a question about something else.
+  const conceptTokenSets = concepts.map((concept) => tokenize(concept)).filter((tokens) => tokens.length > 0);
+  const coversAConcept = (metric: MetricDefinition) => {
+    const metricTokens = new Set(tokenize([metric.name, metric.label].join(' ')).map((token) => singularMetricPhrase(token)));
+    return conceptTokenSets.some((tokens) => tokens.every((token) => metricTokens.has(singularMetricPhrase(token))));
+  };
   return input.semanticLayer.listMetrics()
     .filter((metric) => !tried.has(metric.name))
+    .filter(coversAConcept)
     .map((metric) => ({ metric, score: scoreMetric(metric, conceptTokens) }))
     .filter((candidate) => candidate.score > 0)
     .sort((a, b) => b.score - a.score || a.metric.name.localeCompare(b.metric.name))
@@ -845,8 +944,10 @@ function metricSelectionConcepts(questionPlan: AnalysisQuestionPlan): string[] {
     ...questionPlan.requestedShape.measures,
     ...questionPlan.metricTerms,
   ].map((term) => normalizeSemanticText(term)).filter(Boolean));
-  const meaningful = raw.filter((term) => !GENERIC_METRIC_CONCEPTS.has(term));
-  return (meaningful.length > 0 ? meaningful : raw).slice(0, 4);
+  // Only generic words ("count", "total") name no metric: "How many employees
+  // work at each store?" plans as just `count` once "employees" is unknown,
+  // and used to compile `count_lifetime_orders`.
+  return raw.filter((term) => !GENERIC_METRIC_CONCEPTS.has(term)).slice(0, 4);
 }
 
 function sharedMetricDomain(metrics: MetricDefinition[]): string | undefined {
@@ -859,7 +960,9 @@ function selectDimensions(
   dimensions: DimensionDefinition[],
   questionPlan: AnalysisQuestionPlan,
   timeDimensionName: string | undefined,
+  question = '',
 ): { dimensions: string[]; unresolved: string[] } {
+  const questionWords = new Set(normalizeMetricPhrase(question).split(' '));
   const metricTerms = new Set([
     ...questionPlan.requestedShape.measures,
     ...questionPlan.metricTerms,
@@ -893,12 +996,31 @@ function selectDimensions(
           ...(dimension.tags ?? []),
         ].join(' '), tokens) + semanticDisplayRoleScore(dimension, term),
       }))
+      // "new versus returning customers" compares two documented values of
+      // `customer_type`; that outranks even the display-name role bonus that
+      // `customer_name` earns from the word "customer".
+      .map((candidate) => candidate.score > 0
+        ? { ...candidate, score: candidate.score + documentedValueComparisonScore(candidate.dimension, questionWords) }
+        : candidate)
       .filter((candidate) => candidate.score > 0)
       .sort((a, b) => b.score - a.score || a.dimension.name.localeCompare(b.dimension.name))[0]?.dimension;
     if (hit && !selected.includes(hit.name)) selected.push(hit.name);
     if (!hit) unresolved.push(term);
   }
   return { dimensions: selected, unresolved };
+}
+
+/**
+ * Bonus for a dimension whose description documents quoted values ("Options
+ * are 'new' or 'returning'") when the question names two or more of them: the
+ * question compares that dimension's members.
+ */
+function documentedValueComparisonScore(dimension: DimensionDefinition, questionWords: Set<string>): number {
+  const values = [...(dimension.description ?? '').matchAll(/'([^'\n]{1,40})'|"([^"\n]{1,40})"/g)]
+    .map((match) => normalizeMetricPhrase(match[1] ?? match[2] ?? ''))
+    .filter((value) => value.length > 0 && !value.includes(' '));
+  const named = new Set(values.filter((value) => questionWords.has(value)));
+  return named.size >= 2 ? 200 : 0;
 }
 
 /**
@@ -1113,6 +1235,20 @@ function extractInlineFilterCandidates(
         if (value) candidates.push({ dimension: dimension.name, value });
       }
     }
+    // "orders at the Philadelphia location": a capitalized name before the
+    // entity word of a `<entity>_name` dimension is a value of that dimension.
+    // Lower-case words stay unbound ("for new customer" is not a name).
+    const entity = leafName(dimension.name).match(/^([a-z][a-z0-9]*)_name$/i)?.[1];
+    if (entity) {
+      const namedEntity = new RegExp(
+        `\\b(?:for|where|only|with|in|at|from)\\s+(?:the\\s+)?([A-Z][A-Za-z0-9&.'-]*(?:\\s+[A-Z][A-Za-z0-9&.'-]*){0,3})\\s+${escapeRegExp(entity)}s?\\b`,
+        'g',
+      );
+      for (const match of question.matchAll(namedEntity)) {
+        const value = cleanFilterValue(match[1]);
+        if (value) candidates.push({ dimension: dimension.name, value });
+      }
+    }
   }
   return candidates;
 }
@@ -1210,6 +1346,7 @@ function selectTimeDimension(
   layer: SemanticLayer,
   question: string,
   questionPlan: AnalysisQuestionPlan,
+  primaryMetric?: MetricDefinition,
 ): { name: string; granularity: string } | undefined {
   const granularity = inferTimeGranularity(question, questionPlan);
   if (!granularity) return undefined;
@@ -1230,7 +1367,232 @@ function selectTimeDimension(
     .filter((candidate) => candidate.score > 0)
     .sort((a, b) => b.score - a.score || a.dimension.name.localeCompare(b.dimension.name))[0]?.dimension
     ?? (timeDimensions.length === 1 ? timeDimensions[0] : undefined);
-  return hit ? { name: hit.name, granularity } : undefined;
+  if (hit) return { name: hit.name, granularity };
+  // "each month" names a grain, not a time column. MetricFlow reads such a
+  // grain on the metric's own agg_time_dimension (metric_time); dropping it
+  // instead returned one all-time total for a per-month question.
+  const aggTime = metricAggTimeDimension(layer, primaryMetric);
+  return aggTime ? { name: aggTime, granularity } : undefined;
+}
+
+/**
+ * The metric's agg_time_dimension: declared on the metric, on its semantic
+ * model's defaults, or, for a ratio or derived metric, on its first input.
+ */
+function metricAggTimeDimension(layer: SemanticLayer, metric: MetricDefinition | undefined, depth = 0): string | undefined {
+  if (!metric || depth > 2) return undefined;
+  const declared = (metric as { aggTimeDimension?: unknown }).aggTimeDimension;
+  if (typeof declared === 'string' && declared.trim()) return declared.trim();
+  if (typeof layer.listSemanticModels === 'function') {
+    const modelNames = new Set([metric.cube, ...(metric.semanticModelIds ?? [])].filter((name): name is string => Boolean(name)));
+    for (const model of layer.listSemanticModels()) {
+      if (!modelNames.has(model.name)) continue;
+      const aggTime = (model.defaults as { agg_time_dimension?: unknown } | undefined)?.agg_time_dimension;
+      if (typeof aggTime === 'string' && aggTime.trim()) return aggTime.trim();
+    }
+  }
+  const typeParams = (metric.typeParams ?? {}) as Record<string, unknown>;
+  const inputName = (value: unknown): string | undefined => typeof value === 'string'
+    ? value
+    : value && typeof value === 'object' && typeof (value as { name?: unknown }).name === 'string'
+      ? (value as { name: string }).name
+      : undefined;
+  const inputs = [typeParams.numerator, typeParams.denominator, ...(Array.isArray(typeParams.metrics) ? typeParams.metrics : [])]
+    .map(inputName)
+    .filter((name): name is string => Boolean(name));
+  for (const name of inputs) {
+    const input = layer.listMetrics().find((candidate) => candidate.name === name);
+    const aggTime = metricAggTimeDimension(layer, input, depth + 1);
+    if (aggTime) return aggTime;
+  }
+  return undefined;
+}
+
+const MONTH_NAME = '(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sept?(?:ember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)';
+const DATE_RANGE_PATTERNS: RegExp[] = [
+  new RegExp(`\\b(?:since|between|before|after|until|from)\\s+(?:${MONTH_NAME}\\b|(?:19|20)\\d{2}\\b|\\d{1,2}[/-]\\d{1,2})[^?.!,]*`, 'i'),
+  /\b(?:in|during|for)\s+(?:(?:fy|q[1-4])\s*)?(?:19|20)\d{2}\b/i,
+  new RegExp(`\\b(?:in|during|for)\\s+${MONTH_NAME}\\b(?:\\s+(?:19|20)\\d{2})?`, 'i'),
+  /\b(?:in|during|for)\s+(?:the\s+)?(?:fy\s*)?q[1-4]\b/i,
+  /\b(?:last|past|previous|prior|this|current)\s+(?:\d+\s+)?(?:days?|weeks?|months?|quarters?|years?)\b/i,
+  /\b(?:yesterday|today|ytd|mtd|qtd|year[\s-]to[\s-]date|month[\s-]to[\s-]date)\b/i,
+];
+
+/**
+ * A date restriction ("in 2025", "in March", "last quarter") has no semantic
+ * filter this compiler can write. Compiling without it answered all-time
+ * figures under a governed label.
+ */
+function unappliedDateRestriction(question: string, timeTerms: string[]): string | undefined {
+  for (const pattern of DATE_RANGE_PATTERNS) {
+    const match = question.match(pattern);
+    if (match) return match[0].trim();
+  }
+  return timeTerms.find((term) => /^(?:19|20)\d{2}$/.test(term.trim()));
+}
+
+export interface SemanticQuestionMembers {
+  metrics: string[];
+  dimensions: string[];
+  filters?: SemanticBridgeFilter[];
+  timeDimension?: { name: string; granularity: string };
+}
+
+/**
+ * The parts of a question a semantic selection does not express, each as a
+ * short phrase for the agent: `date range "in March 2025"`, `filter
+ * "Philadelphia"`, `breakdown "hour of the day"`. Empty when the members
+ * answer the whole question. Used on question-mode compiles and on explicit
+ * member selections that come with the user's question.
+ */
+export function unexpressedSemanticQuestionParts(input: {
+  semanticLayer: SemanticLayer;
+  question: string;
+  questionPlan?: AnalysisQuestionPlan;
+  members: SemanticQuestionMembers;
+}): string[] {
+  return unexpressedQuestionParts(input.semanticLayer, input.question, input.questionPlan, input.members);
+}
+
+function unexpressedQuestionParts(
+  layer: SemanticLayer,
+  question: string,
+  questionPlan: AnalysisQuestionPlan | undefined,
+  members: SemanticQuestionMembers,
+  filterValueBindings?: (value: string) => SemanticFilterValueBinding[],
+): string[] {
+  const parts: string[] = [];
+  const dateRange = unappliedDateRestriction(question, questionPlan?.timeTerms ?? []);
+  if (dateRange) parts.push(`date range "${dateRange}"`);
+
+  const metrics = layer.listMetrics().filter((metric) => members.metrics.some((name) => semanticNameMatches(metric, name)));
+  const covered = memberCoverageTokens(layer, members, metrics);
+  const isCovered = (phrase: string) => {
+    const tokens = expandDimensionQueryTokens(phrase);
+    for (const token of tokens) for (const synonym of semanticSynonymsFor(token)) tokens.add(synonym);
+    return [...tokens].some((token) => covered.has(token));
+  };
+
+  const filterValues = (members.filters ?? []).flatMap((filter) => filter.values.map((value) => normalizeSemanticText(value)));
+  for (const value of namedMemberValues(question, questionPlan)) {
+    const normalized = normalizeSemanticText(value);
+    if (!normalized) continue;
+    if (filterValues.some((existing) => existing === normalized || existing.includes(normalized))) continue;
+    // A bound member is applied under its canonical spelling ("Melissa Lopex" -> 'Melissa Lopez').
+    if ((filterValueBindings?.(value) ?? []).some((binding) => filterValues.includes(normalizeSemanticText(binding.canonicalValue)))) continue;
+    // A governed metric can encode the member itself (`food_revenue` for "food").
+    if (metrics.some((metric) => metricEncodesRequestedFilters(metric, [value]))) continue;
+    parts.push(`filter "${value}"`);
+  }
+
+  for (const breakdown of requestedBreakdowns(question)) {
+    if (breakdown.datePart) {
+      const expressed = (members.dimensions ?? []).some((name) => breakdown.datePart!.test(name))
+        || (breakdown.grain !== undefined && members.timeDimension?.granularity === breakdown.grain);
+      if (!expressed) parts.push(`breakdown "${breakdown.phrase}"`);
+      continue;
+    }
+    if (isTimeGrainTerm(breakdown.phrase) && tokenize(breakdown.phrase).every((token) => isTimeGrainTerm(token))) {
+      if (!members.timeDimension) parts.push(`breakdown "${breakdown.phrase}"`);
+      continue;
+    }
+    if (!isCovered(breakdown.phrase)) parts.push(`breakdown "${breakdown.phrase}"`);
+  }
+  return uniqueStrings(parts);
+}
+
+/** Words the selected metrics, dimensions, filters and time grain stand for. */
+function memberCoverageTokens(layer: SemanticLayer, members: SemanticQuestionMembers, metrics: MetricDefinition[]): Set<string> {
+  const dimensions = layer.listDimensions(undefined, { includeVariants: true });
+  const words: string[] = [...members.metrics];
+  for (const metric of metrics) words.push(metric.name, metric.label ?? '');
+  for (const reference of [...members.dimensions, ...(members.filters ?? []).map((filter) => filter.dimension)]) {
+    const lower = reference.toLowerCase();
+    const dimension = dimensions.find((candidate) =>
+      candidate.name.toLowerCase() === lower
+      || semanticDimensionReference(candidate).toLowerCase() === lower
+      || candidate.qualifiedName?.toLowerCase() === lower);
+    words.push(reference, ...(dimension ? semanticDimensionAliases(dimension) : []));
+  }
+  for (const filter of members.filters ?? []) words.push(...filter.values);
+  if (members.timeDimension) words.push(members.timeDimension.name, members.timeDimension.granularity);
+  const tokens = new Set<string>();
+  for (const token of words.flatMap(tokenize)) {
+    tokens.add(token);
+    tokens.add(token.replace(/ies$/, 'y').replace(/s$/, ''));
+  }
+  return tokens;
+}
+
+const NON_MEMBER_CAPITALIZED = new RegExp(`^(?:${MONTH_NAME}|monday|tuesday|wednesday|thursday|friday|saturday|sunday|q[1-4]|fy\\d*|i)$`, 'i');
+
+/**
+ * Member values the question names: a capitalized name after in/at/for/from
+ * ("orders in Philadelphia"), a quoted value, or a value the planner already
+ * read as a filter. Lower-case words are left to the planner, so "revenue for
+ * food" or "new versus returning customers" are not read as members here.
+ */
+function namedMemberValues(question: string, questionPlan: AnalysisQuestionPlan | undefined): string[] {
+  const values: string[] = [];
+  for (const match of question.matchAll(/\b(?:in|at|for|from)\s+(?:the\s+)?([A-Z][A-Za-z0-9'&.-]*(?:\s+[A-Z][A-Za-z0-9'&.-]*){0,3})/g)) {
+    const words = match[1]!.replace(/[.']+$/, '').split(/\s+/).filter((word) => !NON_MEMBER_CAPITALIZED.test(word));
+    if (words.length > 0) values.push(words.join(' '));
+  }
+  for (const match of question.matchAll(/["“]([^"”]{1,60})["”]|(?:^|\s)'([^']{1,60})'/g)) {
+    values.push((match[1] ?? match[2] ?? '').trim());
+  }
+  for (const mention of questionPlan?.valueMentions ?? []) {
+    if (mention.syntacticRole === 'filter_value') values.push(mention.text.trim());
+  }
+  for (const filter of questionPlan?.requestedShape.filters ?? []) values.push(cleanFilterValue(filter));
+  return uniqueStrings(values.filter((value) => !NON_MEMBER_CAPITALIZED.test(value)));
+}
+
+interface RequestedBreakdown {
+  phrase: string;
+  /** For a date part: the dimension names that carry it. */
+  datePart?: RegExp;
+  /** A time grain that expresses it on its own ("hourly"). */
+  grain?: string;
+}
+
+const DATE_PART_BREAKDOWNS: Array<{ pattern: RegExp; datePart: RegExp; grain?: string }> = [
+  { pattern: /\b(?:hour|time)\s+of\s+(?:the\s+)?day\b/i, datePart: /hour|time_of_day/i },
+  { pattern: /\bday\s+of\s+(?:the\s+)?week\b|\bweekdays?\b|\bweekends?\b/i, datePart: /weekday|day_of_week|dow|weekend/i },
+  { pattern: /\b(?:hourly|hours?)\b/i, datePart: /hour/i, grain: 'hour' },
+  { pattern: /\bminutes?\b/i, datePart: /minute/i, grain: 'minute' },
+];
+
+const BREAKDOWN_FILLER = new Set([
+  'the', 'a', 'an', 'of', 'is', 'was', 'are', 'were', 'be', 'had', 'has', 'have', 'did', 'do', 'does',
+  'we', 'our', 'my', 'and', 'or', 'to', 'in', 'on', 'at', 'for', 'with', 'one', 'far', 'way', 'default',
+  'count', 'number', 'total', 'amount', 'sum', 'average', 'avg', 'share', 'percent', 'percentage', 'proportion',
+  'most', 'least', 'more', 'less', 'top', 'bottom', 'highest', 'lowest', 'single', 'other', 'them', 'it',
+]);
+
+/**
+ * Groupings the question asks for: a date part ("hour of the day", "day of
+ * the week"), or the noun after by/per/each/every/across/which/busiest/peak
+ * ("by customer type", "which store location", "busiest hour").
+ */
+function requestedBreakdowns(question: string): RequestedBreakdown[] {
+  const breakdowns: RequestedBreakdown[] = [];
+  let rest = question;
+  for (const { pattern, datePart, grain } of DATE_PART_BREAKDOWNS) {
+    const match = rest.match(pattern);
+    if (!match) continue;
+    breakdowns.push({ phrase: match[0].toLowerCase(), datePart, ...(grain ? { grain } : {}) });
+    rest = rest.replace(pattern, ' ');
+  }
+  for (const match of rest.matchAll(/\b(?:by|per|each|every|across|which|busiest|peak)\s+(?:the\s+)?(?:\d+\s+)?([A-Za-z][A-Za-z_-]*)(?:\s+([A-Za-z][A-Za-z_-]*))?/gi)) {
+    const words = [match[1], match[2]]
+      .filter((word): word is string => Boolean(word))
+      .map((word) => word.toLowerCase());
+    const firstFiller = words.findIndex((word) => BREAKDOWN_FILLER.has(word) || SEMANTIC_STOPWORDS.has(word));
+    const kept = firstFiller === -1 ? words : words.slice(0, firstFiller);
+    if (kept.length > 0) breakdowns.push({ phrase: kept.join(' ') });
+  }
+  return breakdowns;
 }
 
 function inferTimeGranularity(question: string, questionPlan: AnalysisQuestionPlan): string | undefined {

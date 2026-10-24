@@ -5,9 +5,7 @@ import { useShallow } from 'zustand/react/shallow';
 import {
   ArrowLeft,
   ArrowRight,
-  AlertTriangle,
   BarChart3,
-  Blocks,
   BookOpenText,
   Bot,
   CalendarDays,
@@ -29,7 +27,6 @@ import {
   Pencil,
   Plus,
   Search,
-  Send,
   ShieldCheck,
   Sparkles,
   Star,
@@ -38,19 +35,16 @@ import {
   Trash2,
   User,
   Users,
-  Wrench,
   Workflow,
   X,
 } from 'lucide-react';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import {
   api,
-  type AppBlockRecommendation,
   type AppDocumentSummary,
   type DashboardDocumentResponse,
   type DashboardRunResponse,
   type AppAiBuildSession,
-  type GenerateAppResponse,
   type GeneratedAppPlan,
   type AppAskResponse,
   type LocalAppInvestigation,
@@ -58,19 +52,19 @@ import {
 } from '../../api/client';
 import { isViewerLink } from '../../api/server-auth';
 import { hostAllows, hostReader, useHostPage, useHostUi } from '../../host/host-ui';
-import { appLibraryWords, type LibraryFilter } from './app-library-words';
+import { appLibraryWords, withDraftListed, type LibraryFilter } from './app-library-words';
 import type { AppSummary, AppWorkspaceExperience, AppWorkspaceSection } from '../../store/types';
 import { themes, type ThemeMode } from '../../themes/notebook-theme';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
-import { appPageUrl } from './app-links';
-import { AppBuildProposalPanel, defaultProposalSelection, type AppBuildBriefEdits } from './AppBuildProposalPanel';
+import { appCardHref, appHomePageId, appPageUrl } from './app-links';
 import { AppStudioLaunchSurface, AppStudioV2, type AppStudioLaunchConfig } from './AppStudioV2';
+import { appStudioAiConnected, appStudioDefaultLaunchMode, appStudioLaunchTab } from './app-studio-ai-voice';
 import { APP_STYLES } from './app-styles';
-import { cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
-import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, PanelHead, SettingsPanel, StatusSeal } from './AppSidePanels';
+import { appHeaderTitle, cleanStakeholderCopy, formatBusinessLabel, tidyTitle } from './app-text';
+import { AiPinsPanel, DraftsPanel, EmptyPanel, NotebookListPanel, PanelCard, SettingsPanel, StatusSeal } from './AppSidePanels';
 import { FollowPageButton } from './FollowPageButton';
-import { AskAboutApp } from './AskAboutApp';
+import { AskAboutApp, askAboutAppScopeLine } from './AskAboutApp';
 import { ResearchPanel } from './ResearchPanel';
 import { formatVariableEntryValue, formatVariableValue } from './app-variables';
 import type { AppAnalysisHandoff, AppResearchSeed, CreateInvestigationResult } from './app-research-types';
@@ -99,18 +93,26 @@ import {
   type ViewerDashboardFilter,
 } from './dashboard-filters';
 import { semanticApprovalState } from './app-semantic-approval';
-import { appCertificationRollup, appLifecycleLabel } from './app-certification';
+import { relativeAge } from './reader-trust';
+import { NOT_PUBLISHED_YET, NOT_PUBLISHED_YET_ONLY_YOU, UNPUBLISHED_CHANGES } from './app-studio-words';
+import { draftCardTrustText } from './app-studio-publish-readiness';
+import { allDataCertifiedLabel, appCardSeal, appCertificationRollup, appRunTrustAcrossPages, unpublishedChangesText, type AppRunTrust } from './app-certification';
 import type { AppTrustSummary } from '@zlens/core/apps/reader-trust';
 import { beginPersistedAppWorkspaceLoad, resolvePersistedWorkspaceMetadata, type WorkspaceDashboardSummary } from './app-workspace-loader';
 import {
+  acceptRememberedAppFilterValues,
+  dashboardFilterFingerprint,
   isAppScopedDashboardFilter,
   readPersistedAppFilterValues,
   valuesForDashboardPage,
   writePersistedAppFilterValues,
 } from './app-dashboard-filter-scope';
-import { authoredDomainOptions, resolveAuthoredDomainId, type AuthoredDomainOption } from '../domains/authored-domain-options';
+import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/authored-domain-options';
 import { useOperations } from '../../operations/OperationsProvider';
-import { appLibraryLaunchExpanded, type AppLibraryLaunchPreference } from './app-library-launch';
+import { BUILD_NEW_APP_EVENT, appLibraryLaunchExpanded, buildNewAppRequested, type AppLibraryLaunchPreference } from './app-library-launch';
+import { plainSourceText } from './source-names';
+import { isTrustReminderTaskId } from '@zlens/core/apps/app-trust';
+import { dashboardFilterLabel, formatDashboardFilterValue } from './dashboard-filter-words';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -119,7 +121,8 @@ const StructuredAnswerText = lazy(() => import('../agent/AgentAnswerCard')
 
 type AppSurface = 'library' | 'create' | 'workspace';
 type AppExperience = AppWorkspaceExperience;
-type BuilderMode = 'ai' | 'classic';
+/** `quick`: the three quick choices after the Data step, with no AI provider (round-2 Q2). */
+type BuilderMode = 'ai' | 'classic' | 'quick';
 type AppSection = AppWorkspaceSection;
 type DashboardFilter = NonNullable<DashboardDocumentResponse['dashboard']['filters']>[number];
 type DashboardLayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
@@ -139,13 +142,9 @@ interface AppPromptExample {
   prompt: string;
 }
 
-interface AgentSkillCard {
-  id: string;
-  title: string;
-  description: string;
-}
-
-const DEFAULT_PROMPT = 'A weekly revenue dashboard: revenue by month, the top regions, and the latest orders.';
+// "Describe with AI" starts empty: its example is the textarea's placeholder,
+// never a value a typed request would be appended to (or named after).
+const DEFAULT_PROMPT = '';
 const ACTIVE_APP_BUILD_STORAGE_KEY = 'dql.apps.active-ai-build.v1';
 const APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX = 'dql.apps.dashboard-filter-values.v1:';
 
@@ -179,13 +178,6 @@ function persistAppBuild(value: PersistedAppBuild | null): void {
   }
 }
 
-function createAppBuildSessionId(): string {
-  const suffix = typeof window.crypto?.randomUUID === 'function'
-    ? window.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
-    : Math.random().toString(36).slice(2, 14);
-  return `app_build_${Date.now()}_${suffix}`;
-}
-
 const APP_PROMPT_EXAMPLES: AppPromptExample[] = [
   {
     title: 'Revenue story',
@@ -209,24 +201,6 @@ const APP_PROMPT_EXAMPLES: AppPromptExample[] = [
   },
 ];
 
-const AGENT_SKILLS: AgentSkillCard[] = [
-  {
-    id: 'match',
-    title: 'Find blocks',
-    description: 'Search certified blocks, terms, views, and lineage.',
-  },
-  {
-    id: 'story',
-    title: 'Shape story',
-    description: 'Order the app around the business decision.',
-  },
-  {
-    id: 'draft',
-    title: 'Draft gaps',
-    description: 'Keep missing sections visible as draft work instead of hiding them.',
-  },
-];
-
 function normalizeAppTheme(themeMode: string): 'obsidian' | 'paper' | 'white' {
   if (themeMode === 'obsidian' || themeMode === 'dark' || themeMode === 'midnight') return 'obsidian';
   if (themeMode === 'white' || themeMode === 'arctic') return 'white';
@@ -247,7 +221,7 @@ export function AppsView(): JSX.Element {
   })));
   const dispatch = useDispatch();
   const queryClient = useQueryClient();
-  const { operations, track: trackOperation } = useOperations();
+  const { operations } = useOperations();
   const appTheme = useMemo(() => normalizeAppTheme(state.themeMode), [state.themeMode]);
   const [surface, setSurface] = useState<AppSurface>(() => state.activeAppDraftId ? 'create' : state.activeAppId ? 'workspace' : 'library');
   const experience = state.activeAppExperience;
@@ -271,7 +245,6 @@ export function AppsView(): JSX.Element {
   const [dashboardMissing, setDashboardMissing] = useState(false);
   const [workspaceLoadAttempt, setWorkspaceLoadAttempt] = useState(0);
   const [builderMode, setBuilderMode] = useState<BuilderMode>('ai');
-  const [builderExploreGaps, setBuilderExploreGaps] = useState(false);
   const [builderTemplate, setBuilderTemplate] = useState<AppStudioLaunchConfig['template']>('operational_dashboard');
   const [builderPrompt, setBuilderPrompt] = useState(DEFAULT_PROMPT);
   const [builderName, setBuilderName] = useState('');
@@ -279,27 +252,15 @@ export function AppsView(): JSX.Element {
   const builderNameTouchedRef = useRef(false);
   const [builderDomain, setBuilderDomain] = useState('');
   const builderDomainOptions = useMemo(() => authoredDomainOptions(state.authoredDomains), [state.authoredDomains]);
-  const [builderOwner, setBuilderOwner] = useState('analytics');
   const [builderAudience, setBuilderAudience] = useState('stakeholders');
   const builderAudienceTouchedRef = useRef(false);
   const [builderExistingAppId, setBuilderExistingAppId] = useState<string | null>(null);
   const [builderDraftId, setBuilderDraftId] = useState<string | null>(() => state.activeAppDraftId);
-  const [catalog, setCatalog] = useState<AppBlockRecommendation[]>([]);
-  const [catalogLoading, setCatalogLoading] = useState(false);
-  const [catalogError, setCatalogError] = useState<string | null>(null);
-  const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(() => new Set());
-  const [generated, setGenerated] = useState<GenerateAppResponse | null>(null);
   const [buildSession, setBuildSession] = useState<AppAiBuildSession | null>(null);
   const initialPersistedBuildRef = useRef<PersistedAppBuild | null>(readPersistedAppBuild());
   const [durableBuildSessionId, setDurableBuildSessionId] = useState<string | null>(initialPersistedBuildRef.current?.sessionId ?? null);
   const [buildOperationId, setBuildOperationId] = useState<string | null>(initialPersistedBuildRef.current?.operationId ?? null);
   const loadedBuildSessionRef = useRef<string | null>(null);
-  const [proposalSelection, setProposalSelection] = useState<Set<string>>(new Set());
-  const [proposalFilterSelection, setProposalFilterSelection] = useState<Set<string>>(new Set());
-  const [proposalEdits, setProposalEdits] = useState<Record<string, { title?: string; viz?: string }>>({});
-  const [committing, setCommitting] = useState(false);
-  const [builderError, setBuilderError] = useState<string | null>(null);
-  const [builderSaving, setBuilderSaving] = useState(false);
   const [addPageOpen, setAddPageOpen] = useState(false);
   const [addPageTitle, setAddPageTitle] = useState('');
   const [addPageExploreGaps, setAddPageExploreGaps] = useState(false);
@@ -315,6 +276,13 @@ export function AppsView(): JSX.Element {
   const [appliedDashboardFilterValuesByPage, setAppliedDashboardFilterValuesByPage] = useState<Record<string, Record<string, unknown>>>({});
   const [appScopedDashboardFilterValues, setAppScopedDashboardFilterValues] = useState<Record<string, unknown>>({});
   const [appliedAppScopedDashboardFilterValues, setAppliedAppScopedDashboardFilterValues] = useState<Record<string, unknown>>({});
+  // The definition each App-scoped value was chosen for. A remembered value is
+  // applied only to that same filter (id, type and field), never to a filter
+  // that was re-created or changed since.
+  const [appScopedDashboardFilterFingerprints, setAppScopedDashboardFilterFingerprints] = useState<Record<string, string>>({});
+  // Filters whose value came back from this browser's last visit rather than
+  // a choice made now: the filter row says so next to Reset.
+  const [rememberedDashboardFilterIds, setRememberedDashboardFilterIds] = useState<ReadonlySet<string>>(() => new Set());
   const [dashboardFilterPersistenceAppId, setDashboardFilterPersistenceAppId] = useState<string | null>(null);
   const [dashboardNavigationStack, setDashboardNavigationStack] = useState<DashboardNavigationEntry[]>([]);
   const [explainOpen, setExplainOpen] = useState(false);
@@ -337,6 +305,19 @@ export function AppsView(): JSX.Element {
     staleTime: 10_000,
     enabled: !readOnlyLink,
   });
+  // Whether an AI provider is connected (design D4): the Build new App form
+  // opens on Quick start without one (round-2 Q2).
+  const providerSettingsQuery = useQuery({
+    queryKey: ['app-studio-ai-connected'],
+    queryFn: () => api.getProviderSettings(),
+    staleTime: 0,
+    enabled: !readOnlyLink,
+  });
+  const aiConnected = providerSettingsQuery.data ? appStudioAiConnected(providerSettingsQuery.data) : undefined;
+  const openAiProviderSettings = () => {
+    dispatch({ type: 'SET_SETTINGS_TAB', tab: 'ai' });
+    dispatch({ type: 'SET_MAIN_VIEW', view: 'settings' });
+  };
   const personaQuery = useQuery({
     queryKey: ['persona'],
     queryFn: () => api.getPersona(),
@@ -372,29 +353,12 @@ export function AppsView(): JSX.Element {
     setBuilderPrompt(session.prompt || DEFAULT_PROMPT);
     setBuilderExistingAppId(session.inputs.existingAppId ?? null);
     setBuilderDomain(resolveAuthoredDomainId(session.inputs.domain, state.authoredDomains));
-    setBuilderOwner(session.inputs.owner ?? 'analytics');
     setBuilderAudience(session.inputs.audience ?? 'stakeholders');
-    setBuilderExploreGaps(session.inputs.exploreGaps === true);
-    if (session.status === 'building') {
-      setBuilderSaving(true);
-      return;
-    }
-    setBuilderSaving(false);
-    if (session.status === 'error') {
-      setBuilderError(session.error ?? 'The App proposal did not complete.');
-      return;
-    }
-    setBuilderError(null);
-    setProposalSelection(session.proposal ? defaultProposalSelection(session.proposal) : new Set());
+    if (session.status === 'building' || session.status === 'error') return;
     // This runs on every build-status transition, so seeding must not clobber
-    // what the author has typed. Previously a name or tile title entered during
-    // the build was silently reverted to the planner's own wording.
-    setProposalEdits((current) => Object.fromEntries((session.proposal?.tiles ?? []).map((tile) => [
-      tile.id,
-      current[tile.id] ?? { title: tile.title, viz: tile.viz },
-    ])));
+    // what the author has typed. Previously a name was silently reverted to
+    // the planner's own wording.
     const plan = session.plan as GeneratedAppPlan | undefined;
-    setProposalFilterSelection(new Set(plannedAppFilterIds(plan)));
     const planName = session.inputs.existingAppId ? plan?.pages[0]?.title : plan?.name;
     if (planName) setBuilderName((current) => (builderNameTouchedRef.current ? current : planName));
     if (plan?.audience) setBuilderAudience((current) => (builderAudienceTouchedRef.current ? current : plan.audience!));
@@ -414,7 +378,6 @@ export function AppsView(): JSX.Element {
     setBuilderPrompt(persisted.prompt);
     setBuilderExistingAppId(persisted.existingAppId ?? null);
     setBuilderMode('ai');
-    setBuilderSaving(true);
     setSurface('create');
   }, []);
 
@@ -430,7 +393,6 @@ export function AppsView(): JSX.Element {
       && (activeBuildOperation.status === 'queued' || activeBuildOperation.status === 'running')
       && (!buildSession || buildSession.status === 'building')
     ) {
-      setBuilderSaving(true);
       setSurface('create');
     }
 
@@ -441,23 +403,13 @@ export function AppsView(): JSX.Element {
       if (cancelled) return;
       if (!session || session.status === 'building') {
         if (session) applyRecoveredBuildSession(session);
-        if (activeBuildOperation && ['failed', 'cancelled', 'interrupted'].includes(activeBuildOperation.status)) {
-          setBuilderSaving(false);
-          setBuilderError(activeBuildOperation.error?.message ?? (
-            activeBuildOperation.status === 'cancelled'
-              ? 'The App proposal was cancelled.'
-              : 'The App proposal did not complete.'
-          ));
-          return;
-        }
+        if (activeBuildOperation && ['failed', 'cancelled', 'interrupted'].includes(activeBuildOperation.status)) return;
         timer = window.setTimeout(() => { void recover(); }, 900);
         return;
       }
       // The durable session is authoritative. A LAN client can retain an older
       // queued/running operation in the React Query cache after the proposal is
-      // already written. Always clear the spinner before the duplicate-session
-      // guard so that stale progress cannot hide a completed Build Brief.
-      setBuilderSaving(false);
+      // already written.
       if (loadedBuildSessionRef.current === session.id && buildSession?.status === session.status) return;
       loadedBuildSessionRef.current = session.id;
       applyRecoveredBuildSession(session);
@@ -513,6 +465,21 @@ export function AppsView(): JSX.Element {
     });
   }, [state.activeAppId, state.activeDashboardId, surface, workspaceLoadAttempt]);
 
+  // An App opened without a page (an app-only link, `?app=<id>`, or an App
+  // list that did not know its pages yet) opens on its home page. Without
+  // this the reader stayed on "Pages 0 · No dashboard page selected" (Codex F08).
+  useEffect(() => {
+    const appId = state.activeAppId;
+    if (!appId || state.activeDashboardId || state.activeAppDraftId || surface !== 'workspace' || state.activeAppExperience !== 'view') return;
+    let cancelled = false;
+    void api.getApp(appId).then((document) => {
+      if (cancelled || !document) return;
+      const home = appHomePageId({ homepage: document.app.homepage, dashboards: document.dashboards });
+      if (home) dispatch({ type: 'OPEN_APP', appId, dashboardId: home, experience: 'view', section: state.activeAppSection });
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [dispatch, state.activeAppDraftId, state.activeAppExperience, state.activeAppId, state.activeAppSection, state.activeDashboardId, surface]);
+
   const retryWorkspaceLoad = useCallback(() => {
     setWorkspaceLoadAttempt((attempt) => attempt + 1);
   }, []);
@@ -547,6 +514,8 @@ export function AppsView(): JSX.Element {
     if (!appId) {
       setAppScopedDashboardFilterValues({});
       setAppliedAppScopedDashboardFilterValues({});
+      setAppScopedDashboardFilterFingerprints({});
+      setRememberedDashboardFilterIds(new Set());
       setDashboardFilterPersistenceAppId(null);
       return;
     }
@@ -557,9 +526,13 @@ export function AppsView(): JSX.Element {
       );
       setAppScopedDashboardFilterValues(persisted.draft);
       setAppliedAppScopedDashboardFilterValues(persisted.applied);
+      setAppScopedDashboardFilterFingerprints(persisted.fingerprints);
+      setRememberedDashboardFilterIds(new Set(Object.keys(persisted.applied)));
     } catch {
       setAppScopedDashboardFilterValues({});
       setAppliedAppScopedDashboardFilterValues({});
+      setAppScopedDashboardFilterFingerprints({});
+      setRememberedDashboardFilterIds(new Set());
     }
     setDashboardFilterPersistenceAppId(appId);
   }, [state.activeAppId]);
@@ -570,13 +543,53 @@ export function AppsView(): JSX.Element {
       writePersistedAppFilterValues(
         window.localStorage,
         `${APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX}${state.activeAppId}`,
-        { draft: appScopedDashboardFilterValues, applied: appliedAppScopedDashboardFilterValues },
+        {
+          draft: appScopedDashboardFilterValues,
+          applied: appliedAppScopedDashboardFilterValues,
+          fingerprints: appScopedDashboardFilterFingerprints,
+        },
       );
     } catch {
       // Browser storage is not execution authority. The current App still
       // receives its in-memory scope when persistence is unavailable.
     }
-  }, [appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterPersistenceAppId, state.activeAppId]);
+  }, [appScopedDashboardFilterFingerprints, appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterPersistenceAppId, state.activeAppId]);
+
+  // Only App-scoped values chosen for this page's filters as they are today.
+  // Computed on the render path, so a stale value never reaches a run, Ask or
+  // a control even for one render.
+  const acceptedAppScopedDraft = useMemo(() => acceptRememberedAppFilterValues({
+    filters: dashboardFilters,
+    values: appScopedDashboardFilterValues,
+    fingerprints: appScopedDashboardFilterFingerprints,
+    remembered: rememberedDashboardFilterIds,
+  }), [appScopedDashboardFilterFingerprints, appScopedDashboardFilterValues, dashboardFilters, rememberedDashboardFilterIds]);
+  const acceptedAppScopedApplied = useMemo(() => acceptRememberedAppFilterValues({
+    filters: dashboardFilters,
+    values: appliedAppScopedDashboardFilterValues,
+    fingerprints: appScopedDashboardFilterFingerprints,
+    remembered: rememberedDashboardFilterIds,
+  }), [appScopedDashboardFilterFingerprints, appliedAppScopedDashboardFilterValues, dashboardFilters, rememberedDashboardFilterIds]);
+
+  // Forget a remembered value whose filter changed or was re-created, so it
+  // can never come back on another page or visit.
+  useEffect(() => {
+    const rejected = new Set([...acceptedAppScopedDraft.rejected, ...acceptedAppScopedApplied.rejected]);
+    if (rejected.size === 0) return;
+    const forget = (current: Record<string, unknown>) => {
+      if (![...rejected].some((id) => Object.prototype.hasOwnProperty.call(current, id))) return current;
+      const next = { ...current };
+      for (const id of rejected) delete next[id];
+      return next;
+    };
+    setAppScopedDashboardFilterValues(forget);
+    setAppliedAppScopedDashboardFilterValues(forget);
+    setAppScopedDashboardFilterFingerprints((current) => forget(current) as Record<string, string>);
+    setRememberedDashboardFilterIds((current) => {
+      if (![...rejected].some((id) => current.has(id))) return current;
+      return new Set([...current].filter((id) => !rejected.has(id)));
+    });
+  }, [acceptedAppScopedApplied.rejected, acceptedAppScopedDraft.rejected]);
 
   useEffect(() => {
     if (!activeDashboardFilterPageId) return;
@@ -584,7 +597,7 @@ export function AppsView(): JSX.Element {
       const pageValues = valuesForDashboardPage({
         filters: dashboardFilters,
         pageValues: current[activeDashboardFilterPageId] ?? {},
-        appValues: appScopedDashboardFilterValues,
+        appValues: acceptedAppScopedDraft.values,
         defaultValue: defaultDashboardFilterValue,
       });
       if (shallowEqualRecords(current[activeDashboardFilterPageId] ?? {}, pageValues)) return current;
@@ -594,13 +607,13 @@ export function AppsView(): JSX.Element {
       const pageValues = valuesForDashboardPage({
         filters: dashboardFilters,
         pageValues: current[activeDashboardFilterPageId] ?? {},
-        appValues: appliedAppScopedDashboardFilterValues,
+        appValues: acceptedAppScopedApplied.values,
         defaultValue: defaultDashboardFilterValue,
       });
       if (shallowEqualRecords(current[activeDashboardFilterPageId] ?? {}, pageValues)) return current;
       return { ...current, [activeDashboardFilterPageId]: pageValues };
     });
-  }, [activeDashboardFilterPageId, appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterKey, dashboardFilters]);
+  }, [activeDashboardFilterPageId, acceptedAppScopedApplied.values, acceptedAppScopedDraft.values, dashboardFilterKey, dashboardFilters]);
 
   /**
    * Dataset detail navigation carries only explicitly named filters that the
@@ -642,6 +655,14 @@ export function AppsView(): JSX.Element {
     if (Object.keys(carriedAppScoped).length) {
       setAppScopedDashboardFilterValues((current) => ({ ...current, ...carriedAppScoped }));
       setAppliedAppScopedDashboardFilterValues((current) => ({ ...current, ...carriedAppScoped }));
+      setAppScopedDashboardFilterFingerprints((current) => ({
+        ...current,
+        ...Object.fromEntries(Object.keys(carriedAppScoped).flatMap((filterId) => {
+          const filter = target.dashboard.filters?.find((candidate) => candidate.id === filterId);
+          return filter ? [[filterId, dashboardFilterFingerprint(filter)]] : [];
+        })),
+      }));
+      setRememberedDashboardFilterIds((current) => new Set([...current].filter((id) => !(id in carriedAppScoped))));
     }
     dispatch({ type: 'OPEN_DASHBOARD', dashboardId: input.toDashboardId });
     return { ok: true };
@@ -734,7 +755,6 @@ export function AppsView(): JSX.Element {
       setBuilderPrompt(app.description ?? `Improve ${app.name} for ${app.audience ?? 'stakeholders'}.`);
       setBuilderDomain(resolveAuthoredDomainId(app.domain, state.authoredDomains));
       setBuilderAudience(app.audience ?? 'stakeholders');
-      setBuilderError(null);
       setSurface('create');
       return;
     }
@@ -748,128 +768,17 @@ export function AppsView(): JSX.Element {
     setBuildOperationId(null);
     setBuilderExistingAppId(null);
     setBuilderDraftId(null);
-    setBuilderMode(config.mode === 'ai' ? 'ai' : 'classic');
-    setBuilderExploreGaps(config.sourcePolicy === 'include_review_required');
+    setBuilderMode(config.mode === 'ai' ? 'ai' : config.mode === 'quick' ? 'quick' : 'classic');
     setBuilderTemplate(config.template);
     setBuilderPrompt(config.mode === 'ai' ? config.prompt : 'A dashboard of live, checked numbers');
-    setBuilderName(config.mode === 'manual' ? config.name : '');
-    setBuilderDomain((current) => resolveAuthoredDomainId(current, state.authoredDomains));
+    setBuilderName(config.mode === 'ai' ? '' : config.name.trim());
+    // A new App starts in the domain chosen on the Start form, or none. Never
+    // inherit the domain of the App opened for editing last; it would
+    // silently scope AI and the catalog.
+    setBuilderDomain(config.domain?.trim() ?? '');
     setBuilderAudience('stakeholders');
-    setSelectedBlocks(new Set());
-    setBuilderError(null);
-    setGenerated(null);
     setBuildSession(null);
-    setProposalEdits({});
-    setProposalFilterSelection(new Set());
     setSurface('create');
-  };
-
-  const toggleSelectedBlock = (blockId: string) => {
-    setSelectedBlocks((current) => {
-      const next = new Set(current);
-      if (next.has(blockId)) next.delete(blockId);
-      else next.add(blockId);
-      return next;
-    });
-  };
-
-  const runGenerate = async (options?: { extraBlockIds?: string[]; prompt?: string }) => {
-    const extras = (options?.extraBlockIds ?? []).filter((id) => typeof id === 'string');
-    const prompt = (options?.prompt ?? builderPrompt).trim();
-    if (!prompt) {
-      setBuilderError('Describe the app you want to build.');
-      return;
-    }
-    setBuilderSaving(true);
-    setBuilderError(null);
-    const preferredBlockIds = builderMode === 'classic'
-      ? Array.from(selectedBlocks)
-      : Array.from(new Set([
-          ...Array.from(selectedBlocks),
-          ...extras,
-        ]));
-    // Two-phase build: propose first (no files) — the user reviews the content
-    // list with per-tile toggles and confirms before anything is created. The
-    // client owns the session id before the request starts, so route changes can
-    // reconnect even during the server-acceptance window.
-    const sessionId = createAppBuildSessionId();
-    const persisted: PersistedAppBuild = {
-      sessionId,
-      prompt,
-      ...(builderExistingAppId ? { existingAppId: builderExistingAppId } : {}),
-      createdAt: new Date().toISOString(),
-    };
-    persistAppBuild(persisted);
-    setDurableBuildSessionId(sessionId);
-    setBuildOperationId(null);
-    loadedBuildSessionRef.current = null;
-    setBuildSession(null);
-    setGenerated(null);
-    try {
-      const accepted = await api.proposeAppAiBuildInBackground({
-        sessionId,
-        prompt,
-        existingAppId: builderExistingAppId ?? undefined,
-        domain: builderDomain.trim() || undefined,
-        owner: builderOwner.trim() || undefined,
-        force: false,
-        selectedBlockIds: preferredBlockIds,
-        plannerMode: 'ai_assisted',
-        mode: 'personal',
-        exploreGaps: builderExploreGaps,
-      });
-      trackOperation(accepted.operation);
-      setBuildOperationId(accepted.operation.id);
-      persistAppBuild({ ...persisted, operationId: accepted.operation.id });
-      // Do not wait solely on the global EventSource. Remote/LAN EventSource
-      // cannot send the server bearer token, so its queued frame can remain in
-      // memory even after the operation has completed. Poll the durable build
-      // artifact directly; reload recovery remains a second safety net.
-      for (let attempt = 0; attempt < 120; attempt += 1) {
-        const session = await api.getAppAiBuild(sessionId);
-        if (session && session.status !== 'building') {
-          loadedBuildSessionRef.current = session.id;
-          applyRecoveredBuildSession(session);
-          return;
-        }
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-      }
-      setBuilderSaving(false);
-      setBuilderError('The proposal is still running. You can retry now; ZLens will also recover the completed Build Brief when you return to Apps.');
-    } catch (error) {
-      setBuilderSaving(false);
-      setBuilderError(error instanceof Error ? error.message : String(error));
-      persistAppBuild(null);
-      setDurableBuildSessionId(null);
-      setBuildOperationId(null);
-    }
-  };
-
-  // "Add more blocks" in the proposal: adding a certified catalog block
-  // re-proposes the build with that block pinned, so the new tile arrives
-  // through the same governed propose flow (no client-side tile fabrication).
-  const addBlockToProposal = (blockId: string) => {
-    setSelectedBlocks((current) => {
-      const next = new Set(current);
-      next.add(blockId);
-      return next;
-    });
-    void runGenerate({ extraBlockIds: [blockId] });
-  };
-
-  const applyClarificationChoice = (question: string, choice: string) => {
-    const nextPrompt = `${builderPrompt.trim()}\n${question} ${choice}`;
-    setBuilderPrompt(nextPrompt);
-    void runGenerate({ prompt: nextPrompt });
-  };
-
-  const toggleProposalTile = (tileId: string) => {
-    setProposalSelection((current) => {
-      const next = new Set(current);
-      if (next.has(tileId)) next.delete(tileId);
-      else next.add(tileId);
-      return next;
-    });
   };
 
   /**
@@ -883,90 +792,9 @@ export function AppsView(): JSX.Element {
     const appId = state.activeAppId;
     if (!appId || !name.trim()) return;
     const result = await api.renameApp(appId, dashboardId ? { pageTitle: name.trim(), dashboardId } : { name: name.trim() });
-    if (!result.ok) {
-      setBuilderError(result.error);
-      return;
-    }
+    // A refused rename leaves the old name in place; nothing on this view shows the error yet.
+    if (!result.ok) return;
     await refreshApps(appId, dashboardId ?? state.activeDashboardId ?? undefined, 'workspace');
-  };
-
-  const runCommitProposal = async (edits?: AppBuildBriefEdits) => {
-    if (!buildSession || buildSession.status !== 'proposed') return;
-    setCommitting(true);
-    setBuilderError(null);
-    // Edits made in the shared Build Brief win over the surface's own fields:
-    // they are the ones the author was looking at when they pressed Build.
-    const name = (edits?.appName ?? edits?.pageTitle ?? builderName).trim();
-    const result = await api.commitAppAiBuild(buildSession.id, {
-      selectedTileIds: Array.from(proposalSelection),
-      expectedProposalHash: buildSession.proposalHash,
-      ...(builderExistingAppId
-        ? { pageTitle: name || undefined }
-        : { appName: name || undefined }),
-      audience: (edits?.audience ?? builderAudience).trim() || undefined,
-      filterIds: Array.from(proposalFilterSelection),
-      tileOverrides: { ...proposalEdits, ...(edits?.tileOverrides ?? {}) },
-    });
-    setCommitting(false);
-    if (!result.ok) {
-      setBuilderError(result.error);
-      return;
-    }
-    const session = result.session;
-    setBuildSession(session);
-    persistAppBuild(null);
-    setDurableBuildSessionId(null);
-    setBuildOperationId(null);
-    const response: GenerateAppResponse = {
-      ok: true,
-      plan: session.plan as GeneratedAppPlan,
-      validation: session.validation as GenerateAppResponse['validation'],
-      generated: { paths: session.generatedPaths },
-      app: result.app,
-      dashboardId: result.dashboardId,
-    };
-    setGenerated(response);
-    setExplainOpen(true);
-    // You just authored this App, so land in the mode where you can adjust it.
-    // Landing in read-only `view` hid the toolbar, the save status, and every
-    // tile's edit chrome, which read as "there is no way to edit or save".
-    await refreshApps(result.app?.id ?? response.plan.appId, result.dashboardId, 'workspace', { experience: 'build', section: 'dashboards' });
-  };
-
-  const runClassicCreate = async () => {
-    const selected = catalog.filter((block) => selectedBlocks.has(block.id));
-    const resolvedName = builderName.trim() || 'Untitled Analytics App';
-    const resolvedDomain = builderDomain.trim() || selected[0]?.domain || builderDomainOptions[0]?.value || 'general';
-    setBuilderName(resolvedName);
-    setBuilderDomain(resolvedDomain);
-    setBuilderSaving(true);
-    setBuilderError(null);
-    try {
-      const result = await api.createApp({
-        name: resolvedName,
-        domain: resolvedDomain,
-        dashboardTitle: 'Overview',
-        purpose: builderPrompt.trim(),
-        audience: builderAudience.trim() || 'stakeholders',
-        visibility: 'private',
-        lifecycle: 'draft',
-        tags: ['app-builder', resolvedDomain.toLowerCase()],
-        owners: [builderOwner.trim() || 'owner@local'],
-        selectedBlockIds: Array.from(selectedBlocks),
-      });
-      await refreshApps(result.app.id, result.dashboardId, 'workspace', { experience: 'build', section: 'dashboards' });
-    } catch (err) {
-      setBuilderError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBuilderSaving(false);
-    }
-  };
-
-  const openGeneratedWorkspace = () => {
-    const appId = generated?.app?.id ?? generated?.plan.appId;
-    if (!appId) return;
-    dispatch({ type: 'OPEN_APP', appId, dashboardId: generated?.dashboardId ?? undefined, experience: 'build', section: 'dashboards' });
-    setSurface('workspace');
   };
 
   const startDashboardPageBuilder = () => {
@@ -986,23 +814,36 @@ export function AppsView(): JSX.Element {
     setBuilderPrompt(request);
     setBuilderName('New App page');
     setBuilderDomain(resolveAuthoredDomainId(appDoc.app.domain, state.authoredDomains));
-    setBuilderOwner(appDoc.app.owners[0] ?? 'analytics');
     setBuilderAudience(appDoc.app.audience ?? 'stakeholders');
     const localDraft = appDoc.app.publicationIntent === 'personal'
       || (!appDoc.app.publicationIntent && appDoc.app.visibility === 'private');
-    setBuilderExploreGaps(localDraft && addPageExploreGaps);
-    setSelectedBlocks(new Set());
-    setBuilderError(null);
-    setGenerated(null);
     setBuildSession(null);
-    setProposalEdits({});
     setAddPageOpen(false);
     setAddPageTitle('');
     setAddPageExploreGaps(false);
     setSurface('create');
   };
 
-  const dashboardVariables = useMemo(() => ({ ...appliedDashboardFilterValues }), [appliedDashboardFilterValues]);
+  // The page's filter values with its defaults filled in on the same render
+  // the page arrives, not one effect later. Otherwise the viewer's first run
+  // went out with `{}` and a second with the defaults a moment after, and the
+  // two could cancel each other on the server (B1).
+  const dashboardVariables = useMemo(() => valuesForDashboardPage({
+    filters: dashboardFilters,
+    pageValues: appliedDashboardFilterValues,
+    appValues: acceptedAppScopedApplied.values,
+    defaultValue: defaultDashboardFilterValue,
+  }), [acceptedAppScopedApplied.values, appliedDashboardFilterValues, dashboardFilters]);
+  // Each App page's tile trust from its last settled run, so the library card
+  // never says "App certified" while the App itself says otherwise.
+  const [runTrustByApp, setRunTrustByApp] = useState<Record<string, Record<string, AppRunTrust>>>({});
+  const recordPageRunTrust = useCallback((appId: string, pageId: string, trust: AppRunTrust) => {
+    setRunTrustByApp((current) => {
+      const prior = current[appId]?.[pageId];
+      if (prior && prior.certified === trust.certified && prior.total === trust.total) return current;
+      return { ...current, [appId]: { ...(current[appId] ?? {}), [pageId]: trust } };
+    });
+  }, []);
 
   const handleDashboardFilterChange = useCallback((filter: DashboardFilter, value: unknown) => {
     if (!activeDashboardFilterPageId) return;
@@ -1016,7 +857,14 @@ export function AppsView(): JSX.Element {
     }));
     if (isAppScopedDashboardFilter(filter)) {
       setAppScopedDashboardFilterValues((current) => ({ ...current, [filter.id]: nextValue }));
+      setAppScopedDashboardFilterFingerprints((current) => ({ ...current, [filter.id]: dashboardFilterFingerprint(filter) }));
     }
+    setRememberedDashboardFilterIds((current) => {
+      if (!current.has(filter.id)) return current;
+      const next = new Set(current);
+      next.delete(filter.id);
+      return next;
+    });
   }, [activeDashboardFilterPageId]);
   const applyDashboardFilters = useCallback(() => {
     if (!activeDashboardFilterPageId) return;
@@ -1030,6 +878,12 @@ export function AppsView(): JSX.Element {
         .filter(isAppScopedDashboardFilter)
         .map((filter) => [filter.id, dashboardFilterValues[filter.id]])),
     }));
+    setAppScopedDashboardFilterFingerprints((current) => ({
+      ...current,
+      ...Object.fromEntries(dashboardFilters
+        .filter(isAppScopedDashboardFilter)
+        .map((filter) => [filter.id, dashboardFilterFingerprint(filter)])),
+    }));
   }, [activeDashboardFilterPageId, dashboardFilterValues, dashboardFilters]);
   const resetDashboardFilters = useCallback(() => {
     const defaults = Object.fromEntries(dashboardFilters.map((filter) => [filter.id, defaultDashboardFilterValue(filter)]));
@@ -1042,8 +896,22 @@ export function AppsView(): JSX.Element {
     if (Object.keys(appDefaults).length > 0) {
       setAppScopedDashboardFilterValues((current) => ({ ...current, ...appDefaults }));
       setAppliedAppScopedDashboardFilterValues((current) => ({ ...current, ...appDefaults }));
+      setAppScopedDashboardFilterFingerprints((current) => ({
+        ...current,
+        ...Object.fromEntries(dashboardFilters
+          .filter(isAppScopedDashboardFilter)
+          .map((filter) => [filter.id, dashboardFilterFingerprint(filter)])),
+      }));
     }
+    setRememberedDashboardFilterIds(new Set());
   }, [activeDashboardFilterPageId, dashboardFilters]);
+  // The page opened with a value this browser remembered (and still applies):
+  // the filter row says so beside Reset, so the narrowing is never silent.
+  const dashboardFiltersRemembered = useMemo(() => dashboardFilters.some((filter) => (
+    rememberedDashboardFilterIds.has(filter.id)
+    && Object.prototype.hasOwnProperty.call(acceptedAppScopedApplied.values, filter.id)
+    && JSON.stringify(acceptedAppScopedApplied.values[filter.id] ?? null) !== JSON.stringify(defaultDashboardFilterValue(filter) ?? null)
+  )), [acceptedAppScopedApplied.values, dashboardFilters, rememberedDashboardFilterIds]);
   // Filters apply as the reader changes them. A short pause folds a burst of
   // changes (several chips, or typing) into one page refresh.
   const dashboardFiltersPending = useMemo(() => dashboardFilters.some((filter) => (
@@ -1071,6 +939,7 @@ export function AppsView(): JSX.Element {
       setDeleteTarget(null);
       setSurface('library');
       await queryClient.invalidateQueries({ queryKey: ['apps'] });
+      void queryClient.invalidateQueries({ queryKey: ['app-builds'] });
       setDeleteUndo({ appName: deleteTarget.name, recoveryId: deleted.recoveryId });
     } catch (error) {
       setDeleteError(error instanceof Error ? error.message : String(error));
@@ -1088,19 +957,26 @@ export function AppsView(): JSX.Element {
       await queryClient.invalidateQueries({ queryKey: ['apps'] });
       await queryClient.invalidateQueries({ queryKey: ['app-builds'] });
       await refreshApps();
-    } catch (error) {
-      setBuilderError(error instanceof Error ? error.message : String(error));
+    } catch {
+      // Nothing on this view shows a failed restore yet; the App stays deleted.
     }
   };
 
-  const returnToAppLibrary = useCallback(() => {
+  // Back to Apps always shows the library as it is now (round 3): the draft
+  // just left is listed at once, then the drafts and Apps are read again.
+  const returnToAppLibrary = useCallback((draft?: AppStudioBuildDraft | null) => {
     dispatch({ type: 'CLOSE_APP' });
     setAppDoc(null);
     setDashboardDoc(null);
     setBuilderExistingAppId(null);
     setBuilderDraftId(null);
     setSurface('library');
-  }, [dispatch]);
+    if (draft) {
+      queryClient.setQueryData<{ ok: true; drafts: AppStudioBuildDraft[] }>(['app-builds'], (current) => withDraftListed(current, draft));
+    }
+    void queryClient.invalidateQueries({ queryKey: ['app-builds'] });
+    void queryClient.invalidateQueries({ queryKey: ['apps'] });
+  }, [dispatch, queryClient]);
 
   return (
     <div className={`dql-apps-waterline dql-apps-theme-${appTheme}`}>
@@ -1108,12 +984,14 @@ export function AppsView(): JSX.Element {
       {surface === 'library' ? (
         <AppLibrarySurface
           apps={filteredApps}
+          runTrustByApp={runTrustByApp}
           allApps={state.apps}
           loading={appLibraryLoading}
           search={search}
           filter={libraryFilter}
           favorites={favorites}
           localDrafts={localDrafts}
+          domainOptions={builderDomainOptions}
           onSearch={setSearch}
           onFilter={setLibraryFilter}
           onToggleFavorite={(appId) => {
@@ -1125,12 +1003,13 @@ export function AppsView(): JSX.Element {
             });
           }}
           onStartStudio={startStudioBuilder}
+          aiConnected={aiConnected}
+          onConnectAi={openAiProviderSettings}
           onContinueDraft={(draft) => {
             setBuilderDraftId(draft.id);
             setBuilderExistingAppId(draft.baseApp?.appId ?? null);
             setBuilderMode(draft.authoringMode === 'ai' ? 'ai' : 'classic');
             setBuilderTemplate(draft.template);
-            setBuilderExploreGaps(draft.sourcePolicy === 'include_review_required');
             setBuilderPrompt(draft.frame.goal);
             setBuilderName(draft.name);
             setBuilderDomain(draft.pages[0]?.metadata.domain ?? '');
@@ -1145,17 +1024,19 @@ export function AppsView(): JSX.Element {
         />
       ) : surface === 'create' ? (
         <AppStudioV2
-          initialMode={builderMode === 'ai' ? 'ai' : 'manual'}
+          initialMode={builderMode === 'ai' ? 'ai' : builderMode === 'quick' ? 'quick' : 'manual'}
           initialPrompt={builderPrompt}
           initialName={builderName}
           initialDraftId={builderDraftId}
-          initialSourcePolicy={builderExploreGaps ? 'include_review_required' : 'governed_only'}
           initialTemplate={builderTemplate}
           startImmediately
           baseAppId={builderExistingAppId}
           domain={builderDomain}
+          domainOptions={builderDomainOptions}
           audience={builderAudience}
           themeMode={state.themeMode}
+          aiConnected={aiConnected}
+          onConnectAi={openAiProviderSettings}
           onBack={returnToAppLibrary}
           onPublished={(app, dashboardId) => {
             void queryClient.invalidateQueries({ queryKey: ['app-builds'] });
@@ -1184,9 +1065,11 @@ export function AppsView(): JSX.Element {
           explainExpanded={explainExpanded}
           dashboardFilters={dashboardFilters}
           dashboardFilterValues={dashboardFilterValues}
+          dashboardFiltersRemembered={dashboardFiltersRemembered}
           themeMode={state.themeMode}
           variables={dashboardVariables}
-          onBack={returnToAppLibrary}
+          aiConnected={aiConnected}
+          onBack={() => returnToAppLibrary()}
           onRetryDashboardLoad={retryWorkspaceLoad}
           onExperienceChange={(nextExperience) => {
             if (nextExperience === 'build') {
@@ -1231,6 +1114,7 @@ export function AppsView(): JSX.Element {
             void refreshApps(state.activeAppId, dashboard.id, 'workspace');
           }}
           onInvestigationsChanged={handleInvestigationsChanged}
+          onPageRunTrust={recordPageRunTrust}
           onOpenLineageNode={(nodeId) => {
             dispatch({
               type: 'OPEN_LINEAGE_DETAIL',
@@ -1298,16 +1182,23 @@ function AppLibrarySurface({
   filter,
   favorites,
   localDrafts,
+  domainOptions,
   onSearch,
   onFilter,
   onToggleFavorite,
   onStartStudio,
+  aiConnected,
+  onConnectAi,
   onContinueDraft,
   onOpenApp,
   onDeleteApp,
+  runTrustByApp,
 }: {
   apps: AppSummary[];
+  /** Tile trust from each App page's last settled run in this session. */
+  runTrustByApp?: Record<string, Record<string, AppRunTrust>>;
   allApps: AppSummary[];
+  domainOptions: ReturnType<typeof authoredDomainOptions>;
   loading: boolean;
   search: string;
   filter: LibraryFilter;
@@ -1317,19 +1208,51 @@ function AppLibrarySurface({
   onFilter: (value: LibraryFilter) => void;
   onToggleFavorite: (appId: string) => void;
   onStartStudio: (config: AppStudioLaunchConfig) => void;
+  /** Whether an AI provider is connected; `undefined` while settings load (design D4). */
+  aiConnected?: boolean;
+  onConnectAi?: () => void;
   onContinueDraft: (draft: AppStudioBuildDraft) => void;
   onOpenApp: (app: AppSummary, experience?: AppExperience) => void;
   onDeleteApp: (app: AppSummary) => void;
 }) {
-  const counts = libraryCounts(allApps, localDrafts, favorites);
-  const [launchConfig, setLaunchConfig] = useState<AppStudioLaunchConfig>({
-    mode: 'ai',
-    prompt: DEFAULT_PROMPT,
-    name: 'Untitled Analytics App',
-    template: 'operational_dashboard',
-    sourcePolicy: 'governed_only',
+  // The counters count what the cards show (round 3): a draft of a listed App
+  // rides on that App's card, so only new Apps count as "Not published yet".
+  const counts = libraryCounts(allApps, mergeDraftsIntoAppCards(localDrafts, allApps).standaloneDrafts, favorites);
+  // Start manually until the settings answer (design D4); then Describe with
+  // AI with a provider, or Quick start without one (round-2 Q2), unless the
+  // author already picked a tab.
+  const [launchConfig, setLaunchConfig] = useState<AppStudioLaunchConfig>(() => {
+    const mode = appStudioDefaultLaunchMode(aiConnected);
+    return {
+      mode,
+      prompt: DEFAULT_PROMPT,
+      name: mode === 'quick' ? '' : 'Untitled Analytics App',
+      template: mode === 'ai' ? 'operational_dashboard' : 'blank',
+    };
   });
-  const [launchPreference, setLaunchPreference] = useState<AppLibraryLaunchPreference>('auto');
+  const launchModeTouched = useRef(false);
+  useEffect(() => {
+    if (launchModeTouched.current) return;
+    const mode = appStudioDefaultLaunchMode(aiConnected);
+    setLaunchConfig((current) => current.mode === mode ? current : {
+      ...current,
+      mode,
+      template: mode === 'ai' ? 'operational_dashboard' : 'blank',
+      // Quick start names the App after its Domain unless the author types a name.
+      name: mode === 'quick' && current.name === 'Untitled Analytics App' ? '' : mode === 'manual' && !current.name.trim() ? 'Untitled Analytics App' : current.name,
+    });
+  }, [aiConnected]);
+  // Setup's "Finish setup · Build an App" opens the form, even when Apps already exist.
+  const [launchPreference, setLaunchPreference] = useState<AppLibraryLaunchPreference>(() => (buildNewAppRequested() ? 'expanded' : 'auto'));
+  useEffect(() => {
+    const open = () => {
+      if (!buildNewAppRequested({ consume: true })) return;
+      setLaunchPreference('expanded');
+    };
+    open();
+    window.addEventListener(BUILD_NEW_APP_EVENT, open);
+    return () => window.removeEventListener(BUILD_NEW_APP_EVENT, open);
+  }, []);
   const launchExpanded = appLibraryLaunchExpanded({
     preference: launchPreference,
     loading,
@@ -1346,7 +1269,11 @@ function AppLibrarySurface({
       draft.authoringMode,
     ].join(' ').toLowerCase().includes(needle))
     : [];
-  const hasResults = visibleDrafts.length > 0 || apps.length > 0;
+  // A published App with unpublished changes is one card, not two of the same
+  // name; under "Not published yet" its draft is not shown as a new App.
+  const { standaloneDrafts } = mergeDraftsIntoAppCards(visibleDrafts, allApps);
+  const { draftByAppId } = mergeDraftsIntoAppCards(visibleDrafts, apps);
+  const hasResults = standaloneDrafts.length > 0 || apps.length > 0;
   // Under a host (RFC 0010 HH-9), people who may not author Apps read them.
   const hostUi = useHostUi();
   const canAuthor = hostAllows(hostUi, 'app.author');
@@ -1358,8 +1285,18 @@ function AppLibrarySurface({
         {launchExpanded && canAuthor ? (
           <AppStudioLaunchSurface
             config={launchConfig}
-            onChange={(patch) => setLaunchConfig((current) => ({ ...current, ...patch }))}
-            onSubmit={() => onStartStudio(launchConfig)}
+            domainOptions={domainOptions}
+            aiConnected={aiConnected}
+            {...(onConnectAi ? { onConnectAi } : {})}
+            onChange={(patch) => {
+              if (patch.mode) launchModeTouched.current = true;
+              setLaunchConfig((current) => ({ ...current, ...patch }));
+            }}
+            onSubmit={() => {
+              const mode = appStudioLaunchTab(launchConfig.mode, aiConnected);
+              // Quick start builds its own tiles on a blank page.
+              onStartStudio({ ...launchConfig, mode, ...(mode === 'quick' ? { template: 'blank' as const } : {}) });
+            }}
           />
         ) : null}
       </div>
@@ -1385,7 +1322,7 @@ function AppLibrarySurface({
           ) : null}
           {words.localCounts ? (
             <>
-              <span><strong>{localDrafts.length}</strong> local draft{localDrafts.length === 1 ? '' : 's'}</span>
+              <span><strong>{counts.drafts}</strong> not published yet</span>
               <span><strong>{counts.private}</strong> private</span>
               <span><strong>{counts.shared}</strong> shared</span>
             </>
@@ -1413,7 +1350,7 @@ function AppLibrarySurface({
         <EmptyPanel title="No Apps match this view." detail={words.emptyDetail} />
       ) : (
         <div className="dql-apps-grid" aria-label="App library">
-          {visibleDrafts.map((draft) => (
+          {standaloneDrafts.map((draft) => (
             <AppDraftCard key={draft.id} draft={draft} onOpen={() => onContinueDraft(draft)} />
           ))}
           {apps.map((app) => (
@@ -1426,6 +1363,8 @@ function AppLibrarySurface({
               onEdit={canAuthor ? () => onOpenApp(app, 'build') : undefined}
               onDelete={canAuthor ? () => onDeleteApp(app) : undefined}
               reader={reader}
+              runTrust={appRunTrustAcrossPages(runTrustByApp?.[app.id])}
+              {...(!reader && draftByAppId.get(app.id) ? { pendingDraft: draftByAppId.get(app.id)!, onContinueDraft: () => onContinueDraft(draftByAppId.get(app.id)!) } : {})}
             />
           ))}
         </div>
@@ -1434,31 +1373,71 @@ function AppLibrarySurface({
   );
 }
 
+/** "5 min ago", "21 Oct", or "—" when the time is not known. */
+export function appCardUpdated(at: string | undefined, nowMs: number = Date.now()): string {
+  const ms = at ? Date.parse(at) : NaN;
+  return Number.isFinite(ms) ? relativeAge(ms, nowMs) : '—';
+}
+
+/** The card's extra signals: only counts above zero, in plain words. */
+export function appCardSignals(input: { draftCount: number; researchCount: number; aiPinCount: number }): string[] {
+  const out: string[] = [];
+  if (input.draftCount > 0) out.push(`${input.draftCount} unpublished change${input.draftCount === 1 ? '' : 's'}`);
+  if (input.researchCount > 0) out.push(`${input.researchCount} ${input.researchCount === 1 ? 'analysis' : 'analyses'}`);
+  if (input.aiPinCount > 0) out.push(`${input.aiPinCount} saved insight${input.aiPinCount === 1 ? '' : 's'}`);
+  return out;
+}
+
+/**
+ * Drafts of an App that is already in the library ride on that App's card
+ * ("Unpublished changes · Continue editing"); a draft of a new App keeps its
+ * own card. Newest draft wins when one App has several.
+ */
+export function mergeDraftsIntoAppCards<D extends Pick<AppStudioBuildDraft, 'id' | 'appId' | 'updatedAt'>>(
+  drafts: D[],
+  apps: Array<Pick<AppSummary, 'id'>>,
+): { standaloneDrafts: D[]; draftByAppId: Map<string, D> } {
+  const listed = new Set(apps.map((app) => app.id));
+  const draftByAppId = new Map<string, D>();
+  const standaloneDrafts: D[] = [];
+  for (const draft of drafts) {
+    if (!draft.appId || !listed.has(draft.appId)) { standaloneDrafts.push(draft); continue; }
+    const current = draftByAppId.get(draft.appId);
+    if (!current || Date.parse(draft.updatedAt ?? '') > Date.parse(current.updatedAt ?? '')) draftByAppId.set(draft.appId, draft);
+  }
+  return { standaloneDrafts, draftByAppId };
+}
+
 function AppDraftCard({ draft, onOpen }: { draft: AppStudioBuildDraft; onOpen: () => void }) {
-  const needsReview = draft.reviewTasks.some((task) => task.status === 'open');
+  // Open checks only: "needs certifying" reminders older drafts kept are not checks (T3).
+  const openChecks = draft.reviewTasks.some((task) => task.status === 'open' && !isTrustReminderTaskId(task.id));
   const domain = draft.pages[0]?.metadata.domain || 'Local workspace';
+  // One wording (round 3): a new App is "Not published yet"; a draft of a
+  // published App has "Unpublished changes (only you can see them)".
+  const ofPublishedApp = Boolean(draft.baseApp);
+  // The same tile count the editor header and Publish show (F04).
+  const trustText = draftCardTrustText(draft);
+  const status = openChecks ? 'Checks to finish' : ofPublishedApp ? 'Unpublished changes' : NOT_PUBLISHED_YET;
   return (
     <article className="dql-app-card dql-app-draft-card">
       <div className="dql-app-card-body" onClick={onOpen} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onOpen(); }}>
         <div className="dql-app-card-top">
-          <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private"><ShieldCheck size={12} /> Private draft</span></div>
+          <div className="dql-app-card-labels"><span className="dql-app-eyebrow">{domain}</span><span className="dql-app-visibility private" title="Only you can see it until you publish it"><ShieldCheck size={12} /> Only you</span></div>
           <span className="dql-app-draft-mark"><LayoutDashboard size={15} /></span>
         </div>
-        <StatusSeal tone={needsReview ? 'draft' : 'agentic'}>{needsReview ? 'review required' : 'local draft'}</StatusSeal>
+        <StatusSeal tone={openChecks ? 'draft' : 'agentic'} title={trustText ? 'How many of this App\'s tiles are certified. Each tile says Certified (by whom, and when) or Not certified yet.' : undefined}>{trustText ? `${status} · ${trustText}` : status}</StatusSeal>
         <h3>{draft.name}</h3>
         <p>{cleanStakeholderCopy(draft.frame.goal || 'A private App draft ready to shape in Studio.')}</p>
         <div className="dql-app-card-mini">
           <MiniMetric label="Pages" value={String(draft.pages.length)} />
-          <MiniMetric label="Mode" value={draft.authoringMode === 'ai' ? 'AI + manual' : 'Manual'} />
-          <MiniMetric label="Revision" value={String(draft.revision)} />
+          <MiniMetric label="Updated" value={appCardUpdated(draft.updatedAt)} />
         </div>
         <div className="dql-app-card-signals">
-          <span><ShieldCheck size={13} /> Not in Project source</span>
-          <span><Sparkles size={13} /> {draft.sourcePolicy === 'include_review_required' ? 'Review lane enabled' : 'Governed sources'}</span>
+          <span><ShieldCheck size={13} /> {ofPublishedApp ? UNPUBLISHED_CHANGES : NOT_PUBLISHED_YET_ONLY_YOU}</span>
         </div>
       </div>
       <div className="dql-app-card-depth">
-        <span>Saved locally</span>
+        <span />
         <button type="button" className="dql-app-card-act primary" onClick={onOpen}>Continue <ArrowRight size={12} /></button>
       </div>
     </article>
@@ -1473,8 +1452,14 @@ function AppCard({
   onEdit,
   onDelete,
   reader = false,
+  runTrust,
+  pendingDraft,
+  onContinueDraft,
 }: {
   app: AppSummary;
+  /** This App's unpublished draft, shown on this card instead of a second card of the same name. */
+  pendingDraft?: AppStudioBuildDraft;
+  onContinueDraft?: () => void;
   favorite: boolean;
   onToggleFavorite: () => void;
   onOpen: () => void;
@@ -1483,21 +1468,25 @@ function AppCard({
   onDelete?: () => void;
   /** A hosted reader: no local drafts or local insights on the card. */
   reader?: boolean;
+  /** Tile trust from this App's settled runs in this session. */
+  runTrust?: AppRunTrust | null;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const certified = app.certification === 'certified' || app.lifecycle === 'certified';
   const draftCount = app.drafts?.length ?? 0;
+  const seal = appCardSeal({ lifecycle: app.lifecycle, certification: app.certification, draftCount, runTrust, publishedTrust: app.tileTrust, certifiedBy: app.certifiedBy, certifiedAt: app.certifiedAt });
+  const certified = seal.certified;
   const researchCount = app.investigations ?? 0;
   const aiPinCount = app.aiPins ?? 0;
   const shared = isSharedProjectApp(app);
-  const trustLabel = certified ? 'Certified app' : draftCount > 0 || researchCount > 0 || aiPinCount > 0 ? 'Review needed' : 'Draft app';
+  // Only what a person acts on: no zero counts (D6).
+  const signals = appCardSignals({ draftCount: reader ? 0 : draftCount, researchCount, aiPinCount: reader ? 0 : aiPinCount });
   return (
     <article className="dql-app-card">
       <div className="dql-app-card-body" onClick={onOpen}>
         <div className="dql-app-card-top">
           <div className="dql-app-card-labels">
             <span className="dql-app-eyebrow">{app.domain || 'Domain'}</span>
-            <span className={`dql-app-visibility ${shared ? 'shared' : 'private'}`}>{shared ? <Users size={12} /> : <ShieldCheck size={12} />}{reader ? (shared ? 'Shared' : 'Private') : shared ? 'Shared Project' : 'Private Project'}</span>
+            <span className={`dql-app-visibility ${shared ? 'shared' : 'private'}`}>{shared ? <Users size={12} /> : <ShieldCheck size={12} />}{shared ? 'Shared' : 'Private'}</span>
           </div>
           <button
             type="button"
@@ -1515,12 +1504,12 @@ function AppCard({
         {/* The card shows the App's lifecycle, not its data trust: whether each
             tile's source is certified is shown inside the App, from its run. */}
         <StatusSeal tone={certified ? 'certified' : draftCount > 0 ? 'draft' : 'agentic'} title="App lifecycle (draft, in review, certified). Data trust is shown on each tile inside the App.">
-          {appLifecycleLabel(app.lifecycle, certified, draftCount)}
+          {seal.label}
         </StatusSeal>
         <h3>
           <a
             className="dql-app-card-link"
-            href={`/?app=${encodeURIComponent(app.id)}`}
+            href={appCardHref(app)}
             onClick={(event) => { event.preventDefault(); event.stopPropagation(); onOpen(); }}
           >
             {app.name}
@@ -1529,21 +1518,23 @@ function AppCard({
         <p>{cleanStakeholderCopy(app.description || appLibraryWords(reader).appNote(app))}</p>
         <div className="dql-app-card-mini">
           <MiniMetric label="Pages" value={String(app.dashboards.length)} />
-          <MiniMetric label="Books" value={String(app.notebooks?.length ?? 0)} />
-          {reader ? null : <MiniMetric label="Drafts" value={String(draftCount)} />}
+          <MiniMetric label="Updated" value={appCardUpdated(app.updatedAt)} />
         </div>
-        <div className="dql-app-card-signals">
-          <span><ShieldCheck size={13} /> {trustLabel}</span>
-          <span><Search size={13} /> {researchCount} analysis</span>
-          {reader ? null : <span><Sparkles size={13} /> {aiPinCount} local insights</span>}
-        </div>
+        {signals.length || pendingDraft ? <div className="dql-app-card-signals">
+          {pendingDraft ? <span className="dql-app-card-pending" title={`Draft updated ${appCardUpdated(pendingDraft.updatedAt)}. Readers still see the published App.`}><ShieldCheck size={13} /> {UNPUBLISHED_CHANGES}</span> : null}
+          {signals.map((signal) => <span key={signal}>{signal.includes('analys') ? <Search size={13} /> : <Sparkles size={13} />} {signal}</span>)}
+        </div> : null}
       </div>
       <div className="dql-app-card-depth">
         <span>{primaryOwner(app)}</span>
         <button type="button" className="dql-app-card-act" onClick={onOpen} title="View app" aria-label={`View ${app.name}`}>
           <Eye size={12} /> View
         </button>
-        {onEdit ? (
+        {pendingDraft && onContinueDraft ? (
+          <button type="button" className="dql-app-card-act primary" onClick={onContinueDraft} title="Open the unpublished draft" aria-label={`Continue editing ${app.name}`}>
+            <Pencil size={12} /> Continue editing
+          </button>
+        ) : onEdit ? (
           <button type="button" className="dql-app-card-act" onClick={onEdit} title="Edit app" aria-label={`Edit ${app.name}`}>
             <Pencil size={12} /> Edit
           </button>
@@ -1614,521 +1605,6 @@ function DeleteAppDialog({
   );
 }
 
-function AppCreateSurface({
-  mode,
-  existingAppId,
-  appName,
-  prompt,
-  domain,
-  domainOptions,
-  owner,
-  audience,
-  promptExamples,
-  catalog,
-  catalogLoading,
-  catalogError,
-  selectedBlocks,
-  generated,
-  buildSession,
-  proposalSelection,
-  proposalFilterSelection,
-  proposalEdits,
-  committing,
-  themeMode,
-  onToggleProposalTile,
-  onToggleProposalFilter,
-  onProposalEdit,
-  onCommitProposal,
-  saving,
-  error,
-  onBack,
-  onModeChange,
-  onAppNameChange,
-  onPromptChange,
-  onDomainChange,
-  onOwnerChange,
-  onAudienceChange,
-  onToggleBlock,
-  onBuild,
-  onClarificationChoice,
-  onOpenGenerated,
-  onAddBlock,
-}: {
-  mode: BuilderMode;
-  existingAppId: string | null;
-  appName: string;
-  prompt: string;
-  domain: string;
-  domainOptions: AuthoredDomainOption[];
-  owner: string;
-  audience: string;
-  promptExamples: AppPromptExample[];
-  catalog: AppBlockRecommendation[];
-  catalogLoading: boolean;
-  catalogError: string | null;
-  selectedBlocks: Set<string>;
-  generated: GenerateAppResponse | null;
-  buildSession: AppAiBuildSession | null;
-  proposalSelection: Set<string>;
-  proposalFilterSelection: Set<string>;
-  proposalEdits: Record<string, { title?: string; viz?: string }>;
-  committing: boolean;
-  themeMode: ThemeMode;
-  onToggleProposalTile: (tileId: string) => void;
-  onToggleProposalFilter: (filterId: string) => void;
-  onProposalEdit: (tileId: string, edit: { title?: string; viz?: string }) => void;
-  onCommitProposal: (edits?: AppBuildBriefEdits) => void;
-  onAddBlock: (blockId: string) => void;
-  saving: boolean;
-  error: string | null;
-  onBack: () => void;
-  onModeChange: (mode: BuilderMode) => void;
-  onAppNameChange: (value: string) => void;
-  onPromptChange: (value: string) => void;
-  onDomainChange: (value: string) => void;
-  onOwnerChange: (value: string) => void;
-  onAudienceChange: (value: string) => void;
-  onToggleBlock: (blockId: string) => void;
-  onBuild: () => void;
-  onClarificationChoice: (question: string, choice: string) => void;
-  onOpenGenerated: () => void;
-}) {
-  const [addMoreOpen, setAddMoreOpen] = useState(false);
-  const [addQuery, setAddQuery] = useState('');
-  const selected = catalog.filter((block) => selectedBlocks.has(block.id));
-  const selectedFilterIds = Array.from(new Set(selected.flatMap((block) => block.filterIds ?? [])));
-  const contextDomainLabel = domain.trim() || 'Auto domain';
-  const contextOwnerLabel = owner.trim() || 'Local owner';
-  const proposal = buildSession?.status === 'proposed' ? buildSession.proposal : undefined;
-  const plan = generated?.plan
-    ?? (buildSession?.plan as GeneratedAppPlan | undefined)
-    ?? planFromSelection(appName, prompt, domain, owner, selected);
-  const sessionWarnings = buildSession?.warnings ?? [];
-  const scopedReportCount = planScopedReportCount(plan);
-  const isPageBuild = Boolean(existingAppId);
-
-  // ── Redesigned AI build flow (Apps Redesign.dc.html) ──────────────────────
-  // library send → user bubble → building stream (orb + shimmer + staggered
-  // steps while the real propose call runs) → proposal checklist → commit.
-  if (mode === 'ai') {
-    const tiles = proposal?.tiles ?? [];
-    const certifiedTileCount = tiles.filter((tile) => tile.certification === 'certified').length;
-    const semanticTileCount = tiles.filter((tile) => tile.certification === 'reviewed_semantic').length;
-    const selectedCount = tiles.filter((tile) => proposalSelection.has(tile.id)).length;
-    const proposalBlockIds = new Set(tiles.map((tile) => tile.blockId).filter(Boolean));
-    const addNeedle = addQuery.trim().toLowerCase();
-    const addPool = catalog.filter((block) =>
-      !proposalBlockIds.has(block.id)
-      && (!addNeedle || block.name.toLowerCase().includes(addNeedle) || (block.description ?? '').toLowerCase().includes(addNeedle)));
-    const detectedFilters = (plan.globalFilters?.length ? plan.globalFilters : plan.pages[0]?.filters ?? []).slice(0, 8);
-    const buildFrameFilterLabels = Array.from(new Set([
-      ...(proposal?.buildFrame?.filters ?? []),
-      ...detectedFilters.map((filter) => filter.label || filter.id),
-    ])).filter(Boolean);
-    const glyphFor = (viz: string): string => {
-      const v = viz.toLowerCase();
-      // One mark per shape: everything that was not a KPI or a table used to
-      // share a single glyph, so a brief of six varied tiles looked identical.
-      if (v.includes('kpi') || v.includes('metric') || v.includes('single')) return 'Σ';
-      if (v.includes('table') || v.includes('pivot')) return '▤';
-      if (v.includes('line') || v.includes('trend')) return '⟋';
-      if (v.includes('area')) return '◺';
-      if (v.includes('pie') || v.includes('donut')) return '◕';
-      if (v.includes('scatter')) return '⁘';
-      if (v.includes('gauge')) return '◑';
-      if (v.includes('funnel')) return '▽';
-      if (v.includes('heatmap')) return '▩';
-      if (v.includes('text') || v.includes('narrative')) return '¶';
-      return '▦';
-    };
-    const vizLabel = (viz: string): string => {
-      const v = viz.toLowerCase();
-      if (v.includes('kpi') || v.includes('single')) return 'KPI';
-      if (v.includes('table')) return 'Table';
-      if (v.includes('line')) return 'Line chart';
-      if (v.includes('bar')) return 'Bar chart';
-      return viz ? viz.charAt(0).toUpperCase() + viz.slice(1) : 'Auto';
-    };
-    return (
-      <div className="dql-app-flow-scroll">
-        <div className="dql-app-flow">
-          <div className="dql-app-flow-head">
-            <h2>{isPageBuild ? 'Build a new App page' : 'Build an app'}</h2>
-            <p>{isPageBuild
-              ? 'ZLens plans one page from the existing App context, then waits for approval without changing any current page.'
-              : 'ZLens resolves certified blocks and semantic metrics, then waits for your approval before writing a private App draft.'}</p>
-          </div>
-
-          {/* sent prompt */}
-          <div className="dql-app-flow-bubble">{prompt}</div>
-
-          {/* building stream */}
-          {saving ? (
-            <div className="dql-app-buildstream">
-              <span className="dql-app-buildorb"><Sparkles size={14} /></span>
-              <div className="dql-app-buildbody">
-                <span className="dql-app-shimmer">Finding certified blocks…</span>
-                <div className="dql-app-buildsteps">
-                  <span style={{ animationDelay: '0.2s' }}><Check size={11} className="ok" />Matched domain <code>{contextDomainLabel.toLowerCase()}</code></span>
-                  <span style={{ animationDelay: '0.8s' }}><Check size={11} className="ok" />Scanning certified blocks and semantic metrics</span>
-                  <span style={{ animationDelay: '1.4s' }}><i className="dot" />Detecting app filters from block parameters…</span>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* proposal */}
-          {!saving && proposal ? (
-            <div className="dql-app-buildstream proposal">
-              <span className="dql-app-buildorb still"><Sparkles size={14} /></span>
-              <div className="dql-app-buildbody wide">
-                <div className="dql-app-proposal-lede">
-                  <strong>{isPageBuild ? 'Page Build Brief' : 'Build Brief'} · {proposal.intent.target === 'personal' ? 'Personal Draft' : 'Shared Project target'}</strong><br />
-                  Found {certifiedTileCount} certified block{certifiedTileCount === 1 ? '' : 's'}{semanticTileCount > 0 ? ` and ${semanticTileCount} governed semantic view${semanticTileCount === 1 ? '' : 's'}` : ''}.
-                  {isPageBuild
-                    ? ' The approved page is added atomically; existing pages remain unchanged.'
-                    : ' Every generated App starts private; review-required sources must pass publication checks before sharing.'}
-                </div>
-                <label className="dql-app-buildbrief-name">
-                  <span>{isPageBuild ? 'Page name' : 'Draft name'}</span>
-                  <input value={appName} onChange={(event) => onAppNameChange(event.target.value)} maxLength={120} />
-                </label>
-                <label className="dql-app-buildbrief-name">
-                  <span>Audience</span>
-                  <input value={audience} onChange={(event) => onAudienceChange(event.target.value)} maxLength={120} />
-                </label>
-                {proposal.buildFrame ? (
-                  <div className="dql-app-build-frame" aria-label="App Build Frame">
-                    <header><strong>Build Frame</strong><span>Editable intent before source commit</span></header>
-                    <dl>
-                      <div><dt>Decision</dt><dd>{proposal.buildFrame.goal}</dd></div>
-                      <div><dt>Metrics</dt><dd>{proposal.buildFrame.metrics.join(', ') || 'Clarification needed'}</dd></div>
-                      <div><dt>Dimensions</dt><dd>{proposal.buildFrame.dimensions.join(', ') || 'None required'}</dd></div>
-                      <div><dt>Filters</dt><dd>{buildFrameFilterLabels.join(', ') || 'No governed page filters detected'}</dd></div>
-                    </dl>
-                  </div>
-                ) : null}
-                <div className="dql-app-proposal-card">
-                  {tiles.map((tile) => {
-                    const on = proposalSelection.has(tile.id);
-                    const certifiedTile = tile.certification === 'certified';
-                    const semanticTile = tile.certification === 'reviewed_semantic';
-                    return (
-                      <button
-                        key={tile.id}
-                        type="button"
-                        className={`dql-app-proposal-row ${on ? '' : 'off'}`}
-                        onClick={() => onToggleProposalTile(tile.id)}
-                        disabled={Boolean(tile.error)}
-                        title={tile.repair?.message ?? tile.error ?? tile.preflight.message}
-                      >
-                        <span className={`dql-app-prop-check ${on ? 'on' : ''}`}>{on ? <Check size={10} strokeWidth={3.2} /> : null}</span>
-                        <span className={`dql-app-prop-glyph ${certifiedTile && glyphFor(tile.viz) === '▤' ? 'green' : ''}`}>{glyphFor(tile.viz)}</span>
-                        <span className="dql-app-prop-name">
-                          <b>{tile.blockId ?? tile.title}</b>
-                          <small>{tile.description ?? tile.question ?? tile.title}</small>
-                        </span>
-                        <span className={`dql-app-prop-badge ${certifiedTile ? 'certified' : 'draft'}`}>
-                          {certifiedTile
-                            ? 'Certified'
-                            : tile.repair?.status === 'repaired'
-                              ? 'Auto-repaired · review'
-                              : tile.repair?.status === 'failed'
-                                ? 'Repair blocked'
-                                : semanticTile ? 'Semantic · review' : 'Exploratory · review'}
-                        </span>
-                        <span className="dql-app-prop-viz">{vizLabel(tile.viz)}</span>
-                        <small>{tile.preflight.status.replace('_', ' ')}</small>
-                      </button>
-                    );
-                  })}
-                  {tiles.filter((tile) => tile.repair).map((tile) => (
-                    <div key={`repair-${tile.id}`} className="dql-app-flow-gaps">
-                      <span>
-                        {tile.repair?.status === 'repaired' ? <Wrench size={12} /> : <AlertTriangle size={12} />}
-                        {tile.title}: {tile.repair?.message}
-                      </span>
-                    </div>
-                  ))}
-                  <button type="button" className="dql-app-addmore" onClick={() => setAddMoreOpen((open) => !open)}>
-                    <Plus size={13} strokeWidth={2.2} /> Add more blocks
-                  </button>
-                  {addMoreOpen ? (
-                    <div className="dql-app-addmore-panel">
-                      <div className="dql-app-addmore-search">
-                        <Search size={12} />
-                        <input
-                          value={addQuery}
-                          onChange={(event) => setAddQuery(event.target.value)}
-                          placeholder={`Search ${catalog.length} certified block${catalog.length === 1 ? '' : 's'}…`}
-                        />
-                      </div>
-                      {catalogLoading ? <div className="dql-app-addmore-hint">Loading certified blocks…</div> : null}
-                      {addPool.slice(0, 6).map((block) => (
-                        <button key={block.id} type="button" className="dql-app-addmore-row" onClick={() => { setAddQuery(''); onAddBlock(block.id); }}>
-                          <Plus size={12} strokeWidth={2.2} />
-                          <span>{block.name}</span>
-                          <small>{block.domain ?? 'certified'} · {block.status}</small>
-                        </button>
-                      ))}
-                      {!catalogLoading && addPool.length === 0 ? <div className="dql-app-addmore-hint">No more matching certified blocks.</div> : null}
-                    </div>
-                  ) : null}
-                </div>
-
-                <details className="dql-app-buildbrief-edit">
-                  <summary>Edit tile titles and visualizations</summary>
-                  <div>
-                    {tiles.filter((tile) => !tile.error).map((tile) => {
-                      const edit = proposalEdits[tile.id] ?? { title: tile.title, viz: tile.viz };
-                      const visualizations = Array.from(new Set([...(tile.allowedVisualizations ?? []), tile.viz, 'table']));
-                      return (
-                        <label key={`edit-${tile.id}`}>
-                          <input value={edit.title ?? tile.title} onChange={(event) => onProposalEdit(tile.id, { title: event.target.value })} maxLength={120} />
-                          <select value={edit.viz ?? tile.viz} onChange={(event) => onProposalEdit(tile.id, { viz: event.target.value })}>
-                            {visualizations.map((viz) => <option key={viz} value={viz}>{vizLabel(viz)}</option>)}
-                          </select>
-                        </label>
-                      );
-                    })}
-                  </div>
-                </details>
-
-                {detectedFilters.length > 0 ? (
-                  <div className="dql-app-detected">
-                    <span className="dql-app-detected-label">Page filters · select what belongs in this App</span>
-                    {detectedFilters.map((filter) => (
-                      <button
-                        key={filter.id}
-                        type="button"
-                        className={`dql-app-detected-pill ${proposalFilterSelection.has(filter.id) ? 'selected' : 'off'}`}
-                        aria-pressed={proposalFilterSelection.has(filter.id)}
-                        onClick={() => onToggleProposalFilter(filter.id)}
-                      >
-                        {proposalFilterSelection.has(filter.id) ? <Check size={11} /> : <Plus size={11} />}
-                        {filter.label} · <strong>{formatVariableValue(filter.default ?? 'Any')}</strong>
-                      </button>
-                    ))}
-                  </div>
-                ) : null}
-
-                {proposal.gaps.length > 0 ? (
-                  <div className="dql-app-flow-gaps">
-                    {proposal.gaps.slice(0, 3).map((gap) => (
-                      <span key={gap.id}><AlertTriangle size={12} /> {gap.question}</span>
-                    ))}
-                  </div>
-                ) : null}
-
-                {proposal.clarifications?.length ? (
-                  <div className="dql-app-clarifications" aria-label="Questions to improve this App">
-                    <strong>Questions before publication</strong>
-                    {proposal.clarifications.map((clarification) => (
-                      <div key={clarification.id}>
-                        <span>{clarification.question}{clarification.required ? ' · required' : ''}</span>
-                        <div>{clarification.choices.map((choice) => <button key={choice} type="button" disabled={saving} onClick={() => onClarificationChoice(clarification.question, choice)}>{choice}</button>)}</div>
-                      </div>
-                    ))}
-                    <small>Select a choice to re-plan this Build Brief immediately against governed sources.</small>
-                  </div>
-                ) : null}
-
-                <div className="dql-app-flow-actions">
-                  <button type="button" className="dql-app-flow-build" onClick={() => onCommitProposal()} disabled={committing || selectedCount === 0}>
-                    <LayoutDashboard size={13} />
-                    {committing
-                      ? (isPageBuild ? 'Adding page…' : 'Building draft…')
-                      : `${isPageBuild ? 'Add page' : 'Build private draft'} with ${selectedCount} tile${selectedCount === 1 ? '' : 's'}`}
-                  </button>
-                  <button type="button" className="dql-app-flow-reset" onClick={onBack}>{isPageBuild ? 'Back to app' : 'Start over'}</button>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          {/* propose failed or empty state fallback */}
-          {!saving && !proposal ? (
-            <div className="dql-app-flow-actions">
-              <button type="button" className="dql-app-flow-build" onClick={onBuild}>
-                <Sparkles size={13} /> Create Build Brief
-              </button>
-              <button type="button" className="dql-app-flow-reset" onClick={onBack}>{isPageBuild ? 'Back to app' : 'Start over'}</button>
-            </div>
-          ) : null}
-
-          {error ? <div className="dql-app-error">{error}</div> : null}
-          {sessionWarnings.length > 0 && !saving ? (
-            <div className="dql-app-flow-gaps">
-              {sessionWarnings.slice(0, 2).map((warning, index) => (
-                <span key={`${warning}-${index}`}><AlertTriangle size={12} /> {warning}</span>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="dql-app-create-shell">
-      <div className="dql-app-buildbar">
-        <button type="button" className="dql-app-back dql-app-back-label" onClick={onBack}>
-          <ArrowLeft size={14} />
-          <span>Apps</span>
-        </button>
-        <span className="dql-app-name-input">
-          <input aria-label="App name" placeholder="Untitled Analytics App" value={appName} onChange={(event) => onAppNameChange(event.target.value)} spellCheck={false} />
-        </span>
-        <StatusSeal tone={generated ? 'agentic' : 'draft'}>{generated ? 'generated' : 'draft'}</StatusSeal>
-        {/* This surface only renders in manual mode now — AI mode uses the chat flow above. */}
-        <div className="dql-app-mode-seg">
-          <button type="button" onClick={() => onModeChange('ai')}>
-            <Sparkles size={15} /> Build AI
-          </button>
-          <button type="button" className="on" onClick={() => onModeChange('classic')}>
-            <Blocks size={15} /> Manual
-          </button>
-        </div>
-        <div className="dql-app-build-actions">
-          <span className="dql-app-persona"><b>CFO</b> CFO</span>
-          {generated ? <button type="button" className="dql-apps-btn dql-apps-btn-line" onClick={onOpenGenerated}>Open app</button> : null}
-          <button type="button" className="dql-apps-btn dql-apps-btn-primary" onClick={onBuild} disabled={saving}>
-            {saving ? 'Creating...' : 'Create private App'}
-          </button>
-        </div>
-      </div>
-
-      <div className="dql-app-create-workspace clean classic">
-        <section className="dql-app-ai-start">
-          <div className="dql-app-ai-start-main">
-            <div className="dql-app-ai-start-copy">
-              <h1>Start with a governed canvas.</h1>
-              <p>Add certified sources now or begin with an empty page, then use the same canvas for components, filters, formatting, and optional review-required analysis.</p>
-            </div>
-
-            <div className="dql-app-ai-start-card">
-              <textarea
-                value={prompt}
-                onChange={(event) => onPromptChange(event.target.value)}
-                rows={3}
-                aria-label="App purpose"
-                placeholder="Optional: describe the business decision this App supports."
-              />
-              <button type="button" className="dql-app-ai-start-send" onClick={onBuild} disabled={saving} title="Create private App">
-                {saving ? <Workflow size={19} /> : <Send size={19} />}
-              </button>
-            </div>
-
-            <div className="dql-app-suggestions dql-app-ai-start-examples" aria-label="App templates">
-              <span>Templates</span>
-              {[
-                { title: 'Executive Brief', prompt: 'Create an executive brief with an editorial summary, KPI band, trend, narrative implications, and governed evidence.' },
-                { title: 'Operational Dashboard', prompt: 'Create an operational dashboard with global filters, KPIs, trends, driver breakdowns, and a detail table.' },
-                { title: 'Investigation', prompt: 'Create an investigation page with the question, validated findings, comparisons, driver analysis, caveats, and evidence.' },
-              ].map((item) => (
-                <button key={item.title} type="button" onClick={() => onPromptChange(item.prompt)}>
-                  {item.title}
-                </button>
-              ))}
-            </div>
-
-            <details className="dql-app-ai-context dql-app-ai-start-advanced" open>
-              <summary>
-                <span>App setup</span>
-                <b>{contextDomainLabel} / {contextOwnerLabel}</b>
-                <ChevronDown size={14} />
-              </summary>
-              <div className="dql-app-ai-context-grid">
-                <label>Domain
-                  <select value={domain} onChange={(event) => onDomainChange(event.target.value)}>
-                    <option value="">Global / cross-domain</option>
-                    {domainOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                  </select>
-                </label>
-                <label>Owner<input value={owner} onChange={(event) => onOwnerChange(event.target.value)} /></label>
-                <label>Audience<input value={audience} onChange={(event) => onAudienceChange(event.target.value)} /></label>
-              </div>
-              <BlockIndex
-                title="Certified sources"
-                subtitle={`${selectedBlocks.size} selected · optional`}
-                catalog={catalog}
-                loading={catalogLoading}
-                error={catalogError}
-                selectedBlocks={selectedBlocks}
-                onToggleBlock={onToggleBlock}
-              />
-            </details>
-
-            {proposal && !generated ? (
-              <div style={{ border: `1px solid ${themes[themeMode].cellBorder}`, background: themes[themeMode].appBg, borderRadius: 10, padding: 14 }}>
-                <AppBuildProposalPanel
-                  proposal={proposal}
-                  t={themes[themeMode]}
-                  selected={proposalSelection}
-                  onToggle={onToggleProposalTile}
-                  onCreate={(edits) => onCommitProposal(edits)}
-                  defaultName={appName}
-                  busy={committing}
-                  error={null}
-                />
-              </div>
-            ) : null}
-
-            {generated ? (
-              <div className="dql-app-ai-result dql-app-ai-start-result">
-                Generated <b>{generated.plan.name}</b> with {generated.validation.certifiedTiles} certified app tile
-                {generated.validation.certifiedTiles === 1 ? '' : 's'} and {scopedReportCount} scoped report
-                {scopedReportCount === 1 ? '' : 's'}.
-                {buildSession ? <small>Session {buildSession.id}</small> : null}
-              </div>
-            ) : null}
-
-            {error ? <div className="dql-app-error">{error}</div> : null}
-          </div>
-
-          <aside className="dql-app-ai-start-context">
-            <section className="dql-app-ai-context-card">
-              <PanelHead
-                title="Draft contents"
-                meta={`${selected.length} source${selected.length === 1 ? '' : 's'}`}
-              />
-              <div className="dql-app-ai-evidence-list">
-                {selected.map((item) => (
-                  <div key={`selected-${item.id}`} className="dql-app-ai-evidence-row">
-                    <span><Check size={14} /></span>
-                    <div><b>{item.name}</b><small>{item.description || `${item.domain} certified block`}</small></div>
-                    <StatusSeal tone="certified">Included</StatusSeal>
-                  </div>
-                ))}
-                {selected.length === 0 ? <EmptyPanel title="Blank canvas" detail="Select sources on the left, or create the App now and add components in Studio." compact /> : null}
-              </div>
-            </section>
-
-            <section className="dql-app-ai-context-card">
-              <PanelHead title="Page filters" meta="added from source parameters" />
-              <div className="dql-app-ai-filter-preview">
-                {selectedFilterIds.slice(0, 6).map((filterId) => (
-                  <span key={filterId}><small>{formatBusinessLabel(filterId)}</small><b>Included</b></span>
-                ))}
-                {selectedFilterIds.length === 0 ? <p className="dql-app-filter-empty">No parameter-backed filters in the selected sources. After creation, run the page and use Edit → Filters to add compatible result fields.</p> : null}
-              </div>
-            </section>
-
-            <section className="dql-app-ai-context-card">
-              <PanelHead title="Next step" meta="private draft" />
-              <div className="dql-app-ai-gap-list">
-                <span><Check size={13} /> Create the private App, then add KPI, chart, table, pivot, text, and filter components from Edit mode.</span>
-                <span><ShieldCheck size={13} /> Nothing is published to the project until you choose Publish to Project.</span>
-              </div>
-            </section>
-          </aside>
-        </section>
-
-      </div>
-    </div>
-  );
-}
-
 async function dashboardDocumentFingerprint(value: unknown): Promise<string> {
   const bytes = new TextEncoder().encode(JSON.stringify(value));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
@@ -2151,6 +1627,7 @@ function AppWorkspaceSurface({
   explainExpanded,
   dashboardFilters,
   dashboardFilterValues,
+  dashboardFiltersRemembered = false,
   themeMode,
   variables: declaredVariables,
   onBack,
@@ -2172,7 +1649,11 @@ function AppWorkspaceSurface({
   onDashboardChanged,
   onInvestigationsChanged,
   onOpenLineageNode,
+  onPageRunTrust,
+  aiConnected,
 }: {
+  /** `false` when no AI provider is connected: no Ask box or "Ask AI" on tiles (round 3). */
+  aiConnected?: boolean;
   /** Matching local-library entry; its presence is required for writes. */
   app: AppSummary | null;
   /** Server-resolved identity from the current persisted dashboard. */
@@ -2191,6 +1672,8 @@ function AppWorkspaceSurface({
   explainExpanded: boolean;
   dashboardFilters: DashboardFilter[];
   dashboardFilterValues: Record<string, unknown>;
+  /** Some value on this page came back from the reader's last visit. */
+  dashboardFiltersRemembered?: boolean;
   themeMode: ThemeMode;
   variables: Record<string, unknown>;
   onBack: () => void;
@@ -2217,6 +1700,8 @@ function AppWorkspaceSurface({
   onDashboardChanged: (dashboard: DashboardDocumentResponse['dashboard']) => void;
   onInvestigationsChanged: (investigations: LocalAppInvestigation[]) => void;
   onOpenLineageNode: (nodeId: string) => void;
+  /** A page's tile trust once its whole-page run settles (for the library card). */
+  onPageRunTrust?: (appId: string, pageId: string, trust: AppRunTrust) => void;
 }) {
   const readOnlyLink = isViewerLink();
   const hostUi = useHostUi();
@@ -2245,10 +1730,18 @@ function AppWorkspaceSurface({
   // The rendered page reports the aggregate it shows next to its tiles; the
   // header repeats that exact value (plus any pending App drafts) rather than
   // computing its own. Before the page reports, the rollup says "not checked".
+  const settledPageTrustAppId = metadataApp?.id;
+  const settledPageTrustPageId = dashboardDoc?.dashboard.id;
+  useEffect(() => {
+    if (!onPageRunTrust || !settledPageTrustAppId || !settledPageTrustPageId) return;
+    if (!dashboardRun || dashboardRun.stale || dashboardRun.partial) return;
+    if (!pageTrust || pageTrust.state === 'pending' || pageTrust.state === 'empty') return;
+    onPageRunTrust(settledPageTrustAppId, settledPageTrustPageId, { certified: pageTrust.certified, total: pageTrust.total });
+  }, [dashboardRun, onPageRunTrust, pageTrust, settledPageTrustAppId, settledPageTrustPageId]);
   const certification = pageTrust && pageTrust.state !== 'pending' && pageTrust.state !== 'empty'
     ? {
         allCertified: pageTrust.allCertified && draftCount === 0,
-        label: pageTrust.allCertified && draftCount === 0 ? pageTrust.label : draftCount > 0 && pageTrust.allCertified ? `${pageTrust.text} · ${draftCount} App draft pending` : pageTrust.text,
+        label: pageTrust.allCertified && draftCount === 0 ? allDataCertifiedLabel() : draftCount > 0 && pageTrust.allCertified ? `${pageTrust.text} · ${unpublishedChangesText(draftCount)}` : pageTrust.text,
       }
     : rollup;
   const [chartAnswer, setChartAnswer] = useState<{
@@ -2429,11 +1922,18 @@ function AppWorkspaceSurface({
   // "Ask about this App" (HH-16): the whole App, its domain and the filters on
   // screen, through the governed Ask loop (the server scopes it; see
   // app-copilot-scope). Readers ask in the global rail; authors in App AI.
-  const handleAskApp = useCallback((question: string) => {
+  const handleAskApp = useCallback(async (question: string) => {
     if (isEditable) {
       onExplainChange(true);
       setAskSeed({ text: question, nonce: Date.now() });
       return;
+    }
+    // After a filter change re-ran only the linked tiles, the whole page runs
+    // once so Ask reads every tile's current result (round 3).
+    let pageRunId = currentPageRunId;
+    if (!pageRunId && dashboardRun?.partial && ensureSettledRunRef.current) {
+      const full = await ensureSettledRunRef.current();
+      if (full && !full.partial && !full.stale) pageRunId = full.runId;
     }
     const appTitle = tidyTitle(workspaceAppName) || 'this App';
     dispatch({
@@ -2441,7 +1941,7 @@ function AppWorkspaceSurface({
       audience: 'stakeholder',
       context: {
         title: `Ask about ${appTitle}`,
-        scopeHint: `Scoped to ${appTitle}${dashboardDoc?.dashboard.metadata.title ? ` · ${dashboardDoc.dashboard.metadata.title}` : ''}`,
+        scopeHint: askAboutAppScopeLine(appTitle, dashboardDoc?.dashboard.metadata.title),
         selectedObject: { kind: 'app', id: workspaceAppId ?? undefined, title: appTitle },
         workspaceContext: {
           surface: 'apps',
@@ -2451,18 +1951,22 @@ function AppWorkspaceSurface({
           dashboardTitle: dashboardDoc?.dashboard.metadata.title,
           dashboardFilters: variables,
           // The page run on screen: the server answers from its own evidence of it, never from browser rows.
-          ...(currentPageRunId ? { dashboardRunId: currentPageRunId } : {}),
+          ...(pageRunId ? { dashboardRunId: pageRunId } : {}),
         },
         suggestedQuestions: (dashboardDoc?.app as { copilot?: { suggestedQuestions?: string[] } } | undefined)?.copilot?.suggestedQuestions,
       },
       autoRun: { text: question, mode: 'ask' },
     });
-  }, [dispatch, isEditable, onExplainChange, workspaceAppId, workspaceAppName, dashboardDoc, variables, currentPageRunId]);
+  }, [dispatch, isEditable, onExplainChange, workspaceAppId, workspaceAppName, dashboardDoc, variables, currentPageRunId, dashboardRun?.partial]);
+  // A whole-page run on demand (DashboardRenderer hands it over).
+  const ensureSettledRunRef = useRef<(() => Promise<DashboardRunResponse | null>) | null>(null);
+  const registerSettledRun = useCallback((ensure: () => Promise<DashboardRunResponse | null>) => { ensureSettledRunRef.current = ensure; }, []);
   const askAboutAppFilters = useMemo(() => [
+    // The same words as the filter row and the appendix: a date range reads
+    // "1 Jan 2025 – 30 Jun 2025", never disappears for being an object.
     ...dashboardFilters.flatMap((filter) => {
-      const value = dashboardFilterValues[filter.id];
-      const text = Array.isArray(value) ? value.map(String).join(', ') : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '';
-      return text.trim() ? [{ label: formatBusinessLabel((filter as { label?: string }).label ?? filter.id), value: text.slice(0, 80) }] : [];
+      const text = formatDashboardFilterValue(dashboardFilterValues[filter.id], filter);
+      return text ? [{ label: dashboardFilterLabel(filter.id, filter), value: text.slice(0, 80) }] : [];
     }),
     ...viewerFilters.map((filter) => ({ label: formatBusinessLabel(filter.column), value: filter.values.join(', ').slice(0, 80) })),
   ], [dashboardFilters, dashboardFilterValues, viewerFilters]);
@@ -2519,7 +2023,7 @@ function AppWorkspaceSurface({
     setActiveInvestigation(null);
   }, [workspaceAppId, dashboardDoc?.dashboard.id]);
   // A read-only link does not ask the owner's AI provider anything.
-  const copilotAvailable = !readOnlyLink && Boolean(workspaceAppId && dashboardDoc && (section === 'dashboards' || section === 'research'));
+  const copilotAvailable = appCopilotAvailable({ readOnlyLink, hasApp: Boolean(workspaceAppId && dashboardDoc), section, aiConnected });
   const copilotVisible = copilotAvailable && explainOpen;
   const markAction = (status: 'copied' | 'downloaded' | 'ready') => {
     setShareStatus(status);
@@ -2606,14 +2110,14 @@ function AppWorkspaceSurface({
             <span>Apps</span>
           </button>
         )}
-        {/* A reader sees the App's name; its id is for the people who build it. */}
-        <span className="dql-app-crumb"><b>{hostReader(hostUi) ? (tidyTitle(workspaceAppName) || workspaceAppId || 'App') : (workspaceAppId ?? 'app')}</b></span>
+        {/* Everyone reads the App's name; builders find its id in the tooltip. */}
+        <span className="dql-app-crumb" title={hostReader(hostUi) ? undefined : workspaceAppId ?? undefined}><b>{appHeaderTitle(workspaceAppName, workspaceAppId)}</b></span>
         {onDashboards ? (
-          <StatusSeal tone={certification.allCertified ? 'certified' : 'draft'} title="Data trust: whether every tile on this page ran from a certified source.">
+          <StatusSeal tone={certification.allCertified ? 'certified' : 'draft'} title="How many tiles on this page are certified. Each tile says Certified (by whom, and when) or Not certified yet.">
             {certification.label}
           </StatusSeal>
         ) : null}
-        {draftCount > 0 ? <StatusSeal tone="draft" title="App drafts waiting for review">{draftCount} App draft{draftCount === 1 ? '' : 's'}</StatusSeal> : null}
+        {draftCount > 0 ? <StatusSeal tone="draft" title="Changes to this App that are not published yet">{unpublishedChangesText(draftCount)}</StatusSeal> : null}
 
         {readerOnly ? null : <span className="dql-app-topbar-divider" aria-hidden="true" />}
 
@@ -2652,7 +2156,7 @@ function AppWorkspaceSurface({
                 title={semanticRunReady
                   ? 'Approve the successful semantic run for publication'
                   : repairedSemanticTileIds.length > 0
-                    ? 'AI-repaired semantic previews are review-required and cannot be approved as governed semantic results'
+                    ? 'AI-repaired Metrics previews are not certified yet and cannot be approved as certified Metrics results'
                     : 'Run this dashboard successfully before semantic approval'}
               >
                 <Check size={14} /> Approve semantic ({semanticTileIds.length})
@@ -2791,15 +2295,18 @@ function AppWorkspaceSurface({
                             <span
                               key={filter.id}
                               className={`dql-app-filter-coverage ${coverage.applied.length === 0 ? 'is-none' : 'is-partial'}`}
-                              title={`Unaffected: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${tile.reason}` : ''}`).join('; ')}`}
+                              title={`Unaffected: ${coverage.unaffected.map((tile) => `${tile.title ?? tile.tileId}${tile.reason ? ` — ${plainSourceText(tile.reason)}` : ''}`).join('; ')}`}
                             >
-                              {formatBusinessLabel(filter.id)} affects {coverage.applied.length} of {coverage.filterable} tiles
+                              {filter.label?.trim() || formatBusinessLabel(filter.id)} affects {coverage.applied.length} of {coverage.filterable} tiles
                             </span>
                           );
                         })}
                       </div>
                     ) : null}
-                    {dashboardFilters.some((filter) => JSON.stringify(dashboardFilterValues[filter.id] ?? null) !== JSON.stringify(defaultDashboardFilterValue(filter) ?? null)) ? (
+                    {dashboardFiltersRemembered ? (
+                      <span className="dql-app-filter-remembered" role="status">Opened with your last filters</span>
+                    ) : null}
+                    {dashboardFiltersRemembered || dashboardFilters.some((filter) => JSON.stringify(dashboardFilterValues[filter.id] ?? null) !== JSON.stringify(defaultDashboardFilterValue(filter) ?? null)) ? (
                       <button type="button" className="dql-app-filter-reset" onClick={onResetDashboardFilters}>Reset</button>
                     ) : null}
                   </>
@@ -2872,7 +2379,7 @@ function AppWorkspaceSurface({
               </section>
             ) : null}
             {loading ? (
-              <EmptyPanel title="Loading app..." detail="Reading dashboard files and running local blocks." />
+              <EmptyPanel title="Loading app..." detail="Reading dashboard files and running local saved queries." />
             ) : section === 'dashboards' && dashboardLoadError && dashboardRefusal ? (
               <div role="alert" style={{ display: 'grid', justifyItems: 'start', gap: 10 }}>
                 <EmptyPanel title="You don't have access to this App" detail={dashboardLoadError} />
@@ -2921,9 +2428,11 @@ function AppWorkspaceSurface({
                       dashboardId: dashboardDoc.dashboard.id,
                       pageTitle: dashboardDoc.dashboard.metadata.title,
                       filters: askAboutAppFilters,
-                      resultsReady: Boolean(currentPageRunId),
+                      // A partial re-run after a filter change still has every tile's result on screen.
+                      resultsReady: Boolean(currentPageRunId || (dashboardRun?.partial && !dashboardRun.stale && dashboardRun.dashboardId === dashboardDoc.dashboard.id)),
                     }}
-                    onAsk={handleAskApp}
+                    onAsk={(question) => void handleAskApp(question)}
+                    {...(aiConnected !== undefined ? { aiConnected } : {})}
                   />
                 )}
                 <DashboardRenderer
@@ -2935,8 +2444,9 @@ function AppWorkspaceSurface({
                   viewerFilters={viewerFilters}
                   selectedBlockId={selectedBlockId}
                   onBlockFocus={setSelectedBlockId}
-                  onAskBlock={handleAskBlock}
+                  {...(aiConnected === false ? {} : { onAskBlock: handleAskBlock })}
                   onAskChart={handleAskChart}
+                  onSettledRunProvider={registerSettledRun}
                   onOpenLineageNode={onOpenLineageNode}
                   copilotOpen={explainOpen}
                   onCopilotChange={onExplainChange}
@@ -3008,71 +2518,6 @@ function AppWorkspaceSurface({
   );
 }
 
-function BlockIndex({
-  title,
-  subtitle,
-  catalog,
-  loading,
-  error,
-  selectedBlocks,
-  onToggleBlock,
-}: {
-  title: string;
-  subtitle: string;
-  catalog: AppBlockRecommendation[];
-  loading: boolean;
-  error: string | null;
-  selectedBlocks: Set<string>;
-  onToggleBlock: (blockId: string) => void;
-}) {
-  const [query, setQuery] = useState('');
-  const blocks = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return catalog;
-    return catalog.filter((block) => [
-      block.name,
-      block.domain,
-      block.status,
-      block.description,
-      block.owner ?? '',
-      ...(block.tags ?? []),
-    ].join(' ').toLowerCase().includes(needle));
-  }, [catalog, query]);
-  return (
-    <div className="dql-app-palette">
-      <div className="dql-app-palette-title">
-        <span><Blocks size={14} /> {title}</span>
-        <b>{subtitle}</b>
-      </div>
-      <label className="dql-app-palette-search">
-        <Search size={14} />
-        <input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search blocks, domains, tags"
-        />
-      </label>
-      {loading ? <EmptyPanel title="Loading blocks..." detail="Finding certified blocks for this domain." compact /> : null}
-      {!loading && error ? <div className="dql-app-error" role="alert">Could not load certified sources. {error}</div> : null}
-      {!loading && !error && blocks.length === 0 ? <EmptyPanel title="No blocks found." detail="Try another domain or search term, or create a blank App and add sources later." compact /> : null}
-      {blocks.slice(0, 24).map((block, index) => {
-        const selected = selectedBlocks.has(block.id);
-        return (
-          <button key={`${block.id}-${index}`} type="button" className={selected ? 'selected' : ''} onClick={() => onToggleBlock(block.id)}>
-            <span className="dql-app-palette-icon"><LineChart size={14} /></span>
-            <span>
-              <b>{block.name}</b>
-              <small>{block.domain} / {block.chartType ?? 'table'}</small>
-            </span>
-            <i>{selected ? 'using' : block.status}</i>
-          </button>
-        );
-      })}
-      {blocks.length > 24 ? <div className="dql-app-palette-more">{blocks.length - 24} more matches</div> : null}
-    </div>
-  );
-}
-
 /**
  * An `h1` that becomes an input while customizing.
  *
@@ -3123,7 +2568,7 @@ function AppWorkspaceTabs({
   onChange: (section: AppSection) => void;
 }) {
   const reportCount = appDoc?.investigations?.length ?? 0;
-  const appTab = { id: 'dashboards' as const, label: 'Canvas', count: dashboardCount, icon: <LayoutDashboard size={14} /> };
+  const appTab = { id: 'dashboards' as const, label: 'Pages', count: dashboardCount, icon: <LayoutDashboard size={14} /> };
   const contextItems: Array<{ id: AppSection; label: string; count?: number; icon: ReactNode }> = [
     { id: 'research', label: 'Analysis & evidence', count: reportCount, icon: <Search size={14} /> },
     { id: 'notebooks', label: 'Source notebooks', count: appDoc?.notebooks?.length ?? appDoc?.app.notebooks?.length ?? 0, icon: <BookOpenText size={14} /> },
@@ -3321,27 +2766,12 @@ function UnifiedAppAiPanel({
           examplePrompts={[
             { label: 'Explain this dashboard', prompt: 'Explain the most important business story in this dashboard and what action it suggests.' },
             { label: 'Find the main driver', prompt: 'What is the main driver behind the current result? Use the active app filters and governed evidence.' },
-            { label: 'Check this result', prompt: 'Validate the current result against its certified block, semantic definitions, and lineage.' },
+            { label: 'Check this result', prompt: 'Validate the current result against its certified saved query, semantic definitions, and lineage.' },
           ]}
         />
       </Suspense>
     </AiSidePanel>
   );
-}
-
-function planScopedReportCount(plan: GeneratedAppPlan): number {
-  const rootReports = Array.isArray(plan.scopedReports) ? plan.scopedReports.length : 0;
-  const planningReports = Array.isArray(plan.planning?.scopedReports) ? plan.planning.scopedReports.length : 0;
-  if (rootReports > 0 || planningReports > 0) return Math.max(rootReports, planningReports);
-  return Array.isArray(plan.missingEvidence) ? plan.missingEvidence.length : 0;
-}
-
-function plannedAppFilterIds(plan: GeneratedAppPlan | undefined): string[] {
-  if (!plan) return [];
-  return Array.from(new Set([
-    ...(plan.globalFilters ?? []).map((filter) => filter.id),
-    ...plan.pages.flatMap((page) => (page.filters ?? []).map((filter) => filter.id)),
-  ]));
 }
 
 function getDashboardItemBlockId(item: DashboardDocumentResponse['dashboard']['layout']['items'][number]): string | null {
@@ -3483,7 +2913,7 @@ function sampleDashboardRows(rows?: Array<Record<string, unknown>>, columns?: st
 function formatCopilotRouteLabel(route: AppCopilotRoute): string {
   if (route === 'certified_answer') return 'Answered from trusted logic';
   if (route === 'dataset_chart_answer') return 'Answered from this chart';
-  if (route === 'generated_answer') return 'Generated — review required';
+  if (route === 'generated_answer') return 'Generated — needs review';
   if (route === 'investigation') return 'Needs analysis';
   if (route === 'app_change_proposal') return 'App change idea';
   if (route === 'metadata_answer') return 'Metadata answer';
@@ -3554,9 +2984,9 @@ function buildAppBriefMarkdown(
     '',
     ...(dashboards.length ? dashboards.map((item) => `- ${item.title} (${item.itemCount} tiles)`) : ['- No dashboard pages found.']),
     '',
-    '## Governed Blocks',
+    '## Saved queries',
     '',
-    ...(blocks.length ? blocks.map((name) => `- ${name}`) : ['- No block-backed tiles found.']),
+    ...(blocks.length ? blocks.map((name) => `- ${name}`) : ['- No saved query-backed tiles found.']),
     '',
     '## Supporting Assets',
     '',
@@ -3614,10 +3044,10 @@ function AddPageDialog({
           >
             <span>{exploreGaps ? <Check size={11} strokeWidth={3} /> : null}</span>
             <b>Explore uncovered gaps with AI SQL</b>
-            <small>Personal App only · bounded preview · review required</small>
+            <small>Personal App only · bounded preview · not certified yet</small>
           </button>
         ) : (
-          <small className="dql-app-page-source-policy">Shared-project pages use certified blocks and governed semantic metrics.</small>
+          <small className="dql-app-page-source-policy">Shared-project pages use certified tables, Metrics and saved queries.</small>
         )}
         {error ? <div className="dql-app-error">{error}</div> : null}
         <div>
@@ -3667,7 +3097,7 @@ export function DatasetChartAnswerPanel({
   return (
     <section
       aria-live="polite"
-      aria-label="Dataset chart answer"
+      aria-label="Chart answer"
       style={{
         marginTop: 12,
         border: '1px solid var(--border-default, var(--border-color, rgba(0,0,0,0.12)))',
@@ -3682,7 +3112,7 @@ export function DatasetChartAnswerPanel({
         <strong>About this chart</strong>
         <button type="button" className="dql-apps-btn dql-apps-btn-line" onClick={onClose}>Close</button>
       </div>
-      {answer.state === 'loading' ? <span>Checking the current Dataset result…</span> : null}
+      {answer.state === 'loading' ? <span>Checking the current result…</span> : null}
       {answer.state === 'error' ? <div role="alert">{answer.error}</div> : null}
       {answer.state === 'ready' && answer.answer ? (
         <>
@@ -3733,67 +3163,24 @@ export function DatasetChartAnswerPanel({
   );
 }
 
-function planFromSelection(
-  name: string,
-  prompt: string,
-  domain: string,
-  owner: string,
-  selected: AppBlockRecommendation[],
-): GeneratedAppPlan {
-  const tiles = selected.map((block, index) => ({
-    id: block.id || `tile-${index + 1}`,
-    title: block.name,
-    kind: 'certified_block' as const,
-    description: block.description,
-    blockId: block.name,
-    sourceNodeId: block.id,
-    viz: block.chartType ?? 'table',
-    certification: 'certified' as const,
-    reviewStatus: 'certified' as const,
-    rationale: 'Selected from the certified block palette.',
-  }));
-  return {
-    version: 2,
-    mode: 'stakeholder',
-    publicationIntent: 'shared_project',
-    requirements: [{ id: 'primary', question: prompt, role: 'detail', measures: [], dimensions: [], filters: [] }],
-    requirementCoverage: tiles.map((tile) => ({
-      requirementId: 'primary',
-      status: 'covered' as const,
-      source: 'certified_block' as const,
-      tileId: tile.id,
-      sourceId: tile.sourceNodeId,
-      trustState: 'certified',
-      reasons: ['Explicitly selected certified block.'],
-    })),
-    storyEvidencePlan: { version: 1, goal: prompt, audience: 'stakeholder', eligibleTileIds: tiles.map((tile) => tile.id) },
-    appId: slugify(name) || 'new-app',
-    name,
-    prompt,
-    skills: AGENT_SKILLS.map((skill) => ({
-      id: skill.id,
-      title: skill.title,
-      description: skill.description,
-    })),
-    domain,
-    audience: 'stakeholder',
-    businessGoal: prompt,
-    owner,
-    lifecycle: 'draft',
-    tags: ['app-builder'],
-    pages: [{ id: 'overview', title: 'Overview', filters: [], tiles }],
-    caveats: [],
-    reviewTasks: [],
-  };
-}
-
-function isSharedProjectApp(app: AppSummary): boolean {
+function isSharedProjectApp(app: Pick<AppSummary, 'publicationIntent' | 'visibility' | 'storage'>): boolean {
   if (app.publicationIntent) return app.publicationIntent === 'shared_project';
   if (app.visibility) return app.visibility === 'shared';
   return (app.storage ?? 'shared') === 'shared';
 }
 
-function libraryCounts(apps: AppSummary[], drafts: AppStudioBuildDraft[], favorites: Set<string>): Record<LibraryFilter, number> {
+/** The library tab counts: `drafts` are the new Apps not published yet, the cards the library shows for them. */
+/**
+ * The header's "Show AI copilot" button: an App page or research in the
+ * workspace, not a viewer link, and an AI provider connected. Without one the
+ * copilot cannot answer, so the button is hidden like the other AI controls
+ * (#174). `undefined` (settings still loading) keeps it.
+ */
+export function appCopilotAvailable(input: { readOnlyLink: boolean; hasApp: boolean; section: string; aiConnected?: boolean }): boolean {
+  return input.aiConnected !== false && !input.readOnlyLink && input.hasApp && (input.section === 'dashboards' || input.section === 'research');
+}
+
+export function libraryCounts(apps: Array<Pick<AppSummary, 'id' | 'publicationIntent' | 'visibility' | 'storage'>>, drafts: unknown[], favorites: Set<string>): Record<LibraryFilter, number> {
   const shared = apps.filter(isSharedProjectApp).length;
   return {
     all: apps.length + drafts.length,
@@ -3805,7 +3192,7 @@ function libraryCounts(apps: AppSummary[], drafts: AppStudioBuildDraft[], favori
 }
 
 function primaryOwner(app: AppSummary): string {
-  return app.owners?.[0] ?? 'owner@local';
+  return app.ownerName ?? app.owners?.[0] ?? 'owner@local';
 }
 
 function shortHash(value: string): string {
@@ -3814,6 +3201,3 @@ function shortHash(value: string): string {
   return Math.abs(hash).toString(16).slice(0, 7).padStart(7, '0');
 }
 
-function slugify(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
-}

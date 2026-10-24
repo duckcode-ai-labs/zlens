@@ -49,12 +49,12 @@ Those are BI tools — queries live in a database or cloud service. ZLens keeps
 every artifact in git. You get code review, diff, branching, and blame on
 your analytics. See [Migrate from other tools](./migrate.md).
 
-## What's the difference between `custom` and `semantic` blocks?
+## What's the difference between `custom` and `semantic` saved queries?
 
-- **`type = "custom"`** — the block's SQL executes directly against a connection
-- **`type = "semantic"`** — the block references a semantic-layer metric; SQL is generated
+- **`type = "custom"`** — the saved query's SQL executes directly against a connection
+- **`type = "semantic"`** — the saved query references a semantic-layer metric; SQL is generated
 
-Start with `custom` blocks if you're new.
+Start with `custom` saved queries if you're new.
 
 ## Can I use ZLens from code, not just the CLI?
 
@@ -67,8 +67,8 @@ Yes. The useful entry points:
 
 ## Does certification hit a real database?
 
-Yes. **Certify** in Block Studio runs the block and its tests on your
-connection before it marks the block certified. From the terminal,
+Yes. **Certify** in the saved query editor runs the saved query and its tests on your
+connection before it marks the saved query certified. From the terminal,
 `zlens certify <file.dql>` runs the same rules and writes nothing. See
 [Save and certify](../blocks/certify.md).
 

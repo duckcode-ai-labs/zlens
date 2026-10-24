@@ -123,13 +123,19 @@ export interface ContextAuthoringDiagnosticV1 {
   severity: 'info' | 'warning' | 'blocking';
   message: string;
   operationId?: string;
+  /** Every operation a grouped note covers ("13 tables placed in the default area"). */
+  operationIds?: string[];
 }
 
 export interface ContextAuthoringProposalV1 {
   version: 1;
   id: string;
   origin: ContextAuthoringOrigin;
-  status: 'proposed' | 'committed' | 'conflicted';
+  /**
+   * `discarded`: a person turned the drafts down, or a newer draft of the same
+   * kind replaced them (`supersededBy`). Nothing was written either way.
+   */
+  status: 'proposed' | 'committed' | 'conflicted' | 'discarded';
   trustState: 'review_required';
   createdAt: string;
   baseSnapshotId: string;
@@ -150,6 +156,9 @@ export interface ContextAuthoringProposalV1 {
   revision?: number;
   committedAt?: string;
   committedSnapshotId?: string;
+  discardedAt?: string;
+  /** The newer proposal that replaced this one (a revision, a fresh draft, or the one that was saved). */
+  supersededBy?: string;
 }
 
 export type ContextAuthoringProposalInput = Omit<

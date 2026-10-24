@@ -20,7 +20,7 @@
  * and agent index. `--check` preserves the historical report-only behavior.
  */
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { join, resolve, relative } from 'node:path';
+import { dirname, join, resolve, relative } from 'node:path';
 import { collectInputFiles, loadProjectConfig, resolveDbtManifestPath } from '@zlens/core';
 import { ManifestCache } from '@zlens/project';
 import { defaultKgPath, ensureAgentProjectReady } from '@zlens/agent';
@@ -40,6 +40,8 @@ interface DbtCounts {
   sources: number;
   metrics: number;
   semanticModels: number;
+  /** The manifest could not be read: nothing is counted, rather than "0 metric(s)". */
+  unreadable?: boolean;
 }
 
 export async function runSync(
@@ -274,7 +276,8 @@ function reportDiff(opts: {
   console.log(`\n  ZLens Sync — dbt`);
   console.log('  ' + '='.repeat(50));
   console.log(`  Manifest: ${relative(projectRoot, dbtManifestPath)}`);
-  console.log(`    ${counts.models} model(s), ${counts.sources} source(s), ${counts.metrics} metric(s), ${counts.semanticModels} semantic_model(s)`);
+  if (counts.unreadable) console.log('    The manifest could not be read, so its models and metrics are not counted here.');
+  else console.log(`    ${counts.models} model(s), ${counts.sources} source(s), ${counts.metrics} metric(s), ${counts.semanticModels} semantic_model(s)`);
 
   if (!existsSync(cachePath)) {
     console.log('\n  Cache: (cold) — next `zlens compile` will build from scratch.\n');
@@ -315,21 +318,39 @@ function reportDiff(opts: {
   }
 }
 
-function readDbtCounts(manifestPath: string): DbtCounts {
+/**
+ * Counts what the dbt manifest declares. Metrics are dbt's own metrics, the
+ * same number Setup shows (`doctor` names the measures it adds separately).
+ * A manifest without a metrics map falls back to semantic_manifest.json
+ * beside it, so a project with 19 metrics never reads "0 metric(s)".
+ */
+export function readDbtCounts(manifestPath: string): DbtCounts {
   try {
     const raw = JSON.parse(readFileSync(manifestPath, 'utf-8')) as DbtManifestShape;
     let models = 0;
     for (const node of Object.values(raw.nodes ?? {})) {
       if (node?.resource_type === 'model') models += 1;
     }
+    let metrics = Object.keys(raw.metrics ?? {}).length;
+    if (metrics === 0) {
+      try {
+        const semanticPath = join(dirname(manifestPath), 'semantic_manifest.json');
+        if (existsSync(semanticPath)) {
+          const semantic = JSON.parse(readFileSync(semanticPath, 'utf-8')) as { metrics?: unknown[] };
+          if (Array.isArray(semantic.metrics)) metrics = semantic.metrics.length;
+        }
+      } catch {
+        // The manifest's own count stands.
+      }
+    }
     return {
       models,
       sources: Object.keys(raw.sources ?? {}).length,
-      metrics: Object.keys(raw.metrics ?? {}).length,
+      metrics,
       semanticModels: Object.keys(raw.semantic_models ?? {}).length,
     };
   } catch {
-    return { models: 0, sources: 0, metrics: 0, semanticModels: 0 };
+    return { models: 0, sources: 0, metrics: 0, semanticModels: 0, unreadable: true };
   }
 }
 

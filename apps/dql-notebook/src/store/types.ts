@@ -234,11 +234,20 @@ export interface AppSummary {
   audience?: string;
   lifecycle?: 'draft' | 'review' | 'certified' | 'deprecated';
   certification?: 'certified' | 'uncertified';
+  /** Who published the App as certified, and when (D5). */
+  certifiedBy?: string;
+  certifiedAt?: string;
+  /** How many data tiles were certified when the App was published (B6). */
+  tileTrust?: { certified: number; total: number };
+  /** When the App's document or pages last changed. */
+  updatedAt?: string;
   status?: 'ready' | 'empty' | 'review';
   storage?: 'shared' | 'mine' | 'template';
   visibility?: 'shared' | 'private' | 'template';
   publicationIntent?: 'personal' | 'shared_project';
   owners: string[];
+  /** The first owner as a person reads it (this machine's person by their display name). */
+  ownerName?: string;
   tags: string[];
   members: number;
   roles: number;
@@ -1147,6 +1156,8 @@ export interface BlockStudioMetadata {
    */
   certification?: {
     certifiedBy: string;
+    /** The certifier's display name, when one was recorded. */
+    certifiedByName?: string;
     certifiedAt: string;
     via: string;
     rules: 'oss' | 'enterprise';
@@ -1154,6 +1165,12 @@ export interface BlockStudioMetadata {
     checks?: string[];
     warnings?: string[];
   };
+  /**
+   * The source says certified but was edited after its receipt was written
+   * (the receipt's sourceSha256 no longer matches). Ask treats it as pending
+   * recertification until it is certified again.
+   */
+  certificationSourceChanged?: boolean;
   /** Fingerprint of the source that was opened; used for save/certify conflict checks. */
   sourceFingerprint?: string;
   sourceKind?: string;

@@ -1044,7 +1044,9 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       });
       expect(created.status, created.text).toBe(201);
       let draft = created.body.draft;
-      expect(draft).toMatchObject({ version: 3, state: 'local_draft', sourcePolicy: 'governed_only' });
+      expect(draft).toMatchObject({ version: 3, state: 'local_draft' });
+      // An older client's data rule is ignored: new Apps store none (T3).
+      expect(draft).not.toHaveProperty('sourcePolicy');
 
       const sourceCandidates = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/source-candidates?domain=commerce&limit=50`, 'GET');
       expect(sourceCandidates.status, sourceCandidates.text).toBe(200);
@@ -2382,7 +2384,7 @@ describe('Dataset App Builder real DuckDB pilot', () => {
         block: { ref: saved.body.path }, sourceClass: 'exploratory_analysis', trustState: 'review_required', reviewStatus: 'review_required',
       });
       expect(replacementTile).not.toHaveProperty('query');
-      expect(draft.sourcePolicy).toBe('include_review_required');
+      expect(draft).not.toHaveProperty('sourcePolicy');
       expect(draft.sources).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: source.sourceId, trustState: 'certified' }),
         expect.objectContaining({ kind: 'review_block', sourceRef: saved.body.path, trustState: 'review_required' }),
@@ -2395,7 +2397,6 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       try {
         expect(persisted.getAppBuildDraft(draft.id)).toMatchObject({
           revision: draft.revision,
-          sourcePolicy: 'include_review_required',
           pages: [expect.objectContaining({ id: page.id })],
         });
       } finally {
@@ -3470,7 +3471,8 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       const tile = findTile(run.body.tiles, 'Revenue');
       expect(tile.status, tile.error).toBe('ok');
       expect(tile.dataset.appliedFilters).toEqual([
-        expect.objectContaining({ field: 'order_date', op: 'gte', values: [`${range.start}T00:00:00.000Z`] }),
+        // Calendar dates, the calendar the time buckets use (new-user fix B5).
+        expect.objectContaining({ field: 'order_date', op: 'gte', values: [range.start] }),
         expect.objectContaining({ field: 'order_date', op: 'lt' }),
       ]);
       const expected = await executor.executeQuery(
@@ -3597,18 +3599,41 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       expect(published.body.tiles[0].result.rows).toHaveLength(8);
       expect(JSON.parse(readFileSync(pagePath, 'utf-8'))).toEqual(legacyPage);
 
-      // A version-1 tile has no recorded source revision. Opening it for edit
-      // raises exactly the refresh task it raised before Datasets existed.
-      const openedLegacy = await request(base, '/api/app-builds', 'POST', { baseAppId: 'legacy-sales', name: 'Legacy sales', authoringMode: 'manual', sourcePolicy: 'governed_only' });
-      expect(openedLegacy.status, openedLegacy.text).toBe(201);
-      expect(openedLegacy.body.draft.reviewTasks).toEqual([expect.objectContaining({ tileId: 'order-lines', message: expect.stringContaining('has no published source revision') })]);
-
-      // A Studio-published whole-block tile carries its exact source binding.
-      // Open for edit, preview, preflight, republish: no Dataset-era blocker.
       const blockPath = 'domains/commerce/blocks/order-lines-dataset.dql';
       const blockSource = readFileSync(join(projectRoot, blockPath), 'utf-8');
       const sourceId = `app:block:commerce:${createHash('sha256').update(`${blockPath}\u0000Order lines Dataset`).digest('hex').slice(0, 20)}`;
       const sourceRevision = `sha256:${createHash('sha256').update(blockSource).digest('hex')}`;
+      // Open for edit, preview, preflight, republish: no blocker, and the published rows are unchanged.
+      const republish = async (draft: any) => {
+        const preview = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/dashboards/overview/run`, 'POST', { fullRun: true });
+        expect(preview.status, preview.text).toBe(200);
+        expect(preview.body.tiles.every((tile: any) => tile.status === 'ok')).toBe(true);
+        const receipt = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}`, 'PATCH', {
+          expectedRevision: draft.revision,
+          expectedProposalHash: draft.proposalHash,
+          operations: [{ type: 'set_preview_receipt', receipt: { id: preview.body.runId, pageId: 'overview', revision: draft.revision, snapshotId: preview.body.snapshotId, filterFingerprint: preview.body.filterFingerprint, resultFingerprint: preview.body.resultFingerprint, createdAt: new Date().toISOString() } }],
+        });
+        expect(receipt.status, receipt.text).toBe(200);
+        const preflight = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/preflight`, 'POST', { expectedRevision: receipt.body.draft.revision, proposalHash: receipt.body.draft.proposalHash });
+        expect(preflight.status, preflight.text).toBe(200);
+        const republished = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/publish-to-project`, 'POST', { expectedRevision: preflight.body.draft.revision, proposalHash: preflight.body.draft.proposalHash });
+        expect(republished.status, republished.text).toBe(201);
+        const after = await request(base, '/api/apps/legacy-sales/dashboards/overview/run', 'POST', { fullRun: true });
+        expect(after.status, after.text).toBe(200);
+        expect(after.body.tiles[0].result.rows).toEqual(published.body.tiles[0].result.rows);
+      };
+
+      // A version-1 tile names its saved query only. Opening it for edit binds
+      // it to the project's current record (F07): certified, with no task.
+      const openedLegacy = await request(base, '/api/app-builds', 'POST', { baseAppId: 'legacy-sales', name: 'Legacy sales', authoringMode: 'manual', sourcePolicy: 'governed_only' });
+      expect(openedLegacy.status, openedLegacy.text).toBe(201);
+      expect(openedLegacy.body.draft.reviewTasks).toEqual([]);
+      expect(openedLegacy.body.draft.pages[0].layout.items[0]).toMatchObject({ sourceId, sourceRevision, block: { blockId: 'Order lines Dataset' } });
+      expect(openedLegacy.body.draft.sources).toEqual([expect.objectContaining({ id: sourceId, lifecycle: 'certified', trustState: 'certified' })]);
+      await republish(openedLegacy.body.draft);
+
+      // A Studio-published whole-block tile carries its exact source binding.
+      // Open for edit, preview, preflight, republish: no Dataset-era blocker.
       const studioPage = {
         version: 2, id: 'overview',
         metadata: { title: 'Overview', domain: 'commerce', lifecycle: 'certified' },
@@ -3622,38 +3647,41 @@ describe('Dataset App Builder real DuckDB pilot', () => {
       writeFileSync(pagePath, `${JSON.stringify(studioPage, null, 2)}\n`);
       const opened = await request(base, '/api/app-builds', 'POST', { baseAppId: 'legacy-sales', name: 'Legacy sales', authoringMode: 'manual', sourcePolicy: 'governed_only' });
       expect(opened.status, opened.text).toBe(201);
-      let draft = opened.body.draft;
-      expect(draft.reviewTasks).toEqual([]);
-      const preview = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/dashboards/overview/run`, 'POST', { fullRun: true });
-      expect(preview.status, preview.text).toBe(200);
-      expect(preview.body.tiles.every((tile: any) => tile.status === 'ok')).toBe(true);
-      const receipt = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}`, 'PATCH', {
-        expectedRevision: draft.revision,
-        expectedProposalHash: draft.proposalHash,
-        operations: [{ type: 'set_preview_receipt', receipt: { id: preview.body.runId, pageId: 'overview', revision: draft.revision, snapshotId: preview.body.snapshotId, filterFingerprint: preview.body.filterFingerprint, resultFingerprint: preview.body.resultFingerprint, createdAt: new Date().toISOString() } }],
-      });
-      expect(receipt.status, receipt.text).toBe(200);
-      draft = receipt.body.draft;
-      const preflight = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/preflight`, 'POST', { expectedRevision: draft.revision, proposalHash: draft.proposalHash });
-      expect(preflight.status, preflight.text).toBe(200);
-      draft = preflight.body.draft;
-      const republished = await request(base, `/api/app-builds/${encodeURIComponent(draft.id)}/publish-to-project`, 'POST', { expectedRevision: draft.revision, proposalHash: draft.proposalHash });
-      expect(republished.status, republished.text).toBe(201);
-      const after = await request(base, '/api/apps/legacy-sales/dashboards/overview/run', 'POST', { fullRun: true });
-      expect(after.status, after.text).toBe(200);
-      expect(after.body.tiles[0].result.rows).toEqual(published.body.tiles[0].result.rows);
+      expect(opened.body.draft.reviewTasks).toEqual([]);
+      await republish(opened.body.draft);
     } finally {
       await pilot.stop();
     }
   }, 120_000);
 
-  duckDbIt('APP-079 turns field tiles on with one action and keeps every other config key', async () => {
-    const pilot = await startPilotProject('dql-app-datasets-enable-');
+  duckDbIt('APP-007 runs field tiles when apps.datasets is not set (on by default)', async () => {
+    const pilot = await startPilotProject('dql-app-datasets-default-on-');
     try {
       const { projectRoot } = pilot;
       const configPath = join(projectRoot, 'dql.config.json');
       const config = JSON.parse(readFileSync(configPath, 'utf-8'));
       delete config.apps.datasets;
+      writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
+      await pilot.restart();
+      const ran = await request(pilot.base, '/api/apps/commerce-pilot/dashboards/overview/run', 'POST', { fullRun: true });
+      expect(findTile(ran.body.tiles, 'Revenue')).toMatchObject({ status: 'ok', result: { rows: [{ revenue: 130 }] } });
+
+      // Already on: the enable action reports it and writes nothing.
+      const enabled = await request(pilot.base, '/api/app-datasets/enable', 'POST', {});
+      expect(enabled.body).toEqual({ ok: true, datasets: true });
+      expect(JSON.parse(readFileSync(configPath, 'utf-8'))).toEqual(config);
+    } finally {
+      await pilot.stop();
+    }
+  }, 120_000);
+
+  duckDbIt('APP-079 turns field tiles back on with one action and keeps every other config key', async () => {
+    const pilot = await startPilotProject('dql-app-datasets-enable-');
+    try {
+      const { projectRoot } = pilot;
+      const configPath = join(projectRoot, 'dql.config.json');
+      const config = JSON.parse(readFileSync(configPath, 'utf-8'));
+      config.apps.datasets = false;
       writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
       // The runtime reads the flag it loaded; restart onto the edited config.
       await pilot.restart();

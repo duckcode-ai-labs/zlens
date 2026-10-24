@@ -91,7 +91,7 @@ export function ShareLinkMenu({ appId, pageId }: { appId: string; pageId: string
                 ? `Network links are read-only: they open this App's pages and nothing else in the project, until ${new Date(share.viewer.expiresAt).toLocaleDateString()}. Changing the server token ends every link.`
                 : share.viewerBlocked ?? 'This page can be opened on your network only by people who already have the server access link.'}</p>
               : <p className="dql-alerts-note">This link opens only on this computer. To share on your network, start the notebook with <code>--host 0.0.0.0</code> (it needs <code>ZLENS_SERVER_TOKEN</code> and <code>ZLENS_ALLOWED_ORIGINS</code>). To send the page to anyone, use Export → Signed HTML.</p>}
-          <p className="dql-alerts-note">The page opens with its default filters.</p>
+          <p className="dql-alerts-note">The link does not carry your filter choices: anyone else opens the page with its default filters.</p>
         </div>
       ) : null}
     </div>

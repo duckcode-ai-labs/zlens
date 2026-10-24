@@ -166,7 +166,7 @@ export function ConnectionRuntimeSettings({
           )}
           {!section && (
           <section style={{ marginTop: 22 }}>
-            <SectionTitle title="Model providers" detail="Connect at least one AI provider — it powers governed answers, block suggestions, and research. Sign in with a Claude or ChatGPT subscription, or use an API key / local model." t={t} />
+            <SectionTitle title="Model providers" detail="Connect at least one AI provider — it powers governed answers, saved query suggestions, and research. Sign in with a Claude or ChatGPT subscription, or use an API key / local model." t={t} />
 
             <GroupLabel
               title="Use your subscription"
@@ -923,7 +923,7 @@ function ProviderSettingsForm({
       <div>
         <div style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary }}>AI provider</div>
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5 }}>
-          AI is optional. Without it, deterministic queries, dbt metadata, connections, and governed non-AI paths remain available. Keys stay in <span style={{ fontFamily: t.fontMono, fontSize: 11.5 }}>.dql/</span> and are never returned raw.
+          AI is optional. You can run queries and build Apps without it. Keys stay in <span style={{ fontFamily: t.fontMono, fontSize: 11.5 }}>.dql/</span> and are never returned raw.
         </div>
       </div>
 

@@ -120,7 +120,7 @@ export function ChartCell({ cell, cells, index, themeMode, onUpdate }: ChartCell
         accentColor="#a371f7"
         cellLabel="Chart"
         cellName={cell.name}
-        description="Charts render from an upstream dataframe — the rows of a named SQL, DQL, or Block cell above. Drag measures to Y, dimensions to X."
+        description="Charts render from an upstream dataframe — the rows of a named SQL, DQL, or Saved query cell above. Drag measures to Y, dimensions to X."
         upstreamOptions={upstreamOptions}
         onPick={(name) => onUpdate({ upstream: name })}
       />

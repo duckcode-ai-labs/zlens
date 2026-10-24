@@ -35,7 +35,7 @@ export interface VocabularySourceInput {
  */
 export function certifiedBlockContradiction(block: { description?: string; tags?: string[] }): string | undefined {
   if ((block.tags ?? []).some((tag) => /review[\s-]*required/i.test(tag))) {
-    return 'it is marked certified but still carries the review-required tag, so Ask does not serve it as certified. Certify it again in Block Studio (certifying removes the tag), or remove the tag from its source';
+    return 'it is marked certified but still carries the review-required tag, so Ask does not serve it as certified. Certify it again in Saved queries (certifying removes the tag), or remove the tag from its source';
   }
   if (/review[\s-]*required/i.test(block.description ?? '')) {
     return 'it is marked certified but its description says it is review-required, so Ask does not serve it as certified. Edit the description and certify it again';
@@ -59,14 +59,14 @@ export function namedBlockNotServed(question: string, manifest: DQLManifest | un
     if (status === 'certified') {
       const reason = certifiedBlockContradiction(block);
       // A served certified block of the same name answers; this one is not the answer.
-      if (reason && !blocks.some((other) => other !== block && other.name === name && (other.status ?? '').toLowerCase() === 'certified' && !certifiedBlockContradiction(other))) return `The block "${block.name}" was not used: ${reason}.`;
+      if (reason && !blocks.some((other) => other !== block && other.name === name && (other.status ?? '').toLowerCase() === 'certified' && !certifiedBlockContradiction(other))) return `The saved query "${block.name}" was not used: ${reason}.`;
       continue;
     }
     if (status === 'deprecated') {
       if (resolveBlockReplacement(blocks, block)?.replacement) continue;
-      return `The block "${block.name}" was not used: it is retired and names no replacement. Ask about what it measured without naming it, or restore it in Block Studio.`;
+      return `The saved query "${block.name}" was not used: it is retired and names no replacement. Ask about what it measured without naming it, or restore it in Saved queries.`;
     }
-    return `The block "${block.name}" was not used: it is a ${status === 'review' ? 'block in review' : 'draft'}, not certified, and Ask only answers from certified blocks. Certify it in Block Studio, or ask the question without naming the block for a review-required answer.`;
+    return `The saved query "${block.name}" was not used: it is a ${status === 'review' ? 'saved query in review' : 'draft'}, not certified, and Ask only answers from certified saved queries. Certify it in Saved queries, or ask the question without naming the saved query for a review-required answer.`;
   }
   return undefined;
 }

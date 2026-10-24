@@ -17,7 +17,7 @@ export const PAGE_FORMATS: Array<{ id: PageFormat; label: string; description: s
 export const pageFormatLabel = (format: PageFormat) => PAGE_FORMATS.find((entry) => entry.id === format)?.label ?? 'Dashboard';
 
 /**
- * "Readers see this page as": a setting, not a tab. Changing it changes
+ * "Page style: Dashboard": a setting, not a tab. Changing it changes
  * what readers get, so the menu says so and names every format with what it
  * shows.
  */
@@ -54,12 +54,12 @@ export function PageFormatPicker({
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
       >
-        <span>Readers see this page as</span>
+        <span>Page style:</span>
         <strong>{pageFormatLabel(value)}</strong>
         <ChevronDown size={14} aria-hidden="true" />
       </button>
       {open ? (
-        <div className="page-format-menu" role="menu" aria-label="Readers see this page as">
+        <div className="page-format-menu" role="menu" aria-label="Page style">
           {PAGE_FORMATS.map((format) => {
             const Icon = format.icon;
             const on = format.id === value;

@@ -2,6 +2,121 @@ import type { DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
 import type { DashboardVizStyle } from '@zlens/core/apps/viz-style';
 import type { ResultOrdering } from '@zlens/core/apps/result-measures';
 import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
+import type { CertificationByline } from '@zlens/core/apps/reader-trust';
+
+export type { CertificationByline };
+
+export interface SavedQueryDatasetDraft {
+  ok: boolean;
+  source?: { sourceId: string; name: string; sourceRevision: string; status: 'certified' | 'review' | 'draft' | 'deprecated' };
+  rows?: number;
+  proposal?: TableDatasetProposal;
+  /** The saved query is certified: adding fields sends it back for review until its check passes. */
+  sendsBackForReview?: boolean;
+  code?: string;
+  error?: string;
+}
+
+export interface SavedQueryDatasetResult {
+  ok: boolean;
+  /** `checked`: its checks passed and it is checked, not certified yet (design Q1); never certified here. */
+  status?: 'checked' | 'review' | 'draft';
+  previousStatus?: 'certified' | 'review' | 'draft';
+  sourceId?: string;
+  path?: string;
+  blockers?: string[];
+  keyChecked?: boolean;
+  /** Who checked it and what the check found, when its checks passed. */
+  check?: CertificationByline;
+  code?: string;
+  error?: string;
+}
+
+/**
+ * Who checked data that nobody certified yet ("checked, not certified yet",
+ * design Q1), what the check found and which columns it hid as duplicates.
+ */
+export interface AppDataCheck extends CertificationByline {
+  hiddenColumns?: Array<{ column: string; keptColumn: string; reason: string }>;
+}
+
+/** The short review before "I vouch for this — certify" (design Q1). */
+export interface CertifyReview {
+  sourceId: string;
+  sourceRevision: string;
+  name: string;
+  kind: 'dataset' | 'saved_query' | 'metrics';
+  origin: 'table' | 'saved_query' | 'metrics';
+  lifecycle: string;
+  certified: boolean;
+  certification?: CertificationByline;
+  check?: AppDataCheck;
+  /** "Each row is one order (order_id)." */
+  row?: string;
+  /** The row key, checked again against the complete data just now. */
+  keyCheck?: { ok: true; sentence: string } | { ok: false; error: string };
+  numbers: Array<{ name: string; label: string; format: string; aggregation: string; note?: string }>;
+  joins: Array<{ label: string; sentence: string; trust: 'certified' | 'review_required' }>;
+  hiddenColumns: Array<{ column: string; keptColumn: string; reason: string }>;
+  checks: string[];
+  /** Data or a saved query nobody certified yet whose checks pass: "I vouch for this — certify" applies. */
+  canVouch: boolean;
+  /** The saved query's file, for "Open in the saved query editor". */
+  blockStudioPath?: string;
+  /** A saved query's review (T4), run now through the certification path: it runs, its tests, its owner, one row. */
+  savedQuery?: SavedQueryCertifyReview;
+  /** Certified once, changed since (T4): who certified it and when. */
+  previousCertification?: CertificationByline;
+}
+
+/** A saved query's short review before "I vouch for this — certify" (T4). */
+export interface SavedQueryCertifyReview {
+  runs: { ok: true; sentence: string } | { ok: false; error: string };
+  tests: Array<{ name: string; passed: boolean; error?: string }>;
+  testsSentence: string;
+  owner?: string;
+  /** Nobody owns it yet: the review asks, and certifying writes the owner. */
+  ownerRequired: boolean;
+  row?: string;
+  blockers: string[];
+  checks: string[];
+}
+
+/** A join's short review before "I vouch for this join — certify" (T4). */
+export interface JoinCertifyReview {
+  sourceId: string;
+  joinId: string;
+  /** "Orders → Location" */
+  name: string;
+  from: string;
+  to: string;
+  /** "orders.location_id = locations.location_id" */
+  keysSentence: string;
+  /** "each order has one location — checked on 61,948 rows" (the check passed). */
+  checkedSentence?: string;
+  checkLines: string[];
+  /** What would double-count if the join were wrong. */
+  doubleCount: string;
+  /** Why it cannot be certified now. */
+  blockers: string[];
+  /** The grain and key columns certifying fills in the model, from the checks just run. */
+  fills: Array<{ side: 'from' | 'to'; table: string; grain: string; keys: string[]; because: string }>;
+  canVouch: boolean;
+  origin: 'model' | 'drafted' | 'dbt_test';
+  relationshipId: string;
+  previousCertification?: CertificationByline;
+  checkedAt: string;
+}
+
+/** Guided Setup progress (design D7), saved by the server in `.dql/local/setup-progress.json`. */
+export interface SetupProgress {
+  version: 1;
+  step: 1 | 2 | 3 | 4;
+  source?: 'dbt' | 'warehouse' | 'both' | 'existing';
+  aiSkipped?: boolean;
+  draft?: { ok: boolean; message: string; proposalId?: string };
+  updatedAt: string;
+}
 
 export interface WarehouseTableSummary {
   id: string;
@@ -11,6 +126,16 @@ export interface WarehouseTableSummary {
   kind: string;
   columnCount: number;
   rowCountEstimate?: number;
+  /**
+   * The table is modeled (an entity in the project's model binds it) or was
+   * drafted by "Draft my models" and waits for review (design D7). Its
+   * checked row key is reused by "Check and add".
+   */
+  modeled?: { state: 'modeled' | 'drafted'; entity: string; domain: string; key?: string; proposalId?: string };
+  /** Tables its rows point to through a many-to-one join; their fields come with it (design D2). */
+  joins?: string[];
+  /** Datasets "Check and add" already made from it, so it is never added twice (new-user round 3, problem 7). */
+  datasets?: Array<{ sourceId: string; name: string; state: 'certified' | 'checked' | 'draft' }>;
 }
 import type { DiffReport } from '@zlens/core/format';
 import { normalizeDqlArtifactReference, type DqlArtifactReference } from '@zlens/core/artifacts';
@@ -240,6 +365,23 @@ export interface BlockHistoryResult {
 }
 
 /** Result of a Git write. `code` is the server's machine-readable reason (e.g. `no_remote`, `already_a_repo`, `invalid_url`). */
+/** Get updates mid-way (D1/D2): an operation stopped on conflicts, or a finished update that can be undone. */
+export interface GitUpdateState {
+  inProgress: boolean;
+  operation?: 'rebase' | 'merge';
+  target?: string;
+  conflicts: Array<{ path: string; mine: boolean; theirs: boolean }>;
+  unresolved: string[];
+  undoAvailable: boolean;
+}
+
+export interface GitUpdateResult extends GitWriteResult {
+  output?: string;
+  state?: GitUpdateState;
+  files?: string[];
+  undoAvailable?: boolean;
+}
+
 export interface GitWriteResult {
   ok: boolean;
   error?: string;
@@ -470,6 +612,20 @@ export interface WarehouseDiscoveryReport {
   existingRelationships: number;
   validated: boolean;
   queryHistory?: { statements: number; joins: number } | { error: string };
+  /** Staging copies left out because a final table holds the same thing; drafted with "Show staging tables". */
+  stagingHidden?: Array<{ relation: string; finalRelation: string }>;
+}
+
+/** The newest "Draft my models" proposal that waits for review (drafts are kept until saved or discarded). */
+export interface WaitingWarehouseDrafts {
+  proposalId: string;
+  createdAt: string;
+  models: number;
+  joins: number;
+  /** Names of the Domains the drafts create ("Jaffle shop"). */
+  domains: string[];
+  /** The project changed since drafting; Modeling refreshes it on save. */
+  stale: boolean;
 }
 
 export interface DomainWorkspaceSummary {
@@ -2357,6 +2513,8 @@ export interface DashboardDocumentResponse {
       reviewCadence?: string;
       businessRules?: string[];
       caveats?: string[];
+      /** The author added the auto-written Summary to this page (D6). */
+      summary?: boolean;
     };
     params?: Array<{ id: string; type: string; default?: unknown; description?: string }>;
     filters?: Array<{
@@ -2622,6 +2780,27 @@ export interface DashboardRunFilterIssue {
   message?: string;
 }
 
+/** One page of a Dataset field's distinct values (see `api.datasetFieldValues`). */
+export type DatasetFieldValuesResponse = {
+  ok: boolean;
+  values: string[];
+  /** More values exist than were returned. */
+  truncated?: boolean;
+  /** How many values the field has (browsing only), up to the server's count limit. */
+  valueCount?: number;
+  /** The field has more values than the server counts. */
+  valueCountCapped?: boolean;
+  /** The search text these values match, when searching. */
+  search?: string;
+  error?: string;
+};
+
+/** What one tile did with the page's filters (see `filterReport`). */
+export interface DashboardTileFilterReport {
+  applied: string[];
+  notApplied: Array<{ filter: string; code: 'does_not_apply' | 'not_linked' | 'unsupported' | 'invalid_value'; reason: string }>;
+}
+
 export interface DashboardRunResponse {
   appId: string;
   dashboardId: string;
@@ -2638,6 +2817,8 @@ export interface DashboardRunResponse {
   executedTileIds?: string[];
   /** The runtime discarded this response before it could become current evidence. */
   stale?: boolean;
+  /** Why the run went stale: a newer interaction overtook it, or the project changed while it ran. */
+  staleCause?: 'superseded' | 'project_changed';
   staleReason?: string;
   /**
    * A full run can return current safe component results alongside failures.
@@ -2675,6 +2856,8 @@ export interface DashboardRunResponse {
     blockId?: string;
     blockPath?: string;
     certificationStatus?: string | null;
+    /** Who certified this tile's source and when, with the checks that passed (D5). */
+    certification?: CertificationByline | null;
     /** Bound to a retired block: what replaces it, for App Studio authors only. */
     retirement?: { replacedBy?: string; replacementPath?: string; deprecatedOn?: string };
     title?: string;
@@ -2710,6 +2893,12 @@ export interface DashboardRunResponse {
       /** Dataset filters intentionally unmapped from this tile's source. */
       unbound?: DashboardRunFilterIssue[];
     };
+    /**
+     * Server truth for every tile type: which page filters (with a value)
+     * narrowed this tile and which did not, with why. Readers' "Not filtered
+     * by …" pills come from this once a run exists.
+     */
+    filterReport?: DashboardTileFilterReport;
     invocation?: {
       resolvedParameters: Array<{
         name: string;
@@ -2729,6 +2918,8 @@ export interface DashboardRunResponse {
       sourceRevision?: string;
       contractFingerprint?: string;
       trust?: 'certified' | 'review_required';
+      /** checked, not certified yet (design Q1). */
+      checked?: boolean;
       lifecycle?: string;
       binding?: DatasetDescriptor['binding'];
       proofState?: string;
@@ -2746,7 +2937,11 @@ export interface DashboardRunResponse {
       unboundFilters?: Array<{ filterId: string; code: string; message: string }>;
       /** C8 outcome the tile ran under; adaptations are disclosed with the result. */
       validation?: { outcome: 'covered' | 'adapted' | 'needs_review' | 'rejected'; adaptations: Array<{ kind: string; message: string }> };
+      /** A name grouped without a key ZLens knows: it may merge namesakes (new-user round 3, problem 4). */
+      nameWarnings?: Array<{ field: string; entity: string; message: string }>;
       grainRuntimeEvidence?: DashboardDatasetGrainRuntimeEvidence;
+      /** Joins to related tables the tile used (design D2): who certified each, in plain words. */
+      joins?: Array<{ id: string; table: string; trust: 'certified' | 'review_required'; sentence: string }>;
       semanticTargetBinding?: unknown;
       semanticReceipt?: unknown;
       /** Server-derived choices for a declared hierarchy on this effective query. */
@@ -2775,6 +2970,10 @@ export type DatasetTileQueryPreview =
     result?: { columns?: unknown[]; rows?: Array<Record<string, unknown>>; rowCount?: number; truncated?: boolean };
     validation?: { outcome: string; adaptations?: Array<{ kind: string; message: string }> };
     trustState?: string;
+    /** Joins to related tables the query used (design D2). */
+    joins?: Array<{ id: string; table: string; trust: 'certified' | 'review_required'; sentence: string }>;
+    /** A name grouped without a key ZLens knows: it may merge namesakes. */
+    nameWarnings?: Array<{ field: string; entity: string; message: string }>;
   }
   | { ok: false; error?: string; validation?: { outcome: string } };
 
@@ -2973,6 +3172,11 @@ export interface DashboardDriverAnalysisV1 {
 
 export interface DashboardRunOptions {
   runScope?: string;
+  /**
+   * This viewer's request number, increasing per mounted viewer. The server
+   * uses it so a request that arrives late never cancels a newer one.
+   */
+  runSequence?: number;
   /** Bypass the optional local Dataset delivery cache for a fresh live run. */
   refresh?: boolean;
   /** A preview/publish candidate must execute every authored tile. */
@@ -3045,6 +3249,8 @@ export interface AppBlockRecommendation {
   domain: string;
   status: string;
   owner: string | null;
+  /** The owner as a person reads it, when it is this machine's person (their display name). */
+  ownerName?: string;
   tags: string[];
   path: string;
   fingerprint: string;
@@ -3059,6 +3265,10 @@ export interface AppBlockRecommendation {
   reasons: string[];
   /** Canonical AppSourceCatalog identity. Legacy recommend-blocks rows omit it. */
   sourceId?: string;
+  /** Catalog source kind: a DQL block or a semantic model. Legacy rows omit it. */
+  kind?: 'block' | 'semantic';
+  /** Project-relative source file. Legacy rows omit it. */
+  sourcePath?: string;
   qualifiedIdentity?: string;
   sourceRevision?: string;
   snapshotId?: string;
@@ -3083,6 +3293,10 @@ export interface AppBlockRecommendation {
     projectPublish: boolean;
     reasonCodes: string[];
   };
+  /** Who certified it and when, for a certified block (D5). */
+  certification?: CertificationByline;
+  /** checked, not certified yet (design Q1): who checked it, and what the check found. */
+  check?: AppDataCheck;
 }
 
 export interface AppSourceCandidatePage {
@@ -3124,6 +3338,8 @@ interface AppSourceCandidateWire {
   eligibility: NonNullable<AppBlockRecommendation['eligibility']>;
   score?: number;
   reasons: string[];
+  certification?: CertificationByline;
+  check?: AppDataCheck;
 }
 
 export interface CreateAppRequest {
@@ -3363,7 +3579,8 @@ export interface AppStudioBuildDraft {
   proposalHash: string;
   authoringMode: 'ai' | 'manual';
   template: 'executive_brief' | 'operational_dashboard' | 'investigation' | 'blank';
-  sourcePolicy: 'governed_only' | 'include_review_required';
+  /** @deprecated Older Apps' per-App data rule: read and ignored (T3); new Apps have none. */
+  sourcePolicy?: 'governed_only' | 'include_review_required';
   state: 'local_draft' | 'clarification_required' | 'preflight_ready' | 'project_published';
   frame: Omit<AppBuildFrame, 'clarificationQuestions'> & {
     decision?: string;
@@ -3407,6 +3624,8 @@ export interface AppStudioBuildDraft {
     capabilities?: NonNullable<AppBlockRecommendation['capabilities']>;
     trustState: 'certified' | 'review_required' | 'draft_ready';
     reviewStatus: 'not_required' | 'required' | 'approved';
+    /** checked, not certified yet (design Q1), set by the App API from the catalog. */
+    checked?: boolean;
   }>;
   pages: DashboardDocumentResponse['dashboard'][];
   reviewTasks: Array<{ id: string; message: string; status: 'open' | 'resolved'; sourceId?: string; pageId?: string; tileId?: string }>;
@@ -3941,6 +4160,16 @@ export interface BlockStudioCertificationAssessment {
   blockers: string[];
 }
 
+/** The code and plain blockers a refused certification carries (`details.blockers`). */
+function apiErrorBlockers(error: unknown): { code?: string; blockers?: string[] } {
+  if (!(error instanceof DqlApiError)) return {};
+  const blockers = (error.details as { blockers?: unknown } | undefined)?.blockers;
+  return {
+    ...(error.code ? { code: error.code } : {}),
+    ...(Array.isArray(blockers) ? { blockers: blockers.filter((item): item is string => typeof item === 'string') } : {}),
+  };
+}
+
 export class DqlApiError extends Error {
   readonly status: number;
   readonly code?: DbtOnboardingErrorCode | string;
@@ -4471,7 +4700,7 @@ function normalizeNotebookResearchChecklist(raw: NotebookResearchReviewChecklist
         id: 'preview',
         label: 'Preview',
         status: hasPreview || reuseExisting ? 'passed' : 'pending',
-        detail: hasPreview ? 'Preview result is available.' : reuseExisting ? 'Certified block reuse does not require a new raw SQL preview.' : 'Run a bounded preview.',
+        detail: hasPreview ? 'Preview result is available.' : reuseExisting ? 'Certified saved query reuse does not require a new raw SQL preview.' : 'Run a bounded preview.',
       },
       {
         id: 'dql_draft',
@@ -4703,6 +4932,8 @@ export interface ConnectionsResponse {
   metadataStatus?: WarehouseMetadataStatus;
   /** The environment variables the default connection reads (`${NAME}`), by name, and whether each is set. */
   environmentReferences?: Array<{ name: string; set: boolean }>;
+  /** Value profiles are on (`agent.valueProfile.mode: "sampled"`): a few column values reach the AI provider. */
+  valueProfile?: boolean;
 }
 
 export interface ConnectionMetadataScopeV1 {
@@ -4768,7 +4999,7 @@ export interface WarehouseMetadataDiscovery {
 
 export type ContextAuthoringOrigin = 'manual' | 'yaml_import' | 'dbt_discovery' | 'warehouse_discovery' | 'ai' | 'correction';
 export interface ContextAuthoringPatchV1 { path: string; before: string; after: string; changed: boolean; owner: 'dql' | 'dbt'; operationId: string }
-export interface ContextAuthoringDiagnosticV1 { code: string; severity: 'info' | 'warning' | 'blocking'; message: string; operationId?: string }
+export interface ContextAuthoringDiagnosticV1 { code: string; severity: 'info' | 'warning' | 'blocking'; message: string; operationId?: string; operationIds?: string[] }
 /** Browser transport shape for a source-owned Dataset declaration patch. */
 export interface DatasetAuthoringChange {
   targetQualifiedId: string;
@@ -4804,7 +5035,7 @@ export interface ContextAuthoringProposalV1 {
   version: 1;
   id: string;
   origin: ContextAuthoringOrigin;
-  status: 'proposed' | 'committed' | 'conflicted';
+  status: 'proposed' | 'committed' | 'conflicted' | 'discarded';
   trustState: 'review_required';
   createdAt: string;
   baseSnapshotId: string;
@@ -4819,6 +5050,8 @@ export interface ContextAuthoringProposalV1 {
   revision?: number;
   committedAt?: string;
   committedSnapshotId?: string;
+  discardedAt?: string;
+  supersededBy?: string;
 }
 export interface ModelingImportCandidate {
   id: string;
@@ -4843,6 +5076,8 @@ function appSourceCandidateToRecommendation(source: AppSourceCandidateWire): App
   return {
     id: source.sourceId,
     sourceId: source.sourceId,
+    kind: source.kind,
+    sourcePath: source.sourcePath,
     qualifiedIdentity: source.qualifiedIdentity,
     sourceRevision: source.sourceRevision,
     snapshotId: source.snapshotId,
@@ -4864,6 +5099,8 @@ function appSourceCandidateToRecommendation(source: AppSourceCandidateWire): App
     eligibility: source.eligibility,
     score: source.score ?? 0,
     reasons: source.reasons,
+    ...(source.certification ? { certification: source.certification } : {}),
+    ...(source.check ? { check: source.check } : {}),
   };
 }
 
@@ -4920,8 +5157,20 @@ export const api = {
    * warehouse, as a reviewable proposal. `proposal` is null when there is
    * nothing new to draft.
    */
-  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
+  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
     return request('/api/modeling/warehouse/discover/proposal', { method: 'POST', body: JSON.stringify({ validate: true, ...input }) });
+  },
+
+  /** The drafted models that wait for review, or null. */
+  async getWaitingWarehouseDrafts(): Promise<WaitingWarehouseDrafts | null> {
+    const response = await request<{ waiting: WaitingWarehouseDrafts | null }>('/api/modeling/warehouse/drafts');
+    return response.waiting ?? null;
+  },
+
+  /** Turn drafts down: nothing in the project changes, and they stop waiting for review. */
+  async discardContextProposal(id: string): Promise<ContextAuthoringProposalV1> {
+    const response = await request<{ proposal: ContextAuthoringProposalV1 }>(`/api/context-proposals/${encodeURIComponent(id)}/discard`, { method: 'POST', body: '{}' });
+    return response.proposal;
   },
 
   async getDbtModelingNode(uniqueId: string): Promise<DbtNodeAuthoringDetail> {
@@ -5319,12 +5568,13 @@ export const api = {
     });
   },
 
-  async listAgentThreads(input?: { limit?: number; archived?: boolean }): Promise<AgentConversationThreadListResponse> {
+  async listAgentThreads(input?: { limit?: number; archived?: boolean; notebookPath?: string }): Promise<AgentConversationThreadListResponse> {
     const params = new URLSearchParams();
     if (typeof input?.limit === 'number' && Number.isFinite(input.limit)) {
       params.set('limit', String(input.limit));
     }
     if (input?.archived) params.set('archived', '1');
+    if (input?.notebookPath) params.set('notebookPath', input.notebookPath);
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<AgentConversationThreadListResponse>(`/api/agent/threads${suffix}`);
   },
@@ -5388,9 +5638,13 @@ export const api = {
     return request<{ owner: string }>('/api/identity');
   },
 
-  async getProviderSettings(): Promise<{ providers: ProviderSettings[] }> {
+  /**
+   * `assistAvailable` is the server's own answer to "can a model be asked?"
+   * (a host's model or a usable provider), without revealing which keys it holds.
+   */
+  async getProviderSettings(): Promise<{ providers: ProviderSettings[]; assistAvailable?: boolean }> {
     try {
-      return await request<{ providers: ProviderSettings[] }>('/api/settings/providers');
+      return await request<{ providers: ProviderSettings[]; assistAvailable?: boolean }>('/api/settings/providers');
     } catch {
       return { providers: [] };
     }
@@ -5647,7 +5901,7 @@ export const api = {
     try {
       return await request('/api/blocks/library');
     } catch (error) {
-      return { blocks: [], error: error instanceof Error ? error.message : 'The block library could not be loaded.' };
+      return { blocks: [], error: error instanceof Error ? error.message : 'The saved query list could not be loaded.' };
     }
   },
 
@@ -5757,7 +6011,7 @@ export const api = {
           id: 'block-studio-draft',
           type: 'dql',
           source,
-          title: title || 'Block Studio draft',
+          title: title || 'Saved query draft',
         },
         error,
         attemptedSql: source,
@@ -6959,6 +7213,17 @@ export const api = {
     return request<DbtOnboardingStatusResponse>('/api/onboarding/status');
   },
 
+  /** Guided Setup progress (design D7): where a restart resumes. Null when setup has not started or was finished. */
+  async getSetupProgress(): Promise<SetupProgress | null> {
+    const response = await request<{ progress: SetupProgress | null }>('/api/onboarding/progress');
+    return response.progress ?? null;
+  },
+
+  async saveSetupProgress(progress: Omit<SetupProgress, 'version' | 'updatedAt'>): Promise<SetupProgress> {
+    const response = await request<{ progress: SetupProgress }>('/api/onboarding/progress', { method: 'PUT', body: JSON.stringify(progress) });
+    return response.progress;
+  },
+
   async previewDbtOnboarding(payload: DbtOnboardingPreviewRequest): Promise<DbtOnboardingPreviewResponse> {
     return request<DbtOnboardingPreviewResponse>('/api/onboarding/dbt/preview', {
       method: 'POST',
@@ -7254,7 +7519,7 @@ export const api = {
           } | undefined,
         };
       }
-      return { error: error instanceof Error ? error.message : 'Failed to preview semantic block' };
+      return { error: error instanceof Error ? error.message : 'Failed to preview saved query built from metrics' };
     }
   },
 
@@ -7422,6 +7687,15 @@ export const api = {
     ahead: number;
     behind: number;
     changes: Array<{ path: string; status: string }>;
+    projectPrefix?: string;
+    /** The branch reviews merge into: the remote's default branch. */
+    baseBranch?: string;
+    /** Whether the remote already has the base branch (an empty repository has none). */
+    baseOnRemote?: boolean;
+    /** The remote branch ahead/behind are counted against. */
+    upstream?: string | null;
+    /** origin is a ZLens sample repository. */
+    sampleRemote?: boolean;
   }> {
     return request<any>('/api/git/status');
   },
@@ -7590,7 +7864,54 @@ export const api = {
     }
   },
 
-  async gitPull(): Promise<GitWriteResult & { output?: string }> {
+  /** Background check: fetch only. Never touches branches or files. */
+  async gitFetch(): Promise<GitWriteResult> {
+    try {
+      return await request<any>('/api/git/fetch', { method: 'POST', body: '{}' });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  /** Send unsent commits from the base branch to a new branch, leaving the base branch as the remote has it. */
+  async gitSendAsBranch(name?: string): Promise<GitWriteResult & { branch?: string; base?: string; sent?: number; subject?: string; prUrl?: string }> {
+    try {
+      return await request<any>('/api/git/send-as-branch', { method: 'POST', body: JSON.stringify(name ? { name } : {}) });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  /** Keep the current origin (the ZLens sample) as upstream and make your repository origin. */
+  async gitConnectOwnRemote(url: string): Promise<GitWriteResult & { url?: string; previous?: string }> {
+    try {
+      return await request<any>('/api/git/remote/connect-own', { method: 'POST', body: JSON.stringify({ url }) });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  async fetchGitUpdateState(): Promise<GitUpdateState> {
+    return request<GitUpdateState>('/api/git/update/state');
+  },
+
+  async fetchGitConflictVersions(path: string): Promise<{ ok: boolean; error?: string; mine?: string | null; theirs?: string | null }> {
+    try {
+      return await request<any>(`/api/git/update/versions?path=${encodeURIComponent(path)}`);
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  async gitUpdateStep(step: 'resolve' | 'continue' | 'cancel' | 'undo', body: { path?: string; keep?: 'mine' | 'theirs' } = {}): Promise<GitUpdateResult> {
+    try {
+      return await request<any>(`/api/git/update/${step}`, { method: 'POST', body: JSON.stringify(body) });
+    } catch (e) {
+      return gitWriteFailure(e);
+    }
+  },
+
+  async gitPull(): Promise<GitUpdateResult> {
     try {
       return await request<any>('/api/git/pull', { method: 'POST', body: '{}' });
     } catch (e) {
@@ -7611,7 +7932,7 @@ export const api = {
 
   /** Create a review branch, commit only the selected files, push it, and open a PR. Never merges. */
   async gitCreateReview(payload: { paths: string[]; title: string; body?: string; base?: string }): Promise<{
-    ok: boolean; error?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
+    ok: boolean; error?: string; base?: string; branch?: string; hash?: string; prUrl?: string; warning?: string;
   }> {
     try {
       return await request<any>('/api/git/review', { method: 'POST', body: JSON.stringify(payload) });
@@ -7622,7 +7943,7 @@ export const api = {
 
   /** Open a PR after the guided flow has already committed and pushed its review branch. */
   async gitOpenReview(payload: { title: string; body?: string; base?: string }): Promise<{
-    ok: boolean; error?: string; branch?: string; prUrl?: string; warning?: string;
+    ok: boolean; error?: string; base?: string; branch?: string; prUrl?: string; warning?: string;
   }> {
     try {
       return await request<any>('/api/git/review/open', { method: 'POST', body: JSON.stringify(payload) });
@@ -7915,6 +8236,15 @@ export const api = {
     });
   },
 
+  /**
+   * The project's App publish settings (T3), read fresh from dql.config.json:
+   * `requireCertifiedToPublish` is false unless the project (or an Enterprise
+   * policy) turns it on.
+   */
+  async getAppsSettings(): Promise<{ ok: boolean; requireCertifiedToPublish: boolean }> {
+    return request('/api/apps/settings');
+  },
+
   async preflightAppBuild(id: string, expectedRevision: number, proposalHash: string): Promise<{ ok: boolean; draft: AppStudioBuildDraft; errors: string[] }> {
     return request(`/api/app-builds/${encodeURIComponent(id)}/preflight`, {
       method: 'POST',
@@ -7999,21 +8329,28 @@ export const api = {
   },
 
   /** Two-phase build, step 2: the user confirmed — create the app from the selection. */
-  async commitAppAiBuild(sessionId: string, input: {
+  /**
+   * Open an Ask App proposal in App Studio: the server makes a local App
+   * Studio draft (no App files) that opens at the AI Data step.
+   */
+  async openAppAiBuildInStudio(sessionId: string, input: {
     selectedTileIds?: string[];
-    force?: boolean;
     expectedProposalHash?: string;
     appName?: string;
-    pageTitle?: string;
     audience?: string;
-    filterIds?: string[];
-    tileOverrides?: Record<string, { title?: string; viz?: string }>;
   } = {}): Promise<
-    { ok: true; session: AppAiBuildSession; app: AppSummary | null; dashboardId: string | null } | { ok: false; error: string }
+    | {
+      ok: true;
+      draft: AppStudioBuildDraft;
+      sources: Array<{ sourceId: string; title: string; kind: 'Dataset' | 'Metrics' | 'Saved query'; trust: 'Certified' | 'Not certified yet'; domain?: string; reason: string }>;
+      notCoveredYet: string[];
+      reused: boolean;
+    }
+    | { ok: false; error: string }
   > {
     try {
       return await request(
-        `/api/apps/ai-builds/${encodeURIComponent(sessionId)}/commit`,
+        `/api/apps/ai-builds/${encodeURIComponent(sessionId)}/open-in-studio`,
         { method: 'POST', body: JSON.stringify(input) },
       );
     } catch (e) {
@@ -8275,11 +8612,17 @@ export const api = {
     }
   },
 
-  /** Distinct values for a block column → categorical dashboard-filter dropdowns. */
-  async dashboardFilterOptions(block: string, column: string): Promise<{ options: string[]; truncated: boolean } | null> {
+  /**
+   * Distinct values for a block column → categorical dashboard-filter dropdowns
+   * and the reader's "Filter by…" picker. `search` finds every value that
+   * contains the text on the server; a capped browse list says how many exist.
+   */
+  async dashboardFilterOptions(block: string, column: string, options: { search?: string; limit?: number } = {}): Promise<{ options: string[]; truncated: boolean; valueCount?: number; valueCountCapped?: boolean } | null> {
     try {
       const search = new URLSearchParams({ block, column });
-      return await request<{ options: string[]; truncated: boolean }>(`/api/dashboard/filter-options?${search.toString()}`);
+      if (options.search?.trim()) search.set('search', options.search.trim());
+      if (options.limit) search.set('limit', String(options.limit));
+      return await request<{ options: string[]; truncated: boolean; valueCount?: number; valueCountCapped?: boolean }>(`/api/dashboard/filter-options?${search.toString()}`);
     } catch {
       return null;
     }
@@ -8528,7 +8871,7 @@ export const api = {
     // so the viewer shows why a page did not run, not a generic failure.
     return request<DashboardRunResponse>(
       `/api/apps/${encodeURIComponent(appId)}/dashboards/${encodeURIComponent(dashboardId)}/run`,
-      { method: 'POST', body: JSON.stringify({ variables: variables ?? {}, ...(crossFilters?.length ? { crossFilters } : {}), ...(options?.runScope ? { runScope: options.runScope } : {}), ...(options?.refresh ? { refresh: true } : {}), ...(options?.fullRun ? { fullRun: true } : {}), ...(options?.tileId ? { tileId: options.tileId } : {}), ...(options?.visibleTileIds !== undefined ? { visibleTileIds: options.visibleTileIds } : {}), ...(options?.affectedTileIds !== undefined ? { affectedTileIds: options.affectedTileIds } : {}), ...(options?.datasetDrills?.length ? { datasetDrills: options.datasetDrills } : {}), ...(options?.driverProbe ? { driverProbe: options.driverProbe } : {}), ...(options?.exploreProbe ? { exploreProbe: options.exploreProbe } : {}), ...(options?.viewerFilters?.length ? { viewerFilters: options.viewerFilters } : {}) }) },
+      { method: 'POST', body: JSON.stringify({ variables: variables ?? {}, ...(crossFilters?.length ? { crossFilters } : {}), ...(options?.runScope ? { runScope: options.runScope } : {}), ...(options?.runSequence !== undefined ? { runSequence: options.runSequence } : {}), ...(options?.refresh ? { refresh: true } : {}), ...(options?.fullRun ? { fullRun: true } : {}), ...(options?.tileId ? { tileId: options.tileId } : {}), ...(options?.visibleTileIds !== undefined ? { visibleTileIds: options.visibleTileIds } : {}), ...(options?.affectedTileIds !== undefined ? { affectedTileIds: options.affectedTileIds } : {}), ...(options?.datasetDrills?.length ? { datasetDrills: options.datasetDrills } : {}), ...(options?.driverProbe ? { driverProbe: options.driverProbe } : {}), ...(options?.exploreProbe ? { exploreProbe: options.exploreProbe } : {}), ...(options?.viewerFilters?.length ? { viewerFilters: options.viewerFilters } : {}) }) },
     );
   },
 
@@ -8569,9 +8912,15 @@ export const api = {
    * Distinct values of one approved Dataset field, for a Dataset-bound page
    * filter's options. Runs as a governed field query; nothing is App evidence.
    */
-  async datasetFieldValues(sourceId: string, field: string): Promise<{ ok: boolean; values: string[]; truncated?: boolean; error?: string }> {
+  /**
+   * Distinct values of one Dataset field for a filter control: the first page
+   * for browsing (with how many values exist), or, with `search`, the values
+   * that contain the typed text, searched on the server over every value.
+   */
+  async datasetFieldValues(sourceId: string, field: string, options: { search?: string } = {}): Promise<DatasetFieldValuesResponse> {
     try {
-      return await request('/api/app-datasets/field-values', { method: 'POST', body: JSON.stringify({ sourceId, field }) });
+      const search = options.search?.trim();
+      return await request('/api/app-datasets/field-values', { method: 'POST', body: JSON.stringify({ sourceId, field, ...(search ? { search } : {}) }) });
     } catch (error) {
       return { ok: false, values: [], error: error instanceof Error ? error.message : String(error) };
     }
@@ -8595,8 +8944,12 @@ export const api = {
     }
   },
 
-  /** Save the author's choice as a Dataset they own. */
-  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }> }): Promise<{ ok: boolean; status?: 'certified' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; error?: string }> {
+  /**
+   * "Check and use" (design Q1): save the author's choice as a Dataset they
+   * own. Its checks passing makes it checked, not certified yet (`checked`);
+   * it is never certified here.
+   */
+  async createTableDataset(input: { tableId: string; name: string; domain?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; duplicates?: Array<{ name: string; use: 'minor' | 'plain' | 'both' }> }): Promise<{ ok: boolean; status?: 'checked' | 'draft'; sourceId?: string; path?: string; blockers?: string[]; keyChecked?: boolean; check?: CertificationByline; error?: string }> {
     try {
       return await request('/api/app-datasets/tables/create', { method: 'POST', body: JSON.stringify(input) });
     } catch (error) {
@@ -8604,7 +8957,84 @@ export const api = {
     }
   },
 
-  /** Turn on field-based Dataset tiles for this project (writes `apps.datasets: true`). */
+  /** The short review before certifying data on purpose (design Q1). */
+  async getCertifyReview(sourceId: string): Promise<{ ok: boolean; review?: CertifyReview; error?: string; code?: string }> {
+    try {
+      return await request(`/api/app-datasets/certify-review?sourceId=${encodeURIComponent(sourceId)}`);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /**
+   * "I vouch for this — certify" (design Q1, T4): the same certification rules
+   * as Block Studio's Certify, for data and saved queries. `owner` names who
+   * owns a saved query that declares nobody; it is written with the certification.
+   */
+  async certifyAppData(sourceId: string, sourceRevision?: string, owner?: string): Promise<{ ok: boolean; status?: 'certified'; sourceId?: string; sourceRevision?: string; certification?: CertificationByline; blockers?: string[]; error?: string; code?: string }> {
+    try {
+      return await request('/api/app-datasets/certify', { method: 'POST', body: JSON.stringify({ sourceId, ...(sourceRevision ? { sourceRevision } : {}), ...(owner?.trim() ? { owner: owner.trim() } : {}) }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...apiErrorBlockers(error) };
+    }
+  },
+
+  /** A join's short review (T4): its keys, a fresh bounded check, what would double-count, what it fills. */
+  async getJoinCertifyReview(sourceId: string, joinId: string): Promise<{ ok: boolean; review?: JoinCertifyReview; error?: string; code?: string }> {
+    try {
+      return await request(`/api/app-datasets/joins/certify-review?sourceId=${encodeURIComponent(sourceId)}&joinId=${encodeURIComponent(joinId)}`);
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** "I vouch for this join — certify" (T4): checked again now, then written through Modeling's own path. */
+  async certifyAppJoin(sourceId: string, joinId: string): Promise<{ ok: boolean; status?: 'certified'; relationshipId?: string; certification?: CertificationByline; filled?: JoinCertifyReview['fills']; blockers?: string[]; error?: string; code?: string }> {
+    try {
+      return await request('/api/app-datasets/joins/certify', { method: 'POST', body: JSON.stringify({ sourceId, joinId }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...apiErrorBlockers(error) };
+    }
+  },
+
+  /**
+   * Read a saved query's result columns as fields (design D1): no review
+   * step, nothing written to the block, its trust unchanged. Afterwards the
+   * catalog lists the saved query with its fields.
+   */
+  async readSavedQueryFields(sourceId: string): Promise<{ ok: boolean; sourceId?: string; sourceRevision?: string; read?: boolean; descriptor?: DatasetDescriptor; error?: string; code?: string }> {
+    try {
+      return await request('/api/app-datasets/saved-queries/fields', { method: 'POST', body: JSON.stringify({ sourceId }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** Make a saved query row-level (design D1, formerly "Add fields"): what DQL proposes from its output columns, checked against its rows. */
+  async draftSavedQueryDataset(sourceId: string): Promise<SavedQueryDatasetDraft> {
+    try {
+      return await request('/api/app-datasets/saved-queries/draft', { method: 'POST', body: JSON.stringify({ sourceId }) });
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error), ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}) };
+    }
+  },
+
+  /** Write the author's choice onto the same saved query block, then run its certification check. */
+  async createSavedQueryDataset(input: { sourceId: string; sourceRevision?: string; measures: Array<{ name: string; include: boolean; format: string; currency?: string }>; allowReview?: boolean }): Promise<SavedQueryDatasetResult> {
+    try {
+      return await request('/api/app-datasets/saved-queries/create', { method: 'POST', body: JSON.stringify(input) });
+    } catch (error) {
+      const details = error instanceof DqlApiError && error.details && typeof error.details === 'object' ? error.details as { blockers?: unknown } : undefined;
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+        ...(error instanceof DqlApiError && error.code ? { code: error.code } : {}),
+        ...(Array.isArray(details?.blockers) ? { blockers: details.blockers.filter((item): item is string => typeof item === 'string') } : {}),
+      };
+    }
+  },
+
+  /** Turn field-based Dataset tiles back on for a project that set `apps.datasets: false` (they are on by default). */
   async enableDatasetTiles(): Promise<{ ok: boolean; datasets?: boolean; error?: string }> {
     try {
       return await request('/api/app-datasets/enable', { method: 'POST', body: '{}' });

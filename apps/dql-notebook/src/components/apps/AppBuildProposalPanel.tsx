@@ -10,47 +10,42 @@ export function defaultProposalSelection(proposal: AppBuildProposal): Set<string
 
 export type UnbuildableTile = { id: string; title: string; reason: string };
 
+/** The one action on an Ask App proposal (design D9). */
+export const OPEN_IN_APP_STUDIO_LABEL = 'Open in App Studio';
+
 /**
- * Selected tiles the commit will not turn into tiles, and why.
- *
- * The brief used to list AI-generated tiles exactly like certified ones and
- * then drop them at commit without a word, so an app proposed with six tiles
- * arrived with three and no explanation. Both rules below live in
- * `commitAppAiBuild`; they are mirrored here so the author reads them *before*
- * committing rather than inferring them from what is missing afterwards.
+ * Selected tiles that App Studio will not turn into tiles, and why: AI-written
+ * SQL is never added to an App. App Studio lists the question under "Not
+ * covered yet", where the author can generate a draft that needs review.
+ * Shown before opening, so nothing goes missing without a word.
  */
 export function unbuildableSelectedTiles(proposal: AppBuildProposal, selected: Set<string>): UnbuildableTile[] {
-  const personal = proposal.intent.target === 'personal';
   const out: UnbuildableTile[] = [];
   for (const tile of proposal.tiles) {
     if (tile.source !== 'ai_generated' || tile.error || !selected.has(tile.id)) continue;
-    if (!tile.sql) {
-      out.push({ id: tile.id, title: tile.title, reason: 'No query was generated for it, so it has nothing to show. It stays in the review appendix as an open question.' });
-    } else if (!personal) {
-      out.push({ id: tile.id, title: tile.title, reason: 'Exploratory AI SQL can only be accepted into a Personal Draft. Switch this build to Personal Draft to keep it.' });
-    }
+    out.push({
+      id: tile.id,
+      title: tile.title,
+      reason: tile.sql
+        ? 'Draft SQL is not added to an App. App Studio lists this question under Not covered yet, where you can generate draft DQL for it.'
+        : 'No query was written for it, so it has nothing to show. App Studio lists it under Not covered yet.',
+    });
   }
   return out;
 }
 
-/**
- * The edits an author can make while reviewing a brief, in the exact shape
- * `commitAppAiBuild` already accepts. The API has supported all of this from
- * the start; only the Apps hero builder ever sent it, and only from behind a
- * collapsed disclosure.
- */
+/** What the author can change before opening the proposal in App Studio. */
 export type AppBuildBriefEdits = {
   appName?: string;
-  pageTitle?: string;
   audience?: string;
-  tileOverrides: Record<string, { title?: string; viz?: string }>;
 };
 
 /**
- * The confirmable pre-create content list for the two-phase app build: every
- * proposed tile with a trust badge and an include/exclude toggle, uncovered
- * questions listed as gaps, and a single "Build draft" confirm. Shared by the
- * Apps hero builder and the chat `app_proposal` artifact card.
+ * An Ask App proposal before it opens in App Studio: every proposed tile with
+ * its trust and an include toggle (a kept tile's data becomes the App's data),
+ * uncovered questions under "Not covered yet", and one "Open in App Studio"
+ * action. App Studio opens at the Data step; nothing is written to the
+ * project until the author publishes.
  */
 export function AppBuildProposalPanel({
   proposal,
@@ -68,7 +63,7 @@ export function AppBuildProposalPanel({
   t: Theme;
   selected: Set<string>;
   onToggle: (tileId: string) => void;
-  /** Receives the author's edits; the caller forwards them to `commitAppAiBuild`. */
+  /** Receives the author's edits; the caller opens the proposal in App Studio. */
   onCreate: (edits: AppBuildBriefEdits) => void;
   busy?: boolean;
   error?: string | null;
@@ -76,36 +71,26 @@ export function AppBuildProposalPanel({
   nameLabel?: string;
   defaultName?: string;
 }) {
-  // Edits live here so every surface that renders this brief can make them.
-  // The chat card previously had no way to rename anything at all.
+  // App Studio builds the tiles, so only the App name is edited here.
   const [name, setName] = useState(defaultName ?? '');
-  const [tileEdits, setTileEdits] = useState<Record<string, { title?: string; viz?: string }>>({});
-  const editTile = (tileId: string, patch: { title?: string; viz?: string }) => {
-    setTileEdits((current) => ({ ...current, [tileId]: { ...current[tileId], ...patch } }));
-  };
   const selectable = proposal.tiles.filter((tile) => !tile.error);
   const failed = proposal.tiles.filter((tile) => tile.error);
   const selectedCount = selectable.filter((tile) => selected.has(tile.id)).length;
   const unbuildable = unbuildableSelectedTiles(proposal, selected);
-  const generatedSelected = selectable.filter((tile) => selected.has(tile.id) && tile.certification === 'ai_generated').length;
   const semanticSelected = selectable.filter((tile) => selected.has(tile.id) && tile.certification === 'reviewed_semantic').length;
-  const certifiedSelected = selectable.filter((tile) => selected.has(tile.id) && tile.certification === 'certified').length;
-  const canCreate = certifiedSelected + semanticSelected > 0
-    || (proposal.intent.target === 'personal' && generatedSelected > 0);
+  const canCreate = selectedCount > 0;
 
   return (
     <div style={{ display: 'grid', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ fontSize: 13, fontWeight: 600, color: t.textPrimary }}>Build Brief</span>
         <span style={{ fontSize: 11, color: t.textMuted }}>
-          {proposal.coverage.certifiedTiles} certified
-          {proposal.coverage.semanticTiles > 0 ? ` · ${proposal.coverage.semanticTiles} governed semantic` : ''}
-          {proposal.coverage.generatedTiles > 0 ? ` · ${proposal.coverage.generatedTiles} exploratory` : ''}
-          {proposal.coverage.gaps > 0 ? ` · ${proposal.coverage.gaps} uncovered` : ''}
+          {proposal.coverage.certifiedTiles} Certified
+          {proposal.coverage.semanticTiles > 0 ? ` · ${proposal.coverage.semanticTiles} Metrics` : ''}
+          {proposal.coverage.generatedTiles > 0 ? ` · ${proposal.coverage.generatedTiles} Draft SQL` : ''}
+          {proposal.coverage.gaps > 0 ? ` · ${proposal.coverage.gaps} not covered yet` : ''}
         </span>
-        <span style={{ fontSize: 11, color: t.textMuted }}>
-          {proposal.intent.target === 'personal' ? 'Personal Draft' : 'Shared Project target'} · starts private
-        </span>
+        <span style={{ fontSize: 11, color: t.textMuted }}>Opens as a private App Studio draft</span>
       </div>
 
       <label style={{ display: 'grid', gap: 3 }}>
@@ -128,8 +113,6 @@ export function AppBuildProposalPanel({
             checked={selected.has(tile.id)}
             onToggle={() => onToggle(tile.id)}
             compact={compact}
-            edit={tileEdits[tile.id]}
-            onEdit={(patch) => editTile(tile.id, patch)}
           />
         ))}
         {failed.map((tile) => (
@@ -166,7 +149,7 @@ export function AppBuildProposalPanel({
           }}
         >
           <div style={{ fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-            {unbuildable.length === 1 ? '1 selected tile will not be built' : `${unbuildable.length} selected tiles will not be built`}
+            {unbuildable.length === 1 ? '1 selected tile goes to Not covered yet' : `${unbuildable.length} selected tiles go to Not covered yet`}
           </div>
           {unbuildable.map((tile) => (
             <div key={tile.id} style={{ display: 'flex', gap: 7, alignItems: 'flex-start', fontSize: 12, color: t.textSecondary }}>
@@ -183,26 +166,19 @@ export function AppBuildProposalPanel({
         <button
           type="button"
           className="dql-hover"
-          onClick={() => onCreate({
-            ...(name.trim() ? { appName: name.trim(), pageTitle: name.trim() } : {}),
-            tileOverrides: tileEdits,
-          })}
+          onClick={() => onCreate(name.trim() ? { appName: name.trim() } : {})}
           disabled={busy || !canCreate}
           style={createButtonStyle(t, canCreate && !busy)}
         >
           {busy ? <Loader2 size={13} style={{ animation: 'dql-agent-run-spin 0.8s linear infinite' }} /> : <CheckCircle2 size={13} />}
-          <span>{busy ? 'Building draft…' : `Build draft (${selectedCount} tile${selectedCount === 1 ? '' : 's'})`}</span>
+          <span>{busy ? 'Opening App Studio…' : OPEN_IN_APP_STUDIO_LABEL}</span>
         </button>
         <span style={{ fontSize: 11, color: t.textMuted }}>
           {!canCreate
-            ? proposal.intent.target === 'personal'
-              ? 'Select a certified, semantic, or explicitly accepted exploratory tile.'
-              : 'Select at least one certified block or governed semantic tile.'
+            ? 'Keep at least one tile.'
             : semanticSelected > 0
-              ? `${semanticSelected} semantic tile${semanticSelected === 1 ? '' : 's'} will compile against the governed semantic layer and still require result review.`
-            : generatedSelected > 0
-              ? `${generatedSelected} AI-generated tile${generatedSelected === 1 ? '' : 's'} will stay review-required until certified.`
-              : 'No App files are written until you confirm this brief.'}
+              ? `App Studio opens at the Data step. ${semanticSelected} Metrics tile${semanticSelected === 1 ? '' : 's'} still need${semanticSelected === 1 ? 's' : ''} a result review. Nothing is written to your project until you publish.`
+              : 'App Studio opens at the Data step so you can check the data. Nothing is written to your project until you publish.'}
         </span>
       </div>
     </div>
@@ -215,16 +191,12 @@ function ProposalTileRow({
   checked,
   onToggle,
   compact,
-  edit,
-  onEdit,
 }: {
   tile: AppBuildProposalTile;
   t: Theme;
   checked: boolean;
   onToggle: () => void;
   compact?: boolean;
-  edit?: { title?: string; viz?: string };
-  onEdit: (patch: { title?: string; viz?: string }) => void;
 }) {
   const [open, setOpen] = useState(false);
   const certified = tile.certification === 'certified';
@@ -241,37 +213,21 @@ function ProposalTileRow({
       />
       <div style={{ minWidth: 0, flex: 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-          <input
-            value={edit?.title ?? tile.title}
-            onChange={(event) => onEdit({ title: event.target.value })}
-            aria-label={`Title for ${tile.title}`}
-            maxLength={120}
-            style={tileTitleInputStyle(t)}
-          />
+          <span style={tileTitleStyle(t)}>{tile.title}</span>
           {certified ? (
             <span style={badgeStyle(t.success)}>
-              <ShieldCheck size={10} /> certified
+              <ShieldCheck size={10} /> Certified
             </span>
           ) : semantic ? (
             <span style={badgeStyle(t.accent)}>
-              <Sparkles size={10} /> governed semantic · review required
+              <Sparkles size={10} /> Metrics · Not certified yet
             </span>
           ) : (
             <span style={badgeStyle(t.warning)}>
               {tile.repair?.status === 'repaired' ? <Wrench size={10} /> : <Sparkles size={10} />}
-              {tile.repair?.status === 'repaired' ? 'auto-repaired · needs review' : 'AI-generated · needs review'}
+              {tile.repair?.status === 'repaired' ? 'Draft SQL · repaired · Not certified yet' : 'Draft SQL · Not certified yet'}
             </span>
           )}
-          <select
-            value={edit?.viz ?? tile.viz}
-            onChange={(event) => onEdit({ viz: event.target.value })}
-            aria-label={`Visualization for ${tile.title}`}
-            style={tileVizSelectStyle(t)}
-          >
-            {[...new Set([...(tile.allowedVisualizations ?? []), tile.viz, 'table'])].map((viz) => (
-              <option key={viz} value={viz}>{viz.replace(/_/g, ' ')}</option>
-            ))}
-          </select>
         </div>
         {tile.description && !compact ? (
           <div style={{ fontSize: 12, color: t.textSecondary, marginTop: 2, lineHeight: 1.4 }}>{tile.description}</div>
@@ -425,30 +381,13 @@ function briefInputStyle(t: Theme): React.CSSProperties {
   };
 }
 
-function tileTitleInputStyle(t: Theme): React.CSSProperties {
+function tileTitleStyle(t: Theme): React.CSSProperties {
   return {
-    border: '1px solid transparent',
-    background: 'transparent',
     color: t.textPrimary,
-    borderRadius: 5,
-    padding: '1px 4px',
     fontSize: 13,
     fontWeight: 600,
     fontFamily: t.font,
     minWidth: 0,
     flex: '1 1 180px',
-  };
-}
-
-function tileVizSelectStyle(t: Theme): React.CSSProperties {
-  return {
-    border: `1px solid ${t.cellBorder}`,
-    background: t.cellBg,
-    color: t.textMuted,
-    borderRadius: 999,
-    padding: '1px 6px',
-    fontSize: 11,
-    fontFamily: t.font,
-    cursor: 'pointer',
   };
 }

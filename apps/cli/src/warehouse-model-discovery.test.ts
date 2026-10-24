@@ -160,6 +160,44 @@ describe('joins the data proves, on a warehouse that declares no keys', () => {
   });
 });
 
+// New-user round 2, problem 5: database-only setup drafted order_item → product
+// on product_name next to the product_id join: two identical "Order Items → Product" groups.
+describe('joins are drafted on keys, never on names', () => {
+  it('drafts the product_id join and no second join on product_name; a unique name alone is not a key', async () => {
+    const t = (name: string, columns: Array<[string, string]>, rows: number) => ({
+      id: warehouseRelationId({ schema: 'main', name }), schema: 'main', name, relation: `main.${name}`, kind: 'table' as const,
+      columns: columns.map(([column, type]) => ({ name: column, type })), rowCountEstimate: rows,
+    });
+    const bare = normalizeWarehouseCatalog({
+      version: 1, driver: 'sqlite', connectionId: 'default', scopes: [{ catalogOrDatabase: 'main', schemas: ['main'] }], capturedAt: '2026-10-22T00:00:00.000Z',
+      relations: [
+        t('products', [['product_id', 'TEXT'], ['product_name', 'TEXT'], ['product_price', 'DOUBLE']], 3),
+        t('order_items', [['order_item_id', 'TEXT'], ['product_id', 'TEXT'], ['product_name', 'TEXT']], 4),
+        t('stores', [['store_name', 'TEXT'], ['city', 'TEXT']], 2),
+        t('visits', [['visit_ref', 'INTEGER'], ['store_name', 'TEXT']], 3),
+      ],
+    });
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE products (product_id TEXT, product_name TEXT, product_price DOUBLE);
+      CREATE TABLE order_items (order_item_id TEXT, product_id TEXT, product_name TEXT);
+      CREATE TABLE stores (store_name TEXT, city TEXT);
+      CREATE TABLE visits (visit_ref INTEGER, store_name TEXT);
+      INSERT INTO products VALUES ('p1', 'Latte', 4.5), ('p2', 'Mocha', 5), ('p3', 'Bagel', 3);
+      INSERT INTO order_items VALUES ('i1', 'p1', 'Latte'), ('i2', 'p2', 'Mocha'), ('i3', 'p1', 'Latte'), ('i4', 'p3', 'Bagel');
+      INSERT INTO stores VALUES ('North', 'Brooklyn'), ('South', 'Philadelphia');
+      INSERT INTO visits VALUES (1, 'North'), (2, 'South'), (3, 'North');
+    `);
+    const execute = async (sql: string) => ({ rows: db.prepare(sql.replace(/"main"\./g, '')).all() as Array<Record<string, unknown>> });
+    const drafted = discoverWarehouseModel({ snapshot: bare, projectName: 'shop' });
+    const inferred = await inferSharedKeyJoins(drafted, bare, execute, (identifier) => `"${identifier}"`);
+    const joins = inferred.relationships.map((item) => `${item.from}.${item.keys.map((pair) => pair.from).join('+')} -> ${item.to}`).sort();
+    expect(joins).toEqual(['order_item.product_id -> product']);
+    expect(inferred.relationships.some((item) => item.keys.some((pair) => /name/.test(pair.from)))).toBe(false);
+    db.close();
+  });
+});
+
 describe('query-history evidence (opt-in)', () => {
   it('counts the joins recent queries ran, once per statement, and keeps no query text', () => {
     const observed = observedJoinsFromQueries([
@@ -257,8 +295,56 @@ describe('a table’s grain is its own identity column', () => {
     expect(report.entities.find((entity) => entity.id === 'product')).toMatchObject({ grain: 'product_id', keys: ['product_id'], grainSource: 'unique_column' });
     expect(report.entities.find((entity) => entity.id === 'supply')).toMatchObject({ grain: 'supply_uuid', keys: ['supply_uuid'], grainSource: 'unique_column' });
     expect(report.entities.find((entity) => entity.id === 'order_item')).toMatchObject({ grain: 'order_item_id' });
-    // The label join is still found; it no longer decides the grain.
-    expect(report.relationships.some((item) => item.keys[0]!.from === 'product_name' && item.to === 'product')).toBe(true);
+    // A label is not a key (new-user round 2, problem 5): no second Product join on product_name.
+    expect(report.relationships.some((item) => item.keys[0]!.from === 'product_name' && item.to === 'product')).toBe(false);
+    expect(report.relationships.filter((item) => item.from === 'order_item' && item.to === 'product').map((item) => item.keys[0]!.from)).toEqual(['product_id']);
     db.close();
+  });
+});
+
+describe('a first Domain named after the data, without staging copies (new-user round 2, Q3)', () => {
+  const layered = normalizeWarehouseCatalog({
+    version: 1,
+    driver: 'duckdb',
+    connectionId: 'default',
+    scopes: [{ catalogOrDatabase: 'jaffle_shop', schemas: ['dev', 'raw', 'sales'] }],
+    capturedAt: '2026-10-21T00:00:00.000Z',
+    relations: [
+      table('dev', 'customers', ['customer_id', 'name'], { database: 'jaffle_shop', primaryKey: ['customer_id'] }),
+      table('dev', 'stg_customers', ['customer_id', 'name'], { database: 'jaffle_shop' }),
+      table('raw', 'raw_orders', ['id', 'customer'], { database: 'jaffle_shop' }),
+      table('dev', 'orders', ['order_id', 'customer_id'], { database: 'jaffle_shop', primaryKey: ['order_id'] }),
+      table('sales', 'targets', ['target_id', 'amount'], { database: 'jaffle_shop' }),
+    ],
+  });
+
+  it('maps dev and raw into one Domain named after the database; a business schema keeps its own', () => {
+    const report = discoverWarehouseModel({ snapshot: layered, projectName: 'shop' });
+    expect(report.domains).toEqual([
+      { id: 'jaffle_shop', name: 'Jaffle shop', existing: false },
+      { id: 'sales', name: 'Sales', existing: false },
+    ]);
+    expect(report.entities.find((item) => item.relation === 'dev.customers')?.domain).toBe('jaffle_shop');
+    expect(report.entities.find((item) => item.relation === 'sales.targets')?.domain).toBe('sales');
+    // The file name wins over the catalog when the runtime knows it.
+    expect(discoverWarehouseModel({ snapshot: layered, databaseName: 'shop_2026' }).domains).toContainEqual({ id: 'shop_2026', name: 'Shop 2026', existing: false });
+  });
+
+  it('keeps a schema Domain the project already has, and a Domain the person named', () => {
+    expect(discoverWarehouseModel({ snapshot: layered, existingDomains: ['dev'] }).entities.find((item) => item.relation === 'dev.orders')?.domain).toBe('dev');
+    expect(discoverWarehouseModel({ snapshot: layered, domain: 'Jaffle Shop Sales' }).domains).toEqual([{ id: 'jaffle_shop_sales', name: 'Jaffle Shop Sales', existing: false }]);
+  });
+
+  it('leaves out staging copies of a final table only when asked, and says which', () => {
+    const all = discoverWarehouseModel({ snapshot: layered });
+    expect(all.entities.map((item) => item.relation)).toContain('dev.stg_customers');
+    expect(all.stagingHidden).toBeUndefined();
+    const plain = discoverWarehouseModel({ snapshot: layered, hideStagingDuplicates: true });
+    expect(plain.entities.map((item) => item.relation).sort()).toEqual(['dev.customers', 'dev.orders', 'sales.targets']);
+    expect(plain.stagingHidden).toEqual([
+      { relation: 'dev.stg_customers', finalRelation: 'dev.customers' },
+      { relation: 'raw.raw_orders', finalRelation: 'dev.orders' },
+    ]);
+    expect(plain.relations).toBe(5);
   });
 });

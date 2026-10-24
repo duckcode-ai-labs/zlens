@@ -27,6 +27,8 @@ import { pivotLayout, withPivotRollups } from '@zlens/core/apps/pivot';
 import { encodingFromQuery } from '@zlens/core/apps/viz-encoding';
 import { PivotTable } from '../PivotTable';
 import { KpiCard, usesKpiCard } from '../KpiCard';
+import { BarCapNote } from './BarCapNote';
+import { barCategoryCap, sortTouched, withBarCategoryLimit, withDefaultBarSort } from './sort-top-n';
 
 export type DraftTileState = {
   /** Catalog item id of the Dataset the tile is built from. */
@@ -40,7 +42,20 @@ export type DraftTileState = {
   /** The chart type picked in Show Me; kept while the shelves still read that way. */
   chart?: string;
   title: string;
+  /** True once the author sets a sort or Top N; the bar default stops applying. */
+  sortChosen?: boolean;
 };
+
+/**
+ * The draft after a change, with a new bar chart sorted by its measure,
+ * highest first, until the author chooses a sort or Top N themselves.
+ */
+export function withDraftSortDefault(descriptor: DatasetDescriptor, previous: DraftTileState | null, next: DraftTileState): DraftTileState {
+  const sortChosen = Boolean(next.sortChosen || previous?.sortChosen || (previous && sortTouched(previous.query, next.query)));
+  if (sortChosen) return { ...next, sortChosen: true };
+  const query = withDefaultBarSort(next.query, draftVisualization(descriptor, next));
+  return query === next.query ? next : { ...next, query };
+}
 
 /** The chart type a draft is added as: its view, drawn the way its shelves read. */
 export function draftVisualization(descriptor: DatasetDescriptor, draft: DraftTileState): string {
@@ -52,7 +67,7 @@ export function draftVisualization(descriptor: DatasetDescriptor, draft: DraftTi
 type PreviewState =
   | { state: 'idle' }
   | { state: 'running' }
-  | { state: 'ready'; result: QueryResult; ms: number }
+  | { state: 'ready'; result: QueryResult; ms: number; reviewJoin?: boolean; key: string }
   | { state: 'failed'; message: string };
 
 /**
@@ -69,9 +84,15 @@ export function draftColumnsMeta(descriptor: DatasetDescriptor, query: TileQuery
     meta.push({ name, kind, ...(field.format?.currency ? { unit: field.format.currency } : {}), ...(field.format?.decimals !== undefined ? { decimals: field.format.decimals } : {}) });
   }
   for (const dimension of query.dimensions) {
-    if (!dimension.timeGrain) continue;
+    const related = descriptor.fields.find((candidate) => candidate.kind === 'physical' && candidate.related && candidate.name.toLowerCase() === dimension.field.toLowerCase());
+    if (!dimension.timeGrain) {
+      // A related table's field reads as words ("Location Name"), never its joined name (design D2).
+      const name = dimension.alias ?? dimension.field;
+      if (related && columns.includes(name)) meta.push({ name, kind: 'text', label: humanize(related.name) });
+      continue;
+    }
     const name = dimension.alias ?? columns.find((column) => column === `${dimension.field}_${dimension.timeGrain}`) ?? dimension.field;
-    if (columns.includes(name)) meta.push({ name, kind: 'date', grain: dimension.timeGrain });
+    if (columns.includes(name)) meta.push({ name, kind: 'date', grain: dimension.timeGrain, ...(related ? { label: humanize(related.name) } : {}) });
   }
   // Calculations carry their own format and name, as the page run gives them.
   for (const output of checkTileCalculations(descriptor, query).outputs) {
@@ -91,7 +112,7 @@ export function draftColumnsMeta(descriptor: DatasetDescriptor, query: TileQuery
 export function draftTileBlocker(descriptor: DatasetDescriptor, draft: DraftTileState): string | undefined {
   if (!draft.query.measures.length && !draft.query.detail && !draft.query.calculations?.some((calculation) => calculation.expr)) return 'Pick at least one measure.';
   const validation = validateTileQuery(descriptor, draft.query);
-  if (!tileQueryValidationRuns(validation)) return validation.diagnostics[0]?.message ?? 'This field combination is not covered by the Dataset.';
+  if (!tileQueryValidationRuns(validation)) return validation.diagnostics[0]?.message ?? 'This field combination is not covered by the data.';
   const compatibility = datasetTileVisualizationCompatibility(draft.query, draftVisualization(descriptor, draft));
   return compatibility.compatible ? undefined : compatibility.message;
 }
@@ -128,6 +149,7 @@ export function DatasetQueryPreview({
   onResult?: (result: QueryResult | undefined) => void;
 }): JSX.Element {
   const [preview, setPreview] = useState<PreviewState>({ state: 'idle' });
+  const [barShowAll, setBarShowAll] = useState(false);
   const latest = useRef(0);
   // A pivot previews with its totals, as the added tile will run.
   const runQuery = visualization === 'pivot' && !query.detail
@@ -155,37 +177,52 @@ export function DatasetQueryPreview({
         const columns = named.length ? named : Object.keys(rows[0] ?? {});
         setPreview({
           state: 'ready',
+          key,
           ms: Math.round(performance.now() - started),
+          reviewJoin: Boolean(response.joins?.some((join) => join.trust !== 'certified')),
           result: { columns, rows, rowCount: response.result?.rowCount ?? rows.length, ...(descriptor ? { columnsMeta: draftColumnsMeta(descriptor, runQuery, columns) } : {}) },
         });
       }).catch(() => {
         // Superseded by a newer edit.
       });
-    }, 300);
+    // Short: a field click is one action, not typing (round 3: clicks felt a second late).
+    }, 120);
     return () => {
       window.clearTimeout(timer);
       controller.abort();
     };
   }, [sourceId, key, runnable]);
+  // A result for an earlier query is never drawn as this one (round 3): a KPI's
+  // single total drawn as a line read "1 row" with its total on the x-axis
+  // until the new run came back. Until the result matches, it is running.
+  const current: PreviewState = preview.state === 'ready' && preview.key !== key ? { state: 'running' } : preview;
   useEffect(() => {
     if (!onStatus) return;
-    if (preview.state === 'ready') {
-      const count = preview.result.rowCount ?? preview.result.rows.length;
-      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${preview.ms} ms`, 'ok');
-    } else if (preview.state === 'running') onStatus('Running…', 'idle');
-    else if (preview.state === 'failed') onStatus('Run failed', 'error');
-  }, [preview]);
+    if (current.state === 'ready') {
+      const count = current.result.rowCount ?? current.result.rows.length;
+      // A join nobody certified yet (drafted in setup) keeps the tile Not certified yet (design D2).
+      onStatus(`Live · ${count} ${count === 1 ? 'row' : 'rows'} · ${current.ms} ms${current.reviewJoin ? ' · Not certified yet: it uses a join nobody has certified' : ''}`, 'ok');
+    } else if (current.state === 'running') onStatus('Running…', 'idle');
+    else if (current.state === 'failed') onStatus('Run failed', 'error');
+  }, [current.state, current.state === 'ready' ? current.key : '', preview]);
   useEffect(() => {
-    onResult?.(preview.state === 'ready' ? preview.result : undefined);
-  }, [preview]);
-  if (preview.state === 'failed') return <div className="draft-empty warn"><strong>This query did not run</strong><span>{preview.message}</span></div>;
-  if (preview.state !== 'ready') return <div className="draft-empty loading"><span>{sourceId ? 'Running against live data…' : 'Runs when applied'}</span></div>;
+    onResult?.(current.state === 'ready' ? current.result : undefined);
+  }, [current.state, current.state === 'ready' ? current.key : '', preview]);
+  if (current.state === 'failed') return <div className="draft-empty warn"><strong>This query did not run</strong><span>{current.message}</span></div>;
+  if (current.state !== 'ready') return <div className="draft-empty loading"><span>{sourceId && runnable ? 'Running against live data…' : 'Runs when applied'}</span></div>;
   const shelved = { query, viz: { type: visualization, ...(encoding ? { encoding } : {}) } };
-  const shown = encodedTileResult(shelved, preview.result);
+  const shown = encodedTileResult(shelved, current.result);
   if (visualization === 'pivot' && !query.detail) return <PivotTable result={shown} layout={pivotLayout(encoding ?? encodingFromQuery(query, 'pivot'), query)} themeMode={themeMode} maxHeight={height + 20} />;
   if (visualization === 'table' || visualization === 'pivot') return <TableOutput result={shown} themeMode={themeMode} maxHeight={height + 20} initialPageSize={10} />;
   if ((visualization === 'single_value' || visualization === 'kpi') && usesKpiCard(query, undefined)) return <KpiCard result={shown} query={query} label="This KPI" />;
-  return <ChartOutput result={shown} themeMode={themeMode} chartConfig={{ ...encodedChartConfig(shelved), chart: visualization === 'single_value' || visualization === 'kpi' ? 'kpi' : visualization.replace(/_/g, '-') } as CellChartConfig} availableHeight={height} />;
+  const chartConfig = { ...encodedChartConfig(shelved), chart: visualization === 'single_value' || visualization === 'kpi' ? 'kpi' : visualization.replace(/_/g, '-') } as CellChartConfig;
+  // Above 50 categories a bar chart draws the top 25, as the added tile will.
+  const barCap = barCategoryCap(shown, { chart: visualization, category: chartConfig.x, value: chartConfig.y, query, showAll: barShowAll });
+  if (!barCap.cappable) return <ChartOutput result={shown} themeMode={themeMode} chartConfig={withBarCategoryLimit(chartConfig, barCap)} availableHeight={height} />;
+  return <>
+    <BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} />
+    <ChartOutput result={barCap.result} themeMode={themeMode} chartConfig={withBarCategoryLimit(chartConfig, barCap)} availableHeight={Math.max(96, height - 24)} />
+  </>;
 }
 
 /** The new tile on the canvas, drawn live as fields are picked. */
@@ -262,7 +299,7 @@ export function DraftTileInspector({
   };
   return <div className="inspector-body draft-inspector">
     <section className="inspector-title"><label htmlFor="draft-tile-title">Title</label><input id="draft-tile-title" value={draft.title} placeholder={defaultTileTitle(draft.query, humanize)} onChange={(event) => onChange({ ...draft, title: event.target.value })} /></section>
-    <section><label>Dataset</label><div className="static-field">{datasetLabel}</div></section>
+    <section><label>Data</label><div className="static-field">{datasetLabel}</div></section>
     {draft.query.detail ? null : <section>
       <ShelfEditor descriptor={descriptor} encoding={draft.encoding} query={draft.query} disabled={disabled} onChange={changeShelves} onFilterField={(field) => { setFilterField(field); setMoreOpen(true); }} visualization={draftVisualization(descriptor, draft)} result={result} />
       <small className="field-help">Drag fields from the Data panel onto a shelf, or click one to add it.</small>

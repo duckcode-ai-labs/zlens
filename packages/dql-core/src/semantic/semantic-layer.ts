@@ -295,9 +295,27 @@ export interface ComposeQueryOptions {
   tableMapping?: Record<string, string>;
 }
 
+/**
+ * One cube-to-cube join a composition took. A host matches it against its
+ * relationship model (DQL relationships) to decide whether the join is
+ * certified; the compiler itself never decides that.
+ */
+export interface SemanticJoinStep {
+  /** Cube names, in the direction the join was taken. */
+  left: string;
+  right: string;
+  /** The cubes' tables as modeled (before any tableMapping). */
+  leftTable: string;
+  rightTable: string;
+  /** Column pairs read from `${left}.a = ${right}.b [AND ...]`; empty when the ON clause is not plain key equalities. */
+  keys: Array<{ from: string; to: string }>;
+}
+
 export interface ComposeQueryResult {
   sql: string;
   joins: string[];
+  /** The cube-to-cube joins behind `joins`, in order; empty for a single-table composition. */
+  joinPath?: SemanticJoinStep[];
   tables: string[];
   /** Compilation strategy used to protect multi-fact metric grain. */
   strategy?: 'direct_join' | 'aggregate_islands';
@@ -1258,6 +1276,13 @@ export class SemanticLayer {
     return {
       sql,
       joins: joinClauses,
+      joinPath: joinsUsed.map((join) => ({
+        left: join.left,
+        right: join.right,
+        leftTable: this.cubes.get(join.left)?.table ?? join.left,
+        rightTable: this.cubes.get(join.right)?.table ?? join.right,
+        keys: semanticJoinKeys(join.sql),
+      })),
       tables: Array.from(new Set([
         ...allTables,
         ...joinsUsed.map((join) => this.cubes.get(join.right)?.table ?? join.right),
@@ -1279,7 +1304,9 @@ export class SemanticLayer {
   canComposeMetric(name: string): boolean {
     if (this.resolveComposableMetric(name)) return true;
     const ratio = this.ratioInputs(name);
-    return Boolean(ratio && ratio.every((input) => this.resolveComposableMetric(input.name)));
+    if (ratio) return ratio.every((input) => this.resolveComposableMetric(input.name));
+    const derived = this.derivedInputs(name);
+    return Boolean(derived && derived.inputs.every((input) => this.resolveComposableMetric(input.name)));
   }
 
   /**
@@ -1299,8 +1326,11 @@ export class SemanticLayer {
       const missing = inputs.filter((input) => !this.resolveComposableMetric(input.name)).map((input) => input.name);
       return `${name} is a ratio metric; the DQL native semantic engine runs a ratio of two simple metrics, and ${missing.join(' and ')} ${missing.length === 1 ? 'is' : 'are'} not one.`;
     }
+    if (kind === 'derived') {
+      return `${name} is a derived metric; the DQL native semantic engine runs a derived metric only when its expression is arithmetic over simple metrics with no offset window.`;
+    }
     if (kind && kind !== 'simple') {
-      return `${name} is a ${kind} metric; the DQL native semantic engine runs simple and ratio metrics only.`;
+      return `${name} is a ${kind} metric; the DQL native semantic engine runs simple, ratio and arithmetic derived metrics only.`;
     }
     return `${name} does not name a measure with a table and a supported aggregation, so the DQL native semantic engine cannot compose it.`;
   }
@@ -1314,7 +1344,10 @@ export class SemanticLayer {
    * dimension (MetricFlow refuses it too, and caps paths at two hops).
    */
   explainDimensionGap(metricNames: string[], dimensionReference: string): string | undefined {
-    const inputNames = metricNames.flatMap((name) => this.ratioInputs(name)?.map((input) => input.name) ?? [name]);
+    const inputNames = metricNames.flatMap((name) =>
+      this.ratioInputs(name)?.map((input) => input.name)
+      ?? this.derivedInputs(name)?.inputs.map((input) => input.name)
+      ?? [name]);
     const inputs = inputNames.map((name) => this.resolveComposableMetric(name));
     if (inputs.some((metric) => !metric)) return undefined;
     const target = this.resolveDimensionForMetrics(dimensionReference, inputs as MetricDefinition[]);
@@ -1393,16 +1426,49 @@ export class SemanticLayer {
   }
 
   /**
-   * Split a metric request into the plain metrics and ratio metrics it holds.
-   * undefined: no ratio metric was asked for. null: a ratio metric was, and
-   * one of its sides is not a simple metric this compiler can aggregate
+   * The inputs and expression of a derived metric this compiler can run:
+   * arithmetic (`+ - * /`, parentheses, numbers, NULLIF/COALESCE/ROUND/ABS)
+   * over simple metrics, each read at the requested grain with its own
+   * optional filter. undefined when the metric is not derived, or when it is
+   * but needs what this compiler does not run (an offset window or offset to
+   * grain, a function or name outside the list) — refuse, never guess.
+   */
+  private derivedInputs(name: string): {
+    expr: string;
+    inputs: Array<{ name: string; alias: string; filter?: MetricDefinition['filter'] }>;
+  } | undefined {
+    const metric = this.metricForReference(name);
+    if (!metric || (metric.metricType ?? '').toLowerCase() !== 'derived') return undefined;
+    const typeParams = (metric.typeParams ?? {}) as Record<string, unknown>;
+    const expr = typeof typeParams.expr === 'string' ? typeParams.expr.trim() : '';
+    if (!expr || !Array.isArray(typeParams.metrics) || typeParams.metrics.length === 0) return undefined;
+    const inputs: Array<{ name: string; alias: string; filter?: MetricDefinition['filter'] }> = [];
+    for (const value of typeParams.metrics) {
+      const raw = typeof value === 'string' ? { name: value } : value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+      const inputName = typeof raw?.name === 'string' ? raw.name.trim() : '';
+      if (!raw || !inputName) return undefined;
+      if (raw.offset_window || raw.offset_to_grain) return undefined;
+      const alias = typeof raw.alias === 'string' && raw.alias.trim() ? raw.alias.trim() : inputName;
+      const filter = parseSemanticFilter(raw.filter);
+      inputs.push(filter === undefined ? { name: inputName, alias } : { name: inputName, alias, filter });
+    }
+    const known = new Set(inputs.map((input) => input.alias.toLowerCase()));
+    if (renderDerivedExpression(expr, (alias) => known.has(alias.toLowerCase()) ? alias : undefined) === undefined) return undefined;
+    return { expr, inputs };
+  }
+
+  /**
+   * Split a metric request into the plain, ratio and derived metrics it holds.
+   * undefined: no ratio or derived metric was asked for. null: one was, and
+   * one of its inputs is not a simple metric this compiler can aggregate
    * (another ratio, a derived metric, an unknown name) — refuse, never guess.
    */
   private planNativeRatioMetrics(metrics: string[]): NativeRatioPlan | null | undefined {
-    if (!metrics.some((name) => this.ratioInputs(name))) return undefined;
+    const isDerived = (name: string) => (this.metricForReference(name)?.metricType ?? '').toLowerCase() === 'derived';
+    if (!metrics.some((name) => this.ratioInputs(name) || isDerived(name))) return undefined;
     const outputs: NativeRatioPlan['outputs'] = [];
     const inputs = new Map<string, MetricDefinition>();
-    const inputAlias = (ratioName: string, side: 'numerator' | 'denominator', input: { name: string; filter?: MetricDefinition['filter'] }): string | null => {
+    const inputAlias = (ratioName: string, side: string, input: { name: string; filter?: MetricDefinition['filter'] }): string | null => {
       const base = this.resolveComposableMetric(input.name);
       if (!base || this.ratioInputs(input.name)) return null;
       if (input.filter === undefined) {
@@ -1414,6 +1480,23 @@ export class SemanticLayer {
       return alias;
     };
     for (const name of metrics) {
+      if (isDerived(name)) {
+        const derived = this.derivedInputs(name);
+        if (!derived) return null;
+        const columns = new Map<string, string>();
+        for (const input of derived.inputs) {
+          const column = inputAlias(name, sanitizeSqlAlias(input.alias), input);
+          if (!column) return null;
+          columns.set(input.alias.toLowerCase(), column);
+        }
+        const expr = renderDerivedExpression(derived.expr, (alias) => {
+          const column = columns.get(alias.toLowerCase());
+          return column ? `${NATIVE_RATIO_SOURCE}.${column}` : undefined;
+        });
+        if (expr === undefined) return null;
+        outputs.push({ kind: 'derived', name: this.metricForReference(name)!.name, expr });
+        continue;
+      }
       const ratio = this.ratioInputs(name);
       if (!ratio) {
         if (!this.resolveComposableMetric(name)) return null;
@@ -1452,14 +1535,16 @@ export class SemanticLayer {
     }
     if (!inner) return null;
 
-    const source = 'ratio_inputs';
+    const source = NATIVE_RATIO_SOURCE;
     const grainKeys = inner.grainKeys ?? [];
     const outputName = (name: string): string => this.metricForReference(name)?.name ?? name;
     const select = [
       ...grainKeys.map((key) => `${source}.${key} AS ${key}`),
       ...plan.outputs.map((output) => output.kind === 'metric'
         ? `${source}.${outputName(output.name)} AS ${outputName(output.name)}`
-        : `1.0 * ${source}.${output.numerator} / NULLIF(${source}.${output.denominator}, 0) AS ${output.name}`),
+        : output.kind === 'derived'
+          ? `${output.expr} AS ${output.name}`
+          : `1.0 * ${source}.${output.numerator} / NULLIF(${source}.${output.denominator}, 0) AS ${output.name}`),
     ];
     // Aggregate islands arrive as `WITH <islands> SELECT ...`. Some warehouses
     // (SQL Server) reject a WITH inside a derived table, so the islands stay
@@ -1731,6 +1816,8 @@ export class SemanticLayer {
     return {
       sql: `WITH ${ctes.join(',\n')}\n${body}`,
       joins: joinClauses,
+      // The grain-key joins between islands touch no table; the islands' own joins do.
+      joinPath: compiled.flatMap((island) => island.joinPath ?? []),
       tables: Array.from(new Set(compiled.flatMap((island) => island.tables))),
       strategy: 'aggregate_islands',
       grainKeys,
@@ -2437,6 +2524,22 @@ export class SemanticLayer {
   }
 }
 
+/** `${left}.a = ${right}.b AND ...` as left→right column pairs; empty when any conjunct is not a plain key equality. */
+function semanticJoinKeys(sql: string): Array<{ from: string; to: string }> {
+  const column = String.raw`"?([A-Za-z_][\w$]*)"?`;
+  const forward = new RegExp(String.raw`^\(?\s*\$\{left\}\.${column}\s*=\s*\$\{right\}\.${column}\s*\)?$`);
+  const backward = new RegExp(String.raw`^\(?\s*\$\{right\}\.${column}\s*=\s*\$\{left\}\.${column}\s*\)?$`);
+  const keys: Array<{ from: string; to: string }> = [];
+  for (const part of sql.trim().split(/\s+and\s+/i)) {
+    const ahead = part.trim().match(forward);
+    const behind = ahead ? undefined : part.trim().match(backward);
+    if (ahead) keys.push({ from: ahead[1]!, to: ahead[2]! });
+    else if (behind) keys.push({ from: behind[2]!, to: behind[1]! });
+    else return [];
+  }
+  return keys;
+}
+
 function renderMetricExpression(metric: MetricDefinition): string {
   const sql = metric.sql.trim();
   if (/^(sum|count|count_distinct|avg|min|max)\s*\(/i.test(sql)) return sql;
@@ -2576,11 +2679,17 @@ function renderFilterSpec(
   return null;
 }
 
+const NATIVE_RATIO_SOURCE = 'ratio_inputs';
+
 interface NativeRatioPlan {
-  /** Requested metrics in order: plain metrics pass through, ratios divide two inputs. */
+  /**
+   * Requested metrics in order: plain metrics pass through, ratios divide two
+   * inputs, derived metrics evaluate their expression over their inputs.
+   */
   outputs: Array<
     | { kind: 'metric'; name: string }
     | { kind: 'ratio'; name: string; numerator: string; denominator: string }
+    | { kind: 'derived'; name: string; expr: string }
   >;
   /** Input alias → the simple metric composed for it (with any input filter applied). */
   inputs: Map<string, MetricDefinition>;
@@ -2762,6 +2871,50 @@ function semanticDimensionReferences(dimension: DimensionDefinition): string[] {
   if (dimension.qualifiedName) references.add(dimension.qualifiedName);
   if (dimension.source?.objectId) references.add(dimension.source.objectId);
   return Array.from(references);
+}
+
+const DERIVED_EXPRESSION_FUNCTIONS = new Set(['nullif', 'coalesce', 'round', 'abs']);
+
+/**
+ * Rewrite a derived metric expression, replacing each input reference with
+ * `resolve(name)`. undefined when the expression holds anything other than
+ * arithmetic over resolvable inputs: an unknown name, a function outside
+ * {@link DERIVED_EXPRESSION_FUNCTIONS}, a string, or a stray character.
+ */
+function renderDerivedExpression(expr: string, resolve: (name: string) => string | undefined): string | undefined {
+  const token = /\s*(?:([A-Za-z_][A-Za-z0-9_]*)|(\d+(?:\.\d+)?)|([-+*\/(),]))/y;
+  let out = '';
+  let index = 0;
+  while (index < expr.length) {
+    token.lastIndex = index;
+    const match = token.exec(expr);
+    if (!match || match[0].length === 0) {
+      if (/^\s*$/.test(expr.slice(index))) break;
+      return undefined;
+    }
+    index = token.lastIndex;
+    const [, identifier, number, symbol] = match;
+    if (identifier) {
+      const next = expr.slice(index).trimStart();
+      if (next.startsWith('(')) {
+        if (!DERIVED_EXPRESSION_FUNCTIONS.has(identifier.toLowerCase())) return undefined;
+        out += identifier.toUpperCase();
+        continue;
+      }
+      const resolved = resolve(identifier);
+      if (!resolved) return undefined;
+      out += resolved;
+    } else {
+      out += ` ${number ?? symbol} `;
+    }
+  }
+  return out
+    .replace(/\s+/g, ' ')
+    .replace(/\b(NULLIF|COALESCE|ROUND|ABS) \(/g, '$1(')
+    .replace(/\( /g, '(')
+    .replace(/ \)/g, ')')
+    .replace(/ ,/g, ',')
+    .trim();
 }
 
 function sanitizeSqlAlias(value: string): string {

@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, memo, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import {
-  Activity, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, FileText, Filter,
-  Gauge, Heading, LayoutDashboard, LineChart, Monitor, MoreHorizontal, PanelRight,
+  Activity, AlertTriangle, Archive, ArrowLeft, ArrowRight, BarChart3, Blocks, Bot, Check, ChevronDown, Code2, Copy, Database, FileText, Filter,
+  Gauge, Heading, Info, LayoutDashboard, LayoutGrid, LineChart, Monitor, MoreHorizontal, PanelRight,
   Play, Plus, Redo2, ScatterChart, Search, Settings2, ShieldCheck, Smartphone, Sparkles, Table2,
   Trash2, Type, Undo2, Upload, X,
 } from 'lucide-react';
@@ -39,17 +39,23 @@ import type { ThemeMode } from '../../themes/notebook-theme';
 import { themes } from '../../themes/notebook-theme';
 import { AiSidePanel } from '../agent/AiSidePanel';
 import { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog } from './builder/DatasetProposalDialog';
-import { DatasetTileBuilder } from './builder/DatasetTileBuilder';
 import { DataPanel, type DataPanelTarget } from './builder/DataPanel';
-import { DraftTileCard, DraftTileInspector, draftVisualization, type DraftTileState } from './builder/DraftTile';
+import { DraftTileCard, DraftTileInspector, draftVisualization, withDraftSortDefault, type DraftTileState } from './builder/DraftTile';
 import { encodedChartConfig, encodedTileResult } from './dashboard-chart-config';
+import { plainSourceText, sourceDisplayName } from './source-names';
+import { BarCapNote } from './builder/BarCapNote';
+import { barCategoryCap, withBarCategoryLimit } from './builder/sort-top-n';
 import { ProposedTileCard } from './builder/ProposedTile';
 import { ChartStylePanel, compactVizStyle } from './builder/ChartStylePanel';
 import { DriverView } from './DriverView';
 import { StoryView } from './StoryView';
 import { StoryEditor } from './builder/StoryEditor';
 import { CanvasEditor } from './builder/CanvasEditor';
-import { PageFormatPicker } from './builder/PageFormatPicker';
+import { PageFormatPicker, pageFormatLabel } from './builder/PageFormatPicker';
+import { ReaderPreviewParts } from './ReaderPreviewParts';
+import { certifiedByLabel, plainCertificationChecks, type ReaderTrust } from './reader-trust';
+import { pageShowsSummary, readerPageParts, SUMMARY_OPTION } from './reader-page-structure';
+import { NO_UNPUBLISHED_CHANGES, UNPUBLISHED_CHANGES, draftStatusWords, previewSettledWords, rowCountWords, sourceSwitchWords } from './app-studio-words';
 import { CanvasPageFrame, type CanvasFrameEditing } from './CanvasPageFrame';
 import { checkCanvasHtml, insertCanvasNodes, parseCanvasHtml, serializeCanvasNodes, type CanvasNode } from '@zlens/core/apps/canvas-page';
 import { buildStoryBindingCatalog, type StoryBindingTileInput } from '@zlens/core/apps/story-bindings';
@@ -60,13 +66,16 @@ import {
   CANVAS_GAP_PX,
   canvasRowHeight,
   canvasShortcut,
+  canvasShortcutApplies,
   cellsFromPixels,
   copyTileId,
   incrementalPreviewPlan,
   loadStudioHistory,
   saveStudioHistory,
+  selectionAfterAdd,
   tileBodyHeight,
   type CanvasShortcut,
+  type StudioAddOrigin,
 } from './builder/canvas-interactions';
 import { firstFreeGridCell, moveGridItem, nudgeGridItem, placeGridCopy, resizeGridItem, settleGridLayout } from '@zlens/core/apps/grid-layout';
 import { projectProposal, type ProposedPage } from './builder/proposal-preview';
@@ -77,8 +86,39 @@ import type { DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
 import { applyShowMe, showMeFactsFromDescriptor, showMeFirstChoice, showMeInputFromQuery } from '@zlens/core/apps/show-me';
 import { pivotLayout, withPivotRollups, withoutRollups, type PivotTotals } from '@zlens/core/apps/pivot';
 import { PivotTable } from './PivotTable';
-import { TableDatasetDialog } from './builder/TableDatasetDialog';
 import { KpiCard, usesKpiCard } from './KpiCard';
+import { AddDataBrowser } from './builder/AddDataBrowser';
+import { DataStep } from './builder/DataStep';
+import { QuickStartStep, QuickTilesPanel } from './builder/QuickChoices';
+import {
+  CONNECT_AI_TO_DESCRIBE_IN_WORDS,
+  QUICK_START_TAB,
+  quickChoiceData,
+  quickChoiceTiles,
+  quickStartAppName,
+  quickTileLayout,
+  type QuickChoice,
+} from './builder/quick-choices';
+import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
+import { CertifyReviewDialog } from './builder/CertifyReviewDialog';
+import { CertifyJoinDialog } from './builder/CertifyJoinDialog';
+import { appStudioAiDataResume } from './app-studio-handoff';
+import {
+  FIELD_TILES_OFF_MESSAGE,
+  appDataItems,
+  initialStudioStage,
+  planAddDataSource,
+  planRemoveDataSource,
+  savedQueryNeedsFields,
+  DOMAIN_EXPLANATION,
+  sourceCatalogKindLabel,
+  sourceKindLabel,
+  trustLabel,
+  unusedAppDataSources,
+  unusedSourcesPublishNote,
+  type StudioStage,
+} from './builder/app-data';
+import type { AuthoredDomainOption } from '../domains/authored-domain-options';
 
 /** A pivot shows every group; a row limit would cut its totals off. */
 function withoutRowLimit(query: TileQuery): TileQuery {
@@ -89,20 +129,21 @@ import { useMarkInteractions } from './useMarkInteractions';
 import { numberReceiptInfo } from './NumberReceipt';
 import type { MarkPointer } from '../output/echarts/EChartsChart';
 import { ShowMePanel, currentShowMeChart, tileShowMe } from './builder/ShowMe';
-import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
+import { DateRangePresetSelect, filterTimezone } from './date-range-presets';
+import { FiltersPanel, mergeStudioDateRanges, linkedComponentCount, studioFilterMappingOptions, type StudioFilterConfiguration } from './builder/GlobalFilterBar';
+import { studioDateControlHint, studioFilterRunPlan, studioFilterValue } from './app-studio-filter-values';
 import { DatasetInteractionInspector, DatasetTileQueryInspector } from './builder/InteractionLayer';
-import { humanize, messageOf } from './builder/studio-ui';
+import { StudioErrorBanner, humanize, messageOf } from './builder/studio-ui';
 import { usePersistedAgentThreadId } from '../agent/usePersistedAgentThreadId';
 import { ContextProposalReviewDrawer } from '../modeling/ContextProposalReviewDrawer';
 import { ChartOutput } from '../output/ChartOutput';
+import { filterValueCapHint, useFilterValueSearch, type FilterValueList, type FilterValueSource } from './filter-value-search';
+import { studioTileFilterNotices } from './app-studio-filter-notices';
 import { TableOutput } from '../output/TableOutput';
 import { APP_STUDIO_V2_STYLES } from './app-studio-v2-styles';
 import {
-  APP_STUDIO_AI_ACTIVITY_LABELS,
   appStudioProposalRetry,
-  appStudioReviewAddRetry,
   appStudioRevisionRetry,
-  appStudioSourceActionLabel,
   nextAppStudioAiActivityIndex,
   type AppStudioAiActivityRetry,
   type AppStudioSourceActionStatus,
@@ -112,16 +153,34 @@ import {
   appStudioProposalSourceAddMode,
   appStudioProposalRequiredSourceIds,
   appStudioPlannerProvenanceLabel,
-  availableAppStudioProposalSources,
+  appStudioAiComposeRequest,
+  appStudioAiDataModel,
+  appStudioNewDataSources,
+  appStudioPickedDraftSources,
+  appStudioUncoveredRequirements,
+  appStudioUnresolvedClarifications,
   summarizeAppStudioAiPlan,
   operationsForSelectedAppStudioSources,
   type AppStudioAiPlanSummary,
 } from './app-studio-ai-plan';
 import {
+  appStudioAskWords,
+  appStudioPlannerVoice,
+  appStudioPlannerWords,
+  appStudioLaunchTab,
+  CONNECT_AI_ACTION,
+  type AppStudioLaunchMode,
+  type AppStudioPlannerVoice,
+} from './app-studio-ai-voice';
+import {
   datasetFilterBindingsForSelection,
+  studioTileFilterBindings,
   discoverAppFilterCandidates,
   filterTileMappingsForField,
+  tileFilterOfferOperations,
+  tileFilterOffers,
   type StudioRuntimeFilterFields,
+  type StudioTileFilterOffer,
 } from './app-studio-filter-candidates';
 import {
   hydrateAppScopedDashboardFilterValues,
@@ -155,11 +214,22 @@ import {
   localPublicationSteps,
   pagesNeedingSettledPreview,
   planLegacySemanticApproval,
-  publicationBlockerCount,
+  draftTrust,
+  draftWithSourceReceipts,
+  plainReviewTaskMessage,
   publicationBlockingSources,
-  publicationIssueSummaries,
+  publicationReadiness,
+  REQUIRE_CERTIFIED_SENTENCE,
+  tilePatchWithoutRelatedFields,
+  type NotCertifiedPublicationTile,
+  uncertifiedPublicationSources,
   unresolvedPublicationRequirements,
 } from './app-studio-publish-readiness';
+import { PUBLISH_SAVE_FAILED_LEAD, createDraftSaveGate, runAfterPendingSaves } from './app-studio-save-gate';
+import { type AppTileNeedingJoinReview } from '@zlens/core/apps/app-tile-join-trust';
+import { appTileTrustFor, readersWillSeeText, tilesNotCertifiedText } from '@zlens/core/apps/app-trust';
+import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
+import { useDispatch } from '../../store/NotebookStore';
 import {
   isDatasetSourceRecoveryTask,
   runDatasetSourceRecoveryAction,
@@ -178,7 +248,7 @@ import {
 import { PublishedAppAudience } from './AppAudienceEditor';
 
 // Moved to builder/; re-exported for existing callers and tests.
-export { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog, DatasetTileBuilder };
+export { DatasetSourceAuthoringDialog, DatasetSourceRebindReviewDialog };
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -192,6 +262,7 @@ type StudioFilterAvailability = {
   values: string[];
   truncated: boolean;
   valueCount?: number;
+  valueCountCapped?: boolean;
   dateRange?: { min: string; max: string };
 };
 
@@ -222,7 +293,7 @@ export function appAutopilotExamplePrompts(
 ): AppAutopilotPrompt[] {
   const prompts: AppAutopilotPrompt[] = [
     { label: 'Group selected tile', prompt: 'Group the selected chart by Region.' },
-    { label: 'Explain selected tile', prompt: 'Explain what the selected Dataset tile can show and which approved fields support it.' },
+    { label: 'Explain selected tile', prompt: 'Explain what the selected tile can show and which approved fields support it.' },
   ];
   if (repairAvailability === 'failed_tile') {
     prompts.push({ label: 'Repair selected tile', prompt: 'What is the smallest governed repair needed before this selected tile can answer its intended question?' });
@@ -234,7 +305,7 @@ function appAutopilotRepairShortcutHint(
   repairAvailability: AppAutopilotRepairShortcutAvailability,
 ): string {
   if (repairAvailability === 'healthy') {
-    return 'The current preview is healthy, so there is no failed Dataset tile to repair. You can still change its title, layout, grouping, or visualization.';
+    return 'The current preview is healthy, so there is no failed tile to repair. You can still change its title, layout, grouping, or visualization.';
   }
   if (repairAvailability === 'failed_tile') {
     return 'This tile failed in the current preview. AI can prepare a governed repair for you to review.';
@@ -269,15 +340,20 @@ type AppStudioSourceFeedback = {
 };
 
 export interface AppStudioLaunchConfig {
-  mode: 'ai' | 'manual';
+  /** `quick`: the three quick choices, the Start form's first tab with no AI provider (round-2 design Q2). */
+  mode: AppStudioLaunchMode;
   prompt: string;
   name: string;
   template: StudioTemplate;
-  sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
+  /** @deprecated Ignored: there is no per-App data rule (T3). */
+  sourcePolicy?: AppStudioBuildDraft['sourcePolicy'];
+  /** The App's domain; '' is "All domains" (the server keeps `general`). */
+  domain?: string;
 }
 
 export interface AppStudioV2Props {
-  initialMode: 'ai' | 'manual';
+  /** `quick`: a manual App that opens the three quick choices after its data is picked (no AI, round-2 Q2). */
+  initialMode: 'ai' | 'manual' | 'quick';
   initialPrompt: string;
   initialName?: string;
   initialDraftId?: string | null;
@@ -286,66 +362,128 @@ export interface AppStudioV2Props {
   startImmediately?: boolean;
   baseAppId?: string | null;
   domain?: string;
+  /** The project's domains (Domains page), for the Add data domain chips. */
+  domainOptions?: AuthoredDomainOption[];
   audience?: string;
   themeMode: ThemeMode;
-  onBack: () => void;
+  /** Back to Apps, with the draft as it is now so the library lists it at once. */
+  onBack: (draft?: AppStudioBuildDraft | null) => void;
   onPublished: (app: AppSummary, dashboardId?: string) => void;
   onDraftDeleted: (recovery: { appName: string; recoveryId: string }) => void;
+  /**
+   * Whether an AI provider is connected (design D4); `undefined` while the
+   * settings load, which reads as connected. Without one, the toolbar's Quick
+   * tiles opens the three quick choices (round-2 Q2), and AI-only actions ask
+   * to connect a provider.
+   */
+  aiConnected?: boolean;
+  /** Opens Settings → AI provider. */
+  onConnectAi?: () => void;
 }
 
+/**
+ * Starting layouts, said as what they make. A layout other than Blank puts
+ * one intro you edit at the top of the page (its wording differs); you add
+ * the tiles. With Describe with AI, the AI also drafts the tiles under it.
+ */
 const TEMPLATE_OPTIONS: Array<{ id: StudioTemplate; title: string; description: string }> = [
-  { id: 'executive_brief', title: 'Executive Brief', description: 'Editorial summary, KPI band, decision evidence, and appendix.' },
-  { id: 'operational_dashboard', title: 'Operational Dashboard', description: 'Filters, KPIs, trends, drivers, and operating detail.' },
-  { id: 'investigation', title: 'Investigation', description: 'Question, findings, comparisons, caveats, and evidence.' },
-  { id: 'blank', title: 'Blank canvas', description: 'Start with one clean responsive page.' },
+  { id: 'executive_brief', title: 'Executive Brief', description: 'An intro to edit: the decision this page supports. Then add KPIs and evidence.' },
+  { id: 'operational_dashboard', title: 'Operational Dashboard', description: 'An intro to edit: what this page monitors. Then add KPIs, trends and detail.' },
+  { id: 'investigation', title: 'Investigation', description: 'An intro to edit: the question. Then add findings, caveats and evidence.' },
+  { id: 'blank', title: 'Blank page', description: 'One empty page.' },
 ];
+
+/**
+ * A text tile's words as the editor canvas shows them: a markdown heading is
+ * its own bold line, never run into the sentence after it ("Sales Manager
+ * Overview Monitor current…").
+ */
+export function studioTextTileLines(markdown: string): Array<{ text: string; heading: boolean }> {
+  return markdown.split(/\n\s*\n|\n(?=#)/).flatMap((block) => {
+    const text = block.replace(/\s*\n\s*/g, ' ').trim();
+    if (!text) return [];
+    const heading = /^#{1,6}\s+/.test(text);
+    return [{ text: text.replace(/^#{1,6}\s+/, ''), heading }];
+  });
+}
+
+/**
+ * The manual start button says where it goes: the Data step comes first, so
+ * "Open blank Studio" promised a canvas it did not open (Codex G2).
+ */
+export function manualLaunchLabel(template: StudioTemplate): string {
+  return template === 'blank' ? 'Continue to data' : 'Continue to data (with an intro)';
+}
 
 export function AppStudioLaunchSurface({
   config,
+  domainOptions = [],
   busy = false,
   error,
+  aiConnected,
+  onConnectAi,
   onChange,
   onSubmit,
 }: {
   config: AppStudioLaunchConfig;
+  /** The project's domains (Domains page). */
+  domainOptions?: AuthoredDomainOption[];
   busy?: boolean;
   error?: string | null;
+  /**
+   * Whether an AI provider is connected (design D4); `undefined` while the
+   * settings load. With none, the Describe with AI tab is Quick start: three
+   * quick choices after the data is picked, and no free text (round-2 Q2).
+   */
+  aiConnected?: boolean;
+  /** Opens Settings → AI provider. */
+  onConnectAi?: () => void;
   onChange: (patch: Partial<AppStudioLaunchConfig>) => void;
   onSubmit: () => void;
 }): JSX.Element {
-  const canSubmit = config.mode === 'ai' ? Boolean(config.prompt.trim()) : Boolean(config.name.trim());
+  const noAi = aiConnected === false;
+  const mode = appStudioLaunchTab(config.mode, aiConnected);
+  const canSubmit = mode === 'ai' ? Boolean(config.prompt.trim()) : mode === 'quick' ? true : Boolean(config.name.trim());
+  const domainLabel = domainOptions.find((option) => option.value === config.domain)?.label ?? config.domain ?? '';
   return <section className="dql-app-studio-home" aria-labelledby="app-studio-home-title">
     <style>{APP_STUDIO_V2_STYLES}</style>
     <div className="dql-studio-v2-intro">
       <span className="eyebrow"><Sparkles size={14} /> ZLens App Studio 2.0</span>
       <h1 id="app-studio-home-title">Start with the decision.<br />Shape the experience together.</h1>
-      <p>Build with AI or by hand. Everything stays a private draft until you publish it.</p>
+      <p>{noAi ? 'Start from a few quick choices or build by hand.' : 'Build with AI or by hand.'} Only you can see it until you publish it.</p>
     </div>
     <div className="dql-studio-v2-start-card">
       <div className="mode-switch" role="tablist" aria-label="Authoring mode">
-        <button type="button" role="tab" aria-selected={config.mode === 'ai'} className={config.mode === 'ai' ? 'on' : ''} onClick={() => onChange({ mode: 'ai', template: config.template === 'blank' ? 'operational_dashboard' : config.template })}><Sparkles size={16} /> Describe with AI</button>
-        <button type="button" role="tab" aria-selected={config.mode === 'manual'} className={config.mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank', name: config.name || 'Untitled Analytics App' })}><LayoutDashboard size={16} /> Start manually</button>
+        {noAi
+          ? <button type="button" role="tab" aria-selected={mode === 'quick'} className={mode === 'quick' ? 'on' : ''} onClick={() => onChange({ mode: 'quick', template: 'blank', name: config.name === 'Untitled Analytics App' ? '' : config.name })}><LayoutGrid size={16} /> {QUICK_START_TAB}</button>
+          : <button type="button" role="tab" aria-selected={mode === 'ai'} className={mode === 'ai' ? 'on' : ''} onClick={() => onChange({ mode: 'ai', template: config.template === 'blank' ? 'operational_dashboard' : config.template })}><Sparkles size={16} /> Describe with AI</button>}
+        <button type="button" role="tab" aria-selected={mode === 'manual'} className={mode === 'manual' ? 'on' : ''} onClick={() => onChange({ mode: 'manual', template: 'blank', name: config.name || 'Untitled Analytics App' })}><LayoutDashboard size={16} /> Start manually</button>
       </div>
       <label className="primary-field">
-        <span>{config.mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
-        {config.mode === 'ai'
+        <span>{mode === 'ai' ? 'What decision should this App support?' : 'What should this App be called?'}</span>
+        {mode === 'ai'
           ? <textarea value={config.prompt} onChange={(event) => onChange({ prompt: event.target.value })} placeholder="Build a weekly revenue health App for finance leaders with trends, drivers, and customer detail." rows={4} />
-          : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder="Revenue Operations" />}
+          : <input value={config.name} onChange={(event) => onChange({ name: event.target.value })} placeholder={mode === 'quick' ? (domainLabel ? quickStartAppName({ domainLabel }) : 'Sales overview') : 'Revenue Operations'} />}
       </label>
-      {config.mode === 'ai' ? <div className="ai-launch-explainer"><span><Sparkles size={16} /></span><div><strong>AI picks your certified data and drafts a first version</strong><small>You review the data it chose and every tile before anything is applied.</small></div></div> : null}
-      <details className="launch-options" open={config.mode === 'manual'}>
+      <label className="launch-domain-field">
+        <span>Domain</span>
+        <select value={config.domain ?? ''} onChange={(event) => onChange({ domain: event.target.value })} aria-label="Domain">
+          <option value="">All domains</option>
+          {domainOptions.map((option) => <option key={option.value} value={option.value} disabled={option.disabled}>{option.label}</option>)}
+        </select>
+        <small>{DOMAIN_EXPLANATION} Lists of data start on this one; you can still pick data from any domain.</small>
+      </label>
+      {mode === 'quick' ? <div className="ai-launch-explainer quick"><span><LayoutGrid size={16} /></span><div><strong>Pick your data, then a total, a trend and a top list</strong><small>You get exactly the tiles you choose, with plain titles. No AI is used. Left empty, the name is the Domain’s, like “Sales overview”.{onConnectAi ? <> <button type="button" className="link" onClick={onConnectAi}>{CONNECT_AI_TO_DESCRIBE_IN_WORDS}</button></> : null}</small></div></div> : null}
+      {mode === 'ai' ? <div className="ai-launch-explainer"><span><Sparkles size={16} /></span><div><strong>AI picks your data, certified first, and drafts a first version</strong><small>You review the data it chose and every tile before anything is applied.</small></div></div> : null}
+      {mode === 'quick' ? null : <details className="launch-options" open={mode === 'manual'}>
         <summary><span>Starting layout</span><strong>{TEMPLATE_OPTIONS.find((option) => option.id === config.template)?.title ?? 'Operational Dashboard'}</strong><ChevronDown size={15} /></summary>
         <div className="template-grid">
           {TEMPLATE_OPTIONS.map((option) => <button key={option.id} type="button" className={config.template === option.id ? 'on' : ''} onClick={() => onChange({ template: option.id })}><span>{templateIcon(option.id)}</span><strong>{option.title}</strong><small>{option.description}</small></button>)}
         </div>
-      </details>
-      <section className="studio-source-policy-row" aria-label="App source policy">
-        <header><span className="policy-mark"><ShieldCheck size={17} /></span><p><strong>Only certified data</strong><small>Every number comes from data someone owns and checked. Recommended.</small></p></header>
-        <label className="studio-review-toggle"><input type="checkbox" checked={config.sourcePolicy === 'include_review_required'} onChange={(event) => onChange({ sourcePolicy: event.target.checked ? 'include_review_required' : 'governed_only' })} /><i aria-hidden="true" /><span><strong>Also let me try data that needs review</strong><small>Useful while exploring; a page that uses it cannot publish until that data is certified.</small></span></label>
-      </section>
-      {error ? <div className="studio-error" role="alert">{error}</div> : null}
-      <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing local draft…' : config.mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : <><LayoutDashboard size={17} /> Open blank Studio</>}</button>
-      <small className="launch-next-step">Private local draft first · review sources and preview results · publish only when ready</small>
+      </details>}
+      {error ? <StudioErrorBanner error={error} /> : null}
+      <button type="button" className="launch-action" onClick={onSubmit} disabled={busy || !canSubmit}>{busy ? 'Preparing…' : mode === 'ai' ? <><Sparkles size={17} /> Generate editable App</> : mode === 'quick' ? <><Database size={17} /> Choose data</> : <><LayoutDashboard size={17} /> {manualLaunchLabel(config.template)}</>}</button>
+      <small className="launch-next-step">Only you can see it until you publish · preview with live data · publish when ready</small>
     </div>
   </section>;
 }
@@ -354,6 +492,7 @@ function AppStudioAiActivitySurface({
   docked = false,
   activity,
   label,
+  voice = 'ai',
   onBack,
   onReturn,
   onRetry,
@@ -362,6 +501,8 @@ function AppStudioAiActivitySurface({
   docked?: boolean;
   activity: AppStudioAiActivity;
   label: string;
+  /** Keyword suggestions say so while they run (design D4). */
+  voice?: AppStudioPlannerVoice;
   onBack: () => void;
   onReturn?: () => void;
   onRetry: () => void;
@@ -372,13 +513,13 @@ function AppStudioAiActivitySurface({
     <div>
       <span className="loading-mark"><Sparkles size={20} /></span>
       {activity.status === 'running' ? <>
-        <strong id="studio-ai-activity-title">{docked ? 'Drafting a plan' : 'Preparing your editable App proposal'}</strong>
+        <strong id="studio-ai-activity-title">{voice === 'keywords' ? 'Matching your words to your data' : docked ? 'Drafting a plan' : 'Preparing your editable App proposal'}</strong>
         <small className="studio-ai-activity-label" role="status" aria-live="polite">{label}</small>
-        <small>{docked ? 'Proposed tiles appear on the canvas for you to apply or discard. Sources keep their catalog trust.' : 'Sources remain governed or review-required exactly as cataloged. You will review them before the canvas is generated.'}</small>
+        <small>{docked ? 'Proposed tiles appear on the page for you to apply or discard. Sources keep their catalog trust.' : 'Data stays Certified or Not certified yet exactly as cataloged. You review it before the page is generated.'}</small>
       </> : <>
-        <strong id="studio-ai-activity-title">The source proposal needs another try</strong>
+        <strong id="studio-ai-activity-title">{voice === 'keywords' ? appStudioPlannerWords('keywords').errorTitle : 'The source proposal needs another try'}</strong>
         <small role="alert">{activity.error ?? 'App Studio could not prepare the source proposal.'}</small>
-        <span className="studio-ai-activity-actions">{onReturn ? <button type="button" onClick={onReturn}>Back to source review</button> : null}<button type="button" className="primary" onClick={onRetry}>Try AI proposal again</button></span>
+        <span className="studio-ai-activity-actions">{onReturn ? <button type="button" onClick={onReturn}>Back to source review</button> : null}<button type="button" className="primary" onClick={onRetry}>{appStudioPlannerWords(voice).retryLabel}</button></span>
       </>}
     </div>
   </section>;
@@ -389,21 +530,37 @@ export function AppStudioV2({
   initialPrompt,
   initialName = '',
   initialDraftId,
-  initialSourcePolicy = 'governed_only',
+  initialSourcePolicy: _initialSourcePolicy,
   initialTemplate,
   startImmediately = false,
   baseAppId,
   domain,
+  domainOptions = [],
   audience,
   themeMode,
   onBack,
   onPublished,
   onDraftDeleted,
+  aiConnected,
+  onConnectAi,
 }: AppStudioV2Props): JSX.Element {
   const [draft, setDraft] = useState<AppStudioBuildDraft | null>(null);
-  const [mode, setMode] = useState<'ai' | 'manual'>(initialMode);
-  const [sourcePolicy, setSourcePolicy] = useState<AppStudioBuildDraft['sourcePolicy']>(initialSourcePolicy);
-  const [template, setTemplate] = useState<StudioTemplate>(initialTemplate ?? (initialMode === 'manual' ? 'blank' : 'operational_dashboard'));
+  const dispatchNotebook = useDispatch();
+  /** The App's domain, stored on its first page when the draft is created; `general` means every domain. */
+  const draftDomain = appDraftDomain(draft);
+  const [mode] = useState<'ai' | 'manual'>(initialMode === 'quick' ? 'manual' : initialMode);
+  /** Quick start (round-2 Q2): after the Data step, the three quick choices build the first tiles. */
+  const quickStart = initialMode === 'quick';
+  /** The author typed the App's name on the Start form; otherwise Build App names it "<Domain> overview". */
+  const quickNameTyped = Boolean(initialName.trim());
+  const [quickError, setQuickError] = useState<string | null>(null);
+  /** A Domain's name as the Domains page shows it; '' for All domains. */
+  const domainLabelOf = (value?: string): string => {
+    const id = (value ?? '').trim();
+    if (!id || id.toLowerCase() === 'general') return '';
+    return domainOptions.find((option) => option.value === id)?.label ?? id;
+  };
+  const [template, setTemplate] = useState<StudioTemplate>(initialTemplate ?? (initialMode === 'ai' ? 'operational_dashboard' : 'blank'));
   const [prompt, setPrompt] = useState(initialPrompt);
   const [name, setName] = useState(initialName);
   const [panel, setPanel] = useState<StudioPanel>('sources');
@@ -412,17 +569,34 @@ export function AppStudioV2({
   const [workspaceWidth, setWorkspaceWidth] = useState(1260);
   const [activePageId, setActivePageId] = useState('overview');
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null);
+  /**
+   * Tiles added in this session ("pageId:tileId"): each shows a one-click
+   * offer for the page filters it can take ("Customer Name filter can apply
+   * to this tile — Apply"). Nothing links on its own; "Keep unfiltered"
+   * dismisses one offer ("pageId:tileId:filterId").
+   */
+  const [filterOfferTiles, setFilterOfferTiles] = useState<ReadonlySet<string>>(() => new Set());
+  const [dismissedFilterOffers, setDismissedFilterOffers] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedSource, setSelectedSource] = useState<AppBlockRecommendation | null>(null);
   const [catalog, setCatalog] = useState<AppBlockRecommendation[]>([]);
   const [catalogQuery, setCatalogQuery] = useState('');
-  const [catalogNextCursor, setCatalogNextCursor] = useState<string | undefined>();
-  const [catalogTotal, setCatalogTotal] = useState(0);
   const [catalogRefreshNonce, setCatalogRefreshNonce] = useState(0);
-  // Start from a table: the dialog, and the new Dataset to open once the catalog lists it.
-  const [tableDialogOpen, setTableDialogOpen] = useState(false);
-  const [pendingDatasetSourceId, setPendingDatasetSourceId] = useState<string | null>(null);
-  const [datasetTilesEnabled, setDatasetTilesEnabled] = useState(false);
-  const [enablingDatasets, setEnablingDatasets] = useState(false);
+  /** A new manual App picks its data first (the Data step), then opens the canvas. */
+  const [stage, setStage] = useState<StudioStage>('canvas');
+  /**
+   * The App's first AI proposal ("Describe with AI") goes through the Data
+   * step: AI shows the data it picked, then Build pages shows its tiles. Off
+   * once the proposal is applied or discarded.
+   */
+  const [aiDataFlow, setAiDataFlow] = useState(false);
+  /** The canvas "+ Add data" dialog. */
+  const [addDataOpen, setAddDataOpen] = useState(false);
+  /** Catalog records resolved when data was added, so the App's data list can show domain and owner. */
+  const [knownSourceItems, setKnownSourceItems] = useState<Record<string, AppBlockRecommendation>>({});
+  /** Tile settings "Choose another Dataset" opens the Data pane switcher. */
+  const [dataPickerRequest, setDataPickerRequest] = useState(0);
+  // Field-based tiles are on unless the project sets `apps.datasets: false`.
+  const [datasetTilesEnabled, setDatasetTilesEnabled] = useState(true);
   const [catalogLoading, setCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [proposal, setProposal] = useState<AppStudioAiProposal | null>(null);
@@ -439,8 +613,24 @@ export function AppStudioV2({
   const [undoStack, setUndoStack] = useState<AppStudioBuildDraft[]>([]);
   const [redoStack, setRedoStack] = useState<AppStudioBuildDraft[]>([]);
   const [busy, setBusy] = useState(false);
+  // Saves in flight (C1): Publish and Run wait for them instead of ignoring the click.
+  const [saveGate] = useState(createDraftSaveGate);
+  useEffect(() => { saveGate.setBusy(busy); }, [saveGate, busy]);
+  /** What the Publish button is doing after a click: waiting for saves, then checking. */
+  const [publishPhase, setPublishPhase] = useState<'saving' | 'checking' | null>(null);
+  const publishPhaseRef = useRef(publishPhase);
+  publishPhaseRef.current = publishPhase;
+  const [runWaitingForSaves, setRunWaitingForSaves] = useState(false);
+  /** The error a Publish stopped by a failed save shows; its banner offers Try again. */
+  const [publishBlockedBy, setPublishBlockedBy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [savedMessage, setSavedMessage] = useState('Local draft');
+  /**
+   * The App could not move to a newer version of one of its data sources
+   * (R03). `message` is what the banner says (it is also `error`), with the
+   * planner's reason under Technical details and the ways out as buttons.
+   */
+  const [sourceSwitchProblem, setSourceSwitchProblem] = useState<{ sourceId: string; message: string; technical: string; after: 'certified' | 'refresh' } | null>(null);
+  const [savedMessage, setSavedMessage] = useState<string>(() => draftStatusWords({ published: Boolean(baseAppId) }));
   const [previewRunsByPage, setPreviewRunsByPage] = useState<Record<string, DashboardRunResponse>>({});
   const [previewing, setPreviewing] = useState(false);
   const [savingDatasetTileId, setSavingDatasetTileId] = useState<string | null>(null);
@@ -472,10 +662,30 @@ export function AppStudioV2({
   const [actionsOpen, setActionsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [publishReviewOpen, setPublishReviewOpen] = useState(false);
+  const publishReviewOpenRef = useRef(publishReviewOpen);
+  publishReviewOpenRef.current = publishReviewOpen;
+  /** Whether the project folder is a git repository; Publish mentions git only then. Unknown until asked. */
+  const [projectInGit, setProjectInGit] = useState<boolean | undefined>(undefined);
+  useEffect(() => {
+    if (!publishReviewOpen || projectInGit !== undefined) return;
+    let cancelled = false;
+    api.fetchGitStatus().then((status) => { if (!cancelled) setProjectInGit(Boolean(status.inRepo)); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [publishReviewOpen, projectInGit]);
   const [publishIssues, setPublishIssues] = useState<string[]>([]);
+  // The project's `apps.requireCertifiedToPublish` (T3), read when Publish opens.
+  const [requireCertifiedToPublish, setRequireCertifiedToPublish] = useState(false);
   const [datasetAuthoringSource, setDatasetAuthoringSource] = useState<AppBlockRecommendation | null>(null);
   const [datasetAuthoringProposal, setDatasetAuthoringProposal] = useState<ContextAuthoringProposalV1 | null>(null);
   const [datasetRebindPrompt, setDatasetRebindPrompt] = useState<{ sourceId: string; title: string } | null>(null);
+  /** The saved query "Make row-level" is open for (Data pane). */
+  const [savedQueryFields, setSavedQueryFields] = useState<AppBlockRecommendation | null>(null);
+  /** The short review before "I vouch for this — certify" (design Q1). */
+  const [certifyReview, setCertifyReview] = useState<{ sourceId: string; name: string } | null>(null);
+  // T4: a join certifies in its own short review, here, never a detour to Modeling.
+  const [certifyJoin, setCertifyJoin] = useState<{ sourceId: string; joinId: string; name: string } | null>(null);
+  /** Saved queries whose result columns are being read as fields, or could not be (design D1). */
+  const [savedQueryFieldReads, setSavedQueryFieldReads] = useState<Record<string, { state: 'reading' } | { state: 'failed'; error: string }>>({});
   const [copilotOpen, setCopilotOpen] = useState(false);
   /** Edit shows the build chrome; View shows the page exactly as a reader sees it. */
   const [studioView, setStudioView] = useState<'edit' | 'view'>('edit');
@@ -486,10 +696,8 @@ export function AppStudioV2({
   /** A tile being built from fields; it lives on the canvas until added or cancelled. */
   const [draftTile, setDraftTile] = useState<DraftTileState | null>(null);
   const [draftResult, setDraftResult] = useState<QueryResult | undefined>();
-  /** Dataset the author picked in the Data panel (a selected tile's Dataset wins). */
+  /** App data the author picked in the Data panel (a selected tile's Dataset wins). */
   const [chosenDatasetKey, setChosenDatasetKey] = useState<string | null>(null);
-  /** The Data tab shows one Dataset's fields, or the full governed source catalog. */
-  const [dataView, setDataView] = useState<'fields' | 'sources'>('fields');
   /** Page shown on the canvas while an AI proposal is open (it may be a proposed new page). */
   const [proposalPageId, setProposalPageId] = useState<string | null>(null);
   /** One AI entry point: compose or revise the page, or change the selected tile. */
@@ -511,6 +719,15 @@ export function AppStudioV2({
   const previewSequenceRef = useRef(0);
   const previewRunScopeRef = useRef(createAppStudioPreviewRunScope());
   const filterPreviewTimerRef = useRef<number | null>(null);
+  // The latest state, for filter re-runs that start before React re-renders
+  // (an immediate run) or after it (a debounced one). A closure would carry
+  // the values from when the control changed, which ran the PREVIOUS choice.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const previewAppScopedFilterValuesRef = useRef(previewAppScopedFilterValues);
+  previewAppScopedFilterValuesRef.current = previewAppScopedFilterValues;
+  const previewVariablesByPageRef = useRef(previewVariablesByPage);
+  previewVariablesByPageRef.current = previewVariablesByPage;
   const sourceFeedbackTimerRef = useRef<number | null>(null);
   const workspaceRef = useRef<HTMLElement>(null);
   // The App keeps one durable universal-AI thread. The selected page/tile/run
@@ -558,7 +775,16 @@ export function AppStudioV2({
         setDraft(selected);
         setName(selected.name);
         setActivePageId(selected.pages[0]?.id ?? 'overview');
-        setSavedMessage('Resumed local draft');
+        setSavedMessage(draftStatusWords({ published: Boolean(selected.baseApp) }));
+        // An AI draft with no pages built yet (one Ask or an MCP client made,
+        // or a "Describe with AI" draft left early) opens at the AI Data step.
+        const aiResume = appStudioAiDataResume(selected);
+        if (aiResume) {
+          setPrompt(aiResume.prompt);
+          setStage('data');
+          setAiDataFlow(true);
+          await requestAiProposal(selected, aiResume.prompt, aiResume.requiredSourceIds, false);
+        }
         return;
       }
       if (!baseAppId) return;
@@ -569,14 +795,14 @@ export function AppStudioV2({
         audience,
         domain,
         authoringMode: 'manual',
-        sourcePolicy: 'governed_only',
         template: 'blank',
       })).draft;
       if (!active) return;
       setDraft(resolved);
       setName(resolved.name);
       setActivePageId(resolved.pages[0]?.id ?? 'overview');
-      setSavedMessage('Safe local edit draft');
+      // A fresh edit of a published App has changed nothing yet (round 3).
+      setSavedMessage(existing ? UNPUBLISHED_CHANGES : NO_UNPUBLISHED_CHANGES);
     }).catch((cause) => {
       if (active && (baseAppId || initialDraftId)) setError(messageOf(cause));
     }).finally(() => {
@@ -595,12 +821,11 @@ export function AppStudioV2({
       void api.listAppSourceCandidates(draft.id, {
         query: catalogQuery,
         limit: 50,
+        ...(draftDomain ? { domains: [draftDomain] } : {}),
       }, controller.signal).then((page) => {
         if (!active) return;
         setCatalog(page.items);
-        setCatalogNextCursor(page.nextCursor);
-        setCatalogTotal(page.total);
-        setDatasetTilesEnabled(page.features?.datasets === true);
+        setDatasetTilesEnabled(page.features?.datasets !== false);
       }).catch((cause) => {
         if (active && !controller.signal.aborted) {
           setCatalog([]);
@@ -613,7 +838,7 @@ export function AppStudioV2({
       controller.abort();
       window.clearTimeout(timer);
     };
-  }, [catalogRefreshNonce, draft?.id, draft?.sourcePolicy, catalogQuery]);
+  }, [catalogRefreshNonce, draft?.id, draftDomain, catalogQuery]);
 
   useEffect(() => {
     const handleAskResult = (event: Event) => {
@@ -661,7 +886,7 @@ export function AppStudioV2({
   // A preview run lists option values only for some filters. Dataset-bound
   // choice filters fall back to the field's distinct values, the same lookup
   // the published viewer uses, so a Region filter is never a blank text box.
-  const datasetFieldValueCacheRef = useRef<Record<string, string[]>>({});
+  const datasetFieldValueCacheRef = useRef<Record<string, FilterValueList>>({});
   useEffect(() => {
     if (!activePage) return;
     let cancelled = false;
@@ -671,20 +896,23 @@ export function AppStudioV2({
       const source = datasetOptionSource(filter as never, (activePage as { datasets?: never }).datasets);
       if (!source) continue;
       const key = `${source.sourceId}:${source.field}`;
-      const apply = (values: string[]) => {
-        if (cancelled || values.length === 0) return;
+      // The first page of values, and whether more exist: a capped list
+      // searches every value on the server as the author types.
+      const apply = (list: FilterValueList) => {
+        if (cancelled || list.values.length === 0) return;
         setFilterOptionsByPage((current) => {
           const pageOptions = current[activePage.id] ?? {};
           if (pageOptions[filter.id]?.values.length) return current;
-          return { ...current, [activePage.id]: { ...pageOptions, [filter.id]: { values, truncated: false, valueCount: values.length } } };
+          return { ...current, [activePage.id]: { ...pageOptions, [filter.id]: { values: list.values, truncated: Boolean(list.truncated), valueCount: list.valueCount ?? list.values.length, ...(list.valueCountCapped ? { valueCountCapped: true } : {}) } } };
         });
       };
       const cached = datasetFieldValueCacheRef.current[key];
       if (cached) { apply(cached); continue; }
       void api.datasetFieldValues(source.sourceId, source.field).then((result) => {
         if (!result.ok) return;
-        datasetFieldValueCacheRef.current[key] = result.values;
-        apply(result.values);
+        const list: FilterValueList = { values: result.values, truncated: result.truncated, ...(result.valueCount !== undefined ? { valueCount: result.valueCount } : {}), ...(result.valueCountCapped ? { valueCountCapped: true } : {}) };
+        datasetFieldValueCacheRef.current[key] = list;
+        apply(list);
       });
     }
     return () => { cancelled = true; };
@@ -727,7 +955,6 @@ export function AppStudioV2({
     // page, tile, or preview switch presents a new current context.
     setAutopilotReview(null);
   }, [autopilotPresentationScope]);
-  const filteredCatalog = catalog;
   const runtimeFilterFields = useMemo<StudioRuntimeFilterFields>(() => Object.fromEntries(
     Object.entries(previewRunsByPage).map(([pageId, run]) => [pageId, Object.fromEntries(
       run.tiles.map((tile) => [tile.tileId, tile.filterableColumns ?? []]),
@@ -741,15 +968,58 @@ export function AppStudioV2({
   useEffect(() => {
     if (!proposal && !autopilotReview) setProposalPageId(null);
   }, [proposal, autopilotReview]);
-  // Pages that only need a fresh run are run by Publish itself, so they are not fixes for the author.
-  const publishStepCount = useMemo(
-    () => draft ? publicationBlockerCount(draft, publishIssues) - pagesNeedingSettledPreview(draft).length : 0,
-    [draft, publishIssues],
+  // The same list the publish dialog shows (B6). Pages that only need a
+  // fresh run are run by Publish itself, so they are not counted as fixes.
+  // Who certified each of the App's data and when (D5, F03): the draft holds
+  // no receipts, so they come from the current catalog records Studio holds.
+  const trustDraft = useMemo(
+    () => draft ? draftWithSourceReceipts(draft, [...Object.values(knownSourceItems), ...catalog]) : null,
+    [catalog, draft, knownSourceItems],
   );
+  const publishStepCount = useMemo(
+    () => trustDraft ? publicationReadiness(trustDraft, publishIssues, previewRunsByPage, { requireCertifiedToPublish }).fixCount : 0,
+    [trustDraft, previewRunsByPage, publishIssues, requireCertifiedToPublish],
+  );
+  // Each tile's trust from the same answer Publish uses (B6): the editor's dot
+  // never says certified while Publish says the tile is not certified yet.
+  const studioTrust = useMemo(() => trustDraft ? draftTrust(trustDraft, previewRunsByPage) : null, [trustDraft, previewRunsByPage]);
 
   useEffect(() => {
     setSelectedProposalSourceIds(new Set(proposal?.defaultSelectedSourceIds ?? proposalSummary?.sources.map((source) => source.id) ?? []));
   }, [proposal, proposalSummary]);
+
+  // The AI Data step shows each pick's domain: resolve the picks the catalog page did not list.
+  useEffect(() => {
+    if (!draft || !aiDataFlow || !proposalSummary) return;
+    const seen = new Set([...Object.keys(knownSourceItems), ...catalog.map((item) => item.sourceId ?? item.id)]);
+    const missing = proposalSummary.sources.map((source) => source.id).filter((sourceId) => !seen.has(sourceId));
+    if (!missing.length) return;
+    let active = true;
+    void api.resolveAppSourceCandidates(draft.id, missing, { includeReviewRequired: true }).then((resolved) => {
+      if (!active) return;
+      setKnownSourceItems((items) => ({ ...items, ...Object.fromEntries(resolved.items.map((item) => [item.sourceId ?? item.id, item])) }));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [aiDataFlow, draft?.id, proposalSummary]);
+
+  // The App's own data, resolved by id whatever the Data list's page shows,
+  // and again whenever a source changes (certified, refreshed): each tile's
+  // byline says who certified it and when (F03), and a saved query changed
+  // since it was certified says so (F07).
+  const appSourceKey = (draft?.sources ?? [])
+    .filter((source) => source.kind === 'block' || source.kind === 'certified_block' || source.kind === 'review_block')
+    .map((source) => `${source.id}@${source.sourceRevision ?? ''}:${source.lifecycle ?? ''}:${source.trustState}`)
+    .join('|');
+  useEffect(() => {
+    if (!draft || !appSourceKey) return;
+    const ids = appSourceKey.split('|').map((entry) => entry.slice(0, entry.lastIndexOf('@')));
+    let active = true;
+    void api.resolveAppSourceCandidates(draft.id, ids, { includeReviewRequired: true }).then((resolved) => {
+      if (!active || !resolved.items.length) return;
+      setKnownSourceItems((items) => ({ ...items, ...Object.fromEntries(resolved.items.map((item) => [item.sourceId ?? item.id, item])) }));
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [appSourceKey, draft?.id]);
 
   useEffect(() => {
     if (!proposalSummary || selectedSource || catalog.length === 0) return;
@@ -765,18 +1035,19 @@ export function AppStudioV2({
     try {
       const result = await api.createAppBuild({
         baseAppId: baseAppId ?? undefined,
-        name: name.trim() || undefined,
+        name: quickStart ? quickStartAppName({ name, domainLabel: domainLabelOf(domain) }) : name.trim() || undefined,
         goal: prompt.trim() || name.trim() || 'A dashboard of live, checked numbers',
         audience,
         domain,
         authoringMode: mode,
-        sourcePolicy,
         template,
       });
       setDraft(result.draft);
       setName(result.draft.name);
       setActivePageId(result.draft.pages[0]?.id ?? 'overview');
-      setSavedMessage('Saved locally');
+      setStage(initialStudioStage({ mode, resumingDraft: false, editingPublishedApp: Boolean(baseAppId) }));
+      setAiDataFlow(mode === 'ai' && !baseAppId);
+      setSavedMessage(draftStatusWords({ published: Boolean(latestDraftRef.current?.baseApp), saved: true }));
       setPreviewRunsByPage({});
       setPreviewVariablesByPage({});
       setFilterOptionsByPage({});
@@ -818,11 +1089,11 @@ export function AppStudioV2({
       setProposal(result.proposal);
       setAiActivity(null);
       setCopilotOpen(false);
-      setSavedMessage('AI plan ready for review');
+      setSavedMessage(appStudioPlannerVoice(result.proposal, aiConnected) === 'keywords' ? 'Keyword suggestions ready for review' : 'AI plan ready for review');
       return true;
     } catch (cause) {
       const message = messageOf(cause);
-      setSavedMessage('AI proposal needs attention');
+      setSavedMessage(aiConnected === false ? 'Keyword suggestions need attention' : 'AI proposal needs attention');
       setAiActivity({ status: 'error', retry, returnToProposal, error: message });
       return false;
     } finally {
@@ -853,7 +1124,7 @@ export function AppStudioV2({
       });
       setProposal(result.proposal);
       if (showActivity) setAiActivity(null);
-      setSavedMessage('AI proposal revised on the server');
+      setSavedMessage(appStudioPlannerVoice(result.proposal, aiConnected) === 'keywords' ? 'Keyword suggestions updated' : 'AI proposal revised on the server');
       return true;
     } catch (cause) {
       const message = messageOf(cause);
@@ -883,7 +1154,7 @@ export function AppStudioV2({
       // the existing App plan remains untouched until an author explicitly
       // reviews and saves that separate source definition.
       setDatasetAuthoringProposal(result.contextProposal);
-      setSavedMessage('Review the typed Dataset draft for this uncovered requirement');
+      setSavedMessage('Review the typed data draft for this uncovered requirement');
     } catch (cause) {
       setError(messageOf(cause));
     } finally {
@@ -895,39 +1166,23 @@ export function AppStudioV2({
     sourceId: string,
     reviewRequired: boolean,
     source?: AppBlockRecommendation,
-  ) => {
-    if (!draft || !proposal || !proposalSummary) return;
+    /** The Data step shows the activity steps while AI re-plans. */
+    showActivity = false,
+  ): Promise<boolean> => {
+    if (!draft || !proposal || !proposalSummary) return false;
     const requiredSourceIds = appStudioProposalRequiredSourceIds(selectedProposalSourceIds, sourceId);
     const addMode = appStudioProposalSourceAddMode({
       alreadyProposed: proposalSummary.sources.some((candidate) => candidate.id === sourceId),
       reviewRequired,
-      sourcePolicy: draft.sourcePolicy,
     });
     if (source) setSelectedSource(source);
     if (addMode === 'select_existing') {
       setSelectedProposalSourceIds((current) => new Set([...current, sourceId]));
-      return;
+      return true;
     }
     setProposalAddingSourceId(sourceId);
     try {
-      if (addMode === 'enable_review_and_replan') {
-        const retry = appStudioReviewAddRetry(prompt, sourceId, requiredSourceIds);
-        setAiActivityIndex(0);
-        setAiActivity({ status: 'running', retry, returnToProposal: true });
-        const next = await mutate([{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }]);
-        if (!next) {
-          setAiActivity({
-            status: 'error',
-            retry,
-            returnToProposal: true,
-            error: 'The review lane could not be enabled. Your existing proposal is unchanged.',
-          });
-          return;
-        }
-        await requestAiProposal(next, prompt, requiredSourceIds, true);
-      } else {
-        await reviseAiProposal(undefined, requiredSourceIds, false);
-      }
+      return await reviseAiProposal(undefined, requiredSourceIds, showActivity);
     } finally {
       setProposalAddingSourceId(null);
     }
@@ -965,14 +1220,53 @@ export function AppStudioV2({
   // same revision twice, and the second failed with a proposal conflict.
   const latestDraftRef = useRef(draft);
   latestDraftRef.current = draft;
+  // Back hands the library the draft as it is now: a new App is listed at once (round 3).
+  const goBack = () => onBack(latestDraftRef.current);
+  // A tile just added, or the tile being built, is scrolled into view (round 3):
+  // the author may be at the bottom of the page while it lands near the top.
+  const pendingRevealRef = useRef<string | null>(null);
+  // The tile previews are drawn again only when what they show changes (round 3):
+  // their actions call the newest handlers through this ref, never a stale copy.
+  const tileHandlersRef = useRef<StudioTileHandlers | null>(null);
+  const revealTile = (tileId: string) => { pendingRevealRef.current = tileId; };
+  useEffect(() => {
+    const tileId = pendingRevealRef.current;
+    if (!tileId) return;
+    const element = canvasRef.current?.querySelector<HTMLElement>(`[data-tile-id="${tileId.replace(/["\\]/g, '\\$&')}"]`);
+    if (!element) return;
+    pendingRevealRef.current = null;
+    element.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [draft]);
+  const buildingTile = Boolean(draftTile);
+  useEffect(() => {
+    if (!buildingTile) return;
+    canvasRef.current?.querySelector<HTMLElement>('.draft-tile')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+  }, [buildingTile]);
   const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
-  const mutate = (operations: AppStudioDraftOperation[], recordHistory = true): Promise<AppStudioBuildDraft | null> => {
-    if (!draft || operations.length === 0) return Promise.resolve(null);
-    const queued = mutationQueueRef.current.then(() => applyMutation(operations, recordHistory));
+  /** Runs `work` after every save already queued, so it always starts from the newest draft. */
+  const enqueueDraftWork = <T,>(work: () => Promise<T>): Promise<T> => {
+    const queued = saveGate.track(mutationQueueRef.current.then(work));
     mutationQueueRef.current = queued.catch(() => undefined);
     return queued;
   };
-  const applyMutation = async (operations: AppStudioDraftOperation[], recordHistory: boolean) => {
+  const mutate = (operations: AppStudioDraftOperation[], recordHistory = true, rerunTileIds?: string[]): Promise<AppStudioBuildDraft | null> => {
+    if (!draft || operations.length === 0) return Promise.resolve(null);
+    return enqueueDraftWork(() => applyMutation(operations, recordHistory, rerunTileIds));
+  };
+  /**
+   * A save whose operations are worked out from the newest draft when its turn
+   * comes, not from what was on screen when it was asked for (round 3): two
+   * quick field clicks on one tile both land, the second on top of the first.
+   */
+  const mutateFromLatest = (build: (current: AppStudioBuildDraft) => AppStudioDraftOperation[] | null): Promise<AppStudioBuildDraft | null> => {
+    if (!draft) return Promise.resolve(null);
+    return enqueueDraftWork(async () => {
+      const current = latestDraftRef.current;
+      const operations = current ? build(current) : null;
+      return operations?.length ? applyMutation(operations, true) : null;
+    });
+  };
+  const applyMutation = async (operations: AppStudioDraftOperation[], recordHistory: boolean, rerunTileIds?: string[]) => {
     const current = latestDraftRef.current;
     if (!current) return null;
     setBusy(true);
@@ -985,8 +1279,10 @@ export function AppStudioV2({
       const priorRun = pageId ? previewRunsByPage[pageId] : undefined;
       // Editing, adding or removing a tile reruns only that tile; the rest of
       // the page keeps its results. Page-wide edits still rerun everything.
+      // A caller that knows which tiles an edit reaches (a filter offer applied
+      // to one tile) says so; the rest of the page keeps its results.
       const plan = !keepVisiblePreview && pageId && canRerunTilesOnly(pageId)
-        ? incrementalPreviewPlan(operations, pageId)
+        ? (rerunTileIds ? { rerunTileIds, dropTileIds: rerunTileIds } : incrementalPreviewPlan(operations, pageId))
         : undefined;
       const result = await api.patchAppBuild(current.id, current.revision, operations, current.proposalHash);
       latestDraftRef.current = result.draft;
@@ -1020,11 +1316,13 @@ export function AppStudioV2({
         setUndoStack((items) => [...items.slice(-29), previous]);
         setRedoStack([]);
       }
-      setSavedMessage('Saved locally');
+      setSavedMessage(draftStatusWords({ published: Boolean(latestDraftRef.current?.baseApp), saved: true }));
+      saveGate.clearFailure();
       return result.draft;
     } catch (cause) {
       setSavedMessage('Save failed');
       setError(messageOf(cause));
+      saveGate.recordFailure({ message: messageOf(cause), retry: () => enqueueDraftWork(() => applyMutation(operations, recordHistory, rerunTileIds)) });
       return null;
     } finally {
       setBusy(false);
@@ -1045,7 +1343,7 @@ export function AppStudioV2({
     const run = previewRunsByPage[page.id];
     const runTile = run?.tiles.find((candidate) => candidate.tileId === tile.i);
     if (!run || !runTile || runTile.status !== 'ok' || !isCurrentDatasetTileEvidence(tile, runTile)) {
-      setError('Run the current Dataset tile before saving it as a reusable review draft.');
+      setError('Run the current tile before saving it as a reusable review draft.');
       return;
     }
     setSavingDatasetTileId(tile.i);
@@ -1060,14 +1358,14 @@ export function AppStudioV2({
       });
       if (!result.ok) {
         setError(`${result.code}: ${result.error}`);
-        setSavedMessage('Reusable block was not saved');
+        setSavedMessage('Reusable saved query was not saved');
         return;
       }
       setSavedDatasetReviewDrafts((current) => ({ ...current, [`${page.id}:${tile.i}`]: result }));
       setSavedMessage(`Reusable review draft saved at ${result.path}`);
     } catch (cause) {
       setError(messageOf(cause));
-      setSavedMessage('Reusable block was not saved');
+      setSavedMessage('Reusable saved query was not saved');
     } finally {
       setSavingDatasetTileId((current) => current === tile.i ? null : current);
     }
@@ -1087,11 +1385,11 @@ export function AppStudioV2({
     const run = previewRunsByPage[page.id];
     const runTile = run?.tiles.find((candidate) => candidate.tileId === tile.i);
     if (!saved?.replacementEligible) {
-      setError('Save a current representable Dataset tile as a review draft before replacing it.');
+      setError('Save a current representable tile as a review draft before replacing it.');
       return;
     }
     if (!run || !runTile || runTile.status !== 'ok' || !isCurrentDatasetTileEvidence(tile, runTile)) {
-      setError('Run the current Dataset tile before replacing it with a review draft.');
+      setError('Run the current tile before replacing it with a review draft.');
       return;
     }
     setReplacingDatasetTileId(tile.i);
@@ -1108,7 +1406,7 @@ export function AppStudioV2({
       });
       if (!result.ok) {
         setError(`${result.code}: ${result.error}`);
-        setSavedMessage('Dataset tile was not replaced');
+        setSavedMessage('Tile was not replaced');
         return;
       }
       setUndoStack((items) => [...items.slice(-29), draft]);
@@ -1119,10 +1417,10 @@ export function AppStudioV2({
       setPreviewHierarchyDrillsByPage({});
       setFilterOptionsByPage({});
       setSavedDatasetReviewDrafts({});
-      setSavedMessage(`Replaced with review draft after equivalence proof ${result.equivalenceProofFingerprint.slice(0, 18)}…`);
+      setSavedMessage('Replaced with the review draft · its results match');
     } catch (cause) {
       setError(messageOf(cause));
-      setSavedMessage('Dataset tile was not replaced');
+      setSavedMessage('Tile was not replaced');
     } finally {
       setReplacingDatasetTileId((current) => current === tile.i ? null : current);
     }
@@ -1147,14 +1445,14 @@ export function AppStudioV2({
       });
       if (!result.ok) {
         setError(`${result.code}: ${result.error}`);
-        setSavedMessage('Dataset conversion was not previewed');
+        setSavedMessage('Conversion was not previewed');
         return;
       }
       setSemanticTileConversionPreviews((current) => ({ ...current, [`${page.id}:${tile.i}`]: result }));
-      setSavedMessage('Dataset conversion is ready for review · the App is unchanged');
+      setSavedMessage('Conversion is ready for review · the App is unchanged');
     } catch (cause) {
       setError(messageOf(cause));
-      setSavedMessage('Dataset conversion was not previewed');
+      setSavedMessage('Conversion was not previewed');
     } finally {
       setPreviewingSemanticConversionTileId((current) => current === tile.i ? null : current);
     }
@@ -1168,7 +1466,7 @@ export function AppStudioV2({
     if (!draft || !tile.semantic || tile.query) return;
     const preview = semanticTileConversionPreviews[`${page.id}:${tile.i}`];
     if (!preview) {
-      setError('Preview the current legacy semantic tile before applying this Dataset conversion.');
+      setError('Preview the current legacy semantic tile before applying this conversion.');
       return;
     }
     setAcceptingSemanticConversionTileId(tile.i);
@@ -1180,7 +1478,7 @@ export function AppStudioV2({
       });
       if (!result.ok) {
         setError(`${result.code}: ${result.error}`);
-        setSavedMessage('Dataset conversion was not applied');
+        setSavedMessage('Conversion was not applied');
         return;
       }
       setUndoStack((items) => [...items.slice(-29), draft]);
@@ -1192,10 +1490,10 @@ export function AppStudioV2({
       setFilterOptionsByPage({});
       setSavedDatasetReviewDrafts({});
       setSemanticTileConversionPreviews({});
-      setSavedMessage(`Converted to a Dataset query after equivalence proof ${result.equivalenceProofFingerprint.slice(0, 18)}…`);
+      setSavedMessage('Converted to a field query · its results match');
     } catch (cause) {
       setError(messageOf(cause));
-      setSavedMessage('Dataset conversion was not applied');
+      setSavedMessage('Conversion was not applied');
     } finally {
       setAcceptingSemanticConversionTileId((current) => current === tile.i ? null : current);
     }
@@ -1246,16 +1544,10 @@ export function AppStudioV2({
     setSavedMessage('Composing App…');
     try {
       const previous = draft;
-      const result = await api.composeAppBuild(draft.id, {
-        mode: 'ai',
-        expectedRevision: draft.revision,
-        expectedProposalHash: draft.proposalHash,
-        proposalId: proposal.id,
-        selectedSourceIds: Array.from(selectedProposalSourceIds),
-        ...(skippedProposalTileIds.size > 0 ? { rejectedTileIds: Array.from(skippedProposalTileIds) } : {}),
-      });
+      const result = await api.composeAppBuild(draft.id, appStudioAiComposeRequest(draft, proposal.id, selectedProposalSourceIds, skippedProposalTileIds));
       const next = result.draft;
       setDraft(next);
+      setAiDataFlow(false);
       setUndoStack((items) => [...items.slice(-29), previous]);
       setRedoStack([]);
       setPreviewRunsByPage({});
@@ -1265,7 +1557,7 @@ export function AppStudioV2({
       const generatedPage = next.pages.find((page) => page.id === proposal.targetPageId) ?? next.pages[0];
       setActivePageId(generatedPage?.id ?? activePageId);
       if (generatedPage && pageHasDataTiles(generatedPage)) {
-        setSavedMessage('App generated · loading governed data…');
+        setSavedMessage('App generated · loading data…');
         await runPreviewForDraft(next, generatedPage.id);
       }
     } catch (cause) {
@@ -1328,11 +1620,6 @@ export function AppStudioV2({
     if (next) setActivePageId(id);
   };
 
-  const selectSource = (source: AppBlockRecommendation) => {
-    setSelectedSource(source);
-    setError(null);
-  };
-
   /**
    * Source authoring is intentionally separate from adding a field tile. The
    * dialog only accepts a current block Dataset catalog row; semantic models
@@ -1341,8 +1628,8 @@ export function AppStudioV2({
   const openDatasetAuthoring = (source: AppBlockRecommendation) => {
     if (!datasetSourceAuthoringModel(source)) {
       setError(source.capabilities?.dataset?.kind === 'semantic'
-        ? 'This semantic Dataset is owned by its provider model. Update the governed provider definition, then refresh App sources.'
-        : 'Refresh this source before authoring its Dataset definition.');
+        ? 'These Metrics are owned by their semantic model. Update the semantic model, then refresh App sources.'
+        : 'Refresh this source before authoring its field definition.');
       return;
     }
     setDatasetAuthoringProposal(null);
@@ -1354,7 +1641,7 @@ export function AppStudioV2({
     if (!draft || !datasetAuthoringSource) return;
     setBusy(true);
     setError(null);
-    setSavedMessage('Preparing reviewed Dataset definition…');
+    setSavedMessage('Preparing reviewed field definition…');
     try {
       const proposal = await api.createContextProposal({
         origin: 'manual',
@@ -1364,15 +1651,15 @@ export function AppStudioV2({
           change,
           evidence: [
             `App Studio source ${datasetAuthoringSource.sourceId ?? datasetAuthoringSource.id}`,
-            `Dataset source revision ${datasetAuthoringSource.sourceRevision ?? datasetAuthoringSource.fingerprint}`,
+            `Data source version ${datasetAuthoringSource.sourceRevision ?? datasetAuthoringSource.fingerprint}`,
           ],
         }],
       });
       setDatasetAuthoringSource(null);
       setDatasetAuthoringProposal(proposal);
-      setSavedMessage('Review the exact Dataset definition change');
+      setSavedMessage('Review the exact field definition change');
     } catch (cause) {
-      setSavedMessage('Dataset definition needs attention');
+      setSavedMessage('Field definition needs attention');
       setError(messageOf(cause));
     } finally {
       setBusy(false);
@@ -1386,8 +1673,8 @@ export function AppStudioV2({
     setSelectedSource(null);
     setCatalogRefreshNonce((current) => current + 1);
     setSavedMessage(proposal.status === 'committed'
-      ? 'Dataset definition saved as review-required. Refresh this App’s Dataset binding explicitly to use it.'
-      : 'Dataset proposal closed without changing this App binding.');
+      ? 'Field definition saved; it is not certified yet. Refresh this data to use it.'
+      : 'Field proposal closed without changing this App’s data.');
     setPanel('sources');
     setPanelOpen(true);
   };
@@ -1398,11 +1685,26 @@ export function AppStudioV2({
    * available after a browser or CLI restart rather than depending on a
    * transient "just accepted" proposal state.
    */
+  /** The data's name as the author knows it: "Rerun Cert Probe", never its file or id. */
+  const sourceDisplayName = (sourceId: string): string => {
+    const item = knownSourceItems[sourceId] ?? catalog.find((candidate) => (candidate.sourceId ?? candidate.id) === sourceId);
+    if (item?.name) return humanize(item.name);
+    const stored = latestDraftRef.current?.sources.find((source) => source.id === sourceId);
+    const fileName = stored?.sourceRef?.split('/').pop()?.replace(/\.[a-z]+$/i, '');
+    return fileName ? humanize(fileName) : 'this data';
+  };
+  const showSourceSwitchProblem = (sourceId: string, technical: string, after: 'certified' | 'refresh') => {
+    const message = sourceSwitchWords(sourceDisplayName(sourceId), after);
+    setSourceSwitchProblem({ sourceId, message, technical, after });
+    setSavedMessage('Data still needs attention');
+    setError(message);
+  };
+
   const refreshDatasetBinding = async (sourceId: string, enableReviewPreview = false) => {
     if (!draft) return;
     setBusy(true);
     setError(null);
-    setSavedMessage('Checking the current Dataset definition…');
+    setSavedMessage('Checking the current field definition…');
     try {
       const result = await runDatasetSourceRebindAction({
         draft,
@@ -1427,8 +1729,7 @@ export function AppStudioV2({
           setDatasetRebindPrompt({ sourceId, title });
           setSavedMessage('Review policy choice required');
         } else {
-          setSavedMessage('Dataset binding still needs attention');
-          setError(result.error);
+          showSourceSwitchProblem(sourceId, result.error, 'refresh');
         }
         return;
       }
@@ -1440,10 +1741,10 @@ export function AppStudioV2({
       setDatasetRebindPrompt(null);
       setCatalogRefreshNonce((current) => current + 1);
       setSavedMessage(result.plan.requiresReviewPolicy
-        ? 'Dataset binding refreshed for local review preview · Project publication remains blocked'
-        : 'Dataset binding refreshed · run a current preview');
+        ? 'Data refreshed for local review preview · Project publication remains blocked'
+        : 'Data refreshed · run a current preview');
     } catch (cause) {
-      setSavedMessage('Dataset binding refresh failed');
+      setSavedMessage('Data refresh failed');
       setError(messageOf(cause));
     } finally {
       setBusy(false);
@@ -1474,41 +1775,195 @@ export function AppStudioV2({
     }]);
   };
 
-  const enableDatasetTiles = async () => {
-    setEnablingDatasets(true);
-    const result = await api.enableDatasetTiles();
-    setEnablingDatasets(false);
-    if (!result.ok) {
-      setCatalogError(result.error || 'ZLens could not turn on field-based tiles for this project.');
-      return;
+  /**
+   * Connect one source to the App (the Data step and "+ Add data"). The
+   * current catalog record is resolved first, then saved with the existing
+   * `upsert_source` operation. Certified or not, data is added the same way
+   * (T3: no per-App data rule).
+   */
+  const addDataSource = async (sourceId: string, options: { allowReview: boolean; refresh?: boolean }): Promise<boolean> => {
+    const current = latestDraftRef.current;
+    if (!current) return false;
+    setError(null);
+    try {
+      let resolved = await api.resolveAppSourceCandidates(current.id, [sourceId], { includeReviewRequired: true });
+      let candidate = resolved.items.find((item) => (item.sourceId ?? item.id) === sourceId);
+      // A saved query comes with its result's fields (design D1). When they
+      // can't be read it is still added, and shows as it is.
+      if (candidate && datasetTilesEnabled && savedQueryNeedsFields(candidate)) {
+        const fields = await api.readSavedQueryFields(sourceId);
+        if (fields.ok && fields.read) {
+          resolved = await api.resolveAppSourceCandidates(current.id, [sourceId], { includeReviewRequired: true });
+          candidate = resolved.items.find((item) => (item.sourceId ?? item.id) === sourceId) ?? candidate;
+        } else if (!fields.ok) {
+          setSavedQueryFieldReads((reads) => ({ ...reads, [sourceId]: { state: 'failed', error: fields.error ?? 'ZLens could not read its columns.' } }));
+        }
+      }
+      const plan = planAddDataSource(current, candidate, options);
+      if (!plan.ok) {
+        setError(plan.error);
+        return false;
+      }
+      const next = await mutate(plan.operations);
+      if (!next) return false;
+      if (candidate) setKnownSourceItems((items) => ({ ...items, [sourceId]: candidate }));
+      setSavedMessage(options.refresh
+        ? `${candidate ? humanize(candidate.name) : 'Data'} fields are ready`
+        : `${candidate ? humanize(candidate.name) : 'Data'} added to this App`);
+      if (stage === 'canvas' && candidate) setChosenDatasetKey(candidate.id);
+      return true;
+    } catch (cause) {
+      setError(messageOf(cause));
+      return false;
     }
-    setCatalogRefreshNonce((current) => current + 1);
-    // Tiles that were refused while the feature was off can run now.
-    void runPreview();
   };
 
-  const loadMoreSources = async () => {
-    if (!draft || !catalogNextCursor || catalogLoading) return;
-    setCatalogLoading(true);
-    setCatalogError(null);
-    try {
-      const page = await api.listAppSourceCandidates(draft.id, {
-        query: catalogQuery,
-        cursor: catalogNextCursor,
-        limit: 50,
-      });
-      setCatalog((current) => {
-        const seen = new Set(current.map((source) => source.id));
-        return [...current, ...page.items.filter((source) => !seen.has(source.id))];
-      });
-      setCatalogNextCursor(page.nextCursor);
-      setCatalogTotal(page.total);
-      setDatasetTilesEnabled(page.features?.datasets === true);
-    } catch (cause) {
-      setCatalogError(messageOf(cause));
-    } finally {
-      setCatalogLoading(false);
+  /**
+   * A saved query got fields (design D1): it is a Dataset now. The catalog
+   * reloads; when the saved query is already this App's data, its copy in
+   * the App is replaced with the new one so the Data pane shows its fields.
+   */
+  const savedQueryFieldsAdded = async (sourceId: string, status: 'checked' | 'review' | 'draft') => {
+    setSavedQueryFields(null);
+    setCatalogRefreshNonce((current) => current + 1);
+    const current = latestDraftRef.current;
+    const inApp = Boolean(current?.sources.some((source) => source.id === sourceId));
+    if (inApp && !(await addDataSource(sourceId, { allowReview: false }))) return;
+    setSavedMessage(status === 'checked'
+      ? 'Row-level now · checked, not certified yet'
+      : 'Row-level now · not certified yet');
+  };
+
+  /**
+   * Data was certified on purpose (design Q1: "I vouch for this — certify",
+   * from the publish check or a Data list ⋯ menu). Certifying writes a new
+   * revision of its file, so the App's copy and the tiles that use it are
+   * refreshed to that revision. When the publish check is open, its pages
+   * run again so the check can say "Ready to publish".
+   */
+  const afterDataCertified = async (sourceId: string) => {
+    setCertifyReview(null);
+    setCatalogRefreshNonce((value) => value + 1);
+    const current = latestDraftRef.current;
+    if (!current) return;
+    const usedByTiles = current.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === sourceId));
+    if (!usedByTiles) {
+      const source = current.sources.find((candidate) => candidate.id === sourceId);
+      const shownAsItIs = current.pages.some((page) => page.layout.items.some((tile) => !tile.query && tile.sourceId === sourceId));
+      if (source && shownAsItIs) {
+        // A saved query shown as it is (T4): its copy and its tiles move to the certified revision.
+        try {
+          const resolved = await api.resolveAppSourceCandidates(current.id, [sourceId]);
+          const operations = certifiedBlockOperations(current, [source], new Map(resolved.items.map((item) => [item.id, item])));
+          if (operations.length) await mutate(operations);
+        } catch (cause) {
+          setError(messageOf(cause));
+          return;
+        }
+      } else if (source) {
+        await addDataSource(sourceId, { allowReview: false, refresh: true });
+      }
+      setSavedMessage('Certified');
+      const latest = latestDraftRef.current;
+      if (!latest || !publishReviewOpenRef.current) return;
+      setPublishIssues([]);
+      let refreshed = latest;
+      for (const page of refreshed.pages.filter((candidate) => pageHasDataTiles(candidate))) {
+        const recorded = await runPreviewForDraft(refreshed, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+        if (!recorded) return;
+        refreshed = recorded;
+      }
+      await publish(false, refreshed);
+      return;
     }
+    setBusy(true);
+    setError(null);
+    let next: AppStudioBuildDraft | null = null;
+    try {
+      const result = await runDatasetSourceRebindAction({
+        draft: current,
+        sourceId,
+        resolveCandidates: (draftId, sourceIds, options) => api.resolveAppSourceCandidates(draftId, sourceIds, options),
+        patchDraft: (draftId, expectedRevision, operations, expectedProposalHash) => api.patchAppBuild(draftId, expectedRevision, operations, expectedProposalHash),
+        onPreviewInvalidated: () => {
+          previewSequenceRef.current += 1;
+          setPreviewRunsByPage({});
+          setFilterOptionsByPage({});
+          setPreviewing(false);
+        },
+      });
+      if (!result.ok) {
+        showSourceSwitchProblem(sourceId, result.error, 'certified');
+        return;
+      }
+      next = result.draft;
+      // Its review tasks ("… must be certified …") are done: certifying was the review.
+      const doneTasks = next.reviewTasks.filter((task) => task.status === 'open' && task.sourceId === sourceId);
+      if (doneTasks.length) {
+        next = (await api.patchAppBuild(next.id, next.revision, doneTasks.map((task) => ({ type: 'remove_review_task' as const, taskId: task.id })), next.proposalHash)).draft;
+      }
+      latestDraftRef.current = next;
+      setDraft(next);
+      setUndoStack((items) => [...items.slice(-29), current]);
+      setRedoStack([]);
+      setPublishIssues([]);
+      setSavedMessage('Certified · running the page again');
+    } catch (cause) {
+      setError(messageOf(cause));
+      return;
+    } finally {
+      setBusy(false);
+    }
+    if (!next || !publishReviewOpenRef.current) return;
+    let refreshed = next;
+    for (const page of refreshed.pages.filter((candidate) => pageHasDataTiles(candidate))) {
+      const recorded = await runPreviewForDraft(refreshed, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+      if (!recorded) return;
+      refreshed = recorded;
+    }
+    await publish(false, refreshed);
+  };
+
+  /** Open a saved query in Block Studio, where saved queries certify (design Q1). */
+  const openSavedQueryInBlockStudio = (path: string) => {
+    setCertifyReview(null);
+    setPublishReviewOpen(false);
+    const file = { name: path.split('/').pop() ?? path, path, type: 'block' as const, folder: 'blocks' };
+    dispatchNotebook({ type: 'FILE_ADDED', file });
+    void api.openBlockStudio(path).then((payload) => dispatchNotebook({ type: 'OPEN_BLOCK_STUDIO', file, payload }));
+  };
+
+  /**
+   * A saved query in this App without fields yet (an App made before design
+   * D1, or a fresh checkout): read its result columns, then refresh the App's
+   * copy so the Data pane shows them. A failure leaves it usable as it is.
+   */
+  const readSavedQueryFieldsIntoApp = async (item: AppBlockRecommendation) => {
+    const sourceId = item.sourceId ?? item.id;
+    setSavedQueryFieldReads((reads) => ({ ...reads, [sourceId]: { state: 'reading' } }));
+    const response = await api.readSavedQueryFields(sourceId);
+    if (!response.ok) {
+      setSavedQueryFieldReads((reads) => ({ ...reads, [sourceId]: { state: 'failed', error: response.error ?? 'ZLens could not read its columns.' } }));
+      return;
+    }
+    const inApp = Boolean(latestDraftRef.current?.sources.some((source) => source.id === sourceId));
+    if (inApp) await addDataSource(sourceId, { allowReview: false, refresh: true });
+    setCatalogRefreshNonce((current) => current + 1);
+    setSavedQueryFieldReads((reads) => {
+      const next = { ...reads };
+      delete next[sourceId];
+      return next;
+    });
+  };
+
+  const removeDataSource = async (sourceId: string) => {
+    const current = latestDraftRef.current;
+    if (!current) return;
+    const next = await mutate(planRemoveDataSource(current, sourceId));
+    if (!next) return;
+    setChosenDatasetKey((key) => key === sourceId ? null : key);
+    setSelectedTileId((tileId) => tileId && next.pages.some((page) => page.layout.items.some((tile) => tile.i === tileId)) ? tileId : null);
+    setSavedMessage('Data removed from this App · Undo is available');
   };
 
   const addComponent = async (
@@ -1520,6 +1975,8 @@ export function AppStudioV2({
     datasetVisualization?: AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'],
     /** The shelves the author built the tile on (RFC 0009). */
     datasetEncoding?: DashboardVizEncoding,
+    /** How the tile was made; a tile built from field clicks is not left selected. */
+    origin: StudioAddOrigin = 'source',
   ): Promise<boolean> => {
     if (!draft || !activePage) return false;
     const source = kind === 'heading' || kind === 'text'
@@ -1528,13 +1985,12 @@ export function AppStudioV2({
     if (kind !== 'heading' && kind !== 'text' && !source) {
       setPanel('sources');
       setPanelOpen(true);
-      setError('Choose a governed source, then use Add to page.');
+      setError('Choose a table, Metrics or a saved query, then use Add to page.');
       return false;
     }
     if (source) {
       const sourceId = source.sourceId ?? source.id;
       const view = componentKindLabel(kind as 'kpi' | 'chart' | 'table');
-      const enableReviewRequired = source.eligibility?.localPreview === false && draft.sourcePolicy === 'governed_only';
       setSelectedSource(source);
       if (sourceFeedbackTimerRef.current !== null) window.clearTimeout(sourceFeedbackTimerRef.current);
       setSourceFeedback({ sourceId, status: 'adding', view, pageTitle: activePage.metadata.title });
@@ -1542,66 +1998,78 @@ export function AppStudioV2({
       setSavedMessage('Composing source…');
       setError(null);
       try {
-        const previous = draft;
-        let result = await api.composeAppBuild(draft.id, {
-          mode: 'manual',
-          expectedRevision: draft.revision,
-          expectedProposalHash: draft.proposalHash,
-          enableReviewRequired,
-          selections: [{
-            sourceId,
-            pageId: activePage.id,
-            view: kind as 'kpi' | 'chart' | 'table',
-            ...(datasetQuery ? { query: datasetQuery } : {}),
-            ...(datasetTitle?.trim() ? { title: datasetTitle.trim() } : {}),
-          }],
+        // Saved in turn after any queued edit, from the newest draft (round 3),
+        // so an add never races a field click that is still saving.
+        const composedAdd = await enqueueDraftWork(async () => {
+          const previous = latestDraftRef.current ?? draft;
+          let result = await api.composeAppBuild(previous.id, {
+            mode: 'manual',
+            expectedRevision: previous.revision,
+            expectedProposalHash: previous.proposalHash,
+            selections: [{
+              sourceId,
+              pageId: activePage.id,
+              view: kind as 'kpi' | 'chart' | 'table',
+              ...(datasetQuery ? { query: datasetQuery } : {}),
+              ...(datasetTitle?.trim() ? { title: datasetTitle.trim() } : {}),
+            }],
+          });
+          const addedTileId = result.tileIds[0];
+          const composedPage = result.draft.pages.find((page) => page.id === activePage.id);
+          const addedTile = composedPage?.layout.items.find((item) => item.i === addedTileId);
+          const followUp: AppStudioDraftOperation[] = [];
+          if (addedTile && ((datasetVisualization && addedTile.viz.type !== datasetVisualization) || datasetEncoding)) {
+            // Keep the chart the author built (a date reads as a line), on the
+            // shelves they built it on.
+            followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { viz: {
+              ...addedTile.viz,
+              ...(datasetVisualization ? { type: datasetVisualization } : {}),
+              ...(datasetEncoding && addedTile.query && !addedTile.query.detail ? { encoding: datasetEncoding } : {}),
+            } } });
+          }
+          if (composedPage && addedTile) {
+            // The new tile fills the first gap it fits instead of going under the page.
+            const others = settleGridLayout(composedPage.layout.items.filter((item) => item.i !== addedTile.i), CANVAS_COLUMNS);
+            const spot = firstFreeGridCell(others, addedTile.w, addedTile.h, CANVAS_COLUMNS);
+            if (spot.y < addedTile.y || (spot.y === addedTile.y && spot.x !== addedTile.x)) {
+              followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { x: spot.x, y: spot.y } });
+            }
+          }
+          if (composedPage && addedTile) {
+            // A page shown as a report or a custom layout shows the new tile
+            // there too, at the end, so the author sees what they added.
+            const shownAs = composedPage.narrative?.presentation;
+            const tileNode: CanvasNode = { kind: 'element', tag: 'dql-tile', attrs: [['tile', addedTile.i]], children: [] };
+            const layout = shownAs === 'canvas' && composedPage.canvas?.html ? checkCanvasHtml(composedPage.canvas.html) : null;
+            if (composedPage.canvas && layout && layout.issues.length === 0) {
+              followUp.push({ type: 'set_canvas', pageId: activePage.id, canvas: { ...composedPage.canvas, html: serializeCanvasNodes(insertCanvasNodes(parseCanvasHtml(layout.html), [tileNode]).nodes), generatedBy: 'author' } });
+            }
+            if (shownAs === 'story' && composedPage.narrative && !composedPage.narrative.blocks.some((block) => block.kind === 'tile' && block.tileId === addedTile.i)) {
+              const taken = new Set(composedPage.narrative.blocks.map((block) => block.id));
+              let n = composedPage.narrative.blocks.length + 1;
+              while (taken.has(`b${n}`)) n += 1;
+              followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks: [...composedPage.narrative.blocks, { id: `b${n}`, kind: 'tile', tileId: addedTile.i }] } });
+            }
+          }
+          if (followUp.length) {
+            // Same undo step as the add.
+            const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
+            result = { ...result, draft: patched.draft };
+          }
+          // The new tile is scrolled into view wherever it landed (round 3).
+          if (addedTileId) revealTile(addedTileId);
+          latestDraftRef.current = result.draft;
+          setDraft(result.draft);
+          setUndoStack((items) => [...items.slice(-29), previous]);
+          setRedoStack([]);
+          return { result, addedTileId };
         });
-        const addedTileId = result.tileIds[0];
-        const composedPage = result.draft.pages.find((page) => page.id === activePage.id);
-        const addedTile = composedPage?.layout.items.find((item) => item.i === addedTileId);
-        const followUp: AppStudioDraftOperation[] = [];
-        if (addedTile && ((datasetVisualization && addedTile.viz.type !== datasetVisualization) || datasetEncoding)) {
-          // Keep the chart the author built (a date reads as a line), on the
-          // shelves they built it on.
-          followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { viz: {
-            ...addedTile.viz,
-            ...(datasetVisualization ? { type: datasetVisualization } : {}),
-            ...(datasetEncoding && addedTile.query && !addedTile.query.detail ? { encoding: datasetEncoding } : {}),
-          } } });
-        }
-        if (composedPage && addedTile) {
-          // The new tile fills the first gap it fits instead of going under the page.
-          const others = settleGridLayout(composedPage.layout.items.filter((item) => item.i !== addedTile.i), CANVAS_COLUMNS);
-          const spot = firstFreeGridCell(others, addedTile.w, addedTile.h, CANVAS_COLUMNS);
-          if (spot.y < addedTile.y || (spot.y === addedTile.y && spot.x !== addedTile.x)) {
-            followUp.push({ type: 'update_tile', pageId: activePage.id, tileId: addedTile.i, patch: { x: spot.x, y: spot.y } });
-          }
-        }
-        if (composedPage && addedTile) {
-          // A page shown as a report or a custom layout shows the new tile
-          // there too, at the end, so the author sees what they added.
-          const shownAs = composedPage.narrative?.presentation;
-          const tileNode: CanvasNode = { kind: 'element', tag: 'dql-tile', attrs: [['tile', addedTile.i]], children: [] };
-          const layout = shownAs === 'canvas' && composedPage.canvas?.html ? checkCanvasHtml(composedPage.canvas.html) : null;
-          if (composedPage.canvas && layout && layout.issues.length === 0) {
-            followUp.push({ type: 'set_canvas', pageId: activePage.id, canvas: { ...composedPage.canvas, html: serializeCanvasNodes(insertCanvasNodes(parseCanvasHtml(layout.html), [tileNode]).nodes), generatedBy: 'author' } });
-          }
-          if (shownAs === 'story' && composedPage.narrative && !composedPage.narrative.blocks.some((block) => block.kind === 'tile' && block.tileId === addedTile.i)) {
-            const taken = new Set(composedPage.narrative.blocks.map((block) => block.id));
-            let n = composedPage.narrative.blocks.length + 1;
-            while (taken.has(`b${n}`)) n += 1;
-            followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks: [...composedPage.narrative.blocks, { id: `b${n}`, kind: 'tile', tileId: addedTile.i }] } });
-          }
-        }
-        if (followUp.length) {
-          // Same undo step as the add.
-          const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
-          result = { ...result, draft: patched.draft };
-        }
-        setDraft(result.draft);
-        setUndoStack((items) => [...items.slice(-29), previous]);
-        setRedoStack([]);
-        setSelectedTileId(result.tileIds[0] ?? null);
+        const { result, addedTileId } = composedAdd;
+        saveGate.clearFailure();
+        // A tile built from field clicks leaves the selection alone: the author
+        // may already be on the next tile.
+        if (origin !== 'field_draft') setSelectedTileId(selectionAfterAdd(origin, result.tileIds[0]));
+        if (addedTileId) setFilterOfferTiles((current) => new Set([...current, `${activePage.id}:${addedTileId}`]));
         setSourceFeedback({ sourceId, status: 'added', view, pageTitle: activePage.metadata.title });
         sourceFeedbackTimerRef.current = window.setTimeout(() => {
           setSourceFeedback((current) => current?.sourceId === sourceId ? null : current);
@@ -1623,6 +2091,7 @@ export function AppStudioV2({
         setSavedMessage('Compose failed');
         setSourceFeedback({ sourceId, status: 'error', view, pageTitle: activePage.metadata.title, message });
         setError(message);
+        saveGate.recordFailure({ message, retry: () => addComponent(kind, source, datasetQuery, datasetTitle, datasetVisualization, datasetEncoding, origin) });
         return false;
       } finally {
         setBusy(false);
@@ -1662,12 +2131,35 @@ export function AppStudioV2({
     if (next) setSavedMessage('Page arranged · preview preserved');
   };
 
+  /** The author accepted a new tile's filter offer: link that one tile, then refresh the page. */
+  const applyTileFilterOffer = async (offer: StudioTileFilterOffer) => {
+    const page = latestDraftRef.current?.pages.find((candidate) => candidate.id === offer.pageId);
+    if (!page) return;
+    const operations = tileFilterOfferOperations(page, offer);
+    if (!operations.length) return;
+    // Applying a filter to one new tile re-runs that tile only (round 3); the
+    // rest of the page keeps its results instead of going back to skeletons.
+    const onlyThisTile = offer.pageId === activePage?.id && canRerunTilesOnly(offer.pageId);
+    const next = await mutate(operations, true, onlyThisTile ? [offer.tileId] : undefined);
+    if (!next) return;
+    const tileTitle = page.layout.items.find((tile) => tile.i === offer.tileId)?.title || humanize(offer.tileId);
+    setSavedMessage(`${offer.filterLabel} filter now applies to ${tileTitle} · refreshing…`);
+    if (onlyThisTile) return;
+    await runPreviewForDraft(next, offer.pageId, previewVariablesByPage[offer.pageId] ?? {});
+  };
+  const pendingTileFilterOffers = (pageId: string, tileId: string): StudioTileFilterOffer[] => {
+    if (!draft || !filterOfferTiles.has(`${pageId}:${tileId}`)) return [];
+    return tileFilterOffers({ pages: draft.pages, pageId, tileId, catalog, runtimeFields: runtimeFilterFields, boundSources: draft.sources })
+      .filter((offer) => !dismissedFilterOffers.has(`${pageId}:${tileId}:${offer.filterId}`));
+  };
+
   const saveFilter = async (configuration: StudioFilterConfiguration) => {
     if (!draft || !activePage) return;
     const selected = new Set(configuration.selectedMappingKeys);
-    const mappings = filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources);
+    // A date filter's hand-mapped date fields become that Dataset's binding.
+    const mappings = filterTileMappingsForField(draft.pages, catalog, configuration.fieldId, runtimeFilterFields, draft.sources, studioFilterMappingOptions(configuration));
     if (!mappings.some((mapping) => mapping.supported)) {
-      setError('This field is not available on a compatible component.');
+      setError('This field is not available on a compatible tile.');
       return;
     }
     const operations: AppStudioDraftOperation[] = [];
@@ -1704,7 +2196,9 @@ export function AppStudioV2({
             // A date-only control represents a calendar range. Persist the
             // browser's declared IANA zone so timestamp Dataset fields can
             // compile an exact start-inclusive/end-exclusive interval.
-            ...(configuration.type === 'daterange' ? {
+            // Single and relative dates follow the same rule (a whole day /
+            // a resolved range), so they carry the zone too.
+            ...(configuration.type === 'daterange' || configuration.type === 'date' || configuration.type === 'relative_date' ? {
               timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
             } : {}),
             // A page/app filter must still visit unmapped Dataset tiles so the
@@ -1724,16 +2218,18 @@ export function AppStudioV2({
       for (const tile of page.layout.items.filter((item) => item.block || item.semantic || item.draftAnalysis)) {
         const mapping = pageMappings.find((item) => item.tileId === tile.i);
         const currentBindings = tile.filterBindings ?? [];
-        const nextBindings = currentBindings.filter((binding) => binding.filter !== configuration.id);
-        if (shouldAddToPage && mapping?.supported && selected.has(mapping.key)) {
-          nextBindings.push({
-            filter: configuration.id,
-            binding: mapping.binding ?? configuration.fieldId,
-            mode: mapping.mode ?? 'predicate',
-            required: configuration.required,
-            capability: 'preflight_required',
-          });
-        }
+        // "Applies" stores a link; "Does not apply" (unchecked, or a tile that
+        // cannot take this field) stores an explicit exclusion so publishing
+        // treats the tile as decided and readers see "Not filtered by …".
+        const nextBindings = studioTileFilterBindings({
+          tile,
+          filterId: configuration.id,
+          fieldId: configuration.fieldId,
+          required: configuration.required,
+          filterOnPage: shouldAddToPage,
+          applies: Boolean(mapping?.supported && selected.has(mapping.key)),
+          mapping,
+        });
         if (JSON.stringify(nextBindings) !== JSON.stringify(currentBindings)) {
           operations.push({ type: 'update_tile', pageId: page.id, tileId: tile.i, patch: { filterBindings: nextBindings } });
         }
@@ -1748,7 +2244,7 @@ export function AppStudioV2({
     })));
     const nextPage = next.pages.find((page) => page.id === activePage.id);
     if (nextPage && pageHasDataTiles(nextPage)) {
-      setSavedMessage(`${configuration.label.trim() || humanize(configuration.fieldId)} filter linked · refreshing ${linkedComponentCount(next, configuration.id)} components…`);
+      setSavedMessage(`${configuration.label.trim() || humanize(configuration.fieldId)} filter linked · refreshing ${linkedComponentCount(next, configuration.id)} tiles…`);
       await runPreviewForDraft(next, activePage.id, previewVariablesByPage[activePage.id] ?? {});
     } else {
       setSavedMessage(`${configuration.label.trim() || humanize(configuration.fieldId)} filter saved`);
@@ -1789,7 +2285,7 @@ export function AppStudioV2({
     const next = await mutate(operations);
     const nextPage = next?.pages.find((page) => page.id === activePage.id);
     if (next && nextPage && pageHasDataTiles(nextPage)) {
-      setSavedMessage(`${humanize(filterId)} filter removed · refreshing linked components…`);
+      setSavedMessage(`${humanize(filterId)} filter removed · refreshing linked tiles…`);
       await runPreviewForDraft(next, activePage.id, nextVariablesByPage[activePage.id] ?? {});
     } else if (next) {
       setSavedMessage(`${humanize(filterId)} filter removed`);
@@ -1930,14 +2426,14 @@ export function AppStudioV2({
 
   const approveSemanticPreview = async () => {
     if (!draft || !activePage || !previewRun) {
-      setError('Run this page successfully before approving governed semantic results.');
+      setError('Run this page successfully before approving Metrics results.');
       return;
     }
     const approvalTiles = legacySemanticTilesNeedingApproval(draft);
     if (approvalTiles.length === 0) {
       // Dataset source lifecycle is catalog authority. Never manufacture a
       // legacy semantic approval or invalidate settled Dataset receipts here.
-      setSavedMessage('No legacy semantic tile needs approval. Dataset source trust stays governed by its current contract.');
+      setSavedMessage('No legacy Metrics tile needs approval. Data trust follows its current contract.');
       return;
     }
     const approval = planLegacySemanticApproval(draft, activePage, previewRun);
@@ -1946,8 +2442,8 @@ export function AppStudioV2({
         .filter((pageId) => pageId !== activePage.id)
         .map((pageId) => draft.pages.find((page) => page.id === pageId)?.metadata.title ?? pageId);
       setError(pagesToPreview.length > 0
-        ? `Open ${pagesToPreview.join(', ')} and run its preview before approving its governed semantic result.`
-        : `Run ${activePage.metadata.title || activePage.id} successfully before approving its governed semantic result.`);
+        ? `Open ${pagesToPreview.join(', ')} and run its preview before approving its Metrics result.`
+        : `Run ${activePage.metadata.title || activePage.id} successfully before approving its Metrics result.`);
       return;
     }
     const next = await mutate(approval.operations);
@@ -1984,7 +2480,7 @@ export function AppStudioV2({
             sourceIds: nextSourceIds,
             componentIds: nextComponentIds,
             ...(coverage.status === 'covered' && (nextSourceIds.length === 0 || nextComponentIds.length === 0)
-              ? { status: 'gap' as const, reasons: [...coverage.reasons, 'Review-required local analysis was removed from the publication draft.'] }
+              ? { status: 'gap' as const, reasons: [...coverage.reasons, 'Local draft analysis was removed from the publication draft.'] }
               : {}),
           };
         }),
@@ -1997,15 +2493,99 @@ export function AppStudioV2({
     }
   };
 
+  /** A tile on a join nobody certified yet: take its related fields off it (one of the publish dialog's choices). */
+  const removeReviewRelatedFields = async (item: AppTileNeedingJoinReview) => {
+    const tile = draft?.pages.find((page) => page.id === item.pageId)?.layout.items.find((candidate) => candidate.i === item.tileId);
+    const patch = tile ? tilePatchWithoutRelatedFields(tile, item.relatedFields) : null;
+    if (!patch) return;
+    const next = await mutate([{ type: 'update_tile', pageId: item.pageId, tileId: item.tileId, patch }]);
+    if (next) {
+      setPublishIssues([]);
+      setSavedMessage(`${item.tileTitle || 'The tile'} no longer uses ${item.joins.map((join) => join.label).join(', ')} · run the preview again`);
+    }
+  };
+  /** Open the short review of a join (T4), named as the Data list names it ("Orders → Location"). */
+  const openJoinCertify = (sourceId: string, join: DatasetJoin, dataName?: string) => {
+    const known = dataName ?? appData.find((item) => (item.sourceId ?? item.id) === sourceId)?.name;
+    setCertifyJoin({ sourceId, joinId: join.id, name: `${known ? humanize(known) : 'Data'} → ${humanize(join.label)}` });
+  };
+
+  /**
+   * A join was certified (T4). Its Dataset's copy in the App is read again
+   * (the join is certified in it now), and when the publish check is open
+   * its pages run again so the count updates in place and the tile leaves
+   * the not-certified list.
+   */
+  const afterJoinCertified = async (sourceId: string) => {
+    setCertifyJoin(null);
+    setCatalogRefreshNonce((value) => value + 1);
+    const current = latestDraftRef.current;
+    if (!current) return;
+    if (current.sources.some((source) => source.id === sourceId)) await addDataSource(sourceId, { allowReview: false, refresh: true });
+    setSavedMessage('Join certified');
+    const next = latestDraftRef.current;
+    if (!next || !publishReviewOpenRef.current) return;
+    let refreshed = next;
+    for (const page of refreshed.pages.filter((candidate) => pageHasDataTiles(candidate))) {
+      const recorded = await runPreviewForDraft(refreshed, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+      if (!recorded) return;
+      refreshed = recorded;
+    }
+    await publish(false, refreshed);
+  };
+
+  /**
+   * The saved draft, read again (F11): after the App changed in another tab,
+   * the page shows the latest version and runs again before Publish.
+   */
+  const reloadLatestDraft = async () => {
+    const current = latestDraftRef.current;
+    if (!current) return;
+    setBusy(true);
+    try {
+      const { drafts } = await api.listAppBuilds();
+      const latest = drafts.find((candidate) => candidate.id === current.id);
+      if (!latest) {
+        setError('This draft is not here any more. Go back to Apps to see the latest version.');
+        return;
+      }
+      latestDraftRef.current = latest;
+      previewSequenceRef.current += 1;
+      setDraft(latest);
+      setName(latest.name);
+      setPreviewing(false);
+      setPreviewRunsByPage({});
+      setFilterOptionsByPage({});
+      setPublishIssues([]);
+      setPublishReviewOpen(false);
+      setUndoStack([]);
+      setRedoStack([]);
+      setError(null);
+      saveGate.clearFailure();
+      setPublishBlockedBy(null);
+      setSavedMessage('Refreshed · this is the latest version');
+    } catch (cause) {
+      setError(messageOf(cause));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const publish = async (publishWhenReady = true, targetDraft = draft) => {
     if (!targetDraft) return;
     setBusy(true);
     setError(null);
     try {
+      // Read the project's publish setting fresh: a change to dql.config.json applies now.
+      if (!publishWhenReady) {
+        await api.getAppsSettings()
+          .then((settings) => setRequireCertifiedToPublish(Boolean(settings.requireCertifiedToPublish)))
+          .catch(() => undefined);
+      }
       // The confirmation button commits the exact preflight receipt already
       // shown as ready. Starting another preflight here caused readiness to
       // oscillate when source or preview state changed between two requests.
-      if (publishWhenReady && targetDraft.state === 'preflight_ready' && localPublicationSteps(targetDraft).length === 0 && publishIssues.length === 0) {
+      if (publishWhenReady && targetDraft.state === 'preflight_ready' && localPublicationSteps(targetDraft, previewRunsByPage).length === 0 && publishIssues.length === 0) {
         const result = await api.publishAppBuild(targetDraft.id, targetDraft.revision, targetDraft.proposalHash);
         setDraft(result.draft);
         setPublishReviewOpen(false);
@@ -2056,6 +2636,13 @@ export function AppStudioV2({
 
   const reviseRequirementWithAi = (question: string) => {
     if (!draft) return;
+    if (aiConnected === false) {
+      // No AI: nothing reads the question; the quick choices add the tiles for it (round-2 Q2).
+      setPublishReviewOpen(false);
+      setAiScope('page');
+      setCopilotOpen(true);
+      return;
+    }
     const instruction = `Revise this App so it can answer this publish question with governed evidence: ${question}`;
     setPrompt(instruction);
     setPublishReviewOpen(false);
@@ -2082,54 +2669,10 @@ export function AppStudioV2({
       setPublishReviewOpen(false);
       setPanel('sources');
       setPanelOpen(true);
-      setError(`${unavailableSources.map((source) => humanize(source.sourceRef)).join(', ')} ${unavailableSources.length === 1 ? 'is' : 'are'} no longer certified. Replace or remove ${unavailableSources.length === 1 ? 'this source' : 'these sources'} before publication.`);
+      setError(`${unavailableSources.map((source) => sourceDisplayName(source.id)).join(', ')} ${unavailableSources.length === 1 ? 'is' : 'are'} no longer certified. Replace or remove ${unavailableSources.length === 1 ? 'this source' : 'these sources'} before publication.`);
       return;
     }
-    for (const source of blockSources) {
-      const block = byId.get(source.id);
-      if (block && block.lifecycle === 'certified' && (source.sourceRevision !== block.sourceRevision || source.trustState !== 'certified' || source.reviewStatus !== 'not_required')) {
-        operations.push({
-          type: 'upsert_source',
-          source: {
-            ...source,
-            kind: 'block',
-            sourceRef: block.path,
-            sourcePath: block.path,
-            executionRef: block.path,
-            qualifiedIdentity: block.qualifiedIdentity,
-            snapshotId: block.snapshotId,
-            sourceRevision: block.sourceRevision,
-            sourceFingerprint: block.sourceRevision,
-            lifecycle: 'certified',
-            capabilities: block.capabilities,
-            trustState: 'certified',
-            reviewStatus: 'not_required',
-          },
-        });
-      }
-    }
-    for (const page of draft.pages) {
-      for (const tile of page.layout.items) {
-        if (!tile.sourceId) continue;
-        const block = byId.get(tile.sourceId);
-        if (!block || block.lifecycle !== 'certified') continue;
-        if (tile.sourceRevision !== block.sourceRevision || tile.review?.sourceFingerprint !== block.sourceRevision || tile.review?.status !== 'not_required') {
-          operations.push({
-            type: 'update_tile',
-            pageId: page.id,
-            tileId: tile.i,
-            patch: {
-              sourceRevision: block.sourceRevision,
-              block: { ref: block.path },
-              sourceClass: 'certified_block',
-              trustState: 'certified',
-              reviewStatus: 'certified',
-              review: { ...tile.review, status: 'not_required', sourceFingerprint: block.sourceRevision },
-            },
-          });
-        }
-      }
-    }
+    operations.push(...certifiedBlockOperations(draft, blockSources, byId));
     if (!operations.length) {
       setPublishIssues([]);
       setSavedMessage('Certified sources are already current');
@@ -2158,7 +2701,7 @@ export function AppStudioV2({
     }
     if (!task.sourceId) return;
     setBusy(true);
-    setSavedMessage('Checking current Dataset source…');
+    setSavedMessage('Checking current data source…');
     setError(null);
     try {
       const recovery = await runDatasetSourceRecoveryAction({
@@ -2176,8 +2719,7 @@ export function AppStudioV2({
         },
       });
       if (!recovery.ok) {
-        setSavedMessage('Dataset source still needs repair');
-        setError(recovery.error);
+        showSourceSwitchProblem(task.sourceId, recovery.error, 'refresh');
         setPanel('sources');
         setPanelOpen(true);
         return;
@@ -2189,9 +2731,9 @@ export function AppStudioV2({
       setUndoStack((items) => [...items.slice(-29), previous]);
       setRedoStack([]);
       setPublishIssues([]);
-      setSavedMessage('Dataset source restored · run a current preview');
+      setSavedMessage('Data source restored · run a current preview');
     } catch (cause) {
-      setSavedMessage('Dataset source restoration failed');
+      setSavedMessage('Data source restoration failed');
       setError(messageOf(cause));
       setPanel('sources');
       setPanelOpen(true);
@@ -2227,6 +2769,8 @@ export function AppStudioV2({
       edit?: boolean;
       /** Explicit user refresh bypasses the optional local result cache. */
       refresh?: boolean;
+      /** A rerun of the tiles linked to this changed filter (its label). */
+      filterLabel?: string;
     },
   ): Promise<AppStudioBuildDraft | null> {
     const page = targetDraft.pages.find((candidate) => candidate.id === pageId);
@@ -2273,7 +2817,8 @@ export function AppStudioV2({
     try {
       const variables = previewVariablesForPage(
         page,
-        variablesOverride ?? previewVariablesByPage[page.id] ?? {},
+        variablesOverride ?? previewVariablesByPageRef.current[page.id] ?? {},
+        previewAppScopedFilterValuesRef.current,
       );
       const crossFilters = crossFiltersOverride ?? previewCrossFiltersByPage[page.id] ?? [];
       const result = await api.runAppBuildPreview(targetDraft.id, page.id, variables, crossFilters, {
@@ -2322,9 +2867,12 @@ export function AppStudioV2({
             : current);
         }
         if (settlement.kind === 'incomplete') setPublishIssues([settlement.message]);
-        setSavedMessage(interaction?.edit && result.partial && settlement.kind === 'unavailable'
-          ? `Updated ${affectedTileIds.length === 1 ? '1 tile' : `${affectedTileIds.length} tiles`} · Run the whole page before publishing`
-          : settlement.message);
+        const updatedTiles = affectedTileIds.length === 1 ? '1 tile' : `${affectedTileIds.length} tiles`;
+        setSavedMessage(interaction?.filterLabel && result.partial && settlement.kind === 'unavailable'
+          ? `${interaction.filterLabel} applied · ${updatedTiles} updated`
+          : interaction?.edit && result.partial && settlement.kind === 'unavailable'
+            ? `Updated ${updatedTiles} · Run the whole page before publishing`
+            : settlement.message);
         return null;
       }
       const recorded = await api.patchAppBuild(targetDraft.id, targetDraft.revision, [{
@@ -2342,7 +2890,7 @@ export function AppStudioV2({
       if (sequence !== previewSequenceRef.current) return null;
       setDraft(recorded.draft);
       setPublishIssues([]);
-      setSavedMessage(`Preview settled · ${settlement.readyCount}/${settlement.totalCount} ready`);
+      setSavedMessage(previewSettledWords(settlement.readyCount, settlement.totalCount));
       return recorded.draft;
     } catch (cause) {
       if (sequence === previewSequenceRef.current) setError(messageOf(cause));
@@ -2352,9 +2900,21 @@ export function AppStudioV2({
     }
   }
 
+  const runPreviewForDraftRef = useRef(runPreviewForDraft);
+  runPreviewForDraftRef.current = runPreviewForDraft;
+  const previewRunsByPageRef = useRef(previewRunsByPage);
+  previewRunsByPageRef.current = previewRunsByPage;
+  const previewHierarchyDrillsByPageRef = useRef(previewHierarchyDrillsByPage);
+  previewHierarchyDrillsByPageRef.current = previewHierarchyDrillsByPage;
+
   const runPreview = async (pageId = activePage?.id, refresh = false) => {
     if (!draft || !pageId) return;
-    await runPreviewForDraft(draft, pageId, undefined, undefined, refresh ? { refresh: true } : undefined);
+    // A save still in flight is waited for, never a reason to ignore the click (C1).
+    await runAfterPendingSaves(saveGate, async () => {
+      const current = latestDraftRef.current;
+      if (!current) return;
+      await runPreviewForDraftRef.current(current, pageId, undefined, undefined, refresh ? { refresh: true } : undefined);
+    }, { onWaiting: setRunWaitingForSaves });
   };
 
   const runPreviewAndReview = async (pageId: string) => {
@@ -2379,67 +2939,157 @@ export function AppStudioV2({
   };
 
   // One Publish button: pages that only need a fresh run are run first, so
-  // the review lists only what needs the author.
+  // the review lists only what needs the author. A click made while a change
+  // is still saving waits for it ("Saving changes…") and then opens the
+  // review on the saved draft; it is never dropped (C1). A save that fails
+  // stops here with a plain message and Try again.
   const publishFromToolbar = async () => {
-    if (!draft) return;
-    const stale = pagesNeedingSettledPreview(draft);
+    if (!draft || publishPhaseRef.current) return;
+    publishPhaseRef.current = 'checking';
+    setPublishPhase('checking');
+    setPublishBlockedBy(null);
+    try {
+      const outcome = await runAfterPendingSaves(saveGate, async () => {
+        const current = latestDraftRef.current;
+        if (!current) return;
+        await publishDraftFromToolbarRef.current(current);
+      }, {
+        stopOnFailure: true,
+        onWaiting: (waiting) => {
+          publishPhaseRef.current = waiting ? 'saving' : 'checking';
+          setPublishPhase(waiting ? 'saving' : 'checking');
+        },
+      });
+      if (outcome.status === 'save_failed') {
+        setError(outcome.failure.message);
+        setPublishBlockedBy(outcome.failure.message);
+      }
+    } finally {
+      publishPhaseRef.current = null;
+      setPublishPhase(null);
+    }
+  };
+  /** Publish, from the saved draft `start`: run pages that need a fresh run, then open the review. */
+  const publishDraftFromToolbar = async (start: AppStudioBuildDraft) => {
+    const stale = pagesNeedingSettledPreview(start);
     if (!stale.length) {
-      await publish(false);
+      await publish(false, start);
       return;
     }
-    let current = draft;
+    let current = start;
     for (const page of stale) {
-      const recorded = await runPreviewForDraft(current, page.id, previewVariablesForPage(page), undefined, { refresh: true });
+      const recorded = await runPreviewForDraftRef.current(current, page.id, previewVariablesForPage(page), undefined, { refresh: true });
       if (!recorded) return;
       current = recorded;
     }
     setPublishIssues([]);
     await publish(false, current);
   };
+  const publishDraftFromToolbarRef = useRef(publishDraftFromToolbar);
+  publishDraftFromToolbarRef.current = publishDraftFromToolbar;
+  /** Try again after a failed save stopped Publish: save the change again, then Publish. */
+  const retrySaveThenPublish = async () => {
+    const failure = saveGate.failure();
+    saveGate.clearFailure();
+    setPublishBlockedBy(null);
+    setError(null);
+    if (failure?.retry) await saveGate.track(failure.retry());
+    await publishFromToolbarRef.current();
+  };
+  const publishFromToolbarRef = useRef(publishFromToolbar);
+  publishFromToolbarRef.current = publishFromToolbar;
+  /** The ways out of a source that could not switch (R03): refresh it again, or choose it again from Add data. */
+  const sourceSwitchActions = (problem: NonNullable<typeof sourceSwitchProblem>) => [
+    ...(problem.after === 'certified' ? [{ label: 'Refresh this data', onClick: () => { setSourceSwitchProblem(null); setError(null); void refreshDatasetBinding(problem.sourceId); } }] : []),
+    { label: 'Choose it again from Add data', onClick: () => { setSourceSwitchProblem(null); setError(null); setPublishReviewOpen(false); setAddDataOpen(true); } },
+  ];
 
-  const applyFilterValue = (filter: NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number], value: unknown) => {
+  const dismissStudioError = () => {
+    // Dismissing a failed-save message is the author's choice to go on without that change.
+    if (publishBlockedBy !== null) saveGate.clearFailure();
+    setPublishBlockedBy(null);
+    setError(null);
+  };
+
+  /**
+   * A filter change re-runs only the tiles linked to that filter, at once, the
+   * way the reader view applies a filter. Every other tile keeps its result:
+   * it is never re-run or blanked. Typing into a text or number control waits
+   * a moment so each keystroke does not start a run; the run then reads the
+   * latest state, never the values from when the timer was set.
+   */
+  const applyFilterValue = (filter: NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number], rawValue: unknown) => {
     if (!draft || !activePage) return;
+    const value = studioFilterValue(filter, rawValue);
     const pageId = activePage.id;
+    const label = filter.label ?? humanize(filter.id);
     const linkedPageIds = new Set(pagesForDashboardFilterValue(draft.pages, pageId, filter));
-    const nextVariablesByPage = { ...previewVariablesByPage };
+    const nextVariablesByPage = { ...previewVariablesByPageRef.current };
     for (const linkedPageId of linkedPageIds) {
-      nextVariablesByPage[linkedPageId] = { ...(nextVariablesByPage[linkedPageId] ?? {}), [filter.id]: value };
+      const { [filter.id]: _previous, ...rest } = nextVariablesByPage[linkedPageId] ?? {};
+      nextVariablesByPage[linkedPageId] = value === undefined ? rest : { ...rest, [filter.id]: value };
     }
-    const nextAppScopedValues = isAppScopedDashboardFilter(filter)
-      ? { ...previewAppScopedFilterValues, [filter.id]: value }
-      : previewAppScopedFilterValues;
-    if (isAppScopedDashboardFilter(filter)) setPreviewAppScopedFilterValues(nextAppScopedValues);
-    const nextVariables = previewVariablesForPage(
-      activePage,
-      nextVariablesByPage[pageId] ?? { [filter.id]: value },
-      nextAppScopedValues,
-    );
+    if (isAppScopedDashboardFilter(filter)) {
+      const { [filter.id]: _previous, ...rest } = previewAppScopedFilterValuesRef.current;
+      const nextAppScopedValues = value === undefined ? rest : { ...rest, [filter.id]: value };
+      previewAppScopedFilterValuesRef.current = nextAppScopedValues;
+      setPreviewAppScopedFilterValues(nextAppScopedValues);
+    }
+    previewVariablesByPageRef.current = nextVariablesByPage;
     setPreviewVariablesByPage(nextVariablesByPage);
-    setPreviewHierarchyDrillsByPage((current) => {
-      const next = { ...current };
-      for (const linkedPageId of linkedPageIds) delete next[linkedPageId];
-      return next;
-    });
-    setPreviewRunsByPage((current) => {
-      const next = { ...current };
-      for (const linkedPageId of linkedPageIds) delete next[linkedPageId];
-      return next;
-    });
-    previewSequenceRef.current += 1;
-    setPreviewing(false);
-    if (filterPreviewTimerRef.current !== null) window.clearTimeout(filterPreviewTimerRef.current);
-    const range = filter.type === 'daterange' && value && typeof value === 'object' && !Array.isArray(value)
-      ? value as { start?: string; end?: string }
-      : null;
-    if (range && Boolean(range.start) !== Boolean(range.end)) {
-      setSavedMessage(`Choose both ${filter.label ?? humanize(filter.id)} dates`);
+    // Other pages that carry this App filter run again when they are opened.
+    const otherPageIds = [...linkedPageIds].filter((linkedPageId) => linkedPageId !== pageId);
+    if (otherPageIds.length) {
+      setPreviewRunsByPage((current) => {
+        const next = { ...current };
+        for (const linkedPageId of otherPageIds) delete next[linkedPageId];
+        return next;
+      });
+      setPreviewHierarchyDrillsByPage((current) => {
+        const next = { ...current };
+        for (const linkedPageId of otherPageIds) delete next[linkedPageId];
+        return next;
+      });
+    }
+    if (filterPreviewTimerRef.current !== null) {
+      window.clearTimeout(filterPreviewTimerRef.current);
+      filterPreviewTimerRef.current = null;
+    }
+    const run = () => {
+      const latestDraft = draftRef.current;
+      const page = latestDraft?.pages.find((candidate) => candidate.id === pageId);
+      if (!latestDraft || !page) return;
+      const variables = previewVariablesForPage(page, previewVariablesByPageRef.current[pageId] ?? {}, previewAppScopedFilterValuesRef.current);
+      // Nothing settled to keep yet (the page has not run, or a full run is
+      // in flight): run the whole page with the new value instead.
+      const plan = studioFilterRunPlan({ page, filterId: filter.id, hasSettledPreview: Boolean(previewRunsByPageRef.current[pageId]) });
+      if (plan.kind === 'none') {
+        setSavedMessage(`${label} is not linked to a tile on this page`);
+        return;
+      }
+      if (plan.kind === 'page') {
+        setSavedMessage(`${label} changed · running the page…`);
+        void runPreviewForDraftRef.current(latestDraft, pageId, variables);
+        return;
+      }
+      const linkedTileIds = plan.tileIds;
+      setSavedMessage(`${label} changed · updating ${linkedTileIds.length === 1 ? '1 linked tile' : `${linkedTileIds.length} linked tiles`}…`);
+      void runPreviewForDraftRef.current(latestDraft, pageId, variables, undefined, {
+        // A hierarchy drill on a linked tile is re-run with it, under the new value.
+        hierarchyDrills: (previewHierarchyDrillsByPageRef.current[pageId] ?? []).filter((drill) => linkedTileIds.includes(drill.tileId)),
+        affectedTileIds: linkedTileIds,
+        filterLabel: label,
+      });
+    };
+    if (filter.type === 'search' || filter.type === 'number' || filter.type === 'string') {
+      setSavedMessage(`${label} changed · applying…`);
+      filterPreviewTimerRef.current = window.setTimeout(() => {
+        filterPreviewTimerRef.current = null;
+        run();
+      }, 300);
       return;
     }
-    setSavedMessage(`${filter.label ?? humanize(filter.id)} changed · applying automatically…`);
-    filterPreviewTimerRef.current = window.setTimeout(() => {
-      filterPreviewTimerRef.current = null;
-      void runPreviewForDraft(draft, pageId, nextVariables);
-    }, 320);
+    run();
   };
 
   const applyDatasetCrossFilter = (tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number], field: string, values: unknown[], exclude = false) => {
@@ -2451,7 +3101,7 @@ export function AppStudioV2({
     const own = tile.query.dimensions.some((dimension) => !dimension.timeGrain && (dimension.alias ?? dimension.field) === field)
       && Boolean(activePage.datasets?.some((dataset) => dataset.sourceId === tile.sourceId && dataset.sourceRevision === tile.sourceRevision));
     if (!output || (mappings.length === 0 && !own) || distinctValues.length === 0) {
-      setSavedMessage(`No explicit Dataset mapping is configured for ${humanize(field)}. Open this tile’s interaction settings to map it.`);
+      setSavedMessage(`No filter link is set up for ${humanize(field)}. Open this tile’s interaction settings to map it.`);
       return;
     }
     const nextCrossFilter: StudioDatasetCrossFilter = {
@@ -2494,7 +3144,7 @@ export function AppStudioV2({
     });
     previewSequenceRef.current += 1;
     setPreviewing(false);
-    setSavedMessage('Selected result marks cleared. Refreshing mapped Dataset tiles…');
+    setSavedMessage('Selected result marks cleared. Refreshing linked tiles…');
     void runPreviewForDraft(draft, activePage.id, previewVariables, []);
   };
 
@@ -2512,7 +3162,7 @@ export function AppStudioV2({
     });
     previewSequenceRef.current += 1;
     setPreviewing(false);
-    setSavedMessage(`${humanize(field)} result mark cleared. Refreshing mapped Dataset tiles…`);
+    setSavedMessage(`${humanize(field)} result mark cleared. Refreshing linked tiles…`);
     void runPreviewForDraft(draft, activePage.id, previewVariables, nextForPage);
   };
 
@@ -2683,7 +3333,7 @@ export function AppStudioV2({
     saveAsTile: (item, query, title) => {
       const source = datasetItemForSource(item.sourceId);
       const descriptor = item.sourceId ? draft?.sources.find((candidate) => candidate.id === item.sourceId)?.capabilities?.dataset : undefined;
-      if (!source) { setError('This tile\'s Dataset is not in the Data panel.'); return; }
+      if (!source) { setError('This tile\'s data is not in the Data panel.'); return; }
       // Show Me picks the chart for the saved view, as it does for any new tile.
       const choice = !query.detail && descriptor ? showMeFirstChoice(showMeInputFromQuery(query, showMeFactsFromDescriptor(descriptor as DatasetDescriptor))) : undefined;
       const view = query.detail || choice?.viz === 'table' ? 'table' : choice?.viz === 'single_value' ? 'kpi' : 'chart';
@@ -2691,36 +3341,231 @@ export function AppStudioV2({
     },
   });
 
-  // Open a Dataset just started from a table once the catalog lists it.
-  // chooseDataset is declared after the early return below, so it is reached through a ref.
-  const chooseDatasetRef = useRef<((item: AppBlockRecommendation) => void) | null>(null);
-  useEffect(() => {
-    if (!pendingDatasetSourceId) return;
-    const item = catalog.find((candidate) => candidate.capabilities?.dataset && (candidate.sourceId ?? candidate.id) === pendingDatasetSourceId);
-    if (!item || !chooseDatasetRef.current) return;
-    setPendingDatasetSourceId(null);
-    chooseDatasetRef.current(item);
-  }, [catalog, pendingDatasetSourceId]);
-
   if (!draft) {
     return <div className="dql-studio-v2-loading">
       <style>{APP_STUDIO_V2_STYLES}</style>
-      <button type="button" className="icon" onClick={onBack} aria-label="Back to Apps"><ArrowLeft size={18} /></button>
-      <div><span className="loading-mark"><LayoutDashboard size={20} /></span><strong>{error ? 'Studio could not open' : initialDraftId ? 'Opening your local draft…' : baseAppId ? 'Preparing a safe edit draft…' : 'Opening Studio…'}</strong><small>{error ?? 'Your work stays private until you publish it.'}</small>{error ? <button type="button" onClick={() => { immediateStartRef.current = false; void createDraft(); }}>Try again</button> : null}</div>
+      <button type="button" className="icon" onClick={goBack} aria-label="Back to Apps"><ArrowLeft size={18} /></button>
+      <div><span className="loading-mark"><LayoutDashboard size={20} /></span><strong>{error ? 'Studio could not open' : initialDraftId ? 'Opening your App…' : baseAppId ? 'Preparing a safe edit draft…' : 'Opening Studio…'}</strong><small>{error ?? 'Your work stays private until you publish it.'}</small>{error ? <button type="button" onClick={() => { immediateStartRef.current = false; void createDraft(); }}>Try again</button> : null}</div>
     </div>;
   }
 
 
-  const selectedSourceKind = selectedSource ? recommendedComponentKind(selectedSource) : null;
-  const selectedSourceId = selectedSource?.sourceId ?? selectedSource?.id;
-  const selectedSourceFeedback = sourceFeedback?.sourceId === selectedSourceId ? sourceFeedback : null;
-  const selectedSourceAction = selectedSource && selectedSourceKind ? appStudioSourceActionLabel({
-    view: componentKindLabel(selectedSourceKind),
-    status: selectedSourceFeedback?.status ?? 'idle',
-    reviewRequired: selectedSource.eligibility?.localPreview === false && draft.sourcePolicy === 'governed_only',
-    alreadyUsed: draft.sources.some((source) => source.id === selectedSourceId || source.sourceRef === selectedSource.path),
-    pageTitle: selectedSourceFeedback?.pageTitle,
-  }) : '';
+  // Catalog records known for the App's data: the canvas catalog plus what was resolved when it was added.
+  const knownItems = [...Object.values(knownSourceItems), ...catalog];
+  const appData = appDataItems(draft.sources, knownItems);
+  const addDataBrowserProps = {
+    ...(draftDomain ? { appDomain: draftDomain } : {}),
+    domainOptions,
+    disabled: busy,
+    onAdd: addDataSource,
+    onRemove: (sourceId: string) => void removeDataSource(sourceId),
+    fieldsEnabled: datasetTilesEnabled,
+    onFieldsAdded: (sourceId: string, status: 'checked' | 'review' | 'draft') => void savedQueryFieldsAdded(sourceId, status),
+    onCertified: (sourceId: string) => void afterDataCertified(sourceId),
+  };
+  /**
+   * Quick choices → tiles (round-2 Q2): exactly the chosen tiles, composed as
+   * ordinary field tiles on the open page in one change (and one undo step),
+   * placed KPIs first, then charts. A new App also gets its name here when the
+   * author left it empty: "<Domain> overview".
+   */
+  const buildQuickTiles = async (choices: QuickChoice[], target: 'app' | 'page'): Promise<boolean> => {
+    if (!activePage) return false;
+    const data = quickChoiceData(appData, draftDomain);
+    const plan = quickChoiceTiles(data, choices);
+    if (!plan.ok) {
+      setQuickError(plan.error);
+      return false;
+    }
+    setQuickError(null);
+    setError(null);
+    setBusy(true);
+    setSavedMessage(`Adding ${plan.tiles.length} ${plan.tiles.length === 1 ? 'tile' : 'tiles'}…`);
+    try {
+      const previous = draft;
+      let result = await api.composeAppBuild(draft.id, {
+        mode: 'manual',
+        expectedRevision: draft.revision,
+        expectedProposalHash: draft.proposalHash,
+        selections: plan.tiles.map((tile) => ({ sourceId: tile.sourceId, pageId: activePage.id, view: tile.view, query: tile.query, title: tile.title })),
+      });
+      const composedPage = result.draft.pages.find((page) => page.id === activePage.id);
+      const added = new Set(result.tileIds);
+      const spots = quickTileLayout((composedPage?.layout.items ?? []).filter((item) => !added.has(item.i)), plan.tiles, CANVAS_COLUMNS);
+      const followUp: AppStudioDraftOperation[] = [];
+      result.tileIds.forEach((tileId, index) => {
+        const tile = composedPage?.layout.items.find((item) => item.i === tileId);
+        const spec = plan.tiles[index];
+        const spot = spots[index];
+        if (tile && spec && spot) followUp.push({ type: 'update_tile', pageId: activePage.id, tileId, patch: { ...spot, viz: { ...tile.viz, type: spec.visualization } } });
+      });
+      if (composedPage) {
+        // A page shown as a report or a custom layout shows the new tiles there too, at the end.
+        const shownAs = composedPage.narrative?.presentation;
+        const layout = shownAs === 'canvas' && composedPage.canvas?.html ? checkCanvasHtml(composedPage.canvas.html) : null;
+        if (composedPage.canvas && layout && layout.issues.length === 0) {
+          const nodes: CanvasNode[] = result.tileIds.map((tileId) => ({ kind: 'element', tag: 'dql-tile', attrs: [['tile', tileId]], children: [] }));
+          followUp.push({ type: 'set_canvas', pageId: activePage.id, canvas: { ...composedPage.canvas, html: serializeCanvasNodes(insertCanvasNodes(parseCanvasHtml(layout.html), nodes).nodes), generatedBy: 'author' } });
+        }
+        if (shownAs === 'story' && composedPage.narrative) {
+          const blocks = [...composedPage.narrative.blocks];
+          const taken = new Set(blocks.map((block) => block.id));
+          let n = blocks.length + 1;
+          for (const tileId of result.tileIds) {
+            if (blocks.some((block) => block.kind === 'tile' && block.tileId === tileId)) continue;
+            while (taken.has(`b${n}`)) n += 1;
+            taken.add(`b${n}`);
+            blocks.push({ id: `b${n}`, kind: 'tile', tileId });
+          }
+          followUp.push({ type: 'set_narrative', pageId: activePage.id, narrative: { ...composedPage.narrative, blocks } });
+        }
+      }
+      if (target === 'app' && !quickNameTyped) {
+        const used = new Set(plan.tiles.map((tile) => tile.sourceId));
+        const appName = quickStartAppName({ domainLabel: domainLabelOf(draftDomain), data: data.filter((entry) => used.has(entry.sourceId)) });
+        if (appName !== result.draft.name) followUp.push({ type: 'set_name', name: appName });
+      }
+      if (followUp.length) {
+        // Same undo step as the add.
+        const patched = await api.patchAppBuild(result.draft.id, result.draft.revision, followUp, result.draft.proposalHash);
+        result = { ...result, draft: patched.draft };
+      }
+      setDraft(result.draft);
+      setName(result.draft.name);
+      setUndoStack((items) => [...items.slice(-29), previous]);
+      setRedoStack([]);
+      setSelectedTileId(null);
+      setFilterOfferTiles((current) => new Set([...current, ...result.tileIds.map((tileId) => `${activePage.id}:${tileId}`)]));
+      setCopilotOpen(false);
+      if (target === 'app') {
+        setStage('canvas');
+        setPanel('sources');
+        setPanelOpen(typeof window === 'undefined' || window.innerWidth > 820);
+      }
+      setSavedMessage(`${plan.tiles.length} ${plan.tiles.length === 1 ? 'tile' : 'tiles'} added · loading data…`);
+      previewSequenceRef.current += 1;
+      setPreviewRunsByPage({});
+      setFilterOptionsByPage({});
+      await runPreviewForDraft(result.draft, activePage.id);
+      return true;
+    } catch (cause) {
+      setQuickError(messageOf(cause));
+      setSavedMessage('Quick tiles were not added');
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openCanvas = () => {
+    setStage('canvas');
+    setPanel('sources');
+    setPanelOpen(typeof window === 'undefined' || window.innerWidth > 820);
+    const firstDataset = appData.find((item) => item.capabilities?.dataset);
+    if (firstDataset) setChosenDatasetKey(firstDataset.id);
+  };
+
+  /** Build pages: the AI picks are settled; the canvas shows the proposed tiles for review. */
+  const buildPagesFromAiData = () => {
+    setStage('canvas');
+    setPanel('sources');
+    setPanelOpen(typeof window === 'undefined' || window.innerWidth > 820);
+    setProposalPageId(null);
+    setSavedMessage('Review the proposed tiles · nothing is saved until you apply');
+  };
+  /** Discard AI's picks; the Data step stays open so the author can pick data by hand. */
+  const discardAiData = () => {
+    setProposal(null);
+    setAiActivity(null);
+    setAiDataFlow(false);
+    setProposalPageId(null);
+    setSavedMessage(`${appStudioPlannerVoice(proposal, aiConnected) === 'keywords' ? 'Keyword suggestions' : 'AI proposal'} discarded · pick the data yourself`);
+  };
+
+  // Who makes a plan (design D4): the open proposal's provenance decides, else
+  // the provider settings. Entry points that ask for a plan use the settings.
+  const planVoice: AppStudioPlannerVoice = appStudioPlannerVoice(proposal, aiConnected);
+  const planWords = appStudioPlannerWords(planVoice);
+  const askVoice: AppStudioPlannerVoice = aiConnected === false ? 'keywords' : 'ai';
+  const askWords = appStudioAskWords(askVoice);
+  if (stage === 'data') {
+    const aiStep = aiDataFlow && (proposal || aiActivity) ? {
+      status: aiActivity?.status === 'running' ? 'running' as const : aiActivity?.status === 'error' ? 'error' as const : 'ready' as const,
+      goal: proposalSummary?.frame?.goal || draft.frame.goal || prompt,
+      ...(proposal && proposalSummary ? { model: appStudioAiDataModel(proposal, proposalSummary, selectedProposalSourceIds, knownItems) } : {}),
+      activitySteps: planWords.activitySteps,
+      activityIndex: aiActivityIndex,
+      voice: planVoice,
+      ...(onConnectAi ? { onConnectAi } : {}),
+      ...(aiActivity?.error ? { activityError: aiActivity.error } : {}),
+      ...(proposal && appStudioPlannerProvenanceLabel(proposal) ? { plannerLabel: appStudioPlannerProvenanceLabel(proposal) } : {}),
+      busy,
+      pickedSources: proposal ? appStudioPickedDraftSources(proposal, selectedProposalSourceIds) : [],
+      onRemovePick: (sourceId: string) => setSelectedProposalSourceIds((current) => {
+        const next = new Set(current);
+        next.delete(sourceId);
+        return next;
+      }),
+      onAddBack: (sourceId: string, reviewRequired: boolean) => void addSourceToAiProposal(sourceId, reviewRequired, undefined, true),
+      onGenerateGap: (requirementId: string) => void generateAiGap(requirementId),
+      onAnswer: (questionId: string, answerId: string) => void reviseAiProposal({ [questionId]: answerId }),
+      onRevise: () => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true),
+      onRetry: () => { if (aiActivity) retryAiActivity(aiActivity); },
+      ...(proposal ? { onDismissActivityError: () => setAiActivity(null) } : {}),
+      onBuildPages: buildPagesFromAiData,
+      onDiscard: discardAiData,
+    } : undefined;
+    // Adding data while AI's picks are open makes it required and plans again;
+    // removing it moves it to AI suggestions. Nothing is saved until Apply.
+    const browser = aiStep ? {
+      ...addDataBrowserProps,
+      onAdd: (sourceId: string, options: { allowReview: boolean }) => addSourceToAiProposal(sourceId, options.allowReview, knownItems.find((item) => (item.sourceId ?? item.id) === sourceId), true),
+      onRemove: aiStep.onRemovePick,
+    } : addDataBrowserProps;
+    const quickData = quickChoiceData(appData, draftDomain);
+    return <div className="dql-studio-v2 studio-data-stage">
+      <style>{APP_STUDIO_V2_STYLES}</style>
+      <DataStep
+        {...(quickStart && !aiStep ? { next: {
+          label: 'Next: choose tiles',
+          disabled: busy || quickData.length === 0,
+          hint: quickData.length ? undefined : 'Add data with fields to choose tiles.',
+          onClick: () => { setQuickError(null); setStage('quick'); },
+        } } : {})}
+        draft={draft}
+        known={knownItems}
+        error={error}
+        onDismissError={() => setError(null)}
+        onBack={goBack}
+        onOpenCanvas={openCanvas}
+        onSkip={() => { setStage('canvas'); setPanel('sources'); }}
+        browser={browser}
+        {...(aiStep ? { ai: aiStep } : {})}
+      />
+      {datasetAuthoringProposal ? <ContextProposalReviewDrawer
+        proposal={datasetAuthoringProposal}
+        theme={themes[themeMode]}
+        onClose={() => setDatasetAuthoringProposal(null)}
+        onCommitted={finishDatasetAuthoringProposal}
+      /> : null}
+    </div>;
+  }
+
+  if (stage === 'quick') {
+    return <div className="dql-studio-v2 studio-data-stage">
+      <style>{APP_STUDIO_V2_STYLES}</style>
+      <QuickStartStep
+        appName={draft.name}
+        data={quickChoiceData(appData, draftDomain)}
+        busy={busy}
+        error={quickError ?? error}
+        onBack={goBack}
+        onBackToData={() => { setQuickError(null); setStage('data'); }}
+        onBuild={(choices) => void buildQuickTiles(choices, 'app')}
+        {...(onConnectAi ? { onConnectAi } : {})}
+      />
+    </div>;
+  }
 
   const editing = studioView === 'edit';
   const rightPane: 'none' | 'inspector' | 'settings' | 'ai' | 'draft' | 'proposal' = proposal || aiActivity
@@ -2734,7 +3579,10 @@ export function AppStudioV2({
           : selectedTile
             ? 'inspector'
             : settingsOpen ? 'settings' : 'none';
-  const datasetItems = catalog.filter((item) => Boolean(item.capabilities?.dataset));
+  // Datasets known to the Studio: the App's own first, then the catalog (AI proposals may name others).
+  const datasetItems = [...appData, ...catalog]
+    .filter((item, index, all) => Boolean(item.capabilities?.dataset)
+      && all.findIndex((other) => (other.sourceId ?? other.id) === (item.sourceId ?? item.id)) === index);
   // An open AI proposal (page plan or tile change) is drawn on the canvas.
   const proposalOperations = proposal
     ? operationsForSelectedAppStudioSources(proposal, selectedProposalSourceIds)
@@ -2756,17 +3604,28 @@ export function AppStudioV2({
   const canvasMode = Boolean(activePage?.narrative?.presentation === 'canvas' && !projectedPage);
   const storyCatalog = previewRun ? buildStoryBindingCatalog(previewRun.tiles as StoryBindingTileInput[], Object.fromEntries((activePage?.layout.items ?? []).map((item) => [item.i, item.title]))) : {};
   const storyPageTiles = (activePage?.layout.items ?? []).filter((item) => !item.text).map((item) => ({ tileId: item.i, title: item.title || humanize(item.i) }));
-  const storyDraftBlocked = !previewRun
+  // Designing a layout needs a real AI provider (design D4).
+  const storyDraftBlocked = aiConnected === false
+    ? `${CONNECT_AI_ACTION} to design with AI.`
+    : !previewRun
     ? 'Run the page first: the report is drafted from its latest complete results.'
     : previewRun.partial || previewRun.incomplete
       ? 'Run the whole page first: the last run covered only some tiles.'
       : null;
+  // The auto-written Summary is something the author adds (D6); readers get it only then.
+  const summaryAdded = pageShowsSummary(activePage?.metadata);
+  const toggleSummary = async (on: boolean) => {
+    if (!activePage) return;
+    const { summary: _summary, ...metadata } = activePage.metadata;
+    const next = await mutate([{ type: 'upsert_page', page: { ...activePage, metadata: on ? { ...metadata, summary: true } : metadata } }]);
+    if (next) setSavedMessage(on ? SUMMARY_OPTION.added : SUMMARY_OPTION.removed);
+  };
   const setPresentation = async (presentation: 'dashboard' | 'story' | 'canvas') => {
     if (!activePage) return;
     const current = activePage.narrative;
     if ((current?.presentation ?? 'dashboard') === presentation) return;
     const next = await mutate([{ type: 'set_narrative', pageId: activePage.id, narrative: { ...(current ?? { version: 1, blocks: [] }), version: 1, presentation } }]);
-    if (next) setSavedMessage(`Readers now see this page as ${presentation === 'dashboard' ? 'a dashboard' : presentation === 'story' ? 'a report' : 'a custom layout'}`);
+    if (next) setSavedMessage(`Page style: ${pageFormatLabel(presentation)}`);
   };
   const draftStory = async (instruction: string) => {
     if (!draft || !activePage || !previewRun || storyDraftBlocked) return;
@@ -2881,7 +3740,8 @@ export function AppStudioV2({
     const history = shortcut.kind === 'undo' || shortcut.kind === 'redo';
     if (!history && card && card !== element) return;
     const onCanvas = !element || element === document.body || Boolean(canvasRef.current?.contains(element));
-    if (!history && !onCanvas) return;
+    const inSettingsPanel = Boolean(selectedTileId && element?.closest('.studio-right.has-selection'));
+    if (!canvasShortcutApplies(shortcut, { onCanvas, inSettingsPanel, key: event.key })) return;
     event.preventDefault();
     if (busy || gesture) return;
     void runCanvasShortcut(shortcut, targetTileId);
@@ -2930,16 +3790,15 @@ export function AppStudioV2({
   const datasetItemForSource = (sourceId?: string) => sourceId
     ? datasetItems.find((item) => (item.sourceId ?? item.id) === sourceId) ?? null
     : null;
+  // The App data chosen in the Data pane: a Dataset (fields) or a saved query.
+  const chosenAppData = chosenDatasetKey ? appData.find((item) => item.id === chosenDatasetKey) ?? null : null;
   const activeDatasetItem = (draftTile ? datasetItems.find((item) => item.id === draftTile.sourceKey) ?? null : null)
     ?? datasetItemForSource(selectedDatasetTile?.sourceId)
-    ?? (chosenDatasetKey ? datasetItems.find((item) => item.id === chosenDatasetKey) ?? null : null)
-    ?? draft.sources.map((source) => datasetItemForSource(source.id)).find(Boolean)
-    ?? datasetItems[0]
-    ?? null;
+    ?? (chosenAppData?.capabilities?.dataset ? chosenAppData : null)
+    ?? (chosenAppData ? null : appData.find((item) => item.capabilities?.dataset) ?? null);
+  const activeAppData = activeDatasetItem ?? chosenAppData;
   const activeDescriptor = activeDatasetItem?.capabilities?.dataset as DatasetDescriptor | undefined;
-  const fieldsAvailable = datasetTilesEnabled && datasetItems.length > 0;
-  // The Data pane opens even with no Dataset yet: its empty state starts one from a table.
-  const dataPaneOpen = datasetTilesEnabled;
+  const fieldsAvailable = datasetTilesEnabled && Boolean(activeDatasetItem);
   const tileTarget = !draftTile && selectedDatasetTile && activeDatasetItem
     && (activeDatasetItem.sourceId ?? activeDatasetItem.id) === selectedDatasetTile.sourceId
     ? selectedDatasetTile
@@ -2958,56 +3817,29 @@ export function AppStudioV2({
     setPanel('sources');
     setPanelOpen(true);
     if (fieldsAvailable && activeDatasetItem) {
-      setDataView('fields');
       setDraftTile((current) => current ?? emptyDraft(activeDatasetItem));
-    } else {
-      setDataView('sources');
+    } else if (!appData.length) {
+      setAddDataOpen(true);
     }
     window.setTimeout(() => document.getElementById('studio-field-search')?.focus(), 0);
   };
   /** A field click builds the new tile, or edits the selected Dataset tile. */
   const pickField = (field: DatasetField) => {
     if (!activeDatasetItem || !activeDescriptor || !activePage) return;
-    if (tileTarget?.query && !tileTarget.query.detail) {
-      // A click puts the field on the shelf a Tableau author expects, or
-      // takes it off every shelf when it is already there (RFC 0009).
-      const ref = field.kind === 'measure' ? { measure: field.name } : { dimension: field.name };
-      const current = tileTarget.viz.encoding ?? encodingFromQuery(tileTarget.query, tileTarget.viz.type);
-      const encoding = encodingHas(current, ref) ? removeField(current, ref) : addFieldByClick(current, ref, isTimeField(field));
-      const query = queryFromEncoding(encoding, tileTarget.query, descriptorTimeGrain(activeDescriptor));
-      if (!query.measures.length) {
-        setSavedMessage('A tile needs at least one measure');
-        return;
-      }
-      const validation = validateTileQuery(activeDescriptor, query);
-      if (!tileQueryValidationRuns(validation)) {
-        setError(validation.diagnostics[0]?.message ?? 'The Dataset does not cover that field combination.');
-        return;
-      }
-      const type = vizTypeForEncoding(encoding, descriptorTimeField(activeDescriptor), tileTarget.viz.type);
-      const viz = datasetTileVisualizationCompatibility(query, type).compatible ? type : 'table';
-      // A title DQL generated from the fields follows the fields; a title the
-      // author wrote is never touched.
-      const generatedTitle = (tileTarget.title ?? '').trim().toLowerCase() === defaultTileTitle(tileTarget.query, humanize).toLowerCase();
-      void mutate([{ type: 'update_tile', pageId: activePage.id, tileId: tileTarget.i, patch: {
-        query,
-        viz: { ...tileTarget.viz, type: viz as typeof tileTarget.viz.type, encoding },
-        ...(generatedTitle ? { title: defaultTileTitle(query, humanize) } : {}),
-      } }]);
-      return;
-    }
     if (tileTarget?.query) {
-      const query = toggleFieldInQuery(tileTarget.query, field);
-      if (!query.measures.length && !query.detail) {
-        setSavedMessage('A tile needs at least one measure');
-        return;
-      }
-      const validation = validateTileQuery(activeDescriptor, query);
-      if (!tileQueryValidationRuns(validation)) {
-        setError(validation.diagnostics[0]?.message ?? 'The Dataset does not cover that field combination.');
-        return;
-      }
-      void mutate([{ type: 'update_tile', pageId: activePage.id, tileId: tileTarget.i, patch: { query } }]);
+      // Worked out from the tile as saved when this click's turn comes, never
+      // from the screen: a quick second click lands on top of the first (round 3).
+      const pageId = activePage.id;
+      const tileId = tileTarget.i;
+      const descriptor = activeDescriptor;
+      void mutateFromLatest((current) => {
+        const tile = current.pages.find((page) => page.id === pageId)?.layout.items.find((item) => item.i === tileId);
+        if (!tile?.query) return null;
+        const change = tileFieldClickPatch(tile, field, descriptor);
+        if ('message' in change) { setSavedMessage(change.message); return null; }
+        if ('error' in change) { setError(change.error); return null; }
+        return [{ type: 'update_tile', pageId, tileId, patch: change.patch }];
+      });
       return;
     }
     const base = draftTile && draftTile.sourceKey === activeDatasetItem.id ? draftTile : emptyDraft(activeDatasetItem);
@@ -3016,28 +3848,40 @@ export function AppStudioV2({
     const query = queryFromEncoding(encoding, base.query, descriptorTimeGrain(activeDescriptor));
     const next = { ...base, encoding, query };
     const keepView = base.viewChosen && datasetTileVisualizationCompatibility(query, draftVisualization(activeDescriptor, next)).compatible;
-    setDraftTile({ ...next, view: keepView ? base.view : autoTileView(query, encoding, descriptorTimeField(activeDescriptor)), viewChosen: keepView });
+    // A field leaving the tile drops its sort; that is not the author's choice.
+    setDraftTile(withDraftSortDefault(activeDescriptor, { ...base, query: next.query }, { ...next, view: keepView ? base.view : autoTileView(query, encoding, descriptorTimeField(activeDescriptor)), viewChosen: keepView }));
     setSelectedTileId(null);
     setCopilotOpen(false);
     setSettingsOpen(false);
   };
   const chooseDataset = (item: AppBlockRecommendation) => {
     setChosenDatasetKey(item.id);
+    // Counted as a save in flight: Publish waits for the App's copy to refresh (C1).
+    if (datasetTilesEnabled && savedQueryNeedsFields(item) && !savedQueryFieldReads[item.sourceId ?? item.id]) void saveGate.track(readSavedQueryFieldsIntoApp(item).catch(() => undefined));
     setSelectedTileId(null);
-    setDraftTile((current) => current ? emptyDraft(item) : null);
+    setDraftTile((current) => current && item.capabilities?.dataset ? emptyDraft(item) : null);
   };
-  chooseDatasetRef.current = chooseDataset;
   const commitDraftTile = async () => {
     if (!draftTile || !activeDatasetItem) return;
-    const title = draftTile.title.trim() || defaultTileTitle(draftTile.query, humanize);
-    const visualization = activeDescriptor ? draftVisualization(activeDescriptor, draftTile) : undefined;
+    const committed = draftTile;
+    const title = committed.title.trim() || defaultTileTitle(committed.query, humanize);
+    const visualization = activeDescriptor ? draftVisualization(activeDescriptor, committed) : undefined;
     // A new pivot asks for its totals from the start.
-    const query = visualization === 'pivot' ? withPivotRollups(withoutRowLimit(draftTile.query), draftTile.encoding, undefined) : draftTile.query;
+    const query = visualization === 'pivot' ? withPivotRollups(withoutRowLimit(committed.query), committed.encoding, undefined) : committed.query;
+    // The draft leaves at once (round 3): the next field click starts a new
+    // tile while this one is saved and run, instead of landing on it (a KPI
+    // turned into a bar chart by a click made a second too soon).
+    setDraftTile(null);
+    setSelectedTileId(null);
     const added = activeDescriptor
-      ? await addComponent(draftTile.view, activeDatasetItem, query, title, visualization as AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], draftTile.encoding)
-      : await addComponent(draftTile.view, activeDatasetItem, draftTile.query, title, tileVisualization(draftTile.query, draftTile.view));
-    if (added) setDraftTile(null);
+      ? await addComponent(committed.view, activeDatasetItem, query, title, visualization as AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], committed.encoding, 'field_draft')
+      : await addComponent(committed.view, activeDatasetItem, committed.query, title, tileVisualization(committed.query, committed.view), undefined, 'field_draft');
+    // Not added: the tile comes back as it was, unless a new one was started.
+    if (!added) setDraftTile((current) => current ?? committed);
   };
+  // No AI provider, no AI controls on tiles (round 3): Quick tiles and Tile
+  // settings stay; "Edit with AI" / "Change with AI" would only open a dead end.
+  const tileAiAvailable = aiConnected !== false;
   const askAiAboutTile = (tileId: string) => {
     selectAppAutopilotTile(tileId);
     setAiScope('tile');
@@ -3055,15 +3899,17 @@ export function AppStudioV2({
     const tile = activePage?.layout.items.find((item) => item.i === tileId);
     return tile ? <div className="studio-page-grid story-embed">{renderTile({ ...tile, w: 12 }, 'story-embed')}</div> : null;
   };
+  tileHandlersRef.current = { applyDatasetCrossFilter, exploreDatasetHierarchy, returnFromDatasetHierarchy, navigateFromDatasetTile, linkDatasetTileField, openMarkMenu, previewRun };
+  const tileHandlers = () => tileHandlersRef.current!;
   const renderTile = (tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number], extraClass = '', badge: ReactNode = null, placed = false) => {
     return (
                 <article
                   key={tile.i}
                   role="group"
-                  aria-label={`App component: ${tile.title || humanize(tile.i)}`}
+                  aria-label={`App tile: ${tile.title || humanize(tile.i)}`}
                   data-tile-id={tile.i}
                   tabIndex={editing && !projectedPage ? 0 : undefined}
-                  className={`studio-component-card ${extraClass} ${editing && selectedTileId === tile.i ? 'selected' : ''} ${gesture?.origin.i === tile.i ? 'gesturing' : ''} ${tile.text ? 'text-tile' : ''}`}
+                  className={`studio-component-card ${extraClass} ${editing && selectedTileId === tile.i ? 'selected' : ''} ${gesture?.origin.i === tile.i ? 'gesturing' : ''} ${tile.text ? 'text-tile' : ''} ${tileMenuId === tile.i ? 'menu-open' : ''}`}
                   style={placed
                     ? { gridColumn: `${tile.x + 1} / span ${tile.w}`, gridRow: `${tile.y + 1} / span ${tile.h}` }
                     : { '--studio-tile-width': Math.min(tile.w, breakpoint === 'medium' ? 6 : breakpoint === 'narrow' ? 1 : 12), minHeight: tile.text ? undefined : breakpoint === 'narrow' ? Math.max(180, tile.h * 58) : Math.max(150, tile.h * 68) } as CSSProperties}
@@ -3072,15 +3918,24 @@ export function AppStudioV2({
                   <header onPointerDown={placed ? (event) => startGesture(event, tile, 'move') : undefined}>
                     {editing ? <span className="drag-handle" aria-hidden="true" title={canArrange ? 'Drag to move. Arrow keys move the selected tile.' : undefined}>⠿</span> : null}
                     {badge}
-                    <strong>{tile.title || humanize(tile.i)}</strong>
-                    <span className={`trust-dot ${tile.trustState ?? 'draft_ready'}`} title={tile.trustState === 'certified' ? 'Certified source' : tile.trustState === 'review_required' ? 'Needs review before publishing' : 'Draft'} />
-                    <div className="tile-tools" onClick={(event) => event.stopPropagation()}>
-                      {editing && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
+                    <strong title={tile.title || humanize(tile.i)}>{tile.title || humanize(tile.i)}</strong>
+                    {/* "Rolled up from a saved query" sits behind an icon, never over the value. */}
+                    <TileAdaptedNote run={previewRun?.tiles.find((item) => item.tileId === tile.i)} />
+                    {(() => {
+                      const trust = studioTrust && activePage ? appTileTrustFor(studioTrust, activePage.id, tile.i)?.trust : undefined;
+                      if (!trust) return tile.text ? null : <span className={`trust-dot ${tile.trustState === 'certified' ? 'certified' : 'review_required'}`} title={trustLabel(tile.trustState)} />;
+                      const tone = trust.state === 'certified' ? 'certified' : 'review_required';
+                      // "Certified by Kranthi · 21 Oct", never a bare "Certified" (F03).
+                      const words = trust.state === 'certified' ? trust.byline ?? trust.label : trust.label;
+                      return <span className={`trust-dot ${tone}`} data-trust={trust.state} role="img" aria-label={words} title={`${words}: ${trust.detail}`} />;
+                    })()}
+                    <div className={`tile-tools ${tileMenuId === tile.i ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
+                      {editing && tileAiAvailable && tile.sourceId && tile.query ? <button type="button" className={`studio-autopilot-target ${selectedDatasetTile?.i === tile.i ? 'on' : ''}`} aria-pressed={selectedDatasetTile?.i === tile.i} aria-label="Edit with AI" title="Edit with AI" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={13} /></button> : null}
                       {tile.query ? <button type="button" className={`studio-tile-dql-toggle ${dqlTileId === tile.i ? 'on' : ''}`} aria-pressed={dqlTileId === tile.i} aria-label="View DQL" title="View DQL" onClick={() => setDqlTileId((current) => current === tile.i ? null : tile.i)}><Code2 size={13} /></button> : null}
                       <button type="button" className="tile-more" aria-label="Tile actions" aria-haspopup="menu" aria-expanded={tileMenuId === tile.i} title="More" onClick={() => setTileMenuId((current) => current === tile.i ? null : tile.i)}><MoreHorizontal size={14} /></button>
                       {tileMenuId === tile.i ? <div className="tile-menu" role="menu">
                         {tile.query ? <button type="button" role="menuitem" onClick={() => { setDqlTileId(tile.i); setTileMenuId(null); }}><Code2 size={14} /> View DQL and SQL</button> : null}
-                        {tile.sourceId && tile.query ? <button type="button" role="menuitem" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={14} /> {editing ? 'Change with AI' : 'Ask about this tile'}</button> : null}
+                        {tileAiAvailable && tile.sourceId && tile.query ? <button type="button" role="menuitem" onClick={() => askAiAboutTile(tile.i)}><Sparkles size={14} /> {editing ? 'Change with AI' : 'Ask about this tile'}</button> : null}
                         {editing ? <button type="button" role="menuitem" onClick={() => { setSelectedTileId(tile.i); setTileMenuId(null); setCopilotOpen(false); }}><Settings2 size={14} /> Tile settings</button> : null}
                         {editing && driverProbeFor(tile, previewRun?.tiles.find((item) => item.tileId === tile.i)) ? <button type="button" role="menuitem" onClick={() => { setTileMenuId(null); void addDriverTile(tile.i); }}><Activity size={14} /> Explain the latest change</button> : null}
                         {editing ? <button type="button" role="menuitem" onClick={() => { setTileMenuId(null); void duplicateTile(tile.i); }}><Copy size={14} /> Duplicate <kbd>{modifierKeyLabel()}D</kbd></button> : null}
@@ -3088,11 +3943,30 @@ export function AppStudioV2({
                       </div> : null}
                     </div>
                   </header>
-                  {unsupportedTileFilters(tile).map((binding) => <div key={binding.filter} className="tile-filter-notice"><Filter size={11} /><span>{binding.unsupportedReason ?? `${humanize(binding.filter)} does not affect this component.`}</span></div>)}
+                  {/* "Not filtered by …" in Edit and Preview, from the run's filter
+                      report, or the page's stored choice when the run predates it. */}
+                  {activePage ? (() => {
+                    // A tile just added that can take a page filter offers it in one click; the
+                    // default stays "Not filtered by …" until the author chooses Apply.
+                    const offers = editing && !projectedPage ? pendingTileFilterOffers(activePage.id, tile.i) : [];
+                    const offered = new Set(offers.map((offer) => offer.filterId));
+                    return <>
+                      {offers.map((offer) => <div key={`offer:${offer.filterId}`} className="tile-filter-notice tile-filter-offer" role="note" data-testid="tile-filter-offer" onClick={(event) => event.stopPropagation()}>
+                        <Filter size={11} />
+                        <span title={`${offer.filterLabel} filter can apply to this tile${offer.via ? ` through its ${offer.via} join` : ''}. It is not linked until you choose Apply.`}><strong>{offer.filterLabel} filter can apply to this tile</strong>{offer.via ? ` · via ${offer.via}` : ''}</span>
+                        <button type="button" disabled={busy} onClick={() => void applyTileFilterOffer(offer)} aria-label={`Apply the ${offer.filterLabel} filter to ${tile.title || humanize(tile.i)}`}>Apply</button>
+                        <button type="button" className="quiet" onClick={() => setDismissedFilterOffers((current) => new Set([...current, `${offer.pageId}:${offer.tileId}:${offer.filterId}`]))} aria-label={`Keep ${tile.title || humanize(tile.i)} unfiltered by ${offer.filterLabel}`} title="Keep unfiltered">Not now</button>
+                      </div>)}
+                      {studioTileFilterNotices({ page: activePage, tile, run: previewRun?.tiles.find((item) => item.tileId === tile.i), values: previewVariables, mode: editing ? 'edit' : 'preview' })
+                        .filter((notice) => !offered.has(notice.filterId))
+                        .map((notice) => <div key={notice.key} className="tile-filter-notice" role="note" title={`${notice.label}. ${notice.detail}`}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
+                      {/* A name grouped without a key may merge namesakes (new-user round 3, problem 4). */}
+                      {(previewRun?.tiles.find((item) => item.tileId === tile.i)?.dataset?.nameWarnings ?? []).map((warning) => <div key={`names:${warning.field}`} className="tile-filter-notice tile-name-warning" role="note" data-testid="tile-name-warning" title={warning.message}><AlertTriangle size={11} /><span><strong>Names may repeat</strong> · {warning.message}</span></div>)}
+                    </>;
+                  })() : null}
                   {(() => { const retired = retiredTileNotice(previewRun?.tiles.find((item) => item.tileId === tile.i)); return retired ? <div className="tile-filter-notice retired" role="note" title={retired.detail}><Archive size={11} /><span><strong>{retired.label}</strong></span></div> : null; })()}
-                  {datasetTileNotices(previewRun?.tiles.find((item) => item.tileId === tile.i)).map((notice) => <div key={notice.key} className={`tile-filter-notice ${notice.kind}`} title={notice.detail}><Filter size={11} /><span><strong>{notice.label}</strong> · {notice.detail}</span></div>)}
-                  {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the Dataset query and the SQL it compiled to.</p>; })()}</div> : null}
-                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{tile.text.markdown.replace(/^#+\s*/, '')}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><StudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => returnFromDatasetHierarchy(tile.i)} onNavigate={() => navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={datasetLinkProposal(activePage!, tile)} onLinkField={() => linkDatasetTileField(tile)} onMark={(row, at, candidates) => openMarkMenu(tile, previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
+                  {dqlTileId === tile.i ? <div className="studio-tile-dql" onClick={(event) => event.stopPropagation()}>{(() => { const runTile = previewRun?.tiles.find((item) => item.tileId === tile.i); const evidence = runTile && tile.query && isCurrentDatasetTileEvidence(tile, runTile) ? presentDatasetTileEvidence(runTile) : undefined; return evidence ? <DatasetTileExecutionEvidence presentation={evidence} /> : <p>Run a preview to see the field query and the SQL it compiled to.</p>; })()}</div> : null}
+                  {tile.text ? <div className={tile.viz.type === 'heading' ? 'tile-heading' : 'tile-text'}>{studioTextTileLines(tile.text.markdown).map((line, index) => line.heading ? <strong key={index} className="tile-text-title">{line.text}</strong> : <p key={index}>{line.text}</p>)}</div> : <div className="studio-tile-preview-interactions" onClick={(event) => event.stopPropagation()}><MemoStudioTilePreview tile={tile} run={previewRun?.tiles.find((item) => item.tileId === tile.i)} loading={previewing} themeMode={themeMode} chartHeight={placed ? tileBodyHeight(tile.h, rowPx) : undefined} crossFilterFields={datasetCrossFilterFields(activePage!, tile)} activeCrossFilters={previewCrossFilters} onSelectDatasetMark={(field, values) => tileHandlers().applyDatasetCrossFilter(tile, field, values)} onDrillDatasetMark={(candidate, row) => tileHandlers().exploreDatasetHierarchy(tile, candidate, row)} onDrillBack={() => tileHandlers().returnFromDatasetHierarchy(tile.i)} onNavigate={() => tileHandlers().navigateFromDatasetTile(tile)} hasNavigation={Boolean(activePage!.interactions?.navigate?.some((interaction) => interaction.fromTile === tile.i))} linkProposal={editing ? datasetLinkProposal(activePage!, tile) : undefined} sourceLabel={draft.sources.find((source) => source.id === tile.sourceId)?.capabilities?.dataset?.label} onLinkField={() => tileHandlers().linkDatasetTileField(tile)} onMark={(row, at, candidates) => tileHandlers().openMarkMenu(tile, tileHandlers().previewRun?.tiles.find((item) => item.tileId === tile.i), row, at, candidates)} /></div>}
                   {placed && canArrange ? <>
                     <span className="tile-resize-handle e" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-e'); }} />
                     <span className="tile-resize-handle s" aria-hidden="true" onPointerDown={(event) => { event.stopPropagation(); startGesture(event, tile, 'resize-s'); }} />
@@ -3107,12 +3981,14 @@ export function AppStudioV2({
     <div className={`dql-studio-v2 ${projectedPages ? 'has-proposal' : ''} studio-${studioView} right-${rightPane}`}>
       <style>{APP_STUDIO_V2_STYLES}</style>
       <header className="studio-topbar">
-        <div className="studio-brand"><button type="button" className="ghost-icon" onClick={onBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button><span className="mark"><LayoutDashboard size={15} /></span><div><input aria-label="App name" value={name || draft.name} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && name.trim() !== draft.name) void mutate([{ type: 'set_name', name: name.trim() }]); }} /><small>{savedMessage}</small></div></div>
+        <div className="studio-brand"><button type="button" className="ghost-icon" onClick={goBack} aria-label="Back to Apps" title="Back to Apps"><ArrowLeft size={16} /></button><span className="mark"><LayoutDashboard size={15} /></span><div><input aria-label="App name" value={name || draft.name} onChange={(event) => setName(event.target.value)} onBlur={() => { if (name.trim() && name.trim() !== draft.name) void mutate([{ type: 'set_name', name: name.trim() }]); }} /><small>{savedMessage}</small></div></div>
         <nav className="page-nav" aria-label="App pages">
           {projectedPages ? projectedPages.map((page) => <button key={page.id} type="button" className={`${projectedPage?.id === page.id ? 'on' : ''} ${page.isNew ? 'proposed-page' : ''}`} aria-current={projectedPage?.id === page.id ? 'page' : undefined} onClick={() => { setProposalPageId(page.id); if (!page.isNew) setActivePageId(page.id); }}>{page.title}{page.changeCount ? <span className="change-dot" aria-label={`${page.changeCount} proposed ${page.changeCount === 1 ? 'change' : 'changes'}`} /> : null}</button>) : draft.pages.map((page) => <button key={page.id} type="button" className={activePage?.id === page.id ? 'on' : ''} aria-current={activePage?.id === page.id ? 'page' : undefined} onClick={() => { setActivePageId(page.id); setSelectedTileId(null); setTileMenuId(null); setDraftTile(null); }}>{page.metadata.title}</button>)}
           {editing && !projectedPages ? <button type="button" className="ghost-icon" onClick={() => void addPage()} aria-label="Add page" title="Add page"><Plus size={15} /></button> : null}
         </nav>
         <div className="studio-actions">
+          {/* The App's one tile count (F04): the same answer as Publish, the Apps card and the reader. */}
+          {studioTrust?.text ? <span className={`studio-trust-count ${studioTrust.allCertified ? 'certified' : 'partial'}`} role="status" title="How many of this App's tiles are certified. Each tile says Certified (by whom, and when) or Not certified yet."><ShieldCheck size={13} aria-hidden="true" />{studioTrust.text}</span> : null}
           {editing ? <div className="history">
             <button type="button" className="ghost-icon" disabled={!undoStack.length || busy} onClick={() => void undo()} aria-label="Undo" title="Undo"><Undo2 size={15} /></button>
             <button type="button" className="ghost-icon" disabled={!redoStack.length || busy} onClick={() => void redo()} aria-label="Redo" title="Redo"><Redo2 size={15} /></button>
@@ -3121,9 +3997,9 @@ export function AppStudioV2({
             <button type="button" className={editing ? 'on' : ''} aria-pressed={editing} onClick={() => setStudioView('edit')}>Edit</button>
             <button type="button" className={!editing ? 'on' : ''} aria-pressed={!editing} onClick={() => { setStudioView('view'); setSelectedTileId(null); setSettingsOpen(false); setTileMenuId(null); }} title="See the page exactly as readers will">Preview</button>
           </div>
-          <button type="button" className="preview" onClick={() => void runPreview()} disabled={previewing || busy} aria-label={previewing ? 'Running preview' : 'Run preview'} title="Run every tile on this page again"><Play size={13} /><span>{previewing ? 'Running…' : 'Run'}</span></button>
-          <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label="Ask AI"><Sparkles size={14} /><span>Ask AI</span></button>
-          <button type="button" className="publish" onClick={() => void publishFromToolbar()} disabled={busy} aria-label={`Review and publish to Project${publishStepCount ? `, ${publishStepCount} ${publishStepCount === 1 ? 'fix' : 'fixes'} needed` : ''}`}><span>Publish</span>{publishStepCount ? <small>{publishStepCount} {publishStepCount === 1 ? 'fix' : 'fixes'}</small> : null}</button>
+          <button type="button" className="preview" onClick={() => void runPreview()} disabled={previewing || runWaitingForSaves} aria-busy={previewing || runWaitingForSaves} aria-label={previewing ? 'Running preview' : runWaitingForSaves ? 'Saving changes, then running preview' : 'Run preview'} title="Run every tile on this page again"><Play size={13} /><span>{previewing ? 'Running…' : runWaitingForSaves ? 'Saving…' : 'Run'}</span></button>
+          <button type="button" className={`copilot ${copilotOpen ? 'on' : ''}`} onClick={() => { if (!copilotOpen) setAiScope(selectedDatasetTile && askVoice !== 'keywords' ? 'tile' : 'page'); setCopilotOpen((open) => !open); }} aria-pressed={copilotOpen} aria-label={askWords.toolbar} title={askVoice === 'keywords' ? 'Add a total, a trend or a top list from this App’s data' : undefined}>{askVoice === 'keywords' ? <LayoutGrid size={14} /> : <Sparkles size={14} />}<span>{askWords.toolbar}</span></button>
+          <button type="button" className="publish" onClick={() => void publishFromToolbar()} disabled={publishPhase !== null} aria-busy={publishPhase !== null} aria-label={`Review and publish to Project${publishStepCount ? `, ${publishStepCount} ${publishStepCount === 1 ? 'fix' : 'fixes'} needed` : ''}`}><span>{publishPhase === 'saving' ? 'Saving changes…' : publishPhase === 'checking' ? 'Checking…' : 'Publish'}</span>{publishStepCount && !publishPhase ? <small>{publishStepCount} {publishStepCount === 1 ? 'fix' : 'fixes'}</small> : null}</button>
           <button type="button" className="ghost-icon overflow-button" aria-label="More draft actions" aria-expanded={actionsOpen} onClick={() => setActionsOpen((open) => !open)}><MoreHorizontal size={17} /></button>
           {actionsOpen ? <div className="studio-overflow-menu" role="menu">
             <small>Preview size</small>
@@ -3132,7 +4008,7 @@ export function AppStudioV2({
             <button type="button" role="menuitem" disabled={!activePage?.layout.items.length || busy} onClick={() => { setActionsOpen(false); void arrangePage(); }}><LayoutDashboard size={14} /> Tidy page layout</button>
             <button type="button" role="menuitem" onClick={() => { setActionsOpen(false); setStudioView('edit'); setSelectedTileId(null); setCopilotOpen(false); setSettingsOpen(true); }}><Settings2 size={14} /> App settings</button>
             <hr />
-            <button type="button" role="menuitem" className="danger" onClick={() => { setActionsOpen(false); setDeleteConfirmOpen(true); }}><Trash2 size={14} /> Delete local draft</button>
+            <button type="button" role="menuitem" className="danger" onClick={() => { setActionsOpen(false); setDeleteConfirmOpen(true); }}><Trash2 size={14} /> Delete draft</button>
           </div> : null}
         </div>
       </header>
@@ -3146,33 +4022,62 @@ export function AppStudioV2({
         <section className={`left-content ${panelOpen ? 'open' : ''}`}>
           <button type="button" className="mobile-drawer-close" onClick={() => setPanelOpen(false)} aria-label="Close Studio drawer"><X size={16} /></button>
           {panel === 'pages' ? <PagesPanel draft={draft} activePageId={activePage?.id} onOpen={setActivePageId} onAdd={() => void addPage()} template={draft.template} onApplyTemplate={(nextTemplate) => void applyTemplate(nextTemplate)} /> : null}
-          {panel === 'sources' && dataPaneOpen && dataView === 'fields' ? <DataPanel datasets={datasetItems} active={activeDatasetItem} target={dataPanelTarget} disabled={busy || previewing} loading={catalogLoading} onChooseDataset={chooseDataset} onPickField={pickField} onBrowseSources={() => setDataView('sources')} onStartFromTable={() => setTableDialogOpen(true)} onAddContent={(kind) => void addComponent(kind, null)} /> : null}
-          {panel === 'sources' && (!dataPaneOpen || dataView === 'sources') ? <>{dataPaneOpen ? <button type="button" className="panel-back" onClick={() => setDataView('fields')}><ArrowLeft size={13} /> Dataset fields</button> : null}<SourcesPanel usedSources={draft.sources} items={filteredCatalog} selected={selectedSource} query={catalogQuery} loading={catalogLoading} error={catalogError} disabled={busy || previewing} datasetTilesEnabled={datasetTilesEnabled} enablingDatasets={enablingDatasets} onEnableDatasets={() => void enableDatasetTiles()} sourceFeedback={sourceFeedback} onQuery={setCatalogQuery} onSelect={selectSource} onAdd={(item, kind) => void addComponent(kind, item)} onAddDataset={(item, kind, query, title) => void addComponent(kind, item, query, title)} onAuthorDataset={openDatasetAuthoring} onRefreshDatasetBinding={(sourceId) => void refreshDatasetBinding(sourceId)} onAddContent={(kind) => void addComponent(kind, null)} policy={draft.sourcePolicy} total={catalogTotal} hasMore={Boolean(catalogNextCursor)} onLoadMore={() => void loadMoreSources()} onEnableReview={() => void mutate([{ type: 'set_source_policy', sourcePolicy: 'include_review_required' }])} /></> : null}
+          {panel === 'sources' ? <DataPanel
+            appData={appData}
+            active={activeAppData}
+            target={dataPanelTarget}
+            disabled={busy || previewing}
+            loading={catalogLoading}
+            datasetTilesEnabled={datasetTilesEnabled}
+            onChoose={chooseDataset}
+            onPickField={pickField}
+            onAddData={() => setAddDataOpen(true)}
+            onAddSavedQuery={(item, kind) => void addComponent(kind, item)}
+            onAddContent={(kind) => void addComponent(kind, null)}
+            summaryAdded={summaryAdded}
+            onToggleSummary={() => void toggleSummary(!summaryAdded)}
+            {...(activeDatasetItem && datasetSourceAuthoringModel(activeDatasetItem) ? { onAuthorDataset: openDatasetAuthoring } : {})}
+            {...(activeDatasetItem?.sourceId && draft.pages.some((page) => page.layout.items.some((tile) => tile.query && tile.sourceId === activeDatasetItem.sourceId)) ? { onRefreshBinding: (item: AppBlockRecommendation) => { if (item.sourceId) void refreshDatasetBinding(item.sourceId); } } : {})}
+            {...(datasetTilesEnabled ? { onMakeRowLevel: setSavedQueryFields } : {})}
+            onCertify={(item: AppBlockRecommendation) => setCertifyReview({ sourceId: item.sourceId ?? item.id, name: item.name })}
+            onCertifyJoin={(item: AppBlockRecommendation, join: DatasetJoin) => openJoinCertify(item.sourceId ?? item.id, join, humanize(item.name))}
+            {...(activeAppData && savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] ? { fieldsStatus: savedQueryFieldReads[activeAppData.sourceId ?? activeAppData.id] } : {})}
+            pickerRequest={dataPickerRequest}
+          /> : null}
           {panel === 'filters' ? <FiltersPanel draft={draft} activePageId={activePage?.id} catalog={catalog} candidates={filterCandidates} runtimeFilterFields={runtimeFilterFields} previewRunsByPage={previewRunsByPage} previewing={previewing} disabled={busy || previewing} onRunPreview={() => void runPreview()} onSave={(configuration) => void saveFilter(configuration)} onRemove={(id) => void removeFilter(id)} /> : null}
         </section>
       </aside> : null}
 
       <main ref={workspaceRef} className="studio-workspace">
-        {error ? <div className="studio-error floating" role="alert">{error}<button type="button" onClick={() => setError(null)}>×</button></div> : null}
+        {error ? <StudioErrorBanner error={error} floating onDismiss={dismissStudioError} onRefresh={() => void reloadLatestDraft()} {...(publishBlockedBy !== null && publishBlockedBy === error ? { lead: PUBLISH_SAVE_FAILED_LEAD, action: { label: 'Try again', onClick: () => void retrySaveThenPublish() } } : {})} {...(sourceSwitchProblem && sourceSwitchProblem.message === error ? { technical: sourceSwitchProblem.technical, actions: sourceSwitchActions(sourceSwitchProblem) } : {})} /> : null}
         <div className={`studio-canvas-frame ${breakpoint} preview-mode-${previewMode}`}>
-          <section ref={canvasRef} className="studio-canvas" aria-label="App canvas" onClick={(event) => { if (event.target === event.currentTarget) { setSelectedTileId(null); setTileMenuId(null); } }}>
+          <section ref={canvasRef} className="studio-canvas" aria-label="App page" onClick={(event) => { if (event.target === event.currentTarget) { setSelectedTileId(null); setTileMenuId(null); } }}>
             <header className="studio-page-heading">
               <div><h1>{projectedPage?.title ?? activePage?.metadata.title ?? 'Overview'}</h1>{!projectedPage?.isNew && activePage?.metadata.description ? <p>{activePage.metadata.description}</p> : null}</div>
               {editing && !projectedPages && activePage ? <PageFormatPicker value={canvasMode ? 'canvas' : storyMode ? 'story' : 'dashboard'} disabled={busy} onChange={(format) => void setPresentation(format)} /> : null}
               {editing && !projectedPages && !storyMode && !canvasMode ? <button type="button" className="add-tile" onClick={openAddTile}><Plus size={14} /> Add tile</button> : null}
             </header>
-            {editing && (!fieldsAvailable || dataView === 'sources') && selectedSource && selectedSourceKind ? <div className="studio-source-ready"><div><span className="certified"><ShieldCheck size={14} /></span><p><small>Selected data</small><strong>{humanize(selectedSource.name)}</strong></p></div><span className="studio-source-actions"><button type="button" disabled={busy || previewing} onClick={() => selectedSource.capabilities?.dataset ? (setPanel('sources'), setPanelOpen(true)) : void addComponent(selectedSourceKind, selectedSource)}>{selectedSource.capabilities?.dataset ? <><Settings2 size={14} /> Choose fields</> : <><Plus size={14} /> {selectedSourceAction}</>}</button><button type="button" className="source-clear" onClick={() => setSelectedSource(null)} aria-label="Clear selected data"><X size={14} /></button></span></div> : null}
-            {(activePage?.filters ?? []).length ? <div className="studio-page-filterbar">{activePage!.filters!.map((filter) => <StudioFilterControl key={filter.id} filter={filter} availability={activeFilterOptions[filter.id]} value={previewVariables[filter.id] ?? filter.default} applying={previewing} onChange={(value) => applyFilterValue(filter, value)} />)}</div> : null}
-            {previewCrossFilters.length ? <div className="studio-mark-filterbar" role="status" aria-label="Selected Dataset result marks"><span>Selected marks</span>{previewCrossFilters.map((filter) => <button key={`${filter.fromTileId}:${filter.field}`} type="button" onClick={() => removeDatasetCrossFilter(filter.fromTileId, filter.field)}>{humanize(filter.field)}: {filter.values.map(String).join(', ')} <X size={11} /></button>)}<button type="button" className="clear" onClick={clearDatasetCrossFilters}>Reset marks</button></div> : null}
+            {(activePage?.filters ?? []).length ? <div className="studio-page-filterbar">{activePage!.filters!.map((filter) => <StudioFilterControl key={filter.id} filter={filter} availability={activeFilterOptions[filter.id]} searchSource={datasetOptionSource(filter as never, (activePage as { datasets?: never }).datasets)} value={previewVariables[filter.id] ?? filter.default} applying={previewing} onChange={(value) => applyFilterValue(filter, value)} />)}</div> : null}
+            {previewCrossFilters.length ? <div className="studio-mark-filterbar" role="status" aria-label="Selected result marks"><span>Selected marks</span>{previewCrossFilters.map((filter) => <button key={`${filter.fromTileId}:${filter.field}`} type="button" onClick={() => removeDatasetCrossFilter(filter.fromTileId, filter.field)}>{humanize(filter.field)}: {filter.values.map(String).join(', ')} <X size={11} /></button>)}<button type="button" className="clear" onClick={clearDatasetCrossFilters}>Reset marks</button></div> : null}
+            {/* What readers get above the tiles: Preview shows all of it, Edit only the Summary (D6). */}
+            {activePage && !projectedPage && !canvasMode && !storyMode ? <ReaderPreviewParts
+              parts={readerPageParts({ summary: summaryAdded, hasDataTiles: pageHasDataTiles(activePage), mayAsk: true }).filter((part) => editing ? part === 'summary' : true)}
+              appName={name || draft.name}
+              items={activePage.layout.items}
+              run={previewRun}
+              {...(editing ? { onRemoveSummary: () => void toggleSummary(false) } : {})}
+              onAskInPreview={() => setSavedMessage('Readers ask about this page here once it is published. Questions are not sent from Preview.')}
+              {...(aiConnected !== undefined ? { aiConnected } : {})}
+            /> : null}
             {previewRun?.incomplete ? <div className="studio-preview-incomplete" role="status" aria-label="Incomplete preview">
-              <strong>Preview incomplete · {previewRun.tiles.filter((tile) => tile.status === 'ok').length}/{previewRun.tiles.length} components ready</strong>
+              <strong>Preview incomplete · {previewRun.tiles.filter((tile) => tile.status === 'ok').length}/{previewRun.tiles.length} tiles ready</strong>
               <span>{previewRun.incomplete.message}</span>
             </div> : null}
             {autopilotTileSelectionRequested && !selectedDatasetTile ? <div className="studio-autopilot-selection-hint" role="status">
               <strong>Choose a tile to change with AI</strong>
-              <span>Use “Edit with AI” on a Dataset tile. Clicking a chart keeps its own behavior and does not select the tile.</span>
+              <span>Use “Edit with AI” on a tile. Clicking a chart keeps its own behavior and does not select the tile.</span>
             </div> : null}
-            {projectedPage ? <div className={`proposal-banner ${proposalSummaryText(projectedPage).removed ? 'warn' : ''}`} role="status"><Sparkles size={14} /><span><strong>AI proposal</strong> · {proposalSummaryText(projectedPage).text}. Nothing is saved until you apply.</span></div> : null}
+            {projectedPage ? <div className={`proposal-banner ${proposalSummaryText(projectedPage).removed ? 'warn' : ''}`} role="status"><Sparkles size={14} /><span><strong>{planWords.bannerLabel}</strong> · {proposalSummaryText(projectedPage).text}. Nothing is saved until you apply.</span></div> : null}
             {/* A report or custom layout shows the tile being built above it; Add to page puts it at the end. */}
             {(canvasMode || storyMode) && editing && draftTile && activeDescriptor ? <div className="studio-draft-slot"><DraftTileCard sourceId={activeDatasetItem?.sourceId ?? activeDatasetItem?.id} descriptor={activeDescriptor} draft={draftTile} themeMode={themeMode} onResult={setDraftResult} /></div> : null}
             {canvasMode ? canvasArea : storyMode ? storyArea : <>
@@ -3211,7 +4116,7 @@ export function AppStudioV2({
                   item.change === 'removed' ? <span className="proposal-badge removed">WILL BE REMOVED</span> : projectedPage.linkedTileIds.has(item.tile.i) ? <span className="proposal-badge link">PROPOSED LINK</span> : null,
                 ))
                 : canvasItems.map((tile) => renderTile(tile, '', null, breakpoint === 'wide'))}
-              {!visibleItems.length && !draftTile && !projectedPage ? <div className="empty-canvas"><span><Plus size={22} /></span><strong>This page is empty</strong><p>{editing ? 'Choose your data in the Data panel, then click the numbers and fields you want to see. You can also ask AI to draft the page.' : 'Switch to Edit to add tiles to this page.'}</p>{editing ? <div className="empty-actions"><button type="button" className="primary" onClick={openAddTile}><Plus size={14} /> Add tile</button><button type="button" onClick={() => { setAiScope('page'); setCopilotOpen(true); }}><Sparkles size={14} /> Draft with AI</button></div> : null}</div> : null}
+              {!visibleItems.length && !draftTile && !projectedPage ? <div className="empty-canvas"><span><Plus size={22} /></span><strong>This page is empty</strong><p>{editing ? `Choose your data in the Data panel, then click the numbers and fields you want to see. ${askVoice === 'keywords' ? 'Or add a total, a trend and a top list with Quick tiles.' : 'You can also ask AI to draft the page.'}` : 'Switch to Edit to add tiles to this page.'}</p>{editing ? <div className="empty-actions"><button type="button" className="primary" onClick={openAddTile}><Plus size={14} /> Add tile</button><button type="button" onClick={() => { setAiScope('page'); setCopilotOpen(true); }}>{askVoice === 'keywords' ? <LayoutGrid size={14} /> : <Sparkles size={14} />} {askWords.draftPage}</button></div> : null}</div> : null}
             </div>
             {canArrange && visibleItems.length ? <p id="studio-canvas-keys" className="studio-canvas-keys">Drag a tile by its header or resize it from its edges. With a tile selected: arrow keys move it, Shift + arrows resize, {modifierKeyLabel()}D duplicates, Delete removes, {modifierKeyLabel()}Z undoes.</p> : null}
             </>}
@@ -3219,42 +4124,41 @@ export function AppStudioV2({
         </div>
       </main>
 
-      {rightPane === 'proposal' ? <aside className="studio-right studio-plan-pane" aria-label="AI proposal">
+      {rightPane === 'proposal' ? <aside className="studio-right studio-plan-pane" aria-label={planWords.reviewPaneLabel}>
         {aiActivity ? <AppStudioAiActivitySurface
           docked
           activity={aiActivity}
-          label={APP_STUDIO_AI_ACTIVITY_LABELS[aiActivityIndex] ?? APP_STUDIO_AI_ACTIVITY_LABELS[0]}
-          onBack={onBack}
+          label={planWords.activitySteps[aiActivityIndex] ?? planWords.activitySteps[0] ?? ''}
+          voice={planVoice}
+          onBack={goBack}
           onReturn={aiActivity.returnToProposal && proposal ? () => setAiActivity(null) : undefined}
           onRetry={() => retryAiActivity(aiActivity)}
         /> : proposal && proposalSummary ? <AiPlanReview
-            proposal={proposal}
+          proposal={proposal}
           summary={proposalSummary}
-          catalog={catalog}
-          catalogQuery={catalogQuery}
-          sourcePolicy={draft.sourcePolicy}
           selectedSourceIds={selectedProposalSourceIds}
-          addingSourceId={proposalAddingSourceId}
+          newSources={aiDataFlow ? [] : appStudioNewDataSources(proposalSummary, selectedProposalSourceIds, draft.sources)}
+          skippedTileIds={skippedProposalTileIds}
           busy={busy}
-          onRevise={() => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true)}
           changeCount={proposalChangeCount}
+          showPlanNotes={!aiDataFlow}
+          voice={planVoice}
+          {...(aiDataFlow ? { onBackToData: () => setStage('data') } : {})}
+          onRevise={() => void requestAiProposal(draft, prompt, appStudioProposalRequiredSourceIds(selectedProposalSourceIds), true)}
           onApply={() => void applyProposal()}
-          onDismiss={() => { if (projectedPage && !projectedPage.isNew) setActivePageId(projectedPage.id); setProposal(null); setProposalPageId(null); }}
-          onCatalogQuery={setCatalogQuery}
-          onAddSource={(source) => void addSourceToAiProposal(source.sourceId ?? source.id, source.eligibility?.localPreview === false, source)}
-          onAddProposalSource={(sourceId, reviewRequired) => void addSourceToAiProposal(sourceId, reviewRequired)}
+          onDismiss={() => { if (projectedPage && !projectedPage.isNew) setActivePageId(projectedPage.id); setProposal(null); setProposalPageId(null); setAiDataFlow(false); }}
           onAnswerClarification={(questionId, answerId) => void reviseAiProposal({ [questionId]: answerId })}
           onGenerateGap={(requirementId) => void generateAiGap(requirementId)}
-          onToggleSource={(sourceId) => setSelectedProposalSourceIds((current) => {
+          onToggleTile={(tileId) => setSkippedProposalTileIds((current) => {
             const next = new Set(current);
-            if (next.has(sourceId)) next.delete(sourceId); else next.add(sourceId);
+            if (next.has(tileId)) next.delete(tileId); else next.add(tileId);
             return next;
           })}
         /> : null}
       </aside> : null}
       {rightPane === 'draft' && draftTile && activeDescriptor && activeDatasetItem ? <aside className="studio-right" aria-label="New tile">
         <header><div><small>NEW TILE</small><strong>Built from {humanize(activeDatasetItem.name)}</strong></div><button type="button" className="ghost-icon" onClick={() => setDraftTile(null)} aria-label="Cancel new tile"><X size={16} /></button></header>
-        <DraftTileInspector descriptor={activeDescriptor} datasetLabel={humanize(activeDatasetItem.name)} draft={draftTile} disabled={busy} onChange={setDraftTile} onCancel={() => setDraftTile(null)} onAdd={() => void commitDraftTile()} result={draftResult} />
+        <DraftTileInspector descriptor={activeDescriptor} datasetLabel={humanize(activeDatasetItem.name)} draft={draftTile} disabled={busy} onChange={(next) => setDraftTile((current) => withDraftSortDefault(activeDescriptor, current, next))} onCancel={() => setDraftTile(null)} onAdd={() => void commitDraftTile()} result={draftResult} />
       </aside> : null}
       {rightPane === 'inspector' || rightPane === 'settings' ? <aside className={`studio-right ${selectedTile ? 'has-selection' : ''}`} aria-label={selectedTile ? 'Tile settings' : 'App settings'}>
         <header><div><small>{selectedTile ? tileKindLabel(selectedTile) : 'APP'}</small><strong>{selectedTile ? 'Tile settings' : 'App settings'}</strong></div><button type="button" className="ghost-icon" onClick={() => { setSelectedTileId(null); setSettingsOpen(false); }} aria-label={selectedTile ? 'Close tile settings' : 'Close App settings'}><X size={16} /></button></header>
@@ -3263,13 +4167,14 @@ export function AppStudioV2({
             key={selectedTile.i}
             tile={selectedTile}
             run={previewRun?.tiles.find((item) => item.tileId === selectedTile.i)}
+            {...(studioTrust ? (() => { const entry = appTileTrustFor(studioTrust, activePage.id, selectedTile.i); return entry ? { trust: entry.trust } : {}; })() : {})}
             pageId={activePage.id}
             page={activePage}
             pages={draft.pages}
             sources={draft.sources}
             dataset={selectedTile.sourceId ? draft.sources.find((source) => source.id === selectedTile.sourceId)?.capabilities?.dataset : undefined}
             disabled={busy || previewing}
-            onOpenSources={() => { setPanel('sources'); setPanelOpen(true); }}
+            onOpenSources={() => { setPanel('sources'); setPanelOpen(true); setDataPickerRequest((count) => count + 1); }}
             onSaveDatasetTileAsBlock={() => void saveDatasetTileAsReusableBlock(activePage, selectedTile)}
             savingDatasetTileAsBlock={savingDatasetTileId === selectedTile.i}
             savedDatasetReviewDraft={savedDatasetReviewDrafts[`${activePage.id}:${selectedTile.i}`]}
@@ -3287,16 +4192,26 @@ export function AppStudioV2({
           />
         ) : (
           <>
-            <BuildFrameInspector draft={draft} prompt={prompt} previewRun={previewRun} onPrompt={setPrompt} onAskAi={() => { setAiScope('page'); setCopilotOpen(true); }} onSourcePolicy={(nextPolicy) => void mutate([{ type: 'set_source_policy', sourcePolicy: nextPolicy }])} onResolveTask={(task) => void resolveReviewTask(task)} onApproveSemantic={() => void approveSemanticPreview()} />
+            <BuildFrameInspector draft={draft} prompt={prompt} previewRun={previewRun} askLabel={askWords.buildOrRevise} onPrompt={setPrompt} onAskAi={() => { setAiScope('page'); setCopilotOpen(true); }} onResolveTask={(task) => void resolveReviewTask(task)} onApproveSemantic={() => void approveSemanticPreview()} />
             {/* Who the published App is for (RFC 0010 HH-16). */}
             {draft.appId ? <div className="inspector-body"><PublishedAppAudience key={draft.appId} appId={draft.appId} /></div> : null}
           </>
         )}
       </aside> : null}
 
-      {rightPane === 'ai' ? <AiSidePanel
+      {rightPane === 'ai' && askVoice === 'keywords' && aiScope === 'page' ? <QuickTilesPanel
+        pageTitle={activePage?.metadata.title ?? 'this page'}
+        data={quickChoiceData(appData, draftDomain)}
+        busy={busy || previewing}
+        error={quickError}
+        onAdd={(choices) => void buildQuickTiles(choices, 'page')}
+        onAddData={() => { setCopilotOpen(false); setAddDataOpen(true); }}
+        onClose={() => { setCopilotOpen(false); setQuickError(null); }}
+        {...(onConnectAi ? { onConnectAi } : {})}
+      /> : null}
+      {rightPane === 'ai' && !(askVoice === 'keywords' && aiScope === 'page') ? <AiSidePanel
         t={themes[themeMode]}
-        title="AI"
+        title={askWords.panelTitle}
         subtitle={draft.name}
         dock="column"
         expanded={copilotExpanded}
@@ -3310,7 +4225,7 @@ export function AppStudioV2({
         resizable
         minResizeWidth={360}
         maxResizeWidth={900}
-        ariaLabel="Ask AI"
+        ariaLabel={askWords.toolbar}
         className="studio-copilot-panel"
       >
         <div className="studio-ai-scope" role="tablist" aria-label="What should AI work on?">
@@ -3320,12 +4235,12 @@ export function AppStudioV2({
         {aiScope === 'page' ? <section className="studio-ai-page-scope">
           <label htmlFor="studio-ai-page-prompt">Describe the page or the change you want</label>
           <textarea id="studio-ai-page-prompt" value={prompt} rows={5} onChange={(event) => setPrompt(event.target.value)} placeholder="Revenue and order trends by region for the weekly business review" />
-          <small>AI plans tiles from governed Datasets only. New tiles are added below what is already here, and you keep or skip each one before anything changes.</small>
+          <small>{askWords.pageHelp()}</small>
           <label htmlFor="studio-ai-replace-page" className="studio-ai-replace">
             <input id="studio-ai-replace-page" type="checkbox" checked={replacePageWithAi} onChange={(event) => setReplacePageWithAi(event.target.checked)} />
             Rebuild this page instead (replaces its current tiles)
           </label>
-          <button type="button" className="primary" disabled={busy || previewing} onClick={() => void requestAiProposal()}><Sparkles size={13} /> {replacePageWithAi ? 'Propose a new page' : 'Propose additions'}</button>
+          <button type="button" className="primary" disabled={busy || previewing} onClick={() => { setAiDataFlow(false); void requestAiProposal(); }}><Sparkles size={13} /> {replacePageWithAi ? askWords.proposePage : askWords.proposeAdditions}</button>
         </section> : null}
         {aiScope === 'tile' && autopilotReview ? <AppAutopilotReviewCard
           proposal={autopilotReview}
@@ -3336,17 +4251,22 @@ export function AppStudioV2({
           }}
           onApply={() => void applyAutopilotChange()}
         /> : null}
-        {aiScope === 'tile' ? <Suspense fallback={<div className="studio-copilot-loading">Loading…</div>}>
+        {aiScope === 'tile' && askVoice === 'keywords' ? <section className="studio-ai-connect" aria-label="Changing a tile needs AI">
+          <strong>Changing a tile needs an AI provider</strong>
+          <span>Quick tiles add new tiles to a page; reading or changing one tile needs AI. Connect an AI provider, or change the tile yourself in Tile settings.</span>
+          {onConnectAi ? <button type="button" onClick={onConnectAi}>{CONNECT_AI_ACTION}</button> : null}
+        </section> : null}
+        {aiScope === 'tile' && askVoice !== 'keywords' ? <Suspense fallback={<div className="studio-copilot-loading">Loading…</div>}>
           <UnifiedAgentRunPanel
             themeMode={themeMode}
             title="Edit tile with AI"
             scopeHint={selectedDatasetTile
               ? `Draft · ${activePage?.metadata.title ?? 'Overview'} · ${selectedDatasetTile.title || humanize(selectedDatasetTile.i)}${autopilotRepairAvailability === 'healthy' ? ' · preview healthy' : autopilotRepairAvailability === 'failed_tile' ? ' · failed tile' : ''}`
-              : `Draft · ${activePage?.metadata.title ?? 'Overview'} · select a Dataset tile`}
+              : `Draft · ${activePage?.metadata.title ?? 'Overview'} · select a tile`}
             composerPlaceholder="Explain, repair, or change the selected tile…"
             emptyHint={selectedDatasetTile
               ? `AI reads the saved draft and ${selectedDatasetTile.title || humanize(selectedDatasetTile.i)} before it answers, and proposes a change for you to review. ${appAutopilotRepairShortcutHint(autopilotRepairAvailability)}`
-              : 'Choose “Edit with AI” on a Dataset tile first.'}
+              : 'Choose “Edit with AI” on a tile first.'}
             audience="analyst"
             initialMode="app"
             selectedObject={{ kind: 'app', id: draft.appId, title: draft.name }}
@@ -3357,7 +4277,7 @@ export function AppStudioV2({
             onRunningChange={setCopilotRunning}
             onSelectAppAutopilotTile={() => {
               setAutopilotTileSelectionRequested(true);
-              setSavedMessage('Choose “Edit with AI” on a Dataset tile to continue');
+              setSavedMessage('Choose “Edit with AI” on a tile to continue');
               workspaceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }}
             onReviewAppAutopilotChange={(artifact, run) => {
@@ -3375,16 +4295,23 @@ export function AppStudioV2({
         </Suspense> : null}
       </AiSidePanel> : null}
       {publishReviewOpen ? <PublishReadinessDialog
-        draft={draft}
+        draft={trustDraft ?? draft}
+        {...(projectInGit !== undefined ? { inGitRepo: projectInGit } : {})}
         serverIssues={publishIssues}
         busy={busy || previewing}
         previewRun={previewRun}
+        previewRunsByPage={previewRunsByPage}
         onClose={() => setPublishReviewOpen(false)}
         onRetry={() => void publish(true)}
+        requireCertifiedToPublish={requireCertifiedToPublish}
+        onOpenSavedQuery={(source) => setCertifyReview({ sourceId: source.id, name: appData.find((item) => (item.sourceId ?? item.id) === source.id)?.name ?? source.capabilities?.dataset?.label ?? source.sourceRef })}
+        onRemoveRelatedFields={(item) => void removeReviewRelatedFields(item)}
+        onCertifyJoin={(join, sourceId) => { if (join && sourceId) openJoinCertify(sourceId, join); }}
         onRunPreview={(pageId) => void runPreviewAndReview(pageId)}
         onRunAllPreviews={() => void runAllPreviewsAndReview()}
         onRemoveRequirement={(requirementId) => void removeRequirementFromPublishScope(requirementId)}
         onReviseRequirement={reviseRequirementWithAi}
+        reviseLabel={askWords.revise}
         onAnswerQuestion={(questionId, answerId) => void answerBuildFrameQuestion(questionId, answerId)}
         onResolveTask={(task) => void resolveReviewTask(task)}
         onOpenSources={() => { setPublishReviewOpen(false); setPanel('sources'); setPanelOpen(true); }}
@@ -3392,6 +4319,22 @@ export function AppStudioV2({
         onRefreshSources={() => void refreshCertifiedSourceTrust()}
         onApproveSemantic={() => void approveSemanticPreview()}
         onRemoveLocalAnalysis={() => void removeLocalAnalysisForPublication()}
+        onCertifySource={(source) => setCertifyReview({ sourceId: source.id, name: appData.find((item) => (item.sourceId ?? item.id) === source.id)?.name ?? source.capabilities?.dataset?.label ?? source.sourceRef })}
+        sourceName={(source) => appData.find((item) => (item.sourceId ?? item.id) === source.id)?.name ?? source.capabilities?.dataset?.label ?? source.sourceRef}
+      /> : null}
+      {certifyReview ? <CertifyReviewDialog
+        sourceId={certifyReview.sourceId}
+        name={certifyReview.name}
+        onClose={() => setCertifyReview(null)}
+        onCertified={(sourceId) => void afterDataCertified(sourceId)}
+        onOpenBlockStudio={openSavedQueryInBlockStudio}
+      /> : null}
+      {certifyJoin ? <CertifyJoinDialog
+        sourceId={certifyJoin.sourceId}
+        joinId={certifyJoin.joinId}
+        name={certifyJoin.name}
+        onClose={() => setCertifyJoin(null)}
+        onCertified={(sourceId) => void afterJoinCertified(sourceId)}
       /> : null}
       {datasetAuthoringSource ? <DatasetSourceAuthoringDialog
         source={datasetAuthoringSource}
@@ -3412,23 +4355,95 @@ export function AppStudioV2({
         onConfirm={() => void refreshDatasetBinding(datasetRebindPrompt.sourceId, true)}
       /> : null}
       {markOverlays}
-      {tableDialogOpen ? <TableDatasetDialog
-        {...((draft.frame as { domain?: string }).domain ? { domain: (draft.frame as { domain?: string }).domain! } : {})}
-        onClose={() => setTableDialogOpen(false)}
-        onCreated={(sourceId) => {
-          setTableDialogOpen(false);
-          setPanel('sources');
-          setDataView('fields');
-          if (sourceId) setPendingDatasetSourceId(sourceId);
-          setCatalogRefreshNonce((current) => current + 1);
-        }}
+      {savedQueryFields ? <SavedQueryFieldsDialog
+        sourceId={savedQueryFields.sourceId ?? savedQueryFields.id}
+        name={savedQueryFields.name}
+        onClose={() => setSavedQueryFields(null)}
+        onAdded={(sourceId, status) => void savedQueryFieldsAdded(sourceId, status)}
       /> : null}
-      {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete local App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this local draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, components, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
+      {addDataOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="studio-add-data-title" onKeyDown={(event) => { if (event.key === 'Escape' && !(event.target as HTMLElement).closest('.table-dataset-card')) setAddDataOpen(false); }}>
+        <section className="studio-add-data-card">
+          <header><div><h2 id="studio-add-data-title">Add data</h2><p>Connect a table, Metrics or a saved query to this App.</p></div><button type="button" className="icon" onClick={() => setAddDataOpen(false)} aria-label="Close"><X size={15} /></button></header>
+          {error ? <StudioErrorBanner error={error} onRefresh={() => void reloadLatestDraft()} /> : null}
+          <AddDataBrowser {...addDataBrowserProps} draftId={draft.id} draft={draft} />
+          <footer><button type="button" className="primary" onClick={() => setAddDataOpen(false)}>Done</button></footer>
+        </section>
+      </div> : null}
+      {deleteConfirmOpen ? <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Delete App draft"><section className="studio-delete-card"><span className="delete-mark"><Trash2 size={18} /></span><h2>Delete this draft?</h2><p><strong>{draft.name}</strong> will leave the App list. Its pages, tiles, and local history move to a recovery bundle so you can Undo.</p><footer><button type="button" onClick={() => setDeleteConfirmOpen(false)} disabled={busy}>Cancel</button><button type="button" className="danger" onClick={() => void deleteLocalDraft()} disabled={busy}>{busy ? 'Deleting…' : 'Delete draft'}</button></footer></section></div> : null}
     </div>
   );
 }
 
-function PublishReadinessDialog({
+/**
+ * The draft operations that point a certified saved query's copy in the App,
+ * and the tiles that show it, at its certified revision: after Certify in
+ * the publish check (T4) and "Accept current source".
+ */
+function certifiedBlockOperations(
+  draft: AppStudioBuildDraft,
+  blockSources: AppStudioBuildDraft['sources'],
+  byId: ReadonlyMap<string, Awaited<ReturnType<typeof api.resolveAppSourceCandidates>>['items'][number]>,
+): AppStudioDraftOperation[] {
+  const operations: AppStudioDraftOperation[] = [];
+  for (const source of blockSources) {
+    const block = byId.get(source.id);
+    if (block && block.lifecycle === 'certified' && (source.sourceRevision !== block.sourceRevision || source.trustState !== 'certified' || source.reviewStatus !== 'not_required')) {
+      operations.push({
+        type: 'upsert_source',
+        source: {
+          ...source,
+          kind: 'block',
+          sourceRef: block.path,
+          sourcePath: block.path,
+          executionRef: block.path,
+          qualifiedIdentity: block.qualifiedIdentity,
+          snapshotId: block.snapshotId,
+          sourceRevision: block.sourceRevision,
+          sourceFingerprint: block.sourceRevision,
+          lifecycle: 'certified',
+          capabilities: block.capabilities,
+          trustState: 'certified',
+          reviewStatus: 'not_required',
+        },
+      });
+    }
+  }
+  for (const page of draft.pages) {
+    for (const tile of page.layout.items) {
+      if (!tile.sourceId) continue;
+      const block = byId.get(tile.sourceId);
+      if (!block || block.lifecycle !== 'certified') continue;
+      if (tile.sourceRevision !== block.sourceRevision || tile.review?.sourceFingerprint !== block.sourceRevision || tile.review?.status !== 'not_required') {
+        operations.push({
+          type: 'update_tile',
+          pageId: page.id,
+          tileId: tile.i,
+          patch: {
+            sourceRevision: block.sourceRevision,
+            block: { ref: block.path },
+            sourceClass: 'certified_block',
+            trustState: 'certified',
+            reviewStatus: 'certified',
+            review: { ...tile.review, status: 'not_required', sourceFingerprint: block.sourceRevision },
+          },
+        });
+      }
+    }
+  }
+  return operations;
+}
+
+/**
+ * What Publish does, in words: it saves the App as files in the project.
+ * Git is mentioned only when the folder is a git repository.
+ */
+export function publishSavesAsFilesSentence(inGitRepo: boolean | undefined): string {
+  return inGitRepo
+    ? 'Publishing saves the App as files in your project, ready to review in git. Nothing is committed for you.'
+    : 'Publishing saves the App as files in your project folder.';
+}
+
+export function PublishReadinessDialog({
   draft,
   serverIssues,
   busy,
@@ -3439,6 +4454,7 @@ function PublishReadinessDialog({
   onRunAllPreviews,
   onRemoveRequirement,
   onReviseRequirement,
+  reviseLabel = 'Revise with AI',
   onAnswerQuestion,
   onResolveTask,
   onOpenSources,
@@ -3446,17 +4462,46 @@ function PublishReadinessDialog({
   onRefreshSources,
   onApproveSemantic,
   onRemoveLocalAnalysis,
+  previewRunsByPage = {},
+  requireCertifiedToPublish = false,
+  onRemoveRelatedFields = () => undefined,
+  onCertifyJoin = () => undefined,
+  onCertifySource = () => undefined,
+  onOpenSavedQuery,
+  sourceName,
+  inGitRepo,
 }: {
   draft: AppStudioBuildDraft;
+  /** Open the short review before "I vouch for this — certify" for data not certified yet (design Q1). */
+  onCertifySource?: (source: AppStudioBuildDraft['sources'][number]) => void;
+  /**
+   * A saved query not certified yet: open its short review, here (T4). Falls
+   * back to `onCertifySource`, the same review.
+   */
+  onOpenSavedQuery?: (source: AppStudioBuildDraft['sources'][number]) => void;
+  /** How the App's data names a source ("Orders"), when known. */
+  sourceName?: (source: AppStudioBuildDraft['sources'][number]) => string;
+  /** Whether the project folder is a git repository (undefined: not known yet). */
+  inGitRepo?: boolean;
   serverIssues: string[];
   busy: boolean;
   previewRun: DashboardRunResponse | null;
+  /** Each page's last settled run: current evidence of which joins a tile used. */
+  previewRunsByPage?: Readonly<Record<string, DashboardRunResponse | undefined>>;
+  /** The project setting `apps.requireCertifiedToPublish` (T3). Off: publishing is never blocked by trust. */
+  requireCertifiedToPublish?: boolean;
   onClose: () => void;
   onRetry: () => void;
+  /** Take a tile's related fields that are not certified off it. */
+  onRemoveRelatedFields?: (item: AppTileNeedingJoinReview) => void;
+  /** Open the join's short review, here (T4): the join and the Dataset it belongs to. */
+  onCertifyJoin?: (join: DatasetJoin | undefined, sourceId?: string) => void;
   onRunPreview: (pageId: string) => void;
   onRunAllPreviews: () => void;
   onRemoveRequirement: (requirementId: string) => void;
   onReviseRequirement: (question: string) => void;
+  /** "Suggest from keywords" when no AI provider is connected (design D4). */
+  reviseLabel?: string;
   onAnswerQuestion: (questionId: string, answerId: string) => void;
   onResolveTask: (task: AppStudioBuildDraft['reviewTasks'][number]) => void;
   onOpenSources: () => void;
@@ -3465,31 +4510,22 @@ function PublishReadinessDialog({
   onApproveSemantic: () => void;
   onRemoveLocalAnalysis: () => void;
 }): JSX.Element {
-  const requirements = unresolvedPublicationRequirements(draft);
-  const clarifications = (draft.frame.clarificationQuestions ?? []).filter((question) => question.required && !question.answerId);
-  const tasks = blockingPublicationReviewTasks(draft);
-  const previewPages = pagesNeedingSettledPreview(draft);
-  const sources = publicationBlockingSources(draft);
-  const semanticTiles = legacySemanticTilesNeedingApproval(draft);
-  const datasetSources = sources.filter(isDatasetBackedAppSource);
-  const localOnlySources = sources.filter((source) => !isDatasetBackedAppSource(source)
-    && source.kind !== 'governed_semantic'
-    && source.kind !== 'semantic_query');
-  const remainingIssues = publicationIssueSummaries(serverIssues);
-  const ready = requirements.length === 0
-    && clarifications.length === 0
-    && tasks.length === 0
-    && previewPages.length === 0
-    && sources.length === 0
-    && semanticTiles.length === 0
-    && remainingIssues.length === 0;
-  const blockerCount = publicationBlockerCount(draft, serverIssues);
+  // One list for the button and this dialog (B6): the count is its length.
+  const readiness = publicationReadiness(draft, serverIssues, previewRunsByPage, { requireCertifiedToPublish, ...(sourceName ? { sourceName } : {}) });
+  const { requirements, clarifications, tasks, previewPages, semanticTiles, localOnlySources, notCertified, requireCertified, trust } = readiness;
+  const remainingIssues = readiness.serverIssues;
+  const unusedNote = unusedSourcesPublishNote(unusedAppDataSources(draft).length);
+  const ready = readiness.ready;
+  const blockerCount = readiness.fixCount;
+  const countText = trust.text || 'No data tiles';
+  const title = ready ? 'Ready to publish' : blockerCount > 0 ? `${blockerCount} ${blockerCount === 1 ? 'fix' : 'fixes'} before publishing` : 'Run the page once to check it';
+  const notCertifiedTitle = tilesNotCertifiedText(notCertified.length);
 
   return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-labelledby="publish-readiness-title">
     <section className="studio-readiness-card">
       <header>
         <span className={ready ? 'ready' : ''}>{ready ? <Check size={19} /> : <ShieldCheck size={19} />}</span>
-        <div><h2 id="publish-readiness-title">{ready ? 'Ready to publish' : `${blockerCount} ${blockerCount === 1 ? 'fix' : 'fixes'} before publishing`}</h2><p>{ready ? 'Every check passed.' : 'Finish the items below; this review updates as you go.'}</p></div>
+        <div><h2 id="publish-readiness-title">{title}</h2><p className="readiness-trust-count">{countText}</p></div>
         <button type="button" className="icon" onClick={onClose} aria-label="Close publish checklist"><X size={16} /></button>
       </header>
       <div className="readiness-body">
@@ -3499,166 +4535,210 @@ function PublishReadinessDialog({
         </section>)}
         {requirements.map((requirement) => <section className="readiness-item" key={requirement.id}>
           <span className="step-mark"><Sparkles size={15} /></span>
-          <div><strong>Unanswered App question</strong><p>{requirement.question}</p><small>ZLens will not pretend that an unrelated tile covers this question.</small><div className="readiness-actions"><button type="button" className="primary" onClick={() => onReviseRequirement(requirement.question)} disabled={busy}><Bot size={13} /> Revise with AI</button><button type="button" onClick={() => onRemoveRequirement(requirement.id)} disabled={busy}>Remove from publish scope</button></div></div>
+          <div><strong>Unanswered App question</strong><p>{requirement.question}</p><small>ZLens will not pretend that an unrelated tile covers this question.</small><div className="readiness-actions"><button type="button" className="primary" onClick={() => onReviseRequirement(requirement.question)} disabled={busy}><Bot size={13} /> {reviseLabel}</button><button type="button" onClick={() => onRemoveRequirement(requirement.id)} disabled={busy}>Remove from publish scope</button></div></div>
         </section>)}
         {tasks.map((task) => <section className="readiness-item" key={task.id}>
           <span className="step-mark"><FileText size={15} /></span>
-          <div><strong>Scoped review</strong><p>{task.message}</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onResolveTask(task)} disabled={busy}><Check size={13} /> Mark resolved</button></div></div>
+          <div><strong>Check before publishing</strong><p>{plainReviewTaskMessage(task.message)}</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onResolveTask(task)} disabled={busy}><Check size={13} /> Mark resolved</button></div></div>
         </section>)}
         {previewPages.map((page) => <section className="readiness-item" key={page.id}>
           <span className="step-mark"><Play size={15} /></span>
-          <div><strong>Run {page.metadata.title || page.id}</strong><p>Settle the current data, filters, and component results before publishing this page.</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onRunPreview(page.id)} disabled={busy}><Play size={13} /> {busy ? 'Running…' : 'Run preview'}</button></div></div>
+          <div><strong>Run {page.metadata.title || page.id} once to check it</strong><p>ZLens runs the page with its current data and filters before publishing it.</p><div className="readiness-actions"><button type="button" className="primary" onClick={() => onRunPreview(page.id)} disabled={busy}><Play size={13} /> {busy ? 'Running…' : 'Run preview'}</button></div></div>
         </section>)}
         {semanticTiles.length ? <section className="readiness-item">
           <span className="step-mark"><ShieldCheck size={15} /></span>
-          <div><strong>Approve governed semantic results</strong><p>{semanticTiles.map(({ page, tile, source }) => `${page.metadata.title || page.id}/${tile.title || source?.sourceRef || tile.i}`).join(', ')}</p><small>Approval binds each tile to the settled snapshot and receipt you reviewed.</small><div className="readiness-actions">{previewRun ? <button type="button" className="primary" onClick={onApproveSemantic} disabled={busy}><ShieldCheck size={13} /> Approve settled result</button> : <button type="button" onClick={() => onRunPreview(draft.pages[0]?.id ?? '')} disabled={busy}><Play size={13} /> Run preview first</button>}<button type="button" onClick={onOpenSources}>Open Sources</button></div></div>
+          <div><strong>Approve Metrics results</strong><p>{semanticTiles.map(({ page, tile, source }) => `${page.metadata.title || page.id}/${tile.title || source?.sourceRef || tile.i}`).join(', ')}</p><small>Approval binds each tile to the settled snapshot and receipt you reviewed.</small><div className="readiness-actions">{previewRun ? <button type="button" className="primary" onClick={onApproveSemantic} disabled={busy}><ShieldCheck size={13} /> Approve settled result</button> : <button type="button" onClick={() => onRunPreview(draft.pages[0]?.id ?? '')} disabled={busy}><Play size={13} /> Run preview first</button>}<button type="button" onClick={onOpenSources}>Open Sources</button></div></div>
         </section> : null}
-        {datasetSources.length ? <section className="readiness-item warning">
-          <span className="step-mark"><ShieldCheck size={15} /></span>
-          <div><strong>Dataset source needs governed review</strong><p>{datasetSources.map((source) => humanize(source.sourceRef)).join(', ')}</p><small>Dataset publication follows the current source lifecycle and contract. Running a preview does not certify it.</small><div className="readiness-actions"><button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Review Dataset source</button></div></div>
-        </section> : null}
+        {notCertified.length ? <NotCertifiedTilesSection
+          title={notCertifiedTitle}
+          tiles={notCertified}
+          required={requireCertified}
+          busy={busy}
+          onCertifySource={onCertifySource}
+          onOpenSavedQuery={onOpenSavedQuery ?? onCertifySource}
+          onCertifyJoin={onCertifyJoin}
+          onRemoveRelatedFields={onRemoveRelatedFields}
+          onOpenFilters={onOpenFilters}
+        /> : null}
         {localOnlySources.length ? <section className="readiness-item warning">
           <span className="step-mark"><FileText size={15} /></span>
-          <div><strong>Local analysis cannot publish</strong><p>{localOnlySources.map((source) => humanize(source.sourceRef)).join(', ')}</p><small>Replace it with governed data, or remove it from this draft. Removal is saved locally and can be undone from the Studio toolbar.</small><div className="readiness-actions"><button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace with governed data</button><button type="button" onClick={onRemoveLocalAnalysis} disabled={busy}><Trash2 size={13} /> Remove local analysis</button></div></div>
+          <div><strong>Local analysis cannot publish</strong><p>{localOnlySources.map((source) => humanize(source.sourceRef)).join(', ')}</p><small>It lives only on this machine. Replace it with saved data, or remove it from this draft. Removal is saved locally and can be undone from the Studio toolbar.</small><div className="readiness-actions"><button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace with saved data</button><button type="button" onClick={onRemoveLocalAnalysis} disabled={busy}><Trash2 size={13} /> Remove local analysis</button></div></div>
         </section> : null}
         {remainingIssues.map((issue) => <section className="readiness-item" key={issue.id}>
           <span className="step-mark"><Settings2 size={15} /></span>
-          <div><strong>{issue.title}</strong><p>{issue.detail}</p><div className="readiness-actions">{issue.action === 'filters' ? <button type="button" className="primary" onClick={onOpenFilters}><Filter size={13} /> Open Filters</button> : issue.action === 'refresh_sources' ? <button type="button" className="primary" onClick={onRefreshSources} disabled={busy}><ShieldCheck size={13} /> Accept current certified source</button> : issue.action === 'preview' ? <button type="button" className="primary" onClick={onRunAllPreviews} disabled={busy}><Play size={13} /> {busy ? 'Refreshing previews…' : 'Refresh all page previews'}</button> : <button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace or remove source</button>}</div></div>
+          <div><strong>{issue.title}</strong><p>{issue.detail}</p>{issue.technical ? <details className="readiness-technical"><summary>Technical details</summary><code>{issue.technical}</code></details> : null}<div className="readiness-actions">{issue.action === 'filters' ? <button type="button" className="primary" onClick={onOpenFilters}><Filter size={13} /> Open Filters</button> : issue.action === 'refresh_sources' ? <button type="button" className="primary" onClick={onRefreshSources} disabled={busy}><ShieldCheck size={13} /> Accept current source</button> : issue.action === 'preview' ? <button type="button" className="primary" onClick={onRunAllPreviews} disabled={busy}><Play size={13} /> {busy ? 'Refreshing previews…' : 'Refresh all page previews'}</button> : <button type="button" className="primary" onClick={onOpenSources}><Blocks size={13} /> Replace or remove source</button>}</div></div>
         </section>)}
-        {ready ? <div className="readiness-ready"><Check size={18} /><div><strong>All checks passed</strong><span>Publishing saves the App as files in your project, ready to review in git. Nothing is committed for you.</span></div></div> : null}
+        {unusedNote ? <p className="readiness-unused-note" role="note"><Blocks size={14} /> {unusedNote}</p> : null}
+        {ready ? <div className={`readiness-ready ${trust.allCertified || trust.total === 0 ? '' : 'with-review'}`}><Check size={18} /><div><strong>{trust.allCertified || trust.total === 0 ? 'All checks passed' : `Ready to publish · ${countText}`}</strong><span>{publishSavesAsFilesSentence(inGitRepo)}</span></div></div> : null}
       </div>
-      <footer><button type="button" onClick={onClose} disabled={busy}>Back to editing</button>{ready ? <button type="button" className="primary" onClick={onRetry} disabled={busy}>{busy ? 'Publishing…' : 'Publish to Project'}</button> : <span className="readiness-footer-hint">Choose a fix above. This review updates as you work.</span>}</footer>
+      <footer><button type="button" onClick={onClose} disabled={busy}>Back to editing</button>{ready
+        ? <span className="readiness-publish">{trust.notCertified > 0 ? <small className="readiness-readers-note">{readersWillSeeText(trust.notCertified)}</small> : null}<button type="button" className="primary" onClick={onRetry} disabled={busy}>{busy ? 'Publishing…' : 'Publish'}</button></span>
+        : <span className="readiness-footer-hint">{requireCertified && notCertified.length && blockerCount === 1 ? 'Certify the tiles above to publish.' : 'Choose a fix above. This review updates as you work.'}</span>}</footer>
     </section>
   </div>;
 }
 
-function AiPlanReview({
+/**
+ * The tiles readers will see as "Not certified yet" (T3), each with what
+ * certifies it — a table, a saved query or a join, each in its own short
+ * review here (T4). Recommended, never required — unless the project
+ * requires certified data (`apps.requireCertifiedToPublish`), when one plain
+ * sentence says so and Publish waits.
+ */
+export function NotCertifiedTilesSection({
+  title,
+  tiles,
+  required,
+  busy,
+  onCertifySource,
+  onOpenSavedQuery,
+  onCertifyJoin,
+  onRemoveRelatedFields,
+  onOpenFilters,
+}: {
+  title: string;
+  tiles: NotCertifiedPublicationTile[];
+  required: boolean;
+  busy: boolean;
+  onCertifySource: (source: AppStudioBuildDraft['sources'][number]) => void;
+  onOpenSavedQuery: (source: AppStudioBuildDraft['sources'][number]) => void;
+  onCertifyJoin: (join: DatasetJoin | undefined, sourceId?: string) => void;
+  onRemoveRelatedFields: (item: AppTileNeedingJoinReview) => void;
+  onOpenFilters: () => void;
+}): JSX.Element {
+  return <section className={`readiness-item ${required ? 'warning' : 'recommended'}`} aria-label={title}>
+    <span className="step-mark"><ShieldCheck size={15} /></span>
+    <div><strong>{title}</strong>
+      <small>{required ? REQUIRE_CERTIFIED_SENTENCE : 'Readers see “Not certified yet” on these tiles. Certifying is recommended, not required.'}</small>
+      <ul className="readiness-uncertified-list">{tiles.map((tile) => {
+        const name = tile.sourceName ? humanize(tile.sourceName) : tile.title;
+        const action = tile.action;
+        return <li key={`${tile.pageId}/${tile.tileId}`} aria-label={`Not certified yet: ${tile.title}`}>
+          <span><strong>{tile.title}{tile.pageTitle ? <em> · {tile.pageTitle}</em> : null}</strong><small>{tile.detail}{tile.sourceName && action.kind !== 'join' ? ` Data: ${name}.` : ''}</small></span>
+          <span className="readiness-uncertified-actions">
+            {action.kind === 'source' ? <button type="button" className="primary" onClick={() => onCertifySource(action.source)} disabled={busy} aria-label={`Certify now: ${name}`}>Certify now (recommended)</button> : null}
+            {action.kind === 'saved_query' ? <button type="button" className="primary" onClick={() => onOpenSavedQuery(action.source)} disabled={busy} aria-label={`Certify now: ${name}`}>Certify now (recommended)</button> : null}
+            {action.kind === 'join' ? <>
+              <button type="button" className="primary" onClick={() => onCertifyJoin(action.joins[0], action.review.sourceId)} disabled={busy} aria-label={`Certify the join for ${tile.title}`}>Certify this join (recommended)</button>
+              {action.review.relatedFields.length ? <button type="button" onClick={() => onRemoveRelatedFields(action.review)} disabled={busy}><Trash2 size={13} /> {action.review.relatedFields.length === 1 ? 'Remove the related field' : 'Remove the related fields'}</button> : null}
+              {action.review.filterIds.length && !action.review.relatedFields.length ? <button type="button" onClick={onOpenFilters} disabled={busy}><Filter size={13} /> Open Filters</button> : null}
+            </> : null}
+          </span>
+        </li>;
+      })}</ul>
+    </div>
+  </section>;
+}
+
+/**
+ * The canvas AI review (design D3): the proposed tiles, kept or skipped one by
+ * one, then Apply. The data a proposal uses is checked in the Data step for a
+ * new AI App; a canvas proposal (Ask AI, Draft with AI, App settings) lists
+ * only the data it would add to the App.
+ */
+export function AiPlanReview({
   proposal,
   summary,
-  catalog,
-  catalogQuery,
-  sourcePolicy,
   selectedSourceIds,
-  addingSourceId,
+  newSources = [],
+  skippedTileIds = new Set<string>(),
   busy,
-  onRevise,
   changeCount = 0,
+  showPlanNotes = true,
+  voice = 'ai',
+  onBackToData,
   onApply,
   onDismiss,
-  onCatalogQuery,
-  onAddSource,
-  onAddProposalSource,
+  onToggleTile,
+  onRevise,
   onAnswerClarification,
   onGenerateGap,
-  onToggleSource,
 }: {
   proposal: AppStudioAiProposal;
   summary: AppStudioAiPlanSummary;
-  catalog: AppBlockRecommendation[];
-  catalogQuery: string;
-  sourcePolicy: AppStudioBuildDraft['sourcePolicy'];
+  /** @deprecated Ignored: there is no per-App data rule (T3). */
+  sourcePolicy?: AppStudioBuildDraft['sourcePolicy'];
   selectedSourceIds: ReadonlySet<string>;
-  addingSourceId: string | null;
+  /** Selected proposal sources the App does not have yet. */
+  newSources?: AppStudioAiPlanSummary['sources'];
+  skippedTileIds?: ReadonlySet<string>;
   busy: boolean;
-  onRevise: () => void;
-  /** Tile, page, and link changes the canvas shows for the selected sources. */
+  /** Tile, page, and link changes the canvas shows for the kept tiles. */
   changeCount?: number;
+  /** Planner notes, gaps and questions; the Data step already showed them for a new AI App. */
+  showPlanNotes?: boolean;
+  /** Keyword suggestions are labelled as such, never as AI (design D4). */
+  voice?: AppStudioPlannerVoice;
+  /** Back to the AI Data step, while the tiles are not applied yet. */
+  onBackToData?: () => void;
   onApply: () => void;
   onDismiss: () => void;
-  onCatalogQuery: (query: string) => void;
-  onAddSource: (source: AppBlockRecommendation) => void;
-  onAddProposalSource: (sourceId: string, reviewRequired: boolean) => void;
+  onToggleTile: (tileId: string) => void;
+  onRevise: () => void;
   onAnswerClarification: (questionId: string, answerId: string) => void;
   onGenerateGap: (requirementId: string) => void;
-  onToggleSource: (sourceId: string) => void;
 }): JSX.Element {
-  const unresolved = proposal.clarifications.filter((item) => item.required && !item.answerId);
-  const requirementOperation = proposal.operations.find((operation) => operation.type === 'set_requirements');
-  const uncoveredRequirements = requirementOperation?.type === 'set_requirements'
-    ? requirementOperation.requirements.filter((requirement) => requirementOperation.coverage?.some((coverage) => coverage.requirementId === requirement.id && coverage.status === 'gap'))
-    : [];
-  const selectedComponents = summary.components.filter((component) => !component.sourceId || selectedSourceIds.has(component.sourceId));
+  const unresolved = appStudioUnresolvedClarifications(proposal);
+  const uncoveredRequirements = appStudioUncoveredRequirements(proposal);
   const selectedSources = summary.sources.filter((source) => selectedSourceIds.has(source.id));
-  const suggestedSources = summary.sources.filter((source) => !selectedSourceIds.has(source.id));
+  // Page text from a starting layout is drawn on the canvas but is not a tile to keep or skip.
+  const tiles = summary.components.filter((component) => component.source !== 'Page content'
+    && (!component.sourceId || selectedSourceIds.has(component.sourceId)));
+  const keptTiles = tiles.filter((tile) => !skippedTileIds.has(tile.id));
   const plannerProvenanceLabel = appStudioPlannerProvenanceLabel(proposal);
-  const availableSources = availableAppStudioProposalSources(summary, catalog, catalogQuery).slice(0, 10);
-  const sourceNeedle = catalogQuery.trim().toLowerCase();
-  const matchesSourceQuery = (source: AppStudioAiPlanSummary['sources'][number]) => !sourceNeedle || [
-    source.label, source.sourceRef, sourceKindLabel(source.kind), source.rationale ?? '',
-    ...summary.components.filter((component) => component.sourceId === source.id).flatMap((component) => [component.title, component.visualization]),
-  ].join(' ').toLowerCase().includes(sourceNeedle);
-  const visibleSelectedSources = selectedSources.filter(matchesSourceQuery);
-  const visibleSuggestedSources = suggestedSources.filter(matchesSourceQuery);
-  const viewDescription = (source: AppStudioAiPlanSummary['sources'][number]) => {
-    const views = summary.components.filter((component) => component.sourceId === source.id);
-    if (!views.length) return 'AI will use this source as governed context.';
-    return `Creates ${views.length} ${views.length === 1 ? 'view' : 'views'}: ${views.map((view) => view.title).join(', ')}`;
-  };
-  const sourceRow = (source: AppStudioAiPlanSummary['sources'][number], selected: boolean) => {
-    const blockedByPolicy = source.trustState !== 'certified' && sourcePolicy === 'governed_only';
-    const adding = addingSourceId === source.id;
-    return <article key={source.id} className={`proposal-source-row ${selected ? 'selected' : ''}`}>
-    <span className={`proposal-source-trust ${source.trustState}`}>{source.trustState === 'certified' ? <ShieldCheck size={15} /> : <FileText size={15} />}</span>
-    <div><strong>{source.label}</strong><small>{sourceKindLabel(source.kind)} · {source.trustState === 'certified' ? 'Certified' : 'Review required'}</small><p>{viewDescription(source)}</p></div>
-    <button type="button" className={selected ? 'remove' : 'add'} disabled={busy} title={blockedByPolicy ? 'Enable the local review lane and rebuild the proposal with this source.' : undefined} onClick={() => selected ? onToggleSource(source.id) : onAddProposalSource(source.id, blockedByPolicy)} aria-label={`${selected ? 'Remove' : blockedByPolicy ? 'Enable review lane and add' : 'Add'} ${source.label}${summary.sources.filter((item) => item.label === source.label).length > 1 ? ` for ${summary.components.filter((component) => component.sourceId === source.id).map((component) => component.title).join(', ') || source.id}` : ''}`}>
-      {selected ? <><X size={13} /> Remove</> : adding ? 'Adding…' : blockedByPolicy ? 'Enable review lane & add' : <><Plus size={13} /> Add</>}
-    </button>
-  </article>;
-  };
+  const sourceLabel = (sourceId?: string) => summary.sources.find((source) => source.id === sourceId)?.label;
+  const applyLabel = busy ? 'Applying…' : changeCount > 0 ? `Apply ${changeCount} ${changeCount === 1 ? 'change' : 'changes'}` : 'Apply';
+  const words = appStudioPlannerWords(voice);
 
-  return <section className="studio-ai-plan proposal-source-picker" aria-labelledby="proposal-source-title">
+  return <section className="studio-ai-plan proposal-tile-review" aria-labelledby="proposal-tile-review-title">
     <header>
       <span><Sparkles size={18} /></span>
       <div>
-        <small>AI PROPOSAL</small>
-        <h1 id="proposal-source-title">Review the plan</h1>
-        <p>AI understood: <strong>{summary.frame?.goal ?? 'Build a governed analytics App'}</strong>. Proposed tiles are on the canvas. Remove any source you do not trust; nothing is saved until you apply.</p>
+        <small>{words.reviewEyebrow}</small>
+        <h1 id="proposal-tile-review-title">Review the tiles</h1>
+        <p>{words.understood}: <strong>{summary.frame?.goal ?? 'Build an analytics App'}</strong>. Proposed tiles are on the page. Keep or skip each one; nothing is saved until you apply.</p>
         {plannerProvenanceLabel ? <small className="proposal-planner-provenance">{plannerProvenanceLabel}</small> : null}
+        {showPlanNotes && proposal.warnings?.length ? <ul className="proposal-warnings" aria-label={words.notesLabel}>{proposal.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul> : null}
       </div>
-      <button type="button" onClick={onDismiss} aria-label="Discard AI proposal"><X size={16} /></button>
+      <button type="button" onClick={onDismiss} aria-label={words.discardLabel}><X size={16} /></button>
     </header>
 
-    <div className="proposal-source-summary" aria-label="AI proposal summary">
-      <span><strong>{selectedSources.length}</strong> selected sources</span>
-      <span><strong>{selectedComponents.length}</strong> planned views</span>
-      <span><strong>{sourcePolicy === 'governed_only' ? 'Governed only' : 'Review lane enabled'}</strong> source policy</span>
+    {onBackToData ? <button type="button" className="proposal-back-to-data" onClick={onBackToData} disabled={busy}><ArrowLeft size={13} /> Back to data</button> : null}
+
+    <div className="proposal-source-summary" aria-label={`${words.reviewPaneLabel} summary`}>
+      <span><strong>{keptTiles.length}</strong> of {tiles.length} {tiles.length === 1 ? 'tile' : 'tiles'} kept</span>
     </div>
 
     <div className="proposal-source-body">
-      <label className="proposal-source-search"><Search size={15} /><input value={catalogQuery} onChange={(event) => onCatalogQuery(event.target.value)} placeholder="Search proposed and available sources" aria-label="Search proposed and available sources" /></label>
-
-      <section className="proposal-source-group" aria-labelledby="selected-proposal-sources">
-        <div className="proposal-source-heading"><div><h2 id="selected-proposal-sources">Selected for this App</h2><p>Remove anything you do not want AI to use.</p></div><strong>{selectedSources.length}</strong></div>
-        <div className="proposal-source-list">
-          {visibleSelectedSources.map((source) => sourceRow(source, true))}
-          {!selectedSources.length ? <div className="proposal-source-empty"><Blocks size={18} /><div><strong>Select at least one source</strong><p>Add an AI suggestion or another governed block below.</p></div></div> : null}
-          {selectedSources.length > 0 && !visibleSelectedSources.length ? <p className="studio-ai-plan-empty">No selected source matches this search.</p> : null}
-        </div>
-      </section>
-
-      {visibleSuggestedSources.length ? <section className="proposal-source-group" aria-labelledby="ai-source-suggestions">
-        <div className="proposal-source-heading"><div><h2 id="ai-source-suggestions">AI suggestions</h2><p>Sources removed from the selection remain available here.</p></div><strong>{suggestedSources.length}</strong></div>
-        <div className="proposal-source-list">{visibleSuggestedSources.map((source) => sourceRow(source, false))}</div>
+      {newSources.length ? <section className="proposal-source-group" aria-labelledby="proposal-new-data">
+        <div className="proposal-source-heading"><div><h2 id="proposal-new-data">New data for this App</h2><p>Applying adds this data to the App's data.</p></div><strong>{newSources.length}</strong></div>
+        <div className="proposal-source-list">{newSources.map((source) => <article key={source.id} className="proposal-source-row new-data">
+          <span className={`proposal-source-trust ${source.trustState}`}>{source.trustState === 'certified' ? <ShieldCheck size={15} /> : <FileText size={15} />}</span>
+          <div><strong>New data for this App: {source.label}</strong><small>{sourceKindLabel(source.kind, source.capabilities)} · {trustLabel(source.trustState)}</small>{source.rationale ? <p className="proposal-source-why">Why: {source.rationale}</p> : null}</div>
+        </article>)}</div>
       </section> : null}
 
-      <section className="proposal-source-group" aria-labelledby="available-proposal-sources">
-        <div className="proposal-source-heading"><div><h2 id="available-proposal-sources">More App sources</h2><p>Add a certified block, or explicitly open the local review lane for a draft.</p></div><strong>{availableSources.length}</strong></div>
-        <div className="proposal-catalog-list">
-          {availableSources.map((source) => <article key={source.id}>
-            <span className={source.status === 'certified' ? 'certified' : 'review_required'}>{source.status === 'certified' ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-            <div><strong>{humanize(source.name)}</strong><small>{source.domain || 'General'} · {source.status === 'certified' ? 'Certified block' : 'Review required'}</small><p>{source.description || source.reasons[0] || 'Available governed data source'}</p></div>
-            <button type="button" onClick={() => onAddSource(source)} disabled={busy} title={source.eligibility?.localPreview === false ? 'Enable the local review lane and rebuild the proposal with this source.' : undefined}>{addingSourceId === (source.sourceId ?? source.id) ? 'Adding…' : source.eligibility?.localPreview === false ? 'Enable review lane & add' : <><Plus size={13} /> Add</>}</button>
-          </article>)}
-          {!availableSources.length ? <p className="studio-ai-plan-empty">{catalogQuery.trim() ? 'No additional source matches this search.' : 'All available governed sources are already proposed.'}</p> : null}
+      <section className="proposal-source-group" aria-labelledby="proposal-tiles">
+        <div className="proposal-source-heading"><div><h2 id="proposal-tiles">Proposed tiles</h2><p>Skip any tile you do not want. You can also keep or skip it on the page.</p></div><strong>{keptTiles.length}</strong></div>
+        <div className="proposal-source-list">
+          {tiles.map((tile) => {
+            const skipped = skippedTileIds.has(tile.id);
+            const toggleable = proposal.proposedTileIds?.includes(tile.id) ?? false;
+            return <article key={tile.id} className={`proposal-source-row proposal-tile-row ${skipped ? '' : 'selected'}`}>
+              <span className="proposal-source-trust certified"><LayoutDashboard size={15} /></span>
+              <div><strong>{tile.title}</strong><small>{[tile.visualization, sourceLabel(tile.sourceId)].filter(Boolean).join(' · ')}</small></div>
+              {toggleable ? <button type="button" className={skipped ? 'add' : 'remove'} disabled={busy} onClick={() => onToggleTile(tile.id)} aria-label={`${skipped ? 'Keep' : 'Skip'} ${tile.title}`}>{skipped ? <><Plus size={13} /> Keep</> : <><X size={13} /> Skip</>}</button> : null}
+            </article>;
+          })}
+          {!tiles.length ? <p className="studio-ai-plan-empty">This proposal adds no tiles.</p> : null}
         </div>
       </section>
 
-      {sourcePolicy === 'include_review_required' ? <div className="studio-ai-review-lane"><FileText size={14} /><p><strong>Review-required analysis is enabled</strong><small>It stays clearly labeled and cannot be published to the Project until it is replaced, promoted, or removed.</small></p></div> : <div className="studio-ai-review-lane"><FileText size={14} /><p><strong>Draft sources require an explicit review lane</strong><small>Use “Enable review lane &amp; add” on the draft you want. Its trust does not change.</small></p></div>}
-      {uncoveredRequirements.length ? <section className="studio-ai-questions"><header><strong>Uncovered requirements</strong><small>{uncoveredRequirements.length} gaps</small></header>{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy || sourcePolicy !== 'include_review_required'}>{sourcePolicy === 'include_review_required' ? 'Explicitly generate review-required DQL' : 'Enable review lane to generate'}</button></div>)}</section> : null}
-      {unresolved.length ? <section className="studio-ai-questions"><header><strong>AI needs one more decision</strong><small>{unresolved.length} required</small></header>{unresolved.map((item) => <fieldset key={item.id}><legend>{item.question}</legend>{item.choices.map((choice) => <button key={choice.id} type="button" onClick={() => onAnswerClarification(item.id, choice.id)} disabled={busy}><strong>{choice.label}</strong>{choice.description ? <small>{choice.description}</small> : null}</button>)}</fieldset>)}<button type="button" onClick={onRevise} disabled={busy}>{busy ? 'Updating…' : 'Re-run proposal'}</button></section> : null}
+      {showPlanNotes && uncoveredRequirements.length ? <section className="studio-ai-questions" aria-label="Not covered yet"><header><strong>Not covered yet</strong><small>{uncoveredRequirements.length} {voice === 'keywords' ? (uncoveredRequirements.length === 1 ? 'note' : 'notes') : (uncoveredRequirements.length === 1 ? 'gap' : 'gaps')}</small></header>{voice === 'keywords' ? <p>No suggested source matched these. They are notes, not publish blockers.</p> : null}{uncoveredRequirements.map((requirement) => <div key={requirement.id}><p>{requirement.question}</p><button type="button" onClick={() => onGenerateGap(requirement.id)} disabled={busy}>Generate draft DQL</button></div>)}</section> : null}
+      {showPlanNotes && unresolved.length ? <section className="studio-ai-questions"><header><strong>AI needs one more decision</strong><small>{unresolved.length} required</small></header>{unresolved.map((item) => <fieldset key={item.id}><legend>{item.question}</legend>{item.choices.map((choice) => <button key={choice.id} type="button" onClick={() => onAnswerClarification(item.id, choice.id)} disabled={busy}><strong>{choice.label}</strong>{choice.description ? <small>{choice.description}</small> : null}</button>)}</fieldset>)}<button type="button" onClick={onRevise} disabled={busy}>{busy ? 'Updating…' : 'Re-run proposal'}</button></section> : null}
     </div>
 
-    <footer><span>{selectedSources.length} {selectedSources.length === 1 ? 'source' : 'sources'} · {selectedComponents.length} {selectedComponents.length === 1 ? 'tile' : 'tiles'}</span><button type="button" onClick={onDismiss}>Discard</button><button type="button" className="primary" onClick={onApply} disabled={busy || unresolved.length > 0 || selectedSources.length === 0}><Sparkles size={14} /> {busy ? 'Applying…' : changeCount > 0 ? `Apply ${changeCount} ${changeCount === 1 ? 'change' : 'changes'}` : `Apply with ${selectedSources.length} ${selectedSources.length === 1 ? 'source' : 'sources'}`}</button></footer>
+    <footer><span>{keptTiles.length} {keptTiles.length === 1 ? 'tile' : 'tiles'} to add</span><button type="button" onClick={onDismiss}>Discard</button><button type="button" className="primary" onClick={onApply} disabled={busy || unresolved.length > 0 || selectedSources.length === 0}><Sparkles size={14} /> {applyLabel}</button></footer>
   </section>;
 }
 
@@ -3733,7 +4813,7 @@ export function AppAutopilotReviewCard({
     <div className="studio-copilot-change-summary">
       <strong>{humanize(proposal.tileId)}</strong>
       <span>{grouping ? `Proposed grouping: ${grouping}` : `${action}: ${proposal.operations.length} typed App operation${proposal.operations.length === 1 ? '' : 's'} prepared`}</span>
-      <small>Prepared through the shared Agent Run and current governed App and Dataset contracts. This has not changed the draft or its source.</small>
+      <small>Prepared through the shared Agent Run and current governed App and data contracts. This has not changed the draft or its source.</small>
     </div>
     {proposal.diagnostics.map((diagnostic) => <p className={`studio-copilot-diagnostic ${diagnostic.severity}`} key={diagnostic.code}>{diagnostic.message}</p>)}
     <footer><button type="button" onClick={onDiscard} disabled={running}>Discard</button><button type="button" className="primary" onClick={onApply} disabled={running}>{running ? 'Applying…' : 'Apply change'}</button></footer>
@@ -3749,141 +4829,13 @@ function PagesPanel({ draft, activePageId, onOpen, onAdd, template, onApplyTempl
   </>;
 }
 
-function SourcesPanel({
-  usedSources,
-  items,
-  selected,
-  query,
-  loading,
-  error,
-  disabled,
-  datasetTilesEnabled,
-  enablingDatasets = false,
-  onEnableDatasets,
-  sourceFeedback,
-  onQuery,
-  onSelect,
-  onAdd,
-  onAddDataset,
-  onAuthorDataset,
-  onRefreshDatasetBinding,
-  onAddContent,
-  policy,
-  total,
-  hasMore,
-  onLoadMore,
-  onEnableReview,
-}: {
-  usedSources: AppStudioBuildDraft['sources'];
-  items: AppBlockRecommendation[];
-  selected: AppBlockRecommendation | null;
-  query: string;
-  loading: boolean;
-  error: string | null;
-  disabled: boolean;
-  datasetTilesEnabled: boolean;
-  enablingDatasets?: boolean;
-  onEnableDatasets?: () => void;
-  sourceFeedback: AppStudioSourceFeedback | null;
-  onQuery: (value: string) => void;
-  onSelect: (item: AppBlockRecommendation) => void;
-  onAdd: (item: AppBlockRecommendation, kind: 'kpi' | 'chart' | 'table') => void;
-  onAddDataset: (item: AppBlockRecommendation, kind: 'kpi' | 'chart' | 'table', query: TileQuery, title?: string) => void;
-  onAuthorDataset: (item: AppBlockRecommendation) => void;
-  onRefreshDatasetBinding: (sourceId: string) => void;
-  onAddContent: (kind: 'heading' | 'text') => void;
-  policy: AppStudioBuildDraft['sourcePolicy'];
-  total: number;
-  hasMore: boolean;
-  onLoadMore: () => void;
-  onEnableReview: () => void;
-}): JSX.Element {
-  const [viewFilter, setViewFilter] = useState<'all' | 'kpi' | 'chart' | 'table'>('all');
-  const usedDataSources = usedSources.filter((source) => source.kind !== 'text');
-  const usedIdentifiers = new Set(usedDataSources.flatMap((source) => [source.id, source.sourceRef]));
-  const visibleItems = items.filter((item) => viewFilter === 'all' || recommendedComponentKind(item) === viewFilter);
-  return <>
-    {!datasetTilesEnabled ? <div className="source-catalog-empty" role="status"><strong>Build tiles from Dataset fields</strong><small>Pick measures and groupings from a governed Dataset instead of pinning a finished block. This writes <code>{'"apps": { "datasets": true }'}</code> to <code>dql.config.json</code>.</small>{onEnableDatasets ? <button type="button" className="primary" disabled={disabled || enablingDatasets} onClick={onEnableDatasets}>{enablingDatasets ? 'Turning on…' : 'Turn on field-based tiles'}</button> : null}</div> : null}
-    <label className="source-search-primary">
-      <Search size={15} />
-      <input id="studio-field-search" value={query} onChange={(event) => onQuery(event.target.value)} placeholder="Search Datasets, blocks, metrics" aria-label="Search governed sources" />
-      {query ? <button type="button" onClick={() => onQuery('')} aria-label="Clear source search" title="Clear search"><X size={13} /></button> : null}
-    </label>
-    <details className="used-sources-disclosure">
-      <summary>
-        <div><strong>In this App</strong><small>{usedDataSources.length ? `${usedDataSources.length} data ${usedDataSources.length === 1 ? 'source' : 'sources'}` : 'No source added yet'}</small></div>
-        <span>{usedDataSources.length}</span><ChevronDown size={14} />
-      </summary>
-      {usedDataSources.length ? <div className="used-source-list">{usedDataSources.map((source) => <div key={source.id}>
-        <span className={source.trustState}>{source.trustState === 'certified' ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-        <p><strong title={source.sourceRef}>{humanize(source.sourceRef)}</strong><small>{sourceKindLabel(source.kind)} · {source.trustState === 'certified' ? 'Certified' : 'Review required'}</small></p>
-      </div>)}</div> : <div className="source-panel-state compact"><Blocks size={15} /><div><strong>No data source added yet</strong><small>Choose a source below and add a view.</small></div></div>}
-    </details>
-    {policy === 'include_review_required' ? <div className="source-review-lane"><FileText size={14} /><p><strong>Review-required analysis lane is on</strong><small>Referenced DQL or exploratory SQL appears here with a review label. It remains local and cannot publish until resolved.</small></p></div> : null}
-    <div className="source-catalog-toolbar">
-      <div className="source-view-tabs" role="tablist" aria-label="Filter sources by recommended view">
-        {([['all', 'All'], ['kpi', 'KPI'], ['chart', 'Charts'], ['table', 'Tables']] as const).map(([value, label]) => <button key={value} type="button" role="tab" aria-selected={viewFilter === value} className={viewFilter === value ? 'on' : ''} onClick={() => setViewFilter(value)}>{label}</button>)}
-      </div>
-      <small aria-live="polite">{loading ? 'Finding…' : `${visibleItems.length} of ${total} ${total === 1 ? 'result' : 'results'}`}</small>
-    </div>
-    {loading ? <div className="source-panel-state"><Sparkles size={16} /><div><strong>Finding governed sources</strong><small>Matching certified blocks and semantic data to this App decision.</small></div></div> : null}
-    {!loading && error ? <div className="source-panel-state error"><X size={16} /><div><strong>Sources could not load</strong><small>{error}</small></div></div> : null}
-    {!loading && !error && visibleItems.length === 0 ? <div className="source-panel-state"><Search size={16} /><div><strong>{query.trim() || viewFilter !== 'all' ? 'No source matches these filters' : 'No certified data yet'}</strong><small>{query.trim() || viewFilter !== 'all' ? 'Clear the search or choose All to see every governed source.' : 'Start from a table in the Data tab, or allow data that needs review while you explore.'}</small></div></div> : null}
-    <div className="source-catalog-list">{visibleItems.map((item) => {
-      const kind = recommendedComponentKind(item);
-      const isSelected = selected?.id === item.id;
-      const sourceId = item.sourceId ?? item.id;
-      const isUsed = usedIdentifiers.has(sourceId) || usedIdentifiers.has(item.id) || usedIdentifiers.has(item.name);
-      const blockedByPolicy = item.eligibility?.localPreview === false && policy === 'governed_only';
-      const datasetDisabled = Boolean(item.capabilities?.dataset) && !datasetTilesEnabled;
-      const rowFeedback = sourceFeedback?.sourceId === sourceId ? sourceFeedback : null;
-      const actionStatus: AppStudioSourceActionStatus = rowFeedback?.status ?? 'idle';
-      const actionLabel = appStudioSourceActionLabel({
-        view: componentKindLabel(kind),
-        status: actionStatus,
-        reviewRequired: blockedByPolicy,
-        alreadyUsed: isUsed,
-        pageTitle: rowFeedback?.pageTitle,
-      });
-      return <article key={item.id} className={`source-catalog-row ${isSelected ? 'on' : ''}`}>
-        <button type="button" className="source-catalog-summary" onClick={() => onSelect(item)} aria-label={`View ${item.name} source details`} aria-expanded={isSelected}>
-          <span className={item.status === 'certified' ? 'certified' : 'review'}>{item.status === 'certified' ? <ShieldCheck size={14} /> : <FileText size={14} />}</span>
-          <div><strong title={item.name}>{humanize(item.name)}</strong><small>{humanize(item.domain)} · {sourceCatalogKindLabel(item)} · {item.status === 'certified' ? 'Certified' : 'Review required'}{isUsed ? ' · In App' : ''}</small></div>
-        </button>
-        <button type="button" className="source-add-view" disabled={disabled || datasetDisabled} title={datasetDisabled ? 'Turn on field-based tiles at the top of this list to build from Dataset fields.' : blockedByPolicy ? 'Enable the review lane and add this draft block in one saved change.' : undefined} onClick={() => item.capabilities?.dataset ? onSelect(item) : onAdd(item, kind)} aria-label={item.capabilities?.dataset ? `Configure fields for ${item.name}` : `${actionLabel}: ${item.name}`}>{item.capabilities?.dataset ? <><Settings2 size={13} /> Configure fields</> : <><Plus size={13} /> {actionLabel}</>}</button>
-        {rowFeedback ? <small className={`source-action-feedback ${rowFeedback.status}`} role={rowFeedback.status === 'error' ? 'alert' : 'status'}>{rowFeedback.status === 'error' ? rowFeedback.message : actionLabel}</small> : null}
-        {isSelected ? <div className="source-catalog-detail">
-          <p>{item.description || `${humanize(item.name)} from the ${humanize(item.domain)} domain.`}</p>
-          {blockedByPolicy ? <button type="button" className="review-action" onClick={onEnableReview}><FileText size={12} /> Enable review-required sources</button> : null}
-          {(item.filterIds?.length ?? 0) > 0 ? <span><Filter size={12} /> {item.filterIds!.length} supported {item.filterIds!.length === 1 ? 'filter' : 'filters'}</span> : null}
-          {item.capabilities?.dataset && datasetTilesEnabled
-            ? <><DatasetTileBuilder key={`${item.sourceId ?? item.id}:${item.sourceRevision ?? item.fingerprint}`} source={item} disabled={disabled || blockedByPolicy} onAdd={onAddDataset} />
-              {datasetSourceAuthoringModel(item) ? <button type="button" className="dataset-author-source" disabled={disabled} onClick={() => onAuthorDataset(item)}><FileText size={12} /> Author Dataset definition</button> : item.capabilities.dataset.kind === 'semantic' ? <small className="field-help">This Dataset’s fields and measures are owned by its governed semantic provider.</small> : null}
-              {isUsed ? <button type="button" className="dataset-author-source" disabled={disabled || !item.sourceId} onClick={() => item.sourceId && onRefreshDatasetBinding(item.sourceId)}><ShieldCheck size={12} /> Refresh this App binding</button> : null}
-            </>
-            : item.capabilities?.dataset
-              ? <div className="source-view-options"><small>Turn on field-based tiles at the top of this list to build from this Dataset's fields.</small></div>
-            : <div className="source-view-options" aria-label={`Add ${item.name} with another view`}>
-              <button type="button" disabled={disabled} aria-label={blockedByPolicy ? `Enable review lane and add ${item.name} as KPI` : undefined} onClick={() => onAdd(item, 'kpi')}><Gauge size={13} /> KPI</button>
-              <button type="button" disabled={disabled} aria-label={blockedByPolicy ? `Enable review lane and add ${item.name} as Chart` : undefined} onClick={() => onAdd(item, 'chart')}><BarChart3 size={13} /> Chart</button>
-              <button type="button" disabled={disabled} aria-label={blockedByPolicy ? `Enable review lane and add ${item.name} as Table` : undefined} onClick={() => onAdd(item, 'table')}><Table2 size={13} /> Table</button>
-            </div>}
-        </div> : null}
-      </article>;
-    })}</div>
-    {hasMore ? <button type="button" className="source-load-more" onClick={onLoadMore} disabled={loading || disabled}>{loading ? 'Loading…' : 'Load 50 more sources'}</button> : null}
-    <div className="panel-section-label"><span>Page elements</span><small>No data required</small></div>
-    <div className="content-quick-add"><button type="button" disabled={disabled} onClick={() => onAddContent('heading')}><Heading size={15} /><span><strong>Heading</strong><small>Organize the page</small></span><Plus size={13} /></button><button type="button" disabled={disabled} onClick={() => onAddContent('text')}><Type size={15} /><span><strong>Text</strong><small>Add context or guidance</small></span><Plus size={13} /></button></div>
-  </>;
-}
-
-function BuildFrameInspector({ draft, prompt, previewRun, onPrompt, onAskAi, onSourcePolicy, onResolveTask, onApproveSemantic }: { draft: AppStudioBuildDraft; prompt: string; previewRun: DashboardRunResponse | null; onPrompt: (value: string) => void; onAskAi: () => void; onSourcePolicy: (value: AppStudioBuildDraft['sourcePolicy']) => void; onResolveTask: (task: AppStudioBuildDraft['reviewTasks'][number]) => void; onApproveSemantic: () => void }): JSX.Element {
+function BuildFrameInspector({ draft, prompt, previewRun, askLabel = 'Ask AI to build or revise this page', onPrompt, onAskAi, onResolveTask, onApproveSemantic }: { draft: AppStudioBuildDraft; prompt: string; previewRun: DashboardRunResponse | null; askLabel?: string; onPrompt: (value: string) => void; onAskAi: () => void; onResolveTask: (task: AppStudioBuildDraft['reviewTasks'][number]) => void; onApproveSemantic: () => void }): JSX.Element {
   const openTasks = blockingPublicationReviewTasks(draft);
   const semanticNeedsApproval = legacySemanticTilesNeedingApproval(draft).length > 0;
-  return <div className="inspector-body"><section><label>Business decision</label><textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} rows={5} /></section><section><label>Source policy</label><select value={draft.sourcePolicy} onChange={(event) => onSourcePolicy(event.target.value as AppStudioBuildDraft['sourcePolicy'])}><option value="governed_only">Governed sources only</option><option value="include_review_required">Include review-required analysis</option></select><small className="field-help">Review-required sources stay local and block Project publication until replaced or promoted.</small></section><section className="frame-facts"><label>Build Frame</label><div><span>Audience</span><strong>{draft.frame.audience || 'Stakeholders'}</strong></div><div><span>Metrics</span><strong>{draft.frame.metrics.join(', ') || 'Needs clarification'}</strong></div><div><span>Dimensions</span><strong>{draft.frame.dimensions.join(', ') || 'Automatic'}</strong></div><div><span>Source policy</span><strong>{draft.sourcePolicy === 'governed_only' ? 'Governed only' : 'Includes review lane'}</strong></div></section>{semanticNeedsApproval ? <section><label>Semantic review</label><button type="button" className="review-action" onClick={onApproveSemantic} disabled={!previewRun}><ShieldCheck size={14} /> {previewRun ? 'Approve this settled result' : 'Run preview to approve'}</button></section> : null}{openTasks.length ? <section className="review-task-list"><label>Review tasks</label>{openTasks.map((task) => <div key={task.id}><span>{task.message}</span><button type="button" onClick={() => onResolveTask(task)}><Check size={12} /> Resolve</button></div>)}</section> : null}<button type="button" className="ask-ai" onClick={onAskAi}><Bot size={16} /> Ask AI to build or revise this page</button><section className="trust-summary"><ShieldCheck size={17} /><div><strong>Nothing publishes silently</strong><p>AI changes are typed diffs. Project publication revalidates live source trust and filter bindings.</p></div></section></div>;
+  return <div className="inspector-body"><section><label>Business decision</label><textarea value={prompt} onChange={(event) => onPrompt(event.target.value)} rows={5} /></section><section className="frame-facts"><label>Build Frame</label><div><span>Audience</span><strong>{draft.frame.audience || 'Stakeholders'}</strong></div><div><span>Metrics</span><strong>{draft.frame.metrics.join(', ') || 'Needs clarification'}</strong></div><div><span>Dimensions</span><strong>{draft.frame.dimensions.join(', ') || 'Automatic'}</strong></div></section>{semanticNeedsApproval ? <section><label>Semantic review</label><button type="button" className="review-action" onClick={onApproveSemantic} disabled={!previewRun}><ShieldCheck size={14} /> {previewRun ? 'Approve this settled result' : 'Run preview to approve'}</button></section> : null}{openTasks.length ? <section className="review-task-list"><label>Review tasks</label>{openTasks.map((task) => <div key={task.id}><span>{task.message}</span><button type="button" onClick={() => onResolveTask(task)}><Check size={12} /> Resolve</button></div>)}</section> : null}<button type="button" className="ask-ai" onClick={onAskAi}><Bot size={16} /> {askLabel}</button><section className="trust-summary"><ShieldCheck size={17} /><div><strong>Nothing publishes silently</strong><p>AI changes are typed diffs. Project publication revalidates live source trust and filter bindings.</p></div></section></div>;
 }
 
-export function ComponentInspector({ initialTab = 'data', tile, run, pageId, page, pages, sources, dataset, disabled, onOpenSources, onSaveDatasetTileAsBlock, savingDatasetTileAsBlock, savedDatasetReviewDraft, onReplaceDatasetTileWithBlock = () => undefined, replacingDatasetTileWithBlock = false, onPreviewLegacySemanticConversion = () => undefined, previewingLegacySemanticConversion = false, semanticTileConversionPreview, onAcceptLegacySemanticConversion = () => undefined, acceptingLegacySemanticConversion = false, onRefreshDatasetTile, onUpdate, onUpdateInteractions, onDelete }: { initialTab?: 'data' | 'visual' | 'interactions'; tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]; run?: DashboardRunResponse['tiles'][number]; pageId: string; page: AppStudioBuildDraft['pages'][number]; pages: AppStudioBuildDraft['pages']; sources: AppStudioBuildDraft['sources']; dataset?: DatasetDescriptor; disabled: boolean; onOpenSources: () => void; onSaveDatasetTileAsBlock: () => void; savingDatasetTileAsBlock: boolean; savedDatasetReviewDraft?: Extract<DatasetTileSaveAsBlockResponse, { ok: true }>; onReplaceDatasetTileWithBlock?: () => void; replacingDatasetTileWithBlock?: boolean; onPreviewLegacySemanticConversion?: () => void; previewingLegacySemanticConversion?: boolean; semanticTileConversionPreview?: Extract<SemanticTileConversionPreviewResponse, { ok: true }>; onAcceptLegacySemanticConversion?: () => void; acceptingLegacySemanticConversion?: boolean; onRefreshDatasetTile: () => void; onUpdate: (patch: Partial<typeof tile>) => void; onUpdateInteractions: (interactions: AppStudioBuildDraft['pages'][number]['interactions']) => void; onDelete: () => void }): JSX.Element {
+export function ComponentInspector({ initialTab = 'data', tile, run, trust, pageId, page, pages, sources, dataset, disabled, onOpenSources, onSaveDatasetTileAsBlock, savingDatasetTileAsBlock, savedDatasetReviewDraft, onReplaceDatasetTileWithBlock = () => undefined, replacingDatasetTileWithBlock = false, onPreviewLegacySemanticConversion = () => undefined, previewingLegacySemanticConversion = false, semanticTileConversionPreview, onAcceptLegacySemanticConversion = () => undefined, acceptingLegacySemanticConversion = false, onRefreshDatasetTile, onUpdate, onUpdateInteractions, onDelete }: { initialTab?: 'data' | 'visual' | 'interactions'; tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]; run?: DashboardRunResponse['tiles'][number]; /** The tile's trust from the App's one trust answer (B6). */ trust?: ReaderTrust; pageId: string; page: AppStudioBuildDraft['pages'][number]; pages: AppStudioBuildDraft['pages']; sources: AppStudioBuildDraft['sources']; dataset?: DatasetDescriptor; disabled: boolean; onOpenSources: () => void; onSaveDatasetTileAsBlock: () => void; savingDatasetTileAsBlock: boolean; savedDatasetReviewDraft?: Extract<DatasetTileSaveAsBlockResponse, { ok: true }>; onReplaceDatasetTileWithBlock?: () => void; replacingDatasetTileWithBlock?: boolean; onPreviewLegacySemanticConversion?: () => void; previewingLegacySemanticConversion?: boolean; semanticTileConversionPreview?: Extract<SemanticTileConversionPreviewResponse, { ok: true }>; onAcceptLegacySemanticConversion?: () => void; acceptingLegacySemanticConversion?: boolean; onRefreshDatasetTile: () => void; onUpdate: (patch: Partial<typeof tile>) => void; onUpdateInteractions: (interactions: AppStudioBuildDraft['pages'][number]['interactions']) => void; onDelete: () => void }): JSX.Element {
   const [title, setTitle] = useState(tile.title ?? '');
   const [markdown, setMarkdown] = useState(tile.text?.markdown ?? '');
   const [description, setDescription] = useState(tile.description ?? '');
@@ -3899,6 +4851,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
   const columns = run?.result?.columns ?? [];
   const grainKeyCheck = formatDatasetGrainEvidenceKeyCheck(run?.dataset?.grainRuntimeEvidence);
   // A calculation over certified measures reads as Governed, as it does for readers.
+  // A calculation is certified when its inputs are (T2): no separate word for it.
   const calculatedTrust = tile.trustState === 'certified' && Boolean(tile.query?.calculations?.length);
   const currentDatasetEvidence = run && tile.query && isCurrentDatasetTileEvidence(tile, run)
     ? presentDatasetTileEvidence(run)
@@ -3906,7 +4859,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
   const setOption = (key: string, value: unknown) => onUpdate({ viz: { ...tile.viz, options: { ...options, [key]: value || undefined } } });
   const updateDatasetQuery = (query: TileQuery, recovery?: { visualization: 'table'; message: string }) => {
     if (recovery) {
-      setVisualizationFeedback(`${recovery.message} The component was changed to Table; selected fields were kept.`);
+      setVisualizationFeedback(`${recovery.message} The tile was changed to Table; selected fields were kept.`);
       onUpdate({ query, viz: { ...tile.viz, type: recovery.visualization } });
       return;
     }
@@ -3921,7 +4874,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     .filter((meta) => ['currency', 'percent', 'number', 'count'].includes(meta.kind))
     .map((meta) => ({ name: meta.name, label: tileEncoding?.fields?.[`measure:${meta.name}`]?.label ?? meta.label ?? humanize(meta.name) }));
   const updateShelves = ({ encoding, query: shelfQuery, visualization }: ShelfChange, style = tile.viz.style): string | void => {
-    if (!dataset) return 'This tile has no Dataset.';
+    if (!dataset) return 'This tile has no data.';
     if (!shelfQuery.measures.length && !shelfQuery.calculations?.some((calculation) => calculation.expr)) return 'A tile needs at least one measure. Add another before removing this one.';
     // A Show Me pick names its chart; a moved field keeps the chart when the shelves still read that way.
     const type = visualization ?? vizTypeForEncoding(encoding, descriptorTimeField(dataset), tile.viz.type);
@@ -3929,7 +4882,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     const pivot = type === 'pivot';
     const query = pivot ? withPivotRollups(withoutRowLimit(shelfQuery), encoding, style?.totals) : withoutRollups(shelfQuery);
     const validation = validateTileQuery(dataset, query);
-    if (!tileQueryValidationRuns(validation)) return validation.diagnostics[0]?.message ?? 'The Dataset does not cover that field combination.';
+    if (!tileQueryValidationRuns(validation)) return validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.';
     const compatibility = datasetTileVisualizationCompatibility(query, type);
     setVisualizationFeedback(compatibility.compatible ? null : `${compatibility.message} Shown as a Table.`);
     const { style: _style, ...viz } = tile.viz;
@@ -3939,7 +4892,7 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     if (tile.query && dataset) {
       const visualization = datasetTileVisualizationCompatibility(tile.query, type);
       if (!visualization.compatible) {
-        setVisualizationFeedback(`${visualization.message} Choose Table or change the Dataset field selection first.`);
+        setVisualizationFeedback(`${visualization.message} Choose Table or change the field selection first.`);
         return;
       }
     }
@@ -3970,8 +4923,8 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     </> : null}
     {dataTile && tab === 'data' ? <>
     {tile.query && dataset && tileEncoding ? <DatasetTileQueryInspector descriptor={dataset} query={tile.query} visualization={tile.viz.type} encoding={tileEncoding} disabled={disabled} onChange={updateDatasetQuery} onShelves={updateShelves} onOpenSources={onOpenSources} result={run?.status === 'ok' ? run.result : undefined} /> : null}
-    <section className="data-trust"><label>Data & trust</label><div><span className={`trust-dot ${calculatedTrust ? 'governed' : tile.trustState ?? 'draft_ready'}`} /><strong>{calculatedTrust ? 'Governed' : humanize(tile.trustState ?? 'draft_ready')}</strong></div>{calculatedTrust ? <small>Calculations over certified measures read as Governed: the arithmetic is checked, but nobody reviewed the formula.</small> : null}<p>{tile.query && dataset ? `Dataset: ${dataset.label} · ${dataset.kind === 'semantic' ? 'governed semantic source' : 'governed block source'}` : tile.block ? `${tile.trustState === 'certified' ? 'Certified' : 'Review-required'} block: ${'blockId' in tile.block ? tile.block.blockId : tile.block.ref}` : tile.semantic ? `Governed semantic query: ${tile.semantic.id}` : tile.draftAnalysis ? `Review-required DQL: ${tile.draftAnalysis.ref}` : 'Local narrative component'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? `Settled on ${run.result?.rowCount ?? run.result?.rows.length ?? 0} rows` : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable block</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new block is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
-    {tile.semantic && !tile.query ? <section className="dataset-reusable-block"><strong>Convert to Dataset query</strong><p>Preview an exact field-query mapping for this legacy semantic tile. ZLens runs both paths in one fresh read scope before it can apply the change. The original semantic payload is retained as provenance; this does not certify the source.</p><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onPreviewLegacySemanticConversion}>{previewingLegacySemanticConversion ? 'Proving conversion…' : 'Preview Dataset conversion'}</button>{semanticTileConversionPreview ? <div className="dataset-review-replacement"><small>Mapped source: {semanticTileConversionPreview.candidate.sourceId}</small><small>Mapped query: {semanticTileConversionPreview.candidate.query.measures.map((measure) => measure.measure).join(', ')}{semanticTileConversionPreview.candidate.query.dimensions.length ? ` by ${semanticTileConversionPreview.candidate.query.dimensions.map((dimension) => dimension.field).join(', ')}` : ''}</small><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onAcceptLegacySemanticConversion}>{acceptingLegacySemanticConversion ? 'Rechecking and applying…' : 'Apply Dataset conversion'}</button></div> : <small>Preview first. Unsupported bindings, source drift, or an incomplete comparison stay with the original semantic tile.</small>}</section> : null}
+    <section className="data-trust"><label>Data & trust</label>{trust ? <div><span className={`trust-dot ${trust.state === 'certified' ? 'certified' : 'review_required'}`} /><strong>{trust.state === 'certified' ? (run?.certification ? certifiedByLabel(run.certification) : trust.byline ?? trust.label) : trust.label}</strong></div> : <div><span className={`trust-dot ${tile.trustState === 'certified' ? 'certified' : 'review_required'}`} /><strong>{tile.trustState === 'certified' && run?.certification ? certifiedByLabel(run.certification) : trustLabel(tile.trustState)}</strong></div>}{trust && trust.state !== 'certified' ? <small>{trust.detail}</small> : null}{tile.trustState === 'certified' && plainCertificationChecks(run?.certification?.checks).length ? <small>Checks passed: {plainCertificationChecks(run?.certification?.checks).join(' · ')}</small> : null}{calculatedTrust ? <small>Calculated from certified data: every input is certified.</small> : null}<p>{tile.query && dataset ? `${dataset.kind === 'semantic' ? 'Metrics' : 'Data'}: ${dataset.label}` : tile.block ? `Saved query · ${trust ? (trust.state === 'certified' ? (run?.certification ? certifiedByLabel(run.certification) : trust.byline ?? trust.label) : trust.label) : trustLabel(tile.trustState)}: ${sourceDisplayName('blockId' in tile.block ? tile.block.blockId : tile.block.ref)}` : tile.semantic ? `Metrics: ${sourceDisplayName(tile.semantic.id)}` : tile.draftAnalysis ? `Draft DQL · Not certified yet: ${sourceDisplayName(tile.draftAnalysis.ref)}` : 'Page content'}</p>{tile.sourceEvidence?.slice(0, 2).map((evidence, index) => <small key={`${evidence.source}-${index}`}>{evidence.reason}</small>)}{run ? <small>{run.status === 'ok' ? rowCountWords(run.result?.rowCount ?? run.result?.rows.length ?? 0) : run.error}</small> : null}{grainKeyCheck ? <small>Full-source key check: {grainKeyCheck}</small> : null}{run?.dataset?.cacheDelivery ? <div className="dataset-cache-delivery"><small>Cached {new Date(run.dataset.cacheDelivery.cachedAt).toLocaleString()} · this is not fresh publication or reusable-block evidence.</small><button type="button" disabled={disabled} onClick={onRefreshDatasetTile}>Refresh live data</button></div> : null}{tile.query ? <details className="dataset-dql-receipt"><summary>View execution evidence</summary>{currentDatasetEvidence ? <DatasetTileExecutionEvidence presentation={currentDatasetEvidence} /> : <p>{run ? 'This execution evidence no longer matches the selected Dataset source or query. Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.' : 'Run a governed preview to inspect the current Dataset query, executed SQL, binding evidence, and provenance.'}</p>}</details> : null}{tile.query ? <div className="dataset-reusable-block"><strong>Reusable saved query</strong><p>Save this settled result as a separate review draft. This App tile stays unchanged and the new saved query is not certified.</p><button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onSaveDatasetTileAsBlock}>{savingDatasetTileAsBlock ? 'Saving review draft…' : 'Save as reusable review draft'}</button>{savedDatasetReviewDraft ? <div className="dataset-review-replacement"><small>Saved review draft: {savedDatasetReviewDraft.path}</small>{savedDatasetReviewDraft.replacementEligible ? <button type="button" disabled={disabled || savingDatasetTileAsBlock || replacingDatasetTileWithBlock || !currentDatasetEvidence || Boolean(run?.dataset?.cacheDelivery)} onClick={onReplaceDatasetTileWithBlock}>{replacingDatasetTileWithBlock ? 'Proving equivalence…' : 'Replace with this review draft'}</button> : <small>{savedDatasetReviewDraft.replacementMessage ?? 'This saved draft is fixed-value only and cannot replace the interactive Dataset tile.'}</small>}</div> : null}{!currentDatasetEvidence ? <small>Run the current Dataset tile before saving it.</small> : null}{run?.dataset?.cacheDelivery ? <small>Refresh live data before saving or replacing this tile.</small> : null}</div> : null}</section>
+    {tile.semantic && !tile.query ? <section className="dataset-reusable-block"><strong>Convert to a field query</strong><p>Preview an exact field-query mapping for this legacy semantic tile. ZLens runs both paths in one fresh read scope before it can apply the change. The original semantic payload is retained as provenance; this does not certify the source.</p><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onPreviewLegacySemanticConversion}>{previewingLegacySemanticConversion ? 'Proving conversion…' : 'Preview Dataset conversion'}</button>{semanticTileConversionPreview ? <div className="dataset-review-replacement"><small>Mapped source: {semanticTileConversionPreview.candidate.sourceId}</small><small>Mapped query: {semanticTileConversionPreview.candidate.query.measures.map((measure) => measure.measure).join(', ')}{semanticTileConversionPreview.candidate.query.dimensions.length ? ` by ${semanticTileConversionPreview.candidate.query.dimensions.map((dimension) => dimension.field).join(', ')}` : ''}</small><button type="button" disabled={disabled || previewingLegacySemanticConversion || acceptingLegacySemanticConversion} onClick={onAcceptLegacySemanticConversion}>{acceptingLegacySemanticConversion ? 'Rechecking and applying…' : 'Apply Dataset conversion'}</button></div> : <small>Preview first. Unsupported bindings, source drift, or an incomplete comparison stay with the original semantic tile.</small>}</section> : null}
     </> : null}
     {dataTile && tab === 'visual' ? <>
     {tile.query && dataset && tileEncoding ? <section><ShowMePanel suggestions={tileShowMe(dataset, tileEncoding, tile.query, run?.status === 'ok' ? run.result : undefined)} current={currentShowMeChart(tile.viz.type, tileEncoding, descriptorTimeField(dataset))} disabled={disabled} onPick={(suggestion) => { const encoding = applyShowMe(tileEncoding, suggestion); const message = updateShelves({ encoding, query: queryFromEncoding(encoding, tile.query!, descriptorTimeGrain(dataset)), visualization: suggestion.viz }); if (message) setVisualizationFeedback(message); }} />{visualizationFeedback ? <small className="dataset-interaction-message" role="status">{visualizationFeedback}</small> : null}</section> : <section><label>Chart</label><div className="chart-type-grid" role="radiogroup" aria-label="Chart type">{CHART_TYPE_OPTIONS.map(([type, label]) => { const active = tile.viz.type === type || (type === 'single_value' && tile.viz.type === 'kpi'); return <button key={type} type="button" role="radio" aria-checked={active} className={active ? 'on' : ''} disabled={disabled} onClick={() => { if (!active) updateVisualization(type); }}>{chartTypeIcon(type)}<span>{label}</span></button>; })}</div>{savedDatasetVisualization && !savedDatasetVisualization.compatible ? <small className="dataset-builder-error" role="alert">{savedDatasetVisualization.message} Choose Table to keep all selected fields visible.</small> : null}{visualizationFeedback ? <small className="dataset-interaction-message" role="status">{visualizationFeedback}</small> : null}</section>}
@@ -3999,9 +4952,9 @@ export function ComponentInspector({ initialTab = 'data', tile, run, pageId, pag
     </> : null}
     {dataTile && tab === 'interactions' ? (tile.query && dataset
       ? <DatasetInteractionInspector tile={tile} page={page} pages={pages} sources={sources} descriptor={dataset} disabled={disabled} onChange={onUpdateInteractions} />
-      : <p className="field-help">Click actions, cross-filters and drill-downs are available for tiles built from Dataset fields.</p>) : null}
+      : <p className="field-help">Click actions, cross-filters and drill-downs are available for tiles built from fields.</p>) : null}
     <footer className="inspector-footer">
-      <span className={`run-state ${run?.status === 'ok' ? 'ok' : run ? 'error' : ''}`}>{run ? run.status === 'ok' ? `Live · ${rowCount} ${rowCount === 1 ? 'row' : 'rows'}` : 'Last run failed' : 'Not run yet'}</span>
+      <span className={`run-state ${run?.status === 'ok' ? 'ok' : run ? 'error' : ''}`}>{run ? run.status === 'ok' ? liveRowsLabel(rowCount ?? 0, run.result?.rows.length) : 'Last run failed' : 'Not run yet'}</span>
       <button type="button" className="delete-component" onClick={onDelete}><Trash2 size={14} /> Remove</button>
     </footer>
     <small className="inspector-id">{pageId} / {tile.i}</small>
@@ -4015,7 +4968,7 @@ function DatasetEvidenceRows({ rows }: { rows: DatasetEvidenceRow[] }): JSX.Elem
 
 function DatasetTileExecutionEvidence({ presentation }: { presentation: DatasetTileEvidencePresentation }): JSX.Element {
   return <div className="dataset-execution-evidence">
-    <small>Authored Dataset query specification (declarative; not DQL)</small>
+    <small>Authored field query specification (declarative; not DQL)</small>
     <pre>{presentation.authoredQuerySpec ?? presentation.authoredQuerySpecUnavailable}</pre>
     <small>Executed SQL (server returned)</small>
     <pre>{presentation.executedSql ?? presentation.executedSqlUnavailable}</pre>
@@ -4035,7 +4988,7 @@ function StaticComponentPreview({ loading, view }: { loading: boolean; view?: st
     // when results arrive.
     const shape = view === 'single_value' || view === 'kpi' ? 'kpi' : view === 'table' || view === 'pivot' ? 'table' : view === 'line' || view === 'area' ? 'line' : 'bars';
     return <div className={`preview-skeleton ${shape}`} role="status" aria-busy="true">
-      <span className="visually-hidden">Running governed preview…</span>
+      <span className="visually-hidden">Running preview…</span>
       {shape === 'kpi' ? <><i className="sk-value" /><i className="sk-caption" /></> : null}
       {shape === 'table' ? Array.from({ length: 5 }, (_, index) => <i key={index} className="sk-row" />) : null}
       {shape === 'bars' ? <div className="sk-bars">{[62, 84, 48, 72, 36, 58].map((height, index) => <i key={index} style={{ height: `${height}%` }} />)}</div> : null}
@@ -4048,12 +5001,15 @@ function StaticComponentPreview({ loading, view }: { loading: boolean; view?: st
 function StudioFilterControl({
   filter,
   availability,
+  searchSource,
   value,
   applying,
   onChange,
 }: {
   filter: NonNullable<AppStudioBuildDraft['pages'][number]['filters']>[number];
   availability?: StudioFilterAvailability;
+  /** The Dataset field behind the values, so a capped list can search every value. */
+  searchSource?: FilterValueSource;
   value: unknown;
   applying: boolean;
   onChange: (value: unknown) => void;
@@ -4064,23 +5020,21 @@ function StudioFilterControl({
   useEffect(() => setQuery(String(value ?? '')), [value]);
   if (filter.type === 'daterange') {
     const range = value && typeof value === 'object' && !Array.isArray(value) ? value as { start?: string; end?: string } : {};
-    const availabilityLabel = applying
-      ? 'Checking dates…'
-      : availability?.dateRange
-        ? `Available ${availability.dateRange.min} – ${availability.dateRange.max}`
-        : availability?.valueCount === 0
-          ? 'No date values exist for this field'
-          : 'Run preview to check available dates';
-    return <label className={`studio-filter range ${availability?.valueCount === 0 ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" min={availability?.dateRange?.min} max={availability?.dateRange?.max} aria-label={`${label} start`} value={range.start ?? ''} onChange={(event) => onChange({ ...range, start: event.target.value })} /><i>–</i><input type="date" min={availability?.dateRange?.min} max={availability?.dateRange?.max} aria-label={`${label} end`} value={range.end ?? ''} onChange={(event) => onChange({ ...range, end: event.target.value })} /><small>{availabilityLabel}</small></label>;
+    const hint = studioDateControlHint({ type: 'daterange', value, availability });
+    // No min/max: a reader may pick any day, and the run's own dates are only a hint.
+    // A one-sided range says so on the control itself ("From 1 Mar 2025").
+    const oneSided = Boolean(range.start) !== Boolean(range.end);
+    return <label className={`studio-filter range ${hint.empty ? 'empty' : ''} ${oneSided ? 'one-sided' : ''}`} aria-busy={applying}><span>{label}</span><DateRangePresetSelect label={label} value={value} timezone={filterTimezone(filter)} onChange={(next) => onChange(next ?? {})} /><input type="date" aria-label={`${label} start`} value={range.start ?? ''} onChange={(event) => onChange({ ...range, start: event.target.value })} /><i>–</i><input type="date" aria-label={`${label} end`} value={range.end ?? ''} onChange={(event) => onChange({ ...range, end: event.target.value })} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
   }
   if (filter.type === 'boolean') {
     return <label className="studio-filter boolean" aria-busy={applying}><input type="checkbox" checked={Boolean(value)} onChange={(event) => onChange(event.target.checked)} /><span>{label}</span></label>;
   }
   if (filter.type === 'date') {
-    return <label className={`studio-filter ${availability?.valueCount === 0 ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" min={availability?.dateRange?.min} max={availability?.dateRange?.max} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /><small>{applying ? 'Checking dates…' : availability?.dateRange ? `Available ${availability.dateRange.min} – ${availability.dateRange.max}` : availability?.valueCount === 0 ? 'No date values exist for this field' : 'Run preview to check available dates'}</small></label>;
+    const hint = studioDateControlHint({ type: 'date', value, availability });
+    return <label className={`studio-filter ${hint.empty ? 'empty' : ''}`} aria-busy={applying}><span>{label}</span><input type="date" aria-label={label} value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} /><small><span>{hint.text}</span>{applying ? <em> · applying…</em> : null}</small></label>;
   }
   if (optionValues.length > 0 && (filter.type === 'select' || filter.type === 'multiselect')) {
-    return <StudioFilterDropdown label={label} values={optionValues} value={value} multiple={filter.type === 'multiselect'} applying={applying} truncated={availability?.truncated ?? false} onChange={onChange} />;
+    return <StudioFilterDropdown label={label} values={optionValues} value={value} multiple={filter.type === 'multiselect'} applying={applying} truncated={availability?.truncated ?? false} {...(availability?.valueCount !== undefined ? { valueCount: availability.valueCount } : {})} {...(availability?.valueCountCapped ? { valueCountCapped: true } : {})} {...(searchSource ? { searchSource } : {})} onChange={onChange} />;
   }
   if (optionValues.length > 0 && filter.type === 'search') {
     const listId = `studio-filter-${filter.id.replace(/[^a-z0-9_-]/gi, '-')}-options`;
@@ -4098,13 +5052,27 @@ function StudioFilterControl({
   return <label className="studio-filter" aria-busy={applying}><span>{label}</span><input type={filter.type === 'number' ? 'number' : 'search'} value={String(value ?? '')} placeholder="All values" onChange={(event) => onChange(filter.type === 'number' && event.target.value !== '' ? Number(event.target.value) : event.target.value)} /><small>{applying ? 'Applying…' : 'Updates automatically'}</small></label>;
 }
 
-function StudioFilterDropdown({
+/**
+ * "Rolled up from a saved query" (and other grain adaptations) as an info
+ * icon in the tile header, with the explanation in its tooltip. As a block
+ * above the result it covered a KPI's number at the default tile size.
+ */
+export function TileAdaptedNote({ run }: { run?: DashboardRunResponse['tiles'][number] }): JSX.Element | null {
+  const adapted = datasetTileNotices(run).filter((notice) => notice.kind === 'adapted');
+  if (!adapted.length) return null;
+  return <span className="tile-adapted-note" role="note" tabIndex={0} aria-label={adapted.map((notice) => `${notice.label}: ${notice.detail}`).join(' ')} title={adapted.map((notice) => `${notice.label}. ${notice.detail}`).join('\n')}><Info size={12} aria-hidden="true" /></span>;
+}
+
+export function StudioFilterDropdown({
   label,
   values,
   value,
   multiple,
   applying,
   truncated,
+  valueCount,
+  valueCountCapped,
+  searchSource,
   onChange,
 }: {
   label: string;
@@ -4113,6 +5081,11 @@ function StudioFilterDropdown({
   multiple: boolean;
   applying: boolean;
   truncated: boolean;
+  /** How many values the field has, when the server counted them. */
+  valueCount?: number;
+  valueCountCapped?: boolean;
+  /** Where to search every value when the list is capped. */
+  searchSource?: FilterValueSource;
   onChange: (value: unknown) => void;
 }): JSX.Element {
   const [query, setQuery] = useState('');
@@ -4120,7 +5093,10 @@ function StudioFilterDropdown({
   const selected = multiple
     ? new Set(Array.isArray(value) ? value.map(String) : value === undefined || value === null || value === '' ? [] : [String(value)])
     : new Set(value === undefined || value === null || value === '' ? [] : [String(value)]);
-  const visible = values.filter((option) => option.toLowerCase().includes(query.trim().toLowerCase()));
+  const list: FilterValueList = { values, truncated, ...(valueCount !== undefined ? { valueCount } : {}), ...(valueCountCapped ? { valueCountCapped: true } : {}) };
+  const search = useFilterValueSearch(searchSource, list, query);
+  const visible = search.values;
+  const capHint = filterValueCapHint(list);
   const summary = selected.size === 0
     ? 'All values'
     : multiple
@@ -4143,10 +5119,81 @@ function StudioFilterDropdown({
       <label><Search size={12} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search values" autoComplete="off" /></label>
       <button type="button" className="filter-option-clear" onClick={() => { onChange(multiple ? [] : ''); if (!multiple && detailsRef.current) detailsRef.current.open = false; }}>All values</button>
       <div>{visible.map((option) => <button key={option} type="button" className={selected.has(option) ? 'on' : ''} onClick={() => selectValue(option)}>{multiple ? <span className="filter-option-check">{selected.has(option) ? <Check size={11} /> : null}</span> : null}<span>{option}</span>{!multiple && selected.has(option) ? <Check size={12} /> : null}</button>)}</div>
-      {visible.length === 0 ? <small>No matching values</small> : null}
-      <footer>{applying ? 'Applying…' : `${values.length}${truncated ? '+' : ''} available values`}</footer>
+      {visible.length === 0 ? <small>{search.searching ? 'Searching all values…' : 'No matching values'}</small> : null}
+      <footer>{applying ? 'Applying…' : query.trim() && search.searching ? 'Searching all values…' : query.trim() && search.truncated ? `First ${visible.length} matches · type more to narrow` : query.trim() ? `${visible.length} ${visible.length === 1 ? 'match' : 'matches'}` : capHint ?? `${values.length}${truncated ? '+' : ''} available values`}</footer>
     </div>
   </details>;
+}
+
+type StudioTile = AppStudioBuildDraft['pages'][number]['layout']['items'][number];
+
+/** What a tile preview's actions call: always the Studio's newest handlers (see tileHandlersRef). */
+type StudioTileHandlers = {
+  applyDatasetCrossFilter: (tile: StudioTile, field: string, values: unknown[]) => void;
+  exploreDatasetHierarchy: (tile: StudioTile, candidate: RuntimeDatasetHierarchyDrillCandidate, row: Record<string, unknown>) => void;
+  returnFromDatasetHierarchy: (tileId: string) => void;
+  navigateFromDatasetTile: (tile: StudioTile) => void;
+  linkDatasetTileField: (tile: StudioTile) => void;
+  openMarkMenu: (tile: StudioTile, run: DashboardRunResponse['tiles'][number] | undefined, row: Record<string, unknown>, at: MarkPointer | undefined, candidates: RuntimeDatasetHierarchyDrillCandidate[]) => void;
+  previewRun: DashboardRunResponse | null;
+};
+
+const VALUE_COMPARED_PREVIEW_PROPS = new Set(['crossFilterFields', 'activeCrossFilters', 'linkProposal']);
+
+/**
+ * Whether a tile preview would draw the same: its data props are the same (by
+ * value for the small lists built each render); its action props are not
+ * compared, because they call the newest handlers through a ref. A field
+ * click on one tile no longer draws every chart on the page again.
+ */
+export function sameTilePreviewProps(previous: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  for (const key of new Set([...Object.keys(previous), ...Object.keys(next)])) {
+    const left = previous[key];
+    const right = next[key];
+    if (typeof left === 'function' && typeof right === 'function') continue;
+    if (Object.is(left, right)) continue;
+    if (VALUE_COMPARED_PREVIEW_PROPS.has(key) && JSON.stringify(left) === JSON.stringify(right)) continue;
+    return false;
+  }
+  return true;
+}
+
+
+/**
+ * What one field click does to a saved Dataset tile: on a shelf tile it puts
+ * the field on the shelf a Tableau author expects, or takes it off every
+ * shelf when it is already there (RFC 0009); on a detail tile it toggles the
+ * column. A title DQL generated from the fields follows them; a title the
+ * author wrote is never touched.
+ */
+export function tileFieldClickPatch(
+  tile: StudioTile,
+  field: DatasetField,
+  descriptor: DatasetDescriptor,
+): { patch: Partial<StudioTile> } | { message: string } | { error: string } {
+  if (!tile.query) return { message: 'This tile has no fields to change' };
+  if (!tile.query.detail) {
+    const ref = field.kind === 'measure' ? { measure: field.name } : { dimension: field.name };
+    const current = tile.viz.encoding ?? encodingFromQuery(tile.query, tile.viz.type);
+    const encoding = encodingHas(current, ref) ? removeField(current, ref) : addFieldByClick(current, ref, isTimeField(field));
+    const query = queryFromEncoding(encoding, tile.query, descriptorTimeGrain(descriptor));
+    if (!query.measures.length) return { message: 'A tile needs at least one measure' };
+    const validation = validateTileQuery(descriptor, query);
+    if (!tileQueryValidationRuns(validation)) return { error: validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.' };
+    const type = vizTypeForEncoding(encoding, descriptorTimeField(descriptor), tile.viz.type);
+    const viz = datasetTileVisualizationCompatibility(query, type).compatible ? type : 'table';
+    const generatedTitle = (tile.title ?? '').trim().toLowerCase() === defaultTileTitle(tile.query, humanize).toLowerCase();
+    return { patch: {
+      query,
+      viz: { ...tile.viz, type: viz as typeof tile.viz.type, encoding },
+      ...(generatedTitle ? { title: defaultTileTitle(query, humanize) } : {}),
+    } };
+  }
+  const query = toggleFieldInQuery(tile.query, field);
+  if (!query.measures.length && !query.detail) return { message: 'A tile needs at least one measure' };
+  const validation = validateTileQuery(descriptor, query);
+  if (!tileQueryValidationRuns(validation)) return { error: validation.diagnostics[0]?.message ?? 'The data does not cover that field combination.' };
+  return { patch: { query } };
 }
 
 export function StudioTilePreview({
@@ -4163,9 +5210,12 @@ export function StudioTilePreview({
   hasNavigation = false,
   linkProposal,
   onLinkField,
+  sourceLabel,
   chartHeight: placedChartHeight,
   onMark,
 }: {
+  /** The tile's data, in words, for the click-to-filter hint. */
+  sourceLabel?: string;
   /** A clicked mark opens the click menu (RFC 0009 step 6a). */
   onMark?: (row: Record<string, unknown>, at: MarkPointer | undefined, hierarchyCandidates: RuntimeDatasetHierarchyDrillCandidate[]) => void;
   tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number];
@@ -4209,6 +5259,7 @@ export function StudioTilePreview({
     return () => observer.disconnect();
   }, [placed, run]);
   const [markActionId, setMarkActionId] = useState<string>('filter');
+  const [barShowAll, setBarShowAll] = useState(false);
   useEffect(() => {
     const node = frameRef.current;
     if (!node || typeof ResizeObserver === 'undefined') return;
@@ -4224,14 +5275,14 @@ export function StudioTilePreview({
     return <div className="live-component-preview driver"><DriverView analysis={run.driver} compact={tile.h <= 4} /></div>;
   }
   if (run.status !== 'ok' && run.error?.startsWith('APP_DATASETS_FEATURE_DISABLED')) {
-    return <div className="preview-state error"><strong>Field-based tiles are off</strong><span>Turn them on from the Sources panel to run this tile.</span></div>;
+    return <div className="preview-state error"><strong>Field-based tiles are off</strong><span>{FIELD_TILES_OFF_MESSAGE}</span></div>;
   }
-  if (run.status !== 'ok' || !run.result) return <div className="preview-state error"><strong>{humanize(run.status)}</strong><span>{run.error ?? 'This component could not run with the current source and filters.'}</span></div>;
+  if (run.status !== 'ok' || !run.result) return <div className="preview-state error"><strong>{humanize(run.status)}</strong><span>{run.error ?? 'This tile could not run with the current source and filters.'}</span></div>;
   const visualization = tile.query
     ? datasetTileVisualizationCompatibility(tile.query, tile.viz.type)
     : undefined;
   if (visualization && !visualization.compatible) {
-    return <div className="preview-state error"><strong>Dataset visualization needs attention</strong><span>{visualization.message} Choose Table or change the Dataset field selection before running this component.</span></div>;
+    return <div className="preview-state error"><strong>Chart needs attention</strong><span>{visualization.message} Choose Table or change the field selection before running this tile.</span></div>;
   }
   const encodedTable = encodedChartConfig(tile).chart === 'table';
   const chart = encodedTable ? 'table' : tile.viz.type === 'single_value' ? 'kpi' : tile.viz.type;
@@ -4245,6 +5296,10 @@ export function StudioTilePreview({
     ...encodedChartConfig(tile),
   } as CellChartConfig;
   const shownResult = encodedTileResult(tile, run.result);
+  // Above 50 categories a bar chart draws the top 25 until the author asks for all.
+  const barCap = chart === 'table' || chart === 'kpi' || chart === 'pivot'
+    ? null
+    : barCategoryCap(shownResult, { chart, category: chartConfig.x, value: chartConfig.y, query: tile.query, showAll: barShowAll });
   const hierarchy = run.dataset?.hierarchy;
   const hierarchyCandidates = (hierarchy?.candidates ?? []).filter((candidate) => (
     run.result!.rows.some((row) => row[candidate.fromAlias] !== undefined && row[candidate.fromAlias] !== null)
@@ -4277,7 +5332,10 @@ export function StudioTilePreview({
           ? <PivotTable result={shownResult} layout={pivotLayout(tile.viz.encoding ?? encodingFromQuery(tile.query, 'pivot'), tile.query)} themeMode={themeMode} conditionalFormats={tile.viz.style?.conditional} maxHeight={placed ? chartHeight : height} {...(onRowSelect ? { onCellClick: onRowSelect } : {})} />
           : chart === 'table' || chart === 'pivot'
           ? <TableOutput result={shownResult} themeMode={themeMode} maxHeight={placed ? chartHeight : height} initialPageSize={10} onRowClick={onRowSelect} conditionalFormats={tile.viz.style?.conditional} />
-          : <ChartOutput result={shownResult} themeMode={themeMode} chartConfig={{ ...chartConfig, title: undefined }} availableHeight={chartHeight} availableWidth={width} onMarkSelect={onRowSelect} />}
+          : <>
+            <BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} />
+            <ChartOutput result={barCap?.result ?? shownResult} themeMode={themeMode} chartConfig={withBarCategoryLimit({ ...chartConfig, title: undefined }, barCap)} availableHeight={barCap?.cappable ? Math.max(96, chartHeight - 24) : chartHeight} availableWidth={width} onMarkSelect={onRowSelect} />
+          </>}
       </div>
       {selectableFields.length ? <div className={`dataset-mark-controls marks ${selectedForTile.length ? 'has-selection' : ''}`} aria-label="Cross-filter selection">
         <span>Select a result mark</span>
@@ -4293,13 +5351,23 @@ export function StudioTilePreview({
         {hierarchy.activeSteps.length > 0 ? <small>All › {hierarchy.activeSteps.map((step) => step.values.map(String).join(', ')).join(' › ')}</small> : null}
         {hierarchy.activeSteps.length > 0 && onDrillBack ? <button type="button" onClick={onDrillBack}>Up one level</button> : null}
       </div> : null}
-      {!selectableFields.length && linkProposal && onLinkField ? <div className="dataset-link-hint" role="note">
-        <span>{onMark ? 'Keep only reaches tiles on this Dataset.' : `Clicking this ${chart === 'table' ? 'table' : 'chart'} filters nothing yet.`}</span>
-        <button type="button" onClick={onLinkField} title={`Map ${humanize(linkProposal.fieldLabel)} to: ${linkProposal.targetLabels.join(', ')}`}>{onMark ? 'Also filter' : 'Link'} {humanize(linkProposal.fieldLabel)} {onMark ? 'on' : 'to'} {linkProposal.mappings.length === 1 ? linkProposal.targetLabels[0] : `${linkProposal.mappings.length} Datasets`}</button>
+      {!selectableFields.length && linkProposal && onLinkField ? <div className={`dataset-link-hint ${activeCrossFilters.length ? '' : 'hover-only'}`} role="note">
+        <span>{crossFilterHint({ chart, filters: Boolean(onMark), sourceLabel })}</span>
+        <button type="button" onClick={onLinkField} title={`Map ${humanize(linkProposal.fieldLabel)} to: ${linkProposal.targetLabels.join(', ')}`}>{onMark ? 'Also filter' : 'Link to'} {linkProposal.mappings.length === 1 ? linkProposal.targetLabels[0] : `${linkProposal.mappings.length} Datasets`} by {humanize(linkProposal.fieldLabel)}</button>
       </div> : null}
       {hasNavigation ? <button type="button" className="dataset-detail-navigation" onClick={onNavigate}>Open details <ArrowRight size={13} /></button> : null}
     </div>
   );
+}
+
+/**
+ * The click-to-filter hint on a tile (D6): "Clicking a bar filters other
+ * Orders tiles." Replaces "Keep only reaches tiles on this Dataset."
+ */
+export function crossFilterHint(input: { chart: string; filters: boolean; sourceLabel?: string }): string {
+  const mark = input.chart === 'table' || input.chart === 'pivot' ? 'row' : input.chart === 'line' || input.chart === 'area' || input.chart === 'scatter' ? 'point' : input.chart === 'pie' || input.chart === 'donut' ? 'slice' : 'bar';
+  if (!input.filters) return `Clicking this ${input.chart === 'table' ? 'table' : 'chart'} filters nothing yet.`;
+  return `Clicking a ${mark} filters other ${input.sourceLabel ? humanize(input.sourceLabel) : 'tiles on this data'}${input.sourceLabel ? ' tiles' : ''}.`;
 }
 
 function datasetCrossFilterFields(
@@ -4330,7 +5398,6 @@ function restoreOperations(current: AppStudioBuildDraft, target: AppStudioBuildD
     { type: 'set_name', name: target.name },
     { type: 'set_template', template: target.template },
     { type: 'set_frame', frame: target.frame },
-    { type: 'set_source_policy', sourcePolicy: target.sourcePolicy },
     { type: 'set_requirements', requirements: target.requirements, coverage: target.coverage },
     ...current.sources.filter((source) => !target.sources.some((item) => item.id === source.id)).map((source): AppStudioDraftOperation => ({ type: 'remove_source', sourceId: source.id })),
     ...target.sources.map((source): AppStudioDraftOperation => ({ type: 'upsert_source', source })),
@@ -4357,7 +5424,7 @@ function studioTemplatePage(
   const introId = `template-${template}-introduction`;
   const intro = {
     i: introId, x: 0, y: 0, w: 12, h: 2,
-    title: template === 'investigation' ? 'Investigation question' : 'Executive context',
+    title: template === 'investigation' ? 'Investigation question' : 'Intro',
     sectionId: 'exec_summary',
     text: { markdown: template === 'executive_brief'
       ? `# ${appName}\n\nSummarize the decision and the governed evidence that supports it.`
@@ -4429,18 +5496,14 @@ function packStudioItems(items: AppStudioBuildDraft['pages'][number]['layout']['
   });
 }
 
-function recommendedComponentKind(source: AppBlockRecommendation): 'kpi' | 'chart' | 'table' {
-  const view = normalizeViz(source.chartType);
-  if (view === 'single_value') return 'kpi';
-  if (view === 'table') return 'table';
-  return 'chart';
-}
-
-function sourceCatalogKindLabel(source: AppBlockRecommendation): string {
-  if (source.capabilities?.dataset?.kind === 'semantic') return 'Semantic Dataset';
-  if (source.capabilities?.dataset) return 'Dataset';
-  if (source.capabilities?.semanticModelId) return 'Governed semantic source';
-  return 'Block source';
+/**
+ * The App's domain as the server stored it on the draft's first page
+ * (`createStoredAppBuildDraft`). `general` is the no-domain default, so it
+ * returns undefined and lists stay unfiltered.
+ */
+export function appDraftDomain(draft: Pick<AppStudioBuildDraft, 'pages'> | null | undefined): string | undefined {
+  const domain = draft?.pages[0]?.metadata.domain?.trim();
+  return domain && domain.toLowerCase() !== 'general' ? domain : undefined;
 }
 
 const CHART_TYPE_OPTIONS: Array<[AppStudioBuildDraft['pages'][number]['layout']['items'][number]['viz']['type'], string]> = [
@@ -4473,6 +5536,12 @@ function proposalSummaryText(page: ProposedPage): { text: string; removed: numbe
   return { text: parts.length ? parts.join(', ') : 'no changes on this page', removed };
 }
 
+/** "Live · 935 rows", and "· first 500 loaded" when the tile holds only the first rows. */
+export function liveRowsLabel(rowCount: number, loaded?: number): string {
+  const base = `Live · ${rowCount.toLocaleString('en-US')} ${rowCount === 1 ? 'row' : 'rows'}`;
+  return typeof loaded === 'number' && loaded < rowCount ? `${base} · first ${loaded.toLocaleString('en-US')} loaded` : base;
+}
+
 function tileKindLabel(tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]): string {
   if (tile.viz.type === 'heading') return 'HEADING';
   if (tile.text) return 'TEXT';
@@ -4483,15 +5552,6 @@ function tileKindLabel(tile: AppStudioBuildDraft['pages'][number]['layout']['ite
 
 function componentKindLabel(kind: 'kpi' | 'chart' | 'table'): 'KPI' | 'Chart' | 'Table' {
   return kind === 'kpi' ? 'KPI' : kind === 'table' ? 'Table' : 'Chart';
-}
-
-function sourceKindLabel(kind: AppStudioBuildDraft['sources'][number]['kind']): string {
-  if (kind === 'certified_block') return 'Certified block';
-  if (kind === 'governed_semantic' || kind === 'semantic_query') return 'Governed semantic query';
-  if (kind === 'review_block') return 'Review-required block';
-  if (kind === 'review_dql') return 'Review-required DQL';
-  if (kind === 'exploratory_sql') return 'Review-required SQL';
-  return 'Page content';
 }
 
 function isPresentationOnlyOperation(operation: AppStudioDraftOperation): boolean {
@@ -4529,10 +5589,6 @@ function modifierKeyLabel(): string {
   return typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
 }
 
-function unsupportedTileFilters(tile: AppStudioBuildDraft['pages'][number]['layout']['items'][number]) {
-  return (tile.filterBindings ?? []).filter((binding) => binding.capability === 'unsupported' || Boolean(binding.unsupportedReason));
-}
-
 function templateIcon(id: StudioTemplate): JSX.Element {
   if (id === 'executive_brief') return <FileText size={18} />;
   if (id === 'operational_dashboard') return <LayoutDashboard size={18} />;
@@ -4552,4 +5608,6 @@ function normalizeViz(type?: string): 'bar' | 'line' | 'area' | 'table' | 'singl
 function createAppStudioPreviewRunScope(): string {
   return `studio_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
 }
+
+const MemoStudioTilePreview = memo(StudioTilePreview, (previous, next) => sameTilePreviewProps(previous as Record<string, unknown>, next as Record<string, unknown>));
 

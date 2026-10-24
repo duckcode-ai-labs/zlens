@@ -30,15 +30,19 @@ import {
 } from './agent-eval-runtime.js';
 import {
   CassetteStore,
+  cassetteEvidenceLine,
   cassetteEvidenceSummary,
   cassetteDirFor,
   evalCassetteCanonicalizationV2,
+  resolveCassetteModeFromEnv,
+  runtimeCassetteModeMismatch,
   withCassette,
+  type CassetteMode,
 } from './agent-eval-cassette.js';
 import type { AgentRun } from '@zlens/agent';
 import { goldRowsMatch } from './eval-row-match.js';
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { load as loadYaml } from 'js-yaml';
 import {
   AskTraceSqliteStoreV1,
@@ -675,11 +679,14 @@ function printCanonicalCliAskRun(run: AgentThreadRun, threadId?: string): void {
     ? '✓ Certified'
     : run.trustState === 'grounded'
       ? '✓ Verified (grounded)'
-      : run.trustState === 'review_required'
-        ? '! AI-generated · review required'
-        : run.trustState === 'blocked'
-          ? '✕ Blocked'
-          : '· Reply';
+      : run.trustState === 'governed'
+        // The Ask page's "Answer from Metrics": built from Metrics, not certified.
+        ? '· From Metrics'
+        : run.trustState === 'review_required'
+          ? '! AI-generated · review required'
+          : run.trustState === 'blocked'
+            ? '✕ Blocked'
+            : '· Reply';
   console.log(`${badge}\n\n${(run.answer ?? run.summary ?? '').trim()}`);
   if (run.reviewDraft?.path) {
     // Tier 2: the review-required answer was saved as a draft (never certified).
@@ -868,6 +875,9 @@ async function runReindex(rest: string[], flags: CLIFlags): Promise<void> {
   console.log(`  ✓ ${kgStatus}; ${catalogStatus} — ${stats.nodes} nodes, ${stats.edges} edges, ${stats.skills} skill(s).`);
   if (embeddings.upgraded) {
     console.log(`  ✓ Semantic retrieval re-embedded with local Ollama (${embeddings.model}).`);
+  } else if (embeddings.reason === 'not_chosen') {
+    const local = (embeddings as { localModel?: string }).localModel;
+    console.log(`  · Search: word-based.${local ? ` Local Ollama embeddings (${local}) are available on this computer:` : ''} Turn on local embeddings in Settings → AI provider → Search for meaning-based search.`);
   } else if (embeddings.reason === 'no_local_model') {
     console.log('  · Embeddings: token-hash fallback (lexical only). Install Ollama and pull an embedding'
       + ' model such as nomic-embed-text, then rerun, for meaning-based retrieval.');
@@ -1097,21 +1107,20 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
   const execute = Boolean((flags as { execute?: boolean }).execute);
   // R3.2: optional LLM-as-judge. Uses the same provider's completion; skipped
   // gracefully when no provider is available so offline eval stays deterministic.
-  const judge = Boolean((flags as { judge?: boolean }).judge);
+  const judge = Boolean(flags.judge);
   const judgeComplete: JudgeCompletion = async ({ system, user }) =>
     provider.generate([{ role: 'system', content: system }, { role: 'user', content: user }], {});
   // Which half of the stack is under test. `loop` preserves today's behaviour;
   // `runtime` is the one that exercises routing and gates end to end.
   // The in-process answer-loop driver is gone with the V1 runtime; every case
   // runs through a live server so it exercises routing, the lane, and the gates.
+  // `parseArgs` rejects any other --via value.
   const via = 'runtime' as const;
-  if ((flags as { via?: string }).via && (flags as { via?: string }).via !== 'runtime') {
-    throw new Error(`--via ${(flags as { via?: string }).via} is no longer supported; the eval drives a running server (--via runtime).`);
-  }
   const runtimeBase = (flags as { runtimeUrl?: string; runtime?: string }).runtimeUrl
     ?? (flags as { runtime?: string }).runtime
     ?? readEnv('ZLENS_RUNTIME_URL')
     ?? 'http://127.0.0.1:3474';
+  let runtimeCassetteMode: string | undefined;
   if (via === 'runtime') {
     // Fail fast and loudly. Without this, an unreachable server turns every case
     // into a transport error and the report reads as a false-refusal spike that
@@ -1122,6 +1131,15 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
         `--via runtime needs a running ZLens workbench at ${runtimeBase}. Start one with \`zlens notebook ${projectRoot}\` (\`npm run notebook\`), or point --runtime-url / ZLENS_RUNTIME_URL at a running one.`,
       );
     }
+    const health = await probe.json().catch(() => ({})) as { evalCassetteMode?: string };
+    runtimeCassetteMode = health.evalCassetteMode;
+    const mismatch = runtimeCassetteModeMismatch({
+      requested: cassetteMode,
+      reported: runtimeCassetteMode,
+      runtimeBase,
+      cassetteDir: relative(projectRoot, cassetteDirFor(projectRoot, rest[0] ?? 'agent-evals')),
+    });
+    if (mismatch) throw new Error(mismatch);
   }
   const semanticLayer = loadAgentSemanticLayer(projectRoot);
   const expandGroundingContext = createGroundingContextExpander(projectRoot);
@@ -1266,8 +1284,16 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
     : cassetteMode === 'record' || cassetteMode === 'replay'
       ? cassetteDirFor(projectRoot, rest[0] ?? 'agent-evals')
       : undefined;
+  // The runtime reads its mode from the same environment (replay unless
+  // ZLENS_EVAL_CASSETTE_MODE says record or live).
+  const reportedCassetteMode = runtimeCassetteMode === 'record' || runtimeCassetteMode === 'replay' || runtimeCassetteMode === 'live'
+    ? runtimeCassetteMode
+    : undefined;
+  const cassetteRunMode: CassetteMode = via === 'runtime'
+    ? reportedCassetteMode ?? resolveCassetteModeFromEnv(process.env)
+    : cassetteMode === 'record' ? 'record' : 'replay';
   const cassetteEvidence = cassetteDirectory
-    ? cassetteEvidenceSummary(new CassetteStore(cassetteDirectory))
+    ? { ...cassetteEvidenceSummary(new CassetteStore(cassetteDirectory)), mode: cassetteRunMode }
     : undefined;
   const thresholds = {
     minToolRequirement: (flags as { minToolRequirement?: number }).minToolRequirement ?? null,
@@ -1309,9 +1335,7 @@ async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
       + `(${cassetteEvidence.migratedLegacyDeterministicFixtureEntries} migrated legacy deterministic fixture, `
       + `${cassetteEvidence.syntheticDeterministicOrchestrationFixtureEntries} synthetic deterministic orchestration fixture).`,
     );
-    console.log(cassetteEvidence.realProviderQualityEligible
-      ? 'Real-provider quality evidence: eligible.'
-      : `Real-provider quality evidence: excluded (${cassetteEvidence.realProviderQualityExclusionReasons.join(', ')}).`);
+    console.log(cassetteEvidenceLine(cassetteEvidence, cassetteEvidence.mode));
   }
   console.log(`False refusal rate: ${formatRate(metrics.false_refusal_rate)} (${metrics.false_refusal_count}/${metrics.answerable_case_count} answerable cases refused)`);
   console.log(`Clarification rate: ${formatRate(metrics.clarification_rate)} (answerable cases asked instead of answered)`);

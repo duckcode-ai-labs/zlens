@@ -54,7 +54,7 @@ const BLOCK_FIELDS = [
   'domain', 'type', 'status', 'description', 'owner', 'tags',
   'terms',
   'llmContext', 'businessOutcome', 'businessOwner', 'decisionUse',
-  'reviewCadence', 'businessRules', 'caveats', 'datalex_contract',
+  'reviewCadence', 'businessRules', 'caveats', 'synonyms', 'primaryTerms', 'datalex_contract',
   'metric', 'metrics', 'dimensions', 'params', 'query', 'visualization', 'tests',
 ];
 
@@ -352,7 +352,7 @@ function isInsideBusinessViewIncludes(text: string): boolean {
 
 function blockFieldInsertText(field: string): string {
   if (field === 'params' || field === 'visualization' || field === 'tests') return `${field} {\n  \n}`;
-  if (field === 'tags' || field === 'terms' || field === 'metrics' || field === 'dimensions' || field === 'businessRules' || field === 'caveats') return `${field} = []`;
+  if (field === 'tags' || field === 'terms' || field === 'metrics' || field === 'dimensions' || field === 'businessRules' || field === 'caveats' || field === 'synonyms' || field === 'primaryTerms') return `${field} = []`;
   if (field === 'query') return 'query = """\n  SELECT 1\n"""';
   return `${field} = ""`;
 }

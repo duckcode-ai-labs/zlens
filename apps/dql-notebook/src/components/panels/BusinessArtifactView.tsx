@@ -119,8 +119,8 @@ export function BusinessArtifactView() {
             </h1>
             <div style={{ marginTop: 7, color: t.textMuted, fontSize: 13 }}>
               {file.type === 'term'
-                ? 'Business definition used by blocks, views, dashboards, and AI agents.'
-                : 'Business composition built from trusted terms, DQL blocks, and other business views.'}
+                ? 'Business definition used by saved queries, views, dashboards, and AI agents.'
+                : 'Business composition built from trusted terms, saved queries, and other business views.'}
             </div>
           </div>
         </div>

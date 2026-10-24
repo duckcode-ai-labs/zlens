@@ -7,12 +7,14 @@ import type { AgentProvider, AgentToolDefinition } from '@zlens/agent';
 import {
   CassetteMissError,
   CassetteStore,
+  cassetteEvidenceLine,
   cassetteEvidenceSummary,
   cassetteFingerprint,
   cassetteDirFor,
   cassetteKey,
   evalCassetteCanonicalizationV2,
   resolveCassetteModeFromEnv,
+  runtimeCassetteModeMismatch,
   withCassette,
 } from './agent-eval-cassette.js';
 
@@ -393,6 +395,47 @@ describe('withCassette', () => {
       realProviderQualityEligible: false,
       realProviderQualityExclusionReasons: ['synthetic_deterministic_orchestration_fixture'],
     });
+  });
+
+  it('never reports real-provider evidence for a run where every call was replayed', () => {
+    const recorded = {
+      totalEntries: 3,
+      recordedProviderEntries: 3,
+      migratedLegacyDeterministicFixtureEntries: 0,
+      syntheticDeterministicOrchestrationFixtureEntries: 0,
+      unknownProvenanceEntries: 0,
+      orchestrationReplayEligible: true,
+      realProviderQualityEligible: true,
+      realProviderQualityExclusionReasons: [],
+    };
+    expect(cassetteEvidenceLine(recorded, 'replay')).toBe(
+      'Real-provider quality evidence: none from this run — every provider call was replayed from 3 recorded response(s); no provider was called.',
+    );
+    expect(cassetteEvidenceLine(recorded, 'replay')).not.toContain('eligible');
+    expect(cassetteEvidenceLine(recorded, 'record')).toBe('Real-provider quality evidence: eligible.');
+    expect(cassetteEvidenceLine(
+      { ...recorded, realProviderQualityEligible: false, realProviderQualityExclusionReasons: ['no_cassette_entries'] },
+      'record',
+    )).toBe('Real-provider quality evidence: excluded (no_cassette_entries).');
+  });
+
+  it('stops --cassette when the workbench it drives is not in that mode', () => {
+    const base = { runtimeBase: 'http://127.0.0.1:3474', cassetteDir: 'test-cassettes/agent-evals' };
+    expect(runtimeCassetteModeMismatch({ ...base, requested: undefined, reported: 'off' })).toBeUndefined();
+    expect(runtimeCassetteModeMismatch({ ...base, requested: 'replay', reported: 'replay' })).toBeUndefined();
+    expect(runtimeCassetteModeMismatch({ ...base, requested: 'live', reported: 'off' })).toBeUndefined();
+
+    // A normally started workbench would make live provider calls while the
+    // report claimed cassette replay.
+    expect(runtimeCassetteModeMismatch({ ...base, requested: 'replay', reported: 'off' })).toBe(
+      '--cassette replay needs the workbench to run in replay mode, but the workbench at http://127.0.0.1:3474 runs with cassette mode "off". '
+      + 'The workbench makes the provider calls, so the flag alone cannot change them. '
+      + 'Start it with `ZLENS_EVAL_CASSETTE_DIR=test-cassettes/agent-evals ZLENS_EVAL_CASSETTE_MODE=replay zlens notebook . --no-open`, then run the eval again.',
+    );
+    expect(runtimeCassetteModeMismatch({ ...base, requested: 'record', reported: undefined }))
+      .toContain('does not report its cassette mode (it predates this check)');
+    expect(runtimeCassetteModeMismatch({ ...base, requested: 'live', reported: 'replay' }))
+      .toContain('Start it without ZLENS_EVAL_CASSETTE_DIR');
   });
 
   it('derives a readable cassette directory per suite', () => {

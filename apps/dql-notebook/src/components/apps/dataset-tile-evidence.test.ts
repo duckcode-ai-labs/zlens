@@ -152,11 +152,19 @@ describe('dataset tile notices shared by Studio and the viewer', () => {
       },
     } as never);
     expect(notices.map((notice) => [notice.kind, notice.label])).toEqual([
-      ['excluded', 'Excluded from region'],
-      ['not_linked', 'Not filtered by sales channel'],
+      ['excluded', 'Not filtered by Region'],
+      ['not_linked', 'Not filtered by Sales Channel'],
       ['adapted', 'Rolled up over time'],
     ]);
     expect(notices[2]?.detail).toContain('day grain to month');
+  });
+
+  it('says a tile rolled up a saved query\'s certified result (design D1)', () => {
+    const notices = datasetTileNotices({
+      tileId: 't1', status: 'ok', tileType: 'dataset',
+      dataset: { unboundFilters: [], validation: { outcome: 'adapted', adaptations: [{ kind: 'saved_query_rollup', message: 'Rolled up from the certified result of monthly_revenue.' }] } },
+    } as never);
+    expect(notices).toEqual([{ key: 'adaptation:saved_query_rollup', kind: 'adapted', label: 'Rolled up from a saved query', detail: 'Rolled up from the certified result of monthly_revenue.' }]);
   });
 
   it('says nothing for a covered tile with every filter applied', () => {

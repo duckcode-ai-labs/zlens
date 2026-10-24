@@ -1,4 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { changedFilterIds as changedFilterIdsOf, filterChangeRerunTileIds, withUnrunTileFilterNotices } from './reader-filter-rerun';
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from 'react';
 import { useHostUi } from '../../host/host-ui';
 import { EXPORT_LABELS, exportAppTile, type ExportFormat } from '../../api/exports';
@@ -36,7 +37,10 @@ import {
 } from './dashboard-tile-model';
 import { autoLayoutDashboardItems, autoLayoutRank, layoutScore, packDashboardItems, reorderTileForDrop } from './dashboard-layout';
 import { READER_TRUST_LABELS, readerTileFreshness, readerTileReceipt, readerTileTrust, readerTrustCounts } from './reader-trust';
+import { pageShowsSummary } from './reader-page-structure';
+import { formatBusinessLabel } from './app-text';
 import { appTrustSummary, type AppTrustSummary, type ReaderTrustItem, type ReaderTrustTile } from '@zlens/core/apps/reader-trust';
+import { dashboardTileFilterChoice, isDashboardNarrativeTile } from '@zlens/core/apps/filter-reach';
 import { plainDescription, ReaderTrustBadge, TrustLensBar } from './ReaderTrust';
 import { DriverPanel, DriverView } from './DriverView';
 import { StoryView, storyEditionSummary } from './StoryView';
@@ -95,7 +99,12 @@ import { datasetTileVisualizationCompatibility } from '@zlens/core/apps/tile-que
 import { pivotLayout } from '@zlens/core/apps/pivot';
 import { encodingFromQuery } from '@zlens/core/apps/viz-encoding';
 import { PivotTable } from './PivotTable';
+import { dashboardPageRevision, dashboardRunKey, shouldRerunStaleDashboardRun } from './dashboard-run-key';
 import { KpiCard, usesKpiCard } from './KpiCard';
+import { plainSourceText } from './source-names';
+import { dataSourceCountWords, describeDashboardFilterValues, formatDashboardFilterValue, runDataSourceCount } from './dashboard-filter-words';
+import { BarCapNote } from './builder/BarCapNote';
+import { barCategoryCap, withBarCategoryLimit } from './builder/sort-top-n';
 
 const UnifiedAgentRunPanel = lazy(() => import('../agent/UnifiedAgentRunPanel')
   .then((module) => ({ default: module.UnifiedAgentRunPanel })));
@@ -122,7 +131,7 @@ export function datasetTileVisualizationDisplayError(item: DashboardLayoutItem):
   const visualization = datasetTileVisualizationCompatibility(item.query, item.viz.type);
   return visualization.compatible
     ? undefined
-    : `${visualization.message} Open App Studio and switch to Table or change the Dataset field selection.`;
+    : `${visualization.message} Open App Studio and switch to Table or change the field selection.`;
 }
 
 /**
@@ -201,6 +210,7 @@ export function DashboardRenderer({
   onBlockFocus,
   onAskBlock,
   onAskChart,
+  onSettledRunProvider,
   onOpenLineageNode,
   copilotOpen,
   onCopilotChange,
@@ -225,6 +235,12 @@ export function DashboardRenderer({
   onAskBlock?: (blockId: string, question: string) => void;
   /** A Dataset chart question carries only the server-issued settled run id. */
   onAskChart?: (input: { tileId: string; runId: string; question: string }) => void;
+  /**
+   * Hands the parent a way to get a whole-page run before asking: after a
+   * filter change re-ran only the linked tiles (round 3), Ask needs the
+   * page's complete results.
+   */
+  onSettledRunProvider?: (ensure: () => Promise<DashboardRunResponse | null>) => void;
   onOpenLineageNode?: (nodeId: string) => void;
   copilotOpen?: boolean;
   onCopilotChange?: (open: boolean) => void;
@@ -276,6 +292,12 @@ export function DashboardRenderer({
   const visibleTileIdsRef = useRef<string[]>([]);
   const pendingAffectedTileIdsRef = useRef<string[] | null>(null);
   const latestSettledRunRef = useRef<DashboardRunResponse | null>(null);
+  // A run reads the newest page and callback through refs, so a re-fetched copy
+  // of the same page (a new object, same content) never starts a run (B1).
+  const dashboardRef = useRef(dashboard);
+  dashboardRef.current = dashboard;
+  const onRunChangeRef = useRef(onRunChange);
+  onRunChangeRef.current = onRunChange;
   const [error, setError] = useState<string | null>(null);
   const [chatOpen, setChatOpen] = useState(false);
   // Server-persisted conversation thread, keyed per app dashboard so a page
@@ -378,9 +400,11 @@ export function DashboardRenderer({
     () => (storySections ? activeLayout.items : null),
     [activeLayout.items, storySections],
   );
+  // The auto-written Summary is off unless the page's author added it (D6).
+  const summaryAdded = pageShowsSummary(dashboard.metadata);
   const dashboardStory = useMemo(
-    () => (editable || storySections || run?.partial || run?.incomplete ? null : buildDashboardStory(visibleItems, tileResults, runVariables)),
-    [editable, run?.incomplete, run?.partial, runVariables, storySections, tileResults, visibleItems],
+    () => (editable || !summaryAdded || storySections || run?.partial || run?.incomplete ? null : buildDashboardStory(visibleItems, tileResults, runVariables, dashboard.filters)),
+    [dashboard.filters, editable, summaryAdded, run?.incomplete, run?.partial, runVariables, storySections, tileResults, visibleItems],
   );
   useEffect(() => {
     if (editable) return;
@@ -514,7 +538,7 @@ export function DashboardRenderer({
           selected={Boolean(getDashboardItemBlockId(item) && getDashboardItemBlockId(item) === selectedBlockId)}
           onFocusBlock={onBlockFocus}
           onAskBlock={onAskBlock}
-          onAskChart={onAskChart}
+          onAskChart={askChart}
           runId={run?.runId}
           reader={readerContext}
           onExplainChange={editable ? undefined : explainChange}
@@ -528,6 +552,7 @@ export function DashboardRenderer({
           onOpenNotebook={(nextTile) => void openTileInNotebook(item, nextTile)}
           activeVariables={runVariables}
           viewerFilterIds={viewerFilterIds}
+          filterLabels={dashboardFilterLabels(dashboard)}
           onExport={tileExport?.(item.i)}
           crossFilterFields={datasetCrossFilterFields(dashboard, item)}
           onSelectDatasetMark={(field, values) => applyDatasetMark(item, field, values)}
@@ -568,8 +593,11 @@ export function DashboardRenderer({
     nextVariables: Record<string, unknown>,
     nextCrossFilters: DashboardDatasetCrossFilter[],
     nextHierarchyDrills: DashboardDatasetHierarchyDrill[],
-    schedule?: { tileId?: string; affectedTileIds?: string[] },
+    schedule?: { tileId?: string; affectedTileIds?: string[]; changedFilterIds?: string[]; keepVisible?: boolean },
+    staleAttempt = 0,
   ): Promise<DashboardRunResponse | null> => {
+    const onRunChange = onRunChangeRef.current;
+    const layoutItems = dashboardRef.current.layout.items;
     const requestId = runRequestRef.current + 1;
     runRequestRef.current = requestId;
     const isCurrent = () => runRequestRef.current === requestId;
@@ -583,7 +611,7 @@ export function DashboardRenderer({
     // An affected-only refresh keeps unaffected tiles only when the authored
     // mapping says their inputs cannot change; the visible status marks the
     // mapped tiles stale until their server result settles.
-    if (!boundedRefresh || !priorRun) {
+    if ((!boundedRefresh && !schedule?.keepVisible) || !priorRun) {
       setRun(null);
       onRunChange?.(null);
     } else {
@@ -597,19 +625,38 @@ export function DashboardRenderer({
     try {
       const result = await api.runDashboard(appId, dashboard.id, nextVariables, nextCrossFilters, {
         runScope: runScopeRef.current,
+        // The server orders this viewer's requests by this number, not by when
+        // they arrive, so an older request can never cancel a newer one.
+        runSequence: requestId,
         ...(schedule?.tileId ? { tileId: schedule.tileId } : {}),
         // A bounded run never earns the page story, even when its set happens
         // to name every tile, so only send the bound when a tile is hidden.
         ...(schedule?.affectedTileIds?.length
           ? { affectedTileIds: schedule.affectedTileIds }
-          : visibleTileIdsRef.current.length < dashboard.layout.items.length ? { visibleTileIds: visibleTileIdsRef.current } : {}),
+          : visibleTileIdsRef.current.length < layoutItems.length ? { visibleTileIds: visibleTileIdsRef.current } : {}),
         ...(nextHierarchyDrills.length ? { datasetDrills: nextHierarchyDrills } : {}),
         ...viewerFilterOption(),
       });
       if (!isCurrent()) return null;
-      const accepted = result?.partial && boundedRefresh && priorRun
-        ? mergePartialDashboardRun(priorRun, result, dashboard.layout.items)
+      // A reader has no Run button. If the newest run went stale (a newer
+      // interaction or a project change overtook it), run it again rather
+      // than leave "superseded" on the page.
+      if (shouldRerunStaleDashboardRun(result, staleAttempt)) {
+        return runLatest(nextVariables, nextCrossFilters, nextHierarchyDrills, schedule, staleAttempt + 1);
+      }
+      const merged = result?.partial && boundedRefresh && priorRun
+        ? mergePartialDashboardRun(priorRun, result, layoutItems)
         : result;
+      // Tiles a filter change did not run again say what the new values mean for them.
+      const accepted = merged && merged !== result && schedule?.changedFilterIds?.length
+        ? withUnrunTileFilterNotices({
+          run: merged,
+          page: dashboardRef.current,
+          changedFilterIds: schedule.changedFilterIds,
+          values: nextVariables,
+          executedTileIds: result!.executedTileIds ?? result!.tiles.map((entry) => entry.tileId),
+        })
+        : merged;
       setRun(accepted);
       if (accepted) latestSettledRunRef.current = accepted;
       if (result) {
@@ -642,13 +689,76 @@ export function DashboardRenderer({
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  }, [appId, dashboard.id, dashboard.layout.items, onRunChange]);
+  }, [appId, dashboard.id]);
 
+  // B1: the page runs when what a run reads changes — the page's content and
+  // the effective filter values — never because a parent handed over a new
+  // object with the same content.
+  const pageRevision = useMemo(() => dashboardPageRevision(dashboard), [dashboard]);
+  const autoRunKey = useMemo(() => dashboardRunKey({
+    appId,
+    page: dashboard,
+    pageRevision,
+    variables: runVariables,
+    viewerFilters: runViewerFilters,
+    crossFilters: effectiveCrossFilters,
+    hierarchyDrills: effectiveHierarchyDrills,
+    persona: state.activePersona?.userId ?? null,
+  // `dashboard` is read for its filter defaults, which pageRevision already covers.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [appId, effectiveCrossFilters, effectiveHierarchyDrills, pageRevision, runVariables, runViewerFilters, state.activePersona?.userId]);
+  const autoRunInputsRef = useRef({ runVariables, effectiveCrossFilters, effectiveHierarchyDrills });
+  autoRunInputsRef.current = { runVariables, effectiveCrossFilters, effectiveHierarchyDrills };
+
+  /**
+   * The page's complete results: the current run when it is whole, else one
+   * whole-page run that keeps every tile on screen while it runs.
+   */
+  const ensureSettledRun = useCallback(async (): Promise<DashboardRunResponse | null> => {
+    const current = latestSettledRunRef.current;
+    if (current && !current.partial && !current.stale) return current;
+    const inputs = autoRunInputsRef.current;
+    return runLatest(inputs.runVariables, inputs.effectiveCrossFilters, inputs.effectiveHierarchyDrills, { keepVisible: true });
+  }, [runLatest]);
+  useEffect(() => { onSettledRunProvider?.(ensureSettledRun); }, [ensureSettledRun, onSettledRunProvider]);
+  // A chart question reads the chart's settled result: after a partial re-run, the whole page runs first.
+  const askChart = onAskChart ? (input: { tileId: string; runId: string; question: string }) => {
+    if (!latestSettledRunRef.current?.partial) { onAskChart(input); return; }
+    void ensureSettledRun().then((full) => { if (full?.runId) onAskChart({ ...input, runId: full.runId }); });
+  } : undefined;
+
+  // What the last automatic run read, so a reader's filter change can re-run
+  // only the tiles linked to the filters that changed (round 3), as App Studio does.
+  const lastAutoRunRef = useRef<{ appId: string; pageRevision: string; variables: Record<string, unknown>; others: string } | null>(null);
   useEffect(() => {
-    const affectedTileIds = pendingAffectedTileIdsRef.current;
+    let affectedTileIds = pendingAffectedTileIdsRef.current;
     pendingAffectedTileIdsRef.current = null;
-    void runLatest(runVariables, effectiveCrossFilters, effectiveHierarchyDrills, affectedTileIds?.length ? { affectedTileIds } : undefined);
-  }, [dashboard.layout.items.length, effectiveCrossFilters, effectiveHierarchyDrills, runLatest, runVariables, runViewerFilters, state.activePersona?.userId]);
+    const inputs = autoRunInputsRef.current;
+    const others = JSON.stringify([crossFiltersKey, hierarchyDrillsKey, viewerFiltersKey, state.activePersona?.userId ?? null]);
+    const previous = lastAutoRunRef.current;
+    lastAutoRunRef.current = { appId, pageRevision, variables: inputs.runVariables, others };
+    let changedFilterIds: string[] | undefined;
+    const settled = latestSettledRunRef.current;
+    if (!affectedTileIds?.length && previous && previous.appId === appId && previous.pageRevision === pageRevision && previous.others === others
+      && settled && !settled.stale && !settled.incomplete
+      && !inputs.effectiveCrossFilters.length && !inputs.effectiveHierarchyDrills.length
+      // A page with a Summary runs whole: the Summary is written from every tile.
+      && !pageShowsSummary(dashboardRef.current.metadata)) {
+      const linked = filterChangeRerunTileIds(dashboardRef.current, previous.variables, inputs.runVariables);
+      if (linked) {
+        affectedTileIds = linked;
+        changedFilterIds = changedFilterIdsOf(previous.variables, inputs.runVariables);
+      }
+    }
+    void runLatest(
+      inputs.runVariables,
+      inputs.effectiveCrossFilters,
+      inputs.effectiveHierarchyDrills,
+      affectedTileIds?.length ? { affectedTileIds, ...(changedFilterIds ? { changedFilterIds } : {}) } : undefined,
+    );
+  // The key covers every input; the refs read their newest values.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoRunKey, runLatest]);
 
   useEffect(() => {
     const rerun = () => {
@@ -950,7 +1060,7 @@ export function DashboardRenderer({
 
   const clearDatasetMarks = useCallback(() => {
     if (activeCrossFilters.length === 0) return;
-    setCrossFilterNotice('Selected result marks cleared. Refreshing mapped Dataset tiles…');
+    setCrossFilterNotice('Selected result marks cleared. Refreshing linked tiles…');
     setActiveHierarchyDrills([]);
     // With every selection cleared the whole page runs again, so its summary returns.
     setActiveCrossFilters(() => {
@@ -966,7 +1076,7 @@ export function DashboardRenderer({
       pendingAffectedTileIdsRef.current = next.length ? datasetAffectedTileIds(dashboard, current) : null;
       return next;
     });
-    setCrossFilterNotice(`${field} result mark cleared. Refreshing mapped Dataset tiles…`);
+    setCrossFilterNotice(`${field} result mark cleared. Refreshing linked tiles…`);
   }, [dashboard]);
 
   const applyDatasetHierarchyDrill = useCallback((
@@ -1026,7 +1136,7 @@ export function DashboardRenderer({
     drillDown: (item, candidate, row) => applyDatasetHierarchyDrill(item, candidate, row),
     hasDetailsPage: (tileId) => Boolean(dashboard.interactions?.navigate?.some((candidate) => candidate.fromTile === tileId)),
     openDetailsPage: (tileId) => void navigateFromDatasetTile(tileId),
-    ...(onAskChart && run?.runId ? { ask: (item: DashboardLayoutItem, question: string) => onAskChart({ tileId: item.i, runId: run.runId, question }) } : {}),
+    ...(askChart && run?.runId ? { ask: (item: DashboardLayoutItem, question: string) => askChart({ tileId: item.i, runId: run.runId, question }) } : {}),
     ...(dashboard.interactions?.detail?.columns?.length ? { authoredColumns: dashboard.interactions.detail.columns } : {}),
     label: formatGenUiLabel,
   });
@@ -1113,7 +1223,7 @@ export function DashboardRenderer({
           <ShieldCheck size={13} />
           {hiddenReviewTileCount + hiddenPresentationTileCount} tile
           {hiddenReviewTileCount + hiddenPresentationTileCount === 1 ? ' is' : 's are'} hidden from this
-          stakeholder view because {hiddenReviewTileCount > 0 ? 'they still need review' : 'a certified tile already answers the same question'}. Switch to Edit to see everything on this page.
+          stakeholder view because {hiddenReviewTileCount > 0 ? 'they are not certified yet' : 'a certified tile already answers the same question'}. Switch to Edit to see everything on this page.
         </div>
       ) : null}
       {(!embeddedHeader || editable) && (
@@ -1195,7 +1305,7 @@ export function DashboardRenderer({
         )}
       </div>
       )}
-      {editable && <div style={dashboardEditHintStyle}>{editableCanvas ? 'Drag tiles, select a block for Copilot context, or use the tile controls for sizing and chart settings.' : `${breakpoint === 'medium' ? 'Tablet' : 'Mobile'} preview uses the saved responsive projection. Return to a wide canvas to rearrange tiles.`}</div>}
+      {editable && <div style={dashboardEditHintStyle}>{editableCanvas ? 'Drag tiles, select a saved query for Copilot context, or use the tile controls for sizing and chart settings.' : `${breakpoint === 'medium' ? 'Tablet' : 'Mobile'} preview uses the saved responsive projection. Return to a wide canvas to rearrange tiles.`}</div>}
 
       {activeCrossFilters.length > 0 ? (
         <div
@@ -1211,7 +1321,7 @@ export function DashboardRenderer({
               title="Remove this result-mark filter"
               style={{ ...generatedMetaPillStyle, cursor: 'pointer' }}
             >
-              <Filter size={10} /> {formatGenUiLabel(filter.field)}: {filter.exclude ? 'not ' : ''}{filter.values.map((value) => String(value)).join(', ')} <X size={10} />
+              <Filter size={10} /> {formatGenUiLabel(filter.field)}: {filter.exclude ? 'not ' : ''}{filter.values.map((value) => formatDashboardFilterValue(value) ?? '(blank)').join(', ')} <X size={10} />
             </button>
           ))}
           <button type="button" onClick={clearDatasetMarks} style={toolbarButtonStyle(false)}>Reset marks</button>
@@ -1265,7 +1375,7 @@ export function DashboardRenderer({
         </div>
       ) : null}
 
-      {storyNarrative || canvasPage ? null : !editable && businessStory ? (
+      {storyNarrative || canvasPage || !summaryAdded ? null : !editable && businessStory ? (
         <BusinessStoryPanel story={businessStory} onResearch={openCopilot} onEvidence={openLineage} />
       ) : dashboardStory ? <DashboardStoryStrip story={dashboardStory} /> : null}
 
@@ -1289,10 +1399,10 @@ export function DashboardRenderer({
           </div>
           <div style={{ maxWidth: 520, opacity: 0.68, lineHeight: 1.45 }}>
             {hiddenReviewTileCount > 0
-              ? 'Generated analysis and trust placeholders are hidden from the stakeholder view. Open Customize or Analysis to review them, then add certified blocks or pinned insights.'
+              ? 'Generated analysis and trust placeholders are hidden from the stakeholder view. Open Customize or Analysis to review them, then add certified saved queries or pinned insights.'
               : hiddenPresentationTileCount > 0
                 ? 'Static duplicate tiles are hidden from the stakeholder view because a filter-aware certified tile can answer the same question.'
-              : 'Add certified domain blocks, narrative text, or use the scoped AI drawer and pin an answer into this layout.'}
+              : 'Add certified saved queries from this domain, narrative text, or use the scoped AI drawer and pin an answer into this layout.'}
           </div>
           <div style={{ marginTop: 18, display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
             <AddTileMenu
@@ -1372,7 +1482,7 @@ export function DashboardRenderer({
                       <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: 'var(--dql-app-text, #0f172a)' }}>{section.title}</h3>
                       {isAppendix ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, border: '1px solid rgba(217,119,6,0.4)', color: '#b45309', background: 'rgba(217,119,6,0.08)', borderRadius: 999, padding: '1px 8px', fontSize: 11, fontWeight: 600 }}>
-                          needs review
+                          not certified yet
                         </span>
                       ) : null}
                     </div>
@@ -1404,7 +1514,7 @@ export function DashboardRenderer({
                       selected={Boolean(getDashboardItemBlockId(item) && getDashboardItemBlockId(item) === selectedBlockId)}
                       onFocusBlock={onBlockFocus}
                       onAskBlock={onAskBlock}
-                      onAskChart={onAskChart}
+                      onAskChart={askChart}
                       runId={run?.runId}
                       reader={readerContext}
                       onExplainChange={editable ? undefined : explainChange}
@@ -1418,6 +1528,7 @@ export function DashboardRenderer({
                       onOpenNotebook={(nextTile) => void openTileInNotebook(item, nextTile)}
                       activeVariables={runVariables}
                       viewerFilterIds={viewerFilterIds}
+                      filterLabels={dashboardFilterLabels(dashboard)}
                       onExport={tileExport?.(item.i)}
                       crossFilterFields={datasetCrossFilterFields(dashboard, item)}
                       onSelectDatasetMark={(field, values) => applyDatasetMark(item, field, values)}
@@ -1461,7 +1572,7 @@ export function DashboardRenderer({
           {visibleItems.map((item) => renderGridTile(item))}
         </div>
       )}
-      {!editable && run ? <ReviewAppendix run={run} variables={runVariables} /> : null}
+      {!editable && run ? <ReviewAppendix run={run} variables={runVariables} filters={dashboard.filters} ranAtMs={Object.values(tileRanAt).reduce<number | undefined>((latest, at) => (latest === undefined || at > latest ? at : latest), undefined)} /> : null}
       </div>
 
       {lineageOpen && !onOpenLineageNode && (
@@ -1524,10 +1635,13 @@ export function DashboardRenderer({
 }
 
 /**
- * Dataset field tiles receive their actual page-filter scope from the server
- * runtime. Legacy block bindings are not a valid fallback for them: a v3
- * Dataset tile deliberately keeps its filter mapping on the page's exact
- * `datasetBindings`, not on `item.filterBindings`.
+ * The "Not filtered by …" pill for one tile.
+ *
+ * Once a run exists, every tile type uses the server's own word: Dataset
+ * tiles their `dataset.unboundFilters`, every other tile its `filterReport`
+ * (which page filters actually applied and which did not, with why). Before a
+ * run, the page document's choices stand in. Text and heading tiles never show
+ * filter pills.
  */
 export function dashboardTileFilterNotices(input: {
   item: DashboardLayoutItem;
@@ -1535,37 +1649,54 @@ export function dashboardTileFilterNotices(input: {
   activeVariables?: Record<string, unknown>;
   /** The viewer's own session filters; whether they reached a tile is the server's word, not the document's. */
   viewerFilterIds?: string[];
+  /** Page filter labels by id; a pill names the filter the reader sees. */
+  filterLabels?: Record<string, string>;
 }) {
+  // The reader sees "Customer Name", never the column id customer_name (Codex F05).
+  const label = (filterId: string) => input.filterLabels?.[filterId] ?? formatBusinessLabel(filterId);
+  if (isDashboardNarrativeTile(input.item)) return { unfilteredNotice: null, datasetUnboundNotices: [] };
   const datasetUnboundNotices = input.tile?.dataset?.unboundFilters ?? [];
   // A viewer filter is never in the page document, so only the server's
   // applied list says whether it narrowed this tile — for every tile kind.
   const viewerIds = new Set(input.viewerFilterIds ?? []);
   const serverApplied = new Set((input.tile?.filters?.applied ?? []).map((entry) => entry.filter));
   const viewerIgnored = input.tile?.status === 'ok' && input.tile.tileType !== 'text'
-    ? [...viewerIds].filter((filterId) => !serverApplied.has(filterId))
+    ? [...viewerIds].filter((filterId) => !serverApplied.has(filterId)).map(label)
     : [];
   // Driver tiles run Dataset comparisons with the same page filters.
   if (input.item.query || input.item.driver) {
     return { unfilteredNotice: tileUnfilteredNotice(viewerIgnored), datasetUnboundNotices };
   }
+  const report = input.tile?.filterReport;
+  if (report) {
+    const declared = report.notApplied.filter((entry) => !viewerIds.has(entry.filter));
+    return {
+      unfilteredNotice: tileUnfilteredNotice(
+        [...declared.map((entry) => label(entry.filter)), ...viewerIgnored],
+        declared.length ? declared.map((entry) => `${label(entry.filter)}: ${plainSourceText(entry.reason)}`).join(' ') : undefined,
+      ),
+      datasetUnboundNotices,
+    };
+  }
   const active = Object.entries(input.activeVariables ?? {})
     .filter(([key, value]) => !viewerIds.has(key) && value !== undefined && value !== null && value !== '')
     .map(([key]) => key);
   if (active.length === 0) return { unfilteredNotice: tileUnfilteredNotice(viewerIgnored), datasetUnboundNotices };
-  const declaredIgnored = active.filter((filterId) => {
-    const binding: { unsupportedReason?: string; binding?: string; param?: string } | undefined =
-      (input.item.filterBindings ?? []).find((candidate) => candidate.filter === filterId)
-      ?? (input.item.parameterBindings ?? []).find((candidate) => (candidate.filter || candidate.field || candidate.param) === filterId);
-    return !binding || Boolean(binding.unsupportedReason) || !(binding.binding ?? binding.param);
-  });
+  const declaredIgnored = active
+    .filter((filterId) => dashboardTileFilterChoice({}, input.item, { id: filterId }).choice !== 'applies')
+    .map(label);
   return { unfilteredNotice: tileUnfilteredNotice([...declaredIgnored, ...viewerIgnored]), datasetUnboundNotices };
 }
 
-function tileUnfilteredNotice(ignored: string[]): { label: string; detail: string } | null {
+function dashboardFilterLabels(dashboard: { filters?: Array<{ id: string; label?: string }> } | null | undefined): Record<string, string> {
+  return Object.fromEntries((dashboard?.filters ?? []).flatMap((filter) => filter.label ? [[filter.id, filter.label]] : []));
+}
+
+function tileUnfilteredNotice(ignored: string[], detail?: string): { label: string; detail: string } | null {
   if (ignored.length === 0) return null;
   return {
     label: ignored.length === 1 ? `Not filtered by ${ignored[0]}` : `Not filtered by ${ignored.length} page filters`,
-    detail: `This tile has no column bound to ${ignored.join(', ')}, so it shows the full scope while the rest of the page is narrowed.`,
+    detail: detail ?? `This tile has no column bound to ${ignored.join(', ')}, so it shows the full scope while the rest of the page is narrowed.`,
   };
 }
 
@@ -1601,6 +1732,7 @@ function DashboardTile({
   onOpenNotebook,
   activeVariables,
   viewerFilterIds,
+  filterLabels,
   crossFilterFields = [],
   onSelectDatasetMark,
   onDrillDatasetMark,
@@ -1642,6 +1774,8 @@ function DashboardTile({
   activeVariables?: Record<string, unknown>;
   /** Which of `activeVariables` are the viewer's own session filters. */
   viewerFilterIds?: string[];
+  /** Page filter labels, so a pill says "Not filtered by Customer Name". */
+  filterLabels?: Record<string, string>;
   /** Server-owned, explicitly authored Dataset mapping origins for this tile. */
   crossFilterFields?: string[];
   onSelectDatasetMark?: (field: string, values: unknown[]) => void;
@@ -1730,7 +1864,7 @@ function DashboardTile({
    * narrower scope, and the two are indistinguishable on screen — the reader
    * compares a filtered tile against an unfiltered one and never knows.
    */
-  const { unfilteredNotice, datasetUnboundNotices } = dashboardTileFilterNotices({ item, tile, activeVariables, viewerFilterIds });
+  const { unfilteredNotice, datasetUnboundNotices } = dashboardTileFilterNotices({ item, tile, activeVariables, viewerFilterIds, filterLabels });
   const comparisonSummary = item.query ? datasetComparisonSummary(item.query.comparison) : undefined;
 
   /**
@@ -1891,7 +2025,7 @@ function DashboardTile({
             if (blockId) onFocusBlock?.(blockId);
             if (blockId) onAskBlock?.(blockId, defaultTileCopilotQuestion(item.title ?? blockId));
           }}
-          title={canAskChart ? 'Ask about this current Dataset chart' : 'Open app Copilot for this tile'}
+          title={canAskChart ? 'Ask about this current chart' : 'Open app Copilot for this tile'}
         >
           <Sparkles size={11} strokeWidth={2} /> {canAskChart ? 'Ask about chart' : 'Ask AI'}
         </button>
@@ -2050,10 +2184,10 @@ function DashboardTile({
               </span>
             </div>
           ) : null}
-          {datasetUnboundNotices.length || tile?.dataset?.validation?.outcome === 'adapted' ? datasetTileNotices(tile).map((notice) => (
+          {datasetUnboundNotices.length || tile?.dataset?.validation?.outcome === 'adapted' || tile?.dataset?.nameWarnings?.length ? datasetTileNotices(tile, { filterLabels }).map((notice) => (
             <div key={notice.key} style={{ marginTop: 5 }}>
               <span style={generatedMetaPillStyle} title={notice.detail}>
-                {notice.kind === 'adapted' ? <Activity size={9} /> : <Filter size={9} />} {notice.label}
+                {notice.kind === 'adapted' ? <Activity size={9} /> : notice.kind === 'names' ? <AlertTriangle size={9} /> : <Filter size={9} />} {notice.label}
               </span>
             </div>
           )) : null}
@@ -2084,7 +2218,8 @@ function DashboardTile({
                 </span>
               ) : null}
             </div>
-          ) : !isCompactMetric ? (
+          ) : showTileSourceRef({ editable, compact: isCompactMetric, blockRef }) ? (
+            // The source id ("block:customer_profile") is an author's detail; readers never see it, nor "text" on a text tile.
             <div style={{ marginTop: 5, fontSize: 11, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono, monospace)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{blockRef}</div>
           ) : null}
         </div>
@@ -2197,6 +2332,19 @@ function TileInsightCaption({ item, tile, themeMode }: { item: DashboardLayoutIt
   );
 }
 
+/** Whether a tile shows its source id under the title: only to an author, never "text" for a text tile. */
+export function showTileSourceRef(input: { editable: boolean; compact: boolean; blockRef: string }): boolean {
+  return input.editable && !input.compact && input.blockRef !== 'text';
+}
+
+/** What one row of a grouping is, in words: "customer" for customer_name or customer__customer_name. */
+function insightNoun(column: string): string {
+  const own = column.includes('__') ? column.slice(column.lastIndexOf('__') + 2) : column;
+  const words = own.replace(/[_-]+/g, ' ').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const trimmed = words.length > 1 && /^(name|id|key|code|label|title)$/.test(words[words.length - 1]!) ? words.slice(0, -1) : words;
+  return trimmed.join(' ') || 'value';
+}
+
 export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number], item?: DashboardLayoutItem): string | null {
   // A driver tile's rows repeat the same periods once per breakdown, so no
   // caption can be computed from them; its own checked summary is the caption.
@@ -2239,6 +2387,10 @@ export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number],
   const valueMeta = tile?.result?.columnsMeta?.find((meta) => meta.name === valueCol);
   const formatMetric = (value: unknown, compact = true) => formatDisplayValue(valueCol, value, valueSamples, { compact, ...(valueMeta ? { meta: valueMeta } : {}) });
   if (rows.length === 1) {
+    // A KPI already shows its number under the author's title ("Total
+    // revenue"); a caption repeating it under the raw field name
+    // ("Lifetime Spend: $671.4K.") only confuses (new-user round 3, problem 9).
+    if (item?.query && !item.query.dimensions?.length) return null;
     const v = toNum(typedRows[0]![valueCol]);
     return v !== undefined ? `${metricLabel}: ${formatMetric(v)}.` : null;
   }
@@ -2252,8 +2404,16 @@ export function computeTileInsight(tile?: DashboardRunResponse['tiles'][number],
   // No share of a total: the visible rows are not known to add up (a COUNT
   // DISTINCT or a ratio does not, a Top-N result is not the whole, and a row
   // set may repeat a period per breakdown), so a percent would be made up.
+  // A field tile says it as a person would (new-user round 3, problem 9):
+  // "Top customer: Maria Lopez, $3.1K lifetime spend", "Highest month: Aug
+  // 2025, $94.2K order total", never "… reports Lifetime Spend at $3.1K".
   if (item?.query?.dimensions?.length) {
-    return `${label} reports ${metricLabel} at ${formattedTopValue} for this grouped Dataset result.`;
+    const dimensions = item.query.dimensions;
+    const grouping = dimensions.find((dimension) => (dimension.alias ?? (dimension.timeGrain ? `${dimension.field}_${dimension.timeGrain}` : dimension.field)) === labelCol)
+      ?? (dimensions.length === 1 ? dimensions[0] : undefined);
+    const what = metricLabel.toLowerCase();
+    if (grouping?.timeGrain) return `Highest ${grouping.timeGrain.replace(/_/g, ' ')}: ${label}, ${formattedTopValue} ${what}.`;
+    return `Top ${insightNoun(labelCol ?? '')}: ${label}, ${formattedTopValue} ${what}.`;
   }
   return `${label} leads ${metricLabel} at ${formattedTopValue}.`;
 }
@@ -2430,11 +2590,8 @@ const generatedVizOverflowStyle: React.CSSProperties = {
 /** The same words the tiles use (READER_TRUST_LABELS), so a page never says two things. */
 function TrustPill({ trust }: { trust: string }) {
   const certified = trust === 'certified';
-  const label = certified
-    ? READER_TRUST_LABELS.certified
-    : trust === 'governed' || trust === 'grounded'
-      ? READER_TRUST_LABELS.governed
-      : trust === 'review_required' ? READER_TRUST_LABELS.review : 'Draft';
+  // Two words for people (T1): Certified, or Not certified yet.
+  const label = certified ? READER_TRUST_LABELS.certified : READER_TRUST_LABELS.review;
   return (
     <span style={trustPillStyle(certified)}>
       {certified ? <ShieldCheck size={10} strokeWidth={2.4} /> : <AlertTriangle size={10} strokeWidth={2.4} />}
@@ -2478,25 +2635,33 @@ function DashboardStoryStrip({ story }: { story: DashboardStory }): JSX.Element 
  */
 export function storySourceChipLabel(story: Pick<DashboardStoryBrief, 'generatedBy' | 'trustState'>): string {
   const certified = story.trustState === 'certified';
-  if (story.generatedBy === 'ai') return certified ? 'AI wording · verified facts' : 'AI wording · facts from sources that need review';
-  return certified ? 'Verified result summary' : 'Result summary · sources need review';
+  if (story.generatedBy === 'ai') return certified ? 'AI wording · verified facts' : 'AI wording · some facts not certified yet';
+  return certified ? 'Verified result summary' : 'Result summary · some sources not certified yet';
 }
 
-function BusinessStoryPanel({
+/**
+ * The auto-written Summary of a page's current numbers. Shown only on pages
+ * whose author added it (`metadata.summary`, D6); App Studio's Preview uses
+ * the same panel so authors see what readers will.
+ */
+export function BusinessStoryPanel({
   story,
   onEvidence,
   onResearch,
+  onRemove,
 }: {
   story: DashboardStoryBrief;
-  onEvidence: () => void;
-  onResearch: () => void;
+  onEvidence?: () => void;
+  onResearch?: () => void;
+  /** For the author, in App Studio: take the Summary off the page. */
+  onRemove?: () => void;
 }): JSX.Element {
   return (
-    <section style={{ ...dashboardStoryStripStyle, padding: '20px 22px', marginBottom: 16 }} aria-label="Business Story">
+    <section style={{ ...dashboardStoryStripStyle, padding: '20px 22px', marginBottom: 16 }} aria-label="Summary">
       <div style={dashboardStoryHeaderStyle}>
         <div style={dashboardStoryIconStyle}><Sparkles size={15} strokeWidth={2.2} /></div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={dashboardStoryKickerStyle}>Business Story · current filters</div>
+          <div style={dashboardStoryKickerStyle}>Summary (auto-written)</div>
           <h2 style={{ ...dashboardStoryTitleStyle, fontSize: 20 }}>{story.headline}</h2>
         </div>
         <TrustPill trust={story.trustState} />
@@ -2516,28 +2681,41 @@ function BusinessStoryPanel({
         <span style={dashboardStoryChipStyle}>{story.evidenceRefs.length} evidence source{story.evidenceRefs.length === 1 ? '' : 's'}</span>
         {story.caveat ? <span style={dashboardStoryChipStyle}>{story.caveat}</span> : null}
         <span style={{ flex: 1 }} />
-        <button type="button" onClick={onEvidence} style={storyActionButtonStyle}>View evidence</button>
-        {isViewerLink() ? null : <button type="button" onClick={onResearch} style={storyActionButtonStyle}>Research deeper</button>}
+        {onEvidence ? <button type="button" onClick={onEvidence} style={storyActionButtonStyle}>View evidence</button> : null}
+        {isViewerLink() || !onResearch ? null : <button type="button" onClick={onResearch} style={storyActionButtonStyle}>Research deeper</button>}
+        {onRemove ? <button type="button" onClick={onRemove} style={storyActionButtonStyle}>Remove Summary</button> : null}
       </div>
     </section>
   );
 }
 
-function ReviewAppendix({
+/** The appendix's trust line in plain words, never a raw state like "draft_ready". */
+export function appendixTrustWords(trustState: string | undefined): string {
+  if (trustState === 'certified') return 'All sources certified';
+  return 'Some sources not certified yet';
+}
+
+export function ReviewAppendix({
   run,
   variables,
+  filters,
+  ranAtMs,
 }: {
   run: DashboardRunResponse;
   variables: Record<string, unknown>;
+  /** The page's declared filters, so each reads by its label. */
+  filters?: DashboardDocumentResponse['dashboard']['filters'];
+  /** When this run settled, for "Last refreshed". */
+  ranAtMs?: number;
 }): JSX.Element {
   const issues = run.tiles.filter((tile) => tile.status !== 'ok');
-  const activeFilters = Object.entries(variables).filter(([, value]) => value !== undefined && value !== null && value !== '');
+  const activeFilters = describeDashboardFilterValues(variables, filters);
   return (
     <details style={reviewAppendixStyle} aria-label="Evidence and review appendix">
       <summary style={reviewAppendixSummaryStyle}>
         Evidence & review appendix
         <span style={{ opacity: 0.62, fontWeight: 600 }}>
-          {run.story.evidenceRefs.length} sources · {issues.length ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : 'all visible sources ran'}
+          {dataSourceCountWords(runDataSourceCount(run.tiles))} · {issues.length ? `${issues.length} issue${issues.length === 1 ? '' : 's'}` : 'all visible sources ran'}
         </span>
       </summary>
       <div style={{ display: 'grid', gap: 12, padding: '0 16px 16px' }}>
@@ -2545,17 +2723,10 @@ function ReviewAppendix({
           <AlertTriangle size={13} /> {run.incomplete.message}
         </div> : null}
         <div style={reviewAppendixGridStyle}>
-          <div><strong>Run</strong><br /><span>{run.runId}</span></div>
-          <div><strong>Snapshot</strong><br /><span>{run.snapshotId}</span></div>
-          <div><strong>Trust</strong><br /><span>{run.story.trustState}</span></div>
-          <div><strong>Filters</strong><br /><span>{activeFilters.length ? activeFilters.map(([key, value]) => `${key}: ${String(value)}`).join(' · ') : 'Current unfiltered scope'}</span></div>
+          {ranAtMs !== undefined ? <div><strong>Last refreshed</strong><br /><span>{new Date(ranAtMs).toLocaleString()}</span></div> : null}
+          <div><strong>Trust</strong><br /><span>{appendixTrustWords(run.story.trustState)}</span></div>
+          <div><strong>Filters</strong><br /><span>{activeFilters.length ? activeFilters.map((filter) => `${filter.label}: ${filter.value}`).join(' · ') : 'No filters'}</span></div>
         </div>
-        {!run.incomplete ? <div>
-          <strong style={{ fontSize: 12 }}>Evidence used by the story</strong>
-          <div style={{ ...dashboardStoryChipRowStyle, marginTop: 7 }}>
-            {run.story.evidenceRefs.map((ref) => <span key={ref} style={dashboardStoryChipStyle}>{ref}</span>)}
-          </div>
-        </div> : null}
         {issues.length ? (
           <div>
             <strong style={{ fontSize: 12 }}>Items requiring review</strong>
@@ -2564,6 +2735,21 @@ function ReviewAppendix({
             </ul>
           </div>
         ) : null}
+        {/* Ids and the story's evidence references, for whoever needs to check them (D6). */}
+        <details className="dql-technical-details">
+          <summary>Technical details</summary>
+          <div style={{ ...reviewAppendixGridStyle, marginTop: 8 }}>
+            <div><strong>Run</strong><br /><span>{run.runId}</span></div>
+            <div><strong>Snapshot</strong><br /><span>{run.snapshotId}</span></div>
+            <div><strong>Trust state</strong><br /><span>{run.story.trustState}</span></div>
+          </div>
+          {!run.incomplete && run.story.evidenceRefs.length ? <div style={{ marginTop: 8 }}>
+            <strong style={{ fontSize: 12 }}>Evidence used by the summary</strong>
+            <div style={{ ...dashboardStoryChipRowStyle, marginTop: 7 }}>
+              {run.story.evidenceRefs.map((ref) => <span key={ref} style={dashboardStoryChipStyle}>{ref}</span>)}
+            </div>
+          </div> : null}
+        </details>
       </div>
     </details>
   );
@@ -2703,6 +2889,10 @@ export function TileBody({
   onNavigate?: () => void;
 }): JSX.Element {
   const [markActionId, setMarkActionId] = useState<string>('filter');
+  const [barShowAll, setBarShowAll] = useState(false);
+  // An empty tile says why in plain words, not "Query executed successfully.
+  // No columns to display." (Codex G2).
+  const emptyMessage = (tile?.filters?.applied?.length ?? 0) > 0 ? 'No matching rows for these filters.' : 'No rows to show.';
   if (loading && !tile) return <span>Loading data...</span>;
   if (tile?.tileType === 'text') {
     if (genUi) {
@@ -2733,7 +2923,7 @@ export function TileBody({
   if (error && !tile) return <span>{error}</span>;
   if (!tile) return <span>No run result.</span>;
   if (tile.status === 'unauthorized') return <span>Not authorized.</span>;
-  if (tile.status === 'unresolved') return <span>{tile.error ?? 'Block reference unresolved.'}</span>;
+  if (tile.status === 'unresolved') return <span>{tile.error ?? 'Saved query reference unresolved.'}</span>;
   if (tile.status === 'error' && tile.error?.startsWith('APP_DATASETS_FEATURE_DISABLED')) {
     return <DatasetsDisabledTileNotice />;
   }
@@ -2770,7 +2960,7 @@ export function TileBody({
   const datasetVisualizationError = datasetTileVisualizationDisplayError(item);
   if (datasetVisualizationError) {
     return <div role="alert" style={{ display: 'grid', gap: 6, justifyItems: 'center', textAlign: 'center', padding: 8 }}>
-      <strong>Dataset visualization needs attention</strong>
+      <strong>Chart needs attention</strong>
       <span>{datasetVisualizationError}</span>
     </div>;
   }
@@ -2805,8 +2995,8 @@ export function TileBody({
   } else if (groupedDatasetKpi) {
     dataView = (
       <div style={{ width: '100%', alignSelf: 'stretch', display: 'grid', gap: 6 }}>
-        <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>This Dataset tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.</small>
-        <TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} />
+        <small style={{ color: 'var(--text-secondary)', lineHeight: 1.35 }}>This tile is grouped. Its values are shown at the selected grain instead of being summed into a KPI.</small>
+        <TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} emptyMessage={emptyMessage} />
       </div>
     );
   } else if (item.viz.type === 'pivot' && item.query && !item.query.detail) {
@@ -2817,27 +3007,32 @@ export function TileBody({
     if (tile.tileType !== 'aiPin' && (genUi?.component === 'EvidenceTable' || genUi?.component === 'PivotTable')) {
       dataView = <GeneratedEvidenceTable result={displayResult} genUi={genUi} themeMode={themeMode} />;
     } else {
-      dataView = <div style={{ width: '100%', alignSelf: 'stretch' }}><TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} conditionalFormats={item.viz.style?.conditional} /></div>;
+      dataView = <div style={{ width: '100%', alignSelf: 'stretch' }}><TableOutput result={displayResult} themeMode={themeMode} initialPageSize={10} onRowClick={selectResultRow} conditionalFormats={item.viz.style?.conditional} emptyMessage={emptyMessage} /></div>;
     }
   } else {
+    // Above 50 categories a bar chart draws the top 25 until the reader asks for all.
+    const barCap = chart === 'kpi' ? null : barCategoryCap(displayResult, { chart, category: chartConfig.x, value: chartConfig.y, query: item.query, showAll: barShowAll });
     const chartResult = chart === 'kpi'
       ? summarizeDashboardKpiResult(displayResult, chartConfig.y)
-      : displayResult;
+      : barCap?.result ?? displayResult;
     // The tile header is the App title. Passing the same title into the shared
     // chart renderer duplicated it inside the plot and consumed scarce height.
-    dataView = (
+    const chartFrame = (
       <DashboardChartFrame>
         {(availableHeight) => (
           <ChartOutput
             result={chartResult}
             themeMode={themeMode}
-            chartConfig={{ ...chartConfig, title: undefined }}
+            chartConfig={withBarCategoryLimit({ ...chartConfig, title: undefined }, barCap)}
             availableHeight={availableHeight}
             onMarkSelect={selectResultRow}
           />
         )}
       </DashboardChartFrame>
     );
+    dataView = barCap?.cappable
+      ? <div style={{ width: '100%', alignSelf: 'stretch', display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}><BarCapNote cap={barCap} showAll={barShowAll} onShowAll={setBarShowAll} /><div style={{ flex: '1 1 0', minHeight: 0 }}>{chartFrame}</div></div>
+      : chartFrame;
   }
   const detailAction = onNavigate ? (
     <button
@@ -2962,11 +3157,11 @@ export function TileEvidencePanel({
   const runEvidence = presentDashboardTileRunEvidence(tile);
   const canOpenNotebook = canOpenTileInNotebook(tile);
   const sourceLabel = artifact?.sourceKind === 'certified_block'
-    ? 'Certified block'
+    ? 'Certified saved query'
     : artifact?.sourceKind === 'semantic_query'
-      ? 'Governed semantic query'
+      ? 'Semantic query'
       : artifact?.sourceKind === 'dataset_query'
-        ? 'Governed Dataset query'
+        ? 'Field query'
       : artifact?.sourceKind === 'draft_analysis'
         ? 'App analysis'
         : artifact?.sourceKind === 'ai_pin'
@@ -3011,22 +3206,30 @@ export function TileEvidencePanel({
             <div style={{ display: 'grid', gap: 12, fontSize: 13, lineHeight: 1.5 }}>
               <EvidenceRow label="Source" value={artifact?.sourcePath ?? tile.citation?.path ?? tile.citation?.name ?? sourceLabel} />
               <EvidenceRow label="Result" value={runEvidence.result} />
-              {tile.dataset?.sourceId ? <EvidenceRow label="Dataset source" value={`${tile.dataset.sourceId}${tile.dataset.sourceRevision ? ` · ${tile.dataset.sourceRevision}` : ''}`} /> : null}
-              {tile.dataset?.queryFingerprint ? <EvidenceRow label="Dataset query" value={tile.dataset.queryFingerprint} /> : null}
-              {tile.dataset?.filterFingerprint ? <EvidenceRow label="Dataset filters" value={tile.dataset.filterFingerprint} /> : null}
-              {tile.dataset?.executionFingerprint ? <EvidenceRow label="Execution" value={tile.dataset.executionFingerprint} /> : null}
               {comparisonSummary ? <EvidenceRow label="Period comparison" value={comparisonSummary} /> : null}
-              {tile.dataset?.proofState ? <EvidenceRow label="Grain evidence" value={tile.dataset.proofState} /> : null}
               {grainEvidenceDetail ? <EvidenceRow label="Current grain check" value={grainEvidenceDetail} /> : null}
-              {isDatasetArtifact && currentDatasetEvidence ? <>
-                <EvidenceRow label="Bound parameters" value="Values are redacted; binding types and fingerprints are listed below." />
-                <EvidenceRows rows={currentDatasetEvidence.parameterEvidence} />
-                <EvidenceRows rows={currentDatasetEvidence.provenance} />
-                {currentDatasetEvidence.receipt.rows.length ? <EvidenceRows rows={currentDatasetEvidence.receipt.rows} /> : null}
-                {currentDatasetEvidence.receipt.notice ? <EvidenceRow label="Provider receipt" value={currentDatasetEvidence.receipt.notice} /> : null}
-              </> : null}
-              {isDatasetArtifact && !currentDatasetEvidence ? <EvidenceRow label="Execution evidence" value="This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence." /> : null}
-              {isDatasetArtifact ? <EvidenceRow label="Notebook" value="Dataset queries cannot be opened in Notebook yet." /> : null}
+              {/* Ids, revisions and fingerprints, for whoever needs to check them (D6). */}
+              {tile.dataset?.sourceId || tile.dataset?.queryFingerprint || tile.dataset?.proofState || (isDatasetArtifact && currentDatasetEvidence) ? (
+                <details className="dql-technical-details">
+                  <summary>Technical details</summary>
+                  <div style={{ display: 'grid', gap: 12, marginTop: 8 }}>
+                    {tile.dataset?.sourceId ? <EvidenceRow label="Data source" value={`${tile.dataset.sourceId}${tile.dataset.sourceRevision ? ` · ${tile.dataset.sourceRevision}` : ''}`} /> : null}
+                    {tile.dataset?.queryFingerprint ? <EvidenceRow label="Field query" value={tile.dataset.queryFingerprint} /> : null}
+                    {tile.dataset?.filterFingerprint ? <EvidenceRow label="Filters" value={tile.dataset.filterFingerprint} /> : null}
+                    {tile.dataset?.executionFingerprint ? <EvidenceRow label="Execution" value={tile.dataset.executionFingerprint} /> : null}
+                    {tile.dataset?.proofState ? <EvidenceRow label="Grain evidence" value={tile.dataset.proofState} /> : null}
+                    {isDatasetArtifact && currentDatasetEvidence ? <>
+                      <EvidenceRow label="Bound parameters" value="Values are redacted; binding types and fingerprints are listed below." />
+                      <EvidenceRows rows={currentDatasetEvidence.parameterEvidence} />
+                      <EvidenceRows rows={currentDatasetEvidence.provenance} />
+                      {currentDatasetEvidence.receipt.rows.length ? <EvidenceRows rows={currentDatasetEvidence.receipt.rows} /> : null}
+                      {currentDatasetEvidence.receipt.notice ? <EvidenceRow label="Provider receipt" value={currentDatasetEvidence.receipt.notice} /> : null}
+                    </> : null}
+                  </div>
+                </details>
+              ) : null}
+              {isDatasetArtifact && !currentDatasetEvidence ? <EvidenceRow label="Execution evidence" value="This result no longer matches the current data source or query. Run the dashboard again before inspecting execution evidence." /> : null}
+              {isDatasetArtifact ? <EvidenceRow label="Notebook" value="Field queries cannot be opened in Notebook yet." /> : null}
               {artifact?.explanation?.length ? (
                 <div>
                   <b>Execution</b>
@@ -3040,7 +3243,7 @@ export function TileEvidencePanel({
               {tile.repair ? <EvidenceRow label="Repair" value={tile.repair.message} /> : null}
               <div style={{ padding: 10, borderRadius: 8, background: 'var(--bg-2)', color: 'var(--text-secondary)' }}>
                 {isDatasetArtifact
-                  ? 'Parameter values are intentionally omitted here. Dataset execution evidence remains available in this App.'
+                  ? 'Parameter values are intentionally omitted here. Query run evidence remains available in this App.'
                   : 'Parameter values are intentionally omitted here. Open the editable Notebook cell to inspect or change the full execution contract.'}
               </div>
             </div>
@@ -3048,10 +3251,10 @@ export function TileEvidencePanel({
             <pre style={tileEvidenceCodeStyle}>
               {tab === 'dql'
                 ? isDatasetArtifact
-                  ? currentDatasetEvidence?.authoredQuerySpec ?? currentDatasetEvidence?.authoredQuerySpecUnavailable ?? 'This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence.'
+                  ? currentDatasetEvidence?.authoredQuerySpec ?? currentDatasetEvidence?.authoredQuerySpecUnavailable ?? 'This result no longer matches the current data source or query. Run the dashboard again before inspecting execution evidence.'
                   : artifact?.dql ?? 'This tile does not expose DQL source. Its governed semantic intent is composed into SQL at runtime.'
                 : isDatasetArtifact
-                  ? currentDatasetEvidence?.executedSql ?? currentDatasetEvidence?.executedSqlUnavailable ?? 'This result no longer matches the current Dataset source or query. Run the dashboard again before inspecting execution evidence.'
+                  ? currentDatasetEvidence?.executedSql ?? currentDatasetEvidence?.executedSqlUnavailable ?? 'This result no longer matches the current data source or query. Run the dashboard again before inspecting execution evidence.'
                   : artifact?.sql ?? 'Executed SQL is not available for this saved result.'}
             </pre>
           )}
@@ -3491,7 +3694,7 @@ function AddTileMenu({
             textAlign: 'left',
           }}
         >
-          <AddTileMenuItem title="Certified block" description="Chart, table, or KPI from this App domain" onClick={onCertifiedBlock} />
+          <AddTileMenuItem title="Certified saved query" description="Chart, table, or KPI from this App domain" onClick={onCertifiedBlock} />
           <AddTileMenuItem title="Text / summary" description="Narrative, notes, caveats, or CXO context" onClick={onText} />
           <AddTileMenuItem title="Section heading" description="Separate an App page into readable groups" onClick={onHeading} />
           <AddTileMenuItem title="Copilot insight" description="Open scoped AI, then pin the reviewed answer to this App" onClick={onAi} />
@@ -3829,20 +4032,20 @@ function BlockCatalogDialog({
     <div style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(0,0,0,0.36)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
       <div style={{ width: 'min(860px, 94vw)', maxHeight: '86vh', display: 'flex', flexDirection: 'column', background: 'var(--color-bg, #fff)', color: 'inherit', borderRadius: 8, overflow: 'hidden', boxShadow: '0 18px 60px rgba(0,0,0,0.35)' }}>
         <div style={{ padding: 14, borderBottom: '1px solid var(--border-color, rgba(0,0,0,0.1))', display: 'flex', gap: 10, alignItems: 'center' }}>
-          <div style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>Add Certified Block</div>
+          <div style={{ fontSize: 16, fontWeight: 600, flex: 1 }}>Add certified saved query</div>
           <button type="button" onClick={onClose} style={toolbarButtonStyle(false)}>Close</button>
         </div>
         <div style={{ padding: 14, borderBottom: '1px solid var(--border-color, rgba(0,0,0,0.08))' }}>
           <input
             value={search}
             onChange={(event) => onSearch(event.target.value)}
-            placeholder="Search domain blocks..."
+            placeholder="Search domain saved queries..."
             style={{ width: '100%', boxSizing: 'border-box', border: '1px solid var(--border-color, rgba(0,0,0,0.12))', borderRadius: 6, padding: '8px 10px', background: 'var(--surface, transparent)', color: 'inherit' }}
           />
         </div>
         <div style={{ overflow: 'auto', padding: 12, display: 'grid', gap: 8 }}>
           {filtered.length === 0 ? (
-            <div style={{ padding: 18, fontSize: 12, opacity: 0.66 }}>No certified blocks match this App scope.</div>
+            <div style={{ padding: 18, fontSize: 12, opacity: 0.66 }}>No certified saved queries match this App scope.</div>
           ) : filtered.map((block) => (
             <button
               key={block.id}
@@ -3873,7 +4076,7 @@ function ScopedLineagePanel({ lineage }: { lineage: any | null }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
         <div style={{ fontSize: 12, fontWeight: 600, textTransform: 'uppercase', opacity: 0.62, marginBottom: 6 }}>App Lineage</div>
-        <div style={{ fontSize: 12, opacity: 0.72 }}>Terms and business views connect the App back to DQL blocks, dbt models, and source tables.</div>
+        <div style={{ fontSize: 12, opacity: 0.72 }}>Terms and business views connect the App back to saved queries, dbt models, and source tables.</div>
       </div>
       {breadcrumbs.length > 0 && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>

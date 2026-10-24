@@ -165,6 +165,23 @@ const SEMANTIC_MANIFEST = {
       type_params: { numerator: 'open_loss_ratio', denominator: 'claim_count' },
     },
     { name: 'premium_growth', type: 'derived', type_params: { expr: 'written_premium * 2', metrics: ['written_premium'] } },
+    {
+      name: 'premium_growth_mom',
+      type: 'derived',
+      type_params: {
+        expr: '(current_premium - prior_premium) / prior_premium',
+        metrics: [
+          { name: 'written_premium', alias: 'current_premium' },
+          { name: 'written_premium', alias: 'prior_premium', offset_window: '1 month' },
+        ],
+      },
+    },
+    {
+      name: 'loss_per_claim',
+      type: 'derived',
+      type_params: { expr: 'incurred_losses / NULLIF(claim_count, 0)', metrics: ['incurred_losses', 'claim_count'] },
+    },
+    { name: 'unsafe_derived', type: 'derived', type_params: { expr: 'written_premium; DROP TABLE x', metrics: ['written_premium'] } },
   ],
 };
 
@@ -251,13 +268,45 @@ describe('native semantic engine on an insurance book', () => {
       expect(layer.composeQuery({ metrics: ['losses_per_open_claim'], dimensions: [] })).toBeNull();
       expect(layer.canComposeMetric('losses_per_open_claim')).toBe(false);
       expect(layer.explainNativeMetricGap('losses_per_open_claim')).toContain('open_loss_ratio is not one');
-      expect(layer.explainNativeMetricGap('premium_growth')).toContain('derived metric');
+      expect(layer.explainNativeMetricGap('premium_growth_mom')).toContain('derived metric');
     });
 
     it('never leaks its request-scoped numerator into the catalog', () => {
       layer.composeQuery({ metrics: ['open_loss_ratio'], dimensions: [] });
       expect(layer.getMetric('open_loss_ratio__numerator')).toBeUndefined();
       expect(layer.canComposeMetric('open_loss_ratio__numerator')).toBe(false);
+    });
+  });
+
+  describe('derived metrics (arithmetic over simple metrics)', () => {
+    it('composes a derived metric over one simple input', () => {
+      expect(layer.canComposeMetric('premium_growth')).toBe(true);
+      expect(layer.explainNativeMetricGap('premium_growth')).toBeUndefined();
+      const composed = layer.composeQuery({ metrics: ['premium_growth'], dimensions: [] });
+      expect(composed).not.toBeNull();
+      expect(composed!.sql).toContain('ratio_inputs.written_premium * 2 AS premium_growth');
+      if (!DUCKDB_CLI) return;
+      expect(run(composed!.sql)).toEqual([{ premium_growth: 1200 }]);
+    });
+
+    it('evaluates the expression per output row over inputs from two fact tables', () => {
+      const composed = layer.composeQuery({ metrics: ['loss_per_claim'], dimensions: ['line_of_business'], orderBy: [{ name: 'line_of_business', direction: 'asc' }] });
+      expect(composed).not.toBeNull();
+      expect(composed!.sql).toContain('ratio_inputs.incurred_losses / NULLIF(ratio_inputs.claim_count, 0) AS loss_per_claim');
+      if (!DUCKDB_CLI) return;
+      const inputs = run(layer.composeQuery({ metrics: ['incurred_losses', 'claim_count'], dimensions: ['line_of_business'], orderBy: [{ name: 'line_of_business', direction: 'asc' }] })!.sql);
+      expect(rounded(run(composed!.sql))).toEqual(rounded(inputs.map((row) => ({
+        line_of_business: row.line_of_business,
+        loss_per_claim: Number(row.incurred_losses) / Number(row.claim_count),
+      }))));
+    });
+
+    it('refuses an offset window or an expression that is not arithmetic, and says why', () => {
+      expect(layer.composeQuery({ metrics: ['premium_growth_mom'], dimensions: [] })).toBeNull();
+      expect(layer.canComposeMetric('premium_growth_mom')).toBe(false);
+      expect(layer.explainNativeMetricGap('premium_growth_mom')).toContain('no offset window');
+      expect(layer.composeQuery({ metrics: ['unsafe_derived'], dimensions: [] })).toBeNull();
+      expect(layer.canComposeMetric('unsafe_derived')).toBe(false);
     });
   });
 

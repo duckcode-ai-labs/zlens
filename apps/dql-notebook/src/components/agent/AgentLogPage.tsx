@@ -120,7 +120,7 @@ function Timeline({ run, t }: { run: AgentRun; t: Theme }): JSX.Element {
       {slowest >= 1000 && (
         <div style={{ fontSize: 12, color: t.textMuted, marginTop: 8 }}>
           The highlighted step took the longest. Long generation/tool steps usually mean the
-          question fell through to LLM generation — a governed metric or certified block would answer it instantly.
+          question fell through to LLM generation — a governed metric or certified saved query would answer it instantly.
         </div>
       )}
     </section>
@@ -249,12 +249,12 @@ function stepGoalLabel(event: AgentRunEvent): string | null {
 
 function executorLabel(route: AgentRun['route'] | undefined): string {
   switch (route) {
-    case 'certified_answer': return 'Searching certified blocks & governed metrics';
+    case 'certified_answer': return 'Searching certified saved queries & governed metrics';
     case 'generated_answer': return 'Composing the answer (semantic compile → generation)';
     case 'research': return 'Researching across governed data';
     case 'app_build': return 'Assembling the app';
     case 'sql_cell': return 'Writing the query';
-    case 'dql_block_draft': return 'Drafting the block';
+    case 'dql_block_draft': return 'Drafting the saved query';
     case 'modeling_draft': return 'Drafting modeling changes';
     case 'skill_draft': return 'Drafting Skill guidance';
     case 'conversation': return 'Replying';

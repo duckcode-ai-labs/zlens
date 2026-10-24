@@ -76,7 +76,7 @@ export function CellEmptyState({
           </div>
           <div>
             1. Add a <span style={{ fontFamily: t.fontMono, color: t.textSecondary }}>SQL</span> or{' '}
-            <span style={{ fontFamily: t.fontMono, color: t.textSecondary }}>Block</span> cell above this one.
+            <span style={{ fontFamily: t.fontMono, color: t.textSecondary }}>Saved query</span> cell above this one.
             <br />
             2. Run it <span style={{ fontFamily: t.fontMono }}>(⌘↵)</span> and give the cell a name.
             <br />

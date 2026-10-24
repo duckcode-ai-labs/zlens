@@ -64,7 +64,7 @@ export function DraftReviewCard(props: DraftReviewCardProps) {
         </Disclosure>
       ) : null}
       {sqlPreview ? (
-        <Disclosure open={sqlOpen} onToggle={() => setSqlOpen((v) => !v)} label={dql ? 'Compiled SQL preview' : 'SQL this block will run'} t={t}>
+        <Disclosure open={sqlOpen} onToggle={() => setSqlOpen((v) => !v)} label={dql ? 'Compiled SQL preview' : 'SQL this saved query will run'} t={t}>
           <pre style={code(t)}>{sqlPreview}</pre>
         </Disclosure>
       ) : null}

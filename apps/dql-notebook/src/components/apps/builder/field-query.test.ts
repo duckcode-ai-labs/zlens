@@ -59,11 +59,41 @@ describe('click-a-field tile building', () => {
     expect(autoTileView(back)).toBe('kpi');
   });
 
+  it('a bar of names starts as an explicit Top 10, and keeps a Top N the author chose (new-user round 3)', () => {
+    const customerName = { kind: 'physical', name: 'customer__customer_name', qualifiedId: 'ds.customer_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'customer', column: 'customer_name' } } as DatasetField;
+    const top = toggleFieldInQuery(toggleFieldInQuery(EMPTY_TILE_QUERY, revenue), customerName);
+    expect(top).toMatchObject({ orderBy: [{ alias: 'revenue', direction: 'desc' }], limit: 10 });
+    // Name first, measure second: the same Top 10.
+    expect(toggleFieldInQuery(toggleFieldInQuery(EMPTY_TILE_QUERY, customerName), revenue).limit).toBe(10);
+    // The author's Top 25 survives adding a second measure.
+    expect(toggleFieldInQuery({ ...top, limit: 25 }, orders).limit).toBe(25);
+    // A short list of categories (Region) shows every bar.
+    expect(toggleFieldInQuery(toggleFieldInQuery(EMPTY_TILE_QUERY, revenue), region).limit).toBeUndefined();
+  });
+
   it('drops stale sort, limit, and row-detail settings when fields change', () => {
     const next = toggleFieldInQuery({ ...EMPTY_TILE_QUERY, measures: [{ measure: 'revenue' }], orderBy: [{ alias: 'gone', direction: 'asc' }], limit: 5, detail: true, detailColumns: ['region'] }, orderDate);
     expect(next.orderBy).toBeUndefined();
     expect(next.limit).toBeUndefined();
     expect(next.detail).toBeUndefined();
     expect(next.detailColumns).toBeUndefined();
+  });
+});
+
+// New-user round 2, problem 5: two identical "Order Items → Product" groups.
+describe('related field groups never read the same', () => {
+  it('names two joins to one table by their keys when an older descriptor still carries both', () => {
+    const join = (id: string, from: string) => ({ id, label: 'Product', table: 'products', relation: 'main.products', keys: [{ from, to: from }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: id, uniqueness: 'recheck', sentence: 'each order item has one product' });
+    const related = (name: string, joinId: string, column: string) => ({ kind: 'physical', name, qualifiedId: `ds.${name}`, type: 'string', role: 'dimension', status: 'approved', related: { join: joinId, column } });
+    const items = {
+      fields: [region, related('product__product_type', 'product', 'product_type'), related('product_2__product_type', 'product_2', 'product_type')],
+      joins: [join('product', 'product_id'), join('product_2', 'product_name')],
+    } as unknown as DatasetDescriptor;
+    const paths = groupDatasetFields(items).related.map((group) => group.path);
+    expect(paths).toEqual(['Product (by product id)', 'Product (by product name)']);
+    expect(new Set(paths).size).toBe(paths.length);
+    // One join keeps its plain name.
+    const one = { ...items, fields: items.fields.slice(0, 2), joins: items.joins!.slice(0, 1) } as DatasetDescriptor;
+    expect(groupDatasetFields(one).related.map((group) => group.path)).toEqual(['Product']);
   });
 });

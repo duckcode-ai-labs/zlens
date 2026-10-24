@@ -84,7 +84,7 @@ export async function activateClaudeCode(page: Page, notes: string[]): Promise<v
  */
 export const TRUST_LABELS: Array<{ kind: 'certified' | 'governed' | 'review' | 'failed'; pattern: RegExp }> = [
   { kind: 'certified', pattern: /\bCertified (block )?answer\b/ },
-  { kind: 'governed', pattern: /\bGoverned\b|\bSemantic answer\b/ },
+  { kind: 'governed', pattern: /\bFrom Metrics\b|\bSemantic answer\b/ },
   { kind: 'review', pattern: /\bAI-drafted answer\b|\bNeeds review\b|\bAI-generated\b|\bAnswer to review\b/ },
   { kind: 'failed', pattern: /Couldn.t run this query|\bRefused\b/ },
 ];
@@ -95,7 +95,7 @@ export function trustKindsIn(text: string): string[] {
 
 // Every heading an answer can open with; a missing one makes the wait time out
 // instead of failing on the label itself.
-const ANSWER_HEADER = /Certified (block )?answer|Governed answer|AI-drafted answer|AI-generated answer|Semantic answer|Answer to review|Couldn.t run this query|Needs input|Refused/;
+const ANSWER_HEADER = /Certified (block )?answer|Answer from Metrics|Answer from a certified saved query|AI-drafted answer|AI-generated answer|Semantic answer|Answer to review|Couldn.t run this query|Needs input|Refused/;
 
 /**
  * Ask `question` in `box` (Enter, or click `submit`) and wait until the answer

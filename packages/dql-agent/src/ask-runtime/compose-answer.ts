@@ -103,7 +103,7 @@ function unmodeledTerm(term: string, modeled: string[]): string {
       : '');
 }
 
-const REMAINING_TIERS_DECLINED = 'No certified block or semantic metric covers this question, and the analyst declined to run unverified exploratory SQL. No query was executed. Use Research for a deeper investigation, certify a block for this question, or name the exact model/columns to query.';
+const REMAINING_TIERS_DECLINED = 'No certified saved query or semantic metric covers this question, and the analyst declined to run unverified exploratory SQL. No query was executed. Use Research for a deeper investigation, certify a saved query for this question, or name the exact model/columns to query.';
 
 function incident(shape: Extract<TerminalAnswerShape, { kind: 'incident' }>): string {
   switch (shape.code) {
@@ -144,7 +144,7 @@ function v2NoAnswer(shape: Extract<TerminalAnswerShape, { kind: 'v2_no_answer' }
   if (outcome === 'provider_failure') return REFUSAL_TEXT.provider_error;
   if (outcome === 'execution_failure') {
     return reasonCode === 'SEMANTIC_FILTER_NOT_COMPILED'
-      ? 'The governed semantic engine could not apply the required member filter, and ZLens refused to run the unfiltered query in its place. Ask through a certified block or governed SQL, or enable the MetricFlow runtime for cross-model filters.'
+      ? 'The governed semantic engine could not apply the required member filter, and ZLens refused to run the unfiltered query in its place. Ask through a certified saved query or governed SQL, or enable the MetricFlow runtime for cross-model filters.'
       : REFUSAL_TEXT.execution_error;
   }
   if (modelingGap) {

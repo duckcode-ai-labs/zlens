@@ -1,6 +1,6 @@
 # Version and diff your work
 
-Notebooks, blocks and Apps are plain text files, so git is how you review
+Notebooks, saved queries and Apps are plain text files, so git is how you review
 and share them. ZLens adds a **Source control** page for people who do not
 use git every day, and a semantic diff for people who do.
 
@@ -19,7 +19,10 @@ use git every day, and a semantic diff for people who do.
        see **Review request opened** and **View on GitHub**.
 
 At the top, the branch menu has **Create new branch…**, and **Get updates** and
-**Send branch** pull and push.
+**Send** bring in the team's changes and send yours. For the whole flow
+(connecting your own repository, sending as a branch, pull requests, and what
+happens when a file changed on both sides), see
+[Share your work with your team](share-with-your-team.md).
 
 If the project is not a git repository yet, the page offers **Initialize Git
 for this project**. With no remote, **Add remote** asks for the
@@ -29,7 +32,7 @@ for this project**. With no remote, **Add remote** asks for the
 
 | Committed | Kept out of git |
 |---|---|
-| `.dql` blocks and their companion YAML | `.run.json` results |
+| `.dql` block files (saved queries) and their companion YAML | `.run.json` results |
 | `.dqlnb` notebooks | `.dql/` (settings, chats, caches, private work) |
 | Published Apps in `apps/` | `dql-manifest.json` (rebuilt by `zlens compile`) |
 | `dql.config.json` | DuckDB files, `node_modules/` |
@@ -38,7 +41,7 @@ A notebook's results go in `<notebook>.run.json` beside it. When you reopen
 the notebook, cells show their last results with a `cached` chip, without
 running the queries again.
 
-## See what changed in a block or notebook
+## See what changed in a saved query or notebook
 
 `git diff` shows changed characters. `zlens diff` shows what changed in
 meaning:
@@ -88,4 +91,4 @@ zlens promote app <app-id> --to shared
 
 ## Check the project in CI
 
-See [CI and zlens verify](../tutorials/05-ci-and-verify.md).
+See [CI with zlens eval](../tutorials/05-ci-and-verify.md).

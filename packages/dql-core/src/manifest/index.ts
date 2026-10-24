@@ -40,6 +40,19 @@ export {
   type WarehouseCatalogSnapshotV1,
 } from './warehouse-catalog.js';
 export {
+  STAGING_SCHEMAS,
+  TECHNICAL_SCHEMAS,
+  isStagingSchema,
+  isStagingTable,
+  isTechnicalSchema,
+  meaningfulDatabaseName,
+  sentenceCaseName,
+  splitStagingSchemas,
+  splitStagingTables,
+  stagingDuplicates,
+  tableEntityKey,
+} from './staging-tables.js';
+export {
   loadDbtFirstModeling,
   loadWarehouseModeling,
   siblingDbtArtifact,
@@ -67,6 +80,7 @@ export {
   type ModelAreaAuthoringInput,
   type EntityBindingAuthoringInput,
   type RelationshipAuthoringInput,
+  type RelationshipCertifiedAgainst,
   type RelationshipValidationRecordInput,
   type ContractAuthoringInput,
   type DomainExportAuthoringInput,

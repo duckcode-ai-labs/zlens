@@ -18,7 +18,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('Import SQL: Save draft writes a draft; only Certify certifies, with a receipt (F1)', async ({ page, request }) => {
-  await page.getByRole('button', { name: 'Blocks', exact: true }).first().click();
+  await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
   await page.getByRole('button', { name: 'Start import' }).click();
   await page.getByPlaceholder(/select \.\.\./).fill('select count(*) as customer_count from dev.dim_customers');
   await page.getByPlaceholder('auto').fill('orders');
@@ -53,8 +53,9 @@ test('Import SQL: Save draft writes a draft; only Certify certifies, with a rece
 
 test('an App page shows one aggregate trust: header, trust line and tiles agree (F2)', async ({ page }) => {
   await page.getByRole('button', { name: 'Apps', exact: true }).click();
-  // The library card shows App lifecycle, worded so it is not read as data trust.
-  await expect(page.getByText(/^App (draft|in review|certified)/).first()).toBeVisible();
+  // The library card says the tile count, or the two words when no count was recorded (T2).
+  await expect(page.locator('article.dql-app-card').filter({ hasText: 'Smoke Orders' }).getByText(/^(All tiles certified|Not certified yet|\d+ of \d+ tiles? certified)/).first()).toBeVisible();
+  await expect(page.getByText(/^App (draft|in review|certified)/)).toHaveCount(0);
   await page.getByText('Smoke Orders').first().click();
   await expect(page.getByText('Orders overview').first()).toBeVisible();
   // Once the page has run, the header repeats exactly the page's trust line.
@@ -62,8 +63,8 @@ test('an App page shows one aggregate trust: header, trust line and tiles agree 
   await expect(line).toHaveText(/tiles? certified/, { timeout: 45_000 });
   const lineText = (await line.textContent())?.trim() ?? '';
   const seal = page.locator('.dql-app-view-topbar .dql-app-seal').first();
-  if (/^All \d+ tiles? certified$/.test(lineText)) {
-    await expect(seal).toHaveText(/All data certified/i);
+  if (lineText === 'All tiles certified') {
+    await expect(seal).toHaveText('All tiles certified');
   } else {
     await expect(seal).toHaveText(new RegExp(lineText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'));
     await expect(page.getByText('Verified result summary')).toHaveCount(0);

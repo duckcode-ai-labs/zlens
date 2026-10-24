@@ -265,7 +265,7 @@ describe('Dataset source recovery plan (APP-047)', () => {
     ]) {
       const plan = planDatasetSourceRecovery(draft, task, candidate);
       expect(plan.ok).toBe(false);
-      if (!plan.ok) expect(plan.error).toMatch(/current governed catalog|different Dataset revision|currently review/i);
+      if (!plan.ok) expect(plan.error).toMatch(/current governed catalog|different data version|currently review/i);
     }
   });
 
@@ -322,7 +322,7 @@ describe('Dataset source recovery plan (APP-047)', () => {
         onPreviewInvalidated,
       });
       expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toMatch(/current governed catalog|different Dataset revision/i);
+      if (!result.ok) expect(result.error).toMatch(/current governed catalog|different data version/i);
       expect(patchDraft).not.toHaveBeenCalled();
       expect(onPreviewInvalidated).not.toHaveBeenCalled();
     }

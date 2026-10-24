@@ -487,18 +487,25 @@ export function showMeFactsFromDescriptor(
   /** The tile's query, so its calculations are known by their output names. */
   query?: TileQuery,
 ): ShowMeFacts {
-  const find = (name: string) => descriptor.fields.find((field) => field.name.toLowerCase() === name.toLowerCase());
+  // A table's measure usually shares its column's name (`lifetime_spend` is
+  // both a number column and the sum of it): a measure is looked up among
+  // measures, a dimension among fields, or the column hides the measure and
+  // a summed amount reads as one that "does not add up" (new-user round 3).
+  const findField = (name: string) => descriptor.fields.find((field) => field.kind === 'physical' && field.name.toLowerCase() === name.toLowerCase())
+    ?? descriptor.fields.find((field) => field.name.toLowerCase() === name.toLowerCase());
+  const findMeasure = (name: string) => descriptor.fields.find((field) => field.kind === 'measure' && field.name.toLowerCase() === name.toLowerCase())
+    ?? descriptor.fields.find((field) => field.name.toLowerCase() === name.toLowerCase());
   const calculations = new Map((query?.calculations?.length ? checkTileCalculations(descriptor, query).outputs : [])
     .map((output) => [output.id.toLowerCase(), output]));
   return {
     dimension: (name) => {
-      const field = find(name);
+      const field = findField(name);
       const time = Boolean(field && field.kind === 'physical' && (field.role === 'time' || field.type === 'date' || field.type === 'timestamp'));
       const cardinality = observed.cardinality?.(name);
       return { time, ...(cardinality !== undefined ? { cardinality } : {}) };
     },
     measure: (name) => {
-      const field = find(name);
+      const field = findMeasure(name);
       const nonNegative = observed.nonNegative?.(name);
       const calculation = calculations.get(name.toLowerCase());
       if (calculation && (!field || field.kind !== 'measure')) {

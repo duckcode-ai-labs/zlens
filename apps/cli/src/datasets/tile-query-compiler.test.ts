@@ -329,3 +329,137 @@ describe('pivot totals (RFC 0009 step 4)', () => {
       .toThrowError(expect.objectContaining({ message: expect.stringContaining('remove the row limit') }));
   });
 });
+
+describe('fields from related tables (design D2)', () => {
+  const joined = (): DatasetDescriptor => {
+    const base = orderLines();
+    return {
+      ...base,
+      fields: [
+        ...base.fields,
+        { kind: 'physical', name: 'customer_id', qualifiedId: 'order_lines.customer_id', type: 'string', role: 'dimension', status: 'approved' },
+        { kind: 'physical', name: 'customer__customer_name', qualifiedId: 'related::customer::customer_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'customer', column: 'customer_name' } },
+        { kind: 'physical', name: 'customer__region__region_name', qualifiedId: 'related::customer__region::region_name', type: 'string', role: 'dimension', status: 'approved', related: { join: 'customer__region', column: 'region_name' } },
+      ],
+      joins: [
+        { id: 'customer', label: 'Customer', table: 'customers', relation: '"main"."customers"', keys: [{ from: 'customer_id', to: 'customer_id' }], cardinality: 'many_to_one', trust: 'certified', origin: 'model', relationshipId: 'shop::relationship::orders_customers', uniqueness: 'current', sentence: 'each order line has one customer' },
+        { id: 'customer__region', parent: 'customer', label: 'Region', table: 'regions', relation: '"main"."regions"', keys: [{ from: 'region_id', to: 'id' }], cardinality: 'many_to_one', trust: 'review_required', origin: 'drafted', relationshipId: 'p1:op', uniqueness: 'recheck', sentence: 'each customer has one region' },
+      ],
+    } as DatasetDescriptor;
+  };
+
+  it('compiles a tile on its own fields exactly as before', () => {
+    expect(compile('duckdb', grouped, joined()).sql).toBe(QUOTED_ANSI);
+    expect(compile('duckdb', grouped, joined()).joins).toEqual([]);
+  });
+
+  it('LEFT JOINs the related table on the relationship keys and selects only the related fields used', () => {
+    const compiled = compile('duckdb', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, joined());
+    expect(compiled.sql).toBe([
+      'WITH ds AS (SELECT __dql_base.*, __dql_j_customer."customer_name" AS "customer__customer_name"',
+      'FROM (SELECT * FROM order_lines) AS __dql_base',
+      'LEFT JOIN "main"."customers" AS __dql_j_customer ON __dql_base."customer_id" = __dql_j_customer."customer_id")',
+      // Customer Name groups by its customer (new-user round 3, problem 4): namesakes stay apart.
+      'SELECT CASE WHEN MIN(ds."customer_id") OVER (PARTITION BY ds."customer__customer_name") <> MAX(ds."customer_id") OVER (PARTITION BY ds."customer__customer_name") THEN CAST(ds."customer__customer_name" AS VARCHAR) || \' (#\' || CAST(ds."customer_id" AS VARCHAR) || \')\' ELSE ds."customer__customer_name" END AS "customer__customer_name", SUM(ds."net_amount") AS "revenue"',
+      'FROM ds',
+      'GROUP BY ds."customer__customer_name", ds."customer_id"',
+    ].join('\n'));
+    expect(compiled.joins.map((join) => join.id)).toEqual(['customer']);
+    expect(compiled.nameKeys).toEqual([{ field: 'customer__customer_name', key: 'customer_id', alias: 'customer__customer_name' }]);
+    expect(compiled.nameWarnings).toEqual([]);
+  });
+
+  it('follows a second hop through its parent, and a page filter on a related field adds the join', () => {
+    const compiled = compileDatasetTileQuery({
+      descriptor: joined(),
+      query: { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] },
+      filters: [{ field: 'customer__region__region_name', op: 'in', values: ['West'] }],
+      driver: 'duckdb',
+      sourceSql: 'SELECT * FROM order_lines',
+    });
+    expect(compiled.sql).toContain('LEFT JOIN "main"."customers" AS __dql_j_customer ON __dql_base."customer_id" = __dql_j_customer."customer_id"\nLEFT JOIN "main"."regions" AS __dql_j_customer__region ON __dql_j_customer."region_id" = __dql_j_customer__region."id"');
+    expect(compiled.sql).toContain('__dql_j_customer__region."region_name" AS "customer__region__region_name"');
+    expect(compiled.sql).toContain('WHERE ds."customer__region__region_name" IN ($1)');
+    expect(compiled.joins.map((join) => join.id)).toEqual(['customer', 'customer__region']);
+  });
+
+  it('keeps Snowflake references unquoted so upper-cased names resolve, and detail rows default to own columns', () => {
+    const snowflake = compile('snowflake', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, joined());
+    expect(snowflake.sql).toContain('__dql_j_customer.customer_name AS customer__customer_name');
+    expect(snowflake.sql).toContain('ON __dql_base.customer_id = __dql_j_customer.customer_id');
+    const detail = compile('duckdb', { dimensions: [], measures: [], detail: true, limit: 5 }, joined());
+    expect(detail.joins).toEqual([]);
+    expect(detail.sql).not.toContain('customer__customer_name');
+  });
+
+  it('refuses a join whose relation is not a plain table name', () => {
+    const descriptor = joined();
+    descriptor.joins![0] = { ...descriptor.joins![0]!, relation: 'customers; DROP TABLE x' };
+    expect(() => compile('duckdb', { dimensions: [{ field: 'customer__customer_name' }], measures: [{ measure: 'revenue' }] }, descriptor))
+      .toThrowError(expect.objectContaining({ code: 'DATASET_JOIN_INVALID' }));
+  });
+});
+
+describe('names grouped by their key (new-user round 3, problem 4)', () => {
+  const customers = (fields: DatasetDescriptor['fields'] = []): DatasetDescriptor => orderLines({
+    label: 'Customers',
+    grain: { entityIds: ['customer'], keyFields: ['customer_id'], keyEvidence: 'proof.customers' },
+    fields: [
+      { kind: 'physical', name: 'customer_id', qualifiedId: 'customers.customer_id', type: 'string', role: 'key', status: 'approved' },
+      { kind: 'physical', name: 'customer_name', qualifiedId: 'customers.customer_name', type: 'string', role: 'dimension', status: 'approved' },
+      { kind: 'physical', name: 'store_name', qualifiedId: 'customers.store_name', type: 'string', role: 'dimension', status: 'approved' },
+      { kind: 'physical', name: 'first_ordered_at', qualifiedId: 'customers.first_ordered_at', type: 'date', role: 'time', status: 'approved', time: { grains: ['month'], primary: true } },
+      { kind: 'physical', name: 'lifetime_spend', qualifiedId: 'customers.lifetime_spend', type: 'number', role: 'attribute', status: 'approved' },
+      { kind: 'measure', name: 'lifetime_spend', qualifiedId: 'customers.m.lifetime_spend', aggregation: 'sum', from: 'lifetime_spend', dependsOn: ['lifetime_spend'], additivity: { entities: 'additive', time: 'additive' }, allowedAggs: ['sum'], status: 'approved' },
+      ...fields,
+    ],
+  });
+  const top: TileQuery = { dimensions: [{ field: 'customer_name' }], measures: [{ measure: 'lifetime_spend' }], orderBy: [{ alias: 'lifetime_spend', direction: 'desc' }], limit: 10 };
+
+  it('groups a name of the row by the row key and shows the key only for a shared name', () => {
+    const compiled = compile('duckdb', top, customers());
+    expect(compiled.sql).toContain('GROUP BY ds."customer_name", ds."customer_id"');
+    expect(compiled.sql).toContain('ELSE ds."customer_name" END AS "customer_name"');
+    // Top N still ranks by the measure, ties broken by the shown name.
+    expect(compiled.sql).toContain('ORDER BY "lifetime_spend" DESC, "customer_name" ASC');
+    expect(compiled.nameKeys).toEqual([{ field: 'customer_name', key: 'customer_id', alias: 'customer_name' }]);
+    expect(compiled.columns[0]).toMatchObject({ alias: 'customer_name', role: 'dimension' });
+    expect(compiled.columns).toHaveLength(2);
+  });
+
+  it('casts to STRING on BigQuery and keeps a time grouping as it is', () => {
+    expect(compile('bigquery', top, customers()).sql).toContain('CAST(ds.`customer_id` AS STRING)');
+    const trend = compile('duckdb', { dimensions: [{ field: 'first_ordered_at', timeGrain: 'month' }], measures: [{ measure: 'lifetime_spend' }] }, customers());
+    expect(trend.nameKeys).toEqual([]);
+    expect(trend.sql).not.toContain('OVER (PARTITION BY');
+  });
+
+  it('warns about a name whose key it does not know, and groups it as it is', () => {
+    const compiled = compile('duckdb', { dimensions: [{ field: 'store_name' }], measures: [{ measure: 'lifetime_spend' }] }, customers());
+    expect(compiled.sql.endsWith('GROUP BY ds."store_name"')).toBe(true);
+    expect(compiled.nameKeys).toEqual([]);
+    expect(compiled.nameWarnings).toEqual([{ field: 'store_name', entity: 'store', message: 'Store Name may not be unique: different stores with the same name are shown as one, and this data has no store key to tell them apart.' }]);
+  });
+
+  it('is off for a filter value list and a period comparison, and in pivot totals the key is grouped with the name', () => {
+    const values = compileDatasetTileQuery({ descriptor: customers(), query: top, driver: 'duckdb', sourceSql: 'SELECT * FROM customers', groupNamesByKey: false });
+    expect(values.sql).toContain('GROUP BY ds."customer_name"\n');
+    expect(values.nameWarnings).toEqual([]);
+    const pivot = compile('duckdb', { dimensions: [{ field: 'customer_name' }, { field: 'store_name' }], measures: [{ measure: 'lifetime_spend' }], rollups: [['store_name']] }, customers());
+    expect(pivot.sql).toContain('GROUP BY GROUPING SETS ((ds."customer_name", ds."customer_id", ds."store_name"), (ds."store_name"))');
+  });
+
+  it('filters a bar told apart by its key to that one key', () => {
+    const compiled = compileDatasetTileQuery({
+      descriptor: customers(),
+      query: top,
+      filters: [{ field: 'customer_name', op: 'in', values: ['Maria Lopez (#C1)', 'Bob'] }],
+      driver: 'duckdb',
+      sourceSql: 'SELECT * FROM customers',
+    });
+    expect(compiled.sql).toContain('WHERE ((ds."customer_name" = $1 AND CAST(ds."customer_id" AS VARCHAR) = $2) OR ds."customer_name" = $3)');
+    expect(compiled.variables).toMatchObject({ __dataset_tile_customer_name_1: 'Maria Lopez', __dataset_tile_customer_name_2: 'C1', __dataset_tile_customer_name_3: 'Bob' });
+    const excluded = compileDatasetTileQuery({ descriptor: customers(), query: top, filters: [{ field: 'customer_name', op: 'neq', values: ['Maria Lopez (#C1)'] }], driver: 'duckdb', sourceSql: 'SELECT * FROM customers' });
+    expect(excluded.sql).toContain('WHERE NOT (');
+  });
+});

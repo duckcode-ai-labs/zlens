@@ -22,7 +22,7 @@ export function plainBindingLabel(binding: Pick<StoryBinding, 'label'> & Partial
   return bindingCaption(binding, catalog);
 }
 
-const READER_ROWS = new Set(['Source', 'Owner', 'Calculations', 'Filters', 'Ran', 'Cached at']);
+const READER_ROWS = new Set(['Source', 'Certified', 'Owner', 'Joined', 'Calculations', 'Filters', 'Last refreshed', 'Cached at']);
 
 /** The receipt for one bound number: its words, value, tile, trust and the rows a reader needs. */
 export function numberReceiptInfo(
@@ -56,7 +56,7 @@ export function NumberReceiptCard({ info }: { info: NumberReceiptInfo }): JSX.El
         <span>{info.label}</span>
         <strong>{info.value}</strong>
       </header>
-      {info.trust ? <p className={`dql-number-receipt-trust ${info.trust.state}`}><b>{info.trust.label}</b> · {info.trust.detail}</p> : null}
+      {info.trust ? <p className={`dql-number-receipt-trust ${info.trust.state}`}><b>{info.trust.byline ?? info.trust.label}</b> · {info.trust.detail}</p> : null}
       <dl>
         {info.tileTitle ? <div><dt>Tile</dt><dd>{info.tileTitle}</dd></div> : null}
         {info.rows.map((row) => <div key={row.label}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}

@@ -1,12 +1,12 @@
 # Set up an AI provider
 
-Ask, Notebook AI and the AI helpers in Block Studio and App Studio need a
+Ask, Notebook AI and the AI helpers in the saved query editor and App Studio need a
 language model. Everything else works without one: notebooks, SQL and DQL
-queries, blocks, certification, Apps and lineage.
+queries, saved queries, certification, Apps and lineage.
 
 !!! note "Ask needs a model, even for certified answers"
     Ask uses the model to understand the question before it looks for a
-    certified block. Without a provider, Ask answers **Couldn't run this
+    certified saved query. Without a provider, Ask answers **Couldn't run this
     query** and says that no AI model is configured.
 
 ## Pick a provider
@@ -43,16 +43,25 @@ With **Ollama — local**, questions and data never leave your network:
    routing**, the **Model** name.
 4. Click **Test, save & activate**.
 
-## Embeddings (optional)
+## Search (optional)
 
-**Embeddings**, on the same page, decide whether a question can match a
-metric by meaning or only by shared words.
+**Search**, on the same page, decides whether a question can match a metric
+by meaning or only by shared words. It reads **Search: word-based** until you
+choose otherwise; ZLens never switches by itself, even when Ollama is
+running.
 
-- **Offline (Default)** matches words only. It cannot connect "drinks" to a
-  `beverage_revenue` metric.
-- **Ollama (Local)** and **OpenAI** match by meaning.
+- **Word-based** (the default) matches words only. It cannot connect "drinks"
+  to a `beverage_revenue` metric.
+- **Use local Ollama embeddings (nomic-embed-text)** matches by meaning. It
+  runs on this computer and nothing leaves it. Turning it on downloads the
+  model into Ollama if needed and re-embeds the catalog; turning it off goes
+  back to word-based search.
+- **Technical details** has the other models, **OpenAI**, **Test** and
+  **Re-index catalog**, and the embedder in use.
 
-After you change it, click **Re-index catalog**.
+When Ollama serves an embedding model and the project has not chosen one,
+`zlens notebook` says so once in the terminal. A server operator can set
+`ZLENS_EMBEDDINGS_AUTODETECT=on` to adopt a local model automatically.
 
 ## Where the settings are stored
 

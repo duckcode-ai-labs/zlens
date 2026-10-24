@@ -226,4 +226,55 @@ describe('runInit', () => {
     expect(gitignore.split(/\r?\n/).map((line) => line.trim())).not.toContain('.dql/');
     expect(readdirSync(projectDir)).not.toContain('semantic-layer');
   });
+  it('makes a folder with only a database file a Database only project, with no conflicting --warehouse-first advice (D7)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-db-only-'));
+    const projectDir = join(root, 'shop');
+    mkdirSync(projectDir);
+    writeFileSync(join(projectDir, 'jaffle_shop.duckdb'), '');
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('DuckDB file: jaffle_shop.duckdb');
+      expect(output).toContain('Project type: Database only');
+      expect(output).not.toContain('--warehouse-first');
+      expect(output).not.toContain('No dbt project?');
+    } finally {
+      spy.mockRestore();
+    }
+    const config = JSON.parse(readFileSync(join(projectDir, 'dql.config.json'), 'utf-8'));
+    expect(config.modeling).toEqual({ mode: 'warehouse-first' });
+    expect(config.manifestVersion).toBe(3);
+    expect(config.semanticLayer).toEqual({ provider: 'dql' });
+    expect(config.connections.default).toEqual({ driver: 'duckdb', filepath: 'jaffle_shop.duckdb' });
+    expect(config.dbt).toBeUndefined();
+  });
+
+  it('leaves an empty folder undecided for Guided Setup and never suggests a flag', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-empty-'));
+    const projectDir = join(root, 'empty');
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('Guided Setup asks whether you use dbt or a database only');
+      expect(output).not.toContain('--warehouse-first');
+    } finally {
+      spy.mockRestore();
+    }
+    const config = JSON.parse(readFileSync(join(projectDir, 'dql.config.json'), 'utf-8'));
+    expect(config.modeling).toBeUndefined();
+    expect(config.connections).toBeUndefined();
+  });
+
+  it('does not create the "Example Customer Rollup" placeholder block in the welcome notebook (D7)', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-welcome-'));
+    const projectDir = join(root, 'shop');
+    mkdirSync(projectDir);
+    writeFileSync(join(projectDir, 'jaffle_shop.duckdb'), '');
+    await runInit(projectDir, INIT_FLAGS);
+    const welcome = readFileSync(join(projectDir, 'notebooks', 'welcome.dqlnb'), 'utf-8');
+    expect(welcome).not.toContain('Example Customer Rollup');
+    expect(welcome).not.toContain('"type": "dql"');
+  });
 });

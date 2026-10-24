@@ -9,7 +9,7 @@ question" system.
 1. **Certified block** — execute a suitable certified block first. A block is
    selected only when its measure, grain, filters, and requested shape fit the
    question.
-2. **Governed semantic answer** — when no block fits, resolve one or more
+2. **Answer from Metrics** — when no block fits, resolve one or more
    semantic metrics and compile them deterministically. This is a completed,
    governed answer, but it does not certify a newly saved DQL block.
 3. **Review-required generated answer** — generate SQL only when the semantic
@@ -136,8 +136,13 @@ fallback/refusal behavior.
 ## Joins in Ask (amendment A-004)
 
 Ask has two governed sources: certified blocks and the semantic layer, whose
-compiler owns its joins. Everything else is answered by AI-written SQL, and
-the AI writes the joins:
+compiler owns its joins. A semantic answer is From Metrics only when every
+join its compile takes is a certified relationship (the check
+`resolve_analytical_path` applies: certified, valid warehouse proof, safe
+fanout). A compile that joins through a draft relationship, or a join no
+relationship models, is headed "Answer to review, from governed definitions",
+and the answer names the join. Everything else is answered by AI-written SQL,
+and the AI writes the joins:
 
 - Relationships declared in Domain Studio are hints in the drafter's context:
   a certified relationship is the preferred join ("certified in Domain
@@ -149,4 +154,5 @@ the AI writes the joins:
   every required filter present, and a join key that repeats on both sides
   under an aggregate is refused.
 - Domain Studio's Validate and certification (REL-002, REL-005) are unchanged
-  and govern how a relationship becomes certified; they do not gate Ask.
+  and govern how a relationship becomes certified. They do not gate AI-written
+  SQL; they decide whether a semantic answer that joins is From Metrics.

@@ -1,6 +1,6 @@
 {
   "name": "@zlens/core",
-  "version": "0.2.1",
+  "version": "0.2.7",
   "description": "DQL language core: lexer, parser, AST, semantic analysis",
   "license": "Apache-2.0",
   "type": "module",
@@ -59,6 +59,18 @@
       "types": "./dist/apps/canvas-page.d.ts",
       "import": "./dist/apps/canvas-page.js"
     },
+    "./apps/app-data-sources": {
+      "types": "./dist/apps/app-data-sources.d.ts",
+      "import": "./dist/apps/app-data-sources.js"
+    },
+    "./apps/app-tile-join-trust": {
+      "types": "./dist/apps/app-tile-join-trust.d.ts",
+      "import": "./dist/apps/app-tile-join-trust.js"
+    },
+    "./apps/app-trust": {
+      "types": "./dist/apps/app-trust.d.ts",
+      "import": "./dist/apps/app-trust.js"
+    },
     "./apps/viz-encoding": {
       "types": "./dist/apps/viz-encoding.d.ts",
       "import": "./dist/apps/viz-encoding.js"
@@ -87,9 +99,25 @@
       "types": "./dist/apps/reader-trust.d.ts",
       "import": "./dist/apps/reader-trust.js"
     },
+    "./apps/filter-dates": {
+      "types": "./dist/apps/filter-dates.d.ts",
+      "import": "./dist/apps/filter-dates.js"
+    },
+    "./apps/filter-reach": {
+      "types": "./dist/apps/filter-reach.d.ts",
+      "import": "./dist/apps/filter-reach.js"
+    },
     "./datasets/table-draft": {
       "types": "./dist/datasets/table-draft.d.ts",
       "import": "./dist/datasets/table-draft.js"
+    },
+    "./datasets/result-fields": {
+      "types": "./dist/datasets/result-fields.d.ts",
+      "import": "./dist/datasets/result-fields.js"
+    },
+    "./datasets/related-fields": {
+      "types": "./dist/datasets/related-fields.d.ts",
+      "import": "./dist/datasets/related-fields.js"
     },
     "./datasets/descriptor": {
       "types": "./dist/datasets/descriptor.d.ts",
@@ -114,6 +142,10 @@
     "./modeling-ids": {
       "types": "./dist/manifest/model-area-id.d.ts",
       "import": "./dist/manifest/model-area-id.js"
+    },
+    "./staging-tables": {
+      "types": "./dist/manifest/staging-tables.d.ts",
+      "import": "./dist/manifest/staging-tables.js"
     }
   },
   "scripts": {

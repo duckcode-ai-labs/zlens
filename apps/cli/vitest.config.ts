@@ -50,6 +50,12 @@ export default defineConfig({
           "../../packages/dql-core/src/datasets/component-proof.node.ts",
         ),
       },
+      // Browser-safe subpaths the App Studio's planners import (a test loads
+      // one of them by path to exercise the same code the browser runs).
+      {
+        find: /^@zlens\/core\/(datasets|apps)\/([a-z-]+)$/,
+        replacement: resolve(__dirname, "../../packages/dql-core/src/$1/$2.ts"),
+      },
       {
         find: "@zlens/core",
         replacement: resolve(__dirname, "../../packages/dql-core/src/index.ts"),

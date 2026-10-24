@@ -151,15 +151,14 @@ JSON document for a local-first App package.
 {
   "version": 1,
   "id": "cards-ops",
-  "title": "Cards Operations",
+  "name": "Cards Operations",
   "domain": "cards",
+  "owners": ["cards-analytics@example.com"],
   "subdomain": "fraud",
   "groups": ["daily-ops"],
   "visibility": "shared",
   "lifecycle": "draft",
-  "dashboards": [
-    { "id": "daily-ops", "path": "dashboards/daily-ops.dqld", "title": "Daily Ops" }
-  ],
+  "homepage": { "type": "dashboard", "id": "daily-ops" },
   "notebooks": [
     {
       "path": "notebooks/investigation.dqlnb",
@@ -170,6 +169,12 @@ JSON document for a local-first App package.
   ]
 }
 ```
+
+The App loader requires `id` (letters, digits, `-` and `_`, starting with a
+letter or digit), `name`, a domain (`ownerDomain`, or the older `domain`) and
+at least one entry in `owners`. An App missing any of them is not loaded. `version` is optional and must be `1`.
+Pages are not listed here: each `.dqld` file under the App's `dashboards/`
+folder is a page. A notebook `path` is relative to the project root.
 
 In OSS, `visibility`, `domain`, `subdomain`, `groups`, `audience`, and
 `lifecycle` are organization metadata and trust labels. They are not hosted
@@ -208,6 +213,9 @@ Lives at the project root. Written by `zlens init` and `create-zlens-app`.
   "agent": {
     "valueProfile": { "mode": "off" },
     "resultReview": { "mode": "off" }
+  },
+  "apps": {
+    "requireCertifiedToPublish": false
   }
 }
 ```
@@ -243,6 +251,18 @@ Fields:
   call per AI-drafted answer (median 3.6 s on Claude). See
   [a second look at the result](../ask/needs-review.md#optional-a-second-look-at-the-result).
   Both settings are read at every question, so a change applies to the next one.
+- **`apps.requireCertifiedToPublish`** — `true` or `false`, `false` by default.
+  Off: publishing an App is never blocked by trust; tiles nobody certified
+  carry **Not certified yet** for readers, and the publish dialog recommends
+  certifying them. `true`: every tile of an App (its data, every join it can
+  reach, every input of a calculation) must be certified before the App is
+  published; the publish dialog and the server refuse with one message,
+  `APP_BUILD_REQUIRES_CERTIFIED`, and list the certify actions. It is read at
+  every publish, so a change applies to the next one. There is no per-App
+  setting; an older App's `sourcePolicy` ("Only certified data") is ignored.
+  `zlens doctor` reports it on its **App publishing** line. With a host, the
+  host's admin policy can turn it on for the project. See
+  [Publish](../apps/build.md#7-publish).
 
 ### Environment variables
 

@@ -15,7 +15,8 @@ You end with:
 
 You need:
 
-- Node.js 20 or newer (`node -v`)
+- Node.js 20, 22 or 24, with 24 LTS recommended (`node -v`). Node 25 and 26
+  are not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
 - Python 3.9 to 3.13, to build the sample with dbt (`python3 --version`)
 - git
 
@@ -74,7 +75,7 @@ npm install --prefix .dql/connectors duckdb
 
 !!! warning "Do not run `create-zlens-app` in the sample"
     `npx create-zlens-app` inside the sample creates a second, empty workspace
-    in `dql/`, without the sample's domain, blocks, App and notebook. If you
+    in `dql/`, without the sample's domain, saved queries, App and notebook. If you
     already have a `dql/` folder from an older quickstart, delete it.
 
 ## 3. Import the dbt project
@@ -103,21 +104,24 @@ opens it. Leave the terminal running.
 The first time, ZLens opens **Guided Setup** in four steps.
 
 1. **Where does your data model live?** The sample is already a ZLens
-   project on a dbt project, so **dbt project** is selected, and below it,
-   under **Connect your dbt project**, you see **dbt project ready** with
-   the path field showing `.` (this folder). Click **Preview**. ZLens shows
-   the models, sources and metrics it found and says **Nothing has changed
-   yet**. Click **Apply project**, then **Continue to database**. (No dbt
-   project of your own? See [No dbt? Start from your database](no-dbt.md).)
-2. **Connect your database.** The sample's DuckDB connection is already set
-   up: you see **DuckDB · configured** and **Test passed**. Click
-   **Continue to optional AI**.
+   project on a dbt project, so **Open an existing ZLens project** is
+   selected. Its card names the dbt project in this folder and the
+   connection `jaffle_shop_dev` (duckdb). Click **Continue to credentials**.
+   (No dbt project of your own? See
+   [No dbt? Start from your database](no-dbt.md).)
+2. **Check the connection.** The sample's DuckDB connection is already set
+   up: you see **DuckDB · configured** and **Test passed**. You already ran
+   `npm run sync`, so you don't need **Refresh dbt data**. Extra warehouse
+   schemas are under **Advanced** ("Optional: add warehouse schemas dbt
+   doesn't cover"); the sample needs none. Click **Continue to optional AI**.
 3. **Set up an AI provider.** This step is optional. Ask needs a model, but
-   notebooks, blocks, Apps and lineage do not. Set one up now
+   notebooks, saved queries, Apps and lineage do not. Set one up now
    ([how](ai-provider.md)) or click **Continue to finish**.
 4. **Where do you want to start?** Click **Finish setup**.
 
-You can run the setup again later from **Settings → Overview → Guided Setup**.
+Setup saves where you are: if you stop `zlens notebook` halfway, it opens on
+the same step next time. You can run the setup again later from
+**Settings → Overview → Guided Setup**.
 
 ## 6. Run your first query
 
@@ -147,14 +151,24 @@ one with `npx create-zlens-app@latest dql` from the dbt repo; see
 
 ## No dbt?
 
-ZLens also works straight on your database: connect it, choose the schemas
-to model, and ZLens drafts the entities and joins for you to certify. See
-[No dbt? Start from your database](no-dbt.md).
+ZLens also works straight on your database. Open the folder that holds your
+database file:
+
+```bash
+zlens notebook ./shop
+```
+
+It asks **No ZLens project here. Create one? [Y/n]**, creates a Database only
+project around the file and opens Guided Setup on **Database only**. Setup
+asks which schemas to read and drafts the entities and joins for you to
+certify. See [No dbt? Start from your database](no-dbt.md).
 
 ## Next
 
 - [Find your way around](workbench.md) the workbench.
 - [Ask a question](../ask/index.md) in plain English.
-- [Save the query as a block](../blocks/index.md) and certify it.
+- [Keep the query as a saved query](../blocks/index.md) and certify it.
+- [Share your work with your team](../notebooks/share-with-your-team.md)
+  through your own git repository.
 - [Add ZLens to your own dbt project](your-dbt-project.md), or
   [start from your database](no-dbt.md) without dbt.

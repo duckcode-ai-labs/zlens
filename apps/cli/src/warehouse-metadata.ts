@@ -383,9 +383,12 @@ export async function discoverWarehouseMetadataScopes(input: {
     dbtScopes,
     queryCount,
     truncated,
-    message: supported
-      ? `Found ${additionalCount} additional schema${additionalCount === 1 ? '' : 's'} outside the dbt project. Nothing was added or synchronized.`
-      : 'Live catalog discovery is not available for this connector. The configured database and schema are shown when available.',
+    // A project without dbt relations has no "dbt project" to be outside of.
+    message: !supported
+      ? 'Live catalog discovery is not available for this connector. The configured database and schema are shown when available.'
+      : dbtScopes.length > 0
+        ? `Found ${additionalCount} additional schema${additionalCount === 1 ? '' : 's'} outside the dbt project. Nothing was added or synchronized.`
+        : `Found ${additionalCount} schema${additionalCount === 1 ? '' : 's'}. Choose the ones ZLens should read, then Apply and synchronize.`,
   };
 }
 

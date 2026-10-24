@@ -527,7 +527,7 @@ export function DbtOnboardingFlow({
           <Section title="Your dbt-first workspace is ready to continue" description="Choose the next task. Setup is resumable, and trust improves as relationships, skills, evaluations, and certified assets are completed." t={t}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 10 }}>
               <StartCard title="Ask AI" body={setupSkipped ? 'Limited-context and review-required until domains are governed.' : 'Use the governed cascade; unsafe paths clarify or refuse.'} action="Open Ask" onClick={() => completeAndOpen('ask')} t={t} />
-              <StartCard title="Build a Block" body="Turn reviewed analysis into a reusable domain asset and evaluate it." action="New Block" onClick={() => completeAndOpen('block')} t={t} />
+              <StartCard title="Save a query" body="Turn reviewed analysis into a reusable saved query for this domain and evaluate it." action="New saved query" onClick={() => completeAndOpen('block')} t={t} />
               <StartCard title="Modeling" body="Continue models, relationships, terms, and skills." action="Open Modeling" onClick={() => completeAndOpen('modeling')} t={t} />
             </div>
           </Section>
@@ -628,7 +628,7 @@ function WelcomeStory({ t, chooser }: { t: Theme; chooser?: React.ReactNode }) {
           <h1 style={{ margin: '12px 0 0', fontSize: 27, fontWeight: 700, letterSpacing: '-0.02em', color: t.textPrimary, lineHeight: 1.25 }}>Analytics your AI<br />can&apos;t hallucinate</h1>
           <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 9 }}>
             {check('Sits on your dbt project or straight on your database — your models stay yours')}
-            {check(<>Questions route through <strong>certified blocks</strong> before AI writes SQL</>)}
+            {check(<>Questions route through <strong>certified saved queries</strong> before AI writes SQL</>)}
             {check('Every answer carries a trust label your stakeholders can read')}
           </div>
         </div>
@@ -673,13 +673,13 @@ function WelcomeStory({ t, chooser }: { t: Theme; chooser?: React.ReactNode }) {
           {stageCard(0.35, { border: 'rgba(10,107,94,0.3)', bg: 'rgba(10,107,94,0.05)', iconBg: 'rgba(10,107,94,0.12)', iconColor: '#0a6b5e', title: 'Domains & modeling', body: 'Business entities, proven joins, skills' },
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M7.97 4.42A2 2 0 0 0 7 6.13v4.37l5 3 5-3V6.13a2 2 0 0 0-.97-1.71l-3-1.8a2 2 0 0 0-2.06 0z" /><path d="M2.97 12.92A2 2 0 0 0 2 14.63v3.24a2 2 0 0 0 .97 1.71l3 1.8a2 2 0 0 0 2.06 0L12 19v-5.5l-5-3z" /><path d="M12 13.5V19l3.97 2.38a2 2 0 0 0 2.06 0l3-1.8a2 2 0 0 0 .97-1.71v-3.24a2 2 0 0 0-.97-1.71L17 10.5z" /></svg>)}
           {arrow}
-          {stageCard(0.6, { border: 'rgba(107,93,211,0.35)', bg: 'var(--accent-dim)', iconBg: 'rgba(107,93,211,0.14)', iconColor: t.accent, title: 'Certified blocks', body: 'Reusable governed answers — reviewed & certified', glow: true },
+          {stageCard(0.6, { border: 'rgba(107,93,211,0.35)', bg: 'var(--accent-dim)', iconBg: 'rgba(107,93,211,0.14)', iconColor: t.accent, title: 'Certified saved queries', body: 'Reusable governed answers — reviewed & certified', glow: true },
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="8" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /><rect x="13" y="13" width="8" height="8" rx="1.5" /></svg>)}
           {arrow}
           {stageCard(0.85, { border: t.cellBorder, bg: t.appBg, iconBg: 'rgba(178,107,31,0.12)', iconColor: '#b26b1f', title: 'Ask & research', body: 'Ask AI answers + SQL notebooks for deep dives' },
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z" /></svg>)}
           {arrow}
-          {stageCard(1.1, { border: 'rgba(46,139,87,0.3)', bg: 'rgba(46,139,87,0.05)', iconBg: 'var(--status-success-bg)', iconColor: 'var(--status-success)', title: 'Generative apps', body: 'Stakeholder apps built from certified blocks' },
+          {stageCard(1.1, { border: 'rgba(46,139,87,0.3)', bg: 'rgba(46,139,87,0.05)', iconBg: 'var(--status-success-bg)', iconColor: 'var(--status-success)', title: 'Generative apps', body: 'Stakeholder apps built from certified saved queries' },
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" /><path d="m3.3 7 8.7 5 8.7-5" /><path d="M12 22V12" /></svg>)}
         </div>
         <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -712,7 +712,7 @@ function WelcomeStory({ t, chooser }: { t: Theme; chooser?: React.ReactNode }) {
         {loopPill('Certify once', 'var(--status-success)', { border: 'var(--status-success-border)', bg: 'var(--status-success-bg)', color: 'var(--status-success)' })}
         {loopArrow}
         {loopPill('Everyone reuses — instantly', '#4a74c9')}
-        <span style={{ width: '100%', textAlign: 'right', fontSize: 11, color: t.textMuted, marginTop: 2 }}>A certified block answers the same question forever — no regenerated SQL, no second review, no token bill.</span>
+        <span style={{ width: '100%', textAlign: 'right', fontSize: 11, color: t.textMuted, marginTop: 2 }}>A certified saved query answers the same question forever — no regenerated SQL, no second review, no token bill.</span>
       </div>
 
       {connector('Which is why the numbers survive the hardest room in the company.')}
@@ -728,9 +728,9 @@ function WelcomeStory({ t, chooser }: { t: Theme; chooser?: React.ReactNode }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 10, animation: 'dql-setup-fadein 0.5s ease-out both', animationDelay: '1.5s' }}>
         {guaranteeCard('High confidence', 'Certified answers at stakeholder precision — every answer carries its trust label.',
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--status-success)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1 1 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="m9 12 2 2 4-4" /></svg>)}
-        {guaranteeCard('Lower AI cost', 'Reusable blocks answer repeat questions instantly — no regenerated SQL, no wasted tokens.',
+        {guaranteeCard('Lower AI cost', 'Reusable saved queries answer repeat questions instantly — no regenerated SQL, no wasted tokens.',
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="8" height="8" rx="1.5" /><rect x="13" y="13" width="8" height="8" rx="1.5" /><rect x="3" y="13" width="8" height="8" rx="1.5" /><rect x="13" y="3" width="8" height="8" rx="1.5" /></svg>)}
-        {guaranteeCard('Git-versioned', 'Blocks, domains, and apps are files — branch, review, and approve like code.',
+        {guaranteeCard('Git-versioned', 'Saved queries, domains, and apps are files — branch, review, and approve like code.',
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#b26b1f" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><line x1="6" x2="6" y1="3" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></svg>)}
         {guaranteeCard('Full lineage', 'Trace any number from source table to app — including across domains.',
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#4a74c9" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="12" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="19" cy="19" r="2" /><path d="M7 12l10-6M7 12l10 6" /></svg>)}
@@ -748,7 +748,7 @@ function Field({ label, hint, t, children }: { label: string; hint: string; t: T
 }
 
 function OwnershipCallout({ t }: { t: Theme }) {
-  return <Notice t={t} title="Read-only dbt ownership" body="Models, columns, descriptions, tests, lineage, catalog types, and MetricFlow formulas stay in dbt. ZLens stores sparse domains, bindings, relationship safety, contracts, skills, blocks, and evaluations." />;
+  return <Notice t={t} title="Read-only dbt ownership" body="Models, columns, descriptions, tests, lineage, catalog types, and MetricFlow formulas stay in dbt. ZLens stores sparse domains, bindings, relationship safety, contracts, skills, saved queries, and evaluations." />;
 }
 
 function Notice({ title, body, t }: { title: string; body: string; t: Theme }) {

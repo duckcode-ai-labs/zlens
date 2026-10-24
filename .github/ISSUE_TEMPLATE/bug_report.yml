@@ -24,7 +24,7 @@ body:
     attributes:
       label: Version
       description: Package or extension version where you saw the issue.
-      placeholder: '0.2.1'
+      placeholder: '0.2.7'
     validations:
       required: true
   - type: textarea

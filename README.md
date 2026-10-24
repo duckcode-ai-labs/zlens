@@ -10,7 +10,7 @@
 <p align="center">
   Certified answers on your warehouse.<br>
   Every answer says what it is built on:<br>
-  a certified block, your semantic metrics, or SQL that AI wrote and someone still needs to review.
+  a certified saved query, your semantic metrics, or SQL that AI wrote and someone still needs to review.
 </p>
 
 <p align="center">
@@ -29,7 +29,7 @@
 
 <p align="center">
   <a href="https://duckcode-ai-labs.github.io/zlens/">
-    <img src="docs/media/clips/overview.gif" alt="ZLens in under a minute: Ask 'How has revenue changed by month?' and get a Certified answer from the monthly_revenue block, see how it was answered, open the Jaffle Growth Review App where all data is certified, then trace lineage from the dbt sources through the block to the App" width="100%">
+    <img src="docs/media/clips/overview.gif" alt="ZLens in under a minute: Ask 'How has revenue changed by month?' and get a Certified answer from the monthly_revenue saved query, see how it was answered, open the Jaffle Growth Review App where all data is certified, then trace lineage from the dbt sources through the saved query to the App" width="100%">
   </a>
 </p>
 
@@ -45,9 +45,9 @@ labels what it used:
 
 | Label | Answered from | Means |
 |---|---|---|
-| ● **Certified** | a certified block | Ran a block a person reviewed and certified, exactly as certified. |
-| ◐ **Governed** | your semantic layer | Built from approved metrics and dimensions. |
-| ○ **Needs review** | SQL written by AI | Grounded in your schema and checked before it runs, then saved as a draft block until someone certifies it. |
+| ● **Certified** | a certified saved query | Ran a saved query a person reviewed and certified, exactly as certified. |
+| ◐ **From Metrics** | your semantic layer | Built from approved metrics and dimensions. Not certified. |
+| ○ **Needs review** | SQL written by AI | Grounded in your schema and checked before it runs, then saved as a draft saved query until someone certifies it. |
 
 If none of these can answer safely, Ask refuses and says why. It never dresses
 an unreviewed number up as a trusted one.
@@ -56,7 +56,8 @@ an unreviewed number up as a trusted one.
   models and profiles; it does not replace dbt. No dbt? ZLens reads your
   database's tables, keys and comments and drafts the joins for you to
   certify.
-- **Everything is a file.** Blocks (`.dql`), notebooks (`.dqlnb`) and Apps live
+- **Everything is a file.** Saved queries (`.dql` block files), notebooks
+  (`.dqlnb`) and Apps live
   in your repo, so they are diffed, reviewed and versioned like code.
 - **Works with your coding agent.** A built-in MCP server gives Claude Code,
   Codex, Cursor and Claude Desktop the same certified-first answers and labels.
@@ -67,8 +68,9 @@ an unreviewed number up as a trusted one.
 ## Quickstart
 
 Run ZLens on the Jaffle Shop sample dbt project. It takes about ten minutes
-and needs Node.js 20 or newer, Python 3.9 to 3.13 and git. No warehouse
-account is needed.
+and needs Node.js 20, 22 or 24 (24 LTS recommended), Python 3.9 to 3.13 and
+git. No warehouse account is needed. Node 25 and 26 are not supported yet:
+ZLens's DuckDB driver has no prebuilt binary for them.
 
 **1. Get the sample dbt project and build its DuckDB database**
 
@@ -127,7 +129,7 @@ limit 10
 ```
 
 Next: [ask a question in plain English](https://duckcode-ai-labs.github.io/zlens/ask/),
-[save the query as a block and certify it](https://duckcode-ai-labs.github.io/zlens/blocks/),
+[keep the query as a saved query and certify it](https://duckcode-ai-labs.github.io/zlens/blocks/),
 or [add ZLens to your own dbt project](https://duckcode-ai-labs.github.io/zlens/get-started/your-dbt-project/).
 The full walkthrough is the [Quickstart guide](https://duckcode-ai-labs.github.io/zlens/get-started/).
 
@@ -174,17 +176,17 @@ covers the switch.
 ### Ask, with a trust label and the receipts
 
 Ask a question in plain English. The answer opens with its trust label, the
-block or metrics it came from and their owner. **How it was answered** shows
-every step: the certified blocks it checked, the semantic layer, the checks
+saved query or metrics it came from and their owner. **How it was answered**
+shows every step: the certified saved queries it checked, the semantic layer, the checks
 before running, and the exact DQL and SQL that ran.
 
 <p align="center">
-  <img src="docs/assets/readme/ask-certified.png" alt="Ask answers 'How has revenue changed by month?' with a Certified answer from the monthly_revenue block; the How it answered panel lists Read the question, Certified blocks, Semantic layer skipped, Checked before running, Ran on the warehouse and Answer" width="100%">
+  <img src="docs/assets/readme/ask-certified.png" alt="Ask answers 'How has revenue changed by month?' with a Certified answer from the monthly_revenue saved query; the How it answered panel lists Read the question, Certified blocks, Semantic layer skipped, Checked before running, Ran on the warehouse and Answer" width="100%">
 </p>
 
-When no certified block or metric fits, AI writes the SQL from your schema.
+When no certified saved query or metric fits, AI writes the SQL from your schema.
 ZLens checks it before it runs, labels the answer **AI-generated**, and saves
-it as a draft block for someone to review. It never certifies itself.
+it as a draft saved query for someone to review. It never certifies itself.
 
 <p align="center">
   <img src="docs/assets/readme/ask-review.png" alt="An AI-generated answer with 4 checks passed, its result table, and the line Saved for review as a draft block (not certified)" width="85%">
@@ -194,11 +196,11 @@ it as a draft block for someone to review. It never certifies itself.
 [How Ask answered](https://duckcode-ai-labs.github.io/zlens/ask/how-it-answered/) ·
 [Answers that need review](https://duckcode-ai-labs.github.io/zlens/ask/needs-review/)
 
-### Blocks: save is a draft, certify is a person
+### Saved queries: save is a draft, certify is a person
 
-A block is a named, reusable query in a `.dql` file with an owner, a
-description, tests and a chart. Save a notebook cell with **Save Block**, and
-it is a draft. **Certify** runs the block and its checks; only if they pass
+A saved query is a named, reusable query with an owner, a description, tests
+and a chart. Save a notebook cell with **Save as saved query**, and it is a
+draft. **Certify** runs the saved query and its checks; only if they pass
 does it become Certified, with a receipt of who certified it, when, and under
 which rules.
 
@@ -206,7 +208,7 @@ which rules.
   <img src="docs/assets/readme/block-certified.png" alt="Block Studio showing top_customers_by_spend as Certified, with the receipt line Certified by analytics@jaffle.shop via Block Studio, OSS rules, and a Block certified panel with Metadata, Validation, Run, Chart and Lineage checks" width="100%">
 </p>
 
-[Blocks](https://duckcode-ai-labs.github.io/zlens/blocks/) ·
+[Saved queries](https://duckcode-ai-labs.github.io/zlens/blocks/) ·
 [Save and certify](https://duckcode-ai-labs.github.io/zlens/blocks/certify/)
 
 ### Notebooks
@@ -223,7 +225,7 @@ is a `.dqlnb` file; results stay out of git.
 
 ### Apps and dashboards
 
-Build Apps from blocks for the people who read the numbers. Every tile carries
+Build Apps from saved queries for the people who read the numbers. Every tile carries
 its trust label and a receipt, and the page says how much of it is certified.
 Ask about an App and the answer reads that page's own results and filters, and
 takes the trust of the weakest tile it read.
@@ -241,14 +243,14 @@ takes the trust of the weakest tile it read.
 
 ### Lineage, from your tables to the App
 
-Trace any block, App or notebook end to end: your warehouse tables (and, if you
-use dbt, the sources and models behind them), business terms, the block, its
+Trace any saved query, App or notebook end to end: your warehouse tables (and, if you
+use dbt, the sources and models behind them), business terms, the saved query, its
 chart, the dashboard page and the App. Lineage is built from your synced
 warehouse catalog or dbt manifest plus your ZLens files, in the workbench or
 with `zlens lineage`.
 
 <p align="center">
-  <img src="docs/assets/readme/lineage.png" alt="End-to-end lineage of the monthly_revenue block: four dbt sources, staging models, order_items and orders, the Revenue and Order business terms, the block, its chart, the jaffle-growth overview dashboard and the Jaffle Growth Review App" width="100%">
+  <img src="docs/assets/readme/lineage.png" alt="End-to-end lineage of the monthly_revenue saved query: four dbt sources, staging models, order_items and orders, the Revenue and Order business terms, the saved query, its chart, the jaffle-growth overview dashboard and the Jaffle Growth Review App" width="100%">
 </p>
 
 [Lineage](https://duckcode-ai-labs.github.io/zlens/lineage/)
@@ -256,7 +258,7 @@ with `zlens lineage`.
 ### AI agents over MCP
 
 Point your coding agent at the project and it answers data questions the way
-Ask does: certified blocks first, the same trust labels, AI-written SQL kept
+Ask does: certified saved queries first, the same trust labels, AI-written SQL kept
 as a draft for review.
 
 ```console
@@ -282,21 +284,22 @@ Keep `npm run notebook` running while the agent works: it runs the queries.
 
 <p align="center">
   <a href="docs/assets/architecture/dql-flow.svg">
-    <img src="docs/assets/architecture/dql-flow.svg" alt="ZLens architecture: a dbt project and an optional DataLex manifest feed Sync context and Certified blocks, which compile into the DQL manifest that serves Apps, notebooks, agents over MCP and CI verify; AI-written SQL enters as drafts for review" width="100%">
+    <img src="docs/assets/architecture/dql-flow.svg" alt="ZLens architecture: a dbt project and an optional DataLex manifest feed Sync context and Certified saved queries, which compile into the DQL manifest that serves Apps, notebooks, agents over MCP and CI verify; AI-written SQL enters as drafts for review" width="100%">
   </a>
 </p>
 
 1. **Sync.** `zlens sync dbt` reads your dbt manifest, semantic models and
    warehouse shape into a local index. Without dbt, `zlens sync warehouse`
    reads the schemas you choose: tables, columns, keys and comments.
-2. **Certify.** Blocks are reviewed queries with an owner and tests.
+2. **Certify.** Saved queries are reviewed queries with an owner and tests.
    Certifying records who vouched for them.
-3. **Compile.** `zlens compile` writes `dql-manifest.json`: every block,
+3. **Compile.** `zlens compile` writes `dql-manifest.json`: every saved query,
    metric, notebook and App, with lineage and trust.
-4. **Serve.** Apps, notebooks, Ask, your agent over MCP and `zlens verify` in
-   CI all use the same certified blocks instead of each inventing its own SQL.
+4. **Serve.** Apps, notebooks, Ask, your agent over MCP and `zlens eval` in
+   CI all use the same certified saved queries instead of each inventing its own SQL.
 
-DQL is the query language ZLens blocks are written in. See
+DQL is the language saved queries are written in: each is a `block` in a
+`.dql` file. See
 [Concepts](https://duckcode-ai-labs.github.io/zlens/get-started/concepts/),
 [the DQL language](https://duckcode-ai-labs.github.io/zlens/reference/language/)
 and the [architecture overview](https://duckcode-ai-labs.github.io/zlens/architecture/overview/).

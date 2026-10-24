@@ -1,8 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Boxes, Database, FolderOpen, GitBranch, Layers, RefreshCw } from 'lucide-react';
 import type { Theme } from '../../themes/notebook-theme';
+import type { WaitingWarehouseDrafts } from '../../api/client';
+import { stagingLeftOutSentence, waitingDraftsSentence } from '../modeling/proposal-review-words';
 import {
+  databaseOnlyUnavailable,
   EXISTING_PROJECT_TITLE,
+  existingRefreshLabel,
   MODEL_SOURCE_OPTIONS,
   type DraftOutcome,
   type ExistingProject,
@@ -39,7 +43,7 @@ export function ModelSourceChooser({
   name?: string;
   t: Theme;
 }) {
-  const card = (id: ModelSource, title: string, body: React.ReactNode, disabled: boolean) => {
+  const card = (id: ModelSource, title: string, body: React.ReactNode, disabled: boolean, note?: string | null) => {
     const selected = value === id;
     const inputId = `${name}-${id}`;
     return (
@@ -57,7 +61,8 @@ export function ModelSourceChooser({
           background: selected ? 'var(--accent-dim)' : t.cellBg,
           padding: '13px 14px',
           cursor: disabled ? 'not-allowed' : 'pointer',
-          opacity: disabled ? 0.6 : 1,
+          // A card that explains why it is unavailable keeps that note readable.
+          opacity: disabled && !note ? 0.6 : 1,
           fontFamily: t.font,
           minWidth: 0,
         }}
@@ -71,7 +76,7 @@ export function ModelSourceChooser({
           disabled={disabled}
           onChange={() => onChange(id)}
           aria-labelledby={`${inputId}-title`}
-          aria-describedby={`${inputId}-body`}
+          aria-describedby={note ? `${inputId}-body ${inputId}-note` : `${inputId}-body`}
           style={{ marginTop: 3, accentColor: t.accent, flexShrink: 0 }}
         />
         <span style={{ display: 'flex', flexDirection: 'column', gap: 5, minWidth: 0 }}>
@@ -79,7 +84,8 @@ export function ModelSourceChooser({
             <span style={{ color: selected ? t.accent : t.textSecondary, display: 'inline-flex' }}>{ICONS[id]}</span>
             {title}
           </span>
-          <span id={`${inputId}-body`} style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5 }}>{body}</span>
+          <span id={`${inputId}-body`} style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5, opacity: disabled && note ? 0.6 : 1 }}>{body}</span>
+          {note ? <span id={`${inputId}-note`} data-model-source-note="" style={{ fontSize: 11.5, color: t.textPrimary, lineHeight: 1.5, borderTop: `1px solid ${t.headerBorder}`, paddingTop: 6 }}>{note}</span> : null}
         </span>
       </label>
     );
@@ -91,13 +97,16 @@ export function ModelSourceChooser({
         Where does your data model live?
       </legend>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 10 }}>
-        {MODEL_SOURCE_OPTIONS.map((option) => card(option.id, option.title, option.body, dbtOnly && option.id !== 'dbt'))}
+        {MODEL_SOURCE_OPTIONS.map((option) => {
+          const unavailable = option.id === 'warehouse' ? databaseOnlyUnavailable(existing) : null;
+          return card(option.id, option.title, option.body, (dbtOnly && option.id !== 'dbt') || (Boolean(unavailable) && value !== 'warehouse'), unavailable);
+        })}
       </div>
       {card(
         'existing',
         EXISTING_PROJECT_TITLE,
         existing
-          ? <>This folder&apos;s <code style={{ fontFamily: t.fontMono }}>dql.config.json</code> already sets up the data model: <strong style={{ color: t.textPrimary }}>{existing.label}</strong>{existing.detail ? ` · ${existing.detail}` : ''}. Enter credentials, test the connection and synchronize — no modeling questions.</>
+          ? <>This folder&apos;s <code style={{ fontFamily: t.fontMono }}>dql.config.json</code> already sets up the data model: <strong style={{ color: t.textPrimary }}>{existing.label}</strong>{existing.detail ? ` · ${existing.detail}` : ''}. Test the connection and continue — no modeling questions.</>
           : <>For a folder whose <code style={{ fontFamily: t.fontMono }}>dql.config.json</code> already sets up the data model, such as a teammate&apos;s repository: start ZLens in that folder (<code style={{ fontFamily: t.fontMono }}>zlens notebook path/to/project</code>). This folder has no data model yet.</>,
         dbtOnly || !existing,
       )}
@@ -111,16 +120,34 @@ export function DraftModelsCard({
   canDraft,
   outcome,
   onDraft,
+  waiting = null,
+  includeStaging = false,
+  onToggleStaging,
+  onRename,
   t,
 }: {
   busy: boolean;
   canDraft: boolean;
   outcome: DraftOutcome | null;
   onDraft: () => void;
+  /** The drafts that wait for review on the server (kept until saved or discarded). */
+  waiting?: WaitingWarehouseDrafts | null;
+  /** Staging copies are drafted too. */
+  includeStaging?: boolean;
+  onToggleStaging?: (include: boolean) => void;
+  /** Draft again into a Domain with this name. */
+  onRename?: (name: string) => void;
   t: Theme;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const domain = outcome?.domain ?? waiting?.domains[0];
+  const [name, setName] = useState(domain ?? '');
+  useEffect(() => { if (!renaming) setName(domain ?? ''); }, [domain, renaming]);
+  const drafted = Boolean(outcome?.ok && outcome.proposalId) || Boolean(waiting);
+  const hidden = outcome?.stagingHidden ?? [];
+  const smallButton: React.CSSProperties = { height: 26, padding: '0 10px', borderRadius: 7, border: `1px solid ${t.headerBorder}`, background: t.cellBg, color: t.textSecondary, fontSize: 11, fontWeight: 650, cursor: busy ? 'not-allowed' : 'pointer', fontFamily: t.font };
   return (
-    <section aria-label="Draft my models" style={{ maxWidth: 640, border: `1px solid ${outcome?.ok && outcome.proposalId ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
+    <section aria-label="Draft my models" style={{ maxWidth: 640, border: `1px solid ${drafted ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--accent-dim)', color: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Boxes size={16} aria-hidden="true" /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -138,7 +165,7 @@ export function DraftModelsCard({
           {busy ? 'Drafting…' : 'Draft my models'}
         </button>
       </div>
-      {!canDraft && !outcome ? (
+      {!canDraft && !outcome && !waiting ? (
         <div style={{ fontSize: 10.5, color: t.textMuted }}>Choose schemas and Apply and synchronize first.</div>
       ) : null}
       {outcome ? (
@@ -146,11 +173,51 @@ export function DraftModelsCard({
           {outcome.message}
         </div>
       ) : null}
+      {waiting ? (
+        <div aria-label="Drafts waiting" style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary }}>{waitingDraftsSentence(waiting)}</div>
+      ) : outcome?.ok && outcome.proposalId ? (
+        <div style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary }}>They are kept until you review or discard them in Modeling.</div>
+      ) : null}
+      {drafted && domain && onRename ? (
+        <div aria-label="Domain name" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: t.textSecondary }}>
+          {renaming ? (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const next = name.trim();
+                if (!next) return;
+                setRenaming(false);
+                if (next !== domain) onRename(next);
+              }}
+              style={{ display: 'flex', alignItems: 'center', gap: 6 }}
+            >
+              <label htmlFor="setup-domain-name">Domain name</label>
+              <input id="setup-domain-name" value={name} maxLength={80} autoFocus onChange={(event) => setName(event.target.value)} style={{ height: 26, borderRadius: 7, border: `1px solid ${t.headerBorder}`, background: t.appBg, color: t.textPrimary, padding: '0 8px', fontFamily: t.font, fontSize: 11.5 }} />
+              <button type="submit" disabled={busy || !name.trim()} style={smallButton}>Save name</button>
+              <button type="button" onClick={() => setRenaming(false)} style={smallButton}>Cancel</button>
+            </form>
+          ) : (
+            <>
+              <span>Your tables go in the Domain <strong style={{ color: t.textPrimary }}>{domain}</strong>, named after your database.</span>
+              <button type="button" disabled={busy} onClick={() => setRenaming(true)} style={smallButton}>Rename</button>
+            </>
+          )}
+        </div>
+      ) : null}
+      {onToggleStaging && (hidden.length || includeStaging) ? (
+        <div aria-label="Staging tables" style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', fontSize: 11.5, color: t.textSecondary }}>
+          <span style={{ flex: 1, minWidth: 0 }}>{includeStaging ? 'Staging tables are drafted too.' : stagingLeftOutSentence(hidden)}</span>
+          <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: busy ? 'not-allowed' : 'pointer' }}>
+            <input type="checkbox" checked={includeStaging} disabled={busy} onChange={(event) => onToggleStaging(event.target.checked)} />
+            Show staging tables
+          </label>
+        </div>
+      ) : null}
     </section>
   );
 }
 
-/** Open an existing ZLens project: synchronize what its dql.config.json already names. */
+/** Open an existing ZLens project: refresh what its dql.config.json already names. */
 export function ExistingProjectSyncCard({
   project,
   busy,
@@ -168,14 +235,15 @@ export function ExistingProjectSyncCard({
   t: Theme;
 }) {
   const parts = [project.mode !== 'warehouse-first' && project.dbtConfigured ? 'the dbt project' : null, project.warehouseModeling ? 'the saved warehouse schemas' : null].filter(Boolean);
+  const action = existingRefreshLabel(project);
   return (
-    <section aria-label="Synchronize project" style={{ maxWidth: 640, border: `1px solid ${steps && steps.length > 0 && steps.every((step) => step.ok) ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
+    <section aria-label={action} style={{ maxWidth: 640, border: `1px solid ${steps && steps.length > 0 && steps.every((step) => step.ok) ? 'var(--status-success-border)' : t.headerBorder}`, borderRadius: 12, background: t.cellBg, padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 9, fontFamily: t.font }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
         <span style={{ width: 32, height: 32, borderRadius: 9, background: 'var(--accent-dim)', color: t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><RefreshCw size={16} aria-hidden="true" /></span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Synchronize</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>{action}</div>
           <div style={{ fontSize: 11.5, color: t.textSecondary, lineHeight: 1.5, marginTop: 2 }}>
-            {parts.length ? `Reads ${parts.join(' and ')} again, as this project is configured.` : 'Reads this project’s sources again, as it is configured.'} Its models and certifications come from the repository.
+            {parts.length ? `Reads ${parts.join(' and ')} again.` : 'Reads this project’s sources again.'} Only needed when the project changed since you last ran zlens sync. Its models and certifications come from the repository.
           </div>
         </div>
         <button
@@ -184,7 +252,7 @@ export function ExistingProjectSyncCard({
           disabled={busy}
           style={{ height: 32, padding: '0 13px', borderRadius: 8, border: 'none', background: t.accent, color: 'var(--accent-fg)', fontSize: 12, fontWeight: 700, cursor: busy ? 'not-allowed' : 'pointer', opacity: busy ? 0.55 : 1, fontFamily: t.font, flexShrink: 0 }}
         >
-          {busy ? 'Synchronizing…' : 'Synchronize'}
+          {busy ? 'Refreshing…' : action}
         </button>
       </div>
       {environment.length ? (
@@ -200,7 +268,7 @@ export function ExistingProjectSyncCard({
             ))}
           </ul>
           {environment.some((reference) => !reference.set)
-            ? <div style={{ marginTop: 4 }}>Export the missing ones in the shell that starts <code style={{ fontFamily: t.fontMono }}>zlens notebook</code>, restart it, then test and synchronize. Passwords can also be entered above; they stay in the private secrets file.</div>
+            ? <div style={{ marginTop: 4 }}>Export the missing ones in the shell that starts <code style={{ fontFamily: t.fontMono }}>zlens notebook</code>, restart it, then test and refresh. Passwords can also be entered above; they stay in the private secrets file.</div>
             : null}
         </div>
       ) : null}

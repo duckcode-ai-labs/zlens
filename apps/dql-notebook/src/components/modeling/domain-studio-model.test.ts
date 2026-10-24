@@ -27,7 +27,7 @@ describe('Domain Studio navigation', () => {
       'Map',
       'Terms & concepts',
       'Skills',
-      'Blocks',
+      'Saved queries',
       'Used by',
     ]);
     for (const id of ['diagram', 'terms', 'skills', 'blocks', 'used_by']) expect(isDomainStudioSection(id)).toBe(true);

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ZLensMark } from '../shell/ZLensMark';
 import { ArrowLeft, ArrowRight, Boxes, FileText, LayoutDashboard, MessageCircleQuestion, Sparkles } from 'lucide-react';
-import { api, type ProviderSettings, type SetupLaunchResponse, type WarehouseCatalogSummary } from '../../api/client';
+import { api, type ProviderSettings, type SetupLaunchResponse, type WaitingWarehouseDrafts, type WarehouseCatalogSummary } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
 import { ConnectionPanel } from '../panels/ConnectionPanel';
@@ -16,8 +16,12 @@ import {
   initialModelSource,
   modelingModeForSource,
   rememberProposalForModeling,
+  rowsPrivacy,
+  setupFinishTarget,
   setupStepTitles,
+  type SetupStartTarget,
   stepOneBlocker,
+  databaseOnlyUnavailable,
   stepTwoCopy,
   synchronizeExistingProject,
   type DraftOutcome,
@@ -25,9 +29,10 @@ import {
   type ModelSource,
   type ProjectSyncStep,
 } from './setup-model-source';
+import { requestBuildNewApp } from '../apps/app-library-launch';
 
 type SetupState = 'missing' | 'configured' | 'passed';
-type SetupTarget = 'domains' | 'ask' | 'notebook' | 'apps';
+type SetupTarget = SetupStartTarget;
 
 function hasRealConnection(connections: Record<string, unknown>): boolean {
   return Object.values(connections).some((value) => {
@@ -38,6 +43,16 @@ function hasRealConnection(connections: Record<string, unknown>): boolean {
     const filepath = String(connection.filepath ?? connection.path ?? '').trim();
     return Boolean(filepath && filepath !== ':memory:');
   });
+}
+
+/** The default connection is a database file (DuckDB with a path). */
+function databaseFileConnection(info: { default?: string; connections?: Record<string, unknown> }): boolean {
+  const connection = info.default ? info.connections?.[info.default] : undefined;
+  if (!connection || typeof connection !== 'object') return false;
+  const record = connection as Record<string, unknown>;
+  const driver = String(record.driver ?? record.type ?? '').toLowerCase();
+  const filepath = String(record.filepath ?? record.path ?? '').trim();
+  return driver === 'duckdb' && Boolean(filepath) && filepath !== ':memory:';
 }
 
 function providerSummary(provider: ProviderSettings | null): string {
@@ -76,6 +91,12 @@ export function SetupOnboarding({
   const [catalogReady, setCatalogReady] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [draft, setDraft] = useState<DraftOutcome | null>(null);
+  // Drafts are kept on the server until saved or discarded (new-user round 2, Q3).
+  const [waitingDrafts, setWaitingDrafts] = useState<WaitingWarehouseDrafts | null>(null);
+  const [includeStaging, setIncludeStaging] = useState(false);
+  const [domainName, setDomainName] = useState<string | null>(null);
+  // Value profiles on: the rows sentence says a few column values reach the AI provider.
+  const [valueProfileOn, setValueProfileOn] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncSteps, setSyncSteps] = useState<ProjectSyncStep[] | null>(null);
   const [environment, setEnvironment] = useState<Array<{ name: string; set: boolean }>>([]);
@@ -103,8 +124,11 @@ export function SetupOnboarding({
       api.getBlockStudioDbtStatus().catch(() => null),
       api.getConnections().catch(() => null),
       api.getProviderSettings().catch(() => null),
-    ]).then(([onboarding, dbt, connectionInfo, providerInfo]) => {
+      api.getSetupProgress().catch(() => null),
+      api.getWaitingWarehouseDrafts().catch(() => null),
+    ]).then(([onboarding, dbt, connectionInfo, providerInfo, progress, waiting]) => {
       if (!alive) return;
+      setWaitingDrafts(waiting);
       if (onboarding?.dbt?.configured || (dbt?.configured && dbt.artifacts.manifest.exists)) {
         setProjectState(onboarding?.modeling?.snapshotState === 'ready' ? 'passed' : 'configured');
         setProjectDetail(onboarding?.preparation?.message || onboarding?.dbt?.repoUrl || onboarding?.dbt?.projectDir || dbt?.projectPath || 'dbt project configured');
@@ -120,16 +144,31 @@ export function SetupOnboarding({
         setConnectionId(connectionInfo.default);
       }
       setEnvironment(connectionInfo?.environmentReferences ?? []);
+      setValueProfileOn(connectionInfo?.valueProfile === true);
       const catalog = (connectionInfo as { warehouseCatalog?: WarehouseCatalogSummary } | null)?.warehouseCatalog;
       if (catalog?.relations && !catalog.error) setCatalogReady(true);
       const project = existingProjectFromStatus(onboarding, realConnection ? connectionInfo : null);
       setExisting(project);
-      setSource((current) => current ?? initialModelSource({
+      // A restart resumes where setup was left (design D7), unless an update must reapply dbt first.
+      const resume = progress && !launch?.requiresDbtReapply ? progress : null;
+      setSource((current) => current ?? resume?.source ?? initialModelSource({
         requested: requestedSource,
         requiresDbtReapply: Boolean(launch?.requiresDbtReapply),
         existing: project,
         dbtProjectFound: Boolean(onboarding?.dbt?.projectFound),
+        dbtManifestFound: Boolean(onboarding?.dbt?.manifestFound || dbt?.artifacts.manifest.exists),
+        hasDomains: (onboarding?.domains?.count ?? 0) > 0,
+        databaseFileConnection: Boolean(connectionInfo && databaseFileConnection(connectionInfo)),
       }));
+      if (resume) {
+        setStep(resume.step);
+        if (resume.aiSkipped) setAiSkipped(true);
+        if (resume.draft) setDraft(resume.draft);
+        if (resume.source === 'warehouse') {
+          setProjectState('configured');
+          setProjectDetail('Database only · no dbt project');
+        }
+      }
       const provider = providerInfo?.providers.find((candidate) => candidate.active && candidate.configured)
         ?? providerInfo?.providers.find((candidate) => candidate.enabled && candidate.configured)
         ?? null;
@@ -140,6 +179,17 @@ export function SetupOnboarding({
     }).finally(() => alive && setLoading(false));
     return () => { alive = false; };
   }, []);
+
+  // Save the step and answers so a restart resumes here (design D7).
+  useEffect(() => {
+    if (loading) return;
+    void api.saveSetupProgress({
+      step: step as 1 | 2 | 3 | 4,
+      ...(source ? { source } : {}),
+      ...(aiSkipped ? { aiSkipped } : {}),
+      ...(draft ? { draft } : {}),
+    }).catch(() => undefined);
+  }, [loading, step, source, aiSkipped, draft]);
 
   const acknowledge = async (): Promise<boolean> => {
     setAcknowledging(true);
@@ -165,6 +215,8 @@ export function SetupOnboarding({
     if (acknowledging || requiresUpgradeReapply) return;
     void acknowledge().then((acknowledged) => {
       if (!acknowledged) return;
+      // "Build an App" opens the new App form, not only the library (new-user round 2, problem 10).
+      if (target === 'apps') requestBuildNewApp();
       dispatch({ type: 'SET_MAIN_VIEW', view: target });
       if (target === 'notebook') dispatch({ type: 'OPEN_NEW_NOTEBOOK_MODAL' });
       dispatch({ type: 'CLOSE_SETUP' });
@@ -189,6 +241,7 @@ export function SetupOnboarding({
     source,
     requiresDbtReapply: requiresUpgradeReapply,
     dbtConfigured: projectState !== 'missing',
+    existing,
   });
   /** Leave step 1: turn on warehouse-first or hybrid modeling when the answer needs it. */
   const continueFromStepOne = async () => {
@@ -213,18 +266,29 @@ export function SetupOnboarding({
       setContinuing(false);
     }
   };
-  const draftModels = async () => {
+  const draftModels = async (options: { includeStaging?: boolean; domain?: string | null } = {}) => {
+    const staging = options.includeStaging ?? includeStaging;
+    const domain = options.domain === undefined ? domainName : options.domain;
     setDrafting(true);
     setDraft(null);
     try {
-      const outcome = draftOutcome(await api.draftWarehouseModel({ validate: true }));
+      const outcome = draftOutcome(await api.draftWarehouseModel({ validate: true, ...(staging ? { includeStaging: true } : {}), ...(domain ? { domain } : {}) }));
       if (outcome.proposalId) rememberProposalForModeling(outcome.proposalId);
       setDraft(outcome);
     } catch (error) {
       setDraft({ ok: false, message: draftErrorMessage(error) });
     } finally {
+      setWaitingDrafts(await api.getWaitingWarehouseDrafts().catch(() => null));
       setDrafting(false);
     }
+  };
+  const toggleStaging = (include: boolean) => {
+    setIncludeStaging(include);
+    void draftModels({ includeStaging: include });
+  };
+  const renameDomain = (name: string) => {
+    setDomainName(name);
+    void draftModels({ domain: name });
   };
   const synchronize = async () => {
     if (!existing) return;
@@ -240,14 +304,14 @@ export function SetupOnboarding({
     }
   };
 
-  const drafted = Boolean(draft?.proposalId);
-  const stepTwo = stepTwoCopy(source, existing);
+  const drafted = Boolean(draft?.proposalId || waitingDrafts);
+  const stepTwo = stepTwoCopy(source, existing, valueProfileOn);
   const hint = useMemo(() => {
     if (loading) return 'Loading existing project-local configuration…';
     if (step === 1) {
       if (requiresUpgradeReapply) return `Required for ZLens ${launch?.version}: Preview and Reapply the prefilled dbt project.`;
       if (stepOneBlocked) return stepOneBlocked;
-      if (source === 'warehouse') return 'Database only · ZLens reads tables, columns, keys and comments — never rows.';
+      if (source === 'warehouse') return `Database only · ${rowsPrivacy(valueProfileOn, true)}`;
       if (source === 'existing') return `Existing project · ${existing?.label ?? 'configured'}`;
       return projectState === 'missing'
         ? 'Preview before applying; existing dbt settings stay untouched.'
@@ -257,9 +321,9 @@ export function SetupOnboarding({
       if (draftsFromWarehouse(source) && draft?.ok && draft.proposalId) return 'Models drafted · review and certify them in Modeling.';
       return databaseState === 'passed' ? `Test passed · ${databaseDetail}` : databaseState === 'configured' ? databaseDetail : 'A failed test rolls back to the previous connection.';
     }
-    if (step === 3) return aiSkipped ? 'AI skipped · limited-AI mode remains available.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
+    if (step === 3) return aiSkipped ? 'AI skipped · connect a provider later in Settings.' : aiState === 'missing' ? 'Optional · skip for now or configure a provider.' : `${aiState === 'passed' ? 'Test passed' : 'Configured'} · ${providerSummary(aiProvider)}`;
     return 'Setup complete';
-  }, [aiProvider, aiSkipped, aiState, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, requiresUpgradeReapply, source, step, stepOneBlocked]);
+  }, [aiProvider, aiSkipped, aiState, databaseDetail, databaseState, draft, existing, launch?.version, loading, projectDetail, projectState, requiresUpgradeReapply, source, step, stepOneBlocked, valueProfileOn]);
 
   const supportingText = t.textSecondary;
   const primaryButton: React.CSSProperties = {
@@ -288,7 +352,9 @@ export function SetupOnboarding({
   const nextLabel = step === 1
     ? (continuing ? 'Setting up…' : source === 'existing' ? 'Continue to credentials' : 'Continue to database')
     : step === 2 ? 'Continue to optional AI' : 'Continue to finish';
-  const finishTarget: SetupTarget = drafted ? 'domains' : aiState === 'missing' || aiSkipped ? 'domains' : 'ask';
+  // "Finish setup" goes where the highlighted start card says.
+  const finish = setupFinishTarget({ drafted });
+  const finishTarget: SetupTarget = finish.target;
 
   return (
     <div role="dialog" aria-modal="true" aria-label="Guided Setup" style={{ position: 'fixed', inset: 0, zIndex: 1000, background: t.appBg, color: t.textPrimary, display: 'flex', flexDirection: 'column', fontFamily: t.font }}>
@@ -333,7 +399,9 @@ export function SetupOnboarding({
               ) : null}
               {source === 'warehouse' ? (
                 <div style={{ border: `1px solid ${t.headerBorder}`, background: t.cellBg, borderRadius: 10, padding: '12px 13px', fontSize: 11.5, color: supportingText, lineHeight: 1.55 }}>
-                  <strong style={{ color: t.textPrimary }}>Next:</strong> connect your database, choose the schemas to model, Apply and synchronize, then Draft my models. You review and certify the drafts in Modeling before Ask relies on them.
+                  {databaseOnlyUnavailable(existing)
+                    ? databaseOnlyUnavailable(existing)
+                    : <><strong style={{ color: t.textPrimary }}>Next:</strong> connect your database, choose the schemas to model, Apply and synchronize, then Draft my models. You review and certify the drafts in Modeling before Ask relies on them.</>}
                 </div>
               ) : null}
               {continueError ? <div role="alert" style={{ color: 'var(--status-error)', fontSize: 11.5, lineHeight: 1.5 }}>{continueError}</div> : null}
@@ -344,6 +412,10 @@ export function SetupOnboarding({
             <SetupSection eyebrow="Step 2 of 4" title={stepTwo.title} description={stepTwo.description} t={t}>
               <ConnectionPanel
                 variant="setup"
+                setupSource={source}
+                setupPrimaryAction={source === 'existing' && existing
+                  ? <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
+                  : undefined}
                 onConfigured={(detail) => {
                   setDatabaseState('passed');
                   setDatabaseDetail(detail);
@@ -353,19 +425,26 @@ export function SetupOnboarding({
                 }}
               />
               {draftsFromWarehouse(source) ? (
-                <DraftModelsCard busy={drafting} canDraft={catalogReady} outcome={draft} onDraft={() => void draftModels()} t={t} />
-              ) : null}
-              {source === 'existing' && existing ? (
-                <ExistingProjectSyncCard project={existing} busy={syncing} steps={syncSteps} environment={environment} onSync={() => void synchronize()} t={t} />
+                <DraftModelsCard
+                  busy={drafting}
+                  canDraft={catalogReady}
+                  outcome={draft}
+                  onDraft={() => void draftModels()}
+                  waiting={waitingDrafts}
+                  includeStaging={includeStaging}
+                  onToggleStaging={toggleStaging}
+                  onRename={renameDomain}
+                  t={t}
+                />
               ) : null}
             </SetupSection>
           ) : null}
 
           {step === 3 ? (
-            <SetupSection eyebrow="Step 3 of 4" title="Set up an AI provider" description="Optional. AI powers governed Ask and assisted authoring; deterministic queries and non-AI product paths remain available without it." badge="Optional" t={t}>
+            <SetupSection eyebrow="Step 3 of 4" title="Set up an AI provider" description="Optional. AI answers questions and helps you build. You can run queries and build Apps without AI." badge="Optional" t={t}>
               <ConnectionRuntimeSettings embedded includeMemory={false} section="providers" editorMode="setup" onProviderConfigured={onProviderConfigured} />
               <div style={{ border: '1px solid var(--status-info-border)', background: 'var(--status-info-bg)', borderRadius: 10, padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ flex: 1, fontSize: 11.5, color: supportingText, lineHeight: 1.5 }}>Continue in limited-AI mode and configure a provider later in Settings.</div>
+                <div style={{ flex: 1, fontSize: 11.5, color: supportingText, lineHeight: 1.5 }}>Continue without AI. You can connect a provider later in Settings.</div>
                 <button type="button" onClick={() => { setAiSkipped(true); setStep(4); }} style={secondaryButton}>Skip AI for now</button>
               </div>
             </SetupSection>
@@ -376,18 +455,18 @@ export function SetupOnboarding({
               <div style={{ textAlign: 'center' }}>
                 <div style={{ fontSize: 11, fontWeight: 750, letterSpacing: '0.06em', textTransform: 'uppercase', color: t.accent }}>Step 4 of 4 · Setup complete</div>
                 <h2 style={{ margin: '7px 0 0', fontSize: 22, color: t.textPrimary }}>Where do you want to start?</h2>
-                {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not configured. Deterministic and non-AI workflows remain available; return to Settings when you want governed Ask.</div> : null}
+                {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 11 }}>
                 {drafted ? (
-                  <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary />
+                  <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary={finishTarget === 'domains'} />
                 ) : null}
-                <StartCard icon={<LayoutDashboard size={17} />} title="Build a dashboard" body="Pick a table from your database and publish a page with live, checked numbers." action="Build an App" onClick={() => finishTo('apps')} t={t} primary={!drafted} />
+                <StartCard icon={<LayoutDashboard size={17} />} title="Build a dashboard" body="Pick a table from your database and publish a page with live, checked numbers." action="Build an App" onClick={() => finishTo('apps')} t={t} primary={finishTarget === 'apps'} />
                 {drafted ? null : (
                   <StartCard icon={<Boxes size={17} />} title="Build your domain" body="Add models, relationships, business terms, and skills." action="Open Modeling" onClick={() => finishTo('domains')} t={t} />
                 )}
-                <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={aiState === 'missing' || aiSkipped ? 'Open Ask in limited mode; configure AI before a governed model answer.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} />
-                <StartCard icon={<FileText size={17} />} title="Research notebook" body="Work with SQL, DQL, and charts, then save reusable blocks." action="New notebook" onClick={() => finishTo('notebook')} t={t} />
+                <StartCard icon={<MessageCircleQuestion size={17} />} title="Ask" body={aiState === 'missing' || aiSkipped ? 'Ask needs an AI provider. Connect one in Settings to get answers.' : 'Ask a business question grounded in your governed context.'} action="Open Ask" onClick={() => finishTo('ask')} t={t} />
+                <StartCard icon={<FileText size={17} />} title="Research notebook" body="Work with SQL, DQL, and charts, then save reusable queries." action="New notebook" onClick={() => finishTo('notebook')} t={t} />
               </div>
             </div>
           ) : null}
@@ -397,7 +476,7 @@ export function SetupOnboarding({
       <footer style={{ flexShrink: 0, minHeight: 58, borderTop: `1px solid ${t.headerBorder}`, background: t.headerBg, display: 'flex', alignItems: 'center', gap: 10, padding: '11px 22px' }}>
         {step > 1 ? <button type="button" onClick={() => setStep((current) => Math.max(1, current - 1))} style={secondaryButton}><ArrowLeft size={13} /> Back</button> : null}
         <div style={{ flex: 1 }} />
-        <span style={{ fontSize: 11, color: t.textMuted, maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hint}</span>
+        <span title={hint} style={{ fontSize: 11, color: t.textMuted, maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{hint}</span>
         {acknowledgeError ? <span role="alert" style={{ fontSize: 11, color: 'var(--status-error)', maxWidth: 320 }}>{acknowledgeError}</span> : null}
         <button type="button" disabled={acknowledging || requiresUpgradeReapply} onClick={close} style={{ ...secondaryButton, opacity: acknowledging || requiresUpgradeReapply ? 0.5 : 1, cursor: acknowledging || requiresUpgradeReapply ? 'not-allowed' : 'pointer' }}>
           {acknowledging
@@ -415,7 +494,7 @@ export function SetupOnboarding({
             {nextLabel} <ArrowRight size={13} />
           </button>
         ) : (
-          <button type="button" disabled={acknowledging} onClick={() => finishTo(finishTarget)} style={{ ...primaryButton, opacity: acknowledging ? 0.65 : 1 }}><Sparkles size={13} /> Finish setup</button>
+          <button type="button" disabled={acknowledging} onClick={() => finishTo(finishTarget)} style={{ ...primaryButton, opacity: acknowledging ? 0.65 : 1 }}><Sparkles size={13} /> Finish setup · {finish.action}</button>
         )}
       </footer>
     </div>

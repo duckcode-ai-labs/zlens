@@ -155,10 +155,10 @@ export function ReadinessPage(): JSX.Element {
             <div style={{ flex: 1 }} />
             <button
               type="button"
-              onClick={() => openAiBuild({ target: 'block', lockTarget: true, sourceLabel: 'Describe a block to draft from your project context.' })}
+              onClick={() => openAiBuild({ target: 'block', lockTarget: true, sourceLabel: 'Describe a saved query to draft from your project context.' })}
               style={askAiButtonStyle}
             >
-              <Wand2 size={14} /> Ask AI to build a block
+              <Wand2 size={14} /> Ask AI to build a saved query
             </button>
           </div>
           <div style={{ fontSize: 13, opacity: 0.72, maxWidth: 760, lineHeight: 1.55 }}>
@@ -294,7 +294,7 @@ export function ReadinessPage(): JSX.Element {
 
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
               <button type="button" onClick={openBlockStudio} style={reviewQueueBtnStyle}>
-                Open Block Studio <ArrowRight size={13} />
+                Open Saved queries <ArrowRight size={13} />
               </button>
             </div>
           </>
@@ -430,7 +430,7 @@ function CandidateRow({
     openAiBuild({
       target: 'block',
       lockTarget: true,
-      prompt: `Refine the "${candidate.model}" block: ${description ?? `a ${candidate.pattern ?? 'business'} model${candidate.grain ? ` at ${candidate.grain} grain` : ''}`}.`,
+      prompt: `Refine the "${candidate.model}" saved query: ${description ?? `a ${candidate.pattern ?? 'business'} model${candidate.grain ? ` at ${candidate.grain} grain` : ''}`}.`,
       sourceLabel: `Refining ${candidate.model}`,
     });
   }, [candidate.grain, candidate.model, candidate.pattern, description]);
@@ -482,7 +482,7 @@ function CandidateRow({
               {description ? <div style={{ fontSize: 12, opacity: 0.82, lineHeight: 1.5 }}>{description}</div> : null}
 
               <div style={{ display: 'grid', gap: 5 }}>
-                <SectionLabel>SQL this block will run</SectionLabel>
+                <SectionLabel>SQL this saved query will run</SectionLabel>
                 {sqlPreview ? (
                   <pre style={codeBlockStyle}>
                     <code style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 11.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
@@ -524,7 +524,7 @@ function CandidateRow({
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 <button type="button" onClick={() => void openInStudio()} disabled={opening} style={{ ...primaryRowButtonStyle, opacity: opening ? 0.65 : 1 }}>
                   {opening ? <Loader2 size={13} className="spin" /> : <Blocks size={13} />}
-                  {opening ? 'Opening…' : 'Open in Block Studio'}
+                  {opening ? 'Opening…' : 'Open in Saved queries'}
                 </button>
                 <button type="button" onClick={refineWithAi} style={ghostRowButtonStyle}>
                   <Wand2 size={13} /> Refine with AI

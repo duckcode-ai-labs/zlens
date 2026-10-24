@@ -19,7 +19,7 @@ import { NOTEBOOK_CELL_FOCUS_EVENT } from '../../utils/notebook-cell-focus';
 
 interface CellListProps {
   registerCellRef: (id: string, el: HTMLDivElement | null) => void;
-  onStartResearch?: (cellId: string, prompt?: string, options?: { autoAsk?: boolean }) => void;
+  onStartResearch?: (cellId: string, prompt?: string) => void;
   researchRefreshKey?: number;
 }
 
@@ -386,7 +386,7 @@ function EmptyState({ t }: { t: Theme }) {
       await api.openBlockStudio(block.path);
     } catch (error) {
       console.error('Failed to bind block cell', error);
-      window.alert(`Couldn't load block ${block.path}.`);
+      window.alert(`Couldn't load saved query ${block.path}.`);
       return;
     }
     const blockReference = `@block(${JSON.stringify(block.name)})`;
@@ -436,12 +436,12 @@ function EmptyState({ t }: { t: Theme }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8 }}>
         <button type="button" style={{ ...startActionStyle, borderColor: t.accent }} onClick={() => setBlockPickerOpen((open) => !open)}>
-          <strong style={{ display: 'block', color: t.accent }}>Use existing block</strong>
+          <strong style={{ display: 'block', color: t.accent }}>Use existing saved query</strong>
           <span style={{ display: 'block', color: t.textMuted, fontSize: 10.5, marginTop: 3 }}>Search certified and draft reusable analysis.</span>
         </button>
         <button type="button" style={startActionStyle} onClick={() => window.dispatchEvent(new CustomEvent('dql:open-notebook-ai'))}>
           <strong style={{ display: 'block' }}>Ask Notebook AI</strong>
-          <span style={{ display: 'block', color: t.textMuted, fontSize: 10.5, marginTop: 3 }}>Research blocks, semantic models, dbt, and data.</span>
+          <span style={{ display: 'block', color: t.textMuted, fontSize: 10.5, marginTop: 3 }}>Research saved queries, semantic models, dbt, and data.</span>
         </button>
         <button type="button" style={startActionStyle} onClick={() => dispatch({ type: 'ADD_CELL', cell: makeCell('dql') })}>
           <strong style={{ display: 'block' }}>Create DQL query</strong>

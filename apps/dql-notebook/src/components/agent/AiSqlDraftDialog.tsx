@@ -285,7 +285,7 @@ export function AiSqlDraftDialog({
               <textarea
                 value={question}
                 onChange={(event) => setQuestion(event.target.value)}
-                placeholder={isBlockMode ? 'Example: build a top 10 players by points per game block' : 'Example: show monthly revenue by customer type'}
+                placeholder={isBlockMode ? 'Example: a saved query for the top 10 players by points per game' : 'Example: show monthly revenue by customer type'}
                 rows={hasReviewOutput ? 3 : 4}
                 style={textareaStyle(t, hasReviewOutput)}
                 autoFocus={!hasReviewOutput}
@@ -329,7 +329,7 @@ export function AiSqlDraftDialog({
           ) : null}
 
           <div style={contextStyle(t)}>
-            <span>{contextLabel ?? (mode === 'block' ? 'Block Studio' : 'Notebook')}</span>
+            <span>{contextLabel ?? (mode === 'block' ? 'Saved queries' : 'Notebook')}</span>
             <b>{upstreamSql?.trim() ? 'Current SQL context included' : 'Project metadata and runtime schema'}</b>
           </div>
 
@@ -521,16 +521,16 @@ export function resolveSqlDraftDialogCopy(input: {
 }): SqlDraftDialogCopy {
   if (input.mode === 'block') {
     return {
-      ariaLabel: 'Build DQL block',
-      heading: 'Build DQL block',
-      subtitle: 'Metadata, dbt, certified blocks, and schema first. Generated work stays review-required.',
-      draftTitle: 'DQL block draft',
+      ariaLabel: 'Build saved query',
+      heading: 'Build saved query',
+      subtitle: 'Metadata, dbt, certified saved queries, and schema first. Generated work stays review-required.',
+      draftTitle: 'Saved query draft',
       draftSubtitle: 'Review DQL metadata, tests, lineage, grain, and result shape before certification.',
-      waitingText: 'Waiting for the agent to produce a DQL block...',
-      emptyText: 'No DQL block was returned. Add more business context or ask for a specific metric/table grain.',
-      footerText: 'Use this as a draft block. Run, test, save, then certify.',
-      generateLabel: 'Generate block',
-      insertLabel: 'Use draft block',
+      waitingText: 'Waiting for the agent to produce a saved query...',
+      emptyText: 'No saved query was returned. Add more business context or ask for a specific metric/table grain.',
+      footerText: 'Use this as a draft saved query. Run, test, save, then certify.',
+      generateLabel: 'Generate saved query',
+      insertLabel: 'Use draft saved query',
     };
   }
   if (input.isRepairMode) {
@@ -576,12 +576,12 @@ export function resolveSqlDraftDialogCopy(input: {
 }
 
 function statusLabel(status: DraftRunStatus, isBlockMode: boolean, hasPreviewText: boolean): string {
-  if (status === 'generating') return isBlockMode ? 'Generating block' : 'Generating SQL preview';
+  if (status === 'generating') return isBlockMode ? 'Generating saved query' : 'Generating SQL preview';
   if (status === 'running') return 'Running preview';
   if (status === 'fixing') return 'Fixing SQL';
-  if (status === 'ready') return isBlockMode ? 'Block preview ready' : 'SQL preview ready';
+  if (status === 'ready') return isBlockMode ? 'Saved query preview ready' : 'SQL preview ready';
   if (status === 'error') return 'Needs fix';
-  if (hasPreviewText) return isBlockMode ? 'Block draft ready' : 'SQL preview ready';
+  if (hasPreviewText) return isBlockMode ? 'Saved query draft ready' : 'SQL preview ready';
   return 'AI response';
 }
 

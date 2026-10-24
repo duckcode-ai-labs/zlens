@@ -25,6 +25,55 @@ export function readAppPageLink(href: string): AppPageLink | null {
   return { appId, pageId };
 }
 
+/**
+ * The page an App opens on: its dashboard homepage, else its first page.
+ * `null` when it has no page. An app-only link (`?app=<id>`) opens here.
+ */
+export function appHomePageId(app: {
+  homepage?: { type: string; id?: string } | null;
+  dashboards?: ReadonlyArray<{ id: string }>;
+} | null | undefined): string | null {
+  if (!app) return null;
+  const homepage = app.homepage;
+  if (homepage?.type === 'dashboard' && homepage.id && (!app.dashboards || app.dashboards.some((page) => page.id === homepage.id))) {
+    return homepage.id;
+  }
+  return app.dashboards?.[0]?.id ?? null;
+}
+
+/** The relative link an App card's title carries: the App and the page it opens on. */
+export function appCardHref(app: {
+  id: string;
+  homepage?: { type: string; id?: string } | null;
+  dashboards?: ReadonlyArray<{ id: string }>;
+}): string {
+  return withAppPageLink('http://zlens.local/', { appId: app.id, pageId: appHomePageId(app) });
+}
+
+const DRAFT_PARAM = 'appDraft';
+
+/**
+ * `?appDraft=<id>` opens that local App Studio draft. MCP `build_dql_app`
+ * returns this link; App Studio then starts at the AI Data step.
+ */
+export function readAppDraftLink(href: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(href);
+  } catch {
+    return null;
+  }
+  const draftId = url.searchParams.get(DRAFT_PARAM)?.trim() ?? '';
+  return /^[a-z0-9_:-]{1,128}$/i.test(draftId) ? draftId : null;
+}
+
+/** The href without the draft link, so a reload does not reopen the draft. */
+export function withoutAppDraftLink(href: string): string {
+  const url = new URL(href);
+  url.searchParams.delete(DRAFT_PARAM);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 /** The href with this page's link set, or with the link removed when `link` is null. */
 export function withAppPageLink(href: string, link: AppPageLink | null): string {
   const url = new URL(href);

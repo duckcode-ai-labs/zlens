@@ -146,6 +146,13 @@ export function evaluateCertifiedBlockFit(input: {
    */
   uniqueExactExampleContract?: boolean;
   definitionLookup?: boolean;
+  /**
+   * Qualified semantic metrics the question names by name or label (see
+   * {@link namedQualifiedSemanticMeasures}). The planner can drop the
+   * qualifier ("large orders" plans as `count, order`), so these are checked
+   * against the block's own outputs and scope as additional required measures.
+   */
+  namedSemanticMeasures?: NamedSemanticMeasure[];
 }): CertifiedBlockFit {
   const requested = requestedShapeFromPlan(input.plan);
   const block = blockShape(input.block);
@@ -195,12 +202,18 @@ export function evaluateCertifiedBlockFit(input: {
     // static scope remain independently validated below.
     && !uniqueExactExampleMemberToken(input, output, block)
   ));
-  const missingMeasures = uniqueStrings(requestedMeasures.filter((measure) =>
+  const missingRequestedMeasures = requestedMeasures.filter((measure) =>
     !blockMeasures.has(measure)
     && !declaredQualifiedOutputCoversMeasure(block, measure, input.question, input.plan, requested)
-  ));
+  );
+  const missingMeasures = uniqueStrings([
+    ...missingRequestedMeasures,
+    ...(input.namedSemanticMeasures ?? [])
+      .filter((measure) => !blockCoversNamedSemanticMeasure(block, measure, input.question, input.plan, requested))
+      .map((measure) => measure.metric),
+  ]);
   const measureMatch = requestedMeasures.length === 0
-    || missingMeasures.length === 0;
+    || missingRequestedMeasures.length === 0;
 
   const unsupportedFilters = unsupportedRequestedFilters(requested, block, input.question);
   // The WHERE-derived scope is entailed when the question names it in the
@@ -864,6 +877,14 @@ function declaredQualifiedOutputCoversMeasure(
       && /\b(?:how\s+many|count|number\s+of|total)\b/i.test(question)) {
       return true;
     }
+    // The same count with business qualifiers (`large_order_count`) answers
+    // "how many large orders" when the question states every qualifier.
+    if (declaredMeasure.endsWith(`_${requestedMeasure}_count`)
+      && /\b(?:how\s+many|count|number\s+of|total)\b/i.test(question)
+      && declaredMeasure.slice(0, -`_${requestedMeasure}_count`.length).split('_').every((qualifier) =>
+        questionEntailsOutputQualifier(question, plan, requested, qualifier))) {
+      return true;
+    }
     if (metricOutputRoot(declaredMeasure) !== requestedRoot) return false;
     const qualifiers = metricOutputQualifiers(declaredMeasure);
     if (qualifiers.length > 0 && qualifiers.every((qualifier) =>
@@ -882,6 +903,90 @@ function declaredQualifiedOutputCoversMeasure(
       && requestedQualifiers.every((qualifier) =>
         questionEntailsOutputQualifier(question, plan, requested, qualifier));
   });
+}
+
+export interface NamedSemanticMeasure {
+  /** Semantic metric local name, e.g. `large_orders`. */
+  metric: string;
+  /** Canonical metric output identity, e.g. `large_order`. */
+  identity: string;
+  /** Business qualifiers that scope the metric, e.g. `['large']`. */
+  qualifiers: string[];
+}
+
+/**
+ * Semantic metrics the question names by their name or label whose identity
+ * carries a business qualifier beyond the measure and entity words: "large
+ * orders" names `large_orders`, "food revenue %" names `food_revenue_pct`.
+ *
+ * Only the longest named phrase counts, so "food revenue" names `food_revenue`
+ * and not also `revenue`. Unqualified metrics (`orders`, `revenue`,
+ * `order_total`) add nothing: the planner's own measures already cover them.
+ */
+export function namedQualifiedSemanticMeasures(
+  question: string,
+  objects: Array<Pick<MetadataObject, 'objectType' | 'name' | 'payload'>>,
+): NamedSemanticMeasure[] {
+  const questionTokens = tokensFromValue(question);
+  const named: Array<NamedSemanticMeasure & { start: number; end: number }> = [];
+  for (const object of objects) {
+    if (object.objectType !== 'semantic_metric') continue;
+    const metric = stringValue(object.payload?.localId) ?? object.name.split('.').at(-1) ?? object.name;
+    const phrases = [metric, stringValue(object.payload?.label) ?? ''].filter(Boolean);
+    const span = phrases
+      .map((phrase) => tokenPhraseSpan(questionTokens, tokensFromValue(phrase)))
+      .filter((match): match is { start: number; end: number } => Boolean(match))
+      .sort((a, b) => (b.end - b.start) - (a.end - a.start))[0];
+    if (!span) continue;
+    const identity = canonicalMetricOutputIdentity(metric);
+    const qualifiers = metricOutputQualifiers(identity).filter((token) => !isDimensionLike(token));
+    named.push({ metric, identity, qualifiers, ...span });
+  }
+  return named
+    .filter((item) => !named.some((other) =>
+      other !== item
+      && other.start <= item.start && other.end >= item.end
+      && other.end - other.start > item.end - item.start))
+    .filter((item) => item.qualifiers.length > 0)
+    .map(({ metric, identity, qualifiers }) => ({ metric, identity, qualifiers }));
+}
+
+function tokenPhraseSpan(haystack: string[], needle: string[]): { start: number; end: number } | undefined {
+  if (needle.length === 0 || needle.length > haystack.length) return undefined;
+  for (let start = 0; start + needle.length <= haystack.length; start += 1) {
+    if (needle.every((token, offset) => haystack[start + offset] === token)) {
+      return { start, end: start + needle.length };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * A block answers a named qualified semantic metric only when its own outputs
+ * say so: an output with the same identity, a qualified output whose
+ * qualifiers the question entails, or a measure with the same root
+ * (`order_count` for orders) inside a static scope (WHERE, name, tags) that
+ * declares every qualifier. `monthly_revenue`'s `order_count` counts every
+ * order, so it does not answer "large orders".
+ */
+function blockCoversNamedSemanticMeasure(
+  block: BlockShape,
+  measure: NamedSemanticMeasure,
+  question: string,
+  plan: AnalysisQuestionPlan,
+  requested: RequestedAnswerShape,
+): boolean {
+  if (block.measures.includes(measure.identity)) return true;
+  if (declaredQualifiedOutputCoversMeasure(block, measure.identity, question, plan, requested)) return true;
+  const root = metricOutputRoot(measure.identity);
+  const sameRoot = block.measures.some((declared) => {
+    const tokens = declared.split('_');
+    return tokens.at(-1) === root || (tokens.at(-1) === 'count' && tokens.at(-2) === root);
+  });
+  const scoped = measure.qualifiers.every((qualifier) =>
+    block.scopeTokens.has(canonicalToken(qualifier))
+    || block.outputs.some((output) => output.split('_').includes(qualifier)));
+  return sameRoot && scoped;
 }
 
 function metricOutputRoot(identity: string): string | undefined {

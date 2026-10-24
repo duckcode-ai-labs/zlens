@@ -199,7 +199,8 @@ export function appViewAnswerTrust(tiles: ReadonlyArray<Pick<AppViewTileV1, 'tru
 /** One line naming a tile's source and the trust label it shows, as the answer cites it. */
 export function appViewSourceLine(tile: AppViewTileV1): string {
   const label = tile.trust?.label ?? READER_TRUST_LABELS.review;
-  const kind = tile.source.kind === 'block' || tile.source.kind === 'draft_analysis' ? 'block'
+  // "Saved query" is the reader's word for a block (#165).
+  const kind = tile.source.kind === 'block' || tile.source.kind === 'draft_analysis' ? 'saved query'
     : tile.source.kind === 'semantic' ? 'semantic query'
       : tile.source.kind === 'dataset' ? 'Dataset'
         : tile.source.kind === 'ai_pin' ? 'AI answer' : 'source';

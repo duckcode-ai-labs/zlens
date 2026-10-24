@@ -11,6 +11,7 @@ import {
 } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
 import { themes } from '../../themes/notebook-theme';
+import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { dbtPreparationFromResponse } from './dbt-preparation-model';
 import { watchMetricFlowInstall } from './metricflow-install-watch';
 
@@ -337,19 +338,33 @@ export function DbtProjectEditor({
   const metricFlowFailed = metricFlowJob?.state === 'failed';
   const preparing = preparation?.status === 'queued' || preparation?.status === 'running';
   const preparationFailed = preparation?.status === 'failed' || preparation?.status === 'cancelled';
+  // Until the status has loaded, say so: "dbt project missing" flashed on
+  // first start in a folder that already is a configured dbt project (Codex F01).
+  const checking = busy === 'loading' && !status;
+  const foundUnapplied = !configured && Boolean(status?.dbt?.projectFound);
   const projectStatusTitle = reapplyRequired
     ? 'Reapply required after ZLens update'
+    : checking
+    ? 'Checking the dbt project…'
     : preparationFailed
     ? 'dbt project needs attention'
     : preparing
       ? 'Preparing governed search'
       : configured
         ? 'dbt project ready'
-        : 'dbt project missing';
+        : foundUnapplied
+          ? 'dbt project found in this folder'
+          : 'No dbt project yet';
   const projectStatusDetail = reapplyRequired
     ? 'Review the prefilled project, choose Preview, then Reapply project.'
+    : checking
+    ? "Reading this folder's dbt settings."
     : preparation?.message
-    ?? (configured ? status?.dbt?.repoUrl || status?.dbt?.projectDir || 'Configured dbt project.' : 'Choose a local path or Git repository.');
+    ?? (configured
+      ? status?.dbt?.repoUrl || status?.dbt?.projectDir || 'Configured dbt project.'
+      : foundUnapplied
+        ? 'Preview it, then apply it.'
+        : 'Choose a local path or Git repository.');
   const input: React.CSSProperties = {
     width: '100%', boxSizing: 'border-box', height: 36, borderRadius: 8,
     border: `1px solid ${t.inputBorder}`, background: t.inputBg, color: t.textPrimary,
@@ -407,6 +422,8 @@ export function DbtProjectEditor({
         </div>
       </div>
 
+      {/* Guided Setup (compact) keeps the adapters under Advanced (design D7). */}
+      <AdvancedDisclosure enabled={compact} hint="semantic execution adapters" t={t}>
       <div style={{ border: '1px solid var(--border-subtle)', borderRadius: 12, background: t.cellBg, padding: 16, display: 'grid', gap: 12 }}>
         <div>
           <div style={{ fontSize: 13, fontWeight: 700, color: t.textPrimary }}>Semantic execution adapters</div>
@@ -545,6 +562,7 @@ export function DbtProjectEditor({
           </div>
         </details>
       </div>
+      </AdvancedDisclosure>
     </div>
   );
 }

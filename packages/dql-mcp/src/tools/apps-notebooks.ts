@@ -120,7 +120,7 @@ export function listApps(ctx: DQLContext, args: { query?: string }) {
     apps,
     note: apps.length === 0
       ? (args.query ? `No App matches "${args.query}".` : 'This project has no Apps yet. build_dql_app drafts one.')
-      : 'A tile is Certified only when the block it runs is certified. Open an App in the workbench (Apps) to run it.',
+      : 'A tile is Certified only when the saved query it runs is certified. Open an App in the workbench (Apps) to run it.',
   };
 }
 

@@ -1,3 +1,5 @@
+import { formatDashboardFilterValue } from './dashboard-filter-words';
+
 /**
  * Formatting for dashboard variable values, shared by the App shell and the
  * analysis surface.
@@ -8,7 +10,8 @@ export function formatVariableValue(value: unknown): string {
   if (Array.isArray(value)) return value.map(formatVariableValue).join(', ');
   if (typeof value === 'boolean') return value ? 'On' : 'Off';
   if (typeof value === 'number') return value.toLocaleString();
-  if (typeof value === 'object') return JSON.stringify(value);
+  // A date or number range reads in words ("From 1 Jan 2025"), never as JSON.
+  if (typeof value === 'object') return formatDashboardFilterValue(value) ?? 'All';
   return String(value);
 }
 

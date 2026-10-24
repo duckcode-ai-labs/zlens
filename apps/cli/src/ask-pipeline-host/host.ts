@@ -14,6 +14,7 @@ import {
   classifyWarehouseError,
   hostedWarehouseError,
   assessAnalyticalRelationship,
+  assessSemanticJoinTrust,
   parseMemberOption,
   projectVocabularySource,
   rankedRefsFromPack,
@@ -1167,6 +1168,20 @@ export function effectiveAnsweredTrust(input: {
 }
 
 /**
+ * FROM METRICS MEANS CERTIFIED JOINS. A semantic compile's joins (the native
+ * engine's own, or for MetricFlow and dbt Cloud the native composer's join
+ * path for the same request) are checked against the DQL relationships the
+ * way `resolve_analytical_path` checks them; a draft or unmodeled join makes
+ * the answer review-required. A compile with no join path at all is not
+ * judged here.
+ */
+export function withJoinTrust(compiled: SemanticCompileOutput, manifest: DQLManifest | undefined): SemanticCompileOutput {
+  if (!compiled.joinPath) return compiled;
+  const joins = assessSemanticJoinTrust(compiled.joinPath, manifest);
+  return { ...compiled, joinTrust: { certified: joins.certified, ...(joins.caveat ? { caveat: joins.caveat } : {}) } };
+}
+
+/**
  * The answer card's title, from the ONE trust decision and the source of the
  * figures. A certified block served as evidence is never headed "certified"
  * unless the run is, and nothing but SQL the AI wrote is headed AI-drafted:
@@ -1178,7 +1193,7 @@ export function answeredArtifactTitle(
 ): string {
   if (trustState === 'certified') return 'Certified answer';
   if (source === 'ai_sql') return 'AI-drafted answer';
-  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Governed answer from a certified block' : 'Answer to review, from a certified block';
+  if (source === 'block_as_evidence') return trustState === 'governed' ? 'Answer from a certified saved query, not certified for this question' : 'Answer to review, from a certified saved query';
   return trustState === 'governed' ? 'Semantic answer' : 'Answer to review, from governed definitions';
 }
 
@@ -1818,13 +1833,14 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     };
     return {
       ...(layer ? {
-        compileSemantic: (request) => deps.compileSemantic({ ...request, ...(signal ? { signal } : {}) }, connection, semanticCompileContext(request)),
+        compileSemantic: async (request) => withJoinTrust(await deps.compileSemantic({ ...request, ...(signal ? { signal } : {}) }, connection, semanticCompileContext(request)), deps.getManifest().manifest),
         // Different periods are separate MetricFlow/dbt semantic requests, but
         // every branch retains the same selected adapter, connection and
         // cancellation signal.  The host returns executable SQL per branch;
         // the pipeline aligns rows only after the engine has produced them.
         compileSemanticProgram: async (program) => {
           let selectedEngine: string | undefined;
+          let joinPath: SemanticCompileOutput['joinPath'] = [];
           const branches: typeof program.branches = [];
           for (const branch of program.branches) {
             if (signal?.aborted) throw new Error('the semantic execution program was cancelled before every period compiled');
@@ -1834,17 +1850,19 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
               throw new Error(`semantic execution program selected more than one adapter (${selectedEngine}, ${compiled.engine}); all periods must compile on one target`);
             }
             selectedEngine = compiled.engine;
+            joinPath = compiled.joinPath && joinPath ? [...joinPath, ...compiled.joinPath] : undefined;
             branches.push({ ...branch, sql: compiled.sql, engine: compiled.engine });
           }
           if (!selectedEngine) throw new Error('the semantic execution program had no compiled branches');
-          return {
+          return withJoinTrust({
             // `executeCandidate` executes branches, not this marker. Keeping a
             // deterministic SQL fingerprint retains existing receipts/caches.
             sql: branches.map((branch) => `-- ${branch.id}\n${branch.sql ?? ''}`).join('\n'),
             engine: selectedEngine,
             program: { ...program, branches },
             strategy: `${branches.length} bounded semantic period branches`,
-          };
+            ...(joinPath ? { joinPath } : {}),
+          }, deps.getManifest().manifest);
         },
       } : {}),
       // Joins over raw tables are the AI's to write (preferred joins are hints
@@ -1864,7 +1882,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     const startedAt = Date.now();
     const provider = await deps.selectProvider(request);
     if (!provider) {
-      return { blocked: failure(runId, 'No AI model is configured for this project, so the question could not be interpreted.', 'provider_error', startedAt) };
+      // No model ran: the run says so (`providerMissing`), so nothing labels it AI-generated (round 3).
+      return { blocked: failure(runId, 'No AI model is configured for this project, so the question could not be interpreted.', 'provider_error', startedAt, { providerMissing: true }) };
     }
     const scopeMessage = askScopeProblem(deps.getManifest().manifest, request.workspaceContext, deps.getManifest().snapshotId);
     if (scopeMessage) return { blocked: scopeFailure(runId, scopeMessage, startedAt) };
@@ -1935,7 +1954,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       for (const entry of vocabulary.entries) counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + 1);
       const plural = (count: number, one: string, many: string) => `${count} ${count === 1 ? one : many}`;
       const found = [
-        counts.get('block') ? plural(counts.get('block')!, 'certified block', 'certified blocks') : '',
+        counts.get('block') ? plural(counts.get('block')!, 'certified saved query', 'certified saved queries') : '',
         (counts.get('metric') ?? 0) + (counts.get('measure') ?? 0) ? plural((counts.get('metric') ?? 0) + (counts.get('measure') ?? 0), 'metric', 'metrics') : '',
         counts.get('dimension') ? plural(counts.get('dimension')!, 'dimension', 'dimensions') : '',
         counts.get('relation') ? plural(counts.get('relation')!, 'table', 'tables') : '',
@@ -3045,29 +3064,31 @@ function namedBlockFailure(runId: string, message: string, startedAt: number): A
   const receipt = result.askPipelineReceipt as PipelineReceipt;
   receipt.failure = { stage: 'prepare', reason: 'named_block_not_served', message };
   receipt.tiers = [{ round: 0, tier: 'certified', outcome: 'refused', detail: message.slice(0, 580) }];
-  receipt.story = [{ version: 1, phase: 'tier', title: 'The block the question names is not one Ask answers from', detail: message, state: 'missed', at: Date.now() }];
+  receipt.story = [{ version: 1, phase: 'tier', title: 'The saved query the question names is not one Ask answers from', detail: message, state: 'missed', at: Date.now() }];
   return {
     ...result,
     answerRefusalCode: 'modeling_gap',
-    artifacts: (result.artifacts ?? []).map((artifact) => ({ ...artifact, title: 'The named block was not used' })),
+    artifacts: (result.artifacts ?? []).map((artifact) => ({ ...artifact, title: 'The named saved query was not used' })),
     nextActions: [],
   };
 }
 
-function failure(runId: string, message: string, code: 'provider_error' | 'execution_error', startedAt: number): AgentRouteExecutorResult {
+function failure(runId: string, message: string, code: 'provider_error' | 'execution_error', startedAt: number, options: { providerMissing?: boolean } = {}): AgentRouteExecutorResult {
   // Even a run that stops before reading the question tells the reader where
   // it stopped and why, in its own words, never a generic "not worked out".
   const receipt: PipelineReceipt = {
     version: 1, vocabularyFingerprint: '', dispatches: [], candidates: [], refusals: [], tiers: [],
     timings: { total: Date.now() - startedAt },
     failure: { stage: 'resolve', reason: code, message },
-    story: [{ version: 1, phase: 'read', title: code === 'provider_error' ? 'Could not reach an AI model' : 'Could not run the query', detail: message, state: 'failed', at: Date.now() }],
+    story: [{ version: 1, phase: 'read', title: options.providerMissing ? 'No AI provider is connected' : code === 'provider_error' ? 'Could not reach an AI model' : 'Could not run the query', detail: message, state: 'failed', at: Date.now() }],
   };
   return {
     askPipelineReceipt: receipt,
     summary: message, answer: message, status: 'blocked', trustState: 'blocked', stopReason: 'blocked', resolvedRoute: 'generated_answer', answerRefusalCode: code,
-    artifacts: [{ id: `${runId}:diagnostic`, kind: 'answer', title: 'Could not answer', trustState: 'blocked', payload: { kind: 'no_answer', text: message, answer: message, executionError: message } }],
-    evaluations: [], nextActions: [{ id: 'retry-after-provider', label: 'Retry after fixing the AI model settings', route: 'generated_answer' }],
+    artifacts: [{ id: `${runId}:diagnostic`, kind: 'answer', title: options.providerMissing ? 'Ask needs an AI provider' : 'Could not answer', trustState: 'blocked', payload: options.providerMissing
+      ? { kind: 'no_answer', text: message, answer: message, refusalCode: 'provider_error', providerMissing: true }
+      : { kind: 'no_answer', text: message, answer: message, executionError: message } }],
+    evaluations: [], nextActions: [{ id: 'retry-after-provider', label: options.providerMissing ? 'Ask again after connecting an AI provider' : 'Retry after fixing the AI model settings', route: 'generated_answer' }],
     telemetry: { version: 1, stageDurationsMs: { total: Date.now() - startedAt }, providerRoundTrips: 0, toolCalls: 0, sqlExecutions: 0, repairs: 0, egressReceipts: 0 },
   };
 }
@@ -3469,11 +3490,15 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
   if (outcome.kind !== 'answered') throw new Error(`unreachable pipeline outcome ${String((outcome as { kind: string }).kind)}`);
   const { candidate, result } = outcome;
   const certified = candidate.trust === 'certified';
-  const reviewRequired = candidate.trust === 'review_required';
+  // A semantic compile that joins through a draft or unmodeled relationship:
+  // the figures still come from governed definitions (no AI wrote the SQL),
+  // but the answer is labelled for review, not From Metrics, and says which join.
+  const joinDoubt = candidate.tier === 'semantic' && candidate.trust === 'review_required';
+  const reviewRequired = candidate.trust === 'review_required' && !joinDoubt;
   // A certified block served as published for a question it cannot answer
   // with identity is evidence: governed trust, the block as its source.
   const blockAsEvidence = candidate.tier === 'certified' && !certified;
-  const route = certified ? { tier: 'certified_block', label: 'Certified block' } : blockAsEvidence ? { tier: 'certified_block', label: 'Certified block, served as evidence' } : reviewRequired ? { tier: 'generated_sql', label: 'AI-drafted SQL (review required)' } : { tier: 'semantic_metric', label: 'Semantic metric' };
+  const route = certified ? { tier: 'certified_block', label: 'Certified saved query' } : blockAsEvidence ? { tier: 'certified_block', label: 'Certified saved query, served as evidence' } : reviewRequired ? { tier: 'generated_sql', label: 'AI-drafted SQL (review required)' } : { tier: 'semantic_metric', label: 'Semantic metric' };
   // GOVERNED MEANS THE WHOLE QUESTION. A semantic answer is labelled governed
   // only when its reading uses everything the question names and meets every
   // obligation it recorded. A word the reading left unused ("premium" in "the
@@ -3481,7 +3506,7 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
   // governed definitions answered a question near the one asked: the numbers
   // are shown, labelled for review, with the reason.
   const doubt = governedCoverageDoubt(receipt);
-  const coverageDoubt = !certified && !reviewRequired && doubt.reasons.length > 0;
+  const coverageDoubt = !certified && !reviewRequired && (doubt.reasons.length > 0 || joinDoubt);
   const effectiveTrust = effectiveAnsweredTrust({ certified, reviewRequired, coverageDoubt });
   const trustState = effectiveTrust.trustState;
   const payload = {
@@ -3524,21 +3549,22 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
     evaluations: [
       ...contextEvaluation(receipt),
       { id: 'pipeline-interpretation', label: 'Interpretation', passed: true, severity: 'info', message: `Read as: ${outcome.intent.reading || 'the intent below'}` },
-      { id: 'pipeline-preparation', label: certified ? 'Certified entailment' : candidate.tier === 'semantic' ? 'Semantic compilation' : reviewRequired ? 'AI-drafted SQL checks' : 'Certified block', passed: true, severity: 'info', message: candidate.proof.join(' ') },
+      { id: 'pipeline-preparation', label: certified ? 'Certified entailment' : candidate.tier === 'semantic' ? 'Semantic compilation' : reviewRequired ? 'AI-drafted SQL checks' : 'Certified saved query', passed: true, severity: 'info', message: candidate.proof.join(' ') },
       ...(receipt.executed?.proofs ?? []).map((proof, index) => ({ id: `pipeline-execution-${index + 1}`, label: 'Execution proof', passed: true, severity: 'info' as const, message: proof })),
       // Words the reading does not use are never a passed check; the
       // evaluation carries no repair action, so it informs and does not loop.
       // A restriction the reading did not apply is a warning; a word it may
       // cover under another name is a question, never a claim of omission.
       ...coverageEvaluations(receipt),
-      ...(coverageDoubt ? [{ id: 'pipeline-governed-coverage', label: 'Governed label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: the reading does not account for ${doubt.reasons.join('; ')}.` }] : []),
+      ...(coverageDoubt && doubt.reasons.length > 0 ? [{ id: 'pipeline-governed-coverage', label: 'From Metrics label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: the reading does not account for ${doubt.reasons.join('; ')}.` }] : []),
+      ...(joinDoubt ? [{ id: 'pipeline-governed-joins', label: 'From Metrics label', passed: false, severity: 'warning' as const, message: `Computed from governed definitions, but labelled for review: ${candidate.trustCaveat ?? 'a join it takes is not a certified relationship'}` }] : []),
       ...(receipt.grounding ?? []).filter((note) => note.startsWith('identity:') && /share the name/.test(note)).map((note, index) => ({ id: `pipeline-identity-${index + 1}`, label: 'Identity', passed: true, severity: 'warning' as const, message: note.slice('identity:'.length).trim() })),
       // A certified block served as published with a label-only grouping
       // says so: the answer cannot keep two same-named entities apart.
-      ...(candidate.tier === 'certified' ? candidate.proof.filter((line) => /no identity key/.test(line)).map((line, index) => ({ id: `pipeline-certified-caveat-${index + 1}`, label: 'Certified block identity', passed: false, severity: 'warning' as const, message: `${line.replace(/^the block/, 'The block')}. Recertify it with the entity key to keep same-named members apart.` })) : []),
+      ...(candidate.tier === 'certified' ? candidate.proof.filter((line) => /no identity key/.test(line)).map((line, index) => ({ id: `pipeline-certified-caveat-${index + 1}`, label: 'Certified saved query identity', passed: false, severity: 'warning' as const, message: `${line.replace(/^the block/, 'The block')}. Recertify it with the entity key to keep same-named members apart.` })) : []),
       // A certified answer always names who owns its block; a block with no
       // recorded owner is listed here and the answer says "Owner: not set".
-      ...(certified && candidate.sourceRef && !candidate.sourceOwner ? [{ id: 'pipeline-certified-owner', label: 'Certified block owner', passed: false, severity: 'warning' as const, message: `${candidate.sourceRef} has no owner recorded. Set owner in the block declaration.` }] : []),
+      ...(certified && candidate.sourceRef && !candidate.sourceOwner ? [{ id: 'pipeline-certified-owner', label: 'Certified saved query owner', passed: false, severity: 'warning' as const, message: `${candidate.sourceRef} has no owner recorded. Set owner in the block declaration.` }] : []),
       // An answer that could not carry a requested output says so, and the
       // check does not pass: a ranking whose only identity is a numeric key
       // has not answered "which teams".
@@ -3553,10 +3579,10 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
         // The label lives on another entity of the same thing: a concept draft can name that (A-005), for review, never certified by asking.
         { id: 'draft-concept', label: 'Draft a business concept for this identity', route: 'modeling_draft' as const },
       ] : []),
-      ...(receipt.refusals.some((refusal) => refusal.tier === 'certified' && /no identity key/.test(refusal.message)) || (candidate.tier === 'certified' && candidate.proof.some((line) => /no identity key/.test(line))) ? [{ id: 'recertify-with-key', label: 'Recertify this block with the entity key', route: 'dql_block_draft' as const, artifactKind: 'dql_block_draft' as const }] : []),
+      ...(receipt.refusals.some((refusal) => refusal.tier === 'certified' && /no identity key/.test(refusal.message)) || (candidate.tier === 'certified' && candidate.proof.some((line) => /no identity key/.test(line))) ? [{ id: 'recertify-with-key', label: 'Recertify this saved query with the entity key', route: 'dql_block_draft' as const, artifactKind: 'dql_block_draft' as const }] : []),
       ...(receipt.context?.suggestedDomain ? [{ id: 'scope-to-domain', label: `Scope Ask to ${receipt.context.suggestedDomain}`, route: 'generated_answer' as const }] : []),
       ...(undeclaredJoin ? [{ id: 'create-relationship', label: `Save the ${undeclaredJoin.relations!.map(tableName).join(' → ')} join as a relationship`, route: 'modeling_draft' as const }] : []),
-      { id: 'create-block', label: 'Save as block', route: 'dql_block_draft', artifactKind: 'dql_block_draft' }, { id: 'research-gap', label: 'Research deeper', route: 'research' },
+      { id: 'create-block', label: 'Save as saved query', route: 'dql_block_draft', artifactKind: 'dql_block_draft' }, { id: 'research-gap', label: 'Research deeper', route: 'research' },
     ],
     telemetry,
   });

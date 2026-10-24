@@ -231,13 +231,13 @@
         },
         "answer": {
           "all": [
-            "(apps/|draft)"
+            "(App Studio|draft)"
           ]
         },
         "label": "draft",
         "allowCertifiedSources": true
       },
-      "note": "A draft App built from certified blocks may say its tile sources are Certified; it must say the App itself is a draft."
+      "note": "build_dql_app starts an App Studio draft from certified data; the answer may say its sources are Certified, must say the App itself is a draft, and should give the link that opens it in App Studio."
     },
     {
       "id": "d-notebooks",

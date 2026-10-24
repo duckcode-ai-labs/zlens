@@ -253,4 +253,16 @@ query="""SELECT customer_id FROM dim_customer"""
     expect(twice).toBe(once);
     expect(() => parse(twice)).not.toThrow();
   });
+
+  it('keeps a block\'s question aliases and caveats', () => {
+    const formatted = formatDQL(`block "x" {
+  type = "custom"
+  caveats = "Excludes refunds"
+  synonyms = ["sales", "bookings"]
+  query = """SELECT 1"""
+}`);
+    expect(formatted).toContain('caveats = ["Excludes refunds"]');
+    expect(formatted).toContain('synonyms = ["sales", "bookings"]');
+    expect(() => parse(formatted)).not.toThrow();
+  });
 });

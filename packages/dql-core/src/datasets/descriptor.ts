@@ -79,6 +79,56 @@ export interface DatasetPhysicalField {
   status: DatasetFieldStatus;
   time?: { grains: string[]; baseGrain?: string; primary?: boolean };
   hierarchy?: { id: string; level: number };
+  /**
+   * A field of a related table (design D2): the column `column` of the table
+   * the Dataset's join `join` reaches. Absent for the Dataset's own columns.
+   */
+  related?: { join: string; column: string };
+}
+
+/**
+ * A checked many-to-one (or one-to-one) join a table Dataset follows to show
+ * a related table's fields (design D2, "Datasets follow the joins ZLens
+ * already knows"). Each order has one customer, so joining customers to
+ * orders never adds order rows. A join reaches one table; a second hop names
+ * the first as its `parent`. The server recomputes joins from its own
+ * relationship sources on every run; a join in a stored descriptor is never
+ * execution authority.
+ */
+export interface DatasetJoin {
+  /** Plain identifier, the prefix of its fields' names: `customer`, `customer__region`. */
+  id: string;
+  /** The join this one starts from; absent for a join from the Dataset's own table. */
+  parent?: string;
+  /** The related table in words, singular: "Customer". */
+  label: string;
+  /** The related table's name as people know it: "customers". */
+  table: string;
+  /** The related relation as SQL names it. */
+  relation: string;
+  /** Column pairs: `from` on the parent side (the Dataset or the parent join), `to` on the related table. */
+  keys: Array<{ from: string; to: string }>;
+  cardinality: 'many_to_one' | 'one_to_one';
+  /** A certified relationship keeps a tile's trust; a drafted one makes it Needs review. */
+  trust: 'certified' | 'review_required';
+  /** Where the relationship comes from: the model (Modeling, dbt, semantic), a setup draft, or a dbt test. */
+  origin: 'model' | 'drafted' | 'dbt_test';
+  /** The relationship's id in its source. */
+  relationshipId: string;
+  /**
+   * `current`: warehouse evidence already shows the related table's key is
+   * unique. `recheck`: the runtime checks it (a bounded query) before a tile
+   * uses the join.
+   */
+  uniqueness: 'current' | 'recheck';
+  /** "each order has one customer" */
+  sentence: string;
+  /**
+   * A join someone certified that changed since (its keys, cardinality or a
+   * side's grain moved): who certified it and when, so receipts say
+   * "Changed since it was certified on 22 Oct". Absent otherwise.
+   */
+  changedSinceCertified?: { at: string; by?: string; name?: string };
 }
 
 export interface DatasetMeasureField {
@@ -112,6 +162,34 @@ export interface DatasetMeasureField {
 
 export type DatasetField = DatasetPhysicalField | DatasetMeasureField;
 
+/**
+ * Fields read from a saved query's result (design D1, "everything you add has
+ * fields"). A saved query (a block with no Dataset definition) is offered on
+ * the same shelves as a Dataset: its output columns are the fields, and tiles
+ * compile as a query over its complete result. Nothing here is a row-level
+ * contract: the result's own rows are the grain, so a tile either shows them
+ * as they are (it groups by every grouping column of the query) or rolls them
+ * up, and the receipt says which.
+ */
+export interface DatasetResultOrigin {
+  /** The saved query whose result rows the fields read (its block name). */
+  savedQuery: string;
+  /**
+   * The saved query's own grouping columns: one result row per combination.
+   * Empty when the query is not a grouped aggregate, so no tile is "as is".
+   */
+  groupBy: string[];
+  /** Measures that only show a value as it is (averages, ratios): they never roll up. */
+  asIs: string[];
+  /** Where the column types came from: the block's declared contract, a run, or a one-row read. */
+  typesFrom: 'contract' | 'run' | 'probe';
+  /**
+   * The saved query keeps only its first N rows (an outer `LIMIT N`, a Top N).
+   * A tile that rolls those rows up totals the top N only, never everything.
+   */
+  keepsFirstRows?: number;
+}
+
 export interface DatasetDescriptor {
   version: 1;
   id: string;
@@ -129,6 +207,17 @@ export interface DatasetDescriptor {
   fields: DatasetField[];
   operations: DatasetOperation[];
   execution: { route: DatasetExecutionRoute; adapterId?: string };
+  /** Present only for fields read from a saved query's result (see DatasetResultOrigin). */
+  result?: DatasetResultOrigin;
+  /** Joins whose related tables' fields this Dataset shows (design D2). Absent when it follows none. */
+  joins?: DatasetJoin[];
+  /** Plain lines about joins the Dataset does not follow: "Orders per customer: add it from Orders". */
+  joinNotes?: string[];
+}
+
+/** True for the read-only fields of a saved query's result, not a row-level Dataset. */
+export function isSavedQueryResultDataset(descriptor: Pick<DatasetDescriptor, 'result'> | null | undefined): boolean {
+  return Boolean(descriptor?.result);
 }
 
 export function datasetPhysicalFields(descriptor: DatasetDescriptor): DatasetPhysicalField[] {
@@ -187,6 +276,11 @@ export function normalizeDatasetDescriptor(value: unknown): DatasetDescriptor | 
     : [];
   const execution = objectRecord(record.execution);
   const route = enumValue(execution?.route, ['certified', 'semantic', 'governed_sql'] as const);
+  const result = record.result === undefined ? undefined : normalizeDatasetResultOrigin(record.result);
+  if (record.result !== undefined && !result) return undefined;
+  const joins = record.joins === undefined ? undefined : normalizeDatasetJoins(record.joins);
+  if (record.joins !== undefined && !joins) return undefined;
+  const joinNotes = record.joinNotes === undefined ? undefined : strings(record.joinNotes);
   if (!id || !kind || !sourceRevision || !snapshotId || !label || !lifecycle || !trust || !contractKind || !contractId || !contractFingerprint || !binding || !grain || !route) return undefined;
   if (fields.length !== (Array.isArray(record.fields) ? record.fields.length : 0)) return undefined;
   if (operations.length !== (Array.isArray(record.operations) ? record.operations.length : 0)) return undefined;
@@ -197,6 +291,9 @@ export function normalizeDatasetDescriptor(value: unknown): DatasetDescriptor | 
     names.add(key);
     return false;
   })) return undefined;
+  // A related field names a join this descriptor declares.
+  const joinIds = new Set((joins ?? []).map((join) => join.id));
+  if (fields.some((field) => field.kind === 'physical' && field.related && !joinIds.has(field.related.join))) return undefined;
   return {
     version: 1,
     id,
@@ -213,7 +310,56 @@ export function normalizeDatasetDescriptor(value: unknown): DatasetDescriptor | 
     fields,
     operations: Array.from(new Set(operations)),
     execution: { route, adapterId: text(execution?.adapterId) || undefined },
+    ...(result ? { result } : {}),
+    ...(joins?.length ? { joins } : {}),
+    ...(joinNotes?.length ? { joinNotes } : {}),
   };
+}
+
+const PLAIN_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+function normalizeDatasetJoins(value: unknown): DatasetJoin[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const joins: DatasetJoin[] = [];
+  for (const item of value) {
+    const record = objectRecord(item);
+    const id = text(record?.id);
+    const parent = text(record?.parent) || undefined;
+    const label = text(record?.label);
+    const table = text(record?.table);
+    const relation = text(record?.relation);
+    const relationshipId = text(record?.relationshipId);
+    const sentence = text(record?.sentence);
+    const cardinality = enumValue(record?.cardinality, ['many_to_one', 'one_to_one'] as const);
+    const trust = enumValue(record?.trust, ['certified', 'review_required'] as const);
+    const origin = enumValue(record?.origin, ['model', 'drafted', 'dbt_test'] as const);
+    const uniqueness = enumValue(record?.uniqueness, ['current', 'recheck'] as const);
+    const rawKeys = Array.isArray(record?.keys) ? record!.keys as unknown[] : [];
+    const keys = rawKeys.flatMap((pair) => {
+      const keyRecord = objectRecord(pair);
+      const from = text(keyRecord?.from);
+      const to = text(keyRecord?.to);
+      return from && to && PLAIN_IDENTIFIER.test(from) && PLAIN_IDENTIFIER.test(to) ? [{ from, to }] : [];
+    });
+    if (!id || !PLAIN_IDENTIFIER.test(id) || !label || !table || !relation || !relationshipId || !sentence
+      || !cardinality || !trust || !origin || !uniqueness || keys.length === 0 || keys.length !== rawKeys.length) return undefined;
+    if (joins.some((join) => join.id === id)) return undefined;
+    // A second hop's parent is declared before it.
+    if (parent && !joins.some((join) => join.id === parent)) return undefined;
+    joins.push({ id, ...(parent ? { parent } : {}), label, table, relation, keys, cardinality, trust, origin, relationshipId, uniqueness, sentence });
+  }
+  return joins;
+}
+
+function normalizeDatasetResultOrigin(value: unknown): DatasetResultOrigin | undefined {
+  const record = objectRecord(value);
+  const savedQuery = text(record?.savedQuery);
+  const typesFrom = enumValue(record?.typesFrom, ['contract', 'run', 'probe'] as const);
+  if (!record || !savedQuery || !typesFrom || !Array.isArray(record.groupBy) || !Array.isArray(record.asIs)) return undefined;
+  const keepsFirstRows = typeof record.keepsFirstRows === 'number' && Number.isSafeInteger(record.keepsFirstRows) && record.keepsFirstRows > 0
+    ? record.keepsFirstRows
+    : undefined;
+  return { savedQuery, groupBy: strings(record.groupBy), asIs: strings(record.asIs), typesFrom, ...(keepsFirstRows ? { keepsFirstRows } : {}) };
 }
 
 function normalizeDatasetSourceBinding(value: unknown): DatasetSourceBinding | undefined {
@@ -272,11 +418,16 @@ function normalizeDatasetField(value: unknown): DatasetField | undefined {
     const grains = strings(timeRecord?.grains);
     const hierarchyId = text(hierarchyRecord?.id);
     const level = hierarchyRecord?.level;
+    const relatedRecord = objectRecord(record?.related);
+    const relatedJoin = text(relatedRecord?.join);
+    const relatedColumn = text(relatedRecord?.column);
+    if (record?.related !== undefined && (!relatedJoin || !relatedColumn)) return undefined;
     return {
       kind, name, qualifiedId, type, role, status,
       semanticReference: text(record?.semanticReference) || undefined,
       ...(timeRecord ? { time: { grains, baseGrain: text(timeRecord.baseGrain) || undefined, primary: timeRecord.primary === true || undefined } } : {}),
       ...(hierarchyId && typeof level === 'number' && Number.isInteger(level) ? { hierarchy: { id: hierarchyId, level } } : {}),
+      ...(relatedJoin && relatedColumn ? { related: { join: relatedJoin, column: relatedColumn } } : {}),
     };
   }
   const aggregation = enumValue(record?.aggregation, ['sum', 'count', 'count_distinct', 'ratio', 'avg', 'min', 'max'] as const);

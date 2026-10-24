@@ -87,6 +87,27 @@ describe('manifest v3 dbt-first modeling', () => {
     expect(manifest.diagnostics?.some((diagnostic) => diagnostic.kind === 'modeling' && diagnostic.message.includes('stale'))).toBe(true);
   });
 
+  it('keeps who certified a relationship and when, outside its proof, also once it goes stale (T4)', () => {
+    const path = join(projectRoot, 'domains/commerce/modeling/relationships.dql.yaml');
+    const authored = readFileSync(path, 'utf8');
+    const withWho = authored.replace(
+      '      to: { grain: customer_id, keys: [customer_id] }\n    validation:\n      status: passed\n      checked_at: \'2026-07-11T00:00:00.000Z\'\n      query_fingerprint: order-customer-proof',
+      '      to: { grain: customer_id, keys: [customer_id] }\n      certifiedAt: \'2026-10-22T09:00:00.000Z\'\n      certifiedBy: maria@company.test\n      certifiedByName: Maria\n    validation:\n      status: passed\n      checked_at: \'2026-07-11T00:00:00.000Z\'\n      query_fingerprint: order-customer-proof',
+    );
+    expect(withWho).not.toBe(authored);
+    writeFileSync(path, withWho);
+    const before = buildManifest({ projectRoot, dbtManifestPath }).modeling!.relationships['commerce::relationship::order_to_customer'];
+    expect(before.staleCertification).toBe(false);
+    expect(before.certification).toEqual({ by: 'maria@company.test', name: 'Maria', at: '2026-10-22T09:00:00.000Z' });
+
+    const raw = JSON.parse(requireManifest(dbtManifestPath)) as Record<string, any>;
+    raw.nodes['model.commerce.dim_customers'].meta.dql.grain = 'customer_sk';
+    writeFileSync(dbtManifestPath, JSON.stringify(raw));
+    const after = buildManifest({ projectRoot, dbtManifestPath }).modeling!.relationships['commerce::relationship::order_to_customer'];
+    expect(after.staleCertification).toBe(true);
+    expect(after.certification?.at).toBe('2026-10-22T09:00:00.000Z');
+  });
+
   it('uses dbt relation_name as the physical relation without changing its quoting semantics', () => {
     const raw = JSON.parse(requireManifest(dbtManifestPath)) as Record<string, any>;
     raw.nodes['model.commerce.fct_orders'].relation_name = '"ANALYTICS"."sales"."Order Facts"';

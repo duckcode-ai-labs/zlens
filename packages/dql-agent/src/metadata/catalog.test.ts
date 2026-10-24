@@ -45,6 +45,37 @@ describe('local metadata catalog', () => {
     rmSync(projectRoot, { recursive: true, force: true });
   });
 
+  it('finds a block by a question alias from its Context panel', async () => {
+    writeFileSync(
+      join(projectRoot, 'blocks', 'assist_leaders.dql'),
+      `block "Assist Leaders" {
+  domain = "nba"
+  type = "custom"
+  status = "certified"
+  owner = "analytics@example.com"
+  description = "Players ranked by assists."
+  synonyms = ["playmakers", "dime leaders"]
+  primaryTerms = ["court vision"]
+  query = """
+    SELECT player_name, SUM(assists) AS total_assists
+    FROM fct_player_performance
+    GROUP BY 1
+  """
+}`,
+      'utf-8',
+    );
+    await ensureMetadataCatalogFresh(projectRoot);
+    const catalog = openMetadataCatalog(projectRoot);
+    try {
+      expect(catalog.searchObjects({ query: 'playmakers', objectTypes: ['dql_block'] }).map((row) => row.objectKey))
+        .toEqual(['dql:block:Assist Leaders']);
+      expect(catalog.searchObjects({ query: 'court vision', objectTypes: ['dql_block'] }).map((row) => row.objectKey))
+        .toEqual(['dql:block:Assist Leaders']);
+    } finally {
+      catalog.close();
+    }
+  });
+
   it('CTX-003 keeps SQL bodies and prior row values out of metadata FTS queries', () => {
     const query = buildFollowUpSearchQuery('what product did they buy?', {
       kind: 'drilldown',
@@ -908,6 +939,12 @@ it('upgrades the vector index to a real embedder after the sync write, and is id
 
     // Re-running must not re-embed the whole catalog.
     expect(await upgradeVectorIndexForProject(projectRoot, remote)).toMatchObject({ upgraded: false });
+
+    // Turning embeddings off (or an index nobody chose, Codex 23 Oct 2026)
+    // goes back to word-based search, once.
+    expect(await upgradeVectorIndexForProject(projectRoot, new HashedTokenEmbeddingProvider())).toMatchObject({ upgraded: true, providerId: 'hashed-token-v1' });
+    expect(readProvider()).toBe('hashed-token-v1');
+    expect(await upgradeVectorIndexForProject(projectRoot, new HashedTokenEmbeddingProvider())).toMatchObject({ upgraded: false });
   });
 
   it('embeds the ACTIVE snapshot, not just the working database, so the vector lane is live', async () => {

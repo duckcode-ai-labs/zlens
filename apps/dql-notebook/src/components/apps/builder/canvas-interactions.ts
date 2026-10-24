@@ -126,6 +126,32 @@ export function canvasShortcut(event: {
   return undefined;
 }
 
+/**
+ * Where a canvas shortcut was pressed decides whether it applies. On the
+ * canvas every shortcut works; undo and redo work anywhere. In the tile
+ * settings panel, Delete removes the selected tile as long as focus is not
+ * in a text field (canvasShortcut already ignores keys typed into fields),
+ * so an author who just changed a setting can still delete the tile.
+ */
+export function canvasShortcutApplies(shortcut: CanvasShortcut, where: { onCanvas: boolean; inSettingsPanel: boolean; key: string }): boolean {
+  if (shortcut.kind === 'undo' || shortcut.kind === 'redo') return true;
+  if (where.onCanvas) return true;
+  return where.inSettingsPanel && shortcut.kind === 'remove' && where.key === 'Delete';
+}
+
+/** How a tile was added to the page. */
+export type StudioAddOrigin = 'source' | 'field_draft';
+
+/**
+ * The tile selected after an add. A tile built by clicking fields is not left
+ * selected: the author's next field click starts a new tile instead of
+ * changing the one just added.
+ */
+export function selectionAfterAdd(origin: StudioAddOrigin, addedTileId: string | undefined): string | null {
+  if (origin === 'field_draft') return null;
+  return addedTileId ?? null;
+}
+
 // ─── Undo that survives a reload ─────────────────────────────────────────────
 
 const HISTORY_PREFIX = 'dql.studio.history.';

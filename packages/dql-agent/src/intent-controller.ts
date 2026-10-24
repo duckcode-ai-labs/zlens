@@ -435,7 +435,7 @@ export function decideAgentAction(input: IntentDecisionInput): IntentDecision {
     return {
       action: 'compose_app',
       confidence: 0.8,
-      reason: 'This asks to assemble a standing view, so I will compose an app from the relevant certified blocks rather than answer a single question.',
+      reason: 'This asks to assemble a standing view, so I will compose an app from the relevant certified saved queries rather than answer a single question.',
       followsUp,
     };
   }
@@ -470,7 +470,7 @@ export function decideAgentAction(input: IntentDecisionInput): IntentDecision {
   // 3) A confident certified block or governed metric fits → answer it directly,
   //    even if the phrasing looks lightly analytical (don't over-investigate a lookup).
   if (bestMatch >= STRONG_MATCH && !hasMissing && intent !== 'clarify') {
-    const via = certified >= metric ? 'a certified block' : 'a governed metric';
+    const via = certified >= metric ? 'a certified saved query' : 'a governed metric';
     return {
       action: 'answer',
       confidence: Math.min(0.95, 0.5 + bestMatch / 2),
@@ -524,7 +524,7 @@ export function decideAgentAction(input: IntentDecisionInput): IntentDecision {
     action: 'clarify',
     confidence: 0.5,
     clarifySoft: true,
-    reason: 'I could not match this to a certified block, governed metric, or clear analysis, so I will ask for the missing detail.',
+    reason: 'I could not match this to a certified saved query, governed metric, or clear analysis, so I will ask for the missing detail.',
     clarifyingQuestion: buildClarifyingQuestion(question, signals),
     followsUp,
   };

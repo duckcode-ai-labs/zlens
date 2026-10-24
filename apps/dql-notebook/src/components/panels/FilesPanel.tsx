@@ -41,15 +41,15 @@ type FolderKey = 'notebooks' | 'blocks' | 'terms' | 'business-views' | 'dashboar
 
 const FOLDER_LABELS: Record<FolderKey, string> = {
   notebooks: 'Notebooks',
-  blocks: 'Blocks',
+  blocks: 'Saved queries',
   terms: 'Business Terms',
   'business-views': 'Business Views',
   dashboards: 'Dashboards',
 };
 
 const FOLDER_DESCRIPTIONS: Partial<Record<FolderKey, string>> = {
-  terms: 'Certified vocabulary linked to blocks and business views.',
-  'business-views': 'Business compositions built from blocks, terms, and other views.',
+  terms: 'Certified vocabulary linked to saved queries and business views.',
+  'business-views': 'Business compositions built from saved queries, terms, and other views.',
 };
 
 // Dashboards section is hidden when empty — keeps the UI clean on projects

@@ -355,7 +355,7 @@
    "keys": [
     "product_type"
    ],
-   "tier": "governed"
+   "tier": "review_required"
   },
   {
    "id": "food-vs-drink",
@@ -382,7 +382,7 @@
      "lifetime_spend_pretax"
     ]
    },
-   "tier": "governed",
+   "tier": "review_required",
    "note": "A quoted literal is a filter on the customer name. 'Revenue' follows the governed term: order revenue (incl. tax) or product revenue (pretax) are both governed readings; clarifying between them is also correct.",
    "outcome": "clarify_or_rows",
    "alternatives": [
@@ -423,7 +423,7 @@
      "beverage_revenue"
     ]
    },
-   "tier": "governed",
+   "tier": "review_required",
    "note": "Two measures of the same customer, one filter matched case-insensitively. 'Total revenue' may follow either governed reading of the Revenue term (order total incl. tax, or pretax product revenue); the beverage restriction applies only to the beverage measure.",
    "outcome": "clarify_or_rows",
    "alternatives": [
@@ -460,7 +460,7 @@
    "keys": [
     "customer_type"
    ],
-   "tier": "governed"
+   "tier": "review_required"
   },
   {
    "id": "average-order-value",
@@ -654,7 +654,7 @@
    "keys": [
     "customer_type"
    ],
-   "tier": "governed",
+   "tier": "review_required",
    "alternatives": [
     {
      "sql": "SELECT c.customer_type, SUM(o.order_total) AS order_total FROM dev.orders o JOIN dev.customers c ON o.customer_id = c.customer_id GROUP BY c.customer_type",
@@ -1107,7 +1107,7 @@
    "identity": [
     "customer_type"
    ],
-   "tier": "governed",
+   "tier": "review_required",
    "note": "Pretax revenue split between new and returning customers. Two governed readings: by the customer_type dimension (new = only the first order placed, returning = ordered more than once; the answer defines the type from the dbt column description), or per order by customer_order_number (the first order versus later ones; the reading line states it). Gross order_total is not accepted: the question says revenue.",
    "alternatives": [
     {

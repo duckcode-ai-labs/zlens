@@ -46,6 +46,7 @@ import {
   type DatasetDescriptor,
   normalizeMetricCapabilityContract,
   type MetricCapabilityContract,
+  currentBlockFileCheck,
 } from "@zlens/core";
 import { buildKGFromManifest, buildKGFromSemanticLayer, declaredDomainIds } from "../kg/build.js";
 import type { KGEdge, KGNode } from "../kg/types.js";
@@ -81,6 +82,7 @@ import {
   certifiedFitAllowsTier1,
   certifiedTerminationVerdict,
   evaluateCertifiedBlockFit,
+  namedQualifiedSemanticMeasures,
   type CertifiedBlockFit,
 } from './block-fit.js';
 import { retrieveScopedHints } from '../hints/retrieval.js';
@@ -110,6 +112,8 @@ import {
   datasetDescriptorFromSemanticMetrics,
   datasetDescriptorFromManifestBlock,
   loadDatasetGrainProofs,
+  loadSavedQueryResultColumns,
+  savedQueryResultDescriptorFromManifestBlock,
   type SemanticDatasetFieldProjection,
   type SemanticDatasetMeasureProjection,
 } from '../datasets/index.js';
@@ -1223,7 +1227,14 @@ async function upgradeVectorIndexOnCatalog(
   provider: EmbeddingProvider,
 ): Promise<{ upgraded: boolean; providerId: string; reason?: string }> {
   if (provider.id.startsWith('hashed-token')) {
-    return { upgraded: false, providerId: provider.id, reason: 'project uses the offline hashed embedder' };
+    // Word-based search is what a fresh snapshot already holds. Rebuild only
+    // to come back from a semantic index (the person turned local embeddings
+    // off, or an earlier version switched to them by itself): otherwise the
+    // hashed query vectors would find nothing in the semantic index.
+    const indexed = catalog.state('vector_provider');
+    if (!indexed || indexed === provider.id) {
+      return { upgraded: false, providerId: provider.id, reason: 'project uses the offline hashed embedder' };
+    }
   }
   if (catalog.state('vector_provider') === provider.id) {
     return { upgraded: false, providerId: provider.id, reason: 'index already embedded with this provider' };
@@ -5243,6 +5254,7 @@ function addManifestBlockSourceObjects(
 ): void {
   const declarations = manifest.blockDeclarations ?? Object.values(manifest.blocks ?? {});
   const datasetProofs = loadDatasetGrainProofs(projectRoot);
+  const resultColumns = loadSavedQueryResultColumns(projectRoot);
   for (const block of declarations) {
     // A legacy semantic block has no SQL and is not an App source: semantic
     // Datasets are projected below from exact metric capability contracts.
@@ -5265,6 +5277,24 @@ function addManifestBlockSourceObjects(
       ? { proofState: 'not_a_dataset' as const }
       : datasetDescriptorFromManifestBlock({ block, sourceId, sourceRevision, proofs: datasetProofs });
     const lifecycle = dataset.descriptor?.lifecycle ?? normalizeBlockSourceLifecycle(block.status);
+    // "Check and use" (design Q1): a row-level Dataset ZLens checked that
+    // nobody certified yet carries its check record, while its source is the
+    // one that was checked. Its tiles read "Not certified yet" until someone
+    // certifies it.
+    const check = dataset.descriptor && lifecycle !== 'certified' && lifecycle !== 'deprecated'
+      ? currentBlockFileCheck(projectRoot, block.filePath)
+      : null;
+    // A saved query (no Dataset definition) offers its result columns as
+    // fields once their types are known (design D1). Its trust is its own.
+    const resultDescriptor = dataset.descriptor || block.blockType === 'semantic'
+      ? undefined
+      : savedQueryResultDescriptorFromManifestBlock({
+        block,
+        sourceId,
+        sourceRevision,
+        lifecycle: lifecycle as NonNullable<typeof dataset.descriptor>['lifecycle'],
+        observed: resultColumns.get(sourceId),
+      });
     const outputs = block.declaredOutputs
       ?? block.outputContract?.map((output) => output.name).filter(Boolean)
       ?? block.outputs?.map((output) => output.name).filter(Boolean)
@@ -5310,7 +5340,7 @@ function addManifestBlockSourceObjects(
         executionRef: block.filePath,
         sourceRevision,
         fingerprint: sourceRevision,
-        dataset: dataset.descriptor,
+        dataset: dataset.descriptor ?? resultDescriptor,
         datasetProofState: dataset.proofState,
         datasetProofReason: dataset.reason,
         tags: block.tags,
@@ -5331,6 +5361,15 @@ function addManifestBlockSourceObjects(
         })),
         dataState: block.dataState,
         dataStateDetail: block.dataStateDetail,
+        check: check
+          ? compactObject({
+            by: check.checkedBy,
+            name: check.checkedByName,
+            at: check.checkedAt,
+            checks: check.checks,
+            hiddenColumns: check.hiddenColumns,
+          })
+          : undefined,
       }),
     });
   }
@@ -6380,6 +6419,7 @@ async function planContextPackRoute(input: {
   }
 
   const applicabilityByKey = certifiedApplicabilities(input.objects, input.questionPlan);
+  const namedSemanticMeasures = namedQualifiedSemanticMeasures(input.request.question, input.objects);
   const exactByApplicability = [...applicabilityByKey.values()]
     .filter((item) => item.kind === 'exact_answer' || item.kind === 'safe_parameterized')
     .sort((a, b) => b.score - a.score)[0];
@@ -6404,6 +6444,7 @@ async function planContextPackRoute(input: {
         exactExampleMatch: hasExactExampleQuestion(input.request.question, object),
         uniqueExactExampleContract: hasUniqueExactCertifiedExample(input.request.question, input.objects, object),
         definitionLookup: intent === 'definition_lookup' && objectNameInQuestion(input.request.question, object),
+        namedSemanticMeasures,
       }),
       applicabilityScore: applicabilityByKey.get(object.objectKey)?.score ?? 0,
     }))
@@ -6474,6 +6515,7 @@ async function planContextPackRoute(input: {
         )),
         definitionLookup: Boolean(exact && intent === 'definition_lookup'
           && objectNameInQuestion(input.request.question, blockFitObject)),
+        namedSemanticMeasures,
       })
     : undefined;
   const blockFit = rawBlockFit && blockFitObject
@@ -6779,6 +6821,7 @@ function buildCertifiedCandidateFitDiagnostics(input: {
   questionPlan: AnalysisQuestionPlan;
   routeDecision: MetadataRouteDecision;
 }): LocalContextPack['retrievalDiagnostics']['certifiedCandidateFits'] {
+  const namedSemanticMeasures = namedQualifiedSemanticMeasures(input.request.question, input.objects);
   return input.objects
     .filter((object) => object.objectType === 'dql_block' && isCertifiedMetadataObject(object))
     .map((object) => {
@@ -6792,6 +6835,7 @@ function buildCertifiedCandidateFitDiagnostics(input: {
         exactExampleMatch: hasExactExampleQuestion(input.request.question, object),
         uniqueExactExampleContract: exactExampleContract,
         definitionLookup: input.routeDecision.intent === 'definition_lookup',
+        namedSemanticMeasures,
       });
       return {
         objectKey: object.objectKey,

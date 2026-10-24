@@ -6148,7 +6148,7 @@ export function defaultSuccessCriteria(route: AgentRunRoute): string[] {
     case "conversation":
       return ["A direct, friendly reply — no data routing needed."];
     case "certified_answer":
-      return ["Answer is backed by a certified DQL block or governed metric."];
+      return ["Answer is backed by a certified saved query or governed metric."];
     case "semantic_answer":
       return ["Answer is compiled from governed semantic members and executed without generated SQL."];
     case "generated_answer":
@@ -6164,7 +6164,7 @@ export function defaultSuccessCriteria(route: AgentRunRoute): string[] {
     case "skill_draft":
       return ["The Skill proposal is scope-qualified, non-executable, and saved only through explicit review."];
     case "app_build":
-      return ["App tiles are backed by certified blocks."];
+      return ["App tiles are backed by certified saved queries."];
     case "clarify":
       return ["A single sharp clarifying question is returned."];
     default:
@@ -6370,7 +6370,7 @@ function defaultEvaluations(
       label: "Certification boundary",
       passed: true,
       severity: "warning",
-      message: "AI may create a draft block, but certification stays gated by review.",
+      message: "AI may create a draft saved query, but certification stays gated by review.",
     });
   }
   return base;
@@ -6424,7 +6424,7 @@ function defaultArtifacts(
         title: route === "certified_answer"
           ? "Certified answer"
           : route === "semantic_answer"
-            ? "Governed semantic answer"
+            ? "Answer from Metrics"
             : "Generated answer",
         trustState,
         payload: { question: request.question, answer: result.answer },
@@ -6449,7 +6449,7 @@ function defaultArtifacts(
       return [{
         id: "dql:block-draft",
         kind: "dql_block_draft",
-        title: "DQL block draft",
+        title: "Saved query draft",
         trustState,
         payload: { question: request.question },
       }];
@@ -6496,7 +6496,7 @@ function defaultNextActions(route: AgentRunRoute, status: AgentRunStatus): Agent
   }
   if (route === "semantic_answer") {
     return [
-      { id: "create-block", label: "Save as reviewed DQL block", route: "dql_block_draft", artifactKind: "dql_block_draft" },
+      { id: "create-block", label: "Save as reviewed saved query", route: "dql_block_draft", artifactKind: "dql_block_draft" },
       { id: "research-gap", label: "Research deeper", route: "research" },
     ];
   }

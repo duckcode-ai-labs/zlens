@@ -35,7 +35,7 @@ export function DatasetSourceAuthoringDialog({
   }, [initial?.id, model?.descriptor.sourceRevision, source.sourceRevision]);
 
   if (!model) {
-    return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Dataset source authoring unavailable"><section className="dataset-source-authoring-card"><header><span><FileText size={17} /></span><div><small>DATASET SOURCE</small><h2>Authoring is unavailable</h2></div><button type="button" className="icon" onClick={onClose} aria-label="Close Dataset source authoring"><X size={15} /></button></header><p>Refresh this source from the governed catalog before authoring a block-backed Dataset definition.</p><footer><button type="button" onClick={onClose}>Close</button></footer></section></div>;
+    return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Field definitions unavailable"><section className="dataset-source-authoring-card"><header><span><FileText size={17} /></span><div><small>DATASET SOURCE</small><h2>Authoring is unavailable</h2></div><button type="button" className="icon" onClick={onClose} aria-label="Close Dataset source authoring"><X size={15} /></button></header><p>Refresh this source from the catalog before authoring a saved query-backed Dataset definition.</p><footer><button type="button" onClick={onClose}>Close</button></footer></section></div>;
   }
 
   const chooseCandidate = (candidate: DatasetCalculatedMeasureCandidate) => {
@@ -60,30 +60,35 @@ export function DatasetSourceAuthoringDialog({
     }
   };
 
-  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label={`Author ${model.descriptor.label} Dataset`}>
+  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label={`Define fields for ${model.descriptor.label}`}>
     <section className="dataset-source-authoring-card">
       <header>
         <span><FileText size={17} /></span>
-        <div><small>GOVERNED DATASET DEFINITION</small><h2>Author Dataset definition</h2><p>{model.descriptor.label} · source revision <code>{source.sourceRevision?.slice(0, 18)}</code></p></div>
-        <button type="button" className="icon" onClick={onClose} disabled={disabled} aria-label="Close Dataset source authoring"><X size={15} /></button>
+        <div><small>FIELDS</small><h2>Define fields</h2><p>{model.descriptor.label}</p></div>
+        <button type="button" className="icon" onClick={onClose} disabled={disabled} aria-label="Close field definitions"><X size={15} /></button>
       </header>
       <div className="dataset-source-authoring-body">
         <section className="dataset-source-grain">
-          <label>Native grain proposal</label>
-          <p>Describe the source’s real row or aggregate grain. This saves for review; it does not create key proof or make a rollup safe.</p>
+          <label>What is one row?</label>
+          <p>Say what one row of this data stands for, and which column is unique on every row. This saves for review; ZLens still checks the rows before trusting it.</p>
           <div className="dataset-source-form-grid">
-            <label><span>Entities</span><input aria-label="Dataset native grain entities" value={definition.grain.entities} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, entities: event.target.value } }))} placeholder="order_line" /></label>
-            <label><span>Keys</span><input aria-label="Dataset native grain keys" value={definition.grain.keys} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, keys: event.target.value } }))} placeholder="order_line_id" /></label>
-            <label><span>Time grain</span><input aria-label="Dataset native time grain" value={definition.grain.timeGrain} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, timeGrain: event.target.value } }))} placeholder="day" /></label>
-            <label><span>Time bucket field</span><select aria-label="Dataset native time bucket" value={definition.grain.timeBucketBy} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, timeBucketBy: event.target.value } }))}><option value="">Not declared</option>{definition.fields.filter((field) => field.role === 'time' && (field.type === 'date' || field.type === 'timestamp')).map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select></label>
-            <label><span>Key evidence reference</span><input aria-label="Dataset key evidence reference" value={definition.grain.keyEvidence} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, keyEvidence: event.target.value } }))} placeholder="proof:source-grain" /></label>
-            <label className="dataset-source-checkbox"><input aria-label="Dataset is aggregate source" type="checkbox" checked={definition.grain.aggregate} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, aggregate: event.target.checked } }))} /><span>Source already contains aggregates</span></label>
+            <label><span>Entities</span><input aria-label="Native grain entities" value={definition.grain.entities} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, entities: event.target.value } }))} placeholder="order_line" /></label>
+            <label><span>Unique ID column</span><input aria-label="Native grain keys" value={definition.grain.keys} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, keys: event.target.value } }))} placeholder="order_line_id" /></label>
+            <label><span>Time grain</span><input aria-label="Native time grain" value={definition.grain.timeGrain} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, timeGrain: event.target.value } }))} placeholder="day" /></label>
+            <label><span>Time bucket field</span><select aria-label="Native time bucket" value={definition.grain.timeBucketBy} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, timeBucketBy: event.target.value } }))}><option value="">Not declared</option>{definition.fields.filter((field) => field.role === 'time' && (field.type === 'date' || field.type === 'timestamp')).map((field) => <option key={field.name} value={field.name}>{field.name}</option>)}</select></label>
+            <label className="dataset-source-checkbox"><input aria-label="Source is already aggregated" type="checkbox" checked={definition.grain.aggregate} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, aggregate: event.target.checked } }))} /><span>Source already contains aggregates</span></label>
           </div>
-          <small>{definition.grain.aggregate ? 'Aggregate source: any rollup still needs current component evidence.' : 'Row-grain source: detail still needs a current full-source key check.'}</small>
+          <small>{definition.grain.aggregate ? 'Already summarised: rolling it up further needs a check first.' : 'One row per item: ZLens checks the ID column against every row before showing rows.'}</small>
+          {/* Ids and proof references, for whoever needs them (D6). */}
+          <details className="dql-technical-details">
+            <summary>Technical details</summary>
+            <p>Source revision <code>{source.sourceRevision?.slice(0, 18)}</code></p>
+            <label><span>Key evidence reference</span><input aria-label="Key evidence reference" value={definition.grain.keyEvidence} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, grain: { ...current.grain, keyEvidence: event.target.value } }))} placeholder="proof:source-grain" /></label>
+          </details>
         </section>
         <section className="dataset-source-fields">
-          <label>Physical field roles</label>
-          <p>Names, types, and approval state come from the compiled output. You can propose roles and time details; this editor cannot add fields or change source SQL.</p>
+          <label>Column types</label>
+          <p>Columns and their types come from the data. You can say how each column is used and set time details; this cannot add columns or change the SQL.</p>
           <div>{definition.fields.map((field, index) => <span key={field.name} className="dataset-source-field-editor"><strong>{field.name}</strong><small>{field.type} · {field.status}</small><label><span>Role</span><select aria-label={`${field.name} role`} value={field.role} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, fields: current.fields.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, role: event.target.value as DatasetSourceDefinitionDraft['fields'][number]['role'] } : candidate) }))}>{['dimension', 'key', 'time', 'attribute'].map((role) => <option key={role} value={role}>{humanize(role)}</option>)}</select></label>{(field.type === 'date' || field.type === 'timestamp') ? <><label><span>Time grains</span><input aria-label={`${field.name} time grains`} value={field.grains} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, fields: current.fields.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, grains: event.target.value } : candidate) }))} placeholder="day, month" /></label><label className="dataset-source-checkbox"><input aria-label={`${field.name} is primary time`} type="checkbox" checked={field.primary} disabled={disabled} onChange={(event) => setDefinition((current) => ({ ...current, fields: current.fields.map((candidate, candidateIndex) => candidateIndex === index ? { ...candidate, primary: event.target.checked } : candidate) }))} /><span>Primary time field</span></label></> : null}</span>)}</div>
         </section>
         {model.candidates.length ? <section className="dataset-source-candidates">
@@ -106,7 +111,7 @@ export function DatasetSourceAuthoringDialog({
         </section>
         {message ? <p className="dataset-source-authoring-message" role="status">{message}</p> : null}
       </div>
-      <footer><span>Saving creates a review-required source proposal. It does not change this App’s Dataset binding.</span><button type="button" onClick={onClose} disabled={disabled}>Cancel</button><button type="button" className="primary" onClick={preview} disabled={disabled}><FileText size={13} /> Review source change</button></footer>
+      <footer><span>Saving creates a source proposal that is not certified yet. It does not change this App’s data.</span><button type="button" onClick={onClose} disabled={disabled}>Cancel</button><button type="button" className="primary" onClick={preview} disabled={disabled}><FileText size={13} /> Review source change</button></footer>
     </section>
   </div>;
 }
@@ -142,12 +147,12 @@ export function DatasetSourceRebindReviewDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }): JSX.Element {
-  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Enable review preview for Dataset refresh">
+  return <div className="proposal-scrim" role="dialog" aria-modal="true" aria-label="Refresh this data">
     <section className="dataset-source-rebind-card">
-      <header><span><FileText size={17} /></span><div><small>REVIEW-REQUIRED DATASET</small><h2>Refresh this App binding?</h2></div><button type="button" className="icon" onClick={onCancel} disabled={disabled} aria-label="Close Dataset refresh"><X size={15} /></button></header>
-      <p><strong>{humanize(title)}</strong> changed and is currently review-required. You can explicitly enable local review preview and refresh this App’s saved source revision.</p>
-      <p>This does not certify the Dataset. Existing previews are cleared, and Project publication stays blocked until the governed source is certified.</p>
-      <footer><button type="button" onClick={onCancel} disabled={disabled}>Keep current binding</button><button type="button" className="primary" onClick={onConfirm} disabled={disabled}><FileText size={13} /> Enable review preview &amp; refresh</button></footer>
+      <header><span><FileText size={17} /></span><div><small>NOT CERTIFIED YET</small><h2>Refresh this data?</h2></div><button type="button" className="icon" onClick={onCancel} disabled={disabled} aria-label="Close data refresh"><X size={15} /></button></header>
+      <p><strong>{humanize(title)}</strong> changed and is not certified yet. Refresh this App’s saved source revision to use it; its tiles read “Not certified yet” until someone certifies it.</p>
+      <p>This does not certify the data. Existing previews are cleared, and the page runs again with the refreshed data.</p>
+      <footer><button type="button" onClick={onCancel} disabled={disabled}>Keep current data</button><button type="button" className="primary" onClick={onConfirm} disabled={disabled}><FileText size={13} /> Refresh data</button></footer>
     </section>
   </div>;
 }

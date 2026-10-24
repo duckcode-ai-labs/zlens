@@ -1,7 +1,7 @@
 # Claude Code
 
 Connect [Claude Code](https://claude.com/claude-code) to your ZLens project so
-it answers data questions from certified blocks first and labels every answer
+it answers data questions from certified saved queries first and labels every answer
 the way Ask does.
 
 ## Before you start
@@ -61,23 +61,24 @@ connected, with 27 tools.
 
 Ask a question, for example *"How has revenue changed by month?"*.
 
-- Claude calls `inspect_dql_project`, then `ask_dql`. When a certified block
+- Claude calls `inspect_dql_project`, then `ask_dql`. When a certified saved query
   answers the question, it runs it with `query_via_block` and labels the
-  answer **Certified**, citing the block.
-- For a question no certified block answers, for example *"Which store
+  answer **Certified**, citing the saved query.
+- For a question no certified saved query answers, for example *"Which store
   locations had the most revenue in 2025?"*, it calls
   `inspect_metadata_context` and runs one read-only query with
   `query_via_metadata`. The answer is labelled **AI-Generated (review
-  required)** and names the draft block ZLens saved under `blocks/_drafts/`.
+  required)** and names the draft saved query ZLens kept under `blocks/_drafts/`.
 - When the project cannot answer (for example a metric it does not have),
   Claude says what is missing instead of guessing.
-- *"Does the monthly_revenue block pass the certification rules?"* runs
-  `certify`, which runs Block Studio's check through the workbench and changes
-  nothing. Claude cannot certify; a person does, in Block Studio or with
+- *"Does the monthly_revenue saved query pass the certification rules?"* runs
+  `certify`, which runs the saved query editor's check through the workbench and changes
+  nothing. Claude cannot certify; a person does, in the saved query editor or with
   `zlens certify --from-draft`.
 - *"What Apps do we have and are their tiles certified?"* uses `list_apps`;
-  *"Draft an App for beverage performance"* uses `build_dql_app` and writes a
-  draft App under `apps/`.
+  *"Draft an App for beverage performance"* uses `build_dql_app`, which
+  starts an App Studio draft and returns a link that opens it at the Data
+  step. Nothing is written to `apps/` until you publish from App Studio.
 
 Claude Code asks before it runs a tool unless you allow it. To allow every
 ZLens tool for the session, answer "don't ask again" for `dql`, or add

@@ -180,19 +180,19 @@ export function CanvasPageFrame({
     <div className="dql-canvas-page" ref={hostRef}>
       <style>{CANVAS_FRAME_STYLES}</style>
       <header className="dql-canvas-trust" aria-label="About this page">
-        <span className="dql-canvas-badge"><ShieldCheck size={13} aria-hidden="true" /> Governed page</span>
-        <span>{values} {values === 1 ? 'value' : 'values'} and {tileCount} {tileCount === 1 ? 'tile' : 'tiles'} from this page’s governed results{trust ? ` · ${trust}` : ''}</span>
+        <span className="dql-canvas-badge"><ShieldCheck size={13} aria-hidden="true" /> Custom layout</span>
+        <span>{values} {values === 1 ? 'value' : 'values'} and {tileCount} {tileCount === 1 ? 'tile' : 'tiles'} from this page’s results{trust ? ` · ${trust}` : ''}</span>
         <span className="dql-canvas-note">{canvas.generatedBy === 'ai' ? `Designed by ${canvas.model ?? 'AI'} · ` : ''}checked: no scripts, no network, every figure bound</span>
       </header>
       {checked.issues.length ? (
-        <p className="dql-canvas-error" role="alert">This page's markup did not pass the governed check, so it is not shown: {checked.issues[0]!.message}</p>
+        <p className="dql-canvas-error" role="alert">This page's layout did not pass ZLens's safety check, so it is not shown: {checked.issues[0]!.message}</p>
       ) : loading && tiles.length === 0 ? (
         <div className="dql-canvas-loading" role="status" aria-busy="true"><span className="visually-hidden">Loading the page's data…</span></div>
       ) : (
         <div className="dql-canvas-stage">
         <iframe
           ref={frameRef}
-          title="Governed page"
+          title="Page layout"
           // No scripts, no forms, no popups, no top navigation. Same origin
           // only so the host can read the height; with scripts off nothing in
           // the frame can use it.

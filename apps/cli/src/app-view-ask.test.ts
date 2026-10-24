@@ -263,7 +263,8 @@ describe('Ask from an App sees that App (N3)', () => {
     expect(context.tiles).toEqual(expect.arrayContaining([
       expect.objectContaining({
         tileId: 'top-5-players-points-2016-2017',
-        trust: 'Needs review',
+        // The tile's own trust, in the App's two words (T1).
+        trust: 'Not certified yet',
         source: expect.objectContaining({ kind: 'block', name: 'top_5_players_points_2016_2017', path: 'blocks/_drafts/top_5_players_points_2016_2017.dql' }),
         rowsShown: expect.arrayContaining([expect.objectContaining({ rank: 1, player_name: 'James Harden' })]),
       }),
@@ -273,11 +274,15 @@ describe('Ask from an App sees that App (N3)', () => {
     // The answer reads the App's result, cites the tile's block, and is labelled for review, not certified.
     expect(run.answer).toContain('James Harden');
     expect(run.answer).toContain('blocks/_drafts/top_5_players_points_2016_2017.dql');
-    expect(run.answer).toContain('Needs review');
+    // It names the block the way readers know it: a saved query (#165).
+    expect(run.answer).toMatch(/reads saved query \S+ \(blocks\/_drafts\/top_5_players_points_2016_2017\.dql\)/);
+    expect(run.answer).not.toContain('reads block');
+    // It cites the tile's own trust words; the answer itself stays labelled for review (Ask's labels are unchanged).
+    expect(run.answer).toContain('Not certified yet');
     expect(run.trustState).toBe('review_required');
     expect(run.trustState).not.toBe('certified');
     const answer = (run.artifacts ?? []).find((artifact: { kind: string }) => artifact.kind === 'answer');
-    expect(answer).toMatchObject({ trustState: 'review_required', payload: { appView: { pageRunId, tiles: [{ tileId: 'top-5-players-points-2016-2017', trust: { state: 'review', label: 'Needs review' } }] } } });
+    expect(answer).toMatchObject({ trustState: 'review_required', payload: { appView: { pageRunId, tiles: [{ tileId: 'top-5-players-points-2016-2017', trust: { state: 'review', label: 'Not certified yet' } }] } } });
   });
 
   it('labels an answer read only from a certified tile as certified', async () => {
@@ -318,7 +323,13 @@ describe('Ask from an App sees that App (N3)', () => {
     const asked = await post('/api/agent-runs', appAsk(QUESTION, pageRunId));
     expect(asked.status, asked.text.slice(0, 600)).toBe(201);
     expect(asked.text).not.toContain('James Harden');
-    expect(asked.text).not.toContain('2888');
+    // Search for the withheld figure only outside generated ids, hashes and
+    // timestamps: a random run id such as 5f28884c-… can contain "2888".
+    const withoutIds = asked.text
+      .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, '<id>')
+      .replace(/(?:sha256:)?[0-9a-f]{32,64}/gi, '<hash>')
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z/g, '<time>');
+    expect(withoutIds).not.toContain('2888');
     expect(asked.body.run.answer).toBe(WITHHELD_ANSWER);
   });
 });

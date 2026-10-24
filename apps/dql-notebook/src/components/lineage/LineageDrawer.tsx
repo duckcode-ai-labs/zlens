@@ -451,7 +451,7 @@ function NodeMetadataSummary({ node, t }: { node: LineageNode; t: Theme }) {
   if (node.owner) rows.push({ label: 'Owner', value: node.owner });
   if (node.status) rows.push({ label: 'Status', value: node.status });
   if (node.type === 'term' && typeof metadata.termType === 'string') rows.push({ label: 'Term Type', value: metadata.termType });
-  if (node.type === 'block' && typeof metadata.blockType === 'string') rows.push({ label: 'Block Type', value: metadata.blockType });
+  if (node.type === 'block' && typeof metadata.blockType === 'string') rows.push({ label: 'Saved query type', value: metadata.blockType });
   if (typeof metadata.materializedAs === 'string') rows.push({ label: 'Materialized As', value: metadata.materializedAs });
   if (Array.isArray(metadata.identifiers) && metadata.identifiers.length > 0) {
     rows.push({ label: 'Identifiers', value: metadata.identifiers.map(String).join(', ') });

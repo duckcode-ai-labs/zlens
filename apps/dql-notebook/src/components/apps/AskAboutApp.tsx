@@ -11,6 +11,16 @@ import { MessageSquare, SendHorizontal } from 'lucide-react';
  * answer carries the trust label of the tiles it read and is never wider than
  * the view it was asked from.
  */
+/**
+ * "Scoped to <App> · <page>", naming the page only when its title is not the
+ * App's own name (a one-page App titles its page after the App).
+ */
+export function askAboutAppScopeLine(appName: string, pageTitle?: string): string {
+  const page = pageTitle?.trim();
+  const samePage = !page || page.toLowerCase() === appName.trim().toLowerCase();
+  return `Scoped to ${appName}${samePage ? '' : ` · ${page}`}`;
+}
+
 export interface AskAboutAppScope {
   appId: string;
   appName: string;
@@ -32,11 +42,32 @@ export interface AskAboutAppScope {
 export function askAboutAppCapability(scope: Pick<AskAboutAppScope, 'resultsReady'>): string {
   return scope.resultsReady
     ? 'Answers read this page’s current results, each tile’s source and trust label, and the filters on screen.'
-    : 'This page has not finished running: Ask can see its blocks and filters, not its results yet.';
+    : 'This page has not finished running: Ask can see its saved queries and filters, not its results yet.';
 }
 
-export function AskAboutApp({ scope, onAsk }: { scope: AskAboutAppScope; onAsk: (question: string) => void }): JSX.Element {
+/** What the Ask box says when no AI provider is connected: no question box, no "AI-generated" label (round 3). */
+export const ASK_NEEDS_AI_PROVIDER = 'Ask needs an AI provider. The owner can connect one in Settings.';
+
+export function AskAboutApp({ scope, onAsk, aiConnected }: {
+  scope: AskAboutAppScope;
+  onAsk: (question: string) => void;
+  /** `false` when no AI provider is connected: the box says so instead of taking a question. */
+  aiConnected?: boolean;
+}): JSX.Element {
   const [question, setQuestion] = useState('');
+  if (aiConnected === false) {
+    return (
+      <div
+        className="dql-app-ask-about dql-app-ask-unavailable"
+        role="note"
+        aria-label={`Ask about ${scope.appName}`}
+        style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '4px 0 12px', padding: '8px 12px', border: '1px solid var(--border-subtle)', borderRadius: 10, background: 'var(--bg-2)', fontSize: 12.5, color: 'var(--text-secondary)' }}
+      >
+        <MessageSquare size={14} aria-hidden="true" style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
+        <span>{ASK_NEEDS_AI_PROVIDER}</span>
+      </div>
+    );
+  }
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const text = question.trim();
@@ -67,7 +98,7 @@ export function AskAboutApp({ scope, onAsk }: { scope: AskAboutAppScope; onAsk: 
         </button>
       </div>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 11.5, color: 'var(--text-secondary)' }} aria-label="What the question is scoped to">
-        <span>Scoped to {scope.appName}{scope.pageTitle ? ` · ${scope.pageTitle}` : ''}</span>
+        <span>{askAboutAppScopeLine(scope.appName, scope.pageTitle)}</span>
         {chips.map((chip) => (
           <span key={chip} style={{ padding: '1px 7px', borderRadius: 999, border: '1px solid var(--border-subtle)', background: 'var(--bg-1)' }}>{chip}</span>
         ))}

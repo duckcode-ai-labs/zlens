@@ -7,6 +7,7 @@ import {
   type MetricDefinition,
   type SemanticLayer,
   type SemanticExecutionReceiptV1,
+  type SemanticJoinStep,
   type SemanticTargetBindingV1,
   type WarehouseTargetIdentityV1,
 } from '@zlens/core';
@@ -862,7 +863,7 @@ export async function explainMissingSemanticRuntime(projectRoot: string, dbtProj
   // dbt Cloud compiles remotely and needs no local dbt project; otherwise a
   // project without one has no runtime to set up, only metrics to reshape.
   if (!dbtProjectPath && !projectHasDbtProject(projectRoot) && !getEffectiveDbtCloudSemanticSettings(projectRoot).configured) {
-    return 'This metric is not one the DQL native engine runs, and this project has no dbt project for MetricFlow or dbt Cloud to run it. The native engine runs simple metrics and ratios of two simple metrics; define the metric as one of those.';
+    return 'This metric is not one the DQL native engine runs, and this project has no dbt project for MetricFlow or dbt Cloud to run it. The native engine runs simple metrics, ratios of two simple metrics, and derived metrics that do arithmetic over simple metrics with no offset window; define the metric as one of those.';
   }
   const status = await getSemanticRuntimeStatus(projectRoot, { probeConfiguredCloud: true });
   const cloud = status.adapters.find((adapter) => adapter.id === 'dbt-cloud');
@@ -1234,6 +1235,28 @@ export function semanticPathAmbiguityFromError(input: {
     runtimeReference,
     candidates,
   });
+}
+
+/**
+ * The semantic-model joins a request needs, as the native composer would take
+ * them: for an engine (MetricFlow, dbt Cloud) that does not report its own.
+ * Undefined when the native composer cannot plan the request.
+ */
+export function structuralSemanticJoinPath(
+  semanticLayer: SemanticLayer,
+  request: Pick<SemanticRuntimeQueryRequest, 'metrics' | 'dimensions' | 'filters' | 'timeDimension'>,
+): SemanticJoinStep[] | undefined {
+  try {
+    const nativeRequest = semanticRequestWithoutPathSelectors({ ...request } as SemanticRuntimeQueryRequest);
+    return semanticLayer.composeQuery({
+      metrics: nativeRequest.metrics,
+      dimensions: nativeRequest.dimensions,
+      filters: nativeRequest.filters as Array<{ dimension: string; operator: string; values: string[] }> | undefined,
+      timeDimension: nativeRequest.timeDimension,
+    })?.joinPath;
+  } catch {
+    return undefined;
+  }
 }
 
 function semanticRequestWithoutPathSelectors(

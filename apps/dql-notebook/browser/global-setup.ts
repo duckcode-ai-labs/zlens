@@ -16,12 +16,23 @@ import { buildCli, installDuckdbConnector, repoRoot, run, startNotebookServer } 
 
 const fixtureDir = join(repoRoot, 'apps/cli/test/fixtures/jaffle-supply-chain');
 
-function seedProject(projectDir: string): void {
+/**
+ * Copy the fixture and seed its warehouse. A journey that runs its own server
+ * (app-data-step.journey.ts) passes the connector install global setup made,
+ * so DuckDB is not installed twice.
+ */
+export function seedProject(projectDir: string, options: { connectorRoot?: string } = {}): void {
   cpSync(fixtureDir, projectDir, { recursive: true });
 
-  const connectorRoot = installDuckdbConnector(projectDir);
-  // Journeys that build their own project (database-only.journey.ts) reuse this install.
-  process.env.ZLENS_E2E_DUCKDB_CONNECTORS = connectorRoot;
+  let connectorRoot: string;
+  if (options.connectorRoot && existsSync(options.connectorRoot)) {
+    connectorRoot = join(projectDir, '.dql', 'connectors');
+    cpSync(options.connectorRoot, connectorRoot, { recursive: true });
+  } else {
+    connectorRoot = installDuckdbConnector(projectDir);
+    // Journeys that build their own project (database-only.journey.ts) reuse this install.
+    process.env.ZLENS_E2E_DUCKDB_CONNECTORS = connectorRoot;
+  }
   const warehouse = join(projectDir, 'jaffle_shop.duckdb');
   run('node', [join(repoRoot, 'scripts/seed-eval-warehouse.mjs'), '--connector-root', connectorRoot, '--out', warehouse, '--schema', 'dev']);
   // The fixture's certified blocks read unqualified tables (top_customers:

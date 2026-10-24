@@ -11,7 +11,7 @@ clip('import-certify', async ({ page, sample, director }) => {
   const server = await sample.serve(sample.freshProject());
   await openAndRecord(page, director, server.baseUrl);
 
-  await director.click(page.getByRole('button', { name: 'Blocks', exact: true }).first());
+  await director.click(page.getByRole('button', { name: 'Saved queries', exact: true }).first());
   await director.click(page.getByRole('button', { name: 'Start import' }));
   const sql = page.getByPlaceholder(/select \.\.\./);
   await director.click(sql, { after: 200 });
@@ -42,7 +42,7 @@ clip('import-certify', async ({ page, sample, director }) => {
   await director.click(page.getByRole('button', { name: /^commerce\b/ }).first(), { after: 500 });
   await director.click(page.getByRole('button', { name: /^Top Locations By Order Count commerce/ }).first(), { after: 600 });
   const receipt = page.getByTestId('block-certification-receipt');
-  await expect(receipt).toContainText('Certified by analytics@jaffle.shop');
+  await expect(receipt).toContainText(/Certified by \w/);
   director.poster();
   await director.point(receipt, { x: -14, y: 8 });
   await director.beat(2800);

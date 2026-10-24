@@ -5,7 +5,7 @@ import type { Server } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
 import { setBlockStudioStatus, startLocalServer } from './local-runtime.js';
-import { blockSourceStatus, readCompanionCertification } from './certification-receipt.js';
+import { applyCompanionCertification, blockSourceStatus, readCompanionCertification, readCompanionDeprecation } from './certification-receipt.js';
 
 /**
  * The trust promise (graduated-trust.md): nothing becomes certified
@@ -188,13 +188,89 @@ describe('Saving never certifies; certifying is explicit and leaves a receipt', 
       const receipt = readCompanionCertification(readFileSync(join(projectRoot, block.companionPath!), 'utf-8'));
       expect(receipt?.certifiedBy).toEqual(expect.any(String));
 
-      // Demoting drops the receipt, so the YAML never claims a lost certification.
-      setBlockStudioStatus(projectRoot, operation.result.newPath, 'deprecated');
+      // Deprecate (the Block Studio button) keeps the receipt as history and
+      // records who deprecated the block beside it; reviewStatus says it no longer holds.
+      const deprecated = await post(base, '/api/blocks/status', { path: operation.result.newPath, newStatus: 'deprecated' });
+      expect(deprecated.status, deprecated.text).toBe(200);
       const companion = readFileSync(join(projectRoot, block.companionPath!), 'utf-8');
       expect(companion).toContain('reviewStatus: deprecated');
-      expect(companion).not.toContain('certification:');
+      expect(readCompanionCertification(companion)).toEqual(receipt);
+      expect(readCompanionDeprecation(companion)).toMatchObject({
+        deprecatedBy: expect.any(String),
+        deprecatedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+        via: 'block-studio',
+        previousStatus: 'certified',
+      });
+      const reopened = await openBlock(base, operation.result.newPath);
+      expect(reopened.metadata.reviewStatus).toBe('deprecated');
+      // Readers trust a receipt only on a certified block.
+      expect(reopened.metadata.certification).toBeUndefined();
+
+      // Saving the deprecated block from Block Studio keeps both records.
+      const resaved = await post(base, '/api/block-studio/save', {
+        path: operation.result.newPath,
+        source: reopened.source,
+        metadata: { name: 'Scorers', domain: 'nba', description: 'Top scorers.', owner: 'e2e', tags: [] },
+      });
+      expect(resaved.status, resaved.text).toBe(200);
+      const afterSave = readFileSync(join(projectRoot, resaved.body.companionPath ?? block.companionPath!), 'utf-8');
+      expect(afterSave).toContain('reviewStatus: deprecated');
+      expect(readCompanionCertification(afterSave)).toEqual(receipt);
+      expect(readCompanionDeprecation(afterSave)?.previousStatus).toBe('certified');
+
+      // Moving it back to draft drops both: a draft claims neither.
+      setBlockStudioStatus(projectRoot, operation.result.newPath, 'draft');
+      const draft = readFileSync(join(projectRoot, block.companionPath!), 'utf-8');
+      expect(draft).toContain('reviewStatus: draft');
+      expect(draft).not.toContain('certification:');
+      expect(draft).not.toContain('deprecation:');
     });
   }, 60_000);
+
+  it('Deprecate records who deprecated the block, once, and keeps the receipt', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-deprecate-'));
+    roots.push(projectRoot);
+    mkdirSync(join(projectRoot, 'blocks/nba'), { recursive: true });
+    mkdirSync(join(projectRoot, 'semantic-layer/blocks/nba'), { recursive: true });
+    const source = 'block "x" {\n  status = "certified"\n  query = """SELECT 1"""\n}\n';
+    writeFileSync(join(projectRoot, 'blocks/nba/x.dql'), source);
+    const receipt = { certifiedBy: 'analytics', certifiedAt: '2026-10-01T00:00:00.000Z', via: 'block-studio' as const, rules: 'oss' as const, sourceSha256: 'a'.repeat(64) };
+    writeFileSync(join(projectRoot, 'semantic-layer/blocks/nba/x.yaml'), applyCompanionCertification('name: x\nblock: x\ndomain: nba\n', 'certified', receipt));
+
+    setBlockStudioStatus(projectRoot, 'blocks/nba/x.dql', 'deprecated', undefined, 'retirer@example.com');
+    const companionPath = join(projectRoot, 'semantic-layer/blocks/nba/x.yaml');
+    const first = readCompanionDeprecation(readFileSync(companionPath, 'utf-8'));
+    expect(first).toMatchObject({ deprecatedBy: 'retirer@example.com', previousStatus: 'certified' });
+    expect(readCompanionCertification(readFileSync(companionPath, 'utf-8'))).toEqual(receipt);
+
+    // Deprecating again keeps the first record.
+    setBlockStudioStatus(projectRoot, 'blocks/nba/x.dql', 'deprecated', undefined, 'someone-else');
+    expect(readCompanionDeprecation(readFileSync(companionPath, 'utf-8'))).toEqual(first);
+    expect(readCompanionCertification(readFileSync(companionPath, 'utf-8'))).toEqual(receipt);
+  });
+
+  it('Certify writes the companion and its receipt for a block that has none (0.2.4)', () => {
+    // The Jaffle sample's hand-written blocks had no companion YAML: Certify
+    // passed and recorded nothing, so their tiles never read "Certified by …".
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-certify-no-companion-'));
+    roots.push(projectRoot);
+    mkdirSync(join(projectRoot, 'domains/commerce/blocks'), { recursive: true });
+    const source = 'block "monthly_revenue" {\n  domain = "commerce"\n  status = "certified"\n  description = "Monthly gross order revenue."\n  owner = "analytics@jaffle.shop"\n  query = """SELECT 1 AS month"""\n}\n';
+    writeFileSync(join(projectRoot, 'domains/commerce/blocks/monthly_revenue.dql'), source);
+    const receipt = { certifiedBy: 'analytics@jaffle.shop', certifiedAt: '2026-10-23T00:00:00.000Z', via: 'block-studio' as const, rules: 'oss' as const, sourceSha256: 'stale' };
+
+    setBlockStudioStatus(projectRoot, 'domains/commerce/blocks/monthly_revenue.dql', 'certified', receipt);
+
+    const companion = readFileSync(join(projectRoot, 'semantic-layer/blocks/commerce/monthly_revenue.yaml'), 'utf-8');
+    expect(companion).toContain('name: monthly_revenue');
+    expect(companion).toContain('owner: "analytics@jaffle.shop"');
+    expect(companion).toContain('reviewStatus: certified');
+    const written = readCompanionCertification(companion);
+    expect(written).toMatchObject({ certifiedBy: 'analytics@jaffle.shop', via: 'block-studio', rules: 'oss' });
+    // The receipt is for exactly the source on disk, so a later edit shows.
+    expect(written?.sourceSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(written?.sourceSha256).not.toBe('stale');
+  });
 
   it('a status flip to certified without a Certify receipt is refused', () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-status-flip-'));

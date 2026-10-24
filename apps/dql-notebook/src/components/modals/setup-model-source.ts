@@ -14,9 +14,30 @@ import type {
  *   - `warehouse` → warehouse-first: the warehouse's own tables, no dbt;
  *   - `both`      → hybrid: a dbt project plus schemas dbt doesn't cover;
  *   - `existing`  → the folder's dql.config.json already says; Setup asks only
- *                   for credentials, tests the connection and synchronizes.
+ *                   for credentials, tests the connection and refreshes it.
  */
 export type ModelSource = 'dbt' | 'warehouse' | 'both' | 'existing';
+
+/**
+ * What ZLens does with a database's rows, said honestly (new-user round 2,
+ * Q3). It reads structure, counts rows to check keys, and shows sample rows
+ * to the person on this computer. Nothing leaves the computer unless the
+ * project turns on value profiles, which send a few column values to the AI
+ * provider for its answers.
+ */
+export const ROWS_PRIVACY = 'ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. Nothing is sent anywhere unless you turn on value profiles for AI answers.';
+/** The same meaning where space is tight. */
+export const ROWS_PRIVACY_SHORT = 'Reads structure and counts rows to check keys; sample rows stay on this computer. Nothing is sent unless you turn on value profiles.';
+/** Said instead of "nothing is sent" when the project has value profiles on. */
+export const VALUE_PROFILES_ON = 'Value profiles are on: a few column values are sent to your AI provider.';
+
+/** The rows sentence for this project: with value profiles on, it says what is sent. */
+export function rowsPrivacy(valueProfileOn = false, short = false): string {
+  if (!valueProfileOn) return short ? ROWS_PRIVACY_SHORT : ROWS_PRIVACY;
+  return short
+    ? `Reads structure and counts rows to check keys; sample rows stay on this computer. ${VALUE_PROFILES_ON}`
+    : `ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. ${VALUE_PROFILES_ON}`;
+}
 
 export type ModelingMode = 'dbt-first' | 'warehouse-first' | 'hybrid';
 
@@ -35,7 +56,7 @@ export const MODEL_SOURCE_OPTIONS: readonly ModelSourceOption[] = [
   {
     id: 'warehouse',
     title: 'Database only',
-    body: "No dbt? ZLens reads your tables' columns, keys and comments — never their rows — and drafts models and joins for you to review.",
+    body: `No dbt? ZLens drafts models and joins from your tables for you to review. ${ROWS_PRIVACY}`,
   },
   {
     id: 'both',
@@ -45,6 +66,19 @@ export const MODEL_SOURCE_OPTIONS: readonly ModelSourceOption[] = [
 ];
 
 export const EXISTING_PROJECT_TITLE = 'Open an existing ZLens project';
+
+/**
+ * Database only would replace a dbt project's models with warehouse tables,
+ * so the runtime refuses it for a folder that already reads dbt
+ * (MODELING_MODE_CONFLICT). Setup says so before anyone picks it.
+ */
+export const DATABASE_ONLY_DBT_PROJECT =
+  "This folder is a dbt project, so ZLens keeps its dbt models. Choose Both to add warehouse tables dbt doesn't cover. For a database-only project, run npx create-zlens-app my-analytics --warehouse <driver> in a new folder.";
+
+/** Why Database only is not available for this folder, or null when it is. */
+export function databaseOnlyUnavailable(existing: ExistingProject | null | undefined): string | null {
+  return existing && existing.mode !== 'warehouse-first' ? DATABASE_ONLY_DBT_PROJECT : null;
+}
 
 /** What this folder's dql.config.json already says about its data model. */
 export interface ExistingProject {
@@ -112,24 +146,40 @@ export function existingProjectFromStatus(
 }
 
 /**
- * The card selected when step 1 opens. An update that must reapply the dbt
- * project, a configured project and a detected dbt project keep today's dbt
- * card; a fresh folder without dbt asks.
+ * The card selected when step 1 opens, read from what the folder holds
+ * (design D7). An update that must reapply the dbt project keeps the dbt card.
+ * A folder whose dql.config.json already configures its data model opens as
+ * an existing project: a dbt (or dbt + database) project whose dbt manifest is
+ * built, and a Database only project whose model is already written (it has
+ * Domains). The Jaffle sample is such a folder; offering "dbt project" there
+ * asked people to locate the project they were already in (Codex F01). A dbt
+ * project that is configured but not built yet keeps the dbt card (Preview and
+ * Apply build it), a new Database only project opens on Database only, a
+ * detected dbt project on dbt, a folder whose only data is a database file on
+ * Database only. A folder with neither asks.
  */
 export function initialModelSource(input: {
   requested?: ModelSource | null;
   requiresDbtReapply?: boolean;
   existing: ExistingProject | null;
   dbtProjectFound?: boolean;
+  /** The configured dbt project's manifest exists (`dbt build` or `zlens sync dbt` ran). */
+  dbtManifestFound?: boolean;
+  /** The project already has Domains (its model is written in the repository). */
+  hasDomains?: boolean;
+  /** The project's connection is a database file (DuckDB), and there is no dbt project. */
+  databaseFileConnection?: boolean;
 }): ModelSource | null {
   if (input.requiresDbtReapply) return 'dbt';
   if (input.requested && (input.requested !== 'existing' || input.existing)) return input.requested;
   if (input.existing) {
-    if (input.existing.mode === 'warehouse-first') return 'warehouse';
+    if (input.existing.mode === 'warehouse-first') return input.hasDomains ? 'existing' : 'warehouse';
+    if (input.existing.dbtConfigured && input.dbtManifestFound) return 'existing';
     if (input.existing.mode === 'hybrid') return 'both';
     return 'dbt';
   }
-  return input.dbtProjectFound ? 'dbt' : null;
+  if (input.dbtProjectFound) return 'dbt';
+  return input.databaseFileConnection ? 'warehouse' : null;
 }
 
 /** The modeling mode a choice turns on when the user continues from step 1. */
@@ -144,9 +194,14 @@ export function stepOneBlocker(input: {
   source: ModelSource | null;
   requiresDbtReapply: boolean;
   dbtConfigured: boolean;
+  existing?: ExistingProject | null;
 }): string | null {
   if (input.requiresDbtReapply) return `Preview and Reapply the prefilled dbt project first.`;
   if (!input.source) return 'Choose where your data model lives.';
+  if (input.source === 'warehouse') {
+    const unavailable = databaseOnlyUnavailable(input.existing);
+    if (unavailable) return unavailable;
+  }
   if (input.source === 'both' && !input.dbtConfigured) return 'Apply the dbt project first; the next step adds the schemas dbt does not cover.';
   return null;
 }
@@ -156,22 +211,49 @@ export function draftsFromWarehouse(source: ModelSource | null): boolean {
   return source === 'warehouse' || source === 'both';
 }
 
+/** Where Setup's last step can send you. */
+export type SetupStartTarget = 'domains' | 'ask' | 'notebook' | 'apps';
+
+/**
+ * The start card Setup highlights, and so where "Finish setup" goes: the
+ * highlighted card and the button never disagree. Drafted models go to
+ * Modeling for review first; otherwise Build a dashboard (Apps).
+ */
+export function setupFinishTarget(input: { drafted: boolean }): { target: SetupStartTarget; action: string } {
+  return input.drafted ? { target: 'domains', action: 'Open Modeling' } : { target: 'apps', action: 'Build an App' };
+}
+
 export function setupStepTitles(source: ModelSource | null): string {
-  if (source === 'existing') return 'Data model → Credentials and sync → optional AI → Finish';
+  if (source === 'existing') return 'Data model → Connection → optional AI → Finish';
   return 'Data model → Database → optional AI → Finish';
 }
 
-export function stepTwoCopy(source: ModelSource | null, existing: ExistingProject | null): { title: string; description: string } {
+/**
+ * The main action on an existing project's step 2, in plain words: what it
+ * reads again. "Synchronize" and "candidate" were engineering words (Codex G2).
+ */
+export function existingRefreshLabel(project: Pick<ExistingProject, 'mode' | 'dbtConfigured' | 'warehouseModeling'> | null | undefined): string {
+  const dbt = !project || (project.mode !== 'warehouse-first' && project.dbtConfigured);
+  const warehouse = Boolean(project?.warehouseModeling);
+  if (dbt && warehouse) return 'Refresh dbt and warehouse data';
+  if (warehouse) return 'Refresh warehouse tables';
+  return 'Refresh dbt data';
+}
+
+/** The optional line over the extra-schema picker on a dbt project's connection step. */
+export const EXTRA_SCHEMAS_HINT = "Optional: add warehouse schemas dbt doesn't cover";
+
+export function stepTwoCopy(source: ModelSource | null, existing: ExistingProject | null, valueProfileOn = false): { title: string; description: string } {
   if (source === 'existing') {
     return {
-      title: 'Connect and synchronize',
-      description: `This project's data model is already set (${existing?.label ?? 'configured'}). Enter the credentials its connection needs — values written as \${NAME} are read from environment variables — test the connection, then synchronize.`,
+      title: 'Check the connection',
+      description: `This project's data model is already set (${existing?.label ?? 'configured'}). Test the connection — values written as \${NAME} are read from environment variables. Then ${existingRefreshLabel(existing).toLowerCase()} if the project changed since you last ran zlens sync.`,
     };
   }
   if (source === 'warehouse') {
     return {
       title: 'Connect your database',
-      description: "Connect and test the database, choose the schemas to model, then Apply and synchronize. ZLens reads their tables, columns, keys and comments — never their rows. Then Draft my models.",
+      description: `Connect and test the database, choose the schemas to model, then Apply and synchronize. Then Draft my models. ${rowsPrivacy(valueProfileOn)}`,
     };
   }
   if (source === 'both') {
@@ -195,6 +277,10 @@ export interface DraftOutcome {
   ok: boolean;
   message: string;
   proposalId?: string;
+  /** The Domain the drafts go in ("Jaffle shop"), when one is new. */
+  domain?: string;
+  /** Staging copies left out ("Show staging tables" drafts them too). */
+  stagingHidden?: Array<{ relation: string; finalRelation: string }>;
 }
 
 /** Plain words for what `Draft my models` found (`zlens model discover --validate`). */
@@ -209,10 +295,14 @@ export function draftOutcome(result: { report: WarehouseDiscoveryReport; proposa
       message: `Nothing new to draft: the ${plural(report.relations, 'table')} in the warehouse catalog and their joins are already modeled.`,
     };
   }
+  const domain = report.domains.find((item) => !item.existing)?.name ?? report.domains[0]?.name;
   return {
     ok: true,
     proposalId: proposal.id,
-    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}. Nothing is saved until you review and certify them in Modeling.`,
+    // Honest about what is written (new-user round 2, problem 4): drafts wait for a Save in Modeling.
+    message: `Drafted ${plural(entities, 'model')} and ${plural(joins, 'join')} from ${plural(report.relations, 'table')}${report.validated ? ', each join checked on the data' : ''}. Not saved yet: review and save them in Modeling.`,
+    ...(domain ? { domain } : {}),
+    ...(report.stagingHidden?.length ? { stagingHidden: report.stagingHidden } : {}),
   };
 }
 
@@ -264,7 +354,7 @@ export async function synchronizeExistingProject(
 ): Promise<ProjectSyncStep[]> {
   const unset = missingEnvironment(environment);
   if (unset.length) {
-    return [{ kind: project.warehouseModeling ? 'warehouse' : 'dbt', ok: false, message: `Set ${unset.join(', ')} in the shell that starts zlens notebook, restart it, then synchronize.` }];
+    return [{ kind: project.warehouseModeling ? 'warehouse' : 'dbt', ok: false, message: `Set ${unset.join(', ')} in the shell that starts zlens notebook, restart it, then refresh.` }];
   }
   const steps: ProjectSyncStep[] = [];
   if (project.dbtConfigured && project.mode !== 'warehouse-first') {
@@ -272,7 +362,7 @@ export async function synchronizeExistingProject(
       const preview = await syncApi.previewDbtOnboarding({});
       await syncApi.refreshDbtOnboarding({ expectedFingerprint: preview.fingerprint });
       const models = preview.counts?.models;
-      steps.push({ kind: 'dbt', ok: true, message: `dbt project synchronized${typeof models === 'number' ? ` · ${models} models` : ''}. Search indexes update in the background.` });
+      steps.push({ kind: 'dbt', ok: true, message: `dbt data refreshed${typeof models === 'number' ? ` · ${models} models` : ''}. Search indexes update in the background.` });
     } catch (error) {
       steps.push({ kind: 'dbt', ok: false, message: `dbt project: ${error instanceof Error ? error.message : String(error)}` });
     }
@@ -295,7 +385,7 @@ export async function synchronizeExistingProject(
         steps.push({ kind: 'warehouse', ok: false, message: `Warehouse catalog: ${catalog.error}` });
       } else {
         const tables = catalog?.relations ?? synced.status.relationCount;
-        steps.push({ kind: 'warehouse', ok: true, message: `Warehouse synchronized · ${tables.toLocaleString()} tables and views.` });
+        steps.push({ kind: 'warehouse', ok: true, message: `Warehouse tables refreshed · ${tables.toLocaleString()} tables and views.` });
       }
     } catch (error) {
       steps.push({ kind: 'warehouse', ok: false, message: `Warehouse: ${error instanceof Error ? error.message : String(error)}` });

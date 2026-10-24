@@ -2,10 +2,17 @@
 
 ZLens does not need dbt. Point it at your database and choose the schemas to
 model. ZLens reads their tables, columns, comments, declared keys and view
-SQL. It reads metadata only, never rows (unless you turn on a
-[value profile](#optional-show-the-drafter-what-the-columns-hold)). From that it drafts entities and
-joins and checks them on the data. You then certify the ones Ask may rely on.
-Answers carry the same trust labels as in a dbt project.
+SQL, drafts entities and joins from them, and checks each join on the data.
+You then certify the ones Ask may rely on. Answers carry the same trust
+labels as in a dbt project.
+
+What happens to your rows: ZLens reads table structure and counts rows to
+check keys. Sample rows are shown only to you, on this computer. Nothing is
+sent anywhere unless you turn on
+[value profiles](#optional-show-the-drafter-what-the-columns-hold) for AI
+answers, which send a few example values to your AI provider. With them on,
+Setup says *Value profiles are on: a few column values are sent to your AI
+provider*.
 
 This page uses a DuckDB file as the example. The steps are the same for
 PostgreSQL, Snowflake and the [other supported databases](#which-databases-work);
@@ -18,6 +25,41 @@ only the connection differs.
     README, or use your own database. The examples below use that
     `jaffle_shop.duckdb` file, whose tables are in the `dev` schema.
 
+## The quickest start: open the folder
+
+Put the database file in a folder and open that folder. No `init`, no flags:
+
+```bash
+npm i -g @zlens/cli --allow-scripts=better-sqlite3
+zlens notebook ./shop
+```
+
+```text
+  No ZLens project here. Create one? [Y/n]
+  Found the database jaffle_shop.duckdb; the project will be Database only.
+```
+
+Press Enter. ZLens creates a Database only project in the folder, with a
+connection to the file, and opens the workbench on **Guided Setup** with
+**Database only** already chosen. Setup asks two plain questions, connects
+the file (it tests the connection itself), lists the schemas it can see, and
+drafts your tables and joins. See [Or use Guided Setup](#or-use-guided-setup)
+for the steps. A folder that holds `dbt_project.yml` becomes a dbt project
+instead.
+
+Without a terminal (a script, CI, a desktop launcher) `zlens notebook` never
+waits for an answer. It prints the one command to run:
+
+```text
+No ZLens project here: /work/shop (found the database jaffle_shop.duckdb).
+To create one and open it, run:
+
+  npx zlens notebook shop --yes
+```
+
+`--yes` creates the project without asking. The rest of this page does the
+same steps from the terminal, one at a time.
+
 You end with:
 
 - a ZLens project that models your database directly (`warehouse-first`)
@@ -28,7 +70,8 @@ You end with:
 
 You need:
 
-- Node.js 20 or newer (`node -v`)
+- Node.js 20, 22 or 24, with 24 LTS recommended (`node -v`). Node 25 and 26
+  are not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
 - a database ZLens can read, and a login that can see the schemas you want
   to model and `SELECT` from their tables
 
@@ -53,17 +96,18 @@ To install the CLI into a project instead of globally, see
 mkdir my-analytics
 cd my-analytics
 cp /path/to/jaffle_shop.duckdb .
-zlens init --warehouse-first
+zlens init
 ```
 
 The `cp` line is only for DuckDB: the database file sits in the project
-folder. `zlens init --warehouse-first` prints what it found:
+folder. A DuckDB file and no dbt project make a Database only project; no
+flag is needed. `zlens init` prints what it found:
 
 ```text
   Detected:
     dbt project: no
     DuckDB file: jaffle_shop.duckdb
-    Modeling: manifest v3, warehouse-first (entities bind to warehouse tables; no dbt needed)
+    Project type: Database only (ZLens reads the database's tables; no dbt needed)
 ```
 
 It writes `dql.config.json` with:
@@ -77,10 +121,12 @@ When it finds a DuckDB file in the folder, it also adds a `default` connection
 to it. Otherwise the project has no connection yet; you add one in the next
 step.
 
-Plain `zlens init`, without the flag, does not switch modes on its own. If
-you started that way, choose **Database only** in Guided Setup (see
-[below](#or-use-guided-setup)), or open **Modeling** in the workbench and
-click **Model my warehouse without dbt**.
+For a database that is not a file (PostgreSQL, Snowflake …), run
+`zlens init --warehouse-first`, or plain `zlens init` and choose **Database
+only** in Guided Setup (see [below](#or-use-guided-setup)). In a folder with
+neither a dbt project nor a database file, `zlens init` leaves the choice to
+Guided Setup. You can also open **Modeling** in the workbench and click
+**Model my warehouse without dbt**.
 
 You can also create the project with `create-zlens-app`, which adds npm
 scripts and installs the CLI into the project:
@@ -176,12 +222,13 @@ Modeling works from, and to the local index Ask searches.
   **returned no authorized relations**, the schema name is wrong or your
   login cannot see it.
 
-In the workbench, the same step is **Settings → Database → Metadata scope**.
-In a warehouse-first project it says **Choose the schemas to model**. Click
-**Find available databases & schemas**, list them one line per database
-(`DATABASE: SCHEMA, SCHEMA`) and click **Apply and synchronize**. The status
-line then reads **Modeling catalog · 13 tables and views with their keys and
-comments**.
+In the workbench, the same step is **Settings → Database → Metadata scope**
+(in Guided Setup it is the question **Which schemas should ZLens read?**). In
+a warehouse-first project it says **Choose the schemas to model**. Click
+**Find available databases & schemas**, tick the schemas (or list them one
+line per database, `DATABASE: SCHEMA, SCHEMA`) and click **Apply and
+synchronize**. The status line then reads **Modeling catalog · 13 tables and
+views with their keys and comments**.
 
 ### Optional: show the drafter what the columns hold
 
@@ -238,7 +285,7 @@ proposes the cardinality it saw:
 ZLens warehouse discovery (draft only, checked on the warehouse)
   catalog 681422b6800e · 13 relations · 13 new entities · 23 new relationships
 Entities
-  dev.order ← jaffle_shop.dev.orders · grain order_id (unique on the warehouse)
+  jaffle_shop.order ← jaffle_shop.dev.orders · grain order_id (unique on the warehouse)
 Relationships
   order_item → order on order_id = order_id · many_to_one · warehouse: passed
       because both models have order_id
@@ -256,13 +303,21 @@ zlens model apply-discovery --apply --validate
 ```text
 ZLens warehouse discovery apply
   37 draft change(s) written:
-    domains/dev/domain.dql
-    domains/dev/modeling/model.dql.yaml
+    domains/jaffle-shop/domain.dql
+    domains/jaffle-shop/modeling/model.dql.yaml
   Everything is a draft. Review and certify on the Modeling page.
 ```
 
-- Drafts go into a domain named after the schema (`dev` here).
-  `--domain <name>` puts every entity into one domain you name.
+- Drafts go into one Domain named after the database (**Jaffle shop**,
+  id `jaffle_shop`, from `jaffle_shop.duckdb`), never after a schema named
+  for a layer or environment such as `dev`, `main` or `public`. A schema
+  named for a business area, such as `sales`, gets a Domain of its own.
+  `--domain <name>` puts every entity into one Domain you name. You can
+  rename a Domain later in **Modeling → Domain settings**.
+- Staging copies are left out: when a `stg_` table (or a table in a
+  `staging`, `stg` or `raw` schema) and a final table hold the same thing,
+  such as `stg_customers` and `customers`, only the final one is drafted.
+  The report lists what it left out. `--include-staging` drafts them too.
 - `--query-history` also counts the joins in recent queries your login can
   see, on Snowflake, PostgreSQL (`pg_stat_statements`), Databricks and
   BigQuery. Query text is read in memory and dropped; only which columns were
@@ -270,7 +325,16 @@ ZLens warehouse discovery apply
 
 In the workbench, **Modeling → Draft from warehouse** runs the same
 discovery and opens the drafts as a proposal you review before anything is
-saved. Tick **Use query history** first to include query history.
+saved. Tick **Use query history** first to include query history. The
+review shows one plain line per kind of note, such as *13 tables placed in
+the default area*; the codes and ids behind them are under **Technical
+details**. When staging copies were left out, a line says which, with
+**Show staging tables** to draft them too.
+
+Drafts are kept until you save or discard them. Close the review with
+**Keep for later**, reload, or come back another day: Modeling says
+*N drafted models waiting for review*, with **Review drafts** and
+**Discard**.
 
 ## 6. Review and certify
 
@@ -291,11 +355,11 @@ Choose **Certified**, click **Review change**, check the proposal and click
 **Save**. From the terminal you can confirm it:
 
 ```bash
-zlens model explain dev::relationship::order_item_to_order
+zlens model explain jaffle_shop::relationship::order_item_to_order
 ```
 
 ```text
-dev::relationship::order_item_to_order: dev::entity::order_item → dev::entity::order
+jaffle_shop::relationship::order_item_to_order: jaffle_shop::entity::order_item → jaffle_shop::entity::order
   many_to_one; fanout=safe; status=certified
   automatic join allowed
 ```
@@ -310,9 +374,9 @@ Ask needs an AI model: [set up an AI provider](ai-provider.md). Then open
 
 Ask works from the synced schema and the joins you modeled. It labels the
 answer with what it used, as it does in a dbt project. SQL that AI wrote is
-labelled for review and saved as a draft block; certify that block, and Ask can
+labelled for review and saved as a draft saved query; certify that saved query, and Ask can
 answer the question from it as **Certified**. Metrics you add with
-**Modeling → New metric** give **Governed** answers. See
+**Modeling → New metric** give **From Metrics** answers. See
 [Ask a question](../ask/index.md).
 
 ## Or use Guided Setup
@@ -332,24 +396,58 @@ step asks **Where does your data model live?**:
   credentials and tests it. It lists the environment variables the
   connection reads (`${NAME}` values) and which are not set yet. Export those
   in the shell that starts `zlens notebook` and restart it. Then click
-  **Synchronize**, which reads the dbt project and the saved schemas again;
-  the models and certifications come from the repository, so there are no
-  modeling questions.
+  **Refresh dbt data** (or **Refresh warehouse tables** for a Database only
+  project), which reads the dbt project and the saved schemas again; the
+  models and certifications come from the repository, so there are no
+  modeling questions. For a dbt project, extra warehouse schemas are under
+  **Advanced** ("Optional: add warehouse schemas dbt doesn't cover").
+
+Setup chooses the card from what the folder holds: **Database only** for a
+folder with a database file and no dbt project, **dbt project** when it finds
+`dbt_project.yml` that ZLens does not read yet, and **Open an existing ZLens
+project** when `dql.config.json` already sets up the data model: a dbt project
+whose manifest is built, or a Database only project whose model is already
+written.
 
 With **Database only**, Setup walks through the steps above:
 
-1. Connect your database and test it (**Save connection** tests it first).
-2. Under **Metadata scope**, click **Find available databases & schemas** and
-   tick the schemas to model.
+1. Connect your database. A DuckDB file found in the folder is already
+   connected, and Setup tests it for you; otherwise fill in the form and
+   **Save connection** (it tests before saving). Personal dbt profiles from
+   your home folder are not shown: there is no dbt here.
+2. **Which schemas should ZLens read?** Setup lists the schemas as soon as the
+   test passes (**Find available databases & schemas** lists them again).
+   Tick the ones that hold your tables. Schemas named `staging`, `stg` or
+   `raw` wait behind **Show staging tables** when the database has others.
 3. Click **Apply and synchronize**.
 4. Click **Draft my models**. It runs the same discovery as
    `zlens model discover --validate` and says what it drafted, for example
-   *Drafted 13 models and 23 joins from 13 tables, each join checked on the
-   data*. Nothing is saved yet.
+   *Drafted 9 models and 12 joins from 13 tables, each join checked on the
+   data*. It also says:
+   - which staging copies it left out (*Left out 4 staging tables
+     (stg_customers, stg_orders, …): a final table holds the same data*),
+     with **Show staging tables** to draft them too;
+   - the Domain the tables go in, named after your database (*Your tables
+     go in the Domain Jaffle shop*), with **Rename**;
+   - *9 drafted models waiting for review in Jaffle shop. They are kept
+     until you save or discard them.* Nothing is written to the project
+     yet, and nothing is lost if you leave Setup or Modeling without saving.
 5. On the last step, **Review drafted models** opens **Modeling** with the
-   drafts as a proposal. Save it, then certify the joins Ask may rely on, as
-   in [step 6](#6-review-and-certify).
-6. Ask a question.
+   drafts. Save them, then certify the joins Ask may rely on, as in
+   [step 6](#6-review-and-certify).
+6. Build an App or ask a question.
+
+Index mode, the typed schema list and the technical index details are under
+**Advanced** on step 2, closed. Setup saves where you are: stop
+`zlens notebook` and start it again, and Setup opens on the same step with
+your answers. Finishing or closing Setup clears that.
+
+In **Apps → Data**, the tables Setup drafted show **Drafted — review to use**,
+with a link to Modeling, and tables your model already binds show
+**Modeled**; both are listed first, under a line such as *9 drafted models
+waiting for review*. **Check and add** reuses the row key the draft checked,
+so it counts one column instead of guessing. Staging copies of a listed
+table are hidden behind **Show staging tables** there too.
 
 You can run Guided Setup again from **Settings → Overview → Guided Setup**.
 
@@ -385,5 +483,5 @@ bound to warehouse tables keep working. See
   scope.
 - [Modeling and Domain Packages](../datalex-and-dql.md): how the three
   modeling modes work.
-- [Save a query as a block](../blocks/index.md) and certify it.
+- [Keep a query as a saved query](../blocks/index.md) and certify it.
 - [CLI reference](../reference/cli.md).

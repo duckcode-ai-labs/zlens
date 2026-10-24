@@ -1059,7 +1059,7 @@ describe('the units contract of a result', () => {
     expect(text).toMatch(/2 customers share the name "Jordan Lee"; one row per customer, keyed by customer_id\./);
     expect(text).not.toMatch(/stored as/);
     const certified = composeAnsweredText(intent, { columns: ['revenue'], rows: [{ revenue: 1 }], rowCount: 1, executionTimeMs: 1 }, local, 'certified', { caveats: ['the block groups by customer_name (a label) with no identity key, so two entities sharing a name would merge; recertify it with the entity key to keep them apart'] });
-    expect(certified).toMatch(/Source: a certified block\. the block groups by customer_name .* recertify it with the entity key to keep them apart\.$/);
+    expect(certified).toMatch(/Source: a certified saved query\. the block groups by customer_name .* recertify it with the entity key to keep them apart\.$/);
   });
 
   it('never reads raw UUIDs out: an id beside its name is left to the table, and rows keyed only by UUIDs are said to be', () => {

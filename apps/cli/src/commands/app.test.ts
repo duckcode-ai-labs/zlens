@@ -63,11 +63,12 @@ describe('runApp', () => {
       draft: {
         appId: 'customer-360',
         authoringMode: 'manual',
-        sourcePolicy: 'governed_only',
         state: 'local_draft',
         pages: [{ metadata: { domain: 'customer', visibility: 'private', lifecycle: 'draft' } }],
       },
     });
+    // No per-App data rule is written for a new App (T3).
+    expect(payload.draft).not.toHaveProperty('sourcePolicy');
     expect(existsSync(join(projectRoot, 'domains', 'customer', 'apps', 'customer-360', 'dql.app.json'))).toBe(false);
     expect(existsSync(join(projectRoot, 'apps', 'customer-360', 'dql.app.json'))).toBe(false);
     expect(__test__.collectApps(projectRoot)).toEqual([]);
@@ -190,7 +191,7 @@ describe('a tile bound to a retired block', () => {
     expect(result.blockers).toContainEqual(expect.objectContaining({
       code: 'block_not_certified',
       tileId: 'kpi',
-      message: 'overview/kpi uses retired block Claims Summary, replaced by Claims Dataset; it no longer resolves to a certified block.',
+      message: 'overview/kpi uses retired saved query Claims Summary, replaced by Claims Dataset; it no longer resolves to a certified saved query.',
     }));
   });
 });

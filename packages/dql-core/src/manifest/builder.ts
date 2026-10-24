@@ -13,6 +13,8 @@ import { Parser } from '../parser/index.js';
 import { analyze, detectTrustConflicts } from '../semantic/index.js';
 import { extractTablesFromSql } from '../lineage/sql-parser.js';
 import { parseDatasetAggregateExpression } from '../datasets/aggregate-expression.node.js';
+import { relatedFieldParts } from '../datasets/related-fields.js';
+import { SAVED_QUERY_ROW_COUNT } from '../datasets/result-fields.js';
 import { extractColumnLineage, type ColumnLineageResult } from '../lineage/column-lineage.js';
 import { detectOutputDrift } from './output-drift.js';
 import { validateBlockRetirements } from './retirement.js';
@@ -71,6 +73,7 @@ import { domainFolderSlug } from './domain-writer.js';
 import { loadDomainPackageRegistry } from './domain-package-registry.js';
 import type { DomainPackageRegistryResult } from './domain-package-registry.js';
 import { buildManifestKnowledgeGraph, compactManifestKnowledgeGraph } from './knowledge-graph.js';
+import { certifiedBlockFileState, changedSinceCertifiedMessage } from '../trust/certification-source.js';
 import { loadManifestKnowledgeSkills, manifestKnowledgeSkillInputFiles } from './knowledge-skills.js';
 
 // ---- Public API ----
@@ -919,6 +922,7 @@ function scanBlocks(
   const blocks: Record<string, ManifestBlock> = {};
   const all: ManifestBlock[] = [];
   const seenFiles = new Set<string>();
+  let companionRegistry: DomainPackageRegistryResult | undefined;
 
   for (const dir of dirs) {
     const dirPath = join(projectRoot, dir);
@@ -938,6 +942,10 @@ function scanBlocks(
           if (block.kind !== 'BlockDecl') continue;
 
           const nextBlock = blockDeclToManifestBlock(block, relPath);
+          markChangedSinceCertified(projectRoot, nextBlock, source, diagnostics, () => {
+            companionRegistry ??= loadDomainPackageRegistry(projectRoot);
+            return companionRegistry;
+          });
           validateDatasetBlockContract(nextBlock, diagnostics);
           all.push(nextBlock);
           if (blocks[block.name]) {
@@ -967,6 +975,35 @@ function scanBlocks(
   }
 
   return { blocks, all };
+}
+
+/**
+ * A block certified by an explicit Certify action carries a receipt with the
+ * fingerprint of the source it certified. When the source on disk no longer
+ * matches it, the block was edited after certification (outside ZLens, which
+ * demotes an edited block on save): report it as pending recertification and
+ * say so. A block with no receipt (certified before receipts) stays certified.
+ */
+function markChangedSinceCertified(
+  projectRoot: string,
+  block: ManifestBlock,
+  source: string,
+  diagnostics: ManifestDiagnostic[] | undefined,
+  registry: () => DomainPackageRegistryResult,
+): void {
+  if (block.status !== 'certified') return;
+  const { state, companionPath } = certifiedBlockFileState(projectRoot, block.filePath, source, {
+    packageForPath: (filePath) => registry().packageForPath(filePath),
+  });
+  if (state !== 'changed') return;
+  block.status = 'pending_recertification';
+  block.certificationSourceChanged = true;
+  diagnostics?.push({
+    kind: 'resolve',
+    filePath: block.filePath,
+    severity: 'warning',
+    message: changedSinceCertifiedMessage(block.name, companionPath),
+  });
 }
 
 function shouldReplaceDuplicateBlock(existing: ManifestBlock, next: ManifestBlock): boolean {
@@ -1521,6 +1558,17 @@ function stringArrayValue(value: unknown): string[] | undefined {
   return items.length > 0 ? items : undefined;
 }
 
+/**
+ * The placeholder block older welcome notebooks carried ("Example Customer
+ * Rollup", `SELECT 1 AS customer_count`). It is not data anyone can use, so it
+ * never becomes a block: it showed up in every new App's Data step (design D7).
+ * Only the untouched starter is skipped; an edited copy is a real block.
+ */
+export function isStarterPlaceholderBlock(blockName: string | undefined, sql: string | undefined): boolean {
+  if (blockName !== 'Example Customer Rollup') return false;
+  return (sql ?? '').replace(/\s+/g, ' ').trim().replace(/;$/, '').toLowerCase() === 'select 1 as customer_count';
+}
+
 /** Extract blocks declared inside notebook DQL cells into the blocks map. */
 function extractNotebookBlocks(notebooks: Record<string, ManifestNotebook>): Record<string, ManifestBlock> {
   const blocks: Record<string, ManifestBlock> = {};
@@ -1528,6 +1576,8 @@ function extractNotebookBlocks(notebooks: Record<string, ManifestNotebook>): Rec
   for (const [nbPath, nb] of Object.entries(notebooks)) {
     for (const cell of nb.cells) {
       if (cell.type !== 'dql' || !cell.blockName) continue;
+      const placeholder = /query\s*=\s*"""([\s\S]*?)"""/i.exec(cell.source)?.[1];
+      if (isStarterPlaceholderBlock(cell.blockName, placeholder)) continue;
 
       // Only add if not already found as a standalone block file
       if (!blocks[cell.blockName]) {
@@ -2382,10 +2432,16 @@ function validateDashboardDatasetSourceDrift(input: {
     if (!block) continue;
     const binding = bindingBySourceId.get(item.sourceId);
     if (!binding) continue;
-    const physical = new Set((block.datasetFields ?? []).map((field) => field.name.toLowerCase()));
-    const measures = new Set((block.datasetMeasures ?? []).map((measure) => measure.name.toLowerCase()));
+    const declared = manifestDatasetDeclaredFields(block);
+    // A saved query whose result columns can't be named here (SELECT *, or no
+    // column lineage) is checked by the runtime when its tiles run.
+    if (!declared) continue;
+    const { physical, measures } = declared;
     const diagnosePhysical = (field: string, role: string) => {
       if (physical.has(field.toLowerCase())) return;
+      // A field from a related table ("customer__customer_name") comes through
+      // the model's certified joins, which the runtime checks on every run.
+      if (relatedFieldParts(field)) return;
       diagnostics.push({
         kind: 'drift',
         filePath,
@@ -2395,6 +2451,7 @@ function validateDashboardDatasetSourceDrift(input: {
     };
     const diagnoseMeasure = (measure: string, role: string) => {
       if (measures.has(measure.toLowerCase())) return;
+      if (relatedFieldParts(measure)) return;
       diagnostics.push({
         kind: 'drift',
         filePath,
@@ -2407,6 +2464,37 @@ function validateDashboardDatasetSourceDrift(input: {
     for (const filter of item.query.filters ?? []) diagnosePhysical(filter.field, 'filter field');
     for (const filter of item.query.having ?? []) diagnoseMeasure(filter.field, 'HAVING measure');
   }
+}
+
+/**
+ * The fields a block offers App tiles, as the compiler can know them. A block
+ * with a Dataset definition declares them. A plain saved query's fields are
+ * its result columns (design D1): their names come from its column lineage,
+ * plus the measures ZLens adds over a result — Min/Max of each number and the
+ * row count — so a tile over them is not reported as drift. Their types are
+ * read at runtime, so a number column is accepted as a measure here and the
+ * runtime refuses a tile whose fields really went away. Undefined when the
+ * result's columns can't be named (SELECT *, an expression without a name).
+ */
+function manifestDatasetDeclaredFields(block: ManifestBlock): { physical: Set<string>; measures: Set<string> } | undefined {
+  const plainSavedQuery = Boolean(block.sql?.trim()) && block.blockType !== 'semantic'
+    && !block.datasetGrain && !block.datasetFields?.length && !block.datasetMeasures?.length;
+  if (!plainSavedQuery) {
+    return {
+      physical: new Set((block.datasetFields ?? []).map((field) => field.name.toLowerCase())),
+      measures: new Set((block.datasetMeasures ?? []).map((measure) => measure.name.toLowerCase())),
+    };
+  }
+  const outputs = block.outputs ?? [];
+  if (!outputs.length || outputs.some((output) => output.unresolved || !output.name?.trim() || output.name === '*')) return undefined;
+  const columns = outputs.map((output) => output.name.trim().toLowerCase());
+  const measures = new Set<string>([SAVED_QUERY_ROW_COUNT, 'result_row_count']);
+  for (const column of columns) {
+    measures.add(column);
+    measures.add(`min_${column}`);
+    measures.add(`max_${column}`);
+  }
+  return { physical: new Set(columns), measures };
 }
 
 /** Keep compiler source identity byte-for-byte aligned with App source catalog. */
@@ -2987,6 +3075,8 @@ function blockDeclToManifestBlock(block: any, filePath: string): ManifestBlock {
     reviewCadence: agent.reviewCadence,
     businessRules: agent.businessRules,
     caveats: agent.caveats,
+    synonyms: agent.synonyms,
+    primaryTerms: agent.primaryTerms,
     datalexContract: typeof block.datalexContract === 'string' ? block.datalexContract : undefined,
     draftMetadata: extractDraftMetadata(block),
     outputs: columnLineage?.parsed && columnLineage.columns.length > 0
@@ -3385,6 +3475,8 @@ function extractAgentMetadata(block: any): {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  synonyms?: string[];
+  primaryTerms?: string[];
 } {
   return {
     llmContext: typeof block.llmContext === 'string' ? block.llmContext : undefined,
@@ -3396,6 +3488,8 @@ function extractAgentMetadata(block: any): {
     reviewCadence: typeof block.reviewCadence === 'string' ? block.reviewCadence : undefined,
     businessRules: Array.isArray(block.businessRules) ? block.businessRules : undefined,
     caveats: Array.isArray(block.caveats) ? block.caveats : undefined,
+    synonyms: Array.isArray(block.synonyms) && block.synonyms.length > 0 ? block.synonyms : undefined,
+    primaryTerms: Array.isArray(block.primaryTerms) && block.primaryTerms.length > 0 ? block.primaryTerms : undefined,
   };
 }
 

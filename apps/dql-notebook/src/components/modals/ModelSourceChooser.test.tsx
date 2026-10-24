@@ -45,10 +45,26 @@ describe('Where does your data model live?', () => {
     expect(radios(html).find((radio) => radio.checked)?.value).toBe('dbt');
   });
 
-  it('Database only: says it reads metadata, never rows', () => {
+  it('Database only: says honestly what it does with rows', () => {
     const html = renderToStaticMarkup(<ModelSourceChooser value="warehouse" onChange={noop} existing={null} t={t} />);
     expect(radios(html).find((radio) => radio.checked)?.value).toBe('warehouse');
-    expect(html).toContain('never their rows');
+    expect(html).toContain('counts rows to check keys. Sample rows are shown only to you, on this computer. Nothing is sent anywhere unless you turn on value profiles for AI answers.');
+    expect(html).not.toContain('never their rows');
+  });
+
+  it('Database only is disabled for a dbt project and explains why on the card', () => {
+    const dbtProject = existingProjectFromStatus({ dbt: { configured: true, projectDir: '.' }, modeling: { enabled: true, mode: 'dbt-first' } });
+    const html = renderToStaticMarkup(<ModelSourceChooser value="dbt" onChange={noop} existing={dbtProject} t={t} />);
+    expect(radios(html).find((radio) => radio.value === 'warehouse')?.disabled).toBe(true);
+    expect(radios(html).find((radio) => radio.value === 'both')?.disabled).toBe(false);
+    expect(html).toContain('This folder is a dbt project');
+    expect(html).toContain('Choose Both');
+  });
+
+  it('Database only stays available for a Database only project', () => {
+    const html = renderToStaticMarkup(<ModelSourceChooser value="warehouse" onChange={noop} existing={warehouseProject} t={t} />);
+    expect(radios(html).find((radio) => radio.value === 'warehouse')?.disabled).toBe(false);
+    expect(html).not.toContain('This folder is a dbt project');
   });
 
   it("Both: dbt plus schemas dbt doesn't cover", () => {
@@ -94,26 +110,46 @@ describe('Draft my models card', () => {
     expect(html).toContain('Drafted 2 models and 1 join from 6 tables.');
   });
 
+  it('keeps the drafts: says how many wait for review, the Domain they go in, and offers a rename', () => {
+    const waiting = { proposalId: 'p', createdAt: '2026-10-21T00:00:00Z', models: 9, joins: 12, domains: ['Jaffle shop'], stale: false };
+    const html = renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={null} waiting={waiting} onDraft={noop} onRename={noop} t={t} />);
+    expect(html).toContain('9 drafted models waiting for review in Jaffle shop. They are kept until you save or discard them.');
+    expect(html).toContain('Your tables go in the Domain <strong');
+    expect(html).toContain('Jaffle shop</strong>, named after your database.');
+    expect(html).toMatch(/<button[^>]*>Rename<\/button>/);
+  });
+
+  it('says which staging tables it left out, with the Show staging tables toggle', () => {
+    const outcome = { ok: true, proposalId: 'p', message: 'Drafted 2 models.', domain: 'Jaffle shop', stagingHidden: [{ relation: 'dev.stg_customers', finalRelation: 'dev.customers' }, { relation: 'dev.stg_orders', finalRelation: 'dev.orders' }] };
+    const html = renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={outcome} onDraft={noop} onToggleStaging={noop} t={t} />);
+    expect(html).toContain('Left out 2 staging tables (stg_customers, stg_orders): a final table holds the same data.');
+    expect(html).toContain('Show staging tables');
+    expect(html).toContain('They are kept until you review or discard them in Modeling.');
+    // Nothing left out and not asked for: no toggle.
+    expect(renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={{ ok: true, proposalId: 'p', message: 'x' }} onDraft={noop} onToggleStaging={noop} t={t} />)).not.toContain('Show staging tables');
+  });
+
   it('reports a failure as an alert', () => {
     const html = renderToStaticMarkup(<DraftModelsCard busy={false} canDraft outcome={{ ok: false, message: 'boom' }} onDraft={noop} t={t} />);
     expect(html).toContain('role="alert"');
   });
 });
 
-describe('Synchronize card (existing project)', () => {
+describe('Refresh card (existing project)', () => {
   it('says what it reads again and shows each part', () => {
     const html = renderToStaticMarkup(
       <ExistingProjectSyncCard
         project={warehouseProject!}
         busy={false}
-        steps={[{ kind: 'warehouse', ok: true, message: 'Warehouse synchronized · 6 tables and views.' }]}
+        steps={[{ kind: 'warehouse', ok: true, message: 'Warehouse tables refreshed · 6 tables and views.' }]}
         onSync={noop}
         t={t}
       />,
     );
     expect(html).toContain('Reads the saved warehouse schemas again');
-    expect(html).toContain('Warehouse synchronized · 6 tables and views.');
-    expect(html).toMatch(/<button[^>]*>Synchronize<\/button>/);
+    expect(html).toContain('Warehouse tables refreshed · 6 tables and views.');
+    expect(html).toMatch(/<button[^>]*>Refresh warehouse tables<\/button>/);
+    expect(html).not.toMatch(/Synchroniz/);
   });
 
   it('names the environment variables the connection reads and which are missing', () => {

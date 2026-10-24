@@ -188,8 +188,11 @@ async function call(lane, mcp, name, args, expectation, { timeoutMs = CALL_TIMEO
   }
   const ms = Date.now() - started;
   const text = response?.content?.map((item) => item.text ?? '').join('') ?? '';
+  // The JSON result is the first text block; an answer with a trust line adds
+  // a second, plain-text block after it.
+  const json = response?.content?.[0]?.text ?? '';
   let body;
-  try { body = text ? JSON.parse(text) : undefined; } catch { body = undefined; }
+  try { body = json ? JSON.parse(json) : undefined; } catch { body = undefined; }
   const outcome = { isError: Boolean(response?.isError), text, body, thrown, ms };
   let failure;
   try {
@@ -243,6 +246,9 @@ async function profileChecks(lane, project, runtimeUrl) {
       const mentioned = [...instructions.matchAll(/`([a-z][a-z0-9_]+)`/g)].map((match) => match[1]).filter((word) => /_/.test(word) && (expected.includes(word) || dqlToolNamesForSurface('mcp').includes(word)));
       const unserved = mentioned.filter((name) => !names.includes(name));
       record(lane, 'instructions', profile, expectThat(unserved.length === 0, `instructions name tools this profile does not serve: ${[...new Set(unserved)].join(', ')}`));
+      // Claude Desktop reads only these instructions: ask_dql comes before the semantic layer.
+      const askFirst = instructions.indexOf('1. Call `ask_dql` first');
+      record(lane, 'instructions', `${profile} ask_dql first`, expectThat(askFirst > -1 && askFirst < instructions.indexOf('`query_semantic_model`'), 'instructions must route through ask_dql before query_semantic_model'));
     } finally {
       await mcp.close();
     }
@@ -288,7 +294,7 @@ async function dbtLane(project, runtimeUrl) {
   await profileChecks(lane, project, runtimeUrl);
   const mcp = await connectMcp(project, runtimeUrl);
   try {
-    await call(lane, mcp, 'inspect_dql_project', {}, ok((b) => expectThat(b.blocks?.certified >= 4, `certified blocks ${b.blocks?.certified}`)));
+    await call(lane, mcp, 'inspect_dql_project', {}, ok((b) => expectThat(b.blocks?.certified >= 4 && b.certifiedBlocks?.some((x) => x.name === 'monthly_revenue' && x.grain === 'one row per calendar month') && b.nextTool === 'ask_dql', `certified blocks ${b.blocks?.certified}, listed ${JSON.stringify(b.certifiedBlocks?.map((x) => x.name))}, next ${b.nextTool}`)));
     await call(lane, mcp, 'search_blocks', { query: 'revenue' }, ok((b) => expectThat(b.blocks?.some((x) => x.name === 'monthly_revenue' && x.status === 'certified'), 'monthly_revenue (certified) not found')));
     await call(lane, mcp, 'search_blocks', { status: 'bogus' }, fails('status'));
     await call(lane, mcp, 'get_block', { name: 'monthly_revenue' }, ok((b) => expectThat(/order_total/.test(b.sql ?? '') && b.status === 'certified', 'monthly_revenue SQL/status')));
@@ -331,8 +337,18 @@ async function dbtLane(project, runtimeUrl) {
     await call(lane, mcp, 'query_via_metadata', { question: 'drop it', contextPackId, proposedSql: 'DELETE FROM dev.orders' }, fails(/read-only|SELECT/i));
     await call(lane, mcp, 'query_via_metadata', { question: 'q', contextPackId, proposedSql: 'select * from dev.no_such_table' }, fails(/no_such_table|not in the inspected|unknown/i));
 
-    await call(lane, mcp, 'query_semantic_model', { metrics: ['order_total'], timeDimension: { name: 'metric_time', granularity: 'month' }, saveDraft: false }, ok((b) => expectThat(b.matched && b.uncertified === true && b.trustLabelInfo?.base === 'AI-Generated' && b.executionStatus === 'executed' && b.rowCount > 0, `matched ${b.matched} status ${b.executionStatus} label ${b.trustLabelInfo?.base}`)));
+    await call(lane, mcp, 'query_semantic_model', { metrics: ['order_total'], timeDimension: { name: 'metric_time', granularity: 'month' }, saveDraft: false }, ok((b) => expectThat(b.matched && b.uncertified === true && b.trustLabelInfo?.base === 'From Metrics' && b.executionStatus === 'executed' && b.rowCount > 0 && b.certifiedBlock?.name === 'monthly_revenue' && b.nextTool === 'query_via_block', `matched ${b.matched} status ${b.executionStatus} label ${b.trustLabelInfo?.base} certifiedBlock ${b.certifiedBlock?.name}`)));
+    // The Claude Desktop recording: the question asked straight of the semantic layer must name the certified block.
+    await call(lane, mcp, 'query_semantic_model', { question: 'How has revenue changed by month?', dryRun: true, saveDraft: false }, ok((b) => expectThat(b.certifiedBlock?.name === 'monthly_revenue' && b.nextTool === 'query_via_block' && !JSON.stringify(b).includes('No certified block'), `certifiedBlock ${b.certifiedBlock?.name} next ${b.nextTool}`)), { label: 'certified question' });
+    await call(lane, mcp, 'query_semantic_model', { question: 'Which store location had the most orders in 2025?', dryRun: true, saveDraft: false }, ok((b) => expectThat(!b.certifiedBlock && b.certifiedCheck?.checked === true, `certifiedBlock ${b.certifiedBlock?.name} check ${JSON.stringify(b.certifiedCheck)}`)), { label: 'no certified block' });
     await call(lane, mcp, 'query_semantic_model', { metrics: ['no_such_metric'] }, ok((b) => expectThat(b.matched === false && b.reason, 'unknown metric not reported')), { label: 'invalid' });
+    // 2026-10-23 recording bugs: a certified block that does not return the measure, the metric
+    // the question names, and the From Metrics label the Ask page shows.
+    await call(lane, mcp, 'ask_dql', { question: 'How many large orders did we get each month?' }, ok((b) => expectThat(b.route !== 'certified' && !b.exactCertifiedBlock, `route ${b.route} block ${b.exactCertifiedBlock?.name}`)), { label: 'large orders not certified' });
+    await call(lane, mcp, 'query_semantic_model', { question: 'What is the average order value by customer type?', dryRun: true, saveDraft: false }, ok((b) => expectThat(b.matched && b.metric === 'average_order_value' && b.dimensions?.[0] === 'customer_type' && b.trustLabelInfo?.base === 'From Metrics' && b.dqlArtifact?.trustState === 'governed', `metric ${b.metric} by ${b.dimensions} label ${b.trustLabelInfo?.base}`)), { label: 'closest metric, From Metrics' });
+    // A compile through the draft order_to_location join is AI-Generated, not From Metrics.
+    await call(lane, mcp, 'query_semantic_model', { question: 'How many large orders did each location get?', dryRun: true, saveDraft: false }, ok((b) => expectThat(b.matched && b.certification === 'ai_generated' && b.trustLabelInfo?.base === 'AI-Generated' && b.aiGenerated === true && JSON.stringify(b.trustStatus?.caveats ?? []).includes('order_to_location'), `certification ${b.certification} label ${b.trustLabelInfo?.display}`)), { label: 'draft join, AI-Generated' });
+    await call(lane, mcp, 'query_semantic_model', { question: 'What share of revenue comes from food each month?', dryRun: true, saveDraft: false }, ok((b) => expectThat(b.matched && b.metric === 'food_revenue_pct' && b.timeDimension?.granularity === 'month', `metric ${b.metric} grain ${b.timeDimension?.granularity}`)), { label: 'share metric by month' });
 
     await call(lane, mcp, 'lineage_impact', { focus: 'monthly_revenue' }, ok((b) => expectThat(JSON.stringify(b.nodes ?? []).includes('dbt_model:orders'), 'orders not upstream of monthly_revenue')));
     await call(lane, mcp, 'lineage_impact', { focus: 'no_such_node' }, fails('No node matches'));
@@ -367,9 +383,15 @@ async function dbtLane(project, runtimeUrl) {
     await call(lane, mcp, 'build_block_from_prompt', { prompt: 'weekly order count' }, ok((b) => expectThat(b.ok && /_drafts\//.test(b.draftBlockPath ?? '') && b.trustLabel === 'AI-Generated', `draft ${b.draftBlockPath}`)), { label: 'governed metric, no model' });
     await call(lane, mcp, 'build_block_from_prompt', { prompt: 'x', mode: 'edit' }, fails('blockPath'));
 
-    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', saveDraft: false }, ok((b) => expectThat(b.ok === true && b.plan && b.generated === undefined, 'plan-only app draft')));
+    // Design D9: an App AI builds is an App Studio draft that opens at the Data step; no App files.
+    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', saveDraft: false }, ok((b) => expectThat(b.ok === true && b.saved === false && Array.isArray(b.sources) && b.draftId === undefined, 'picks-only App draft')));
     await call(lane, mcp, 'build_dql_app', {}, fails('prompt'));
-    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', name: 'Beverage Performance', blocks: ['beverage_revenue_by_product', 'top_beverage_customers'] }, ok((b) => expectThat(b.ok && b.appId === 'beverage-performance' && b.certifiedTiles === 2 && b.lifecycle === 'draft' && existsSync(join(project, 'apps', 'beverage-performance')), `app ${b.appId} tiles ${b.certifiedTiles} lifecycle ${b.lifecycle}`)), { label: 'named, exact blocks, saved' });
+    await call(lane, mcp, 'build_dql_app', { prompt: 'beverage performance', name: 'Beverage Performance', blocks: ['beverage_revenue_by_product', 'top_beverage_customers'] }, ok((b) => expectThat(
+      b.ok && b.saved === true && /^build_/.test(b.draftId ?? '') && b.appId === 'beverage-performance'
+        && b.openPath === `/?appDraft=${b.draftId}` && b.sources?.length === 2 && b.sources.every((s) => s.trust === 'Certified' && s.reason)
+        && !existsSync(join(project, 'apps', 'beverage-performance')),
+      `draft ${b.draftId} app ${b.appId} open ${b.openPath} sources ${JSON.stringify(b.sources)?.slice(0, 200)}`,
+    )), { label: 'named, exact blocks, App Studio draft' });
     await call(lane, mcp, 'build_dql_app', { prompt: 'x', blocks: ['no_such_block'] }, fails('Only certified blocks'));
     await call(lane, mcp, 'list_apps', {}, ok((b) => {
       const app = b.apps?.find((a) => a.name === 'Jaffle Growth Review');

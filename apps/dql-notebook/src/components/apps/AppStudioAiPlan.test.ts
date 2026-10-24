@@ -5,10 +5,15 @@ import {
   appStudioProposalSourceAddMode,
   appStudioProposalRequiredSourceIds,
   appStudioPlannerProvenanceLabel,
+  appStudioAiDataModel,
+  appStudioAiPickedHeading,
+  appStudioBuildPagesLabel,
+  appStudioPickedDraftSources,
   availableAppStudioProposalSources,
   operationsForSelectedAppStudioSources,
   summarizeAppStudioAiPlan,
 } from './app-studio-ai-plan';
+import { aiProposal, orderLinesDataset } from './builder/app-data.fixtures';
 
 describe('App Studio AI plan review (AGT-025, UI-022)', () => {
   it('shows the exact sources and components that typed proposal operations will apply', () => {
@@ -198,8 +203,11 @@ describe('App Studio AI plan review (AGT-025, UI-022)', () => {
       .toBe('select_existing');
     expect(appStudioProposalSourceAddMode({ alreadyProposed: true, reviewRequired: true, sourcePolicy: 'include_review_required' }))
       .toBe('select_existing');
+    // No per-App data rule (T3): an old App's "Only certified data" never adds a step.
     expect(appStudioProposalSourceAddMode({ alreadyProposed: true, reviewRequired: true, sourcePolicy: 'governed_only' }))
-      .toBe('enable_review_and_replan');
+      .toBe('select_existing');
+    expect(appStudioProposalSourceAddMode({ alreadyProposed: false, reviewRequired: true }))
+      .toBe('replan');
     expect(appStudioProposalSourceAddMode({ alreadyProposed: false, reviewRequired: false, sourcePolicy: 'governed_only' }))
       .toBe('replan');
   });
@@ -225,9 +233,42 @@ describe('App Studio AI plan review (AGT-025, UI-022)', () => {
         mode: 'deterministic',
         providerInvocation: 'not_attempted',
       },
-    })).toBe('Deterministic planner fallback');
+    })).toBe('Suggested from keywords · no AI connected');
     // A failed planner creates no proposal and therefore cannot be presented
     // as a configured-provider success or as a fallback.
     expect(appStudioPlannerProvenanceLabel({})).toBeUndefined();
+  });
+});
+
+describe('AI Data step model (design D3, AI path)', () => {
+  it('splits picks from removed suggestions, keeps the planner reason, and reads gaps and questions from the proposal', () => {
+    const proposal = aiProposal({ clarify: true });
+    const summary = summarizeAppStudioAiPlan(proposal);
+    const ordersId = orderLinesDataset.sourceId!;
+    const model = appStudioAiDataModel(proposal, summary, new Set([ordersId]), [orderLinesDataset]);
+    expect(model.picked.map((pick) => [pick.label, pick.meta, pick.rationale, pick.tileTitles])).toEqual([
+      ['Order Lines', 'Table · Certified · Commerce', 'Order lines carries revenue by order date.', ['Revenue trend']],
+    ]);
+    expect(model.suggestions.map((pick) => [pick.label, pick.meta])).toEqual([['Margin', 'Metrics · Certified']]);
+    // With the catalog's receipt, a pick says who certified it and when (F03).
+    const receipted = appStudioAiDataModel(proposal, summary, new Set([ordersId]), [{ ...orderLinesDataset, certification: { by: 'analytics@jaffle.shop', at: '2026-10-15T12:00:00.000Z' } }]);
+    expect(receipted.picked[0]!.meta).toMatch(/^Table · Certified by Analytics \(jaffle\.shop\) · 15 Oct.* · Commerce$/);
+    expect(model.warnings).toEqual(['Revenue by channel was not added because no Dataset has a channel field.']);
+    expect(model.uncovered).toEqual([{ id: 'channel', question: 'Which channel drives revenue?' }]);
+    expect(model.clarifications.map((item) => item.id)).toEqual(['period']);
+    expect(appStudioPickedDraftSources(proposal, new Set([ordersId])).map((source) => source.id)).toEqual([ordersId]);
+    expect(appStudioAiPickedHeading(1)).toBe('AI picked 1 source');
+    expect(appStudioBuildPagesLabel(3)).toBe('Build pages with 3 sources');
+  });
+});
+
+describe('AI source names', () => {
+  it('reads a qualified block identity as its name', () => {
+    const proposal = {
+      id: 'p', draftId: 'd', baseRevision: 0, baseProposalHash: 'h', clarifications: [],
+      summary: { requirements: 0, covered: 0, gaps: 0, certifiedSources: 1, semanticSources: 0 },
+      operations: [{ type: 'upsert_source', source: { id: 's1', kind: 'block', sourceRef: 'blocks/top_customers.dql', qualifiedIdentity: 'orders::block::top_customers::17ade6f52b3f8d9cb9c9', trustState: 'certified', reviewStatus: 'not_required' } }],
+    } as unknown as AppStudioAiProposal;
+    expect(summarizeAppStudioAiPlan(proposal).sources[0]!.label).toBe('Top Customers');
   });
 });

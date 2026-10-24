@@ -128,7 +128,6 @@ async function runAppNew(rest: string[], flags: CLIFlags): Promise<void> {
     audience: owner,
     domain,
     authoringMode: "manual",
-    sourcePolicy: "governed_only",
     template: "blank",
   });
 
@@ -165,7 +164,6 @@ async function runAppGenerate(rest: string[], flags: CLIFlags): Promise<void> {
     audience: owner,
     domain,
     authoringMode: "ai",
-    sourcePolicy: "governed_only",
     template: "operational_dashboard",
   });
   const proposal = await proposeAppBuildDraftOperations(projectRoot, draft, { prompt });

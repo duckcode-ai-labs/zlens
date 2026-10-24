@@ -37,6 +37,7 @@ import type { QueryResult } from '../../../store/types';
 import { descriptorTimeField, descriptorTimeGrain, isTimeField } from './field-query';
 import { ShowMePanel, currentShowMeChart, tileShowMe } from './ShowMe';
 import { humanize } from './studio-ui';
+import { TOP_N_CHOICES, canShowTopN, measureSortChip, topNFor, withSort, withTopN } from './sort-top-n';
 
 /** The drag payload a field carries between the Data pane and the shelves. */
 export const FIELD_DRAG_TYPE = 'application/x-dql-field';
@@ -203,6 +204,11 @@ export function ShelfEditor({
               >
                 {calculation ? <SquareFunction size={11} aria-label="Calculation" /> : measure ? <Hash size={11} aria-hidden="true" /> : time ? <CalendarDays size={11} aria-hidden="true" /> : <Type size={11} aria-hidden="true" />}
                 <span className="shelf-pill-name">{fieldLabel(ref)}{grain ? <em> · {humanize(grain)}</em> : null}</span>
+                {/* The measure's Top N or sort, on the pill itself ("Top 10 ▾"); a click opens Sort & top. */}
+                {measure ? (() => {
+                  const chip = measureSortChip(query, ref);
+                  return chip ? <button type="button" className="shelf-pill-sort" disabled={disabled} aria-label={`${chip.label} by ${fieldLabel(ref)}: change sort and top`} title="Sort & top" onClick={() => setMenu((current) => (current?.shelf === shelf && fieldKey(current.ref) === fieldKey(ref) ? null : { shelf, ref }))}>{chip.label} ▾</button> : null;
+                })() : null}
                 <button type="button" className="shelf-pill-menu" disabled={disabled} aria-haspopup="menu" aria-expanded={menu?.shelf === shelf && fieldKey(menu.ref) === fieldKey(ref)} aria-label={`Options for ${fieldLabel(ref)} on ${SHELF_LABELS[shelf]}`} onClick={() => setMenu((current) => (current?.shelf === shelf && fieldKey(current.ref) === fieldKey(ref) ? null : { shelf, ref }))}>
                   <MoreHorizontal size={12} />
                 </button>
@@ -276,7 +282,7 @@ export function ShelfEditor({
   );
 }
 
-function FieldMenu({
+export function FieldMenu({
   descriptor,
   encoding,
   query,
@@ -377,15 +383,44 @@ function FieldMenu({
     return Object.keys(fields).length ? { ...rest, fields } : rest;
   };
   const moveTargets = (['columns', 'rows', 'color', 'size', 'label', 'tooltip', 'detail'] as ShelfId[]).filter((target) => target !== shelf && shelfAccepts(target, fieldRef));
-  const sortBy = (direction: 'asc' | 'desc' | null) => {
-    const others = (query.orderBy ?? []).filter((entry) => entry.alias.toLowerCase() !== alias.toLowerCase());
-    const orderBy = direction ? [{ alias, direction }, ...others] : others;
-    const { orderBy: _previous, ...rest } = query;
-    onEncoding(encoding, orderBy.length ? { ...rest, orderBy } : rest);
-  };
+  // Sort and Top N write the tile query's orderBy and limit, the same fields
+  // "Filters, sort and more" shows, so the two always agree.
+  const sortBy = (direction: 'asc' | 'desc' | null) => onEncoding(encoding, withSort(query, alias, direction));
+  const topN = measure && canShowTopN(query) ? topNFor(query, alias) : null;
+  const showTopN = measure && canShowTopN(query);
+  const [customTop, setCustomTop] = useState(topN !== null && !(TOP_N_CHOICES as readonly number[]).includes(topN) ? String(topN) : '');
+  const setTopN = (n: number | null) => onEncoding(encoding, withTopN(query, alias, n));
 
   return (
     <div className="shelf-menu" role="menu" aria-label={`${label} options`} ref={ref} style={shift ? { transform: `translateX(${shift}px)` } : undefined}>
+      {/* Sort & top first: it is what a measure's menu is most often opened for. */}
+      <div className="shelf-menu-group" role="group" aria-label="Sort">
+        <span className="shelf-menu-label">{showTopN ? 'Sort & top' : 'Sort'}</span>
+        <div className="shelf-menu-chips">
+          <button type="button" role="menuitemradio" aria-checked={sorted === 'asc'} aria-label={`Sort ascending by ${label}`} className={sorted === 'asc' ? 'on' : ''} onClick={() => sortBy('asc')}><ArrowUp size={11} aria-hidden="true" /> Ascending</button>
+          <button type="button" role="menuitemradio" aria-checked={sorted === 'desc'} aria-label={`Sort descending by ${label}`} className={sorted === 'desc' ? 'on' : ''} onClick={() => sortBy('desc')}><ArrowDown size={11} aria-hidden="true" /> Descending</button>
+          {sorted ? <button type="button" role="menuitem" onClick={() => sortBy(null)}>Clear</button> : null}
+        </div>
+      </div>
+      {showTopN ? (
+        <div className="shelf-menu-group" role="group" aria-label="Show top">
+          <span className="shelf-menu-label">Show top</span>
+          <div className="shelf-menu-chips">
+            {TOP_N_CHOICES.map((n) => (
+              <button key={n} type="button" role="menuitemradio" aria-checked={topN === n} aria-label={`Show top ${n} by ${label}`} className={topN === n ? 'on' : ''} onClick={() => setTopN(n)}>{n}</button>
+            ))}
+            <button type="button" role="menuitemradio" aria-checked={topN === null && typeof query.limit !== 'number'} className={topN === null && typeof query.limit !== 'number' ? 'on' : ''} onClick={() => setTopN(null)}>All</button>
+          </div>
+          <form className="shelf-menu-row" onSubmit={(event) => {
+            event.preventDefault();
+            const n = Number(customTop);
+            if (Number.isInteger(n) && n >= 1 && n <= 10_000) setTopN(n);
+          }}>
+            <input aria-label="Custom top N" type="number" min={1} max={10000} placeholder="Other number" value={customTop} onChange={(event) => setCustomTop(event.target.value)} />
+            <button type="submit" disabled={!customTop}>Show</button>
+          </form>
+        </div>
+      ) : null}
       <div className="shelf-menu-group" role="group" aria-label="Move to">
         <span className="shelf-menu-label">Move to</span>
         <div className="shelf-menu-chips">
@@ -410,14 +445,6 @@ function FieldMenu({
           </div>
         </div>
       ) : null}
-      <div className="shelf-menu-group" role="group" aria-label="Sort">
-        <span className="shelf-menu-label">Sort</span>
-        <div className="shelf-menu-chips">
-          <button type="button" role="menuitemradio" aria-checked={sorted === 'asc'} className={sorted === 'asc' ? 'on' : ''} onClick={() => sortBy('asc')}><ArrowUp size={11} aria-hidden="true" /> Ascending</button>
-          <button type="button" role="menuitemradio" aria-checked={sorted === 'desc'} className={sorted === 'desc' ? 'on' : ''} onClick={() => sortBy('desc')}><ArrowDown size={11} aria-hidden="true" /> Descending</button>
-          {sorted ? <button type="button" role="menuitem" onClick={() => sortBy(null)}>Clear</button> : null}
-        </div>
-      </div>
       {quick ? (
         <div className="shelf-menu-group" role="group" aria-label="Quick calculation">
           <span className="shelf-menu-label">Quick calculation</span>

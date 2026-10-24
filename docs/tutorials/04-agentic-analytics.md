@@ -171,24 +171,24 @@ zlens agent ask "drill into Enterprise last week"
 
 ## Step 5 — Generate a local App from a prompt
 
-The OSS app builder writes reviewable files. It does not generate hidden React
-or bypass certification state:
+The OSS app builder drafts an App from certified blocks. It does not generate
+hidden React or bypass certification state:
 
 ```bash
 zlens app generate "Build a weekly revenue health app for the COO"
 ```
 
-> **You should see** an `apps/<app-id>/` package with:
->
-> - `dql.app.json`
-> - `dashboards/overview.dqld`
-> - `README.md`
+> **You should see** `✓ Created AI-assisted local App draft` with its draft
+> id and `Project source: unchanged`. The draft is stored locally, not as
+> files under `apps/`.
 
 Certified blocks become certified dashboard tiles. Missing or AI-created
-sections become text/draft placeholders with review tasks, so the generated
-App is useful immediately but still safe for Git review.
+sections become text/draft placeholders with review tasks.
 
-Build the App manifest after review:
+Run `zlens notebook`, open **Apps**, and continue the draft under
+**Not published yet**. Publishing it writes `apps/<app-id>/` with
+`dql.app.json` and its `.dqld` pages, ready for Git review. Then build the
+App manifest:
 
 ```bash
 zlens app build
@@ -228,4 +228,4 @@ when it has to generate a deeper or different-grain answer.
 ✓ A local generated App package with certified tiles and draft review tasks
 ✓ An MCP server giving Claude, Codex, Cursor, and other agents governed access to your analytics
 
-[Continue to tutorial 05 — CI and `zlens verify` →](./05-ci-and-verify.md)
+[Continue to tutorial 05 — CI with `zlens eval` →](./05-ci-and-verify.md)

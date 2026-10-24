@@ -9,9 +9,9 @@ type Tone = React.ComponentProps<typeof StatusPill>['tone'];
  * Canonical trust-label vocabulary.
  *
  * This MIRRORS the single source of truth in
- * `@zlens/core` (`src/trust/labels.ts`): the same five base
- * labels (Certified · Reviewed · AI-Generated · Insufficient-Context ·
- * Conflict), each with a base label + optional qualifier shape and a color
+ * `@zlens/core` (`src/trust/labels.ts`): the same six base
+ * labels (Certified · From Metrics · Reviewed · AI-Generated ·
+ * Insufficient-Context · Conflict), each with a base label + optional qualifier shape and a color
  * token. `dql-ui` is a browser-only leaf package with no ZLens workspace
  * dependencies, so it cannot import dql-core (which carries node-only deps)
  * without bloating the UI bundle — hence this intentional mirror. Keep the two
@@ -22,6 +22,7 @@ type Tone = React.ComponentProps<typeof StatusPill>['tone'];
  */
 export type CanonicalTrustLabelId =
   | 'certified'
+  | 'governed'
   | 'reviewed'
   | 'ai_generated'
   | 'insufficient_context'
@@ -29,6 +30,7 @@ export type CanonicalTrustLabelId =
 
 const CANONICAL_TRUST_LABELS: Record<CanonicalTrustLabelId, { base: string; tone: Tone }> = {
   certified: { base: 'Certified', tone: 'success' },
+  governed: { base: 'From Metrics', tone: 'info' },
   reviewed: { base: 'Reviewed', tone: 'info' },
   ai_generated: { base: 'AI-Generated', tone: 'warning' },
   insufficient_context: { base: 'Insufficient-Context', tone: 'neutral' },
@@ -73,6 +75,7 @@ export function TrustBadge({ state, qualifier, label }: TrustBadgeProps) {
 const TRUST_BADGE_CONFIG: Record<TrustState, { tone: Tone; label: string }> = {
   // Canonical vocabulary (mirrors dql-core).
   certified: { tone: CANONICAL_TRUST_LABELS.certified.tone, label: CANONICAL_TRUST_LABELS.certified.base },
+  governed: { tone: CANONICAL_TRUST_LABELS.governed.tone, label: CANONICAL_TRUST_LABELS.governed.base },
   reviewed: { tone: CANONICAL_TRUST_LABELS.reviewed.tone, label: CANONICAL_TRUST_LABELS.reviewed.base },
   ai_generated: { tone: CANONICAL_TRUST_LABELS.ai_generated.tone, label: CANONICAL_TRUST_LABELS.ai_generated.base },
   insufficient_context: { tone: CANONICAL_TRUST_LABELS.insufficient_context.tone, label: CANONICAL_TRUST_LABELS.insufficient_context.base },

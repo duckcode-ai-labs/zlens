@@ -34,7 +34,7 @@ describe('the decision flow graph of an Ask run', () => {
     const flow = decisionFlowGraph(explainAskRun({ receipt: aiRun, payload: {}, status: 'completed' })!);
     expect(flow.nodes.map((node) => [node.kind, node.title, node.outcome])).toEqual([
       ['call', 'Read the question', 'done'],
-      ['tier', 'Certified blocks', 'skipped'],
+      ['tier', 'Certified saved queries', 'skipped'],
       ['call', 'Drafted SQL', 'done'],
       ['checks', 'Checks on draft 1', 'failed'],
       ['call', 'Fixed a failed check', 'done'],

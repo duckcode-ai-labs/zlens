@@ -23,6 +23,34 @@ export interface DuckDBConsistentReadScope {
 }
 
 /**
+ * The DuckDB release line whose files ZLens reads: the Node `duckdb` driver
+ * installed into .dql/connectors is 1.4.x, and a file written by a newer
+ * DuckDB (2.0 writes storage version 999) cannot be opened by it.
+ */
+export const ZLENS_DUCKDB_READER_LINE = '1.4';
+/** The pip requirement that installs the reader's release line. */
+const ZLENS_DUCKDB_PIP_PIN = 'duckdb<1.5';
+
+/**
+ * DuckDB's message for a file a newer DuckDB wrote ("Trying to read a database
+ * file with version number 999, but we can only read versions between 64 and
+ * 67. The database file was created with an newer version of DuckDB.") says
+ * neither which release wrote it nor how to get a readable file. This says
+ * both, and keeps DuckDB's words underneath. Anything else returns undefined.
+ */
+export function duckDBNewerFileMessage(dbPath: string, duckdbMessage: string): string | undefined {
+  const match = /version number (\d+)[\s\S]*newer version of DuckDB/i.exec(duckdbMessage);
+  if (!match) return undefined;
+  // DuckDB 2.0 marks its files with storage version 999.
+  const writer = Number(match[1]) >= 999 ? 'a newer DuckDB (2.x)' : 'a newer DuckDB';
+  return [
+    `This database file was written by ${writer}. ZLens reads files from DuckDB ${ZLENS_DUCKDB_READER_LINE}. `
+      + `Rebuild it with \`pip install '${ZLENS_DUCKDB_PIP_PIN}'\` (then rerun dbt), or use a file written by DuckDB ${ZLENS_DUCKDB_READER_LINE}.`,
+    `Original DuckDB error (${dbPath}): ${duckdbMessage}`,
+  ].join('\n');
+}
+
+/**
  * The message for a DuckDB file that could not be opened. DuckDB lets one
  * process at a time open a database file for writing, and its own message
  * ("Could not set lock on file … Conflicting lock is held in … (PID n)")
@@ -30,6 +58,8 @@ export interface DuckDBConsistentReadScope {
  * to free it; any other failure keeps DuckDB's words.
  */
 export function duckDBOpenFailureMessage(dbPath: string, duckdbMessage: string): string {
+  const newerFile = duckDBNewerFileMessage(dbPath, duckdbMessage);
+  if (newerFile) return newerFile;
   if (!/could not set lock on file/i.test(duckdbMessage)) return `DuckDB connection failed: ${duckdbMessage}`;
   const pid = /\(PID (\d+)\)/i.exec(duckdbMessage)?.[1];
   return [

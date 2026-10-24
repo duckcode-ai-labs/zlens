@@ -39,7 +39,7 @@ describe('signed snapshot bodies (RFC 0008 step 10)', () => {
     expect(body).toContain('grid-column:1 / span 6');
     expect(body).toContain('grid-column:7 / span 6');
     expect(body).toContain('<span class="snap-tile-trust certified">Certified</span>');
-    expect(body).toContain('<span class="snap-tile-trust review">Needs review</span>');
+    expect(body).toContain('<span class="snap-tile-trust review">Not certified yet</span>');
     expect(body).toContain('<div class="dql-tile-kpi">$145</div>');
     expect(body).toContain('<svg');
     expect(body).toContain('<h3>Notes &lt;b&gt;</h3><p>Checked <strong>weekly</strong>.</p>');

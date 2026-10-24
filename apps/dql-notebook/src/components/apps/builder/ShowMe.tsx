@@ -66,7 +66,12 @@ export function tileShowMe(
   const facts = showMeFactsFromDescriptor(descriptor, {
     cardinality: (dimension) => {
       const name = column({ dimension });
-      return name && result ? new Set(result.rows.map((row) => String(row[name] ?? ''))).size : undefined;
+      if (!name || !result) return undefined;
+      const loaded = new Set(result.rows.map((row) => String(row[name] ?? ''))).size;
+      // A tile grouped by this field alone has one row per value: the result
+      // counts all of them (930), the rows hold only the first (500).
+      const counted = query.dimensions.length === 1 && loaded === result.rows.length && typeof result.rowCount === 'number' ? result.rowCount : 0;
+      return Math.max(loaded, counted);
     },
     nonNegative: (measure) => {
       const name = column({ measure });

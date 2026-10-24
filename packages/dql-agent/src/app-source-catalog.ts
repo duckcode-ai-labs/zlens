@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { resolve } from 'node:path';
 import type {
   AppBuildSourceCapabilities,
   AppBuildSourceLifecycle,
@@ -21,6 +22,19 @@ export interface AppSourceEligibility {
   reasonCodes: string[];
 }
 
+/**
+ * "Checked · Needs certifying" (design Q1): ZLens checked this Dataset (it
+ * compiles and runs, what one row is, number formats) and someone added it,
+ * but nobody vouched for it yet. Who checked it and what the check found.
+ */
+export interface AppSourceCheck {
+  by: string;
+  name?: string;
+  at: string;
+  checks?: string[];
+  hiddenColumns?: Array<{ column: string; keptColumn: string; reason: string }>;
+}
+
 export interface AppSourceCatalogRecord {
   sourceId: string;
   qualifiedIdentity: string;
@@ -40,6 +54,8 @@ export interface AppSourceCatalogRecord {
   tags: string[];
   capabilities: AppBuildSourceCapabilities;
   eligibility: AppSourceEligibility;
+  /** Present while a Dataset is Checked · Needs certifying. */
+  check?: AppSourceCheck;
   score?: number;
   reasons: string[];
 }
@@ -77,6 +93,36 @@ type AppSourceCursor = {
 };
 
 const APP_SOURCE_OBJECT_TYPE = 'dql_block_source';
+
+/**
+ * A runtime may add what only it knows to each catalog record before any
+ * caller reads it: the local runtime adds the fields of related tables a
+ * table Dataset can reach through checked many-to-one joins (design D2). It
+ * is registered per project root and applied to every record this module
+ * returns, so the Data pane, the planner, previews and runs all read one
+ * descriptor. A decorator that throws leaves the record as it was.
+ */
+export type AppSourceRecordDecorator = (record: AppSourceCatalogRecord) => AppSourceCatalogRecord;
+const recordDecorators = new Map<string, AppSourceRecordDecorator>();
+
+/** Register the record decorator for one project; returns a function that removes it. */
+export function registerAppSourceRecordDecorator(projectRoot: string, decorate: AppSourceRecordDecorator): () => void {
+  const key = resolve(projectRoot);
+  recordDecorators.set(key, decorate);
+  return () => {
+    if (recordDecorators.get(key) === decorate) recordDecorators.delete(key);
+  };
+}
+
+function decorateRecord(projectRoot: string, record: AppSourceCatalogRecord): AppSourceCatalogRecord {
+  const decorate = recordDecorators.get(resolve(projectRoot));
+  if (!decorate) return record;
+  try {
+    return decorate(record);
+  } catch {
+    return record;
+  }
+}
 const DEFAULT_LIFECYCLES: AppBuildSourceLifecycle[] = [
   'certified',
   'review',
@@ -148,9 +194,11 @@ export function queryAppSourceCatalog(
     const result = kindFilter
       ? undefined
       : lease.catalog.queryObjectsPage({ ...queryInput, offset, limit: pageSize });
-    const items = filteredItems
+    // Relevance picks the page; trust orders it. Re-ranking stays within the
+    // page so the cursor keeps addressing the same relevance-ordered rows.
+    const items = rankAppSourcesByTrust(filteredItems
       ? filteredItems.slice(offset, offset + pageSize)
-      : result!.items.map((object) => appSourceFromMetadata(object, lease.snapshotId, policy));
+      : result!.items.map((object) => appSourceFromMetadata(object, lease.snapshotId, policy))).map((record) => decorateRecord(projectRoot, record));
     const total = filteredItems?.length ?? result!.total;
     const nextOffset = offset + items.length;
     const inventory = lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
@@ -217,7 +265,7 @@ export function resolveAppSourceCatalogRecords(
       snapshotId: lease.snapshotId,
       items: uniqueIds.flatMap((id) => {
         const object = byId.get(id);
-        return object ? [appSourceFromMetadata(object, lease.snapshotId, sourcePolicy)] : [];
+        return object ? [decorateRecord(projectRoot, appSourceFromMetadata(object, lease.snapshotId, sourcePolicy))] : [];
       }),
       missingSourceIds: uniqueIds.filter((id) => !byId.has(id)),
     };
@@ -226,28 +274,160 @@ export function resolveAppSourceCatalogRecords(
   }
 }
 
-/** Return a bounded candidate-card set for one App-specific planning call. */
+/**
+ * Catalog records for the blocks and Metrics an AI build named outside App
+ * Studio (an Ask `app_build` proposal or the MCP `build_dql_app` tool), so the
+ * App Studio draft can carry them as the App's data. A block is matched by its
+ * exact name; Metrics by semantic model or metric name. Certified records win
+ * when a name is declared more than once. Names that match nothing are
+ * returned in `unmatched` rather than guessed.
+ */
+export function matchAppSourceCatalogRecords(
+  projectRoot: string,
+  refs: { blockNames?: string[]; semanticModels?: string[]; metrics?: string[] },
+  sourcePolicy: AppBuildSourcePolicy = 'governed_only',
+): { snapshotId: string; items: AppSourceCatalogRecord[]; unmatched: string[] } {
+  const clean = (values: string[] | undefined) => Array.from(new Set((values ?? []).map((value) => value.trim()).filter(Boolean)));
+  const blockNames = clean(refs.blockNames);
+  const models = new Set(clean(refs.semanticModels).map((value) => value.toLowerCase()));
+  const metrics = clean(refs.metrics);
+  const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+  try {
+    const inventory = lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
+      .filter((object) => object.status !== 'deprecated')
+      .map((object) => decorateRecord(projectRoot, appSourceFromMetadata(object, lease.snapshotId, sourcePolicy)));
+    const preferCertified = (candidates: AppSourceCatalogRecord[]) => rankAppSourcesByTrust(candidates)[0];
+    const items: AppSourceCatalogRecord[] = [];
+    const unmatched: string[] = [];
+    const add = (record: AppSourceCatalogRecord | undefined, ref: string) => {
+      if (!record) unmatched.push(ref);
+      else if (!items.some((item) => item.sourceId === record.sourceId)) items.push(record);
+    };
+    for (const name of blockNames) {
+      add(preferCertified(inventory.filter((record) => record.kind === 'block' && record.name.toLowerCase() === name.toLowerCase())), name);
+    }
+    const semantic = inventory.filter((record) => record.kind === 'semantic' || Boolean(record.capabilities.semanticModelId));
+    const modelOf = (record: AppSourceCatalogRecord) => record.capabilities.semanticModelId?.toLowerCase() ?? '';
+    const lastSegment = (value: string) => value.toLowerCase().split(/[:./]/).filter(Boolean).pop() ?? value.toLowerCase();
+    for (const model of models) {
+      const byModel = semantic.filter((record) => modelOf(record) === model || lastSegment(modelOf(record)) === lastSegment(model));
+      if (byModel.length) add(preferCertified(byModel), model);
+    }
+    for (const metric of metrics) {
+      const wanted = lastSegment(metric);
+      const byMetric = semantic.filter((record) => (
+        record.capabilities.measures.some((measure) => measure.toLowerCase() === wanted)
+        || Object.entries(record.capabilities.metricCapabilities ?? {}).some(([key, capability]) => (
+          lastSegment(key) === wanted || lastSegment(capability.metricId) === wanted
+        ))
+      ));
+      // A metric already covered by a matched model adds nothing new.
+      if (byMetric.some((record) => items.some((item) => item.sourceId === record.sourceId))) continue;
+      add(preferCertified(byMetric), metric);
+    }
+    // An unmatched model name is not reported on its own: its metrics are.
+    return { snapshotId: lease.snapshotId, items, unmatched };
+  } finally {
+    lease.release();
+  }
+}
+
+/**
+ * The current catalog record behind each saved-query reference a published
+ * App page holds, so editing the App reads trust from the project as it is
+ * now (F07). A reference is a catalog source id, a block name (`blockId`) or
+ * a block file path (`ref`). Certified records win when a name is declared
+ * more than once. References that match nothing are left out.
+ */
+export function matchAppBlockSourceRefs(
+  projectRoot: string,
+  refs: string[],
+  sourcePolicy: AppBuildSourcePolicy = 'governed_only',
+): Map<string, AppSourceCatalogRecord> {
+  const wanted = Array.from(new Set(refs.map((ref) => ref.trim()).filter(Boolean)));
+  const matched = new Map<string, AppSourceCatalogRecord>();
+  if (!wanted.length) return matched;
+  const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+  try {
+    const inventory = rankAppSourcesByTrust(lease.catalog.listAllObjects({ objectTypes: [APP_SOURCE_OBJECT_TYPE] })
+      .filter((object) => object.status !== 'deprecated')
+      .map((object) => appSourceFromMetadata(object, lease.snapshotId, sourcePolicy))
+      .filter((record) => record.kind === 'block'));
+    const path = (value: string) => value.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase();
+    for (const ref of wanted) {
+      const lower = ref.toLowerCase();
+      const record = inventory.find((candidate) => candidate.sourceId === ref)
+        ?? inventory.find((candidate) => candidate.name.toLowerCase() === lower)
+        ?? inventory.find((candidate) => Boolean(candidate.sourcePath) && path(candidate.sourcePath) === path(ref))
+        ?? inventory.find((candidate) => Boolean(candidate.executionRef) && path(candidate.executionRef) === path(ref));
+      if (record) matched.set(ref, decorateRecord(projectRoot, record));
+    }
+    return matched;
+  } finally {
+    lease.release();
+  }
+}
+
+/**
+ * Return a bounded candidate-card set for one App-specific planning call.
+ *
+ * Certified data comes first, but data nobody certified is never excluded
+ * (T3: there is no per-App data rule; readers see "Not certified yet" on its
+ * tiles). A legacy `governed_only` caller still gets certified and checked
+ * data only. Within the prompt matches, and then within the fill-up rows,
+ * sources are trust-ordered (see `rankAppSourcesByTrust`).
+ */
 export function shortlistAppSources(
   projectRoot: string,
   prompt: string,
   options: { sourcePolicy?: AppBuildSourcePolicy; limit?: number; domains?: string[] } = {},
 ): AppSourceCatalogPage {
   const limit = Math.min(12, Math.max(8, Math.floor(options.limit ?? 12)));
+  const certifiedOnly = options.sourcePolicy === 'governed_only';
+  // Over-fetch when review-required rows are dropped so the shortlist still fills.
+  const fetchLimit = certifiedOnly ? 100 : limit;
+  // Checked data (design Q1: checked, not certified yet) is usable while an App is built; it blocks publishing until certified.
+  const allowed = (item: AppSourceCatalogRecord) => !certifiedOnly || item.trust === 'certified' || Boolean(item.check);
   const primary = queryAppSourceCatalog(projectRoot, {
     query: prompt,
-    limit,
+    limit: fetchLimit,
     domains: options.domains,
     sourcePolicy: options.sourcePolicy,
   });
-  if (primary.items.length >= limit) return primary;
+  const matched = rankAppSourcesByTrust(primary.items.filter(allowed).slice(0, limit));
+  if (matched.length >= limit) return { ...primary, items: matched, nextCursor: undefined };
   const fallback = queryAppSourceCatalog(projectRoot, {
-    limit,
+    limit: fetchLimit,
     domains: options.domains,
     sourcePolicy: options.sourcePolicy,
   });
-  const seen = new Set(primary.items.map((item) => item.sourceId));
-  const items = [...primary.items, ...fallback.items.filter((item) => !seen.has(item.sourceId))].slice(0, limit);
+  const seen = new Set(matched.map((item) => item.sourceId));
+  const fill = rankAppSourcesByTrust(fallback.items.filter((item) => allowed(item) && !seen.has(item.sourceId)));
+  const items = [...matched, ...fill].slice(0, limit);
   return { ...primary, items, nextCursor: undefined };
+}
+
+/**
+ * Trust tier of an App source, lower first: certified Dataset (a block with
+ * fields), certified Metrics (a semantic model), certified saved query (a
+ * plain block), then anything that needs review.
+ */
+export function appSourceTrustTier(source: Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>): number {
+  if (source.trust !== 'certified') return 3;
+  const dataset = source.capabilities.dataset;
+  const semantic = source.kind === 'semantic' || dataset?.kind === 'semantic' || Boolean(source.capabilities.semanticModelId);
+  // A saved query's result fields (design D1) keep it a saved query here.
+  if (dataset && !semantic && !dataset.result) return 0;
+  if (semantic) return 1;
+  return 2;
+}
+
+/** Stable trust re-rank: the incoming (relevance) order is kept within each tier. */
+export function rankAppSourcesByTrust<T extends Pick<AppSourceCatalogRecord, 'kind' | 'trust' | 'capabilities'>>(sources: readonly T[]): T[] {
+  return sources
+    .map((source, index) => ({ source, index, tier: appSourceTrustTier(source) }))
+    .sort((left, right) => left.tier - right.tier || left.index - right.index)
+    .map((entry) => entry.source);
 }
 
 export class AppSourceCatalogError extends Error {
@@ -267,16 +447,21 @@ function appSourceFromMetadata(
   const lifecycle = appSourceLifecycle(object.status);
   const dataset = normalizeDatasetDescriptor(payload.dataset);
   const certified = dataset ? dataset.trust === 'certified' : lifecycle === 'certified';
-  const policyAllowsPreview = certified || sourcePolicy === 'include_review_required';
   const deprecated = lifecycle === 'deprecated';
+  const check = !certified && !deprecated && dataset ? sourceCheckFromPayload(payload.check) : undefined;
+  // Checked data works in tiles while an App is edited under any data rule;
+  // publishing still needs it certified (design Q1).
+  const policyAllowsPreview = certified || Boolean(check) || sourcePolicy === 'include_review_required';
   const bindingRequired = dataset?.binding.state === 'target_required';
   const reasonCodes = deprecated
     ? ['SOURCE_DEPRECATED']
     : certified
       ? []
-      : sourcePolicy === 'governed_only'
-        ? ['ENABLE_REVIEW_REQUIRED_SOURCES']
-        : ['REVIEW_REQUIRED_SOURCE'];
+      : check
+        ? ['CHECKED_NEEDS_CERTIFYING']
+        : sourcePolicy === 'governed_only'
+          ? ['ENABLE_REVIEW_REQUIRED_SOURCES']
+          : ['REVIEW_REQUIRED_SOURCE'];
   if (bindingRequired) reasonCodes.push('CONNECT_SOURCE_TO_VERIFY');
   const sourcePath = stringValue(object.sourcePath) ?? stringValue(payload.executionRef) ?? '';
   const metricCapabilities = metricCapabilitiesFromPayload(payload.metricCapabilitiesById ?? payload.metricCapabilities);
@@ -333,8 +518,33 @@ function appSourceFromMetadata(
       projectPublish: !deprecated && certified,
       reasonCodes,
     },
+    ...(check ? { check } : {}),
     score: object.score,
     reasons: object.snippet ? [object.snippet] : [],
+  };
+}
+
+function sourceCheckFromPayload(value: unknown): AppSourceCheck | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const by = stringValue(record.by);
+  const at = stringValue(record.at);
+  if (!by || !at) return undefined;
+  const hidden = Array.isArray(record.hiddenColumns)
+    ? record.hiddenColumns.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const item = entry as Record<string, unknown>;
+      const column = stringValue(item.column);
+      const keptColumn = stringValue(item.keptColumn);
+      return column && keptColumn ? [{ column, keptColumn, reason: stringValue(item.reason) ?? '' }] : [];
+    })
+    : [];
+  return {
+    by,
+    ...(stringValue(record.name) ? { name: stringValue(record.name) } : {}),
+    at,
+    ...(stringArray(record.checks).length ? { checks: stringArray(record.checks) } : {}),
+    ...(hidden.length ? { hiddenColumns: hidden } : {}),
   };
 }
 

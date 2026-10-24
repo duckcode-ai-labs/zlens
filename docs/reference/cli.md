@@ -43,14 +43,14 @@ installation.
 
 | Command | What it does |
 | --- | --- |
-| `zlens init [dir]` | Initialize ZLens in a project (auto-detects dbt) |
+| `zlens init [dir]` | Initialize ZLens in a project. A dbt project makes a dbt project; a DuckDB file and no dbt makes a Database only project (`warehouse-first`); an empty folder leaves the choice to Guided Setup |
 | `zlens init [dir] --warehouse-first` | Initialize a project that models the database's own tables, no dbt needed (`manifestVersion: 3`, `modeling.mode: "warehouse-first"`) |
 | `zlens doctor [path]` | Run local setup checks |
 | `zlens doctor scale` | Report enterprise-scale manifest/cache/index health |
 | `zlens doctor git-hygiene` | Flag tracked local/generated files before commit |
 | `zlens validate [path]` | Validate all `.dql` files and semantic references |
 | `zlens compile [path]` | Generate project manifest (`dql-manifest.json`) |
-| `zlens verify [path]` | Verify that `dql-manifest.json` is reproducible from tracked source |
+| `zlens verify [path]` | Check that the local `dql-manifest.json` (written by `zlens compile`) still matches the source: block SQL, status and domain, plus added or removed blocks, notebooks, Apps, dashboards, metrics, dimensions and sources. Exits 1 on drift. The manifest is gitignored, so this is a local check, not a CI gate on a clean clone |
 
 `zlens doctor scale --format json` includes counts, cache freshness,
 metadata/KG index state, context-pack timing, source fingerprints, domain
@@ -88,9 +88,14 @@ local databases, data files, AI pins, saved views, and layout overrides.
 | --- | --- |
 | `zlens diff <path>` | Semantic diff of a `.dql` or `.dqlnb` against git HEAD |
 | `zlens diff <before> <after>` | Semantic diff between two files on disk |
+| `zlens diff <path> --impact` | Add downstream impact from the compiled lineage (run `zlens compile` first) |
 | `zlens diff <path> --impact --write-recertification` | Mark impacted semantic metric/dimension YAML as `pending_recertification` |
 
-Exits **1** on changes — scriptable like `git diff`.
+Without `--impact`, `zlens diff` exits **1** on any change, like `git diff
+--exit-code`. With `--impact`, it exits **1** only when a changed block
+invalidates a certified downstream item that `--write-recertification` did not
+mark for recertification; otherwise it exits 0, including when there is no
+`dql-manifest.json` to read lineage from.
 
 ### Build & preview
 
@@ -99,7 +104,7 @@ Exits **1** on changes — scriptable like `git diff`.
 | `zlens build <file.dql>` | Compile to a static HTML bundle |
 | `zlens preview <file.dql>` | Local browser preview |
 | `zlens serve [dir]` | Serve a built bundle |
-| `zlens notebook [path]` | Launch the browser-first notebook |
+| `zlens notebook [path]` | Launch the browser-first notebook. In a folder with no ZLens project it asks "No ZLens project here. Create one? [Y/n]" and creates it as `zlens init` would; `--yes` creates it without asking; without a terminal it prints the one command to run |
 
 ### Data & semantic
 
@@ -129,7 +134,8 @@ Warehouse sync and discovery flags (see
 | `zlens sync warehouse` | `agent.valueProfile.mode: "sampled"` in `dql.config.json` | Also read a few example values and the range of each column for Ask's SQL drafter (off by default; the values reach your AI provider). See [value profile](../get-started/no-dbt.md#optional-show-the-drafter-what-the-columns-hold) |
 | `zlens model discover`, `apply-discovery` | `--validate` | Check each drafted join and candidate key on the warehouse (aggregate queries only) and propose the cardinality seen |
 | `zlens model discover`, `apply-discovery` | `--query-history` | Also count joins in recent warehouse queries (Snowflake, PostgreSQL, Databricks, BigQuery); only join pairs and counts are kept |
-| `zlens model discover`, `apply-discovery` | `--domain <id>` | From the warehouse: put every drafted entity into this domain (default: one domain per schema). From dbt: the discovered domain to apply |
+| `zlens model discover`, `apply-discovery` | `--include-staging` | Also draft staging copies (`stg_*` tables, or tables in a `staging`, `stg` or `raw` schema) that a final table already holds; they are left out by default |
+| `zlens model discover`, `apply-discovery` | `--domain <id>` | From the warehouse: put every drafted entity into this domain (default: one domain named after the database file or catalog, such as `jaffle_shop`, for schemas named for a layer or environment like `dev`, `main` or `public`; a schema named for a business area, such as `sales`, gets its own). From dbt: the discovered domain to apply |
 | `zlens model discover`, `apply-discovery` | `--source warehouse\|dbt` | In a hybrid project, choose what to draft from (default: dbt when a dbt manifest exists) |
 
 ```bash
@@ -156,11 +162,15 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 
 | Command | What it does |
 | --- | --- |
-| `zlens app new <name>` | Create a local App package |
-| `zlens app generate "<prompt>"` | Generate a governed App draft from certified blocks plus review placeholders |
+| `zlens app new <id> --domain <domain> [--owner <user>]` | Create a local App draft. `--domain` is required; `--owner` defaults to `<your user name>@local`. The draft is stored in `.dql/local/apps.sqlite` and no App files are written: open **Apps** in `zlens notebook`, continue the draft under **Not published yet**, and publish it to write `apps/<id>/` |
+| `zlens app generate "<prompt>"` | Create an AI-assisted local App draft from certified blocks plus review placeholders. Like `app new`, it writes no App files until you publish the draft |
 | `zlens app generate "<prompt>" --ai-layout` | Store richer GenUI layout metadata for dynamic visualization/layout decisions |
 | `zlens app ls\|show\|reindex` | List, inspect, or reindex local Apps |
 | `zlens app build [path]` | Build every App in the project at `path` (default `.`) into `dql-manifest.json`. It takes a project path, not an App id: `zlens app build .` |
+| `zlens app check <id> [--format json]` | Run the checks publishing runs on an App already in the project: each tile's source, whether it passes, and what stops publishing. Exits 1 when the App is not ready to publish |
+| `zlens app diff [base] [head] [--html <file>] [--markdown <file>] [--check] [--format json]` | Review what a change does to every App page: compares `dql.app.json` and `.dqld` files between two git revisions, or a revision and the working tree (default: `HEAD` against the working tree). Names the tiles added, removed and changed, flags changes that can move numbers, lists schedule and alert changes, and re-checks each changed page. Runs no query, so it works in CI |
+| `zlens app verify <snapshot.html> [--trust-key <public.pem>] [--format json]` | Check a signed App snapshot offline: the file is unchanged since it was signed and the signature matches. With `--trust-key`, or inside the project that signed it, it also checks the signing key. Exits 1 when a check fails |
+| `zlens app key [--format json]` | Print this project's snapshot signing public key, to share with people who verify its snapshots |
 | `zlens promote notebook <path> --to shared` | Strip local run/UI state and mark a notebook as shared source |
 | `zlens promote app <app-id> --to shared` | Mark an App manifest as shared/reviewed source |
 | `zlens promote dashboard <app-id>/<dashboard-id> --to shared` | Strip AI pins/local state and mark a dashboard as shared source |
@@ -189,8 +199,10 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `zlens schedule status [path]` | Show local scheduler status |
 | `zlens schedule stop [path]` | Stop the local scheduler |
 | `zlens slack serve [path]` | Run the Slack slash-command bot through the governed answer loop |
-| `zlens eval [path]` | Replay block examples and `eval/*.yaml` through the router |
-| `zlens agent eval <file.yml>` | Evaluate certified/follow-up/refusal behavior, optional tools, SQL execution, and judging |
+| `zlens eval [path]` | Replay block examples and `eval/*.yaml` through the router. Builds the manifest from source in memory and reads no warehouse or model, so it runs on a clean clone |
+| `zlens eval [path] --init` | Write a starter `eval/golden.yaml` (commented examples for the Jaffle Shop sample's blocks) |
+| `zlens ci init [path] [--force]` | Write `.github/workflows/zlens-eval.yml` at the git root: `zlens eval . --min-route-accuracy 1 --min-refusal 1` on every pull request, with the CLI pinned to this version. See [CI with zlens eval](../tutorials/05-ci-and-verify.md) |
+| `zlens agent eval <file.yml>` | Evaluate certified/follow-up/refusal behavior, optional tools, SQL execution, and judging, through a running workbench (`zlens notebook`) |
 
 ### Migration
 
@@ -216,6 +228,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--verbose` | Detailed output |
 | `--open` / `--no-open` | Auto-open the browser on `preview`/`serve` |
 | `--no-schedules` | `zlens notebook` does not run the project's App schedules |
+| `--yes`, `-y` | `zlens notebook` creates a project in a folder that has none, without asking |
 | `--check` | For `fmt`: non-zero exit if changes needed |
 | `--input <path>` | Source for scaffold-style migrations |
 | `--out-dir <path>` | Output directory for `build` |
@@ -229,8 +242,8 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--to shared` | Target for `zlens promote` |
 | `--port <n>` | Preferred local port for `preview`/`serve` |
 | `--chart <type>` | Primary chart type for `new` scaffolds |
-| `--domain <name>` | Domain for new block scaffolds |
-| `--owner <name>` | Owner for new block scaffolds |
+| `--domain <name>` | Domain for new block scaffolds; required for `zlens app new` |
+| `--owner <name>` | Owner for new block scaffolds and `zlens app new` |
 | `--purpose <text>` | Governed purpose for an authorized cross-domain import |
 | `--pattern <name>` | Block scaffold pattern, such as `metric_wrapper`, `entity_profile`, `entity_rollup`, `ranking`, `trend`, `bridge`, `drilldown`, or `replacement` |
 | `--template <name>` | Alias for `--pattern` on scaffold commands |
@@ -248,7 +261,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--ai-layout` | Store dynamic GenUI layout metadata for `zlens app generate` |
 | `--provider <name>` | Select agent provider where supported |
 | `--user <id>` | Attribute agent memory or feedback to a local user id |
-| `--runtime-url <url>` / `--runtime <url>` | Select the local agent runtime endpoint |
+| `--runtime-url <url>` / `--runtime <url>` | Select the local agent runtime endpoint; for `zlens agent eval`, the workbench to drive (default `http://127.0.0.1:3474`, or `ZLENS_RUNTIME_URL`) |
 | `--thread <id>` | Continue a persisted `zlens agent ask` conversation |
 | `--reasoning-effort low\|medium\|high` | Select supported provider reasoning effort |
 | `--analysis-depth quick\|deep` | Control the agent context budget |
@@ -257,18 +270,39 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--min-route-accuracy <0..1>` | For `zlens eval`: minimum expected-route accuracy |
 | `--min-refusal <0..1>` | For `zlens eval`: minimum refusal recall |
 | `--min-answer-rate <0..1>` | For `zlens eval`: fail when answerable cases route to missing context below this non-refusal rate |
+| `--min-candidate-recall <0..1>` | For `zlens eval`: minimum share of cases whose expected block was retrieved at all (separates a retrieval miss from a routing miss) |
+| `--no-examples` | For `zlens eval`: score YAML cases without manifest examples |
+| `--init` | For `zlens eval`: write a starter `eval/golden.yaml`; never overwrites one |
+| `--via runtime` | For `zlens agent eval`: drive a running workbench. The default and only driver; any other value is an error |
+| `--cassette record\|replay\|live` | For `zlens agent eval`: the cassette mode the workbench must be running in. The workbench makes the provider calls, and it replays them only when it was started with `ZLENS_EVAL_CASSETTE_DIR` (plus `ZLENS_EVAL_CASSETTE_MODE`, which is `replay` unless set to `record` or `live`). When its `/api/health` reports another mode, or none, the eval stops before any case runs and prints the command to start it. The flag also sets the mode for this process's own `--judge` calls |
+| `--judge` | For `zlens agent eval`: score each answer with the LLM judge; needs a provider |
+| `--min-judge-pass <0..1>` | For `zlens agent eval`: minimum LLM-judge pass rate (needs `--judge`) |
+| `--max-false-refusal <0..1>` | For `zlens agent eval`: maximum share of answerable cases that refused |
+| `--min-refusal-recall <0..1>` | For `zlens agent eval`: minimum share of must-refuse cases that refused |
 | `--min-tool-requirement <0..1>` | For `zlens agent eval`: fail when cases with `expected.minToolCalls` fall below this pass rate |
 | `--min-execution-match <0..1>` | For `zlens agent eval`: minimum expected-row execution match |
-| `--min-judge-pass <0..1>` | For `zlens agent eval`: minimum LLM-judge pass rate |
+| `--min-grounded-narration <0..1>` | For `zlens agent eval`: minimum share of attempted verified-fact narrations that passed their fact check |
 | `--max-wrong-certified <n>` | For `zlens agent eval`: maximum wrongly certified answers |
-| `--no-examples` | For `zlens eval`: score YAML cases without manifest examples |
+| `--max-provider-dispatches <n>` | For `zlens agent eval`: maximum provider round trips for the worst question |
+| `--max-latency-p95-ms <ms>` | For `zlens agent eval`: maximum p95 latency for answerable cases |
+| `--case-timeout-ms <ms>` | For `zlens agent eval`: how long one question may take before it is recorded as failed |
+| `--trust-key <public.pem>` | For `zlens app verify`: require the snapshot to be signed by this public key |
+| `--html <file>` | For `zlens app diff`: also write an HTML report |
+| `--markdown <file>` | For `zlens app diff`: also write a pull request comment in Markdown |
+| `--check` (with `zlens app diff`) | Exit 1 when a changed App file has problems |
 | `--impact` | Include downstream impact in `zlens diff` |
 | `--write-recertification` | Mark impacted semantic YAML pending recertification |
+
+Every `<0..1>` flag takes a share between 0 and 1 (90% is `0.9`). A value
+outside that range is an error and the command does not run. In `zlens eval`,
+a threshold that no case measures (for example `--min-refusal` with no
+`expectRefuse` case) is reported as n/a and not applied.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Generic failure *or* `zlens diff`/`zlens fmt --check` found differences |
-| `2` | Usage / argument error |
+| `1` | Any failure: an error, an invalid flag value, a missed `eval`/`agent eval` threshold, drift found by `zlens verify`, an App that is not ready to publish in `zlens app check`, a failed `zlens app verify`, problems found by `zlens app diff --check`, or differences found by `zlens diff` (see its `--impact` rule above), `zlens fmt --check` or `zlens migrate format --check` |
+
+There is no separate exit code for usage errors.

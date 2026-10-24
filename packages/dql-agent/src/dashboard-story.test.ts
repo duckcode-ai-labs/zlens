@@ -159,6 +159,44 @@ describe('dashboard business story', () => {
     expect(result.story.caveat).toContain('Season start, season end and top n do not narrow any tile summarized here');
   });
 
+  it('describes tiles narrowed by different filters with their own scope, in labels and readable dates (review phase 2)', () => {
+    const month = { start: '2025-01-01', end: '2025-06-30' };
+    const result = buildDeterministicDashboardStory({
+      goal: 'Sales manager review',
+      filters: { month, customer_name: 'Angela Moyer' },
+      filterLabels: { month: 'Month', customer_name: 'Customer Name' },
+      tiles: [
+        {
+          tileId: 'revenue', title: 'Gross Revenue', status: 'ok', trustState: 'certified',
+          // The customer filter does not reach the revenue KPI.
+          filters: { month },
+          result: { columns: ['gross_revenue'], rows: [{ gross_revenue: 395828.89 }] },
+        },
+        {
+          tileId: 'customers', title: 'Top customers', status: 'ok', trustState: 'certified',
+          filters: { customer_name: 'Angela Moyer' },
+          result: { columns: ['customer_name', 'lifetime_spend'], rows: [{ customer_name: 'Angela Moyer', lifetime_spend: 1200 }] },
+        },
+      ],
+    });
+    const text = [result.story.headline, ...result.story.paragraphs, result.story.caveat ?? ''].join(' ');
+    expect(text).not.toContain('[object Object]');
+    expect(text).not.toMatch(/None of the tiles|no tile reflects/);
+    expect(result.story.paragraphs[0]).toContain('For Month 1 Jan 2025 – 30 Jun 2025 (not filtered by Customer Name), the clearest signal is Gross Revenue');
+    expect(result.story.paragraphs[0]).toContain('For Customer Name Angela Moyer (not filtered by Month)');
+    expect(result.story.claims.map((claim) => claim.factIds.every((id) => id.startsWith(claim.factIds[0]!.split(':')[0]!)))).toEqual([true, true]);
+    expect(validateDashboardStoryBrief(result.story, result.facts)).toEqual({ ok: true, errors: [] });
+  });
+
+  it('reads a one-sided date range as "from" and never as an object', () => {
+    const result = buildDeterministicDashboardStory({
+      goal: 'Revenue', filters: { month: { start: '2025-03-01', end: '' } }, filterLabels: { month: 'Month' },
+      tiles: [{ tileId: 'kpi', title: 'Revenue', status: 'ok', trustState: 'certified', filters: { month: { start: '2025-03-01', end: '' } }, result: { columns: ['revenue'], rows: [{ revenue: 10 }] } }],
+    });
+    expect(result.story.paragraphs[0]).toMatch(/^For Month from 1 Mar 2025, /);
+    expect(validateDashboardStoryBrief(result.story, result.facts).ok).toBe(true);
+  });
+
   it('narrates only tiles the page filters reached and names the filter that reached none (F6)', () => {
     const result = buildDeterministicDashboardStory({
       goal: 'NBA player performance',

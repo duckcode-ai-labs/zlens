@@ -88,13 +88,15 @@ export async function startNotebookServer(input: {
   env?: NodeJS.ProcessEnv;
   /** false leaves the first-run Guided Setup open, for journeys that walk it. */
   acknowledgeSetup?: boolean;
+  /** More `zlens notebook` arguments, e.g. `--yes` to create a project in a bare folder. */
+  args?: string[];
 }): Promise<NotebookServer> {
   const port = await freePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   mkdirSync(input.workDir, { recursive: true });
   const logPath = join(input.workDir, 'server.log');
   const logFd = openSync(logPath, 'w');
-  const server = spawn('node', [cliEntry, 'notebook', input.projectDir, '--port', String(port), '--no-open'], {
+  const server = spawn('node', [cliEntry, 'notebook', input.projectDir, '--port', String(port), '--no-open', ...(input.args ?? [])], {
     cwd: input.workDir,
     stdio: ['ignore', logFd, logFd],
     env: {

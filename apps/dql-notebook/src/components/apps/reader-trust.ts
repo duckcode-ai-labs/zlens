@@ -8,14 +8,16 @@ import {
   type ReaderTrustItem,
   type ReaderTrustTile,
 } from '@zlens/core/apps/reader-trust';
+import { formatBusinessLabel } from './app-text';
+import { formatDashboardFilterValue } from './dashboard-filter-words';
 
 /**
  * The reader's trust vocabulary lives in dql-core (RFC 0008 step 6, shared
  * with signed snapshots and digests in step 10). This module adds what only
  * the reader needs: freshness and the receipt behind a tile.
  */
-export { READER_TRUST_LABELS, readerTrustCounts, readerTrustSummary } from '@zlens/core/apps/reader-trust';
-export type { ReaderTrust, ReaderTrustState } from '@zlens/core/apps/reader-trust';
+export { READER_TRUST_LABELS, certifiedByLabel, plainCertificationChecks, readerTrustCounts, readerTrustSummary } from '@zlens/core/apps/reader-trust';
+export type { CertificationByline, ReaderTrust, ReaderTrustState } from '@zlens/core/apps/reader-trust';
 
 type LayoutItem = DashboardDocumentResponse['dashboard']['layout']['items'][number];
 type RunTile = DashboardRunResponse['tiles'][number];
@@ -56,6 +58,18 @@ export interface ReceiptRow {
   value: string;
   /** Fingerprints and ids are shown in a monospace face and can be copied. */
   code?: boolean;
+  /**
+   * Ids, hashes, file paths and fingerprints: shown only under the
+   * collapsed **Technical details** toggle (D6).
+   */
+  technical?: boolean;
+  /** Several items (the checks that passed), shown as a list. */
+  list?: string[];
+}
+
+/** The rows a person reads first, and the ones kept under Technical details. */
+export function splitTechnicalRows(rows: ReceiptRow[]): { plain: ReceiptRow[]; technical: ReceiptRow[] } {
+  return { plain: rows.filter((row) => !row.technical), technical: rows.filter((row) => row.technical) };
 }
 
 const short = (value: string | undefined | null) => (value ? (value.length > 16 ? `${value.slice(0, 12)}…` : value) : undefined);
@@ -72,22 +86,29 @@ export function readerTileReceipt(
   ranAtMs: number | undefined,
 ): ReceiptRow[] {
   const rows: ReceiptRow[] = [];
-  const push = (label: string, value: string | undefined | null, code = false) => {
-    if (value !== undefined && value !== null && String(value).trim() !== '') rows.push({ label, value: String(value), ...(code ? { code } : {}) });
+  const push = (label: string, value: string | undefined | null, code = false, technical = code) => {
+    if (value !== undefined && value !== null && String(value).trim() !== '') rows.push({ label, value: String(value), ...(code ? { code } : {}), ...(technical ? { technical } : {}) });
   };
   const source = tile?.artifact?.name ?? tile?.citation?.name ?? tile?.blockPath ?? item.block?.blockId ?? tile?.dataset?.sourceId;
   push('Source', source);
-  push('Source file', tile?.artifact?.sourcePath ?? tile?.citation?.path ?? tile?.blockPath);
+  const trust = readerTileTrust(item, tile);
+  // Who certified it and when, and the checks that passed (D5).
+  if (trust?.state === 'certified' && trust.byline && trust.byline !== 'Certified') push('Certified', trust.byline);
+  if (trust?.state === 'certified' && trust.checks?.length) rows.push({ label: 'Checks passed', value: trust.checks.join(' · '), list: trust.checks });
+  push('Source file', tile?.artifact?.sourcePath ?? tile?.citation?.path ?? tile?.blockPath, false, true);
   push('Owner', item.owner);
+  // How related tables were joined, in plain words (design D2).
+  const joins = (tile?.dataset as { joins?: Array<{ sentence?: string }> } | undefined)?.joins ?? [];
+  if (joins.length) rows.push({ label: 'Joined', value: joins.map((join) => join.sentence).join(' · '), list: joins.flatMap((join) => (join.sentence ? [join.sentence] : [])) });
   // Every calculation's expression, so a reader can see how a number was made.
   push('Calculations', calculationWords(item.query as TileQuery | undefined).join(' · ') || undefined);
   const applied = tile?.filters?.applied ?? [];
   push('Filters', applied.length
-    ? applied.map((filter) => `${filter.field ?? filter.filter ?? 'filter'} ${filter.op && filter.op !== '=' && filter.op !== 'in' ? `${filter.op} ` : ''}${formatFilterValue(filter.values)}`).join(' · ')
+    ? applied.map((filter) => `${formatBusinessLabel(filter.field ?? filter.filter ?? 'filter')} ${filterOperatorWords(filter.op)}${formatFilterValue(filter.values, filter.op)}`).join(' · ')
     : 'None applied');
   const rowCount = tile?.result?.rowCount ?? tile?.result?.rows?.length;
   push('Rows', rowCount !== undefined ? rowCount.toLocaleString() : undefined);
-  push('Ran', ranAtMs !== undefined ? new Date(ranAtMs).toLocaleString() : undefined);
+  push('Last refreshed', ranAtMs !== undefined ? new Date(ranAtMs).toLocaleString() : undefined);
   push('Cached at', tile?.dataset?.cacheDelivery?.cachedAt ? new Date(tile.dataset.cacheDelivery.cachedAt).toLocaleString() : undefined);
   push('Result fingerprint', short(tile?.result?.resultFingerprint ?? tile?.dataset?.executionProvenance?.resultFingerprint ?? (tile as { resultFingerprint?: string } | undefined)?.resultFingerprint), true);
   push('SQL fingerprint', short(tile?.dataset?.executionProvenance?.executedSqlFingerprint ?? (tile as { compiledSqlFingerprint?: string } | undefined)?.compiledSqlFingerprint), true);
@@ -106,8 +127,21 @@ function calculationWords(query: TileQuery | undefined): string[] {
   });
 }
 
-function formatFilterValue(value: unknown): string {
-  if (Array.isArray(value)) return value.map(String).join(', ');
-  if (value && typeof value === 'object') return JSON.stringify(value);
-  return String(value ?? 'any');
+const OPERATOR_WORDS: Record<string, string> = {
+  gte: 'from ', '>=': 'from ', lte: 'until ', '<=': 'until ', gt: 'after ', '>': 'after ', lt: 'before ', '<': 'before ',
+  neq: 'not ', '!=': 'not ', not_in: 'not ', contains: 'contains ',
+};
+
+/** `gte` reads "from", `lt` "before"; equality and lists read as the value alone. */
+function filterOperatorWords(op: string | undefined): string {
+  if (!op || ['=', 'eq', 'in', 'between'].includes(op)) return '';
+  return OPERATOR_WORDS[op] ?? `${op} `;
+}
+
+function formatFilterValue(value: unknown, op?: string): string {
+  // A closed range applied as `between [start, end]` reads as one range.
+  if (Array.isArray(value) && value.length === 2 && /^between$/i.test(op ?? '')) {
+    return formatDashboardFilterValue({ start: value[0], end: value[1] }) ?? 'any';
+  }
+  return formatDashboardFilterValue(value) ?? 'any';
 }

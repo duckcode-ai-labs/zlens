@@ -183,6 +183,17 @@ describe('parseAppDocument', () => {
   });
 });
 
+describe('who certified an App (D5)', () => {
+  it('keeps certifiedBy and certifiedAt only while the App is certified', () => {
+    const certified = parseAppDocument(JSON.stringify({ ...minimalApp, lifecycle: 'certified', certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' })).document!;
+    expect(certified).toMatchObject({ certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' });
+    const review = parseAppDocument(JSON.stringify({ ...minimalApp, lifecycle: 'review', certifiedBy: 'Maria', certifiedAt: '2026-10-21T09:00:00.000Z' })).document!;
+    expect(review).not.toHaveProperty('certifiedBy');
+    expect(review).not.toHaveProperty('certifiedAt');
+    expect(parseAppDocument(JSON.stringify({ ...minimalApp, lifecycle: 'certified', certifiedBy: 7 })).errors[0]?.message).toMatch(/certifiedBy/);
+  });
+});
+
 describe('resolveRlsContext', () => {
   it('substitutes member attributes for matching role bindings', () => {
     const app: AppDocument = {

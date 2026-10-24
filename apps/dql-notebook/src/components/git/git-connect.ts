@@ -27,3 +27,35 @@ export function remoteUrlInputProblem(raw: string): string | null {
 export function isNoRemoteFailure(result: { ok: boolean; code?: string } | null | undefined): boolean {
   return Boolean(result && !result.ok && result.code === 'no_remote');
 }
+
+/** How often the Git page checks the remote while it is open (D3). */
+export const BACKGROUND_FETCH_INTERVAL_MS = 5 * 60 * 1000;
+
+export type RemoteCheck = { state: 'unknown' } | { state: 'ok' } | { state: 'unreachable'; message: string };
+
+/** The header's one-line sync summary: what is new on the remote and what is not sent yet. */
+export function syncSummary(input: { hasRemote: boolean; ahead: number; behind: number; check: RemoteCheck; updating?: boolean }): { text: string; tone: 'muted' | 'ok' | 'warning'; title?: string } {
+  if (input.updating) return { text: 'Update waiting for your choices', tone: 'warning', title: 'Get updates stopped because some files changed on both sides.' };
+  if (!input.hasRemote) return { text: 'no remote', tone: 'muted', title: 'No Git remote is configured. Changes stay on this computer.' };
+  if (input.check.state === 'unreachable') return { text: "Can't reach the remote", tone: 'warning', title: input.check.message };
+  const parts: string[] = [];
+  if (input.behind > 0) parts.push(`${input.behind} new on the remote`);
+  if (input.ahead > 0) parts.push(`${input.ahead} of yours not sent`);
+  if (parts.length > 0) return { text: parts.join(' · '), tone: input.behind > 0 ? 'warning' : 'muted' };
+  return input.check.state === 'ok' ? { text: 'Up to date', tone: 'ok' } : { text: 'Checking the remote…', tone: 'muted' };
+}
+
+/**
+ * D4: sending from the base branch offers a new branch first. Only when the
+ * remote already has that base branch: the first send to an empty repository
+ * is what creates it.
+ */
+export function shouldOfferSendAsBranch(input: { branch: string | null; baseBranch?: string; baseOnRemote?: boolean }): boolean {
+  if (!input.branch || input.branch === 'HEAD' || !input.baseOnRemote) return false;
+  return input.branch === (input.baseBranch || 'main') || input.branch === 'main' || input.branch === 'master';
+}
+
+/** True when a send was refused because origin is the ZLens sample (D5). */
+export function isSampleRemoteFailure(result: { ok: boolean; code?: string } | null | undefined): boolean {
+  return Boolean(result && !result.ok && result.code === 'sample_remote');
+}

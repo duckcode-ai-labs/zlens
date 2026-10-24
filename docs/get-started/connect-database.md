@@ -80,9 +80,15 @@ Every driver's fields are listed in the [Connectors reference](../reference/conn
 ## Choose what ZLens reads: Metadata scope
 
 After a passing test, **Metadata scope** appears under the form. It decides
-which schemas ZLens reads. ZLens copies their table and column names, never
-their rows, into a local index so Ask, notebook and Block Studio searches
-stay fast. What else the scope does depends on how the project models data:
+which schemas ZLens reads. ZLens copies their table and column names into a
+local index so Ask, notebook and saved query searches stay fast. What
+happens to your rows: ZLens reads table structure and counts rows to check
+keys. Sample rows are shown only to you, on this computer. Nothing is sent
+anywhere unless you turn on
+[value profiles](no-dbt.md#optional-show-the-drafter-what-the-columns-hold)
+for AI answers; when they are on, Setup says *Value profiles are on: a few
+column values are sent to your AI provider*. What else the scope does
+depends on how the project models data:
 
 - **With dbt** (`dbt-first`), the dbt project already says which tables
   matter. The scope is optional; use it only to add schemas dbt does not
@@ -114,6 +120,18 @@ catalog · 13 tables and views with their keys and comments**. A failed or
 empty refresh keeps the previous index. **Refresh metadata** rebuilds it
 later.
 
+In **Guided Setup** the same section is one question, **Which schemas should
+ZLens read?** (Database only and Both). Setup lists the schemas as soon as the
+connection test passes; tick them and **Apply and synchronize**, and Setup
+says what it read (*Read 13 tables (86 columns)*). Schemas named `staging`,
+`stg` or `raw` wait behind **Show staging tables** when the database has
+other schemas; a ticked one always shows. Index mode,
+the typed list, the index details and **Refresh metadata** are under
+**Advanced**, closed. With a dbt project the whole section is under
+**Advanced**, since dbt already says which tables matter, and so is
+**Import from a dbt profile**. Database only never shows the dbt profiles
+from your home folder.
+
 The scope is saved in `dql.config.json` under `metadataScopes`. The terminal
 equivalent is:
 
@@ -125,8 +143,12 @@ zlens sync warehouse --schemas sales,finance
 schemas**; `zlens sync warehouse` with no flags syncs the saved selection
 again and lists what changed since the last sync.
 
-Next, without dbt: **Modeling → Draft from warehouse** drafts entities and
-joins from what you synced, for you to review and certify. See
+Next, without dbt: **Draft my models** in Guided Setup, or **Modeling →
+Draft from warehouse**, drafts entities and joins from what you synced, for
+you to review and certify. The first Domain is named after the database
+(`jaffle_shop.duckdb` gives **Jaffle shop**), staging copies of a final
+table are left out, and the drafts are kept until you save or discard them.
+See [No dbt? Start from your database](no-dbt.md#or-use-guided-setup) and
 [Modeling and Domain Packages](../datalex-and-dql.md#warehouse-first-model-your-database-without-dbt).
 
 ## Check from the terminal

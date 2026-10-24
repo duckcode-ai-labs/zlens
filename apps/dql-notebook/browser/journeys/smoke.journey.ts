@@ -29,7 +29,7 @@ test('opens the app and the runtime reports healthy', async ({ page, request }) 
   expect(health.ok()).toBe(true);
   expect((await health.json()).status).toBe('ok');
   await expect(page.getByRole('button', { name: 'Apps', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Blocks', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Saved queries', exact: true })).toBeVisible();
 });
 
 test('theme choice sets data-theme, persists dql-theme, and survives a reload', async ({ page }) => {
@@ -57,10 +57,10 @@ test('opens a notebook and runs its cell against the seeded warehouse', async ({
   await expect(page.getByText('smoke-true')).toBeVisible();
 });
 
-test('Blocks lists the certified blocks', async ({ page }) => {
-  await page.getByRole('button', { name: 'Blocks', exact: true }).first().click();
+test('Saved queries lists the certified saved queries', async ({ page }) => {
+  await page.getByRole('button', { name: 'Saved queries', exact: true }).first().click();
   // Blocks are grouped by domain; the fixture's three blocks sit under "orders".
-  await expect(page.getByText(/3 blocks/)).toBeVisible();
+  await expect(page.getByText(/3 saved queries/)).toBeVisible();
   await page.getByRole('button', { name: /^orders\s*\d+$/ }).click();
   await expect(page.getByText('top_customers').first()).toBeVisible();
 });
@@ -85,10 +85,12 @@ test('an App viewer filter narrows the tile, shows a chip, and clears back to th
   await expect(page.getByText('Showing 1–3 of 3 rows')).toBeVisible({ timeout: 30_000 });
 
   await page.getByRole('combobox', { name: 'Filter this page by' }).selectOption('customer_name');
-  const value = page.getByRole('combobox', { name: 'Customer Name value' });
-  const firstCustomer = await value.locator('option').nth(1).getAttribute('value');
+  // The values come from the server, searchable (Codex F02), not a sample of the tile's rows.
+  await page.getByRole('button', { name: 'Customer Name: choose a value' }).click();
+  const firstOption = page.getByRole('listbox', { name: 'Customer Name' }).getByRole('option').first();
+  const firstCustomer = (await firstOption.innerText()).trim();
   expect(firstCustomer).toBeTruthy();
-  await value.selectOption(firstCustomer!);
+  await firstOption.click();
   await page.getByRole('button', { name: 'Apply', exact: true }).click();
 
   const chip = page.getByTestId('app-viewer-filter-chip');

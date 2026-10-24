@@ -81,13 +81,17 @@ npm exec -- zlens sync dbt --watch
 npm run notebook
 ```
 
-In Guided Setup:
+Guided Setup opens on **Open an existing ZLens project**: `dql.config.json`
+names your dbt project and `npm run sync` built it.
 
-1. On **Connect your dbt project**, click **Preview**, then **Apply project**.
-   This turns on the dbt-first features, such as browsing dbt models in the
-   notebook's **Database** tab.
-2. On **Connect your database**, your dbt profile is listed under
-   **dbt profiles**. Click **Import & test**.
+1. Click **Continue to credentials**.
+2. On **Check the connection**, open **Import from a dbt profile**; your dbt
+   profile is listed under **dbt profiles**. Click **Import & test**.
+   **Refresh dbt data** reads the dbt project again; you need it only when dbt
+   changed since `npm run sync`.
+
+If the manifest is not built yet, Setup opens on **dbt project** instead: on
+**Connect your dbt project**, click **Preview**, then **Apply project**.
 
 You can do both later in **Settings → Project & dbt** and
 **Settings → Database**. See [Connect a database](connect-database.md) for other
@@ -97,7 +101,7 @@ databases and for drivers.
 
 - `npm run doctor` passes its checks.
 - In **Notebooks**, the **Database** tab lists your dbt models.
-- In **Lineage**, picking a block shows the dbt models it reads.
+- In **Lineage**, picking a saved query shows the dbt models it reads.
 
 ## dbt semantic metrics
 

@@ -31,6 +31,7 @@ import {
   boundedAgentMeaningSignal,
   applyDashboardFiltersToBlockExecution,
   dashboardSemanticFiltersForTile,
+  dashboardTileFilterReport,
   collectDashboardFilterOptions,
   buildAgentPreviewSql,
   buildAppCopilotResearchAgentRequest,
@@ -104,6 +105,7 @@ import {
   getConnectorInstallStatuses,
   assertConnectionNodeCompatibility,
   ensureConnectorInstalledForStartup,
+  connectorInstallBlockedReason,
   loadProjectConfig,
   isAgentValueProbeColumn,
   markBlockStudioSourceReusable,
@@ -148,6 +150,7 @@ import {
   validateBlockStudioSource,
   validateConnectionForTest,
 } from './local-runtime.js';
+import { dashboardValuesForTile } from './dashboard-tile-filters.js';
 import { Certifier, ENTERPRISE_RULES } from '@zlens/governance';
 import {
   getActiveProvider,
@@ -1187,10 +1190,36 @@ describe('formatLocalQueryRuntimeError', () => {
       new Error("Cannot find module '/tmp/duckdb/lib/binding/duckdb.node'"),
     );
 
-    expect(message).toContain('DuckDB native bindings could not be loaded');
-    expect(message).toContain(`Current Node.js runtime: ${process.versions.node}`);
-    expect(message).toContain('Node 18, 20, or 22');
-    expect(message).toContain('pnpm install');
+    const realVersions = process.versions;
+    Object.defineProperty(process, 'versions', { value: { ...realVersions, node: '24.15.0' }, configurable: true, enumerable: true });
+    try {
+      const onSupportedNode = formatLocalQueryRuntimeError(
+        { driver: 'file', filepath: ':memory:' },
+        new Error("Cannot find module '/tmp/duckdb/lib/binding/duckdb.node'"),
+      );
+      expect(onSupportedNode).toContain('DuckDB native bindings could not be loaded');
+      expect(onSupportedNode).toContain('Current Node.js runtime: 24.15.0');
+      expect(onSupportedNode).toContain('Node 24, 22, or 20');
+      expect(onSupportedNode).toContain('pnpm install');
+    } finally {
+      Object.defineProperty(process, 'versions', { value: realVersions, configurable: true, enumerable: true });
+    }
+    expect(message).toContain('Local query runtime is unavailable for driver "file"');
+  });
+
+  it('names the Node to use when DuckDB has no prebuilt binary for this one', () => {
+    const realVersions = process.versions;
+    Object.defineProperty(process, 'versions', { value: { ...realVersions, node: '26.12.0' }, configurable: true, enumerable: true });
+    try {
+      const message = formatLocalQueryRuntimeError(
+        { driver: 'duckdb', filepath: ':memory:' },
+        new Error("Cannot find module '/tmp/duckdb/lib/binding/duckdb.node'"),
+      );
+      expect(message).toContain("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+      expect(message).not.toContain('rerun "pnpm install"');
+    } finally {
+      Object.defineProperty(process, 'versions', { value: realVersions, configurable: true, enumerable: true });
+    }
   });
 });
 
@@ -1877,7 +1906,7 @@ describe('uniform DQL artifact parameter invocation API (PRD-001, CTX-001, AGT-0
       const parameterOptionsResponse = await fetch(`${base}/api/dashboard/filter-options?block=${encodeURIComponent('Runtime Parameter')}&column=category`);
       expect(parameterOptionsResponse.status).toBe(400);
       await expect(parameterOptionsResponse.json()).resolves.toMatchObject({
-        error: '"category" is not a declared output of this block',
+        error: '"category" is not a declared output of this saved query',
       });
       expect(executeQuery).not.toHaveBeenCalled();
 
@@ -2657,7 +2686,7 @@ describe('dbt-first onboarding runtime API', () => {
       }],
       metrics: [
         { name: 'total_order_revenue', type: 'simple', type_params: { measure: { name: 'order_revenue' } } },
-        { name: 'revenue_growth', type: 'derived', type_params: { expr: 'total_order_revenue', metrics: [{ name: 'total_order_revenue' }] } },
+        { name: 'revenue_growth', type: 'derived', type_params: { expr: 'total_order_revenue - prior_revenue', metrics: [{ name: 'total_order_revenue' }, { name: 'total_order_revenue', alias: 'prior_revenue', offset_window: '1 month' }] } },
       ],
     }));
     let server: Server | undefined;
@@ -5501,6 +5530,45 @@ LIMIT \${top_n}
     }
   });
 
+  it('never saves a block with an empty name', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-block-empty-name-'));
+    tempDirs.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), '{}\n');
+    let server: Server | undefined;
+    try {
+      const port = await startLocalServer({
+        rootDir: projectRoot,
+        projectRoot,
+        executor: {} as QueryExecutor,
+        connection: { driver: 'file' },
+        preferredPort: 0,
+        captureServer: (created) => { server = created; },
+      });
+      const cleared = `block "" {
+  type = "custom"
+  status = "draft"
+  query = """SELECT 1 AS value"""
+}`;
+      const save = (name: string) => fetch(`http://127.0.0.1:${port}/api/block-studio/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ source: cleared, metadata: { name, domain: 'finance', owner: 'analytics' } }),
+      });
+      const blank = await save('   ');
+      expect(blank.status).toBe(400);
+      expect((await blank.json() as { error: string }).error).toMatch(/A name is required/);
+      expect(existsSync(join(projectRoot, 'blocks'))).toBe(false);
+
+      const named = await save('order_value');
+      expect(named.status).toBe(200);
+      const saved = readFileSync(join(projectRoot, (await named.json() as { path: string }).path), 'utf-8');
+      expect(saved).toContain('block "order_value" {');
+      expect(saved).not.toContain('block ""');
+    } finally {
+      await new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve());
+    }
+  });
+
   it('stamps App-source reuse only when a generated draft is explicitly saved or added', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-block-reusable-save-'));
     tempDirs.push(projectRoot);
@@ -5656,6 +5724,117 @@ SELECT missing_revenue FROM analytics.orders
       expect(executor.executeQuery).toHaveBeenCalledTimes(2);
       expect(readFileSync(draftPath, 'utf-8')).toBe(source);
       expect(readFileSync(dashboardPath, 'utf-8')).toBe(dashboardSourceBefore);
+    } finally {
+      await new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve());
+    }
+  });
+
+  it('applies linked page filters to App draft tiles and says truthfully what applied', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-app-draft-filters-'));
+    tempDirs.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), '{}\n');
+    const created = createAppPackage(projectRoot, {
+      name: 'Draft Filters App',
+      domain: 'revenue',
+      owners: ['owner@local'],
+      tags: [],
+      selectedBlockIds: [],
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    const draftDir = join(projectRoot, 'apps/draft-filters-app/drafts');
+    mkdirSync(draftDir, { recursive: true });
+    const source = `block "Regional revenue" {
+  domain = "revenue"
+  type = "custom"
+  status = "review"
+  owner = "owner@local"
+  query = """
+SELECT region, ordered_at, revenue FROM analytics.orders
+  """
+  visualization { chart = "table" }
+}\n`;
+    writeFileSync(join(draftDir, 'regional-revenue.dql'), source);
+    const fingerprint = `sha256:${createHash('sha256').update(source).digest('hex')}`;
+    const dashboardPath = join(projectRoot, 'apps/draft-filters-app/dashboards/overview.dqld');
+    const dashboard = JSON.parse(readFileSync(dashboardPath, 'utf-8')) as any;
+    dashboard.filters = [
+      { id: 'region', type: 'select', label: 'Region' },
+      { id: 'period', type: 'daterange', label: 'Period' },
+    ];
+    const draftTile = (i: string, filterBindings: unknown[]) => ({
+      i, x: 0, y: 0, w: 6, h: 3,
+      draftAnalysis: { ref: 'drafts/regional-revenue.dql', artifactFingerprint: fingerprint },
+      viz: { type: 'table' },
+      title: i,
+      sourceClass: 'exploratory_analysis',
+      review: { status: 'required' },
+      trustState: 'review_required',
+      reviewStatus: 'review_required',
+      filterBindings,
+    });
+    dashboard.layout.items.push(
+      draftTile('linked', [
+        { filter: 'region', binding: 'region', mode: 'predicate', capability: 'preflight_required' },
+        { filter: 'period', binding: 'ordered_at', mode: 'predicate', capability: 'preflight_required' },
+      ]),
+      draftTile('partly', [
+        { filter: 'region', binding: 'region', mode: 'predicate', capability: 'preflight_required' },
+        { filter: 'period', capability: 'unsupported', unsupportedReason: 'Author: does not apply' },
+      ]),
+      { i: 'note', x: 0, y: 4, w: 12, h: 1, text: { markdown: 'Context' }, viz: { type: 'text' }, title: 'Note' },
+    );
+    writeFileSync(dashboardPath, `${JSON.stringify(dashboard, null, 2)}\n`);
+    let server: Server | undefined;
+    const executed: Array<{ sql: string; variables: Record<string, unknown> }> = [];
+    const executor = {
+      executeQuery: vi.fn(async (sql: string, _params: unknown, variables: Record<string, unknown>) => {
+        executed.push({ sql, variables });
+        return { columns: ['region', 'ordered_at', 'revenue'], rows: [{ region: 'East', ordered_at: '2026-03-02', revenue: 10 }], rowCount: 1, sql };
+      }),
+    } as unknown as QueryExecutor;
+    try {
+      const port = await startLocalServer({
+        rootDir: projectRoot,
+        projectRoot,
+        executor,
+        connection: { driver: 'file' },
+        preferredPort: 0,
+        captureServer: (createdServer) => { server = createdServer; },
+      });
+      const response = await fetch(`http://127.0.0.1:${port}/api/apps/draft-filters-app/dashboards/overview/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ variables: { region: 'East', period: ['2026-03-01', '2026-03-31'] } }),
+      });
+      const payload = await response.json() as any;
+      expect(response.status, JSON.stringify(payload)).toBe(200);
+      const tile = (id: string) => payload.tiles.find((candidate: any) => candidate.tileId === id);
+      expect(tile('linked')).toMatchObject({
+        status: 'ok',
+        trustState: 'review_required',
+        filters: { applied: [expect.objectContaining({ filter: 'region' }), expect.objectContaining({ filter: 'period' })] },
+        filterReport: { applied: ['region', 'period'], notApplied: [] },
+      });
+      expect(tile('linked').artifact.explanation).toEqual(expect.arrayContaining([
+        'The saved App-scoped DQL was executed with the current filters.',
+        'Page filters applied: Region, Period.',
+      ]));
+      expect(tile('linked').artifact.sql).toMatch(/_dql_filter\.region = .*_dql_filter\.ordered_at >= CAST\(.* AS DATE\) AND _dql_filter\.ordered_at < CAST\(/);
+      expect(tile('partly')).toMatchObject({
+        status: 'ok',
+        trustState: 'review_required',
+        filterReport: { applied: ['region'], notApplied: [{ filter: 'period', code: 'does_not_apply', reason: 'Author: does not apply' }] },
+      });
+      expect(tile('partly').artifact.explanation).toEqual(expect.arrayContaining([
+        'The saved App-scoped DQL was executed.',
+        'Page filters applied: Region.',
+        'Page filters not applied: Period (Author: does not apply).',
+      ]));
+      expect(tile('partly').artifact.explanation).not.toContain('The saved App-scoped DQL was executed with the current filters.');
+      expect(tile('partly').artifact.sql).not.toContain('ordered_at >=');
+      expect(tile('note').filterReport).toBeUndefined();
+      expect(executed.some((entry) => Object.values(entry.variables).includes('2026-04-01'))).toBe(true);
     } finally {
       await new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve());
     }
@@ -7403,6 +7582,57 @@ describe('ensureConnectorInstalledForStartup', () => {
     expect(() => ensureConnectorInstalledForStartup(projectRoot, 'not-a-real-driver')).not.toThrow();
     expect(existsSync(join(projectRoot, '.dql/connectors'))).toBe(false);
   });
+
+  it('does not start a DuckDB source build on a Node without a prebuilt binary, and says which Node to use', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-ensure-connector-node26-'));
+    tempDirs.push(projectRoot);
+    vi.stubEnv('ZLENS_DUCKDB_BUILD_FROM_SOURCE', '');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      ensureConnectorInstalledForStartup(projectRoot, 'duckdb', '26.12.0');
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain("[zlens] ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+      expect(output).not.toContain('Installing the DuckDB driver');
+      // npm never ran: it would have created the connector folder.
+      expect(existsSync(join(projectRoot, '.dql/connectors'))).toBe(false);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('does not rebuild a DuckDB copy from another Node on one without a prebuilt binary', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-ensure-connector-node26-'));
+    tempDirs.push(projectRoot);
+    const pkgDir = join(projectRoot, '.dql', 'connectors', 'node_modules', 'duckdb');
+    mkdirSync(pkgDir, { recursive: true });
+    writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: 'duckdb', version: '1.4.4', main: 'index.js' }));
+    writeFileSync(join(pkgDir, 'index.js'), "throw new Error(\"Cannot find module '/x/node_modules/duckdb/lib/binding/duckdb.node'\");");
+    vi.stubEnv('ZLENS_DUCKDB_BUILD_FROM_SOURCE', '');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      ensureConnectorInstalledForStartup(projectRoot, 'duckdb', '26.12.0');
+      const output = log.mock.calls.flat().join('\n');
+      expect(output).toContain('no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.');
+      expect(output).not.toContain('rebuilding it');
+      // A rebuild first writes allowScripts into .dql/connectors/package.json.
+      expect(existsSync(join(projectRoot, '.dql', 'connectors', 'package.json'))).toBe(false);
+    } finally {
+      log.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+describe('connectorInstallBlockedReason', () => {
+  it('blocks only duckdb, only on a Node without a prebuilt binary, unless a source build is asked for', () => {
+    expect(connectorInstallBlockedReason(['duckdb'], '26.12.0', {})).toContain('no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.');
+    expect(connectorInstallBlockedReason(['duckdb'], '25.2.1', {})).toContain('Node 25');
+    expect(connectorInstallBlockedReason(['duckdb'], '26.12.0', { ZLENS_DUCKDB_BUILD_FROM_SOURCE: '1' })).toBeNull();
+    expect(connectorInstallBlockedReason(['duckdb'], '24.15.0', {})).toBeNull();
+    expect(connectorInstallBlockedReason(['duckdb'], '22.18.0', {})).toBeNull();
+    expect(connectorInstallBlockedReason(['pg', 'ssh2'], '26.12.0', {})).toBeNull();
+  });
 });
 
 describe('Snowflake Node runtime startup guard (API-007, E2E-014)', () => {
@@ -8372,6 +8602,16 @@ describe('prepareLocalExecution', () => {
       sourceTileIds: ['orders'],
       valueCount: 0,
     }]);
+    // A tile whose result does not carry the field (a month bucket named
+    // order_date_month) was not read: that is "unknown", never "no values".
+    const unread = collectDashboardFilterOptions(dashboard, [{
+      tileId: 'orders',
+      status: 'ok',
+      result: { columns: ['order_date_month', 'revenue'], rows: [{ order_date_month: '2025-03-01', revenue: 10 }], rowCount: 1 },
+      filterableColumns: [{ column: 'order_date_month', predicateTarget: 'order_date_month' }],
+    }]);
+    expect(unread).toEqual([]);
+    expect(collectDashboardFilterOptions(dashboard, [])).toEqual([]);
   });
 
   it('fills block parameters from dashboard filters before execution', () => {
@@ -8495,7 +8735,7 @@ describe('prepareLocalExecution', () => {
 
     expect(applied.sql).toBe('SELECT customer_name, customer_type FROM marts.customers');
     expect(applied.appliedFilters).toEqual([]);
-    expect(applied.skippedFilters).toEqual([{ filter: 'customer_type', reason: 'component is outside this filter scope' }]);
+    expect(applied.skippedFilters).toEqual([{ filter: 'customer_type', reason: 'component is outside this filter scope', code: 'does_not_apply' }]);
   });
 
   it('maps App-wide filter values into only explicitly linked semantic components', () => {
@@ -8510,13 +8750,114 @@ describe('prepareLocalExecution', () => {
     expect(dashboardSemanticFiltersForTile(dashboard, {
       i: 'segment-chart', semantic,
       filterBindings: [{ filter: 'segment', binding: 'customer_segment', mode: 'semantic', capability: 'preflight_required' }],
-    }, { segment: ['Enterprise', 'SMB'] })).toEqual([{
+    }, { segment: ['Enterprise', 'SMB'] }).filters).toEqual([{
       dimension: 'customer_segment', operator: 'in', values: ['Enterprise', 'SMB'],
     }]);
     expect(dashboardSemanticFiltersForTile(dashboard, {
       i: 'unlinked-chart', semantic,
       filterBindings: [{ filter: 'segment', binding: 'customer_segment', mode: 'semantic', capability: 'preflight_required' }],
-    }, { segment: ['Enterprise'] })).toEqual([]);
+    }, { segment: ['Enterprise'] })).toMatchObject({
+      filters: [],
+      skipped: [{ filter: 'segment', code: 'does_not_apply' }],
+    });
+  });
+
+  describe('Metrics tile filters', () => {
+    const kpi = {
+      id: 'revenue-kpi', provider: 'native' as const, metrics: ['revenue'], dimensions: [] as string[],
+      semanticModelRefs: ['orders'], definitionFingerprint: 'sha256:kpi',
+    };
+    const modelDimensions = new Set(['region', 'ordered_at', 'order_total']);
+    const options = { dimensionAvailable: (dimension: string) => modelDimensions.has(dimension), now: new Date('2026-03-10T12:00:00Z') };
+    const linked = (filter: string, binding: string) => ({ filter, binding, mode: 'semantic' as const, capability: 'preflight_required' as const });
+
+    it('sends a date range as >= start and < the day after the end, never as in', () => {
+      const resolution = dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'period', type: 'daterange' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [linked('period', 'ordered_at')] },
+        { period: ['2026-03-01', '2026-03-31'] },
+        options,
+      );
+      expect(resolution.filters).toEqual([
+        { dimension: 'ordered_at', operator: 'gte', values: ['2026-03-01'] },
+        { dimension: 'ordered_at', operator: 'lt', values: ['2026-04-01'] },
+      ]);
+      expect(resolution.filters.some((filter) => filter.operator === 'in')).toBe(false);
+      expect(resolution.applied).toEqual([{ filter: 'period', binding: 'ordered_at', mode: 'semantic' }]);
+    });
+
+    it('makes a single date that whole day and resolves a relative date to a range', () => {
+      expect(dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'day', type: 'date' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [linked('day', 'ordered_at')] },
+        { day: '2026-03-05' },
+        options,
+      ).filters).toEqual([
+        { dimension: 'ordered_at', operator: 'gte', values: ['2026-03-05'] },
+        { dimension: 'ordered_at', operator: 'lt', values: ['2026-03-06'] },
+      ]);
+      expect(dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'period', type: 'relative_date' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [linked('period', 'ordered_at')] },
+        { period: 'last_7_days' },
+        options,
+      ).filters).toEqual([
+        { dimension: 'ordered_at', operator: 'gte', values: ['2026-03-04'] },
+        { dimension: 'ordered_at', operator: 'lt', values: ['2026-03-11'] },
+      ]);
+    });
+
+    it('filters a KPI on a model dimension it does not group by', () => {
+      const resolution = dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'region', type: 'select' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [linked('region', 'region')] },
+        { region: 'East' },
+        options,
+      );
+      expect(resolution.filters).toEqual([{ dimension: 'region', operator: 'equals', values: ['East'] }]);
+      // Without the model's dimension list only the tile's own group-bys count, and the skip says why.
+      expect(dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'region', type: 'select' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [linked('region', 'channel')] },
+        { region: 'East' },
+        options,
+      )).toMatchObject({ filters: [], skipped: [{ filter: 'region', code: 'unsupported', reason: expect.stringContaining('channel') }] });
+    });
+
+    it('turns a number range into gte/lte and reports unsupported search as skipped', () => {
+      expect(dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'size', type: 'number_range' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [linked('size', 'order_total')] },
+        { size: [10, 50] },
+        options,
+      ).filters).toEqual([
+        { dimension: 'order_total', operator: 'gte', values: ['10'] },
+        { dimension: 'order_total', operator: 'lte', values: ['50'] },
+      ]);
+      const search = { filters: [{ id: 'q', type: 'search' as const, label: 'Region search' }] };
+      expect(dashboardSemanticFiltersForTile(search, { i: 'kpi', semantic: kpi, filterBindings: [linked('q', 'region')] }, { q: 'ea' }, options).filters)
+        .toEqual([{ dimension: 'region', operator: 'contains', values: ['ea'] }]);
+      expect(dashboardSemanticFiltersForTile(
+        search,
+        { i: 'kpi', semantic: { ...kpi, provider: 'metricflow' as const }, filterBindings: [linked('q', 'region')] },
+        { q: 'ea' },
+        options,
+      )).toMatchObject({ filters: [], skipped: [{ filter: 'q', code: 'unsupported', reason: expect.stringMatching(/MetricFlow cannot search/) }] });
+    });
+
+    it('honours "Does not apply" and reports unlinked filters', () => {
+      const resolution = dashboardSemanticFiltersForTile(
+        { filters: [{ id: 'region', type: 'select' }, { id: 'channel', type: 'select' }] },
+        { i: 'kpi', semantic: kpi, filterBindings: [{ filter: 'region', capability: 'unsupported', unsupportedReason: 'Author: does not apply' }] },
+        { region: 'East', channel: 'Web' },
+        options,
+      );
+      expect(resolution.filters).toEqual([]);
+      expect(resolution.skipped).toEqual([
+        { filter: 'region', code: 'does_not_apply', reason: 'Author: does not apply' },
+        { filter: 'channel', code: 'not_linked', reason: 'channel is not linked to this tile.' },
+      ]);
+    });
   });
 
   it('treats a search control as a case-insensitive contains predicate', () => {
@@ -8531,6 +8872,139 @@ describe('prepareLocalExecution', () => {
 
     expect(applied.sql).toBe('SELECT * FROM (SELECT customer_name, customer_type FROM marts.customers) _dql_filter WHERE LOWER(_dql_filter.customer_name) LIKE LOWER($1)');
     expect(applied.variables.__dashboard_filter_customer_name_contains).toBe('%aaron%');
+  });
+
+  it('lets an explicit "Does not apply" beat a block parameter of the same name', () => {
+    const block = {
+      name: 'Regional Revenue',
+      allowedFilters: ['region'],
+      parameterPolicy: [{ name: 'region', policy: 'dynamic' as const }],
+    };
+    const sqlParams = [{ name: 'region', position: 1 }];
+    const excluded = applyDashboardFiltersToBlockExecution({
+      sql: 'SELECT region, revenue FROM revenue WHERE region = $1',
+      sqlParams,
+      variables: { region: 'East' },
+      block,
+      dashboard: { filters: [{ id: 'region', type: 'select' }] },
+      tileId: 'regional',
+      tileFilterBindings: [{ filter: 'region', capability: 'unsupported', unsupportedReason: 'Author: does not apply' }],
+    });
+    expect(excluded.appliedFilters).toEqual([]);
+    expect(excluded.skippedFilters).toEqual([{ filter: 'region', reason: 'Author: does not apply', code: 'does_not_apply' }]);
+    expect(excluded.sql).toBe('SELECT region, revenue FROM revenue WHERE region = $1');
+
+    // A tile the author linked still binds by parameter name.
+    const linked = applyDashboardFiltersToBlockExecution({
+      sql: 'SELECT region, revenue FROM revenue WHERE region = $1',
+      sqlParams,
+      variables: { region: 'East' },
+      block,
+      dashboard: { filters: [{ id: 'region', type: 'select' }] },
+      tileId: 'regional',
+      tileFilterBindings: [{ filter: 'region', binding: 'region', mode: 'predicate', capability: 'preflight_required' }],
+    });
+    expect(linked.appliedFilters).toEqual([{ filter: 'region', mode: 'parameter', paramNames: ['region'] }]);
+  });
+
+  it('removes a "Does not apply" filter from the values a tile sees', () => {
+    const dashboard = { filters: [{ id: 'region', type: 'select' as const }, { id: 'channel', type: 'select' as const }] };
+    expect(dashboardValuesForTile(dashboard, {
+      i: 'regional',
+      filterBindings: [{ filter: 'region', capability: 'unsupported', unsupportedReason: 'Author: does not apply' }],
+    }, { region: 'East', channel: 'Web', top_n: 5 })).toEqual({ channel: 'Web', top_n: 5 });
+  });
+
+  it('wraps block results with the shared date rule', () => {
+    const run = (filter: { id: string; type: 'daterange' | 'date' | 'relative_date' | 'number_range' }, value: unknown) => applyDashboardFiltersToBlockExecution({
+      sql: 'SELECT ordered_at, amount FROM orders',
+      sqlParams: [],
+      variables: { [filter.id]: value },
+      block: { name: 'Orders' },
+      dashboard: { filters: [filter] },
+      tileFilterBindings: [{ filter: filter.id, binding: filter.type === 'number_range' ? 'amount' : 'ordered_at', mode: 'predicate' }],
+      now: new Date('2026-03-10T12:00:00Z'),
+    });
+    const range = run({ id: 'period', type: 'daterange' }, ['2026-03-01', '2026-03-31']);
+    expect(range.sql).toBe('SELECT * FROM (SELECT ordered_at, amount FROM orders) _dql_filter WHERE _dql_filter.ordered_at >= CAST($1 AS DATE) AND _dql_filter.ordered_at < CAST($2 AS DATE)');
+    expect(range.variables).toMatchObject({ __dashboard_filter_period_start: '2026-03-01', __dashboard_filter_period_end_exclusive: '2026-04-01' });
+
+    const day = run({ id: 'day', type: 'date' }, '2026-03-05');
+    expect(day.sql).toContain('_dql_filter.ordered_at >= CAST($1 AS DATE) AND _dql_filter.ordered_at < CAST($2 AS DATE)');
+    expect(day.variables).toMatchObject({ __dashboard_filter_day_start: '2026-03-05', __dashboard_filter_day_end_exclusive: '2026-03-06' });
+
+    const relative = run({ id: 'period', type: 'relative_date' }, 'last_7_days');
+    expect(relative.variables).toMatchObject({ __dashboard_filter_period_start: '2026-03-04', __dashboard_filter_period_end_exclusive: '2026-03-11' });
+
+    const amount = run({ id: 'size', type: 'number_range' }, [10, 50]);
+    expect(amount.sql).toContain('_dql_filter.amount BETWEEN $1 AND $2');
+    expect(amount.sql).not.toContain(' IN (');
+  });
+
+  it('fills range parameters with the chosen dates, the end as the inclusive last day', () => {
+    const applied = applyDashboardFiltersToBlockExecution({
+      sql: 'SELECT * FROM orders WHERE order_date BETWEEN $1 AND $2',
+      sqlParams: [{ name: 'period_start', position: 1 }, { name: 'period_end', position: 2 }],
+      variables: { period: 'month_to_date' },
+      block: { name: 'Orders' },
+      dashboard: { filters: [{ id: 'period', type: 'relative_date' }] },
+      now: new Date('2026-03-10T12:00:00Z'),
+    });
+    expect(applied.appliedFilters).toEqual([{ filter: 'period', mode: 'parameter', paramNames: ['period_start', 'period_end'] }]);
+    expect(applied.variables).toMatchObject({ period_start: '2026-03-01', period_end: '2026-03-10' });
+  });
+
+  describe('per-tile filter report', () => {
+    const dashboard = {
+      id: 'overview',
+      filters: [
+        { id: 'region', type: 'select' as const, label: 'Region' },
+        { id: 'period', type: 'daterange' as const },
+        { id: 'unset', type: 'select' as const },
+      ],
+    };
+    const values = { region: 'East', period: ['2026-03-01', '2026-03-31'] };
+
+    it('reports Dataset tiles from the server unbound list', () => {
+      expect(dashboardTileFilterReport({
+        dashboard,
+        item: { i: 'orders', query: { dimensions: [], measures: [] } as never, viz: { type: 'table' } },
+        tile: { status: 'ok', tileType: 'dataset', dataset: { unboundFilters: [{ filterId: 'period', code: 'DATASET_TILE_EXCLUDED', message: 'Excluded.' }] } },
+        values,
+      })).toEqual({ applied: ['region'], notApplied: [{ filter: 'period', code: 'does_not_apply', reason: 'Excluded.' }] });
+    });
+
+    it('reports Saved query, Metrics and draft tiles from their own applied/skipped lists', () => {
+      for (const tileType of ['block', 'semantic', 'draftAnalysis']) {
+        expect(dashboardTileFilterReport({
+          dashboard,
+          item: { i: 'tile', viz: { type: 'bar' } },
+          tile: {
+            status: 'ok',
+            tileType,
+            filters: {
+              applied: [{ filter: 'region' }],
+              skipped: [
+                { filter: 'period', reason: 'Author: does not apply', code: 'does_not_apply' },
+                { filter: 'unset', reason: 'no value supplied' },
+              ],
+            },
+          },
+          values,
+        })).toEqual({ applied: ['region'], notApplied: [{ filter: 'period', code: 'does_not_apply', reason: 'Author: does not apply' }] });
+      }
+    });
+
+    it('reports saved insights through their parameters and never reports text or failed tiles', () => {
+      expect(dashboardTileFilterReport({
+        dashboard,
+        item: { i: 'pin', aiPin: { id: 'p' }, viz: { type: 'table' }, parameterBindings: [{ param: 'region', source: 'dashboard_filter', filter: 'region' }] },
+        tile: { status: 'ok', tileType: 'aiPin' },
+        values,
+      })).toMatchObject({ applied: ['region'], notApplied: [{ filter: 'period', code: 'not_linked' }] });
+      expect(dashboardTileFilterReport({ dashboard, item: { i: 'note', text: { markdown: 'x' }, viz: { type: 'text' } }, tile: { status: 'ok', tileType: 'text' }, values })).toBeUndefined();
+      expect(dashboardTileFilterReport({ dashboard, item: { i: 'tile', viz: { type: 'bar' } }, tile: { status: 'error' }, values })).toBeUndefined();
+    });
   });
 
   it('rewrites SQL paths for file-backed notebook queries', () => {
@@ -12699,6 +13173,10 @@ describe('unified context authoring proposals (API-011, API-012, MIG-003)', () =
         };
       };
       expect(proposal.diagnostics).toContainEqual(expect.objectContaining({ code: 'MODEL_AREA_DEFAULTED', severity: 'info' }));
+      // One plain note, not one line per model (new-user round 2, Q3).
+      expect(proposal.diagnostics.filter((diagnostic) => diagnostic.code === 'MODEL_AREA_DEFAULTED')).toEqual([
+        { code: 'MODEL_AREA_DEFAULTED', severity: 'info', operationId: 'bind:orders', operationIds: ['bind:orders'], message: '1 model placed in the default area. You can rename or move it later.' },
+      ]);
       expect(proposal.diagnostics.filter((diagnostic) => diagnostic.severity === 'blocking')).toEqual([]);
       expect(proposal.operations.find((operation) => operation.id === 'bind:orders')?.change?.value).toMatchObject({ areaId: 'core' });
       // The existing Domain is reused; only the missing area is synthesized.

@@ -169,7 +169,7 @@ export function DomainSettingsDrawer({
             </select>
           </Field>
           <Field label="Description" t={t} hint="What this domain covers and how people use it. Ask reads this to decide whether a question belongs here.">
-            <textarea value={draft.description ?? ''} onChange={(event) => set('description', event.target.value)} rows={4} placeholder="Recognized revenue, invoices and the blocks that report them." style={textarea(t)} />
+            <textarea value={draft.description ?? ''} onChange={(event) => set('description', event.target.value)} rows={4} placeholder="Recognized revenue, invoices and the saved queries that report them." style={textarea(t)} />
           </Field>
           <Field label="Covers" t={t} hint="The business boundary in one line.">
             <input type="text" value={draft.boundedContext ?? ''} onChange={(event) => set('boundedContext', event.target.value)} placeholder="Recognized revenue and invoicing" style={input(t)} />

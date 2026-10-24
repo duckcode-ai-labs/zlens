@@ -656,7 +656,7 @@ function buildBusiness360Gaps(input: {
     gaps.push({
       code: 'missing_definition',
       severity: 'warning',
-      message: 'This term is not connected to a block or business view yet.',
+      message: 'This term is not connected to a saved query or business view yet.',
     });
   }
 
@@ -664,7 +664,7 @@ function buildBusiness360Gaps(input: {
     gaps.push({
       code: 'missing_composition',
       severity: 'warning',
-      message: 'This business view does not include any blocks or nested business views.',
+      message: 'This business view does not include any saved queries or nested business views.',
     });
   }
 
@@ -712,7 +712,7 @@ function buildBusiness360Gaps(input: {
     gaps.push({
       code: 'missing_reusable_filters',
       severity: 'info',
-      message: `${staticContracts.length} block contract(s) do not declare reusable parameters or filter bindings: ${staticContracts.slice(0, 5).map((contract) => assetLabel(contract.block)).join(', ')}${staticContracts.length > 5 ? `, +${staticContracts.length - 5} more` : ''}.`,
+      message: `${staticContracts.length} saved query contract(s) do not declare reusable parameters or filter bindings: ${staticContracts.slice(0, 5).map((contract) => assetLabel(contract.block)).join(', ')}${staticContracts.length > 5 ? `, +${staticContracts.length - 5} more` : ''}.`,
     });
   }
 

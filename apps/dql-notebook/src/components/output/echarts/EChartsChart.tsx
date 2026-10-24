@@ -61,11 +61,17 @@ export function EChartsChart(props: EChartsChartProps): JSX.Element | null {
   // fixed tile frame, or the tile's grid rows), so the chart cannot grow the
   // box it was measured from.
   const height = echartsHeight(availableHeight);
+  // Every bar keeps its label: when a tile is shorter than the bars need, the
+  // chart keeps its full height and scrolls inside the tile.
+  const chartHeight = built.minHeight && built.minHeight > height ? built.minHeight : height;
+  const chart = serverRender
+    ? <div className="dql-echart" style={{ height: chartHeight }} dangerouslySetInnerHTML={{ __html: renderOptionToSvg(built, availableWidth ?? 600, chartHeight) }} />
+    : <InteractiveChart built={built} height={chartHeight} onMarkSelect={onMarkSelect} />;
   return (
     <div style={{ position: 'relative' }}>
-      {serverRender
-        ? <div className="dql-echart" style={{ height }} dangerouslySetInnerHTML={{ __html: renderOptionToSvg(built, availableWidth ?? 600, height) }} />
-        : <InteractiveChart built={built} height={height} onMarkSelect={onMarkSelect} />}
+      {chartHeight > height
+        ? <div className="dql-echart-scroll" style={{ height, overflowY: 'auto', overflowX: 'hidden' }}>{chart}</div>
+        : chart}
       {onMarkSelect ? <MarkButtons built={built} onMarkSelect={onMarkSelect} /> : null}
       {built.droppedSeries > 0
         ? <p style={{ margin: '4px 8px 0', fontSize: 11, color: 'var(--text-tertiary, #6b6e76)' }}>

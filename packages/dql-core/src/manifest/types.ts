@@ -384,7 +384,14 @@ export interface ManifestBlock {
   filePath: string;
   domain?: string;
   owner?: string;
+  /**
+   * Lifecycle status. A block whose source says `certified` but no longer
+   * matches its certification receipt is `pending_recertification` here, so
+   * nothing serves an edited block as certified.
+   */
   status?: string;
+  /** True when the source declares `certified` but was edited after its certification receipt was written. */
+  certificationSourceChanged?: boolean;
   blockType?: string;
   /** Raw SQL from the block's query */
   sql: string;
@@ -473,6 +480,10 @@ export interface ManifestBlock {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  /** Question aliases: other words people use for what the block answers. Ask matches on them. */
+  synonyms?: string[];
+  /** Business terms in the block's own words; unlike `termRefs` they need not name a declared term. */
+  primaryTerms?: string[];
   /**
    * v1.6 — DataLex contract reference (`<domain>.<Entity>.<contract_name>`
    * with optional `@<version>` suffix). When present, the compiler
@@ -1256,6 +1267,12 @@ export interface ManifestModelRelationship {
   sourcePath: string;
   fingerprint: string;
   certificationFingerprint?: string;
+  /**
+   * Who certified the relationship and when, when the certify action recorded
+   * it (inside `certifiedAgainst`). Kept when the certification goes stale, so
+   * receipts can say "Changed since it was certified on 22 Oct".
+   */
+  certification?: { by?: string; name?: string; at?: string };
   /** Warehouse-backed evidence captured before certification. */
   validation?: ManifestRelationshipValidationEvidence;
   /** Lowercased catalog data types of the join keys, when dbt's catalog knows them; part of the validation proof. */

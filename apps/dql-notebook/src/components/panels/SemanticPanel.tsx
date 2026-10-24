@@ -72,7 +72,7 @@ function SetupState({
         Connect your Semantic Layer
       </div>
       <div style={{ fontSize: 12, color: t.textMuted, lineHeight: 1.5, marginBottom: 14 }}>
-        Import metrics and dimensions from your existing data stack to build certified DQL blocks.
+        Import metrics and dimensions from your existing data stack to build certified saved queries.
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 14 }}>
@@ -826,7 +826,7 @@ export function SemanticPanel() {
 
         <div style={{ padding: '10px', borderBottom: `1px solid ${t.headerBorder}`, background: `${t.accent}0d`, display: 'grid', gap: 6 }}>
         <div style={{ fontSize: 11, fontWeight: 600, color: t.textPrimary, fontFamily: t.font }}>
-          Build blocks in Block Studio
+          Build saved queries
         </div>
         <div style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font, lineHeight: 1.5 }}>
           Use the full-screen studio to author DQL with semantic metrics, database schemas, validation, results, and visualization in one workspace.

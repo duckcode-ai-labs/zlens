@@ -53,7 +53,7 @@ const LINEAGE_PRESETS = [
   {
     key: 'domain',
     label: 'Domain',
-    title: 'Business terms, governed domains, semantic metrics, and certified blocks',
+    title: 'Business terms, governed domains, semantic metrics, and certified saved queries',
     types: DOMAIN_LINEAGE_NODE_TYPES,
   },
   {
@@ -67,7 +67,7 @@ const LINEAGE_PRESETS = [
 // The canvas always scopes to ONE of these — a block, app, or notebook the user
 // picks — rather than showing the whole (noisy) project graph. Ordered as tabs.
 const FOCUSABLE_TYPES = [
-  { type: 'block', label: 'Blocks' },
+  { type: 'block', label: 'Saved queries' },
   { type: 'app', label: 'Apps' },
   { type: 'notebook', label: 'Notebooks' },
   { type: 'dashboard', label: 'Dashboards' },
@@ -396,7 +396,7 @@ export function LineageDAG() {
         <div style={{ width: 'min(560px, 100%)', border: `1px solid ${t.headerBorder}`, borderRadius: 14, background: t.cellBg, padding: '22px 22px 18px', boxShadow: '0 1px 4px rgba(26,26,26,0.05)' }}>
           <div style={{ fontSize: 16, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Trace lineage</div>
           <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
-            Pick a block, app, or notebook to see its upstream sources and downstream consumers — no project-wide noise.
+            Pick a saved query, app, or notebook to see its upstream sources and downstream consumers — no project-wide noise.
           </div>
           <div style={{ marginTop: 16 }}>
             <EntityPicker
@@ -463,7 +463,7 @@ export function LineageDAG() {
               value={switchQuery}
               onChange={(event) => { setSwitchQuery(event.target.value); setSwitchOpen(true); }}
               onFocus={() => setSwitchOpen(true)}
-              placeholder="Search another block, app, or notebook…"
+              placeholder="Search another saved query, app, or notebook…"
               style={{ width: '100%', boxSizing: 'border-box', height: 30, padding: '0 10px 0 28px', borderRadius: 8, border: `1px solid ${switchOpen ? t.accent : t.headerBorder}`, background: 'var(--color-bg-sunken)', color: t.textPrimary, fontSize: 12, fontFamily: t.font, outline: 'none' }}
             />
             {switchOpen && (
@@ -471,7 +471,7 @@ export function LineageDAG() {
                 <div onClick={() => setSwitchOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 30 }} />
                 <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 31, width: 'min(340px, 90vw)', maxHeight: 300, overflow: 'auto', background: t.cellBg, border: `1px solid ${t.headerBorder}`, borderRadius: 11, boxShadow: '0 10px 30px rgba(26,26,26,0.14)', padding: 4 }}>
                   {switchResults.length === 0 ? (
-                    <div style={{ padding: '12px 11px', fontSize: 12, color: t.textMuted, fontFamily: t.font }}>No matching block, app, or notebook.</div>
+                    <div style={{ padding: '12px 11px', fontSize: 12, color: t.textMuted, fontFamily: t.font }}>No matching saved query, app, or notebook.</div>
                   ) : (
                     switchResults.map((entity) => (
                       <button

@@ -45,6 +45,11 @@ export interface VizOptionOutput {
   /** Series left out because a chart shows at most eight. */
   droppedSeries: number;
   /**
+   * The height the chart needs to label every category (horizontal bars). A
+   * shorter tile scrolls the chart instead of skipping labels.
+   */
+  minHeight?: number;
+  /**
    * The exact result row under a clicked mark: the series (a colour value)
    * as well as the category, a scatter point or a heatmap cell. Falls back to
    * the category's row when a chart has no finer mark.
@@ -245,17 +250,34 @@ function cartesianOption(
   const marks = markLayers(style, categories, labelCol, horizontal, tokens, axisFormat);
   if (seriesOptions[0]) Object.assign(seriesOptions[0], marks);
 
+  // Every bar is named: skipping every other label made a top-25 list look
+  // as if it skipped ranks 2 and 4. Bar categories show all their labels,
+  // truncated (the tooltip has the full name) and, on a crowded vertical axis,
+  // rotated. A time axis may still thin its labels; its order says the rest.
+  const labelEveryBar = !isLine && !timeAxis;
   const categoryAxis = {
     type: 'category' as const,
-    data: categoryLabels,
+    data: labelEveryBar ? categories.map((value) => formatCategoryLabel(value, labelCol, 80)) : categoryLabels,
     ...(horizontal ? { inverse: true } : {}),
     axisLine: { lineStyle: { color: tokens.axis } },
     axisTick: { show: false },
-    axisLabel: { color: tokens.muted, fontSize: 11, hideOverlap: true },
+    axisLabel: labelEveryBar
+      ? {
+          color: tokens.muted,
+          fontSize: 11,
+          interval: 0,
+          hideOverlap: false,
+          formatter: (value: string) => formatCategoryLabel(value, labelCol, horizontal ? 18 : 14),
+          ...(!horizontal && categories.length > 6 ? { rotate: 35 } : {}),
+        }
+      : { color: tokens.muted, fontSize: 11, hideOverlap: true },
   };
+  // Value ticks never run into each other ("$500.0$1.0K$1.5K" on a narrow
+  // bar tile): ECharts drops a label that would overlap, and round ticks drop
+  // their ".0" ("$500", "$1K", "$1.5K").
   const valueAxis = {
     type: 'value' as const,
-    axisLabel: { color: tokens.muted, fontSize: 11, formatter: (value: number) => axisFormat(value) },
+    axisLabel: { color: tokens.muted, fontSize: 11, hideOverlap: true, formatter: (value: number) => axisTickLabel(axisFormat(value)) },
     splitLine: { lineStyle: { color: tokens.grid } },
   };
   const showLegend = series.length > 1 && style.legend !== 'none';
@@ -285,8 +307,13 @@ function cartesianOption(
     const entry = series[seriesIndex];
     return colorCol && entry ? rowsByColour.get(entry.name)?.get(category) : rowForCategory.get(category);
   };
-  return { option, categories, rowForCategory, categoryLabels, droppedSeries, rowAt };
+  // Horizontal bars need room for one readable row per category.
+  const minHeight = horizontal && labelEveryBar ? categories.length * BAR_ROW_PX + 32 : undefined;
+  return { option, categories, rowForCategory, categoryLabels, droppedSeries, rowAt, ...(minHeight ? { minHeight } : {}) };
 }
+
+/** The height one labelled horizontal bar needs. */
+const BAR_ROW_PX = 18;
 
 /** Reference lines, target bands and dated notes, drawn on the first series. */
 function markLayers(
@@ -577,13 +604,18 @@ function heatmapOption(base: EChartsOption, result: QueryResult, themeMode: Them
 
 // ─── Shared ──────────────────────────────────────────────────────────────────
 
+const SINGLE_VALUE_CHARTS: ReadonlySet<ChartType> = new Set<ChartType>(['bar', 'line', 'area']);
+
 function seriesMeasures(result: QueryResult, labelCol: string, valueCol: string, chartType: ChartType, config?: CellChartConfig): string[] {
   // Measures on the value shelf are the series, in shelf order.
   if (config?.orientation && config.metrics?.length) {
     const onShelf = config.metrics.filter((metric) => result.columns.includes(metric));
     if (onShelf.length) return onShelf;
   }
-  if (config?.y && result.columns.includes(config.y) && chartType === 'bar') return [config.y];
+  // A chosen "Y / value" field is the one series of a bar, line or area
+  // chart: the author picked one value, so other number columns stay off the
+  // axis. Stacked and grouped bars exist to show several measures together.
+  if (config?.y && result.columns.includes(config.y) && config.y !== labelCol && SINGLE_VALUE_CHARTS.has(chartType)) return [config.y];
   const measures = measureColumns(result).filter((column) => column !== labelCol);
   if (chartType === 'bar' && !config?.style?.stack) return [valueCol];
   const ordered = config?.metrics?.filter((metric) => measures.includes(metric)) ?? [];
@@ -721,4 +753,10 @@ function itemTooltip(
     lines.push(`${escapeHtmlText(columnName(result, column))}: ${escapeHtmlText(extra === null ? 'Unavailable' : numberFormatter(result, column, {}, config)(extra))}`);
   }
   return lines.join('<br/>') + tooltipFooterHtml(config);
+}
+
+
+/** An axis tick without a trailing ".0": "$500.0" → "$500", "$1.0K" → "$1K"; "$1.5K" is kept. */
+export function axisTickLabel(label: string): string {
+  return label.replace(/(\d)\.0+(?=[^\d.]*$)/, '$1');
 }

@@ -758,54 +758,56 @@ function formatRate(value: number | null): string {
   return value === null ? 'n/a' : `${Math.round(value * 1000) / 10}%`;
 }
 
+/** One score row; every value starts in the same column. */
+function scoreRow(label: string, value: string): string {
+  return `  ${label.padEnd(SCORE_LABEL_WIDTH)}${value}`;
+}
+
+const SCORE_LABEL_WIDTH = 'Block-selection accuracy: '.length;
+
+/** A threshold with no case measuring it is skipped (see meetsThresholds); say so. */
+function formatThresholdActual(value: number | null): string {
+  return value === null ? 'n/a: no case measures this, so it is not applied' : formatRate(value);
+}
+
 function formatCountAndShare(count: number, total: number): string {
   const share = total === 0 ? 'n/a' : formatRate(count / total);
   return `${count} (${share})`;
 }
 
-const GOLDEN_TEMPLATE = `# DQL golden eval set — replayed by \`zlens eval\` through the real agent router.
+const GOLDEN_TEMPLATE = `# ZLens golden eval set — replayed by \`zlens eval\` through the real agent router.
 # No warehouse queries, no LLM calls: routing, block selection, and question-plan
 # shape are scored deterministically, so this file is CI-gateable.
 #
 # Add one case per question your team actually asks. When the agent gets a
-# question wrong, add that question here BEFORE fixing it.
+# question wrong, add that question here BEFORE fixing it. The examples below
+# use the Jaffle Shop sample's blocks; swap in your own block names.
 cases:
   # Tier pick: this question must terminate on a certified block.
-  # - name: weekly revenue → certified block
-  #   question: "What was total revenue last week?"
+  # - name: monthly revenue → certified block
+  #   question: "How has revenue changed by month?"
   #   expectRoute: certified
-  #   expectBlock: "Revenue Total"
+  #   expectBlock: monthly_revenue
 
-  # Casing + label robustness: metric labels typed in Title Case must be read
-  # as the metric, never as a member filter.
-  # - name: Title-Case metric label is not a filter
-  #   question: "What is the Previous Day BCM?"
-  #   expectMetricTerms: ["previous day bcm"]
-  #   expectNoFilters: ["Previous Day"]
-
-  # Filter survival: real member values must stay filters.
-  # - name: customer filter survives
-  #   question: "previous day bcm for Capital One"
-  #   expectFilters: ["Capital One"]
+  # Member filter: a named customer is a filter the certified block cannot
+  # apply (it runs its SQL as written), so the answer is generated, and the
+  # name must survive as the filter.
+  # - name: named customer → generated, filter kept
+  #   question: "Give me the complete profile for Matthew Meyer."
+  #   expectRoute: generated
+  #   expectFilters: ["Matthew Meyer"]
 
   # Follow-up metric switch: a follow-up naming a DIFFERENT metric must not
   # stay stuck on the previous turn's metric.
   # - name: follow-up switches metric
-  #   priorQuestion: "daily consumption today"
-  #   question: "consumption % by customer"
-  #   expectMetricTerms: ["percent"]
-  #   expectNoMetricTerms: ["daily consumption"]
+  #   priorQuestion: "How has revenue changed by month?"
+  #   question: "What about the number of orders by month?"
+  #   expectMetricTerms: ["order"]
+  #   expectNoMetricTerms: ["revenue"]
 
   # Safe refusal: questions your data cannot answer should refuse, not guess.
   # - name: unanswerable refuses
   #   question: "What is our employee attrition rate?"
-  #   expectRefuse: true
-
-  # Modeling-gap refusal: a governed metric sliced by a DECLARED dimension that has
-  # no join path to it must refuse-with-reason (listing the connected dimensions),
-  # never hand-roll a cross-table join that misjoins or hits an ambiguous column.
-  # - name: unconnected breakdown refuses with reason
-  #   question: "total bcm by campaign channel"
   #   expectRefuse: true
 `;
 
@@ -874,9 +876,10 @@ function printReport(report: EvalReport): void {
   console.log('  ' + '='.repeat(50));
 
   if (results.length === 0) {
+    // eval builds the manifest from source itself: no `zlens compile` needed.
     console.log('\n  No eval cases found.');
     console.log('  Add `examples = [{ question = "..." }]` to certified blocks,');
-    console.log('  or create eval/*.yaml cases, then run `zlens compile` and retry.\n');
+    console.log('  or add eval/*.yaml cases (`zlens eval --init` writes a starter), then retry.\n');
     return;
   }
 
@@ -892,37 +895,37 @@ function printReport(report: EvalReport): void {
 
   console.log('\n  Scores');
   console.log('  ' + '-'.repeat(50));
-  console.log(`  Cases passed:            ${scores.passed}/${scores.total}`);
-  console.log(`  Answer rate:             ${formatRate(scores.answerRate)}`);
-  console.log(`  Candidate recall:        ${formatRate(scores.executableCandidateRecall)}`);
-  console.log(`  Route accuracy:          ${formatRate(scores.routeAccuracy)}`);
-  console.log(`  Block-selection accuracy:${formatRate(scores.blockSelectionAccuracy).padStart(7)}`);
-  console.log(`  Grain-match precision:   ${formatRate(scores.grainMatchPrecision)}`);
-  console.log(`  Refusal precision:       ${formatRate(scores.refusalPrecision)}`);
-  console.log(`  Refusal recall:          ${formatRate(scores.refusalRecall)}`);
+  console.log(scoreRow('Cases passed:', `${scores.passed}/${scores.total}`));
+  console.log(scoreRow('Answer rate:', formatRate(scores.answerRate)));
+  console.log(scoreRow('Candidate recall:', formatRate(scores.executableCandidateRecall)));
+  console.log(scoreRow('Route accuracy:', formatRate(scores.routeAccuracy)));
+  console.log(scoreRow('Block-selection accuracy:', formatRate(scores.blockSelectionAccuracy)));
+  console.log(scoreRow('Grain-match precision:', formatRate(scores.grainMatchPrecision)));
+  console.log(scoreRow('Refusal precision:', formatRate(scores.refusalPrecision)));
+  console.log(scoreRow('Refusal recall:', formatRate(scores.refusalRecall)));
 
   console.log('\n  Cascade distribution');
   console.log('  ' + '-'.repeat(50));
-  console.log(`  Certified:               ${formatCountAndShare(distributions.actualRoutes.certified, scores.total)}`);
-  console.log(`  Generated:               ${formatCountAndShare(distributions.actualRoutes.generated, scores.total)}`);
-  console.log(`  Missing context:         ${formatCountAndShare(distributions.actualRoutes.missing_context, scores.total)}`);
-  console.log(`  Research:                ${formatCountAndShare(distributions.actualRoutes.research, scores.total)}`);
+  console.log(scoreRow('Certified:', formatCountAndShare(distributions.actualRoutes.certified, scores.total)));
+  console.log(scoreRow('Generated:', formatCountAndShare(distributions.actualRoutes.generated, scores.total)));
+  console.log(scoreRow('Missing context:', formatCountAndShare(distributions.actualRoutes.missing_context, scores.total)));
+  console.log(scoreRow('Research:', formatCountAndShare(distributions.actualRoutes.research, scores.total)));
 
   const t = report.thresholds;
   if (t.minRouteAccuracy !== null || t.minRefusal !== null || t.minAnswerRate !== null || t.minCandidateRecall !== null) {
     console.log('\n  Thresholds');
     console.log('  ' + '-'.repeat(50));
     if (t.minCandidateRecall !== null) {
-      console.log(`  --min-candidate-recall ${t.minCandidateRecall}  (candidate recall ${formatRate(scores.executableCandidateRecall)})`);
+      console.log(`  --min-candidate-recall ${t.minCandidateRecall}  (candidate recall ${formatThresholdActual(scores.executableCandidateRecall)})`);
     }
     if (t.minRouteAccuracy !== null) {
-      console.log(`  --min-route-accuracy ${t.minRouteAccuracy}  (route accuracy ${formatRate(scores.routeAccuracy)})`);
+      console.log(`  --min-route-accuracy ${t.minRouteAccuracy}  (route accuracy ${formatThresholdActual(scores.routeAccuracy)})`);
     }
     if (t.minRefusal !== null) {
-      console.log(`  --min-refusal ${t.minRefusal}  (refusal recall ${formatRate(scores.refusalRecall)})`);
+      console.log(`  --min-refusal ${t.minRefusal}  (refusal recall ${formatThresholdActual(scores.refusalRecall)})`);
     }
     if (t.minAnswerRate !== null) {
-      console.log(`  --min-answer-rate ${t.minAnswerRate}  (answer rate ${formatRate(scores.answerRate)})`);
+      console.log(`  --min-answer-rate ${t.minAnswerRate}  (answer rate ${formatThresholdActual(scores.answerRate)})`);
     }
     console.log(`\n  ${report.ok ? '✓ PASS — thresholds met.' : '✕ FAIL — below configured thresholds.'}`);
   }

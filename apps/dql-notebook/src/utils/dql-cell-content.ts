@@ -20,19 +20,21 @@ export function dqlCellHoldsPlainSql(content: string): boolean {
   return SQL_STATEMENT.test(code);
 }
 
-/** The DQL a new, empty DQL cell can start from. */
-export const DQL_CELL_EXAMPLE = `block "Top customers by revenue" {
-  domain = "sales"
+/**
+ * The DQL a new, empty DQL cell can start from. It runs as-is on the Jaffle
+ * sample project (`dev.orders`, `dev.locations`).
+ */
+export const DQL_CELL_EXAMPLE = `block "orders_by_store" {
+  domain = "commerce"
   type = "custom"
-  description = "Customers ranked by total revenue."
+  description = "Orders taken at each store."
   owner = "analytics"
 
   query = """
-    SELECT customer_name, SUM(amount) AS revenue
-    FROM orders
-    GROUP BY customer_name
-    ORDER BY revenue DESC
-    LIMIT 10
+    SELECT location_name, COUNT(*) AS orders
+    FROM dev.orders JOIN dev.locations USING (location_id)
+    GROUP BY 1
+    ORDER BY 2 DESC
   """
 }
 `;
@@ -44,9 +46,9 @@ export function queryCellKindLabel(cell: {
   blockBinding?: unknown;
   executionTarget?: { target?: string };
 }): string {
-  if (cell.blockBinding) return 'Certified or draft block';
+  if (cell.blockBinding) return 'Certified or draft saved query';
   if (/@(?:metric|dim)\s*\(/i.test(cell.content)) return 'Semantic query';
-  if (cell.type === 'dql') return 'DQL block';
+  if (cell.type === 'dql') return 'DQL query';
   return cell.executionTarget?.target === 'local' ? 'Local dataset SQL' : 'Warehouse SQL';
 }
 

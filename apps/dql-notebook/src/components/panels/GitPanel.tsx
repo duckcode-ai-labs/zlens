@@ -282,7 +282,7 @@ function NotARepoCard({ t, onInitialized }: { t: Theme; onInitialized: () => voi
     >
       <div style={{ color: t.textPrimary, fontWeight: 600 }}>Not a Git repository yet</div>
       <div style={{ lineHeight: 1.45 }}>
-        Initialize Git to track changes to blocks, notebooks, and apps. Nothing is sent anywhere until you add a remote.
+        Initialize Git to track changes to saved queries, notebooks, and apps. Nothing is sent anywhere until you add a remote.
       </div>
       <button
         type="button"

@@ -87,7 +87,7 @@ npm i -D @zlens/cli@latest && npx zlens --version
 ```
 
 You do **not** need a working `zlens` to upgrade, and you do **not** need to
-downgrade Node — 1.6.30+ installs on Node 20, 22, and 24. If `zlens --version`
+downgrade Node — ZLens installs on Node 20, 22, and 24. If `zlens --version`
 still shows the old number afterward, run `hash -r` (or open a new shell) and
 check `which -a zlens` for a shadowing copy.
 
@@ -104,6 +104,24 @@ zlens doctor
 
 Use `zlens init .` only if you want ZLens folders directly in the current repo
 root.
+
+### "ZLens's DuckDB driver has no prebuilt binary for Node 26 yet"
+
+You are on a Node release the DuckDB driver has no prebuilt binary for (Node
+25 or 26, or an odd-numbered one). Installing it there means compiling DuckDB
+from source, which takes over ten minutes and fails without Python and a C++
+toolchain, so ZLens stops and says so at startup, in the Connections page
+**Test**, and in `zlens doctor`. Switch to Node 24 LTS or 22 and start ZLens
+again; the driver installs on its own:
+
+```bash
+nvm install 24   # or: fnm use 24, volta install node@24
+zlens notebook
+```
+
+To compile DuckDB from source on the newer Node anyway, set
+`ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` before `zlens notebook` and install DuckDB
+from the Connections page.
 
 ### Optional connector package errors
 
@@ -152,13 +170,34 @@ Stop that process (Ctrl+C in the workbench's terminal) and run the command
 again. The workbench shows the same message when another program holds the
 file.
 
+### "This database file was written by a newer DuckDB (2.x)"
+
+The full message also shows DuckDB's own words: "Trying to read a database
+file with version number 999, but we can only read versions between 64 and
+67. The database file was created with an newer version of DuckDB."
+
+ZLens reads DuckDB files with DuckDB 1.4. DuckDB 2.0 (Python `duckdb` 2.0,
+which `dbt-duckdb` installs unless you pin it, or the 2.0 `duckdb` CLI) writes
+files that 1.4 cannot open. Stop the workbench, install DuckDB 1.4 where the
+file is built, and rebuild the file:
+
+```bash
+pip install 'duckdb<1.5'   # in the virtual environment that runs dbt
+rm jaffle_shop.duckdb      # your DuckDB file; dbt recreates it
+dbt seed && dbt build
+```
+
+To keep it pinned, add `duckdb>=1.4,<1.5` to your `requirements.txt`. The
+samples do this, and their `./setup.sh` rebuilds a file written by a newer
+DuckDB for you.
+
 ---
 
-## Authoring blocks
+## Authoring saved queries
 
 ### `zlens certify` says `tests-pass: ✗` but the data looks right
 
-The certifier runs the block against `defaultConnection` from
+The certifier runs the saved query against `defaultConnection` from
 `dql.config.json` (or the connection you pass with `--connection`). If
 your local DuckDB doesn't have the tables but your prod warehouse does,
 you'll see different test results. Pin the connection explicitly:
@@ -167,7 +206,7 @@ you'll see different test results. Pin the connection explicitly:
 zlens certify blocks/foo.dql --connection duckdb
 ```
 
-— and make sure the connection actually contains the tables the block
+— and make sure the connection actually contains the tables the saved query
 reads (for a dbt project, run `dbt build` first).
 
 ### `Block parse error in blocks/foo.dql`
@@ -181,10 +220,10 @@ query = """
 """
 ```
 
-### Block doesn't show up in the manifest
+### Saved query doesn't show up in the manifest
 
 `zlens compile` only scans `blocks/`, `dashboards/`, `workbooks/`, and
-`apps/<id>/blocks/` (when configured). If your block lives somewhere
+`apps/<id>/blocks/` (when configured). If your saved query lives somewhere
 else, add the directory to `dql.config.json`:
 
 ```json
@@ -193,7 +232,7 @@ else, add the directory to `dql.config.json`:
 }
 ```
 
-### Two blocks have the same name
+### Two saved queries have the same name
 
 The manifest keys by `block.name` (the string after `block "..."`). If
 two `.dql` files both declare `block "foo"`, the second one silently
@@ -233,9 +272,9 @@ curl -s http://127.0.0.1:3475/api/apps    | jq
 
 ### Branch viewer sees rows from other branches
 
-`@rls` only narrows when the **block** carries the decorator. Confirm:
+`@rls` only narrows when the **saved query** carries the decorator. Confirm:
 
-1. The block declares `@rls("branch", "{user.branch}")` (and `@rls("region", …)`).
+1. The saved query declares `@rls("branch", "{user.branch}")` (and `@rls("region", …)`).
 2. The App has `rlsBindings` mapping `role: "branch_viewer"` → `from: "branch"`.
 3. The member's `attributes.branch` is set.
 
@@ -248,7 +287,7 @@ curl -s http://127.0.0.1:3475/api/persona | jq '.persona.rlsContext'
 `rlsContext` should show the substituted values. If it's `{}`, the App
 binding didn't match the member's roles + attributes.
 
-### `policies[].domain = "*"` doesn't match my block's domain
+### `policies[].domain = "*"` doesn't match my saved query's domain
 
 Wildcard `*` matches every domain. If you want "any domain in the cards
 org", make policies explicit per domain (`cards`, `cards.fraud`,
@@ -287,7 +326,7 @@ node -e "
 > the agent will use Ollama. If `ollama` returns `false`, the daemon
 > isn't running. Start it: `ollama serve`.
 
-### Every certified block answer cites the same block, even when wrong
+### Every certified saved query answer cites the same saved query, even when wrong
 
 The FTS5 retrieval threshold is too loose for your domain. Tune in
 [`packages/dql-agent/src/answer-loop.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-agent/src/answer-loop.ts):
@@ -360,24 +399,48 @@ a file or wrap with `2>&1 | tee dql-slack.log`.
 
 ---
 
-## CI / `zlens verify`
+## CI / `zlens eval` and `zlens verify`
 
-### `zlens verify` says "drift" but the diff looks empty
+### `zlens eval` fails in CI: a block example routes to generated
 
-The diff prints terse change descriptions. To see the full per-block
-diff, use `--format json`:
+A certified block's `examples` must be questions that block answers as
+written. The failing line names what happened, for example
+`route expected certified, got generated`. The usual causes:
 
-```bash
-zlens verify --format json | jq
-```
+- The example names a member ("…for Matthew Meyer"). A certified block runs its
+  SQL as written and cannot filter to one member, so Ask generates SQL. Reword
+  the example, or move it to `eval/*.yaml` with `expectRoute: generated`.
+- The example asks for a measure the block does not output. A count output such
+  as `order_count` answers "number of orders" or "how many orders", not
+  "orders".
 
-Common silent drift causes:
+Run `zlens eval . --format json` to see each case's route reason in `trace`.
+See [CI with zlens eval](../tutorials/05-ci-and-verify.md#when-a-block-example-fails).
 
-- A block test result changed (a stat was non-deterministic).
-- A semantic-layer YAML moved.
-- `dbtImport` filters changed.
+### `zlens eval` rejects `--min-route-accuracy 90`
 
-If you can't pin it, force a fresh compile and inspect:
+Thresholds are shares between 0 and 1: use `0.9` for 90%. Older versions
+silently ignored an out-of-range value, which left the gate off.
+
+### `zlens verify` fails in CI with "dql-manifest.json not found"
+
+`dql-manifest.json` is gitignored, so a clean clone has none. `zlens verify` is
+a local check after `zlens compile`; running both in one CI job always passes,
+because it compares a fresh compile with itself. Gate pull requests on
+`zlens eval` instead (`zlens ci init` writes the workflow).
+
+### `zlens verify` reports drift you did not expect
+
+`zlens verify` lists each difference on its own line, and `--format json`
+prints the same list (`{ "ok": false, "drift": [...] }`). It compares block
+SQL, status and domain, plus added or removed blocks, notebooks, Apps,
+dashboards, metrics, dimensions and sources. Common causes:
+
+- A block was edited, renamed or re-certified after the last `zlens compile`.
+- A semantic-layer metric or dimension was added, removed or renamed.
+- `dbtImport` filters or the dbt manifest changed the set of sources.
+
+To compare the full manifests:
 
 ```bash
 mv dql-manifest.json /tmp/old-manifest.json
@@ -387,15 +450,15 @@ diff /tmp/old-manifest.json dql-manifest.json | head -80
 
 ### `zlens certify` is non-deterministic in CI
 
-If a block test like `assert row_count >= 100` flickers, the underlying data
+If a saved query test like `assert row_count >= 100` flickers, the underlying data
 is non-deterministic. Either:
 
 1. Pin the test data (commit a small CSV that drives the test).
 2. Loosen the assertion (a lower bound rather than an exact `==`).
 3. Move volatile expectations to `invariants` (which are documentation for the
-   agent, not executable). Note `assert` compares a single returned column to a
-   value (`assert <column> <op> <value>`) — wrap any aggregation in the block's
-   SQL and assert on the resulting column.
+   agent, not executable). Note `assert` compares a returned column to a value
+   on every row (`assert <column> <op> <value>`) — wrap any aggregation in the
+   saved query's SQL and assert on the resulting column.
 
 ---
 
@@ -403,7 +466,7 @@ is non-deterministic. Either:
 
 The architecture is small and readable. Bookmark these:
 
-- Block lifecycle and certification: [`packages/dql-governance/src/certifier.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-governance/src/certifier.ts)
+- Saved query lifecycle and certification: [`packages/dql-governance/src/certifier.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-governance/src/certifier.ts)
 - Apps + dashboards parsing: [`packages/dql-core/src/apps/`](https://github.com/duckcode-ai-labs/zlens/tree/main/packages/dql-core/src/apps)
 - Persona registry: [`packages/dql-project/src/persona.ts`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-project/src/persona.ts)
 - RLS lowering: [`packages/dql-compiler/src/ir/lowering.ts:440`](https://github.com/duckcode-ai-labs/zlens/blob/main/packages/dql-compiler/src/ir/lowering.ts) (`applyRLSDecorators`)
