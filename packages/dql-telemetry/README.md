@@ -1,4 +1,4 @@
-# @duckcodeailabs/dql-telemetry
+# @zlens/telemetry
 
 > **Deprecated.** No ZLens package or CLI command uses this package, and there is
 > no `zlens telemetry` command. ZLens does not send usage telemetry. The package is
@@ -66,7 +66,7 @@ dql telemetry on
 Or programmatically:
 
 ```ts
-import { setEnabled } from '@duckcodeailabs/dql-telemetry';
+import { setEnabled } from '@zlens/telemetry';
 setEnabled(true);
 ```
 

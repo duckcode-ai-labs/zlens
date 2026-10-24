@@ -39,7 +39,7 @@ function sourceFiles(directory: string): string[] {
   });
 }
 
-describe('DuckCode brand tokens', () => {
+describe('ZLens brand tokens', () => {
   const themes = {
     obsidian: themeBlock(':root {'),
     paper: themeBlock('[data-theme="paper"] {'),

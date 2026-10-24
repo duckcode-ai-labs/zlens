@@ -49,7 +49,7 @@
   --text-tertiary: #8d93a3;   /* 5.7:1 on --bg-2, 4.7:1 on --bg-4 (WCAG AA); #626878 was 3.1:1 */
   --text-muted: #4a5060;
 
-  --accent: #2bb3a9;             /* DuckCode deep teal, lifted for dark */
+  --accent: #2bb3a9;             /* ZLens deep teal, lifted for dark */
   --accent-hover: #4cc7bd;
   --accent-dim: rgba(43, 179, 169, 0.14);
   /* Chart series, dark surfaces (checked for colour-blind separation;
@@ -196,7 +196,7 @@
   --text-tertiary: #64676e;      /* 5.7:1 on white, 5:1 on --bg-0; #6b6e76 was 4.5:1 there */
   --text-muted: #b0b2ba;
 
-  --accent: #0b7a75;            /* DuckCode deep teal; also the certified colour */
+  --accent: #0b7a75;            /* ZLens deep teal; also the certified colour */
   --accent-hover: #09625e;
   --accent-dim: #e6f2f1;
   /* Chart series, light surfaces (checked for colour-blind separation;

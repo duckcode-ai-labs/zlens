@@ -15,8 +15,8 @@ From the repository root, first build the CLI and run the deterministic Ask
 semantic-route test:
 
 ```sh
-pnpm --filter @duckcodeailabs/dql-cli build
-pnpm --filter @duckcodeailabs/dql-cli exec vitest run src/ask-pipeline-host/manifest-only-enterprise.fixture.test.ts
+pnpm --filter @zlens/cli build
+pnpm --filter @zlens/cli exec vitest run src/ask-pipeline-host/manifest-only-enterprise.fixture.test.ts
 node apps/cli/test/fixtures/manifest-only-metricflow/run-local-acceptance.mjs
 ```
 

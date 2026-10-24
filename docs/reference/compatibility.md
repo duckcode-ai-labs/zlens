@@ -46,7 +46,7 @@ Snowflake install project-local driver packages into `.dql/connectors/`. See
 
 ## What's **not** in this repo
 
-Lives in the closed DuckCode Cloud product:
+Lives in the closed ZLens Enterprise product:
 
 - Hosted multi-user workspace with SSO, enforced RBAC, audit logs, and governed secrets
 - Organization memory, approval workflows, and permissions-aware team retrieval
