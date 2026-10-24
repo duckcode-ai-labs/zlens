@@ -248,12 +248,30 @@ describe('ZLens MCP server instructions', () => {
     expect(__test__.dqlMcpInstructionsForProfile('full')).toContain('record_correction');
   });
 
+  it('tells MCP clients in the answer tools\' descriptions to lead with the trust line', () => {
+    const descriptions = Object.fromEntries(
+      __test__.buildMcpToolRegistrations({ projectRoot: '/tmp/p' } as never).map((tool) => [tool.name, __test__.toolDescription(tool.name)]),
+    );
+    for (const name of ['query_via_block', 'query_semantic_model', 'query_via_metadata', 'answer_question']) {
+      expect(descriptions[name]).toContain('start your answer with that line');
+    }
+    expect(descriptions.ask_dql).not.toContain('trustLine');
+  });
+
+  it('sends the trust line as its own plain-text block after the JSON, with the rule to show it first', () => {
+    const wrapped = __test__.wrap({ trustLine: '🟢 Certified · saved query monthly_revenue', rows: [] }, 'query_via_block');
+    expect(JSON.parse(wrapped.content[0]!.text)).toMatchObject({ trustLine: '🟢 Certified · saved query monthly_revenue' });
+    expect(wrapped.content[1]?.text).toContain('Start your answer with this trust line');
+    expect(wrapped.content[1]?.text).toContain('**🟢 Certified · saved query monthly_revenue**');
+  });
+
   it('compacts MCP tool JSON by default to reduce token load', () => {
     const previous = process.env.ZLENS_MCP_PRETTY_JSON;
     try {
       delete process.env.ZLENS_MCP_PRETTY_JSON;
       const wrapped = __test__.wrap({ answer: 'ok', rows: [{ id: 1 }] });
       expect(wrapped.content[0]?.text).toBe('{"answer":"ok","rows":[{"id":1}]}');
+      expect(wrapped.content).toHaveLength(1);
     } finally {
       if (previous === undefined) delete process.env.ZLENS_MCP_PRETTY_JSON;
       else process.env.ZLENS_MCP_PRETTY_JSON = previous;
