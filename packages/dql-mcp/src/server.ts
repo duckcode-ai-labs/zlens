@@ -349,8 +349,14 @@ function mcpToolHandlers(ctx: DQLContext): Partial<Record<DqlToolName, Pick<McpT
   };
 }
 
+/** MCP answer tools whose results carry a `trustLine` (see trust-line.ts). */
+const TRUST_LINE_TOOLS = new Set<string>(['query_via_block', 'query_semantic_model', 'query_via_metadata', 'answer_question']);
+
 function toolDescription(name: DqlToolName): string {
-  return getDqlToolDefinition(name).description;
+  const description = getDqlToolDefinition(name).description;
+  return TRUST_LINE_TOOLS.has(name)
+    ? `${description} A result with rows starts with a trustLine (e.g. "🟢 Certified · saved query …"); start your answer with that line, in bold, word for word.`
+    : description;
 }
 
 /**
@@ -372,12 +378,32 @@ export function isToolError(result: unknown, toolName?: string): boolean {
   return typeof record.error === 'string' && record.error.trim().length > 0;
 }
 
+/**
+ * A `trustLine` inside the JSON was easy to miss: in Claude Desktop the model
+ * wrote the label somewhere in its prose, or not at all. So the line also goes
+ * out as its own plain-text block, with the rule to show it first, right next
+ * to the data. The JSON stays the first block for clients that parse it.
+ */
+function trustLineBlock(result: unknown): string | undefined {
+  const trustLine = result && typeof result === 'object' && !Array.isArray(result)
+    ? (result as { trustLine?: unknown }).trustLine
+    : undefined;
+  if (typeof trustLine !== 'string' || !trustLine.trim()) return undefined;
+  return 'Start your answer with this trust line, in bold on its own line, word for word, ' +
+    'before any number, table or chart:\n' +
+    `**${trustLine.trim()}**`;
+}
+
 function wrap(result: unknown, toolName?: string) {
   const text = readEnv('ZLENS_MCP_PRETTY_JSON') === '1'
     ? JSON.stringify(result, null, 2)
     : JSON.stringify(result);
+  const trust = trustLineBlock(result);
   return {
-    content: [{ type: 'text' as const, text }],
+    content: [
+      { type: 'text' as const, text },
+      ...(trust ? [{ type: 'text' as const, text: trust }] : []),
+    ],
     ...(isToolError(result, toolName) ? { isError: true } : {}),
   };
 }
@@ -387,6 +413,7 @@ export const __test__ = {
   isToolError,
   dqlMcpInstructionsForProfile,
   resolveMcpToolProfile,
+  toolDescription,
   wrap,
   zodRawShapeFromJsonSchema,
 };

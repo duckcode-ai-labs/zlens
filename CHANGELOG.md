@@ -8,6 +8,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### MCP: the trust line is its own text block
+
+- In Claude Desktop the `trustLine` inside the JSON result was easy to miss:
+  the model wrote the label somewhere in its prose, or not at all. Answer
+  results with a trust line now also send it as a second plain-text block,
+  `**🟢 Certified · saved query …**`, with the rule to start the answer with
+  it, and the MCP descriptions of `query_via_block`, `query_semantic_model`,
+  `query_via_metadata` and `answer_question` say the same. The JSON is still
+  the first block, unchanged; a client that joins every text block before
+  parsing JSON should parse the first block only.
+
 ## v0.2.6 - 2026-10-23
 
 A patch for honest answers over MCP and Ask.
