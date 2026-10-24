@@ -8658,6 +8658,8 @@ describe('prepareLocalExecution', () => {
         filter: 'season_range',
         mode: 'parameter',
         paramNames: ['season_start', 'season_end'],
+        values: [2016, 2017],
+        op: 'between',
       },
     ]);
   });
@@ -8690,7 +8692,28 @@ describe('prepareLocalExecution', () => {
       filter: 'region',
       binding: 'region',
       mode: 'predicate',
+      // The receipt names the chosen values, so the applied record carries them.
+      values: ['East', 'West'],
     });
+  });
+
+  it('records the value a reader filter applied to a saved-query tile, so its receipt can name it', () => {
+    const applied = applyDashboardFiltersToBlockExecution({
+      sql: 'SELECT customer_name, SUM(amount) AS revenue FROM marts.orders GROUP BY 1',
+      sqlParams: [],
+      variables: { customer_name: 'Melissa Lopez' },
+      block: { name: 'Top beverage customers' },
+      dashboard: { filters: [{ id: 'customer_name', label: 'customer_name', type: 'select', bindsTo: 'customer_name' }] },
+      tileId: 'top',
+      tileFilterBindings: [{ filter: 'customer_name', binding: 'customer_name', mode: 'predicate' }],
+    });
+    expect(applied.appliedFilters).toEqual([{
+      filter: 'customer_name',
+      binding: 'customer_name',
+      mode: 'predicate',
+      paramNames: ['__dashboard_filter_customer_name_value'],
+      values: ['Melissa Lopez'],
+    }]);
   });
 
   it('applies a server-proven App tile binding added by the manual filter editor', () => {
@@ -8904,7 +8927,7 @@ describe('prepareLocalExecution', () => {
       tileId: 'regional',
       tileFilterBindings: [{ filter: 'region', binding: 'region', mode: 'predicate', capability: 'preflight_required' }],
     });
-    expect(linked.appliedFilters).toEqual([{ filter: 'region', mode: 'parameter', paramNames: ['region'] }]);
+    expect(linked.appliedFilters).toEqual([{ filter: 'region', mode: 'parameter', paramNames: ['region'], values: ['East'] }]);
   });
 
   it('removes a "Does not apply" filter from the values a tile sees', () => {
@@ -8950,7 +8973,7 @@ describe('prepareLocalExecution', () => {
       dashboard: { filters: [{ id: 'period', type: 'relative_date' }] },
       now: new Date('2026-03-10T12:00:00Z'),
     });
-    expect(applied.appliedFilters).toEqual([{ filter: 'period', mode: 'parameter', paramNames: ['period_start', 'period_end'] }]);
+    expect(applied.appliedFilters).toEqual([{ filter: 'period', mode: 'parameter', paramNames: ['period_start', 'period_end'], values: ['month_to_date'] }]);
     expect(applied.variables).toMatchObject({ period_start: '2026-03-01', period_end: '2026-03-10' });
   });
 

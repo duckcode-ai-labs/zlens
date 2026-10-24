@@ -9,7 +9,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { join, dirname, relative, basename, sep } from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { hostActor, hostActorDisplayName } from './host/request-context.js';
-import { blockCertificationByline, blockPreviousCertificationByline, bylineForViewer, gitUserName, localPersonAliases, localPersonSelf, personDisplayName, type CertificationByline } from './certification-receipt.js';
+import { blockCertificationByline, blockPreviousCertificationByline, bylineForViewer, gitUserName, localPersonAliases, localPersonIdentity, localPersonSelf, personDisplayName, type CertificationByline } from './certification-receipt.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import { pinForReader, previewWithoutFigures, WITHHELD_ANSWER } from './host/answer-figures.js';
 import type {
@@ -2184,6 +2184,25 @@ export function appOwnerDisplayName(projectRoot: string, identity: string | null
  */
 function appCertifierName(projectRoot: string, owner: string): string {
   return (hostActor() ? hostActorDisplayName() ?? hostActor() : gitUserName(projectRoot)) ?? owner;
+}
+
+/**
+ * The person an App's files name as its owner: the host's signed-in person,
+ * else this machine's person the way a certification receipt records them
+ * (git `user.email`, named by git `user.name`), and `$USER@local` only when
+ * git has no identity.
+ */
+export function appPublisher(projectRoot: string): { id: string; name: string } {
+  const actor = hostActor();
+  if (actor) return { id: actor, name: hostActorDisplayName() ?? actor };
+  const id = localPersonIdentity(projectRoot);
+  return { id, name: gitUserName(projectRoot) ?? id };
+}
+
+/** An owner's member record: this machine's person by their display name, anyone else as given. */
+function appOwnerMember(owner: string, publisher: { id: string; name: string }): AppDocument['members'][number] {
+  const displayName = owner === publisher.id ? publisher.name : owner;
+  return { userId: owner, displayName, roles: ['owner', 'analyst'] };
 }
 
 /** When an App's files last changed: its document and its pages. */
@@ -8848,8 +8867,10 @@ export function publishStoredAppBuildDraft(
 
   const stage = join(projectRoot, '.dql', 'local', 'app-build-staging', `${draft.id}-${Date.now()}`);
   const dashboardDir = join(stage, 'dashboards');
-  // With a host, the person publishing owns it; otherwise this machine's user.
-  const owner = hostActor() ?? `${process.env.USER ?? 'owner'}@local`;
+  // With a host, the person publishing owns it; otherwise this machine's
+  // person by their git identity, as certification receipts name them.
+  const publisher = appPublisher(projectRoot);
+  const owner = publisher.id;
   const domain = draft.pages[0]?.metadata.domain || 'general';
   const name = draft.name.trim() || draft.appId;
   const publishedSources = appBuildSourcesUsedByTiles(draft);
@@ -8883,7 +8904,7 @@ export function publishStoredAppBuildDraft(
     ...(lifecycle === 'certified' ? { certifiedBy: appCertifierName(projectRoot, owner), certifiedAt: new Date().toISOString() } : {}),
     ...(trust.total > 0 ? { tileTrust: publishedAppTileTrust(trust) } : {}),
     owners: [owner],
-    members: [{ userId: owner, displayName: owner, roles: ['owner', 'analyst'] }],
+    members: [appOwnerMember(owner, publisher)],
     roles: [
       { id: 'owner', displayName: 'Owner' },
       { id: 'analyst', displayName: 'Analyst' },
@@ -8923,7 +8944,7 @@ export function publishStoredAppBuildDraft(
     for (const page of committedPages) {
       writeFileSync(join(dashboardDir, `${page.id}.dqld`), JSON.stringify(page, null, 2) + '\n', 'utf-8');
     }
-    writeFileSync(join(stage, 'README.md'), appReadme(app, draft.frame.audience ?? '', [], committedPages[0].id), 'utf-8');
+    writeFileSync(join(stage, 'README.md'), appReadme(app, draft.frame.audience ?? '', publishedSources.flatMap(appReadmeSourceData), committedPages[0].id), 'utf-8');
     mkdirSync(dirname(destination), { recursive: true });
     if (draft.baseApp) {
       const backup = join(projectRoot, '.dql', 'local', 'app-build-staging', `${draft.id}-backup-${Date.now()}`);
@@ -9445,7 +9466,8 @@ export function createAppPackage(
   const dashboardTitle = cleanString(input.dashboardTitle) || 'Overview';
   const dashboardId = slugify(dashboardTitle) || 'overview';
 
-  const owner = cleanString(input.owners?.[0]) || hostActor() || `${process.env.USER ?? 'owner'}@local`;
+  const publisher = appPublisher(projectRoot);
+  const owner = cleanString(input.owners?.[0]) || publisher.id;
   const audience = cleanString(input.audience);
   const subdomain = cleanString(input.subdomain);
   const groups = normalizeTags(input.groups ?? []);
@@ -9484,9 +9506,7 @@ export function createAppPackage(
     lifecycle,
     owners: [owner],
     tags,
-    members: [
-      { userId: owner, displayName: owner, roles: ['owner', 'analyst'] },
-    ],
+    members: [appOwnerMember(owner, publisher)],
     roles: [
       { id: 'owner', displayName: 'Owner', description: 'Full access to dashboards and App configuration.' },
       { id: 'analyst', displayName: 'Analyst', description: 'Can execute dashboards and review generated drafts.' },
@@ -9559,7 +9579,12 @@ export function createAppPackage(
   mkdirSync(join(appDir, 'drafts'), { recursive: true });
   writeFileSync(join(appDir, 'dql.app.json'), JSON.stringify(app, null, 2) + '\n', 'utf-8');
   writeFileSync(join(appDir, 'dashboards', `${dashboardId}.dqld`), JSON.stringify(dashboard, null, 2) + '\n', 'utf-8');
-  writeFileSync(join(appDir, 'README.md'), appReadme(app, audience, selectedBlocks, dashboardId), 'utf-8');
+  writeFileSync(join(appDir, 'README.md'), appReadme(app, audience, selectedBlocks.map((block) => ({
+    name: appReadmeName(block.name),
+    kind: 'Saved query' as const,
+    certified: block.status === 'certified',
+    path: block.path,
+  })), dashboardId), 'utf-8');
 
   const created = collectAppsList(projectRoot).find((entry) => entry.id === id);
   if (!created) return { ok: false, error: `App was written but could not be reloaded: ${id}` };
@@ -10053,7 +10078,57 @@ function recommendationRationale(
     : `Recommended ${component} with ${viz} as a safe table-first presentation fallback.`;
 }
 
-function appReadme(app: AppDocument, audience: string, blocks: BlockCandidate[], dashboardId = 'overview'): string {
+/** One piece of data an App uses, as its README lists it. */
+export interface AppReadmeData {
+  name: string;
+  /** The App Studio glossary: a Saved query, a Table or Metrics. */
+  kind: 'Saved query' | 'Table' | 'Metrics';
+  certified: boolean;
+  path?: string;
+}
+
+/** "top_customers" reads "Top Customers"; a name with spaces is kept as written. */
+function appReadmeName(name: string): string {
+  const trimmed = name.trim();
+  return /\s/.test(trimmed) ? trimmed : trimmed.replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+/** A published App's data source as its README lists it; page text is not data. */
+export function appReadmeSourceData(source: AppBuildDraftSource): AppReadmeData[] {
+  if (source.kind === 'text') return [];
+  const dataset = source.capabilities?.dataset;
+  const kind: AppReadmeData['kind'] = source.kind === 'governed_semantic' || source.kind === 'semantic_query'
+    || dataset?.kind === 'semantic' || source.capabilities?.semanticModelId
+    ? 'Metrics'
+    : dataset && !dataset.result ? 'Table' : 'Saved query';
+  const identity = (source.qualifiedIdentity ?? source.id).split('::').map((part) => part.trim()).filter(Boolean);
+  const fromPath = (source.sourcePath ?? source.sourceRef ?? '').split('/').pop()?.replace(/\.(dql|ya?ml|sql)$/i, '');
+  const name = dataset?.label?.trim()
+    || (identity.length >= 3 ? identity[2] : undefined)
+    || fromPath
+    || source.id;
+  return [{
+    name: appReadmeName(name),
+    kind,
+    certified: source.trustState === 'certified' && (!source.lifecycle || source.lifecycle === 'certified'),
+    ...(source.sourcePath ? { path: source.sourcePath } : {}),
+  }];
+}
+
+/** "Kranthi <kranthi@example.com>" for a member with a display name, else the id. */
+function appReadmeOwner(app: AppDocument, owner: string): string {
+  const displayName = app.members.find((member) => member.userId === owner)?.displayName?.trim();
+  return displayName && displayName !== owner ? `${displayName} <${owner}>` : owner;
+}
+
+export function appReadme(app: AppDocument, audience: string, data: AppReadmeData[], dashboardId = 'overview'): string {
+  const seen = new Set<string>();
+  const listed = data.filter((item) => {
+    const key = `${item.kind}:${item.name.toLowerCase()}:${item.path ?? ''}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   return [
     `# ${app.name}`,
     '',
@@ -10065,17 +10140,18 @@ function appReadme(app: AppDocument, audience: string, blocks: BlockCandidate[],
     `- Audience: ${audience || 'not specified'}`,
     `- Visibility: ${app.visibility}`,
     `- Lifecycle: ${app.lifecycle}`,
-    `- Owners: ${app.owners.join(', ')}`,
+    `- Owners: ${app.owners.map((owner) => appReadmeOwner(app, owner)).join(', ')}`,
     `- Starter dashboard: dashboards/${dashboardId}.dqld`,
     `- Supporting notebooks: notebooks/`,
     `- Draft blocks: drafts/`,
     '',
-    '## Selected Certified Blocks',
-    '',
-    ...(blocks.length > 0
-      ? blocks.map((block) => `- ${block.name} (${block.domain}, ${block.status}) - ${block.path}`)
-      : ['No blocks selected yet. Add certified blocks from the Apps Command Center.']),
-    '',
+    // The data its tiles read, in App Studio's words. An App with no data yet gets no section.
+    ...(listed.length > 0 ? [
+      '## Data',
+      '',
+      ...listed.map((item) => `- ${item.name} · ${item.kind} · ${item.certified ? 'Certified' : 'Not certified yet'}${item.path ? ` (${item.path})` : ''}`),
+      '',
+    ] : []),
     '## Governance',
     '',
     'This OSS App uses local persona switching with owner, analyst, and viewer roles. Real authentication and SSO are intentionally outside OSS scope.',
@@ -12278,7 +12354,7 @@ function promoteAiPinToDraftBlock(
       `  domain = "${escapeDqlString(loaded.app.domain)}"`,
       '  type = "custom"',
       '  status = "review"',
-      `  owner = "${escapeDqlString(loaded.app.owners[0] ?? `${process.env.USER ?? 'analyst'}@local`)}"`,
+      `  owner = "${escapeDqlString(loaded.app.owners[0] ?? appPublisher(projectRoot).id)}"`,
       // With a host, a draft block is project content: it says what it answers, not the pinner's figures.
       `  description = "${escapeDqlString((currentRecordOwner() !== undefined ? pin.question || pin.title : pin.answer).slice(0, 240))}"`,
       sourceContext ? `  llmContext = "${escapeDqlString(sourceContext.slice(0, 800))}"` : '',

@@ -8,6 +8,20 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Apps: fixes found while walking the Jaffle sample
+
+- **Receipts name a reader's filter value on saved-query tiles.** A tile's
+  receipt read "Filters: Customer Name any" after Filter by Customer Name =
+  Melissa Lopez; it now reads "Customer Name Melissa Lopez", like table tiles.
+- **"Certify now (recommended)" stays inside its button** in the publish
+  dialog when the item's text wraps; the text wraps instead.
+- **The Filters tab names a related-table field once:** "…has no Location
+  Name field.", not "Location Location Name".
+- **Published App files name your git identity.** `dql.app.json` members and
+  the App's `README.md` use git `user.name` and `user.email`, as certification
+  receipts do; `$USER@local` only when git has none. The README lists the
+  App's saved queries, tables and Metrics instead of "No blocks selected yet".
+
 ## v0.2.8 - 2026-10-24
 
 A branding patch: ZLens replaces DuckCode in everything people read. There are

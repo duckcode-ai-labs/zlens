@@ -72,4 +72,19 @@ describe('reader trust (RFC 0008 step 6)', () => {
     ])).toBe('Ordered At from 1 Jan 2025 · Ordered At before 1 Jul 2025');
     expect(receipt([{ field: 'customer_name', op: 'in', values: ['Angela Moyer'] }])).toBe('Customer Name Angela Moyer');
   });
+
+  it('names the value a reader filter applied to a saved-query tile, never "any"', () => {
+    const receipt = (applied: unknown[]) => readerTileReceipt(item(), tile({ filters: { applied } } as never), null, undefined)
+      .find((row) => row.label === 'Filters')?.value;
+    // The block-tile record the server now sends for "Filter by Customer Name = Melissa Lopez".
+    expect(receipt([{ filter: 'customer_name', binding: 'customer_name', mode: 'predicate', paramNames: ['p'], values: ['Melissa Lopez'] }]))
+      .toBe('Customer Name Melissa Lopez');
+    expect(receipt([{ filter: 'location_name', mode: 'parameter', paramNames: ['location_name'], values: ['Philadelphia', 'Brooklyn'] }]))
+      .toBe('Location Name Philadelphia, Brooklyn');
+    expect(receipt([{ filter: 'ordered_at', mode: 'predicate', values: [{ start: '2025-01-01', end: '2025-06-30' }] }]))
+      .toBe('Ordered At 1 Jan 2025 – 30 Jun 2025');
+    // An older server sent no values: the filter still applied, so it reads as the field alone.
+    expect(receipt([{ filter: 'customer_name', binding: 'customer_name', mode: 'predicate', paramNames: [] }])).toBe('Customer Name');
+    expect(receipt([{ filter: 'customer_name', mode: 'predicate', values: [] }])).not.toMatch(/\bany\b/);
+  });
 });

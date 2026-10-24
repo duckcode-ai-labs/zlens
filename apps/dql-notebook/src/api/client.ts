@@ -2757,8 +2757,8 @@ export interface DashboardDatasetCacheDeliveryReceipt {
 /**
  * A server-applied dashboard filter. Legacy block executions identify the
  * dashboard filter by `filter`; Dataset executions identify the approved
- * physical field and operator instead. Raw values are never displayed by the
- * App evidence UI.
+ * physical field and operator instead. Both carry the applied `values`, which
+ * the tile's receipt names ("Customer Name Melissa Lopez").
  */
 export interface DashboardRunAppliedFilter {
   filter?: string;

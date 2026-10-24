@@ -39168,8 +39168,27 @@ export interface DashboardFilterApplicationResult {
     binding?: string;
     mode: 'parameter' | 'predicate';
     paramNames: string[];
+    /**
+     * The value(s) the reader chose, so the tile's receipt names them
+     * ("Customer Name Melissa Lopez") the same way a table tile's does.
+     */
+    values: unknown[];
+    /** `between` when a two-ended date or number range was applied as a list. */
+    op?: 'between';
   }>;
   skippedFilters: DashboardTileFilterSkip[];
+}
+
+/** The applied value(s) of one page filter, shaped like a table tile's `values`. */
+export function dashboardAppliedFilterValues(
+  filter: Pick<NonNullable<DashboardDocument['filters']>[number], 'type'>,
+  value: unknown,
+): { values: unknown[]; op?: 'between' } {
+  if (Array.isArray(value)) {
+    if ((isDashboardDateFilterType(filter.type) || filter.type === 'number_range') && value.length === 2) return { values: [...value], op: 'between' };
+    return { values: [...value] };
+  }
+  return { values: [value] };
 }
 
 export function dashboardRuntimeVariables(
@@ -39434,6 +39453,7 @@ export function applyDashboardFiltersToBlockExecution(input: {
         filter: filter.id,
         mode: 'parameter',
         paramNames,
+        ...dashboardAppliedFilterValues(filter, value),
       });
       continue;
     }
@@ -39481,6 +39501,7 @@ export function applyDashboardFiltersToBlockExecution(input: {
       paramNames: sqlParams
         .filter((param) => param.name.startsWith(`__dashboard_filter_${normalizeDashboardFilterName(filter.id)}_`))
         .map((param) => param.name),
+      ...dashboardAppliedFilterValues(filter, value),
     });
   }
 
