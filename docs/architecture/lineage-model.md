@@ -99,7 +99,7 @@ for one set of filter values.
 ## Column-level lineage
 
 Table-level lineage is fully open-source. **Column-level lineage is a
-commercial feature** in the DuckCode Cloud build — see the
-[OSS/Cloud boundary](https://github.com/duckcode-ai-labs/zlens/blob/main/ROADMAP.md#commercial-gate--osscloud-boundary).
+commercial feature** in the ZLens Enterprise build — see the
+[OSS boundaries](https://github.com/duckcode-ai-labs/zlens/blob/main/ROADMAP.md#oss-boundaries).
 The manifest output is identical in both builds; column-level is gated at
 the surface, not in the graph.

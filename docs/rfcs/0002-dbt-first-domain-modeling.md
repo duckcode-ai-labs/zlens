@@ -1,4 +1,4 @@
-# RFC 0002: dbt-first domain modeling for DuckCode DQL
+# RFC 0002: dbt-first domain modeling for ZLens
 
 | Field              | Value                                                |
 | ------------------ | ---------------------------------------------------- |

@@ -2,7 +2,7 @@
 
 Official command-line interface for ZLens.
 
-Use the CLI to scaffold projects, validate blocks, preview charts locally, and build static bundles without DuckCode Studio.
+Use the CLI to scaffold projects, validate blocks, preview charts locally, and build static bundles, all on your own machine.
 
 ## Install
 

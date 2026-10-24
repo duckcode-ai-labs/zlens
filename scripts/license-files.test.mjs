@@ -1,4 +1,4 @@
-// Every package DQL publishes is Apache-2.0 and its npm tarball carries the
+// Every package ZLens publishes is Apache-2.0 and its npm tarball carries the
 // licence text and the NOTICE. Run: node --test scripts/license-files.test.mjs
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -55,9 +55,10 @@ test('root LICENSE is the verbatim Apache License 2.0 text', () => {
   assert.equal(digest, APACHE_2_SHA256);
 });
 
-test('root NOTICE names DQL and its copyright holder', () => {
+test('root NOTICE names ZLens and its copyright holder', () => {
   const notice = readFileSync(path.join(root, 'NOTICE'), 'utf-8');
-  assert.match(notice, /^DQL\nCopyright 2026 DuckCode AI Labs\n/);
+  assert.match(notice, /^ZLens\nCopyright 2026 DuckCode AI Labs\n/);
+  assert.match(notice, /\nZLens is a product of DuckCode AI Labs\n/);
 });
 
 test('the VS Code extension LICENSE.txt is the full root LICENSE', () => {

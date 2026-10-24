@@ -3,7 +3,7 @@
   "version": "0.2.7",
   "description": "Scaffold a new ZLens project. Run with: npx create-zlens-app <name>",
   "license": "Apache-2.0",
-  "author": "DuckCode AI Labs",
+  "author": "ZLens",
   "homepage": "https://github.com/duckcode-ai-labs/zlens",
   "bugs": {
     "url": "https://github.com/duckcode-ai-labs/zlens/issues"
