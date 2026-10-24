@@ -188,8 +188,11 @@ async function call(lane, mcp, name, args, expectation, { timeoutMs = CALL_TIMEO
   }
   const ms = Date.now() - started;
   const text = response?.content?.map((item) => item.text ?? '').join('') ?? '';
+  // The JSON result is the first text block; an answer with a trust line adds
+  // a second, plain-text block after it.
+  const json = response?.content?.[0]?.text ?? '';
   let body;
-  try { body = text ? JSON.parse(text) : undefined; } catch { body = undefined; }
+  try { body = json ? JSON.parse(json) : undefined; } catch { body = undefined; }
   const outcome = { isError: Boolean(response?.isError), text, body, thrown, ms };
   let failure;
   try {

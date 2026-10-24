@@ -16,7 +16,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   `**🟢 Certified · saved query …**`, with the rule to start the answer with
   it, and the MCP descriptions of `query_via_block`, `query_semantic_model`,
   `query_via_metadata` and `answer_question` say the same. The JSON is still
-  the first block, unchanged.
+  the first block, unchanged; a client that joins every text block before
+  parsing JSON should parse the first block only.
 
 ## v0.2.6 - 2026-10-23
 
