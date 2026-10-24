@@ -1,6 +1,6 @@
 {
   "name": "@zlens/governance",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "ZLens governance: block testing, certification, cost estimation, and access policies",
   "license": "Apache-2.0",
   "type": "module",

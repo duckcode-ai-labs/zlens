@@ -1,6 +1,6 @@
 {
   "name": "@zlens/notebook",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "description": "Notebook document model and execution helpers for ZLens",
   "license": "Apache-2.0",
   "type": "module",
