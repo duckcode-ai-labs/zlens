@@ -8,6 +8,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.8 - 2026-10-24
+
+A branding patch: ZLens replaces DuckCode in everything people read. There are
+no behaviour changes.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.8` in each project.
+
+### Brand: ZLens replaces DuckCode in everything people read
+
+- The docs, code comments and package metadata say **ZLens**:
+  - `create-zlens-app`'s author is ZLens.
+  - `NOTICE` reads "ZLens is a product of DuckCode AI Labs".
+- DuckCode AI Labs remains the copyright holder and the GitHub organisation.
+- Theme token names and values are unchanged, so embedding hosts need no
+  change.
+
 ## v0.2.7 - 2026-10-23
 
 A patch for MCP clients. Every answer's trust line now arrives as its own text

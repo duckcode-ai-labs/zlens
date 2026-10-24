@@ -11,7 +11,7 @@
     "validate": "zlens validate"
   },
   "devDependencies": {
-    "@zlens/cli": "^0.2.7"
+    "@zlens/cli": "^0.2.8"
   },
   "engines": {
     "node": ">=20"
