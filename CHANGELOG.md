@@ -8,6 +8,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.9 - 2026-10-24
+
+A patch for Apps, found by walking the Jaffle sample on 0.2.8.
+- Receipts name a reader's filter value on saved-query tiles.
+- The certify button keeps its label inside it.
+- A related-table field is named once.
+- Published App files use your git identity, and the App's README lists its
+  data.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.9` in each project.
+
 ### Apps: fixes found while walking the Jaffle sample
 
 - **Receipts name a reader's filter value on saved-query tiles.** A tile's

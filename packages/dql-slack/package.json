@@ -1,6 +1,6 @@
 {
   "name": "@zlens/slack",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "ZLens Slack front-end: slash-command bot that answers via the block-first agent loop",
   "license": "Apache-2.0",
   "type": "module",

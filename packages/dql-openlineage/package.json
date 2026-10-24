@@ -1,6 +1,6 @@
 {
   "name": "@zlens/openlineage",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "OpenLineage event emitter for ZLens block and notebook runs.",
   "license": "Apache-2.0",
   "type": "module",

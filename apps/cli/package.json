@@ -1,6 +1,6 @@
 {
   "name": "@zlens/cli",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Public CLI for ZLens: parsing, formatting, testing, and certifying DQL blocks",
   "license": "Apache-2.0",
   "type": "module",
