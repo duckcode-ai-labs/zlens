@@ -1,6 +1,6 @@
 {
   "name": "@zlens/dql-lsp",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "DQL Language Server Protocol implementation",
   "license": "Apache-2.0",
   "type": "module",

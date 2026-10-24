@@ -1,6 +1,6 @@
 {
   "name": "create-zlens-app",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "Scaffold a new ZLens project. Run with: npx create-zlens-app <name>",
   "license": "Apache-2.0",
   "author": "ZLens",

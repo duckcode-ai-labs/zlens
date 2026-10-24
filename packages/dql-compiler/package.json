@@ -1,6 +1,6 @@
 {
   "name": "@zlens/dql-compiler",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "DQL compiler: IR lowering, Vega-Lite code generation, HTML/CSS emitting",
   "license": "Apache-2.0",
   "type": "module",

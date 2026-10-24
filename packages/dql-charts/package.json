@@ -1,6 +1,6 @@
 {
   "name": "@zlens/charts",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "description": "ZLens chart library: visx-powered React SVG components for reusable analytics blocks",
   "license": "Apache-2.0",
   "type": "module",
