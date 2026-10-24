@@ -8,6 +8,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.7 - 2026-10-23
+
+A patch for MCP clients. Every answer's trust line now arrives as its own text
+block, so Claude Desktop, Codex and other clients start their answer with
+`🟢 Certified`, `🔵 From Metrics` or `🟠 AI-Generated` rather than burying it.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.7` in each project.
+
 ### MCP: the trust line is its own text block
 
 - In Claude Desktop the `trustLine` inside the JSON result was easy to miss:
