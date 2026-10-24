@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import { Readable } from 'node:stream';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AppPlan, AppSourceCatalogRecord } from '@zlens/agent';
@@ -41,6 +42,8 @@ import {
   openAppAiBuildInStudio,
   writeDashboardForTest,
   readAppsPublishSettings,
+  appReadme,
+  appReadmeSourceData,
   rebindPublishedBlockPlaceholders,
 } from './apps-api.js';
 
@@ -458,6 +461,76 @@ describe('Apps command center API helpers', () => {
       layout: { responsive: { wide: { cols: 12 }, medium: { cols: 6 }, narrow: { cols: 1 } } },
     });
     expect(existsSync(join(root, '.dql/local/app-build-staging', draft.id))).toBe(false);
+  });
+
+  it('names the git identity as the published App\'s owner, as certification receipts do (0.2.8 recording bug 4)', () => {
+    const root = createProject();
+    execFileSync('git', ['init', '-q'], { cwd: root });
+    execFileSync('git', ['config', 'user.name', 'Ana Analyst'], { cwd: root });
+    execFileSync('git', ['config', 'user.email', 'ana@example.com'], { cwd: root });
+    const draft = createStoredAppBuildDraft(root, {
+      appId: 'owner-check', name: 'Owner Check', goal: 'Owner Check', domain: 'finance',
+      authoringMode: 'manual', sourcePolicy: 'governed_only',
+    });
+    publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, draft));
+
+    const app = JSON.parse(readFileSync(join(root, 'apps/owner-check/dql.app.json'), 'utf-8'));
+    expect(app.owners).toEqual(['ana@example.com']);
+    expect(app.members).toEqual([{ userId: 'ana@example.com', displayName: 'Ana Analyst', roles: ['owner', 'analyst'] }]);
+    const readme = readFileSync(join(root, 'apps/owner-check/README.md'), 'utf-8');
+    expect(readme).toContain('- Owners: Ana Analyst <ana@example.com>');
+    expect(readme).not.toContain('@local');
+    // An App with no data yet says nothing untrue about blocks or an old screen name.
+    expect(readme).not.toMatch(/No blocks selected|Apps Command Center|## Data/);
+  });
+
+  it('falls back to $USER@local only when git has no identity', () => {
+    const root = createProject();
+    vi.stubEnv('GIT_CONFIG_GLOBAL', join(root, 'no-global-gitconfig'));
+    vi.stubEnv('GIT_CONFIG_NOSYSTEM', '1');
+    vi.stubEnv('USER', 'kranthi');
+    try {
+      const draft = createStoredAppBuildDraft(root, {
+        appId: 'no-git', name: 'No Git', goal: 'No Git', domain: 'finance',
+        authoringMode: 'manual', sourcePolicy: 'governed_only',
+      });
+      publishStoredAppBuildDraft(root, markStoredAppBuildDraftPreflighted(root, draft));
+      const app = JSON.parse(readFileSync(join(root, 'apps/no-git/dql.app.json'), 'utf-8'));
+      expect(app.owners).toEqual(['kranthi@local']);
+      expect(app.members[0]).toMatchObject({ userId: 'kranthi@local', displayName: 'kranthi@local' });
+      expect(readFileSync(join(root, 'apps/no-git/README.md'), 'utf-8')).toContain('- Owners: kranthi@local\n');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('lists an App\'s saved queries, tables and metrics in its README, in App Studio\'s words', () => {
+    const source = (extra: Partial<AppBuildDraftSource>): AppBuildDraftSource => ({
+      id: 'src', kind: 'certified_block', sourceRef: 'blocks/x.dql', trustState: 'certified', reviewStatus: 'not_required', ...extra,
+    });
+    const data = [
+      source({ id: 'commerce::block::top_beverage_customers::8f7fac5d', kind: 'certified_block', qualifiedIdentity: 'commerce::block::top_beverage_customers::8f7fac5d', sourcePath: 'blocks/top_beverage_customers.dql', lifecycle: 'certified' }),
+      source({ id: 'orders-table', kind: 'review_block', trustState: 'review_required', capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], dataset: { label: 'Orders' } as DatasetDescriptor } }),
+      source({ id: 'metrics', kind: 'governed_semantic', capabilities: { measures: [], dimensions: [], outputs: [], filters: [], parameters: [], semanticModelId: 'orders' }, sourceRef: 'semantic/orders.yaml' }),
+      source({ id: 'note', kind: 'text', sourceRef: 'ask:note' }),
+    ].flatMap(appReadmeSourceData);
+    expect(data).toEqual([
+      { name: 'Top Beverage Customers', kind: 'Saved query', certified: true, path: 'blocks/top_beverage_customers.dql' },
+      { name: 'Orders', kind: 'Table', certified: false },
+      { name: 'Orders', kind: 'Metrics', certified: true },
+    ]);
+    const readme = appReadme({
+      version: 1, id: 'growth', name: 'Growth', domain: 'growth', visibility: 'shared', lifecycle: 'review',
+      owners: ['ana@example.com'], members: [{ userId: 'ana@example.com', displayName: 'Ana Analyst', roles: ['owner'] }],
+    } as never, 'leaders', data, 'overview');
+    expect(readme).toContain([
+      '## Data',
+      '',
+      '- Top Beverage Customers · Saved query · Certified (blocks/top_beverage_customers.dql)',
+      '- Orders · Table · Not certified yet',
+      '- Orders · Metrics · Certified',
+    ].join('\n'));
+    expect(readme).not.toMatch(/No blocks selected|Apps Command Center/);
   });
 
   it('keeps alerts, governance and other App files when a published App is republished (evaluation I1)', () => {

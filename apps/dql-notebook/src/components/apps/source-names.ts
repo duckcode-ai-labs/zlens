@@ -59,8 +59,23 @@ export function plainSourceText(text: string | null | undefined): string {
 
 /** "Monthly Revenue has no Customer Name field." */
 export function missingFieldReason(sourceName: string, field: string): string {
-  const fieldLabel = field.trim().replace(/[_-]+/g, ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
-  return `${sourceDisplayName(sourceName)} has no ${fieldLabel} field.`;
+  return `${sourceDisplayName(sourceName)} has no ${readableFieldLabel(field)} field.`;
+}
+
+/**
+ * The words for a field id. A related-table field is `<table>__<column>`, and
+ * its column often already starts with the table's name: `location__location_name`
+ * reads "Location Name", not "Location Location Name"; `customer__name` reads
+ * "Customer Name".
+ */
+export function readableFieldLabel(field: string): string {
+  const words = field.trim().split(/[\s_-]+/).filter(Boolean).map((word) => word.charAt(0).toUpperCase() + word.slice(1));
+  // Drop a leading run of words that the next words repeat ("Location Location Name").
+  for (let size = Math.floor(words.length / 2); size >= 1; size -= 1) {
+    const head = words.slice(0, size).join(' ').toLowerCase();
+    if (head === words.slice(size, size * 2).join(' ').toLowerCase()) return words.slice(size).join(' ');
+  }
+  return words.join(' ');
 }
 
 /**

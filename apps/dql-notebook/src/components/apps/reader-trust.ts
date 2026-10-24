@@ -104,7 +104,7 @@ export function readerTileReceipt(
   push('Calculations', calculationWords(item.query as TileQuery | undefined).join(' · ') || undefined);
   const applied = tile?.filters?.applied ?? [];
   push('Filters', applied.length
-    ? applied.map((filter) => `${formatBusinessLabel(filter.field ?? filter.filter ?? 'filter')} ${filterOperatorWords(filter.op)}${formatFilterValue(filter.values, filter.op)}`).join(' · ')
+    ? applied.map((filter) => appliedFilterWords(filter)).join(' · ')
     : 'None applied');
   const rowCount = tile?.result?.rowCount ?? tile?.result?.rows?.length;
   push('Rows', rowCount !== undefined ? rowCount.toLocaleString() : undefined);
@@ -138,10 +138,23 @@ function filterOperatorWords(op: string | undefined): string {
   return OPERATOR_WORDS[op] ?? `${op} `;
 }
 
-function formatFilterValue(value: unknown, op?: string): string {
+type AppliedFilter = NonNullable<NonNullable<RunTile['filters']>['applied']>[number];
+
+/**
+ * "Customer Name Melissa Lopez", "Order Date from 1 Jan 2024". An applied
+ * filter always narrowed the tile, so it never reads "any": when an older
+ * server sent no value, the receipt names the field alone.
+ */
+export function appliedFilterWords(filter: AppliedFilter): string {
+  const label = formatBusinessLabel(filter.field ?? filter.filter ?? 'filter');
+  const value = formatFilterValue(filter.values, filter.op);
+  return value ? `${label} ${filterOperatorWords(filter.op)}${value}` : label;
+}
+
+function formatFilterValue(value: unknown, op?: string): string | null {
   // A closed range applied as `between [start, end]` reads as one range.
   if (Array.isArray(value) && value.length === 2 && /^between$/i.test(op ?? '')) {
-    return formatDashboardFilterValue({ start: value[0], end: value[1] }) ?? 'any';
+    return formatDashboardFilterValue({ start: value[0], end: value[1] });
   }
-  return formatDashboardFilterValue(value) ?? 'any';
+  return formatDashboardFilterValue(value);
 }

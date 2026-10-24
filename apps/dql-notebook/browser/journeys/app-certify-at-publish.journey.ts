@@ -144,7 +144,34 @@ test('checking a table does not certify it; certifying is a short review from th
   await expect(notCertified).toContainText('Lifetime Spend');
   await expect(notCertified).toContainText('Checked, not certified yet. Data: Customers.');
   await expect(ready.getByText('Readers will see \u2018Not certified yet\u2019 on 1 tile.')).toBeVisible();
-  await notCertified.getByRole('button', { name: 'Certify now: Customers' }).click();
+  // "Certify now (recommended)" stays on one line inside its button, even when
+  // the item's text wraps to two lines (the 0.2.8 overflow seen at 1440×900).
+  await notCertified.locator('li small').first().evaluate((node) => {
+    node.textContent = 'Changed since it was certified on 15 Oct. Data: Beverage Revenue By Product, a much longer name that has to wrap.';
+  });
+  const certifyNow = notCertified.getByRole('button', { name: 'Certify now: Customers' });
+  const fit = await certifyNow.evaluate((node) => {
+    const button = node as HTMLElement;
+    // One client rect per line box the text was laid out on.
+    const lineCount = (element: Element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      return new Set(Array.from(range.getClientRects()).map((rect) => Math.round(rect.top))).size;
+    };
+    return {
+      overflowY: button.scrollHeight - button.clientHeight,
+      overflowX: button.scrollWidth - button.clientWidth,
+      lines: lineCount(button),
+      textLines: lineCount(button.closest('li')!.querySelector('small')!),
+    };
+  });
+  expect(fit).toMatchObject({ overflowY: 0, overflowX: 0, lines: 1 });
+  expect(fit.textLines).toBeGreaterThanOrEqual(2);
+  if (shotsDir) {
+    mkdirSync(shotsDir, { recursive: true });
+    await ready.screenshot({ path: join(shotsDir, '17-certify-now-button.png') });
+  }
+  await certifyNow.click();
 
   // The short review: what one row is, the key checked again now, number formats.
   const review = page.getByRole('dialog', { name: 'Certify Customers' });
