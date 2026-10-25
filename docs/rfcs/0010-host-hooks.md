@@ -141,6 +141,7 @@ export interface DqlHostHooks {
     banner?: DqlHostBanner;
     audience?: 'reader';                                                         // reader words on stakeholder screens
     appNotFound?: { message: string; next?: { label: string; href: string } };  // an App link this host cannot open here
+    certification?: 'proposes';                                                  // certifying here proposes; the host certifies through review, so screens say "propose"
   }>;
   homeCards?(principal: DqlPrincipal): Promise<DqlHomeCard[]>;
   follows?: { list(principal: DqlPrincipal): Promise<DqlFollow[]>; set(principal: DqlPrincipal, follow: DqlFollow, following: boolean): Promise<void> };

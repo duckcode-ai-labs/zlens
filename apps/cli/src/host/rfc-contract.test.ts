@@ -78,7 +78,7 @@ describe('RFC 0010 lists every hook and field once, with a default', () => {
   it('reads the hook types (guards the parser)', () => {
     expect(hooks.length).toBeGreaterThanOrEqual(30);
     expect(hooks).toEqual(expect.arrayContaining(['resolvePrincipal', 'authorize', 'rowPolicy', 'stores', 'purposeAttributes', 'keepsAnswerText', 'figuresDependOnReader', 'columnsVisible', 'statements', 'traceSalt']));
-    expect(uiFields).toEqual(expect.arrayContaining(['signOutUrl', 'links', 'answerActions', 'environment', 'banner', 'audience', 'appNotFound']));
+    expect(uiFields).toEqual(expect.arrayContaining(['signOutUrl', 'links', 'answerActions', 'environment', 'banner', 'audience', 'appNotFound', 'certification']));
   });
 
   it('the RFC\'s DqlHostHooks block lists every hook in request-context.ts, and nothing that is not there', () => {
@@ -187,6 +187,7 @@ describe('each documented default is what ZLens does without the hook', () => {
     expect(hosted.signOutUrl).toBeUndefined();
     expect(hosted.audience).toBeUndefined();
     expect(hosted.appNotFound).toBeUndefined();
+    expect(hosted.certification).toBeUndefined();
   });
 
   it('homeCards — none; directoryGroups — the author types group names; answerStatus — no status', async () => {

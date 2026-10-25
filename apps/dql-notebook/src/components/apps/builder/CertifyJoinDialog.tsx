@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Copy, KeyRound, Link2, ShieldCheck, X } from 'lucide-react';
 import { certifiedDateLabel } from '@zlens/core/apps/reader-trust';
 import { api, type CertificationByline, type JoinCertifyReview } from '../../../api/client';
+import { useHostUi } from '../../../host/host-ui';
+import { certifyWords } from './certify-words';
 import { messageOf } from './studio-ui';
 
 type ReviewLoader = (sourceId: string, joinId: string) => Promise<{ ok: boolean; review?: JoinCertifyReview; error?: string }>;
@@ -42,6 +44,8 @@ export function CertifyJoinDialog({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<{ message: string; blockers: string[] } | null>(null);
+  // Under a host where certifying only proposes certification, every word says "propose" (the check and what is written stay).
+  const words = certifyWords(useHostUi()).join;
 
   useEffect(() => {
     if (initialReview) return undefined;
@@ -66,7 +70,7 @@ export function CertifyJoinDialog({
     void (certify ?? ((source, join) => api.certifyAppJoin(source, join)))(review.sourceId, review.joinId).then((response) => {
       setSaving(false);
       if (!response.ok) {
-        setError({ message: response.error ?? 'ZLens could not certify this join.', blockers: response.blockers ?? [] });
+        setError({ message: response.error ?? words.couldNot, blockers: response.blockers ?? [] });
         return;
       }
       onCertified(review.sourceId, review.joinId, response.certification);
@@ -84,8 +88,8 @@ export function CertifyJoinDialog({
         <header>
           <span className="table-dataset-icon"><Link2 size={17} aria-hidden="true" /></span>
           <div>
-            <h2 id="certify-join-title">Certify the join {title}</h2>
-            <p>A short review, here. Certifying says you checked how these tables join and vouch for it.</p>
+            <h2 id="certify-join-title">{words.heading(title)}</h2>
+            <p>{words.intro}</p>
           </div>
           <button type="button" className="icon" onClick={onClose} disabled={saving} aria-label="Close"><X size={15} /></button>
         </header>
@@ -117,8 +121,8 @@ export function CertifyJoinDialog({
         </div>
         <footer>
           <button type="button" onClick={onClose} disabled={saving}>Not now</button>
-          {review ? <small>ZLens records you as the person who certified it, with the date and the check; Modeling shows it certified.</small> : <span />}
-          {review ? <button type="button" className="primary" disabled={saving || !review.canVouch} onClick={vouch}>{saving ? 'Certifying…' : 'I vouch for this join — certify'}</button> : null}
+          {review ? <small>{words.record}</small> : <span />}
+          {review ? <button type="button" className="primary" disabled={saving || !review.canVouch} onClick={vouch}>{saving ? words.saving : words.button}</button> : null}
         </footer>
       </section>
     </div>

@@ -16,6 +16,8 @@ import { humanize, messageOf } from './studio-ui';
 import { TableDatasetDialog } from './TableDatasetDialog';
 import { SavedQueryFieldsDialog } from './SavedQueryFieldsDialog';
 import { appDataSameNameOrigins, madeTableTrustWords, tableTrustLine, tableTrustWords } from './app-data-names';
+import { certifyWords } from './certify-words';
+import { useHostUi } from '../../../host/host-ui';
 import { useDispatch } from '../../../store/NotebookStore';
 import { rememberProposalForModeling } from '../../modals/setup-model-source';
 import { splitStagingTables } from '@zlens/core/staging-tables';
@@ -446,6 +448,7 @@ function AddDataRow({
   const trustDetail = dataTrustDetail(item);
   const origin = sourceOriginLabel(item);
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuWords = certifyWords(useHostUi()).menu;
   const meta = [origin, dataTrustLabel(item), item.domain && item.domain !== 'Unassigned' ? humanize(item.domain) : '', ownerWords(item)].filter(Boolean).join(' · ');
   return <article className={`add-data-row ${highlighted ? 'highlight' : ''} ${added ? 'added' : ''}`} role="listitem" data-source-id={sourceId} data-origin={origin}>
     <button type="button" className="add-data-summary" aria-expanded={expanded} onClick={onToggle} aria-label={`${expanded ? 'Hide' : 'Show'} details for ${humanize(item.name)}`}>
@@ -460,7 +463,7 @@ function AddDataRow({
       {onMakeRowLevel || onCertify ? <span className="add-data-more-menu">
         <button type="button" className="more" aria-haspopup="menu" aria-expanded={menuOpen} aria-label={`More for ${humanize(item.name)}`} disabled={disabled} onClick={() => setMenuOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {menuOpen ? <span className="add-data-menu" role="menu" aria-label={`More for ${humanize(item.name)}`}>
-          {onCertify ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onCertify(); }}><strong>Certify…</strong><small>A short review, then “I vouch for this — certify”.</small></button> : null}
+          {onCertify ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onCertify(); }}><strong>{menuWords.certify}</strong><small>{menuWords.certifyHint}</small></button> : null}
           {onMakeRowLevel ? <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); onMakeRowLevel(); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button> : null}
         </span> : null}
       </span> : null}

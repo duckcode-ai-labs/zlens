@@ -24,6 +24,11 @@ export interface HostUi {
   audience?: 'reader';
   /** What an App link says when this project has no such App, and where to go. */
   appNotFound?: { message: string; next?: { label: string; href: string } };
+  /**
+   * `proposes`: certifying data, a saved query or a join here only proposes certification; the host certifies through
+   * its own review. The App Studio's certify words say "propose" instead. Absent: the person certifies here.
+   */
+  certification?: 'proposes';
 }
 
 export interface HostBanner { text: string; tone?: 'info' | 'caution'; links?: Array<{ label: string; href: string }> }
@@ -86,13 +91,22 @@ export function hostUiFrom(value: unknown): HostUi | null {
     ? Object.fromEntries(Object.entries(raw.capabilities as Record<string, unknown>).map(([action, allowed]) => [action, allowed === true]))
     : {};
   const objects = (list: unknown) => (Array.isArray(list) ? list.filter((item) => !!item && typeof item === 'object') : []);
+  const rest: Record<string, unknown> = { ...raw };
+  delete rest.certification;
   return {
-    ...(raw as unknown as HostUi),
+    ...(rest as unknown as HostUi),
     person: { id: person.id, name: typeof person.name === 'string' ? person.name : person.id, ...(typeof person.email === 'string' ? { email: person.email } : {}), kind: person.kind === 'service' ? 'service' : 'person' },
     capabilities,
     links: objects(raw.links) as HostLink[],
     answerActions: objects(raw.answerActions) as HostAnswerAction[],
+    // Only the one value the app knows; anything else reads as "certifies here".
+    ...(raw.certification === 'proposes' ? { certification: 'proposes' as const } : {}),
   };
+}
+
+/** Whether certifying here only proposes certification (the host certifies through its review); never without a host. */
+export function hostProposesCertification(state: HostUiState): boolean {
+  return state.host && state.certification === 'proposes';
 }
 
 /** Waits between attempts to load the host map while it is not known yet: quick at first, then every 30 seconds. */

@@ -7,6 +7,8 @@ import { groupDatasetFields, queryFieldNames } from './field-query';
 import { humanize } from './studio-ui';
 import { writeFieldDrag } from './ShelfEditor';
 import { appDataSameNameOrigins } from './app-data-names';
+import { certifyWords } from './certify-words';
+import { useHostUi } from '../../../host/host-ui';
 import { SUMMARY_OPTION } from '../reader-page-structure';
 import { FIELD_TILES_OFF_MESSAGE, MAKE_ROW_LEVEL_HINT, SAVED_QUERY_FIELDS_NOTE, canCertifyAppData, canMakeRowLevel, dataTrustLabel, joinsToCertify, needsReview, sourceOriginLabel } from './app-data';
 import type { DatasetJoin } from '@zlens/core/datasets/descriptor';
@@ -44,6 +46,7 @@ export function DataPanel({
   fieldsStatus,
   pickerRequest = 0,
   defaultPickerOpen = false,
+  defaultMoreOpen = false,
   loading = false,
 }: {
   /** This App's data: Datasets, Metrics and saved queries already connected. */
@@ -78,12 +81,15 @@ export function DataPanel({
   /** Changing this number opens the switcher (tile settings "Choose another Dataset"). */
   pickerRequest?: number;
   defaultPickerOpen?: boolean;
+  /** Start with the active data's ⋯ menu open (tests). */
+  defaultMoreOpen?: boolean;
   /** The App's data is still loading. */
   loading?: boolean;
 }): JSX.Element {
   const [search, setSearch] = useState('');
   const [pickerOpen, setPickerOpen] = useState(defaultPickerOpen);
-  const [moreOpen, setMoreOpen] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(defaultMoreOpen);
+  const menuWords = certifyWords(useHostUi()).menu;
   useEffect(() => { if (pickerRequest > 0) setPickerOpen(true); }, [pickerRequest]);
   const descriptor = active?.capabilities?.dataset as DatasetDescriptor | undefined;
   // A saved query's result fields need field tiles; with them off it is added whole.
@@ -130,8 +136,8 @@ export function DataPanel({
       {(rowLevel || certify || reviewJoins.length) && active ? <span className="dataset-more">
         <button type="button" aria-haspopup="menu" aria-expanded={moreOpen} aria-label={`More for ${humanize(active.name)}`} disabled={disabled} onClick={() => setMoreOpen((open) => !open)}><MoreHorizontal size={14} /></button>
         {moreOpen ? <span className="dataset-more-menu" role="menu" aria-label={`More for ${humanize(active.name)}`}>
-          {certify ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); certify(active); }}><strong>Certify…</strong><small>A short review, then “I vouch for this — certify”.</small></button> : null}
-          {reviewJoins.map((join) => <button key={join.id} type="button" role="menuitem" onClick={() => { setMoreOpen(false); onCertifyJoin?.(active, join); }}><strong>Certify the join to {humanize(join.label)}…</strong><small>{join.sentence}: a fresh check, then “I vouch for this join — certify”.</small></button>)}
+          {certify ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); certify(active); }}><strong>{menuWords.certify}</strong><small>{menuWords.certifyHint}</small></button> : null}
+          {reviewJoins.map((join) => <button key={join.id} type="button" role="menuitem" onClick={() => { setMoreOpen(false); onCertifyJoin?.(active, join); }}><strong>{menuWords.join(humanize(join.label))}</strong><small>{menuWords.joinHint(join.sentence)}</small></button>)}
           {rowLevel ? <button type="button" role="menuitem" onClick={() => { setMoreOpen(false); rowLevel(active); }}><strong>Make row-level</strong><small>{MAKE_ROW_LEVEL_HINT}</small></button> : null}
         </span> : null}
       </span> : null}

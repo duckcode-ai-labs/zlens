@@ -3,6 +3,8 @@ import { AlertTriangle, Check, Copy, Hash, Link2, ListChecks, Play, ShieldCheck,
 import { api, type CertificationByline, type CertifyReview } from '../../../api/client';
 import { checkedByLabel } from './app-data';
 import { certifiedDateLabel } from '@zlens/core/apps/reader-trust';
+import { useHostUi } from '../../../host/host-ui';
+import { certifyWords } from './certify-words';
 import { humanize, messageOf } from './studio-ui';
 
 type ReviewLoader = (sourceId: string) => Promise<{ ok: boolean; review?: CertifyReview; error?: string }>;
@@ -67,6 +69,8 @@ export function CertifyReviewDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<{ message: string; blockers: string[] } | null>(null);
   const [owner, setOwner] = useState('');
+  // Under a host where certifying only proposes certification, every word says "propose" (the checks and what is written stay).
+  const words = certifyWords(useHostUi()).review;
 
   useEffect(() => {
     if (initialReview) return undefined;
@@ -91,7 +95,7 @@ export function CertifyReviewDialog({
     void (certify ?? ((id, revision, named) => api.certifyAppData(id, revision, named)))(review.sourceId, review.sourceRevision, certifyReviewVouch(review, owner).owner).then((response) => {
       setSaving(false);
       if (!response.ok) {
-        setError({ message: response.error ?? 'ZLens could not certify this data.', blockers: response.blockers ?? [] });
+        setError({ message: response.error ?? words.couldNot, blockers: response.blockers ?? [] });
         return;
       }
       onCertified(review.sourceId, response.certification);
@@ -112,12 +116,12 @@ export function CertifyReviewDialog({
         <header>
           <span className="table-dataset-icon"><ShieldCheck size={17} aria-hidden="true" /></span>
           <div>
-            <h2 id="certify-review-title">Certify {title}</h2>
+            <h2 id="certify-review-title">{words.heading(title)}</h2>
             <p>{review?.kind === 'saved_query' && !savedQuery
               ? 'A saved query ZLens cannot run here is certified in the saved query editor.'
               : review?.kind === 'metrics'
                 ? 'Metrics come from your semantic model and are certified there.'
-                : 'A short review. Certifying says you looked at it and vouch for these numbers.'}</p>
+                : words.intro}</p>
           </div>
           <button type="button" className="icon" onClick={onClose} disabled={saving} aria-label="Close"><X size={15} /></button>
         </header>
@@ -143,7 +147,7 @@ export function CertifyReviewDialog({
                 <h3><UserRound size={13} aria-hidden="true" /> Who owns it</h3>
                 {savedQuery.ownerRequired
                   ? <label className="certify-review-owner">
-                    <span>Nobody owns it yet. Name the person or team who answers for these numbers; ZLens writes it into the saved query when you certify.</span>
+                    <span>{words.ownerAsk}</span>
                     <input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="Owner, e.g. Maria Lopez or Sales analytics" aria-label="Owner" maxLength={120} disabled={saving} />
                   </label>
                   : <p>{savedQuery.owner}</p>}
@@ -152,7 +156,7 @@ export function CertifyReviewDialog({
                 <h3><Table2 size={13} aria-hidden="true" /> What one row is</h3>
                 <p>{savedQuery.row ?? 'Not known: it declares no grain or grouping columns.'}</p>
               </section>
-              {savedQuery.blockers.length ? <div className="table-dataset-error" role="alert"><p>Not ready to certify:</p><ul>{savedQuery.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
+              {savedQuery.blockers.length ? <div className="table-dataset-error" role="alert"><p>{words.notReady}</p><ul>{savedQuery.blockers.map((blocker) => <li key={blocker}>{blocker}</li>)}</ul></div> : null}
             </> : null}
             {review.kind === 'dataset' ? <>
               <section className="certify-review-part" aria-label="What one row is">
@@ -182,9 +186,9 @@ export function CertifyReviewDialog({
         </div>
         <footer>
           <button type="button" onClick={onClose} disabled={saving}>Not now</button>
-          {vouchable ? <small>ZLens records you as the person who certified it, with the date and what was checked.{review?.kind === 'saved_query' && review.blockStudioPath && onOpenBlockStudio ? <> <button type="button" className="link certify-review-editor-link" onClick={() => onOpenBlockStudio(review.blockStudioPath!)} disabled={saving}>Open in the saved query editor</button></> : null}</small> : <span />}
+          {vouchable ? <small>{words.record}{review?.kind === 'saved_query' && review.blockStudioPath && onOpenBlockStudio ? <> <button type="button" className="link certify-review-editor-link" onClick={() => onOpenBlockStudio(review.blockStudioPath!)} disabled={saving}>Open in the saved query editor</button></> : null}</small> : <span />}
           {vouchable
-            ? <button type="button" className="primary" disabled={saving || !canVouchNow} onClick={vouch}>{saving ? 'Certifying…' : 'I vouch for this — certify'}</button>
+            ? <button type="button" className="primary" disabled={saving || !canVouchNow} onClick={vouch}>{saving ? words.saving : words.button}</button>
             : review?.kind === 'saved_query' && review.blockStudioPath && onOpenBlockStudio
               ? <button type="button" className="primary" onClick={() => onOpenBlockStudio(review.blockStudioPath!)}>Open in the saved query editor</button>
               : null}
