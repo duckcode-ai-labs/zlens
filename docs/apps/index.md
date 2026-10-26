@@ -30,6 +30,8 @@ same count for the page, for example **3 of 4 tiles certified**.
 
 ## Read the trust on each tile
 
+{{ video("ap1-read-an-app") }}
+
 Each tile says one of two things:
 
 | Label | Means |
@@ -54,6 +56,8 @@ was **Last refreshed**. Some rows appear only when there is something to show:
   only on a certified tile whose certification recorded checks.
 - **Owner** appears only when the page's author filled in the tile's **Owner**
   in App Studio's tile settings.
+- **Joined** lists each join the tile used, for example *Joined to locations
+  on location_id (each order has one location — checked)*.
 
 Ids, the source file and the fingerprints of the result and the SQL are under
 **Technical details**, which starts closed. **Show the query and SQL** opens
@@ -94,7 +98,7 @@ App Studio uses one small set of words:
 | **Make row-level** | An action under a saved query's **⋯**: ZLens checks what one row is and records it, for row-safe measures such as distinct counts. |
 | **Related table** | A table that checked data points to through a many-to-one join (each order has one customer). Its fields show under the data as **Orders → Customer**, and totals stay the same. |
 | **Metrics** | Measures and dimensions from a semantic model. |
-| **Certified** | A person reviewed the data and vouched for it (**I vouch for this — certify**, or **Certify** in Block Studio). ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. A tile is certified when everything it uses is. |
+| **Certified** | A person reviewed the data and vouched for it (**I vouch for this — certify**, or **Certify** in the saved query editor). ZLens always says who and when: **Certified by** *name* **·** *date*, and the receipt lists the checks that passed. A tile is certified when everything it uses is. |
 | **3 of 4 tiles certified** | The App's one count. The App header, the Apps card, the publish dialog and the published `dql.app.json` all show the same count. |
 | **Certified by** | The person who certified the data: the signed-in person with a host, otherwise your git `user.name`. You read **Certified by you** for data you certified. Older data shows **Certified · date** or **Certified**. |
 | **Unpublished changes** | Changes to an App that only you can see until you publish. |
@@ -107,6 +111,8 @@ query is a *block*.
 
 ## Change a filter
 
+{{ video("ap4-filters") }}
+
 Filters sit above the tiles.
 
 - Pick values from a searchable list, or set **from** and **to** dates.
@@ -114,9 +120,14 @@ Filters sit above the tiles.
 - If a filter does not apply to every tile, it says so, for example
   **Region affects 2 of 3 tiles**.
 
-To filter the page by something the App does not offer, use **Filter by…**,
-choose a field and a value, and click **Apply**. That filter is yours, for this
-session only.
+To filter by a field the App doesn't offer, click **Filter by…**, pick a
+field, then a value. A long list says *Type to search all 930 values*. Before
+you apply, the bar says **Will narrow 2 of 4 tiles**. After **Apply**, the
+chip reads *Customer Name: Melissa Lopez · Narrows 2 of 4 tiles*, and tiles
+without the field say **Not filtered by Customer Name**. On a saved-query tile
+the reviewed query runs as it is and only the matching rows are kept, so the
+tile stays certified and its receipt lists the filter. Your filters are for
+this session only.
 
 ## Ask about the App
 
@@ -141,6 +152,10 @@ read the page, not in **Edit**. It lists only the items that fit the tile:
 | **Open in notebook** | The tile is not built from fields, for example it shows a saved query. |
 | **Show as** | The tile has a result and more than one chart type fits it. |
 | **Download CSV** | The tile has a result. With a host, the menu has **Download CSV**, **Download JSON** and **Download Excel** instead, made on the server, and a read-only link has no download. |
+
+**How this was computed** has three tabs: **How it works**, **DQL** and
+**SQL**. The SQL tab shows the exact SQL that ran. On a tile built from
+fields, the last two are named **Authored query spec** and **Executed SQL**.
 
 ## Follow, share and export
 

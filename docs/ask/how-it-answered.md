@@ -6,6 +6,8 @@ passed.
 
 ## From an answer
 
+{{ video("ask2-how-answered") }}
+
 1. Under the answer, click **How it was answered**.
 2. The panel opens on **How it answered**. It starts with the outcome, such as
    **Answered from a certified saved query.**, and a line like
@@ -19,8 +21,16 @@ passed.
     - **Checked before running** and **Ran on the warehouse**.
     - **Answer**, or **No answer** with the reason.
 
-    Each step is marked done or skipped. Click a step to see its details, such
-    as the AI calls and the SQL it wrote.
+    Each step is marked **Done**, **Not used**, **Skipped**, **Failed** or
+    **Not reached**. Click a step to see why, such as the AI calls and the
+    SQL it wrote.
+
+    **Checked before running** lists the checks AI-written SQL must pass
+    before it runs: **Uses only tables and columns the project lists**,
+    **Applies every value the question states**, **Joins do not count rows
+    more than once** and **Shows names, not bare keys**. When the SQL joins
+    tables a certified relationship connects, it also checks **Joins
+    certified tables on their certified keys**.
 4. Use the other tabs for the detail: **DQL**, **SQL**, **Data used** (the
    certified saved query, metrics, dimensions, tables, joins and filters) and
    **Checks**.
@@ -31,6 +41,8 @@ passed.
 In the left rail, under **Govern**, click **Ask observability**. It lists
 every local Ask run, newest first.
 
+{{ video("ask6-keep-trace") }}
+
 Filter the list by:
 
 - **Outcome**: completed, blocked, failed, cancelled and more.
@@ -39,9 +51,10 @@ Filter the list by:
   **Exploratory SQL**, **Clarify or gap**.
 - **Trust**: **Certified**, **From Metrics**, **Review required**, **Blocked**.
 
-Click **Open trace** on a run. The trace page has three views: **Trace Tree**
-(the steps, nested), **Agent Graph** (how the steps depend on each other) and
-**Timeline** (where the time went).
+Click **Open trace** on a run. The trace page starts with the decision story
+and a flow chart of each decision. **Recorded events (advanced)** holds the
+**Trace Tree** (the steps, nested) and the **Timeline** (where the time
+went).
 
 The trace keeps what each AI call was for, how long it took and its reply,
 the checks, the SQL that ran and a sample of its rows. It does not keep full

@@ -45,11 +45,29 @@ hierarchies:
 
 ## dbt import
 
-ZLens reads `target/manifest.json` directly — see
+ZLens reads dbt metrics from `target/semantic_manifest.json`. After you
+change them, run `dbt parse`, then `npm run sync`. See
 [Import a dbt project](../get-started/your-dbt-project.md). Imported metrics and
-dimensions appear in the **Semantic** panel alongside DQL-local ones.
+dimensions appear in the **Semantic** tab alongside DQL-local ones.
+
+## Use a metric in a notebook
+
+In a notebook, click the **Semantic** tab in the sidebar. Every metric is
+listed by its business name. Tick a metric: only the dimensions it can safely
+use appear (**Governed dimensions · N available**). Tick a dimension and click
+**Preview & run**. Then click **Add to cell** to add a semantic DQL cell.
+
+In the saved query editor, **Semantic picker** builds a saved query from the
+same metric.
+
+If the tab says **No semantic layer imported yet.**, run `dbt parse`, then
+`npm run sync`.
+
+{{ video("sem1-metric-once") }}
 
 ## Which engine runs a metric
+
+{{ video("sem2-engines") }}
 
 | Project | Engine | Runs |
 | --- | --- | --- |
@@ -62,6 +80,13 @@ compiler serves it. When the native compiler cannot run a metric it says why
 (for example "revenue_growth_mom is a derived metric; the DQL native semantic
 engine runs a derived metric only when its expression is arithmetic over simple
 metrics with no offset window") instead of asking for `dbt parse`.
+
+Pick the engine in **Settings → Project & dbt → Semantic execution
+adapters**. **Preferred runtime** is **Auto (recommended)**, **dbt Cloud**,
+**Local MetricFlow** or **Native (DQL)**. The engine in use is marked
+**ACTIVE**. A metric the engine cannot run is greyed out in the **Semantic**
+tab, and hovering it says why. **Trust & Steps** on a result names the
+engine, for example `Compiled through native.`
 
 ### Derived metrics
 
@@ -126,6 +151,15 @@ dbt model (`where Party_Role_Code = 'AG'`) whose entity `policy` is declared
 of every foreign `policy`; `policy_agent` then joins it one-to-one, and a claim
 metric groups by the agent in both engines (`claim__policy__agent_party_id` is
 two hops for MetricFlow).
+
+{{ video("sem3-safe-joins") }}
+
+In the sample project, one order has many order items. So when you pick
+**Orders** in the **Semantic** tab, no order-item fields are offered. If you
+force one in a cell, the run stops with **Could not compose SQL for semantic
+block metrics** and names the fix: model one row per order, keyed
+`type: unique`. Ask has the same guard: if a join would multiply rows, it
+stops and runs nothing.
 
 ## CLI
 

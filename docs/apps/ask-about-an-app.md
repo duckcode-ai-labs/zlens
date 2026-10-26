@@ -4,6 +4,8 @@ Every App page has its own Ask box. Questions asked there stay inside that
 App: Ask reads the page's current results, each tile's source and trust
 label, and the filters on screen.
 
+{{ video("ap7-ask") }}
+
 ## Ask
 
 1. Open an App page and let it finish running.
@@ -59,9 +61,10 @@ example:
 Source on "Overview": "Top customers by lifetime spend" reads saved query Top customers by lifetime spend (…) — Certified: Runs a certified saved query exactly as it was reviewed.
 ```
 
-The answer's trust is the weakest tile it read. The answer shows it as a
-badge, and the result card is titled, for example, **Answer from this App
-(certified tiles)**:
+The answer's trust is the weakest tile it read. The answer's heading says its
+trust: **Certified answer**, **Answer from Metrics, in this App**, or **Answer
+from this App · needs review**. It also shows as a badge, and the result
+card is titled, for example, **Answer from this App (certified tiles)**:
 
 | Badge | Means |
 |---|---|
@@ -74,6 +77,10 @@ no model is set up, the model is outside the project's privacy boundary, the
 model cannot be reached, or its reply cannot be used, Ask reads the page
 directly instead: the answer starts **Read directly from this page** and says
 why no model wrote it, then lists the first rows of up to four tiles.
+
+Without a host, only a model on this machine (for example Ollama at a local
+address) may read the App's numbers. A cloud model never gets them; Ask reads
+the page directly instead.
 
 ## If the page has not run
 

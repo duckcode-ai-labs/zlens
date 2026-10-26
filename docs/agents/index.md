@@ -5,20 +5,25 @@ to Claude Code, Codex, Cursor or Claude Desktop, and your agent answers data
 questions the way Ask does: from certified saved queries first, with the same trust
 labels, and with AI-written SQL clearly marked for review.
 
+{{ video("agt1-why") }}
+
 {{ clip("mcp-connect") }}
 
 ## 1. Check the project
 
-From your ZLens project folder:
+Start the workbench first, in another terminal: `npm run notebook`. Leave it
+running (see [step 4](#4-keep-the-workbench-running)).
+
+Then, from your ZLens project folder:
 
 ```bash
 npm exec -- zlens mcp test
 ```
 
-It checks the project, the manifest, the metadata catalog, the search index,
-the MCP tools and the ZLens runtime, which is the workbench that
-`npm run notebook` starts (see [step 4](#4-keep-the-workbench-running)).
-Every check must pass:
+It runs seven checks: the project, the manifest, the metadata catalog, the
+agent index, the MCP tools (27 by default), the ZLens runtime and the Dataset
+runtime. The runtime checks need the workbench that `npm run notebook`
+starts. Every check must pass:
 
 - When they all pass, the last line is
   `Ready: point Claude Code, Codex, Cursor, or Claude Desktop at this project with zlens connect.`
@@ -45,6 +50,8 @@ From the project folder, run the command for your agent:
 | Claude Desktop | `npm exec -- zlens connect claude-desktop` | Claude Desktop's own config file, for your user | [Claude Desktop](claude-desktop.md) |
 | All four | `npm exec -- zlens connect all` | all of the above | |
 
+{{ video("agt3-codex-cursor") }}
+
 For Claude Code, the output looks like this:
 
 ```text
@@ -53,10 +60,14 @@ For Claude Code, the output looks like this:
 
   ✓ Claude Code
     Project .mcp.json and CLAUDE.md now point Claude Code at ZLens.
+    /path/to/jaffle-shop-duckdb/.mcp.json
+    /path/to/jaffle-shop-duckdb/CLAUDE.md
     Next: Open Claude Code from this project and run /mcp to confirm the dql server is loaded.
 
   Verify before asking an agent: zlens mcp test
 ```
+
+A client that was already set up shows `•` instead of `✓`.
 
 The server is registered under the name `dql`. Each config starts it with
 (Claude Desktop gets the full path of `npx`; Codex also gets longer start
@@ -86,7 +97,7 @@ only rewrites the ZLens entry. `zlens connect` has one option,
 - **Codex**: open the project and trust it, so Codex loads the project's MCP
   config. See [Codex](codex.md).
 - **Cursor**: turn on `dql` in Cursor's MCP settings. See [Cursor](cursor.md).
-- **Claude Desktop**: quit and reopen it; `dql` is in the tools menu. See
+- **Claude Desktop**: quit and reopen it; `dql` is under **+ → Connectors**. See
   [Claude Desktop](claude-desktop.md).
 
 ## 4. Keep the workbench running
@@ -103,6 +114,8 @@ lifetime spend?"*
 
 - If a certified saved query answers it, the agent answers from it and the label is
   **Certified**.
+- If your metrics answer it but no saved query does, ZLens builds it from the
+  semantic layer with `query_semantic_model`. The label is **From Metrics**.
 - If not, ZLens writes SQL, runs it, labels the answer as needing review, and
   saves a draft saved query for review, exactly as [Ask](../ask/needs-review.md) does.
 - If the project cannot answer safely, the agent is told to refuse rather than

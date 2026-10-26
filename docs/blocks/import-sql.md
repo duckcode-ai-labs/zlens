@@ -7,6 +7,8 @@ you want to keep, and certify the ones that are right.
 
 {{ clip("import-certify") }}
 
+{{ video("bk2-import-sql") }}
+
 ## 1. Open Import SQL
 
 1. In the left rail, click **Saved queries**.
@@ -23,6 +25,9 @@ Pick one:
 - **Paste SQL**: paste one or more queries.
 - **Upload files**: pick `.sql` files.
 - **Local path**: a file or folder inside your project.
+
+Only `.sql` files are read. Put several queries in one file by ending each
+with `;` or a `GO` line.
 
 Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
 
@@ -41,6 +46,11 @@ The **Drafts** list shows one row per query. Click a draft to see:
 
 Click **Show context (N)** to see the **Grounding**: the tables and columns
 ZLens matched, with any warnings. **Hide context** closes it again.
+
+A draft says **Preview ran successfully. Nothing is written until you save.**
+After you edit **Review details**, click **Apply edits**. When a draft repeats
+a saved query you already have, it is marked **reuse recommended**, and
+**Show context** names the one to use.
 
 The draft runs your SQL, and so does its preview. Only a query that is
 exactly a metric query becomes a saved query built from metrics: one table, no joins,

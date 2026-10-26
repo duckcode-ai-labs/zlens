@@ -9,6 +9,8 @@ queries, saved queries, certification, Apps and lineage.
     certified saved query. Without a provider, Ask answers **Couldn't run this
     query** and says that no AI model is configured.
 
+{{ video("qs3-ask") }}
+
 ## Pick a provider
 
 1. Open **Settings → AI provider**.

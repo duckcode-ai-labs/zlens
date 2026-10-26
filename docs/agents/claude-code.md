@@ -4,6 +4,8 @@ Connect [Claude Code](https://claude.com/claude-code) to your ZLens project so
 it answers data questions from certified saved queries first and labels every answer
 the way Ask does.
 
+{{ video("agt2-claude-code") }}
+
 ## Before you start
 
 - A ZLens project where `npm exec -- zlens mcp test` ends with `Ready`. See
@@ -39,9 +41,9 @@ It writes two files in the project:
     `alwaysLoad` makes Claude Code load the ZLens tools at the start of every
     session instead of searching for them.
 
-- A ZLens section in `CLAUDE.md` that tells Claude how to route questions,
-  which tool serves which feature, and how to report trust labels. It names
-  only tools the server offers by default.
+- A section headed `## ZLens Agent Guide` in `CLAUDE.md` that tells Claude
+  how to route questions, which tool serves which feature, and how to report
+  trust labels. It names only tools the server offers by default.
 
 Running the command again only rewrites the ZLens entry and section.
 

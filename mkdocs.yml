@@ -76,8 +76,10 @@ plugins:
         guides/home-and-following.md: apps/index.md
 
 # Embeds feature clips: {{ clip("<id>") }} on a line of its own.
+# Links video tutorials: {{ video("<id>") }} and {{ videos() }} (docs/media/videos.yml).
 hooks:
   - scripts/mkdocs/clips.py
+  - scripts/mkdocs/videos.py
 
 extra_css:
   - stylesheets/zlens.css
@@ -131,6 +133,7 @@ nav:
       - Set up an AI provider: get-started/ai-provider.md
       - Add ZLens to your dbt project: get-started/your-dbt-project.md
       - Concepts: get-started/concepts.md
+      - Video tutorials: get-started/videos.md
   - Ask and trust:
       - Ask a question: ask/index.md
       - Answers that need review: ask/needs-review.md

@@ -54,3 +54,55 @@
 .md-typeset .zlens-clip__placeholder-title {
   font-size: 0.8rem;
 }
+
+/* Video tutorial cards (scripts/mkdocs/videos.py). */
+.md-typeset .zlens-video {
+  display: flex;
+  gap: 0.9em;
+  align-items: flex-start;
+  margin: 1em 0;
+  padding: 0.6em;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 6px;
+}
+.md-typeset .zlens-video__thumb {
+  flex: 0 0 auto;
+  line-height: 0;
+}
+.md-typeset .zlens-video__thumb img {
+  width: 9.6rem;
+  height: auto;
+  border-radius: 4px;
+}
+.md-typeset .zlens-video__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  min-width: 0;
+}
+.md-typeset .zlens-video__kicker {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--md-default-fg-color--light);
+}
+.md-typeset .zlens-video__title {
+  font-weight: 600;
+}
+.md-typeset .zlens-video__note,
+.md-typeset .zlens-video__docs {
+  font-size: 0.72rem;
+  color: var(--md-default-fg-color--light);
+}
+.md-typeset .zlens-video-list {
+  margin: 0.8em 0 1.6em;
+}
+.md-typeset .zlens-video-list .zlens-video {
+  margin: 0.5em 0;
+}
+@media screen and (max-width: 30em) {
+  .md-typeset .zlens-video__thumb img {
+    width: 7rem;
+  }
+}

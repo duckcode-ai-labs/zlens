@@ -86,6 +86,8 @@ you say so.
 
 ### Quick start without AI
 
+{{ video("ap3-quick-start") }}
+
 With no AI provider connected, nothing can read a request, so App Studio
 doesn't guess from your words. **Quick start** builds the first tiles from
 three quick choices instead, and you get exactly the tiles you pick.
@@ -148,6 +150,8 @@ publish, and publishing goes through the same checks.
 
 ## 2. Choose the data
 
+{{ video("ap2-start-with-data") }}
+
 **Data for this App** lists the App's data on the left (**This App's data**)
 and one **Add data** list on the right. Everything in it has fields:
 
@@ -178,11 +182,11 @@ rows** reads a few of its rows.
   by you · 22 Oct, not certified yet** and what the check found. You can build
   tiles from it right away. Checking is not certifying: see
   [Check vs certify](#check-vs-certify).
-- When a table has the same number twice, such as `order_total` and
-  `order_total_cents`, the check asks one question: **Use Order total in
-  dollars?** **Yes** (recommended) reads `order_total_cents` in dollars as
-  **Order total**; **No** uses `order_total` as it is. The other column is
-  hidden from the fields, and the choice is kept in the data's definition.
+- When a table stores amounts twice, the check asks one question, for
+  example *These columns are stored twice, in dollars and in cents: Subtotal
+  and Order total.* **OK** (chosen first) uses the dollar columns and hides
+  the cents copies. **Show both** keeps both, with the cents columns as plain
+  numbers. The choice is kept in the data's definition.
 - Data says only **Certified** or **Not certified yet**. Tables Guided
   Setup's **Draft my models** drafted add **drafted — review in Modeling**,
   with **Review in Modeling**; tables your model already uses are listed first
@@ -296,6 +300,9 @@ The pill says how the tile is sorted: **Top 10 ▾** when it shows the top 10
 by that measure, **Sorted ↓** or **Sorted ↑** when it is only sorted by it.
 Click it to open the same menu.
 
+A new bar of names, such as Customer Name, starts as **Top 10**, highest
+first, and the pill says so. Change it with **Show top**.
+
 **Filters, sort and more** in **Tile settings** has the same **Sort by** and
 **Show top** controls. Both edit the same tile, so they always agree.
 
@@ -333,9 +340,10 @@ says which tables it reaches, for example *joins: customers, locations*.
   join that was only drafted, for example by **Draft my models** in setup,
   shows **Not certified yet** on its group, and a tile that uses it is **Not
   certified yet** (its receipt says *Uses a join nobody has certified*), like
-  any data nobody has certified yet. Certify the join from the publish dialog
-  (**Certify this join**) or from the Data tab's **⋯ → Certify the join to
-  …**, without leaving the App (see [Certify a join](#certify-a-join)).
+  any data nobody has certified yet. While you build, the tile's status line
+  says *Not certified yet: it uses a join nobody has certified*. Certify the
+  join from the publish dialog (**Certify this join**) or from the Data
+  tab's **⋯ → Certify the join to …**, without leaving the App (see [Certify a join](#certify-a-join)).
   **Modeling** shows it certified afterwards.
 - **Receipt.** A tile's receipt lists each join it used, for example *Joined to
   customers on customer_id (each order has one customer — checked)*.
@@ -370,6 +378,8 @@ A tile's **⋯** menu lists only the items that fit the tile and the mode
 | **Remove tile** | In **Edit**. |
 
 ## 5. Add filters
+
+{{ video("ap4-filters") }}
 
 1. Open the **Filters** tab and click **New filter**, then pick a field.
 2. Set a **Display label** and a **Control**. Every field offers
@@ -510,6 +520,8 @@ or **Date**.
 
 ## 7. Publish
 
+{{ video("ap5-publish-certify") }}
+
 Trust lives at one level, the tile, and has two words: a tile is **Certified
 by** *name* **·** *date* (or **by you**) or **Not certified yet**. A tile is
 certified only when everything it can use is certified: its data, every join
@@ -559,7 +571,19 @@ you. The App opens in view mode. Its header and trust line say the count
 the reader's side (**Certified by you · 22 Oct**, **Certified by Kranthi ·
 22 Oct**), and the others say **Not certified yet**.
 
+```text
+apps/customer-overview/
+├─ dql.app.json            the App: name, owners, pages, filters
+├─ README.md
+└─ dashboards/
+   └─ overview.dqld        one file per page
+```
+
+Commit the folder from **Source control** to share it.
+
 ### Check vs certify
+
+{{ video("ap6-query-changes") }}
 
 - **Check** is what **Check and use** (and **Make row-level**) does: ZLens
   checks the data compiles and runs, what one row is, and how each number is
@@ -592,6 +616,8 @@ the reader's side (**Certified by you · 22 Oct**, **Certified by Kranthi ·
   **Not certified yet** again. ZLens keeps the date it was certified, so its
   receipt, the review and the publish dialog say *Changed since it was
   certified on 22 Oct*. Certify it again to vouch for the new version.
+  The review re-runs the saved query and its tests. It doesn't show what
+  changed: read that with `git diff` or in the saved query editor.
 - With a host, certifying needs the steward role, as before, and the host's
   admin policy can turn on `apps.requireCertifiedToPublish` for the project.
   Data certified before this change stays certified.
@@ -621,16 +647,6 @@ them with the check, who certified it and when. **Modeling** then shows it
 fails (a key repeats on the "one" side, too many rows lose their match), the
 review says why and nothing is written.
 
-```text
-apps/customer-overview/
-├─ dql.app.json            the App: name, owners, pages, filters
-├─ README.md
-└─ dashboards/
-   └─ overview.dqld        one file per page
-```
-
-Commit the folder from **Source control** to share it.
-
 ## Change a published App
 
 Open the App and click **Edit**. App Studio opens a draft of the App; the
@@ -642,4 +658,7 @@ published version does not change until you publish again.
 zlens app ls          # list the project's Apps
 zlens app show customer-overview
 zlens app build .     # build every App and refresh dql-manifest.json
+zlens app diff        # what changed in each App; marks tiles whose numbers can change
 ```
+
+Run `git status --short -uall apps` to see the files publishing wrote.

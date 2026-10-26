@@ -3,6 +3,8 @@
 ZLens sits next to your dbt project. It reads dbt's artifacts and never
 changes your dbt files.
 
+{{ video("qs4-own-data") }}
+
 ## 1. Build the dbt manifest
 
 From your dbt repo:
@@ -23,6 +25,13 @@ Keep ZLens in a `dql/` folder inside the dbt repo:
 npx create-zlens-app@latest dql
 cd dql
 npm install
+```
+
+Install your database's driver into the project:
+
+```bash
+npm install --prefix .dql/connectors duckdb          # DuckDB
+npm install --prefix .dql/connectors snowflake-sdk   # Snowflake
 ```
 
 The scaffolder finds `dbt_project.yml` in the folder above and writes this to
@@ -108,9 +117,10 @@ databases and for drivers.
 If your dbt project has MetricFlow metrics, ZLens reads them from
 `semantic_manifest.json`.
 
-- Simple metrics run with ZLens's built-in compiler.
-- Derived, ratio, cumulative and conversion metrics need a semantic runtime.
-  Open **Settings → Project & dbt** and click **Install local MetricFlow**, or
+- Simple metrics, ratios, and derived metrics that do arithmetic over simple
+  metrics run with ZLens's built-in compiler.
+- Cumulative, conversion, and derived metrics with an offset window need a
+  semantic runtime. Open **Settings → Project & dbt** and click **Install local MetricFlow**, or
   set up the dbt Cloud Semantic Layer on the same page.
 
 ## Large dbt projects
