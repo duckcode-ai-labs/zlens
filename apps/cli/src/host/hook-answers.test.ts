@@ -132,7 +132,22 @@ describe('a hosted page and its answers say they are hosted (the app never falls
       for (const link of ui.body.links) expect(link).toEqual({ id: 'b', label: 'B', href: '/e/b', placement: 'nav' });
       expect(ui.body.environment).toBeUndefined();
       expect(ui.body.audience).toBeUndefined();
+      expect(ui.body.certification).toBeUndefined();
     }
+  }, 60_000);
+
+  it('GET /api/host/ui passes `certification: proposes` through (the host certifies through its review) and drops any other value', async () => {
+    const proposes = await (await serve({ ui: () => ({ certification: 'proposes' }) })).call('GET', '/api/host/ui');
+    expect(proposes.status).toBe(200);
+    expect(proposes.body).toMatchObject({ host: true, certification: 'proposes' });
+    for (const other of ['certifies', 'PROPOSES', true, { kind: 'proposes' }, undefined]) {
+      const ui = await (await serve({ ui: () => ({ certification: other } as never) })).call('GET', '/api/host/ui');
+      expect(ui.status, JSON.stringify(other)).toBe(200);
+      expect(ui.body, JSON.stringify(other)).toMatchObject({ host: true });
+      expect(ui.body, JSON.stringify(other)).not.toHaveProperty('certification');
+    }
+    // Without a host: { host: false }, nothing else.
+    expect((await (await serve({})).call('GET', '/api/host/ui')).body).not.toHaveProperty('certification');
   }, 60_000);
 });
 

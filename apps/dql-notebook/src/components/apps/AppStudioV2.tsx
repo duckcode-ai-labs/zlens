@@ -102,6 +102,8 @@ import {
 import { SavedQueryFieldsDialog } from './builder/SavedQueryFieldsDialog';
 import { CertifyReviewDialog } from './builder/CertifyReviewDialog';
 import { CertifyJoinDialog } from './builder/CertifyJoinDialog';
+import { certifyWords, type CertifyWords } from './builder/certify-words';
+import { useHostUi } from '../../host/host-ui';
 import { appStudioAiDataResume } from './app-studio-handoff';
 import {
   FIELD_TILES_OFF_MESSAGE,
@@ -4510,6 +4512,8 @@ export function PublishReadinessDialog({
   onApproveSemantic: () => void;
   onRemoveLocalAnalysis: () => void;
 }): JSX.Element {
+  // Under a host where certifying only proposes certification, the certify buttons say "propose" (what they do is unchanged).
+  const certify = certifyWords(useHostUi()).publish;
   // One list for the button and this dialog (B6): the count is its length.
   const readiness = publicationReadiness(draft, serverIssues, previewRunsByPage, { requireCertifiedToPublish, ...(sourceName ? { sourceName } : {}) });
   const { requirements, clarifications, tasks, previewPages, semanticTiles, localOnlySources, notCertified, requireCertified, trust } = readiness;
@@ -4559,6 +4563,7 @@ export function PublishReadinessDialog({
           onCertifyJoin={onCertifyJoin}
           onRemoveRelatedFields={onRemoveRelatedFields}
           onOpenFilters={onOpenFilters}
+          words={certify}
         /> : null}
         {localOnlySources.length ? <section className="readiness-item warning">
           <span className="step-mark"><FileText size={15} /></span>
@@ -4595,6 +4600,7 @@ export function NotCertifiedTilesSection({
   onCertifyJoin,
   onRemoveRelatedFields,
   onOpenFilters,
+  words: certifyWordsProp,
 }: {
   title: string;
   tiles: NotCertifiedPublicationTile[];
@@ -4605,21 +4611,24 @@ export function NotCertifiedTilesSection({
   onCertifyJoin: (join: DatasetJoin | undefined, sourceId?: string) => void;
   onRemoveRelatedFields: (item: AppTileNeedingJoinReview) => void;
   onOpenFilters: () => void;
+  /** The certify words for this host: "propose" where certifying only proposes certification (what the buttons do is unchanged). */
+  words?: CertifyWords['publish'];
 }): JSX.Element {
+  const words = certifyWordsProp ?? certifyWords({ host: false }).publish;
   return <section className={`readiness-item ${required ? 'warning' : 'recommended'}`} aria-label={title}>
     <span className="step-mark"><ShieldCheck size={15} /></span>
     <div><strong>{title}</strong>
-      <small>{required ? REQUIRE_CERTIFIED_SENTENCE : 'Readers see “Not certified yet” on these tiles. Certifying is recommended, not required.'}</small>
+      <small>{required ? REQUIRE_CERTIFIED_SENTENCE : words.recommended}</small>
       <ul className="readiness-uncertified-list">{tiles.map((tile) => {
         const name = tile.sourceName ? humanize(tile.sourceName) : tile.title;
         const action = tile.action;
         return <li key={`${tile.pageId}/${tile.tileId}`} aria-label={`Not certified yet: ${tile.title}`}>
           <span><strong>{tile.title}{tile.pageTitle ? <em> · {tile.pageTitle}</em> : null}</strong><small>{tile.detail}{tile.sourceName && action.kind !== 'join' ? ` Data: ${name}.` : ''}</small></span>
           <span className="readiness-uncertified-actions">
-            {action.kind === 'source' ? <button type="button" className="primary" onClick={() => onCertifySource(action.source)} disabled={busy} aria-label={`Certify now: ${name}`}>Certify now (recommended)</button> : null}
-            {action.kind === 'saved_query' ? <button type="button" className="primary" onClick={() => onOpenSavedQuery(action.source)} disabled={busy} aria-label={`Certify now: ${name}`}>Certify now (recommended)</button> : null}
+            {action.kind === 'source' ? <button type="button" className="primary" onClick={() => onCertifySource(action.source)} disabled={busy} aria-label={words.nowAria(name)}>{words.now}</button> : null}
+            {action.kind === 'saved_query' ? <button type="button" className="primary" onClick={() => onOpenSavedQuery(action.source)} disabled={busy} aria-label={words.nowAria(name)}>{words.now}</button> : null}
             {action.kind === 'join' ? <>
-              <button type="button" className="primary" onClick={() => onCertifyJoin(action.joins[0], action.review.sourceId)} disabled={busy} aria-label={`Certify the join for ${tile.title}`}>Certify this join (recommended)</button>
+              <button type="button" className="primary" onClick={() => onCertifyJoin(action.joins[0], action.review.sourceId)} disabled={busy} aria-label={words.joinAria(tile.title)}>{words.join}</button>
               {action.review.relatedFields.length ? <button type="button" onClick={() => onRemoveRelatedFields(action.review)} disabled={busy}><Trash2 size={13} /> {action.review.relatedFields.length === 1 ? 'Remove the related field' : 'Remove the related fields'}</button> : null}
               {action.review.filterIds.length && !action.review.relatedFields.length ? <button type="button" onClick={onOpenFilters} disabled={busy}><Filter size={13} /> Open Filters</button> : null}
             </> : null}

@@ -464,6 +464,16 @@ export interface DqlHostUi {
    * own message.
    */
   appNotFound?: { message: string; next?: { label: string; href: string } };
+  /**
+   * What certifying means here. `proposes`: certifying data, a saved query or
+   * a join in this space only proposes certification — the host certifies
+   * through its own review (a creator's change becomes a pull request a
+   * steward certifies) — so DQL's screens say "propose" where they would say
+   * "certify" ("Propose for certification", "ZLens records you as the person
+   * who proposed it"). What is checked and written is unchanged. Absent: the
+   * person certifies here, and the screens say so.
+   */
+  certification?: 'proposes';
 }
 
 /** `appNotFound` as ZLens passes it on: plain text, a same-origin link only. */

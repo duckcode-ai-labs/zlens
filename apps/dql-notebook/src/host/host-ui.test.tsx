@@ -5,7 +5,7 @@ import { HostAnswerActions, HostAnswerStatusView, answerNeedsReview } from '../c
 import { HostPersonMenu } from '../components/shell/HostPersonMenu';
 import { HostBanner } from '../components/shell/HostBanner';
 import { themes } from '../themes/notebook-theme';
-import { HOST_UNREACHABLE_AFTER_MS, HostConnecting, HostUiProvider, hostAllows, hostPageSrc, hostReader, hostRefusal, hostUiFrom, navItemAllowed, pageSaysHosted, type HostUi, type HostUiState } from './host-ui';
+import { HOST_UNREACHABLE_AFTER_MS, HostConnecting, HostUiProvider, hostAllows, hostPageSrc, hostProposesCertification, hostReader, hostRefusal, hostUiFrom, navItemAllowed, pageSaysHosted, type HostUi, type HostUiState } from './host-ui';
 import { appLibraryWords } from '../components/apps/app-library-words';
 
 const NO_HOST: HostUiState = { host: false };
@@ -224,5 +224,22 @@ describe('a hosted page before (or without) its capability map', () => {
     expect(read?.capabilities).toEqual({ ask: true, export: false, 'settings.manage': false });
     expect(read?.links).toEqual([]);
     expect(read?.answerActions).toEqual([{ id: 'a', label: 'A', url: '/a' }]);
+  });
+
+  it('keeps `certification: proposes` (the host certifies through its review) and drops any other value', () => {
+    const map = { host: true, person: { id: 'u-1', name: 'Ana' }, capabilities: {} };
+    const proposes = hostUiFrom({ ...map, certification: 'proposes' });
+    expect(proposes?.certification).toBe('proposes');
+    expect(hostProposesCertification(proposes!)).toBe(true);
+    for (const junk of ['certifies', 'PROPOSES', true, 1, { kind: 'proposes' }, null]) {
+      const read = hostUiFrom({ ...map, certification: junk });
+      expect(read, JSON.stringify(junk)).not.toBeNull();
+      expect(read, JSON.stringify(junk)).not.toHaveProperty('certification');
+      expect(hostProposesCertification(read!), JSON.stringify(junk)).toBe(false);
+    }
+    expect(hostUiFrom(map)).not.toHaveProperty('certification');
+    // Never without a host: `zlens notebook` certifies here.
+    expect(hostProposesCertification(NO_HOST)).toBe(false);
+    expect(hostProposesCertification(hosted())).toBe(false);
   });
 });

@@ -44138,6 +44138,7 @@ export function storyValueRelations(
 export function safeHostUiExtras(answer: unknown): {
   audience?: 'reader';
   appNotFound?: { message: string; next?: { label: string; href: string } };
+  certification?: 'proposes';
   signOutUrl?: string;
   environment?: string;
   banner?: ReturnType<typeof safeHostBanner>;
@@ -44153,6 +44154,8 @@ export function safeHostUiExtras(answer: unknown): {
   return {
     ...(extras.audience === 'reader' ? { audience: 'reader' as const } : {}),
     ...(appNotFound ? { appNotFound } : {}),
+    // Only the one value ZLens knows: certifying here proposes certification, the host certifies through its review.
+    ...(extras.certification === 'proposes' ? { certification: 'proposes' as const } : {}),
     ...(sameOrigin(extras.signOutUrl) ? { signOutUrl: extras.signOutUrl } : {}),
     ...(environment ? { environment } : {}),
     ...(banner ? { banner } : {}),
