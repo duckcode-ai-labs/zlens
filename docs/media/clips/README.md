@@ -50,7 +50,7 @@ No API key is used or stored.
 
 - Node 20–22, pnpm, and the Playwright Chromium
   (`pnpm -F @zlens/notebook-app exec playwright install chromium`)
-- Python 3.9–3.13 (dbt-duckdb builds the sample's DuckDB file)
+- Python 3.9–3.14 (dbt-duckdb builds the sample's DuckDB file)
 - ffmpeg with libx264 and libvpx-vp9 (`FFMPEG=/path/to/ffmpeg` to choose one)
 - Network on the first run (sample clone, dbt packages, DuckDB driver)
 

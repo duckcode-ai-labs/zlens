@@ -10,6 +10,11 @@ from Metrics"; it is not certified. A semantic compile that joins through a
 draft relationship, or a join no relationship models, is AI-Generated, and its
 caveat names the join.
 
+Every answer with rows starts with a trust line, for example
+`🟢 Certified · saved query monthly_revenue · owner analytics@jaffle.shop`.
+🔵 is From Metrics and 🟠 is AI-Generated. The server tells the agent to start
+its answer with that line, word for word.
+
 The default profile serves 27 tools. Set `ZLENS_MCP_TOOL_PROFILE=full` in the
 server's environment for 8 more, for maintenance and governance sessions.
 
@@ -21,6 +26,8 @@ decide when to ask you first: Codex runs read-only tools without asking.
 
 A call that fails is marked as an error (MCP `isError`) and its message says
 what to do, for example which command starts the workbench.
+
+{{ video("agt4-tools") }}
 
 ## Which tool serves which feature
 
@@ -81,6 +88,14 @@ file), so these tools keep `block` in their names.
 | `query_via_metadata` | Runs one read-only `SELECT` or `WITH` query as a bounded preview. Marks the result `uncertified` (AI-Generated) and saves a draft saved query unless asked not to. | no (saves a draft) |
 | `query_semantic_model` | Compiles and previews a semantic-layer query, labels it, and saves it as a draft. The label is From Metrics when every join it takes is a certified relationship (or it takes none), and AI-Generated when a join is a draft or unmodeled relationship; `relationshipProof` lists each join and the relationship it matched. `uncertified: true` means no certified saved query backs the result and the draft needs review; it does not mean AI-generated, so read the label from `trustLabelInfo.display` (or `certification`, `aiGenerated`). It picks the metric whose name or label the question uses, and says "No semantic match" rather than answer with a different metric, or with a metric that leaves out a breakdown, member filter or date range the question asks for (`unexpressed` lists them; answer through `query_via_metadata`). | no (saves a draft) |
 | `kg_search` | Searches the project's knowledge graph: saved queries, terms, metrics, Apps, notebooks, dbt models, entities, relationships, skills. | yes |
+
+`query_via_block` refuses a saved query that is not certified:
+`Block "<name>" is "draft" — only certified blocks can be executed via MCP.`
+`query_via_metadata` runs only one read-only `SELECT` or `WITH`. It rejects
+write keywords such as `INSERT`, `DROP` and `SET`, tables and joins the
+project does not allow, and joins nobody has certified
+(`relationship_not_certified`). It returns 200 rows by default and at most
+10,000.
 
 ### Saved queries, lineage and checks
 

@@ -52,6 +52,9 @@ no case measures is reported as n/a and is not applied. In the sample,
 `--min-refusal` waits for a case with `expectRefuse: true`, which you add in
 Step 2.
 
+To run only your `eval/*.yaml` cases and skip the certified saved queries' own
+examples, add `--no-examples`.
+
 ### When a block example fails
 
 A block example is a promise that the question is answered by that certified
@@ -72,9 +75,18 @@ The failure line shows what happened, for example
 `route expected certified, got generated`. `--format json` adds each case's
 route reason in `trace`.
 
+A block that is no longer certified drops its examples from the run, so keep
+its key questions in `eval/*.yaml` too (Step 2). For example, if
+`eval/golden.yaml` expects `How has revenue changed by month?` to route to
+`monthly_revenue`, and someone changes that block from `certified` to `draft`,
+the case fails with `route expected certified, got missing_context` and the run
+ends `✕ FAIL — below configured thresholds.` (exit 1).
+
 ---
 
 ## Step 2 — Add golden cases
+
+{{ video("eval1-test-answers") }}
 
 ```bash
 npx zlens eval . --init
@@ -103,9 +115,13 @@ checks (`expectMetricTerms`, `expectNoMetricTerms`, `expectFilters`,
 `zlens eval --help` lists them all. When Ask gets a question wrong, add the
 question here before you fix it.
 
+A refused question shows its route as `missing_context`.
+
 ---
 
 ## Step 3 — Add the workflow
+
+{{ video("eval2-pr-check") }}
 
 ```bash
 npx zlens ci init
@@ -136,10 +152,10 @@ jobs:
         with:
           node-version: "22"
       - name: Routing eval
-        run: npx -y --package=@zlens/cli@0.2.2 zlens eval . --min-route-accuracy 1 --min-refusal 1
+        run: npx -y --package=@zlens/cli@0.2.9 zlens eval . --min-route-accuracy 1 --min-refusal 1
 ```
 
-- The CLI is pinned to the version that wrote the file. Run
+- The CLI is pinned to the version that wrote the file (`0.2.9` here). Run
   `zlens ci init --force` to move to a newer one.
 - There is no install step. The sample ships no lockfile (it ignores
   `package-lock.json`), so `npm ci` would fail, and `npx` needs none.
@@ -158,6 +174,8 @@ merging** → add **ZLens eval**.
 
 ## Optional — `zlens agent eval` in replay mode
 
+{{ video("eval3-real-answers") }}
+
 `zlens agent eval` scores the full answer: the route, the trust label, the
 SQL and, with `--execute`, the rows. It always drives a running workbench
 (`--via runtime`, the default and only driver), so in CI it needs more than
@@ -170,7 +188,41 @@ SQL and, with `--execute`, the rows. It always drives a running workbench
    the workbench with `ZLENS_EVAL_CASSETTE_DIR=test-cassettes/agent-evals` and
    `ZLENS_EVAL_CASSETTE_MODE=record`, run the suite, and commit
    `test-cassettes/`. Recording needs provider credentials; replay does not.
-3. **The workbench in replay mode**, then the suite:
+3. **The workbench in replay mode**, then the suite.
+
+The suite is a YAML file of questions and what each answer should be, for
+example `agent-evals.yml`:
+
+```yaml
+cases:
+  - name: certified revenue by month
+    question: "How has revenue changed by month?"
+    expected:
+      kind: certified
+      route: certified
+      certification: certified
+  - name: orders per store
+    question: "How many orders per store?"
+    expected:
+      kind: uncertified
+      route: generated_sql
+      certification: analyst_review_required
+  - name: unanswerable refuses
+    question: "What is our employee churn?"
+    expected:
+      kind: no_answer
+```
+
+When every case passes, the report ends with lines such as:
+
+```text
+3/3 eval case(s) passed.
+Certified hit rate: 100%
+…
+Safe refusal rate: 100%
+```
+
+The workflow steps:
 
 ```yaml
       - name: Start the workbench (replay)
@@ -178,7 +230,7 @@ SQL and, with `--execute`, the rows. It always drives a running workbench
           ZLENS_EVAL_CASSETTE_DIR: test-cassettes/agent-evals
           ZLENS_EVAL_CASSETTE_MODE: replay
         run: |
-          npx -y --package=@zlens/cli@0.2.2 zlens notebook . --no-open --port 3474 > workbench.log 2>&1 &
+          npx -y --package=@zlens/cli@0.2.9 zlens notebook . --no-open --port 3474 > workbench.log 2>&1 &
           for i in $(seq 1 60); do
             curl -sf http://127.0.0.1:3474/api/health && exit 0
             sleep 1
@@ -186,18 +238,20 @@ SQL and, with `--execute`, the rows. It always drives a running workbench
           cat workbench.log; exit 1
       - name: Agent eval
         run: >
-          npx -y --package=@zlens/cli@0.2.2 zlens agent eval agent-evals.yml
+          npx -y --package=@zlens/cli@0.2.9 zlens agent eval agent-evals.yml
           --runtime-url http://127.0.0.1:3474 --cassette replay
           --max-false-refusal 0.05 --min-refusal-recall 1
 ```
+
+`--runtime-url` is optional when the workbench runs on the default port 3474.
 
 In replay mode a question whose provider call was not recorded fails; it
 never reaches a live model. The workbench makes the provider calls, so the
 environment variables above are what make it replay. `--cassette replay`
 checks that: when the workbench's `/api/health` reports another mode, the eval
 stops before any case runs and prints the command to start the workbench in
-replay mode. The `--cassette` check and the mode in `/api/health` are new
-after 0.2.2; 0.2.2 does not check the workbench's mode.
+replay mode. The `--cassette` check and the mode in `/api/health` are there
+since 0.2.3; 0.2.2 does not check the workbench's mode.
 
 `--judge` and `--min-judge-pass` need a live provider, so keep them for a
 scheduled, credentialed job rather than a pull-request gate.

@@ -4,6 +4,8 @@ Connect [Cursor](https://cursor.com) to your ZLens project so its agent
 answers data questions from certified saved queries first and labels every answer the
 way Ask does.
 
+{{ video("agt3-codex-cursor") }}
+
 ## Before you start
 
 - A ZLens project where `npm exec -- zlens mcp test` ends with `Ready`. See

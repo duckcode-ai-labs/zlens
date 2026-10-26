@@ -34,11 +34,15 @@ certify first.
 
 ## Review and certify the draft
 
+{{ video("ask3-ai-to-certified") }}
+
 1. Click **Open draft to review**, or find it in **Saved queries** in the **Drafts**
    folder.
 2. Check the SQL and click **Run** to look at the rows.
-3. Check the **Name** and **Domain**, set an **Owner** and a clear
-   description. Add a test if you can.
+3. Check the **Saved query name** and **Domain**, set an **Owner** and a clear
+   description. Add a test if you can. To change the **Saved query name**,
+   **Domain** or **Owner**, click **Open in builder**. These fields are in the
+   **Details** box.
 4. Click **Certify**. If the draft has no Domain yet and your project has
    Domains, the saved query editor asks for one first: a Domain, or **Global /
    cross-domain** for an answer that spans Domains.

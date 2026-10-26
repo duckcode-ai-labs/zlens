@@ -1,0 +1,116 @@
+# ZLens video tutorials on YouTube (https://www.youtube.com/@zlensanalytics).
+#
+# One entry per video. Pages show a video with a marker on a line of its own:
+#
+#     {{ video("qs1-install") }}
+#
+# and the Video tutorials page lists every playlist with {{ videos() }}
+# (scripts/mkdocs/videos.py). Thumbnails live in docs/media/videos/<id>.jpg
+# (480x270). `note` is shown under the link when the video differs from the
+# current product; keep it to one sentence.
+
+playlists:
+  - key: intro
+    title: Start here
+    youtube: PLKzfNDl3I2sI
+    summary: The whole idea in 90 seconds.
+  - key: quick-start
+    title: Quick Start
+    youtube: PLOQWt259Y25k
+    summary: From install to your first trusted answer, on the Jaffle Shop sample or your own data.
+  - key: notebooks
+    title: Notebooks
+    youtube: PLUdJRzKhNIRA
+    summary: SQL, charts, inputs and AI in one file you share and review in git.
+  - key: blocks
+    title: Saved queries and certification
+    youtube: PLRvLK1Q_JFQA
+    summary: Saved queries your team can trust, and how a person certifies them.
+  - key: ask
+    title: Ask and trust
+    youtube: PLahuj-J7h3TY
+    summary: How Ask picks a source, what each label means, and when it refuses.
+  - key: semantic
+    title: Semantic layer
+    youtube: PLXjz0fV3orFg
+    summary: Define a metric once, and certify how tables join.
+  - key: lineage
+    title: Lineage
+    youtube: PLJIc5kBRmBLs
+    summary: Trace a number to its source, and see what a change will break.
+  - key: git
+    title: Share and review with git
+    youtube: PLZGwS382JLAs
+    summary: Review data work like code, without learning git commands.
+  - key: agents
+    title: Your AI agent + ZLens
+    youtube: PLJSaxF-L_t4Q
+    summary: Use ZLens from Claude Code, Claude Desktop, Codex and Cursor.
+  - key: evals
+    title: Evals and CI
+    youtube: PLcTI7I6RUs-4
+    summary: Test your AI answers like code, on every pull request.
+  - key: apps
+    title: Apps
+    youtube: PLBI3ZFFvskKQ
+    summary: Dashboards that show their proof.
+
+videos:
+  zlens-agentic-film: {playlist: intro, youtube: nsyLc4UfKxo, length: "1:30", title: "ZLens: certified agentic analytics, explained in 90 seconds", docs: index.md, note: "The end card omits the folder name: run npx create-zlens-app@latest my-analytics, or start with the Quickstart."}
+
+  qs1-install: {playlist: quick-start, youtube: oQUM9aiwuHA, length: "0:52", title: "Install ZLens in 1 minute", docs: get-started/index.md}
+  qs2-setup: {playlist: quick-start, youtube: s2o9aI-MpaY, length: "1:05", title: "Guided Setup and your first query", docs: get-started/index.md, note: "On the sample, Setup now opens on Open an existing ZLens project: just click Continue to credentials."}
+  qs3-ask: {playlist: quick-start, youtube: LpuPFbBLrRo, length: "1:07", title: "Connect an AI model and ask your first question", docs: get-started/ai-provider.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+  qs4-own-data: {playlist: quick-start, youtube: DVItZgNmDJQ, length: "1:10", title: "Use your own data, with or without dbt", docs: get-started/your-dbt-project.md, note: "This video says \"Governed\"; the label is now \"From Metrics\"."}
+
+  nb1-first-notebook: {playlist: notebooks, youtube: Jji1nqT_8Bc, length: "1:09", title: "Your first research notebook", docs: notebooks/index.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
+  nb2-cell-types: {playlist: notebooks, youtube: R4xMQE9VaMM, length: "1:01", title: "Every cell type", docs: notebooks/index.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
+  nb3-inputs-data: {playlist: notebooks, youtube: RNiu4-8sG80, length: "0:54", title: "Inputs and local data", docs: notebooks/index.md}
+  nb4-result-chart: {playlist: notebooks, youtube: rOzUy81o-mA, length: "0:58", title: "From result to chart", docs: notebooks/index.md}
+  nb5-notebook-ai: {playlist: notebooks, youtube: kKFyBJfHY9w, length: "0:51", title: "Notebook AI", docs: notebooks/index.md, note: "Recorded on 0.2.2: the per-cell button now reads Replace cell & run."}
+  nb6-keep-it: {playlist: notebooks, youtube: jjEvoH7O6kU, length: "1:04", title: "Is this worth keeping? Save it for review", docs: notebooks/index.md, note: "Recorded on 0.2.2: Save Block is now Save as saved query."}
+
+  bk1-why-blocks: {playlist: blocks, youtube: 1EglFCmPqH4, length: "0:57", title: "Why certified saved queries", docs: blocks/index.md, note: "Recorded on 0.2.2: Blocks are now Saved queries, and Apps say All tiles certified."}
+  bk2-import-sql: {playlist: blocks, youtube: _e5dvgSE7rA, length: "0:59", title: "Import your SQL", docs: blocks/import-sql.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
+  bk3-block-studio: {playlist: blocks, youtube: tTciKShDo1I, length: "0:55", title: "Inside the saved query editor", docs: blocks/block-studio.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
+  bk4-tests: {playlist: blocks, youtube: HaO0iHQXvbc, length: "0:52", title: "Tests, the promises your data keeps", docs: blocks/certify.md, note: "Recorded on 0.2.2: messages now say \"saved query\" instead of \"block\"."}
+  bk5-certify: {playlist: blocks, youtube: RuntC3P2EYg, length: "1:00", title: "Certify, change, retire", docs: blocks/certify.md, note: "Recorded on 0.2.2: messages now say \"saved query\" instead of \"block\"."}
+
+  ask1-labels: {playlist: ask, youtube: mBgVFHZb2OQ, length: "0:51", title: "Read every trust label", docs: ask/index.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+  ask2-how-answered: {playlist: ask, youtube: nuGWGCiHQbQ, length: "0:46", title: "How it was answered", docs: ask/how-it-answered.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+  ask3-ai-to-certified: {playlist: ask, youtube: GmRXwkkq9eg, length: "0:50", title: "From AI answer to certified", docs: ask/needs-review.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+  ask4-says-no: {playlist: ask, youtube: AnyCQ_p1SLs, length: "0:47", title: "When Ask says no", docs: ask/refusals.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+  ask5-steer: {playlist: ask, youtube: GX9t6UMt8Cs, length: "0:41", title: "Steer Ask: scope, thinking and follow-ups", docs: ask/index.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+  ask6-keep-trace: {playlist: ask, youtube: rNJk44SHsFM, length: "0:41", title: "Keep and trace every answer", docs: ask/index.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
+
+  sem1-metric-once: {playlist: semantic, youtube: fIHbeWtP24A, length: "1:00", title: "Define a metric once", docs: reference/semantic-layer.md, note: "This video says \"Governed\"; the label is now \"From Metrics\"."}
+  sem2-engines: {playlist: semantic, youtube: ag2QXBMctU4, length: "0:58", title: "Where metrics run", docs: reference/semantic-layer.md, note: "Since this recording, the built-in compiler also runs derived metrics that do plain arithmetic over simple metrics."}
+  sem3-safe-joins: {playlist: semantic, youtube: oNIHhObSOsc, length: "0:48", title: "Safe joins: stop counting rows twice", docs: reference/semantic-layer.md, note: "This video says \"Governed\"; the label is now \"From Metrics\"."}
+  sem4-certify-joins: {playlist: semantic, youtube: 3m7Ti2siTgg, length: "1:04", title: "Certify your joins", docs: datalex-and-dql.md, note: "This video says \"Governed\"; the label is now \"From Metrics\"."}
+
+  lin1-trace: {playlist: lineage, youtube: 5N2nJ4fCSWU, length: "0:49", title: "Trace a number to its source", docs: lineage/index.md, note: "Recorded on 0.2.2: the Blocks tab and DQL Block card are now Saved queries and Saved query."}
+  lin2-impact: {playlist: lineage, youtube: dBn41pPweBg, length: "0:45", title: "Before you change a model", docs: lineage/index.md}
+  lin3-everywhere: {playlist: lineage, youtube: xOcKVFSyeoE, length: "0:46", title: "Lineage everywhere", docs: lineage/index.md}
+
+  git1-what-goes-in: {playlist: git, youtube: _6UiyqeZXm4, length: "0:41", title: "What goes into git", docs: notebooks/version-and-diff.md}
+  git2-what-changed: {playlist: git, youtube: lAtcXASuEa8, length: "0:41", title: "See what changed", docs: notebooks/version-and-diff.md}
+  git3-share: {playlist: git, youtube: J1s6oEyXF1c, length: "0:40", title: "Share for review", docs: notebooks/share-with-your-team.md}
+  git4-updates: {playlist: git, youtube: HRNkJsUEz_Y, length: "0:38", title: "Get updates", docs: notebooks/share-with-your-team.md}
+
+  agt1-why: {playlist: agents, youtube: XGDoFCB97lU, length: "0:51", title: "Why connect your agent", docs: agents/index.md, note: "Recorded on 0.2.2: since 0.2.6 there is a third label, From Metrics, and Block Studio is now Saved queries."}
+  agt2-claude-code: {playlist: agents, youtube: uuiyluHRsIY, length: "0:50", title: "Connect Claude Code", docs: agents/claude-code.md, note: "Running zlens on its own needs the global install; in a project, run npm exec -- zlens."}
+  agt3-claude-desktop: {playlist: agents, youtube: -MQ_hBMxKKw, length: "1:10", title: "Claude Desktop: certified answers in your chat", docs: agents/claude-desktop.md}
+  agt3-codex-cursor: {playlist: agents, youtube: Ip975LqibiI, length: "0:41", title: "Codex and Cursor", docs: agents/codex.md}
+  agt4-tools: {playlist: agents, youtube: sORDViPLhWY, length: "0:49", title: "What your agent can and can't do", docs: agents/tools.md, note: "Recorded on 0.2.2: Block Studio is now the saved query editor."}
+
+  eval1-test-answers: {playlist: evals, youtube: EPfuj9jOlm4, length: "0:49", title: "Test your answers", docs: tutorials/05-ci-and-verify.md}
+  eval2-pr-check: {playlist: evals, youtube: AQhVQtVXlxA, length: "0:47", title: "A check on every pull request", docs: tutorials/05-ci-and-verify.md, note: "Recorded on 0.2.2: since 0.2.3, npx zlens ci init writes this workflow for you, pinned to your ZLens version."}
+  eval3-real-answers: {playlist: evals, youtube: AJQG_AM1paY, length: "0:50", title: "Test the real answers", docs: tutorials/05-ci-and-verify.md}
+
+  ap1-read-an-app: {playlist: apps, youtube: hv0cHJ0h20E, length: "0:47", title: "Read an App: every tile has a receipt", docs: apps/index.md}
+  ap2-start-with-data: {playlist: apps, youtube: j_fv3OAfhIk, length: "1:31", title: "Start with the data, not the chart", docs: apps/build.md}
+  ap3-quick-start: {playlist: apps, youtube: IRk2VOlu8YE, length: "0:49", title: "Quick start: an App in three choices, no AI", docs: apps/build.md}
+  ap4-filters: {playlist: apps, youtube: -3NX6r6QPsA, length: "1:32", title: "Filters that say which tiles they reach", docs: apps/index.md}
+  ap5-publish-certify: {playlist: apps, youtube: 4vJiqXEih4I, length: "1:04", title: "Publish, and certify what's missing on the spot", docs: apps/build.md}
+  ap6-query-changes: {playlist: apps, youtube: KUpPQvWhna4, length: "0:46", title: "When a saved query changes, it loses its certification", docs: apps/build.md}
+  ap7-ask: {playlist: apps, youtube: 7Ktxzlb15Hw, length: "0:56", title: "Ask questions inside an App", docs: apps/ask-about-an-app.md}

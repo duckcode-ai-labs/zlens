@@ -5,6 +5,8 @@ open your project's files, so everything it learns about the project comes
 through the ZLens tools: saved queries, Apps, notebooks, lineage, the semantic layer
 and the catalog.
 
+{{ video("agt3-claude-desktop") }}
+
 ## Before you start
 
 - A ZLens project where `npm exec -- zlens mcp test` ends with `Ready`. See
@@ -56,12 +58,14 @@ project.
 
 ## Open Claude Desktop
 
-Quit Claude Desktop completely and open it again. In a new chat, open the
-tools menu (search and tools): `dql` is listed with its 27 tools. Claude
-Desktop asks before it runs each tool; choose to allow it for the chat or
-always.
+Quit Claude Desktop completely and open it again. In a new chat, click **+**
+→ **Connectors**: `dql` is listed. Switch it on. Claude Desktop asks before
+it runs each tool; choose to allow it for the chat or always.
 
 ## What to expect
+
+Claude Desktop has no project guide file. Start a question with "Using
+ZLens, …" so Claude goes to the `dql` tools.
 
 - *"How has revenue changed by month?"*: Claude routes the question with
   `ask_dql`, runs the certified saved query with `query_via_block`, and labels the
@@ -70,6 +74,9 @@ always.
   query returns that measure, so Claude compiles the semantic metric
   `average_order_value` with `query_semantic_model`, and the answer is labelled
   **From Metrics**, as on the Ask page: the compile reads one table.
+- *"How many large orders did we get each month?"* works the same way: the
+  semantic metric `large_orders` by month, from one table, labelled
+  **From Metrics**.
 - *"How many large orders did each location get?"*: the compile joins orders
   to locations through `order_to_location`, which is a draft relationship in
   the sample, so the answer is labelled **AI-Generated** and the caveat names
@@ -90,7 +97,7 @@ it returns `modelUnavailable` and Claude answers through `ask_dql` instead.
 
 | What you see | What to do |
 |---|---|
-| `dql` is missing from the tools menu | Quit Claude Desktop fully (not just the window) and reopen it. Check the config file above holds the `dql` entry. |
+| `dql` is missing under **+** → **Connectors** | Quit Claude Desktop fully (not just the window) and open it again. Check the config file above holds the `dql` entry, then switch `dql` on. |
 | `spawn npx ENOENT` in Claude Desktop's MCP log | Run `npm exec -- zlens connect claude-desktop` again from the project, with the Node you use every day, so the entry gets the full `npx` path. |
 | The server starts slowly the first time | `npx` downloads the CLI once. Install it in the project (`npm install`) to skip the download. |
 | A tool says `Could not reach the ZLens runtime` | Start the workbench and keep it running. If it runs on another port, add `"ZLENS_RUNTIME_URL": "http://127.0.0.1:<port>"` to the entry's `env`. |

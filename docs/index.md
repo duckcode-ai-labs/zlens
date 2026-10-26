@@ -18,6 +18,8 @@ Using dbt? ZLens reads your models, tests and lineage. Not using dbt? Start stra
 
 Everything is a file in your project, so it is reviewed in git like code. ZLens runs on your machine; no hosted account is needed.
 
+{{ video("zlens-agentic-film") }}
+
 {{ clip("overview") }}
 
 ## Start here

@@ -42,6 +42,8 @@ top of your dbt project, or straight on your database's own tables. It turns
 the analytics people build (queries, notebooks, dashboards and AI answers)
 into files you review in git, and it tells you how far to trust each answer.
 
+Watch the [90-second film](https://youtu.be/nsyLc4UfKxo) for the whole idea.
+
 When someone asks a question, ZLens tries the most trusted source first and
 labels what it used:
 
@@ -70,15 +72,34 @@ an unreviewed number up as a trusted one.
 ## Quickstart
 
 Run ZLens on the Jaffle Shop sample dbt project. It takes about ten minutes
-and needs Node.js 20, 22 or 24 (24 LTS recommended), Python 3.9 to 3.13 and
-git. No warehouse account is needed. Node 25 and 26 are not supported yet:
-ZLens's DuckDB driver has no prebuilt binary for them.
+and needs Node.js 20, 22 or 24 (24 LTS recommended), Python 3.9 to 3.14 and
+git. `./setup.sh` picks a supported Python for you. No warehouse account is
+needed. Node 25 and 26 are not supported yet: ZLens's DuckDB driver has no
+prebuilt binary for them.
 
-**1. Get the sample dbt project and build its DuckDB database**
+**1. Get the sample and set it up**
+
+The sample is the Jaffle Shop dbt project on DuckDB, already set up as a
+ZLens workspace. Clone it and run its setup script:
 
 ```bash
 git clone https://github.com/duckcode-ai/jaffle-shop-duckdb.git
 cd jaffle-shop-duckdb
+./setup.sh
+```
+
+`./setup.sh` builds the sample's DuckDB database with dbt, installs ZLens and
+the DuckDB driver into this folder, and imports the dbt project. It ends with
+`Setup complete.` and is safe to run again.
+
+<details>
+<summary>Without the script</summary>
+
+<br>
+
+Build the database:
+
+```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/dbt deps --profiles-dir .
@@ -86,20 +107,17 @@ python3 -m venv .venv
 .venv/bin/dbt build --profiles-dir . --exclude resource_type:seed
 ```
 
-**2. Install ZLens, import the dbt project and open the workbench**
-
-The sample is already a ZLens workspace, so install ZLens into the same
-folder:
+Install ZLens and import the dbt project:
 
 ```bash
 npm install
-npm install --prefix .dql/connectors duckdb
 npm run sync
-npm run notebook
 ```
 
-The terminal prints `Notebook ready: http://127.0.0.1:3474` and your browser
-opens it.
+You don't need to install the DuckDB driver: `npm run notebook` installs the
+active connection's driver the first time it starts.
+
+</details>
 
 > [!NOTE]
 > **npm 12** runs a dependency's install script only when `package.json` lists
@@ -112,16 +130,26 @@ opens it.
 > [npm 12 and install scripts](https://docs.zlens.app/get-started/install/#npm-12-and-install-scripts).
 
 > [!NOTE]
-> The sample also has `./setup.sh`, which runs steps 1 and 2 (except
-> `npm run notebook`) in one go. Do not run `create-zlens-app` inside the
-> sample: it creates a second, empty workspace in `dql/`.
+> Do not run `create-zlens-app` inside the sample: it creates a second, empty
+> workspace in `dql/`.
+
+**2. Open the workbench**
+
+```bash
+npm run notebook
+```
+
+The terminal prints `Notebook ready: http://127.0.0.1:3474` and your browser
+opens it.
 
 **3. Finish Guided Setup and run a query**
 
-Guided Setup walks you through four steps: **Preview** and **Apply project**
-for the dbt project, the sample's DuckDB connection (already configured and
-tested), an optional AI provider, then **Finish setup**. Then open **Notebooks → New Notebook**, click
-**Create DQL query → Switch to SQL cell**, and run this with **Shift+Enter**:
+Guided Setup walks you through four steps: **Open an existing ZLens project**
+(already selected, click **Continue to credentials**), the sample's DuckDB
+connection (already configured and tested), an optional AI provider
+(**Skip AI for now**), then **Finish setup · Build an App**. Then open
+**Notebooks → New Notebook**, click **Create DQL query → Switch to SQL cell**,
+and run this with **Shift+Enter**:
 
 ```sql
 select customer_name, count_lifetime_orders, lifetime_spend
@@ -176,11 +204,11 @@ covers the switch.
 ## Video tutorials
 
 Short videos (about a minute each) on the [ZLens YouTube channel](https://www.youtube.com/@zlensanalytics).
-New here? Watch **Start here**, then **Quick Start**.
+New here? Watch **Start here**, then **Quick Start**. The [Video tutorials](https://docs.zlens.app/get-started/videos/) page in the docs lists every video next to its steps.
 
 | Playlist | What it covers |
 |---|---|
-| [Start here](https://www.youtube.com/playlist?list=PLKzfNDl3I2sI) | The whole idea in 90 seconds: certified answers, AI answers you can review, refusals instead of guesses. |
+| [Start here](https://youtu.be/nsyLc4UfKxo) | The whole idea in 90 seconds: certified answers, AI answers you can review, refusals instead of guesses. |
 | [Quick Start](https://www.youtube.com/playlist?list=PLOQWt259Y25k) | Install, Guided Setup, your first question with a trust label, then your own data, with or without dbt. |
 | [Notebooks](https://www.youtube.com/playlist?list=PLUdJRzKhNIRA) | SQL, charts, inputs and AI in one file you share, review in git and save as a saved query. |
 | [Blocks and certification](https://www.youtube.com/playlist?list=PLRvLK1Q_JFQA) | Saved queries your team can trust: import your SQL, add tests, then certify, change or retire. |

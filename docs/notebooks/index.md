@@ -7,14 +7,19 @@ in one file. When a query is worth keeping, you keep it as a saved query.
 
 ## Create a notebook
 
+{{ video("nb1-first-notebook") }}
+
 1. In the left rail, click **Notebooks**.
 2. Click **New Notebook** (or the **Create notebook** icon next to
    **Search notebooks…**).
 3. Fill in the **Create notebook** dialog:
     - **Notebook name**, such as `Customer retention analysis`.
-    - **Domain context** (optional).
+    - **Domain context** (optional) lists the notebook under that domain. The
+      file stays where it is.
     - **Who is this for**: **Shared with the team** saves it in `notebooks/`,
-      tracked by git. **Private to me** keeps it outside git until you publish it.
+      tracked by git. **Private to me** saves it in
+      `.dql/local/private/notebooks/`, outside git, until you publish it. The
+      hint under the name shows the path.
     - **Starting point**: **Start empty**, **Explore a question**,
       **Investigate a metric**, **Check data quality** or **Review an
       experiment**. Templates only add starter cells: DQL queries and note
@@ -31,6 +36,8 @@ An empty notebook asks **What are you researching?** and offers:
 Below them, **+ Add a research note instead** adds a Note cell.
 
 ## Add cells
+
+{{ video("nb2-cell-types") }}
 
 Hover between cells and click **Add cell**. Pick a type:
 
@@ -80,6 +87,8 @@ like `SELECT @metric(...) ...` is still plain SQL, not a saved query. In DQL, as
 metrics with `type = "semantic"`, which names a `metric` and its
 `dimensions`. See [Semantic block](../reference/language.md#semantic-block) in the DQL reference.
 
+{{ video("sem1-metric-once") }}
+
 ## Run cells
 
 - Run one cell: **Shift+Enter**, **Cmd+Enter** (**Ctrl+Enter**), or the run
@@ -88,6 +97,8 @@ metrics with `type = "semantic"`, which names a `metric` and its
 
 ## Work with a result
 
+{{ video("nb4-result-chart") }}
+
 The result appears under the cell. The bar above it shows the row count and
 the time it took, such as `7 rows · 12.4ms`.
 
@@ -95,19 +106,28 @@ the time it took, such as `7 rows · 12.4ms`.
   **Pivot**, **Chart** or **KPI**.
 - **Table**, **Profile** and **Chart** change how this result is shown.
   **Profile** summarizes each column. **Chart** opens a list of chart types.
-  **Suggest** picks a chart from the result's columns.
+  **Suggest** picks a chart from the result's columns. In chart view, the gear
+  next to **Chart** (**Chart configuration**) sets the X and Y axes.
+- A **KPI** cell shows one number. Set its **Aggregation** (**Sum**,
+  **Average**, **Count**, **Min**, **Max** or **Last**), **Metric field**,
+  **Format** (**Number**, **Currency**, **Percent** or **Duration**) and
+  **Label**.
 - **CSV** and **JSON**, in the table's toolbar, download the rows.
 - **Trust & Steps**, under the result, shows how the cell ran: its status
   (such as **Success**), the engine, the time, where it ran, and the steps
-  and SQL behind it.
+  and SQL behind it: **Compiled SQL**, **Executed SQL** and **Target binding &
+  execution receipt**.
 
 ## Input cells
 
+{{ video("nb3-inputs-data") }}
+
 An Input cell holds a value that SQL cells use.
 
-1. Add an **Input** cell and give it a **Variable name**, such as
-   `start_date`, a **Display label**, and a type: **Text**, **Number**,
-   **Date** or **Select**.
+1. Add an **Input** cell. Its settings (the gear, **Configure parameter**)
+   ask for a **Variable name**, such as `start_date`, a **Display label**, a
+   type (**Text**, **Number**, **Date** or **Select**) and a **Default
+   value**. Click **Done**.
 2. In a SQL cell, write the name in double braces:
 
     ```sql
@@ -152,7 +172,20 @@ changes.
 The notebook is a `.dqlnb` file. Results go in a `.run.json` file next to it,
 which git ignores, so data never ends up in a commit.
 
+## See where a cell's data comes from
+
+Under a SQL or DQL cell, open **Cell SQL lineage** (SQL) or **Project saved query
+lineage** (DQL). **Cell SQL lineage** lists the tables the query reads, then
+**SQL shape** (outputs, joins, filters, groups), **Query logic**, and
+**Business context from detected sources**: the dbt models, metrics and saved
+queries behind those tables. Check the joins before you keep a query.
+
+On a DQL cell, **View in DAG** opens the **Lineage Inspector** panel on that
+saved query. See [lineage](../lineage/index.md).
+
 ## Save a cell as a saved query
+
+{{ video("nb6-keep-it") }}
 
 When a query is worth reusing:
 
@@ -162,20 +195,16 @@ When a query is worth reusing:
    **Domain**, **Tags** and **Description**. **Governance checks** shows what is
    still missing. The dialog shows the file it will write, such as
    `domains/commerce/blocks/orders_by_store.dql`.
-3. Click **Save draft saved query**.
+3. Click **Save draft**. It stays greyed out until **Name** and **Owner** are
+   filled in.
 
 ZLens saves a draft saved query and opens it in the saved query editor. As the dialog says,
 saving never certifies: click **Certify** in the saved query editor when it is ready.
 See [Save and certify](../blocks/certify.md).
 
-## See where a cell's data comes from
-
-Under a SQL or DQL cell, open **Cell SQL lineage** (SQL) or **Project saved query
-lineage** (DQL) to see the tables, joins, filters and outputs. On a DQL cell,
-**View in DAG** opens the **Lineage Inspector** panel on that saved query. See
-[lineage](../lineage/index.md).
-
 ## Notebook AI and history
+
+{{ video("nb5-notebook-ai") }}
 
 - **Notebook AI** (top right) opens a side panel that answers questions using
   the whole notebook, dbt and semantic metadata, and certified saved queries. It needs
@@ -185,8 +214,11 @@ lineage** (DQL) to see the tables, joins, filters and outputs. On a DQL cell,
   **SQL cell · store_names**. The AI gets the cell's query, and
   its error when the last run failed, so you can ask "Fix this query" or
   "Explain this cell".
-- **History** lists this notebook's Notebook AI conversations. Click one to
-  continue it. Saved research for the notebook is listed below them.
+- The history icon at the top of the panel (**Show AI history**) opens **AI
+  history**: this notebook's Notebook AI conversations. Click one to continue
+  it. Saved research for the notebook is listed below them.
+
+Close the panel and open it again: the conversation is still there.
 
 An answer comes with a button that puts it in the notebook:
 

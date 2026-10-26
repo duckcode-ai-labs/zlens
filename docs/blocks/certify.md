@@ -20,8 +20,12 @@ In the saved query editor, click **Save draft**.
 - If the saved query was already certified, your edit is saved as a separate draft
   beside it. The saved query editor says **Saved as a draft beside the certified saved query.
   The certified version stays in use until this draft is certified.**
+  The draft is named *name* **(draft edit)** and is listed in the **Drafts**
+  folder, next to the certified saved query that stays in use.
 
 ## Certify a saved query
+
+{{ video("bk5-certify") }}
 
 1. Open the saved query in the saved query editor.
 2. Click **Certify** in the toolbar (**Re-certify** on a saved query that is already
@@ -90,6 +94,8 @@ grain, declared outputs, entities and a review cadence. They are recorded on
 the receipt. With `zlens certify --enterprise`, they become requirements.
 
 ## Add tests
+
+{{ video("bk4-tests") }}
 
 Tests are assertions about the saved query's result. Certify runs them; running the
 saved query does not. In the saved query's DQL:

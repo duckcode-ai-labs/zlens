@@ -38,6 +38,8 @@ who it is for (**Shared with the team** or **Private to me**), a **Name**, a
 
 ## The saved query page
 
+{{ video("bk3-block-studio") }}
+
 When you open a saved query, you see its overview:
 
 - the name, a status badge such as **DRAFT** or **CERTIFIED**, the domain and
@@ -66,6 +68,12 @@ The toolbar at the top has:
 Switch between **Visual Builder** and **DQL Source** to edit the saved query in
 a form or as text. Above the visual builder, the **Query** toggle switches
 between **Semantic picker** (metrics and dimensions) and **Raw SQL**.
+
+Below the query, **Chart intent** sets how Apps and answers show the saved
+query by default. **Business outputs** names what people see when it answers a
+question. The **Context** button shows how many context fields are filled,
+for example **Context (3)**.
+
 **Context** opens a panel with the saved query's context. Each field is
 written into its DQL:
 
@@ -89,14 +97,15 @@ The tabs at the bottom are **Results**, **Run inputs**, **Lineage**,
 
 1. Click **Open in builder** (or switch to **DQL Source**).
 2. Change the query, the chart or the details. In the visual builder, the
-   **Details** box holds **Name**, **Domain**, **Owner**, **Tags**,
-   **Folder (optional)** and **Description**.
+   **Details** box holds **Saved query name**, **Domain**, **Owner**,
+   **Tags**, **Folder (optional)** and **Description**. **Owner** reads
+   *Required to save* until you fill it in.
 3. Click **Run** to check the rows.
 4. Click **Save draft**.
 
-A saved query always has a name. If you clear **Name**, the editor says
-**A saved query needs a name** and keeps the previous name until you type a new one;
-**Save draft** asks for a name first.
+A saved query always has a name. If you clear **Saved query name**, the
+editor says **A block needs a name. Type one to save; until then the block
+keeps its previous name.** **Save draft** asks for a name first.
 
 Saving a certified saved query does not change the certified version: your edit is
 saved as a separate draft beside it until you certify it.

@@ -9,6 +9,9 @@ ZLens tries the most trusted source first:
 2. then **semantic metrics** from your semantic layer,
 3. then **SQL written by AI** from your tables, marked as needing review.
 
+The Ask page says this in its header: **Certified first · semantic next ·
+generated SQL last**.
+
 If none of these can answer safely, Ask refuses and says why.
 
 !!! note "Before you start"
@@ -24,6 +27,9 @@ If none of these can answer safely, Ask refuses and says why.
    `Who are the top customers by lifetime spend?`
 3. Press **Enter**. (**Shift+Enter** adds a new line.)
 
+On the Jaffle Shop sample, try `How has revenue changed by month?`. It
+answers from the certified saved query `monthly_revenue`.
+
 While Ask works, you see each step, such as `Searched the project: 1
 certified saved query, 24 metrics…` and `Asking the AI to read the question`.
 Click **Stop** to cancel.
@@ -35,7 +41,7 @@ table. For a question that a certified saved query answers:
 
 - The trust line reads **Certified answer**, followed by **from** and the
   saved query's name, and its **Owner**.
-- The result card says `certified block`.
+- The result card says `certified saved query`.
 - **Results** shows the rows; **Visualization** shows a chart.
 
 Other trust lines:
@@ -48,7 +54,11 @@ Other trust lines:
 | **Needs clarification** | Ask needs one more detail. Answer the question it asks. |
 | **Couldn't run this query** or **No matching data** | Ask refused or found nothing, and says why. See [When Ask refuses](refusals.md). |
 
+{{ video("ask1-labels") }}
+
 ## See how it answered
+
+{{ video("ask2-how-answered") }}
 
 Under each answer, click **How it was answered**. A panel opens with tabs:
 
@@ -63,13 +73,20 @@ See [How Ask answered](how-it-answered.md) for the full trace.
 
 ## Keep the answer
 
+{{ video("ask6-keep-trace") }}
+
 In the answer's panel:
 
 - **Save as saved query** saves the query as a draft saved query. See
   [Save and certify](../blocks/certify.md).
-- **Add to app** adds the result to an App.
+- **Add to app** opens **Save to an editable App**. Pick an App or
+  **New app…**. A certified answer is saved as a certified tile (**Saved as a
+  certified tile**). Other answers say **Saved — review required**. Click
+  **Open App** to see it.
 
 ## Narrow the question to one domain
+
+{{ video("ask5-steer") }}
 
 Click **Scope: All domains** above the question box. Pick a **Domain**, and
 optionally a **Subject area** and a **Purpose**, then click **Apply**. Ask then
@@ -85,12 +102,21 @@ Click **Answer settings** (the sliders icon under the question box):
 - **Model**: shows the AI provider in use. Change it in
   **Settings → AI provider**.
 
+## Follow up
+
+Ask a follow-up in the same chat, such as `And the month before?`. Ask keeps
+the context. To ask about one part of an answer, select it. A **Follow up on
+this** box opens with **Why is this?**, **Root cause** and **Break it down**.
+You can also type your own question.
+
 ## Conversations
 
 - Each conversation is kept, so you can continue it later. They are listed
   under **Recent**; pin the ones you use often to **Favourites**.
 - **New chat** starts a fresh conversation.
 - Conversations are private to your machine and are not committed to git.
+  The list says **Private project history · not committed to Git**.
+- Hover a chat to pin it (star) or rename it (pencil).
 
 ## Ask from the terminal
 
@@ -98,9 +124,10 @@ Click **Answer settings** (the sliders icon under the question box):
 zlens agent ask "Who are the top customers by lifetime spend?"
 ```
 
-It prints the trust label (`✓ Certified`, `! AI-generated · review required`
-or `✕ Blocked`), the answer, and the thread id. Continue the conversation
-with `--thread <id>`. List conversations with `zlens agent threads`.
+It prints the trust label (`✓ Certified`, `· From Metrics`,
+`! AI-generated · review required` or `✕ Blocked`), the answer, and
+`Trace: <id> (complete)`. With `--thread <id>` it also prints the thread.
+List conversations with `zlens agent threads`.
 
 Your AI agent (Claude Code, Codex, Cursor) can use the same Ask through MCP.
 See [Connect your AI agent](../agents/index.md).

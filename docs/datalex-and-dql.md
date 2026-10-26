@@ -211,7 +211,19 @@ can also set `"mode": "hybrid"` in `dql.config.json`.
 
 Drafted and imported relationships start as drafts; only a person promotes
 them. On the **Modeling** map, click a relationship, then
-**Edit relationship**. **What Ask may do with it** has three levels:
+**Edit relationship**.
+
+Before you can certify a join, both models need a grain and keys.
+Right-click a model on the map and choose **Edit model**. Set **Grain
+override** (what one row means, such as `one row per order`) and **Key
+overrides** (such as `order_id`). By default these come from dbt `meta.dql`.
+Click **Preview source change**, then **Save**. The model card then shows
+**1 row = …**. When you open **Edit relationship**, the **Warehouse check**
+must say **Safe to join**.
+
+{{ video("sem4-certify-joins") }}
+
+**What Ask may do with it** has three levels:
 
 | Level | What Ask does with it |
 |---|---|
@@ -224,3 +236,6 @@ Pick a level, click **Review change**, check the proposal and click
 reviewed in git like the rest of the project.
 `zlens model explain <relationship-id>` says whether a relationship is
 automatic join proof for Ask.
+
+Once a join is certified, Ask adds the check **Joins certified tables on
+their certified keys** to AI-written SQL that joins those tables.

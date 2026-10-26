@@ -25,6 +25,10 @@ only the connection differs.
     README, or use your own database. The examples below use that
     `jaffle_shop.duckdb` file, whose tables are in the `dev` schema.
 
+{{ video("qs4-own-data") }}
+
+Path B in the video (no dbt) starts at 0:29.
+
 ## The quickest start: open the folder
 
 Put the database file in a folder and open that folder. No `init`, no flags:
@@ -351,6 +355,15 @@ join, then **Edit relationship**. Under **What Ask may do with it**, pick one:
 | **Validated** | Checked safe to join. Ask prefers it when it writes SQL. |
 | **Certified** | Ask must join these models on exactly these keys. |
 
+Before you can certify a join, both models need a grain and keys. Drafting
+sets them when a table has a primary key, or an id column the data shows is
+unique; the model card then shows **1 row = …**. If a card has no
+**1 row =** line, right-click the model on the map and choose **Edit model**.
+Set **Grain override** (what one row means, such as `one row per order`) and
+**Key overrides** (such as `order_id`). Click **Preview source change**, then
+**Save**. When you open **Edit relationship**, the **Warehouse check** must
+say **Safe to join**.
+
 Choose **Certified**, click **Review change**, check the proposal and click
 **Save**. From the terminal you can confirm it:
 
@@ -366,6 +379,8 @@ jaffle_shop::relationship::order_item_to_order: jaffle_shop::entity::order_item 
 
 The model lives in `domains/`, so commit it and review changes in git like
 any other code.
+
+{{ video("sem4-certify-joins") }}
 
 ## 7. Ask your first question
 

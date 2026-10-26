@@ -8,6 +8,8 @@ it means the data or the definitions you need are not in the project yet.
 
 ## What you see
 
+{{ video("ask4-says-no") }}
+
 Ask the sample project `What is our employee headcount by department?`:
 
 1. The trust line reads **Couldn't run this query**.
@@ -31,6 +33,7 @@ ZLens keeps no draft for a refusal.
 | AI-written SQL is turned off for this project | Only certified saved queries and semantic metrics can answer. Certify a saved query for the question. |
 | **Policy or permissions blocked this query** | The query touches data your project's policy excludes. |
 | Ask is scoped to a domain that no longer exists | Clear the **Scope** or pick another domain. |
+| **The saved query "…" was not used: it is a draft, not certified** | Ask answers only from certified saved queries, even when you name one. Certify it in **Saved queries**, or ask without naming it for an answer that needs review. |
 
 ## See exactly why
 

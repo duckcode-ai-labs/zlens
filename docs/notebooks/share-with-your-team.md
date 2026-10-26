@@ -24,6 +24,9 @@ ZLens open **Source control** (left rail, under **Govern**).
 
 ZLens only saves the address. Nothing is sent until you press **Send**.
 
+ZLens connects with your own SSH key or Git credential helper. It refuses an
+address that contains a password or token.
+
 A repository the host created with a README, licence or `.gitignore` is fine:
 on the first send ZLens brings those files in, keeps your project's own
 README, and adds any missing `.gitignore` lines.
@@ -36,10 +39,15 @@ README, and adds any missing `.gitignore` lines.
 
 ## 2. Keep and send a change
 
+{{ video("git3-share") }}
+
 1. Pick the files to share and describe the change (or click **Write it for
    me from the changes**).
 2. Click **Share N changes**. ZLens keeps (commits) the change on a new review
    branch and sends it.
+
+The review branch is named `dql/review/…`, so main stays untouched. **Write it
+for me** builds the description from the file names. It does not use AI.
 
 If you keep changes on the main branch and press **Send**, ZLens asks first:
 **Send as a new branch** (the default) moves your changes to a branch named
@@ -61,6 +69,8 @@ A teammate reviews it and merges it, and the change is part of the team's
 copy.
 
 ## 4. Stay up to date
+
+{{ video("git4-updates") }}
 
 The header says where you stand, checked in the background every five
 minutes and whenever you come back to the window:
@@ -90,7 +100,8 @@ asks you to get them first.
 If you and a teammate changed the same lines, Get updates stops at **Finish
 getting updates** and lists those files. For each one:
 
-- **Compare** shows your version and the remote's side by side.
+- **Compare** shows your version and the remote's side by side (**Yours**
+  and **On the remote**).
 - **Keep mine** or **Keep theirs** chooses one.
 
 When every file has a version, click **Continue**. **Cancel update** puts
