@@ -194,6 +194,6 @@ fallback does not make VS Code Marketplace publication automatic.
 | `create-zlens-app` templates | npm tarball |
 | Notebook app assets | bundled inside `zlens` |
 | VS Code extension | Marketplace |
-| Docs | `docs/` in this repo, published to <https://duckcode-ai-labs.github.io/zlens/> by `.github/workflows/docs.yml` on every push to `main` |
+| Docs | `docs/` in this repo, published to <https://docs.zlens.app/> by `.github/workflows/docs.yml` on every push to `main` |
 
 Homebrew tap and desktop/Tauri binaries are not part of the OSS release path.

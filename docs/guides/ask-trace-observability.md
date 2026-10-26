@@ -2,4 +2,4 @@
 
 This page moved to **[How Ask answered](../ask/how-it-answered.md)**.
 
-The ZLens docs are published at <https://duckcode-ai-labs.github.io/zlens/>.
+The ZLens docs are published at <https://docs.zlens.app/>.

@@ -541,7 +541,7 @@ ${c.green('✓ Ready.')} Next steps:
 
 Your notebook will open at ${c.cyan('http://127.0.0.1:3474')}.
 
-Docs:   ${c.cyan('https://duckcode-ai-labs.github.io/zlens/')}
+Docs:   ${c.cyan('https://docs.zlens.app/')}
 Source: ${c.cyan('https://github.com/duckcode-ai-labs/zlens')}
 Issues: ${c.cyan('https://github.com/duckcode-ai-labs/zlens/issues')}
 `);
