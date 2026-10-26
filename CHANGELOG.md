@@ -1522,7 +1522,7 @@ or join declares a `status:` ZLens does not know (see Modeling).
 - The quickstart installs ZLens into the sample's own workspace
   (`npm install`, `npm run sync`, `npm run notebook`), and warns not to run
   `create-zlens-app` inside it.
-- New page: [No dbt? Start from your database](https://duckcode-ai-labs.github.io/zlens/get-started/no-dbt/).
+- New page: [No dbt? Start from your database](https://docs.zlens.app/get-started/no-dbt/).
 - CI checks that every `zlens` command and flag in the docs exists.
 
 ### Releasing
@@ -1554,7 +1554,7 @@ This release also ships every change listed below under
 | `@duckcodeailabs/dql-<name>` (all other packages) | `@zlens/<name>`, e.g. `@zlens/core`, `@zlens/runtime`, `@zlens/agent` |
 | Environment variables `DQL_<NAME>` | `ZLENS_<NAME>`, read first; `DQL_<NAME>` is still read when the new name is not set |
 | Repository `github.com/duckcode-ai-labs/dql` | `github.com/duckcode-ai-labs/zlens` (GitHub redirects the old address) |
-| Docs at `dql.duckcode.ai` | <https://duckcode-ai-labs.github.io/zlens/> |
+| Docs at `dql.duckcode.ai` | <https://docs.zlens.app/> |
 
 - The `dql` command is an alias for `zlens`. It prints one line on stderr,
   "dql is now called zlens; the dql command will be removed in a future

@@ -1,6 +1,6 @@
 # ZLens Documentation
 
-The published docs are at <https://duckcode-ai-labs.github.io/zlens/>. The
+The published docs are at <https://docs.zlens.app/>. The
 same pages are plain Markdown here.
 
 ## Get started

@@ -21,16 +21,16 @@
 </p>
 
 <p align="center">
-  <a href="https://duckcode-ai-labs.github.io/zlens/"><b>Docs</b></a> ·
+  <a href="https://docs.zlens.app/"><b>Docs</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·
   <a href="#video-tutorials"><b>Video tutorials</b></a> ·
-  <a href="https://duckcode-ai-labs.github.io/zlens/agents/"><b>AI agents (MCP)</b></a> ·
+  <a href="https://docs.zlens.app/agents/"><b>AI agents (MCP)</b></a> ·
   <a href="https://github.com/duckcode-ai-labs/zlens/discussions"><b>Discussions</b></a> ·
   <a href="./CONTRIBUTING.md"><b>Contributing</b></a>
 </p>
 
 <p align="center">
-  <a href="https://duckcode-ai-labs.github.io/zlens/">
+  <a href="https://docs.zlens.app/">
     <img src="docs/media/clips/overview.gif" alt="ZLens in under a minute: Ask 'How has revenue changed by month?' and get a Certified answer from the monthly_revenue saved query, see how it was answered, open the Jaffle Growth Review App where all data is certified, then trace lineage from the dbt sources through the saved query to the App" width="100%">
   </a>
 </p>
@@ -109,7 +109,7 @@ opens it.
 > better-sqlite3 (a folder installed before the sample had the entry), run
 > `npm install-scripts approve better-sqlite3` then
 > `npm rebuild better-sqlite3`. See
-> [npm 12 and install scripts](https://duckcode-ai-labs.github.io/zlens/get-started/install/#npm-12-and-install-scripts).
+> [npm 12 and install scripts](https://docs.zlens.app/get-started/install/#npm-12-and-install-scripts).
 
 > [!NOTE]
 > The sample also has `./setup.sh`, which runs steps 1 and 2 (except
@@ -130,12 +130,12 @@ order by lifetime_spend desc
 limit 10
 ```
 
-Next: [ask a question in plain English](https://duckcode-ai-labs.github.io/zlens/ask/),
-[keep the query as a saved query and certify it](https://duckcode-ai-labs.github.io/zlens/blocks/),
-or [add ZLens to your own dbt project](https://duckcode-ai-labs.github.io/zlens/get-started/your-dbt-project/).
-The full walkthrough is the [Quickstart guide](https://duckcode-ai-labs.github.io/zlens/get-started/).
+Next: [ask a question in plain English](https://docs.zlens.app/ask/),
+[keep the query as a saved query and certify it](https://docs.zlens.app/blocks/),
+or [add ZLens to your own dbt project](https://docs.zlens.app/get-started/your-dbt-project/).
+The full walkthrough is the [Quickstart guide](https://docs.zlens.app/get-started/).
 
-**No dbt?** [Start from your database](https://duckcode-ai-labs.github.io/zlens/get-started/no-dbt/):
+**No dbt?** [Start from your database](https://docs.zlens.app/get-started/no-dbt/):
 connect it, choose schemas, and ZLens drafts the models for you to certify.
 
 <details>
@@ -163,12 +163,12 @@ Install only the driver your warehouse needs, into the project:
 | Snowflake | `npm install --prefix .dql/connectors snowflake-sdk` |
 
 The notebook's Connections page can install DuckDB or Snowflake for you. See
-[Install](https://duckcode-ai-labs.github.io/zlens/get-started/install/),
-[Connect a database](https://duckcode-ai-labs.github.io/zlens/get-started/connect-database/),
-[Connectors](https://duckcode-ai-labs.github.io/zlens/reference/connectors/) and
-[Troubleshooting](https://duckcode-ai-labs.github.io/zlens/guides/troubleshooting/).
+[Install](https://docs.zlens.app/get-started/install/),
+[Connect a database](https://docs.zlens.app/get-started/connect-database/),
+[Connectors](https://docs.zlens.app/reference/connectors/) and
+[Troubleshooting](https://docs.zlens.app/guides/troubleshooting/).
 Coming from the `dql` command and `@duckcodeailabs/dql-cli`? Install
-`@zlens/cli`; the [install guide](https://duckcode-ai-labs.github.io/zlens/get-started/install/)
+`@zlens/cli`; the [install guide](https://docs.zlens.app/get-started/install/)
 covers the switch.
 
 </details>
@@ -213,9 +213,9 @@ it as a draft saved query for someone to review. It never certifies itself.
   <img src="docs/assets/readme/ask-review.png" alt="An AI-generated answer with 4 checks passed, its result table, and the line Saved for review as a draft block (not certified)" width="85%">
 </p>
 
-[Ask a question](https://duckcode-ai-labs.github.io/zlens/ask/) ·
-[How Ask answered](https://duckcode-ai-labs.github.io/zlens/ask/how-it-answered/) ·
-[Answers that need review](https://duckcode-ai-labs.github.io/zlens/ask/needs-review/)
+[Ask a question](https://docs.zlens.app/ask/) ·
+[How Ask answered](https://docs.zlens.app/ask/how-it-answered/) ·
+[Answers that need review](https://docs.zlens.app/ask/needs-review/)
 
 ### Saved queries: save is a draft, certify is a person
 
@@ -229,8 +229,8 @@ which rules.
   <img src="docs/assets/readme/block-certified.png" alt="Block Studio showing top_customers_by_spend as Certified, with the receipt line Certified by analytics@jaffle.shop via Block Studio, OSS rules, and a Block certified panel with Metadata, Validation, Run, Chart and Lineage checks" width="100%">
 </p>
 
-[Saved queries](https://duckcode-ai-labs.github.io/zlens/blocks/) ·
-[Save and certify](https://duckcode-ai-labs.github.io/zlens/blocks/certify/)
+[Saved queries](https://docs.zlens.app/blocks/) ·
+[Save and certify](https://docs.zlens.app/blocks/certify/)
 
 ### Notebooks
 
@@ -242,7 +242,7 @@ is a `.dqlnb` file; results stay out of git.
   <img src="docs/assets/readme/notebook.png" alt="A notebook with a warehouse SQL cell over dev.customers and its result table of ten customers" width="100%">
 </p>
 
-[Work in a notebook](https://duckcode-ai-labs.github.io/zlens/notebooks/)
+[Work in a notebook](https://docs.zlens.app/notebooks/)
 
 ### Apps and dashboards
 
@@ -259,8 +259,8 @@ takes the trust of the weakest tile it read.
   <img src="docs/assets/readme/app-ask.png" alt="The Jaffle Growth Review App, all data certified, with Ask about Jaffle Growth Review open: a Certified answer read from the App's current results, where every tile it read runs a certified source" width="100%">
 </p>
 
-[Read an App](https://duckcode-ai-labs.github.io/zlens/apps/) ·
-[Ask about an App](https://duckcode-ai-labs.github.io/zlens/apps/ask-about-an-app/)
+[Read an App](https://docs.zlens.app/apps/) ·
+[Ask about an App](https://docs.zlens.app/apps/ask-about-an-app/)
 
 ### Lineage, from your tables to the App
 
@@ -274,7 +274,7 @@ with `zlens lineage`.
   <img src="docs/assets/readme/lineage.png" alt="End-to-end lineage of the monthly_revenue saved query: four dbt sources, staging models, order_items and orders, the Revenue and Order business terms, the saved query, its chart, the jaffle-growth overview dashboard and the Jaffle Growth Review App" width="100%">
 </p>
 
-[Lineage](https://duckcode-ai-labs.github.io/zlens/lineage/)
+[Lineage](https://docs.zlens.app/lineage/)
 
 ### AI agents over MCP
 
@@ -298,8 +298,8 @@ $ npm exec -- zlens connect claude-code
 `zlens connect` also supports `codex`, `cursor`, `claude-desktop` and `all`.
 Keep `npm run notebook` running while the agent works: it runs the queries.
 
-[Connect your AI agent](https://duckcode-ai-labs.github.io/zlens/agents/) ·
-[MCP tools](https://duckcode-ai-labs.github.io/zlens/agents/tools/)
+[Connect your AI agent](https://docs.zlens.app/agents/) ·
+[MCP tools](https://docs.zlens.app/agents/tools/)
 
 ## How it works
 
@@ -321,9 +321,9 @@ Keep `npm run notebook` running while the agent works: it runs the queries.
 
 DQL is the language saved queries are written in: each is a `block` in a
 `.dql` file. See
-[Concepts](https://duckcode-ai-labs.github.io/zlens/get-started/concepts/),
-[the DQL language](https://duckcode-ai-labs.github.io/zlens/reference/language/)
-and the [architecture overview](https://duckcode-ai-labs.github.io/zlens/architecture/overview/).
+[Concepts](https://docs.zlens.app/get-started/concepts/),
+[the DQL language](https://docs.zlens.app/reference/language/)
+and the [architecture overview](https://docs.zlens.app/architecture/overview/).
 
 ## Packages
 

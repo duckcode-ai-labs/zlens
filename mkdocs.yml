@@ -1,6 +1,6 @@
 site_name: ZLens
 site_description: Certified answers on your warehouse. Certified blocks, Apps, end-to-end lineage, and AI answers that cite their sources.
-site_url: https://duckcode-ai-labs.github.io/zlens/
+site_url: https://docs.zlens.app/
 repo_url: https://github.com/duckcode-ai-labs/zlens
 repo_name: duckcode-ai-labs/zlens
 edit_uri: edit/main/docs/
@@ -86,7 +86,7 @@ extra_javascript:
   - javascripts/clips.js
 
 copyright: >-
-  <a href="https://duckcode-ai-labs.github.io/zlens/architecture/overview/">Architecture</a> ·
+  <a href="https://docs.zlens.app/architecture/overview/">Architecture</a> ·
   <a href="https://github.com/duckcode-ai-labs/zlens/blob/main/CONTRIBUTING.md">Contributing</a> ·
   <a href="https://github.com/duckcode-ai-labs/zlens/blob/main/SUPPORT.md">Support</a> ·
   Apache-2.0
