@@ -23,6 +23,7 @@
 <p align="center">
   <a href="https://duckcode-ai-labs.github.io/zlens/"><b>Docs</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·
+  <a href="#video-tutorials"><b>Video tutorials</b></a> ·
   <a href="https://duckcode-ai-labs.github.io/zlens/agents/"><b>AI agents (MCP)</b></a> ·
   <a href="https://github.com/duckcode-ai-labs/zlens/discussions"><b>Discussions</b></a> ·
   <a href="./CONTRIBUTING.md"><b>Contributing</b></a>
@@ -171,6 +172,25 @@ Coming from the `dql` command and `@duckcodeailabs/dql-cli`? Install
 covers the switch.
 
 </details>
+
+## Video tutorials
+
+Short videos (about a minute each) on the [ZLens YouTube channel](https://www.youtube.com/@zlensanalytics).
+New here? Watch **Start here**, then **Quick Start**.
+
+| Playlist | What it covers |
+|---|---|
+| [Start here](https://www.youtube.com/playlist?list=PLKzfNDl3I2sI) | The whole idea in 90 seconds: certified answers, AI answers you can review, refusals instead of guesses. |
+| [Quick Start](https://www.youtube.com/playlist?list=PLOQWt259Y25k) | Install, Guided Setup, your first question with a trust label, then your own data, with or without dbt. |
+| [Notebooks](https://www.youtube.com/playlist?list=PLUdJRzKhNIRA) | SQL, charts, inputs and AI in one file you share, review in git and save as a saved query. |
+| [Blocks and certification](https://www.youtube.com/playlist?list=PLRvLK1Q_JFQA) | Saved queries your team can trust: import your SQL, add tests, then certify, change or retire. |
+| [Ask and trust](https://www.youtube.com/playlist?list=PLahuj-J7h3TY) | How Ask picks a source, what each label means, and when it refuses. |
+| [Semantic layer](https://www.youtube.com/playlist?list=PLXjz0fV3orFg) | Define a metric once so every answer computes it the same way, and certify how tables join. (These videos use the older label "Governed"; it is now "From Metrics".) |
+| [Lineage](https://www.youtube.com/playlist?list=PLJIc5kBRmBLs) | Trace a number to its source, and see what a change will break before you make it. |
+| [Share and review with git](https://www.youtube.com/playlist?list=PLZGwS382JLAs) | Review data work like code: see what changed, share a review branch and pull request, get updates. |
+| [Your AI agent + ZLens](https://www.youtube.com/playlist?list=PLJSaxF-L_t4Q) | Use ZLens from Claude Code, Claude Desktop, Codex and Cursor over MCP. |
+| [Evals and CI](https://www.youtube.com/playlist?list=PLcTI7I6RUs-4) | Test your AI answers like code, and fail a pull request when an answer gets worse. |
+| [Apps](https://www.youtube.com/playlist?list=PLBI3ZFFvskKQ) | Dashboards that show their proof: every tile has a receipt, and filters say which tiles they reach. |
 
 ## Features
 
