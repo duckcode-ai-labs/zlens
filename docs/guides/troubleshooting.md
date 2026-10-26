@@ -475,7 +475,8 @@ The architecture is small and readable. Bookmark these:
 
 If you find a bug or rough edge in any of these:
 
-1. File an issue at <https://github.com/duckcode-ai-labs/zlens/issues>.
+1. File an issue at <https://github.com/duckcode-ai-labs/zlens/issues/new/choose>, or ask in
+   [Discussions → Q&A](https://github.com/duckcode-ai-labs/zlens/discussions/categories/q-a) if you're not sure it's a bug.
 2. PRs welcome — every package has tests in `*.test.ts` next to the
    source it covers.
 

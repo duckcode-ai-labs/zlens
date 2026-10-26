@@ -13,6 +13,7 @@ describe('Help page outside links (N1)', () => {
     expect(HELP_LINKS.map((link) => [link.label, link.href])).toEqual([
       ['Keyboard shortcuts', `${REPO}#readme`],
       ['CLI reference', `${REPO}/blob/main/docs/reference/cli.md`],
+      ['Ask a question', `${REPO}/discussions/categories/q-a`],
       ['Community & support', `${REPO}/blob/main/SUPPORT.md`],
       ['Report an issue', `${REPO}/issues/new/choose`],
     ]);

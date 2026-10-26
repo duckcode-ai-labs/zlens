@@ -78,6 +78,10 @@ Hosted multi-user workspaces, governed secrets, audit logs, organization
 memory, approval workflows, managed alerting, regulatory governance packs, and
 permissions-aware team retrieval. See [Compatibility](../reference/compatibility.md).
 
-## Where do I report bugs or request features?
+## Where do I ask questions, report bugs or request features?
 
-[github.com/duckcode-ai-labs/zlens/issues](https://github.com/duckcode-ai-labs/zlens/issues).
+- Questions and setup help: [GitHub Discussions → Q&A](https://github.com/duckcode-ai-labs/zlens/discussions/categories/q-a).
+- Ideas you'd like to discuss first: [Discussions → Ideas](https://github.com/duckcode-ai-labs/zlens/discussions/categories/ideas).
+- Reproducible bugs and well-defined feature requests: [open an issue](https://github.com/duckcode-ai-labs/zlens/issues/new/choose).
+
+[SUPPORT.md](https://github.com/duckcode-ai-labs/zlens/blob/main/SUPPORT.md) lists what to include and how we triage.

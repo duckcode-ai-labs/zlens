@@ -24,6 +24,7 @@
   <a href="https://duckcode-ai-labs.github.io/zlens/"><b>Docs</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·
   <a href="https://duckcode-ai-labs.github.io/zlens/agents/"><b>AI agents (MCP)</b></a> ·
+  <a href="https://github.com/duckcode-ai-labs/zlens/discussions"><b>Discussions</b></a> ·
   <a href="./CONTRIBUTING.md"><b>Contributing</b></a>
 </p>
 
@@ -346,9 +347,17 @@ the [repository layout](./docs/contribute/repo-layout.md); the
 
 ## Community and support
 
-- **Bugs and feature requests:** [open an issue](https://github.com/duckcode-ai-labs/zlens/issues/new/choose).
-- **Questions and proposals:** see [SUPPORT.md](./SUPPORT.md) for where to go and how issues are triaged.
-- **Security issues:** follow [SECURITY.md](./SECURITY.md); do not open a public issue.
+- **Questions and help:** ask in [GitHub Discussions → Q&A](https://github.com/duckcode-ai-labs/zlens/discussions/categories/q-a).
+  Not sure whether it's a bug? Ask there first.
+- **Ideas and feature suggestions:** [Discussions → Ideas](https://github.com/duckcode-ai-labs/zlens/discussions/categories/ideas).
+- **Show what you built:** [Discussions → Show and tell](https://github.com/duckcode-ai-labs/zlens/discussions/categories/show-and-tell).
+- **Reproducible bugs and well-defined feature requests:** [open an issue](https://github.com/duckcode-ai-labs/zlens/issues/new/choose).
+- **Release news:** [Announcements](https://github.com/duckcode-ai-labs/zlens/discussions/categories/announcements) and
+  [Releases](https://github.com/duckcode-ai-labs/zlens/releases).
+- **Video tutorials:** [ZLens on YouTube](https://www.youtube.com/@zlensanalytics).
+- **Security issues:** follow [SECURITY.md](./SECURITY.md) (security@zlens.app); do not open a public issue.
+
+[SUPPORT.md](./SUPPORT.md) explains what to include when you ask and how we triage.
 
 ## License
 
