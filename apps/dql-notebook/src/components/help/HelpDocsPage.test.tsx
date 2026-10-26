@@ -26,11 +26,11 @@ describe('Help page outside links (N1)', () => {
     expect(readdirSync(join(repoRoot, '.github', 'ISSUE_TEMPLATE')).some((name) => name.endsWith('.yml') && name !== 'config.yml')).toBe(true);
   });
 
-  it('renders those targets and never the disabled Discussions page', () => {
+  it('renders those targets, with Discussions only through its Q&A category', () => {
     const html = renderToStaticMarkup(<NotebookProvider><HelpDocsPage /></NotebookProvider>);
     for (const link of HELP_LINKS) expect(html).toContain(`href="${link.href}"`);
     expect(html).toContain('Community &amp; support');
-    expect(html).not.toContain('/discussions');
+    expect(html.match(/\/discussions[^"]*/g)).toEqual(['/discussions/categories/q-a']);
   });
 });
 
