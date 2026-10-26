@@ -52,7 +52,7 @@ const card: React.CSSProperties = {
   border: '1px solid var(--border-subtle)',
   background: 'var(--bg-2)',
 };
-const heading: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-muted)' };
+const heading: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--text-tertiary)' };
 const rowButton: React.CSSProperties = {
   display: 'flex', alignItems: 'baseline', gap: 8, width: '100%', padding: '5px 6px', margin: '0 -6px',
   border: 'none', borderRadius: 6, background: 'transparent', color: 'var(--text-primary)', textAlign: 'left', cursor: 'pointer', fontSize: 13,
