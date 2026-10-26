@@ -1,8 +1,14 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Ask a question
+    url: https://github.com/duckcode-ai-labs/zlens/discussions/categories/q-a
+    about: Setup help, "how do I…?", or not sure whether it's a bug. Ask in Discussions → Q&A.
+  - name: Suggest an idea
+    url: https://github.com/duckcode-ai-labs/zlens/discussions/categories/ideas
+    about: Early feature ideas start in Discussions → Ideas; agreed ideas become issues.
   - name: Security policy
     url: https://github.com/duckcode-ai-labs/zlens/blob/main/SECURITY.md
-    about: Report vulnerabilities through the documented security process.
+    about: Report vulnerabilities privately through the documented security process.
   - name: Getting help
     url: https://github.com/duckcode-ai-labs/zlens/blob/main/SUPPORT.md
-    about: Where to ask questions and how to propose larger changes (write an RFC).
+    about: Where to ask questions, what to include, and how to propose larger changes (write an RFC).

@@ -27,12 +27,13 @@ const CLI_REFERENCE_URL = 'https://github.com/duckcode-ai-labs/zlens/blob/main/d
 
 /**
  * The rail's outside links. Every target must be a page that exists:
- * GitHub Discussions are not enabled on the repository, so support goes to
- * SUPPORT.md (which routes to the issue forms and the RFC process).
+ * questions go to GitHub Discussions (Q&A), bugs to the issue forms, and
+ * SUPPORT.md explains the rest (what to include, triage, RFCs).
  */
 export const HELP_LINKS = [
   { label: 'Keyboard shortcuts', href: 'https://github.com/duckcode-ai-labs/zlens#readme' },
   { label: 'CLI reference', href: CLI_REFERENCE_URL },
+  { label: 'Ask a question', href: 'https://github.com/duckcode-ai-labs/zlens/discussions/categories/q-a' },
   { label: 'Community & support', href: 'https://github.com/duckcode-ai-labs/zlens/blob/main/SUPPORT.md' },
   { label: 'Report an issue', href: 'https://github.com/duckcode-ai-labs/zlens/issues/new/choose' },
 ] as const;

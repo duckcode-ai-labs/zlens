@@ -102,4 +102,4 @@ Older pages, kept so links keep working: [About the archive](./archive.md).
 
 ---
 
-Bug or feature request? [Open an issue](https://github.com/duckcode-ai-labs/zlens/issues).
+Question? Ask in [GitHub Discussions](https://github.com/duckcode-ai-labs/zlens/discussions/categories/q-a). Bug or feature request? [Open an issue](https://github.com/duckcode-ai-labs/zlens/issues/new/choose).
