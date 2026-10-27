@@ -156,11 +156,13 @@ const EXPECTED_TEST_FILES = 190;
 // 2584 with From Metrics only through certified joins (semantic-join-trust.test.ts, +8; prepare.test.ts, +2).
 // 2590 with a semantic compile refused when it leaves out a breakdown, member or date range the question
 // asks for (compose.test.ts, +6).
-const EXPECTED_TESTS = 2590;
-// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 73 + project-state.test.ts 4), pinned so
+// 2591 with the active snapshot named for the content it holds when two refreshes land at once
+// (catalog.test.ts, +1; ZLens Enterprise gate round 4).
+const EXPECTED_TESTS = 2591;
+// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 74 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2497.
-const EXPECTED_HEAVY_TESTS = 77;
+const EXPECTED_HEAVY_TESTS = 78;
 
 const LANES = ['all', 'ordinary', 'heavy'];
 function requestedLane() {
