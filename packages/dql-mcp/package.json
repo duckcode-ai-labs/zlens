@@ -1,6 +1,6 @@
 {
   "name": "@zlens/mcp",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "ZLens MCP server: expose certified blocks, semantic layer, lineage, and governance to LLM agents via the Model Context Protocol",
   "license": "Apache-2.0",
   "type": "module",
