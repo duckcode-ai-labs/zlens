@@ -155,7 +155,7 @@ export function isTokenExpired(credentials: ClaudeOAuthCredentials): boolean {
  * and the provider (`generate`) see the same credentials.
  */
 export class ClaudeOAuthManager {
-  private pendingAuth: { codeVerifier: string; state: string; server?: http.Server; reject?: (err: Error) => void } | null = null;
+  private pendingAuth: { codeVerifier: string; state: string; server?: http.Server; resolve?: (creds: ClaudeOAuthCredentials) => void; reject?: (err: Error) => void } | null = null;
   private refreshPromise: Promise<ClaudeOAuthCredentials> | null = null;
 
   constructor(private readonly projectRoot: string) {}
@@ -193,6 +193,7 @@ export class ClaudeOAuthManager {
     const { codeVerifier, state } = pending;
 
     return new Promise<ClaudeOAuthCredentials>((resolve, reject) => {
+      pending.resolve = resolve;
       pending.reject = reject;
       const server = http.createServer(async (req, res) => {
         try {
@@ -235,16 +236,46 @@ export class ClaudeOAuthManager {
         reject(new Error('Claude OAuth callback timed out'));
       }, 5 * 60 * 1000);
       server.on('close', () => clearTimeout(timeout));
-      server.on('error', (err) => {
-        clearTimeout(timeout);
-        if (this.pendingAuth === pending) this.pendingAuth = null;
-        reject(err);
-      });
+      // The loopback port may be taken, or unreachable from the browser (a
+      // codespace, a container, a remote host). Keep the flow open so the
+      // pasted-address path below can still finish it; the timeout ends it.
+      server.on('error', () => { /* completeFromRedirect still works */ });
       server.listen(CLAUDE_OAUTH_CONFIG.callbackPort);
     });
   }
 
   /** Returns a valid access token, refreshing (and persisting) if within the expiry buffer. */
+  /**
+   * Finishes the pending sign-in from the address the browser landed on, for
+   * when the browser can't reach this machine's loopback port (ZLens in a
+   * codespace, a container or on another host): the provider still redirects
+   * to `/callback` on the person's own computer, which shows an error page whose
+   * address carries the code. Accepts that full address or just its query.
+   */
+  async completeFromRedirect(redirect: string): Promise<ClaudeOAuthCredentials> {
+    const pending = this.pendingAuth;
+    if (!pending) throw new Error('No sign-in is in progress. Click "Sign in with Claude" again.');
+    const text = redirect.trim();
+    let params: URLSearchParams;
+    try {
+      params = text.includes('?') ? new URL(text, 'http://localhost').searchParams : new URLSearchParams(text.replace(/^[?#]/, ''));
+    } catch {
+      throw new Error('That doesn\'t look like the address from your browser. Copy the whole address bar.');
+    }
+    const providerError = params.get('error');
+    if (providerError) throw new Error(`Sign-in was not completed: ${params.get('error_description') || providerError}.`);
+    const code = params.get('code');
+    const receivedState = params.get('state');
+    if (!code || !receivedState) throw new Error('That address has no sign-in code. Copy the whole address bar after you sign in.');
+    if (receivedState !== pending.state) throw new Error('That address is from a different sign-in. Click "Sign in" again and paste the new address.');
+    const credentials = await exchangeCodeForTokens(code, pending.codeVerifier, receivedState);
+    setClaudeCredentials(this.projectRoot, credentials);
+    this.pendingAuth = null;
+    if (pending.server) { try { pending.server.close(); } catch { /* noop */ } }
+    pending.resolve?.(credentials);
+    return credentials;
+  }
+
   async getAccessToken(): Promise<string | null> {
     let creds = getClaudeCredentials(this.projectRoot);
     if (!creds) return null;

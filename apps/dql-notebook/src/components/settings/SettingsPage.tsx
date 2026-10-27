@@ -663,6 +663,9 @@ function SubscriptionOAuthPanel({
 }) {
   const [status, setStatus] = useState<OAuthStatus | null>(null);
   const [busy, setBusy] = useState(false);
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [pasted, setPasted] = useState('');
+  const [pasteError, setPasteError] = useState<string | null>(null);
   const pollRef = useRef<number | null>(null);
   const mountedRef = useRef(true);
   const brand = oauthProvider === 'codex' ? 'ChatGPT' : 'Claude';
@@ -685,6 +688,9 @@ function SubscriptionOAuthPanel({
     try {
       const res = await api.startOAuth(oauthProvider);
       setStatus(res);
+      setAuthUrl(res.url);
+      setPasted('');
+      setPasteError(null);
       window.open(res.url, '_blank', 'noopener,noreferrer');
       onStatus(`Opened your browser to sign in to ${brand}. Complete it there — this updates automatically.`);
       const started = Date.now();
@@ -706,6 +712,24 @@ function SubscriptionOAuthPanel({
     } catch (error) {
       setBusy(false);
       onStatus(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  // ZLens in a codespace, a container or on another host: the provider sends the
+  // browser back to localhost on the person's own computer, which can't reach
+  // ZLens. They paste the address that page shows; the server checks it.
+  const finishFromPaste = async () => {
+    if (!pasted.trim()) return;
+    setPasteError(null);
+    try {
+      const s = await api.completeOAuth(oauthProvider, pasted.trim());
+      stopPolling();
+      setBusy(false);
+      setStatus(s);
+      setAuthUrl(null);
+      if (s.connected) onConnected(s.defaultModel);
+    } catch (error) {
+      setPasteError(error instanceof Error ? error.message : String(error));
     }
   };
 
@@ -749,6 +773,32 @@ function SubscriptionOAuthPanel({
       <div style={{ fontSize: 12, color: t.textSecondary, lineHeight: 1.5 }}>
         No API key needed — signs in with your {brand} subscription in the browser.
       </div>
+      {(busy || status?.pending) && authUrl ? (
+        <div style={{ display: 'grid', gap: 6, padding: 10, border: `1px solid ${t.headerBorder}`, borderRadius: 8 }}>
+          <div style={{ fontSize: 12, lineHeight: 1.5 }}>
+            Nothing opened? <a href={authUrl} target="_blank" rel="noopener noreferrer">Open the {brand} sign-in page</a>.
+          </div>
+          <div style={{ fontSize: 12, color: t.textSecondary, lineHeight: 1.5 }}>
+            Using ZLens in a codespace, Docker or on another computer? After you sign in, your browser shows a page
+            that can't load (an address starting with <code>http://localhost</code>). Copy that whole address and paste it here.
+          </div>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <input
+              id={`oauth-paste-${oauthProvider}`}
+              value={pasted}
+              onChange={(e) => setPasted(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') void finishFromPaste(); }}
+              placeholder="http://localhost:…?code=…&state=…"
+              aria-label={`Address from your browser after signing in to ${brand}`}
+              style={{ ...inputStyle(t), flex: 1, minWidth: 200 }}
+            />
+            <button type="button" onClick={() => void finishFromPaste()} disabled={!pasted.trim()} style={buttonStyle(t, false)}>
+              Finish sign-in
+            </button>
+          </div>
+          {pasteError ? <div role="alert" style={{ fontSize: 12, color: '#b42318' }}>{pasteError}</div> : null}
+        </div>
+      ) : null}
       <details>
         <summary style={{ fontSize: 11.5, color: t.textSecondary, cursor: 'pointer' }}>Prefer the CLI?</summary>
         <div style={{ marginTop: 6, display: 'grid', gap: 6 }}>
