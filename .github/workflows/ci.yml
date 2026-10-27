@@ -13,7 +13,7 @@ jobs:
   # --- primary build + unit/golden tests ---
   build-and-test:
     name: build + test (node ${{ matrix.node }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
@@ -50,7 +50,7 @@ jobs:
   # Guards the "5 minutes to first dashboard" demo gate.
   scaffold-smoke:
     name: create-zlens-app smoke
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -65,7 +65,7 @@ jobs:
   # compose file or the docs drift from the runtime.
   docker-image:
     name: docker image health
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: build and start with docker compose
@@ -98,7 +98,7 @@ jobs:
   # --- docs: every relative link resolves; every documented command is real ---
   docs:
     name: docs link check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -116,7 +116,7 @@ jobs:
   # it reaches main.
   format-check:
     name: zlens fmt --check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -155,7 +155,7 @@ jobs:
   # credentialed/project CI, but this keeps every PR honest without live AI keys.
   golden-eval:
     name: golden eval (router)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -198,7 +198,7 @@ jobs:
   # clear errors (MCP isError), and no call left hanging.
   mcp-stdio:
     name: mcp every tool (stdio, no model)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -229,7 +229,7 @@ jobs:
   # Gates: cold <30s, warm <2s. See docs/contribute/testing.md.
   stress-test:
     name: stress (4k-model synthetic project)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     # Only run on main branch pushes — expensive.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     steps:
@@ -253,7 +253,7 @@ jobs:
   # cassette replay, so no live model is ever called.
   e2e:
     name: playwright e2e
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -281,7 +281,7 @@ jobs:
   # --- summary gate for branch protection ---
   ci-ok:
     name: ci-ok
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: [build-and-test, scaffold-smoke, docs, format-check, golden-eval, e2e, mcp-stdio]
     steps:
       - run: echo "All required CI gates passed."
