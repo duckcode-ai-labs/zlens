@@ -16,12 +16,14 @@ import {
   buildAuthorizationUrl as codexAuthUrl,
   extractAccountId,
   CodexOAuthProvider,
+  CodexOAuthManager,
   CODEX_OAUTH_CONFIG,
 } from './codex-oauth.js';
 import {
   setClaudeCredentials,
   setCodexCredentials,
   getClaudeCredentials,
+  getCodexCredentials,
   clearOAuthProvider,
 } from './oauth-store.js';
 import { ClaudeCodeCliProvider } from '../subscription-cli.js';
@@ -290,5 +292,52 @@ describe('CodexOAuthProvider request', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })));
     const provider = new CodexOAuthProvider({ projectRoot: root });
     expect(await provider.generate([{ role: 'user', content: 'hi' }])).toBe('onetwo');
+  });
+});
+
+describe('finishing a sign-in from the pasted browser address (ZLens not on this computer)', () => {
+  const tokenResponse = () => new Response(JSON.stringify({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 }), { status: 200, headers: { 'content-type': 'application/json' } });
+
+  it('refuses when no sign-in is in progress', async () => {
+    const m = new ClaudeOAuthManager(root);
+    await expect(m.completeFromRedirect('http://localhost:54545/callback?code=c&state=s')).rejects.toThrow(/No sign-in is in progress/);
+  });
+
+  it('refuses an address from a different sign-in and keeps the flow open', async () => {
+    const m = new ClaudeOAuthManager(root);
+    m.startAuthorizationFlow();
+    await expect(m.completeFromRedirect('http://localhost:54545/callback?code=c&state=not-this-one')).rejects.toThrow(/different sign-in/);
+    expect(m.isPending()).toBe(true);
+    m.cancelAuthorizationFlow();
+  });
+
+  it('refuses an address without a code, and passes on a provider error', async () => {
+    const m = new ClaudeOAuthManager(root);
+    m.startAuthorizationFlow();
+    await expect(m.completeFromRedirect('http://localhost:54545/callback')).rejects.toThrow(/no sign-in code/);
+    await expect(m.completeFromRedirect('http://localhost:54545/callback?error=access_denied')).rejects.toThrow(/not completed: access_denied/);
+    m.cancelAuthorizationFlow();
+  });
+
+  it('Claude: exchanges the code, saves the credentials and settles the waiting flow', async () => {
+    const m = new ClaudeOAuthManager(root);
+    const state = new URL(m.startAuthorizationFlow()).searchParams.get('state')!;
+    const waiting = m.waitForCallback();
+    const fetchMock = vi.fn(async () => tokenResponse());
+    vi.stubGlobal('fetch', fetchMock);
+    await m.completeFromRedirect(`  ${CLAUDE_OAUTH_CONFIG.redirectUri}?code=the-code&state=${state}  `);
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body)).code).toBe('the-code');
+    expect(getClaudeCredentials(root)?.access_token).toBe('at');
+    expect(m.isPending()).toBe(false);
+    await expect(waiting).resolves.toMatchObject({ access_token: 'at' });
+  });
+
+  it('ChatGPT: accepts just the query string and saves the credentials', async () => {
+    const m = new CodexOAuthManager(root);
+    const state = new URL(m.startAuthorizationFlow()).searchParams.get('state')!;
+    vi.stubGlobal('fetch', vi.fn(async () => tokenResponse()));
+    await m.completeFromRedirect(`?code=the-code&state=${state}`);
+    expect(getCodexCredentials(root)?.access_token).toBe('at');
+    expect(m.isPending()).toBe(false);
   });
 });

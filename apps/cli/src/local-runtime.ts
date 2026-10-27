@@ -19376,10 +19376,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
     // ── Subscription OAuth (Claude Pro/Max, ChatGPT Plus/Pro) ──────────────
     {
-      const authMatch = path.match(/^\/api\/auth\/(claude|codex)\/(start|status|signout)$/);
+      const authMatch = path.match(/^\/api\/auth\/(claude|codex)\/(start|status|signout|complete)$/);
       if (authMatch) {
         const oauthProvider = authMatch[1] as 'claude' | 'codex';
-        const action = authMatch[2] as 'start' | 'status' | 'signout';
+        const action = authMatch[2] as 'start' | 'status' | 'signout' | 'complete';
         const info = oauthProvider === 'claude'
           ? { models: CLAUDE_OAUTH_MODELS as readonly string[], defaultModel: CLAUDE_OAUTH_DEFAULT_MODEL }
           : { models: CODEX_OAUTH_MODELS as readonly string[], defaultModel: CODEX_OAUTH_DEFAULT_MODEL };
@@ -19416,6 +19416,28 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             void manager.waitForCallback().catch(() => { /* timeout/denied/superseded — status stays disconnected */ });
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
             res.end(serializeJSON({ url, ...statusPayload() }));
+            return;
+          }
+          if (action === 'complete' && req.method === 'POST') {
+            // The browser could not reach the loopback callback (ZLens in a
+            // codespace, a container or on another host): the person pastes the
+            // address the provider redirected them to, and the pending flow's
+            // own state check decides whether it is accepted.
+            const body = await readJSON(req) as { url?: unknown };
+            if (typeof body?.url !== 'string' || !body.url.trim()) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(serializeJSON({ error: 'Paste the address from your browser after you sign in.' }));
+              return;
+            }
+            try {
+              await manager.completeFromRedirect(body.url);
+            } catch (error) {
+              res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error), ...statusPayload() }));
+              return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+            res.end(serializeJSON(statusPayload()));
             return;
           }
           res.writeHead(405, { 'Content-Type': 'application/json; charset=utf-8' });

@@ -5681,6 +5681,11 @@ export const api = {
     return request(`/api/auth/${provider}/status`);
   },
 
+  /** Finishes a sign-in from the address the browser landed on (ZLens not on this computer). */
+  async completeOAuth(provider: OAuthProviderId, url: string): Promise<OAuthStatus> {
+    return request(`/api/auth/${provider}/complete`, { method: 'POST', body: JSON.stringify({ url }) });
+  },
+
   async signOutOAuth(provider: OAuthProviderId): Promise<OAuthStatus> {
     return request(`/api/auth/${provider}/signout`, { method: 'POST' });
   },
