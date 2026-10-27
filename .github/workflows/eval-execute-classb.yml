@@ -18,7 +18,7 @@ on:
 jobs:
   classb-execution:
     name: class-B execution match (seed + execute)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ github.repository_owner == 'duckcode-ai-labs' }}
     steps:
       - uses: actions/checkout@v4
