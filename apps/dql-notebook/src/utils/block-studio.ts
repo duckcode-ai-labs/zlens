@@ -616,6 +616,36 @@ export function setBlockArray(content: string, key: string, values: string[]): s
   return insertBlockField(content, `  ${key} = ${list}`);
 }
 
+/**
+ * The questions a block records as its own (`examples = [{ question = "…" }]`).
+ * Ask answers each of them from the block, certified, before any model reads
+ * the question; Block Studio shows them as "Questions it answers".
+ */
+export function blockExampleQuestions(content: string): string[] {
+  const list = content.match(/\bexamples\s*=\s*\[([\s\S]*?)\]/i)?.[1] ?? '';
+  const questions: string[] = [];
+  for (const match of list.matchAll(/\bquestion\s*=\s*"((?:[^"\\]|\\.)*)"/gi)) questions.push(match[1]!.replace(/\\(.)/g, '$1'));
+  return questions;
+}
+
+/** Writes the questions the block answers; the SQL an example carried is kept for a question that stays. */
+export function setBlockExampleQuestions(content: string, questions: string[]): string {
+  const unique = Array.from(new Set(questions.map((question) => question.replace(/\s+/g, ' ').trim()).filter(Boolean)));
+  const field = /(\bexamples\s*=\s*)\[[\s\S]*?\]/i;
+  const existing = content.match(field)?.[0] ?? '';
+  const sqlFor = new Map<string, string>();
+  for (const match of existing.matchAll(/\{\s*question\s*=\s*"((?:[^"\\]|\\.)*)"\s*,\s*sql\s*=\s*"((?:[^"\\]|\\.)*)"\s*\}/gi)) sqlFor.set(match[1]!.replace(/\\(.)/g, '$1'), match[2]!);
+  const list = `[${unique.map((question) => {
+    const sql = sqlFor.get(question);
+    return `{ question = "${escapeDqlValue(question)}"${sql !== undefined ? `, sql = "${sql}"` : ''} }`;
+  }).join(', ')}]`;
+  if (field.test(content)) {
+    if (unique.length === 0) return content.replace(/^[ \t]*examples\s*=\s*\[[\s\S]*?\][ \t]*\r?\n?/im, '');
+    return content.replace(field, (_whole, prefix: string) => `${prefix}${list}`);
+  }
+  return unique.length === 0 ? content : insertBlockField(content, `  examples = ${list}`);
+}
+
 export function upsertVisualizationConfig(content: string, chartConfig: CellChartConfig): string {
   const section = /visualization\s*\{[\s\S]*?\n\s*\}/i;
   if (!section.test(content)) {

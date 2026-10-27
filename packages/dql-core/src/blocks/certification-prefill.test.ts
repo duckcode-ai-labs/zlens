@@ -41,3 +41,24 @@ describe('prefillCertificationMetadata (exported from dql-core)', () => {
     expect(source).toMatch(/tests \{\s+assert row_count > 0\s+\}/);
   });
 });
+
+describe('the question the answer was given for', () => {
+  const skeleton = 'block "adjusters" {\n  status = "draft"\n  query = """SELECT adjuster_id, COUNT(*) AS open_claims FROM claims GROUP BY adjuster_id"""\n}\n';
+
+  it('is recorded as the block\'s example, as a question the certified block answers', () => {
+    const { source, suggested } = prefillCertificationMetadata(skeleton, { question: '  Which adjusters handle\n the most open claims? ' });
+    expect(source).toContain('examples = [{ question = "Which adjusters handle the most open claims?" }]');
+    expect(suggested).toContainEqual({ field: 'examples', value: ['Which adjusters handle the most open claims?'] });
+    expect(source).toMatch(/Review each value before you certify: .*examples/);
+  });
+
+  it('never overwrites examples the draft already declares, and is not listed as unknown when there is no question', () => {
+    const declared = skeleton.replace('status = "draft"', 'status = "draft"\n  examples = [{ question = "Open claims per adjuster" }]');
+    const kept = prefillCertificationMetadata(declared, { question: 'Which adjusters handle the most open claims?' });
+    expect(kept.source).toContain('examples = [{ question = "Open claims per adjuster" }]');
+    expect(kept.source).not.toContain('Which adjusters');
+    const none = prefillCertificationMetadata(skeleton, {});
+    expect(none.unknown).not.toContain('examples');
+    expect(none.source).not.toContain('examples');
+  });
+});

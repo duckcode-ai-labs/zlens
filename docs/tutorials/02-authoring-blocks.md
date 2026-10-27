@@ -66,6 +66,11 @@ block "revenue_by_month" {
   // llmContext is a single-line string — a block uses one triple-quoted
   // ("""…""") string and we reserve it for `query` below.
   llmContext = "Use this block for questions about revenue over time, monthly revenue, or revenue trend. Revenue is the sum of order_total from the dbt orders mart (gross, before costs). One row per calendar month."
+  // The questions this block answers. A question that equals one of them
+  // (ignoring case, spacing and trailing punctuation) is answered by this
+  // block once it is certified, before any model reads it. A draft made from
+  // an Ask answer or a request records that question here; Block Studio
+  // edits the list as "Questions it answers".
   examples = [
     { question = "What is monthly revenue?" },
     { question = "How has revenue trended this year?" }

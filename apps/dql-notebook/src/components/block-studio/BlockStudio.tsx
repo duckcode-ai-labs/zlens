@@ -103,6 +103,8 @@ import {
   setSemanticScalar,
   setBlockName,
   setBlockArray,
+  blockExampleQuestions,
+  setBlockExampleQuestions,
   setBlockStringField,
   setBlockQuery,
   setBlockTags,
@@ -1367,6 +1369,7 @@ export function BlockStudio() {
         runId: payload.sourceRunId,
         sql: sql || undefined,
         columns: payload.result?.columns,
+        question: payload.question?.trim() || undefined,
       });
       openIntentRef.current = 'builder';
       // The SQL is left as the creator wrote it; the suggestion to add the key is for them to review.
@@ -2951,6 +2954,8 @@ function BlockContextInspector({
         {tokenFields.map((item) => (
           <ContextTokenEditor key={item.key} label={item.label} hint={item.hint} values={array(item.key)} onChange={(values) => onChange(setBlockArray(source, item.key, values))} t={t} />
         ))}
+        {/* The questions the block was certified to answer (`examples`): Ask answers each from this block before any model reads it. */}
+        <ContextTokenEditor label="Questions it answers" hint="Which adjusters handle the most open claims?" values={blockExampleQuestions(source)} onChange={(values) => onChange(setBlockExampleQuestions(source, values))} t={t} splitOnComma={false} />
         <FieldLabel label="Rules and caveats" t={t}>
           {/* One rule per line; the block keeps them as a list (`caveats = [...]`). */}
           <SourceTextField multiline rows={2} value={(array('caveats').length > 0 ? array('caveats') : [field('caveats')].filter(Boolean)).join('\n')} onChange={(next) => onChange(setBlockArray(source, 'caveats', next.split(/\r?\n/)))} placeholder="Known limitation or interpretation rule, one per line" style={{ ...importInputStyle(t), resize: 'vertical' }} />
@@ -2961,10 +2966,10 @@ function BlockContextInspector({
   );
 }
 
-function ContextTokenEditor({ label, hint, values, onChange, t }: { label: string; hint: string; values: string[]; onChange: (values: string[]) => void; t: Theme }) {
+function ContextTokenEditor({ label, hint, values, onChange, t, splitOnComma = true }: { label: string; hint: string; values: string[]; onChange: (values: string[]) => void; t: Theme; /** A question keeps its commas: one entry per Enter. */ splitOnComma?: boolean }) {
   const [input, setInput] = useState('');
   const add = () => {
-    const next = input.split(',').map((value) => value.trim()).filter(Boolean);
+    const next = (splitOnComma ? input.split(',') : [input]).map((value) => value.trim()).filter(Boolean);
     if (next.length > 0) onChange([...values, ...next]);
     setInput('');
   };
@@ -2972,7 +2977,7 @@ function ContextTokenEditor({ label, hint, values, onChange, t }: { label: strin
     <FieldLabel label={label} t={t}>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, padding: 6, minHeight: 36, border: `1px solid ${t.cellBorder}`, borderRadius: 6, background: t.cellBg }}>
         {values.map((value) => <button type="button" key={value} onClick={() => onChange(values.filter((item) => item !== value))} title="Remove" style={{ ...selectionChipStyle(t, true), border: 'none', cursor: 'pointer' }}>{value} ×</button>)}
-        <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ',') { event.preventDefault(); add(); } }} onBlur={add} placeholder={values.length ? 'Add another…' : hint} style={{ minWidth: 120, flex: 1, border: 'none', outline: 'none', background: 'transparent', color: t.textPrimary, fontSize: 11, fontFamily: t.font }} />
+        <input value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' || (splitOnComma && event.key === ',')) { event.preventDefault(); add(); } }} onBlur={add} placeholder={values.length ? 'Add another…' : hint} style={{ minWidth: 120, flex: 1, border: 'none', outline: 'none', background: 'transparent', color: t.textPrimary, fontSize: 11, fontFamily: t.font }} />
       </div>
     </FieldLabel>
   );

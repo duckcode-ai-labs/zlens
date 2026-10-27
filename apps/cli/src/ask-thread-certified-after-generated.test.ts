@@ -112,6 +112,8 @@ const lastReading = () => {
   const prompt = [...provider.prompts].reverse().find((entry) => entry.includes(INTENT_PROMPT_MARKER)) ?? '';
   return { asFollowUp: prompt.includes(FOLLOW_UP_RULE) && prompt.includes(PRIOR_MARKER), blocksShown: refsOf(prompt, 'block') };
 };
+/** How many times the interpreter has been asked to read a question so far. */
+const readings = () => provider.prompts.filter((entry) => entry.includes(INTENT_PROMPT_MARKER)).length;
 
 beforeAll(async () => {
   root = mkdtempSync(join(tmpdir(), 'dql-ask-thread-recertified-'));
@@ -183,20 +185,24 @@ describe('a block certified after an AI-generated answer in the thread answers t
     expect(generated, JSON.stringify(generated)).toMatchObject({ route: 'generated_answer', trustState: 'review_required' });
     expect(lastReading()).toMatchObject({ asFollowUp: false });
 
-    // The block answering the question is built, certified and deployed.
+    // The block answering the question is built, certified and deployed. It records the question it was certified
+    // for (`examples`), so from here the question is the block's own: no interpreter reads it (round 4 of the gate had
+    // the model read it as claim rows and the API ask come back AI-generated twice).
     writeFileSync(join(root, BLOCK_FILE), certifiedBlockSource);
+    const readBefore = readings();
     const api = await askThroughApi(QUESTION);
     expect(api, JSON.stringify(api)).toMatchObject(CERTIFIED);
+    expect(readings()).toBe(readBefore);
 
     // Asked again in the same thread, with the page's own history of the earlier answer: a new run, not a replay,
-    // read on its own words (not as an edit of the AI-drafted reading) with the block in view.
+    // read on its own words (not as an edit of the AI-drafted reading), and the block answers.
     const page = await askThroughPage(QUESTION, threadId, history);
     expect(page.replayed).toBe(false);
     expect(page.id).not.toBe(generated.id);
-    expect(lastReading()).toEqual({ asFollowUp: false, blocksShown: expect.arrayContaining(['block:orders.top_customers']) });
     expect(page, JSON.stringify(page)).toMatchObject(CERTIFIED);
     const again = await askThroughPage(QUESTION, threadId, history);
     expect(again, JSON.stringify(again)).toMatchObject(CERTIFIED);
+    expect(readings()).toBe(readBefore);
     expect(lastReading()).toMatchObject({ asFollowUp: false });
   }, 120_000);
 

@@ -112,7 +112,9 @@ async function readRun(at: string, runId: string): Promise<RunState> {
 
 describe('an Ask run outlives another ZLens runtime opening the same project', () => {
   it('keeps running, and the page that comes back finds it running, then its answer', async () => {
-    const { runId, leave } = await startStreamedRun('Who are the top customers by lifetime spend?');
+    // A question the model reads: the fixture block records "Who are the top customers by lifetime spend?" as
+    // its own and answers it before any model call, which this test holds.
+    const { runId, leave } = await startStreamedRun('Show the top customers by lifetime spend');
     await modelReached;
     // The person goes to another page: the page stops reading the stream.
     await leave();

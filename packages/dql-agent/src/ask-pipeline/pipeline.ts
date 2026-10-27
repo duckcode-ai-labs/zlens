@@ -11,6 +11,7 @@ import { prepareExploratory } from './prepare/exploratory.js';
 import { isGovernedEntry, keepMembersApart, normalizeEffectiveIntent, resolveIntent, uncoveredQuestionTerms, coverageStates, unmetFacets, type IntentResolution, causalOperatorsIn, predictiveOperatorsIn, readingLane, validateIntentRefs } from './resolve-intent.js';
 import { buildVocabularyIndex, renderCard, type RenderedCards, type VocabularyDomainHeader, type VocabularyEntry, type VocabularyIndex } from './vocabulary.js';
 import { readByOwnWords } from './lexical-reading.js';
+import { readByCertifiedQuestion } from './certified-question.js';
 import { mergePhysicalRelationBinding, physicalRelationIdentity, physicalRelationText, samePhysicalRelation } from './physical-binding.js';
 
 /**
@@ -1031,12 +1032,20 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   // 1. Resolve. Only certified blocks and authored semantics are governed; a
   // reading over anything else goes to AI-written SQL when it is available.
   const aiSqlAvailable = Boolean(input.prepareDeps.draftSql && (input.explorationOptIn || input.explorationAuto));
+  // The reading is the question's own when nothing else owns it: no edit of
+  // the thread's last analysis, no settled identity, no clarification pending.
+  const ownReading = !settled && !input.prior && !memberGuidance(input) && !input.selection && !input.memberSelection && !input.conversation?.pendingClarification;
+  // A QUESTION A CERTIFIED BLOCK RECORDS AS ITS OWN (its examples, or a
+  // description that is the question verbatim) is answered by that block.
+  // The route is settled before any model reads the question, so the words a
+  // block was certified for cannot come back AI-written on another reading.
+  const certifiedQuestion = ownReading ? readByCertifiedQuestion(input.question, input.vocabulary) : undefined;
   // 0. DRAFT FIRST where nothing is governed: the question goes to the SQL
   // drafter as asked, the checks and the result review stay, and only what
   // the drafter declines is read into a reading as before. Anything the
   // reading owns (an edit of the last analysis, an answer to a clarification,
   // a picked meaning, a forecast, a question about causes) is read first.
-  if (!settled && input.draftFirst && aiSqlAvailable && !input.prior && !memberGuidance(input) && !input.selection && !input.memberSelection && !input.conversation?.pendingClarification
+  if (ownReading && !certifiedQuestion && input.draftFirst && aiSqlAvailable
     && predictiveOperatorsIn(input.question).length === 0 && causalOperatorsIn(input.question).length === 0) {
     // No reading was made, so nothing has checked the question's terms yet: a
     // term no listed column holds or defines is declined, not invented, and
@@ -1047,8 +1056,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   const resolveStarted = now();
   // A question that is only a governed metric and dimensions, by their own words, is read here: no mode or model phrasing can move its route.
   // The model keeps any question that reads as an edit of the thread's last analysis (the host passes `prior` only then) and any host guidance.
-  const lexicalReading = !settled && !input.prior && !memberGuidance(input) && !input.selection && !input.memberSelection && !input.conversation?.pendingClarification ? readByOwnWords(input.question, input.vocabulary) : undefined;
-  let resolution: IntentResolution = settled ? settledResolution(settled.intent, input.vocabulary) : await resolveIntent({
+  const lexicalReading = ownReading && !certifiedQuestion ? readByOwnWords(input.question, input.vocabulary) : undefined;
+  let resolution: IntentResolution = settled ? settledResolution(settled.intent, input.vocabulary) : certifiedQuestion ? { status: 'resolved', intent: certifiedQuestion.intent, attempts: 0, problems: [] } : await resolveIntent({
     question: input.question, vocabulary: input.vocabulary, provider: input.provider, prior: input.prior, priorExecuted: input.priorExecuted, ...(input.hidePriorValues ? { hidePriorValues: true } : {}), priorAnswerSummary: input.priorAnswerSummary, clauseCoverage: input.clauseCoverage, budgetMs: remaining(), ...(input.selection ? { selection: input.selection } : {}),
     guidance: memberGuidance(input), cardBudget: input.cardBudget, providerOptions, now,
     renderedCards, ...(input.conversation ? { conversation: input.conversation } : {}),
@@ -1063,6 +1072,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   if (settled) {
     receipt.reuse = 'interpretation';
     step('read', resolution.status === 'failed' ? 'The settled reading named things that do not exist' : 'Used the settled reading', resolution.status === 'failed' ? 'failed' : 'done', { detail: resolution.status === 'failed' ? resolution.detail : settled.intent.reading });
+  } else if (certifiedQuestion) {
+    step('read', `Read the question as the one the certified saved query ${certifiedQuestion.block.name} answers`, 'done', { detail: certifiedQuestion.intent.reading });
   } else if (lexicalReading) {
     step('read', 'Read the question by the semantic layer\'s own words', 'done', { detail: lexicalReading.reading });
   } else {
@@ -1315,7 +1326,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   }
   // A name the reading leans on that the filters never carried is bound from
   // the warehouse before anything is prepared.
-  if (!settled && !aiReading && input.suggestMembers && remaining() > 8_000) {
+  if (!settled && !certifiedQuestion && !aiReading && input.suggestMembers && remaining() > 8_000) {
     try {
       const bound = await bindNamedSubject(intent, input.question, input.vocabulary, input.suggestMembers);
       if (bound.length) receipt.grounding = [...(receipt.grounding ?? []), ...bound];
@@ -1392,7 +1403,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   receipt.intent = intent;
   receipt.reading = intent.reading;
   recordSelection(intent);
-  const uncovered = settled ? [] : uncoveredQuestionTerms(input.question, intent, input.vocabulary);
+  // A question a block was certified for is covered by that block: no word of it is unused.
+  const uncovered = settled || certifiedQuestion ? [] : uncoveredQuestionTerms(input.question, intent, input.vocabulary);
   if (uncovered.length) {
     receipt.uncovered = uncovered;
     // What each unused word names: a competing measure the reading chose not
@@ -1741,7 +1753,7 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   if (judgmentCaveat) caveats.unshift(judgmentCaveat);
   // A part the POLICY answered for is answered: the required filters the
   // host applied are part of the reading, not context it lacks.
-  const facets = settled ? [] : unmetFacets(input.question, intent, input.vocabulary, { policyTexts: [...(receipt.context?.enforced?.requiredFilters ?? []), ...(receipt.policies ?? []).map((policy) => policy.effect ?? '')] });
+  const facets = settled || certifiedQuestion ? [] : unmetFacets(input.question, intent, input.vocabulary, { policyTexts: [...(receipt.context?.enforced?.requiredFilters ?? []), ...(receipt.policies ?? []).map((policy) => policy.effect ?? '')] });
   if (facets.length > 0) {
     const message = `this answer carries nothing for ${facets.map((facet) => `"${facet}"`).join(', ')}: no governed metric or dimension of this project is named for ${facets.length === 1 ? 'it' : 'them'}`;
     receipt.unmet = [...(receipt.unmet ?? []), { obligation: 'coverage', message }];

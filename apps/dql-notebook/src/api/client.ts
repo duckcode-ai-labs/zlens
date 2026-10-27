@@ -6159,6 +6159,8 @@ export const api = {
     /** The answer's SQL and result column names (never rows), so the server can pre-fill certification metadata. */
     sql?: string;
     columns?: string[];
+    /** The question the answer was given for, recorded as the block's example so the certified block answers it first. */
+    question?: string;
   }): Promise<BlockStudioOpenPayload & { prefill?: { suggested: unknown[]; unknown: string[]; identityGap?: { labels: string[]; key?: string; message: string } } }> {
     return request('/api/block-studio/agent-drafts', {
       method: 'POST',
