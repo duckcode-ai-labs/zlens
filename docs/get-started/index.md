@@ -13,7 +13,8 @@ You end with:
 
 !!! tip "Just want to look first? Nothing to install"
     - **In your browser:** [open the sample in GitHub Codespaces](https://codespaces.new/duckcode-ai/jaffle-shop-duckdb?quickstart=1){ target=_blank rel=noopener },
-      then **Create codespace**. ZLens opens in a new tab in about a minute.
+      then **Create codespace**. In about a minute ZLens opens in a panel inside
+      the codespace, and the terminal prints a link to open it in its own tab.
     - **With Docker:** `docker run --rm -p 127.0.0.1:3474:3474 ghcr.io/duckcode-ai/zlens-demo`,
       then open the link it prints.
 
