@@ -87,11 +87,12 @@ stop it at [github.com/codespaces](https://github.com/codespaces) when you're do
 **With Docker:**
 
 ```bash
-docker run --rm -p 127.0.0.1:3474:3474 ghcr.io/duckcode-ai/zlens-demo
+docker run --rm -p 127.0.0.1:3474:3474 -p 127.0.0.1:54545:54545 -p 127.0.0.1:1455:1455 ghcr.io/duckcode-ai/zlens-demo
 ```
 
 Open the link it prints. It runs on your machine and keeps nothing after you
-stop it (Ctrl+C).
+stop it (Ctrl+C). Ports 54545 and 1455 let **Sign in with Claude** and **Sign in
+with ChatGPT** finish inside the container.
 
 Either way, **Ask** needs an AI model: add one in **Settings → AI provider**.
 To use your own data, follow the [Quickstart](#quickstart).
