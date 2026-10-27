@@ -2905,6 +2905,11 @@ function businessNarrativeGaps(warnings: string[] | undefined): string[] | undef
 // source of prior turns (survives refresh); the client-built context remains
 // the fallback for embedders that never send a threadId.
 
+/** A question's words alone, so a re-ask matches its earlier turn whatever the spacing, case or punctuation. */
+function conversationQuestionWords(question: string | undefined): string {
+  return (question ?? '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).join(' ');
+}
+
 async function conversationContextFromThread(
   store: ConversationStoreLike,
   threadId: string,
@@ -7720,12 +7725,24 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const store = getConversationStore();
       if (!store || !request.threadId) return undefined;
       const turns = (await store.recentTurns(request.threadId, 6)).sort((a, b) => b.seq - a.seq);
+      // A RE-ASK IS NOT AN EDIT. A question that repeats, word for word, the
+      // question of an earlier turn is read the way that turn was read: with
+      // the turn before it as its prior, or on its own when it opened the
+      // conversation. Handing it the latest turn as "the previous analysis to
+      // edit" told the interpreter to keep every clause the message does not
+      // change — and the same words change nothing — so the earlier reading
+      // came back verbatim, and a block certified since (or a semantic metric
+      // modelled since) never reached the certified tier: the Ask page stayed
+      // on the AI-drafted answer while the API, with no thread, was certified.
+      const asked = conversationQuestionWords(request.question);
+      const repeated = asked ? [...turns].reverse().find((turn) => conversationQuestionWords(turn.question) === asked) : undefined;
+      const earlier = repeated ? turns.filter((turn) => turn.seq < repeated.seq) : turns;
       // A blocked turn produced no rows, but its typed reading is still the
       // question the user asked. It carries forward as an UNEXECUTED plan:
       // the next turn may keep its restrictions, ranking and period, and may
       // never claim its result. Without this a blocked turn resets the
       // conversation and the next answer silently covers every row.
-      for (const turn of turns) {
+      for (const turn of earlier) {
         const intent = (turn.contract as Record<string, unknown> | undefined)?.askIntentV1;
         if (!intent || typeof intent !== 'object') continue;
         const executed = !turn.runStatus || ['completed', 'needs_review'].includes(turn.runStatus);
