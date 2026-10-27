@@ -79,8 +79,9 @@ See ZLens working on the Jaffle Shop sample, with nothing to install.
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/duckcode-ai/jaffle-shop-duckdb?quickstart=1)
 
 Click the button, then **Create codespace**. In about a minute ZLens opens in a
-new tab with the certified saved queries, the Jaffle Growth Review App,
-lineage and notebooks. It uses your GitHub account's free Codespaces hours;
+panel inside the codespace, and the terminal prints a link that opens it in its
+own tab: the certified saved queries, the Jaffle Growth Review App, lineage and
+notebooks. Nothing opened? Click **Ports**, then the globe next to **ZLens (3474)**. It uses your GitHub account's free Codespaces hours;
 stop it at [github.com/codespaces](https://github.com/codespaces) when you're done.
 
 **With Docker:**
