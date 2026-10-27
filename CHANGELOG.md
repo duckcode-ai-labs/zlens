@@ -8,6 +8,51 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.10 - 2026-10-27
+
+Sign in with your Claude or ChatGPT subscription when ZLens runs somewhere
+else: in a GitHub codespace, a Docker container or on another computer.
+- Paste the address your browser lands on to finish the sign-in.
+- The sign-in page has a link, in case the pop-up is blocked.
+- Home card headings are readable in every theme.
+- Hosts that review certification through pull requests can make the App
+  Studio say "propose" instead of "certify".
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.10` in each project.
+
+### AI provider: subscription sign-in away from your computer
+
+- **Finish a sign-in by pasting an address.** Claude and ChatGPT send your
+  browser back to `localhost` on your own computer after you sign in. When
+  ZLens runs in a codespace, a container or on another host, that page can't
+  load and the sign-in never finished. Now, while a sign-in waits,
+  **Settings → AI provider → Subscription** shows a box: paste the address
+  from your browser's address bar and click **Finish sign-in**. ZLens checks
+  it belongs to this sign-in before it accepts it. (#208)
+- **A link to the sign-in page.** The page opens in a pop-up, which some
+  browsers block inside an embedded panel (for example a codespace's preview).
+  The waiting screen now shows **Open the Claude sign-in page** (or ChatGPT).
+- **Docker:** the demo image's command maps the two return ports, so the
+  sign-in finishes inside the container without pasting:
+  `docker run --rm -p 127.0.0.1:3474:3474 -p 127.0.0.1:54545:54545 -p 127.0.0.1:1455:1455 ghcr.io/duckcode-ai/zlens-demo`.
+
+### Workbench
+
+- **Home card headings read at 4.5:1 contrast in every theme.** (#199)
+- **Hosts:** a host whose review certifies through pull requests can answer
+  `certification: 'proposes'`; the App Studio then says "Propose for
+  certification" wherever it said "certify". Only the words change. (#198)
+
+### Try it and docs
+
+- Try ZLens without installing: an **Open in GitHub Codespaces** button and a
+  one-command **Docker** demo image (`ghcr.io/duckcode-ai/zlens-demo`), both
+  opening the Jaffle Shop sample's certified App. (#205, #207)
+- The docs moved to **https://docs.zlens.app**; old links redirect. (#201)
+- Every docs page shows its YouTube tutorial, and the steps match the videos.
+  (#204)
+- Questions go to **GitHub Discussions**. (#200)
+
 ## v0.2.9 - 2026-10-24
 
 A patch for Apps, found by walking the Jaffle sample on 0.2.8.
