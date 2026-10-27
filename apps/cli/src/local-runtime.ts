@@ -6004,6 +6004,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       && typeof candidate.filepath === 'string' && candidate.filepath !== ':memory:'
       && resolve(projectRoot, candidate.filepath) === file);
   };
+  /** The name of the project's default connection (dql.config.json), as executionTargetDescriptor describes a run with no target. */
+  const defaultConnectionKey = (): string | undefined => projectConfig.defaultConnectionName
+    ?? resolveDefaultConnectionKey(
+      projectConfig as unknown as Record<string, unknown>,
+      getStoredConnections(projectConfig as unknown as Record<string, unknown>),
+    );
   const resolveExecutionConnection = async (
     body: Record<string, unknown>,
   ): Promise<ConnectionConfig> => {
@@ -6020,6 +6026,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       target?.target === "connection" &&
       typeof target.connectionName === "string"
     ) {
+      // The default connection, asked for by name, is the connection this server runs by default: the one it was
+      // started on when that replaces dql.config.json's (a host's draft space starts DQL on a copy of Production's
+      // DuckDB file; `zlens notebook` can be started on another connection too), else the configured one. A request
+      // with no execution target runs on that same connection and is described as the default's name
+      // (executionTargetDescriptor), so a receipt of such a run, verified by that name, must resolve the same
+      // connection: resolving the configured file instead read as "previewed against a different warehouse target".
+      if (target.connectionName === defaultConnectionKey() && connection) {
+        const active = requireActiveConnection(connection);
+        return hosted ? namedConnection(active, target.connectionName) : active;
+      }
       const named = resolveNamedConnection(target.connectionName);
       if (!named) {
         if (hosted) throw new ConnectionChoiceRefusedError(UNKNOWN_CONNECTION_REFUSED);
@@ -6046,16 +6062,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (target?.target === 'local') return hosted && hostHooks?.onePerson !== true ? { target: 'connection' } : { target: 'local' };
     // With a host, only a name the project has is described back (never one the request made up).
     if (hosted && target?.target === 'connection' && typeof target.connectionName === 'string' && !resolveNamedConnection(target.connectionName)) return { target: 'connection' };
-    const storedConnections = getStoredConnections(
-      projectConfig as unknown as Record<string, unknown>,
-    );
     const connectionName = target?.target === 'connection' && typeof target.connectionName === 'string'
       ? target.connectionName
-      : projectConfig.defaultConnectionName
-        ?? resolveDefaultConnectionKey(
-          projectConfig as unknown as Record<string, unknown>,
-          storedConnections,
-        );
+      : defaultConnectionKey();
     return {
       target: 'connection',
       ...(connectionName ? { connectionName } : {}),
