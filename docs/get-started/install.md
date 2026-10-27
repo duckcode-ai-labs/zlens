@@ -85,6 +85,20 @@ zlens doctor
 
 No Node.js needed on your machine.
 
+### Just try it: the demo image
+
+```bash
+docker run --rm -p 127.0.0.1:3474:3474 ghcr.io/duckcode-ai/zlens-demo
+```
+
+The image holds the Jaffle Shop sample, already built. It makes an access
+token, waits for ZLens and prints one link (`http://localhost:3474/?app=…#dql_token=…`)
+that opens the sample's certified App. Nothing is kept after you stop it
+(Ctrl+C). Port 3474 already in use? Run
+`docker run --rm -e ZLENS_PORT=3480 -p 127.0.0.1:3480:3480 ghcr.io/duckcode-ai/zlens-demo`.
+
+### Run your own project in Docker
+
 ```bash
 git clone https://github.com/duckcode-ai-labs/zlens.git
 cd zlens

@@ -22,6 +22,7 @@
 
 <p align="center">
   <a href="https://docs.zlens.app/"><b>Docs</b></a> ·
+  <a href="#try-it-in-one-click"><b>Try it in one click</b></a> ·
   <a href="#quickstart"><b>Quickstart</b></a> ·
   <a href="#video-tutorials"><b>Video tutorials</b></a> ·
   <a href="https://docs.zlens.app/agents/"><b>AI agents (MCP)</b></a> ·
@@ -68,6 +69,31 @@ an unreviewed number up as a trusted one.
 - **Runs on your terms.** Use a Claude or ChatGPT subscription, an API key
   (Anthropic, OpenAI, Gemini or any OpenAI-compatible endpoint), or a local
   model through Ollama. No ZLens account or hosted service, and no usage telemetry.
+
+## Try it in one click
+
+See ZLens working on the Jaffle Shop sample, with nothing to install.
+
+**In your browser:**
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/duckcode-ai/jaffle-shop-duckdb?quickstart=1)
+
+Click the button, then **Create codespace**. In about a minute ZLens opens in a
+new tab with the certified saved queries, the Jaffle Growth Review App,
+lineage and notebooks. It uses your GitHub account's free Codespaces hours;
+stop it at [github.com/codespaces](https://github.com/codespaces) when you're done.
+
+**With Docker:**
+
+```bash
+docker run --rm -p 127.0.0.1:3474:3474 ghcr.io/duckcode-ai/zlens-demo
+```
+
+Open the link it prints. It runs on your machine and keeps nothing after you
+stop it (Ctrl+C).
+
+Either way, **Ask** needs an AI model: add one in **Settings → AI provider**.
+To use your own data, follow the [Quickstart](#quickstart).
 
 ## Quickstart
 

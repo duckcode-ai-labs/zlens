@@ -11,6 +11,17 @@ You end with:
 
 {{ clip("quickstart") }}
 
+!!! tip "Just want to look first? Nothing to install"
+    - **In your browser:** [open the sample in GitHub Codespaces](https://codespaces.new/duckcode-ai/jaffle-shop-duckdb?quickstart=1){ target=_blank rel=noopener },
+      then **Create codespace**. ZLens opens in a new tab in about a minute.
+    - **With Docker:** `docker run --rm -p 127.0.0.1:3474:3474 ghcr.io/duckcode-ai/zlens-demo`,
+      then open the link it prints.
+
+    Both open the sample with its certified saved queries, App, lineage and
+    notebooks, and keep nothing after you stop them. **Ask** needs an
+    [AI provider](ai-provider.md). Follow the steps below to keep your work
+    or use your own data.
+
 ## Before you start
 
 You need:
