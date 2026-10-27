@@ -15,7 +15,7 @@ You end with:
     - **In your browser:** [open the sample in GitHub Codespaces](https://codespaces.new/duckcode-ai/jaffle-shop-duckdb?quickstart=1){ target=_blank rel=noopener },
       then **Create codespace**. In about a minute ZLens opens in a panel inside
       the codespace, and the terminal prints a link to open it in its own tab.
-    - **With Docker:** `docker run --rm -p 127.0.0.1:3474:3474 ghcr.io/duckcode-ai/zlens-demo`,
+    - **With Docker:** `docker run --rm -p 127.0.0.1:3474:3474 -p 127.0.0.1:54545:54545 -p 127.0.0.1:1455:1455 ghcr.io/duckcode-ai/zlens-demo`,
       then open the link it prints.
 
     Both open the sample with its certified saved queries, App, lineage and
