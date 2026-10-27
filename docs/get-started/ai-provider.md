@@ -35,6 +35,27 @@ provider and model. If the test fails, your previous provider stays active.
 
 **Test unsaved values** checks the form without saving it.
 
+## Subscription sign-in in a codespace, Docker or on another computer
+
+**Sign in with Claude** and **Sign in with ChatGPT** send your browser back to
+`localhost` on your own computer when you finish signing in. When ZLens runs
+somewhere else, that page can't load. To finish the sign-in (ZLens 0.2.10 and
+later):
+
+1. Click **Sign in with Claude** (or ChatGPT). If no sign-in page opens, click
+   **Open the Claude sign-in page** under the button.
+2. Sign in and approve. Your browser lands on a page that can't load, with an
+   address that starts with `http://localhost:54545/callback?code=` (Claude) or
+   `http://localhost:1455/auth/callback?code=` (ChatGPT).
+3. Copy that whole address from the address bar, paste it into the box in
+   **Settings → AI provider**, and click **Finish sign-in**.
+
+ZLens accepts the address only for the sign-in you started, and only once.
+
+With the Docker demo image you can skip the paste: map the two return ports,
+as the [install guide](install.md#option-d-docker) shows
+(`-p 127.0.0.1:54545:54545 -p 127.0.0.1:1455:1455`).
+
 ## Run everything on your machine
 
 With **Ollama — local**, questions and data never leave your network:
