@@ -599,6 +599,44 @@ describe('local metadata catalog', () => {
     expect(activeKnowledgeSnapshotLeaseCount()).toBe(0);
   });
 
+  it('a refresh that lands while another is exporting leaves the pointer at a file holding what its name says', async () => {
+    // Two refreshes in flight at once with different content (a draft space's first requests arrive together;
+    // a dbt preparation job runs beside an App Studio request): the second rebuilds the working catalog while
+    // the first awaits its vector upgrade, before the first exports and points. Named for the first's build,
+    // that export carried the second's content, and every acquire at the pointer was refused as a mismatch
+    // (ZLens Enterprise gate round 4: GET /api/app-builds/<id>/source-candidates answered 400).
+    const manifestPath = join(projectRoot, 'target', 'manifest.json');
+    const originalManifest = readFileSync(manifestPath, 'utf-8');
+    const first = ensureMetadataCatalogFresh(projectRoot);
+    addGenericAthleteBoxScoreModel(projectRoot, 'snapshot_generation_two');
+    const second = ensureMetadataCatalogFresh(projectRoot);
+    const [a, b] = await Promise.all([first, second]);
+    // Whichever exported last, the pointer names a file that holds that fingerprint.
+    for (const result of [a, b]) {
+      const sealed = new MetadataCatalog(result.snapshotPath, { readOnly: true });
+      try {
+        expect(sealed.state('fingerprint')).toBe(result.fingerprint);
+      } finally {
+        sealed.close();
+      }
+    }
+    const pointer = JSON.parse(readFileSync(join(projectRoot, '.dql', 'cache', 'active-snapshot.json'), 'utf-8')) as { snapshotId: string };
+    expect(pointer.snapshotId).toBe(b.fingerprint);
+
+    // Back to the first content: its snapshot is activated again and must hold what its name says, not the
+    // second's content left there by the race.
+    writeFileSync(manifestPath, originalManifest);
+    const third = await ensureMetadataCatalogFresh(projectRoot);
+    expect(third.fingerprint).not.toBe(b.fingerprint);
+    const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+    try {
+      expect(lease.snapshotId).toBe(third.fingerprint);
+      expect(lease.catalog.getObject('dbt:model:snapshot_generation_two')).toBeNull();
+    } finally {
+      lease.release();
+    }
+  });
+
   it('ID-001 resolves canonical semantic identities and fails closed on ambiguous aliases', async () => {
     writeQualifiedSemanticIdentityFixture(projectRoot);
     const semanticLayer = resolveSemanticLayerWithDiagnostics({

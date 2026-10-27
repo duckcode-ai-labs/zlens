@@ -1022,15 +1022,57 @@ export function currentMetadataFingerprint(projectRoot: string): string | undefi
   }
 }
 
-function activateMetadataSnapshot(projectRoot: string, fingerprint: string, catalog: MetadataCatalog): string {
-  const snapshotPath = metadataSnapshotPath(projectRoot, fingerprint, catalog.state('vector_provider') ?? undefined);
+/** The content fingerprint a snapshot file holds; null when it cannot be read as one. */
+function snapshotFileFingerprint(path: string): string | null {
+  try {
+    const sealed = new MetadataCatalog(path, { readOnly: true });
+    try {
+      return sealed.state('fingerprint');
+    } finally {
+      sealed.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Export the working catalog as the active immutable snapshot and point at it.
+ *
+ * The working catalog can have moved on since the caller built it: a second
+ * refresh with other content (a draft space's first requests arrive together;
+ * a dbt preparation job runs beside an App Studio request) rebuilds it while
+ * this one awaits its vector upgrade, before it exports. A snapshot file is
+ * named for its content, so the export is named for what the catalog holds
+ * NOW. Named for this caller's build instead, the file carried the other
+ * build's content, and every acquire at that pointer was refused as a
+ * "pointer mismatch" until a third refresh moved it (ZLens Enterprise gate
+ * round 4, a draft space's App Studio catalogue).
+ */
+function activateMetadataSnapshot(
+  projectRoot: string,
+  fingerprint: string,
+  catalog: MetadataCatalog,
+): { snapshotPath: string; fingerprint: string } {
+  const current = catalog.state('fingerprint') ?? fingerprint;
+  const snapshotPath = metadataSnapshotPath(projectRoot, current, catalog.state('vector_provider') ?? undefined);
+  // A file of this name written before this guard may hold another build's
+  // content: it goes, and is exported again. A request still holding it open
+  // keeps reading what it opened, as with any superseded snapshot.
+  if (existsSync(snapshotPath) && snapshotFileFingerprint(snapshotPath) !== current) {
+    try {
+      rmSync(snapshotPath, { force: true });
+    } catch {
+      // Held open on a platform that refuses to unlink an open file: the export below keeps it.
+    }
+  }
   catalog.exportSnapshot(snapshotPath);
   const cacheDir = join(projectRoot, '.dql', 'cache');
   const pointerPath = join(cacheDir, 'active-snapshot.json');
   const candidate = `${pointerPath}.candidate`;
   mkdirSync(cacheDir, { recursive: true });
   writeFileSync(candidate, JSON.stringify({
-    snapshotId: fingerprint,
+    snapshotId: current,
     indexSchemaVersion: METADATA_INDEX_VERSION,
     snapshotPath,
   }, null, 2), 'utf8');
@@ -1038,7 +1080,7 @@ function activateMetadataSnapshot(projectRoot: string, fingerprint: string, cata
   // Do not delete older immutable files here: a request that acquired the old
   // pointer may still hold it open. Cache cleanup is an explicit maintenance
   // concern until the snapshot service owns reference-counted leases.
-  return snapshotPath;
+  return { snapshotPath, fingerprint: current };
 }
 
 export function openMetadataCatalog(projectRoot: string, dbPath = defaultMetadataPath(projectRoot)): MetadataCatalog {
@@ -1310,15 +1352,15 @@ export async function ensureMetadataCatalogFresh(
       // Without this, switching `ai.embeddings` never takes effect until an
       // unrelated dbt change happens to move the fingerprint.
       await upgradeVectors();
-      const snapshotPath = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
+      const active = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
       return {
         path: defaultMetadataPath(projectRoot),
-        snapshotPath,
+        snapshotPath: active.snapshotPath,
         refreshed: false,
         objectCount: catalog.objectCount(),
         edgeCount: catalog.edgeCount(),
         diagnostics: catalog.diagnostics(),
-        fingerprint: snapshot.fingerprint,
+        fingerprint: active.fingerprint,
       };
     }
     // W3.4 — incremental reindex when prior state exists (only re-tokenizes changed
@@ -1330,15 +1372,15 @@ export async function ensureMetadataCatalogFresh(
       catalog.rebuildIncremental(snapshot);
     }
     await upgradeVectors();
-    const snapshotPath = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
+    const active = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
     return {
       path: defaultMetadataPath(projectRoot),
-      snapshotPath,
+      snapshotPath: active.snapshotPath,
       refreshed: true,
       objectCount: snapshot.objects.length,
       edgeCount: snapshot.edges.length,
       diagnostics: snapshot.diagnostics,
-      fingerprint: snapshot.fingerprint,
+      fingerprint: active.fingerprint,
     };
   } finally {
     catalog.close();
@@ -1349,15 +1391,15 @@ export function upsertMetadataSnapshot(projectRoot: string, snapshot: MetadataSn
   const catalog = openMetadataCatalog(projectRoot);
   try {
     catalog.rebuild(snapshot);
-    const snapshotPath = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
+    const active = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
     return {
       path: defaultMetadataPath(projectRoot),
-      snapshotPath,
+      snapshotPath: active.snapshotPath,
       refreshed: true,
       objectCount: snapshot.objects.length,
       edgeCount: snapshot.edges.length,
       diagnostics: snapshot.diagnostics,
-      fingerprint: snapshot.fingerprint,
+      fingerprint: active.fingerprint,
     };
   } finally {
     catalog.close();
