@@ -8,10 +8,10 @@ import { applyRerank, type RerankOutcome } from '../agentic/rerank.js';
  * context pack before answering.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
 import type Database from 'better-sqlite3';
 import {
@@ -1048,6 +1048,17 @@ function snapshotFileFingerprint(path: string): string | null {
  * build's content, and every acquire at that pointer was refused as a
  * "pointer mismatch" until a third refresh moved it (ZLens Enterprise gate
  * round 4, a draft space's App Studio catalogue).
+ *
+ * Within one process, refreshes now take turns (`withWorkingCatalogTurn`), so
+ * the catalog cannot move between the name being chosen and the export. Another
+ * PROCESS on the same project (a `zlens` command beside the server) still can,
+ * and can export a file of the same name first: so the pointer is written for
+ * what the exported file HOLDS, read back from the file itself, and a file
+ * whose content is not what its name says is moved to the name that content
+ * maps to. The pointer then names its file's content whatever happened on disk,
+ * and `acquireActiveKnowledgeSnapshot` has nothing to refuse (ZLens Enterprise
+ * kept-up sandbox run 40724556538, W2 B6: the first App Studio catalogue call
+ * in a fresh draft space was refused, a later one on the same draft was not).
  */
 function activateMetadataSnapshot(
   projectRoot: string,
@@ -1055,7 +1066,8 @@ function activateMetadataSnapshot(
   catalog: MetadataCatalog,
 ): { snapshotPath: string; fingerprint: string } {
   const current = catalog.state('fingerprint') ?? fingerprint;
-  const snapshotPath = metadataSnapshotPath(projectRoot, current, catalog.state('vector_provider') ?? undefined);
+  const vectorProviderId = catalog.state('vector_provider') ?? undefined;
+  let snapshotPath = metadataSnapshotPath(projectRoot, current, vectorProviderId);
   // A file of this name written before this guard may hold another build's
   // content: it goes, and is exported again. A request still holding it open
   // keeps reading what it opened, as with any superseded snapshot.
@@ -1067,12 +1079,43 @@ function activateMetadataSnapshot(
     }
   }
   catalog.exportSnapshot(snapshotPath);
+  let held = snapshotFileFingerprint(snapshotPath);
+  if (held === null) {
+    // Not readable as a snapshot (a file cut short by an older build's export
+    // beside this one): replaced by one more export, which is then read back.
+    rmSync(snapshotPath, { force: true });
+    catalog.exportSnapshot(snapshotPath);
+    held = snapshotFileFingerprint(snapshotPath);
+    if (held === null) {
+      throw new Error(`Metadata snapshot export at ${snapshotPath} cannot be read back as a snapshot.`);
+    }
+  }
+  if (held !== current) {
+    // The file holds another build's content: the working catalog was rebuilt
+    // by another process between the name being chosen and the export, or that
+    // process exported this name first. Snapshot files are named for their
+    // content, so the file moves to the name its content maps to (replacing a
+    // stale file of that name, or going when that name already holds it) and
+    // the pointer names that. The name chosen above is left free for a later
+    // activation of `current` to export afresh.
+    const truthfulPath = metadataSnapshotPath(projectRoot, held, vectorProviderId);
+    if (existsSync(truthfulPath) && snapshotFileFingerprint(truthfulPath) === held) {
+      try {
+        rmSync(snapshotPath, { force: true });
+      } catch {
+        // Held open elsewhere: the next activation of `current` replaces it.
+      }
+    } else {
+      renameSync(snapshotPath, truthfulPath);
+    }
+    snapshotPath = truthfulPath;
+  }
   const cacheDir = join(projectRoot, '.dql', 'cache');
   const pointerPath = join(cacheDir, 'active-snapshot.json');
-  const candidate = `${pointerPath}.candidate`;
+  const candidate = `${pointerPath}.${process.pid}-${randomUUID().slice(0, 8)}.candidate`;
   mkdirSync(cacheDir, { recursive: true });
   writeFileSync(candidate, JSON.stringify({
-    snapshotId: current,
+    snapshotId: held,
     indexSchemaVersion: METADATA_INDEX_VERSION,
     snapshotPath,
   }, null, 2), 'utf8');
@@ -1080,7 +1123,7 @@ function activateMetadataSnapshot(
   // Do not delete older immutable files here: a request that acquired the old
   // pointer may still hold it open. Cache cleanup is an explicit maintenance
   // concern until the snapshot service owns reference-counted leases.
-  return { snapshotPath, fingerprint: current };
+  return { snapshotPath, fingerprint: held };
 }
 
 export function openMetadataCatalog(projectRoot: string, dbPath = defaultMetadataPath(projectRoot)): MetadataCatalog {
@@ -1109,14 +1152,33 @@ const activeKnowledgeSnapshotLeases = new Map<string, number>();
  * Acceptance: CTX-002, CTX-005.
  */
 export function acquireActiveKnowledgeSnapshot(projectRoot: string): ActiveKnowledgeSnapshotLease {
-  const pointer = readActiveMetadataSnapshotPointer(projectRoot);
-  const path = pointer?.snapshotPath ?? defaultMetadataPath(projectRoot);
-  const catalog = new MetadataCatalog(path, { readOnly: Boolean(pointer) });
-  const catalogFingerprint = catalog.state('fingerprint') ?? 'metadata-unavailable';
-  if (pointer && pointer.snapshotId !== catalogFingerprint) {
-    catalog.close();
-    throw new Error(`Active metadata snapshot pointer mismatch (pointer ${pointer.snapshotId}, catalog ${catalogFingerprint}).`);
+  const openPointed = (pointer: ActiveMetadataSnapshotPointer | null) => {
+    const path = pointer?.snapshotPath ?? defaultMetadataPath(projectRoot);
+    const catalog = new MetadataCatalog(path, { readOnly: Boolean(pointer) });
+    const catalogFingerprint = catalog.state('fingerprint') ?? 'metadata-unavailable';
+    return { path, catalog, catalogFingerprint, mismatch: Boolean(pointer) && pointer!.snapshotId !== catalogFingerprint };
+  };
+  const mismatchError = (pointer: ActiveMetadataSnapshotPointer, catalogFingerprint: string) =>
+    new Error(`Active metadata snapshot pointer mismatch (pointer ${pointer.snapshotId}, catalog ${catalogFingerprint}).`);
+  let pointer = readActiveMetadataSnapshotPointer(projectRoot);
+  let opened = openPointed(pointer);
+  if (opened.mismatch) {
+    // An activation in another process may have moved the pointer, or replaced
+    // the file it names, between the read and the open: the pointer is read
+    // once more. A pointer that has not moved is a real mismatch and is still
+    // refused, so a corrupt state stays visible.
+    opened.catalog.close();
+    const again = readActiveMetadataSnapshotPointer(projectRoot);
+    const moved = again && (again.snapshotId !== pointer!.snapshotId || again.snapshotPath !== pointer!.snapshotPath);
+    if (!moved) throw mismatchError(pointer!, opened.catalogFingerprint);
+    pointer = again;
+    opened = openPointed(pointer);
+    if (opened.mismatch) {
+      opened.catalog.close();
+      throw mismatchError(pointer!, opened.catalogFingerprint);
+    }
   }
+  const { path, catalog, catalogFingerprint } = opened;
   activeKnowledgeSnapshotLeases.set(path, (activeKnowledgeSnapshotLeases.get(path) ?? 0) + 1);
   let released = false;
   return Object.freeze({
@@ -1293,25 +1355,73 @@ async function upgradeVectorIndexOnCatalog(
   }
 }
 
+/**
+ * One turn at a time on a project's working catalog, inside this process.
+ *
+ * Every refresh rebuilds the ONE working catalog (`.dql/cache/metadata.sqlite`)
+ * and then awaits its vector upgrade before it exports and points. Two in
+ * flight at once (a draft space's first requests arrive together: the
+ * preparation job a dbt Apply starts after its response, beside an App Studio
+ * request) each rebuilt the catalog in turn and exported what the OTHER had
+ * built. Turns are taken per resolved project root, so a refresh exports the
+ * catalog it built. Callers keep their own result: a turn that finds the
+ * catalog already at its content takes the no-rebuild path.
+ */
+const workingCatalogTurns = new Map<string, Promise<void>>();
+
+async function withWorkingCatalogTurn<T>(projectRoot: string, work: () => Promise<T>): Promise<T> {
+  const key = resolve(projectRoot);
+  const previous = workingCatalogTurns.get(key) ?? Promise.resolve();
+  const turn = previous.then(work);
+  const settled = turn.then(() => undefined, () => undefined);
+  workingCatalogTurns.set(key, settled);
+  try {
+    return await turn;
+  } finally {
+    if (workingCatalogTurns.get(key) === settled) workingCatalogTurns.delete(key);
+  }
+}
+
+/**
+ * The refresh most recently started or queued per project root, with the
+ * content it builds. A caller arriving for the SAME content (the common case:
+ * both read the same project files) shares its promise instead of queueing a
+ * second rebuild; a caller for other content (a dbt preparation that has just
+ * written a new manifest) queues its own turn, so no caller is ever answered
+ * with a catalog that lacks what it came to index. A forced caller (App Studio
+ * after writing App files) shares only a forced build, since it asked for a
+ * clean full rebuild, not an incremental one.
+ */
+interface InFlightMetadataRefresh {
+  fingerprint: string;
+  providerId: string;
+  force: boolean;
+  promise: Promise<EnsureMetadataCatalogResult>;
+}
+
+const inFlightMetadataRefreshes = new Map<string, InFlightMetadataRefresh>();
+
 export async function upgradeVectorIndexForProject(
   projectRoot: string,
   provider: EmbeddingProvider,
 ): Promise<{ upgraded: boolean; providerId: string; reason?: string }> {
-  const catalog = openMetadataCatalog(projectRoot);
-  try {
-    const result = await upgradeVectorIndexOnCatalog(catalog, provider);
-    // Re-export so the ACTIVE snapshot carries the new vectors. Without this the
-    // upgrade only ever touched the mutable working database, which the answer
-    // path never reads — so `POST /api/settings/embeddings/reindex` reported
-    // success while retrieval kept serving the hashed index.
-    if (result.upgraded) {
-      const fingerprint = catalog.state('fingerprint');
-      if (fingerprint) activateMetadataSnapshot(projectRoot, fingerprint, catalog);
+  return withWorkingCatalogTurn(projectRoot, async () => {
+    const catalog = openMetadataCatalog(projectRoot);
+    try {
+      const result = await upgradeVectorIndexOnCatalog(catalog, provider);
+      // Re-export so the ACTIVE snapshot carries the new vectors. Without this the
+      // upgrade only ever touched the mutable working database, which the answer
+      // path never reads — so `POST /api/settings/embeddings/reindex` reported
+      // success while retrieval kept serving the hashed index.
+      if (result.upgraded) {
+        const fingerprint = catalog.state('fingerprint');
+        if (fingerprint) activateMetadataSnapshot(projectRoot, fingerprint, catalog);
+      }
+      return result;
+    } finally {
+      catalog.close();
     }
-    return result;
-  } finally {
-    catalog.close();
-  }
+  });
 }
 
 export async function ensureMetadataCatalogFresh(
@@ -1324,18 +1434,49 @@ export async function ensureMetadataCatalogFresh(
   const manifest = options.manifest ?? loadAgentManifest(projectRoot);
   const skills = options.skills ?? loadSkills(projectRoot).skills;
   const snapshot = buildMetadataSnapshot(projectRoot, manifest, semanticLayer, skills, options.graphs);
+  // The snapshot write embeds with the sync hashed provider (better-sqlite3
+  // transactions cannot await), so a configured Ollama/OpenAI embedder can only
+  // be applied afterwards — and it must land BEFORE the export, since retrieval
+  // reads the exported snapshot. `searchVectorObjects` returns ZERO candidates
+  // when the requested provider id does not match the indexed one, so skipping
+  // this makes configuring a real embedder strictly worse than not configuring
+  // one: an empty vector lane instead of a weak one.
+  const vectorProvider = options.embeddingProvider ?? projectEmbeddingProvider(projectRoot);
+  const key = resolve(projectRoot);
+  const inFlight = inFlightMetadataRefreshes.get(key);
+  const force = Boolean(options.force);
+  if (
+    inFlight
+    && inFlight.fingerprint === snapshot.fingerprint
+    && inFlight.providerId === vectorProvider.id
+    && (!force || inFlight.force)
+  ) {
+    return inFlight.promise;
+  }
+  const promise = withWorkingCatalogTurn(
+    projectRoot,
+    () => refreshWorkingCatalog(projectRoot, snapshot, vectorProvider, force),
+  );
+  const record: InFlightMetadataRefresh = { fingerprint: snapshot.fingerprint, providerId: vectorProvider.id, force, promise };
+  inFlightMetadataRefreshes.set(key, record);
+  try {
+    return await promise;
+  } finally {
+    if (inFlightMetadataRefreshes.get(key) === record) inFlightMetadataRefreshes.delete(key);
+  }
+}
+
+/** One turn on the working catalog: rebuild it to `snapshot` if it is not there already, embed, export, point. */
+async function refreshWorkingCatalog(
+  projectRoot: string,
+  snapshot: MetadataSnapshot,
+  vectorProvider: EmbeddingProvider,
+  force: boolean,
+): Promise<EnsureMetadataCatalogResult> {
   const catalog = openMetadataCatalog(projectRoot);
   try {
     const existing = catalog.state('fingerprint');
     const compatibleIndex = catalog.state('index_version') === METADATA_INDEX_VERSION;
-    // The snapshot write embeds with the sync hashed provider (better-sqlite3
-    // transactions cannot await), so a configured Ollama/OpenAI embedder can only
-    // be applied afterwards — and it must land BEFORE the export, since retrieval
-    // reads the exported snapshot. `searchVectorObjects` returns ZERO candidates
-    // when the requested provider id does not match the indexed one, so skipping
-    // this makes configuring a real embedder strictly worse than not configuring
-    // one: an empty vector lane instead of a weak one.
-    const vectorProvider = options.embeddingProvider ?? projectEmbeddingProvider(projectRoot);
     const upgradeVectors = async (): Promise<void> => {
       const upgrade = upgradeVectorIndexOnCatalog(catalog, vectorProvider);
       pendingVectorUpgrades.set(projectRoot, upgrade.then(() => undefined, () => undefined));
@@ -1347,7 +1488,7 @@ export async function ensureMetadataCatalogFresh(
         new Promise((resolve) => setTimeout(resolve, VECTOR_UPGRADE_BUDGET_MS)),
       ]);
     };
-    if (!options.force && compatibleIndex && existing === snapshot.fingerprint) {
+    if (!force && compatibleIndex && existing === snapshot.fingerprint) {
       // The project content is unchanged but the CONFIGURED EMBEDDER may not be.
       // Without this, switching `ai.embeddings` never takes effect until an
       // unrelated dbt change happens to move the fingerprint.
@@ -1366,7 +1507,7 @@ export async function ensureMetadataCatalogFresh(
     // W3.4 — incremental reindex when prior state exists (only re-tokenizes changed
     // sources' FTS); `force` does a clean full rebuild. Proven equal to a full
     // rebuild by incremental-reindex.test.ts.
-    if (options.force || !compatibleIndex) {
+    if (force || !compatibleIndex) {
       catalog.rebuild(snapshot);
     } else {
       catalog.rebuildIncremental(snapshot);
@@ -4342,28 +4483,35 @@ export class MetadataCatalog {
   exportSnapshot(destination: string): void {
     mkdirSync(dirname(destination), { recursive: true });
     if (existsSync(destination)) return;
-    const candidate = `${destination}.candidate`;
-    rmSync(candidate, { force: true });
-    this.db.pragma('wal_checkpoint(TRUNCATE)');
-    this.db.prepare('VACUUM INTO ?').run(candidate);
-    const Database = loadDatabase();
-    const sealed = new Database(candidate);
+    // One candidate per export: two processes exporting the same name at once
+    // (a dbt preparation beside a server request) otherwise unlink and rename
+    // each other's half-written candidate, and the file that lands is cut short.
+    const candidate = `${destination}.${process.pid}-${randomUUID().slice(0, 8)}.candidate`;
     try {
-      sealed.exec(`
-        DELETE FROM context_packs;
-        DELETE FROM query_runs;
-        DELETE FROM runtime_schema_snapshots;
-        DELETE FROM runtime_schema_fts;
-        DELETE FROM runtime_schema_objects;
-        DELETE FROM runtime_value_fts;
-        DELETE FROM runtime_value_index;
-        VACUUM;
-      `);
-      sealed.pragma('journal_mode = DELETE');
-    } finally {
-      sealed.close();
+      this.db.pragma('wal_checkpoint(TRUNCATE)');
+      this.db.prepare('VACUUM INTO ?').run(candidate);
+      const Database = loadDatabase();
+      const sealed = new Database(candidate);
+      try {
+        sealed.exec(`
+          DELETE FROM context_packs;
+          DELETE FROM query_runs;
+          DELETE FROM runtime_schema_snapshots;
+          DELETE FROM runtime_schema_fts;
+          DELETE FROM runtime_schema_objects;
+          DELETE FROM runtime_value_fts;
+          DELETE FROM runtime_value_index;
+          VACUUM;
+        `);
+        sealed.pragma('journal_mode = DELETE');
+      } finally {
+        sealed.close();
+      }
+      renameSync(candidate, destination);
+    } catch (error) {
+      rmSync(candidate, { force: true });
+      throw error;
     }
-    renameSync(candidate, destination);
   }
 
   state(key: string): string | null {
