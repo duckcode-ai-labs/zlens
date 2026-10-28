@@ -404,8 +404,11 @@ a file or wrap with `2>&1 | tee dql-slack.log`.
 ### `zlens eval` fails in CI: a block example routes to generated
 
 A certified block's `examples` must be questions that block answers as
-written. The failing line names what happened, for example
-`route expected certified, got generated`. The usual causes:
+written. In Ask, an example question asked word for word (case, spacing and
+trailing punctuation aside) is answered by its block before any model reads
+it; `zlens eval` checks the examples the way the router reads them. The failing line
+names what happened, for example `route expected certified, got generated`.
+The usual causes:
 
 - The example names a member ("…for Matthew Meyer"). A certified block runs its
   SQL as written and cannot filter to one member, so Ask generates SQL. Reword

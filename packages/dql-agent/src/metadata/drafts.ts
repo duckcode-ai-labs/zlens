@@ -499,7 +499,8 @@ function renderGeneratedDraft(rec: GeneratedDraftRecord & { answerFingerprint?: 
     type = "custom"
     status = "draft"
     owner = "${escapeDqlString(rec.owner ?? '')}"
-    description = """${rec.question.replace(/"""/g, '\\"\\"\\"')}"""${outputs}
+    description = """${rec.question.replace(/"""/g, '\\"\\"\\"')}"""
+    examples = [{ question = "${escapeDqlString(rec.question.replace(/\s+/g, ' ').trim())}" }]${outputs}
 
     // Tier-2 generated proposal. This block is NOT certified.
     // Reviewer must validate filters, joins, grain, metric definition, lineage,
@@ -553,6 +554,8 @@ function stampGeneratedDqlArtifactDraft(
     `  proposed_contract_id = "${escapeDqlString(rec.proposedContractId)}"`,
     `  proposed_domain = "${escapeDqlString(rec.proposedDomain ?? '')}"`,
     `  source_question = "${escapeDqlString(rec.sourceQuestion ?? '')}"`,
+    // The question the answer was given for: certified, the block answers it before any model reads it.
+    /\bexamples\s*=/.test(sourceWithOwner) ? '' : `  examples = [{ question = "${escapeDqlString(rec.question.replace(/\s+/g, ' ').trim())}" }]`,
     `  source_block = "${escapeDqlString(rec.sourceBlock ?? '')}"`,
     `  followup_kind = "${escapeDqlString(rec.followupKind ?? '')}"`,
     `  context_pack_id = "${escapeDqlString(rec.contextPackId ?? '')}"`,

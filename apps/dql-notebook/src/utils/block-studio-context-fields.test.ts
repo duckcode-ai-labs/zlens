@@ -73,3 +73,28 @@ describe('Block Studio context fields', () => {
     expect(block(source).caveats).toEqual(['Excludes refunds', 'Excludes test stores']);
   });
 });
+
+describe('Questions it answers (examples)', () => {
+  it('writes the questions as examples the block parser reads, with the other fields', async () => {
+    const { blockExampleQuestions, setBlockExampleQuestions } = await import('./block-studio.js');
+    const source = setBlockExampleQuestions(SAVED, ['Which stores take the most orders?', ' Orders per store, by location ', 'Which stores take the most orders?']);
+    expect(source).toContain('examples = [{ question = "Which stores take the most orders?" }, { question = "Orders per store, by location" }]');
+    expect(source.indexOf('examples =')).toBeLessThan(source.indexOf('query ='));
+    expect(block(source).examples).toEqual([{ question: 'Which stores take the most orders?' }, { question: 'Orders per store, by location' }]);
+    expect(blockExampleQuestions(source)).toEqual(['Which stores take the most orders?', 'Orders per store, by location']);
+  });
+
+  it('keeps the SQL an example carried, escapes quotes, and removes the field when the last question goes', async () => {
+    const { blockExampleQuestions, setBlockExampleQuestions } = await import('./block-studio.js');
+    const withSql = SAVED.replace('tags = ["orders", "stores"]', 'tags = ["orders", "stores"]\n  examples = [{ question = "Orders per store", sql = "SELECT 1" }, { question = "Old question" }]');
+    const edited = setBlockExampleQuestions(withSql, ['Orders per store', 'Say "hi" to stores']);
+    expect(edited).toContain('examples = [{ question = "Orders per store", sql = "SELECT 1" }, { question = "Say \\"hi\\" to stores" }]');
+    expect(edited).not.toContain('Old question');
+    expect(blockExampleQuestions(edited)).toEqual(['Orders per store', 'Say "hi" to stores']);
+    expect(block(edited).examples).toEqual([{ question: 'Orders per store', sql: 'SELECT 1' }, { question: 'Say "hi" to stores' }]);
+    const cleared = setBlockExampleQuestions(edited, []);
+    expect(cleared).not.toMatch(/examples/);
+    expect(block(cleared).examples).toBeUndefined();
+    expect(setBlockExampleQuestions(SAVED, [])).toBe(SAVED);
+  });
+});

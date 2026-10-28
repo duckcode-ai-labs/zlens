@@ -8,6 +8,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Ask: a certified block answers the question it was certified for
+
+- **The question a block records is its own.** A certified block's
+  `examples` (and a description that is the question verbatim) now settle
+  the route before any model reads the question: asked word for word, in any
+  case, spacing or trailing punctuation, the question is answered by that
+  block as Certified. Until now the certified tier matched only the model's
+  reading, so the same words came back Certified one run and AI-generated
+  the next (live gate W1, round 4: the model read "Which adjusters handle the
+  most open claims?" as claim rows, and no block entails that). Two certified
+  blocks recording the same question leave the choice to the meaning-based
+  match, which still runs second for every other question.
+- **The question is recorded for you.** "Make this a certified answer" and
+  the review draft an Ask answer leaves both write the question as the
+  block's first example; Block Studio edits the list under Context as
+  "Questions it answers".
+
 ## v0.2.10 - 2026-10-27
 
 Sign in with your Claude or ChatGPT subscription when ZLens runs somewhere

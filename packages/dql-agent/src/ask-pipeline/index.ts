@@ -8,6 +8,7 @@ export * from './prior-values.js';
 export * from './prepare/index.js';
 export * from './prepare/sql-checks.js';
 export * from './named-blocks.js';
+export * from './certified-question.js';
 export * from './execute.js';
 export * from './outcomes.js';
 export * from './policies.js';

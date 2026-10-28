@@ -28562,6 +28562,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const prefill = prefillCertificationMetadata(cleanedSource, {
           sql: typeof body.sql === 'string' ? body.sql : undefined,
           columns: Array.isArray(body.columns) ? (body.columns as unknown[]).filter((column): column is string => typeof column === 'string') : undefined,
+          // The question the answer was given for is recorded as the block's example: certified, it answers that question first.
+          question: typeof body.question === 'string' ? body.question : undefined,
           knownRelations: knownRelationKeys(projectRoot),
           owner: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot)),
           entities: semanticEntitiesForSource(cleanedSource, semanticLayer),

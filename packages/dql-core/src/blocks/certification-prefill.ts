@@ -26,6 +26,12 @@ export interface CertificationPrefillHints {
   sourceSystemFor?: (table: string) => string | undefined;
   /** Keys and columns known for the tables the SQL reads (from the warehouse catalog or dbt), used to name the key to add. */
   knownRelations?: RelationKeyKnowledge[];
+  /**
+   * The question the answer was given for (a request's question, an Ask
+   * turn). Recorded as the block's first example, so once certified the block
+   * answers that question before any model reads it.
+   */
+  question?: string;
 }
 
 export interface CertificationSuggestion {
@@ -89,12 +95,14 @@ export function prefillCertificationMetadata(source: string, hints: Certificatio
   }
   if (!/\btests\s*\{/i.test(source)) propose('tests', DEFAULT_TEST);
   if (hints.owner?.trim() && !hasValue(source, 'owner')) propose('owner', hints.owner.trim());
+  const question = hints.question?.replace(/\s+/g, ' ').trim();
+  if (question && !hasExamples(source)) propose('examples', [question]);
 
   if (suggested.length === 0) return withGap({ source, suggested, unknown });
 
   const fieldLines = suggested
     .filter((entry) => entry.field !== 'tests')
-    .map((entry) => `  ${entry.field} = ${render(entry.value)}`);
+    .map((entry) => `  ${entry.field} = ${renderField(entry.field, entry.value)}`);
   const marker = `  // Suggested by DQL from this answer. Review each value before you certify: ${suggested.map((entry) => entry.field).join(', ')}.`;
 
   let next = source;
@@ -103,8 +111,8 @@ export function prefillCertificationMetadata(source: string, hints: Certificatio
     if (entry.field === 'tests') continue;
     const empty = new RegExp(`^([ \\t]*)${entry.field}[ \\t]*=[ \\t]*(?:""|\\[[ \\t]*\\])[ \\t]*$`, 'm');
     if (empty.test(next)) {
-      next = next.replace(empty, `$1${entry.field} = ${render(entry.value)}`);
-      const at = fieldLines.indexOf(`  ${entry.field} = ${render(entry.value)}`);
+      next = next.replace(empty, `$1${entry.field} = ${renderField(entry.field, entry.value)}`);
+      const at = fieldLines.indexOf(`  ${entry.field} = ${renderField(entry.field, entry.value)}`);
       if (at >= 0) fieldLines.splice(at, 1);
     }
   }
@@ -121,6 +129,17 @@ export function prefillCertificationMetadata(source: string, hints: Certificatio
 
 function render(value: string | string[]): string {
   return Array.isArray(value) ? `[${value.map((item) => JSON.stringify(item)).join(', ')}]` : JSON.stringify(value);
+}
+
+/** `examples` holds the questions the block answers, each as `{ question = "…" }`; every other field is a string or a list of strings. */
+function renderField(field: string, value: string | string[]): string {
+  if (field !== 'examples') return render(value);
+  const questions = Array.isArray(value) ? value : [value];
+  return `[${questions.map((question) => `{ question = ${JSON.stringify(question)} }`).join(', ')}]`;
+}
+
+function hasExamples(source: string): boolean {
+  return /\bexamples\s*=\s*\[\s*\{/i.test(source);
 }
 
 function hasValue(source: string, key: string): boolean {
