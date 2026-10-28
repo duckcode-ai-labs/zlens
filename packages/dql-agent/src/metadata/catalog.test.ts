@@ -13,6 +13,7 @@ import {
   ensureMetadataCatalogFresh,
   MetadataCatalog,
   latestRuntimeSchemaSnapshotForProject,
+  metadataSnapshotPath,
   openMetadataCatalog,
   planAgentAnswer,
   recordRuntimeSchemaSnapshot,
@@ -27,7 +28,7 @@ import {
 } from './catalog.js';
 import { buildAnalysisQuestionPlan } from './analysis-planner.js';
 import { buildBlockBusinessFingerprint, buildBlockSqlFingerprints } from './block-fingerprints.js';
-import { resolveSemanticLayerWithDiagnostics, SemanticLayer, type DQLManifest } from '@zlens/core';
+import { buildManifest, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics, SemanticLayer, type DQLManifest } from '@zlens/core';
 import { recordCorrectionTrace, reviewHint } from '../hints/git-store.js';
 import { HashedTokenEmbeddingProvider } from '../embeddings/provider.js';
 import { defaultKgPath, reindexProject } from '../index.js';
@@ -635,6 +636,125 @@ describe('local metadata catalog', () => {
     } finally {
       lease.release();
     }
+  });
+
+  it('two refreshes of the same changed project at once rebuild the working catalog once and share the result', async () => {
+    // A draft space's first requests arrive together (the preparation job a dbt Apply starts after its
+    // response, beside an App Studio request, which forces a refresh after writing App files): both read the
+    // same project files, which differ from what the working catalog holds. One rebuild happens, both callers
+    // get the snapshot it activated, and an acquire at the pointer is never refused (ZLens Enterprise kept-up
+    // sandbox run 40724556538, W2 B6).
+    await ensureMetadataCatalogFresh(projectRoot);
+    addGenericAthleteBoxScoreModel(projectRoot, 'snapshot_shared_rebuild');
+    const fullRebuilds = vi.spyOn(MetadataCatalog.prototype, 'rebuild');
+    const incrementalRebuilds = vi.spyOn(MetadataCatalog.prototype, 'rebuildIncremental');
+    try {
+      const [a, b] = await Promise.all([
+        ensureMetadataCatalogFresh(projectRoot, { force: true }),
+        ensureMetadataCatalogFresh(projectRoot, { force: true }),
+      ]);
+      expect(fullRebuilds.mock.calls.length + incrementalRebuilds.mock.calls.length).toBe(1);
+      expect(a.refreshed).toBe(true);
+      expect(b.fingerprint).toBe(a.fingerprint);
+      expect(b.snapshotPath).toBe(a.snapshotPath);
+      for (const result of [a, b]) {
+        const sealed = new MetadataCatalog(result.snapshotPath!, { readOnly: true });
+        try {
+          expect(sealed.state('fingerprint')).toBe(result.fingerprint);
+          expect(sealed.getObject('dbt:model:snapshot_shared_rebuild')).toMatchObject({ objectType: 'dbt_model' });
+        } finally {
+          sealed.close();
+        }
+      }
+      const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+      try {
+        expect(lease.snapshotId).toBe(a.fingerprint);
+      } finally {
+        lease.release();
+      }
+    } finally {
+      fullRebuilds.mockRestore();
+      incrementalRebuilds.mockRestore();
+    }
+    // A refresh that arrives for OTHER content (a dbt preparation that has just written a new manifest)
+    // takes its own turn after the one in flight instead of sharing a result that lacks what it came for.
+    const stale = ensureMetadataCatalogFresh(projectRoot);
+    addGenericAthleteBoxScoreModel(projectRoot, 'snapshot_written_during_refresh');
+    const [, newer] = await Promise.all([stale, ensureMetadataCatalogFresh(projectRoot)]);
+    const newerLease = acquireActiveKnowledgeSnapshot(projectRoot);
+    try {
+      expect(newerLease.snapshotId).toBe(newer.fingerprint);
+      expect(newerLease.catalog.getObject('dbt:model:snapshot_written_during_refresh')).toMatchObject({ objectType: 'dbt_model' });
+    } finally {
+      newerLease.release();
+    }
+  });
+
+  it('the active pointer names what its file holds when another process moved the catalog under the export', async () => {
+    // Turns are taken inside one process only. Another process on the same project (a `zlens` command
+    // beside the server) can still rebuild the working catalog between the export's name being chosen and
+    // the export itself, so the file named for X holds Y. The pointer is written for what the file holds,
+    // read back from the file, and the file is moved to the name Y maps to: an acquire is not refused.
+    const originalExport = MetadataCatalog.prototype.exportSnapshot;
+    const exportedNames: string[] = [];
+    let otherBuildFingerprint = '';
+    const exportSpy = vi.spyOn(MetadataCatalog.prototype, 'exportSnapshot')
+      .mockImplementationOnce(function (this: MetadataCatalog, destination: string) {
+        exportedNames.push(destination);
+        addGenericAthleteBoxScoreModel(projectRoot, 'snapshot_from_another_process');
+        const otherBuild = buildMetadataSnapshot(projectRoot, buildManifest({
+          projectRoot,
+          dbtManifestPath: resolveDbtManifestPath(projectRoot) ?? undefined,
+        }));
+        otherBuildFingerprint = otherBuild.fingerprint;
+        const otherProcess = openMetadataCatalog(projectRoot);
+        try {
+          otherProcess.rebuild(otherBuild);
+        } finally {
+          otherProcess.close();
+        }
+        return originalExport.call(this, destination);
+      });
+    let activated: Awaited<ReturnType<typeof ensureMetadataCatalogFresh>>;
+    try {
+      activated = await ensureMetadataCatalogFresh(projectRoot);
+    } finally {
+      exportSpy.mockRestore();
+    }
+    // The export was named for the caller's build, but the file it wrote holds the other build.
+    expect(exportedNames).toHaveLength(1);
+    expect(exportedNames[0]).not.toBe(activated.snapshotPath);
+    expect(activated.fingerprint).toBe(otherBuildFingerprint);
+    expect(activated.snapshotPath).toBe(metadataSnapshotPath(projectRoot, otherBuildFingerprint));
+    const pointer = JSON.parse(readFileSync(join(projectRoot, '.dql', 'cache', 'active-snapshot.json'), 'utf-8')) as {
+      snapshotId: string;
+      snapshotPath: string;
+    };
+    expect(pointer).toMatchObject({ snapshotId: activated.fingerprint, snapshotPath: activated.snapshotPath });
+    // The misnamed file was moved, not copied: the name chosen for the caller's build is free again.
+    expect(existsSync(exportedNames[0])).toBe(false);
+    const sealed = new MetadataCatalog(activated.snapshotPath!, { readOnly: true });
+    try {
+      expect(sealed.state('fingerprint')).toBe(activated.fingerprint);
+    } finally {
+      sealed.close();
+    }
+    const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+    try {
+      expect(lease.snapshotId).toBe(activated.fingerprint);
+      expect(lease.catalog.getObject('dbt:model:snapshot_from_another_process')).toMatchObject({ objectType: 'dbt_model' });
+    } finally {
+      lease.release();
+    }
+
+    // A pointer that really does name another fingerprint than its file holds, and does not move, is still
+    // refused: a corrupt cache stays visible.
+    writeFileSync(join(projectRoot, '.dql', 'cache', 'active-snapshot.json'), JSON.stringify({
+      snapshotId: 'not-what-the-file-holds',
+      snapshotPath: activated.snapshotPath,
+    }));
+    expect(() => acquireActiveKnowledgeSnapshot(projectRoot)).toThrow(/Active metadata snapshot pointer mismatch/);
+    expect(activeKnowledgeSnapshotLeaseCount()).toBe(0);
   });
 
   it('ID-001 resolves canonical semantic identities and fails closed on ambiguous aliases', async () => {

@@ -161,11 +161,13 @@ const EXPECTED_TEST_FILES = 191;
 // (catalog.test.ts, +1; ZLens Enterprise gate round 4).
 // 2605 with a certified block answering the question it was certified for, before any model reads it
 // (certified-question.test.ts, +14).
-const EXPECTED_TESTS = 2605;
-// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 74 + project-state.test.ts 4), pinned so
+// 2607 with one metadata refresh at a time per project and the active pointer naming what its file holds
+// (catalog.test.ts, +2; ZLens Enterprise kept-up sandbox run 40724556538, W2 B6).
+const EXPECTED_TESTS = 2607;
+// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2497.
-const EXPECTED_HEAVY_TESTS = 78;
+// The ordinary lane's share is the difference: 2527.
+const EXPECTED_HEAVY_TESTS = 80;
 
 const LANES = ['all', 'ordinary', 'heavy'];
 function requestedLane() {
