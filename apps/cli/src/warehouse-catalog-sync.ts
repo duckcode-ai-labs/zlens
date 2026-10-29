@@ -65,11 +65,26 @@ export function buildWarehouseCatalogQueries(driver: string, scope: { catalogOrD
   }
   if (d === 'postgres' || d === 'postgresql' || d === 'redshift') {
     const rel = `format('%I.%I', c.table_schema, c.table_name)::regclass`;
-    return [
+    const columnsAndTables: CatalogQuery[] = [
       { kind: 'columns', catalogOrDatabase: db, sql: `SELECT c.table_catalog, c.table_schema, c.table_name, c.column_name, c.data_type, c.is_nullable, col_description(${rel}, c.ordinal_position) AS comment FROM information_schema.columns c WHERE ${schemaFilter('c.table_schema')} ORDER BY c.table_schema, c.table_name, c.ordinal_position LIMIT ${MAX_ROWS}` },
       { kind: 'tables', catalogOrDatabase: db, sql: `SELECT c.table_catalog, c.table_schema, c.table_name, c.table_type, obj_description(${rel}, 'pg_class') AS comment FROM information_schema.tables c WHERE ${schemaFilter('c.table_schema')}` },
-      { kind: 'views', catalogOrDatabase: db, sql: `SELECT table_catalog, table_schema, table_name, view_definition FROM information_schema.views WHERE ${schemaFilter('table_schema')}` },
-      { kind: 'keys', catalogOrDatabase: db, sql: `SELECT tc.constraint_type, tc.constraint_name, kcu.table_schema, kcu.table_name, kcu.column_name, kcu.ordinal_position AS position, ref.table_schema AS ref_schema, ref.table_name AS ref_table, ref.column_name AS ref_column FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema LEFT JOIN information_schema.referential_constraints rc ON tc.constraint_type = 'FOREIGN KEY' AND rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.constraint_schema LEFT JOIN information_schema.key_column_usage ref ON ref.constraint_name = rc.unique_constraint_name AND ref.constraint_schema = rc.unique_constraint_schema AND ref.ordinal_position = kcu.position_in_unique_constraint WHERE tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') AND ${schemaFilter('kcu.table_schema')} ORDER BY kcu.table_schema, kcu.table_name, tc.constraint_name, kcu.ordinal_position` },
+    ];
+    if (d === 'redshift') {
+      // Redshift has no LATERAL unnest over pg_constraint arrays: it keeps the
+      // information_schema reads.
+      return [
+        ...columnsAndTables,
+        { kind: 'views', catalogOrDatabase: db, sql: `SELECT table_catalog, table_schema, table_name, view_definition FROM information_schema.views WHERE ${schemaFilter('table_schema')}` },
+        { kind: 'keys', catalogOrDatabase: db, sql: `SELECT tc.constraint_type, tc.constraint_name, kcu.table_schema, kcu.table_name, kcu.column_name, kcu.ordinal_position AS position, ref.table_schema AS ref_schema, ref.table_name AS ref_table, ref.column_name AS ref_column FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name AND kcu.constraint_schema = tc.constraint_schema LEFT JOIN information_schema.referential_constraints rc ON tc.constraint_type = 'FOREIGN KEY' AND rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.constraint_schema LEFT JOIN information_schema.key_column_usage ref ON ref.constraint_name = rc.unique_constraint_name AND ref.constraint_schema = rc.unique_constraint_schema AND ref.ordinal_position = kcu.position_in_unique_constraint WHERE tc.constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') AND ${schemaFilter('kcu.table_schema')} ORDER BY kcu.table_schema, kcu.table_name, tc.constraint_name, kcu.ordinal_position` },
+      ];
+    }
+    // Postgres: keys and view SQL come from pg_catalog. information_schema
+    // shows constraints, and a view's definition, only to the table's owner,
+    // so a read-only login (the role the docs recommend) would read none.
+    return [
+      ...columnsAndTables,
+      { kind: 'views', catalogOrDatabase: db, sql: `SELECT current_database() AS table_catalog, n.nspname AS table_schema, c.relname AS table_name, pg_get_viewdef(c.oid) AS view_definition FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${schemaFilter('n.nspname')}` },
+      { kind: 'keys', catalogOrDatabase: db, sql: `SELECT CASE con.contype WHEN 'p' THEN 'PRIMARY KEY' ELSE 'FOREIGN KEY' END AS constraint_type, con.conname AS constraint_name, n.nspname AS table_schema, c.relname AS table_name, a.attname AS column_name, k.position, rn.nspname AS ref_schema, rc.relname AS ref_table, ra.attname AS ref_column FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid = con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace CROSS JOIN LATERAL unnest(con.conkey, con.confkey) WITH ORDINALITY AS k(attnum, ref_attnum, position) JOIN pg_catalog.pg_attribute a ON a.attrelid = con.conrelid AND a.attnum = k.attnum LEFT JOIN pg_catalog.pg_class rc ON rc.oid = con.confrelid LEFT JOIN pg_catalog.pg_namespace rn ON rn.oid = rc.relnamespace LEFT JOIN pg_catalog.pg_attribute ra ON ra.attrelid = con.confrelid AND ra.attnum = k.ref_attnum WHERE con.contype IN ('p', 'f') AND ${schemaFilter('n.nspname')} ORDER BY n.nspname, c.relname, con.conname, k.position` },
     ];
   }
   if (d === 'snowflake') {

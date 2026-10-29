@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### PostgreSQL: a read-only login reads keys and view SQL
+
+- **`zlens sync warehouse` on PostgreSQL now reads declared primary and
+  foreign keys and view definitions with a SELECT-only login**, the role the
+  docs recommend. They came from `information_schema`, which shows a table's
+  constraints and a view's SQL only to its owner, so a read-only login got
+  none and the sync did not say so. Discovery then drafted joins from column
+  names alone: it missed a foreign key whose names differ
+  (`orders.buyer_id → customers.customer_id`) and could pass a join between
+  two unrelated columns that share a name. Keys and views are now read from
+  `pg_catalog`, which any login with `USAGE` on the schema can see; composite
+  keys keep their column order. Redshift still reads `information_schema`.
+
 ### Ask: a certified block answers the question it was certified for
 
 - **The question a block records is its own.** A certified block's
