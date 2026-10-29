@@ -62,7 +62,7 @@ describe('assembling a warehouse catalog from metadata rows', () => {
     expect(orders.foreignKeys).toEqual([{ columns: ['CUSTOMER_ID'], references: { relation: 'ACME.SALES.CUSTOMERS', columns: ['CUSTOMER_ID'] }, name: 'FK_ORDERS_CUSTOMER' }]);
   });
 
-  it('Postgres: keys from information_schema with the referenced side resolved', () => {
+  it('Postgres: a composite primary key in key order, and a foreign key with the referenced side resolved', () => {
     const queries = buildWarehouseCatalogQueries('postgres', { catalogOrDatabase: 'app', schemas: ['public'] });
     const byKind = (kind: string) => queries.find((query) => query.kind === kind)!;
     const relations = assembleWarehouseCatalog('postgres', [
@@ -78,6 +78,47 @@ describe('assembling a warehouse catalog from metadata rows', () => {
     ]);
     expect(relations[0]).toMatchObject({ relation: 'app.public.line_items', primaryKey: ['order_id', 'line_no'] });
     expect(relations[0]!.foreignKeys).toEqual([{ columns: ['order_id'], references: { relation: 'public.orders', columns: ['id'] }, name: 'line_items_order_fk' }]);
+  });
+
+  it('Postgres: keys and view SQL come from pg_catalog, which a read-only login can read', () => {
+    // information_schema.table_constraints and views.view_definition show a
+    // table's constraints and a view's SQL only to its owner.
+    const queries = buildWarehouseCatalogQueries('postgresql', { catalogOrDatabase: 'shop', schemas: ['sales'] });
+    const byKind = (kind: string) => queries.find((query) => query.kind === kind)!;
+    expect(queries.map((query) => query.kind)).toEqual(['columns', 'tables', 'views', 'keys']);
+    expect(byKind('keys').sql).toContain('pg_catalog.pg_constraint');
+    expect(byKind('keys').sql).toContain("UPPER(n.nspname) IN (UPPER('sales'))");
+    expect(byKind('views').sql).toContain('pg_get_viewdef(c.oid)');
+    for (const kind of ['keys', 'views']) expect(byKind(kind).sql).not.toContain('information_schema');
+    // Rows as Postgres 16 returns them to a SELECT-only role: a composite
+    // foreign key unnests to one row per column pair, in key order.
+    const relations = assembleWarehouseCatalog('postgresql', [
+      { query: byKind('columns'), rows: [
+        { table_catalog: 'shop', table_schema: 'sales', table_name: 'shipments', column_name: 'shipment_id', data_type: 'text', is_nullable: 'NO', comment: null },
+        { table_catalog: 'shop', table_schema: 'sales', table_name: 'shipments', column_name: 'order_id', data_type: 'text', is_nullable: 'YES', comment: null },
+        { table_catalog: 'shop', table_schema: 'sales', table_name: 'shipments', column_name: 'line_no', data_type: 'integer', is_nullable: 'YES', comment: null },
+        { table_catalog: 'shop', table_schema: 'sales', table_name: 'open_shipments', column_name: 'shipment_id', data_type: 'text', is_nullable: 'YES', comment: null },
+      ] },
+      { query: byKind('tables'), rows: [{ table_catalog: 'shop', table_schema: 'sales', table_name: 'open_shipments', table_type: 'VIEW', comment: null }] },
+      { query: byKind('views'), rows: [{ table_catalog: 'shop', table_schema: 'sales', table_name: 'open_shipments', view_definition: ' SELECT shipments.shipment_id\n   FROM sales.shipments;' }] },
+      { query: byKind('keys'), rows: [
+        { constraint_type: 'FOREIGN KEY', constraint_name: 'shipments_line_fk', table_schema: 'sales', table_name: 'shipments', column_name: 'order_id', position: '1', ref_schema: 'sales', ref_table: 'order_items', ref_column: 'order_id' },
+        { constraint_type: 'FOREIGN KEY', constraint_name: 'shipments_line_fk', table_schema: 'sales', table_name: 'shipments', column_name: 'line_no', position: '2', ref_schema: 'sales', ref_table: 'order_items', ref_column: 'line_no' },
+        { constraint_type: 'PRIMARY KEY', constraint_name: 'shipments_pkey', table_schema: 'sales', table_name: 'shipments', column_name: 'shipment_id', position: '1', ref_schema: null, ref_table: null, ref_column: null },
+      ] },
+    ]);
+    const byName = Object.fromEntries(relations.map((relation) => [relation.name, relation]));
+    expect(byName.shipments).toMatchObject({ relation: 'shop.sales.shipments', primaryKey: ['shipment_id'] });
+    expect(byName.shipments!.foreignKeys).toEqual([{ columns: ['order_id', 'line_no'], references: { relation: 'sales.order_items', columns: ['order_id', 'line_no'] }, name: 'shipments_line_fk' }]);
+    expect(byName.open_shipments).toMatchObject({ kind: 'view', viewSql: expect.stringContaining('FROM sales.shipments') });
+  });
+
+  it('Redshift keeps reading keys and views from information_schema', () => {
+    const queries = buildWarehouseCatalogQueries('redshift', { catalogOrDatabase: 'dw', schemas: ['sales'] });
+    const byKind = (kind: string) => queries.find((query) => query.kind === kind)!;
+    expect(byKind('keys').sql).toContain('information_schema.table_constraints');
+    expect(byKind('views').sql).toContain('information_schema.views');
+    expect(queries.some((query) => query.sql.includes('LATERAL'))).toBe(false);
   });
 
   it('Databricks: Unity Catalog information_schema, informational keys, catalog-qualified relations', () => {
