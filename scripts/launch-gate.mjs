@@ -3,7 +3,7 @@
 //
 //   node scripts/launch-gate.mjs [--out <dir>] [--tarballs <dir>] [--only dbt,warehouse,create]
 //                                [--port <first port>] [--python <bin>]
-//                                [--npm system,12] [--node <dir of a node binary>]
+//                                [--npm system,12,bundled:<node dir>] [--node <dir of a node binary>]
 //
 // It packs the release from this checkout (the same tarballs `npm publish`
 // would upload), serves them from a local registry, and then follows the
@@ -17,7 +17,9 @@
 // unless package.json allows them, which left better-sqlite3 without its
 // native binary in 0.2.0; a gate on npm 10 alone could not see it. npm 12
 // needs Node ^22.22.2 || ^24.15.0 || >=26: when the gate's own Node is older,
-// pass --node <folder with a newer node binary>.
+// pass --node <folder with a newer node binary>. A `bundled:<node dir>` lane
+// runs that Node with the npm it ships with, for a Node line the other lanes do
+// not cover (the release gate adds Node 26 LTS this way).
 
 import { spawn } from 'node:child_process';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -75,7 +77,7 @@ export function parseGateArguments(argv, now = new Date()) {
     else if (arg === '--python') options.python = value();
     else if (arg === '--npm') {
       const lanes = value().split(',').map((part) => part.trim()).filter(Boolean);
-      for (const lane of lanes) if (lane !== 'system' && !/^\d+(\.\d+){0,2}$/.test(lane)) throw new Error(`Unknown --npm lane: ${lane} (use system, or an npm version such as 12)`);
+      for (const lane of lanes) if (lane !== 'system' && !/^\d+(\.\d+){0,2}$/.test(lane) && !/^bundled:.+/.test(lane)) throw new Error(`Unknown --npm lane: ${lane} (use system, an npm version such as 12, or bundled:<folder with a node binary>)`);
       if (lanes.length === 0) throw new Error('--npm needs at least one lane.');
       options.npm = [...new Set(lanes)];
     } else if (arg === '--node') options.node = path.resolve(value());
@@ -317,8 +319,10 @@ async function packTarballs(gate, options) {
 
 /** Loads better-sqlite3 from the project and opens a database: what every ZLens store does first. */
 const LOAD_SQLITE = `node -e "const D = require('better-sqlite3'); new D(':memory:').close(); console.log('better-sqlite3 loads')"`;
-/** Loads the DuckDB driver from .dql/connectors, as the connector does. */
-const LOAD_DUCKDB = `node -e "const d = require('./.dql/connectors/node_modules/duckdb'); new d.Database(':memory:').close(); console.log('duckdb loads')"`;
+/** Loads the DuckDB driver from .dql/connectors, as the connector does, and says which DuckDB it is. */
+const LOAD_DUCKDB = `node -e "const { DuckDBInstance } = require('./.dql/connectors/node_modules/@duckdb/node-api'); DuckDBInstance.create(':memory:').then(async (db) => { const c = await db.connect(); const r = await c.runAndReadAll('SELECT version() AS v'); console.log('duckdb loads ' + r.getRows()[0][0]); c.closeSync(); db.closeSync(); }).catch((e) => { console.error(e); process.exit(1); })"`;
+/** The DuckDB line ZLens reads (RFC 0011): a driver from another line is a failed row. */
+const DUCKDB_LINE = /duckdb loads v1\.5\./;
 const BLOCKED_SCRIPTS = /install-scripts[^\n]*(better-sqlite3|duckdb)@/g;
 
 /** The `zlens x.y.z` line of `npx zlens --version` (npm 12 also prints "npm notice run …" lines). */
@@ -340,6 +344,21 @@ function blockedScripts(output) {
 async function prepareLanes(gate, options, { registryUrl, shims }) {
   const lanes = [];
   for (const spec of options.npm) {
+    if (spec.startsWith('bundled:')) {
+      let lane = null;
+      await gate.check('machine', `${spec} lane: that Node with the npm it ships with`, async () => {
+        const given = spec.slice('bundled:'.length);
+        const nodeDir = statSync(given).isDirectory() ? given : path.dirname(given);
+        const { env, removed } = cleanEnv({ out: gate.out, registryUrl, shims, prepend: [nodeDir] });
+        const npmVersion = (await sh('npm --version', { cwd: gate.out, env })).output.trim();
+        const nodeVersion = (await sh('node --version', { cwd: gate.out, env })).output.trim();
+        const major = nodeVersion.replace(/^v/, '').split('.')[0];
+        lane = { id: `node${major}`, label: `node ${major}`, npmVersion, nodeVersion, env, removed };
+        return `npm ${npmVersion} on node ${nodeVersion} (${nodeDir})`;
+      });
+      if (lane) lanes.push(lane);
+      continue;
+    }
     if (spec === 'system') {
       const { env, removed } = cleanEnv({ out: gate.out, registryUrl, shims });
       const npmVersion = (await sh('npm --version', { cwd: gate.out, env })).output.trim();
@@ -501,19 +520,17 @@ async function sampleFlow(gate, sample, ctx, lane) {
     return 'opens an in-memory database';
   }, { evidence: `logs/${logName('native')}` });
 
-  await gate.check(area, 'npm install --prefix .dql/connectors duckdb', async () => {
-    const result = await run('npm install --prefix .dql/connectors duckdb', 'duckdb');
-    expectRun(result, 'duckdb driver install');
-    const duckdb = JSON.parse(readFileSync(path.join(projectDir, '.dql', 'connectors', 'node_modules', 'duckdb', 'package.json'), 'utf8')).version;
-    const blocked = blockedScripts(result.output);
-    return `duckdb ${duckdb}${blocked.includes('duckdb') ? '; npm blocked its install script (ZLens allows and rebuilds it on sync / notebook start)' : ''}`;
-  }, { evidence: `logs/${logName('duckdb')}` });
-
+  // No driver step: `npm run sync` (a warehouse sync) or `npm run notebook`
+  // installs @duckdb/node-api into .dql/connectors the first time (RFC 0011).
+  const driverPackageJson = path.join(projectDir, '.dql', 'connectors', 'node_modules', '@duckdb', 'node-api', 'package.json');
   await gate.check(area, 'npm run sync', async () => {
     const result = await run('npm run sync', 'sync');
     if (sample === 'dbt') expectRun(result, 'npm run sync', { contains: /✓ dbt sync complete/ });
     else expectRun(result, 'npm run sync', { contains: /✓ Warehouse catalog: 13 relation\(s\)/ });
-    return result.output.trim().split('\n').filter((line) => line.includes('✓')).slice(-1)[0]?.trim() ?? '';
+    const last = result.output.trim().split('\n').filter((line) => line.includes('✓')).slice(-1)[0]?.trim() ?? '';
+    if (sample === 'dbt') return last;
+    if (!existsSync(driverPackageJson)) throw new Error('the warehouse sync did not install @duckdb/node-api into .dql/connectors');
+    return `${last}; installed @duckdb/node-api ${JSON.parse(readFileSync(driverPackageJson, 'utf8')).version}`;
   }, { evidence: `logs/${logName('sync')}` });
 
   await gate.check(area, 'npm run validate', async () => {
@@ -526,15 +543,15 @@ async function sampleFlow(gate, sample, ctx, lane) {
   let workbench = null;
   const started = await gate.check(area, 'npm run notebook (Notebook ready)', async () => {
     workbench = await startWorkbench({ cwd: projectDir, env, port, logFile: log('notebook') });
-    const repaired = /rebuilding it/.test(workbench.output()) ? '; ZLens rebuilt the DuckDB driver npm had installed without its binary' : '';
-    return `${workbench.url} (README: 3474; the gate uses a free port and passes --port)${repaired}`;
+    const installed = /Installing the DuckDB driver/.test(workbench.output()) ? '; installed the DuckDB driver on start' : '';
+    return `${workbench.url} (README: 3474; the gate uses a free port and passes --port)${installed}`;
   }, { evidence: `logs/${logName('notebook')}` });
   if (!started) return;
 
-  await gate.check(area, 'DuckDB driver native binary loads (.dql/connectors)', async () => {
+  await gate.check(area, 'DuckDB driver loads from .dql/connectors (DuckDB 1.5)', async () => {
     const result = await run(LOAD_DUCKDB, 'native');
-    expectRun(result, 'require .dql/connectors duckdb + open :memory:');
-    return 'opens an in-memory database';
+    expectRun(result, 'require .dql/connectors @duckdb/node-api + open :memory:', { contains: DUCKDB_LINE });
+    return `${result.output.trim().split('\n').find((line) => line.startsWith('duckdb loads'))}; no source build`;
   }, { evidence: `logs/${logName('native')}` });
 
   const runtimeEnv = { ...env, ZLENS_RUNTIME_URL: workbench.url };
@@ -619,13 +636,14 @@ async function createFlow(gate, ctx, lane) {
     expectRun(await sh(LOAD_SQLITE, { cwd: appDir, env, logFile: log }), 'require better-sqlite3 + open :memory:');
     return `${versionLine(zlens.output)}; better-sqlite3 opens a database`;
   }, { evidence: `logs/${logName}` }))) return;
-  await gate.check(area, 'printed driver step: npm install --prefix .dql/connectors duckdb; duckdb loads', async () => {
-    const install = await sh('npm install --prefix .dql/connectors duckdb', { cwd: appDir, env, logFile: log });
-    expectRun(install, 'duckdb driver install');
+  await gate.check(area, "README's manual driver install (@duckdb/node-api 1.5); it loads", async () => {
+    const install = await sh("npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'", { cwd: appDir, env, logFile: log });
+    expectRun(install, '@duckdb/node-api driver install');
     const blocked = blockedScripts(install.output);
-    if (blocked.length) throw new Error(`npm blocked the install script of ${blocked.join(', ')}: .dql/connectors/package.json should allow it`);
-    expectRun(await sh(LOAD_DUCKDB, { cwd: appDir, env, logFile: log }), 'require .dql/connectors duckdb + open :memory:');
-    return 'no install script blocked; duckdb opens a database';
+    if (blocked.length) throw new Error(`npm blocked the install script of ${blocked.join(', ')}`);
+    const loaded = await sh(LOAD_DUCKDB, { cwd: appDir, env, logFile: log });
+    expectRun(loaded, 'require .dql/connectors @duckdb/node-api + open :memory:', { contains: DUCKDB_LINE });
+    return `no install script; ${loaded.output.trim().split('\n').find((line) => line.startsWith('duckdb loads'))}`;
   }, { evidence: `logs/${logName}` });
 }
 

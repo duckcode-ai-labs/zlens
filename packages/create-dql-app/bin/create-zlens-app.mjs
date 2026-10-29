@@ -57,7 +57,8 @@ const DRIVER_ALIASES = { postgres: 'postgresql' };
 const FILE_DRIVERS = new Set(['duckdb', 'sqlite']);
 // The project-local package each driver needs (none = built in).
 const DRIVER_PACKAGES = {
-  duckdb: 'duckdb',
+  // DuckDB 1.5 only: npm's latest (2.0) writes files 1.x cannot read (RFC 0011).
+  duckdb: '@duckdb/node-api@^1.5.6-r.1',
   postgresql: 'pg',
   redshift: 'pg',
   snowflake: 'snowflake-sdk',
@@ -291,13 +292,10 @@ function warehouseConnection(target, driver, databasePath) {
   return connection;
 }
 
-// npm 12 blocks a dependency's install script unless package.json lists it
-// in "allowScripts" (the template's own package.json allows better-sqlite3).
-// duckdb downloads its native binary in that script, so the driver folder
-// gets a package.json that allows it before anyone installs there; ZLens
-// writes the same file when it installs a driver itself.
-const NATIVE_DRIVER_PACKAGES = ['duckdb'];
-
+// The driver folder gets its own package.json, so `npm install --prefix`
+// installs there and never walks up to the project's. No driver ZLens installs
+// has an install script npm 12 would block (the DuckDB driver's binary is a
+// per-platform optional dependency), so it allows none.
 function seedConnectorFolder(target) {
   const dir = join(target, '.dql', 'connectors');
   mkdirSync(dir, { recursive: true });
@@ -306,16 +304,15 @@ function seedConnectorFolder(target) {
   const pkg = {
     private: true,
     description: 'Project-local ZLens connector packages',
-    allowScripts: Object.fromEntries(NATIVE_DRIVER_PACKAGES.map((name) => [name, true])),
   };
   writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n', 'utf-8');
 }
 
 function connectorInstall(pkg) {
-  // Drivers always install with npm (it ships with Node): pnpm 10 skips
-  // duckdb's native build script and Yarn Berry has no --prefix equivalent,
-  // so neither yields a driver the runtime can load from .dql/connectors.
-  return `npm install --prefix .dql/connectors ${pkg}`;
+  // Drivers always install with npm (it ships with Node): Yarn Berry has no
+  // --prefix equivalent, so it yields no driver the runtime can load from
+  // .dql/connectors. A version range is quoted (zsh reads ^ as a pattern).
+  return `npm install --prefix .dql/connectors ${/[\^~<>]/.test(pkg) ? `'${pkg}'` : pkg}`;
 }
 
 function warehouseReadmeSection(driver, connection) {
@@ -327,7 +324,7 @@ function warehouseReadmeSection(driver, connection) {
     ? `Check \`filepath\` in the \`default\` connection in \`dql.config.json\` (driver \`${driver}\`); a relative path is read from this folder.`
     : `Fill in the \`default\` connection in \`dql.config.json\` (driver \`${driver}\`). The \`\${...}\` values (${secrets.map((name) => `\`${name}\``).join(', ')}) are read from environment variables when ZLens connects, so secrets stay out of git. Set them, or edit the connection in the notebook under Settings → Database, which keeps typed secrets in a git-ignored file.`;
   const install = pkg
-    ? `\n   Install the driver once:\n\n   \`\`\`bash\n   ${connectorInstall(pkg)}\n   \`\`\`\n`
+    ? `\n   ZLens installs the driver into \`.dql/connectors\` the first time \`npm run sync\`\n   or \`npm run notebook\` connects. To install it yourself (offline, CI):\n\n   \`\`\`bash\n   ${connectorInstall(pkg)}\n   \`\`\`\n`
     : '\n   This driver is built in; nothing else to install.\n';
   return `## Database only (no dbt)
 
@@ -506,25 +503,18 @@ async function main() {
 
   let steps;
   if (mode.kind === 'warehouse') {
-    const pkg = DRIVER_PACKAGES[mode.driver];
     steps = [
       c.bold(`cd ${args.dir}`),
       c.bold(installCmd),
-      ...(pkg ? [c.bold(connectorInstall(pkg))] : []),
       c.dim(FILE_DRIVERS.has(mode.driver)
         ? `# Check the "default" connection's filepath in dql.config.json (${connection.filepath})`
         : '# Fill the "default" connection in dql.config.json (set its ${ENV_VAR}s, or use Settings → Database)'),
-      `${c.bold('npx zlens sync warehouse --schemas <schema>')}   ${c.dim(`# first time; then ${syncCmd}`)}`,
+      `${c.bold('npx zlens sync warehouse --schemas <schema>')}   ${c.dim(`# installs the driver the first time; then ${syncCmd}`)}`,
       c.bold('npx zlens model discover --validate'),
       `${c.bold(runCmd)}   ${c.dim('# review and certify in Modeling, then Ask')}`,
     ].join('\n  ');
   } else {
-    const connectorTip = [
-      c.dim('# Optional database driver install before running queries:'),
-      c.dim(`#   DuckDB/local files: ${connectorInstall('duckdb')}`),
-      c.dim(`#   Snowflake:       ${connectorInstall('snowflake-sdk')}`),
-      c.dim('#   Databricks:      no extra package'),
-    ].join('\n  ');
+    const connectorTip = c.dim('# ZLens installs your database\'s driver the first time it connects.');
     const dbtTip = dbtSibling
       ? `\n\n${c.dim('Tip:')} run ${c.bold('dbt parse')} inside ${c.dim(dbtSibling)}\n     first, then ${c.bold(syncCmd)} to import the dbt DAG.`
       : '';

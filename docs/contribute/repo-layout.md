@@ -10,7 +10,7 @@ cd zlens
 pnpm install
 ```
 
-Requires **pnpm 9+** and **Node 20, 22 or 24**.
+Requires **pnpm 9+** and **Node 20, 22, 24 or 26**.
 
 ## Layout
 

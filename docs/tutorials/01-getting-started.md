@@ -15,8 +15,8 @@ open the notebook, and see end-to-end lineage.
 
 ## Prerequisites
 
-- **Node.js** 20, 22, or 24 LTS (check: `node --version`). Node 25 and 26 are
-  not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
+- **Node.js** 20, 22, 24 or 26 (check: `node --version`). Node 26 LTS is
+  recommended.
 - **git** (any modern version)
 - A dbt project with `target/manifest.json`
 - Optional for tutorial 04: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
@@ -73,10 +73,12 @@ edit `dql.config.json`:
 and Snowflake use project-local drivers. See
 [connect-warehouse](../get-started/connect-database.md).)
 
-Install only the driver your project uses:
+The notebook installs the active connection's driver the first time it
+starts (Step 5). To install it now, so `npm run doctor` passes in Step 3,
+install only the driver your project uses:
 
 ```bash
-npm install --prefix .dql/connectors duckdb          # DuckDB and local files
+npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'   # DuckDB and local files
 # npm install --prefix .dql/connectors snowflake-sdk # Snowflake
 # Databricks does not need an extra package.
 ```

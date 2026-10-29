@@ -15,16 +15,8 @@ export { ConnectionPoolManager } from './connection-pool.js';
 export { QueryExecutor } from './query-executor.js';
 export { MissingConnectorDependencyError, ConnectorNativeBindingError } from './optional-dependency.js';
 export {
-  DUCKDB_PREBUILT_NODE_MAJORS,
-  DUCKDB_SOURCE_BUILD_ENV,
-  DuckDBNodeUnsupportedError,
-  duckdbHasPrebuiltBinary,
-  duckdbNoPrebuiltHelp,
-  duckdbNoPrebuiltReason,
-  duckdbSourceBuildAllowed,
-} from './duckdb-node-support.js';
-export {
   NATIVE_INSTALL_SCRIPT_PACKAGES,
+  NATIVE_OPTIONAL_BINARY_PACKAGES,
   isNativeBindingError,
   isNodeAbiMismatch,
   nativeBindingHelp,
@@ -36,7 +28,7 @@ export {
 export type { SQLParamSpec } from './sql-params.js';
 export { buildParamValues, expandArrayParameters, normalizeSQLPlaceholders } from './sql-params.js';
 export { SnowflakeConnector } from './drivers/snowflake.js';
-export { DuckDBConnector, duckDBNewerFileMessage, duckDBOpenFailureMessage, ZLENS_DUCKDB_READER_LINE, type DuckDBConsistentReadScope } from './drivers/duckdb.js';
+export { DuckDBConnector, DUCKDB_DRIVER_PACKAGE, duckDBNewerFileMessage, duckDBOpenFailureMessage, ZLENS_DUCKDB_READER_LINE, type DuckDBConsistentReadScope } from './drivers/duckdb.js';
 export { FileConnector } from './drivers/file.js';
 export { DatabricksConnector } from './drivers/databricks.js';
 export { SQLiteConnector } from './drivers/sqlite.js';

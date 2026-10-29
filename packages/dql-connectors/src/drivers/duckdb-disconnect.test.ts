@@ -4,34 +4,31 @@ const events: string[] = [];
 
 class FakeConnection {
   constructor(readonly id: number) {}
-  all(_sql: string, ...rest: unknown[]) {
-    const callback = rest[rest.length - 1] as (err: Error | null, rows: unknown[]) => void;
-    callback(null, [{ one: 1 }]);
+  async run(_sql: string) {
+    return { columnNames: () => ['one'], getRows: async () => [[1]] };
   }
-  close(callback: () => void) {
+  closeSync() {
     events.push(`connection.close:${this.id}`);
-    callback();
   }
 }
 
-class FakeDatabase {
+class FakeInstance {
   private nextConnection = 0;
-  constructor(_path: string, callback: (err: Error | null) => void) {
+  static async create(_path: string) {
     events.push('database.open');
-    queueMicrotask(() => callback(null));
+    return new FakeInstance();
   }
-  connect() {
+  async connect() {
     this.nextConnection += 1;
     return new FakeConnection(this.nextConnection);
   }
-  close(callback: (err: Error | null) => void) {
+  closeSync() {
     events.push('database.close');
-    callback(null);
   }
 }
 
 vi.mock('../optional-dependency.js', () => ({
-  importConnectorDependency: async () => ({ Database: FakeDatabase }),
+  importConnectorDependency: async () => ({ DuckDBInstance: FakeInstance }),
 }));
 
 const { DuckDBConnector } = await import('./duckdb.js');

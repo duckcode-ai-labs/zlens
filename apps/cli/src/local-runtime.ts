@@ -59,7 +59,7 @@ import {
   planMixedSourceSql,
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
-import { connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
+import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
 import {
   ensureDqlGitignore,
   isGovernedSourceFile,
@@ -76,10 +76,6 @@ import {
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
-  DuckDBNodeUnsupportedError,
-  duckdbHasPrebuiltBinary,
-  duckdbNoPrebuiltHelp,
-  duckdbSourceBuildAllowed,
 } from "@zlens/connectors";
 import {
   buildExecutionPlan,
@@ -32608,17 +32604,10 @@ export function formatLocalQueryRuntimeError(
 ): string {
   const detail = error instanceof Error ? error.message : String(error);
   const driver = connection.driver;
-  const currentNode = process.versions.node;
-
-  if (
-    (driver === 'file' || driver === 'duckdb') &&
-    detail.includes('duckdb.node')
-  ) {
-    const noPrebuilt = duckdbNoPrebuiltHelp(currentNode);
-    if (noPrebuilt) return `Local query runtime is unavailable for driver "${driver}": ${noPrebuilt}`;
-    return `Local query runtime is unavailable for driver "${driver}": DuckDB native bindings could not be loaded. Current Node.js runtime: ${currentNode}. Reinstall dependencies with a supported LTS Node release (Node 24, 22, or 20), then rerun "pnpm install". Original error: ${detail}`;
+  // A ConnectorNativeBindingError already says how to reinstall; a bare load error does not.
+  if ((driver === 'file' || driver === 'duckdb') && detail.includes('duckdb.node') && !detail.includes('--include=optional')) {
+    return `Local query runtime is unavailable for driver "${driver}": DuckDB's binary for this computer (${process.platform}-${process.arch}) could not be loaded. Reinstall the driver (nothing is compiled): npm --prefix .dql/connectors install @duckdb/node-api --include=optional. Original error: ${detail}`;
   }
-
   return `Local query runtime is unavailable for driver "${driver}": ${detail}`;
 }
 
@@ -38176,7 +38165,9 @@ export async function syncProjectWarehouse(projectRoot: string, options: {
   const connectionId = options.connectionId || warehouseCatalogConnectionId(cfg);
   const selectedConnection = projectConnectionById(projectRoot, cfg, connectionId);
   if (!selectedConnection) throw new Error(`Unknown connection "${connectionId}". Add it in Settings → Connections or dql.config.json.`);
-  repairConnectorDriverBinding(projectRoot, selectedConnection.driver);
+  // Install the driver the first time, as `zlens notebook` does at start, so
+  // syncing needs no separate driver step; a driver already there is repaired.
+  ensureConnectorInstalledForStartup(projectRoot, selectedConnection.driver === 'file' ? 'duckdb' : selectedConnection.driver);
   const configured = configuredMetadataScopeInput(cfg, connectionId);
   let input: ConnectionMetadataScopeInput | undefined = configured;
   if (options.schemas?.length) {
@@ -38549,13 +38540,13 @@ const CONNECTOR_INSTALLS: Record<string, Omit<ConnectorInstallStatus, 'installed
   duckdb: {
     driver: 'duckdb',
     label: 'DuckDB',
-    packageName: 'duckdb',
-    // Latest 1.x. An earlier pin to 1.1.3 worked around a BIGINT serialization crash,
-    // but that only bites a naive `JSON.stringify` — the DQL driver
-    // (`normalizeDuckDBValue`) coerces BIGINT→number before marshaling and
-    // `serializeJSON` has a BigInt replacer, so 1.4.x is verified-good on the local
-    // DuckDB path (COUNT/AVG/SELECT * over UUID/BIGINT/decimal/datetime on real data).
-    packageSpec: 'duckdb@^1.1.0',
+    // RFC 0011: DuckDB's Node API. Its binary is a per-platform optional
+    // dependency built on Node-API, so one install works on every Node from 20
+    // up, with no install script. The range stays on DuckDB 1.5 (it allows
+    // 1.5.6-r.* builds only): npm's `latest` is 2.0, whose files 1.x cannot
+    // read, and dbt-duckdb writes 1.5 files.
+    packageName: '@duckdb/node-api',
+    packageSpec: '@duckdb/node-api@^1.5.6-r.1',
     builtIn: false,
   },
   snowflake: {
@@ -38741,31 +38732,11 @@ function runConnectorNpm(projectRoot: string, args: string[]): void {
   });
 }
 
-/**
- * Why ZLens must not npm-install these packages on this Node, or null. Today
- * that is `duckdb` on a Node it has no prebuilt binary for: the install would
- * compile DuckDB from source (over ten minutes, and a failure without Python
- * and a C++ toolchain) unless ZLENS_DUCKDB_BUILD_FROM_SOURCE=1 asks for that.
- */
-export function connectorInstallBlockedReason(
-  packageNames: string[],
-  nodeVersion = process.versions.node,
-  env: NodeJS.ProcessEnv = process.env,
-): string | null {
-  if (!packageNames.includes('duckdb') || duckdbHasPrebuiltBinary(nodeVersion) || duckdbSourceBuildAllowed(env)) return null;
-  return duckdbNoPrebuiltHelp(nodeVersion);
-}
-
-function logZlensLines(text: string): void {
-  for (const line of text.split('\n')) console.log(`[zlens] ${line}`);
-}
-
 function installPackages(projectRoot: string, packageSpecs: string[]): void {
   const installRoot = connectorInstallRoot(projectRoot);
-  // npm 12 blocks a dependency's install script unless package.json allows it,
-  // and duckdb downloads its native binary in that script: allow it here.
+  // npm 12 blocks a dependency's install script unless package.json allows it:
+  // allow it here for a driver that downloads its native binary in that script.
   const packageNames = packageSpecs.map(packageNameOf);
-  if (connectorInstallBlockedReason(packageNames)) throw new DuckDBNodeUnsupportedError();
   seedConnectorAllowScripts(installRoot, packageNames);
 
   runConnectorNpm(projectRoot, ['install', '--prefix', installRoot, '--no-audit', '--no-fund', ...packageSpecs]);
@@ -38792,20 +38763,13 @@ function installPackages(projectRoot: string, packageSpecs: string[]): void {
 export function ensureConnectorInstalledForStartup(
   projectRoot: string,
   driver: string | undefined,
-  nodeVersion = process.versions.node,
 ): void {
   if (!driver) return;
   const definition = CONNECTOR_INSTALLS[driver];
   // Built-in drivers (e.g. the local file driver) and unknown drivers need nothing.
   if (!definition || definition.builtIn || !definition.packageSpec || !definition.packageName) return;
   if (isConnectorPackageInstalled(projectRoot, definition.packageName)) {
-    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label, nodeVersion);
-    return;
-  }
-  // Never start a silent source build from startup: say which Node to use.
-  const blocked = connectorInstallBlockedReason([definition.packageName], nodeVersion);
-  if (blocked) {
-    logZlensLines(blocked);
+    repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
     return;
   }
   console.log(`[zlens] Installing the ${definition.label} driver into .dql/connectors (first run after install/upgrade)…`);
@@ -38816,13 +38780,6 @@ export function ensureConnectorInstalledForStartup(
     const detail = err instanceof Error ? err.message : String(err);
     console.log(`[zlens] Could not auto-install the ${definition.label} driver (${detail}). Open the Connections page and click "Install" once you have network access.`);
   }
-}
-
-/** The driver package a connection loads from .dql/connectors, repaired if npm 12 blocked its binary. */
-export function repairConnectorDriverBinding(projectRoot: string, driver: string | undefined): void {
-  const definition = driver ? CONNECTOR_INSTALLS[driver === 'file' ? 'duckdb' : driver] : undefined;
-  if (!definition?.packageName || definition.builtIn) return;
-  repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
 }
 
 function isInsideConnectorRoot(packageDir: string, installRoot: string): boolean {
@@ -38842,30 +38799,28 @@ function repairBlockedConnectorBinding(
   projectRoot: string,
   packageName: string,
   label: string,
-  nodeVersion = process.versions.node,
 ): void {
   if (!isNativeConnectorPackage(packageName)) return;
   const installRoot = connectorInstallRoot(projectRoot);
   const broken = connectorBindingError(connectorModuleSearchPaths(projectRoot), packageName);
   if (!broken) return;
-  // Rebuilding here would be a source build (a copy installed under another Node).
-  const blocked = connectorInstallBlockedReason([packageName], nodeVersion);
-  if (blocked) {
-    logZlensLines(blocked);
-    return;
-  }
   if (!isInsideConnectorRoot(broken.packageDir, installRoot)) return;
-  console.log(`[zlens] The ${label} driver in .dql/connectors has no native binary (npm 12 blocks install scripts that package.json does not allow); rebuilding it…`);
+  const optionalBinary = !NATIVE_CONNECTOR_PACKAGES.includes(packageName);
+  console.log(optionalBinary
+    ? `[zlens] The ${label} driver in .dql/connectors has no binary for this computer (${process.platform}-${process.arch}); reinstalling it…`
+    : `[zlens] The ${label} driver in .dql/connectors has no native binary (npm 12 blocks install scripts that package.json does not allow); rebuilding it…`);
   try {
     if (repairConnectorBinding(installRoot, packageName, (args) => runConnectorNpm(projectRoot, args))) {
-      console.log(`[zlens] ${label} driver rebuilt.`);
+      console.log(`[zlens] ${label} driver ${optionalBinary ? 'reinstalled' : 'rebuilt'}.`);
       return;
     }
   } catch (err) {
-    console.log(`[zlens] Could not rebuild the ${label} driver (${err instanceof Error ? err.message.split('\n')[0] : String(err)}).`);
+    console.log(`[zlens] Could not ${optionalBinary ? 'reinstall' : 'rebuild'} the ${label} driver (${err instanceof Error ? err.message.split('\n')[0] : String(err)}).`);
     return;
   }
-  console.log(`[zlens] The ${label} driver still cannot load; run: npm --prefix ${installRoot} install-scripts approve ${packageName} && npm --prefix ${installRoot} rebuild ${packageName}`);
+  console.log(optionalBinary
+    ? `[zlens] The ${label} driver still cannot load; run: npm --prefix ${installRoot} install ${packageName} --include=optional`
+    : `[zlens] The ${label} driver still cannot load; run: npm --prefix ${installRoot} install-scripts approve ${packageName} && npm --prefix ${installRoot} rebuild ${packageName}`);
 }
 
 /** Node majors this Snowflake path has actually been exercised on. */

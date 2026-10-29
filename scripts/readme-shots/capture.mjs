@@ -21,7 +21,7 @@ const cliEntry = join(repoRoot, 'apps/cli/dist/index.js');
 
 const SAMPLE_REPO = 'https://github.com/duckcode-ai/jaffle-shop-duckdb.git';
 const SAMPLE_COMMIT = 'a9ec27779995708d961a6cfcad9ee5c049573e6e';
-const DUCKDB_VERSION = '1.1.3';
+const DUCKDB_DRIVER = '@duckdb/node-api@^1.5.6-r.1';
 const SAMPLE_OWNER = 'analytics@jaffle.shop';
 
 const { values: args } = parseArgs({
@@ -107,10 +107,10 @@ function prepareProject(sampleDir) {
 
   // The DuckDB driver, installed once and copied in (as the Connections page installs it).
   const connectorCache = join(workDir, 'connectors');
-  if (!existsSync(join(connectorCache, 'node_modules/duckdb'))) {
+  if (!existsSync(join(connectorCache, 'node_modules/@duckdb/node-api'))) {
     mkdirSync(connectorCache, { recursive: true });
     writeFileSync(join(connectorCache, 'package.json'), '{"private":true}\n');
-    run('npm', ['--prefix', connectorCache, 'install', '--no-save', '--no-package-lock', '--workspaces=false', `duckdb@${DUCKDB_VERSION}`]);
+    run('npm', ['--prefix', connectorCache, 'install', '--no-save', '--no-package-lock', '--workspaces=false', DUCKDB_DRIVER]);
   }
   cpSync(connectorCache, join(projectDir, '.dql/connectors'), { recursive: true });
 

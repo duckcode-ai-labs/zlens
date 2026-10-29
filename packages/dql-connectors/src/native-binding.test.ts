@@ -122,8 +122,8 @@ describe('nativeBindingHelp', () => {
 });
 
 describe('importConnectorDependency', () => {
-  // On a Node with no duckdb prebuilt (25, 26) the loader says to switch Node
-  // instead (duckdb-node-support.test.ts); these cases are about Node 24.
+  // `duckdb` here stands for any driver that downloads its binary in an
+  // install script; the DuckDB driver ZLens installs today has none (below).
   const realVersions = process.versions;
   beforeEach(() => {
     Object.defineProperty(process, 'versions', { value: { ...realVersions, node: '24.15.0' }, configurable: true, enumerable: true });
@@ -145,6 +145,15 @@ describe('importConnectorDependency', () => {
     const load = importConnectorDependency('duckdb', { driver: 'duckdb', moduleSearchPaths: [connectors] });
     await expect(load).rejects.toBeInstanceOf(ConnectorNativeBindingError);
     await expect(load).rejects.toThrow(`npm --prefix ${connectors} install-scripts approve duckdb`);
+  });
+
+  it('says to reinstall @duckdb/node-api with optional dependencies when its platform binary is missing', async () => {
+    const connectors = join(tempDir(), '.dql', 'connectors');
+    connectorPackage(connectors, '@duckdb/node-api', `throw new Error("Cannot find module '@duckdb/node-bindings-linux-x64/duckdb.node'");`);
+    const load = importConnectorDependency('@duckdb/node-api', { driver: 'duckdb', moduleSearchPaths: [connectors] });
+    await expect(load).rejects.toBeInstanceOf(ConnectorNativeBindingError);
+    await expect(load).rejects.toThrow(`npm --prefix ${connectors} install @duckdb/node-api --include=optional`);
+    await expect(load).rejects.not.toThrow('install-scripts');
   });
 
   it('still says "install it" when the package is absent', async () => {

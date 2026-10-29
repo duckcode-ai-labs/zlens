@@ -17,8 +17,8 @@ The row changes to **Connector installed and ready**. The driver goes into
 `.dql/connectors/` in your project. From a terminal, the same thing is:
 
 ```bash
-npm install --prefix .dql/connectors duckdb          # DuckDB and local files
-npm install --prefix .dql/connectors snowflake-sdk   # Snowflake
+npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'   # DuckDB and local files
+npm install --prefix .dql/connectors snowflake-sdk                     # Snowflake
 ```
 
 ## Import a dbt profile

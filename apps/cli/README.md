@@ -6,10 +6,9 @@ Use the CLI to scaffold projects, validate blocks, preview charts locally, and b
 
 ## Install
 
-Use Node 20, 22 or 24 (24 LTS recommended). Node 25 and 26 are not supported
-yet: ZLens's DuckDB driver has no prebuilt binary for them. If you change Node versions after installing native
-database drivers, reinstall those project-local dependencies for the active
-runtime.
+Use Node 20, 22, 24 or 26 (26 LTS recommended). If you change Node versions
+after installing native database drivers, reinstall those project-local
+dependencies for the active runtime.
 
 ```bash
 npm i -D @zlens/cli@latest

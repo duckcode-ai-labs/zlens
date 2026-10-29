@@ -80,9 +80,9 @@ test.beforeAll(async () => {
   const projectDir = join(workDir, 'project');
   seedProject(projectDir, { connectorRoot: process.env.ZLENS_E2E_DUCKDB_CONNECTORS });
   // A certified saved query with no Dataset definition, over three months of order items.
-  const duckdbModule = join(projectDir, '.dql', 'connectors', 'node_modules', 'duckdb');
+  const duckdbModule = join(projectDir, '.dql', 'connectors', 'node_modules', '@duckdb', 'node-api');
   const warehouse = join(projectDir, 'jaffle_shop.duckdb');
-  run('node', ['-e', `const duckdb = require(${JSON.stringify(duckdbModule)}); const db = new duckdb.Database(${JSON.stringify(warehouse)}); db.exec(${JSON.stringify(MORE_ORDER_ITEMS)}, (error) => { if (error) { console.error(error); process.exit(1); } db.close(() => process.exit(0)); });`]);
+  run('node', ['-e', `const { DuckDBInstance } = require(${JSON.stringify(duckdbModule)}); (async () => { const db = await DuckDBInstance.create(${JSON.stringify(warehouse)}); const c = await db.connect(); await c.run(${JSON.stringify(MORE_ORDER_ITEMS)}); c.closeSync(); db.closeSync(); })().catch((error) => { console.error(error); process.exit(1); });`]);
   writeFileSync(join(projectDir, 'blocks', 'monthly_revenue.dql'), MONTHLY_REVENUE);
   server = await startNotebookServer({ projectDir, workDir });
 

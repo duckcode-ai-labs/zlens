@@ -62,7 +62,7 @@ function assertGeneratedPackage(target) {
   assert(pkg.allowScripts?.['better-sqlite3'] === true, 'package.json allows better-sqlite3\'s install script (npm 12)');
   assert(pkg.pnpm?.onlyBuiltDependencies?.includes('better-sqlite3'), 'package.json lets pnpm 10 build better-sqlite3');
   const connectors = JSON.parse(readFileSync(join(target, '.dql', 'connectors', 'package.json'), 'utf-8'));
-  assert(connectors.allowScripts?.duckdb === true, '.dql/connectors/package.json allows duckdb\'s install script (npm 12)');
+  assert(connectors.private === true && connectors.allowScripts === undefined, '.dql/connectors/package.json exists and allows no install script (the DuckDB driver has none)');
 }
 
 function assertTemplateDqlSyntax(target) {
@@ -277,7 +277,8 @@ withBase((base) => {
   const result = run(base, ['app', '--warehouse', 'duckdb', '--database-path', 'data/jaffle_shop.duckdb']);
   assert(result.status === 0, `scaffold exits 0 (got ${result.status})`);
   assertWarehouseWorkspace(join(base, 'app'), 'duckdb', { driver: 'duckdb', filepath: '../data/jaffle_shop.duckdb' });
-  assert(result.stdout.includes('npm install --prefix .dql/connectors duckdb'), 'next steps install the duckdb driver');
+  assert(!result.stdout.includes('npm install --prefix .dql/connectors'), 'next steps have no separate driver install (sync installs it)');
+  assert(readFileSync(join(base, 'app', 'README.md'), 'utf-8').includes("npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'"), 'README names the manual DuckDB driver install on the 1.5 line');
 });
 
 console.log('\n▸ --warehouse duckdb (default file), even next to a dbt project');
@@ -295,7 +296,7 @@ withBase((base) => {
   assertWarehouseWorkspace(join(base, 'app'), 'postgresql', {
     driver: 'postgresql', host: '${PGHOST}', port: 5432, database: '${PGDATABASE}', username: '${PGUSER}', password: '${PGPASSWORD}',
   });
-  assert(result.stdout.includes('npm install --prefix .dql/connectors pg'), 'next steps install the pg driver');
+  assert(!result.stdout.includes('npm install --prefix .dql/connectors') && result.stdout.includes('installs the driver the first time'), 'next steps say sync installs the pg driver');
 });
 
 console.log('\n▸ --warehouse snowflake');

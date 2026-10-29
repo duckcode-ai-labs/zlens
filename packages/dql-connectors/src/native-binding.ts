@@ -8,7 +8,15 @@ import { join, sep } from 'node:path';
  * `allowScripts`, and pnpm 10 skips them unless the build is approved, so the
  * JavaScript installs but the binary never does.
  */
-export const NATIVE_INSTALL_SCRIPT_PACKAGES = ['better-sqlite3', 'duckdb'] as const;
+export const NATIVE_INSTALL_SCRIPT_PACKAGES = ['better-sqlite3'] as const;
+
+/**
+ * Native packages whose binary arrives as a per-platform optional dependency
+ * (`@duckdb/node-bindings-<os>-<arch>`), with no install script. The binary is
+ * missing only when optional dependencies were skipped or node_modules was
+ * copied from another platform.
+ */
+export const NATIVE_OPTIONAL_BINARY_PACKAGES = ['@duckdb/node-api'] as const;
 
 /** Where the broken copy lives decides which commands repair it. */
 export type NativeInstallContext =
@@ -23,7 +31,7 @@ export type NativeInstallContext =
 
 const BINDING_MISSING = [
   /Could not locate the bindings file/i, // `bindings` (better-sqlite3)
-  /Cannot find module '[^']*\.node'/i, // node-pre-gyp (duckdb)
+  /Cannot find module '[^']*\.node'/i, // a platform binary package (@duckdb/node-bindings-*)
   /better_sqlite3\.node/i,
   /duckdb\.node/i,
 ];
@@ -93,6 +101,16 @@ export function nativeBindingHelp(options: NativeBindingHelpOptions): string {
   const lines: string[] = [];
 
   lines.push(`ZLens could not load ${pkg}, ${role}.`);
+  if ((NATIVE_OPTIONAL_BINARY_PACKAGES as readonly string[]).includes(pkg)) {
+    const npm = context.kind === 'connectors' ? `npm --prefix ${quote(context.dir)}` : context.kind === 'global' ? 'npm -g' : 'npm';
+    lines.push(`Its binary for this computer (${process.platform}-${process.arch}) is missing. It comes as an optional dependency, so it is skipped by --omit=optional or --no-optional, and it is absent from a node_modules folder copied from another operating system.`);
+    lines.push('');
+    lines.push('Reinstall it here (nothing is compiled):');
+    lines.push(`  ${npm} install ${pkg} --include=optional`);
+    lines.push('');
+    lines.push(`Underlying error: ${firstLine(messageOf(error))}`);
+    return lines.join('\n');
+  }
   if (abi) {
     lines.push(`Its native binary was built for a different Node.js version than this one (${process.version}). Rebuild it for this Node.`);
   } else if (pm.name === 'npm' && (pm.major ?? 0) < 12) {

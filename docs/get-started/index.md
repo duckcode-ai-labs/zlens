@@ -27,8 +27,7 @@ You end with:
 
 You need:
 
-- Node.js 20, 22 or 24, with 24 LTS recommended (`node -v`). Node 25 and 26
-  are not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
+- Node.js 20, 22, 24 or 26, with 26 LTS recommended (`node -v`).
 - Python 3.9 to 3.14, to build the sample with dbt (`python3 --version`).
   `./setup.sh` picks a supported one for you.
 - git
@@ -87,10 +86,9 @@ the DuckDB driver into this folder, and imports the dbt project. It ends with
 
 !!! note "npm 12"
     npm 12 runs a dependency's install script only when `package.json` lists
-    it in `allowScripts`. ZLens needs two such scripts, which download native
-    binaries: `better-sqlite3`'s, which the sample already allows, and
-    `duckdb`'s, which ZLens allows in `.dql/connectors` and rebuilds when
-    `npm run notebook` starts.
+    it in `allowScripts`. ZLens needs one: `better-sqlite3`'s, which downloads
+    its native binary and which the sample already allows. The DuckDB driver
+    has no install script, so it needs no entry.
 
     If you ran `npm install` in a copy of the sample from before that, ZLens
     stops with "ZLens could not load better-sqlite3". Fix that folder with:

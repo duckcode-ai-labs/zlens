@@ -24,8 +24,8 @@ const seedWarehouse = resolve(dirname(fileURLToPath(import.meta.url)), '../../..
 describe('POST /api/keys/prove', () => {
   duckDbIt('proves each certified Dataset\'s declared keys, narrows to the blocks asked for, and fails a key that does not hold', async () => {
     const root = connectorRoot!;
-    const duckdb = createRequire(join(root, 'package.json'))('duckdb') as { Database?: unknown };
-    expect(typeof duckdb.Database).toBe('function');
+    const duckdb = createRequire(join(root, 'package.json'))('@duckdb/node-api') as { DuckDBInstance?: unknown };
+    expect(typeof duckdb.DuckDBInstance).toBe('function');
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-key-proofs-'));
     const databasePath = join(projectRoot, 'app-datasets-pilot.duckdb');
     const connection: ConnectionConfig = { driver: 'duckdb', filepath: databasePath, moduleSearchPaths: [root] };

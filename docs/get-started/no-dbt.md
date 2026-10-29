@@ -74,8 +74,7 @@ You end with:
 
 You need:
 
-- Node.js 20, 22 or 24, with 24 LTS recommended (`node -v`). Node 25 and 26
-  are not supported yet: ZLens's DuckDB driver has no prebuilt binary for them.
+- Node.js 20, 22, 24 or 26, with 26 LTS recommended (`node -v`).
 - a database ZLens can read, and a login that can see the schemas you want
   to model and `SELECT` from their tables
 
@@ -150,11 +149,8 @@ in CI or with piped input it keeps writing a dbt config for you to edit.
 
 ## 3. Connect your database
 
-For DuckDB, install the driver into the project:
-
-```bash
-npm install --prefix .dql/connectors duckdb
-```
+For DuckDB there is nothing to install: `zlens sync warehouse` in step 4
+installs the driver into the project the first time it runs.
 
 For any other database, open **Settings → Database** in the workbench, pick
 it under **Warehouse**, fill in the fields and click **Save connection**.
