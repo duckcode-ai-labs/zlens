@@ -8,6 +8,33 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Business terms are certified only through Certify
+
+- **Saving a term no longer certifies it.** On **Modeling → Terms &
+  concepts**, the Status list offered "Certified", and choosing it saved the
+  term as certified with no check and no record of who did it. A term is now
+  certified only by **Certify**: it checks the term has an owner and a
+  definition, and that any metric it links exists, then writes
+  `status = "certified"` and a receipt next to the term's file
+  (`terms/revenue.certification.yaml`) saying who certified it and when. From
+  the terminal: `zlens certify <term file> --apply`.
+- **Editing a certified term makes it a draft** until someone certifies it
+  again. Saving it unchanged keeps it certified.
+- **A term that says certified without a receipt counts as a draft**, with a
+  warning on the term's card, in `zlens compile` and under **Certified
+  terms** in `zlens doctor`. This includes terms
+  certified before this release: open each one and click **Certify** (or run
+  `zlens certify <term file> --apply`) to certify it again. Only certified
+  terms take part in conflict checks between two definitions of one word.
+
+### Docs: OpenLineage
+
+- The docs said ZLens sends OpenLineage events when saved queries, notebook
+  cells and dashboards run, and read an `openlineage` setting. It does
+  neither. The OpenLineage page now says what exists: the
+  `@zlens/openlineage` package, which sends a lineage snapshot of a project
+  (each certified saved query and what it reads) from a script you run.
+
 ## v0.2.11 - 2026-10-29
 
 ZLens runs on Node 26 LTS.

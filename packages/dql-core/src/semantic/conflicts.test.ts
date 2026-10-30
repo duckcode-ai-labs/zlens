@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildManifest } from '../manifest/builder.js';
 import { detectTrustConflicts } from './conflicts.js';
+import { termCertificationFingerprint, termMeaningInSource, writeTermCertificationReceipt } from '../trust/term-certification.js';
 import type { ManifestBlock, ManifestTerm } from '../manifest/types.js';
 
 function term(partial: Partial<ManifestTerm> & { name: string }): ManifestTerm {
@@ -201,6 +202,12 @@ describe('conflict detection through buildManifest (compile)', () => {
 }`,
       'utf-8',
     );
+
+    // Only certified terms conflict, and a term is certified through its receipt.
+    for (const [file, name] of [['terms/active_customer_marketing.dql', 'Active Customer (Marketing)'], ['terms/active_customer_finance.dql', 'Active Customer (Finance)']]) {
+      const meaning = termMeaningInSource(readFileSync(join(tmpDir, file), 'utf-8'), name)!;
+      writeTermCertificationReceipt(tmpDir, file, name, { certifiedBy: 'steward', certifiedAt: '2026-10-29T00:00:00.000Z', via: 'cli', termSha256: termCertificationFingerprint(meaning) });
+    }
 
     const manifest = buildManifest({ projectRoot: tmpDir });
     const conflicts = (manifest.diagnostics ?? []).filter((d) => d.kind === 'conflict');

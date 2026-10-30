@@ -131,6 +131,25 @@ describe('runDoctor', () => {
     expect(output).not.toContain('add duckdb for file/duckdb local preview support');
   });
 
+  it('lists a term that says certified without a receipt as a draft, without failing the run', async () => {
+    const projectDir = makeProject('dql-doctor-terms-');
+    mkdirSync(join(projectDir, 'terms'));
+    writeFileSync(join(projectDir, 'dql.config.json'), JSON.stringify({ defaultConnection: { driver: 'file', filepath: ':memory:' } }, null, 2));
+    writeFileSync(join(projectDir, 'terms', 'revenue.dql'), 'term "Revenue" {\n  status = "certified"\n  description = "Gross money paid."\n  owner = "analytics"\n}\n');
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    await runDoctor(projectDir, {
+      check: false, chart: '', domain: '', format: 'text', help: false, open: null, input: '', outDir: '', owner: '',
+      port: null, queryOnly: false, template: 'starter', connection: '', verbose: false, skipTests: false, version: false,
+    });
+
+    const output = spy.mock.calls.flat().join('\n');
+    expect(output).toContain('Certified terms');
+    expect(output).toContain('1 term(s) count as drafts until someone certifies them');
+    expect(output).toContain('terms/revenue.dql: "Revenue" says certified but has no receipt');
+    expect(output).not.toContain('✗ Certified terms');
+  });
+
   it('reports enterprise scale counts and cache issues', async () => {
     const projectDir = makeProject('dql-doctor-scale-');
     mkdirSync(join(projectDir, 'domains', 'customer', 'blocks'), { recursive: true });

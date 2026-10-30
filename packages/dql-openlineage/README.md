@@ -1,6 +1,8 @@
 # @zlens/openlineage
 
-OpenLineage event emitter for DQL block and notebook runs.
+OpenLineage event emitter for ZLens projects. ZLens itself never calls it:
+you call it from your own code, to send a lineage snapshot of a project or to
+wrap runs you start.
 
 ## Install
 
@@ -51,9 +53,11 @@ Network failures are swallowed (routed to `onError`) so infra issues never
 surface to end users. Wrap-mode re-throws *handler* errors after emitting
 `FAIL`.
 
-## Compatible receivers
+## Receivers
 
-Marquez · DataHub · Atlan · Monte Carlo — anything that speaks the OL spec.
+Any receiver that accepts OpenLineage spec 0.19 events, such as Marquez or
+DataHub. The package's tests check the event format; they do not run a
+receiver.
 See [docs/architecture/openlineage.md](../../docs/architecture/openlineage.md).
 
 ## Project snapshot from a compiled manifest

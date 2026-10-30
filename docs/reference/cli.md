@@ -78,6 +78,7 @@ local databases, data files, AI pins, saved views, and layout overrides.
 | `zlens certify <file.dql>` | Evaluate certification rules |
 | `zlens certify <file.dql> --enterprise` | Enforce grain, outputs, source-system lineage, pattern-specific reusable contracts, review cadence, and test assertions |
 | `zlens certify --from-draft <path>` | Promote a reviewed Tier-2 draft and surface its DataLex contract patch |
+| `zlens certify <term file> [--apply]` | Check the business terms a file declares (owner, definition, linked metrics); `--apply` certifies the ones that pass and writes their receipt |
 | `zlens test <file.dql>` | Deprecated compatibility command; use `zlens certify --connection` |
 | `zlens fmt <file.dql\|.dqlnb>` | Format a file in place (canonical form) |
 | `zlens fmt --check <path>` | CI check; exits 1 if anything needs formatting |
@@ -235,7 +236,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--host <host>` | Bind host for local HTTP commands; defaults to loopback |
 | `--to domain-first` | Target for `zlens migrate layout` |
 | `--dry-run` | Preview layout moves without writing |
-| `--apply` | Apply an otherwise preview-only migration or discovery plan |
+| `--apply` | Apply an otherwise preview-only migration or discovery plan, or certify the terms `zlens certify` checked |
 | `--warehouse-first` | For `init`: model the database's own tables, no dbt needed |
 | `--plan` | Print a deterministic proposal plan without writing |
 | `--force` / `-f` | Apply supported overwrites or file moves |

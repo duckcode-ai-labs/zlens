@@ -4,6 +4,7 @@ import {
   DataLexContractRegistry,
   Parser,
   analyze,
+  buildManifest,
   certifiedBlockFileState,
   changedSinceCertifiedMessage,
   resolveDataLexManifestPath,
@@ -18,7 +19,8 @@ import { loadProjectConfig, prepareLocalExecution, normalizeProjectConnection, r
 import type { ProjectConfig } from '../local-runtime.js';
 import type { CLIFlags } from '../args.js';
 import { promoteFromDraft } from '../promote-from-draft.js';
-import { localPersonIdentity, passedCheckNames } from '../certification-receipt.js';
+import { gitUserName, localPersonIdentity, passedCheckNames } from '../certification-receipt.js';
+import { certifyTermDeclaration, termCertificationVerdict } from '../term-certification.js';
 import { blockTestAssertionName, evaluateBlockTestAssertion, formatBlockTestExpected } from '../block-test-assertions.js';
 import { startProjectRuntime } from './notebook.js';
 import { WorkbenchRoutedQueryExecutor } from '../workbench-query-route.js';
@@ -253,6 +255,59 @@ async function registerDataViews(
   }
 }
 
+/**
+ * `zlens certify <term file>`: check each term the file declares (an owner, a
+ * definition, metrics that exist). With `--apply`, certify the ones that pass:
+ * their status and a receipt beside the file, the same write the Modeling
+ * page's Certify makes. Saving a term never certifies it.
+ */
+function certifyTermFile(filePath: string, flags: CLIFlags, projectConfig: ProjectConfig): void {
+  const projectRoot = realpathSync(process.cwd());
+  const relPath = relative(projectRoot, realpathSync(resolve(filePath))).replace(/\\/g, '/');
+  const terms = Object.values(buildManifest({ projectRoot, dqlVersion: 'cli' }).terms ?? {}).filter((term) => term.filePath === relPath);
+  const json = flags.format === 'json';
+  if (!terms.length) {
+    const message = `ZLens does not read terms from ${relPath}. Put the file under terms/ or a domain's terms/ folder.`;
+    if (json) console.log(JSON.stringify({ ok: false, error: message }, null, 2));
+    else console.error(`\n  ✗ ${message}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const semantic = resolveSemanticLayerWithDiagnostics(resolveProjectSemanticConfig(projectConfig, projectRoot), projectRoot);
+  const knownMetrics = semantic.layer && semantic.errors.length === 0
+    ? new Set(semantic.layer.listMetrics(undefined, { includeMeasures: false }).map((metric) => metric.name.toLowerCase()))
+    : undefined;
+  const results = terms.map((term) => {
+    if (term.status === 'certified') return { term: term.name, status: 'certified' as const, certifiedBy: term.certification?.certifiedBy, blockers: [] as string[] };
+    const verdict = termCertificationVerdict(term, knownMetrics);
+    if (verdict.blockers.length || !flags.apply) {
+      return { term: term.name, status: verdict.blockers.length ? 'blocked' as const : 'ready' as const, blockers: verdict.blockers, checks: verdict.checks };
+    }
+    const receipt = certifyTermDeclaration(projectRoot, term, {
+      certifiedBy: localPersonIdentity(projectRoot),
+      certifiedByName: gitUserName(projectRoot),
+      via: 'cli',
+      checks: verdict.checks,
+    });
+    return { term: term.name, status: 'certified' as const, certifiedBy: receipt.certifiedBy, blockers: [], checks: verdict.checks, newlyCertified: true };
+  });
+  if (results.some((result) => result.status === 'blocked')) process.exitCode = 1;
+  if (json) {
+    console.log(JSON.stringify({ ok: !results.some((result) => result.status === 'blocked'), file: relPath, terms: results }, null, 2));
+    return;
+  }
+  console.log('');
+  for (const result of results) {
+    if (result.status === 'certified') console.log(`  ✓ ${result.term}: certified${result.certifiedBy ? ` by ${result.certifiedBy}` : ''}${'newlyCertified' in result ? ' (receipt written)' : ''}`);
+    else if (result.status === 'ready') console.log(`  • ${result.term}: passes the checks. Run again with --apply to certify it.`);
+    else {
+      console.log(`  ✗ ${result.term}: not certified`);
+      for (const blocker of result.blockers) console.log(`      - ${blocker}`);
+    }
+  }
+  console.log('');
+}
+
 export async function runCertify(filePath: string, flags: CLIFlags): Promise<void> {
   // Tier-2 promotion: `zlens certify --from-draft <path>` moves a draft to its
   // canonical certified location and surfaces the datalex-manifest.json patch.
@@ -294,6 +349,11 @@ export async function runCertify(filePath: string, flags: CLIFlags): Promise<voi
   const datalexDiagnostics = collectDataLexDiagnostics(ast, process.cwd(), filePath, flags);
 
   const blocks = ast.statements.filter((s: any) => s.kind === 'BlockDecl');
+
+  if (blocks.length === 0 && ast.statements.some((s: any) => s.kind === 'TermDecl')) {
+    certifyTermFile(filePath, flags, projectConfig);
+    return;
+  }
 
   if (blocks.length === 0) {
     console.log('\n  ⚠ No block declarations found in file.');

@@ -276,6 +276,13 @@ term "Customer" {
 }
 ```
 
+Saving or writing `status = "certified"` does not certify a term. Only
+Certify does (**Modeling → Terms & concepts**, or `zlens certify <term file>
+--apply`): it checks the term has an owner and a definition, then writes the
+status and a receipt next to the file (`customer.certification.yaml`). A term
+that says certified without a matching receipt counts as a draft. See
+[Certify business terms](../datalex-and-dql.md#certify-business-terms).
+
 Attach terms to a block:
 
 ```dql

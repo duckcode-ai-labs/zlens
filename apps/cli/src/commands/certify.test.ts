@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -335,6 +335,50 @@ describe('runCertify', () => {
     const warning = payload.warnings.find((entry: { rule: string }) => entry.rule === 'Certification receipt');
     expect(warning?.message).toContain('was edited after it was certified');
     expect(warning?.message).toContain('semantic-layer/blocks/revenue.yaml');
+  });
+
+  it('checks the terms a term file declares, and certifies the ones that pass only with --apply', async () => {
+    const projectDir = makeProject('dql-certify-terms-');
+    writeFileSync(join(projectDir, 'dql.config.json'), JSON.stringify({ project: 'p' }), 'utf-8');
+    mkdirSync(join(projectDir, 'terms'), { recursive: true });
+    const termPath = join(projectDir, 'terms', 'shop.dql');
+    writeFileSync(termPath, [
+      'term "Revenue" {',
+      '  status = "certified"',
+      '  description = "Gross money paid for orders."',
+      '  owner = "analytics@shop"',
+      '}',
+      '',
+      'term "Churn" {',
+      '  description = "A customer who left."',
+      '}',
+      '',
+    ].join('\n'), 'utf-8');
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const previousCwd = process.cwd();
+    const previousExitCode = process.exitCode;
+    try {
+      process.chdir(projectDir);
+      // Saying certified in the file is not enough: without --apply nothing is written.
+      await runCertify(termPath, flags());
+      const checked = lastJsonLog(spy);
+      expect(checked.terms).toEqual([
+        { term: 'Revenue', status: 'ready', blockers: [], checks: ['has-owner', 'has-definition'] },
+        { term: 'Churn', status: 'blocked', blockers: ['Add an owner: the person or team who answers for this word.'], checks: ['has-definition'] },
+      ]);
+      expect(existsSync(join(projectDir, 'terms', 'shop.certification.yaml'))).toBe(false);
+
+      await runCertify(termPath, flags({ apply: true } as Partial<CLIFlags>));
+      const applied = lastJsonLog(spy);
+      expect(applied.terms.find((term: { term: string }) => term.term === 'Revenue')).toMatchObject({ status: 'certified', newlyCertified: true });
+      expect(applied.terms.find((term: { term: string }) => term.term === 'Churn')).toMatchObject({ status: 'blocked' });
+      expect(readFileSync(join(projectDir, 'terms', 'shop.certification.yaml'), 'utf-8')).toContain('via: cli');
+      expect(readFileSync(termPath, 'utf-8')).toContain('term "Churn" {\n  description = "A customer who left."');
+    } finally {
+      process.chdir(previousCwd);
+      process.exitCode = previousExitCode;
+      spy.mockRestore();
+    }
   });
 
   // The passing promotion path (gate passes → certified + receipt) is covered

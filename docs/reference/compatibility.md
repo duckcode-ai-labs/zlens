@@ -41,7 +41,7 @@ Snowflake install project-local driver packages into `.dql/connectors/`. See
 - Local agentic analytics with certified-first routing, draft block proposals, and BYO provider setup
 - Local schedules and Slack front-end
 - Plugin API (custom connectors, charts, governance rules)
-- OpenLineage export
+- OpenLineage export as a library you call (`@zlens/openlineage`); ZLens does not send events on its own
 
 ## What's **not** in this repo
 

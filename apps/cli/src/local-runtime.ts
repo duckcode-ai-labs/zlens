@@ -221,6 +221,11 @@ import {
   renderDomainDeclaration,
   writeTermDeclaration,
   deleteTermDeclaration,
+  renderTermDeclaration,
+  readTermCertificationReceipts,
+  removeTermCertificationReceipt,
+  termCertificationFingerprint,
+  termMeaningInSource,
   type TermInput,
   ProjectSnapshotService,
   analyzeSqlReferences,
@@ -303,6 +308,7 @@ import {
   type CertificationReceipt,
   type CertificationSurface,
 } from './certification-receipt.js';
+import { certifyTermDeclaration, termCertificationVerdict } from './term-certification.js';
 import { listBlockTemplates } from './block-templates.js';
 import { captureReviewRequiredDraft } from './review-draft-capture.js';
 import { scopeAppCopilotRequest } from './app-copilot-scope.js';
@@ -19071,6 +19077,53 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // ── Business terms — the words Ask maps to governed definitions. Direct
     //    save like skills: a term carries no join or certification authority,
     //    and Git history is its review. ─────────────────────────────────────
+    // ── Certify a term: the only way a term becomes certified. It checks the
+    //    term (owner, definition, metrics that exist), then writes its status
+    //    and a receipt beside its file, like Certify for a saved query. ────
+    if (path === '/api/terms/certify' && req.method === 'POST') {
+      const json = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      try {
+        const body = (await readJSON(req).catch(() => ({}))) as { filePath?: unknown; name?: unknown };
+        const filePath = typeof body.filePath === 'string' ? body.filePath : '';
+        const name = typeof body.name === 'string' ? body.name : '';
+        const term = Object.values(buildManifest({ projectRoot, dqlVersion: 'notebook' }).terms ?? {})
+          .find((candidate) => candidate.filePath === filePath && candidate.name === name);
+        if (!term) {
+          json(404, { error: 'That term no longer exists. Refresh the list.' });
+          return;
+        }
+        if (term.status === 'certified') {
+          json(200, { ok: true, term });
+          return;
+        }
+        const knownMetrics = semanticLayer
+          ? new Set(semanticLayer.listMetrics(undefined, { includeMeasures: false }).map((metric) => metric.name.toLowerCase()))
+          : undefined;
+        const verdict = termCertificationVerdict(term, knownMetrics);
+        if (verdict.blockers.length) {
+          json(422, { ok: false, error: verdict.blockers.join(' '), blockers: verdict.blockers });
+          return;
+        }
+        certifyTermDeclaration(projectRoot, term, {
+          // The person certifying, never the term's configured owner (as for saved queries).
+          certifiedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)),
+          certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
+          via: 'modeling',
+          checks: verdict.checks,
+        });
+        await refreshUnifiedProjectIndexes(projectRoot);
+        const certified = Object.values(buildManifest({ projectRoot, dqlVersion: 'notebook' }).terms ?? {})
+          .find((candidate) => candidate.filePath === filePath && candidate.name === name);
+        json(200, { ok: true, term: certified ?? term });
+      } catch (error) {
+        json(400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (path === '/api/terms' && (req.method === 'GET' || req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE')) {
       const json = (status: number, body: unknown) => {
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -19089,7 +19142,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             json(404, { error: 'That term no longer exists. Refresh the list.' });
             return;
           }
+          const doomed = readTerms().find((term) => term.filePath === filePath);
           deleteTermDeclaration(projectRoot, filePath);
+          if (doomed) removeTermCertificationReceipt(projectRoot, filePath, doomed.name);
           await refreshUnifiedProjectIndexes(projectRoot);
           json(200, { ok: true });
           return;
@@ -19121,9 +19176,23 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             return;
           }
         }
-        const written = writeTermDeclaration(projectRoot, input, { directory: termDirectoryFor(projectRoot, input.domain), existingPath: previousPath });
+        // Saving never certifies a term. A certified term stays certified only
+        // when this save leaves it exactly as it was certified (same name, same
+        // meaning); any other edit makes it a draft for Certify to look at again.
+        const previous = previousPath ? existing.find((term) => term.filePath === previousPath) : undefined;
+        const receipt = previous?.status === 'certified' ? readTermCertificationReceipts(projectRoot, previous.filePath)[previous.name] : undefined;
+        const asCertified = receipt && previous?.name === input.name && input.status !== 'deprecated'
+          ? termMeaningInSource(renderTermDeclaration({ ...input, status: 'certified' }), input.name)
+          : null;
+        const keepsCertification = Boolean(asCertified && receipt && termCertificationFingerprint(asCertified) === receipt.termSha256);
+        const saved: TermInput = { ...input, status: keepsCertification ? 'certified' : input.status === 'deprecated' ? 'deprecated' : 'draft' };
+        const written = writeTermDeclaration(projectRoot, saved, { directory: termDirectoryFor(projectRoot, input.domain), existingPath: previousPath });
+        if (previous && !keepsCertification) removeTermCertificationReceipt(projectRoot, previous.filePath, previous.name);
         await refreshUnifiedProjectIndexes(projectRoot);
-        json(200, { term: readTerms().find((term) => term.filePath === written.path) ?? { ...input, filePath: written.path } });
+        json(200, {
+          term: readTerms().find((term) => term.filePath === written.path) ?? { ...saved, filePath: written.path },
+          ...(previous?.status === 'certified' && !keepsCertification ? { certificationCleared: true } : {}),
+        });
       } catch (error) {
         json(400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -34553,6 +34622,8 @@ function collectDomainPackageAssets(
   for (const path of listProjectFiles(projectRoot).filter((candidate) => candidate.startsWith('domains/'))) {
     const pkg = registry.packageForPath(join(projectRoot, path));
     if (!pkg || path === pkg.declarationPath) continue;
+    // A term's certification receipt travels with the term; it is not an asset of its own.
+    if (path.endsWith('.certification.yaml')) continue;
     const local = relative(pkg.root, join(projectRoot, path)).replace(/\\/g, '/');
     const top = local.split('/')[0] ?? '';
     const kind = top === 'business-views' ? 'views' : top;

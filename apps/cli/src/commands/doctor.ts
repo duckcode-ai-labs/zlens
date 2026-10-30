@@ -131,6 +131,7 @@ export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest
   checks.push(checkNotebookAssets());
   checks.push(checkAppsPublishing(projectRoot));
   checks.push(checkOutputContractDrift(projectRoot));
+  checks.push(checkTermCertification(projectRoot));
   checks.push(await checkDqlVersionDrift(projectRoot));
   checks.push(checkRetrievalHealth(projectRoot, config));
   checks.push(await checkSemanticExecutionRuntime(projectRoot, resolveProjectSemanticConfig(config, projectRoot)));
@@ -933,6 +934,31 @@ function checkSemanticLayer(semanticConfig: unknown, projectRoot: string): Check
       ok: false,
       detail: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+/**
+ * Terms whose file says certified but no receipt certified them (typed by
+ * hand, carried in by a merge, or certified before receipts) or that were
+ * edited since. They count as drafts; this says which ones and how to fix it.
+ * A warning, never a failure.
+ */
+function checkTermCertification(projectRoot: string): Check {
+  try {
+    const terms = Object.values(buildManifest({ projectRoot }).terms ?? {});
+    const issues = terms.filter((term) => term.certificationIssue);
+    const certified = terms.filter((term) => term.status === 'certified').length;
+    if (!issues.length) {
+      return { name: 'Certified terms', ok: true, detail: certified ? `${certified} certified term(s), each with its receipt` : 'no certified terms' };
+    }
+    const lines = issues.map((term) => `⚠ ${term.filePath}: "${term.name}" ${term.certificationIssue === 'changed' ? 'was edited after it was certified' : 'says certified but has no receipt'}`);
+    return {
+      name: 'Certified terms',
+      ok: true,
+      detail: `${issues.length} term(s) count as drafts until someone certifies them (Modeling → Terms & concepts → Certify, or zlens certify <term file> --apply):\n    ${lines.join('\n    ')}`,
+    };
+  } catch (err) {
+    return { name: 'Certified terms', ok: true, detail: `not checked: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 

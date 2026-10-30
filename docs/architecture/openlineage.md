@@ -1,64 +1,56 @@
 # OpenLineage export
 
-ZLens emits [OpenLineage](https://openlineage.io) events from block and
-notebook runs so your existing metadata platform sees DQL-level lineage
-alongside dbt-level lineage.
+ZLens does not send [OpenLineage](https://openlineage.io) events on its own.
+`zlens notebook`, `zlens sync` and the other commands never call an
+OpenLineage endpoint, and `dql.config.json` has no OpenLineage setting.
 
-## Enable
+What exists is the [`@zlens/openlineage`](../../packages/dql-openlineage)
+package. From a script you run, it can:
 
-```json
-{
-  "openlineage": {
-    "enabled": true,
-    "url": "http://marquez.internal:5000",
-    "namespace": "analytics"
-  }
-}
-```
+- send a **snapshot** of a project's lineage to any OpenLineage receiver: each
+  certified saved query, with the dbt models, tables and DataLex contracts it
+  reads;
+- **wrap your own code**, so each run sends `START`, then `COMPLETE` or `FAIL`.
 
-Or via environment:
+## Send a snapshot
+
+Install the package next to `@zlens/cli` in your project, point it at your
+receiver, and run:
 
 ```bash
-export OPENLINEAGE_URL=http://marquez.internal:5000
+npm i -D @zlens/openlineage
+export OPENLINEAGE_URL=http://localhost:5000/api/v1/lineage
 export OPENLINEAGE_NAMESPACE=analytics
+node -e "
+  import('@zlens/core').then(async ({ buildManifest }) => {
+    const { createEmitter, emitProjectSnapshot } = await import('@zlens/openlineage');
+    const manifest = buildManifest({ projectRoot: '.' });
+    const { emitted } = await emitProjectSnapshot(createEmitter(), manifest);
+    console.log('Emitted', emitted, 'events.');
+  });
+"
 ```
 
-## Event shape
+Run it again whenever you want the receiver to catch up, for example in CI
+after a merge to main. `ZLENS_OPENLINEAGE_DISABLED=1` turns it into a no-op.
 
-Every block execution emits a `START` and `COMPLETE` event:
+## What a snapshot contains
 
-```json
-{
-  "eventType": "COMPLETE",
-  "eventTime": "2026-04-15T12:34:56Z",
-  "job": {
-    "namespace": "analytics",
-    "name": "block.revenue_by_segment"
-  },
-  "run": { "runId": "…" },
-  "inputs":  [{ "namespace": "analytics", "name": "orders" }],
-  "outputs": [{ "namespace": "analytics", "name": "block.revenue_by_segment" }]
-}
-```
+For each certified saved query (pass `blockStatuses` to include others):
 
-## Compatible receivers
+- a `START` and a `COMPLETE` event with one run id, for the job
+  `dql.block.<name>`;
+- its inputs: the tables and dbt models it reads (`dbt.<model>`), and its
+  DataLex contract when it declares one;
+- one output dataset with a `schema` facet and, when ZLens can trace them, a
+  `columnLineage` facet pointing each column at the dbt column it comes from;
+- `documentation` and `ownership` facets from its description and owner.
 
-Verified against:
+Events follow OpenLineage spec 0.19. The package's tests check the event
+format and that events are posted; they do not run a receiver.
 
-- [Marquez](https://marquezproject.ai/) (reference OL consumer)
-- [DataHub](https://datahubproject.io/) via the OL connector
-- [Atlan](https://atlan.com/) via the OL integration
-- [Monte Carlo](https://www.montecarlodata.com/) via OL webhook
+## Not done yet
 
-## What's emitted
-
-- Block runs
-- Notebook cell runs (one event per cell)
-- Dashboard compilations
-- dbt-backed ZLens compile/sync metadata, when dbt artifacts are configured
-
-## Schema version
-
-ZLens currently emits [OpenLineage spec
-0.19](https://openlineage.io/spec). Facet support is full for `schema`,
-`columnLineage` (commercial build), and `sql`.
+- No events when a saved query, notebook cell or App runs in ZLens.
+- No setting in `dql.config.json`; configure the package with environment
+  variables or `createEmitter({ url, namespace })`.

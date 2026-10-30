@@ -409,7 +409,7 @@ ZLens ships as 18 npm packages. Most people only need `create-zlens-app` or
 | [`@zlens/ui`](./packages/dql-ui) | Design tokens, theme provider and headless UI primitives |
 | [`@zlens/dql-lsp`](./packages/dql-lsp) | DQL language server |
 | [`@zlens/slack`](./packages/dql-slack) | Slack slash-command bot that answers through the block-first agent loop |
-| [`@zlens/openlineage`](./packages/dql-openlineage) | OpenLineage events for block and notebook runs |
+| [`@zlens/openlineage`](./packages/dql-openlineage) | Send a project's lineage to an OpenLineage receiver from your own script |
 | [`@zlens/plugin-api`](./packages/dql-plugin-api) | Plugin contracts: connectors, chart renderers, governance rule packs |
 | [`@zlens/telemetry`](./packages/dql-telemetry) | Deprecated and unused: ZLens sends no usage telemetry |
 

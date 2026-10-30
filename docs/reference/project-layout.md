@@ -101,7 +101,9 @@ my-dql-project/
 - **`blocks/`** — one `.dql` file per block. Governance fields (`domain`,
   `owner`) are required by default; the certification check runs on CI.
 - **`terms/`** — one `.dql` file per `term`. These define business vocabulary,
-  identifiers, synonyms, business rules, and caveats without requiring SQL.
+  identifiers, synonyms, business rules, and caveats without requiring SQL. A
+  certified term has a receipt beside its file (`<name>.certification.yaml`);
+  commit it with the term.
 - **`business-views/`** — one `.dql` file per `business_view`. These compose
   blocks and other business views into business lineage, without running SQL.
 - **`notebooks/`** — interactive analysis. Saved results live beside the

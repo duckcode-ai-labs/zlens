@@ -11869,6 +11869,62 @@ describe('domains API (spec 17, part B)', () => {
     expect(termDirectoryFor(projectRoot, 'unknown_domain')).toBe('domains/unknown-domain/terms');
   });
 
+  it('makes a term certified only through Certify, which checks it and writes a receipt; an edit makes it a draft again', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-term-certify-'));
+    tempDirs.push(projectRoot);
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({ project: 'p' }), 'utf-8');
+    let server: Server | undefined;
+    try {
+      const port = await startLocalServer({ rootDir: projectRoot, projectRoot, executor: {} as QueryExecutor, preferredPort: 0, captureServer: (created) => { server = created; } });
+      const call = async (method: string, path: string, body?: unknown) => {
+        const response = await fetch(`http://127.0.0.1:${port}${path}`, { method, headers: { 'Content-Type': 'application/json' }, ...(body ? { body: JSON.stringify(body) } : {}) });
+        return { status: response.status, body: await response.json() as any };
+      };
+      const revenue = { name: 'Revenue', description: 'Gross money paid for orders.', owner: 'analytics@shop', synonyms: ['sales'] };
+
+      // Saving never certifies, even when the body asks for it.
+      const created = await call('POST', '/api/terms', { term: { ...revenue, status: 'certified' } });
+      expect(created.status).toBe(200);
+      expect(created.body.term).toMatchObject({ name: 'Revenue', status: 'draft', filePath: 'terms/revenue.dql' });
+      expect(readFileSync(join(projectRoot, 'terms', 'revenue.dql'), 'utf-8')).toContain('status = "draft"');
+      expect(existsSync(join(projectRoot, 'terms', 'revenue.certification.yaml'))).toBe(false);
+
+      // Certify checks the term first.
+      expect((await call('POST', '/api/terms/certify', { filePath: 'terms/revenue.dql', name: 'Nope' })).status).toBe(404);
+      await call('POST', '/api/terms', { term: { name: 'Churn' } });
+      const blocked = await call('POST', '/api/terms/certify', { filePath: 'terms/churn.dql', name: 'Churn' });
+      expect(blocked.status).toBe(422);
+      expect(blocked.body.blockers).toEqual([
+        'Add an owner: the person or team who answers for this word.',
+        'Add a definition (the description), so everyone reads the word the same way.',
+      ]);
+      expect(blocked.body.error).toContain('Add an owner');
+
+      const certified = await call('POST', '/api/terms/certify', { filePath: 'terms/revenue.dql', name: 'Revenue' });
+      expect(certified.status).toBe(200);
+      expect(certified.body.term.status).toBe('certified');
+      expect(certified.body.term.certification.certifiedBy).toBeTruthy();
+      expect(readFileSync(join(projectRoot, 'terms', 'revenue.dql'), 'utf-8')).toContain('status = "certified"');
+      expect(readFileSync(join(projectRoot, 'terms', 'revenue.certification.yaml'), 'utf-8')).toMatch(/Revenue:\n\s+certifiedBy: .+\n[\s\S]*via: modeling[\s\S]*- has-owner\n\s+- has-definition/);
+
+      // Saving it unchanged keeps it certified; an edit makes it a draft and drops the receipt.
+      const unchanged = await call('PUT', '/api/terms', { filePath: 'terms/revenue.dql', term: { ...revenue, status: 'certified' } });
+      expect(unchanged.body.term.status).toBe('certified');
+      expect(unchanged.body.certificationCleared).toBeUndefined();
+      const edited = await call('PUT', '/api/terms', { filePath: 'terms/revenue.dql', term: { ...revenue, status: 'certified', description: 'Net money paid for orders.' } });
+      expect(edited.body.term.status).toBe('draft');
+      expect(edited.body.certificationCleared).toBe(true);
+      expect(existsSync(join(projectRoot, 'terms', 'revenue.certification.yaml'))).toBe(false);
+
+      // Deleting a certified term deletes its receipt too.
+      expect((await call('POST', '/api/terms/certify', { filePath: 'terms/revenue.dql', name: 'Revenue' })).status).toBe(200);
+      expect((await call('DELETE', '/api/terms?filePath=terms%2Frevenue.dql')).status).toBe(200);
+      expect(existsSync(join(projectRoot, 'terms', 'revenue.certification.yaml'))).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => server ? server.close(() => resolve()) : resolve());
+    }
+  });
+
   it('keeps domain declarations out of the Blocks library and saves bootstrap choices explicitly', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-domain-bootstrap-'));
     tempDirs.push(projectRoot);
