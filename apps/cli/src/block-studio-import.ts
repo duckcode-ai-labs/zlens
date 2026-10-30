@@ -2,6 +2,17 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, extname, join, relative, resolve } from 'node:path';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
+import {
+  foldSqlScript,
+  splitAtStatementStarts,
+  sqlLogicFingerprint,
+  statementStartOffsets,
+  unwrapStoredProcedures,
+  type ImportedSqlParameter,
+  type SkippedSqlStatement,
+} from './sql-import-script.js';
+
+export type { SkippedSqlStatement } from './sql-import-script.js';
 
 export type BlockStudioImportSourceKind =
   | 'raw-sql-file'
@@ -11,7 +22,7 @@ export type BlockStudioImportSourceKind =
 
 export type BlockStudioImportReviewStatus = 'draft' | 'review' | 'saved' | 'rejected';
 export type BlockStudioImportInputMode = 'path' | 'paste' | 'upload';
-export type BlockStudioImportSplitStrategy = 'semicolon-go' | 'metadata-comment' | 'manual';
+export type BlockStudioImportSplitStrategy = 'semicolon-go' | 'metadata-comment' | 'statement-start' | 'manual';
 
 export interface BlockStudioImportSource {
   path: string;
@@ -76,6 +87,8 @@ export interface DqlParameterDecision {
   sourceExpression: string;
   reason: string;
   confidence: number;
+  /** A report parameter the imported SQL gave no value: the saved query declares it without a default. */
+  required?: boolean;
 }
 
 export interface BlockFilterBinding {
@@ -142,6 +155,8 @@ export interface BlockStudioImportCandidate {
   splitStrategy: BlockStudioImportSplitStrategy;
   warnings: string[];
   conversionNotes: string[];
+  /** What the import changed in the SQL, or could not do (a temp table folded into a WITH clause, a parameter without a value). */
+  importNotes?: string[];
   aiAssistance: BlockStudioAiAssistance[];
   certificationChecklist?: BlockStudioCertificationChecklist;
   reviewStatus: BlockStudioImportReviewStatus;
@@ -176,6 +191,8 @@ export interface BlockStudioImportManifest {
     tags: string[];
   };
   candidateIds: string[];
+  /** Statements that got no draft: they change data, run a procedure, or repeat a query already in this import. */
+  skippedStatements?: SkippedSqlStatement[];
   /** With a host (RFC 0010): the person who imported; its SQL and preview rows are read only by them. */
   ownerId?: string;
 }
@@ -231,6 +248,8 @@ interface SqlStatementCandidate {
   totalStatements: number;
   splitStrategy: BlockStudioImportSplitStrategy;
   warnings: string[];
+  parameters: ImportedSqlParameter[];
+  notes: string[];
 }
 
 interface SqlSource {
@@ -258,15 +277,39 @@ export function createBlockStudioImportSession(
     owner: options.owner?.trim() ?? '',
     tags: normalizeTags(['imported', 'raw-sql', ...(options.tags ?? [])]),
   };
-  const statements = collectSqlStatements(sourceBundle.sources);
+  const collected = collectSqlStatements(sourceBundle.sources);
   const importId = buildImportId(sourceKind, sourceBundle.inputPath, now);
-  const candidates = statements.map((statement) => buildSqlCandidate({
+  const built = collected.statements.map((statement) => buildSqlCandidate({
     importId,
     sourceKind,
     projectRoot,
     statement,
     defaults,
   }));
+  // The same query twice in one import (a report copied into two files) is
+  // one draft; the copy is listed as skipped.
+  const seen = new Map<string, BlockStudioImportCandidate>();
+  const skippedStatements = [...collected.skipped];
+  const candidates: BlockStudioImportCandidate[] = [];
+  for (const candidate of built) {
+    const fingerprint = sqlLogicFingerprint(candidate.sql);
+    const first = seen.get(fingerprint);
+    if (first) {
+      skippedStatements.push({
+        sourcePath: candidate.sourcePath,
+        kind: 'duplicate',
+        reason: `Same query as "${first.name}" (${first.sourcePath}).`,
+        sql: candidate.sql.replace(/\s+/g, ' ').slice(0, 160),
+      });
+      continue;
+    }
+    seen.set(fingerprint, candidate);
+    candidates.push(candidate);
+  }
+  if (candidates.length === 0) {
+    throw new Error(`Nothing to import: ${skippedStatements.length === 1 ? 'the one statement' : `all ${skippedStatements.length} statements`} found ${skippedStatements.length === 1 ? 'was' : 'were'} left out. ${skippedStatements.slice(0, 3).map((item) => item.reason).join(' ')}`);
+  }
+  giveUniqueNames(candidates);
   const manifest: BlockStudioImportManifest = {
     id: importId,
     sourceKind,
@@ -277,6 +320,7 @@ export function createBlockStudioImportSession(
     updatedAt: now,
     defaults,
     candidateIds: candidates.map((candidate) => candidate.id),
+    ...(skippedStatements.length ? { skippedStatements } : {}),
   };
   const session = { ...manifest, candidates };
   writeBlockStudioImportSession(projectRoot, session);
@@ -368,6 +412,7 @@ export function writeBlockStudioImportSession(projectRoot: string, session: Bloc
     updatedAt: new Date().toISOString(),
     defaults: session.defaults,
     candidateIds: session.candidates.map((candidate) => candidate.id),
+    ...(session.skippedStatements?.length ? { skippedStatements: session.skippedStatements } : {}),
     ...(existing?.ownerId ? { ownerId: existing.ownerId } : typeof owner === 'string' ? { ownerId: owner } : {}),
   };
   writeFileSync(join(root, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n', 'utf-8');
@@ -449,7 +494,7 @@ export function updateBlockStudioImportCandidate(
       ...next.lineage,
       sourceTables: extractSourceTables(next.sql),
       parameters: extractSqlParameters(next.sql),
-      warnings: analyzeSqlWarnings(next.sql, next.lineage.totalStatements),
+      warnings: [...analyzeSqlWarnings(next.sql, next.lineage.totalStatements), ...(next.importNotes ?? [])],
     };
     next.warnings = next.lineage.warnings;
     next.confidence = scoreSqlCandidate(next.sql, next.lineage);
@@ -509,7 +554,11 @@ export function candidateToDqlSource(candidate: Pick<BlockStudioImportCandidate,
   if (llmContext) lines.push(`    llmContext = ${dqlString(llmContext)}`);
   if (params.length > 0) {
     lines.push('', '    params {');
-    lines.push(...params.map((param) => `        ${param.name} = ${formatDqlLiteral(param.value)}`));
+    // A report parameter the imported SQL gave no value is declared with its
+    // type only: the saved query asks for it until someone sets a default.
+    lines.push(...params.map((param) => (param.required
+      ? `        ${param.name}: ${dqlParamType(param.valueType)}`
+      : `        ${param.name} = ${formatDqlLiteral(param.value)}`)));
     lines.push('    }');
   }
   // A block whose query is empty is not a runnable custom block. This was emitted
@@ -589,6 +638,14 @@ function normalizeParameterPolicyKind(value: string): DqlParameterPolicyKind {
 
 function normalizeIdentifier(value: string): string {
   return String(value || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '').replace(/^([0-9])/, '_$1');
+}
+
+function dqlParamType(valueType: DqlParameterDecision['valueType']): string {
+  if (valueType === 'date') return 'date';
+  if (valueType === 'number' || valueType === 'year') return 'number';
+  if (valueType === 'boolean') return 'boolean';
+  if (valueType === 'set') return 'string[]';
+  return 'string';
 }
 
 function formatDqlLiteral(value: DqlParameterValue): string {
@@ -1060,25 +1117,32 @@ function splitSqlList(value: string): string[] {
   return parts.map((part) => part.trim()).filter(Boolean);
 }
 
-function collectSqlStatements(sources: SqlSource[]): SqlStatementCandidate[] {
+function collectSqlStatements(sources: SqlSource[]): { statements: SqlStatementCandidate[]; skipped: SkippedSqlStatement[] } {
   const statements: SqlStatementCandidate[] = [];
+  const skipped: SkippedSqlStatement[] = [];
   for (const source of sources) {
-    const split = splitSqlStatements(source.content);
-    const executableStatements = split.statements.filter(hasExecutableSql);
-    const sharedWarnings = executableStatements.length === 1 ? analyzeSqlWarnings(executableStatements[0], executableStatements.length) : [];
-    executableStatements.forEach((sql, index) => {
+    // A stored procedure becomes its body; then the file is split into
+    // statements and each script is folded into the queries it ends in.
+    const split = splitSqlStatements(unwrapStoredProcedures(source.content));
+    const folded = foldSqlScript(split.statements.filter(hasExecutableSql));
+    skipped.push(...folded.skipped.map((item) => ({ ...item, sourcePath: source.path })));
+    const queries = folded.queries.filter((query) => hasExecutableSql(query.sql));
+    const sharedWarnings = queries.length === 1 ? analyzeSqlWarnings(queries[0].sql, queries.length) : [];
+    queries.forEach((query, index) => {
       statements.push({
         sourcePath: source.path,
-        sql,
+        sql: query.sql,
         statementIndex: index + 1,
-        totalStatements: executableStatements.length,
+        totalStatements: queries.length,
         splitStrategy: split.strategy,
         warnings: index === 0 ? sharedWarnings : [],
+        parameters: query.parameters,
+        notes: query.notes,
       });
     });
   }
-  if (statements.length === 0) throw new Error('No SQL statements found to import.');
-  return statements;
+  if (statements.length === 0 && skipped.length === 0) throw new Error('No SQL statements found to import.');
+  return { statements, skipped };
 }
 
 function buildSqlCandidate(options: {
@@ -1092,16 +1156,27 @@ function buildSqlCandidate(options: {
   const sourcePath = displayPath(options.projectRoot, statement.sourcePath);
   const metadata = extractStatementMetadata(statement.sql);
   const sourceTables = extractSourceTables(statement.sql);
-  const inferred = metadata.name ? null : inferStatementBusinessMetadata(statement.sql, sourcePath, sourceTables);
-  const baseName = metadata.name || inferred?.name || basename(statement.sourcePath, extname(statement.sourcePath));
-  const name = statement.totalStatements > 1 && !metadata.name
-    ? `${baseName} ${statement.statementIndex}`
-    : baseName;
+  const inferred = inferStatementBusinessMetadata(statement.sql, sourcePath, sourceTables);
+  // A name header wins, then a short comment right above the query, then a
+  // name read from the SQL. Names that repeat in one import get a number
+  // afterwards (giveUniqueNames).
+  const name = metadata.name || metadata.title || inferred.name || basename(statement.sourcePath, extname(statement.sourcePath));
   const parameters = extractSqlParameters(statement.sql);
+  const parameterDecisions: DqlParameterDecision[] = statement.parameters.map((parameter) => ({
+    name: parameter.name,
+    policy: 'dynamic',
+    value: parameter.default ?? '',
+    valueType: parameter.valueType,
+    sourceExpression: parameter.written,
+    reason: `Report parameter ${parameter.written} in the imported SQL.`,
+    confidence: 0.9,
+    ...(parameter.default === undefined ? { required: true } : {}),
+  }));
   const warnings = [
     ...(parameters.length > 0 ? [`Contains parameters: ${parameters.join(', ')}`] : []),
     ...(statement.sql.includes('"""') ? ['SQL contains triple quotes that were escaped in the DQL draft.'] : []),
     ...statement.warnings,
+    ...statement.notes,
   ];
   const lineage: BlockStudioImportLineage = {
     sourceTables,
@@ -1116,9 +1191,10 @@ function buildSqlCandidate(options: {
     sourcePath,
     name: titleizeName(name),
     domain: metadata.domain ? sanitizeDomain(metadata.domain) : options.defaults.domain,
-    description: metadata.description || inferred?.description || `Imported from ${sourcePath}`,
+    description: metadata.description || inferred.description || `Imported from ${sourcePath}`,
     owner: options.defaults.owner,
-    tags: normalizeTags([...options.defaults.tags, ...metadata.tags, ...(inferred?.tags ?? [])]),
+    tags: normalizeTags([...options.defaults.tags, ...metadata.tags, ...(metadata.name ? [] : inferred.tags)]),
+    ...(parameterDecisions.length ? { parameterDecisions } : {}),
     sql: statement.sql.trim(),
     dqlSource: '',
     validation: null,
@@ -1127,11 +1203,13 @@ function buildSqlCandidate(options: {
     confidence: scoreSqlCandidate(statement.sql, lineage),
     splitStrategy: statement.splitStrategy,
     warnings,
+    ...(statement.notes.length ? { importNotes: statement.notes } : {}),
     conversionNotes: [
       'Deterministic SQL extraction created this DQL draft locally.',
       'Name, description, domain, and tags come from leading SQL comments when present; otherwise ZLens uses the source path and import defaults.',
-      'Multiple scripts in one file are split by semicolon, GO batch separator, or repeated name/title header comments.',
-      'The SQL statement is wrapped into query = """ ... """ without LLM rewriting.',
+      'Multiple scripts in one file are split by semicolon, GO batch separator, repeated name/title header comments, or a new statement on its own line.',
+      'Temp tables, views and tables a script builds before its query become WITH clauses; DECLARE and SET values become parameter defaults; statements that change data get no draft.',
+      'Otherwise the SQL statement is wrapped into query = """ ... """ without LLM rewriting.',
       'Visualization defaults to table until a reviewer chooses a chart type.',
       'The default test is assert row_count > 0.',
       'Optional AI assist is review-gated and only receives this candidate context.',
@@ -1146,14 +1224,20 @@ function buildSqlCandidate(options: {
 
 function splitSqlStatements(source: string): { statements: string[]; strategy: BlockStudioImportSplitStrategy } {
   const semicolonStatements = splitSqlBySemicolonAndGo(source);
-  if (semicolonStatements.length > 1) {
-    return { statements: semicolonStatements, strategy: 'semicolon-go' };
-  }
-  const metadataStatements = splitSqlByMetadataHeaders(source);
-  if (metadataStatements.length > 1) {
-    return { statements: metadataStatements, strategy: 'metadata-comment' };
-  }
-  return { statements: semicolonStatements, strategy: 'semicolon-go' };
+  const base: { statements: string[]; strategy: BlockStudioImportSplitStrategy } = semicolonStatements.length > 1
+    ? { statements: semicolonStatements, strategy: 'semicolon-go' }
+    : (() => {
+      const metadataStatements = splitSqlByMetadataHeaders(source);
+      return metadataStatements.length > 1
+        ? { statements: metadataStatements, strategy: 'metadata-comment' as const }
+        : { statements: semicolonStatements, strategy: 'semicolon-go' as const };
+    })();
+  // T-SQL scripts often have no semicolons, and a pasted page of reports may
+  // leave only a blank line between queries: split where a new statement
+  // starts on its own line.
+  const statements = base.statements.flatMap(splitAtStatementStarts);
+  if (base.statements.length === 1 && statements.length > 1) return { statements, strategy: 'statement-start' };
+  return { statements, strategy: base.strategy };
 }
 
 function splitSqlBySemicolonAndGo(source: string): string[] {
@@ -1264,33 +1348,75 @@ function matchGoBatchSeparator(source: string, index: number): { end: number } |
   const lineStart = Math.max(source.lastIndexOf('\n', index - 1) + 1, 0);
   if (source.slice(lineStart, index).trim()) return null;
   const rest = source.slice(index);
-  const match = rest.match(/^go(?:\s+\d+)?\s*(?:--[^\r\n]*)?(?:\r?\n|$)/i);
+  // Only the GO line itself: `\s` here crossed blank lines and swallowed the
+  // comment after them, the next query's name header.
+  const match = rest.match(/^go(?:[ \t]+\d+)?[ \t]*(?:--[^\r\n]*)?(?:\r?\n|$)/i);
   if (!match) return null;
   return { end: index + match[0].length };
 }
 
 function analyzeSqlWarnings(sql: string, totalStatements: number): string[] {
   const warnings: string[] = [];
-  if (totalStatements === 1) {
-    const cleaned = stripSqlComments(sql);
-    const starts = cleaned.match(/\b(?:select|with)\b/gi) ?? [];
-    if (starts.length > 1) {
-      warnings.push('Only one candidate was created, but multiple SELECT/WITH clauses were detected. Add semicolons, GO batch separators, or split manually if this file contains multiple scripts.');
-    }
+  // A second query on the same line as the first (`select … from a select …
+  // from b`) is not split; say so. Subqueries and WITH lists are not counted.
+  if (totalStatements === 1 && statementStartOffsets(sql, { lineStartOnly: false }).length > 0) {
+    warnings.push('Only one candidate was created, but multiple SELECT/WITH clauses were detected. Add semicolons, GO batch separators, or split manually if this file contains multiple scripts.');
   }
   return warnings;
 }
 
-function extractStatementMetadata(sql: string): { name: string; description: string; domain: string; tags: string[] } {
+function extractStatementMetadata(sql: string): { name: string; title: string; description: string; domain: string; tags: string[] } {
   const leading = sql.split(/\r?\n/).slice(0, 12).join('\n');
   const name = leading.match(/(?:--|\/\*)\s*(?:name|block|title|query)\s*:\s*([^*\n]+)/i)?.[1]?.trim() ?? '';
   const description = leading.match(/(?:--|\/\*)\s*(?:description|desc)\s*:\s*([^*\n]+)/i)?.[1]?.trim() ?? '';
   const domain = leading.match(/(?:--|\/\*)\s*domain\s*:\s*([^*\n]+)/i)?.[1]?.trim() ?? '';
   const tagText = leading.match(/(?:--|\/\*)\s*tags?\s*:\s*([^*\n]+)/i)?.[1]?.trim() ?? '';
   const tags = normalizeTags(tagText ? tagText.split(',') : []);
-  if (description) return { name, description, domain, tags };
-  const firstComment = leading.match(/^\s*--\s*(?!name\s*:|block\s*:)(.+)$/im)?.[1]?.trim() ?? '';
-  return { name, description: firstComment, domain, tags };
+  // The first plain comment, never a `key: value` header line.
+  const firstComment = leading.match(/^[^\S\n]*--[^\S\n]*(?!(?:name|block|title|query|description|desc|domain|tags?)\s*:)(\S.*)$/im)?.[1]?.trim() ?? '';
+  // A short comment right above a query without a name header names it
+  // (`-- Average order value per customer type`).
+  const title = !name && isCommentTitle(firstComment) && commentDirectlyAboveCode(sql, firstComment) ? firstComment : '';
+  if (description) return { name, title, description, domain, tags };
+  return { name, title, description: title ? '' : firstComment, domain, tags };
+}
+
+function isCommentTitle(comment: string): boolean {
+  if (comment.length < 3 || comment.length > 60 || !/[A-Za-z]{3}/.test(comment)) return false;
+  if (comment.split(/\s+/).length > 9) return false;
+  if (/[:=<>'"();]/.test(comment)) return false;
+  return !/^(?:todo|fixme|note|xxx|hack|select|and|or|where|from|join|group|order|limit|union|with)\b/i.test(comment);
+}
+
+function commentDirectlyAboveCode(sql: string, comment: string): boolean {
+  const lines = sql.split(/\r?\n/);
+  const index = lines.findIndex((line) => line.includes(comment));
+  if (index < 0) return false;
+  for (const line of lines.slice(index + 1)) {
+    if (!line.trim()) return false;
+    if (/^\s*--/.test(line)) continue;
+    return true;
+  }
+  return false;
+}
+
+/** Names that repeat in one import get " 2", " 3" in the order they were found. */
+function giveUniqueNames(candidates: BlockStudioImportCandidate[]): void {
+  const counts = new Map<string, number>();
+  for (const candidate of candidates) {
+    const key = candidate.name.toLowerCase();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const seen = new Map<string, number>();
+  for (const candidate of candidates) {
+    const key = candidate.name.toLowerCase();
+    if ((counts.get(key) ?? 0) < 2) continue;
+    const position = (seen.get(key) ?? 0) + 1;
+    seen.set(key, position);
+    if (position === 1) continue;
+    candidate.name = `${candidate.name} ${position}`;
+    candidate.dqlSource = candidateToDqlSource(candidate);
+  }
 }
 
 function inferStatementBusinessMetadata(sql: string, sourcePath: string, sourceTables: string[]): { name: string; description: string; tags: string[] } {
@@ -1308,9 +1434,15 @@ function inferStatementBusinessMetadata(sql: string, sourcePath: string, sourceT
   const yearLabel = years.length === 1 ? years[0] : years.length > 1 ? years.join(' ') : '';
   const yearClause = years.length === 1 ? ` for ${years[0]}` : years.length > 1 ? ` for ${years.join(' and ')}` : '';
 
+  // "Top …" only for a ranking: sorted descending and cut to the first rows.
+  const ranking = /\border\s+by\b[\s\S]*\bdesc\b/i.test(stripSqlComments(sql))
+    && (hasRankingLimit(sql) || /\bselect\s+(?:distinct\s+)?top\s*\(?\s*\d+/i.test(sql) || /\bfetch\s+first\b/i.test(sql));
+  const dimensionLabel = dimension ? titleizeName(dimension) : '';
   let name = '';
-  if (metricLabel && dimension) {
+  if (metricLabel && dimension && ranking) {
     name = `Top ${pluralDimension} By ${metricLabel}${yearLabel ? ` ${yearLabel}` : ''}`;
+  } else if (metricLabel && dimension) {
+    name = `${metricLabel} By ${dimensionLabel}${yearLabel ? ` ${yearLabel}` : ''}`;
   } else if (metricLabel) {
     name = `${metricLabel}${yearLabel ? ` ${yearLabel}` : ''}`;
   } else if (dimension) {
@@ -1319,8 +1451,10 @@ function inferStatementBusinessMetadata(sql: string, sourcePath: string, sourceT
 
   const selectedMeasures = aggregateAliases.map(titleizeName).filter((label) => label && label !== metricLabel);
   let description = '';
-  if (metricLabel && dimension) {
+  if (metricLabel && dimension && ranking) {
     description = `Ranks ${pluralDimension.toLowerCase()} by ${metricLabel.toLowerCase()}${yearClause} using ${sourceTables.join(', ') || sourcePath}.`;
+  } else if (metricLabel && dimension) {
+    description = `Calculates ${metricLabel.toLowerCase()} by ${dimensionLabel.toLowerCase()}${yearClause} using ${sourceTables.join(', ') || sourcePath}.`;
   } else if (metricLabel) {
     description = `Calculates ${metricLabel.toLowerCase()}${yearClause} using ${sourceTables.join(', ') || sourcePath}.`;
   } else if (dimension) {
@@ -1440,10 +1574,12 @@ function extractSourceTables(sql: string): string[] {
   const tables = new Set<string>();
   const cleaned = stripSqlComments(sql).replace(/extract\s*\(\s*\w+\s+from\s+[^)]+\)/gi, 'EXTRACT_VALUE');
   const cteNames = extractCteNames(cleaned);
-  const regex = /\b(?:from|join|update|into)\s+([`"[]?[A-Za-z0-9_./:-]+(?:\.[A-Za-z0-9_./:-]+)*[`"\]]?)/gi;
+  const part = '(?:\\[[^\\]]+\\]|"[^"]+"|`[^`]+`|[A-Za-z0-9_/:#$-]+)';
+  const regex = new RegExp(`\\b(?:from|join|update|into)\\s+(${part}(?:\\.${part})*)`, 'gi');
   let match: RegExpExecArray | null;
   while ((match = regex.exec(cleaned))) {
-    const raw = match[1].replace(/^[`"[]|[`"\]]$/g, '');
+    // [dev].[orders] and "dev"."orders" are dev.orders.
+    const raw = match[1].replace(/[`"\[\]]/g, '');
     if (!raw || raw.startsWith('(')) continue;
     if (/^(select|values|unnest|lateral)$/i.test(raw)) continue;
     if (cteNames.has(raw.toLowerCase())) continue;

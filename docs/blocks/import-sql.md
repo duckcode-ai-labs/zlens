@@ -26,12 +26,32 @@ Pick one:
 - **Upload files**: pick `.sql` files.
 - **Local path**: a file or folder inside your project.
 
-Only `.sql` files are read. Put several queries in one file by ending each
-with `;` or a `GO` line.
+Only `.sql` files are read. A file can hold many queries: ZLens splits at `;`,
+at `GO` lines, and where a new statement starts on its own line, so a pasted
+page of reports with only a blank line between them works too. A comment
+right above a query names its draft (`-- Revenue by store`), and so does a
+`-- name:` line.
 
-ZLens runs only read-only `SELECT` and `WITH` queries. Any other statement in
-your SQL, such as a `DROP`, `DELETE`, `CREATE` or `INSERT`, still gets a draft
-but is never run: its preview says it only supports read-only queries.
+Scripts become the queries they end in:
+
+| In your SQL | In the draft |
+|---|---|
+| A temp table the script builds, then reads (`CREATE TEMP TABLE`, `SELECT … INTO #t`, `CREATE TABLE #t` + `INSERT … SELECT`) | A `WITH` clause in the query |
+| `DECLARE @since date = '2024-01-01'`, or Snowflake `SET since = …` | The parameter `since`, with that value as its default |
+| A variable set to an expression (`SET @cutoff = GETDATE()`) | The expression, written into the query |
+| A report parameter with no value: `:start_date`, `@Region`, Tableau's `<Parameters.Store>`, `{{ region }}` | A parameter without a default. Give it one in **Edit full DQL** so the preview and Certify can run the query |
+| A stored procedure | The queries in its body, named after the procedure |
+| A view nothing else in the file reads | The query it selects, named after the view |
+
+Each draft's warnings say what was changed.
+
+No draft is made for a statement that changes data (`DROP`, `DELETE`,
+`INSERT`, `CREATE TABLE … AS` of a table nothing reads), for `EXEC`/`CALL`, or
+for a query that repeats one earlier in the same import. **Left out** under
+the drafts lists each one with the reason, and none of them is run. Session
+settings (`SET NOCOUNT ON`, `USE`) and temp-table cleanup are dropped without
+a note. The preview and Certify only ever run one read-only `SELECT` or
+`WITH` query.
 
 Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
 
@@ -111,11 +131,14 @@ Unlike the Import SQL page, the terminal command saves every draft as it goes.
 zlens import sql ./legacy-sql --domain finance --owner you@example.com
 ```
 
-It prints one line per query with the draft's path, and ends with:
+It prints one line per query with the draft's path, then the statements it
+left out and why, and ends with:
 
 ```text
 Drafts are autosaved under blocks/_drafts or domains/<domain>/blocks/_drafts. Review, preview, then certify selected candidates.
 ```
 
 Then certify a draft with
-`zlens certify --from-draft <path> --owner you@example.com`.
+`zlens certify --from-draft <path> --owner you@example.com`. The certified
+file drops the draft's hash from its name (`monthly-revenue.dql`) unless that
+name is taken.

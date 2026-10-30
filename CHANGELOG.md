@@ -19,6 +19,33 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   anything but one read-only `SELECT` or `WITH` query and say so on the
   draft. Nothing else changes for read-only queries.
 
+### Import SQL: scripts, parameters and duplicates
+
+- **Scripts become the queries they end in.** A temp table a script builds
+  and then reads (`CREATE TEMP TABLE … AS`, `SELECT … INTO #t`, `CREATE TABLE
+  #t` + `INSERT … SELECT`) becomes a `WITH` clause, a stored procedure becomes
+  the queries in its body, and a view nothing else reads becomes its query.
+  These were split at every `;` into pieces that could not run.
+- **Report parameters become saved query parameters.** `:start_date`,
+  `@Region`, Tableau's `<Parameters.Store>` and `{{ region }}` become
+  `${start_date}` and so on. A value from `DECLARE @x = …` or Snowflake
+  `SET x = …` becomes the default; an expression such as `GETDATE()` is
+  written into the query.
+- **Statements that change data, `EXEC`/`CALL` and repeated queries get no
+  draft.** The import lists them under **Left out** (and in
+  `zlens import sql`) with the reason. A query found twice in one import was
+  drafted, and could be certified, twice.
+- **Splitting:** a new statement on its own line starts a new draft, so T-SQL
+  without semicolons and queries with only a blank line between them split
+  correctly. A `GO` line no longer swallows the comment after it, which lost
+  the next query's name.
+- **Names:** a short comment right above a query names it; "Top …" is used
+  only for queries that rank; names that repeat get a number instead of every
+  query in a file; a `-- name:` line no longer ends up in the description.
+- `zlens certify --from-draft` drops the draft's hash from the certified file
+  name (`monthly-revenue.dql`) unless that name is taken.
+- Tables written `[dev].[orders]` are read as `dev.orders` in a draft's lineage.
+
 ### Business terms are certified only through Certify
 
 - **Saving a term no longer certifies it.** On **Modeling → Terms &

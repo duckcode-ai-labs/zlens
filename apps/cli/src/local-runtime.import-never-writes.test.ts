@@ -69,7 +69,7 @@ async function withServer(run: (base: string, executed: string[]) => Promise<voi
 }
 
 describe('Import SQL never runs a statement that writes', () => {
-  it('previews the SELECT and refuses the DROP, CREATE and DELETE beside it without running them', async () => {
+  it('makes a draft of the SELECT only, lists the DROP, CREATE and DELETE as skipped, and runs none of them', async () => {
     await withServer(async (base, executed) => {
       const session = await post(base, '/api/block-studio/ai-imports', {
         inputMode: 'paste',
@@ -80,22 +80,41 @@ describe('Import SQL never runs a statement that writes', () => {
       });
       expect(session.status, session.text).toBe(200);
       const candidates = session.body.candidates as Array<{ id: string; sql: string }>;
-      expect(candidates).toHaveLength(4);
+      expect(candidates).toHaveLength(1);
+      expect(session.body.skippedStatements.map((item: { kind: string; reason: string }) => [item.kind, item.reason])).toEqual([
+        ['writes', 'Changes data (DROP). ZLens imports only queries that read.'],
+        ['writes', 'Creates table dev.order_snapshot. ZLens imports queries that read; if this is a report, import its SELECT.'],
+        ['writes', 'Changes data (DELETE). ZLens imports only queries that read.'],
+      ]);
 
-      const outcomes: Array<{ sql: string; status: number; text: string }> = [];
-      for (const candidate of candidates) {
-        const preview = await post(base, `/api/block-studio/ai-imports/${encodeURIComponent(session.body.id)}/candidates/${encodeURIComponent(candidate.id)}/preview`, {});
-        outcomes.push({ sql: candidate.sql, status: preview.status, text: preview.text });
-      }
-
+      const preview = await post(base, `/api/block-studio/ai-imports/${encodeURIComponent(session.body.id)}/candidates/${encodeURIComponent(candidates[0].id)}/preview`, {});
+      expect(preview.status, preview.text).toBe(200);
       expect(executed.some((sql) => /date_trunc\('week'/i.test(sql))).toBe(true);
       expect(executed.filter((sql) => WRITES.test(sql))).toEqual([]);
-      const select = outcomes.find((outcome) => /^-- name: Weekly orders/.test(outcome.sql));
-      expect(select?.status, select?.text).toBe(200);
-      for (const outcome of outcomes.filter((item) => item !== select)) {
-        expect(outcome.status, outcome.sql).not.toBe(200);
-        expect(outcome.text).toContain('Saved query preview only supports read-only SELECT or WITH queries.');
-      }
+    });
+  }, 60_000);
+
+  it('refuses to preview a draft someone edited into a statement that writes', async () => {
+    await withServer(async (base, executed) => {
+      const session = await post(base, '/api/block-studio/ai-imports', {
+        inputMode: 'paste',
+        sources: [{ path: 'weekly.sql', content: "select date_trunc('week', ordered_at) as week, count(*) as orders from dev.orders group by 1" }],
+        domain: 'commerce',
+        owner: 'analytics@jaffle.shop',
+        persistence: 'session-only',
+      });
+      const candidate = session.body.candidates[0] as { id: string };
+      const path = `/api/block-studio/ai-imports/${encodeURIComponent(session.body.id)}/candidates/${encodeURIComponent(candidate.id)}`;
+      const edited = await fetch(`${base}${path}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sql: 'drop table dev.orders' }),
+      });
+      expect(edited.status, await edited.text()).toBe(200);
+      const preview = await post(base, `${path}/preview`, {});
+      expect(preview.status, preview.text).not.toBe(200);
+      expect(preview.text).toContain('Saved query preview only supports read-only SELECT or WITH queries.');
+      expect(executed.filter((sql) => WRITES.test(sql))).toEqual([]);
     });
   }, 60_000);
 

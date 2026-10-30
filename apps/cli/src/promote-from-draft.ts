@@ -110,7 +110,14 @@ export async function promoteFromDraft(
     };
   }
 
-  const slug = inferSlugFromPath(draftAbs);
+  // A draft file keeps a hash so drafts never collide (`monthly-revenue-a9a82c329b13`);
+  // the certified file drops it unless that name is already taken.
+  const draftSlug = inferSlugFromPath(draftAbs);
+  const cleanSlug = draftSlug.replace(/-[0-9a-f]{12,16}$/, '');
+  const slug = cleanSlug !== draftSlug && cleanSlug
+    && !existsSync(join(projectRoot, resolvePromotedBlockPath(projectRoot, domain, cleanSlug, draftPathInput)))
+    ? cleanSlug
+    : draftSlug;
   const destRel = resolvePromotedBlockPath(projectRoot, domain, slug, draftPathInput);
   const destAbs = join(projectRoot, destRel);
 
