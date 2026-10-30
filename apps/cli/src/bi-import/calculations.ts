@@ -51,8 +51,89 @@ export const CALCULATION_KIND_LABELS: Record<CalculationKind, string> = {
   advanced: 'Advanced',
 };
 
+// ── Reading a formula ───────────────────────────────────────────────────────
+
+/**
+ * A formula read once, left to right, so a `//` inside a string, an
+ * apostrophe in a field name (`[Last Year's Sales]`) or a function's name
+ * inside a field name (`[Total (copy)]`) is never taken for code. All three
+ * keep the formula's length, so a position in one is the same in the others.
+ */
+interface ScannedFormula {
+  /** Comments blanked, string contents blanked: what the formula computes, with its names. */
+  code: string;
+  /** `code` with every name blanked too (inside `[…]`, and DAX's quoted table names): what the rules read. */
+  shape: string;
+  /** Comments removed, strings kept: for showing. */
+  display: string;
+}
+
+function scanFormula(formula: string, language: BiCalculation['language']): ScannedFormula {
+  let code = '';
+  let shape = '';
+  let display = '';
+  const blank = (text: string) => text.replace(/[^\n]/g, ' ');
+  let index = 0;
+  const take = (end: number, kind: 'code' | 'string' | 'name' | 'comment') => {
+    const text = formula.slice(index, end);
+    if (kind === 'comment') {
+      code += blank(text);
+      shape += blank(text);
+      display += ' ';
+    } else if (kind === 'string') {
+      const inner = text.length >= 2 ? `${text[0]}${blank(text.slice(1, -1))}${text[text.length - 1]}` : blank(text);
+      code += inner;
+      shape += inner;
+      display += text;
+    } else if (kind === 'name') {
+      code += text;
+      shape += text.length >= 2 ? `${text[0]}${'_'.repeat(text.length - 2)}${text[text.length - 1]}` : text;
+      display += text;
+    } else {
+      code += text;
+      shape += text;
+      display += text;
+    }
+    index = end;
+  };
+  /** The end of a quoted run opened at `index` by `quote`, where a doubled quote stays inside. */
+  const closing = (quote: string) => {
+    let at = index + 1;
+    while (at < formula.length) {
+      if (formula[at] === quote) {
+        if (formula[at + 1] === quote) at += 2;
+        else return at + 1;
+      } else at += 1;
+    }
+    return formula.length;
+  };
+  while (index < formula.length) {
+    const char = formula[index]!;
+    const next = formula[index + 1];
+    if (char === '/' && next === '*') {
+      const end = formula.indexOf('*/', index + 2);
+      take(end < 0 ? formula.length : end + 2, 'comment');
+    } else if ((char === '/' && next === '/') || (language === 'dax' && char === '-' && next === '-')) {
+      const end = formula.slice(index).search(/[\r\n]/);
+      take(end < 0 ? formula.length : index + end, 'comment');
+    } else if (char === '[') {
+      // `]]` is a `]` inside the name.
+      take(closing(']'), 'name');
+    } else if (char === '"' || (char === "'" && language === 'tableau')) {
+      take(closing(char), 'string');
+    } else if (char === "'" && language === 'dax') {
+      // DAX quotes table names in single quotes; they are names, not text.
+      take(closing("'"), 'name');
+    } else {
+      let end = index + 1;
+      while (end < formula.length && !/[\/\-\['"]/.test(formula[end]!)) end += 1;
+      take(end, 'code');
+    }
+  }
+  return { code, shape, display: display.replace(/\s+/g, ' ').trim() };
+}
+
 const ORDER: CalculationKind[] = ['simple', 'filtered', 'ratio', 'row-level', 'advanced'];
-const harder = (a: CalculationKind, b: CalculationKind): CalculationKind => (ORDER.indexOf(a) >= ORDER.indexOf(b) ? a : b);
 
 // ── Tableau ─────────────────────────────────────────────────────────────────
 
@@ -65,70 +146,54 @@ const TABLEAU_ADVANCED: Array<[RegExp, string]> = [
   [/\b(?:RAWSQL\w*|RAWSQLAGG\w*|SCRIPT_\w+|MODEL_\w+)\s*\(/i, 'Pass-through SQL or an analytics extension (RAWSQL, SCRIPT_…).'],
 ];
 
-/** The formula without comments and with string literals emptied, so names inside them do not count. */
-function tableauCode(formula: string): string {
-  return formula
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/\/\/[^\n\r]*/g, ' ')
-    .replace(/'(?:[^']|'')*'/g, "''")
-    .replace(/"(?:[^"]|"")*"/g, '""')
-    .trim();
-}
-
 /** `[Name]` and `[Source].[Name]` references, as the name inside the last brackets. */
 function tableauReferences(code: string): string[] {
-  return Array.from(code.matchAll(/(?:\[[^\]]+\]\.)?\[([^\]]+)\]/g), (match) => match[1]!.trim());
+  return Array.from(code.matchAll(/(?:\[(?:[^\]]|\]\])+\]\.)?\[((?:[^\]]|\]\])+)\]/g), (match) => match[1]!.replace(/\]\]/g, ']').trim());
 }
 
 // ── DAX ─────────────────────────────────────────────────────────────────────
 
 const DAX_AGGREGATES = /\b(?:SUM|AVERAGE|MIN|MAX|COUNT|COUNTA|COUNTBLANK|COUNTROWS|DISTINCTCOUNT|DISTINCTCOUNTNOBLANK|MEDIAN|CALCULATE)\s*\(/i;
-const COLUMN_REF = String.raw`(?:'(?:[^']|'')+'|[A-Za-z_][\w ]*)?\[[^\]]+\]`;
-const DAX_SIMPLE = new RegExp(String.raw`^(?:(?:SUM|AVERAGE|MIN|MAX|COUNT|COUNTA|DISTINCTCOUNT|DISTINCTCOUNTNOBLANK|MEDIAN)\s*\(\s*${COLUMN_REF}\s*\)|COUNTROWS\s*\(\s*(?:'(?:[^']|'')+'|[A-Za-z_]\w*)\s*\))$`, 'i');
-const DAX_FILTER_ARG = new RegExp(String.raw`^${COLUMN_REF}\s*(?:=|==|<>|<=|>=|<|>|IN\b)\s*(?:\{[^}]*\}|[^,{}]+)$`, 'i');
+const COLUMN_REF = String.raw`(?:'[^']*'|[A-Za-z_][\w ]*)?\[[^\]]+\]`;
+const DAX_SIMPLE = new RegExp(String.raw`^(?:(?:SUM|AVERAGE|MIN|MAX|COUNT|COUNTA|DISTINCTCOUNT|DISTINCTCOUNTNOBLANK|MEDIAN)\s*\(\s*${COLUMN_REF}\s*\)|COUNTROWS\s*\(\s*(?:'[^']*'|[A-Za-z_]\w*)\s*\))$`, 'i');
+/** A column compared with a value (`T[c] = "x"`, `T[d] >= DATE(2024, 1, 1)`, `T[c] IN {…}`), alone or in KEEPFILTERS. */
+const DAX_FILTER_ARG = new RegExp(String.raw`^(?:KEEPFILTERS\s*\(\s*)?${COLUMN_REF}\s*(?:=|==|<>|<=|>=|<|>|IN\b)\s*(?:\{[^}]*\}|[^{}\[\]]+?)\s*\)?$`, 'i');
 const DAX_ADVANCED: Array<[RegExp, string]> = [
   [/\b(?:TOTAL[YQM]TD|DATES[YQM]TD|SAMEPERIODLASTYEAR|DATEADD|PARALLELPERIOD|PREVIOUS(?:DAY|MONTH|QUARTER|YEAR)|NEXT(?:DAY|MONTH|QUARTER|YEAR)|DATESBETWEEN|DATESINPERIOD|(?:OPENING|CLOSING)BALANCE\w*|(?:START|END)OF(?:MONTH|QUARTER|YEAR))\s*\(/i, 'Time intelligence (TOTALYTD, SAMEPERIODLASTYEAR, DATEADD …).'],
   [/\b(?:SUMX|AVERAGEX|MINX|MAXX|COUNTX|COUNTAX|PRODUCTX|CONCATENATEX|RANKX|MEDIANX|PERCENTILEX\.\w+)\s*\(/i, 'An iterator (SUMX, AVERAGEX, RANKX …) that works row by row over a table.'],
-  [/\b(?:ALL|ALLEXCEPT|ALLSELECTED|ALLNOBLANKROW|REMOVEFILTERS|KEEPFILTERS|FILTER|CALCULATETABLE|USERELATIONSHIP|CROSSFILTER|TREATAS)\s*\(/i, 'Changes which rows count (ALL, FILTER, REMOVEFILTERS, USERELATIONSHIP …).'],
+  [/\b(?:ALL|ALLEXCEPT|ALLSELECTED|ALLNOBLANKROW|REMOVEFILTERS|FILTER|CALCULATETABLE|USERELATIONSHIP|CROSSFILTER|TREATAS)\s*\(/i, 'Changes which rows count (ALL, FILTER, REMOVEFILTERS, USERELATIONSHIP …).'],
   [/\b(?:SELECTEDVALUE|HASONEVALUE|HASONEFILTER|ISFILTERED|ISCROSSFILTERED|ISINSCOPE|VALUES|EARLIER|EARLIEST|LOOKUPVALUE|RELATEDTABLE)\s*\(/i, 'Depends on the report\'s filters or another table (SELECTEDVALUE, VALUES, LOOKUPVALUE …).'],
   [/\b(?:SUMMARIZE|SUMMARIZECOLUMNS|ADDCOLUMNS|SELECTCOLUMNS|TOPN|GENERATE\w*|UNION|INTERSECT|EXCEPT|NATURAL\w+JOIN|CROSSJOIN|DATATABLE|GROUPBY)\s*\(/i, 'Builds a table (SUMMARIZE, TOPN, ADDCOLUMNS …).'],
   [/\b(?:USERPRINCIPALNAME|USERNAME|USEROBJECTID|CUSTOMDATA)\s*\(/i, 'Depends on who is viewing (USERPRINCIPALNAME): a row rule, not a metric.'],
   [/\bVAR\b/i, 'Uses variables (VAR … RETURN).'],
 ];
 
-function daxCode(formula: string): string {
-  return formula
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/(?:\/\/|--)[^\n\r]*/g, ' ')
-    .replace(/"(?:[^"]|"")*"/g, '""')
-    .replace(/\s+/g, ' ')
-    .trim();
+/** Every `[Name]` or `Table[Name]` in DAX code, with its table when written, and where it is. */
+function daxReferences(code: string): Array<{ table?: string; name: string; start: number; end: number }> {
+  return Array.from(code.matchAll(/('(?:[^']|'')*'|[A-Za-z_][\w]*)?\[((?:[^\]]|\]\])+)\]/g), (match) => ({
+    ...(match[1] ? { table: match[1].replace(/^'|'$/g, '').replace(/''/g, "'") } : {}),
+    name: match[2]!.replace(/\]\]/g, ']').trim(),
+    start: match.index!,
+    end: match.index! + match[0].length,
+  }));
 }
 
-/** Bare `[Name]` references (no table before them): measures, in a measure. */
-function daxMeasureReferences(code: string): string[] {
-  return Array.from(code.matchAll(/(^|[^\w'\]])\[([^\]]+)\]/g), (match) => match[2]!.trim());
-}
-
-/** The arguments of the call whose `(` is at `open`, split at top-level commas. */
-function callArguments(code: string, open: number): { args: string[]; end: number } | null {
-  const args: string[] = [];
+/** The arguments of the call whose `(` is at `open`, split at top-level commas, with where each starts. */
+function callArguments(code: string, open: number): { args: Array<{ text: string; start: number }>; end: number } | null {
+  const args: Array<{ text: string; start: number }> = [];
   let depth = 0;
   let start = open + 1;
   for (let index = open; index < code.length; index += 1) {
     const char = code[index];
-    if (char === '"') {
-      const close = code.indexOf('"', index + 1);
-      index = close < 0 ? code.length : close;
-    } else if (char === '(' || char === '{') depth += 1;
+    if (char === '(' || char === '{') depth += 1;
     else if (char === ')' || char === '}') {
       depth -= 1;
       if (depth === 0) {
-        args.push(code.slice(start, index).trim());
+        args.push({ text: code.slice(start, index), start });
         return { args, end: index };
       }
     } else if (char === ',' && depth === 1) {
-      args.push(code.slice(start, index).trim());
+      args.push({ text: code.slice(start, index), start });
       start = index + 1;
     }
   }
@@ -157,7 +222,7 @@ export function classifyCalculations(calculations: BiCalculation[]): ClassifiedC
   const verdictOf = (calculation: BiCalculation): Verdict => {
     const known = verdicts.get(calculation);
     if (known) return known;
-    if (visiting.has(calculation)) return { kind: 'advanced', reason: 'refers to itself through other calculations' };
+    if (visiting.has(calculation)) return { kind: 'advanced', reason: 'Refers to itself through other calculations.' };
     visiting.add(calculation);
     const scope = byScope.get(scopeOf(calculation)) ?? new Map<string, BiCalculation>();
     const lookup = (name: string) => {
@@ -178,26 +243,28 @@ function tableauVerdict(
   lookup: (name: string) => BiCalculation | undefined,
   verdictOf: (calculation: BiCalculation) => Verdict,
 ): Verdict {
-  const code = tableauCode(calculation.formula);
-  for (const [pattern, reason] of TABLEAU_ADVANCED) if (pattern.test(code)) return { kind: 'advanced', reason };
+  const { code, shape: rawShape } = scanFormula(calculation.formula, 'tableau');
+  const shape = rawShape.trim();
+  for (const [pattern, reason] of TABLEAU_ADVANCED) if (pattern.test(shape)) return { kind: 'advanced', reason };
   const referenced = (calculation.references ?? tableauReferences(code)).map(lookup).filter((found): found is BiCalculation => Boolean(found));
   const references = referenced.map((found) => ({ found, verdict: verdictOf(found) }));
   const advanced = references.find((reference) => reference.verdict.kind === 'advanced');
   if (advanced) return { kind: 'advanced', reason: `Builds on ${advanced.found.name}, which is advanced.` };
+  // A row-level calculation is a column: aggregating it is still one metric.
   const aggregatedReference = references.some((reference) => reference.verdict.kind !== 'row-level');
-  const aggregates = TABLEAU_AGGREGATES.test(code);
+  const aggregates = TABLEAU_AGGREGATES.test(shape);
   if (!aggregates && !aggregatedReference) {
-    return { kind: 'row-level', reason: /^(?:''|""|-?[\d.]+|TRUE|FALSE|#[^#]+#)$/i.test(code) ? 'A constant value.' : 'A value for each row: a column or dimension.' };
+    return { kind: 'row-level', reason: /^(?:'\s*'|"\s*"|-?[\d.]+|TRUE|FALSE|#[^#]+#)$/i.test(shape) ? 'A constant value.' : 'A value for each row: a column or dimension.' };
   }
-  const outer = TABLEAU_SIMPLE.exec(code);
+  if (/^ATTR\s*\(\s*\[_*\]\s*\)$/i.test(shape)) return { kind: 'row-level', reason: 'ATTR of a field shows its one value: a dimension.' };
+  const outer = TABLEAU_SIMPLE.exec(shape);
   if (outer && !TABLEAU_AGGREGATES.test(outer[1]!) && !aggregatedReference && balanced(outer[1]!)) {
     return /\b(?:IF|IIF|CASE)\b/i.test(outer[1]!)
       ? { kind: 'filtered', reason: 'One aggregate of a condition: a metric with a filter.' }
       : { kind: 'simple', reason: 'One aggregate: a metric.' };
   }
-  if (/\b(?:IF|IIF|CASE)\b/i.test(outsideAggregates(code))) return { kind: 'advanced', reason: 'A condition on aggregated values.' };
-  const base: Verdict = { kind: 'ratio', reason: 'Aggregates combined with arithmetic: a metric built from other metrics.' };
-  return references.reduce<Verdict>((verdict, reference) => (harder(verdict.kind, reference.verdict.kind) === verdict.kind ? verdict : { kind: reference.verdict.kind, reason: verdict.reason }), base);
+  if (/\b(?:IF|IIF|CASE)\b/i.test(outsideAggregates(shape))) return { kind: 'advanced', reason: 'A condition on aggregated values.' };
+  return { kind: 'ratio', reason: 'Aggregates combined with arithmetic: a metric built from other metrics.' };
 }
 
 function daxVerdict(
@@ -205,42 +272,58 @@ function daxVerdict(
   lookup: (name: string) => BiCalculation | undefined,
   verdictOf: (calculation: BiCalculation) => Verdict,
 ): Verdict {
-  const code = daxCode(calculation.formula);
+  const scanned = scanFormula(calculation.formula, 'dax');
+  // Trimmed the same at both ends, so positions in code and shape still match.
+  const lead = scanned.code.length - scanned.code.trimStart().length;
+  const code = scanned.code.trim();
+  const shape = scanned.shape.slice(lead, lead + code.length);
   if (calculation.role === 'table') return { kind: 'advanced', reason: 'A calculated table.' };
-  for (const [pattern, reason] of DAX_ADVANCED) if (pattern.test(code)) return { kind: 'advanced', reason };
+  for (const [pattern, reason] of DAX_ADVANCED) if (pattern.test(shape)) return { kind: 'advanced', reason };
   if (calculation.role === 'column') {
-    return DAX_AGGREGATES.test(code)
+    return DAX_AGGREGATES.test(shape)
       ? { kind: 'advanced', reason: 'A calculated column that aggregates (row context to filter context).' }
       : { kind: 'row-level', reason: 'A calculated column: a value for each row.' };
   }
-  const references = daxMeasureReferences(code).map(lookup).filter((found): found is BiCalculation => Boolean(found)).map((found) => ({ found, verdict: verdictOf(found) }));
+  // A measure is named `[Name]`, or `Table[Name]` with its home table.
+  const measureAt = (reference: ReturnType<typeof daxReferences>[number]) => {
+    const found = lookup(reference.name);
+    return found && (!reference.table || reference.table.toLowerCase() === (found.owner ?? '').toLowerCase()) ? found : undefined;
+  };
+  const located = daxReferences(code).map((reference) => ({ ...reference, found: measureAt(reference) }));
+  const references = located.filter((reference) => reference.found).map((reference) => ({ ...reference, found: reference.found!, verdict: verdictOf(reference.found!) }));
   const advanced = references.find((reference) => reference.verdict.kind === 'advanced');
   if (advanced) return { kind: 'advanced', reason: `Builds on ${advanced.found.name}, which is advanced.` };
-  if (DAX_SIMPLE.test(code)) return { kind: 'simple', reason: 'One aggregate: a metric.' };
-  const calculate = /^CALCULATE\s*\(/i.exec(code);
-  if (calculate) {
-    const call = callArguments(code, calculate[0].length - 1);
-    if (call && call.end === code.length - 1 && call.args.length >= 2) {
-      const [expression, ...filters] = call.args;
-      const measure = /^\[([^\]]+)\]$/.exec(expression!);
-      const inner = measure ? references.find((reference) => reference.found.name.toLowerCase() === measure[1]!.toLowerCase())?.verdict.kind : DAX_SIMPLE.test(expression!) ? 'simple' : undefined;
-      if (inner === 'simple' && filters.every((filter) => filter.split(/\s*(?:&&|\|\|)\s*/).every((part) => DAX_FILTER_ARG.test(part)))) {
-        return { kind: 'filtered', reason: 'One aggregate with a filter: a metric with a filter.' };
-      }
-    }
-    return { kind: 'advanced', reason: 'CALCULATE with filters that are not simple column conditions.' };
+  if (DAX_SIMPLE.test(shape)) return { kind: 'simple', reason: 'One aggregate: a metric.' };
+  if (references.length === 1 && references[0]!.start === 0 && references[0]!.end === code.length) {
+    return { ...references[0]!.verdict, reason: `The same as ${references[0]!.found.name}.` };
   }
-  if (/\b(?:IF|SWITCH)\s*\(/i.test(code)) return { kind: 'advanced', reason: 'A condition on aggregated values (IF, SWITCH).' };
-  if (!DAX_AGGREGATES.test(code) && references.length === 0) return { kind: 'row-level', reason: 'No aggregate: a constant or a value per row.' };
-  if (references.length === 1 && /^\[[^\]]+\]$/.test(code)) return { ...references[0]!.verdict, reason: `The same as ${references[0]!.found.name}.` };
-  const base: Verdict = { kind: 'ratio', reason: 'Aggregates combined with arithmetic (or DIVIDE): a metric built from other metrics.' };
-  return references.reduce<Verdict>((verdict, reference) => (harder(verdict.kind, reference.verdict.kind) === 'advanced' ? { kind: 'advanced', reason: verdict.reason } : verdict), base);
+
+  // Each CALCULATE must be one aggregate (or a simple measure) with column conditions.
+  const simpleAt = (text: string, start: number) => {
+    const trimmed = text.trim();
+    const offset = start + text.indexOf(trimmed);
+    if (DAX_SIMPLE.test(trimmed)) return true;
+    const reference = references.find((candidate) => candidate.start === offset && candidate.end === offset + trimmed.length);
+    return reference?.verdict.kind === 'simple';
+  };
+  const calls = Array.from(shape.matchAll(/\bCALCULATE\s*\(/gi));
+  for (const call of calls) {
+    const parsed = callArguments(shape, call.index! + call[0].length - 1);
+    const [expression, ...filters] = parsed?.args ?? [];
+    const simpleFilters = filters.length > 0 && filters.every((filter) => filter.text.split(/&&|\|\|/).every((part) => DAX_FILTER_ARG.test(part.trim())));
+    if (!parsed || !expression || !simpleAt(expression.text, expression.start) || !simpleFilters) {
+      return { kind: 'advanced', reason: 'CALCULATE with filters that are not simple column conditions.' };
+    }
+    if (call.index === 0 && parsed.end === shape.length - 1) return { kind: 'filtered', reason: 'One aggregate with a filter: a metric with a filter.' };
+  }
+  if (/\b(?:IF|SWITCH)\s*\(/i.test(shape)) return { kind: 'advanced', reason: 'A condition on aggregated values (IF, SWITCH).' };
+  if (!DAX_AGGREGATES.test(shape) && references.length === 0) return { kind: 'row-level', reason: 'No aggregate: a constant or a value per row.' };
+  return { kind: 'ratio', reason: 'Aggregates combined with arithmetic (or DIVIDE): a metric built from other metrics.' };
 }
 
 /** A formula without its comments, for showing: what it computes, not the notes about it. */
 export function formulaWithoutComments(formula: string, language: BiCalculation['language']): string {
-  const lineComment = language === 'tableau' ? /\/\/[^\n\r]*/g : /(?:\/\/|--)[^\n\r]*/g;
-  return formula.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(lineComment, ' ').replace(/\s+/g, ' ').trim();
+  return scanFormula(formula, language).display;
 }
 
 /** The code with every aggregate call's argument removed, to find a condition outside them. */

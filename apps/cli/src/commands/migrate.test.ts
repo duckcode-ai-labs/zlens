@@ -290,6 +290,9 @@ describe('runMigrate assess', () => {
 
       await runMigrate('assess', baseFlags({ format: 'text', outDir: 'out/assessment.md' }), ['reports']);
       expect(readFileSync(join(dir, 'out', 'assessment.md'), 'utf8')).toContain('| Queries (Custom SQL, native SQL, scripts) | 1 |');
+      // --out an existing folder: the report goes in it.
+      await runMigrate('assess', baseFlags({ format: 'text', outDir: 'out' }), ['reports']);
+      expect(existsSync(join(dir, 'out', 'zlens-migration-assessment.md'))).toBe(true);
     } finally {
       process.chdir(cwd);
       log.mockRestore();

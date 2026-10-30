@@ -27,10 +27,10 @@ export function extractPowerBiTemplate(zip: Buffer, displayPath: string): Extrac
   const schema = readZipFile(zip, (name) => name === 'DataModelSchema');
   if (!schema) throw new Error(`${displayPath} has no DataModelSchema; save it again as a Power BI template (.pbit).`);
   const extracted = extractPowerBiModelJson(decodeModelText(schema.data), displayPath);
-  const layout = readZipFile(zip, (name) => name === 'Report/Layout');
-  if (layout && extracted.inventory) {
+  if (extracted.inventory) {
     try {
-      extracted.inventory.pages = readPowerBiReportLayout(decodeModelText(layout.data));
+      const layout = readZipFile(zip, (name) => name === 'Report/Layout');
+      if (layout) extracted.inventory.pages = readPowerBiReportLayout(decodeModelText(layout.data));
     } catch {
       // The report is only counted; its queries are what the import needs.
     }
@@ -160,6 +160,7 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
   const result: ExtractedBiFile = { sources: [], skipped: [], inventory };
   const connectors = new Map<string, BiInventory['dataSources'][number]>();
   const tableLoads: string[] = [];
+  const tablesLoaded = new Set<string>();
   const otherLoads: string[] = [];
   const calculatedTables: string[] = [];
   const measures: string[] = [];
@@ -178,8 +179,9 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
         continue;
       }
       const reading = readPowerQuery(partition.expression, { parameters, shared });
-      const source = reading.connector ?? (reading.otherSources.length ? reading.otherSources.join(', ') : undefined);
-      if (source && !connectors.has(source)) connectors.set(source, { name: source, ...(reading.connector ? { database: reading.connector } : {}) });
+      // A database connector, else what it loads from (Csv.Document, Excel.Workbook, Web.Contents).
+      const source = reading.connector ?? reading.otherSources[0];
+      if (source && !connectors.has(source)) connectors.set(source, { name: source, database: source });
       reading.queries.forEach((query, index) => {
         const name = humanizeObjectName(table.name) || table.name;
         const fullName = reading.queries.length > 1 ? `${name} ${index + 1}` : name;
@@ -194,12 +196,16 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
           parameters: query.parameters,
         });
       });
-      if (!reading.queries.length && reading.tables.length) tableLoads.push(`${table.name} (${reading.tables.join(', ')})`);
+      if (!reading.queries.length && reading.tables.length) {
+        tableLoads.push(`${table.name} (${reading.tables.join(', ')})`);
+        tablesLoaded.add(table.name);
+      }
       else if (!reading.queries.length && reading.otherSources.length) otherLoads.push(`${table.name} (${reading.otherSources.join(', ')})`);
     }
   }
   inventory.dataSources.push(...connectors.values());
-  inventory.tablesWithoutSql = tableLoads.length + otherLoads.length;
+  // Each table once, however many partitions it has; file and web loads are data sources, not database tables.
+  inventory.tablesWithoutSql = tablesLoaded.size;
   if (tableLoads.length) {
     result.skipped.push({
       sourcePath: displayPath,
@@ -335,7 +341,7 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
 /** A TMDL value's own lines end where the object's properties (`lineageTag: …`, `annotation …`) start. */
 function stripProperties(value: string): string {
   const lines = value.split('\n');
-  const cut = lines.findIndex((line, index) => index > 0 && /^\s*(?:lineageTag|annotation|formatString|displayFolder|description|queryGroup|isHidden|resultType|kind|changedProperty)\b/.test(line));
+  const cut = lines.findIndex((line, index) => index > 0 && /^\s*(?:lineageTag|annotation|formatString|displayFolder|description|queryGroup|isHidden|resultType|kind|changedProperty|dataType|summarizeBy|sortByColumn|dataCategory|isNameInferred|isDataTypeInferred|isAvailableInMdx|sourceColumn)\b/.test(line));
   return (cut > 0 ? lines.slice(0, cut) : lines).join('\n').trim();
 }
 

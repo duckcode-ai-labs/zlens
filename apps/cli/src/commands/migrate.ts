@@ -159,7 +159,7 @@ async function runMigrateAssess(input: string | undefined, flags: CLIFlags): Pro
     return;
   }
   if (!isAssessableInput(resolve(input))) {
-    console.error(`\n  ✗ ${input} is not a folder, or a Tableau, Power BI or SQL file.\n`);
+    console.error(`\n  ✗ ${input} is not a folder, or a Tableau (.twb, .twbx), Power BI (.pbit, .pbip, model.bim, .tmdl) or .sql file.\n`);
     process.exitCode = 1;
     return;
   }
@@ -168,7 +168,9 @@ async function runMigrateAssess(input: string | undefined, flags: CLIFlags): Pro
     console.log(JSON.stringify(assessment, null, 2));
     return;
   }
-  const reportPath = flags.outDir || DEFAULT_ASSESSMENT_FILE;
+  // --out names the report, or the folder it goes in.
+  const out = flags.outDir || DEFAULT_ASSESSMENT_FILE;
+  const reportPath = existsSync(resolve(out)) && statSync(resolve(out)).isDirectory() ? join(out, DEFAULT_ASSESSMENT_FILE) : out;
   mkdirSync(dirname(resolve(reportPath)), { recursive: true });
   writeFileSync(resolve(reportPath), migrationAssessmentMarkdown(assessment));
   for (const line of migrationAssessmentSummary(assessment, reportPath)) console.log(line);

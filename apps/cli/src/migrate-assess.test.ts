@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -191,5 +191,53 @@ describe('zlens migrate assess', () => {
     const assessment = assessMigrationFolder('.', { cwd: root });
     expect(assessment.queries.drafts).toBe(0);
     expect(assessment.leftOut).toHaveLength(1);
+  });
+
+  it('says when the queries could not be counted, instead of reporting none', () => {
+    if (process.platform === 'win32' || process.getuid?.() === 0) return;
+    const root = handover();
+    chmodSync(join(root, 'reports/sql/monthly.sql'), 0o000);
+    try {
+      const assessment = assessMigrationFolder('reports', { cwd: root });
+      expect(assessment.queries.drafts).toBe(0);
+      expect(assessment.leftOut.some((item) => /The queries could not be counted/.test(item.reason))).toBe(true);
+    } finally {
+      chmodSync(join(root, 'reports/sql/monthly.sql'), 0o644);
+    }
+  });
+
+  it('keeps a # in a file name with its file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'zlens-assess-hash-'));
+    roots.push(root);
+    mkdirSync(join(root, 'sql'));
+    writeFileSync(join(root, 'sql', 'report#1.sql'), 'select 1 as one;\n');
+    const assessment = assessMigrationFolder('sql', { cwd: root });
+    expect(assessment.files.map((file) => [file.path, file.tool, file.queries])).toEqual([['sql/report#1.sql', 'sql', 1]]);
+  });
+
+  it('reads a .pbip project file as its model and report, and a report folder on its own', () => {
+    const root = handover();
+    writeFileSync(join(root, 'reports/powerbi/Sales.pbip'), JSON.stringify({ version: '1.0', artifacts: [{ report: { path: 'Sales.Report' } }] }));
+    const project = assessMigrationFolder('reports/powerbi/Sales.pbip', { cwd: root });
+    expect(project.files.map((file) => file.path)).toEqual(['reports/powerbi/Sales.Report', 'reports/powerbi/Sales.SemanticModel/model.bim']);
+    expect(project.queries.drafts).toBe(1);
+    const report = assessMigrationFolder('reports/powerbi/Sales.Report', { cwd: root });
+    expect(report.files.map((file) => [file.path, file.pages.length])).toEqual([['reports/powerbi/Sales.Report', 2]]);
+  });
+
+  it('names the files and web sources a Power BI table loads, and counts each table once', () => {
+    const root = mkdtempSync(join(tmpdir(), 'zlens-assess-pbi-'));
+    roots.push(root);
+    const model = { model: { tables: [
+      { name: 'Targets', partitions: [{ name: 'Targets', source: { type: 'm', expression: 'let Source = Csv.Document(File.Contents("C:\\targets.csv")) in Source' } }] },
+      { name: 'Orders', partitions: [
+        { name: 'Orders 2024', source: { type: 'm', expression: 'let Source = Sql.Database("db", "dw"), Orders = Source{[Schema="dbo",Item="orders_2024"]}[Data] in Orders' } },
+        { name: 'Orders 2025', source: { type: 'm', expression: 'let Source = Sql.Database("db", "dw"), Orders = Source{[Schema="dbo",Item="orders_2025"]}[Data] in Orders' } },
+      ] },
+    ] } };
+    writeFileSync(join(root, 'model.bim'), JSON.stringify(model));
+    const assessment = assessMigrationFolder('model.bim', { cwd: root });
+    expect(assessment.tablesWithoutSql).toBe(1);
+    expect(assessment.databases.map((db) => [db.database, db.connects])).toEqual([['Csv.Document', 'check'], ['SQL Server', 'yes']]);
   });
 });

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { basename, extname, join, relative, resolve, sep } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { planBlockStudioImport, tmdlDefinitionFolder } from './block-studio-import.js';
 import { readBiFile, readTmdlFolder, unreadableBiFile } from './bi-import/index.js';
 import { CALCULATION_KIND_LABELS, classifyCalculations, formulaWithoutComments, type CalculationKind, type ClassifiedCalculation } from './bi-import/calculations.js';
@@ -127,7 +127,17 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
     const rel = relative(cwd, absolute).replaceAll('\\', '/');
     return rel && !rel.startsWith('..') ? rel : absolute.replaceAll('\\', '/');
   };
-  const { files, reportFolders } = statSync(root).isDirectory() ? walk(root) : { files: [root], reportFolders: [] };
+  // A PBIP project file stands for its model and report folders beside it.
+  const pbip = /\.pbip$/i.test(root) ? root.slice(0, -5) : null;
+  const fileAllowed = pbip ? (file: string) => file.startsWith(`${pbip}.SemanticModel${sep}`) || file.startsWith(`${pbip}.Report${sep}`) : undefined;
+  const planInput = pbip ? dirname(root) : root;
+  const found = pbip
+    ? walk(dirname(root))
+    : statSync(root).isDirectory()
+      ? (/\.Report$/i.test(root) ? { files: [], reportFolders: [root] } : walk(root))
+      : { files: [root], reportFolders: [] };
+  const files = fileAllowed ? found.files.filter(fileAllowed) : found.files;
+  const reportFolders = pbip ? found.reportFolders.filter((folder) => folder === `${pbip}.Report`) : found.reportFolders;
 
   const assessed = new Map<string, AssessedFile>();
   const fileEntry = (path: string, tool: AssessedTool): AssessedFile => {
@@ -199,12 +209,18 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
   // The import's own plan: the drafts it would make, duplicates folded.
   let plan: ReturnType<typeof planBlockStudioImport> | null = null;
   try {
-    plan = planBlockStudioImport(cwd, { sourceKind: 'raw-sql', inputPath: root, domain: 'imported', owner: '' });
-  } catch {
-    // No SQL anywhere (only .pbix files, or no files): no drafts.
+    plan = planBlockStudioImport(cwd, { sourceKind: 'raw-sql', inputPath: planInput, domain: 'imported', owner: '', ...(fileAllowed ? { fileAllowed } : {}) });
+  } catch (error) {
+    // No SQL anywhere (only .pbix files, or no files) means no drafts; anything else is said.
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/^(?:No SQL|Nothing to import)/.test(message)) {
+      leftOut.push({ sourcePath: shown(root), kind: 'unreadable', reason: `The queries could not be counted: ${message}`, sql: basename(root) });
+    }
   }
+  // A query's source is its file, then `#` and where in the file: the longest file path that starts it.
+  const knownPaths = () => Array.from(assessed.keys()).sort((a, b) => b.length - a.length);
   for (const candidate of plan?.candidates ?? []) {
-    const path = candidate.sourcePath.split('#')[0]!;
+    const path = knownPaths().find((known) => candidate.sourcePath === known || candidate.sourcePath.startsWith(`${known}#`)) ?? candidate.sourcePath.split('#')[0]!;
     const entry = assessed.get(path) ?? fileEntry(path, /\.twbx?$/i.test(path) ? 'tableau' : /\.sql$/i.test(path) ? 'sql' : 'powerbi');
     entry.queries += 1;
   }
@@ -419,5 +435,5 @@ export function migrationAssessmentMarkdown(assessment: MigrationAssessment): st
 export const DEFAULT_ASSESSMENT_FILE = 'zlens-migration-assessment.md';
 
 export function isAssessableInput(path: string): boolean {
-  return existsSync(path) && (statSync(path).isDirectory() || BI_FILE.test(path) || /\.(?:sql|tmdl)$/i.test(path) || extname(path).toLowerCase() === '.bim');
+  return existsSync(path) && (statSync(path).isDirectory() || BI_FILE.test(path) || /\.(?:sql|tmdl|pbip)$/i.test(path) || /^model\.bim$/i.test(basename(path)));
 }

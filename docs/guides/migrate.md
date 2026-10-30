@@ -11,13 +11,17 @@ Before you import anything, point ZLens at the folder of reports:
 npx zlens migrate assess ./reports
 ```
 
-It reads Tableau workbooks (`.twb`, `.twbx`), Power BI templates (`.pbit`)
-and projects (PBIP), and `.sql` files, and reports:
+Point it at a folder, or at one file: a Tableau workbook (`.twb`, `.twbx`), a
+Power BI template (`.pbit`), a Power BI project (its `.pbip` file, its
+`model.bim` or TMDL folder, or its `.Report` folder) or a `.sql` file. It
+reports:
 
 - **Queries**: how many draft saved queries `zlens import sql` would make
   (the import's own count: a copy of a query counts once, statements that
   change data are left out), and how many take report parameters.
-- **Tables read without SQL**: ZLens reads those from the database directly.
+- **Tables loaded by name from a database**, with no SQL to import: ZLens
+  reads those tables from the database directly. Files and web sources a
+  report loads are listed under the databases instead.
 - **Calculations**, each Tableau calculated field and DAX measure, calculated
   column and calculated table, sorted by how it moves:
 
@@ -38,8 +42,12 @@ It prints a summary and writes the full report to
 files only: nothing runs against a database, no AI is asked, and nothing
 leaves your computer. You do not need a ZLens project to run it.
 
-The calculation kinds come from reading each formula, not running it, and a
-formula that builds on another calculation counts as the harder of the two.
+The calculation kinds come from reading each formula, not running it.
+Comments and text in quotes are not read as code, and neither are field and
+table names (`[Total (copy)]` is a field, not a table calculation). A
+formula that builds on an advanced calculation is advanced; a ratio of
+row-level calculations is still a ratio. If a file cannot be read, the
+report says so under **Not read** rather than counting it as empty.
 
 ## Bring the SQL over
 

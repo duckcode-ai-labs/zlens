@@ -119,3 +119,66 @@ describe('Power BI DAX', () => {
     expect(formulaWithoutComments('// note\nSUM([Sales]) /* old */', 'tableau')).toBe('SUM([Sales])');
   });
 });
+
+describe('formulas as real workbooks and models write them (review cases)', () => {
+  it('a ratio over a row-level calculation is still a ratio, and so is a ratio built on it', () => {
+    expect(kinds([
+      tableau('Profit', '[Revenue] - [Cost]'),
+      tableau('Profit Ratio', 'SUM([Profit]) / SUM([Revenue])', 'Orders', ['Profit']),
+      tableau('Profit Ratio %', '[Profit Ratio] * 100', 'Orders', ['Profit Ratio']),
+      tableau('Line Total', '[Price] * [Qty]'),
+      tableau('Average Order', 'SUM([Line Total]) / COUNTD([Order ID])', 'Orders', ['Line Total']),
+      tableau('Total Line', 'SUM([Line Total])', 'Orders', ['Line Total']),
+    ])).toEqual({ Profit: 'row-level', 'Profit Ratio': 'ratio', 'Profit Ratio %': 'ratio', 'Line Total': 'row-level', 'Average Order': 'ratio', 'Total Line': 'simple' });
+  });
+
+  it('reads // and -- inside text as text, and apostrophes in field names as names', () => {
+    expect(kinds([
+      tableau('Link', "[Server] + '://' + [Path]"),
+      tableau('Https running', 'IF [Site] = "https://a" THEN RUNNING_SUM(SUM([Sales])) END'),
+      tableau('Owners', "SUM([Customer's Profit]) / SUM([Owner's Sales])"),
+      tableau('Men share', "SUM([Men's Sales]) / TOTAL(SUM(IF [Dept]='Men' THEN [Sales] END))"),
+      dax('Image', '"https://img.example.com/" & SELECTEDVALUE(Products[SKU])'),
+    ])).toEqual({ Link: 'row-level', 'Https running': 'advanced', Owners: 'ratio', 'Men share': 'advanced', Image: 'advanced' });
+    expect(formulaWithoutComments('"https://img.example.com/" & SELECTEDVALUE(Products[SKU]) -- the picture', 'dax')).toBe('"https://img.example.com/" & SELECTEDVALUE(Products[SKU])');
+    expect(formulaWithoutComments("[Server] + '://' // host\n + [Path]", 'tableau')).toBe("[Server] + '://' + [Path]");
+  });
+
+  it('never reads a function in a field or table name', () => {
+    expect(kinds([
+      tableau('Copy', 'SUM([Total (copy)])'),
+      tableau('USD', 'AVG([Total (USD)])'),
+      tableau('Tasks', 'SUM([index (tasks)])'),
+      tableau('Doubled', '[Count (Orders)] * 2'),
+      dax('Var', 'SUM(Budget[Var])'),
+      dax('Var Share', 'DIVIDE([Var], [Budget])'),
+      dax('Budget', 'SUM(Budget[Amount])'),
+      dax('Analysis', "SUM('Var Analysis'[Amount])"),
+      dax('USD Sales', 'SUM(Sales[Values (USD)])'),
+    ])).toEqual({
+      Copy: 'simple', USD: 'simple', Tasks: 'simple', Doubled: 'row-level',
+      Var: 'simple', 'Var Share': 'ratio', Budget: 'simple', Analysis: 'simple', 'USD Sales': 'simple',
+    });
+  });
+
+  it('resolves a DAX measure written with its table', () => {
+    const measures = (name: string, formula: string): BiCalculation => ({ ...dax(name, formula), owner: 'Measures' });
+    expect(kinds([
+      measures('Total Sales', 'SUM(Sales[Amount])'),
+      measures('Sales YTD', 'TOTALYTD([Total Sales], Dates[Date])'),
+      measures('YTD Share', 'DIVIDE(Measures[Sales YTD], Measures[Total Sales])'),
+      measures('Doubled', "'Measures'[Total Sales] * 2"),
+    ])).toEqual({ 'Total Sales': 'simple', 'Sales YTD': 'advanced', 'YTD Share': 'advanced', Doubled: 'ratio' });
+  });
+
+  it('ATTR is a dimension; CALCULATE with dates, KEEPFILTERS or around arithmetic stays a metric', () => {
+    expect(kinds([
+      tableau('Region', 'ATTR([Region])'),
+      dax('Total Sales', 'SUM(Sales[Amount])'),
+      dax('Since 2024', 'CALCULATE(SUM(Sales[Amount]), Sales[Date] >= DATE(2024, 1, 1))'),
+      dax('Kept East', 'CALCULATE([Total Sales], KEEPFILTERS(Region[Name] = "East"))'),
+      dax('East Share', 'CALCULATE([Total Sales], Region[Name] = "East") / [Total Sales]'),
+      dax('East Share 2', 'DIVIDE(CALCULATE([Total Sales], Region[Name] = "East"), [Total Sales])'),
+    ])).toEqual({ Region: 'row-level', 'Total Sales': 'simple', 'Since 2024': 'filtered', 'Kept East': 'filtered', 'East Share': 'ratio', 'East Share 2': 'ratio' });
+  });
+});

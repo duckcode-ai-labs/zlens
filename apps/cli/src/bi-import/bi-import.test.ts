@@ -370,3 +370,24 @@ describe('a Power BI report, counted', () => {
     ]);
   });
 });
+
+describe('a TMDL calculated column, read', () => {
+  it('keeps its formula and leaves out the properties written under it', () => {
+    const text = [
+      'table Sales',
+      '\tcolumn Weekday = FORMAT(Sales[Date], "dddd")',
+      '\t\tdataType: string',
+      '\t\tsummarizeBy: none',
+      '\t\tlineageTag: 1234',
+      '',
+      '\tcolumn Amount',
+      '\t\tdataType: double',
+      '\t\tsourceColumn: amount',
+    ].join('\n');
+    const read = readBiFile(Buffer.from(text), 'Sales.SemanticModel/definition/tables/Sales.tmdl');
+    expect(read.inventory!.calculations.map((calculation) => [calculation.name, calculation.role, calculation.formula])).toEqual([
+      ['Weekday', 'column', 'FORMAT(Sales[Date], "dddd")'],
+    ]);
+  });
+});
+

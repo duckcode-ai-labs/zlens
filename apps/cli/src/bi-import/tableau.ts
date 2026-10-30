@@ -85,7 +85,8 @@ export function extractTableauWorkbook(xml: string, displayPath: string): Extrac
       const tables = Array.from(new Set(relations
         .filter((relation) => relation.attributes.type === 'table' && relation.attributes.table)
         .map((relation) => relation.attributes.table.replace(/[\[\]"]/g, ''))));
-      inventory.tablesWithoutSql += tables.length;
+      // Tables from a text file or a workbook are not in a database ZLens reads.
+      if (!databaseClass || !['textscan', 'excel-direct', 'hyper'].includes(databaseClass)) inventory.tablesWithoutSql += tables.length;
       if (tables.length) {
         result.skipped.push({
           sourcePath: `${displayPath}#${caption}`,
