@@ -8,6 +8,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+## v0.2.11 - 2026-10-29
+
+ZLens runs on Node 26 LTS.
+- DuckDB now loads through `@duckdb/node-api`, which installs in about a
+  second on Node 20, 22, 24 and 26, with nothing to compile.
+- `zlens sync warehouse` installs the DuckDB driver the first time, so the
+  quickstarts have one step fewer.
+- A read-only PostgreSQL login now reads primary keys, foreign keys and view
+  SQL.
+- A question a certified block records is answered by that block, word for
+  word, every time.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.11` in each project. On Node 26,
+`npm install -g @zlens/cli` now installs 0.2.11 instead of 0.2.1.
+
 ### Node 26 LTS: the DuckDB driver is now `@duckdb/node-api`
 
 - **ZLens runs on Node 20, 22, 24 and 26.** Node 26 became the LTS this
@@ -69,6 +84,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   the review draft an Ask answer leaves both write the question as the
   block's first example; Block Studio edits the list under Context as
   "Questions it answers".
+
+### Fixes
+
+- **Apps:** saving an App page's preview receipt no longer fails with
+  "previewed against a different warehouse target" when ZLens runs on a
+  connection that replaces the configured default (a copied DuckDB file, a
+  host's draft space). (#212)
+- **Ask:** the same question asked again in a thread is read as a new
+  question, so it gets the certified answer a saved query now gives it,
+  instead of being read as an edit of the earlier AI answer. (#213)
+- **Metadata:** two metadata refreshes running at once on one project no
+  longer leave the active snapshot pointing at the wrong catalog (the "Active
+  metadata snapshot pointer mismatch" error). Refreshes now run one at a time
+  per project. (#214, #216)
+- **Docs:** the AI provider page explains how to finish a Claude or ChatGPT
+  sign-in in a codespace, in Docker or on another computer. (#211)
 
 ## v0.2.10 - 2026-10-27
 
