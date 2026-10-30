@@ -4870,6 +4870,22 @@ function BlockStudioImportWorkspace({
                     Show all {candidateMatches.length} drafts
                   </button>
                 )}
+                {(session.skippedStatements?.length ?? 0) > 0 && (
+                  <details style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
+                    <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: t.textSecondary, fontFamily: t.font }}>
+                      Left out ({session.skippedStatements!.length})
+                    </summary>
+                    <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+                      <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>No draft was made for these, and none of them was run.</span>
+                      {session.skippedStatements!.map((item, index) => (
+                        <div key={`${item.sourcePath}-${index}`} style={{ display: 'grid', gap: 3 }}>
+                          <span style={{ fontSize: 11, color: t.textPrimary, lineHeight: 1.4 }}>{item.reason}</span>
+                          <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>{item.sourcePath} · {item.sql}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                )}
                 {!session.candidates.some(isAiGeneratedCandidate) && smartCounts.ready > 0 && (
                   <button onClick={() => void saveAll()} disabled={savingAll} style={primaryImportButtonStyle(t)}>{savingAll ? 'Saving...' : 'Save all valid'}</button>
                 )}

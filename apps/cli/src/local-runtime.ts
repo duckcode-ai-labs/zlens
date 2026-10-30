@@ -45010,6 +45010,13 @@ function deterministicDqlGenerationPatch(
 ): DqlGenerationPatch {
   const domain = inferDqlGenerationDomain(candidate);
   const parameterized = parameterizeSqlForDqlImport(candidate.sql);
+  // Report parameters the import found (`:start_date`, `DECLARE @since`) come
+  // first; literals the SQL compares against are parameterized after them.
+  const imported = candidate.parameterDecisions ?? [];
+  const parameterDecisions = [
+    ...imported,
+    ...parameterized.parameterDecisions.filter((decision) => !imported.some((item) => item.name === decision.name)),
+  ];
   const grain = extractDqlGenerationGroupByFields(parameterized.sql)[0];
   const outputs = extractDqlGenerationSelectOutputs(parameterized.sql);
   const sourceSystems = candidate.lineage.sourceTables.map((table) => table.split('.').filter(Boolean).slice(-2, -1)[0] ?? '').filter(Boolean);
@@ -45020,6 +45027,7 @@ function deterministicDqlGenerationPatch(
     : '';
   const description = ownDescription || deterministicDqlGenerationDescription(candidate, evidence);
   const allowedFilters = Array.from(new Set([
+    ...imported.map((decision) => decision.name),
     ...parameterized.allowedFilters,
     ...extractDqlGenerationFilterFields(parameterized.sql),
   ])).slice(0, 16);
@@ -45042,9 +45050,9 @@ function deterministicDqlGenerationPatch(
     outputs,
     dimensions: extractDqlGenerationDimensions(parameterized.sql, grain, outputs),
     allowedFilters,
-    parameterPolicy: parameterized.parameterPolicy,
+    parameterPolicy: parameterDecisions.map((decision) => ({ name: decision.name, policy: decision.policy })),
     filterBindings: parameterized.filterBindings,
-    parameterDecisions: parameterized.parameterDecisions,
+    parameterDecisions,
     sql: parameterized.sql,
     warnings: parameterized.warnings,
     sourceSystems,

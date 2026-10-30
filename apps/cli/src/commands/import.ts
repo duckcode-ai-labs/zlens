@@ -38,8 +38,10 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
     return [...validationErrors, ...saveError].map((error) => ({ candidateId: candidate.id, error }));
   });
 
+  const skipped = session.skippedStatements ?? [];
+
   if (flags.format === 'json') {
-    console.log(JSON.stringify({ session, drafts, saved: drafts, reused, errors }, null, 2));
+    console.log(JSON.stringify({ session, drafts, saved: drafts, reused, skipped, errors }, null, 2));
     return;
   }
 
@@ -50,6 +52,7 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
   console.log(`  Candidates:  ${session.candidates.length}`);
   console.log(`  Drafts:      ${drafts.length}`);
   console.log(`  Reuse:       ${reused.length}`);
+  if (skipped.length > 0) console.log(`  Left out:    ${skipped.length}`);
   console.log(`  Domain:      ${session.defaults.domain}`);
   if (session.defaults.owner) console.log(`  Owner:       ${session.defaults.owner}`);
   console.log(`  Generator:   ${session.generation.provider}`);
@@ -77,6 +80,14 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
     if (candidate.similarityMatches?.length) {
       const match = candidate.similarityMatches[0];
       console.log(`    match: ${match.name} (${match.kind}, ${Math.round(match.score * 100)}%)`);
+    }
+  }
+  if (skipped.length > 0) {
+    console.log('');
+    console.log(`  Left out (${skipped.length}): no draft was made for these.`);
+    for (const item of skipped) {
+      console.log(`  • ${item.sourcePath}: ${item.reason}`);
+      console.log(`    ${item.sql}`);
     }
   }
   console.log('');

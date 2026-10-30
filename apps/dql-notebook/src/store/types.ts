@@ -1220,7 +1220,7 @@ export interface BlockStudioImportCandidate {
     totalStatements: number;
   };
   confidence: number;
-  splitStrategy?: 'semicolon-go' | 'metadata-comment' | 'manual';
+  splitStrategy?: 'semicolon-go' | 'metadata-comment' | 'statement-start' | 'manual';
   warnings?: string[];
   conversionNotes?: string[];
   aiAssistance?: Array<{
@@ -1336,7 +1336,16 @@ export interface BlockStudioImportSession {
     tags: string[];
   };
   candidateIds: string[];
+  /** Statements that got no draft: they change data, run a procedure, or repeat a query already in this import. */
+  skippedStatements?: BlockStudioImportSkippedStatement[];
   candidates: BlockStudioImportCandidate[];
+}
+
+export interface BlockStudioImportSkippedStatement {
+  sourcePath: string;
+  kind: 'writes' | 'duplicate' | 'runs-procedure' | 'not-a-query';
+  reason: string;
+  sql: string;
 }
 
 export interface DqlGenerationSession extends Omit<BlockStudioImportSession, 'candidates'> {

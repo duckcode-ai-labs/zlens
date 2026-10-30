@@ -96,6 +96,18 @@ describe('promoteFromDraft (zlens certify --from-draft)', () => {
     rmSync(tmp, { recursive: true, force: true });
   });
 
+  it('drops the draft hash from the certified file name, unless that name is taken', async () => {
+    writeDomainDraft(tmp, 'finance', 'monthly-revenue-a9a82c329b13');
+    const first = await promote(tmp, baseFlags({ fromDraft: 'domains/finance/blocks/_drafts/monthly-revenue-a9a82c329b13.dql', owner: 'a@example.com' }));
+    expect(first.ok, first.message).toBe(true);
+    expect(first.certifiedPath).toBe('domains/finance/blocks/monthly-revenue.dql');
+
+    writeDomainDraft(tmp, 'finance', 'monthly-revenue-68fb0abbc481');
+    const second = await promote(tmp, baseFlags({ fromDraft: 'domains/finance/blocks/_drafts/monthly-revenue-68fb0abbc481.dql', owner: 'a@example.com' }));
+    expect(second.ok, second.message).toBe(true);
+    expect(second.certifiedPath).toBe('domains/finance/blocks/monthly-revenue-68fb0abbc481.dql');
+  });
+
   it('returns ok=false when the draft path does not exist', async () => {
     const out = await promote(tmp, baseFlags({ fromDraft: 'blocks/_drafts/nope.dql' }));
     expect(out.ok).toBe(false);

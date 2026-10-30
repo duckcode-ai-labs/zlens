@@ -288,6 +288,13 @@ go
     expect(session.candidates[0].splitStrategy).toBe('semicolon-go');
   });
 
+  it('keeps the name header of a query that follows a GO line and a blank line', () => {
+    const root = tempProject();
+    writeFileSync(join(root, 'batches.sql'), 'select count(*) as n from raw.events\nGO\n\n-- name: Account regions\nselect region, count(*) as n from raw.accounts group by region\nGO\n');
+    const session = createBlockStudioImportSession(root, { inputPath: 'batches.sql', domain: 'ops' });
+    expect(session.candidates[1].name).toBe('Account Regions');
+  });
+
   it('infers useful metadata for pasted analytical SQL without comments', () => {
     const root = tempProject();
     const session = createBlockStudioImportSession(root, {
@@ -344,6 +351,68 @@ select * from account_revenue
     expect(session.candidates[0].splitStrategy).toBe('metadata-comment');
     expect(session.candidates[0].lineage.totalStatements).toBe(2);
     expect(session.candidates[0].lineage.sourceTables).toEqual(['raw.customers']);
+  });
+
+  it('makes one draft of the same query found twice, and lists the copy as left out', () => {
+    const root = tempProject();
+    mkdirSync(join(root, 'legacy'));
+    writeFileSync(join(root, 'legacy', '01_monthly_revenue.sql'), "-- name: Monthly revenue\nselect date_trunc('month', ordered_at) as order_month, sum(order_total) as revenue\nfrom dev.orders\ngroup by 1\norder by 1\n");
+    writeFileSync(join(root, 'legacy', '06_copy.sql'), "SELECT DATE_TRUNC('month', ordered_at) AS order_month,\n       SUM(order_total)  AS revenue\nFROM dev.orders\nGROUP BY 1\nORDER BY 1;\n");
+    const session = createBlockStudioImportSession(root, { inputPath: 'legacy', domain: 'finance' });
+    expect(session.candidates.map((candidate) => candidate.name)).toEqual(['Monthly Revenue']);
+    expect(session.skippedStatements).toEqual([expect.objectContaining({
+      sourcePath: 'legacy/06_copy.sql',
+      kind: 'duplicate',
+      reason: 'Same query as "Monthly Revenue" (legacy/01_monthly_revenue.sql).',
+    })]);
+    expect(loadBlockStudioImportSession(root, session.id).skippedStatements).toHaveLength(1);
+  });
+
+  it('names a query from the comment above it, keeps name headers out of descriptions, and numbers only names that repeat', () => {
+    const root = tempProject();
+    writeFileSync(join(root, 'finance_pack.sql'), `-- name: Store revenue for a period
+select l.location_name, sum(o.order_total) as revenue
+from dev.orders o join dev.locations l on l.location_id = o.location_id
+group by 1;
+
+-- Average order value per customer type
+select c.customer_type, avg(o.order_total) as avg_order_value
+from dev.orders o join dev.customers c on c.customer_id = o.customer_id
+group by 1;
+
+select product_type, count(*) as items_sold from dev.products group by 1;
+select product_type, count(*) as items_sold from dev.products where is_food_item group by 1;
+`);
+    const session = createBlockStudioImportSession(root, { inputPath: 'finance_pack.sql', domain: 'finance' });
+    expect(session.candidates.map((candidate) => candidate.name)).toEqual([
+      'Store Revenue For A Period',
+      'Average Order Value Per Customer Type',
+      'Items Sold By Product Type',
+      'Items Sold By Product Type 2',
+    ]);
+    expect(session.candidates[0].description).not.toMatch(/name:/i);
+    expect(session.candidates[0].description).toBe('Calculates revenue by location name using dev.orders, dev.locations.');
+    expect(session.candidates[1].description).toBe('Calculates avg order value by customer type using dev.orders, dev.customers.');
+  });
+
+  it('turns a report parameter with no value into a required parameter and one with a DECLARE value into a default', () => {
+    const root = tempProject();
+    writeFileSync(join(root, 'params.sql'), `DECLARE @since date = '2024-01-01'
+SELECT l.location_name, SUM(o.order_total) AS revenue
+FROM [dev].[orders] AS o
+JOIN [dev].[locations] AS l ON l.location_id = o.location_id
+WHERE o.ordered_at >= @since AND l.location_name = <Parameters.Store>
+GROUP BY l.location_name
+`);
+    const session = createBlockStudioImportSession(root, { inputPath: 'params.sql', domain: 'finance' });
+    expect(session.candidates).toHaveLength(1);
+    const candidate = session.candidates[0];
+    expect(candidate.splitStrategy).toBe('statement-start');
+    expect(candidate.lineage.sourceTables).toEqual(['dev.orders', 'dev.locations']);
+    expect(candidate.sql).toContain('o.ordered_at >= ${since} AND l.location_name = ${store}');
+    expect(candidate.dqlSource).toContain('since = "2024-01-01"');
+    expect(candidate.dqlSource).toContain('store: string');
+    expect(candidate.warnings.join(' ')).toMatch(/<Parameters\.Store> became the parameter store\. Give it a default value/);
   });
 
   it('warns when one candidate likely contains several undelimited scripts', () => {
