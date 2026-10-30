@@ -25,6 +25,8 @@ import { blockTestAssertionName, evaluateBlockTestAssertion, formatBlockTestExpe
 import { startProjectRuntime } from './notebook.js';
 import { WorkbenchRoutedQueryExecutor } from '../workbench-query-route.js';
 import { findRunningNotebook, serverTokenFor } from '../schedule/notebook-runtime.js';
+import { listBlockStudioImportSessions, loadBlockStudioImportSession, writeBlockStudioImportCandidate } from '../block-studio-import.js';
+import { certifyImportCandidate, importFailureKind, plainImportFailure, withImportRuntime } from '../import-runtime.js';
 
 /**
  * Run the same certification rules Block Studio's Certify runs (owner, a
@@ -77,6 +79,107 @@ async function runtimeCertificationGate(
   } finally {
     await handle.close();
   }
+}
+
+interface ImportCertifyResult {
+  candidateId: string;
+  name: string;
+  status: 'certified' | 'ready' | 'blocked' | 'already-certified' | 'missing';
+  reason?: string;
+  path?: string;
+}
+
+/**
+ * `zlens certify --from-import <session|latest>`: the checks Certify runs, for
+ * every draft of one import; with `--apply`, certify each draft that passes,
+ * through the Import SQL page's own Certify. A person starts it, and each
+ * saved query is still checked on its own and gets its own receipt: import
+ * never certifies anything by itself.
+ */
+async function certifyFromImport(projectRoot: string, flags: CLIFlags): Promise<void> {
+  const sessions = listBlockStudioImportSessions(projectRoot);
+  const importId = flags.fromImport === 'latest'
+    ? [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]?.id
+    : flags.fromImport;
+  if (!importId) {
+    console.error('\n  ✗ No import found. Run zlens import sql <file or folder> first.\n');
+    process.exitCode = 1;
+    return;
+  }
+  let session;
+  try {
+    session = loadBlockStudioImportSession(projectRoot, importId);
+  } catch (error) {
+    console.error(`\n  ✗ ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const results: ImportCertifyResult[] = [];
+  const todo = session.candidates.filter((candidate) => {
+    if (candidate.recommendedAction === 'reuse_existing' || candidate.draftSave?.status === 'skipped') return false;
+    if (/^\s*status\s*=\s*"certified"/m.test(candidate.dqlSource)) {
+      results.push({ candidateId: candidate.id, name: candidate.name, status: 'already-certified', ...(candidate.savedPath ? { path: candidate.savedPath } : {}) });
+      return false;
+    }
+    // The draft file is what a person fixes; check and certify what it says now.
+    const draftFile = candidate.draftSave?.path;
+    if (draftFile) {
+      const absolute = join(projectRoot, draftFile);
+      if (!existsSync(absolute)) {
+        results.push({ candidateId: candidate.id, name: candidate.name, status: 'missing', reason: `Its draft file ${draftFile} is no longer there.` });
+        return false;
+      }
+      const text = readFileSync(absolute, 'utf-8');
+      if (text !== candidate.dqlSource) {
+        candidate.dqlSource = text;
+        writeBlockStudioImportCandidate(projectRoot, importId, candidate);
+      }
+    }
+    return true;
+  });
+  await withImportRuntime(projectRoot, flags, async (call) => {
+    for (const candidate of todo) {
+      if (flags.apply) {
+        const outcome = await certifyImportCandidate(call, importId, candidate.id);
+        results.push(outcome.ok
+          ? { candidateId: candidate.id, name: candidate.name, status: 'certified', path: outcome.path }
+          : { candidateId: candidate.id, name: candidate.name, status: 'blocked', reason: outcome.reason });
+        continue;
+      }
+      const source = candidate.dqlSource.replace(/^(\s*status\s*=\s*)"draft"/m, '$1"certified"');
+      const check = await call('POST', '/api/block-studio/certification-check', { source, enterprise: false });
+      const blockers: string[] = Array.isArray(check.body?.blockers) ? check.body.blockers.map(String) : [];
+      results.push(check.status === 200 && check.body?.ok === true
+        ? { candidateId: candidate.id, name: candidate.name, status: 'ready' }
+        : { candidateId: candidate.id, name: candidate.name, status: 'blocked', reason: plainImportFailure(blockers.join(' ') || String(check.body?.error ?? 'The certification rules did not pass.')) });
+    }
+  });
+
+  const blocked = results.filter((result) => result.status === 'blocked');
+  if (blocked.length > 0) process.exitCode = 1;
+  if (flags.format === 'json') {
+    console.log(JSON.stringify({ ok: blocked.length === 0, importId, apply: flags.apply === true, results }, null, 2));
+    return;
+  }
+  console.log(`\n  ZLens certify: import ${importId} (${session.inputPath})\n`);
+  for (const result of results) {
+    if (result.status === 'certified') console.log(`  ✓ ${result.name}: certified${result.path ? `, ${result.path}` : ''}`);
+    else if (result.status === 'already-certified') console.log(`  ✓ ${result.name}: already certified`);
+    else if (result.status === 'ready') console.log(`  • ${result.name}: passes the checks`);
+    else if (result.status === 'missing') console.log(`  – ${result.name}: ${result.reason}`);
+    else console.log(`  ✗ ${result.name}: ${result.reason}`);
+  }
+  const passed = results.filter((result) => result.status === 'certified' || result.status === 'ready').length;
+  const reasons = new Map<string, number>();
+  for (const result of blocked) reasons.set(importFailureKind(result.reason ?? ''), (reasons.get(importFailureKind(result.reason ?? '')) ?? 0) + 1);
+  console.log('');
+  console.log(flags.apply
+    ? `  Certified ${passed} of ${todo.length}.${blocked.length ? ` ${blocked.length} need a fix:` : ''}`
+    : `  ${passed} of ${todo.length} pass the checks.${blocked.length ? ` ${blocked.length} need a fix:` : ''}`);
+  for (const [reason, count] of [...reasons.entries()].sort((a, b) => b[1] - a[1])) console.log(`    ${count} × ${reason}`);
+  if (!flags.apply && passed > 0) console.log(`  Certify them: zlens certify --from-import ${importId} --apply`);
+  if (blocked.length > 0) console.log('  Fix a draft on the Import SQL page (Saved queries → Import SQL → Import history), or edit its file, then run this again.');
+  console.log('');
 }
 
 function resolveConnection(flags: CLIFlags, projectConfig: ProjectConfig): ConnectionConfig {
@@ -309,6 +412,10 @@ function certifyTermFile(filePath: string, flags: CLIFlags, projectConfig: Proje
 }
 
 export async function runCertify(filePath: string, flags: CLIFlags): Promise<void> {
+  if (flags.fromImport) {
+    await certifyFromImport(process.cwd(), flags);
+    return;
+  }
   // Tier-2 promotion: `zlens certify --from-draft <path>` moves a draft to its
   // canonical certified location and surfaces the datalex-manifest.json patch.
   if (flags.fromDraft) {

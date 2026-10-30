@@ -41,6 +41,7 @@ group by region;
         outDir: '',
         owner: 'analytics',
         port: null,
+        preview: false,
         queryOnly: false,
         save: true,
         skipTests: false,

@@ -114,6 +114,15 @@ the checks pass, the saved query moves out of `_drafts/` to its normal place and
 you see **Not certified; the draft is unchanged.** and the reasons. See
 [Save and certify](certify.md) for the rules.
 
+### Certify all that ran
+
+Under the drafts, **Certify all that ran (N)** runs Certify on every draft
+whose preview ran, one after another. Each draft is still checked on its own
+and gets its own receipt; the ones that fail stay drafts, and a line under
+the button names them with the reason. Drafts that are certified already,
+rejected, or marked **reuse recommended** are not included. Nothing is
+certified until you click it.
+
 ## Where the drafts go
 
 Saved drafts go in:
@@ -131,14 +140,34 @@ Unlike the Import SQL page, the terminal command saves every draft as it goes.
 zlens import sql ./legacy-sql --domain finance --owner you@example.com
 ```
 
-It prints one line per query with the draft's path, then the statements it
-left out and why, and ends with:
+It prints one line per query with the draft's path and whether it ran (`ran:
+12 rows`, or `needs a fix:` and why), then the statements it left out. It
+ends with a count by kind of fix:
 
 ```text
-Drafts are autosaved under blocks/_drafts or domains/<domain>/blocks/_drafts. Review, preview, then certify selected candidates.
+Ran: 9 of 13 drafts. Need a fix: 4.
+  2 × Needs a default value
+  1 × Does not parse on this connection
+  1 × Column problem
+Certify the ones that pass the checks: zlens certify --from-import imp_5f4b1b7a93 --apply
 ```
 
-Then certify a draft with
-`zlens certify --from-draft <path> --owner you@example.com`. The certified
-file drops the draft's hash from its name (`monthly-revenue.dql`) unless that
-name is taken.
+It uses the running `zlens notebook` when there is one. `--no-preview` makes
+the drafts without running them.
+
+Check every draft of the import, then certify the ones that pass:
+
+```bash
+zlens certify --from-import
+zlens certify --from-import --apply
+```
+
+Without an id it uses the latest import. `--apply` runs the page's Certify on
+each draft, so each one is checked on its own and gets its own receipt
+(`via: sql-import`). The ones that fail stay drafts and are listed with the
+reason. Fix a draft on the Import SQL page or in its file under `_drafts/`,
+then run it again: drafts already certified are skipped.
+
+One draft at a time: `zlens certify --from-draft <path> --owner
+you@example.com`. The certified file drops the draft's hash from its name
+(`monthly-revenue.dql`) unless that name is taken.

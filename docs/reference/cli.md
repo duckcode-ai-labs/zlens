@@ -78,6 +78,7 @@ local databases, data files, AI pins, saved views, and layout overrides.
 | `zlens certify <file.dql>` | Evaluate certification rules |
 | `zlens certify <file.dql> --enterprise` | Enforce grain, outputs, source-system lineage, pattern-specific reusable contracts, review cadence, and test assertions |
 | `zlens certify --from-draft <path>` | Promote a reviewed Tier-2 draft and surface its DataLex contract patch |
+| `zlens certify --from-import [id] [--apply]` | Check every draft of an SQL import (the latest by default); `--apply` certifies each one that passes, with its own receipt |
 | `zlens certify <term file> [--apply]` | Check the business terms a file declares (owner, definition, linked metrics); `--apply` certifies the ones that pass and writes their receipt |
 | `zlens test <file.dql>` | Deprecated compatibility command; use `zlens certify --connection` |
 | `zlens fmt <file.dql\|.dqlnb>` | Format a file in place (canonical form) |
@@ -254,6 +255,8 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--skip-tests` | Skip executable certification tests when the command supports it |
 | `--save` | Compatibility flag for SQL import; drafts already autosave |
 | `--from-draft <path>` | Draft source for `zlens certify --from-draft` |
+| `--from-import [id\|latest]` | The SQL import whose drafts `zlens certify --from-import` checks or, with `--apply`, certifies |
+| `--no-preview` | `zlens import sql`: make the drafts without running them |
 | `--contract <id@version>` | DataLex contract bound during draft certification |
 | `--datalex-manifest <path>` | DataLex manifest used for contract validation or compilation |
 | `--open-pr` | Push the certification branch and open a GitHub pull request |

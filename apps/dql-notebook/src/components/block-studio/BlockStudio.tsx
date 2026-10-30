@@ -4248,6 +4248,8 @@ function BlockStudioImportWorkspace({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingAll, setSavingAll] = useState(false);
+  const [certifyingAll, setCertifyingAll] = useState<{ done: number; total: number } | null>(null);
+  const [certifyAllSummary, setCertifyAllSummary] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<{ kind: 'one'; id: string } | { kind: 'all' } | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -4612,6 +4614,48 @@ function BlockStudioImportWorkspace({
     await certifyCandidate({ ...candidate, description });
   };
 
+  // Drafts whose preview ran and that nobody has certified, rejected or
+  // marked as a copy of an existing saved query.
+  const certifiableCandidates = (session?.candidates ?? []).filter((candidate) => {
+    if (importCandidateTrust(candidate) === 'certified') return false;
+    if (candidate.recommendedAction === 'reuse_existing' || candidate.reviewStatus === 'rejected') return false;
+    if (candidateErrors[candidate.id]) return false;
+    const rowCount = candidate.preview?.result?.rowCount ?? candidate.preview?.result?.rows?.length;
+    return typeof rowCount === 'number';
+  });
+
+  // One click for the whole import: each draft still goes through Certify on
+  // its own (its checks, its receipt); the ones that fail stay drafts.
+  const certifyAllThatRan = async () => {
+    if (!session) return;
+    const todo = certifiableCandidates;
+    setError(null);
+    setCertifyAllSummary(null);
+    setCertifyingAll({ done: 0, total: todo.length });
+    let certified = 0;
+    const failed: string[] = [];
+    // Each result builds on the last: updateCandidate would start from the
+    // session this render saw and drop the drafts certified before it.
+    let working = session;
+    for (const [index, candidate] of todo.entries()) {
+      try {
+        const response = await api.certifyDqlGenerationCandidate(session.id, candidate.id);
+        working = { ...working, candidates: working.candidates.map((item) => item.id === response.candidate.id ? response.candidate : item) };
+        onSessionChange(working);
+        setSmartItems((current) => ({ ...current, [response.candidate.id]: smartItemFromCandidate(response.candidate) }));
+        onSavedCandidate(response.candidate, response.block);
+        certified += 1;
+      } catch (err: any) {
+        const blockers: string[] = Array.isArray(err?.details?.blockers) ? err.details.blockers : [];
+        failed.push(`${candidate.name}: ${blockers[0] ?? err?.message ?? 'not certified'}`);
+      }
+      setCertifyingAll({ done: index + 1, total: todo.length });
+    }
+    await onRefreshSessions();
+    setCertifyingAll(null);
+    setCertifyAllSummary(`Certified ${certified} of ${todo.length}.${failed.length ? ` Still drafts: ${failed.join(' · ')}` : ''}`);
+  };
+
   const saveAll = async () => {
     if (!session) return;
     const saveOwner = owner.trim() || session.defaults.owner.trim();
@@ -4888,6 +4932,23 @@ function BlockStudioImportWorkspace({
                 )}
                 {!session.candidates.some(isAiGeneratedCandidate) && smartCounts.ready > 0 && (
                   <button onClick={() => void saveAll()} disabled={savingAll} style={primaryImportButtonStyle(t)}>{savingAll ? 'Saving...' : 'Save all valid'}</button>
+                )}
+                {(certifiableCandidates.length > 0 || certifyingAll) && (
+                  <>
+                    <button
+                      onClick={() => void certifyAllThatRan()}
+                      disabled={Boolean(certifyingAll) || loading}
+                      style={primaryImportButtonStyle(t)}
+                    >
+                      {certifyingAll ? `Certifying ${certifyingAll.done} of ${certifyingAll.total}...` : `Certify all that ran (${certifiableCandidates.length})`}
+                    </button>
+                    <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+                      Runs Certify on each draft whose preview ran. Each is checked on its own and gets its own receipt; any that fail stay drafts.
+                    </span>
+                  </>
+                )}
+                {certifyAllSummary && (
+                  <span role="status" style={{ fontSize: 11, color: t.textSecondary, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{certifyAllSummary}</span>
                 )}
               </>
             )}
