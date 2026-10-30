@@ -6,10 +6,8 @@ This page covers the other ways to install and upgrade.
 
 ## Requirements
 
-- Node.js 20, 22 or 24 (24 LTS recommended). CI tests all three. Node 25 and
-  26 are not supported yet: ZLens's DuckDB driver has no prebuilt binary for
-  them, so the driver install would compile DuckDB from source and ZLens stops
-  with "use Node 24 LTS or 22" instead.
+- Node.js 20, 22, 24 or 26 (26 LTS recommended). CI tests all four.
+  Odd-numbered lines such as Node 25 run but are not tested.
 - npm 10 or newer. On npm 12, see [npm 12 and install scripts](#npm-12-and-install-scripts).
 - macOS, Linux or Windows.
 
@@ -41,11 +39,14 @@ Run it inside a dbt repo to wire the dbt project in automatically; see
 
 ### Database drivers
 
-Install only the driver your database needs, from the project folder:
+`zlens notebook` and `zlens sync warehouse` install the active connection's
+driver into `.dql/connectors` the first time they run. To install it yourself
+(offline or in CI), install only the driver your database needs, from the
+project folder:
 
 | Database | Install |
 |---|---|
-| DuckDB, or local CSV, Parquet and JSON files | `npm install --prefix .dql/connectors duckdb` |
+| DuckDB, or local CSV, Parquet and JSON files | `npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'` |
 | Snowflake | `npm install --prefix .dql/connectors snowflake-sdk` |
 | Databricks SQL | nothing; it is built in |
 
@@ -129,13 +130,12 @@ docker compose --profile ollama up   # adds a local Ollama on :11434
 
 npm 12 blocks a dependency's install script unless the project's
 `package.json` lists the package in `allowScripts`, and prints
-`install scripts blocked because they are not covered by allowScripts`. Two
-packages ZLens uses download their native binary in that script:
+`install scripts blocked because they are not covered by allowScripts`. One
+package ZLens uses downloads its native binary in that script:
 
 | Package | What ZLens uses it for | Where it is allowed |
 |---|---|---|
 | `better-sqlite3` | the local index, run history and caches | your project's `package.json`: projects from `create-zlens-app` 0.2.1 and the sample projects already have it |
-| `duckdb` | the DuckDB driver | `.dql/connectors/package.json`: ZLens writes it when it installs or repairs the driver |
 
 The entry in `package.json` is:
 
@@ -154,12 +154,14 @@ npm install-scripts approve better-sqlite3
 npm rebuild better-sqlite3
 ```
 
-**The DuckDB driver.** `zlens notebook` (at startup) and `zlens sync warehouse`
-repair a driver installed without its binary. To do it yourself:
+**The DuckDB driver.** `@duckdb/node-api` has no install script, so it needs
+no `allowScripts` entry. Its binary comes as a per-platform optional
+dependency. If it is missing (optional dependencies skipped, or a `.dql`
+folder copied from another operating system), `zlens notebook` (at startup)
+and `zlens sync warehouse` reinstall it. To do it yourself:
 
 ```bash
-npm --prefix .dql/connectors install-scripts approve duckdb
-npm --prefix .dql/connectors rebuild duckdb
+npm --prefix .dql/connectors install @duckdb/node-api --include=optional
 ```
 
 **A global install.** `npm install -g` has no `package.json` to allow scripts
@@ -170,7 +172,7 @@ in, so pass the flag (or set it once with
 npm install -g @zlens/cli --allow-scripts=better-sqlite3
 ```
 
-npm 12 needs Node.js 22.22.2 or newer (or 24.15.0 or newer). npm 10 and 11
+npm 12 needs Node.js 22.22.2 or newer (or 24.15.0 or newer, or Node 26). npm 10 and 11
 run install scripts as before and ignore `allowScripts`.
 
 ## Run project commands
@@ -242,8 +244,9 @@ npm i -g @zlens/cli@latest --allow-scripts=better-sqlite3   # reinstall; a faile
 file".** npm 12 skipped its install script. See
 [npm 12 and install scripts](#npm-12-and-install-scripts).
 
-**A native driver fails to build (`node-gyp rebuild`).** Switch to Node 22
-LTS and retry. On macOS run `xcode-select --install` once. On Linux install
+**A native driver fails to build (`node-gyp rebuild`).** Switch to an LTS
+Node (20, 22, 24 or 26) and retry: better-sqlite3 has prebuilt binaries for
+those. On macOS run `xcode-select --install` once. On Linux install
 `python3`, `make` and `g++`; on Windows, the Microsoft C++ Build Tools.
 
 **Docker: port already in use.** In `docker-compose.yml`, change

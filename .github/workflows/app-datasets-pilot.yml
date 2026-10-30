@@ -46,7 +46,7 @@ jobs:
         run: |
           mkdir -p "$CONNECTOR_ROOT"
           printf '%s\n' '{"private":true}' > "$CONNECTOR_ROOT/package.json"
-          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false duckdb@1.1.3
+          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false '@duckdb/node-api@^1.5.6-r.1'
         env:
           CONNECTOR_ROOT: ${{ runner.temp }}/app-datasets-connectors
 

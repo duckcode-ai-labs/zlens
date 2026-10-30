@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { duckDBOpenFailureMessage } from '@zlens/connectors';
 
-// The Node duckdb 1.4.4 driver's exact message for a file Python duckdb 2.0.0 wrote.
+// The Node DuckDB driver's message for a file Python duckdb 2.0.0 wrote.
 const DUCKDB2_ERROR = [
   'IO Error: Trying to read a database file with version number 999, but we can only read versions between 64 and 67.',
   'The database file was created with an newer version of DuckDB.',
@@ -50,8 +50,8 @@ describe('zlens doctor on a DuckDB file written by DuckDB 2.0', () => {
     const filepath = join(root, 'jaffle_shop.duckdb');
     expect(check.detail).toBe(`Local query runtime is unavailable for driver "duckdb": ${duckDBOpenFailureMessage(filepath, DUCKDB2_ERROR)}`);
     expect(check.detail).toContain(
-      'This database file was written by a newer DuckDB (2.x). ZLens reads files from DuckDB 1.4. '
-      + "Rebuild it with `pip install 'duckdb<1.5'` (then rerun dbt), or use a file written by DuckDB 1.4.",
+      'This database file was written by a newer DuckDB (2.x). ZLens reads files from DuckDB 1.5. '
+      + "Rebuild it with `pip install 'duckdb<1.6'` (then rerun dbt), or use a file written by DuckDB 1.5.",
     );
     expect(check.detail).toContain(`\nOriginal DuckDB error (${filepath}): IO Error: Trying to read a database file with version number 999`);
   });

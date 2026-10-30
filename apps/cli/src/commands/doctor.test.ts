@@ -9,11 +9,12 @@ import { checkAppsPublishing, checkDuckDBDependency, checkNodeVersion, isSnowfla
 const tempDirs: string[] = [];
 
 describe('Snowflake Node runtime support', () => {
-  it('accepts supported LTS majors and rejects unsupported majors', () => {
+  it('accepts Node 20 and newer, as snowflake-sdk and the notebook runtime do', () => {
     expect(isSnowflakeSupportedNodeVersion('20.19.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('22.18.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('24.4.1')).toBe(true);
-    expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(false);
+    expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(true);
+    expect(isSnowflakeSupportedNodeVersion('18.20.4')).toBe(false);
   });
 });
 
@@ -39,32 +40,37 @@ describe('App publishing check (T3)', () => {
 });
 
 describe('Node.js check', () => {
-  it('passes Node 20, 22 and 24, warns on a newer Node, fails below 20', () => {
-    for (const version of ['20.19.0', '22.18.0', '24.15.0']) {
-      expect(checkNodeVersion(version)).toEqual({ name: 'Node.js', ok: true, detail: `version=${version} (supported: Node 20, 22 or 24)` });
+  it('passes Node 20, 22, 24 and 26, notes an untested Node, fails below 20', () => {
+    for (const version of ['20.19.0', '22.18.0', '24.15.0', '26.13.0']) {
+      expect(checkNodeVersion(version)).toEqual({ name: 'Node.js', ok: true, detail: `version=${version} (supported: Node 20, 22, 24 or 26)` });
     }
-    const node26 = checkNodeVersion('26.12.0');
-    expect(node26.ok).toBe(true);
-    expect(node26.advisory).toBe(true);
-    expect(node26.detail).toContain('not supported yet');
-    expect(node26.detail).toContain("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
+    const node25 = checkNodeVersion('25.2.1');
+    expect(node25.ok).toBe(true);
+    expect(node25.advisory).toBe(true);
+    expect(node25.detail).toContain('is not tested');
     expect(checkNodeVersion('18.20.4').ok).toBe(false);
   });
 });
 
 describe('DuckDB connector check', () => {
-  it('names the Node to use when DuckDB has no prebuilt binary for this one', () => {
-    const projectDir = makeProject('dql-doctor-duckdb-node26-');
-    const check = checkDuckDBDependency(projectDir, '26.12.0');
-    expect(check.ok).toBe(false);
-    expect(check.detail.split('\n')[0]).toBe("ZLens's DuckDB driver has no prebuilt binary for Node 26 yet; use Node 24 LTS or 22.");
-  });
-
-  it('still says "missing; install" on Node 24', () => {
-    const projectDir = makeProject('dql-doctor-duckdb-node24-');
-    const check = checkDuckDBDependency(projectDir, '24.15.0');
+  it('says "missing; install" with the @duckdb/node-api command', () => {
+    const projectDir = makeProject('dql-doctor-duckdb-missing-');
+    const check = checkDuckDBDependency(projectDir);
     expect(check.ok).toBe(false);
     expect(check.detail).toContain('missing; install from the notebook Connections page');
+    expect(check.detail).toContain('@duckdb/node-api');
+  });
+
+  it('says how to reinstall a driver whose binary for this computer is missing', () => {
+    const projectDir = makeProject('dql-doctor-duckdb-nobinary-');
+    const dir = join(projectDir, '.dql', 'connectors', 'node_modules', '@duckdb', 'node-api');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@duckdb/node-api', version: '1.5.6-r.2', main: 'index.js' }));
+    writeFileSync(join(dir, 'index.js'), "throw new Error(\"Cannot find module '@duckdb/node-bindings-linux-x64/duckdb.node'\");");
+    const check = checkDuckDBDependency(projectDir);
+    expect(check.ok).toBe(false);
+    expect(check.detail).toContain('is missing. It comes as an optional dependency');
+    expect(check.detail).toContain('install @duckdb/node-api --include=optional');
   });
 });
 

@@ -4,42 +4,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(new URL('../packages/dql-connectors/package.json', import.meta.url));
-const duckdb = require('duckdb');
+const { DuckDBInstance } = require('@duckdb/node-api');
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '..');
 const projectRoot = resolve(repoRoot, 'jaffle-shop');
 const databasePath = join(projectRoot, 'jaffle_shop.duckdb');
-
-function connect(filepath) {
-  const db = new duckdb.Database(filepath);
-  const connection = db.connect();
-  return { db, connection };
-}
-
-function exec(connection, sql) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    connection.run(sql, (error) => {
-      if (error) rejectPromise(error);
-      else resolvePromise();
-    });
-  });
-}
-
-function close(db, connection) {
-  return new Promise((resolvePromise, rejectPromise) => {
-    connection.close((closeError) => {
-      if (closeError) {
-        rejectPromise(closeError);
-        return;
-      }
-      db.close((dbError) => {
-        if (dbError) rejectPromise(dbError);
-        else resolvePromise();
-      });
-    });
-  });
-}
 
 const bootstrapSql = `
 PRAGMA disable_progress_bar;
@@ -297,12 +267,14 @@ async function main() {
     rmSync(databasePath, { force: true });
   }
 
-  const { db, connection } = connect(databasePath);
+  const db = await DuckDBInstance.create(databasePath);
+  const connection = await db.connect();
   try {
-    await exec(connection, bootstrapSql);
+    await connection.run(bootstrapSql);
     console.log(`Created sample DuckDB database at ${databasePath}`);
   } finally {
-    await close(db, connection);
+    connection.closeSync();
+    db.closeSync();
   }
 }
 

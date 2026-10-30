@@ -22,18 +22,18 @@ const configuredDuckDbConnectorRoot = readEnv('ZLENS_APP_DATASETS_DUCKDB_CONNECT
 const duckDbIt = configuredDuckDbConnectorRoot ? it : it.skip;
 
 describe('resolveDuckDBModule', () => {
-  it('accepts a direct Database export', () => {
-    class Database {}
-    expect(resolveDuckDBModule({ Database })).toEqual({ Database });
+  const DuckDBInstance = { create: async () => ({}) };
+  it('accepts a direct DuckDBInstance export', () => {
+    expect(resolveDuckDBModule({ DuckDBInstance })).toEqual({ DuckDBInstance });
   });
 
-  it('accepts a CommonJS default export shape', () => {
-    class Database {}
-    expect(resolveDuckDBModule({ default: { Database } })).toEqual({ Database });
+  it('accepts a default export shape', () => {
+    expect(resolveDuckDBModule({ default: { DuckDBInstance } })).toEqual({ DuckDBInstance });
   });
 
-  it('throws when Database is missing', () => {
-    expect(() => resolveDuckDBModule({ default: {} })).toThrow('Database constructor');
+  it('throws when DuckDBInstance.create is missing (the old duckdb package, for one)', () => {
+    expect(() => resolveDuckDBModule({ default: {} })).toThrow('DuckDBInstance.create');
+    expect(() => resolveDuckDBModule({ Database: class {} })).toThrow('@duckdb/node-api');
   });
 });
 
@@ -60,44 +60,67 @@ describe('normalizeDuckDBValue', () => {
 });
 
 describe('DuckDBConnector execution control', () => {
-  it('interrupts a pending native query on abort and ignores its late callback', async () => {
-    const connector = new DuckDBConnector();
-    let callback: ((error: Error | null, rows: unknown) => void) | undefined;
+  /** A connection whose `run` stays pending until the test settles it. */
+  const pendingConnection = () => {
+    let finish: ((result: unknown) => void) | undefined;
     const interrupt = vi.fn();
-    const all = vi.fn((...args: unknown[]) => {
-      callback = args.at(-1) as ((error: Error | null, rows: unknown) => void);
-    });
-    (connector as unknown as { connection: unknown; db: unknown }).connection = { all, interrupt };
+    const run = vi.fn(() => new Promise((resolve) => { finish = resolve; }));
+    const result = (rows: unknown[][]) => ({ columnNames: () => ['slow_value'], getRows: async () => rows });
+    return { connection: { run, interrupt }, run, interrupt, finish: (rows: unknown[][]) => finish?.(result(rows)) };
+  };
+
+  it('interrupts a pending native query on abort and ignores its late result', async () => {
+    const connector = new DuckDBConnector();
+    const native = pendingConnection();
+    (connector as unknown as { connection: unknown; db: unknown }).connection = native.connection;
     const controller = new AbortController();
 
     const pending = connector.execute('SELECT slow_value', undefined, { signal: controller.signal, deadlineMs: 10_000 });
     const cancelled = expect(pending).rejects.toThrow('DuckDB query was cancelled: Ask run cancelled.');
-    expect(all).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(native.run).toHaveBeenCalledTimes(1));
     controller.abort(new Error('Ask run cancelled'));
 
     await cancelled;
-    expect(interrupt).toHaveBeenCalledTimes(1);
-    // node-duckdb can still invoke the callback after interrupt. It must not
+    expect(native.interrupt).toHaveBeenCalledTimes(1);
+    // The driver can still settle the statement after interrupt. It must not
     // revive a cancelled Ask execution or resolve a second result.
-    callback?.(null, [{ slow_value: 42 }]);
+    native.finish([[42]]);
     await Promise.resolve();
-    expect(interrupt).toHaveBeenCalledTimes(1);
+    expect(native.interrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it('a cancelled statement still waiting for its connection never runs and never interrupts the one running', async () => {
+    const connector = new DuckDBConnector();
+    const native = pendingConnection();
+    (connector as unknown as { connection: unknown; db: unknown }).connection = native.connection;
+    const controller = new AbortController();
+
+    const first = connector.execute('SELECT slow_value');
+    const second = connector.execute('SELECT queued_value', undefined, { signal: controller.signal });
+    await vi.waitFor(() => expect(native.run).toHaveBeenCalledTimes(1));
+    controller.abort(new Error('closed'));
+    await expect(second).rejects.toThrow('DuckDB query was cancelled: closed.');
+    expect(native.interrupt).not.toHaveBeenCalled();
+
+    native.finish([[1]]);
+    await expect(first).resolves.toMatchObject({ rows: [{ slow_value: 1 }] });
+    await Promise.resolve();
+    expect(native.run).toHaveBeenCalledTimes(1);
   });
 
   it('interrupts a pending native query when its connector deadline elapses', async () => {
     vi.useFakeTimers();
     try {
       const connector = new DuckDBConnector();
-      const interrupt = vi.fn();
-      const all = vi.fn();
-      (connector as unknown as { connection: unknown; db: unknown }).connection = { all, interrupt };
+      const native = pendingConnection();
+      (connector as unknown as { connection: unknown; db: unknown }).connection = native.connection;
 
       const pending = connector.execute('SELECT slow_value', undefined, { deadlineMs: 25 });
       const timedOut = expect(pending).rejects.toThrow('DuckDB query exceeded the 25ms deadline.');
       await vi.advanceTimersByTimeAsync(25);
 
       await timedOut;
-      expect(interrupt).toHaveBeenCalledTimes(1);
+      expect(native.interrupt).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
@@ -135,10 +158,89 @@ describe('DuckDB consistent App read scope', () => {
   });
 });
 
+describe('DuckDB values and parameters (as the old duckdb driver returned and bound them)', () => {
+  // Every expected value below is what `duckdb` 1.4.4 returned after
+  // normalizeDuckDBRow, so moving to @duckdb/node-api changes no result.
+  duckDbIt('returns each type as before', async () => {
+    const connector = new DuckDBConnector();
+    try {
+      await connector.connect({ driver: 'duckdb', moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+      const { rows, columns } = await connector.execute(`SELECT
+        42::INTEGER AS i, 42::BIGINT AS b, 9007199254740993::BIGINT AS big, 170141183460469231731687303715884105727::HUGEINT AS huge,
+        1.5::DOUBLE AS d, 123.45::DECIMAL(10,2) AS dec, true AS flag, 'hé' AS s, NULL::INTEGER AS empty,
+        DATE '2025-03-04' AS day, TIMESTAMP '2025-03-04 05:06:07.123456' AS ts, TIMESTAMPTZ '2025-03-04 05:06:07+02' AS tstz,
+        TIME '05:06:07' AS t, INTERVAL 3 DAY + INTERVAL 2 HOUR AS span, '4ac7a9e9-607c-4c8a-84f3-843f0191e3fd'::UUID AS id,
+        'a'::ENUM('a', 'b') AS e, [1, 2] AS list, [1::BIGINT] AS biglist, {'a': 1, 'b': 'x'} AS st, MAP {'k': 1, 'z': 2} AS m,
+        '0101'::BIT AS bits, '05:06:07+02'::TIMETZ AS ttz, 'infinity'::DATE AS forever, count(*) AS n FROM range(3)`);
+      expect(rows).toEqual([{
+        i: 42, b: 42, big: '9007199254740993', huge: '170141183460469231731687303715884105727',
+        d: 1.5, dec: 123.45, flag: true, s: 'hé', empty: null,
+        day: new Date('2025-03-04T00:00:00.000Z'), ts: new Date('2025-03-04T05:06:07.123Z'), tstz: new Date('2025-03-04T03:06:07.000Z'),
+        t: '05:06:07', span: { months: 0, days: 3, micros: 7_200_000_000 }, id: '4ac7a9e9-607c-4c8a-84f3-843f0191e3fd',
+        e: 'a', list: [1, 2], biglist: [1], st: { a: 1, b: 'x' }, m: '{k=1, z=2}',
+        bits: '0101', ttz: '05:06:07+02', forever: null, n: 3,
+      }]);
+      const type = Object.fromEntries(columns.map((column) => [column.name, column.type]));
+      expect(type).toMatchObject({ i: 'number', dec: 'number', flag: 'boolean', s: 'string', day: 'datetime', t: 'string', n: 'number' });
+      // A NULL in the first row no longer hides the column's type.
+      expect(type.empty).toBe('number');
+    } finally {
+      await connector.disconnect();
+    }
+  });
+
+  duckDbIt('a repeated column name keeps its last value, as before', async () => {
+    const connector = new DuckDBConnector();
+    try {
+      await connector.connect({ driver: 'duckdb', moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+      const result = await connector.execute('SELECT 1 AS a, 2 AS a');
+      expect(result.rows).toEqual([{ a: 2 }]);
+      expect(result.columns.map((column) => column.name)).toEqual(['a']);
+    } finally {
+      await connector.disconnect();
+    }
+  });
+
+  duckDbIt('binds numbers, text, booleans, nulls, bigints and dates where the statement expects them', async () => {
+    const connector = new DuckDBConnector();
+    try {
+      await connector.connect({ driver: 'duckdb', moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+      await connector.execute("CREATE TABLE p AS SELECT * FROM (VALUES (1, 'a', 1.5), (2, 'b', 2.5), (3, 'c', 3.5)) t(id, name, price)");
+      const one = async (sql: string, params: unknown[]) => (await connector.execute(sql, params)).rows;
+      expect(await one('SELECT ? + 1 AS v', [1])).toEqual([{ v: 2 }]);
+      expect(await one('SELECT id FROM p ORDER BY id LIMIT ?', [2])).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(await one('SELECT id FROM p WHERE price > ? ORDER BY id', [2])).toEqual([{ id: 2 }, { id: 3 }]);
+      expect(await one('SELECT id FROM p WHERE price > ? ORDER BY id', [2.5])).toEqual([{ id: 3 }]);
+      expect(await one('SELECT id FROM p WHERE name = ? AND id = $2', ['b', 2])).toEqual([{ id: 2 }]);
+      expect(await one('SELECT id FROM p WHERE id IN (?, ?) ORDER BY id', [1, 3])).toEqual([{ id: 1 }, { id: 3 }]);
+      expect(await one('SELECT ? AS v', [true])).toEqual([{ v: true }]);
+      expect(await one('SELECT ? IS NULL AS v', [null])).toEqual([{ v: true }]);
+      expect(await one('SELECT ? AS v', [10n])).toEqual([{ v: 10 }]);
+      expect(await one('SELECT ? + 1 AS v', [5_000_000_000])).toEqual([{ v: 5_000_000_001 }]);
+      expect(await one('SELECT ?::DATE AS v', [new Date('2025-01-02T00:00:00Z')])).toEqual([{ v: new Date('2025-01-02T00:00:00.000Z') }]);
+      expect(await one("SELECT ?::TIMESTAMP AS v", ['2025-01-02 03:04:05'])).toEqual([{ v: new Date('2025-01-02T03:04:05.000Z') }]);
+      expect(await one('SELECT 5 = ? AS v', ['5'])).toEqual([{ v: true }]);
+    } finally {
+      await connector.disconnect();
+    }
+  });
+
+  duckDbIt('runs statements on one connection one at a time when they are sent together', async () => {
+    const connector = new DuckDBConnector();
+    try {
+      await connector.connect({ driver: 'duckdb', moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+      const results = await Promise.all(Array.from({ length: 20 }, (_, index) => connector.execute(`SELECT ${index} AS v, count(*) AS n FROM range(20000)`)));
+      expect(results.map((result) => result.rows[0])).toEqual(Array.from({ length: 20 }, (_, index) => ({ v: index, n: 20000 })));
+    } finally {
+      await connector.disconnect();
+    }
+  });
+});
+
 describe('DuckDB database lifetime', () => {
-  // duckdb-node frees a closed native instance only when its Connection and
-  // Statement objects are garbage-collected. Force that moment instead of
-  // waiting for it, which is when a stale instance used to delete the WAL.
+  // A closed native instance is freed only when its last JS handle is
+  // garbage-collected. Force that moment instead of waiting for it, which is
+  // when a stale instance used to delete the WAL.
   const collectGarbage = async () => {
     setFlagsFromString('--expose-gc');
     const gc = runInNewContext('gc') as () => void;
@@ -227,32 +329,33 @@ describe('DuckDB database lifetime', () => {
 });
 
 /**
- * A stand-in `duckdb` module that records every statement per connection, so the
- * settings a connection starts with can be checked without the native driver.
+ * A stand-in `@duckdb/node-api` module that records every statement per
+ * connection, so the settings a connection starts with can be checked without
+ * the native driver.
  */
 function stubDuckDBModule(): string {
   const root = mkdtempSync(join(tmpdir(), 'dql-duckdb-stub-'));
-  const dir = join(root, 'node_modules', 'duckdb');
+  const dir = join(root, 'node_modules', '@duckdb', 'node-api');
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'duckdb', main: 'index.js' }));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@duckdb/node-api', main: 'index.js' }));
   writeFileSync(join(dir, 'index.js'), `
 const log = [];
-class Connection {
+const result = (name, rows) => ({ columnNames: () => (name ? [name] : []), getRows: async () => rows });
+class DuckDBConnection {
   constructor() { this.statements = []; log.push(this.statements); }
-  all(sql, ...args) {
-    const callback = args[args.length - 1];
+  async run(sql) {
     this.statements.push(sql);
-    const rows = /current_schema/.test(sql) ? [{ __dql_schema: 'main' }] : /TimeZone/.test(sql) ? [{ __dql_timezone: 'UTC' }] : [];
-    process.nextTick(() => callback(null, rows));
+    return /current_schema/.test(sql) ? result('__dql_schema', [['main']]) : /TimeZone/.test(sql) ? result('__dql_timezone', [['UTC']]) : result(undefined, []);
   }
-  close(callback) { if (callback) callback(); }
+  interrupt() {}
+  closeSync() {}
 }
-class Database {
-  constructor(path, callback) { process.nextTick(() => callback(null)); }
-  connect() { return new Connection(); }
-  close(callback) { if (callback) callback(null); }
+class DuckDBInstance {
+  static async create() { return new DuckDBInstance(); }
+  async connect() { return new DuckDBConnection(); }
+  closeSync() {}
 }
-module.exports = { Database, log };
+module.exports = { DuckDBInstance, log };
 `);
   writeFileSync(join(root, 'package.json'), '{}');
   return root;
@@ -262,7 +365,7 @@ const SWITCH_NAMES = ['ZLENS_DUCKDB_AUTOINSTALL', 'DQL_DUCKDB_AUTOINSTALL'] as c
 
 describe('extension downloads (ZLENS_DUCKDB_AUTOINSTALL)', () => {
   const stubRoot = stubDuckDBModule();
-  const stub = createRequire(join(stubRoot, 'package.json'))('duckdb') as { log: string[][] };
+  const stub = createRequire(join(stubRoot, 'package.json'))('@duckdb/node-api') as { log: string[][] };
   const saved: Partial<Record<(typeof SWITCH_NAMES)[number], string | undefined>> = {};
   beforeAll(() => { for (const name of SWITCH_NAMES) saved[name] = process.env[name]; });
   beforeEach(() => {
@@ -604,13 +707,13 @@ describe('a DuckDB file written by a newer DuckDB', () => {
     'See the storage page for migration strategy and more information: https://duckdb.org/internals/storage',
   ].join('\n');
 
-  it('says DuckDB 2.x wrote it, that ZLens reads 1.4, and how to rebuild it', async () => {
+  it('says DuckDB 2.x wrote it, that ZLens reads 1.5, and how to rebuild it', async () => {
     const { duckDBOpenFailureMessage } = await import('./duckdb.js');
     const message = duckDBOpenFailureMessage('/p/jaffle_shop.duckdb', duckdb2);
     const [guidance, ...rest] = message.split('\n');
     expect(guidance).toBe(
-      'This database file was written by a newer DuckDB (2.x). ZLens reads files from DuckDB 1.4. '
-      + "Rebuild it with `pip install 'duckdb<1.5'` (then rerun dbt), or use a file written by DuckDB 1.4.",
+      'This database file was written by a newer DuckDB (2.x). ZLens reads files from DuckDB 1.5. '
+      + "Rebuild it with `pip install 'duckdb<1.6'` (then rerun dbt), or use a file written by DuckDB 1.5.",
     );
     // DuckDB's own words stay underneath, with the file they are about.
     expect(rest.join('\n')).toBe(`Original DuckDB error (/p/jaffle_shop.duckdb): ${duckdb2}`);
@@ -619,7 +722,7 @@ describe('a DuckDB file written by a newer DuckDB', () => {
   it('does not claim 2.x for another newer storage version', async () => {
     const { duckDBNewerFileMessage } = await import('./duckdb.js');
     const message = duckDBNewerFileMessage('/p/x.duckdb', 'IO Error: Trying to read a database file with version number 68, but we can only read versions between 64 and 67.\nThe database file was created with an newer version of DuckDB.');
-    expect(message).toMatch(/^This database file was written by a newer DuckDB\. ZLens reads files from DuckDB 1\.4\./);
+    expect(message).toMatch(/^This database file was written by a newer DuckDB\. ZLens reads files from DuckDB 1\.5\./);
     expect(message).not.toContain('2.x');
   });
 

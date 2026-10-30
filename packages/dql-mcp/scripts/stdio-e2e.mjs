@@ -20,8 +20,8 @@
  *   node stdio-e2e.mjs --lane dbt --project /path/jaffle-shop-duckdb --runtime-url http://127.0.0.1:3640
  *   node stdio-e2e.mjs --lane warehouse --project /path/jaffle-shop-warehouse --runtime-url http://127.0.0.1:3641
  *
- * Needs a DuckDB driver for the CI lanes: --connector-root <dir with node_modules/duckdb>
- * (or ZLENS_DUCKDB_CONNECTOR_ROOT); without one it installs duckdb@1.1.3 into a temp dir.
+ * Needs a DuckDB driver for the CI lanes: --connector-root <dir with node_modules/@duckdb/node-api>
+ * (or ZLENS_DUCKDB_CONNECTOR_ROOT); without one it installs @duckdb/node-api (DuckDB 1.5) into a temp dir.
  * Exit code 1 when any check fails. --json <file> writes the per-call results.
  */
 import { spawn, spawnSync } from 'node:child_process';
@@ -78,7 +78,7 @@ function ensureConnectorRoot(explicit) {
   if (explicit) return explicit;
   const root = mkdtempSync(join(tmpdir(), 'zlens-mcp-e2e-duckdb-'));
   writeFileSync(join(root, 'package.json'), '{"private":true}\n');
-  run('npm', ['--prefix', root, 'install', '--no-save', '--no-package-lock', '--workspaces=false', '--no-audit', '--no-fund', 'duckdb@1.1.3']);
+  run('npm', ['--prefix', root, 'install', '--no-save', '--no-package-lock', '--workspaces=false', '--no-audit', '--no-fund', '@duckdb/node-api@^1.5.6-r.1']);
   return root;
 }
 

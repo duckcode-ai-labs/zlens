@@ -144,7 +144,7 @@ export function HelpDocsPage() {
             <pre style={{ ...codeBlock, margin: '14px 0 0' }}>npm i -g @zlens/cli --allow-scripts=better-sqlite3{'\n'}zlens notebook ./shop</pre>
             <p style={para}>In a folder with no ZLens project, ZLens asks <strong>No ZLens project here. Create one? [Y/n]</strong>. Press Enter: a folder with a database file and no dbt becomes a <strong>Database only</strong> project with a connection to the file; a folder with <span style={inlineCode}>dbt_project.yml</span> becomes a dbt project. The workbench then opens on Guided Setup.</p>
             <p style={para}>Without a terminal, ZLens prints the one command to run instead: <span style={inlineCode}>npx zlens notebook ./shop --yes</span>.</p>
-            {callout(<><strong>Requirements:</strong> Node 20, 22 or 24, and a database ZLens can read (a DuckDB file, PostgreSQL, Snowflake and more). A dbt project is optional. Working in one of the sample repositories? Follow its README; it already holds a ZLens project.</>)}
+            {callout(<><strong>Requirements:</strong> Node 20, 22, 24 or 26, and a database ZLens can read (a DuckDB file, PostgreSQL, Snowflake and more). A dbt project is optional. Working in one of the sample repositories? Follow its README; it already holds a ZLens project.</>)}
           </div>
 
           <div ref={setSectionRef(1)} style={{ marginTop: 44 }}>

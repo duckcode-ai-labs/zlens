@@ -30,6 +30,12 @@ tar xzf node-$V-darwin-arm64.tar.gz && cd -
 node scripts/launch-gate.mjs --node ../node24/node-$V-darwin-arm64/bin
 ```
 
+**Node 26 LTS.** Add a lane that runs Node 26 with the npm it ships with:
+`--npm system,12,bundled:<folder with Node 26>`. ZLens's DuckDB driver
+(`@duckdb/node-api`, RFC 0011) loads on every Node from 20 up, so the release
+gate runs this lane too. Get Node 26 the same way as Node 24 above
+(`V=v26.13.0`).
+
 It takes 40 to 80 minutes: per lane, the dbt build, the `npm install`s, and
 Ask answered by a live model.
 
@@ -61,10 +67,10 @@ Ask answered by a live model.
    - `npm install` (no install script may be blocked: the sample's
      `package.json` allows `better-sqlite3`), then `better-sqlite3` must open
      a database;
-   - the DuckDB driver (on npm 12 its script is blocked here), `npm run sync`,
-     `npm run validate`;
-   - `npm run notebook`, after which the DuckDB driver in `.dql/connectors`
-     must load (on npm 12, ZLens has rebuilt it by then);
+   - `npm run sync`, `npm run validate` (no driver step: the README has none);
+   - `npm run notebook`, which installs the DuckDB driver
+     (`@duckdb/node-api`) into `.dql/connectors` on start; it must then load
+     and report DuckDB 1.5, with nothing compiled;
    - then, in the browser (`apps/dql-notebook/browser/gate/dbt-sample.gate.ts`):
      - Guided Setup opening the sample as an existing ZLens project (DuckDB
        configured and tested, Refresh dbt data, Finish setup);
@@ -81,7 +87,9 @@ Ask answered by a live model.
      its SQLite native module and DuckDB driver checks pass), and
      `zlens mcp test` with it stopped (must fail and say Not ready).
 5. **Warehouse sample** (`duckcode-ai/jaffle-shop-warehouse`, no dbt): the same
-   steps without dbt. In the browser (`warehouse-sample.gate.ts`):
+   steps without dbt; here `npm run sync` (a warehouse sync) installs the
+   DuckDB driver, and its row fails if it did not. In the browser
+   (`warehouse-sample.gate.ts`):
    - Guided Setup with Database only;
    - the starter notebook's **Run all**;
    - a certified join in Modeling;
@@ -96,8 +104,10 @@ Ask answered by a live model.
      `better-sqlite3`;
    - `npm install` (no script blocked), `npx zlens --version`, and
      `better-sqlite3` opens a database;
-   - the driver step it prints, `npm install --prefix .dql/connectors duckdb`:
-     no script blocked, and the driver loads.
+   - the manual driver install its README gives,
+     `npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'`: no
+     install script, and the driver loads DuckDB 1.5. (Its printed next steps
+     have no driver step: `zlens sync warehouse` installs it.)
 
 The sample's own `@zlens/cli` range is a check of its own. If the range would
 not install the packed version (`^0.1.0` never installs 0.2.0), that row

@@ -3,9 +3,9 @@
 | Field | Value |
 |---|---|
 | **Author(s)** | @KKranthi6881 (with Claude) |
-| **Status** | Draft. Needs the owner's approval before any code is written |
+| **Status** | Accepted by the owner on 2026-10-29; implemented (see Implementation notes) |
 | **Created** | 2026-10-19 |
-| **Targets** | ZLens 0.3 (0.2.2 ships only the Node-range guard) |
+| **Targets** | The next ZLens release (0.2.2 shipped only the Node-range guard) |
 | **Discussion** | — |
 | **Implementation** | — |
 | **Supersedes** | — |
@@ -196,3 +196,40 @@ Each of these has a test today, and each must pass unchanged on the new driver:
 - Launch gate passes on Node 26 with no DuckDB-specific rows skipped.
 - The npm 12 "ZLens rebuilt the DuckDB driver" note disappears from gate
   output, because there is nothing to rebuild.
+
+## Implementation notes (2026-10-29)
+
+Built as decided, with these differences:
+
+- **Version range.** `@duckdb/node-api@^1.5.6-r.1`, which installs 1.5.6-r.*
+  builds only. npm's `latest` became 2.0 on 2026-10-21, and a 2.0 file cannot
+  be opened by 1.x, so nothing installs `@duckdb/node-api` without this range.
+- **Node range (decision 5).** `engines.node` is
+  `^20.0.0 || ^22.0.0 || ^24.0.0 || ^26.0.0`, the LTS lines CI tests, not
+  `>=20`. Since 0.2.2 the narrower range made npm on Node 26 fall back to
+  0.2.1 (the last release whose `engines` allowed it); with 26 in the range it
+  installs the current release.
+- **Values.** Rows are read with `connection.run()` and converted to what the
+  old driver returned (TIME, TIMETZ and BIT as text, MAP as `{k=v}` text,
+  BIGINT made a number or a string by `normalizeDuckDBValue`). A DATE or
+  TIMESTAMP a JS Date cannot hold (`infinity`) is null. A repeated column name
+  keeps its last value. `runAndReadAll` was not used: on 1.5.6-r.2 it fails to
+  read a constant INTERVAL expression.
+- **Parameters.** Bound with explicit types (INTEGER, BIGINT, DOUBLE, BOOLEAN,
+  TIMESTAMP for a Date, VARCHAR otherwise). Untyped, the driver binds every
+  number as DOUBLE, which `? + 1` and `LIMIT ?` reject.
+- **One statement at a time per connection.** The old driver queued
+  statements itself; the connector now does. A cancelled statement that is
+  still waiting never runs and never interrupts the one running.
+- **Missing platform binary (beyond decision 6).** When `@duckdb/node-api`
+  resolves but its binary for this computer is missing (optional dependencies
+  skipped, or a `.dql` folder copied from another OS), startup reinstalls the
+  same version with `--include=optional`. Nothing is compiled.
+- **Driver install without a separate step.** `zlens sync warehouse` now
+  installs a missing driver, as `zlens notebook` already did at start, so the
+  quickstarts and `create-zlens-app` have no driver step.
+- **CI and gate.** CI's build matrix and a new `duckdb-driver` job run on
+  Node 20, 22, 24 and 26 (the job runs the real-driver tests and fails on a
+  skipped case or a native build). The launch gate takes a
+  `bundled:<node dir>` lane, used for Node 26.
+

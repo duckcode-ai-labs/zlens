@@ -22,14 +22,17 @@ export interface DuckDBConsistentReadScope {
   close(): Promise<void>;
 }
 
+/** The DuckDB driver package ZLens installs into .dql/connectors (RFC 0011). */
+export const DUCKDB_DRIVER_PACKAGE = '@duckdb/node-api';
+
 /**
- * The DuckDB release line whose files ZLens reads: the Node `duckdb` driver
- * installed into .dql/connectors is 1.4.x, and a file written by a newer
+ * The DuckDB release line whose files ZLens reads: the driver installed into
+ * .dql/connectors is `@duckdb/node-api` 1.5.x, and a file written by a newer
  * DuckDB (2.0 writes storage version 999) cannot be opened by it.
  */
-export const ZLENS_DUCKDB_READER_LINE = '1.4';
+export const ZLENS_DUCKDB_READER_LINE = '1.5';
 /** The pip requirement that installs the reader's release line. */
-const ZLENS_DUCKDB_PIP_PIN = 'duckdb<1.5';
+const ZLENS_DUCKDB_PIP_PIN = 'duckdb<1.6';
 
 /**
  * DuckDB's message for a file a newer DuckDB wrote ("Trying to read a database
@@ -78,22 +81,20 @@ export class DuckDBConnector implements DatabaseConnector {
 
   async connect(config: ConnectionConfig): Promise<void> {
     await this.disconnect();
-    const duckdbModule = await importConnectorDependency('duckdb', config);
+    const duckdbModule = await importConnectorDependency(DUCKDB_DRIVER_PACKAGE, config);
     const duckdb = resolveDuckDBModule(duckdbModule);
 
     const dbPath = config.filepath ?? ':memory:';
     const downloadsOff = duckDBAutoinstallOff();
     const { db, release } = await acquireDuckDBDatabase(duckDBDatabaseKey(dbPath), async () => {
-      const database = await new Promise<any>((resolve, reject) => {
-        const opened = new duckdb.Database(dbPath, (err: Error | null) => {
-          if (err) {
-            reject(new Error(duckDBOpenFailureMessage(dbPath, err.message)));
-            return;
-          }
-          resolve(opened);
-        });
-      });
-      const setup = database.connect();
+      let database: any;
+      try {
+        database = await duckdb.DuckDBInstance.create(dbPath);
+      } catch (err) {
+        throw new Error(duckDBOpenFailureMessage(dbPath, err instanceof Error ? err.message : String(err)));
+      }
+      duckDBDatabaseModules.set(database, duckdb);
+      const setup = await database.connect();
       try {
         await executeDuckDBConnection(setup, database, 'PRAGMA disable_checkpoint_on_shutdown');
         // A host that must not download code at run time (ZLENS_DUCKDB_AUTOINSTALL=off): DuckDB uses only the
@@ -202,8 +203,8 @@ export class DuckDBConnector implements DatabaseConnector {
   }
 
   /**
-   * Ask V8 to collect now. duckdb-node (1.1) keeps the file open after
-   * `Database#close` until its native objects are garbage-collected, so a host
+   * Ask V8 to collect now. A native DuckDB instance can keep the file open
+   * after it is closed until its last JS handle is garbage-collected, so a host
    * that must delete or unmount the file right after `disconnect()` calls this
    * (a no-op unless the process runs with `--expose-gc`).
    */
@@ -291,6 +292,9 @@ function executeDuckDBConnection(
   const startTime = performance.now();
   return new Promise((resolve, reject) => {
     let settled = false;
+    // A connection runs one statement at a time; this one may still be queued
+    // behind another, and then interrupting the connection would stop that one.
+    let running = false;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
     const signal = options.signal;
     const cleanup = () => {
@@ -305,13 +309,8 @@ function executeDuckDBConnection(
       finish();
     };
     const interrupt = () => {
-      const candidates = [connection, database, connection?.db];
-      for (const candidate of candidates) {
-        const stop = candidate?.interrupt ?? candidate?.cancel;
-        if (typeof stop !== 'function') continue;
-        try { stop.call(candidate); } catch { /* local cancellation still wins */ }
-        return;
-      }
+      if (!running) return;
+      try { connection.interrupt?.(); } catch { /* local cancellation still wins */ }
     };
     const cancel = (error: Error) => {
       interrupt();
@@ -322,44 +321,187 @@ function executeDuckDBConnection(
     if (options.deadlineMs !== undefined && Number.isFinite(options.deadlineMs)) {
       deadlineTimer = setTimeout(() => cancel(duckDbDeadlineError(options.deadlineMs!)), Math.max(0, options.deadlineMs));
     }
-    const callback = (err: Error | null, result: any) => {
+    const fail = (err: Error) => {
+      if (settled) return;
+      if (signal?.aborted) {
+        cancel(duckDbCancellationError(signal.reason));
+        return;
+      }
+      const missing = downloadsOff ? missingDuckDBExtensionName(err.message) : undefined;
+      if (missing) {
+        // The engine's text offers INSTALL and the auto-install settings, neither of which this install allows.
+        duckDBExtensionInstalled(connection, database, missing).then((installed) => {
+          settle(() => reject(new Error(`DuckDB query failed: ${extensionDownloadsOffMessage(missing, installed)}`)));
+        });
+        return;
+      }
+      settle(() => reject(new Error(`DuckDB query failed: ${withMissingTableHint(err.message)}`)));
+    };
+    const succeed = (result: DuckDBRows) => {
       if (settled) return;
       if (signal?.aborted) {
         cancel(duckDbCancellationError(signal.reason));
         return;
       }
       const executionTimeMs = performance.now() - startTime;
-      if (err) {
-        const missing = downloadsOff ? missingDuckDBExtensionName(err.message) : undefined;
-        if (missing) {
-          // The engine's text offers INSTALL and the auto-install settings, neither of which this install allows.
-          duckDBExtensionInstalled(connection, missing).then((installed) => {
-            settle(() => reject(new Error(`DuckDB query failed: ${extensionDownloadsOffMessage(missing, installed)}`)));
-          });
-          return;
-        }
-        settle(() => reject(new Error(`DuckDB query failed: ${withMissingTableHint(err.message)}`)));
-        return;
-      }
-      if (!result || !Array.isArray(result) || result.length === 0) {
+      if (result.rows.length === 0) {
         settle(() => resolve({ columns: [], rows: [], rowCount: 0, executionTimeMs }));
         return;
       }
-      const normalizedRows = result.map((row: Row) => normalizeDuckDBRow(row));
+      const normalizedRows = result.rows.map((row: Row) => normalizeDuckDBRow(row));
       const columns: ColumnMeta[] = Object.keys(normalizedRows[0]).map((name) => ({
         name,
-        type: inferDuckDBType(normalizedRows[0][name]),
+        // The first row's value, as before; a NULL there no longer hides the column's type.
+        type: normalizedRows[0][name] === null || normalizedRows[0][name] === undefined
+          ? duckDBColumnType(result.types[name])
+          : inferDuckDBType(normalizedRows[0][name]),
         driverType: 'duckdb',
       }));
       settle(() => resolve({ columns, rows: normalizedRows, rowCount: normalizedRows.length, executionTimeMs }));
     };
-    try {
-      if (params && params.length > 0) connection.all(sql, ...params, callback);
-      else connection.all(sql, callback);
-    } catch (error) {
-      settle(() => reject(error instanceof Error ? error : new Error(String(error))));
-    }
+    enqueueOnDuckDBConnection(connection, async () => {
+      if (settled) return;
+      running = true;
+      try {
+        succeed(await runDuckDBStatement(connection, database, sql, params));
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error(String(error)));
+      } finally {
+        running = false;
+      }
+    });
   });
+}
+
+/**
+ * DRIVER ADAPTER (`@duckdb/node-api`, RFC 0011). Everything that touches the
+ * driver's API is below; the connector above only opens, connects, runs and
+ * closes through these.
+ */
+
+/** The driver module each open database was created with (its converters and type constants). */
+const duckDBDatabaseModules = new WeakMap<object, any>();
+
+/** One statement at a time per connection, in call order (the old driver queued them itself). */
+const duckDBConnectionQueues = new WeakMap<object, Promise<void>>();
+
+function enqueueOnDuckDBConnection(connection: object, work: () => Promise<void>): void {
+  const previous = duckDBConnectionQueues.get(connection) ?? Promise.resolve();
+  const next = previous.then(work, work);
+  duckDBConnectionQueues.set(connection, next.then(() => undefined, () => undefined));
+}
+
+interface DuckDBRows {
+  rows: Row[];
+  /** DuckDB type id name per column (last one wins for a repeated name, like its value). */
+  types: Record<string, string | undefined>;
+}
+
+async function runDuckDBStatement(connection: any, database: any, sql: string, params?: unknown[]): Promise<DuckDBRows> {
+  const duckdb = duckDBDatabaseModules.get(database);
+  const bound = params && params.length > 0 ? bindDuckDBParams(duckdb, params) : undefined;
+  const result = await connection.run(sql, bound?.values, bound?.types);
+  const names: string[] = result.columnNames();
+  const columnTypes: any[] = typeof result.columnTypes === 'function' ? result.columnTypes() : [];
+  const converter = duckDBValueConverter(duckdb);
+  const values: unknown[][] = converter ? await result.convertRows(converter) : await result.getRows();
+  const types: DuckDBRows['types'] = {};
+  names.forEach((name, index) => { types[name] = duckDBTypeName(duckdb, columnTypes[index]); });
+  // A repeated column name keeps its last value, as the old driver's row objects did.
+  const rows = values.map((row) => {
+    const object: Row = {};
+    names.forEach((name, index) => { object[name] = row[index] as Row[string]; });
+    return object;
+  });
+  return { rows, types };
+}
+
+/**
+ * Parameters with the types the old driver gave them. Left to itself the
+ * driver binds every number as DOUBLE, which a statement that expects an
+ * integer (`? + 1`, `LIMIT ?`) rejects, and cannot bind a Date or an array.
+ */
+function bindDuckDBParams(duckdb: any, params: unknown[]): { values: unknown[]; types: unknown[] } | undefined {
+  if (!duckdb?.INTEGER) return undefined;
+  const values: unknown[] = [];
+  const types: unknown[] = [];
+  for (const param of params) {
+    if (param === null || param === undefined) {
+      values.push(null);
+      types.push(duckdb.SQLNULL);
+    } else if (typeof param === 'number') {
+      values.push(Number.isInteger(param) && Number.isSafeInteger(param) && Math.abs(param) > 2_147_483_647 ? BigInt(param) : param);
+      types.push(!Number.isInteger(param) ? duckdb.DOUBLE : Math.abs(param) <= 2_147_483_647 ? duckdb.INTEGER : Number.isSafeInteger(param) ? duckdb.BIGINT : duckdb.DOUBLE);
+    } else if (typeof param === 'bigint') {
+      values.push(param);
+      types.push(duckdb.BIGINT);
+    } else if (typeof param === 'boolean') {
+      values.push(param);
+      types.push(duckdb.BOOLEAN);
+    } else if (param instanceof Date && typeof duckdb.timestampValueFromDate === 'function') {
+      values.push(duckdb.timestampValueFromDate(param));
+      types.push(duckdb.TIMESTAMP);
+    } else {
+      // Strings, and anything else as its text (the old driver did the same).
+      values.push(String(param));
+      types.push(duckdb.VARCHAR);
+    }
+  }
+  return { values, types };
+}
+
+const duckDBValueConverters = new WeakMap<object, (value: any, type: any, converter: any) => unknown>();
+
+/**
+ * Values as the old driver returned them: numbers, bigints (made numbers or
+ * strings by `normalizeDuckDBValue`), `Date`s for dates and timestamps,
+ * strings for TIME, TIMETZ and BIT, a `{key=value}` string for MAP, and
+ * nested lists and structs as arrays and objects. A date or timestamp a JS
+ * Date cannot hold (`infinity`) is null.
+ */
+function duckDBValueConverter(duckdb: any): ((value: any, type: any, converter: any) => unknown) | undefined {
+  if (!duckdb?.JSDuckDBValueConverter || !duckdb?.DuckDBTypeId) return undefined;
+  const cached = duckDBValueConverters.get(duckdb);
+  if (cached) return cached;
+  const id = duckdb.DuckDBTypeId;
+  const js = duckdb.JSDuckDBValueConverter;
+  const asText = new Set([id.TIME, id.TIME_TZ, id.TIME_NS, id.BIT].filter((typeId) => typeId !== undefined));
+  const dateTypes = new Set([id.DATE, id.TIMESTAMP, id.TIMESTAMP_S, id.TIMESTAMP_MS, id.TIMESTAMP_NS, id.TIMESTAMP_TZ].filter((typeId) => typeId !== undefined));
+  const converter = (value: any, type: any, self: any): unknown => {
+    if (value === null || value === undefined) return null;
+    const typeId = type?.typeId;
+    if (asText.has(typeId)) return String(value);
+    if (typeId === id.MAP) {
+      const entries: Array<{ key: unknown; value: unknown }> = value.entries ?? [];
+      return `{${entries.map((entry) => `${String(entry.key)}=${entry.value === null ? 'NULL' : String(entry.value)}`).join(', ')}}`;
+    }
+    if (dateTypes.has(typeId)) {
+      try {
+        return js(value, type, self);
+      } catch {
+        return null;
+      }
+    }
+    return js(value, type, self);
+  };
+  duckDBValueConverters.set(duckdb, converter);
+  return converter;
+}
+
+function duckDBTypeName(duckdb: any, type: any): string | undefined {
+  const typeId = type?.typeId;
+  if (typeId === undefined || !duckdb?.DuckDBTypeId) return undefined;
+  return duckdb.DuckDBTypeId[typeId];
+}
+
+function duckDBColumnType(typeName: string | undefined): ColumnType {
+  if (!typeName) return 'null';
+  if (/^(TINYINT|SMALLINT|INTEGER|BIGINT|HUGEINT|UTINYINT|USMALLINT|UINTEGER|UBIGINT|UHUGEINT|FLOAT|DOUBLE|DECIMAL|BIGNUM)$/.test(typeName)) return 'number';
+  if (typeName === 'BOOLEAN') return 'boolean';
+  if (typeName === 'DATE' || /^TIMESTAMP/.test(typeName)) return 'datetime';
+  if (/^(VARCHAR|UUID|ENUM|TIME|TIME_TZ|TIME_NS|BIT)$/.test(typeName)) return 'string';
+  if (typeName === 'SQLNULL') return 'null';
+  return 'unknown';
 }
 
 async function readDuckDBSessionContext(connection: any, database: any): Promise<DuckDBConsistentReadScope['context']> {
@@ -403,7 +545,7 @@ export function restrictDuckDBDatabase(database: any, allowedDirectories: readon
   const existing = restrictedDuckDBDatabases.get(database);
   if (existing) return existing;
   const pending = (async (): Promise<DuckDBRestriction> => {
-    const setup = database.connect();
+    const setup = await database.connect();
     const run = (sql: string) => executeDuckDBConnection(setup, database, sql);
     try {
       await run('SET autoinstall_known_extensions = false');
@@ -441,8 +583,7 @@ export function restrictDuckDBDatabase(database: any, allowedDirectories: readon
 }
 
 /**
- * duckdb-node's `Database#close` only drops the Database handle. Every
- * Connection and every Statement (`Statement#finalize` is a no-op in 1.1)
+ * Closing a DuckDB instance from JS only drops that handle. Every connection
  * still holds the native instance, which lives on until garbage collection.
  * When it is finally destroyed, DuckDB's shutdown checkpoint writes the
  * snapshot that instance last saw and then deletes the WAL, even if the
@@ -495,7 +636,7 @@ async function turnOffDuckDBExtensionDownloads(connection: any, database: any): 
  * already has both off and its settings locked, so nothing is issued there.
  */
 async function openDuckDBConnection(database: any): Promise<any> {
-  const connection = database.connect();
+  const connection = await database.connect();
   if (extensionDownloadsOffDuckDBDatabases.has(database) && !restrictedDuckDBDatabases.has(database)) {
     try {
       await turnOffDuckDBExtensionDownloads(connection, database);
@@ -563,18 +704,13 @@ export function missingDuckDBExtensionName(message: string): string | undefined 
 }
 
 /** Whether `extension` is installed in this database's extension directory (so only a LOAD is missing). */
-function duckDBExtensionInstalled(connection: any, extension: string): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    try {
-      connection.all(
-        'SELECT installed FROM duckdb_extensions() WHERE extension_name = ?',
-        extension,
-        (error: Error | null, rows: Array<{ installed?: unknown }> | undefined) => resolve(!error && rows?.[0]?.installed === true),
-      );
-    } catch {
-      resolve(false);
-    }
-  });
+async function duckDBExtensionInstalled(connection: any, database: any, extension: string): Promise<boolean> {
+  try {
+    const { rows } = await runDuckDBStatement(connection, database, 'SELECT installed FROM duckdb_extensions() WHERE extension_name = ?', [extension]);
+    return rows[0]?.installed === true;
+  } catch {
+    return false;
+  }
 }
 
 async function acquireDuckDBDatabase(
@@ -642,7 +778,7 @@ function duckDBDatabaseKey(dbPath: string): string | null {
 
 async function closeDuckDBDatabase(db: any, checkpoint: boolean): Promise<void> {
   if (checkpoint) {
-    const connection = db.connect();
+    const connection = await db.connect();
     try {
       await executeDuckDBConnection(connection, db, 'CHECKPOINT');
     } catch (error) {
@@ -652,49 +788,36 @@ async function closeDuckDBDatabase(db: any, checkpoint: boolean): Promise<void> 
       await closeDuckDBConnection(connection);
     }
   }
-  await new Promise<void>((resolve) => {
-    db.close((err: Error | null) => {
-      if (err) {
-        console.warn('DuckDB disconnect warning:', err.message);
-      }
-      resolve();
-    });
-  });
+  try {
+    db.closeSync();
+  } catch (err) {
+    console.warn('DuckDB disconnect warning:', err instanceof Error ? err.message : String(err));
+  }
 }
 
 async function closeDuckDBConnection(connection: any): Promise<void> {
-  await new Promise<void>((resolve) => {
-    if (!connection || typeof connection.close !== 'function') {
-      resolve();
-      return;
-    }
-    connection.close(() => resolve());
-  });
+  if (!connection) return;
+  // Let a statement already queued on it finish first.
+  await duckDBConnectionQueues.get(connection);
+  try {
+    if (typeof connection.closeSync === 'function') connection.closeSync();
+    else connection.disconnectSync?.();
+  } catch {
+    // Already closed.
+  }
 }
 
-export function resolveDuckDBModule(module: unknown): { Database: new (path: string, callback: (err: Error | null) => void) => any } {
-  const candidate = (
-    module &&
-    typeof module === 'object' &&
-    'Database' in module &&
-    typeof (module as { Database?: unknown }).Database === 'function'
-  )
-    ? module
-    : (
-      module &&
-      typeof module === 'object' &&
-      'default' in module &&
-      (module as { default?: unknown }).default &&
-      typeof (module as { default: { Database?: unknown } }).default.Database === 'function'
-    )
-      ? (module as { default: { Database: new (path: string, callback: (err: Error | null) => void) => any } }).default
-      : null;
+type DuckDBInstanceFactory = { create(path?: string, options?: Record<string, string>): Promise<any> };
 
-  if (!candidate) {
-    throw new Error('DuckDB module did not expose a Database constructor.');
-  }
-
-  return candidate as { Database: new (path: string, callback: (err: Error | null) => void) => any };
+/** The `@duckdb/node-api` module, as an ES import or a CommonJS require gives it. */
+export function resolveDuckDBModule(module: unknown): { DuckDBInstance: DuckDBInstanceFactory } & Record<string, any> {
+  const hasInstance = (value: unknown): boolean => Boolean(
+    value && typeof value === 'object' && typeof (value as { DuckDBInstance?: { create?: unknown } }).DuckDBInstance?.create === 'function',
+  );
+  if (hasInstance(module)) return module as { DuckDBInstance: DuckDBInstanceFactory };
+  const fallback = (module as { default?: unknown } | null)?.default;
+  if (hasInstance(fallback)) return fallback as { DuckDBInstance: DuckDBInstanceFactory };
+  throw new Error(`The DuckDB driver (${DUCKDB_DRIVER_PACKAGE}) did not expose DuckDBInstance.create.`);
 }
 
 /**

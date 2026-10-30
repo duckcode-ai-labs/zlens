@@ -8,11 +8,13 @@ file in git. See [Concepts](../get-started/concepts.md).
 
 ## Do I need a cloud warehouse to try it?
 
-No. ZLens supports local DuckDB and file queries. Install the project-local
-DuckDB driver, then query CSV, Parquet, or JSON files from the notebook:
+No. ZLens supports local DuckDB and file queries. The workbench installs the
+project-local DuckDB driver the first time it connects, then you can query
+CSV, Parquet, or JSON files from the notebook. To install it by hand (offline
+or in CI):
 
 ```bash
-npm install --prefix .dql/connectors duckdb
+npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'
 ```
 
 Databricks SQL is built in. Snowflake uses a project-local `snowflake-sdk`

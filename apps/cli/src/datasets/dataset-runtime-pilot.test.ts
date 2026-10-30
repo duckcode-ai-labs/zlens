@@ -3916,8 +3916,8 @@ function requireConfiguredDuckDbConnectorRoot(): string {
   // An explicitly configured root must load DuckDB.  Do not fall back to an
   // ambient package, which would turn an unavailable real-driver test into a
   // false pass.
-  const duckdb = createRequire(join(configuredDuckDbConnectorRoot, 'package.json'))('duckdb') as { Database?: unknown };
-  if (typeof duckdb?.Database !== 'function') throw new Error(`DuckDB did not load from ${configuredDuckDbConnectorRoot}.`);
+  const duckdb = createRequire(join(configuredDuckDbConnectorRoot, 'package.json'))('@duckdb/node-api') as { DuckDBInstance?: unknown };
+  if (typeof duckdb?.DuckDBInstance !== 'function') throw new Error(`DuckDB did not load from ${configuredDuckDbConnectorRoot}.`);
   return configuredDuckDbConnectorRoot;
 }
 

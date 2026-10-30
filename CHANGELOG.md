@@ -8,6 +8,38 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Node 26 LTS: the DuckDB driver is now `@duckdb/node-api`
+
+- **ZLens runs on Node 20, 22, 24 and 26.** Node 26 became the LTS this
+  month, and until now ZLens could not use DuckDB on it: the old `duckdb`
+  package had no binary for Node 26 and compiled DuckDB from source for over
+  ten minutes, then failed. Worse, `npm install -g @zlens/cli` on Node 26
+  quietly installed 0.2.1, the last release whose `engines` allowed it. ZLens
+  now loads DuckDB through DuckDB's own Node API (`@duckdb/node-api`, RFC
+  0011). Its binary is built on Node-API and comes as a per-platform optional
+  dependency, so one install works on every Node from 20 up, in about a
+  second, with no install script and nothing compiled. `engines` adds Node 26.
+- **It installs on its own.** On the next `npm run notebook` or `npm run
+  sync`, ZLens installs `@duckdb/node-api` into `.dql/connectors`. You can
+  delete `.dql/connectors/node_modules/duckdb`; ZLens no longer loads it. If
+  you install the driver yourself (CI, Docker), use
+  `npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'`: npm's
+  `latest` is DuckDB 2.0, whose files DuckDB 1.x cannot read.
+- **DuckDB 1.5.** ZLens now reads files written by DuckDB 1.5 (and older), so
+  a dbt-duckdb that installed Python DuckDB 1.5 no longer needs pinning back
+  to 1.4. Files written by DuckDB 2.0 still cannot be opened.
+- **Same results.** Every value comes back as before (numbers, dates and
+  timestamps, TIME as text, lists and structs); a column that is NULL in the
+  first row now gets its real type instead of none.
+- **A tile by month, quarter or year lists its rows in date order** when you
+  have not set a sort. DuckDB 1.5 returns grouped rows in a different order
+  from run to run, so a table tile could show March before February.
+- **`zlens sync warehouse` installs the driver** the first time, as `zlens
+  notebook` does at start, so quickstarts and `create-zlens-app` have no
+  separate driver step. A driver whose binary for this computer is missing (a
+  `.dql` folder copied from another OS) is reinstalled on start.
+- Removed: the Node 25/26 "no prebuilt binary" guard and
+  `ZLENS_DUCKDB_BUILD_FROM_SOURCE`.
 ### PostgreSQL: a read-only login reads keys and view SQL
 
 - **`zlens sync warehouse` on PostgreSQL now reads declared primary and

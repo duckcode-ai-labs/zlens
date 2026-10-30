@@ -17,7 +17,7 @@
   <a href="https://github.com/duckcode-ai-labs/zlens/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/duckcode-ai-labs/zlens/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://www.npmjs.com/package/@zlens/cli"><img alt="npm @zlens/cli" src="https://img.shields.io/npm/v/@zlens/cli?label=%40zlens%2Fcli"></a>
   <a href="./LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-blue"></a>
-  <a href="https://nodejs.org"><img alt="Node 20 | 22 | 24" src="https://img.shields.io/badge/node-20%20%7C%2022%20%7C%2024-green"></a>
+  <a href="https://nodejs.org"><img alt="Node 20 | 22 | 24 | 26" src="https://img.shields.io/badge/node-20%20%7C%2022%20%7C%2024%20%7C%2026-green"></a>
 </p>
 
 <p align="center">
@@ -100,10 +100,9 @@ To use your own data, follow the [Quickstart](#quickstart).
 ## Quickstart
 
 Run ZLens on the Jaffle Shop sample dbt project. It takes about ten minutes
-and needs Node.js 20, 22 or 24 (24 LTS recommended), Python 3.9 to 3.14 and
-git. `./setup.sh` picks a supported Python for you. No warehouse account is
-needed. Node 25 and 26 are not supported yet: ZLens's DuckDB driver has no
-prebuilt binary for them.
+and needs Node.js 20, 22, 24 or 26 (26 LTS recommended), Python 3.9 to 3.14
+and git. `./setup.sh` picks a supported Python for you. No warehouse account
+is needed.
 
 **1. Get the sample and set it up**
 
@@ -150,8 +149,8 @@ active connection's driver the first time it starts.
 > [!NOTE]
 > **npm 12** runs a dependency's install script only when `package.json` lists
 > it in `allowScripts`. The sample already allows `better-sqlite3`, the SQLite
-> library ZLens keeps its index in, and ZLens allows and rebuilds the DuckDB
-> driver in `.dql/connectors` itself. If ZLens says it could not load
+> library ZLens keeps its index in. The DuckDB driver has no install script,
+> so it needs no entry. If ZLens says it could not load
 > better-sqlite3 (a folder installed before the sample had the entry), run
 > `npm install-scripts approve better-sqlite3` then
 > `npm rebuild better-sqlite3`. See
@@ -215,10 +214,12 @@ Install only the driver your warehouse needs, into the project:
 | Database | Install before running queries |
 |---|---|
 | Databricks SQL | nothing (built in, over HTTPS) |
-| DuckDB, or local CSV / Parquet / JSON files | `npm install --prefix .dql/connectors duckdb` |
+| DuckDB, or local CSV / Parquet / JSON files | `npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'` |
 | Snowflake | `npm install --prefix .dql/connectors snowflake-sdk` |
 
-The notebook's Connections page can install DuckDB or Snowflake for you. See
+ZLens installs the DuckDB driver on its own the first time it connects, so
+you can usually skip that row. The notebook's Connections page can install
+DuckDB or Snowflake for you. See
 [Install](https://docs.zlens.app/get-started/install/),
 [Connect a database](https://docs.zlens.app/get-started/connect-database/),
 [Connectors](https://docs.zlens.app/reference/connectors/) and

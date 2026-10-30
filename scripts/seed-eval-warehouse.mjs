@@ -106,8 +106,8 @@ async function seedDuckDb(statements, outPath, connectorRoot) {
   try {
     if (resolvedConnectorRoot) {
       const connectorRootReal = realpathSync(resolvedConnectorRoot);
-      const packageRootReal = realpathSync(join(connectorRootReal, 'node_modules', 'duckdb'));
-      const entryReal = realpathSync(req.resolve('duckdb'));
+      const packageRootReal = realpathSync(join(connectorRootReal, 'node_modules', '@duckdb', 'node-api'));
+      const entryReal = realpathSync(req.resolve('@duckdb/node-api'));
       const packageRelativePath = relative(packageRootReal, entryReal);
       const entryIsInsidePackage = packageRelativePath !== ''
         && packageRelativePath !== '..'
@@ -118,21 +118,23 @@ async function seedDuckDb(statements, outPath, connectorRoot) {
       }
       duckdb = req(entryReal);
     } else {
-      duckdb = req('duckdb');
+      duckdb = req('@duckdb/node-api');
     }
   } catch {
     const install = resolvedConnectorRoot
-      ? `npm --prefix ${resolvedConnectorRoot} install --no-save --no-package-lock duckdb@1.1.3`
-      : 'pnpm add duckdb';
-    console.error(`duckdb is not installed. Install it (${install}) or use --print to emit SQL.`);
+      ? `npm --prefix ${resolvedConnectorRoot} install --no-save --no-package-lock '@duckdb/node-api@^1.5.6-r.1'`
+      : "pnpm add '@duckdb/node-api@^1.5.6-r.1'";
+    console.error(`The DuckDB driver (@duckdb/node-api) is not installed. Install it (${install}) or use --print to emit SQL.`);
     process.exit(1);
   }
-  const db = new duckdb.Database(outPath);
-  const connection = db.connect();
-  const run = (sql) => new Promise((res, rej) => connection.run(sql, (e) => (e ? rej(e) : res())));
-  for (const sql of statements) await run(sql);
-  await new Promise((res, rej) => connection.close((e) => (e ? rej(e) : res())));
-  await new Promise((res, rej) => db.close((e) => (e ? rej(e) : res())));
+  const db = await duckdb.DuckDBInstance.create(outPath);
+  const connection = await db.connect();
+  try {
+    for (const sql of statements) await connection.run(sql);
+  } finally {
+    connection.closeSync();
+    db.closeSync();
+  }
 }
 
 async function main() {

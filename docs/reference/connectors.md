@@ -40,10 +40,12 @@ connection also installs what it needs. ZLens installs driver packages into:
 .dql/connectors/
 ```
 
-CLI equivalents:
+`zlens notebook` and `zlens sync warehouse` also install the active
+connection's driver on their own when it is missing. CLI equivalents, for
+offline machines or CI:
 
 ```bash
-npm install --prefix .dql/connectors duckdb                  # DuckDB and local files
+npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'   # DuckDB and local files
 npm install --prefix .dql/connectors snowflake-sdk           # Snowflake
 npm install --prefix .dql/connectors pg                      # PostgreSQL, Redshift
 npm install --prefix .dql/connectors mysql2                  # MySQL, MariaDB
@@ -60,19 +62,28 @@ that uses a tunnel or IAM sign-in.
 This keeps the global CLI install small while still letting each project opt
 into the database packages it actually uses.
 
-**npm 12.** `duckdb` downloads its native binary in an install script, which
-npm 12 runs only when `.dql/connectors/package.json` lists it in
-`allowScripts`. ZLens writes that entry when it installs the driver, and
-rebuilds a copy installed without its binary the next time `zlens notebook`
-starts or `zlens sync warehouse` runs. By hand:
+Keep the `@^1.5.6-r.1` range on the DuckDB command (and the quotes, which
+zsh needs): npm's `latest` for `@duckdb/node-api` is 2.0, whose database files
+DuckDB 1.x cannot read.
+
+**DuckDB's binary.** `@duckdb/node-api` gets its binary from a per-platform
+optional dependency built on Node-API. One install loads on every Node from
+20 up, nothing is compiled, and there is no install script, so npm 12 needs
+no `allowScripts` entry for it. The binary is missing when optional
+dependencies were skipped (`--omit=optional`) or the `.dql` folder was copied
+from another operating system. ZLens then reinstalls the driver the next time
+`zlens notebook` starts or `zlens sync warehouse` runs. By hand:
 
 ```bash
-npm --prefix .dql/connectors install-scripts approve duckdb
-npm --prefix .dql/connectors rebuild duckdb
+npm --prefix .dql/connectors install @duckdb/node-api --include=optional
 ```
 
-The other drivers have no install script. `ssh2`'s only builds an optional
-speed-up, so it works with the script blocked.
+A project set up with an older ZLens has the old `duckdb` package in
+`.dql/connectors`. ZLens installs `@duckdb/node-api` next to it on the next
+start, and you can delete `.dql/connectors/node_modules/duckdb`.
+
+The other drivers have no install script either. `ssh2` has one, but it only
+builds an optional speed-up, so it works with the script blocked.
 
 ## Credentials
 

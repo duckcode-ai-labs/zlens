@@ -386,6 +386,13 @@ export function compileDatasetTileQuery(input: {
       orderBy.push(`${quote(dimension.alias)} ASC`);
       orderedAliases.add(dimension.alias.toLowerCase());
     }
+  } else if (!orderBy.length) {
+    // With no authored order, a time series reads chronologically. Without
+    // this the rows come back in the warehouse's GROUP BY hash order, which
+    // DuckDB 1.5 does not keep stable from run to run.
+    for (const dimension of dimensions) {
+      if (dimension.timeGrain) orderBy.push(`${quote(dimension.alias)} ASC`);
+    }
   }
   const grouped = [
     'FROM ds',

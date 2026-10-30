@@ -64,8 +64,8 @@ function ensureSampleBuilt(cacheDir: string): string {
   return cloneDir;
 }
 
-/** The DuckDB driver range for the template (the sample's setup.sh installs the latest `duckdb`, which this range includes). */
-export const SAMPLE_DUCKDB_RANGE = '^1.1.0';
+/** The DuckDB driver range for the template (the same range the sample's setup.sh installs). */
+export const SAMPLE_DUCKDB_RANGE = '^1.5.6-r.1';
 
 /** The DuckDB connector, installed once and copied into each project. */
 function ensureConnectors(cacheDir: string): string {
@@ -73,7 +73,7 @@ function ensureConnectors(cacheDir: string): string {
   const connectors = join(holder, '.dql', 'connectors');
   const stamp = join(holder, '.range');
   const current = existsSync(stamp) ? readFileSync(stamp, 'utf8').trim() : '';
-  if (current !== SAMPLE_DUCKDB_RANGE || !existsSync(join(connectors, 'node_modules', 'duckdb'))) {
+  if (current !== SAMPLE_DUCKDB_RANGE || !existsSync(join(connectors, 'node_modules', '@duckdb', 'node-api'))) {
     rmSync(holder, { recursive: true, force: true });
     installDuckdbConnector(holder, SAMPLE_DUCKDB_RANGE);
     writeFileSync(stamp, `${SAMPLE_DUCKDB_RANGE}\n`);

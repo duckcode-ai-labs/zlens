@@ -27,11 +27,13 @@ cd dql
 npm install
 ```
 
-Install your database's driver into the project:
+You don't need to install your database's driver: ZLens installs it into the
+project when the workbench starts or when you save the connection in step 4.
+To install it ahead of time (offline or in CI):
 
 ```bash
-npm install --prefix .dql/connectors duckdb          # DuckDB
-npm install --prefix .dql/connectors snowflake-sdk   # Snowflake
+npm install --prefix .dql/connectors '@duckdb/node-api@^1.5.6-r.1'   # DuckDB
+npm install --prefix .dql/connectors snowflake-sdk                     # Snowflake
 ```
 
 The scaffolder finds `dbt_project.yml` in the folder above and writes this to

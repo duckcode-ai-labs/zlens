@@ -14,16 +14,18 @@ test('seeds through an explicit disposable connector root', () => {
   const root = mkdtempSync(join(tmpdir(), 'dql-seed-connectors-'));
   try {
     writeFileSync(join(root, 'package.json'), '{"private":true}\n');
-    const moduleDir = join(root, 'node_modules', 'duckdb');
+    const moduleDir = join(root, 'node_modules', '@duckdb', 'node-api');
     mkdirSync(moduleDir, { recursive: true });
     writeFileSync(join(moduleDir, 'index.js'), `
       const fs = require('node:fs');
-      class Database {
-        constructor(path) { this.path = path; fs.writeFileSync(path, 'fake duckdb'); }
-        connect() { return { run(sql, done) { if ((process.env.ZLENS_TEST_SEED_SQL_LOG ?? process.env.DQL_TEST_SEED_SQL_LOG)) fs.appendFileSync((process.env.ZLENS_TEST_SEED_SQL_LOG ?? process.env.DQL_TEST_SEED_SQL_LOG), sql + '\\n'); done(null); }, close(done) { done(null); } }; }
-        close(done) { done(null); }
-      }
-      module.exports = { Database };
+      const log = process.env.ZLENS_TEST_SEED_SQL_LOG ?? process.env.DQL_TEST_SEED_SQL_LOG;
+      const DuckDBInstance = {
+        async create(path) {
+          fs.writeFileSync(path, 'fake duckdb');
+          return { async connect() { return { async run(sql) { if (log) fs.appendFileSync(log, sql + '\\n'); }, closeSync() {} }; }, closeSync() {} };
+        },
+      };
+      module.exports = { DuckDBInstance };
     `);
 
     const out = join(root, 'seeded.duckdb');
@@ -50,16 +52,17 @@ test('does not resolve DuckDB from a parent of an explicit connector root', () =
     const connectorRoot = join(root, 'connector');
     mkdirSync(connectorRoot, { recursive: true });
     writeFileSync(join(connectorRoot, 'package.json'), '{"private":true}\n');
-    const ambientModuleDir = join(root, 'node_modules', 'duckdb');
+    const ambientModuleDir = join(root, 'node_modules', '@duckdb', 'node-api');
     mkdirSync(ambientModuleDir, { recursive: true });
     writeFileSync(join(ambientModuleDir, 'index.js'), `
       const fs = require('node:fs');
-      class Database {
-        constructor(path) { fs.writeFileSync(path, 'ambient duckdb'); }
-        connect() { return { run(_sql, done) { done(null); }, close(done) { done(null); } }; }
-        close(done) { done(null); }
-      }
-      module.exports = { Database };
+      const DuckDBInstance = {
+        async create(path) {
+          fs.writeFileSync(path, 'ambient duckdb');
+          return { async connect() { return { async run() {}, closeSync() {} }; }, closeSync() {} };
+        },
+      };
+      module.exports = { DuckDBInstance };
     `);
 
     const out = join(root, 'seeded.duckdb');
@@ -68,7 +71,7 @@ test('does not resolve DuckDB from a parent of an explicit connector root', () =
       encoding: 'utf8',
     });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /duckdb is not installed/i);
+    assert.match(result.stderr, /The DuckDB driver \(@duckdb\/node-api\) is not installed/);
     assert.doesNotMatch(result.stdout, /Seeded 4 tables/);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -93,10 +96,11 @@ test('seeds the manifest-qualified DuckDB catalog and schema with the pinned con
 
     const connectorRoot = realpathSync(integrationConnectorRoot);
     const requireFromConnector = createRequire(join(connectorRoot, 'package.json'));
-    const duckdb = requireFromConnector(realpathSync(requireFromConnector.resolve('duckdb')));
-    const db = new duckdb.Database(out);
-    const connection = db.connect();
-    const all = (sql) => new Promise((resolveRows, rejectRows) => connection.all(sql, (error, rows) => error ? rejectRows(error) : resolveRows(rows)));
+    const duckdb = requireFromConnector(realpathSync(requireFromConnector.resolve('@duckdb/node-api')));
+    const db = await duckdb.DuckDBInstance.create(out);
+    const connection = await db.connect();
+    const all = async (sql) => (await connection.runAndReadAll(sql)).getRowObjectsJS()
+      .map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, typeof value === 'bigint' ? Number(value) : value])));
     try {
       const tables = await all([
         'SELECT table_catalog, table_schema, table_name',
@@ -121,8 +125,8 @@ test('seeds the manifest-qualified DuckDB catalog and schema with the pinned con
         { customer_name: 'Carol', count_lifetime_orders: 1 },
       ]);
     } finally {
-      await new Promise((resolveClose, rejectClose) => connection.close((error) => error ? rejectClose(error) : resolveClose()));
-      await new Promise((resolveClose, rejectClose) => db.close((error) => error ? rejectClose(error) : resolveClose()));
+      connection.closeSync();
+      db.closeSync();
     }
   } finally {
     rmSync(root, { recursive: true, force: true });

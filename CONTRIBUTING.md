@@ -30,8 +30,8 @@ Before a non-trivial change, read the
 
 ## Development Setup
 
-Requires Node.js 20, 22 or 24 (CI tests all three) and pnpm 9. Node 25 and 26
-are not supported yet: the DuckDB driver has no prebuilt binary for them.
+Requires Node.js 20, 22, 24 or 26 (CI tests all four) and pnpm 9. Node 26 LTS
+is recommended.
 
 ```bash
 git clone https://github.com/duckcode-ai-labs/zlens.git

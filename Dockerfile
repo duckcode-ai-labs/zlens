@@ -21,7 +21,7 @@ WORKDIR /build
 # pnpm via corepack — pinned by the repo's `packageManager` field.
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 
-# Build deps for native modules (better-sqlite3, duckdb).
+# Build deps for native modules (better-sqlite3; the DuckDB driver needs none).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 build-essential \
  && rm -rf /var/lib/apt/lists/*

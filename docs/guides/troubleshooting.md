@@ -32,7 +32,7 @@ npm i -g @zlens/cli@latest --allow-scripts=better-sqlite3   # a failed earlier i
 ```
 
 The last one is the usual culprit for existing users: before **1.6.30**, a
-global install could **fail on Node 23/24** (the current LTS is Node 24). A
+global install could **fail on Node 23/24**. A
 failed `npm i -g` never creates the `zlens` symlink, so the command is missing
 even though "install" appeared to run. Reinstalling `@latest` on any Node ≥20
 fixes it — see [How do I upgrade ZLens?](#how-do-i-upgrade-zlens) below.
@@ -61,14 +61,8 @@ To keep fresh clones working, add the entry to `package.json` (projects from
 }
 ```
 
-The DuckDB driver has the same script. ZLens allows it in
-`.dql/connectors/package.json` and rebuilds the driver the next time the
-workbench starts or `zlens sync warehouse` runs; by hand:
-
-```bash
-npm --prefix .dql/connectors install-scripts approve duckdb
-npm --prefix .dql/connectors rebuild duckdb
-```
+The DuckDB driver (`@duckdb/node-api`) has no install script, so it needs no
+entry.
 
 A global install has no `package.json`: reinstall with
 `npm install -g @zlens/cli --allow-scripts=better-sqlite3`. `npm run doctor`
@@ -87,7 +81,7 @@ npm i -D @zlens/cli@latest && npx zlens --version
 ```
 
 You do **not** need a working `zlens` to upgrade, and you do **not** need to
-downgrade Node — ZLens installs on Node 20, 22, and 24. If `zlens --version`
+downgrade Node — ZLens installs on Node 20, 22, 24 and 26. If `zlens --version`
 still shows the old number afterward, run `hash -r` (or open a new shell) and
 check `which -a zlens` for a shadowing copy.
 
@@ -105,30 +99,29 @@ zlens doctor
 Use `zlens init .` only if you want ZLens folders directly in the current repo
 root.
 
-### "ZLens's DuckDB driver has no prebuilt binary for Node 26 yet"
+### "The DuckDB driver in .dql/connectors has no binary for this computer"
 
-You are on a Node release the DuckDB driver has no prebuilt binary for (Node
-25 or 26, or an odd-numbered one). Installing it there means compiling DuckDB
-from source, which takes over ten minutes and fails without Python and a C++
-toolchain, so ZLens stops and says so at startup, in the Connections page
-**Test**, and in `zlens doctor`. Switch to Node 24 LTS or 22 and start ZLens
-again; the driver installs on its own:
+The DuckDB driver, `@duckdb/node-api`, gets its binary from a per-platform
+optional dependency. Nothing is compiled, and one install works on every Node
+from 20 up. The binary is missing when optional dependencies were skipped
+(`--omit=optional` or `--no-optional`), or when the `.dql` folder was copied
+from another operating system. ZLens reinstalls the driver the next time the
+workbench starts or `zlens sync warehouse` runs. By hand:
 
 ```bash
-nvm install 24   # or: fnm use 24, volta install node@24
-zlens notebook
+npm --prefix .dql/connectors install @duckdb/node-api --include=optional
 ```
 
-To compile DuckDB from source on the newer Node anyway, set
-`ZLENS_DUCKDB_BUILD_FROM_SOURCE=1` before `zlens notebook` and install DuckDB
-from the Connections page.
+If you used an older ZLens, `.dql/connectors` may still hold the old `duckdb`
+package. ZLens installs `@duckdb/node-api` next to it on the next start, and
+you can delete `.dql/connectors/node_modules/duckdb`.
 
 ### Optional connector package errors
 
 DuckDB and Snowflake drivers are installed project-locally when needed. If the
 **Settings → Database** says a driver package is missing, click **Install connector** or
 run the printed project-local install command. If a native package fails to
-build on a fresh OS install, check Node `20`, `22`, or `24` LTS and local build tools.
+build on a fresh OS install, check Node `20`, `22`, `24` or `26` and local build tools.
 
 ```bash
 node -v
@@ -176,20 +169,20 @@ The full message also shows DuckDB's own words: "Trying to read a database
 file with version number 999, but we can only read versions between 64 and
 67. The database file was created with an newer version of DuckDB."
 
-ZLens reads DuckDB files with DuckDB 1.4. DuckDB 2.0 (Python `duckdb` 2.0,
-which `dbt-duckdb` installs unless you pin it, or the 2.0 `duckdb` CLI) writes
-files that 1.4 cannot open. Stop the workbench, install DuckDB 1.4 where the
-file is built, and rebuild the file:
+ZLens reads files written by DuckDB 1.5 and older. DuckDB 2.0 (Python
+`duckdb` 2.0, which `dbt-duckdb` installs unless you pin it, or the 2.0
+`duckdb` CLI) writes files that 1.5 cannot open. Stop the workbench, install
+DuckDB 1.5 where the file is built, and rebuild the file:
 
 ```bash
-pip install 'duckdb<1.5'   # in the virtual environment that runs dbt
+pip install 'duckdb<1.6'   # in the virtual environment that runs dbt
 rm jaffle_shop.duckdb      # your DuckDB file; dbt recreates it
 dbt seed && dbt build
 ```
 
-To keep it pinned, add `duckdb>=1.4,<1.5` to your `requirements.txt`. The
-samples do this, and their `./setup.sh` rebuilds a file written by a newer
-DuckDB for you.
+To keep it pinned, add `duckdb<1.6` to your `requirements.txt`. The samples
+pin DuckDB below 2.0 too, and their `./setup.sh` rebuilds a file written by a
+newer DuckDB for you.
 
 ---
 

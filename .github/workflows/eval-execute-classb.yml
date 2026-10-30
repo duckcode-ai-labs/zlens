@@ -44,8 +44,8 @@ jobs:
       - name: Prepare seeded project (DuckDB)
         if: steps.guard.outputs.run == 'true'
         run: |
-          # duckdb is an optional dependency; install it ad-hoc for the seed step.
-          npm install --no-save duckdb
+          # The DuckDB driver is an optional dependency; install it ad-hoc for the seed step.
+          npm install --no-save '@duckdb/node-api@^1.5.6-r.1'
           PROJ="$RUNNER_TEMP/classb-proj"
           cp -r apps/cli/test/fixtures/jaffle-supply-chain "$PROJ"
           node scripts/seed-eval-warehouse.mjs --out "$PROJ/jaffle.duckdb"

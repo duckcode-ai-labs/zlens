@@ -40,6 +40,9 @@ test('the gate runs the system npm and npm 12 by default', () => {
   assert.equal(options.node, '/opt/node24/bin');
   assert.deepEqual(parseGateArguments(['--npm', 'system']).npm, ['system']);
   assert.throws(() => parseGateArguments(['--npm', 'latest']), /Unknown --npm lane/);
+  // A Node line of its own (Node 26 LTS), with the npm that Node ships with.
+  assert.deepEqual(parseGateArguments(['--npm', 'system,12,bundled:/opt/node26/bin']).npm, ['system', '12', 'bundled:/opt/node26/bin']);
+  assert.throws(() => parseGateArguments(['--npm', 'bundled:']), /Unknown --npm lane/);
 });
 
 test("npm 12's engines range: ^22.22.2 || ^24.15.0 || >=26", () => {

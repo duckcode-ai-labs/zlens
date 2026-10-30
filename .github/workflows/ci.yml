@@ -17,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node: [20, 22, 24]
+        node: [20, 22, 24, 26]
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -45,6 +45,50 @@ jobs:
       - name: dql-agent heavy lane (alone)
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: pnpm --filter @zlens/agent run test:heavy
+
+  # --- the DuckDB driver on every supported Node (RFC 0011) ---
+  # @duckdb/node-api ships a Node-API binary per platform, so the same install
+  # loads on every Node from 20 up. Run the connector's real-driver tests on
+  # each, including Node 26 LTS, which the old `duckdb` package could not
+  # install without compiling DuckDB. A skipped case fails the job.
+  duckdb-driver:
+    name: duckdb driver (node ${{ matrix.node }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 22, 24, 26]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @zlens/connectors... build
+      - name: Install the DuckDB driver as ZLens does (no install script, nothing compiled)
+        run: |
+          mkdir -p "$CONNECTOR_ROOT"
+          printf '%s\n' '{"private":true}' > "$CONNECTOR_ROOT/package.json"
+          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false '@duckdb/node-api@^1.5.6-r.1' 2>&1 | tee "$RUNNER_TEMP/driver-install.log"
+          if grep -qiE 'node-gyp|gyp info|prebuild-install' "$RUNNER_TEMP/driver-install.log"; then
+            echo "Installing the DuckDB driver compiled or downloaded a native build." >&2
+            exit 1
+          fi
+        env:
+          CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
+      - name: DuckDB connector tests against the real driver
+        working-directory: packages/dql-connectors
+        shell: bash
+        run: |
+          npx vitest run src/drivers/duckdb.test.ts src/drivers/duckdb-file-handle.test.ts src/drivers/duckdb-disconnect.test.ts --reporter=verbose | tee "$RUNNER_TEMP/duckdb-driver.log"
+          if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/duckdb-driver.log"; then
+            echo "DuckDB driver tests skipped cases although the driver root was configured." >&2
+            exit 1
+          fi
+        env:
+          ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
 
   # --- create-zlens-app smoke test ---
   # Guards the "5 minutes to first dashboard" demo gate.
@@ -212,7 +256,7 @@ jobs:
         run: |
           mkdir -p "$CONNECTOR_ROOT"
           printf '%s\n' '{"private":true}' > "$CONNECTOR_ROOT/package.json"
-          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false duckdb@1.1.3
+          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false '@duckdb/node-api@^1.5.6-r.1'
         env:
           CONNECTOR_ROOT: ${{ runner.temp }}/mcp-duckdb-connector
       - name: every MCP tool over stdio
@@ -282,6 +326,6 @@ jobs:
   ci-ok:
     name: ci-ok
     runs-on: ubuntu-24.04
-    needs: [build-and-test, scaffold-smoke, docs, format-check, golden-eval, e2e, mcp-stdio]
+    needs: [build-and-test, duckdb-driver, scaffold-smoke, docs, format-check, golden-eval, e2e, mcp-stdio]
     steps:
       - run: echo "All required CI gates passed."
