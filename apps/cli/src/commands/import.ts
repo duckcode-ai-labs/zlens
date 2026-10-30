@@ -1,5 +1,6 @@
 import type { CLIFlags } from '../args.js';
 import type { BlockStudioImportCandidate } from '../block-studio-import.js';
+import { importFailureKind, previewImportCandidate, withImportRuntime, type ImportPreviewOutcome } from '../import-runtime.js';
 import { createDqlGenerationSessionForProject } from '../local-runtime.js';
 
 export async function runImport(source: string, rest: string[], flags: CLIFlags): Promise<void> {
@@ -40,8 +41,34 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
 
   const skipped = session.skippedStatements ?? [];
 
+  // Run each draft once, as the Import SQL page does, so the list says which
+  // ones work before anyone opens them.
+  const previews = new Map<string, ImportPreviewOutcome>();
+  let previewError: string | null = null;
+  if (flags.preview !== false && drafts.length > 0) {
+    try {
+      await withImportRuntime(process.cwd(), flags, async (call) => {
+        for (const draft of drafts) previews.set(draft.candidateId, await previewImportCandidate(call, session.id, draft.candidateId));
+      });
+    } catch (error) {
+      previewError = error instanceof Error ? error.message : String(error);
+    }
+  }
+  const ran = Array.from(previews.values()).filter((outcome) => outcome.ok).length;
+  const failures = new Map<string, number>();
+  for (const outcome of previews.values()) if (!outcome.ok) failures.set(importFailureKind(outcome.reason), (failures.get(importFailureKind(outcome.reason)) ?? 0) + 1);
+
   if (flags.format === 'json') {
-    console.log(JSON.stringify({ session, drafts, saved: drafts, reused, skipped, errors }, null, 2));
+    console.log(JSON.stringify({
+      session,
+      drafts,
+      saved: drafts,
+      reused,
+      skipped,
+      errors,
+      previews: Object.fromEntries(previews),
+      ...(previewError ? { previewError } : {}),
+    }, null, 2));
     return;
   }
 
@@ -76,6 +103,8 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
     console.log(`    ${candidate.id} · confidence ${Math.round(candidate.confidence * 100)}%${action} · tables: ${tables}${params}${warningText}`);
     if (validationErrors.length > 0) console.log(`    fix: ${validationErrors.join(' ')}`);
     if (draftPath) console.log(`    draft: ${draftPath}`);
+    const preview = previews.get(candidate.id);
+    if (preview) console.log(preview.ok ? `    ran: ${preview.rowCount} row${preview.rowCount === 1 ? '' : 's'}` : `    needs a fix: ${preview.reason}`);
     if (candidate.draftSave.status === 'skipped' && candidate.draftSave.reason) console.log(`    reuse: ${candidate.draftSave.reason}`);
     if (candidate.similarityMatches?.length) {
       const match = candidate.similarityMatches[0];
@@ -93,6 +122,16 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
   console.log('');
   console.log('  Drafts are autosaved under blocks/_drafts or domains/<domain>/blocks/_drafts. Review, preview, then certify selected candidates.');
   console.log(`  Import cache: .dql/imports/${session.id}/`);
+  if (previews.size > 0) {
+    console.log('');
+    console.log(`  Ran: ${ran} of ${previews.size} drafts.${failures.size ? ` Need a fix: ${previews.size - ran}.` : ''}`);
+    for (const [reason, count] of [...failures.entries()].sort((a, b) => b[1] - a[1])) console.log(`    ${count} × ${reason}`);
+    if (ran > 0) console.log(`  Certify the ones that pass the checks: zlens certify --from-import ${session.id} --apply`);
+  } else if (previewError) {
+    console.log('');
+    console.log(`  The drafts were not run: ${previewError}`);
+    console.log(`  Fix the connection, then check them with: zlens certify --from-import ${session.id}`);
+  }
   console.log('');
   if (errors.length > 0) process.exitCode = 1;
 }

@@ -19,6 +19,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   anything but one read-only `SELECT` or `WITH` query and say so on the
   draft. Nothing else changes for read-only queries.
 
+### Import SQL: run every draft, then certify the ones that pass
+
+- **`zlens import sql` runs each draft once** and says which ones ran
+  (`ran: 12 rows`) and which need a fix, with the reasons counted by kind
+  (`2 × Needs a default value`). It used to save every draft without running
+  any. `--no-preview` skips the run.
+- **`zlens certify --from-import [id] [--apply]`** checks every draft of an
+  import (the latest by default); `--apply` certifies each one that passes,
+  through the Import SQL page's own Certify, so each saved query gets its
+  own checks and receipt (`via: sql-import`). It certifies what the draft
+  file says now, so fix a draft in its file and run it again; drafts already
+  certified are skipped. One draft at a time took about 8 seconds each from
+  the terminal; a whole import now takes about as long as one did.
+- **Certify all that ran** on the Import SQL page does the same for the
+  drafts whose preview ran. Nothing is certified until someone clicks it.
+
 ### Import SQL: scripts, parameters and duplicates
 
 - **Scripts become the queries they end in.** A temp table a script builds

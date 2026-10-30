@@ -44,6 +44,10 @@ export interface CLIFlags {
   http?: boolean;
   /** `zlens certify --from-draft <path>` — promote a Tier-2 draft to certified. */
   fromDraft?: string;
+  /** `zlens certify --from-import <session|latest>` — check, or with --apply certify, an import's drafts. */
+  fromImport?: string;
+  /** `zlens import sql --no-preview`: make the drafts without running them. */
+  preview?: boolean;
   /** `--contract <id@version>` — DataLex contract id to bind during certify. */
   contract?: string;
   /** Optional path to datalex-manifest.json for datalex_contract validation. */
@@ -260,6 +264,11 @@ export function parseArgs(argv: string[]): ParsedArgs {
       flags.http = true;
     } else if (arg === '--from-draft' && i + 1 < argv.length) {
       flags.fromDraft = argv[++i];
+    } else if (arg === '--from-import') {
+      const value = argv[i + 1];
+      flags.fromImport = value && !value.startsWith('--') ? argv[++i] : 'latest';
+    } else if (arg === '--no-preview') {
+      flags.preview = false;
     } else if (arg === '--contract' && i + 1 < argv.length) {
       flags.contract = argv[++i];
     } else if (arg === '--datalex-manifest' && i + 1 < argv.length) {

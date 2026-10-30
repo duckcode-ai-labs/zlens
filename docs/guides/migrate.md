@@ -15,12 +15,25 @@ scripts starts with the SQL behind your reports.
 
     `zlens migrate raw-sql --input ./legacy-sql` does the same thing.
 
-3. Review the drafts and certify the ones that are right. You can also do the
-   import in the workbench. See [Import SQL](../blocks/import-sql.md).
+    It runs each draft once and lists the ones that need a fix, by kind.
 
-Each query becomes a draft block with a name, description, grain and outputs
-drafted by AI, a preview of its rows, and a default test. Nothing is
-certified until a person certifies it.
+3. Check the drafts, then certify the ones that pass:
+
+    ```bash
+    zlens certify --from-import
+    zlens certify --from-import --apply
+    ```
+
+    Fix the rest (often a parameter that needs a default value) and run it
+    again. You can also do all of this in the workbench, where **Certify all
+    that ran** does the same. See [Import SQL](../blocks/import-sql.md).
+
+Each query becomes a draft block with a name, description, grain and outputs,
+a preview of its rows, and a default test. Scripts become one query each:
+temp tables turn into `WITH` clauses and report parameters (`:start_date`,
+`@Region`, Tableau `<Parameters.Store>`) into saved query parameters.
+Statements that change data get no draft. Nothing is certified until a person
+runs Certify.
 
 ## What `zlens migrate <tool>` does today
 

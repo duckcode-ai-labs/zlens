@@ -59,6 +59,7 @@ const HELP = `
     zlens certify <file.dql> --enterprise
                                     Enforce enterprise reusable-block requirements
     zlens certify --from-draft <path> Promote a Tier-2 draft block to certified
+    zlens certify --from-import [id] Check every draft of an SQL import (latest by default); --apply certifies the ones that pass
                                     (auto-flips status, sets datalex_contract,
                                      surfaces datalex-manifest.json patch)
     zlens info <file.dql>           Show block metadata
@@ -163,6 +164,8 @@ const HELP = `
     --connection <driver|path>      Database connection for certify/test (e.g. duckdb, path/to/db)
     --save                          For "import sql": retained for compatibility; drafts autosave
     --from-draft <path>             For "certify": promote a Tier-2 draft block to certified
+    --from-import [id|latest]       For "certify": check an SQL import's drafts; with --apply, certify the ones that pass
+    --no-preview                    For "import sql": make the drafts without running them
     --contract <id@version>         For "certify --from-draft": DataLex contract id (e.g. commerce.Customer.foo@1)
     --datalex-manifest <path>       Optional DataLex manifest for datalex_contract validation
     --open-pr                       For "certify --from-draft": push branch + open GitHub PR with the diff
@@ -217,6 +220,7 @@ const COMMAND_HELP: Record<string, string> = {
   Usage:
     zlens certify <file.dql> [--connection <driver|path>] [--skip-tests] [--enterprise]
     zlens certify --from-draft <path> [--owner <name>] [--domain <name>] [--contract <id@version>] [--enterprise] [--force]
+    zlens certify --from-import [id|latest] [--apply]
 
   Notes:
     \`zlens certify <file.dql>\` evaluates the certification rules and writes
@@ -451,7 +455,7 @@ async function main() {
     command === "eval" ||
     command === "ci" ||
     command === "propose" ||
-    (command === "certify" && Boolean(flags.fromDraft));
+    (command === "certify" && Boolean(flags.fromDraft || flags.fromImport));
   if (!file && !commandAllowsNoFile) {
     console.error(
       'Error: No file/argument specified. Run "zlens --help" for usage.',
