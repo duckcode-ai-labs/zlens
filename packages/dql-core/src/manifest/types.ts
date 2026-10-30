@@ -698,6 +698,17 @@ export interface ManifestTerm {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  /**
+   * Who certified the term, from its certification receipt. Present only
+   * while the receipt matches the term; `status` is then `certified`.
+   */
+  certification?: { certifiedBy: string; certifiedByName?: string; certifiedAt: string };
+  /**
+   * Set when the source says `certified` but no receipt certified this term
+   * (`no_receipt`) or it was edited since (`changed`). `status` is then
+   * `draft`: a term becomes certified only through Certify.
+   */
+  certificationIssue?: 'no_receipt' | 'changed';
 }
 
 // ---- Business Views ----

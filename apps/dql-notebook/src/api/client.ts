@@ -508,9 +508,13 @@ export interface BusinessTerm {
   reviewCadence?: string;
   businessRules?: string[];
   caveats?: string[];
+  /** Who certified the term, from its receipt; only on a certified term. */
+  certification?: { certifiedBy: string; certifiedByName?: string; certifiedAt: string };
+  /** The file says certified but nobody certified it (`no_receipt`), or it was edited since (`changed`); the term counts as a draft. */
+  certificationIssue?: 'no_receipt' | 'changed';
 }
 
-export type BusinessTermInput = Omit<BusinessTerm, 'filePath'>;
+export type BusinessTermInput = Omit<BusinessTerm, 'filePath' | 'certification' | 'certificationIssue'>;
 
 /** A domain Ask can be scoped to, with its subject areas and the purposes its imports are approved for. */
 export interface AskScopeOption {
@@ -9360,9 +9364,18 @@ export const api = {
     return request<{ term: BusinessTerm }>('/api/terms', { method: 'POST', body: JSON.stringify({ term }) });
   },
 
-  /** Rewrite the term declared in `filePath`. → PUT /api/terms  body { term, filePath } */
-  async updateTerm(filePath: string, term: BusinessTermInput): Promise<{ term: BusinessTerm }> {
-    return request<{ term: BusinessTerm }>('/api/terms', { method: 'PUT', body: JSON.stringify({ term, filePath }) });
+  /**
+   * Rewrite the term declared in `filePath`. Saving never certifies: an edit
+   * to a certified term makes it a draft again (`certificationCleared`).
+   * → PUT /api/terms  body { term, filePath }
+   */
+  async updateTerm(filePath: string, term: BusinessTermInput): Promise<{ term: BusinessTerm; certificationCleared?: boolean }> {
+    return request<{ term: BusinessTerm; certificationCleared?: boolean }>('/api/terms', { method: 'PUT', body: JSON.stringify({ term, filePath }) });
+  },
+
+  /** Certify a saved term: checks it, then writes its status and receipt. → POST /api/terms/certify  body { filePath, name } */
+  async certifyTerm(filePath: string, name: string): Promise<{ ok: true; term: BusinessTerm }> {
+    return request<{ ok: true; term: BusinessTerm }>('/api/terms/certify', { method: 'POST', body: JSON.stringify({ filePath, name }) });
   },
 
   /** Delete a term's file. → DELETE /api/terms?filePath= */

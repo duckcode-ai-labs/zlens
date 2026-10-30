@@ -31,3 +31,15 @@ export {
   currentBlockFileCheck,
 } from './certification-source.js';
 export type { CertifiedSourceState, BlockCheckRecord } from './certification-source.js';
+export {
+  termCertificationFingerprint,
+  termCertificationReceiptPath,
+  readTermCertificationReceipts,
+  termCertificationState,
+  writeTermCertificationReceipt,
+  removeTermCertificationReceipt,
+  termMeaningInSource,
+  setTermStatusInSource,
+  termNotCertifiedMessage,
+} from './term-certification.js';
+export type { TermCertificationReceipt, TermCertificationState, TermMeaning } from './term-certification.js';

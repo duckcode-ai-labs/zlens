@@ -1,0 +1,11 @@
+# ZLens certification receipts for the terms in the .dql file of the same name.
+# Written by Certify (Modeling → Terms & concepts, or zlens certify). Editing a term clears its receipt.
+terms:
+  Order:
+    certifiedBy: zlens-fixtures
+    certifiedAt: '2026-10-29T00:00:00.000Z'
+    via: cli
+    termSha256: 32621d6523aa24b94d46966e16763df39f13655e22f9e4729d533aec5df2991e
+    checks:
+      - has-owner
+      - has-definition

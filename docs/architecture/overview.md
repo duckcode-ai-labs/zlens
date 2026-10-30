@@ -48,7 +48,7 @@ user edits .dql file
         lineage DAG (dql-core)
                │
                ▼
-        OpenLineage events
+        OpenLineage snapshot (optional, from your own script)
 ```
 
 ## Where data lives

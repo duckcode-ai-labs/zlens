@@ -239,3 +239,26 @@ automatic join proof for Ask.
 
 Once a join is certified, Ask adds the check **Joins certified tables on
 their certified keys** to AI-written SQL that joins those tables.
+
+## Certify business terms
+
+A term is a business word Ask should read one way, such as "Revenue" or
+"Active customer". Create and edit terms on **Modeling → Terms & concepts**.
+Saving a term always keeps it a draft. To certify it:
+
+1. Open the term and make sure it has an **Owner** and a **Meaning** (its
+   definition). Any metric it links must exist in the semantic layer.
+2. Save it, then click **Certify**. If something is missing, ZLens says what.
+
+Certify writes `status = "certified"` into the term's file and a receipt next
+to it (`terms/revenue.dql` gets `terms/revenue.certification.yaml`), with who
+certified it and when. Commit both files.
+
+Editing a certified term makes it a draft again until someone certifies it
+again. A term whose file says `certified` without a receipt that matches it,
+for example one typed by hand or changed in a merge, counts as a draft.
+`zlens doctor` lists such terms under **Certified terms**.
+
+From the terminal, `zlens certify terms/revenue.dql` checks every term in the
+file, and `zlens certify terms/revenue.dql --apply` certifies the ones that
+pass.

@@ -54,6 +54,8 @@ const HELP = `
     zlens test <file.dql>           [deprecated] Use zlens certify --connection instead
     zlens validate [path]           Validate all DQL files and semantic references
     zlens certify <file.dql>        Evaluate certification rules
+    zlens certify <term file> --apply
+                                    Certify the business terms a file declares
     zlens certify <file.dql> --enterprise
                                     Enforce enterprise reusable-block requirements
     zlens certify --from-draft <path> Promote a Tier-2 draft block to certified

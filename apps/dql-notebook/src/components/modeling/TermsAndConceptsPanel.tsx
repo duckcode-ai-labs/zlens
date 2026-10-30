@@ -39,6 +39,19 @@ export function termReadiness(term: Pick<BusinessTerm, 'synonyms' | 'metricRefs'
   return gaps;
 }
 
+/** Why a term whose file says certified counts as a draft. */
+export function certificationIssueText(issue: NonNullable<BusinessTerm['certificationIssue']>): string {
+  return issue === 'changed'
+    ? 'Edited after it was certified, so it counts as a draft. Certify it again once it is reviewed.'
+    : 'Its file says certified, but nobody certified it, so it counts as a draft. Open it and click Certify.';
+}
+
+function certifiedLine(certification: NonNullable<BusinessTerm['certification']>): string {
+  const who = certification.certifiedByName || certification.certifiedBy;
+  const when = new Date(certification.certifiedAt);
+  return Number.isNaN(when.getTime()) ? who : `${who} · ${when.toLocaleDateString()}`;
+}
+
 export function conceptLocalId(name: string): string {
   return name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
@@ -158,7 +171,9 @@ function TermCard({ term, t, onEdit }: { term: BusinessTerm; t: Theme; onEdit?: 
       {(term.synonyms ?? []).length ? <Line label="Words people use" t={t}>{(term.synonyms ?? []).join(', ')}</Line> : null}
       {(term.metricRefs ?? []).length ? <Line label="Measured by" t={t}><code>{(term.metricRefs ?? []).join(', ')}</code></Line> : null}
       {(term.businessRules ?? []).length ? <Line label="Rules" t={t}>{(term.businessRules ?? []).length}</Line> : null}
-      {gaps.length ? <div style={{ marginTop: 8, color: 'var(--status-warning)', fontSize: 10.5, lineHeight: 1.45 }}>{gaps[0]}</div> : null}
+      {term.certification ? <Line label="Certified by" t={t}>{certifiedLine(term.certification)}</Line> : null}
+      {term.certificationIssue ? <div style={{ marginTop: 8, color: 'var(--status-warning)', fontSize: 10.5, lineHeight: 1.45 }}>{certificationIssueText(term.certificationIssue)}</div> : null}
+      {!term.certificationIssue && gaps.length ? <div style={{ marginTop: 8, color: 'var(--status-warning)', fontSize: 10.5, lineHeight: 1.45 }}>{gaps[0]}</div> : null}
       <code style={{ display: 'block', marginTop: 8, color: t.textMuted, fontSize: 9.5 }}>{term.filePath}</code>
     </article>
   );
@@ -201,7 +216,13 @@ function TermDrawer({ term, domain, domains, metrics, t, onClose, onSaved }: {
   const [busy, setBusy] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const set = <K extends keyof BusinessTermInput>(key: K, value: BusinessTermInput[K]) => setDraft((previous) => ({ ...previous, [key]: value }));
+  const [dirty, setDirty] = useState(false);
+  const set = <K extends keyof BusinessTermInput>(key: K, value: BusinessTermInput[K]) => {
+    setDirty(true);
+    setDraft((previous) => ({ ...previous, [key]: value }));
+  };
+  const certified = term?.status === 'certified';
+  const canCertify = Boolean(term) && !certified && term?.status !== 'deprecated';
   const gaps = termReadiness(draft);
   const kindHint = TERM_KINDS.find((item) => item.value === (draft.termType ?? ''))?.hint;
 
@@ -211,6 +232,20 @@ function TermDrawer({ term, domain, domains, metrics, t, onClose, onSaved }: {
     try {
       if (term) await api.updateTerm(term.filePath, draft);
       else await api.createTerm(draft);
+      onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Certify the saved term (never unsaved edits): the server checks it and writes its receipt.
+  const certify = async () => {
+    if (!term) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.certifyTerm(term.filePath, term.name);
       onSaved();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -240,6 +275,7 @@ function TermDrawer({ term, domain, domains, metrics, t, onClose, onSaved }: {
           ? <span style={{ marginRight: 'auto', display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 11.5 }}>Delete this term? <button type="button" onClick={() => void remove()} disabled={busy} style={dangerButton(t)}>Delete</button><button type="button" onClick={() => setConfirmDelete(false)} style={secondaryButton(t)}>Keep</button></span>
           : <button type="button" onClick={() => setConfirmDelete(true)} disabled={busy} style={{ ...secondaryButton(t), marginRight: 'auto', color: t.error }}><Trash2 size={13} /> Delete</button>) : null}
         <button type="button" onClick={onClose} disabled={busy} style={secondaryButton(t)}>Cancel</button>
+        {canCertify ? <button type="button" onClick={() => void certify()} disabled={busy || dirty} title={dirty ? 'Save your changes first: Certify certifies the saved term.' : 'Check the term and certify it'} style={{ ...secondaryButton(t), opacity: busy || dirty ? 0.55 : 1 }}>Certify</button> : null}
         <button type="button" onClick={() => void save()} disabled={busy || !draft.name.trim()} style={{ ...primaryButton(t), opacity: busy || !draft.name.trim() ? 0.55 : 1 }}>{busy ? <Loader2 size={13} /> : null}{editing ? 'Save term' : 'Create term'}</button>
       </>}
     >
@@ -274,14 +310,16 @@ function TermDrawer({ term, domain, domains, metrics, t, onClose, onSaved }: {
       </Field>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
         <Field label="Owner" t={t}><input value={draft.owner ?? ''} onChange={(event) => set('owner', event.target.value)} placeholder="analytics@company.com" style={input(t)} /></Field>
-        <Field label="Status" t={t}>
+        <Field label="Status" hint={certified ? 'Changing the term makes it a draft until someone certifies it again.' : 'Save the term, then click Certify.'} t={t}>
           <select value={draft.status ?? 'draft'} onChange={(event) => set('status', event.target.value)} style={input(t)}>
             <option value="draft">Draft</option>
-            <option value="certified">Certified</option>
+            {certified ? <option value="certified">Certified</option> : null}
             <option value="deprecated">Retired</option>
           </select>
         </Field>
       </div>
+      {term?.certification ? <div style={{ fontSize: 11, color: t.textSecondary }}>Certified by {certifiedLine(term.certification)}</div> : null}
+      {term?.certificationIssue ? <div style={{ fontSize: 11, color: 'var(--status-warning)', lineHeight: 1.5 }}>{certificationIssueText(term.certificationIssue)}</div> : null}
       {gaps.length ? <div style={{ border: '1px solid var(--status-warning)', borderRadius: 8, padding: '9px 11px', fontSize: 11, lineHeight: 1.5, color: t.textSecondary }}><b>Before Ask can rely on this term</b><ul style={{ margin: '5px 0 0', paddingLeft: 17 }}>{gaps.map((gap) => <li key={gap}>{gap}</li>)}</ul></div> : null}
       {error ? <div role="alert" style={{ color: t.error, fontSize: 11.5 }}>{error}</div> : null}
     </Drawer>

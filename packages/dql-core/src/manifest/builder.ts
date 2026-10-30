@@ -74,6 +74,7 @@ import { loadDomainPackageRegistry } from './domain-package-registry.js';
 import type { DomainPackageRegistryResult } from './domain-package-registry.js';
 import { buildManifestKnowledgeGraph, compactManifestKnowledgeGraph } from './knowledge-graph.js';
 import { certifiedBlockFileState, changedSinceCertifiedMessage } from '../trust/certification-source.js';
+import { termCertificationState, termNotCertifiedMessage } from '../trust/term-certification.js';
 import { loadManifestKnowledgeSkills, manifestKnowledgeSkillInputFiles } from './knowledge-skills.js';
 
 // ---- Public API ----
@@ -1112,7 +1113,7 @@ function scanTerms(
             // envelope decides which one an answer reads (ID-001). The same
             // name twice in ONE domain is still a duplicate.
             const existing = terms[term.name];
-            const incoming = termDeclToManifestTerm(term, relPath);
+            const incoming = governTermCertification(projectRoot, termDeclToManifestTerm(term, relPath), diagnostics);
             if (incoming.domain && existing.domain && existing.domain !== incoming.domain && !terms[`${incoming.domain}::${term.name}`]) {
               terms[`${incoming.domain}::${term.name}`] = incoming;
               continue;
@@ -1126,7 +1127,7 @@ function scanTerms(
             continue;
           }
 
-          terms[term.name] = termDeclToManifestTerm(term, relPath);
+          terms[term.name] = governTermCertification(projectRoot, termDeclToManifestTerm(term, relPath), diagnostics);
         }
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -1619,7 +1620,8 @@ function extractNotebookTerms(notebooks: Record<string, ManifestNotebook>): Reco
         for (const stmt of ast.statements) {
           const term = stmt as any;
           if (term.kind !== 'TermDecl' || terms[term.name]) continue;
-          terms[term.name] = termDeclToManifestTerm(term, `${nbPath}#${cell.id}`);
+          // A notebook cell has no receipt file, so a term in one is never certified.
+          terms[term.name] = governTermCertification(null, termDeclToManifestTerm(term, `${nbPath}#${cell.id}`));
         }
       } catch {
         // scanNotebooks already records parse diagnostics for invalid DQL cells.
@@ -3325,6 +3327,31 @@ function termDeclToManifestTerm(term: any, filePath: string): ManifestTerm {
     businessRules: Array.isArray(term.businessRules) ? term.businessRules : undefined,
     caveats: Array.isArray(term.caveats) ? term.caveats : undefined,
   };
+}
+
+/**
+ * A term counts as certified only while a certification receipt matches it;
+ * a source that says `certified` otherwise reads as a draft, with a warning.
+ */
+function governTermCertification(projectRoot: string | null, term: ManifestTerm, diagnostics?: ManifestDiagnostic[]): ManifestTerm {
+  if ((term.status ?? '').toLowerCase() !== 'certified') return term;
+  const { state, receipt, receiptPath } = projectRoot
+    ? termCertificationState(projectRoot, term.filePath, term)
+    : { state: 'no_receipt' as const, receipt: undefined, receiptPath: null };
+  if (state === 'matches' && receipt) {
+    return {
+      ...term,
+      status: 'certified',
+      certification: {
+        certifiedBy: receipt.certifiedBy,
+        ...(receipt.certifiedByName ? { certifiedByName: receipt.certifiedByName } : {}),
+        certifiedAt: receipt.certifiedAt,
+      },
+    };
+  }
+  const issue = state === 'matches' ? 'no_receipt' : state;
+  diagnostics?.push({ kind: 'resolve', filePath: term.filePath, severity: 'warning', message: termNotCertifiedMessage(term.name, issue, receiptPath) });
+  return { ...term, status: 'draft', certificationIssue: issue };
 }
 
 function businessViewDeclToManifestBusinessView(view: any, filePath: string): ManifestBusinessView {

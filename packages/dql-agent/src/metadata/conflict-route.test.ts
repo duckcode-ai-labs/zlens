@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { termCertificationFingerprint, termMeaningInSource, writeTermCertificationReceipt } from '@zlens/core';
 import { ensureMetadataCatalogFresh, planAgentAnswer } from './catalog.js';
 
 /**
@@ -52,6 +53,11 @@ describe('conflict route', () => {
 }`,
       'utf-8',
     );
+    // A term is certified only through its receipt.
+    for (const [file, name] of [['terms/active_customer_marketing.dql', 'Active Customer Marketing'], ['terms/active_customer_finance.dql', 'Active Customer Finance']]) {
+      const meaning = termMeaningInSource(readFileSync(join(projectRoot, file), 'utf-8'), name)!;
+      writeTermCertificationReceipt(projectRoot, file, name, { certifiedBy: 'steward', certifiedAt: '2026-10-29T00:00:00.000Z', via: 'cli', termSha256: termCertificationFingerprint(meaning) });
+    }
   }
 
   it('routes a question matching a conflicting certified pair to the conflict route', async () => {
