@@ -23,10 +23,11 @@ The page is titled **Import SQL to DQL** and shows three steps: **Source**,
 Pick one:
 
 - **Paste SQL**: paste one or more queries.
-- **Upload files**: pick `.sql` files.
+- **Upload files**: pick `.sql` files, Tableau workbooks or Power BI files.
 - **Local path**: a file or folder inside your project.
 
-Only `.sql` files are read. A file can hold many queries: ZLens splits at `;`,
+ZLens reads `.sql` files, Tableau workbooks and Power BI files (see
+[Tableau and Power BI](#tableau-and-power-bi)). A `.sql` file can hold many queries: ZLens splits at `;`,
 at `GO` lines, and where a new statement starts on its own line, so a pasted
 page of reports with only a blank line between them works too. A comment
 right above a query names its draft (`-- Revenue by store`), and so does a
@@ -58,6 +59,36 @@ Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
 ZLens works through **Reading SQL** and **Running previews**, then **Import
 complete**. Nothing is written to your project yet: a draft becomes a saved query
 file only when you click **Save draft** on it.
+
+### Tableau and Power BI
+
+| File | What becomes a draft |
+|---|---|
+| Tableau workbook (`.twb`, or a packaged `.twbx`) | Each Custom SQL query, named after it (`Usage Stats (Custom SQL)` → `Usage Stats`) |
+| Power BI template (`.pbit`) | Each table whose Power Query runs SQL: `Value.NativeQuery(…)`, a connector's `Query` option (`Sql.Database(…, [Query="…"])`), or `Odbc.Query` |
+| Power BI project (PBIP): the `.pbip` file, its `<name>.SemanticModel` folder, `model.bim` or the `.tmdl` files | The same, read from the model's tables |
+
+A draft's warnings name the workbook or model, the data source or table, the
+database it ran on, and for Tableau the worksheets that use it. Tableau
+parameters (`<Parameters.Start Date>`) and Power BI parameters become saved
+query parameters, with the value they have in the file as default. SQL that
+Power Query builds with `&` is put back together; a piece ZLens cannot read
+becomes a parameter, and the warning says to check it.
+
+Some of a BI file has no SQL. **Left out** lists it, so you can see what is
+not covered:
+
+- **Data sources and tables that load a table directly**, without SQL: most
+  Power BI tables and many Tableau data sources. ZLens reads those tables from
+  the database itself.
+- **Calculated fields and DAX measures:** rebuild the ones your reports need
+  as metrics.
+- **A `.pbix`**, which stores its model compressed. In Power BI Desktop choose
+  **File → Export → Power BI template** and import the `.pbit`, or save the
+  report as a Power BI project.
+
+Upload is fine for workbooks without extracts. For a large `.twbx`, point the
+**Local path** at it instead.
 
 ## 3. Review each draft
 

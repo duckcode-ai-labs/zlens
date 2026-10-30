@@ -69,7 +69,7 @@ local databases, data files, AI pins, saved views, and layout overrides.
 | `zlens new domain <name>` | Create `domains/<domain>/domain.dql` plus domain-local `terms/`, `blocks/`, `views/`, and `apps/` folders |
 | `zlens new block --domain <domain> --pattern <pattern> <name>` | Create a draft block scaffold with enterprise contract metadata |
 | `zlens new view --domain <domain> <name>` | Create a domain-local business view scaffold |
-| `zlens import sql <path>` | Generate AI-first DQL draft blocks from SQL files or folders |
+| `zlens import sql <path>` | Draft saved queries from `.sql` files, Tableau workbooks (`.twb`, `.twbx`), Power BI files (`.pbit`, PBIP) or a folder of them, and run each draft once |
 | `zlens import sql <path> --save` | Compatibility alias; generated drafts autosave before certification |
 | `zlens propose [path]` | Rank dbt models and write review-only DQL block proposals |
 | `zlens propose [path] --dry-run` | Preview ranked proposals without writing files |
@@ -210,7 +210,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 
 | Command | What it does |
 | --- | --- |
-| `zlens import sql <path>` | Generate autosaved AI import drafts from SQL files/folders |
+| `zlens import sql <path>` | Draft saved queries from SQL, Tableau and Power BI files or folders |
 | `zlens migrate <source>` | Scaffold from looker, tableau, dbt, metabase, or raw-sql |
 | `zlens migrate layout --to domain-first --dry-run` | Preview moves from legacy folders into `domains/<domain>/...` |
 | `zlens migrate layout --to domain-first --force` | Apply the previewed domain-first file moves |

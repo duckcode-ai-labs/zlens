@@ -13394,6 +13394,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         ? body.sources.map((source: any, index: number) => ({
             path: typeof source?.path === 'string' ? source.path : `source-${index + 1}.sql`,
             content: typeof source?.content === 'string' ? source.content : '',
+            ...(source?.encoding === 'base64' ? { encoding: 'base64' as const } : {}),
           }))
         : undefined,
       sourceKind: typeof body.sourceKind === 'string' ? body.sourceKind : 'raw-sql',
@@ -28147,6 +28148,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             ? body.sources.map((source: any, index: number) => ({
                 path: typeof source?.path === 'string' ? source.path : `source-${index + 1}.sql`,
                 content: typeof source?.content === 'string' ? source.content : '',
+                ...(source?.encoding === 'base64' ? { encoding: 'base64' as const } : {}),
               }))
             : undefined,
           sourceKind: typeof body.sourceKind === 'string' ? body.sourceKind : 'raw-sql',

@@ -1,12 +1,16 @@
 # Migrate from other tools
 
-Moving to ZLens from Looker, Metabase, Tableau, Hex or a folder of SQL
-scripts starts with the SQL behind your reports.
+Moving to ZLens from Looker, Metabase, Tableau, Power BI, Hex or a folder of
+SQL scripts starts with the SQL behind your reports.
 
 ## Bring the SQL over
 
-1. Export or copy the SQL of the reports you want to keep into `.sql` files,
-   one query per file (or several queries in one file).
+1. Put the reports you want to keep in one folder:
+    - Tableau workbooks (`.twb`, `.twbx`), as they are.
+    - Power BI templates (`.pbit`), or Power BI projects (PBIP). For a
+      `.pbix`, export a template first: **File → Export → Power BI
+      template**.
+    - Other SQL, copied into `.sql` files, one or several queries per file.
 2. Import them:
 
     ```bash
@@ -38,8 +42,9 @@ runs Certify.
 ## What `zlens migrate <tool>` does today
 
 `zlens migrate looker`, `metabase`, `tableau` and `dbt` do not read your
-exports yet. They print the approach for that tool and an example of the block
-it would produce. Use the import above for real content.
+exports. They print the approach for that tool and an example of the block
+it would produce. Use the import above for real content: it reads Tableau
+workbooks and Power BI files directly.
 
 ## Check the result
 

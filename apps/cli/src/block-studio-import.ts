@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
+import { biSourceKind, isBiImportFile, readBiFile, readTmdlFolder, unreadableBiFile, type ExtractedBiFile } from './bi-import/index.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import {
   foldSqlScript,
@@ -27,6 +28,8 @@ export type BlockStudioImportSplitStrategy = 'semicolon-go' | 'metadata-comment'
 export interface BlockStudioImportSource {
   path: string;
   content: string;
+  /** An uploaded binary file (.twbx, .pbit) comes base64-encoded. */
+  encoding?: 'base64';
 }
 
 export interface BlockStudioImportLineage {
@@ -250,15 +253,19 @@ interface SqlStatementCandidate {
   warnings: string[];
   parameters: ImportedSqlParameter[];
   notes: string[];
+  sourceKind?: BlockStudioImportSourceKind;
 }
 
 interface SqlSource {
   path: string;
   content: string;
+  /** Set for a query read out of a Tableau or Power BI file. */
+  sourceKind?: BlockStudioImportSourceKind;
+  /** The BI file's parameters, with their current values. */
+  parameters?: ImportedSqlParameter[];
 }
 
-const SQL_EXTENSIONS = new Set(['.sql']);
-const ACTIVE_IMPORT_KINDS = new Set<BlockStudioImportSourceKind>(['raw-sql-file', 'raw-sql-folder']);
+const ACTIVE_IMPORT_KINDS = new Set<BlockStudioImportSourceKind>(['raw-sql-file', 'raw-sql-folder', 'tableau-workbook', 'powerbi-project']);
 
 export function createBlockStudioImportSession(
   projectRoot: string,
@@ -278,6 +285,7 @@ export function createBlockStudioImportSession(
     tags: normalizeTags(['imported', 'raw-sql', ...(options.tags ?? [])]),
   };
   const collected = collectSqlStatements(sourceBundle.sources);
+  collected.skipped.unshift(...sourceBundle.skipped);
   const importId = buildImportId(sourceKind, sourceBundle.inputPath, now);
   const built = collected.statements.map((statement) => buildSqlCandidate({
     importId,
@@ -299,7 +307,7 @@ export function createBlockStudioImportSession(
         sourcePath: candidate.sourcePath,
         kind: 'duplicate',
         reason: `Same query as "${first.name}" (${first.sourcePath}).`,
-        sql: candidate.sql.replace(/\s+/g, ' ').slice(0, 160),
+        sql: candidate.sql.replace(/^(?:[ \t]*--[^\n]*\n)+/, '').replace(/\s+/g, ' ').trim().slice(0, 160),
       });
       continue;
     }
@@ -1124,7 +1132,7 @@ function collectSqlStatements(sources: SqlSource[]): { statements: SqlStatementC
     // A stored procedure becomes its body; then the file is split into
     // statements and each script is folded into the queries it ends in.
     const split = splitSqlStatements(unwrapStoredProcedures(source.content));
-    const folded = foldSqlScript(split.statements.filter(hasExecutableSql));
+    const folded = foldSqlScript(split.statements.filter(hasExecutableSql), { parameters: source.parameters ?? [] });
     skipped.push(...folded.skipped.map((item) => ({ ...item, sourcePath: source.path })));
     const queries = folded.queries.filter((query) => hasExecutableSql(query.sql));
     const sharedWarnings = queries.length === 1 ? analyzeSqlWarnings(queries[0].sql, queries.length) : [];
@@ -1138,6 +1146,7 @@ function collectSqlStatements(sources: SqlSource[]): { statements: SqlStatementC
         warnings: index === 0 ? sharedWarnings : [],
         parameters: query.parameters,
         notes: query.notes,
+        ...(source.sourceKind ? { sourceKind: source.sourceKind } : {}),
       });
     });
   }
@@ -1187,7 +1196,7 @@ function buildSqlCandidate(options: {
   };
   const candidate: BlockStudioImportCandidate = {
     id: buildCandidateId(sourcePath, statement.statementIndex, statement.sql),
-    sourceKind: options.sourceKind,
+    sourceKind: statement.sourceKind ?? options.sourceKind,
     sourcePath,
     name: titleizeName(name),
     domain: metadata.domain ? sanitizeDomain(metadata.domain) : options.defaults.domain,
@@ -1639,16 +1648,17 @@ function scoreSqlCandidate(sql: string, lineage: BlockStudioImportLineage): numb
   return Math.max(0.35, Math.min(0.92, Number(score.toFixed(2))));
 }
 
-function walkSqlFiles(root: string): string[] {
+function walkImportFiles(root: string): string[] {
   const files: string[] = [];
   const stack = [root];
   while (stack.length > 0) {
     const dir = stack.pop()!;
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.dql') continue;
+      // .pbi holds a Power BI project's local cache, not its definition.
+      if (entry.name === 'node_modules' || entry.name === '.git' || entry.name === '.dql' || entry.name === '.pbi') continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) stack.push(full);
-      else if (entry.isFile() && SQL_EXTENSIONS.has(extname(entry.name).toLowerCase())) files.push(full);
+      else if (entry.isFile() && (extname(entry.name).toLowerCase() === '.sql' || isBiImportFile(entry.name))) files.push(full);
     }
   }
   return files.sort();
@@ -1658,40 +1668,98 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
   sourceKind: BlockStudioImportSourceKind;
   inputPath: string;
   sources: SqlSource[];
+  skipped: SkippedSqlStatement[];
 } {
+  const sources: SqlSource[] = [];
+  const skipped: SkippedSqlStatement[] = [];
+  const add = (extracted: ExtractedBiFile) => {
+    sources.push(...extracted.sources);
+    skipped.push(...extracted.skipped);
+  };
+  const readSafely = (displayName: string, read: () => ExtractedBiFile) => {
+    try {
+      add(read());
+    } catch (error) {
+      add(unreadableBiFile(displayName, error));
+    }
+  };
+
   if (options.sources?.length) {
-    const sources = options.sources
-      .map((source, index) => ({
-        path: sanitizeSourcePath(source.path || `pasted-${index + 1}.sql`),
-        content: source.content ?? '',
-      }))
-      .filter((source) => source.content.trim().length > 0);
-    if (sources.length === 0) throw new Error('No SQL content was provided.');
+    const tmdl: Array<{ absolutePath: string; displayPath: string; text: string }> = [];
+    options.sources.forEach((source, index) => {
+      const path = sanitizeSourcePath(source.path || `pasted-${index + 1}.sql`);
+      const bytes = Buffer.from(source.content ?? '', source.encoding === 'base64' ? 'base64' : 'utf8');
+      if (/\.tmdl$/i.test(path)) {
+        tmdl.push({ absolutePath: '', displayPath: path, text: bytes.toString('utf8') });
+      } else if (isBiImportFile(path)) {
+        readSafely(path, () => readBiFile(bytes, path));
+      } else if ((source.content ?? '').trim()) {
+        sources.push({ path, content: source.content });
+      }
+    });
+    // Uploaded .tmdl files are one Power BI model's tables and expressions.
+    if (tmdl.length) readSafely('uploaded TMDL files', () => readBiFile(Buffer.from(tmdl.map((file) => file.text).join('\n\n')), 'uploaded.tmdl'));
+    if (sources.length === 0 && skipped.length === 0) throw new Error('No SQL content was provided.');
+    const kinds = new Set(sources.map((source) => source.sourceKind ?? 'raw-sql'));
+    const uploadedKind = options.sources.length === 1 ? biSourceKind(options.sources[0].path ?? '') : null;
     return {
-      sourceKind: sources.length > 1 ? 'raw-sql-folder' : 'raw-sql-file',
-      inputPath: options.inputMode === 'paste' ? 'pasted SQL' : `${sources.length} uploaded SQL file(s)`,
+      sourceKind: uploadedKind ?? (kinds.size === 1 && !kinds.has('raw-sql') ? [...kinds][0] as BlockStudioImportSourceKind : sources.length > 1 ? 'raw-sql-folder' : 'raw-sql-file'),
+      inputPath: options.inputMode === 'paste' ? 'pasted SQL' : `${options.sources.length} uploaded file(s)`,
       sources,
+      skipped,
     };
   }
 
-  const inputPath = resolveInputPath(projectRoot, options.inputPath ?? '');
+  let inputPath = resolveInputPath(projectRoot, options.inputPath ?? '');
+  // A Power BI project file points at its model folder beside it.
+  if (/\.pbip$/i.test(inputPath) && existsSync(inputPath.replace(/\.pbip$/i, '.SemanticModel'))) inputPath = inputPath.replace(/\.pbip$/i, '.SemanticModel');
   const sourceKind = resolveSourceKind(inputPath, options.sourceKind);
   const stats = statSync(inputPath);
-  const files = (stats.isDirectory() ? walkSqlFiles(inputPath) : [inputPath]).filter((file) => !options.fileAllowed || options.fileAllowed(file));
-  if (files.length === 0) throw new Error('No .sql files found to import.');
+  const files = (stats.isDirectory() ? walkImportFiles(inputPath) : [inputPath]).filter((file) => !options.fileAllowed || options.fileAllowed(file));
+  const tmdlFolders = new Map<string, string[]>();
+  for (const file of files) {
+    const shown = displayPath(projectRoot, file);
+    if (extname(file).toLowerCase() === '.sql') {
+      sources.push({ path: shown, content: readFileSync(file, 'utf-8') });
+    } else if (/\.tmdl$/i.test(file)) {
+      const folder = tmdlDefinitionFolder(file);
+      tmdlFolders.set(folder, [...(tmdlFolders.get(folder) ?? []), file]);
+    } else {
+      readSafely(shown, () => readBiFile(readFileSync(file), shown));
+    }
+  }
+  for (const [folder, folderFiles] of tmdlFolders) {
+    // Tables and shared expressions (parameters) make up the model's queries.
+    const expressions = join(folder, 'expressions.tmdl');
+    const modelFiles = Array.from(new Set([...folderFiles, ...(existsSync(expressions) && (!options.fileAllowed || options.fileAllowed(expressions)) ? [expressions] : [])]))
+      .filter((file) => file.includes(`${sep}tables${sep}`) || basename(file).toLowerCase() === 'expressions.tmdl' || folderFiles.length === 1);
+    if (modelFiles.length === 0) continue;
+    readSafely(displayPath(projectRoot, folder), () => readTmdlFolder(modelFiles.map((file) => ({ absolutePath: file, displayPath: displayPath(projectRoot, file) })), displayPath(projectRoot, folder)));
+  }
+  if (sources.length === 0 && skipped.length === 0) throw new Error('No SQL, Tableau or Power BI files found to import.');
   return {
     sourceKind,
     inputPath: displayPath(projectRoot, inputPath),
-    sources: files.map((file) => ({
-      path: displayPath(projectRoot, file),
-      content: readFileSync(file, 'utf-8'),
-    })),
+    sources,
+    skipped,
   };
+}
+
+/** A PBIP model's `definition` folder holding this .tmdl file (its tables/ folder's parent), else the file's own folder. */
+function tmdlDefinitionFolder(file: string): string {
+  let folder = dirname(file);
+  for (let depth = 0; depth < 4; depth += 1) {
+    if (basename(folder).toLowerCase() === 'definition') return folder;
+    const parent = dirname(folder);
+    if (parent === folder) break;
+    folder = parent;
+  }
+  return basename(dirname(file)).toLowerCase() === 'tables' ? dirname(dirname(file)) : dirname(file);
 }
 
 function sanitizeSourcePath(path: string): string {
   const clean = path.replaceAll('\\', '/').replace(/^\/+/, '').trim();
-  return clean.endsWith('.sql') ? clean : `${clean || 'pasted'}.sql`;
+  return clean.endsWith('.sql') || isBiImportFile(clean) ? clean : `${clean || 'pasted'}.sql`;
 }
 
 function resolveInputPath(projectRoot: string, inputPath: string): string {
@@ -1704,9 +1772,11 @@ function resolveInputPath(projectRoot: string, inputPath: string): string {
 function resolveSourceKind(inputPath: string, requested?: CreateBlockStudioImportOptions['sourceKind']): BlockStudioImportSourceKind {
   if (requested && requested !== 'raw-sql') return requested;
   const stats = statSync(inputPath);
-  if (stats.isDirectory()) return 'raw-sql-folder';
+  if (stats.isDirectory()) return /\.SemanticModel$|[\\/]definition$/i.test(inputPath) ? 'powerbi-project' : 'raw-sql-folder';
   if (extname(inputPath).toLowerCase() === '.sql') return 'raw-sql-file';
-  throw new Error('Only .sql files and folders are supported in this import build.');
+  const kind = biSourceKind(inputPath);
+  if (kind) return kind;
+  throw new Error('Import reads .sql files, Tableau workbooks (.twb, .twbx) and Power BI files (.pbit, .pbip, model.bim, .tmdl), or a folder of them.');
 }
 
 function importRoot(projectRoot: string, importId: string): string {

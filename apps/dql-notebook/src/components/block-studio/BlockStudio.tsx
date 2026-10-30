@@ -4090,6 +4090,12 @@ export function importCandidateTrust(candidate: Pick<BlockStudioImportCandidate,
   return 'unsaved';
 }
 
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  return btoa(binary);
+}
+
 function smartItemFromCandidate(candidate: BlockStudioImportCandidate): SmartImportItem {
   if (candidate.reviewStatus === 'saved') {
     const certified = importCandidateTrust(candidate) === 'certified';
@@ -4242,7 +4248,7 @@ function BlockStudioImportWorkspace({
   const [mode, setMode] = useState<ImportSourceMode>('paste');
   const [path, setPath] = useState('');
   const [pasteSql, setPasteSql] = useState('');
-  const [uploadSources, setUploadSources] = useState<Array<{ path: string; content: string }>>([]);
+  const [uploadSources, setUploadSources] = useState<Array<{ path: string; content: string; encoding?: 'base64' }>>([]);
   const [domain, setDomain] = useState(defaultDomain);
   const [owner, setOwner] = useState(defaultOwner);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -4716,8 +4722,12 @@ function BlockStudioImportWorkspace({
 
   const handleFiles = async (files: FileList | null) => {
     const list = Array.from(files ?? []);
-    const sqlFiles = list.filter((file) => file.name.toLowerCase().endsWith('.sql'));
-    const sources = await Promise.all(sqlFiles.map(async (file) => ({ path: file.name, content: await file.text() })));
+    // SQL, Tableau workbooks and Power BI files; the zipped ones (.twbx, .pbit,
+    // .pbix) go up base64-encoded.
+    const importable = list.filter((file) => /\.(?:sql|twb|twbx|pbit|pbix|tmdl|bim)$/i.test(file.name));
+    const sources = await Promise.all(importable.map(async (file) => (/\.(?:twbx|pbit|pbix)$/i.test(file.name)
+      ? { path: file.name, content: bytesToBase64(new Uint8Array(await file.arrayBuffer())), encoding: 'base64' as const }
+      : { path: file.name, content: await file.text() })));
     setUploadSources(sources);
     if (sources.length > 0) setPath('');
   };
@@ -4790,16 +4800,16 @@ function BlockStudioImportWorkspace({
                           setPath(event.target.value);
                           if (event.target.value.trim()) setUploadSources([]);
                         }}
-                        placeholder="./queries or ./legacy.sql"
+                        placeholder="./queries, ./legacy.sql, ./Sales.pbit"
                         style={importInputStyle(t)}
                       />
                     </FieldLabel>
                 )}
                 {mode === 'upload' && (
-                    <FieldLabel label="Upload SQL files" t={t}>
-                      <input type="file" multiple accept=".sql,text/sql,text/plain" onChange={(event) => void handleFiles(event.target.files)} style={importInputStyle(t)} />
+                    <FieldLabel label="Upload SQL, Tableau or Power BI files" t={t}>
+                      <input type="file" multiple accept=".sql,.twb,.twbx,.pbit,.pbix,.tmdl,.bim,text/sql,text/plain" onChange={(event) => void handleFiles(event.target.files)} style={importInputStyle(t)} />
                       <span style={{ fontSize: 11, color: t.textMuted, fontFamily: t.font }}>
-                        {uploadSources.length > 0 ? `${uploadSources.length} SQL file(s) ready` : 'Choose one or more SQL files.'}
+                        {uploadSources.length > 0 ? `${uploadSources.length} file(s) ready` : 'Choose .sql files, Tableau workbooks (.twb, .twbx) or Power BI templates (.pbit).'}
                       </span>
                     </FieldLabel>
                 )}
@@ -5659,7 +5669,7 @@ function ImportStep({ index, active, complete, title, detail, t }: { index: numb
 
 function ImportGuide({ t }: { t: Theme }) {
   const items = [
-    ['1', 'Add SQL', 'Paste SQL, upload files, or point to an enterprise SQL folder.'],
+    ['1', 'Add SQL', 'Paste SQL, upload SQL, Tableau or Power BI files, or point to a folder of them.'],
     ['2', 'Generate drafts', 'ZLens analyzes statements, project metadata, tables, and business context.'],
     ['3', 'Review and certify', 'Preview results, edit metadata, then certify the governed saved query.'],
   ];

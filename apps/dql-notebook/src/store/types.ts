@@ -1343,7 +1343,7 @@ export interface BlockStudioImportSession {
 
 export interface BlockStudioImportSkippedStatement {
   sourcePath: string;
-  kind: 'writes' | 'duplicate' | 'runs-procedure' | 'not-a-query';
+  kind: 'writes' | 'duplicate' | 'runs-procedure' | 'not-a-query' | 'no-sql' | 'calculations' | 'unreadable';
   reason: string;
   sql: string;
 }
