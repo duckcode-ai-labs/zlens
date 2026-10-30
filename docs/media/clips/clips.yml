@@ -57,18 +57,18 @@ ask-refusal:
     - Open How it was answered to see each step and where it stopped.
 
 import-certify:
-  title: Import SQL, save a draft, certify
+  title: Import a folder of reports, certify all that ran
   caption: >-
-    Paste SQL into Import SQL, generate a DQL draft and save it: saving never
-    certifies. Certify is a separate, explicit action, and the certified block
-    carries a receipt saying who certified it, when, and how.
+    Point Import SQL at a folder holding a Tableau workbook, a Power BI
+    template and an old SQL script. Every query becomes a draft saved query,
+    what has no SQL is listed under Left out, and Certify all that ran
+    certifies each draft on its own, with its own receipt.
   steps:
-    - Open Blocks and start an import.
-    - Paste a SQL query that counts orders per store, and set the domain and owner.
-    - Generate DQL drafts; the draft gets a name, description, outputs and checks.
-    - Save draft; the draft is saved and marked needs review, and Certify becomes available.
-    - Certify the draft; it is now certified.
-    - Open the block in Block Studio; its receipt reads Certified by, with the date, via SQL import, under OSS rules.
+    - Open Saved queries and start an import from a local folder, with a domain and an owner.
+    - Generate DQL drafts; one draft per Tableau Custom SQL query, Power BI native query and script report, each previewed.
+    - Open Left out; calculated fields, DAX measures, table loads and the script's DROP get no draft, and nothing there is run.
+    - Click Certify all that ran; every draft is checked and certified.
+    - Open a certified saved query; its receipt reads Certified by, and its parameter keeps the report's value.
 
 notebook:
   title: A notebook with SQL and DQL cells
