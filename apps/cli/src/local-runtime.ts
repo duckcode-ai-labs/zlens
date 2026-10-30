@@ -13286,12 +13286,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         semanticSql: semanticCompose?.sql ?? undefined,
       },
     );
+    // A saved query is one read-only SELECT or WITH. Import SQL previews every
+    // statement of a pasted file or folder as soon as the drafts are made, so a
+    // DROP or DELETE among them must be refused here, never run.
     const execution = await timer.time('preview_query', () => analyticalExecutionService.execute({
       sql: semanticCompose?.sql ?? plan?.sql ?? executableSql,
-      subject: 'Block Studio preview query',
+      subject: 'Saved query preview',
       connection: activeConnection,
       sqlParams: plan?.sqlParams,
       variables: { ...(plan?.variables ?? {}), ...invocation.values },
+      enforceReadOnly: true,
     }));
     return {
       sql: execution.preparation.executedSql,
@@ -13366,10 +13370,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
     const execution = await timer.time('run_query', () => analyticalExecutionService.execute({
       sql: semanticCompose?.sql ?? plan.sql,
-      subject: 'Block Studio certification test query',
+      subject: 'Saved query certification check',
       connection: activeConnection,
       sqlParams: plan.sqlParams,
       variables: plan.variables,
+      enforceReadOnly: true,
     }));
     const { rows, columns } = execution.result;
     return timer.time('evaluate_assertions', () => evaluateBlockStudioTests(tests, rows, columns, start));
