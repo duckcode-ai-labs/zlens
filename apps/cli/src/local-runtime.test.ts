@@ -9420,7 +9420,7 @@ describe('ExecutionService surface parity (API-003 / E2E-014)', () => {
       source.indexOf('const runBlockStudioPreviewSource = async'),
       source.indexOf('const runBlockStudioTestSummary', source.indexOf('const runBlockStudioPreviewSource = async')),
     );
-    expect(blockPreview).toContain("subject: 'Block Studio preview query'");
+    expect(blockPreview).toContain("subject: 'Saved query preview'");
     expect(blockPreview).not.toContain('executor.executeQuery(');
     expect(notebookExecution).toContain('analyticalExecutionService.execute');
     expect(blockRun).toContain('executeDqlArtifactSourceForAgent');

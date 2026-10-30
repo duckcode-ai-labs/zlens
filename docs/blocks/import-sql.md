@@ -29,6 +29,10 @@ Pick one:
 Only `.sql` files are read. Put several queries in one file by ending each
 with `;` or a `GO` line.
 
+ZLens runs only read-only `SELECT` and `WITH` queries. Any other statement in
+your SQL, such as a `DROP`, `DELETE`, `CREATE` or `INSERT`, still gets a draft
+but is never run: its preview says it only supports read-only queries.
+
 Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
 
 ZLens works through **Reading SQL** and **Running previews**, then **Import

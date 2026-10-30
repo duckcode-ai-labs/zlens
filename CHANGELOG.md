@@ -8,6 +8,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Import SQL no longer runs statements that write
+
+- **Import SQL ran every statement it found, including ones that change the
+  database.** Making the drafts runs a preview of each statement in the
+  pasted SQL, files or folder. A `DROP TABLE`, `DELETE`, `CREATE TABLE` or
+  `INSERT` among them (old cleanup and load steps often sit next to the
+  reports) ran against your connection, and its draft said "Preview ran
+  successfully". The preview, and the check that Certify runs, now refuse
+  anything but one read-only `SELECT` or `WITH` query and say so on the
+  draft. Nothing else changes for read-only queries.
+
 ### Business terms are certified only through Certify
 
 - **Saving a term no longer certifies it.** On **Modeling → Terms &
