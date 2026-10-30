@@ -6187,7 +6187,7 @@ export const api = {
     path: string;
     sourceKind?: 'raw-sql' | BlockStudioImportCandidate['sourceKind'];
     inputMode?: 'path' | 'paste' | 'upload';
-    sources?: Array<{ path: string; content: string }>;
+    sources?: Array<{ path: string; content: string; encoding?: 'base64' }>;
     domain?: string;
     owner?: string;
     tags?: string[];
@@ -6206,7 +6206,7 @@ export const api = {
       path?: string;
       sourceKind?: 'raw-sql' | BlockStudioImportCandidate['sourceKind'];
     inputMode?: 'path' | 'paste' | 'upload';
-    sources?: Array<{ path: string; content: string }>;
+    sources?: Array<{ path: string; content: string; encoding?: 'base64' }>;
     domain?: string;
     owner?: string;
     tags?: string[];
@@ -6221,7 +6221,7 @@ export const api = {
       path?: string;
       sourceKind?: 'raw-sql' | BlockStudioImportCandidate['sourceKind'];
       inputMode?: 'path' | 'paste' | 'upload';
-      sources?: Array<{ path: string; content: string }>;
+      sources?: Array<{ path: string; content: string; encoding?: 'base64' }>;
       domain?: string;
       owner?: string;
       tags?: string[];

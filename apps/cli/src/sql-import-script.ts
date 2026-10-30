@@ -24,7 +24,17 @@ export interface ImportedSqlParameter {
   default?: string | number | boolean;
 }
 
-export type SkippedSqlStatementKind = 'writes' | 'duplicate' | 'runs-procedure' | 'not-a-query';
+export type SkippedSqlStatementKind =
+  | 'writes'
+  | 'duplicate'
+  | 'runs-procedure'
+  | 'not-a-query'
+  /** A BI table or data source that loads data without SQL. */
+  | 'no-sql'
+  /** Tableau calculated fields, DAX measures and calculated tables. */
+  | 'calculations'
+  /** A file ZLens could not read (a .pbix, a damaged workbook). */
+  | 'unreadable';
 
 export interface SkippedSqlStatement {
   sourcePath: string;
@@ -412,7 +422,7 @@ const TSQL_SET_OPTIONS = /^(?:nocount|ansi_\w+|quoted_identifier|xact_abort|tran
  * - Session settings and temp-table cleanup are dropped quietly. Anything else
  *   that changes data, and EXEC/CALL, is listed as skipped with the reason.
  */
-export function foldSqlScript(statements: string[]): FoldedSqlScript {
+export function foldSqlScript(statements: string[], options: { parameters?: ImportedSqlParameter[] } = {}): FoldedSqlScript {
   const queries: ImportedScriptQuery[] = [];
   const skipped: FoldedSqlScript['skipped'] = [];
   const temps = new Map<string, TempDefinition>();
@@ -592,7 +602,7 @@ export function foldSqlScript(statements: string[]): FoldedSqlScript {
     sql = folded.sql;
     queryNotes.push(...folded.notes);
     if (database) queryNotes.push(`The script ran USE ${database} first. Check that the tables it reads point at that database.`);
-    const converted = convertParameters(sql, variables, snowflakeVariables);
+    const converted = convertParameters(sql, variables, snowflakeVariables, options.parameters ?? []);
     queryNotes.push(...converted.notes);
     queries.push({
       sql: `${leading ? `${leading}\n` : ''}${converted.sql}`,
@@ -862,8 +872,20 @@ function convertParameters(
   sql: string,
   variables: Map<string, VariableValue>,
   snowflakeVariables: Map<string, VariableValue>,
+  declared: ImportedSqlParameter[],
 ): { sql: string; parameters: ImportedSqlParameter[]; notes: string[] } {
   const parameters = new Map<string, ImportedSqlParameter>();
+  // `${name}` already: a BI file's parameter (Tableau, Power BI) with its current
+  // value, or a saved query parameter someone wrote by hand.
+  const masked = maskSqlNonCode(sql);
+  const placeholder = /\$\{\s*([A-Za-z_]\w*)\s*\}/g;
+  let existing: RegExpExecArray | null;
+  while ((existing = placeholder.exec(masked))) {
+    const name = existing[1];
+    if (parameters.has(name)) continue;
+    const known = declared.find((parameter) => parameter.name === name);
+    parameters.set(name, known ?? { name, written: existing[0], valueType: parameterType(name, undefined, undefined) });
+  }
   const notes: string[] = [];
   const inlined = new Set<string>();
   const useVariable = (variable: VariableValue | undefined, written: string, ownName?: string): string => {

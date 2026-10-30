@@ -19,6 +19,24 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   anything but one read-only `SELECT` or `WITH` query and say so on the
   draft. Nothing else changes for read-only queries.
 
+### Import SQL reads Tableau workbooks and Power BI files
+
+- **Tableau (`.twb`, `.twbx`):** each Custom SQL query becomes a draft, named
+  after it. Its warnings name the data source, the database and the
+  worksheets that use it. Tableau parameters become saved query parameters,
+  with their current value as the default.
+- **Power BI (`.pbit`, PBIP: `.pbip`, `model.bim`, `.tmdl`):** each table
+  whose Power Query runs SQL becomes a draft: `Value.NativeQuery(…)`, a
+  connector's `Query` option, or `Odbc.Query`. SQL built with `&` from text
+  and parameters is put back together; Power BI parameters become saved
+  query parameters with their value as the default.
+- **Left out lists what has no SQL:** tables loaded without SQL, calculated
+  fields, DAX measures and calculated tables. A `.pbix` is listed with how to
+  export a template, since it stores its model compressed. A file ZLens cannot
+  read is listed instead of failing the import.
+- Upload on the Import SQL page takes these files too; `.twbx`, `.pbit` and
+  `.pbix` go up base64-encoded.
+
 ### Import SQL: run every draft, then certify the ones that pass
 
 - **`zlens import sql` runs each draft once** and says which ones ran

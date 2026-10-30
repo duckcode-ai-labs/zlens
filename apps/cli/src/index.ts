@@ -74,7 +74,7 @@ const HELP = `
     zlens migrate modeling --to dbt-first --dry-run|--apply
                                     Explicitly adopt manifest v3, consolidate
                                     modeling, and relocate legacy shared products
-    zlens import sql <path>         Generate AI import drafts from SQL files/folders
+    zlens import sql <path>         Draft saved queries from SQL, Tableau (.twb, .twbx) or Power BI (.pbit, PBIP) files
     zlens import sql <path> --save  Compatibility alias; drafts autosave before certification
     zlens propose [path]            Draft a ranked governance layer from dbt evidence
                                     (one DRAFT block per high-value model; never
