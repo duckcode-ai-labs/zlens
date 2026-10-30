@@ -1,6 +1,8 @@
 import { clip, expect, openAndRecord } from './support/clip-test';
 
-const SQL = `select l.location_name, count(*) as order_count
+// The comment above the query names the draft.
+const SQL = `-- Orders by store
+select l.location_name, count(*) as order_count
 from dev.orders o
 join dev.locations l on o.location_id = l.location_id
 group by 1
@@ -40,7 +42,7 @@ clip('import-certify', async ({ page, sample, director }) => {
 
   // The receipt: open the certified block in Block Studio.
   await director.click(page.getByRole('button', { name: /^commerce\b/ }).first(), { after: 500 });
-  await director.click(page.getByRole('button', { name: /^Top Locations By Order Count commerce/ }).first(), { after: 600 });
+  await director.click(page.getByRole('button', { name: /^Orders By Store commerce/ }).first(), { after: 600 });
   const receipt = page.getByTestId('block-certification-receipt');
   await expect(receipt).toContainText(/Certified by \w/);
   director.poster();

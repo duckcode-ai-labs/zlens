@@ -237,3 +237,33 @@ describe('runMigrate parameters', () => {
     expect(readFileSync(join(projectRoot, 'blocks', 'orders.dql'), 'utf-8')).toContain('${start_date}');
   });
 });
+
+describe('runMigrate <tool>: say what ZLens reads, and import what it can', () => {
+  it('imports a Tableau workbook with --input, and points looker at the import instead of claiming to convert it', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-migrate-tableau-'));
+    tempDirs.push(root);
+    writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ project: 'demo' }));
+    writeFileSync(join(root, 'sales.twb'), `<workbook><datasources><datasource caption='Orders' name='federated.1'><connection class='federated'><named-connections><named-connection name='postgres.1'><connection class='postgres' /></named-connection></named-connections><relation connection='postgres.1' name='Revenue (Custom SQL)' type='text'>select sum(order_total) as revenue from dev.orders</relation></connection></datasource></datasources></workbook>`);
+    const logs: string[] = [];
+    const log = vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logs.push(args.join(' ')); });
+    const cwd = process.cwd();
+    try {
+      process.chdir(root);
+      await runMigrate('tableau', baseFlags({ input: 'sales.twb', domain: 'finance', preview: false }));
+      expect(JSON.parse(logs.join('\n')).drafts).toHaveLength(1);
+
+      logs.length = 0;
+      await runMigrate('looker', baseFlags());
+      const looker = JSON.parse(logs.join('\n'));
+      expect(looker.status).toBe('not-built');
+      expect(looker.next).toContain('Import them: zlens import sql <folder>');
+
+      logs.length = 0;
+      await runMigrate('powerbi', baseFlags());
+      expect(JSON.parse(logs.join('\n'))).toMatchObject({ status: 'use-import' });
+    } finally {
+      process.chdir(cwd);
+      log.mockRestore();
+    }
+  });
+});

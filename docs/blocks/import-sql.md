@@ -1,9 +1,10 @@
 # Import SQL
 
-Turn SQL you already have into draft saved queries (`.dql` block files). ZLens
-reads the SQL, drafts a
-saved query for each query and runs a preview. You review each draft, save the ones
-you want to keep, and certify the ones that are right.
+Turn SQL you already have into draft saved queries (`.dql` block files): `.sql`
+files and pasted SQL, the Custom SQL in Tableau workbooks, and the native SQL
+in Power BI templates and projects. ZLens drafts a saved query for each query
+and runs a preview. You review the drafts and certify the ones that are right,
+one at a time or all that ran at once.
 
 {{ clip("import-certify") }}
 
@@ -27,9 +28,10 @@ Pick one:
 - **Local path**: a file or folder inside your project.
 
 ZLens reads `.sql` files, Tableau workbooks and Power BI files (see
-[Tableau and Power BI](#tableau-and-power-bi)). A `.sql` file can hold many queries: ZLens splits at `;`,
-at `GO` lines, and where a new statement starts on its own line, so a pasted
-page of reports with only a blank line between them works too. A comment
+[Tableau and Power BI](#tableau-and-power-bi) below). A `.sql` file can hold
+many queries: ZLens splits at `;`, at `GO` lines, and where a new statement
+starts on its own line, so a pasted page of reports with only a blank line
+between them works too. A comment
 right above a query names its draft (`-- Revenue by store`), and so does a
 `-- name:` line.
 
@@ -53,12 +55,6 @@ the drafts lists each one with the reason, and none of them is run. Session
 settings (`SET NOCOUNT ON`, `USE`) and temp-table cleanup are dropped without
 a note. The preview and Certify only ever run one read-only `SELECT` or
 `WITH` query.
-
-Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
-
-ZLens works through **Reading SQL** and **Running previews**, then **Import
-complete**. Nothing is written to your project yet: a draft becomes a saved query
-file only when you click **Save draft** on it.
 
 ### Tableau and Power BI
 
@@ -89,6 +85,14 @@ not covered:
 
 Upload is fine for workbooks without extracts. For a large `.twbx`, point the
 **Local path** at it instead.
+
+### Generate the drafts
+
+Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
+
+ZLens works through **Reading SQL** and **Running previews**, then **Import
+complete**. Nothing is written to your project yet: a draft becomes a saved query
+file only when you click **Save draft** on it, or when it is certified.
 
 ## 3. Review each draft
 
@@ -125,6 +129,19 @@ whole saved query. If ZLens finds a similar certified saved query, the save butt
 **Reuse existing** and is disabled, and there is no **Certify**: use the
 existing saved query instead of saving a copy.
 
+### When a draft needs a fix
+
+A draft whose preview did not run is marked **needs attention**, with the
+reason. The usual ones:
+
+| The draft says | What to do |
+|---|---|
+| `Provide required parameter: start_date` (in the terminal: **Needs a default value**) | The SQL had a report parameter without a value. In **Edit full DQL**, give it one: `params { start_date = "2024-01-01" }`. |
+| A table does not exist (in the terminal: **Reads a table this connection does not have**) | The report ran on another database or schema. Point the table names at this connection's, or connect ZLens to that database. |
+| A syntax error (in the terminal: **Does not parse on this connection**) | The SQL is in another database's dialect, such as SQL Server's `TOP` or `[brackets]` on DuckDB. Rewrite those parts for this connection. |
+| A column error (in the terminal: **Column problem**) | The query itself has a mistake, such as an ambiguous column. It would fail in the old tool too. |
+| A warning that a temp table is changed after it is created | The script builds the table in several steps (`UPDATE`, `DELETE`). Rewrite it as one `SELECT`. |
+
 ## 4. Save the draft
 
 Click **Save draft**. This is when the `.dql` block file and its companion YAML are
@@ -148,11 +165,11 @@ you see **Not certified; the draft is unchanged.** and the reasons. See
 ### Certify all that ran
 
 Under the drafts, **Certify all that ran (N)** runs Certify on every draft
-whose preview ran, one after another. Each draft is still checked on its own
-and gets its own receipt; the ones that fail stay drafts, and a line under
-the button names them with the reason. Drafts that are certified already,
-rejected, or marked **reuse recommended** are not included. Nothing is
-certified until you click it.
+whose preview ran, one after another; you do not have to save each one first.
+Each draft is still checked on its own and gets its own receipt; the ones
+that fail stay drafts, and a line under the button names them with the
+reason. Drafts that are certified already, rejected, or marked **reuse
+recommended** are not included. Nothing is certified until you click it.
 
 ## Where the drafts go
 
@@ -169,6 +186,13 @@ Unlike the Import SQL page, the terminal command saves every draft as it goes.
 
 ```bash
 zlens import sql ./legacy-sql --domain finance --owner you@example.com
+```
+
+The path can be a `.sql` file, a Tableau workbook, a Power BI template or
+project, or a folder holding any of them:
+
+```bash
+zlens import sql ./reports/Sales.pbit --domain finance --owner you@example.com
 ```
 
 It prints one line per query with the draft's path and whether it ran (`ran:
