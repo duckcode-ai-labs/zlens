@@ -67,9 +67,14 @@ The folder can hold any of these, and ZLens picks the first it finds:
 
 Each file becomes a table named after it: `orders.csv` is `orders`, and
 `Daily Sales.parquet` is `daily_sales`. DuckDB reads the files where they
-are, each time a query runs, so a file you replace is read fresh; nothing is
-copied or imported. Files in subfolders, hidden files and tool settings
-(`dql.config.json`, `package.json`) are left out.
+are, each time a query runs: a file you replace is read fresh, a file you add
+becomes a table, and one you remove stops being one; nothing is copied or
+imported. A file DuckDB cannot read (a half-copied Parquet file, say) is left
+out until it changes, and the rest still work. Files in subfolders, hidden
+files, names with `*`, `?`, `[` or `]`, and tool settings (`dql.config.json`,
+`package.json`) are left out; in the project's own folder every `.json` file
+is (put JSON data in `data/`, or use JSON Lines). A folder with only `.json`
+files is not picked up as data.
 
 ```text
   No ZLens project here. Create one? [Y/n]

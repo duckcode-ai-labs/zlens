@@ -65,7 +65,7 @@ describe('nativeInstallContextFor', () => {
     mkdirSync(globalLib, { recursive: true });
     expect(nativeInstallContextFor(join(globalLib, 'node_modules', '@zlens', 'cli', 'node_modules', 'better-sqlite3'))).toEqual({ kind: 'global' });
 
-    expect(nativeInstallContextFor('/Users/a/.npm/_npx/713c2588/node_modules/better-sqlite3')).toEqual({ kind: 'npx' });
+    expect(nativeInstallContextFor(join('/Users/a/.npm', '_npx', '713c2588', 'node_modules', 'better-sqlite3'))).toEqual({ kind: 'npx', key: '713c2588', dir: join('/Users/a/.npm', '_npx', '713c2588') });
   });
 });
 

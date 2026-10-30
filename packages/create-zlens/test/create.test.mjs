@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { chooseFolder, parseCreateArgs, whatIsHere } from '../bin/create-zlens.mjs';
+
+const BIN = join(dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'create-zlens.mjs');
 
 const folder = (files = {}) => {
   const dir = mkdtempSync(join(tmpdir(), 'create-zlens-'));
@@ -51,5 +55,20 @@ test('a folder with data or a project is used where it is', async () => {
     assert.match(asked, /Found the database shop\.duckdb here/);
   } finally {
     for (const dir of [withDb, withProject, withCsv]) rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('npm create zlens@latest <new folder> creates the folder and its project, even inside another project', () => {
+  const parent = folder({ 'dql.config.json': JSON.stringify({ project: 'parent' }) });
+  try {
+    // `--help` after `--` goes to `zlens notebook`, which prints its help instead of starting the workbench.
+    const run = spawnSync(process.execPath, [BIN, 'my-analytics', '--', '--help'], { cwd: parent, encoding: 'utf8', env: { ...process.env, ZLENS_DISABLE_VERSION_CHECK: '1' } });
+    assert.equal(run.status, 0, run.stderr);
+    const config = join(parent, 'my-analytics', 'dql.config.json');
+    assert.ok(existsSync(config), 'the new folder has its own project');
+    assert.equal(JSON.parse(readFileSync(config, 'utf8')).project, 'my-analytics');
+    assert.match(run.stdout, /Created a ZLens project in .*my-analytics/);
+  } finally {
+    rmSync(parent, { recursive: true, force: true });
   }
 });

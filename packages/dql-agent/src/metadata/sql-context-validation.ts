@@ -211,7 +211,8 @@ function physicalRelationsInSql(sql: string): string[] {
  * quoting an inspected relation is that relation. Snowflake, PostgreSQL and
  * BigQuery keep quote-sensitive identities.
  */
-const CASE_INSENSITIVE_RELATION_ENGINES = new Set(['duckdb', 'sqlite', 'mysql', 'mariadb', 'mssql', 'sqlserver', 'fabric', 'trino', 'athena']);
+// `file` is DuckDB reading a folder of data files.
+const CASE_INSENSITIVE_RELATION_ENGINES = new Set(['duckdb', 'file', 'sqlite', 'mysql', 'mariadb', 'mssql', 'sqlserver', 'fabric', 'trino', 'athena']);
 
 /**
  * Compare an executed relation to the inspected binding using the active
@@ -236,7 +237,7 @@ export function executionRelationIdentity(relation: string, dialect?: string): s
  * database.schema.table: an omitted database part can only mean that one.
  * (SQLite is not one: its first name part is an attached database.)
  */
-const SINGLE_DATABASE_ENGINES = new Set(['duckdb']);
+const SINGLE_DATABASE_ENGINES = new Set(['duckdb', 'file']);
 
 /**
  * Whether a relation a statement reads is one this request inspected: the

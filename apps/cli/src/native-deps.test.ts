@@ -65,8 +65,12 @@ describe('better-sqlite3 preflight (npm 12 blocked install script)', () => {
 
   it('from the npx cache, says the exact command to run again with the script allowed', () => {
     const message = betterSqlite3Help(BINDINGS_ERROR, '/Users/a/.npm/_npx/713c2588/node_modules/better-sqlite3');
-    expect(message).toContain('npx installed ZLens without running the script. Run it again with the script allowed:');
-    expect(message).toMatch(/\n {2}npx --allow-scripts=better-sqlite3 zlens/);
+    // npx reuses the copy it installed: the message clears it before running again (npm 12 here, see beforeEach).
+    expect(message).toContain('npx installed ZLens without running the script, and keeps that copy. Clear it, then run it again with the script allowed:');
+    expect(message).toMatch(/\n {2}npm cache npx rm 713c2588\n {2}npx --allow-scripts=better-sqlite3 zlens/);
+    // npm 10 has no `npm cache npx`: delete the cached copy's folder.
+    vi.stubEnv('npm_config_user_agent', 'npm/10.9.3 node/v22.18.0 darwin arm64 workspaces/false');
+    expect(betterSqlite3Help(BINDINGS_ERROR, '/Users/a/.npm/_npx/713c2588/node_modules/better-sqlite3')).toContain('  rm -rf /Users/a/.npm/_npx/713c2588\n');
     expect(npxRerunCommand(['node', '/x/_npx/1/node_modules/.bin/zlens', 'notebook', 'my data', '--yes'], {})).toBe("npx --allow-scripts=better-sqlite3 zlens notebook 'my data' --yes");
     // npm create zlens: its folder first, then its options after --.
     expect(npxRerunCommand([], { ZLENS_CREATE_ARGS: JSON.stringify(['./shop', '--port', '4000']) })).toBe('npm create zlens@latest --allow-scripts=better-sqlite3 ./shop -- --port 4000');

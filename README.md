@@ -84,6 +84,11 @@ own tab: the certified saved queries, the Jaffle Growth Review App, lineage and
 notebooks. Nothing opened? Click **Ports**, then the globe next to **ZLens (3474)**. It uses your GitHub account's free Codespaces hours;
 stop it at [github.com/codespaces](https://github.com/codespaces) when you're done.
 
+No dbt? The same in one click on the database-only sample, the Jaffle Shop as
+a plain DuckDB file:
+
+[![Open the database-only sample in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/duckcode-ai/jaffle-shop-warehouse?quickstart=1)
+
 **With Docker:**
 
 ```bash

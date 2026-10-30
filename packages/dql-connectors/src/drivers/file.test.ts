@@ -1,8 +1,10 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { createConnectionConfigKey } from '../connection-pool.js';
 import { dataFolderTables, dataFolderViewStatements, isDataFile } from '../data-folder.js';
+import { DuckDBConnector } from './duckdb.js';
 import { readEnv } from '../env.js';
 import { FileConnector } from './file.js';
 
@@ -49,6 +51,21 @@ describe('a data folder read as a database', () => {
     expect(dataFolderTables(join(folder, 'missing'))).toEqual([]);
   });
 
+  it('leaves out names DuckDB reads as a pattern, and settings in a project folder', () => {
+    expect(isDataFile('sales[1].csv')).toBe(false);
+    expect(isDataFile('sales*.csv')).toBe(false);
+    expect(isDataFile('dql-manifest.json')).toBe(false);
+    const project = dataFolder({ 'dql.config.json': '{}', 'renovate.json': '{}', 'events.jsonl': '{}\n', 'orders.csv': 'id\n1\n' });
+    expect(dataFolderTables(project).map((table) => table.name)).toEqual(['events', 'orders']);
+    const data = dataFolder({ 'config.json': '[]', 'orders.csv': 'id\n1\n' });
+    expect(dataFolderTables(data).map((table) => table.name)).toEqual(['config', 'orders']);
+  });
+
+  it('keeps a connection per folder: two data folders never share one', () => {
+    expect(createConnectionConfigKey({ driver: 'file', filepath: ':memory:', dataFolder: '/a' }))
+      .not.toBe(createConnectionConfigKey({ driver: 'file', filepath: ':memory:', dataFolder: '/b' }));
+  });
+
   it('gives a second file with the same name its format as a suffix', () => {
     const folder = dataFolder({ 'orders.csv': 'id\n1\n', 'orders.parquet': '' });
     expect(dataFolderTables(folder).map((table) => table.name)).toEqual(['orders', 'orders_parquet']);
@@ -85,6 +102,53 @@ describe('a data folder read as a database', () => {
       expect((await connector.execute('SELECT COUNT(*) AS n FROM orders')).rows).toEqual([{ n: 2 }]);
     } finally {
       await connector.disconnect();
+    }
+  });
+
+  duckDbIt('a file DuckDB cannot read gets no table; the others work, and it is tried again once it changes', async () => {
+    const folder = dataFolder({ 'orders.csv': 'id\n1\n2\n', 'broken.parquet': 'not parquet' });
+    const connector = new FileConnector();
+    await connector.connect({ driver: 'file', dataFolder: folder, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    try {
+      expect((await connector.execute('SELECT COUNT(*) AS n FROM orders')).rows).toEqual([{ n: 2 }]);
+      expect((await connector.listTables()).map((table) => table.name)).toEqual(['orders']);
+      // Replaced by a real file: now it is a table.
+      rmSync(join(folder, 'broken.parquet'));
+      await connector.execute(`COPY (SELECT 7 AS v) TO '${join(folder, 'broken.parquet')}' (FORMAT parquet)`);
+      utimesSync(join(folder, 'broken.parquet'), new Date(), new Date(Date.now() + 5000));
+      expect((await connector.execute('SELECT v FROM broken')).rows).toEqual([{ v: 7 }]);
+    } finally {
+      await connector.disconnect();
+    }
+  });
+
+  duckDbIt('follows the folder: a file added while connected becomes a table, a removed one stops being one', async () => {
+    const folder = dataFolder({ 'orders.csv': 'id\n1\n' });
+    const connector = new FileConnector();
+    await connector.connect({ driver: 'file', dataFolder: folder, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    try {
+      writeFileSync(join(folder, 'customers.csv'), 'id,name\n1,Ada\n');
+      expect((await connector.execute('SELECT name FROM customers')).rows).toEqual([{ name: 'Ada' }]);
+      rmSync(join(folder, 'orders.csv'));
+      expect((await connector.listTables()).map((table) => table.name)).toEqual(['customers']);
+    } finally {
+      await connector.disconnect();
+    }
+  });
+
+  duckDbIt('with a real DuckDB file, the views are temporary and never written into it', async () => {
+    const folder = dataFolder({ 'orders.csv': 'id\n1\n' });
+    const database = join(folder, 'own.duckdb');
+    const connector = new FileConnector();
+    await connector.connect({ driver: 'file', filepath: database, dataFolder: folder, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    expect((await connector.execute('SELECT COUNT(*) AS n FROM orders')).rows).toEqual([{ n: 1 }]);
+    await connector.disconnect();
+    const plain = new DuckDBConnector();
+    await plain.connect({ driver: 'duckdb', filepath: database, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    try {
+      expect((await plain.execute("SELECT COUNT(*) AS n FROM duckdb_views() WHERE NOT internal AND view_name = 'orders'")).rows).toEqual([{ n: 0 }]);
+    } finally {
+      await plain.disconnect();
     }
   });
 });

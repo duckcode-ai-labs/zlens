@@ -51,11 +51,14 @@ export function probeBetterSqlite3(req: NodeRequire = cliRequire): BetterSqlite3
 
 function contextFor(packageDir: string | undefined): NativeInstallContext {
   const context = packageDir ? nativeInstallContextFor(packageDir) : { kind: 'project' as const, dir: process.cwd() };
-  return context.kind === 'npx' ? { kind: 'npx', rerun: npxRerunCommand() } : context;
+  return context.kind === 'npx' ? { ...context, rerun: npxRerunCommand() } : context;
 }
 
-/** A shell word as typed: quoted only when a shell would split or expand it. */
-const shellWord = (word: string) => (/^[\w./=:@,+-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
+/** A shell word as typed: quoted only when a shell would split or expand it (double quotes on Windows). */
+const shellWord = (word: string) => {
+  if (process.platform === 'win32') return /^[\w.\\/=:@,+-]+$/.test(word) ? word : `"${word.replace(/"/g, '""')}"`;
+  return /^[\w./=:@,+-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`;
+};
 
 /**
  * The command that ran ZLens from the npx cache, again, with better-sqlite3's

@@ -2277,7 +2277,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // overlaps. Draft blocks are never shown; the answer stays review-required.
       const draftBlocks = certifiedBlocksForDraft(current.entries, `${question} ${intent?.reading ?? ''}`, relations);
       const blockLines = draftBlocks
-        .map((entry) => `- certified block ${entry.label ?? entry.name} (how the team joins these tables and defines its measures, for a report near this question: reuse its joins and definitions where the question overlaps it; which rows to keep, the grouping and the output come from the question, not the block; write the SQL for ${connection?.driver ?? 'duckdb'} even where the block's syntax differs)${entry.description ? `: ${entry.description.replace(/\s+/g, ' ').slice(0, 300)}` : ''}. Its certified SQL: ${entry.sql!.replace(/\s+/g, ' ').slice(0, 1500)}`);
+        .map((entry) => `- certified block ${entry.label ?? entry.name} (how the team joins these tables and defines its measures, for a report near this question: reuse its joins and definitions where the question overlaps it; which rows to keep, the grouping and the output come from the question, not the block; write the SQL for ${connection?.driver === 'file' ? 'duckdb' : connection?.driver ?? 'duckdb'} even where the block's syntax differs)${entry.description ? `: ${entry.description.replace(/\s+/g, ' ').slice(0, 300)}` : ''}. Its certified SQL: ${entry.sql!.replace(/\s+/g, ' ').slice(0, 1500)}`);
       // THE PROJECT'S WRITTEN RULES: the skills selected for this request whose
       // text shares the most words with the question and the chosen tables,
       // long enough to carry a definition (the reading step sees a short card).
@@ -3278,7 +3278,7 @@ export function connectionKey(connection: ConnectionConfig): string {
   const fields: Array<[string, unknown]> = [
     ['driver', connection.driver], ['account', connection.account], ['host', connection.host], ['port', connection.port],
     ['database', connection.database ?? connection.catalog], ['schema', connection.schema], ['warehouse', connection.warehouse], ['role', connection.role],
-    ['user', connection.username ?? candidate.user], ['filepath', connection.filepath], ['project', connection.projectId],
+    ['user', connection.username ?? candidate.user], ['filepath', connection.filepath], ['dataFolder', connection.dataFolder], ['project', connection.projectId],
     ['runtimeGeneration', candidate.runtimeGeneration ?? candidate.runtime_generation ?? candidate.generationId],
     ['currentDatabase', candidate.currentDatabase], ['currentSchema', candidate.currentSchema],
   ];

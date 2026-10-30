@@ -100,6 +100,8 @@ export function connectionReference(connection: ConnectionConfig): string {
     role: connection.role,
     warehouse: connection.warehouse,
     filepath: connection.filepath,
+    // A file connection's folder of data files is its database; absent elsewhere, so other references keep their value.
+    ...(connection.dataFolder ? { dataFolder: connection.dataFolder } : {}),
     projectId: connection.projectId,
     httpPath: connection.httpPath,
   }).slice(0, 24)}`;
@@ -110,7 +112,9 @@ function configuredWarehouseContext(connection: ConnectionConfig): WarehouseTarg
   // redacted stable marker for the configured local database so target A and
   // target B cannot collapse into one empty-context fingerprint. The marker
   // is a one-way digest, never a filesystem path exposed to a receipt/UI.
-  const localDatabase = (connection.driver === 'duckdb' || connection.driver === 'file')
+  const localDatabase = connection.driver === 'file' && connection.dataFolder && (!connection.filepath || connection.filepath === ':memory:')
+    ? connection.dataFolder
+    : (connection.driver === 'duckdb' || connection.driver === 'file')
     ? connection.filepath
     : connection.driver === 'sqlite'
       ? connection.database

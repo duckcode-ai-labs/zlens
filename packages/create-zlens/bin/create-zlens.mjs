@@ -5,8 +5,8 @@
 // SQLite file, or a folder of CSV, Parquet or JSON files is picked up) and
 // opens it. With no folder, it uses the current folder when that already
 // holds a project or data, else asks for a new folder's name.
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 const DEFAULT_FOLDER = 'my-analytics';
@@ -29,12 +29,14 @@ const HELP = `
 
 /** The folder argument and the options passed through to `zlens notebook`. */
 export function parseCreateArgs(argv) {
-  const rest = argv.filter((arg) => arg !== '--');
-  if (rest.some((arg) => arg === '--help' || arg === '-h')) return { help: true, folder: null, passThrough: [] };
-  const index = rest.findIndex((arg) => !arg.startsWith('-'));
+  // npm passes what follows its own `--` without it; run directly, `--` ends this command's options.
+  const separator = argv.indexOf('--');
+  const own = separator < 0 ? argv : argv.slice(0, separator);
+  const after = separator < 0 ? [] : argv.slice(separator + 1);
+  if (own.some((arg) => arg === '--help' || arg === '-h')) return { help: true, folder: null, passThrough: [] };
   // An option's value (`--port 4000`) is not the folder: only a first word counts.
-  const folder = index === 0 ? rest[0] : null;
-  return { help: false, folder, passThrough: folder ? rest.slice(1) : rest };
+  const folder = own[0] && !own[0].startsWith('-') ? own[0] : null;
+  return { help: false, folder, passThrough: [...own.slice(folder ? 1 : 0), ...after] };
 }
 
 /** A project or data the CLI would pick up in `dir`, in plain words, or null. */
@@ -58,6 +60,20 @@ export async function chooseFolder({ cwd, interactive, ask }) {
   return answer || fallback;
 }
 
+/**
+ * Create the project in `folder` when it has none of its own, so the
+ * workbench opens it and not a project in a folder above it. Running
+ * `npm create zlens` is the consent; `zlens notebook` alone still asks.
+ */
+export async function createProjectIn(folder) {
+  const target = resolve(folder);
+  if (existsSync(join(target, 'dql.config.json'))) return false;
+  mkdirSync(target, { recursive: true });
+  const { runInit } = await import('@zlens/cli/dist/commands/init.js');
+  await runInit(target, { format: 'text', force: false, open: false }, { output: 'summary' });
+  return existsSync(join(target, 'dql.config.json'));
+}
+
 async function askInTerminal(question) {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   try {
@@ -74,12 +90,22 @@ async function main() {
     return;
   }
   const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY);
-  const folder = given ?? await chooseFolder({ cwd: process.cwd(), interactive, ask: askInTerminal });
+  let folder;
+  try {
+    folder = given ?? await chooseFolder({ cwd: process.cwd(), interactive, ask: askInTerminal });
+  } catch (error) {
+    // Ctrl+C or Ctrl+D at the question: stop, having made nothing.
+    if (error?.name !== 'AbortError') throw error;
+    console.log('\n  Nothing was created.');
+    process.exitCode = 130;
+    return;
+  }
   // Exactly what `zlens notebook <folder> --yes` does, in this process so the
   // terminal (Ctrl+C, the browser prompt) stays the same. A repair message
   // (npm 12 blocking an install script) says to run `npm create zlens` again
   // with these arguments.
   process.env.ZLENS_CREATE_ARGS = JSON.stringify([folder, ...passThrough]);
+  await createProjectIn(folder);
   process.argv = [process.argv[0], process.argv[1], 'notebook', folder, '--yes', ...passThrough];
   await import('@zlens/cli/dist/index.js');
 }

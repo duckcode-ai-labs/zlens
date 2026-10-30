@@ -26,13 +26,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   has a **Local files** form for it.
 - **A SQLite file is picked up** (`.sqlite`, `.sqlite3`, or a `.db` file
   SQLite wrote), opened read-only. A `.db` file DuckDB wrote is read as DuckDB.
+- **The tables follow the folder**: a file added while ZLens runs becomes a
+  table, a removed one stops being one, and a file DuckDB cannot read is left
+  out (tried again once it changes) instead of breaking the connection. Ask,
+  the row limit and receipts treat a `file` connection as the DuckDB it is,
+  and two data folders never share one connection.
 - **Fixed: a `file` connection never got its DuckDB driver.** Start-up
   treated the file driver as built in, so the first query failed until the
   driver was installed by hand. It now installs the DuckDB driver, as a
   DuckDB connection does.
 - **On npm 12, the message for a blocked install script under `npx` or `npm
-  create` gives the exact command to run again**, with
-  `--allow-scripts=better-sqlite3`.
+  create` gives the exact commands**: clear npx's cached copy (`npm cache npx
+  rm <key>`), then run it again with `--allow-scripts=better-sqlite3`.
 
 ### Import SQL no longer runs statements that write
 

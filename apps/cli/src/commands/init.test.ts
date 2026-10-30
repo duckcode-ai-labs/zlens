@@ -311,6 +311,11 @@ describe('runInit', () => {
     writeFileSync(join(dbt, 'dbt_project.yml'), 'name: shop\n');
     writeFileSync(join(dbt, 'seed.csv'), 'a\n1\n');
     expect(detectFolderContents(dbt)).toMatchObject({ isDbt: true, dataFolder: null });
+    // A tool's settings at the top of a folder are not data.
+    const settings = mkdtempSync(join(tmpdir(), 'dql-init-settings-'));
+    writeFileSync(join(settings, 'renovate.json'), '{}');
+    writeFileSync(join(settings, 'vercel.json'), '{}');
+    expect(detectFolderContents(settings).dataFolder).toBeNull();
   });
 
   it('leaves an empty folder undecided for Guided Setup and never suggests a flag', async () => {

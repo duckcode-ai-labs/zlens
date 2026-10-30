@@ -192,13 +192,19 @@ npm --prefix .dql/connectors install @duckdb/node-api --include=optional
 ```
 
 **`npx zlens` and `npm create zlens`.** They install into npm's cache, which
-has no `package.json` of yours either. If ZLens says npx installed it without
-running the script, run the command again with the flag; ZLens prints it:
+has no `package.json` of yours either, and npx reuses what it installed. If
+ZLens says npx installed it without running the script, clear that copy and
+run the command again with the flag. ZLens prints both commands, with the
+copy's key:
 
 ```bash
+npm cache npx rm <key>
 npx --allow-scripts=better-sqlite3 zlens notebook ./my-data
-npm create zlens@latest --allow-scripts=better-sqlite3
 ```
+
+Pass the flag the first time to skip this:
+`npx --allow-scripts=better-sqlite3 zlens …` or
+`npm create zlens@latest --allow-scripts=better-sqlite3`.
 
 **A global install.** `npm install -g` has no `package.json` to allow scripts
 in, so pass the flag (or set it once with

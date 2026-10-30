@@ -1019,6 +1019,9 @@ describe('the frozen-SQL check and the drafted-SQL check read inspected relation
     expect(inspectedRelationMatches('main.claim', schema('acme_insurance.main.claim', 'acme_insurance.main.policy'), 'duckdb')).toBe(true);
     expect(inspectedRelationMatches('main.claim', schema('"acme_insurance"."main"."claim"', '"acme_insurance"."main"."policy"'), 'duckdb')).toBe(true);
     expect(inspectedRelationMatches('"acme_insurance"."main"."claim"', schema('acme_insurance.main.claim'), 'duckdb')).toBe(true);
+    // A file connection is DuckDB over a folder of data files: its tables match the same way.
+    expect(inspectedRelationMatches('main.orders', schema('memory.main.orders'), 'file')).toBe(true);
+    expect(inspectedRelationMatches('"memory"."main"."orders"', schema('memory.main.orders'), 'file')).toBe(true);
   });
   it('stays exact elsewhere: another engine, an ambiguous tail, another database, a table never inspected', () => {
     expect(inspectedRelationMatches('main.claim', schema('acme_insurance.main.claim'), 'snowflake')).toBe(false);

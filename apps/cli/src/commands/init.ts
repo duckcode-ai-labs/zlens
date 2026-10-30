@@ -298,11 +298,15 @@ function detectSQLiteFile(dir: string): string | null {
   return entries.find((entry) => /\.(?:sqlite3?|db)$/i.test(entry) && fileHeader(join(dir, entry), 16).toString('latin1') === SQLITE_HEADER) ?? null;
 }
 
-/** CSV, TSV, Parquet or JSON files in the folder itself, else in its `data/` folder. */
+/**
+ * CSV, TSV, Parquet or JSON files in the folder itself, else in its `data/`
+ * folder. JSON files alone do not count: at a folder's top they are more often
+ * a tool's settings (renovate.json, vercel.json) than data.
+ */
 function detectDataFolder(dir: string): { path: string; files: string[] } | null {
   for (const path of ['.', 'data']) {
     const files = dataFolderTables(join(dir, path)).map((table) => table.file.split(/[\\/]/).pop() ?? table.file);
-    if (files.length) return { path, files };
+    if (files.some((file) => !/\.json$/i.test(file))) return { path, files };
   }
   return null;
 }

@@ -40030,7 +40030,7 @@ export function clampAnalyticalRowBound(rowLimit: number, ceiling = 10_000): num
  * is the guarantee, and appending is only an optimization.
  */
 const TRAILING_LIMIT_DIALECTS = new Set([
-  'duckdb', 'postgres', 'postgresql', 'redshift', 'snowflake', 'bigquery',
+  'duckdb', 'file', 'postgres', 'postgresql', 'redshift', 'snowflake', 'bigquery',
   'databricks', 'trino', 'presto', 'clickhouse', 'mysql', 'mariadb', 'sqlite', 'athena',
 ]);
 
