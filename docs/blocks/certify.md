@@ -56,7 +56,8 @@ write the same receipt:
 
 | Where | Action | Receipt says |
 |---|---|---|
-| [Import SQL](import-sql.md) | **Certify** on a saved draft | `via: sql-import` |
+| [Import SQL](import-sql.md) | **Certify** on a saved draft, or **Certify all that ran** for every draft whose preview ran | `via: sql-import` |
+| Terminal, after `zlens import sql` | `zlens certify --from-import --apply`: each draft of the import that passes | `via: sql-import` |
 | App Studio, data checked from a table (or a saved query made row-level) | **I vouch for this — certify**, at publish or under **⋯ → Certify…** | `via: app-dataset` |
 | App Studio, a saved query | **Certify now** in the publish dialog, or **⋯ → Certify…**: a short review (it runs, its tests, who owns it, what one row is), then **I vouch for this — certify** | `via: app-dataset` |
 | Terminal | `zlens certify --from-draft <path>` | `via: cli` |

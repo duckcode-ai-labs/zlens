@@ -14,10 +14,11 @@ SQL scripts starts with the SQL behind your reports.
 2. Import them:
 
     ```bash
-    zlens import sql ./legacy-sql --domain finance --owner you@example.com
+    zlens import sql ./reports --domain finance --owner you@example.com
     ```
 
-    `zlens migrate raw-sql --input ./legacy-sql` does the same thing.
+    `zlens migrate raw-sql --input ./reports` does the same thing, and so do
+    `zlens migrate tableau --input` and `zlens migrate powerbi --input`.
 
     It runs each draft once and lists the ones that need a fix, by kind.
 
@@ -41,10 +42,14 @@ runs Certify.
 
 ## What `zlens migrate <tool>` does today
 
-`zlens migrate looker`, `metabase`, `tableau` and `dbt` do not read your
-exports. They print the approach for that tool and an example of the block
-it would produce. Use the import above for real content: it reads Tableau
-workbooks and Power BI files directly.
+`zlens migrate tableau --input <path>` and `zlens migrate powerbi --input
+<path>` run the import above. Without `--input` they print the command to
+use.
+
+`zlens migrate looker`, `metabase` and `dbt` do not read anything yet: they
+print what a migration would involve and an example saved query. For Looker
+and Metabase, export the SQL behind your reports into `.sql` files and import
+those; for dbt, see `zlens propose` in the [CLI reference](../reference/cli.md).
 
 ## Check the result
 

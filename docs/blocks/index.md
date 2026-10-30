@@ -12,7 +12,7 @@ from saved queries.
 
 | Start from | How |
 |---|---|
-| Existing SQL files or pasted SQL | [Import SQL](import-sql.md) |
+| Existing SQL: `.sql` files, pasted SQL, Tableau workbooks or Power BI files | [Import SQL](import-sql.md) |
 | A notebook cell | **Save as saved query** on the cell. See [Notebooks](../notebooks/index.md#save-a-cell-as-a-saved-query). |
 | An Ask answer you want to keep | **Save as saved query** on the answer, or the review draft Ask saves for you. See [Answers that need review](../ask/needs-review.md). |
 | Nothing yet | **New saved query** in [Saved queries](block-studio.md) |

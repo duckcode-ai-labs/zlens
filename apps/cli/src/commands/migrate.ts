@@ -18,7 +18,7 @@ import type { CLIFlags } from '../args.js';
 import { findProjectRoot } from '../local-runtime.js';
 import { runImport } from './import.js';
 
-export type MigrationSource = 'looker' | 'tableau' | 'dbt' | 'metabase' | 'raw-sql';
+export type MigrationSource = 'looker' | 'tableau' | 'powerbi' | 'dbt' | 'metabase' | 'raw-sql';
 
 export interface MigrationResult {
   source: MigrationSource;
@@ -88,7 +88,7 @@ export async function runMigrate(file: string, flags: CLIFlags): Promise<void> {
   }
   // file is used as the source type for migration
   const source = file as MigrationSource;
-  const validSources: MigrationSource[] = ['looker', 'tableau', 'dbt', 'metabase', 'raw-sql'];
+  const validSources: MigrationSource[] = ['looker', 'tableau', 'powerbi', 'dbt', 'metabase', 'raw-sql'];
 
   if (!validSources.includes(source)) {
     console.error(`\n  ✗ Unknown migration source: "${source}"`);
@@ -102,24 +102,30 @@ export async function runMigrate(file: string, flags: CLIFlags): Promise<void> {
     process.exit(1);
   }
 
-  if (source === 'raw-sql' && flags.input) {
+  // SQL files, Tableau workbooks and Power BI files are read by the import.
+  const imported = source === 'raw-sql' || source === 'tableau' || source === 'powerbi';
+  if (imported && flags.input) {
     await runImport('sql', [flags.input], flags);
     return;
   }
 
+  const guidance = MIGRATION_GUIDANCE[source];
   if (flags.format === 'json') {
     console.log(JSON.stringify({
       source,
-      status: 'scaffold',
-      message: `Migration from ${source} is scaffold-only in the OSS CLI. Use the generated block as a starting point.`,
-      exampleBlock: generateBlockDQL({
-        name: `migrated-from-${source}`,
-        domain: 'migrated',
-        description: `Auto-migrated from ${source}`,
-        sql: 'SELECT dimension, SUM(measure) AS measure\nFROM source_table\nGROUP BY dimension',
-        owner: 'migration-bot',
-        tags: ['migrated', source],
-        chart: 'bar',
+      status: imported ? 'use-import' : 'not-built',
+      reads: guidance.reads,
+      next: guidance.next,
+      ...(imported ? {} : {
+        exampleBlock: generateBlockDQL({
+          name: `migrated-from-${source}`,
+          domain: 'migrated',
+          description: `Migrated from ${source}`,
+          sql: 'SELECT dimension, SUM(measure) AS measure\nFROM source_table\nGROUP BY dimension',
+          owner: 'migration-bot',
+          tags: ['migrated', source],
+          chart: 'bar',
+        }),
       }),
     }, null, 2));
     return;
@@ -127,58 +133,60 @@ export async function runMigrate(file: string, flags: CLIFlags): Promise<void> {
 
   console.log(`\n  ZLens Migration: ${source}`);
   console.log('  ─────────────────────────────');
-
-  switch (source) {
-    case 'looker':
-      console.log('  Source: LookML explores + measures + dimensions');
-      console.log('  Method: Parse LookML → generate DQL blocks + semantic layer YAML');
-      console.log('  Coverage: ~80% automated');
-      break;
-    case 'tableau':
-      console.log('  Source: Workbook calculations + dashboard structure');
-      console.log('  Method: Extract via REST API → generate DQL blocks per sheet');
-      console.log('  Coverage: Semi-automated');
-      break;
-    case 'dbt': {
-      const dbtDir = flags.input || '.';
-      console.log(`  Source: dbt project at "${dbtDir}"`);
-      console.log('  Method: Inspect models and metrics, then scaffold DQL blocks and semantic layer files manually.');
-      console.log('  Coverage: Planning-only in OSS V1');
-      break;
-    }
-    case 'metabase':
-      console.log('  Source: Saved questions + dashboard cards');
-      console.log('  Method: Export via API → generate DQL blocks per question');
-      console.log('  Coverage: ~85% automated');
-      break;
-    case 'raw-sql':
-      console.log('  Source: Ad-hoc SQL scripts');
-      console.log('  Method: AI wraps in DQL block structure + adds metadata');
-      console.log('  Coverage: AI-assisted');
-      break;
-  }
-
-  console.log('\n  Example generated block:');
-  console.log('  ───');
-  const example = generateBlockDQL({
-    name: `migrated-from-${source}`,
-    domain: 'migrated',
-    description: `Auto-migrated from ${source}`,
-    sql: 'SELECT dimension, SUM(measure) AS measure\nFROM source_table\nGROUP BY dimension',
-    owner: 'migration-bot',
-    tags: ['migrated', source],
-    chart: 'bar',
-  });
-  console.log(example.split('\n').map((l) => `    ${l}`).join('\n'));
-
+  console.log(`  ${guidance.reads}`);
+  console.log('');
   console.log('  Next steps:');
-  console.log(`    1. Provide source files: zlens migrate ${source} --input <path>`);
-  console.log('    2. Review generated blocks in blocks/migrated/');
-  console.log('    3. Run: zlens validate blocks/migrated/example.dql');
-  console.log('    4. Run: zlens certify blocks/migrated/example.dql --connection <driver>');
-  console.log('    4. Commit and push for certification');
+  guidance.next.forEach((step, index) => console.log(`    ${index + 1}. ${step}`));
   console.log('');
 }
+
+/** What each `zlens migrate <tool>` can read today, and what to run. */
+const MIGRATION_GUIDANCE: Record<MigrationSource, { reads: string; next: string[] }> = {
+  'raw-sql': {
+    reads: 'Reads .sql files: one or many queries per file, scripts with temp tables, and report parameters.',
+    next: [
+      'Import them: zlens migrate raw-sql --input <file or folder> (the same as zlens import sql <path>)',
+      'Certify the drafts that pass: zlens certify --from-import --apply',
+    ],
+  },
+  tableau: {
+    reads: 'Reads the Custom SQL in Tableau workbooks (.twb, .twbx), with their parameters. Calculated fields are listed, not converted.',
+    next: [
+      'Import them: zlens migrate tableau --input <workbook or folder> (the same as zlens import sql <path>)',
+      'Certify the drafts that pass: zlens certify --from-import --apply',
+      'Rebuild the calculated fields your reports need as metrics.',
+    ],
+  },
+  powerbi: {
+    reads: 'Reads the native SQL in Power BI templates (.pbit) and projects (PBIP), with their parameters. DAX measures are listed, not converted; export a .pbix as a template first.',
+    next: [
+      'Import them: zlens migrate powerbi --input <.pbit, project folder or folder> (the same as zlens import sql <path>)',
+      'Certify the drafts that pass: zlens certify --from-import --apply',
+      'Rebuild the DAX measures your reports need as metrics.',
+    ],
+  },
+  looker: {
+    reads: 'Not built yet: ZLens does not read LookML.',
+    next: [
+      'Export the SQL behind the Looks and explores you keep into .sql files.',
+      'Import them: zlens import sql <folder>',
+      'Rebuild LookML measures and dimensions as metrics in the semantic layer.',
+    ],
+  },
+  metabase: {
+    reads: 'Not built yet: ZLens does not read Metabase exports.',
+    next: [
+      'Copy the SQL of the questions you keep into .sql files; {{variables}} become saved query parameters.',
+      'Import them: zlens import sql <folder>',
+    ],
+  },
+  dbt: {
+    reads: 'ZLens reads your dbt project directly; there is nothing to migrate.',
+    next: [
+      'Point dql.config.json at the dbt project, then draft saved queries from your models: zlens propose',
+    ],
+  },
+};
 
 type ModelingMigrationIssueCode =
   | 'DBT_MANIFEST_MISSING'

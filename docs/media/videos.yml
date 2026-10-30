@@ -71,7 +71,7 @@ videos:
   nb6-keep-it: {playlist: notebooks, youtube: jjEvoH7O6kU, length: "1:04", title: "Is this worth keeping? Save it for review", docs: notebooks/index.md, note: "Recorded on 0.2.2: Save Block is now Save as saved query."}
 
   bk1-why-blocks: {playlist: blocks, youtube: 1EglFCmPqH4, length: "0:57", title: "Why certified saved queries", docs: blocks/index.md, note: "Recorded on 0.2.2: Blocks are now Saved queries, and Apps say All tiles certified."}
-  bk2-import-sql: {playlist: blocks, youtube: _e5dvgSE7rA, length: "0:59", title: "Import your SQL", docs: blocks/import-sql.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
+  bk2-import-sql: {playlist: blocks, youtube: _e5dvgSE7rA, length: "0:59", title: "Import your SQL", docs: blocks/import-sql.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app, and Import SQL now also reads Tableau and Power BI files, lists what it leaves out, and has Certify all that ran."}
   bk3-block-studio: {playlist: blocks, youtube: tTciKShDo1I, length: "0:55", title: "Inside the saved query editor", docs: blocks/block-studio.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
   bk4-tests: {playlist: blocks, youtube: HaO0iHQXvbc, length: "0:52", title: "Tests, the promises your data keeps", docs: blocks/certify.md, note: "Recorded on 0.2.2: messages now say \"saved query\" instead of \"block\"."}
   bk5-certify: {playlist: blocks, youtube: RuntC3P2EYg, length: "1:00", title: "Certify, change, retire", docs: blocks/certify.md, note: "Recorded on 0.2.2: messages now say \"saved query\" instead of \"block\"."}

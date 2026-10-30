@@ -51,6 +51,15 @@ Those are BI tools — queries live in a database or cloud service. ZLens keeps
 every artifact in git. You get code review, diff, branching, and blame on
 your analytics. See [Migrate from other tools](./migrate.md).
 
+## Can I bring my Tableau or Power BI reports?
+
+Their SQL, yes. `zlens import sql` (or **Import SQL** in the workbench) reads
+the Custom SQL in Tableau workbooks (`.twb`, `.twbx`) and the native SQL in
+Power BI templates (`.pbit`) and projects (PBIP), with their parameters, and
+drafts a saved query for each. Calculated fields, DAX measures and tables
+loaded without SQL are listed as left out: rebuild the ones you need as
+metrics. See [Import SQL](../blocks/import-sql.md#tableau-and-power-bi).
+
 ## What's the difference between `custom` and `semantic` saved queries?
 
 - **`type = "custom"`** — the saved query's SQL executes directly against a connection
