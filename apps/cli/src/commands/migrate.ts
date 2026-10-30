@@ -17,6 +17,7 @@ import {
 import type { CLIFlags } from '../args.js';
 import { findProjectRoot } from '../local-runtime.js';
 import { runImport } from './import.js';
+import { assessMigrationFolder, DEFAULT_ASSESSMENT_FILE, isAssessableInput, migrationAssessmentMarkdown, migrationAssessmentSummary } from '../migrate-assess.js';
 
 export type MigrationSource = 'looker' | 'tableau' | 'powerbi' | 'dbt' | 'metabase' | 'raw-sql';
 
@@ -65,7 +66,11 @@ function generateBlockDQL(opts: {
 `;
 }
 
-export async function runMigrate(file: string, flags: CLIFlags): Promise<void> {
+export async function runMigrate(file: string, flags: CLIFlags, rest: string[] = []): Promise<void> {
+  if (file === 'assess') {
+    await runMigrateAssess(rest[0] || flags.input, flags);
+    return;
+  }
   if (file === 'format') {
     await runFormatMigrate(flags.input || '.', flags);
     return;
@@ -93,6 +98,7 @@ export async function runMigrate(file: string, flags: CLIFlags): Promise<void> {
   if (!validSources.includes(source)) {
     console.error(`\n  ✗ Unknown migration source: "${source}"`);
     console.error(`    Valid sources: ${validSources.join(', ')}`);
+    console.error(`    Or: "assess <folder>" to see what moves from a folder of Tableau, Power BI and SQL files`);
     console.error(`    Or: "format" to upgrade .dql/.dqlnb files to the canonical on-disk format`);
     console.error(`    Or: "layout --to domain-first --dry-run" to preview enterprise domain layout moves`);
     console.error(`    Or: "parameters --check" to audit legacy block parameter contracts`);
@@ -138,6 +144,36 @@ export async function runMigrate(file: string, flags: CLIFlags): Promise<void> {
   console.log('  Next steps:');
   guidance.next.forEach((step, index) => console.log(`    ${index + 1}. ${step}`));
   console.log('');
+}
+
+/**
+ * `zlens migrate assess <folder>`: what moves from a folder of Tableau, Power
+ * BI and SQL files. Prints a summary and writes the full report as Markdown
+ * (`--out`, default zlens-migration-assessment.md here); `--format json`
+ * prints the assessment and writes nothing.
+ */
+async function runMigrateAssess(input: string | undefined, flags: CLIFlags): Promise<void> {
+  if (!input) {
+    console.error('\n  ✗ Which folder? Usage: zlens migrate assess <folder> [--out <file.md>] [--format json]\n');
+    process.exitCode = 1;
+    return;
+  }
+  if (!isAssessableInput(resolve(input))) {
+    console.error(`\n  ✗ ${input} is not a folder, or a Tableau (.twb, .twbx), Power BI (.pbit, .pbip, model.bim, .tmdl) or .sql file.\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const assessment = assessMigrationFolder(input);
+  if (flags.format === 'json') {
+    console.log(JSON.stringify(assessment, null, 2));
+    return;
+  }
+  // --out names the report, or the folder it goes in.
+  const out = flags.outDir || DEFAULT_ASSESSMENT_FILE;
+  const reportPath = existsSync(resolve(out)) && statSync(resolve(out)).isDirectory() ? join(out, DEFAULT_ASSESSMENT_FILE) : out;
+  mkdirSync(dirname(resolve(reportPath)), { recursive: true });
+  writeFileSync(resolve(reportPath), migrationAssessmentMarkdown(assessment));
+  for (const line of migrationAssessmentSummary(assessment, reportPath)) console.log(line);
 }
 
 /** What each `zlens migrate <tool>` can read today, and what to run. */

@@ -1,4 +1,5 @@
 import type { ImportedSqlParameter, SkippedSqlStatement } from '../sql-import-script.js';
+import type { BiCalculation } from './calculations.js';
 
 /** One query read out of a BI file, as SQL the import's script folding takes. */
 export interface ExtractedSqlSource {
@@ -15,6 +16,27 @@ export interface ExtractedBiFile {
   sources: ExtractedSqlSource[];
   /** What has no SQL to import (table loads, calculated fields, DAX measures), with the reason. */
   skipped: SkippedSqlStatement[];
+  /** What the file holds besides SQL, for `zlens migrate assess`. */
+  inventory?: BiInventory;
+}
+
+/** A BI file's contents, counted: where its data comes from, its calculations and its report. */
+export interface BiInventory {
+  tool: 'tableau' | 'powerbi';
+  /** Each data source (Tableau) or connector (Power BI), with the database it reads, as people say it. */
+  dataSources: Array<{ name: string; database?: string }>;
+  calculations: BiCalculation[];
+  /** Tables loaded without SQL (read by name, or through Power Query steps): ZLens reads them from the database. */
+  tablesWithoutSql: number;
+  /** Worksheets and dashboards (Tableau) or report pages (Power BI), with each one's chart types. */
+  pages: BiReportPage[];
+}
+
+export interface BiReportPage {
+  name: string;
+  kind: 'worksheet' | 'dashboard' | 'page';
+  /** The visuals on it by type (`Bar`, `lineChart`); a Tableau worksheet has one. */
+  visuals: string[];
 }
 
 export function sqlSourceContent(name: string, notes: string[], sql: string): string {

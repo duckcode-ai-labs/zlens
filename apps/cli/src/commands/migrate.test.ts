@@ -267,3 +267,35 @@ describe('runMigrate <tool>: say what ZLens reads, and import what it can', () =
     }
   });
 });
+
+describe('runMigrate assess', () => {
+  it('writes the report beside where it runs and prints the summary; --format json prints only', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'dql-migrate-assess-'));
+    tempDirs.push(dir);
+    mkdirSync(join(dir, 'reports'));
+    writeFileSync(join(dir, 'reports', 'revenue.sql'), 'select location_id, sum(order_total) as revenue from dev.orders group by 1;\n');
+    const cwd = process.cwd();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      process.chdir(dir);
+      await runMigrate('assess', baseFlags({ format: 'text' }), ['reports']);
+      expect(readFileSync(join(dir, 'zlens-migration-assessment.md'), 'utf8')).toContain('# Migration assessment');
+      expect(log.mock.calls.flat().join('\n')).toContain('Queries:       1 query becomes');
+
+      rmSync(join(dir, 'zlens-migration-assessment.md'));
+      log.mockClear();
+      await runMigrate('assess', baseFlags({ format: 'json' }), ['reports']);
+      expect(JSON.parse(log.mock.calls.flat().join('\n')).queries.drafts).toBe(1);
+      expect(existsSync(join(dir, 'zlens-migration-assessment.md'))).toBe(false);
+
+      await runMigrate('assess', baseFlags({ format: 'text', outDir: 'out/assessment.md' }), ['reports']);
+      expect(readFileSync(join(dir, 'out', 'assessment.md'), 'utf8')).toContain('| Queries (Custom SQL, native SQL, scripts) | 1 |');
+      // --out an existing folder: the report goes in it.
+      await runMigrate('assess', baseFlags({ format: 'text', outDir: 'out' }), ['reports']);
+      expect(existsSync(join(dir, 'out', 'zlens-migration-assessment.md'))).toBe(true);
+    } finally {
+      process.chdir(cwd);
+      log.mockRestore();
+    }
+  });
+});

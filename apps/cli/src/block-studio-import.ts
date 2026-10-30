@@ -267,11 +267,24 @@ interface SqlSource {
 
 const ACTIVE_IMPORT_KINDS = new Set<BlockStudioImportSourceKind>(['raw-sql-file', 'raw-sql-folder', 'tableau-workbook', 'powerbi-project']);
 
-export function createBlockStudioImportSession(
+/**
+ * What an import would make, without saving anything: the drafts (one per
+ * query, duplicates folded) and what is left out. `zlens migrate assess`
+ * counts these, so its numbers are the import's own.
+ */
+export function planBlockStudioImport(
   projectRoot: string,
   options: CreateBlockStudioImportOptions,
-): BlockStudioImportSession {
-  const inputMode = options.inputMode ?? (options.sources?.length ? 'upload' : 'path');
+): {
+  sourceKind: BlockStudioImportSourceKind;
+  inputPath: string;
+  sourceFiles: string[];
+  candidates: BlockStudioImportCandidate[];
+  skippedStatements: SkippedSqlStatement[];
+  importId: string;
+  defaults: { domain: string; owner: string; tags: string[] };
+  createdAt: string;
+} {
   const sourceBundle = collectSqlSources(projectRoot, options);
   const sourceKind = sourceBundle.sourceKind;
   if (!ACTIVE_IMPORT_KINDS.has(sourceKind)) {
@@ -314,6 +327,24 @@ export function createBlockStudioImportSession(
     seen.set(fingerprint, candidate);
     candidates.push(candidate);
   }
+  return {
+    sourceKind,
+    inputPath: sourceBundle.inputPath,
+    sourceFiles: sourceBundle.sources.map((source) => source.path),
+    candidates,
+    skippedStatements,
+    importId,
+    defaults,
+    createdAt: now,
+  };
+}
+
+export function createBlockStudioImportSession(
+  projectRoot: string,
+  options: CreateBlockStudioImportOptions,
+): BlockStudioImportSession {
+  const inputMode = options.inputMode ?? (options.sources?.length ? 'upload' : 'path');
+  const { sourceKind, inputPath, sourceFiles, candidates, skippedStatements, importId, defaults, createdAt: now } = planBlockStudioImport(projectRoot, options);
   if (candidates.length === 0) {
     throw new Error(`Nothing to import: ${skippedStatements.length === 1 ? 'the one statement' : `all ${skippedStatements.length} statements`} found ${skippedStatements.length === 1 ? 'was' : 'were'} left out. ${skippedStatements.slice(0, 3).map((item) => item.reason).join(' ')}`);
   }
@@ -321,9 +352,9 @@ export function createBlockStudioImportSession(
   const manifest: BlockStudioImportManifest = {
     id: importId,
     sourceKind,
-    inputPath: sourceBundle.inputPath,
+    inputPath,
     inputMode,
-    sourceFiles: sourceBundle.sources.map((source) => source.path),
+    sourceFiles,
     createdAt: now,
     updatedAt: now,
     defaults,
@@ -1746,7 +1777,7 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
 }
 
 /** A PBIP model's `definition` folder holding this .tmdl file (its tables/ folder's parent), else the file's own folder. */
-function tmdlDefinitionFolder(file: string): string {
+export function tmdlDefinitionFolder(file: string): string {
   let folder = dirname(file);
   for (let depth = 0; depth < 4; depth += 1) {
     if (basename(folder).toLowerCase() === 'definition') return folder;

@@ -211,6 +211,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | Command | What it does |
 | --- | --- |
 | `zlens import sql <path>` | Draft saved queries from SQL, Tableau and Power BI files or folders |
+| `zlens migrate assess <folder>` | Read Tableau, Power BI and SQL files and report what moves: queries, calculations by kind, the report and the databases. Writes `zlens-migration-assessment.md` (`--out <file.md>`); `--format json` prints it instead. Reads files only |
 | `zlens migrate <source>` | `tableau`, `powerbi` and `raw-sql` with `--input <path>` run `zlens import sql`; `looker`, `metabase` and `dbt` print what to do instead |
 | `zlens migrate layout --to domain-first --dry-run` | Preview moves from legacy folders into `domains/<domain>/...` |
 | `zlens migrate layout --to domain-first --force` | Apply the previewed domain-first file moves |

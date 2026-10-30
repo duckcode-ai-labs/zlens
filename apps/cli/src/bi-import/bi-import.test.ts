@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createBlockStudioImportSession } from '../block-studio-import.js';
 import { readBiFile } from './index.js';
 import { readPowerQuery, readPowerQueryParameter } from './power-query.js';
+import { readPowerBiReportLayout } from './powerbi.js';
 import { listZipEntries, readZipFile } from './zip.js';
 
 /**
@@ -354,3 +355,39 @@ select location_id, sum(order_total) as revenue from dev.orders group by 1
     ]);
   });
 });
+
+describe('a Power BI report, counted', () => {
+  it('reads pages and visual types from a template layout (Report/Layout) or an older report.json', () => {
+    const layout = JSON.stringify({
+      sections: [
+        { displayName: 'Overview', visualContainers: [{ config: JSON.stringify({ singleVisual: { visualType: 'card' } }) }, { config: JSON.stringify({ singleVisual: { visualType: 'lineChart' } }) }] },
+        { name: 'ReportSection2', visualContainers: [{ config: '{not json' }, { config: JSON.stringify({ singleVisualGroup: {} }) }] },
+      ],
+    });
+    expect(readPowerBiReportLayout(layout)).toEqual([
+      { name: 'Overview', kind: 'page', visuals: ['card', 'lineChart'] },
+      { name: 'ReportSection2', kind: 'page', visuals: [] },
+    ]);
+  });
+});
+
+describe('a TMDL calculated column, read', () => {
+  it('keeps its formula and leaves out the properties written under it', () => {
+    const text = [
+      'table Sales',
+      '\tcolumn Weekday = FORMAT(Sales[Date], "dddd")',
+      '\t\tdataType: string',
+      '\t\tsummarizeBy: none',
+      '\t\tlineageTag: 1234',
+      '',
+      '\tcolumn Amount',
+      '\t\tdataType: double',
+      '\t\tsourceColumn: amount',
+    ].join('\n');
+    const read = readBiFile(Buffer.from(text), 'Sales.SemanticModel/definition/tables/Sales.tmdl');
+    expect(read.inventory!.calculations.map((calculation) => [calculation.name, calculation.role, calculation.formula])).toEqual([
+      ['Weekday', 'column', 'FORMAT(Sales[Date], "dddd")'],
+    ]);
+  });
+});
+
