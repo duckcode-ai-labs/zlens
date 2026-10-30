@@ -94,8 +94,22 @@ Open the link it prints. It runs on your machine and keeps nothing after you
 stop it (Ctrl+C). Ports 54545 and 1455 let **Sign in with Claude** and **Sign in
 with ChatGPT** finish inside the container.
 
-Either way, **Ask** needs an AI model: add one in **Settings → AI provider**.
-To use your own data, follow the [Quickstart](#quickstart).
+**On your own data, in one command:**
+
+```bash
+npx zlens notebook ./my-data
+```
+
+`./my-data` can be a dbt project, a folder with a DuckDB or SQLite file, or a
+folder of CSV, Parquet or JSON files (each file becomes a table). ZLens asks
+before it creates a project there, then opens the workbench, and Guided Setup
+drafts the tables and joins for you to certify. To start a new project
+instead, run `npm create zlens@latest`. On npm 12, add
+`--allow-scripts=better-sqlite3` after `npx` (or after `npm create zlens@latest`);
+see [npm 12 and install scripts](https://docs.zlens.app/get-started/install/#npm-12-and-install-scripts).
+
+Whichever you use, **Ask** needs an AI model: add one in **Settings → AI provider**.
+For the full walkthrough on a sample dbt project, follow the [Quickstart](#quickstart).
 
 ## Quickstart
 
@@ -384,8 +398,8 @@ and the [architecture overview](https://docs.zlens.app/architecture/overview/).
 
 ## Packages
 
-ZLens ships as 18 npm packages. Most people only need `create-zlens-app` or
-`@zlens/cli`.
+ZLens ships as 20 npm packages. Most people only need `zlens` (for `npx
+zlens`), `create-zlens` (for `npm create zlens`) or `@zlens/cli`.
 
 <details>
 <summary><b>All packages</b></summary>
@@ -395,6 +409,8 @@ ZLens ships as 18 npm packages. Most people only need `create-zlens-app` or
 | Package | What it is |
 |---|---|
 | [`@zlens/cli`](./apps/cli) | The `zlens` command: workbench, sync, compile, certify, lineage, Ask and the MCP server |
+| [`zlens`](./packages/zlens) | `npx zlens …` with nothing installed: runs `@zlens/cli` |
+| [`create-zlens`](./packages/create-zlens) | `npm create zlens@latest`: creates a project and opens the workbench |
 | [`create-zlens-app`](./packages/create-dql-app) | Scaffolds a ZLens project, next to your dbt project or for a database alone |
 | [`@zlens/core`](./packages/dql-core) | DQL language core: lexer, parser, AST and semantic analysis |
 | [`@zlens/dql-compiler`](./packages/dql-compiler) | DQL compiler: IR lowering, Vega-Lite generation, HTML and CSS output |

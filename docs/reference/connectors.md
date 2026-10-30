@@ -192,16 +192,31 @@ token rather than a personal token.
 }
 ```
 
-For CSV/Parquet/JSON exploration, use the `file` driver with DuckDB installed:
+For CSV, TSV, Parquet and JSON files, use the `file` driver. It runs on
+DuckDB, so ZLens installs the DuckDB driver for it. With `dataFolder`, each
+data file in that folder is a table (a view) named after the file, so sync,
+Guided Setup and Ask see the folder as a database:
 
 ```json
 {
   "driver": "file",
-  "filepath": ":memory:"
+  "filepath": ":memory:",
+  "dataFolder": "./data"
 }
 ```
 
-Then query files from SQL:
+```sql
+select * from orders   -- reads ./data/orders.csv
+```
+
+`dataFolder` is relative to the project. The files are read where they are, at
+query time; only files directly in the folder are read, not subfolders, and
+tool settings such as `dql.config.json` and `package.json` are left out. Two
+files with the same name (`orders.csv`, `orders.parquet`) become `orders` and
+`orders_parquet`. `zlens notebook` on a folder of data files writes this
+connection for you.
+
+Any file can also be read from SQL:
 
 ```sql
 select * from read_csv_auto('./data/orders.csv')

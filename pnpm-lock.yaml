@@ -234,6 +234,12 @@ importers:
 
   packages/create-dql-app: {}
 
+  packages/create-zlens:
+    dependencies:
+      '@zlens/cli':
+        specifier: workspace:*
+        version: link:../../apps/cli
+
   packages/datalex-lsp:
     dependencies:
       ajv:
@@ -611,6 +617,12 @@ importers:
       vitest:
         specifier: ^3.0.0
         version: 3.2.4(@types/debug@4.1.12)(@types/node@22.19.11)(jiti@2.6.1)(lightningcss@1.32.0)(terser@5.46.0)(tsx@4.21.0)(yaml@2.8.2)
+
+  packages/zlens:
+    dependencies:
+      '@zlens/cli':
+        specifier: workspace:*
+        version: link:../../apps/cli
 
 packages:
 

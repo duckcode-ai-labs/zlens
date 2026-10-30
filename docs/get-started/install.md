@@ -4,6 +4,33 @@ ZLens is a set of npm packages. Most people never install it by hand: the
 [Quickstart](index.md) scaffolds a project that installs the CLI locally.
 This page covers the other ways to install and upgrade.
 
+## Run it without installing
+
+```bash
+npx zlens notebook ./my-data
+```
+
+`npx` fetches the `zlens` package (the `zlens` command of `@zlens/cli`) and
+runs it. `./my-data` can be a dbt project, a folder with a DuckDB or SQLite
+file, or a folder of CSV, Parquet or JSON files. ZLens asks before it creates
+a project there (`--yes` creates it without asking), then opens the workbench.
+Run the same command again to reopen it.
+
+To start a new project and open it in one step:
+
+```bash
+npm create zlens@latest
+```
+
+In a folder with data it offers to make the project there; anywhere else it
+asks for a new folder's name. On npm 12, add `--allow-scripts=better-sqlite3`
+after `npx` or after `npm create zlens@latest` (see
+[npm 12 and install scripts](#npm-12-and-install-scripts)); npm 10 and 11
+ignore the flag.
+
+`npx @zlens/cli` does not work: that package has two commands (`zlens`, and
+`dql`, its old name), so npx cannot tell which to run. Use `npx zlens`.
+
 ## Requirements
 
 - Node.js 20, 22, 24 or 26 (26 LTS recommended). CI tests all four.
@@ -162,6 +189,15 @@ and `zlens sync warehouse` reinstall it. To do it yourself:
 
 ```bash
 npm --prefix .dql/connectors install @duckdb/node-api --include=optional
+```
+
+**`npx zlens` and `npm create zlens`.** They install into npm's cache, which
+has no `package.json` of yours either. If ZLens says npx installed it without
+running the script, run the command again with the flag; ZLens prints it:
+
+```bash
+npx --allow-scripts=better-sqlite3 zlens notebook ./my-data
+npm create zlens@latest --allow-scripts=better-sqlite3
 ```
 
 **A global install.** `npm install -g` has no `package.json` to allow scripts

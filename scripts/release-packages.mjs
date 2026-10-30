@@ -31,6 +31,9 @@ export const RELEASE_PACKAGE_PATHS = [
   // extension ships as a .vsix (release.yml), not from npm.
   'apps/cli',
   'packages/create-dql-app',
+  // `npx zlens` and `npm create zlens`: one command each, running the CLI above.
+  'packages/zlens',
+  'packages/create-zlens',
 ];
 
 /**

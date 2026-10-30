@@ -30,6 +30,7 @@ export { buildParamValues, expandArrayParameters, normalizeSQLPlaceholders } fro
 export { SnowflakeConnector } from './drivers/snowflake.js';
 export { DuckDBConnector, DUCKDB_DRIVER_PACKAGE, duckDBNewerFileMessage, duckDBOpenFailureMessage, ZLENS_DUCKDB_READER_LINE, type DuckDBConsistentReadScope } from './drivers/duckdb.js';
 export { FileConnector } from './drivers/file.js';
+export { dataFolderTables, isDataFile, type DataFolderTable } from './data-folder.js';
 export { DatabricksConnector } from './drivers/databricks.js';
 export { SQLiteConnector } from './drivers/sqlite.js';
 export { PostgreSQLConnector } from './drivers/postgresql.js';

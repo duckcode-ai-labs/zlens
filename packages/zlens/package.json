@@ -1,0 +1,48 @@
+{
+  "name": "zlens",
+  "version": "0.2.11",
+  "description": "The zlens command with nothing installed first: npx zlens notebook ./my-data",
+  "license": "Apache-2.0",
+  "author": "ZLens",
+  "homepage": "https://github.com/duckcode-ai-labs/zlens",
+  "bugs": {
+    "url": "https://github.com/duckcode-ai-labs/zlens/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/duckcode-ai-labs/zlens.git",
+    "directory": "packages/zlens"
+  },
+  "keywords": [
+    "zlens",
+    "analytics",
+    "bi",
+    "dbt",
+    "semantic-layer",
+    "notebook"
+  ],
+  "type": "module",
+  "bin": {
+    "zlens": "./bin/zlens.mjs"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "scripts": {
+    "build": "echo 'no build step: pure JS'",
+    "test": "node --test test/*.test.mjs",
+    "prepack": "node ../../scripts/package-license-files.mjs"
+  },
+  "dependencies": {
+    "@zlens/cli": "workspace:*"
+  },
+  "engines": {
+    "node": "^20.0.0 || ^22.0.0 || ^24.0.0 || ^26.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

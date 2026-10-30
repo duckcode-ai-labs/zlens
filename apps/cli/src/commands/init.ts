@@ -1,18 +1,27 @@
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, relative, resolve } from 'node:path';
 import { createWelcomeNotebook, serializeNotebook } from '@zlens/notebook';
 import { resolveLocalOwner, seedDefaultSkills, seedDomainSkills } from '@zlens/agent';
 import { buildManifest } from '@zlens/core';
+import { dataFolderTables } from '@zlens/connectors';
 import type { CLIFlags } from '../args.js';
 import { ensureDqlGitignore } from '../git-contract.js';
+import { describeDatabase } from './bare-folder.js';
 import { runNotebook } from './notebook.js';
 
-/** What a folder already holds: a dbt project (here or a level up) and a DuckDB file. */
+/** What a folder already holds: a dbt project (here or a level up), a database file, or data files. */
 export interface FolderContents {
   isDbt: boolean;
   dbtProjectDir: string | null;
   /** A DuckDB file, relative to the folder (e.g. `jaffle_shop.duckdb` or `../dev.duckdb`). */
   duckdbPath: string | null;
+  /** A SQLite file in the folder (`shop.sqlite`, `app.db`), when there is no DuckDB file. */
+  sqlitePath?: string | null;
+  /**
+   * CSV, TSV, Parquet or JSON files, in the folder itself (`.`) or its `data/`
+   * folder, when there is no database file: each becomes a table.
+   */
+  dataFolder?: { path: string; files: string[] } | null;
 }
 
 /**
@@ -34,7 +43,12 @@ export function detectFolderContents(targetDir: string): FolderContents {
       }
     }
   }
-  return { isDbt, dbtProjectDir, duckdbPath: detectDuckDBFile(targetDir, dbtProjectDir) };
+  const duckdbPath = detectDuckDBFile(targetDir, dbtProjectDir);
+  // A dbt project or a DuckDB file decides the project; otherwise a SQLite
+  // file, then a folder of data files, is the database.
+  const sqlitePath = isDbt || duckdbPath ? null : detectSQLiteFile(targetDir);
+  const dataFolder = isDbt || duckdbPath || sqlitePath ? null : detectDataFolder(targetDir);
+  return { isDbt, dbtProjectDir, duckdbPath, sqlitePath, dataFolder };
 }
 
 /**
@@ -44,7 +58,7 @@ export function detectFolderContents(targetDir: string): FolderContents {
  */
 export function initProjectKind(contents: FolderContents, warehouseFirstFlag = false): 'dbt' | 'database' | 'undecided' {
   if (contents.isDbt) return 'dbt';
-  if (warehouseFirstFlag || contents.duckdbPath) return 'database';
+  if (warehouseFirstFlag || contents.duckdbPath || contents.sqlitePath || contents.dataFolder) return 'database';
   return 'undecided';
 }
 
@@ -75,6 +89,7 @@ export async function runInit(
 
   const contents = detectFolderContents(targetDir);
   const { isDbt, dbtProjectDir, duckdbPath } = contents;
+  const database = databaseConnectionFor(contents);
   // A database file and no dbt project is a database-only project: no flag needed.
   const warehouseFirst = initProjectKind(contents, flags.warehouseFirst === true) === 'database';
 
@@ -84,7 +99,7 @@ export async function runInit(
     // Resolve the local OSS owner up front (git user.email → $USER → guest@local)
     // and persist it as identity.owner so drafts are never born "Missing owner".
     const owner = resolveLocalOwner(targetDir, { persist: false });
-    const config = buildConfig(projectName, isDbt, duckdbPath, dbtProjectDir, targetDir, owner, warehouseFirst);
+    const config = buildConfig(projectName, isDbt, database, dbtProjectDir, targetDir, owner, warehouseFirst);
     writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
   }
 
@@ -170,6 +185,8 @@ export async function runInit(
       manifestVersion: projectConfig.manifestVersion ?? 2,
       modelingMode: projectConfig.modeling?.mode ?? null,
       duckdb: duckdbPath ?? null,
+      sqlite: contents.sqlitePath ?? null,
+      dataFolder: contents.dataFolder?.path ?? null,
       seededSkills,
     }, null, 2));
     return;
@@ -177,7 +194,8 @@ export async function runInit(
 
   if (options.output === 'summary') {
     const kind = isDbt ? 'dbt project' : projectConfig.modeling?.mode === 'warehouse-first' ? 'Database only' : 'no data source yet';
-    console.log(`\n  ✓ Created a ZLens project in ${targetDir} (${kind}${duckdbPath ? ` · ${duckdbPath}` : ''}).`);
+    const source = database ? ` · ${describeDatabase(contents)}` : '';
+    console.log(`\n  ✓ Created a ZLens project in ${targetDir} (${kind}${source}).`);
     return;
   }
 
@@ -190,7 +208,9 @@ export async function runInit(
   } else {
     console.log(`    dbt project: ${isDbt ? 'yes (dbt_project.yml found)' : 'no'}`);
   }
-  console.log(`    DuckDB file: ${duckdbPath ?? 'none'}`);
+  if (contents.sqlitePath) console.log(`    SQLite file: ${contents.sqlitePath}`);
+  else if (contents.dataFolder) console.log(`    Data files: ${describeDatabase(contents)}`);
+  else console.log(`    DuckDB file: ${duckdbPath ?? 'none'}`);
   if (isDbt) {
     if (projectConfig.manifestVersion === 3 && projectConfig.modeling?.mode === 'dbt-first') {
       console.log('    Modeling: manifest v3, dbt-first (dbt artifacts remain read-only)');
@@ -236,6 +256,57 @@ export async function runInit(
   }
 }
 
+/** The connection a folder's database file or data files make, or null. */
+export function databaseConnectionFor(contents: FolderContents): Record<string, unknown> | null {
+  if (contents.duckdbPath) return { driver: 'duckdb', filepath: contents.duckdbPath };
+  if (contents.sqlitePath) return { driver: 'sqlite', filepath: contents.sqlitePath };
+  // DuckDB reads the files where they are; each one is a view (FileConnector).
+  if (contents.dataFolder) return { driver: 'file', filepath: ':memory:', dataFolder: contents.dataFolder.path };
+  return null;
+}
+
+const SQLITE_HEADER = 'SQLite format 3\u0000';
+
+/** The first bytes of a file, or an empty buffer. */
+function fileHeader(path: string, length: number): Buffer {
+  const buffer = Buffer.alloc(length);
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, 'r');
+    const read = readSync(fd, buffer, 0, length, 0);
+    return buffer.subarray(0, read);
+  } catch {
+    return Buffer.alloc(0);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
+
+/** A DuckDB file carries `DUCK` at byte 8. */
+function isDuckDBFile(path: string): boolean {
+  return fileHeader(path, 12).subarray(8, 12).toString('latin1') === 'DUCK';
+}
+
+/** A SQLite file in the folder: `.sqlite`, `.sqlite3` or `.db`, by its header (a `.db` may be DuckDB's). */
+function detectSQLiteFile(dir: string): string | null {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir).sort();
+  } catch {
+    return null;
+  }
+  return entries.find((entry) => /\.(?:sqlite3?|db)$/i.test(entry) && fileHeader(join(dir, entry), 16).toString('latin1') === SQLITE_HEADER) ?? null;
+}
+
+/** CSV, TSV, Parquet or JSON files in the folder itself, else in its `data/` folder. */
+function detectDataFolder(dir: string): { path: string; files: string[] } | null {
+  for (const path of ['.', 'data']) {
+    const files = dataFolderTables(join(dir, path)).map((table) => table.file.split(/[\\/]/).pop() ?? table.file);
+    if (files.length) return { path, files };
+  }
+  return null;
+}
+
 function detectDuckDBFile(workspaceDir: string, dbtProjectDir: string | null): string | null {
   // Common DuckDB file locations in dbt projects
   const candidates = [
@@ -270,7 +341,11 @@ function detectDuckDBFile(workspaceDir: string, dbtProjectDir: string | null): s
 
 function firstDuckDBIn(dir: string): string | null {
   try {
-    return readdirSync(dir).find((entry: string) => entry.endsWith('.duckdb')) ?? null;
+    const entries = readdirSync(dir).sort();
+    return entries.find((entry: string) => entry.endsWith('.duckdb'))
+      // `.db` is used by DuckDB and SQLite alike: the file's header says which.
+      ?? entries.find((entry: string) => /\.db$/i.test(entry) && isDuckDBFile(join(dir, entry)))
+      ?? null;
   } catch {
     return null;
   }
@@ -279,7 +354,7 @@ function firstDuckDBIn(dir: string): string | null {
 function buildConfig(
   projectName: string,
   isDbt: boolean,
-  duckdbPath: string | null,
+  database: Record<string, unknown> | null,
   dbtProjectDir: string | null,
   projectRoot: string,
   owner?: string,
@@ -304,14 +379,9 @@ function buildConfig(
     config.identity = { owner: owner.trim() };
   }
 
-  if (duckdbPath) {
+  if (database) {
     config.defaultConnectionName = 'default';
-    config.connections = {
-      default: {
-        driver: 'duckdb',
-        filepath: duckdbPath,
-      },
-    };
+    config.connections = { default: database };
   }
 
   if (isDbt) {

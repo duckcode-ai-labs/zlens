@@ -14,6 +14,17 @@ const scope = (catalogOrDatabase: string, schemas: string[]): ConnectionMetadata
 });
 
 describe('assembling a warehouse catalog from metadata rows', () => {
+  it('a file connection (a folder of data files on DuckDB) reads its catalog as DuckDB does', () => {
+    const scope = { catalogOrDatabase: 'memory', schemas: ['main'] };
+    expect(buildWarehouseCatalogQueries('file', scope)).toEqual(buildWarehouseCatalogQueries('duckdb', scope));
+    const queries = buildWarehouseCatalogQueries('file', scope);
+    const relations = assembleWarehouseCatalog('file', [
+      { query: queries.find((query) => query.kind === 'columns')!, rows: [{ table_catalog: 'memory', table_schema: 'main', table_name: 'orders', column_name: 'order_id', data_type: 'BIGINT', is_nullable: true, comment: null }] },
+      { query: queries.find((query) => query.kind === 'views')!, rows: [{ table_catalog: 'memory', table_schema: 'main', table_name: 'orders', comment: null, view_definition: "CREATE VIEW orders AS SELECT * FROM read_csv_auto('/data/orders.csv')" }] },
+    ]);
+    expect(relations[0]).toMatchObject({ name: 'orders', database: 'memory', relation: 'memory.main.orders' });
+  });
+
   it('DuckDB: columns, comments, declared keys and view SQL (rows as a real DuckDB returns them)', () => {
     const queries = buildWarehouseCatalogQueries('duckdb', { catalogOrDatabase: 'memory', schemas: ['sales'] });
     const byKind = (kind: string) => queries.find((query) => query.kind === kind)!;

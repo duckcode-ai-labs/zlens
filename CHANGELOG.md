@@ -8,6 +8,32 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Start with one command, on a folder of files too
+
+- **`npx zlens …` works with nothing installed.** `npx @zlens/cli` stops
+  with "could not determine executable to run", because that package has two
+  commands (`zlens` and its old name `dql`). The new `zlens` package has one
+  and runs the same CLI, so `npx zlens notebook ./my-data` works, and so do
+  the `npx zlens …` commands ZLens already printed in its hints.
+- **`npm create zlens@latest`** creates a project and opens the workbench.
+  In a folder with data it offers to make the project there; anywhere else it
+  asks for a folder name.
+- **A folder of CSV, TSV, Parquet or JSON files is a database.** `zlens
+  notebook` (and `zlens init`) on such a folder, or its `data/` folder,
+  writes a `file` connection with `dataFolder`. Each file becomes a table
+  named after it, read where it is at query time. Sync, Guided Setup, Draft
+  my models and Ask work on it as on a DuckDB file. **Settings → Database**
+  has a **Local files** form for it.
+- **A SQLite file is picked up** (`.sqlite`, `.sqlite3`, or a `.db` file
+  SQLite wrote), opened read-only. A `.db` file DuckDB wrote is read as DuckDB.
+- **Fixed: a `file` connection never got its DuckDB driver.** Start-up
+  treated the file driver as built in, so the first query failed until the
+  driver was installed by hand. It now installs the DuckDB driver, as a
+  DuckDB connection does.
+- **On npm 12, the message for a blocked install script under `npx` or `npm
+  create` gives the exact command to run again**, with
+  `--allow-scripts=better-sqlite3`.
+
 ### Import SQL no longer runs statements that write
 
 - **Import SQL ran every statement it found, including ones that change the

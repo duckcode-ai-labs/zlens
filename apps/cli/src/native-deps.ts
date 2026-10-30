@@ -50,7 +50,34 @@ export function probeBetterSqlite3(req: NodeRequire = cliRequire): BetterSqlite3
 }
 
 function contextFor(packageDir: string | undefined): NativeInstallContext {
-  return packageDir ? nativeInstallContextFor(packageDir) : { kind: 'project', dir: process.cwd() };
+  const context = packageDir ? nativeInstallContextFor(packageDir) : { kind: 'project' as const, dir: process.cwd() };
+  return context.kind === 'npx' ? { kind: 'npx', rerun: npxRerunCommand() } : context;
+}
+
+/** A shell word as typed: quoted only when a shell would split or expand it. */
+const shellWord = (word: string) => (/^[\w./=:@,+-]+$/.test(word) ? word : `'${word.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The command that ran ZLens from the npx cache, again, with better-sqlite3's
+ * install script allowed (npm 12 blocks it; the flag is ignored by older npm).
+ * `npm create zlens` puts the arguments it was given in ZLENS_CREATE_ARGS.
+ */
+export function npxRerunCommand(argv: readonly string[] = process.argv, env: NodeJS.ProcessEnv = process.env): string {
+  const flag = '--allow-scripts=better-sqlite3';
+  if (env.ZLENS_CREATE_ARGS !== undefined) {
+    let args: string[] = [];
+    try {
+      const parsed = JSON.parse(env.ZLENS_CREATE_ARGS) as unknown;
+      if (Array.isArray(parsed)) args = parsed.map(String);
+    } catch {
+      // Unreadable: rerun without arguments.
+    }
+    // npm reads options before `--` as its own, so the folder goes first and options after `--`.
+    const folder = args[0] && !args[0].startsWith('-') ? [args[0]] : [];
+    const options = args.slice(folder.length).filter((arg) => arg !== '--');
+    return ['npm create zlens@latest', flag, ...folder.map(shellWord), ...(options.length ? ['--', ...options.map(shellWord)] : [])].join(' ');
+  }
+  return ['npx', flag, 'zlens', ...argv.slice(2).map(shellWord)].join(' ');
 }
 
 /** The repair message for a better-sqlite3 that cannot load. */

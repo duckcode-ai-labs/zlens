@@ -1,4 +1,5 @@
 import type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo } from '../connector.js';
+import { dataFolderTables, dataFolderViewStatements } from '../data-folder.js';
 import type { QueryResult } from '../result-types.js';
 import { DuckDBConnector } from './duckdb.js';
 
@@ -13,6 +14,10 @@ import { DuckDBConnector } from './duckdb.js';
  *   SELECT * FROM read_csv('./data/sales.csv')
  *   SELECT * FROM read_parquet('./data/events.parquet')
  *   SELECT * FROM read_json('./data/config.json')
+ *
+ * With `dataFolder`, each data file in that folder is also a view named after
+ * it (`SELECT * FROM orders` reads `orders.csv`), so sync, Setup and Ask see
+ * the folder as tables.
  */
 export class FileConnector implements DatabaseConnector {
   readonly driverName = 'file';
@@ -23,15 +28,22 @@ export class FileConnector implements DatabaseConnector {
   }
 
   async connect(config: ConnectionConfig): Promise<void> {
+    // The data folder's views read its files at query time, so a host's
+    // restriction still lets them read that folder (and only the folders it allows).
+    const allowedDirectories = [...(config.allowedDirectories ?? []), ...(config.dataFolder ? [config.dataFolder] : [])];
     // Use in-memory DuckDB by default for file queries
     const duckdbConfig: ConnectionConfig = {
       driver: 'duckdb',
       filepath: config.filepath ?? ':memory:',
+      ...(config.moduleSearchPaths ? { moduleSearchPaths: config.moduleSearchPaths } : {}),
       // A host's restriction (and the folders it still allows) holds for file connections too.
       ...(config.restrictExternalAccess ? { restrictExternalAccess: true } : {}),
-      ...(config.allowedDirectories?.length ? { allowedDirectories: config.allowedDirectories } : {}),
+      ...(allowedDirectories.length ? { allowedDirectories } : {}),
     };
     await this.duckdb.connect(duckdbConfig);
+    if (config.dataFolder) {
+      for (const statement of dataFolderViewStatements(dataFolderTables(config.dataFolder))) await this.duckdb.execute(statement);
+    }
   }
 
   async execute(sql: string, params?: unknown[]): Promise<QueryResult> {

@@ -71,6 +71,15 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
     ].join('\n'));
   });
 
+  it('names a SQLite file or a folder of data files in the question', async () => {
+    const ask = vi.fn(async (_question: string) => '');
+    await decideBareFolder({ folder: '/work/shop', contents: { isDbt: false, dbtProjectDir: null, duckdbPath: null, sqlitePath: 'shop.sqlite' }, yes: false, interactive: true, ask, cwd: '/work' });
+    expect(ask.mock.calls[0]![0]).toContain('Found the database shop.sqlite; the project will be Database only.');
+    const files = { isDbt: false, dbtProjectDir: null, duckdbPath: null, dataFolder: { path: '.', files: ['customers.csv', 'items.csv', 'orders.csv', 'stores.csv'] } };
+    await decideBareFolder({ folder: '/work/shop', contents: files, yes: false, interactive: true, ask, cwd: '/work' });
+    expect(ask.mock.calls[1]![0]).toContain('Found 4 data files: customers.csv, items.csv, orders.csv, …; the project will be Database only, each file a table.');
+  });
+
   it('--yes creates without asking', async () => {
     const ask = vi.fn(async (_question: string) => 'n');
     await expect(decideBareFolder({ folder: '/work/shop', contents: database, yes: true, interactive: true, ask })).resolves.toEqual({ action: 'create' });
