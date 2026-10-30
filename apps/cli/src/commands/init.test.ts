@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it, vi } from 'vitest';
-import { runInit } from './init.js';
+import { detectFolderContents, runInit } from './init.js';
 import { loadSkills } from '@zlens/agent';
 
 const INIT_FLAGS = {
@@ -248,6 +248,74 @@ describe('runInit', () => {
     expect(config.semanticLayer).toEqual({ provider: 'dql' });
     expect(config.connections.default).toEqual({ driver: 'duckdb', filepath: 'jaffle_shop.duckdb' });
     expect(config.dbt).toBeUndefined();
+  });
+
+  it('makes a folder with a SQLite file a Database only project; a .db file is read by its header', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-sqlite-'));
+    const projectDir = join(root, 'shop');
+    mkdirSync(projectDir);
+    writeFileSync(join(projectDir, 'notes.db'), 'not a database');
+    writeFileSync(join(projectDir, 'shop.db'), Buffer.concat([Buffer.from('SQLite format 3\u0000', 'latin1'), Buffer.alloc(84)]));
+    expect(detectFolderContents(projectDir)).toMatchObject({ isDbt: false, duckdbPath: null, sqlitePath: 'shop.db', dataFolder: null });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('SQLite file: shop.db');
+      expect(output).toContain('Project type: Database only');
+    } finally {
+      spy.mockRestore();
+    }
+    const config = JSON.parse(readFileSync(join(projectDir, 'dql.config.json'), 'utf-8'));
+    expect(config.modeling).toEqual({ mode: 'warehouse-first' });
+    expect(config.connections.default).toEqual({ driver: 'sqlite', filepath: 'shop.db' });
+  });
+
+  it('reads a .db file that DuckDB wrote as the DuckDB database', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-duckdb-db-'));
+    const header = Buffer.alloc(64);
+    header.write('DUCK', 8, 'latin1');
+    writeFileSync(join(root, 'warehouse.db'), header);
+    expect(detectFolderContents(root)).toMatchObject({ duckdbPath: 'warehouse.db', sqlitePath: null, dataFolder: null });
+  });
+
+  it('makes a folder of CSV or Parquet files a Database only project where each file is a table', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-files-'));
+    const projectDir = join(root, 'shop');
+    mkdirSync(join(projectDir, 'data'), { recursive: true });
+    writeFileSync(join(projectDir, 'data', 'orders.csv'), 'id,amount\n1,10\n');
+    writeFileSync(join(projectDir, 'data', 'customers.parquet'), '');
+    writeFileSync(join(projectDir, 'data', 'notes.txt'), 'not data');
+    writeFileSync(join(projectDir, 'README.md'), '# Shop');
+    expect(detectFolderContents(projectDir).dataFolder).toEqual({ path: 'data', files: ['customers.parquet', 'orders.csv'] });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('Data files: 2 data files in data/: customers.parquet, orders.csv');
+      expect(output).toContain('Project type: Database only');
+    } finally {
+      spy.mockRestore();
+    }
+    const config = JSON.parse(readFileSync(join(projectDir, 'dql.config.json'), 'utf-8'));
+    expect(config.modeling).toEqual({ mode: 'warehouse-first' });
+    expect(config.connections.default).toEqual({ driver: 'file', filepath: ':memory:', dataFolder: 'data' });
+  });
+
+  it('lets a dbt project or a database file win over data files beside it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-precedence-'));
+    writeFileSync(join(root, 'export.csv'), 'a\n1\n');
+    writeFileSync(join(root, 'shop.duckdb'), '');
+    expect(detectFolderContents(root)).toMatchObject({ duckdbPath: 'shop.duckdb', sqlitePath: null, dataFolder: null });
+    const dbt = mkdtempSync(join(tmpdir(), 'dql-init-precedence-dbt-'));
+    writeFileSync(join(dbt, 'dbt_project.yml'), 'name: shop\n');
+    writeFileSync(join(dbt, 'seed.csv'), 'a\n1\n');
+    expect(detectFolderContents(dbt)).toMatchObject({ isDbt: true, dataFolder: null });
+    // A tool's settings at the top of a folder are not data.
+    const settings = mkdtempSync(join(tmpdir(), 'dql-init-settings-'));
+    writeFileSync(join(settings, 'renovate.json'), '{}');
+    writeFileSync(join(settings, 'vercel.json'), '{}');
+    expect(detectFolderContents(settings).dataFolder).toBeNull();
   });
 
   it('leaves an empty folder undecided for Guided Setup and never suggests a flag', async () => {

@@ -45,14 +45,15 @@ function hasRealConnection(connections: Record<string, unknown>): boolean {
   });
 }
 
-/** The default connection is a database file (DuckDB with a path). */
+/** The default connection is a database file (DuckDB or SQLite with a path) or a folder of data files. */
 function databaseFileConnection(info: { default?: string; connections?: Record<string, unknown> }): boolean {
   const connection = info.default ? info.connections?.[info.default] : undefined;
   if (!connection || typeof connection !== 'object') return false;
   const record = connection as Record<string, unknown>;
   const driver = String(record.driver ?? record.type ?? '').toLowerCase();
   const filepath = String(record.filepath ?? record.path ?? '').trim();
-  return driver === 'duckdb' && Boolean(filepath) && filepath !== ':memory:';
+  if (driver === 'file') return String(record.dataFolder ?? '').trim() !== '';
+  return (driver === 'duckdb' || driver === 'sqlite') && Boolean(filepath) && filepath !== ':memory:';
 }
 
 function providerSummary(provider: ProviderSettings | null): string {

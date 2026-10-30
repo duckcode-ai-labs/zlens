@@ -76,6 +76,19 @@ export function additionalDiscoveredSchemaCount(
 }
 
 /**
+ * The one schema discovery found, when it found exactly one and the dbt
+ * project reads none: Guided Setup ticks it, as there is nothing to choose
+ * (a folder of data files, a SQLite file, a one-schema database).
+ */
+export function onlyDiscoveredSchema(
+  discovery: WarehouseMetadataDiscovery,
+): { catalogOrDatabase: string; schema: string } | null {
+  if (discovery.dbtScopes.length > 0) return null;
+  const all = discovery.scopes.flatMap((scope) => scope.schemas.map((schema) => ({ catalogOrDatabase: scope.catalogOrDatabase, schema: schema.name })));
+  return all.length === 1 ? all[0]! : null;
+}
+
+/**
  * A value that is a generated identifier, such as `LOCAL_88B5DE228E554CBCCCF7F634`:
  * it means nothing to a person, so the panel never prints it (design D7).
  */

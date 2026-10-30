@@ -192,16 +192,38 @@ token rather than a personal token.
 }
 ```
 
-For CSV/Parquet/JSON exploration, use the `file` driver with DuckDB installed:
+For CSV, TSV, Parquet and JSON files, use the `file` driver. It runs on
+DuckDB, so ZLens installs the DuckDB driver for it. With `dataFolder`, each
+data file in that folder is a table (a view) named after the file, so sync,
+Guided Setup and Ask see the folder as a database:
 
 ```json
 {
   "driver": "file",
-  "filepath": ":memory:"
+  "filepath": ":memory:",
+  "dataFolder": "./data"
 }
 ```
 
-Then query files from SQL:
+```sql
+select * from orders   -- reads ./data/orders.csv
+```
+
+`dataFolder` is relative to the project. The files are read where they are, at
+query time, and the tables follow the folder: a file added while ZLens runs
+becomes a table, a removed one stops being one. Only files directly in the
+folder are read, not subfolders. Left out: a file DuckDB cannot read (until it
+changes), names with `*`, `?`, `[` or `]`, tool settings such as
+`dql.config.json` and `package.json`, and, in the project's own folder, every
+`.json` file. Two files with the same name (`orders.csv`, `orders.parquet`)
+become `orders` and `orders_parquet`. With a real `filepath`, the views are
+temporary and never written into that DuckDB file. `zlens notebook` on a
+folder of data files writes this connection for you.
+
+Replacing a Dataset tile and aggregate Dataset rollups need a DuckDB
+connection; a `file` connection refuses them with that reason.
+
+Any file can also be read from SQL:
 
 ```sql
 select * from read_csv_auto('./data/orders.csv')

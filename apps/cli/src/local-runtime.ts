@@ -38728,9 +38728,14 @@ function packageNameOf(spec: string): string {
   return spec.startsWith('@') ? `@${spec.slice(1).split('@')[0]}` : spec.split('@')[0]!;
 }
 
+/** The driver whose package a connection needs: a file connection (CSV, Parquet, JSON files) runs on DuckDB. */
+export function connectorInstallDriver(driver: string): string {
+  return driver === 'file' ? 'duckdb' : driver;
+}
+
 /** Install whatever the connection needs that is not yet present. */
 export function ensureConnectionPackages(projectRoot: string, connection: Partial<ConnectionConfig>): string[] {
-  const definition = connection.driver ? CONNECTOR_INSTALLS[connection.driver] : undefined;
+  const definition = connection.driver ? CONNECTOR_INSTALLS[connectorInstallDriver(connection.driver)] : undefined;
   const wanted = [
     ...(definition && !definition.builtIn && definition.packageSpec ? [definition.packageSpec] : []),
     ...connectorAddonPackages(connection),
@@ -38843,8 +38848,9 @@ export function ensureConnectorInstalledForStartup(
   driver: string | undefined,
 ): void {
   if (!driver) return;
-  const definition = CONNECTOR_INSTALLS[driver];
-  // Built-in drivers (e.g. the local file driver) and unknown drivers need nothing.
+  const installs = connectorInstallDriver(driver);
+  const definition = CONNECTOR_INSTALLS[installs];
+  // Built-in drivers (SQLite, Databricks) and unknown drivers need nothing.
   if (!definition || definition.builtIn || !definition.packageSpec || !definition.packageName) return;
   if (isConnectorPackageInstalled(projectRoot, definition.packageName)) {
     repairBlockedConnectorBinding(projectRoot, definition.packageName, definition.label);
@@ -38852,7 +38858,7 @@ export function ensureConnectorInstalledForStartup(
   }
   console.log(`[zlens] Installing the ${definition.label} driver into .dql/connectors (first run after install/upgrade)…`);
   try {
-    installConnectorPackage(projectRoot, driver);
+    installConnectorPackage(projectRoot, installs);
     console.log(`[zlens] ${definition.label} driver ready — connection restored without manual setup.`);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
@@ -39022,6 +39028,8 @@ function isPlaceholderLocalConnection(value: unknown): boolean {
   const connection = normalizeStoredConnection(value);
   if (!connection) return false;
   if (connection.driver !== 'duckdb' && connection.driver !== 'file') return false;
+  // A folder of data files is a real database, read in memory.
+  if (connection.driver === 'file' && typeof connection.dataFolder === 'string' && connection.dataFolder.trim()) return false;
   return !connection.filepath || connection.filepath === ':memory:';
 }
 
@@ -40022,7 +40030,7 @@ export function clampAnalyticalRowBound(rowLimit: number, ceiling = 10_000): num
  * is the guarantee, and appending is only an optimization.
  */
 const TRAILING_LIMIT_DIALECTS = new Set([
-  'duckdb', 'postgres', 'postgresql', 'redshift', 'snowflake', 'bigquery',
+  'duckdb', 'file', 'postgres', 'postgresql', 'redshift', 'snowflake', 'bigquery',
   'databricks', 'trino', 'presto', 'clickhouse', 'mysql', 'mariadb', 'sqlite', 'athena',
 ]);
 
@@ -40727,6 +40735,12 @@ export function normalizeProjectConnection(connection: ConnectionConfig, project
 
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && normalized.filepath && normalized.filepath !== ':memory:' && !isAbsoluteLikePath(normalized.filepath)) {
     normalized.filepath = resolve(projectRoot, normalized.filepath);
+  }
+  // A file connection's folder of data files: relative to the project.
+  if (normalized.driver === 'file' && typeof normalized.dataFolder === 'string' && normalized.dataFolder.trim() !== '') {
+    if (!isAbsoluteLikePath(normalized.dataFolder)) normalized.dataFolder = resolve(projectRoot, normalized.dataFolder);
+  } else if (normalized.dataFolder !== undefined) {
+    delete normalized.dataFolder;
   }
   // Folders a hosted connection still reads files from (none by default): relative to the project.
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.allowedDirectories)) {

@@ -42,7 +42,7 @@ const HELP = `
   zlens — ZLens CLI
 
   Usage:
-    zlens init [directory]           Initialize ZLens in a project (auto-detects dbt or a DuckDB file)
+    zlens init [directory]           Initialize ZLens in a project (auto-detects dbt, a DuckDB or SQLite file, or data files)
     zlens new <type> <name>         Create a domain, block, semantic block, view, term, dashboard, or workbook
     zlens build <file.dql>          Compile a DQL file to a static HTML bundle
     zlens doctor [path]             Run local setup checks for a ZLens project
@@ -196,9 +196,12 @@ const COMMAND_HELP: Record<string, string> = {
 
   Notes:
     ZLens looks at what the folder holds. A dbt project (here or a level up)
-    makes a dbt project. A DuckDB file and no dbt project makes a Database
-    only project that reads the database's own tables. An empty folder gets a
-    project, and Guided Setup asks where your data lives.
+    makes a dbt project. A DuckDB or SQLite file and no dbt project makes a
+    Database only project that reads the database's own tables. So does a
+    folder of CSV, TSV, Parquet or JSON files (in the folder or its data/
+    folder): each file is a table, named after the file, read where it is.
+    An empty folder gets a project, and Guided Setup asks where your data
+    lives.
     --force patches missing folders of an existing project; it never
     overwrites dql.config.json or your files. --open starts the notebook.
   `,

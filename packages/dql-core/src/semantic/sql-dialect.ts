@@ -482,7 +482,8 @@ export function listDialectDrivers(): string[] {
  */
 export function describeDialectForPrompt(driver?: string): string {
   const dialect = getDialect(driver);
-  const name = driver?.trim() || 'duckdb';
+  // A file connection is DuckDB reading data files: its SQL is DuckDB's.
+  const name = driver?.trim() === 'file' ? 'duckdb' : driver?.trim() || 'duckdb';
   const limitGuidance = dialect.limitAtEnd
     ? `row-limit with \`${dialect.limitClause(100)}\` at the END of the query`
     : `row-limit with \`${dialect.limitClause(100)}\` (goes right after SELECT, not at the end)`;

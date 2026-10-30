@@ -37,6 +37,7 @@ import {
   formatMetadataScopeEditor,
   looksLikeGeneratedId,
   metadataScopeIncludes,
+  onlyDiscoveredSchema,
   parseMetadataScopeEditor,
   toggleAdditionalMetadataScope,
 } from './connection-metadata-scope';
@@ -132,6 +133,8 @@ function saveMessageColor(message: string, theme: Theme): string {
 function isPlaceholderLocalConnection(cfg: any): boolean {
   const driver = normalizeDriverName(String(cfg?.driver ?? cfg?.type ?? ''));
   if (driver !== 'duckdb' && driver !== 'file') return false;
+  // A folder of data files is a real database, read in memory.
+  if (driver === 'file' && String(cfg?.dataFolder ?? '').trim()) return false;
   const filepath = cfg?.filepath ?? cfg?.path;
   return !filepath || filepath === ':memory:';
 }
@@ -376,6 +379,11 @@ export function ConnectionPanel({
       const discovery = await api.discoverConnectionMetadataScopes(info.default);
       setMetadataDiscovery(discovery);
       setMetadataMessage(discovery.message);
+      const only = onlyDiscoveredSchema(discovery);
+      if (isSetup && only && parseMetadataScopeEditor(metadataScopeText).length === 0) {
+        setMetadataScopeText(formatMetadataScopeEditor([{ catalogOrDatabase: only.catalogOrDatabase, schemas: [only.schema] }]));
+        setMetadataMode('selected_scopes');
+      }
     } catch (error) {
       setMetadataDiscovery(null);
       setMetadataMessage(error instanceof Error ? error.message : String(error));
@@ -1845,6 +1853,7 @@ function primaryFieldKeys(driver: string, fields: Record<string, string>): strin
   const declared = CONNECTOR_SCHEMA_BY_DRIVER[driver]?.primary;
   if (declared) return declared(fields.authMethod ?? '');
   if (driver === 'duckdb' || driver === 'sqlite') return ['filepath'];
+  if (driver === 'file') return ['dataFolder'];
   if (driver === 'databricks') return ['host', 'httpPath', 'database', 'schema', 'authMethod', 'token'];
   if (driver !== 'snowflake') return [];
 

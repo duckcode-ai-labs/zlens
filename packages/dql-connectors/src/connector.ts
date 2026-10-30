@@ -49,6 +49,13 @@ export interface ConnectionConfig {
   trustServerCertificate?: boolean;
   filepath?: string;
   /**
+   * File connections: a folder whose CSV, TSV, Parquet and JSON files each
+   * become a view named after the file (`orders.csv` → `orders`), so the
+   * folder reads like a database. The files are read where they are, at
+   * query time.
+   */
+  dataFolder?: string;
+  /**
    * DuckDB and file connections, with a host: folders whose files a statement
    * may still read once the engine is restricted (`restrictExternalAccess`),
    * for example a data folder mounted for this connection. None by default.

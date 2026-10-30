@@ -48,7 +48,8 @@ export function buildWarehouseCatalogQueries(driver: string, scope: { catalogOrD
   const schemas = scope.schemas.length ? scope.schemas : [];
   const schemaFilter = (column: string) => (schemas.length ? `UPPER(${column}) IN (${inList(schemas)})` : `UPPER(${column}) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')`);
   const d = driver.toLowerCase();
-  if (d === 'duckdb') {
+  // A file connection is DuckDB reading files: its data folder's views are its tables.
+  if (d === 'duckdb' || d === 'file') {
     return [
       { kind: 'columns', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, column_name, data_type, is_nullable, comment FROM duckdb_columns() WHERE ${schemaFilter('schema_name')} AND NOT internal ORDER BY schema_name, table_name, column_index LIMIT ${MAX_ROWS}` },
       { kind: 'tables', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, 'BASE TABLE' AS table_type, comment, estimated_size AS row_count FROM duckdb_tables() WHERE ${schemaFilter('schema_name')} AND NOT internal` },
@@ -195,7 +196,7 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
   // relation (ids stay as they were): Ask's schema index names these tables
   // `database.schema.table`, and a table must have one name everywhere or its
   // columns are not found under the name it was chosen by.
-  const recordDatabase = includeCatalog || ['duckdb', 'postgres', 'postgresql', 'redshift', 'mssql', 'fabric', 'trino'].includes(driver.toLowerCase());
+  const recordDatabase = includeCatalog || ['duckdb', 'file', 'postgres', 'postgresql', 'redshift', 'mssql', 'fabric', 'trino'].includes(driver.toLowerCase());
   const relations = new Map<string, WarehouseCatalogRelationV1>();
   const ensure = (row: Row, catalogOrDatabase: string): WarehouseCatalogRelationV1 | undefined => {
     const schema = text(row, 'table_schema');

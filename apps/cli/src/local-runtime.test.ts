@@ -105,6 +105,7 @@ import {
   getConnectorInstallStatuses,
   assertConnectionNodeCompatibility,
   ensureConnectorInstalledForStartup,
+  connectorInstallDriver,
   loadProjectConfig,
   isAgentValueProbeColumn,
   markBlockStudioSourceReusable,
@@ -7552,12 +7553,18 @@ describe('ensureConnectorInstalledForStartup', () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-ensure-connector-'));
     tempDirs.push(projectRoot);
     // None of these should attempt an install — so no .dql/connectors is created and
-    // no throw escapes. (duckdb/snowflake would npm-install, so they're not tested here.)
+    // no throw escapes. (duckdb, file and snowflake would npm-install, so they're not tested here.)
     expect(() => ensureConnectorInstalledForStartup(projectRoot, undefined)).not.toThrow();
     expect(() => ensureConnectorInstalledForStartup(projectRoot, 'databricks')).not.toThrow();
-    expect(() => ensureConnectorInstalledForStartup(projectRoot, 'file')).not.toThrow();
+    expect(() => ensureConnectorInstalledForStartup(projectRoot, 'sqlite')).not.toThrow();
     expect(() => ensureConnectorInstalledForStartup(projectRoot, 'not-a-real-driver')).not.toThrow();
     expect(existsSync(join(projectRoot, '.dql/connectors'))).toBe(false);
+  });
+
+  it('installs the DuckDB driver for a file connection, which runs on DuckDB', () => {
+    expect(connectorInstallDriver('file')).toBe('duckdb');
+    expect(connectorInstallDriver('duckdb')).toBe('duckdb');
+    expect(connectorInstallDriver('snowflake')).toBe('snowflake');
   });
 
 });

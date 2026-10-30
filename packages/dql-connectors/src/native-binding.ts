@@ -26,8 +26,12 @@ export type NativeInstallContext =
   | { kind: 'connectors'; dir: string }
   /** `npm install -g`. */
   | { kind: 'global' }
-  /** The npx cache (`npx -p @zlens/cli zlens …`). */
-  | { kind: 'npx' };
+  /**
+   * The npx cache (`npx zlens …`, `npm create zlens`): `dir` is the cached
+   * install, `key` its name in `npm cache npx`. `rerun` is the command the
+   * person ran, with the install script allowed, when it is known.
+   */
+  | { kind: 'npx'; key?: string; dir?: string; rerun?: string };
 
 const BINDING_MISSING = [
   /Could not locate the bindings file/i, // `bindings` (better-sqlite3)
@@ -59,7 +63,11 @@ export function isNodeAbiMismatch(error: unknown): boolean {
  * project's own install.
  */
 export function nativeInstallContextFor(packageDir: string): NativeInstallContext {
-  if (packageDir.includes(`${sep}_npx${sep}`)) return { kind: 'npx' };
+  const npx = packageDir.indexOf(`${sep}_npx${sep}`);
+  if (npx >= 0) {
+    const key = packageDir.slice(npx + 6).split(sep)[0];
+    return key ? { kind: 'npx', key, dir: packageDir.slice(0, npx + 6 + key.length) } : { kind: 'npx' };
+  }
   const marker = `${sep}node_modules${sep}`;
   const index = packageDir.indexOf(marker);
   if (index < 0) return { kind: 'project', dir: packageDir };
@@ -127,8 +135,19 @@ export function nativeBindingHelp(options: NativeBindingHelpOptions): string {
     lines.push(`  npm install -g @zlens/cli --allow-scripts=${pkg}`);
     lines.push(`(or repair it in place: npm rebuild -g ${pkg} --allow-scripts=${pkg})`);
   } else if (context.kind === 'npx') {
-    lines.push('npx installed ZLens without running the script. Install the CLI into your project instead (npm install -D @zlens/cli, with');
-    lines.push(`"allowScripts": { "${pkg}": true } in package.json), or globally: npm install -g @zlens/cli --allow-scripts=${pkg}`);
+    if (context.rerun) {
+      // npx keeps the copy it installed, script and all, and reuses it: clear it first.
+      lines.push('npx installed ZLens without running the script, and keeps that copy. Clear it, then run it again with the script allowed:');
+      if (context.key && (pm.name !== 'npm' || (pm.major ?? 0) >= 11)) lines.push(`  npm cache npx rm ${context.key}`);
+      else if (context.dir) lines.push(`  ${process.platform === 'win32' ? `rmdir /s /q "${context.dir}"` : `rm -rf ${quote(context.dir)}`}`);
+      lines.push(`  ${context.rerun}`);
+      lines.push('');
+      lines.push(`Or install the CLI globally (npm install -g @zlens/cli --allow-scripts=${pkg}), or into your project (npm install -D @zlens/cli, with`);
+      lines.push(`"allowScripts": { "${pkg}": true } in package.json).`);
+    } else {
+      lines.push('npx installed ZLens without running the script. Install the CLI into your project instead (npm install -D @zlens/cli, with');
+      lines.push(`"allowScripts": { "${pkg}": true } in package.json), or globally: npm install -g @zlens/cli --allow-scripts=${pkg}`);
+    }
   } else if (pm.name === 'pnpm' && context.kind === 'project') {
     lines.push(`Fix it in ${context.dir}:`);
     lines.push('  pnpm approve-builds');

@@ -440,6 +440,13 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
       { key: 'filepath', label: 'SQLite file path', type: 'text', placeholder: './data/app.sqlite', required: true, helpText: 'Opened read-only.' },
     ],
   },
+  {
+    driver: 'file',
+    label: 'Local files',
+    fields: [
+      { key: 'dataFolder', label: 'Data folder', type: 'text', placeholder: './data', required: true, helpText: 'Each CSV, TSV, Parquet or JSON file in the folder is a table named after the file. The files are read where they are.' },
+    ],
+  },
 ];
 
 /** Whether a field applies to the form's current sign-in method and tunnel switch. */

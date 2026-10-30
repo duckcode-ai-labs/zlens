@@ -31,12 +31,16 @@ Path B in the video (no dbt) starts at 0:29.
 
 ## The quickest start: open the folder
 
-Put the database file in a folder and open that folder. No `init`, no flags:
+Put the database file in a folder and open that folder. No install, no
+`init`, no flags:
 
 ```bash
-npm i -g @zlens/cli --allow-scripts=better-sqlite3
-zlens notebook ./shop
+npx zlens notebook ./shop
 ```
+
+(On npm 12, `npx --allow-scripts=better-sqlite3 zlens notebook ./shop`; see
+[npm 12 and install scripts](install.md#npm-12-and-install-scripts). With
+ZLens installed, `zlens notebook ./shop` does the same.)
 
 ```text
   No ZLens project here. Create one? [Y/n]
@@ -50,6 +54,37 @@ the file (it tests the connection itself), lists the schemas it can see, and
 drafts your tables and joins. See [Or use Guided Setup](#or-use-guided-setup)
 for the steps. A folder that holds `dbt_project.yml` becomes a dbt project
 instead.
+
+The folder can hold any of these, and ZLens picks the first it finds:
+
+| The folder holds | The connection ZLens writes |
+|---|---|
+| A DuckDB file (`.duckdb`, or a `.db` file DuckDB wrote) | `{ "driver": "duckdb", "filepath": "shop.duckdb" }` |
+| A SQLite file (`.sqlite`, `.sqlite3`, or a `.db` file SQLite wrote) | `{ "driver": "sqlite", "filepath": "shop.sqlite" }`, opened read-only |
+| CSV, TSV, Parquet or JSON files, in the folder or its `data/` folder | `{ "driver": "file", "filepath": ":memory:", "dataFolder": "data" }` |
+
+### A folder of CSV, Parquet or JSON files
+
+Each file becomes a table named after it: `orders.csv` is `orders`, and
+`Daily Sales.parquet` is `daily_sales`. DuckDB reads the files where they
+are, each time a query runs: a file you replace is read fresh, a file you add
+becomes a table, and one you remove stops being one; nothing is copied or
+imported. A file DuckDB cannot read (a half-copied Parquet file, say) is left
+out until it changes, and the rest still work. Files in subfolders, hidden
+files, names with `*`, `?`, `[` or `]`, and tool settings (`dql.config.json`,
+`package.json`) are left out; in the project's own folder every `.json` file
+is (put JSON data in `data/`, or use JSON Lines). A folder with only `.json`
+files is not picked up as data.
+
+```text
+  No ZLens project here. Create one? [Y/n]
+  Found 6 data files in data/: customers.csv, locations.csv, order_items.csv, …; the project will be Database only, each file a table.
+```
+
+From there it is the same as a database: Guided Setup lists one schema,
+`main`; tick it, **Apply and synchronize**, then **Draft my models**. Files
+have no declared keys, so ZLens finds the joins from column names and checks
+each one on the data before you certify it.
 
 Without a terminal (a script, CI, a desktop launcher) `zlens notebook` never
 waits for an answer. It prints the one command to run:
@@ -472,6 +507,7 @@ reads depends on the database:
 | DuckDB, SQLite, PostgreSQL, Amazon Redshift, MySQL / MariaDB, SQL Server / Azure SQL, Microsoft Fabric, Snowflake, Databricks (Unity Catalog), BigQuery | tables, views, columns, comments and declared primary and foreign keys |
 | Trino / Starburst, Amazon Athena | tables, views, columns and comments; they declare no keys, so joins come from naming, view SQL and `--validate` |
 | ClickHouse | tables, columns and comments; no declared keys |
+| Local files (CSV, TSV, Parquet, JSON) | each file as a table, with its columns; files declare no keys, so joins come from naming and `--validate` |
 | Any other | tables, views and columns from `information_schema` |
 
 Columns are always read. Comments, keys and view SQL are read when the

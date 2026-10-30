@@ -6,9 +6,9 @@ import type { FolderContents } from './init.js';
  * `zlens notebook <folder>` on a folder with no ZLens project (design D7):
  * in a terminal, ask "No ZLens project here. Create one? [Y/n]" and create it;
  * without a terminal (a script, CI, a desktop launcher) print the single
- * command that creates and opens it. A database file in the folder is picked
- * up, so the project is Database only without a flag; a dbt project makes it a
- * dbt project.
+ * command that creates and opens it. A database file (DuckDB or SQLite) or a
+ * folder of CSV, Parquet or JSON files is picked up, so the project is
+ * Database only without a flag; a dbt project makes it a dbt project.
  */
 
 export type BareFolderDecision =
@@ -24,17 +24,30 @@ export function bareFolderCommand(folder: string, cwd: string = process.cwd()): 
   return `npx zlens notebook ${shown} --yes`;
 }
 
+/** The database a folder holds, in plain words: `shop.sqlite`, `3 data files in data/: orders.csv, …`. */
+export function describeDatabase(contents: FolderContents): string {
+  if (contents.duckdbPath) return contents.duckdbPath;
+  if (contents.sqlitePath) return contents.sqlitePath;
+  const folder = contents.dataFolder;
+  if (!folder) return '';
+  const shown = folder.files.slice(0, 3).join(', ') + (folder.files.length > 3 ? ', …' : '');
+  const where = folder.path === '.' ? '' : ` in ${folder.path}/`;
+  return `${folder.files.length} data file${folder.files.length === 1 ? '' : 's'}${where}: ${shown}`;
+}
+
 /** What the folder holds, in plain words, for the question and the message. */
 export function describeFolder(contents: FolderContents): string {
   if (contents.isDbt) return contents.duckdbPath ? `a dbt project and the database ${contents.duckdbPath}` : 'a dbt project';
-  if (contents.duckdbPath) return `the database ${contents.duckdbPath}`;
+  if (contents.duckdbPath || contents.sqlitePath) return `the database ${describeDatabase(contents)}`;
+  if (contents.dataFolder) return describeDatabase(contents);
   return '';
 }
 
 /** The kind of project ZLens would create, in plain words. */
 export function plannedProjectKind(contents: FolderContents): string {
   if (contents.isDbt) return 'a dbt project';
-  if (contents.duckdbPath) return 'Database only';
+  if (contents.duckdbPath || contents.sqlitePath) return 'Database only';
+  if (contents.dataFolder) return 'Database only, each file a table';
   return 'Guided Setup asks whether you use dbt or a database only';
 }
 
