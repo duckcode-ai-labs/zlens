@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url';
 const here = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = resolve(here, '../../../..');
 export const cliEntry = join(repoRoot, 'apps/cli/dist/index.js');
-export const DUCKDB_VERSION = '1.1.3';
+export const DUCKDB_VERSION = '^1.5.6-r.1';
 
 export function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}): void {
   const result = spawnSync(command, args, { cwd: options.cwd ?? repoRoot, stdio: 'inherit', env: options.env ?? process.env });
@@ -50,7 +50,7 @@ export function installDuckdbConnector(projectDir: string, version: string = DUC
   const connectorRoot = join(projectDir, '.dql', 'connectors');
   mkdirSync(connectorRoot, { recursive: true });
   writeFileSync(join(connectorRoot, 'package.json'), '{"private":true}\n');
-  run('npm', ['--prefix', connectorRoot, 'install', '--no-save', '--no-package-lock', '--workspaces=false', `duckdb@${version}`]);
+  run('npm', ['--prefix', connectorRoot, 'install', '--no-save', '--no-package-lock', '--workspaces=false', `@duckdb/node-api@${version}`]);
   return connectorRoot;
 }
 

@@ -31,6 +31,9 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **Same results.** Every value comes back as before (numbers, dates and
   timestamps, TIME as text, lists and structs); a column that is NULL in the
   first row now gets its real type instead of none.
+- **A tile by month, quarter or year lists its rows in date order** when you
+  have not set a sort. DuckDB 1.5 returns grouped rows in a different order
+  from run to run, so a table tile could show March before February.
 - **`zlens sync warehouse` installs the driver** the first time, as `zlens
   notebook` does at start, so quickstarts and `create-zlens-app` have no
   separate driver step. A driver whose binary for this computer is missing (a

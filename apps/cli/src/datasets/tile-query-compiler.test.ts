@@ -173,6 +173,13 @@ describe('dataset tile compiler golden SQL', () => {
     }
   });
 
+  it('orders a time series by its time grain when the tile names no order, and keeps an authored order as it is', () => {
+    const series: TileQuery = { dimensions: [{ field: 'region' }, { field: 'ordered_at', timeGrain: 'month' }], measures: [{ measure: 'revenue' }] };
+    expect(compile('duckdb', series).sql.split('\n').at(-1)).toBe('ORDER BY "ordered_at_month" ASC');
+    expect(compile('duckdb', { ...series, orderBy: [{ alias: 'revenue', direction: 'desc' }] }).sql.split('\n').at(-1)).toBe('ORDER BY "revenue" DESC');
+    expect(compile('duckdb', { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }] }).sql).not.toContain('ORDER BY');
+  });
+
   it('never renders an unknown time grain', () => {
     const injected: TileQuery = { dimensions: [{ field: 'ordered_at', timeGrain: "month', x) --" }], measures: [{ measure: 'revenue' }] };
     expect(() => compile('duckdb', injected)).toThrowError(expect.objectContaining({ code: 'DATASET_QUERY_REJECTED' }));
@@ -319,6 +326,7 @@ describe('pivot totals (RFC 0009 step 4)', () => {
       `SELECT ds."region" AS "region", DATE_TRUNC('month', ds."ordered_at") AS "ordered_at_month", COUNT(DISTINCT ds."order_line_id") AS "orders", GROUPING(ds."region") AS "__total_region", GROUPING(DATE_TRUNC('month', ds."ordered_at")) AS "__total_ordered_at_month"`,
       'FROM ds',
       `GROUP BY GROUPING SETS ((ds."region", DATE_TRUNC('month', ds."ordered_at")), (ds."region"), ())`,
+      'ORDER BY "ordered_at_month" ASC',
     ].join('\n'));
     expect(compile('bigquery', { dimensions: [{ field: 'region' }], measures: [{ measure: 'revenue' }], rollups: [[]] }).sql)
       .toContain('GROUP BY GROUPING SETS ((ds.`region`), ())');
