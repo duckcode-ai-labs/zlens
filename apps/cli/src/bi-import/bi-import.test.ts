@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createBlockStudioImportSession } from '../block-studio-import.js';
 import { readBiFile } from './index.js';
 import { readPowerQuery, readPowerQueryParameter } from './power-query.js';
+import { readPowerBiReportLayout } from './powerbi.js';
 import { listZipEntries, readZipFile } from './zip.js';
 
 /**
@@ -351,6 +352,21 @@ select location_id, sum(order_total) as revenue from dev.orders group by 1
       ['calculations', 'legacy/revenue.twb#Orders'],
       ['no-sql', 'legacy/revenue.twb#Customers'],
       ['calculations', 'legacy/Sales.SemanticModel/definition'],
+    ]);
+  });
+});
+
+describe('a Power BI report, counted', () => {
+  it('reads pages and visual types from a template layout (Report/Layout) or an older report.json', () => {
+    const layout = JSON.stringify({
+      sections: [
+        { displayName: 'Overview', visualContainers: [{ config: JSON.stringify({ singleVisual: { visualType: 'card' } }) }, { config: JSON.stringify({ singleVisual: { visualType: 'lineChart' } }) }] },
+        { name: 'ReportSection2', visualContainers: [{ config: '{not json' }, { config: JSON.stringify({ singleVisualGroup: {} }) }] },
+      ],
+    });
+    expect(readPowerBiReportLayout(layout)).toEqual([
+      { name: 'Overview', kind: 'page', visuals: ['card', 'lineChart'] },
+      { name: 'ReportSection2', kind: 'page', visuals: [] },
     ]);
   });
 });

@@ -3,6 +3,44 @@
 Moving to ZLens from Looker, Metabase, Tableau, Power BI, Hex or a folder of
 SQL scripts starts with the SQL behind your reports.
 
+## See what moves first
+
+Before you import anything, point ZLens at the folder of reports:
+
+```bash
+npx zlens migrate assess ./reports
+```
+
+It reads Tableau workbooks (`.twb`, `.twbx`), Power BI templates (`.pbit`)
+and projects (PBIP), and `.sql` files, and reports:
+
+- **Queries**: how many draft saved queries `zlens import sql` would make
+  (the import's own count: a copy of a query counts once, statements that
+  change data are left out), and how many take report parameters.
+- **Tables read without SQL**: ZLens reads those from the database directly.
+- **Calculations**, each Tableau calculated field and DAX measure, calculated
+  column and calculated table, sorted by how it moves:
+
+    | Kind | For example | In ZLens |
+    |---|---|---|
+    | Simple | `SUM([Sales])`, `DISTINCTCOUNT(Orders[customer_id])` | one metric |
+    | Filtered | `SUM(IF [Region] = "East" THEN [Sales] END)`, `CALCULATE(SUM(Orders[total]), Orders[status] = "paid")` | one metric with a filter |
+    | Ratio | `SUM([Profit]) / SUM([Sales])`, `DIVIDE([Total Sales], [Orders])` | one metric built from others |
+    | Row-level | `[Price] * [Quantity]`, a DAX calculated column | a column or dimension |
+    | Advanced | `{FIXED …}`, `RUNNING_SUM`, `TOTALYTD`, `SUMX`, `ALL`, `USERNAME()` | rewritten by hand or with a coding agent; the report says why |
+
+- **The report**: worksheets, dashboards, report pages and their chart types.
+- **Databases** the reports read, and whether ZLens connects to each.
+
+It prints a summary and writes the full report to
+`zlens-migration-assessment.md` where you run it (`--out <file.md>` to choose;
+`--format json` prints the assessment instead and writes nothing). It reads
+files only: nothing runs against a database, no AI is asked, and nothing
+leaves your computer. You do not need a ZLens project to run it.
+
+The calculation kinds come from reading each formula, not running it, and a
+formula that builds on another calculation counts as the harder of the two.
+
 ## Bring the SQL over
 
 1. Put the reports you want to keep in one folder:
@@ -41,6 +79,9 @@ Statements that change data get no draft. Nothing is certified until a person
 runs Certify.
 
 ## What `zlens migrate <tool>` does today
+
+`zlens migrate assess <folder>` reports what moves; see
+[See what moves first](#see-what-moves-first).
 
 `zlens migrate tableau --input <path>` and `zlens migrate powerbi --input
 <path>` run the import above. Without `--input` they print the command to

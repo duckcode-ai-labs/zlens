@@ -37,6 +37,8 @@ export interface PowerQueryReading {
   tables: string[];
   /** What the expression loads from when it is neither SQL nor a table (`Csv.Document`). */
   otherSources: string[];
+  /** The database connector the expression uses, as people say it (`Snowflake`), when known. */
+  connector?: string;
 }
 
 const CONNECTORS: Array<[RegExp, string]> = [
@@ -79,7 +81,7 @@ export function readPowerQuery(expression: string, context: { parameters: Map<st
   const otherSources = queries.length || tables.length
     ? []
     : Array.from(new Set(tokens.filter((token) => token.kind === 'identifier' && FILE_SOURCES.test(token.text)).map((token) => token.text)));
-  return { queries, tables, otherSources };
+  return { queries, tables, otherSources, ...(connector ? { connector } : {}) };
 }
 
 // ── Assembling the SQL text ────────────────────────────────────────────────

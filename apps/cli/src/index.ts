@@ -63,6 +63,9 @@ const HELP = `
                                     (auto-flips status, sets datalex_contract,
                                      surfaces datalex-manifest.json patch)
     zlens info <file.dql>           Show block metadata
+    zlens migrate assess <folder>   Read Tableau, Power BI and SQL files and report what moves to ZLens
+                                    (queries, calculations by kind, reports, databases); files only,
+                                    nothing leaves this computer. --out <file.md>, --format json
     zlens migrate <source>          Scaffold migration from looker/tableau/dbt/metabase/raw-sql
     zlens migrate format [--check]  Upgrade all .dql/.dqlnb files to canonical format
     zlens migrate layout --to domain-first [--dry-run]
@@ -508,7 +511,7 @@ async function main() {
         await runInfo(file!, flags);
         break;
       case "migrate":
-        await runMigrate(file!, flags);
+        await runMigrate(file!, flags, rest);
         break;
       case "import":
         await runImport(file!, rest, flags);

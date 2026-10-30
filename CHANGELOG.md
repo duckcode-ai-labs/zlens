@@ -8,6 +8,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### See what moves before you migrate: `zlens migrate assess`
+
+- **`zlens migrate assess <folder>`** reads a folder of Tableau workbooks,
+  Power BI templates and projects, and SQL files, and says what moves to
+  ZLens: how many draft saved queries the import would make, which tables
+  are read without SQL, every calculated field and DAX measure sorted by how
+  it moves (simple, filtered or ratio: one metric each; row-level: a column;
+  advanced: level of detail, table calculations, time intelligence,
+  iterators, with the reason), the worksheets, dashboards and report pages
+  with their chart types, and the databases they read. It writes the full
+  report to `zlens-migration-assessment.md` (`--out` to choose; `--format
+  json` to print it). It reads files only and needs no project.
+- The Tableau and Power BI readers now also read each calculation's formula,
+  DAX calculated columns, and a template's or PBIP project's report pages.
+
 ### Start with one command, on a folder of files too
 
 - **`npx zlens …` works with nothing installed.** `npx @zlens/cli` stops

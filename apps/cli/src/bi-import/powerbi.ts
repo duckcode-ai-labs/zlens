@@ -1,6 +1,7 @@
 import { humanizeObjectName } from '../sql-import-script.js';
 import { readPowerQuery, readPowerQueryParameter, type PowerQueryParameter } from './power-query.js';
-import { listNames, sqlSourceContent, type ExtractedBiFile } from './types.js';
+import type { BiCalculation } from './calculations.js';
+import { listNames, sqlSourceContent, type BiInventory, type BiReportPage, type ExtractedBiFile } from './types.js';
 import { decodeModelText, readZipFile } from './zip.js';
 
 /**
@@ -16,6 +17,8 @@ interface PowerBiModel {
     name: string;
     partitions: Array<{ name: string; mode?: string; type: string; expression: string }>;
     measures: Array<{ name: string; expression: string }>;
+    /** Calculated columns (a data column has no expression). */
+    columns: Array<{ name: string; expression: string }>;
   }>;
   expressions: Array<{ name: string; expression: string }>;
 }
@@ -23,7 +26,75 @@ interface PowerBiModel {
 export function extractPowerBiTemplate(zip: Buffer, displayPath: string): ExtractedBiFile {
   const schema = readZipFile(zip, (name) => name === 'DataModelSchema');
   if (!schema) throw new Error(`${displayPath} has no DataModelSchema; save it again as a Power BI template (.pbit).`);
-  return extractPowerBiModelJson(decodeModelText(schema.data), displayPath);
+  const extracted = extractPowerBiModelJson(decodeModelText(schema.data), displayPath);
+  const layout = readZipFile(zip, (name) => name === 'Report/Layout');
+  if (layout && extracted.inventory) {
+    try {
+      extracted.inventory.pages = readPowerBiReportLayout(decodeModelText(layout.data));
+    } catch {
+      // The report is only counted; its queries are what the import needs.
+    }
+  }
+  return extracted;
+}
+
+/**
+ * A report's pages and their visuals from its layout JSON: a template's
+ * `Report/Layout`, or a PBIP report's `report.json` (the older format).
+ */
+export function readPowerBiReportLayout(text: string): BiReportPage[] {
+  const layout = JSON.parse(text) as { sections?: Array<{ displayName?: string; name?: string; visualContainers?: Array<{ config?: string }> }> };
+  return (layout.sections ?? []).map((section) => ({
+    name: section.displayName || section.name || 'Page',
+    kind: 'page' as const,
+    visuals: (section.visualContainers ?? []).map((container) => {
+      try {
+        return String((JSON.parse(container.config ?? '{}') as { singleVisual?: { visualType?: string } }).singleVisual?.visualType ?? '');
+      } catch {
+        return '';
+      }
+    }).filter(Boolean),
+  }));
+}
+
+/**
+ * A PBIP report in the PBIR format: `definition/pages/<page>/page.json` and
+ * `definition/pages/<page>/visuals/<visual>/visual.json`, paths relative to the
+ * report folder.
+ */
+export function readPowerBiReportDefinition(files: Array<{ path: string; text: string }>): BiReportPage[] {
+  const pages = new Map<string, BiReportPage>();
+  const pageOf = (id: string) => {
+    const page = pages.get(id) ?? { name: id, kind: 'page' as const, visuals: [] };
+    pages.set(id, page);
+    return page;
+  };
+  const normalized = files.map((file) => ({ path: file.path.replace(/\\/g, '/'), text: file.text })).sort((a, b) => a.path.localeCompare(b.path));
+  for (const file of normalized) {
+    const pageMatch = /(?:^|\/)pages\/([^/]+)\/page\.json$/i.exec(file.path);
+    const visualMatch = /(?:^|\/)pages\/([^/]+)\/visuals\/[^/]+\/visual\.json$/i.exec(file.path);
+    try {
+      if (pageMatch) {
+        const json = JSON.parse(file.text) as { displayName?: string };
+        const page = pageOf(pageMatch[1]!);
+        if (json.displayName) page.name = json.displayName;
+      } else if (visualMatch) {
+        const json = JSON.parse(file.text) as { visual?: { visualType?: string } };
+        if (json.visual?.visualType) pageOf(visualMatch[1]!).visuals.push(json.visual.visualType);
+      }
+    } catch {
+      // A file that does not parse is not counted.
+    }
+  }
+  // `pages/pages.json` lists the pages in the order the report shows them.
+  let order: string[] = [];
+  try {
+    order = (JSON.parse(normalized.find((file) => /(?:^|\/)pages\/pages\.json$/i.test(file.path))?.text ?? '{}') as { pageOrder?: string[] }).pageOrder ?? [];
+  } catch {
+    // Without it, pages come in folder order.
+  }
+  const rank = (id: string) => (order.includes(id) ? order.indexOf(id) : order.length);
+  return [...pages.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(([, page]) => page);
 }
 
 /** A .pbix keeps its model compressed in a format ZLens does not read: say how to get a template instead. */
@@ -52,6 +123,9 @@ export function extractPowerBiModelJson(text: string, displayPath: string): Extr
         expression: joined(partition.source?.expression),
       })),
       measures: (table.measures ?? []).map((measure: any) => ({ name: String(measure.name ?? ''), expression: joined(measure.expression) })),
+      columns: (table.columns ?? [])
+        .filter((column: any) => column.type === 'calculated' && joined(column.expression).trim())
+        .map((column: any) => ({ name: String(column.name ?? ''), expression: joined(column.expression) })),
     })),
     expressions: (json.model?.expressions ?? []).map((expression: any) => ({ name: String(expression.name ?? ''), expression: joined(expression.expression) })),
   };
@@ -82,20 +156,30 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
       shared.set(expression.name, expression.expression);
     }
   }
-  const result: ExtractedBiFile = { sources: [], skipped: [] };
+  const inventory: BiInventory = { tool: 'powerbi', dataSources: [], calculations: [], tablesWithoutSql: 0, pages: [] };
+  const result: ExtractedBiFile = { sources: [], skipped: [], inventory };
+  const connectors = new Map<string, BiInventory['dataSources'][number]>();
   const tableLoads: string[] = [];
   const otherLoads: string[] = [];
   const calculatedTables: string[] = [];
   const measures: string[] = [];
+  const calculation = (name: string, formula: string, role: BiCalculation['role'], owner: string): BiCalculation => ({ name, formula, language: 'dax', role, owner, sourcePath: displayPath });
   for (const table of model.tables) {
     measures.push(...table.measures.map((measure) => `${measure.name} = ${measure.expression.replace(/\s+/g, ' ').slice(0, 60)}`));
+    inventory.calculations.push(...table.measures.map((measure) => calculation(measure.name, measure.expression, 'measure', table.name)));
+    inventory.calculations.push(...table.columns.map((column) => calculation(column.name, column.expression, 'column', table.name)));
     for (const partition of table.partitions) {
       if (partition.type !== 'm') {
         // A table that only holds measures ({BLANK()}) is not a calculation of its own.
-        if (partition.type === 'calculated' && !/^\{?\s*BLANK\(\)\s*\}?$/i.test(partition.expression.trim())) calculatedTables.push(table.name);
+        if (partition.type === 'calculated' && !/^\{?\s*BLANK\(\)\s*\}?$/i.test(partition.expression.trim())) {
+          calculatedTables.push(table.name);
+          inventory.calculations.push(calculation(table.name, partition.expression, 'table', table.name));
+        }
         continue;
       }
       const reading = readPowerQuery(partition.expression, { parameters, shared });
+      const source = reading.connector ?? (reading.otherSources.length ? reading.otherSources.join(', ') : undefined);
+      if (source && !connectors.has(source)) connectors.set(source, { name: source, ...(reading.connector ? { database: reading.connector } : {}) });
       reading.queries.forEach((query, index) => {
         const name = humanizeObjectName(table.name) || table.name;
         const fullName = reading.queries.length > 1 ? `${name} ${index + 1}` : name;
@@ -114,6 +198,8 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
       else if (!reading.queries.length && reading.otherSources.length) otherLoads.push(`${table.name} (${reading.otherSources.join(', ')})`);
     }
   }
+  inventory.dataSources.push(...connectors.values());
+  inventory.tablesWithoutSql = tableLoads.length + otherLoads.length;
   if (tableLoads.length) {
     result.skipped.push({
       sourcePath: displayPath,
@@ -192,7 +278,7 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
     const trimmed = line.trim();
     const tableMatch = /^table\s+(.+)$/.exec(line);
     if (tableMatch) {
-      table = { name: objectName(tableMatch[1]), partitions: [], measures: [] };
+      table = { name: objectName(tableMatch[1]), partitions: [], measures: [], columns: [] };
       tables.push(table);
       continue;
     }
@@ -208,6 +294,14 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
     if (measureMatch) {
       const { value, next } = valueAt(index, measureMatch[2]);
       table.measures.push({ name: objectName(measureMatch[1]), expression: stripProperties(value) });
+      index = next - 1;
+      continue;
+    }
+    // A calculated column has `= expression`; a data column has none.
+    const columnMatch = /^\s+column\s+('(?:[^']|'')+'|[^\s=]+)\s*=(.*)$/.exec(line);
+    if (columnMatch) {
+      const { value, next } = valueAt(index, columnMatch[2]);
+      table.columns.push({ name: objectName(columnMatch[1]), expression: stripProperties(value) });
       index = next - 1;
       continue;
     }
