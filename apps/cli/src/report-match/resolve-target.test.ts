@@ -46,6 +46,7 @@ describe('working out what the columns are', () => {
     expect(resolveMetricTarget(file('Order Date,Total Sales\nQ1 2026,1.5\n'), catalog).timeDimension).toEqual({ name: 'order_date', granularity: 'quarter' });
     expect(resolveMetricTarget(file('Order Date,Total Sales\n2026-01-05,1.5\n'), catalog).timeDimension).toEqual({ name: 'order_date', granularity: 'day' });
     expect(resolveMetricTarget(file('YEAR(Order Date),Total Sales\n2026,1.5\n'), catalog).timeDimension).toEqual({ name: 'order_date', granularity: 'year' });
+    expect(resolveMetricTarget(file('Order Date,Total Sales\n2025,1.5\n2026,2.5\n'), catalog).timeDimension).toEqual({ name: 'order_date', granularity: 'year' });
   });
 
   it('treats a plain whole number that matches no metric as a key, using the table\'s column', () => {

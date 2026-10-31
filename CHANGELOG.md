@@ -10,8 +10,8 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Prove the numbers match the old report
 
-- **`zlens migrate compare <file|folder>`** takes a CSV export of an old Tableau
-  or Power BI report, builds the same table from ZLens's metric drafts, metrics
+- **`zlens migrate compare <file|folder>`** takes a CSV or `.xlsx` export of an
+  old Tableau or Power BI report, builds the same table from ZLens's metric drafts, metrics
   or a saved query, and compares every value at the precision the file prints.
   It reads what these tools really write: UTF-16 with tabs, `$1,234`, `($41,000)`,
   `8.7%`, decimal commas, `Measure Names`, total rows. Each metric gets its own

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { extractTableauWorkbook } from '../bi-import/tableau.js';
 import { matchReportMarkdown, matchWords, readComparisonDetail, readMatchRecords, writeComparisonDetail, writeMatchRecords } from './record.js';
+import { readExport } from './read-export.js';
 import { compareOptionProblem, ComparisonStopped, ExportRefused, queryFingerprint, runComparison, type CompareDeps, type CompareRequest } from './run.js';
 
 const metric = (name: string, label: string, extra: Partial<MetricDefinition> = {}): MetricDefinition => ({ name, label, description: '', domain: 'sales', type: 'sum', sql: name, table: 'analytics.orders', ...extra });
@@ -84,6 +85,16 @@ describe('a comparison from start to finish', () => {
     const text = `Applied filters: Region is East\n${byRegion}`;
     expect((await runComparison(request(text), deps(rows))).comparison.verdict).toBe('not-proven');
     expect((await runComparison(request(text, { waive: ['Applied filters: this export has every region'] }), deps(rows))).comparison.verdict).toBe('matches');
+  });
+
+  it('counts a part of the file it did not read like an unanswered filter', async () => {
+    const context = deps(rows);
+    const table = { ...readExport(Buffer.from(byRegion), 'a.csv'), unread: ['the hidden sheet Old'] };
+    const withUnread = { ...context, readFile: async () => table };
+    const held = await runComparison(request(byRegion), withUnread);
+    expect(held.comparison.verdict).toBe('not-proven');
+    expect(held.filters.seen).toContain('the hidden sheet Old');
+    expect((await runComparison(request(byRegion, { waive: ['Applied filters: an old copy'] }), withUnread)).comparison.verdict).toBe('matches');
   });
 
   it('does not let another waiver, or one stated filter, answer the whole line', async () => {

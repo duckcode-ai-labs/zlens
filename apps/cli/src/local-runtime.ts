@@ -786,6 +786,7 @@ import {
 } from './block-studio-import.js';
 import { findImportedWorksheet, readBlockStudioImportCalculations } from './block-studio-import.js';
 import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, runComparison } from './report-match/run.js';
+import { readExportAside } from './report-match/read-export-aside.js';
 import { readComparisonDetail, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
 import {
   MetricDraftApprovalError,
@@ -18287,6 +18288,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             },
           },
           tableMapping,
+          readFile: readExportAside,
           driver: active.driver,
           connection: { driver: active.driver, ...(active.database ? { database: active.database } : {}) },
           worksheet: (worksheet) => findImportedWorksheet(projectRoot, worksheet),

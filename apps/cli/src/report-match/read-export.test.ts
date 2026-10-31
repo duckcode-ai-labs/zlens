@@ -62,6 +62,27 @@ describe('reading an export', () => {
     expect(() => readExport(Buffer.from('Region,Sales\n"East,1\nWest,2\nNorth,3\n'), 'a.csv')).toThrow('never closes');
   });
 
+  it('reads the filters that follow their label, above or below the table', () => {
+    const below = readExport(Buffer.from('Region,Sales\nEast,1\nApplied filters:\nRegion is East\nYear is 2026\n'), 'a.csv');
+    expect(below.appliedFilters).toBe('Region is East; Year is 2026');
+    expect(below.rows).toEqual([['East', '1']]);
+    const above = readExport(Buffer.from('Applied filters:\nRegion is East\nRegion,Sales\nEast,1\n'), 'a.csv');
+    expect(above.appliedFilters).toBe('Region is East');
+    expect(above.headers).toEqual(['Region', 'Sales']);
+    expect(readExport(Buffer.from('Applied filters:\nRegion,Sales\nEast,1\n'), 'a.csv').appliedFilters).toBe('filters the file does not name');
+  });
+
+  it('sets a title aside, but never a header row out of line with the table', () => {
+    const titled = readExport(Buffer.from('Sales by Region\nRegion,Sales\nEast,1\n'), 'a.csv');
+    expect(titled.headers).toEqual(['Region', 'Sales']);
+    expect(titled.notes[0]).toContain('Sales by Region');
+    expect(() => readExport(Buffer.from(',Sales\nEast,1\n'), 'b.csv')).toThrow('several header rows');
+  });
+
+  it('knows a pivot\'s subtotal', () => {
+    expect(readExport(Buffer.from('Region,Sales\nEast,1\nWest Total,2\n'), 'a.csv').totals).toEqual([['West Total', '2']]);
+  });
+
   it('keeps every Applied filters line', () => {
     const table = readExport(Buffer.from('Applied filters: Region is East\nApplied filters: Year is 2026\nRegion,Sales\nEast,1\n'), 'a.csv');
     expect(table.appliedFilters).toBe('Region is East; Year is 2026');

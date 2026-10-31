@@ -215,7 +215,7 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | --- | --- |
 | `zlens import sql <path>` | Draft saved queries from SQL, Tableau and Power BI files or folders |
 | `zlens migrate assess <folder>` | Read Tableau, Power BI and SQL files and report what moves: queries, calculations by kind, the report and the databases. Writes `zlens-migration-assessment.md` (`--out <file.md>`); `--format json` prints it instead. Reads files only |
-| `zlens migrate compare <file\|folder>` | Compare an old report's CSV export with ZLens's own table, value by value, at the precision the file prints: Matches, Differs or Not proven (exit 0, 1 or 2). Works on metric drafts. Keeps a record per metric or saved query with no values. A folder writes `zlens-migration-match.md` (`--out <file.md>`) |
+| `zlens migrate compare <file\|folder>` | Compare an old report's CSV or `.xlsx` export with ZLens's own table, value by value, at the precision the file prints: Matches, Differs or Not proven (exit 0, 1 or 2). Works on metric drafts. Keeps a record per metric or saved query with no values. A folder writes `zlens-migration-match.md` (`--out <file.md>`) |
 | `zlens migrate compare --metric <name> --value <number>` | Compare one number from the old report with a metric |
 | `zlens migrate <source>` | `tableau`, `powerbi` and `raw-sql` with `--input <path>` run `zlens import sql`; `looker`, `metabase` and `dbt` print what to do instead |
 | `zlens migrate layout --to domain-first --dry-run` | Preview moves from legacy folders into `domains/<domain>/...` |

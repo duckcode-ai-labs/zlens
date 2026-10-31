@@ -45,14 +45,18 @@ export function listZipEntries(zip: Buffer): ZipEntry[] {
   return entries;
 }
 
-export function readZipEntry(zip: Buffer, entry: ZipEntry): Buffer {
-  if (entry.size > MAX_ZIP_ENTRY_BYTES) throw new Error(`${entry.name} is larger than ZLens reads (${Math.round(MAX_ZIP_ENTRY_BYTES / 1024 / 1024)} MB).`);
+export function readZipEntry(zip: Buffer, entry: ZipEntry, maxBytes: number = MAX_ZIP_ENTRY_BYTES): Buffer {
+  if (entry.size > maxBytes) throw new Error(`${entry.name} is larger than ZLens reads (${Math.round(maxBytes / 1024 / 1024)} MB).`);
   const local = entry.localHeaderOffset;
   if (local + 30 > zip.length || zip.readUInt32LE(local) !== LOCAL_FILE_HEADER) throw new Error(`The zip entry ${entry.name} is damaged.`);
   const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
   const data = zip.subarray(start, start + entry.compressedSize);
-  if (entry.method === 0) return Buffer.from(data);
-  if (entry.method === 8) return inflateRawSync(data, { maxOutputLength: MAX_ZIP_ENTRY_BYTES });
+  if (entry.method === 0) {
+    // A stored entry's real size is what it occupies, whatever its header says.
+    if (data.length > maxBytes) throw new Error(`${entry.name} is larger than ZLens reads (${Math.round(maxBytes / 1024 / 1024)} MB).`);
+    return Buffer.from(data);
+  }
+  if (entry.method === 8) return inflateRawSync(data, { maxOutputLength: maxBytes });
   throw new Error(`The zip entry ${entry.name} uses a compression ZLens does not read (method ${entry.method}).`);
 }
 

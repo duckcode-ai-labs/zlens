@@ -49,6 +49,8 @@ export interface CompareDeps {
   worksheet: (name: string) => BiWorksheet | undefined;
   /** Runs one read-only statement. `truncated` when a row limit cut it. */
   run: (sql: string, saved?: SavedQueryRun) => Promise<{ rows: Array<Record<string, unknown>>; truncated: boolean }>;
+  /** Reads the export away from the server's own thread. Without it, here. */
+  readFile?: (bytes: Buffer, fileName: string) => Promise<ExportTable>;
   /** A saved query's SQL, and what its parameters bind. */
   savedQuery?: (name: string, parameters: Record<string, unknown>) => Promise<({ name: string; sql: string } & SavedQueryRun) | undefined>;
   now?: Date;
@@ -120,7 +122,7 @@ export function compareOptionProblem(options: Record<string, unknown>): string |
 }
 
 export async function runComparison(request: CompareRequest, deps: CompareDeps): Promise<CompareOutcome> {
-  const table = tableOf(request, deps.catalog.metrics);
+  const table = await tableOf(request, deps);
   const stated = (request.filters ?? []).map(parseStatedFilter);
   const waived = request.waive ?? [];
   for (const text of waived) {
@@ -130,11 +132,12 @@ export async function runComparison(request: CompareRequest, deps: CompareDeps):
   // Filters ZLens can see, each needing an answer.
   const worksheet = request.worksheet ? deps.worksheet(request.worksheet) : undefined;
   if (request.worksheet && !worksheet) throw new ComparisonStopped(`No imported workbook has a worksheet named ${request.worksheet}. Import the workbook first, or leave --worksheet out.`);
-  const seen = [...(worksheet?.filters ?? []).map((filter) => filter.words), ...(table.appliedFilters ? [`Applied filters: ${table.appliedFilters}`] : [])];
+  const seen = [...(worksheet?.filters ?? []).map((filter) => filter.words), ...(table.appliedFilters ? [`Applied filters: ${table.appliedFilters}`] : []), ...(table.unread ?? [])];
   const statedFields = stated.map((filter) => filter.field);
   const unanswered = (worksheet?.filters ?? []).filter((filter) => !isFilterAnswered(filter.field, statedFields, waived)).map((filter) => filter.field);
   // The line can name several filters, so stating one does not answer it: the person says it is answered.
-  if (table.appliedFilters && !isFilterAnswered('Applied filters', [], waived)) unanswered.push(table.appliedFilters);
+  const unseen = [...(table.appliedFilters ? [table.appliedFilters] : []), ...(table.unread ?? [])];
+  if (unseen.length && !isFilterAnswered('Applied filters', [], waived)) unanswered.push(...unseen);
 
   const options: CompareOptions = {
     fileRowsOnly: Boolean(request.fileRows),
@@ -225,7 +228,8 @@ function notesOf(metrics: MetricDefinition[]): string[] {
   })));
 }
 
-function tableOf(request: CompareRequest, metrics: MetricDefinition[]): ExportTable {
+async function tableOf(request: CompareRequest, deps: CompareDeps): Promise<ExportTable> {
+  const metrics = deps.catalog.metrics;
   if (request.value !== undefined) {
     if (!request.metric) throw new ComparisonStopped('--value needs --metric: the metric it is the old number of.');
     const metric = metrics.find((candidate) => candidate.name === request.metric);
@@ -240,7 +244,7 @@ function tableOf(request: CompareRequest, metrics: MetricDefinition[]): ExportTa
     };
   }
   if (!request.file) throw new ComparisonStopped('Name an export to compare, or give --metric and --value.');
-  return readExport(request.file.bytes, request.file.name);
+  return deps.readFile ? deps.readFile(request.file.bytes, request.file.name) : readExport(request.file.bytes, request.file.name);
 }
 
 function reportName(fileName: string): string {

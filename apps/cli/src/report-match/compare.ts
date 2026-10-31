@@ -1,4 +1,4 @@
-import { dateOrderOf, decimalStyleOf, isEmptyCell, parseDateCell, parseNumberCell, type DateGrain, type DateOrder, type DecimalStyle, type ExportTable, type PrintedNumber } from './read-export.js';
+import { dateOrderOf, decimalStyleOf, fullNumberCell, isEmptyCell, parseDateCell, parseNumberCell, type DateGrain, type DateOrder, type DecimalStyle, type ExportTable, type PrintedNumber } from './read-export.js';
 
 /**
  * Comparing an export with ZLens's result, value by value.
@@ -126,7 +126,7 @@ export function compareExport(table: ExportTable, plan: ComparisonPlan, rows: Ar
   for (const number of plan.numbers) {
     const found = decimalStyleOf(columnOf(number.header));
     styles.set(number.header, found.style);
-    if (found.ambiguous) {
+    if (found.ambiguous && !table.fullValues?.[number.header]) {
       const sample = columnOf(number.header).find((cell) => /\d[.,]\d{3}\b/.test(cell));
       notes.push(`Numbers in ${number.header} such as ${sample} have one separator, so a comma was read as thousands and a point as decimals.`);
     }
@@ -194,7 +194,11 @@ export function compareExport(table: ExportTable, plan: ComparisonPlan, rows: Ar
   const differences: ValueDifference[] = [];
   const shared = sharedMissing(table, options);
   const rowsDiffer = counts.onlyInFile > 0 || counts.onlyInZLens > 0;
-  const numbers = plan.numbers.map((number) => compareColumn(number, pairs, headerAt.get(number.header)!, styles.get(number.header)!, options, differences, rowsDiffer, shared));
+  const numbers = plan.numbers.map((number) => {
+    const full = table.fullValues?.[number.header];
+    const style = styles.get(number.header)!;
+    return compareColumn(number, pairs, headerAt.get(number.header)!, (cell) => (full ? fullNumberCell(cell, full) : parseNumberCell(cell, style)), options, differences, rowsDiffer, shared);
+  });
 
   const missing = [...shared, ...plan.notCompared.map((column) => `${column} was not compared.`)];
   if (!plan.numbers.length) missing.push('No number column was compared.');
@@ -231,7 +235,7 @@ function compareColumn(
   number: NumberColumn,
   pairs: Array<{ key: string[]; cells: string[]; row: Record<string, unknown> }>,
   at: number,
-  style: DecimalStyle,
+  readNumber: (cell: string) => PrintedNumber | null,
   options: CompareOptions,
   differences: ValueDifference[],
   rowsDiffer: boolean,
@@ -239,7 +243,7 @@ function compareColumn(
 ): NumberResult {
   const printed = pairs.map((pair) => {
     const cell = pair.cells[at] ?? '';
-    return { pair, cell, parsed: isEmptyCell(cell) ? null : parseNumberCell(cell, style), ours: toNumber(pick(pair.row, number.output)) };
+    return { pair, cell, parsed: isEmptyCell(cell) ? null : readNumber(cell), ours: toNumber(pick(pair.row, number.output)) };
   });
   const decimals = printed.reduce((most, item) => Math.max(most, item.parsed?.decimals ?? 0), 0);
   const tolerance = options.tolerance ?? 0;
@@ -286,7 +290,7 @@ function isEqual(printed: PrintedNumber, ours: number, columnDecimals: number, t
   const places = printed.decimals === null ? null : columnDecimals;
   const unit = places === null ? 0 : 10 ** -places * printed.scale * (printed.percent ? 0.01 : 1);
   // A number with no printed form is its full value, so only the float's own noise is allowed.
-  const noise = places === null ? Math.max(Math.abs(ours), Math.abs(printed.value)) * 1e-9 : 0;
+  const noise = places === null ? Math.max(Math.abs(ours), Math.abs(printed.value)) * 1e-12 : 0;
   const limit = Math.max(unit / 2, noise, Math.abs(printed.value) * tolerance) * (1 + 1e-9);
   return Math.abs(ours - printed.value) <= limit;
 }

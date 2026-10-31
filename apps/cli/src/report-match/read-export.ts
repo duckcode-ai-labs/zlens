@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readXlsx, XlsxRefused, type FullValue } from './read-xlsx.js';
 
 /**
  * Reading an export of an old report: what Tableau and Power BI really write.
@@ -6,7 +7,8 @@ import { createHash } from 'node:crypto';
  * Tableau's crosstabs are UTF-16 with tabs and carry formatted text (`$1,234`,
  * `8.7%`, `($41,000)`), so a number keeps how it was printed: "matches" means
  * equal at the precision the file shows. The file is read once into plain
- * rows; nothing here knows about metrics or databases.
+ * rows; nothing here knows about metrics or databases. Excel holds a number's
+ * full value instead, so a column of them compares at that value.
  */
 
 export interface ExportTable {
@@ -23,8 +25,12 @@ export interface ExportTable {
   tool?: 'tableau' | 'powerbi';
   /** Power BI's `Applied filters: …` line, as written. */
   appliedFilters?: string;
+  /** Parts of the file ZLens did not read, which could hold filters. */
+  unread?: string[];
   /** The export says it was cut short, as written. */
   cutShort?: string;
+  /** Columns Excel holds as numbers: compared at their full value, not a printed one. */
+  fullValues?: Record<string, FullValue>;
   /** Things read in a way the person may want to check. */
   notes: string[];
 }
@@ -40,36 +46,107 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
   if (bytes.length > MAX_EXPORT_BYTES) throw new ExportRefused(`${fileName} is larger than ${MAX_EXPORT_BYTES / 1024 / 1024} MB.`);
   refuseOtherFiles(fileName);
   const sha256 = createHash('sha256').update(bytes).digest('hex');
+  if (/\.xlsx$/i.test(fileName)) {
+    const sheet = readWorkbook(bytes, fileName);
+    const fullByRow = new Map(sheet.rows.map((row, index) => [row, sheet.full[index]!]));
+    return tableFromRows(sheet.rows, {
+      fileName,
+      sha256,
+      notes: sheet.notes,
+      encoding: 'xlsx',
+      separator: '',
+      fullOf: (row) => fullByRow.get(row),
+      detailLines: sheet.details,
+      unread: sheet.hiddenSheets.map((name) => `the hidden sheet ${name}`),
+    });
+  }
   const { text, encoding } = decode(bytes);
   const separator = detectSeparator(text);
-  const table = parseDelimited(text, separator, fileName);
-  const notes: string[] = [];
-  let appliedFilters: string | undefined;
-  let cutShort: string | undefined;
+  return tableFromRows(parseDelimited(text, separator, fileName), { fileName, sha256, notes: [], encoding, separator });
+}
 
-  // Lines Power BI adds around the table.
-  const body = table.filter((row) => {
-    const first = (row[0] ?? '').trim();
-    if (/^applied filters:/i.test(first)) {
-      const line = row.join(' ').replace(/^applied filters:\s*/i, '').trim();
-      appliedFilters = appliedFilters ? `${appliedFilters}; ${line}` : line;
+interface RowSource {
+  fileName: string;
+  sha256: string;
+  notes: string[];
+  encoding: string;
+  separator: string;
+  fullOf?: (row: string[]) => Array<FullValue | undefined> | undefined;
+  /** What the export says about itself, off the table. Anything here may be a filter. */
+  detailLines?: string[];
+  unread?: string[];
+}
+
+function readWorkbook(bytes: Buffer, fileName: string) {
+  try {
+    return readXlsx(bytes, fileName);
+  } catch (error) {
+    if (error instanceof XlsxRefused) throw new ExportRefused(error.message);
+    throw new ExportRefused(`${fileName} is not an Excel workbook ZLens can read. Save it again as .xlsx, or export CSV.`);
+  }
+}
+
+/** Rows as a file holds them, whatever kind of file, to the table that is compared. */
+function tableFromRows(table: string[][], source: RowSource): ExportTable {
+  const { fileName, sha256, notes, encoding, separator } = source;
+  const filterLines: string[] = [];
+  let cutShort: string | undefined;
+  const saidOfExport = (line: string): boolean => {
+    if (!/exported data exceeded the allowed volume/i.test(line)) return false;
+    cutShort = line.trim();
+    return true;
+  };
+  const addFilterLine = (line: string) => {
+    const text = line.replace(/^\s*applied filters:\s*/i, '').trim();
+    if (text) filterLines.push(text);
+  };
+  for (const line of source.detailLines ?? []) {
+    if (!saidOfExport(line)) addFilterLine(line);
+  }
+
+  // Lines Power BI adds around the table. The filters can follow their label, one to a row.
+  let afterLabel = false;
+  let labelled = false;
+  const rowsWithin = table.filter((row) => {
+    const cells = row.filter((cell) => cell.trim() !== '');
+    if (/^applied filters:/i.test((row[0] ?? '').trim())) {
+      addFilterLine(row.join(' '));
+      labelled = true;
+      afterLabel = cells.length === 1;
       return false;
     }
-    if (/exported data exceeded the allowed volume/i.test(row.join(' '))) {
-      cutShort = row.join(' ').trim();
+    if (saidOfExport(row.join(' '))) return false;
+    if (afterLabel && cells.length === 1) {
+      addFilterLine(cells[0]!);
       return false;
     }
-    return row.some((cell) => cell.trim() !== '');
+    if (cells.length) afterLabel = false;
+    return cells.length > 0;
   });
+  // A label with nothing after it still says filters were applied.
+  if (labelled && !filterLines.length) filterLines.push('filters the file does not name');
+  const appliedFilters = filterLines.length ? filterLines.join('; ') : undefined;
+
+  // A title above the table: alone on its row, no further right than the table starts.
+  const cellsIn = (row: string[]) => row.filter((cell) => cell.trim() !== '').length;
+  const firstUsed = (row: string[]) => row.findIndex((cell) => cell.trim() !== '');
+  const tableStart = rowsWithin.findIndex((row) => cellsIn(row) >= 2);
+  const above = tableStart > 0 ? rowsWithin.slice(0, tableStart) : [];
+  const titled = above.length > 0 && above.every((row) => cellsIn(row) === 1 && firstUsed(row) <= firstUsed(rowsWithin[tableStart]!));
+  const body = titled ? rowsWithin.slice(tableStart) : rowsWithin;
+  if (titled) notes.push(`Set aside above the table: ${above.map((row) => row[firstUsed(row)]!.trim()).join('; ').slice(0, 200)}.`);
   if (!body.length) throw new ExportRefused(`${fileName} has no rows.`);
 
-  const headers = body[0]!.map(cleanHeader);
+  // A table that starts a column or two in.
+  const shift = body.reduce((least, row) => Math.min(least, firstUsed(row)), Number.POSITIVE_INFINITY);
+  const headers = body[0]!.slice(shift).map(cleanHeader);
   // A separator at the end of each line.
   while (headers.length > 1 && !headers[headers.length - 1]) headers.pop();
   refuseShapes(headers, fileName);
-  const overlong = body.slice(1).find((row) => row.slice(headers.length).some((cell) => cell.trim() !== ''));
+  const data = body.slice(1);
+  const overlong = data.find((row) => row.slice(shift + headers.length).some((cell) => cell.trim() !== ''));
   if (overlong) throw new ExportRefused(`${fileName} has a row with more values than it has columns: ${overlong.join(', ').slice(0, 80)}. Export it again.`);
-  let rows = body.slice(1).map((row) => headers.map((_, index) => cleanCell(row[index] ?? '')));
+  let rows = data.map((row) => headers.map((_, index) => cleanCell(row[index + shift] ?? '')));
   if (rows.length > MAX_EXPORT_ROWS) throw new ExportRefused(`${fileName} has ${rows.length.toLocaleString('en-US')} rows; ZLens compares up to ${MAX_EXPORT_ROWS.toLocaleString('en-US')}.`);
 
   const shaped = reshapeMeasures(headers, rows);
@@ -79,6 +156,7 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
   const isTotal = (row: string[]) => keyColumns.some((index) => isTotalLabel(row[index] ?? ''));
   const kept = rows.filter((row) => !isTotal(row));
   const totals = rows.filter(isTotal);
+  const fullValues = source.fullOf ? fullColumns(headers, shaped.headers, data, shift, source.fullOf) : {};
 
   return {
     fileName,
@@ -89,9 +167,30 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
     ...(totals.length ? { totals } : {}),
     ...(toolFromFile(encoding, separator, headers, appliedFilters) ? { tool: toolFromFile(encoding, separator, headers, appliedFilters) } : {}),
     ...(appliedFilters ? { appliedFilters } : {}),
+    ...(source.unread?.length ? { unread: source.unread } : {}),
     ...(cutShort ? { cutShort } : {}),
+    ...(Object.keys(fullValues).length ? { fullValues } : {}),
     notes,
   };
+}
+
+/** A column counts only when every value in it is an Excel number. */
+function fullColumns(headers: string[], shapedHeaders: string[], data: string[][], shift: number, fullOf: NonNullable<RowSource['fullOf']>): Record<string, FullValue> {
+  const kindOf = (column: number, rows: string[][]): FullValue | undefined => {
+    const kinds = rows.filter((row) => !isEmptyCell(row[column + shift])).map((row) => fullOf(row)?.[column + shift]);
+    if (!kinds.length || kinds.some((kind) => !kind)) return undefined;
+    return kinds.every((kind) => kind === 'percent') ? 'percent' : 'number';
+  };
+  const measureNames = headers.findIndex((header) => /^measure names$/i.test(header));
+  const measureValues = headers.findIndex((header) => /^measure values$/i.test(header));
+  const found: Record<string, FullValue> = {};
+  for (const header of shapedHeaders) {
+    const at = headers.indexOf(header);
+    // Under Measure Values each measure has its own format.
+    const kind = at >= 0 ? kindOf(at, data) : kindOf(measureValues, data.filter((row) => (row[measureNames + shift] ?? '').trim().toLowerCase() === header.toLowerCase()));
+    if (kind) found[header] = kind;
+  }
+  return found;
 }
 
 function refuseOtherFiles(fileName: string): void {
@@ -99,7 +198,7 @@ function refuseOtherFiles(fileName: string): void {
   if (/\.(?:twb|twbx|pbit|pbix|pbip|tds|tdsx)$/.test(lower)) {
     throw new ExportRefused(`${fileName} is the report, not its numbers. In Tableau use Download → Crosstab; in Power BI use a visual's Export data.`);
   }
-  if (/\.(?:xlsx|xls|xlsm)$/.test(lower)) throw new ExportRefused(`ZLens does not read Excel exports yet. Save ${fileName} as CSV, or use the CSV download.`);
+  if (/\.(?:xls|xlsm|xlsb)$/.test(lower)) throw new ExportRefused(`ZLens reads .xlsx, not this kind of Excel file. Save ${fileName} as .xlsx or CSV.`);
   if (/\.(?:pdf|png|jpe?g|pptx?|hyper)$/.test(lower)) {
     throw new ExportRefused(`${fileName} is not a table ZLens can read. Export the worksheet or visual as CSV.`);
   }
@@ -276,7 +375,8 @@ function reshapeMeasures(headers: string[], rows: string[][]): { headers: string
 }
 
 function isTotalLabel(cell: string): boolean {
-  return /^(?:grand\s+|sub-?\s*)?totals?$/i.test(cell.trim());
+  // `West Total` is a pivot's subtotal.
+  return /(?:^|\s)(?:grand\s+|sub-?\s*)?totals?$/i.test(cell.trim());
 }
 
 /** What the file itself shows, never a guess from its name. */
@@ -305,13 +405,21 @@ export interface PrintedNumber {
 }
 
 const SCALES: Record<string, number> = { K: 1e3, M: 1e6, B: 1e9, T: 1e12 };
+/** No number or date is longer, and the patterns that read them slow down on a very long cell. */
+const MAX_READABLE_CELL = 400;
 
 export type DecimalStyle = 'point' | 'comma';
 
 /** How a number was printed, or null when the text is not a number. */
+/** An Excel number cell: nothing was printed, so nothing rounds it. */
+export function fullNumberCell(cell: string, kind: FullValue): PrintedNumber | null {
+  const value = Number(cell);
+  return cell !== '' && Number.isFinite(value) ? { value, decimals: null, scale: 1, percent: kind === 'percent' } : null;
+}
+
 export function parseNumberCell(cell: string, style: DecimalStyle = 'point'): PrintedNumber | null {
   let text = cell.replace(/[  ]/g, ' ').trim().replace(/−/g, '-');
-  if (!text) return null;
+  if (!text || text.length > MAX_READABLE_CELL) return null;
   let negative = false;
   if (/^\(.*\)$/.test(text)) {
     negative = true;
@@ -386,6 +494,7 @@ export type DateOrder = 'mdy' | 'dmy';
 /** A date or a period as these tools print it, or null. */
 export function parseDateCell(cell: string, order: DateOrder = 'mdy'): ParsedDate | null {
   const text = cell.trim();
+  if (text.length > MAX_READABLE_CELL) return null;
   const pad = (value: number) => String(value).padStart(2, '0');
   const day = (year: number, month: number, date: number): ParsedDate | null => {
     const made = new Date(Date.UTC(year, month - 1, date));

@@ -164,8 +164,8 @@ A metric draft shows its value over all rows, but a report is a whole table.
 table in ZLens, and compares every value. It works on drafts, so you can check
 before you approve.
 
-1. Export the report as CSV: in Tableau, **Download → Crosstab**; in Power BI, a
-   visual's **Export data**. Excel files are not read yet.
+1. Export the report as CSV or `.xlsx`: in Tableau, **Download → Crosstab**; in
+   Power BI, a visual's **Export data**.
 2. Compare it:
 
     ```bash
@@ -202,6 +202,10 @@ a report known to lag, up to 10%, and is recorded. An empty value is equal only 
 an empty value. A percent is also tried at 100 times when the metric's definition
 multiplies by 100, so `14.9%` matches a metric that holds 14.9.
 
+An `.xlsx` number has nothing printed to round to, so it is compared at the full
+value the file holds. If the file holds rounded numbers, every one will differ a
+little: use the CSV download, or `--tolerance`.
+
 **Three verdicts.** Each metric gets its own, and the file gets the worst:
 
 | Verdict | Means |
@@ -225,6 +229,8 @@ waived, or the best result is Not proven:
 
 A Power BI `Applied filters:` line can name several filters, so stating one does
 not answer it. State them, then waive the line: `--waive "Applied filters: all stated"`.
+In an `.xlsx`, the text of an `ExportHeaders` sheet counts as that line, and so does
+any hidden sheet, because ZLens does not read those and they could hold filters.
 
 A filter that can't be written this way (top N, sets, `OR`) can be waived, and
 `--file-rows` compares only the rows in the file. That proves the values on those
