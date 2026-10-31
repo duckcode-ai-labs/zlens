@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Blocks, Box, ChevronDown, ChevronRight, Database, FileText, Folder, FolderOpen, Layers, NotebookPen, Plus, Search, Trash2, Upload } from 'lucide-react';
 import { api, DqlApiError } from '../../api/client';
-import { hostReadOnly, useHostUi } from '../../host/host-ui';
+import { hostProposesCertification, hostReadOnly, useHostUi } from '../../host/host-ui';
 import { insertSemanticReference } from '../../editor/semantic-completions';
 import { controlStyle } from '../../themes/control-tokens';
 import { makeCell, useNotebook } from '../../store/NotebookStore';
@@ -9,7 +9,7 @@ import type { ExecutionTarget, NotebookFile } from '../../store/types';
 import type { Theme } from '../../themes/notebook-theme';
 import { themes } from '../../themes/notebook-theme';
 import type { BlockEntry } from '../blocks/block-types';
-import { BlockStatusBadge } from '../blocks/BlockStatusBadge';
+import { BlockStatusBadge, blockDisplayStatus } from '../blocks/BlockStatusBadge';
 import { SemanticTreeView } from './CatalogTree';
 import { blockDomains, filterBlocksForDomain } from './block-domain-filter';
 import { buildNotebookSemanticBlock } from './semantic-notebook-source';
@@ -37,7 +37,7 @@ const TABS: { id: BuildTab; label: string; icon: React.ComponentType<any> }[] = 
 // Paper-handoff status dots: certified green · draft amber · review blue.
 const STATUS_COLOR: Record<string, string> = {
   certified: 'var(--status-success)', published: 'var(--status-success)', deprecated: 'var(--status-error)',
-  draft: 'var(--status-warning)', pending: 'var(--status-warning)', review: '#4a74c9', in_review: '#4a74c9',
+  draft: 'var(--status-warning)', pending: 'var(--status-warning)', review: '#4a74c9', in_review: '#4a74c9', proposed: '#4a74c9',
 };
 
 /**
@@ -829,6 +829,7 @@ function SemanticList({ t, search, onInsert, notebookMode, onSemanticCompose }: 
 }
 
 function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBlock, refreshKey }: { t: Theme; search: string; domain: string; onDomainChange?: (domain: string) => void; onOpenBlock?: (block: BlockEntry) => void; onDeleteBlock?: (block: BlockEntry) => void; refreshKey: number }) {
+  const hostProposes = hostProposesCertification(useHostUi());
   const { state, dispatch } = useNotebook();
   const [blocks, setBlocks] = useState<BlockEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -893,7 +894,7 @@ function BlocksList({ t, search, domain, onDomainChange, onOpenBlock, onDeleteBl
     }
   };
 
-  const draftCount = filtered.filter((block) => String(block.status ?? 'draft') !== 'certified').length;
+  const draftCount = filtered.filter((block) => blockDisplayStatus(String(block.status ?? 'draft'), block, hostProposes) !== 'certified').length;
   const certifiedNames = new Set(blocks.filter((block) => block.status === 'certified').map((block) => block.name));
   const retry = <button type="button" onClick={() => setRetryKey((current) => current + 1)} style={{ marginLeft: 10, border: 'none', background: 'transparent', color: t.accent, cursor: 'pointer', fontSize: 11.5, fontWeight: 650, padding: 0, fontFamily: t.font }}>Retry</button>;
 
@@ -999,8 +1000,8 @@ function countTreeBlocks(nodes: BlockLibraryTreeNode[]): number {
 
 // Prototype block row: blocks glyph · mono name over a meta line · status dot.
 // A single click opens the block's detail overview (description lives there).
-function BlockRow({ block, depth = 0, t, onOpen, onDelete, onPublish, publishing = false, editsCertified = false }: { block: BlockEntry; depth?: number; t: Theme; onOpen: () => void; onDelete?: () => void; onPublish?: () => void; publishing?: boolean; editsCertified?: boolean }) {
-  const status = String(block.status ?? 'draft');
+export function BlockRow({ block, depth = 0, t, onOpen, onDelete, onPublish, publishing = false, editsCertified = false }: { block: BlockEntry; depth?: number; t: Theme; onOpen: () => void; onDelete?: () => void; onPublish?: () => void; publishing?: boolean; editsCertified?: boolean }) {
+  const status = blockDisplayStatus(String(block.status ?? 'draft'), block, hostProposesCertification(useHostUi()));
   const dot = STATUS_COLOR[status] ?? t.warning;
   const isPrivate = block.visibility === 'private';
   // Delete is a destructive action: it appears on hover or keyboard focus, not on every row.
@@ -1021,7 +1022,7 @@ function BlockRow({ block, depth = 0, t, onOpen, onDelete, onPublish, publishing
         <Blocks size={14} color={t.textMuted} strokeWidth={1.75} style={{ flexShrink: 0 }} />
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span style={{ fontSize: 12, fontWeight: 600, color: t.textPrimary, fontFamily: t.fontMono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{block.name}</span>
-          <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[block.domain, editsCertified ? 'draft · edits to the certified saved query' : status, status === 'deprecated' && (block.replacement?.name ?? block.replacedBy) ? `replaced by ${block.replacement?.name ?? block.replacedBy}` : null].filter(Boolean).join(' · ')}</span>
+          <span style={{ fontSize: 10.5, color: t.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{[block.domain, editsCertified ? 'draft · edits to the certified saved query' : status === 'proposed' ? 'certification proposed' : status, status === 'deprecated' && (block.replacement?.name ?? block.replacedBy) ? `replaced by ${block.replacement?.name ?? block.replacedBy}` : null].filter(Boolean).join(' · ')}</span>
         </span>
       </button>
       {isPrivate ? (

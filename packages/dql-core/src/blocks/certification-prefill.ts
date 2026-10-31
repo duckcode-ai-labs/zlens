@@ -57,6 +57,29 @@ const DEFAULT_PATTERN = 'custom';
 const DEFAULT_REVIEW_CADENCE = 'quarterly';
 const DEFAULT_TEST = 'assert row_count > 0';
 
+/** The fields Certify checks that a creator fills by hand, each with the words a person reads. */
+export const CERTIFICATION_FIELDS = [
+  { field: 'grain', label: 'grain' },
+  { field: 'outputs', label: 'outputs' },
+  { field: 'reviewCadence', label: 'review cadence' },
+  { field: 'sourceSystems', label: 'source systems' },
+  { field: 'tests', label: 'a test' },
+] as const;
+
+export type CertificationField = typeof CERTIFICATION_FIELDS[number]['field'];
+
+/** Which certification fields the source has not filled, by the same reading the certifier's source parse gives them. */
+export function certificationFieldGaps(source: string): CertificationField[] {
+  return CERTIFICATION_FIELDS
+    .filter(({ field }) => (field === 'tests' ? !hasAssertion(source) : !hasValue(source, field)))
+    .map(({ field }) => field);
+}
+
+/** The words for a field a suggestion names: "review cadence" for `reviewCadence`. */
+export function certificationFieldLabel(field: string): string {
+  return CERTIFICATION_FIELDS.find((entry) => entry.field === field)?.label ?? field;
+}
+
 export function prefillCertificationMetadata(source: string, hints: CertificationPrefillHints = {}): CertificationPrefill {
   const open = source.match(/\bblock\s+"[^"]+"\s*\{/i);
   if (!open || open.index === undefined) return { source, suggested: [], unknown: [] };
@@ -93,7 +116,7 @@ export function prefillCertificationMetadata(source: string, hints: Certificatio
   if (!hasValue(source, 'sourceSystems')) {
     propose('sourceSystems', unique(tables.map((table) => hints.sourceSystemFor?.(table) ?? table)));
   }
-  if (!/\btests\s*\{/i.test(source)) propose('tests', DEFAULT_TEST);
+  if (!hasAssertion(source)) propose('tests', DEFAULT_TEST);
   if (hints.owner?.trim() && !hasValue(source, 'owner')) propose('owner', hints.owner.trim());
   const question = hints.question?.replace(/\s+/g, ' ').trim();
   if (question && !hasExamples(source)) propose('examples', [question]);
@@ -121,8 +144,14 @@ export function prefillCertificationMetadata(source: string, hints: Certificatio
   next = `${next.slice(0, insertAt)}\n${[marker, ...fieldLines].join('\n')}${next.slice(insertAt)}`;
 
   if (suggested.some((entry) => entry.field === 'tests')) {
-    const close = next.lastIndexOf('}');
-    if (close > 0) next = `${next.slice(0, close).trimEnd()}\n\n  tests {\n    ${DEFAULT_TEST}\n  }\n}${next.slice(close + 1)}`;
+    // A tests section left empty by the builder is filled in place so the block keeps one.
+    const emptyTests = /\btests\s*\{\s*\}/i;
+    if (emptyTests.test(next)) {
+      next = next.replace(emptyTests, `tests {\n    ${DEFAULT_TEST}\n  }`);
+    } else {
+      const close = next.lastIndexOf('}');
+      if (close > 0) next = `${next.slice(0, close).trimEnd()}\n\n  tests {\n    ${DEFAULT_TEST}\n  }\n}${next.slice(close + 1)}`;
+    }
   }
   return withGap({ source: next, suggested, unknown });
 }
@@ -136,6 +165,10 @@ function renderField(field: string, value: string | string[]): string {
   if (field !== 'examples') return render(value);
   const questions = Array.isArray(value) ? value : [value];
   return `[${questions.map((question) => `{ question = ${JSON.stringify(question)} }`).join(', ')}]`;
+}
+
+function hasAssertion(source: string): boolean {
+  return /\btests\s*\{[^}]*\bassert\b/i.test(source);
 }
 
 function hasExamples(source: string): boolean {

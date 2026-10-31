@@ -36,6 +36,14 @@ export interface CertificationReceipt {
   checks?: string[];
   /** Advisory warnings the certifier reported (not blockers). */
   warnings?: string[];
+  /**
+   * The git branch this certification was made on, recorded only under a host.
+   * Where the host certifies through its own review (`certification:
+   * 'proposes'`), a certification made on the branch being served has not been
+   * reviewed yet, so the screens call it a proposal. Merged, the same receipt
+   * sits on another branch and reads as certified.
+   */
+  branch?: string;
 }
 
 export type CertificationSurface =
@@ -176,6 +184,7 @@ export function buildCertificationReceipt(input: {
   enterprise?: boolean;
   checks?: string[];
   warnings?: string[];
+  branch?: string;
   now?: Date;
 }): CertificationReceipt {
   const certifiedBy = input.certifiedBy?.trim() || 'local';
@@ -189,6 +198,7 @@ export function buildCertificationReceipt(input: {
     sourceSha256: sourceSha256(input.source),
     ...(input.checks && input.checks.length > 0 ? { checks: Array.from(new Set(input.checks)) } : {}),
     ...(input.warnings && input.warnings.length > 0 ? { warnings: Array.from(new Set(input.warnings)) } : {}),
+    ...(input.branch ? { branch: input.branch } : {}),
   };
 }
 
@@ -360,9 +370,20 @@ export function readCompanionCertification(companion: string | null | undefined)
       sourceSha256: typeof receipt.sourceSha256 === 'string' ? receipt.sourceSha256 : '',
       ...(Array.isArray(receipt.checks) ? { checks: receipt.checks.map(String) } : {}),
       ...(Array.isArray(receipt.warnings) ? { warnings: receipt.warnings.map(String) } : {}),
+      ...(typeof receipt.branch === 'string' && receipt.branch.trim() ? { branch: receipt.branch.trim() } : {}),
     };
   } catch {
     return null;
+  }
+}
+
+/** The git branch checked out at the project, if any. Never throws. */
+export function currentGitBranch(projectRoot: string): string | undefined {
+  try {
+    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectRoot, encoding: 'utf-8', timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    return branch && branch !== 'HEAD' ? branch : undefined;
+  } catch {
+    return undefined;
   }
 }
 

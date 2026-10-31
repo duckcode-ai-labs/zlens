@@ -141,7 +141,7 @@ export interface DqlHostHooks {
     banner?: DqlHostBanner;
     audience?: 'reader';                                                         // reader words on stakeholder screens
     appNotFound?: { message: string; next?: { label: string; href: string } };  // an App link this host cannot open here
-    certification?: 'proposes';                                                  // certifying here proposes; the host certifies through review, so screens say "propose"
+    certification?: 'proposes';                                                  // certifying here proposes; the host certifies through review, so screens say "propose" and a certification made on the served branch reads as a proposal
   }>;
   homeCards?(principal: DqlPrincipal): Promise<DqlHomeCard[]>;
   follows?: { list(principal: DqlPrincipal): Promise<DqlFollow[]>; set(principal: DqlPrincipal, follow: DqlFollow, following: boolean): Promise<void> };
@@ -430,6 +430,7 @@ A host serves every role with DQL's app. It does not rebuild Ask, Apps or notebo
 - **In the app:**
   - Navigation hides screens the person may not use.
   - The header shows the person, the environment and sign-out.
+  - `certification: 'proposes'`: the host certifies through its own review, so Certify says "Propose certification" and passing it reads "Certification proposed by … · …: takes effect when a reviewer approves", on the saved query and in the list. What tells a proposal from a saved query that really is certified is its receipt: under a host, a receipt records the git `branch` it was made on, and a receipt made on the branch being served is a proposal. Merged, the same receipt sits on another branch and reads as certified, and Production is unaffected by the signal. Absent, or without a host, a certification reads as certified. No new host field is needed.
   - A host `banner` is a strip above the header; its links open at the top level, since they may take the person to another environment (a host that runs a writable copy of a project per person, beside Production, says so here).
   - A host `nav` link opens the host's page inside DQL's main area, with `embed=1` added so the page leaves out its own frame.
   - An answer that needs review offers the host's answer actions, which POST `{ runId, question, trustState }` to the host's path.

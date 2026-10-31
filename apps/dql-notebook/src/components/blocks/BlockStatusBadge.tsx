@@ -22,13 +22,13 @@ const GEN_LABEL: Record<string, string> = {
   queued: 'Queued', generating: 'Generating', running: 'Running', saving: 'Saving',
   saved: 'Saved', ready: 'Ready', blocked: 'Blocked', needs_attention: 'Needs review',
   draft: 'Draft', review: 'In review', certified: 'Certified', deprecated: 'Deprecated',
-  pending_recertification: 'Recertify',
+  pending_recertification: 'Recertify', proposed: 'Certification proposed',
 };
 
 const ICONS: Record<string, React.ComponentType<any>> = {
   draft: FilePen, queued: Clock, generating: Loader2, running: Loader2, saving: Loader2,
   ready: CheckCircle2, saved: CheckCircle2, blocked: AlertTriangle, needs_attention: AlertTriangle,
-  review: Eye, certified: ShieldCheck, deprecated: Archive, pending_recertification: AlertTriangle,
+  review: Eye, certified: ShieldCheck, deprecated: Archive, pending_recertification: AlertTriangle, proposed: Eye,
 };
 
 const SPIN = new Set(['generating', 'running', 'saving']);
@@ -40,6 +40,15 @@ export function blockStatusColor(status: string): string {
 
 export function blockStatusLabel(status: string): string {
   return GEN_LABEL[status] ?? (status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, ' '));
+}
+
+/**
+ * The status a person reads for a block. Under a host that certifies through its
+ * own review, a certification made on the branch being served is a proposal until
+ * a reviewer approves it; everything else reads as its own status.
+ */
+export function blockDisplayStatus(status: string, block: { certificationProposed?: boolean } | null | undefined, hostProposes: boolean): string {
+  return hostProposes && status === 'certified' && block?.certificationProposed ? 'proposed' : status;
 }
 
 export function BlockStatusBadge({ status, t, label }: { status: string; t: Theme; label?: string }) {

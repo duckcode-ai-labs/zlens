@@ -3,7 +3,8 @@ export type BlockStatus =
   | 'review'
   | 'certified'
   | 'deprecated'
-  | 'pending_recertification';
+  | 'pending_recertification'
+  | 'proposed';
 
 export interface BlockEntry {
   name: string;
@@ -27,6 +28,8 @@ export interface BlockEntry {
   deprecatedOn?: string;
   /** The active block replacedBy resolves to; null when it names no block. */
   replacement?: { name: string; path: string } | null;
+  /** Certified on the branch being served: under a host that certifies through review, not reviewed yet. */
+  certificationProposed?: boolean;
 }
 
 export const STATUS_COLORS: Record<string, string> = {
@@ -35,4 +38,5 @@ export const STATUS_COLORS: Record<string, string> = {
   certified: '#3fb950',
   deprecated: '#f85149',
   pending_recertification: '#db6d28',
+  proposed: '#d29922',
 };

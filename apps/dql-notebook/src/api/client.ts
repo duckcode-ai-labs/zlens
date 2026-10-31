@@ -140,7 +140,7 @@ export interface WarehouseTableSummary {
 import type { DiffReport } from '@zlens/core/format';
 import { normalizeDqlArtifactReference, type DqlArtifactReference } from '@zlens/core/artifacts';
 import type { Business360ResultV2 } from '@zlens/core/lineage';
-import type { DatasetDescriptor, MetricCapabilityContract, SemanticTileConversionProvenanceV1, TileQuery } from '@zlens/core';
+import type { DatasetDescriptor, ExistingSemanticModel, MetricCapabilityContract, SemanticTileConversionProvenanceV1, TileQuery } from '@zlens/core';
 import type {
   ManifestDbtFirstModeling,
   ManifestModelRelationship,
@@ -487,6 +487,8 @@ export interface DbtFirstModelingResponse {
   manifestVersion: 3;
   dbtProvenance: ManifestDbtProvenance;
   modeling: ManifestDbtFirstModeling;
+  /** Every semantic model the project has, so Add metric extends one instead of creating a second. */
+  semanticModels?: ExistingSemanticModel[];
   domainAssets?: Record<string, Record<string, string[]>>;
   lineage: ManifestLineage;
   diagnostics: ManifestDiagnostic[];
@@ -4853,6 +4855,15 @@ export interface NotebookRepairExecutionResponse {
   executionReceipt?: Record<string, unknown>;
 }
 
+export interface BlockStudioCertificationPrefill {
+  source: string;
+  /** Every value written, so the creator can review it. */
+  suggested: Array<{ field: string; value: string | string[] }>;
+  /** Fields the query and its run did not tell enough to fill. */
+  unknown: string[];
+  preview?: BlockStudioPreview;
+}
+
 export interface BlockStudioRepairExecutionResponse {
   source: string;
   repairedSql: string;
@@ -6410,6 +6421,20 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ source }),
     });
+  },
+
+  /** Fills the certification fields the draft can derive. Applied to the editor only; nothing is written. */
+  async prefillBlockStudioCertification(source: string): Promise<BlockStudioCertificationPrefill> {
+    const raw = await request<any>('/api/block-studio/certification-prefill', {
+      method: 'POST',
+      body: JSON.stringify({ source }),
+    });
+    return {
+      source: String(raw.source ?? source),
+      suggested: Array.isArray(raw.suggested) ? raw.suggested : [],
+      unknown: Array.isArray(raw.unknown) ? raw.unknown.map(String) : [],
+      ...(raw.preview ? { preview: { sql: String(raw.preview.sql ?? ''), result: normalizeQueryResultPayload(raw.preview.result) } } : {}),
+    };
   },
 
   async certifyBlockStudio(payload: { source: string; path?: string | null }): Promise<{

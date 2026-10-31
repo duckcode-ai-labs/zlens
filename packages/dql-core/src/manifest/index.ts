@@ -96,10 +96,15 @@ export {
 export {
   previewDbtMetricPatch,
   applyDbtMetricPatch,
+  previewProjectMetricPatch,
+  applyProjectMetricPatch,
+  listExistingSemanticModels,
   DBT_METRIC_AGGREGATIONS,
   type DbtMetricAggregation,
   type DbtMetricAuthoringInput,
   type DbtMetricPatchPreview,
+  type ExistingSemanticModel,
+  type MetricAuthoringPaths,
 } from './dbt-metric-authoring.js';
 export {
   planDataLexMigration,
