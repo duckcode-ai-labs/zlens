@@ -132,7 +132,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     existingMetrics,
     existingDrafts,
     existingDimensions,
-    stringLiteral: stringLiteralFor(driver),
+    stringLiteral: (value) => dialect.quoteString(value),
   });
 
   const draftsByName = new Map(converted.drafts.map((draft) => [draft.definition.name, draft]));
@@ -219,22 +219,6 @@ function needsQuotes(name: string, fold: 'lower' | 'upper' | undefined): boolean
   if (fold === 'lower') return name !== name.toLowerCase();
   if (fold === 'upper') return name !== name.toUpperCase();
   return false;
-}
-
-/**
- * A text value as this database reads it. Several read a backslash as an
- * escape, and BigQuery and Databricks escape a quote with one too, so a value
- * from a BI file can never end the string early.
- */
-export function stringLiteralFor(driver: string): (value: string) => string {
-  if (driver === 'bigquery' || driver === 'databricks') {
-    // A quote as \u0027, so nothing reading the SQL later has to know that `\'` does not end the string.
-    return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, '\\u0027').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}'`;
-  }
-  if (driver === 'mysql' || driver === 'snowflake' || driver === 'clickhouse') {
-    return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
-  }
-  return (value) => `'${value.replace(/'/g, "''")}'`;
 }
 
 /** Where the file reads something other than what ZLens is connected to: the same table name need not be the same numbers. */

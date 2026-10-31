@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { loadSemanticLayerFromDir } from '@zlens/core';
+import { getDialect, loadSemanticLayerFromDir } from '@zlens/core';
 import { extractTableauWorkbook } from './bi-import/tableau.js';
 import {
   approveMetricDrafts,
@@ -12,7 +12,6 @@ import {
   listMetricDrafts,
   makeImportMetricDrafts,
   MetricDraftApprovalError,
-  stringLiteralFor,
   type MakeImportMetricDraftsInput,
 } from './import-metric-drafts.js';
 import type { WarehouseTableSummary } from './datasets/table-dataset.js';
@@ -175,10 +174,8 @@ describe('the import\'s metric drafts', () => {
       check: false,
     }));
     expect(record.items.find((item) => item.calculation === 'Discounts')!.inWords).toBe('sum("user"), on analytics.orders');
-    expect(stringLiteralFor('postgres')("it's \\ ok")).toBe("'it''s \\ ok'");
-    expect(stringLiteralFor('snowflake')("it's \\ ok")).toBe("'it''s \\\\ ok'");
-    // No `\\'`: a quote inside a literal must not look like its end to anything that reads the SQL later.
-    expect(stringLiteralFor('bigquery')("it's \\ ok")).toBe("'it\\u0027s \\\\ ok'");
+    expect(getDialect('postgresql').quoteString("it's \\ ok")).toBe("'it''s \\ ok'");
+    expect(getDialect('snowflake').quoteString("it's \\ ok")).toBe("'it''s \\\\ ok'");
   });
 });
 

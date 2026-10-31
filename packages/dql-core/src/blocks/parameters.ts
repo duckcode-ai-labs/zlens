@@ -110,6 +110,8 @@ export function blockSemanticRuntimeBindings(
     if (value === undefined || value === null || value === '') continue;
     if (definition.binding?.kind === 'semantic_filter') {
       const rawValues = Array.isArray(value) ? value : [value];
+      // Nothing selected in a multi-select means no filter, like an empty value above.
+      if (rawValues.length === 0) continue;
       filters.push({
         dimension: definition.binding.field,
         operator: definition.binding.operator,

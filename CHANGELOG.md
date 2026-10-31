@@ -8,6 +8,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### A requested filter is applied or refused, never dropped
+
+- **`composeQuery` no longer drops a filter it cannot apply.** An unknown
+  operator (`>=` from an agent, say), an empty `in`, or a `between` with one
+  bound wrote no `WHERE` at all, so the answer ignored the filter under a
+  governed label. It now refuses, and the usual spellings (`=`, `!=`, `<>`,
+  `>`, `>=`, `<`, `<=`) work.
+- **Filter values are escaped for each database.** On Snowflake, BigQuery,
+  Databricks, MySQL, ClickHouse and Redshift a backslash in a value could end
+  the string; `SQLDialect.quoteString` now writes text as each one reads it.
+- `not_equals` with several values excludes them all, not only the first.
+
 ### Tableau and Power BI calculations become metric drafts
 
 - **`zlens import sql <workbook>`** now turns each simple, filtered and ratio
