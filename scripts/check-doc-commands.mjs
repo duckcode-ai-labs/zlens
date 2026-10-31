@@ -83,7 +83,7 @@ const SUBCOMMANDS = {
   doctor: { words: ['scale', 'git-hygiene'], optional: true },
   mcp: { words: ['test'], optional: true },
   lineage: { words: ['cross-domain'], optional: true },
-  migrate: { words: ['assess', 'looker', 'tableau', 'powerbi', 'dbt', 'metabase', 'raw-sql', 'format', 'layout', 'parameters', 'datalex', 'modeling'] },
+  migrate: { words: ['assess', 'compare', 'looker', 'tableau', 'powerbi', 'dbt', 'metabase', 'raw-sql', 'format', 'layout', 'parameters', 'datalex', 'modeling'] },
 };
 
 const problems = [];

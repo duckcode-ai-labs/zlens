@@ -176,6 +176,9 @@ function actionFor(method: string, path: string): DqlAction {
   if (!read && (path === '/api/query' || path === '/api/notebook/execute' || path === '/api/dql/artifacts/execute')) return 'query.run';
   // Proving the keys certified content declares: read-only probes as the person, counts only (RFC 0010 key proofs).
   if (!read && path === '/api/keys/prove') return 'query.run';
+  // Comparing an old report's export reads as the person; writing the record in the project is authoring.
+  if (!read && path === '/api/report-match/compare') return 'query.run';
+  if (!read && path === '/api/report-match/record') return 'dataset.author';
 
   // A published page runs its Dataset tiles and filter lists through these.
   if (!read && (path === '/api/app-datasets/run' || path === '/api/app-datasets/field-values')) return 'app.view';
