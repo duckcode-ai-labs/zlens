@@ -18,6 +18,7 @@ import type { CLIFlags } from '../args.js';
 import { findProjectRoot } from '../local-runtime.js';
 import { runImport } from './import.js';
 import { assessMigrationFolder, DEFAULT_ASSESSMENT_FILE, isAssessableInput, migrationAssessmentMarkdown, migrationAssessmentSummary } from '../migrate-assess.js';
+import { runMigrateCompare } from './migrate-compare.js';
 
 export type MigrationSource = 'looker' | 'tableau' | 'powerbi' | 'dbt' | 'metabase' | 'raw-sql';
 
@@ -69,6 +70,10 @@ function generateBlockDQL(opts: {
 export async function runMigrate(file: string, flags: CLIFlags, rest: string[] = []): Promise<void> {
   if (file === 'assess') {
     await runMigrateAssess(rest[0] || flags.input, flags);
+    return;
+  }
+  if (file === 'compare') {
+    await runMigrateCompare(rest[0] || flags.input, flags);
     return;
   }
   if (file === 'format') {

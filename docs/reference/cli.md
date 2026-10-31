@@ -215,6 +215,8 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | --- | --- |
 | `zlens import sql <path>` | Draft saved queries from SQL, Tableau and Power BI files or folders |
 | `zlens migrate assess <folder>` | Read Tableau, Power BI and SQL files and report what moves: queries, calculations by kind, the report and the databases. Writes `zlens-migration-assessment.md` (`--out <file.md>`); `--format json` prints it instead. Reads files only |
+| `zlens migrate compare <file\|folder>` | Compare an old report's CSV export with ZLens's own table, value by value, at the precision the file prints: Matches, Differs or Not proven (exit 0, 1 or 2). Works on metric drafts. Keeps a record per metric or saved query with no values. A folder writes `zlens-migration-match.md` (`--out <file.md>`) |
+| `zlens migrate compare --metric <name> --value <number>` | Compare one number from the old report with a metric |
 | `zlens migrate <source>` | `tableau`, `powerbi` and `raw-sql` with `--input <path>` run `zlens import sql`; `looker`, `metabase` and `dbt` print what to do instead |
 | `zlens migrate layout --to domain-first --dry-run` | Preview moves from legacy folders into `domains/<domain>/...` |
 | `zlens migrate layout --to domain-first --force` | Apply the previewed domain-first file moves |
@@ -264,6 +266,18 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--no-metrics` | `zlens import sql`: make no metric drafts from a Tableau or Power BI file's calculations |
 | `--no-check` | `zlens import sql`: write the metric drafts without running each once on the database |
 | `--all-from [id\|latest]` | `zlens semantic approve`: approve every metric draft that import wrote and ran |
+| `--worksheet <name>` | `zlens migrate compare`: the Tableau worksheet this is an export of, for the filters saved on it |
+| `--report <name>` | `zlens migrate compare`: the report's name in the record (default: the file's) |
+| `--query <name>` | `zlens migrate compare`: compare a saved query rather than metrics |
+| `--param <name=value>` | `zlens migrate compare --query`: a report parameter; repeatable |
+| `--metric <name>`, `--value <number>` | `zlens migrate compare`: one number from the old report |
+| `--filter "<field> <op> <value>"` | `zlens migrate compare`: a filter the old report had, with `= != > >= < <= in between`; repeatable |
+| `--waive "<field>: <reason>"` | `zlens migrate compare`: leave out a filter ZLens can see, saying why; repeatable |
+| `--map "<column>=<name>"`, `--key <column>`, `--ignore <column>` | `zlens migrate compare`: say what a column is, make it a key, or leave it out; repeatable |
+| `--file-rows` | `zlens migrate compare`: compare only the rows in the file |
+| `--tolerance <percent>` | `zlens migrate compare`: allow this difference, such as `0.5%`; recorded |
+| `--dates <dmy\|mdy>` | `zlens migrate compare`: read the file's dates as day first or month first |
+| `--no-record` | `zlens migrate compare`: compare without keeping a record |
 | `--contract <id@version>` | DataLex contract bound during draft certification |
 | `--datalex-manifest <path>` | DataLex manifest used for contract validation or compilation |
 | `--open-pr` | Push the certification branch and open a GitHub pull request |

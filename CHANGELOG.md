@@ -8,6 +8,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Prove the numbers match the old report
+
+- **`zlens migrate compare <file|folder>`** takes a CSV export of an old Tableau
+  or Power BI report, builds the same table from ZLens's metric drafts, metrics
+  or a saved query, and compares every value at the precision the file prints.
+  It reads what these tools really write: UTF-16 with tabs, `$1,234`, `($41,000)`,
+  `8.7%`, decimal commas, `Measure Names`, total rows. Each metric gets its own
+  verdict: **Matches**, **Differs**, or **Not proven** when nothing disagrees but
+  something is missing. Exit codes follow (0, 1, 2).
+- **Filters decide most comparisons,** and an export does not show them. ZLens
+  applies none by itself: with `--worksheet` it reads the filters saved on an
+  imported worksheet, and each must be stated (`--filter`) or waived with a reason
+  (`--waive`), or the result is Not proven.
+- It says why numbers might differ, from evidence: a constant factor, data that
+  stops early, keys that differ only in case, a draft's own notes.
+- Records go in `semantic-layer/report-matches/`, one per metric or saved query,
+  with counts and fingerprints and no values. A folder of exports writes
+  `zlens-migration-match.md`, the page to hand to whoever signs off a migration.
+
 ### A requested filter is applied or refused, never dropped
 
 - **`composeQuery` no longer drops a filter it cannot apply.** An unknown

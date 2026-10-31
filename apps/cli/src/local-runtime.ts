@@ -92,7 +92,9 @@ import {
   type TermTemplateInput,
   termFilePath,
   buildTermTemplate,
+  loadSemanticDimensionDraftsFromDir,
   loadSemanticLayerFromDir,
+  loadSemanticMetricDraftsFromDir,
   normalizeDqlArtifactReference,
   applyAppBuildDraftOperations,
   appBuildPreviewIntentFingerprint,
@@ -782,7 +784,9 @@ import {
   type DqlCandidateRecommendedAction,
   type DqlParameterDecision,
 } from './block-studio-import.js';
-import { readBlockStudioImportCalculations } from './block-studio-import.js';
+import { findImportedWorksheet, readBlockStudioImportCalculations } from './block-studio-import.js';
+import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, runComparison } from './report-match/run.js';
+import { readComparisonDetail, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
 import {
   MetricDraftApprovalError,
   approveMetricDrafts,
@@ -791,6 +795,7 @@ import {
   listMetricDrafts,
   makeImportMetricDrafts,
   readImportMetricDraftsRecord,
+  sqlNamer,
   writeImportMetricDraftsRecord,
 } from './import-metric-drafts.js';
 import {
@@ -13251,6 +13256,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     invocation: ReturnType<typeof prepareBlockInvocation>;
     tests: NonNullable<ReturnType<typeof buildExecutionPlan>>['tests'];
     validation: BlockStudioValidationResult;
+    /** What the statement in `sql` binds, to run it again. */
+    sqlParams?: NonNullable<ReturnType<typeof buildExecutionPlan>>['sqlParams'];
+    variables: Record<string, unknown>;
   }> => {
     const activeConnection = requireActiveConnection(targetConnection);
     let tableMapping: Record<string, string> | undefined;
@@ -13317,6 +13325,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       invocation,
       tests: plan?.tests ?? [],
       validation,
+      ...(plan?.sqlParams ? { sqlParams: plan.sqlParams } : {}),
+      variables: { ...(plan?.variables ?? {}), ...invocation.values },
     };
   };
 
@@ -18203,6 +18213,143 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         reply(200, { metricDrafts: record });
       } catch (error) {
         reply(importRequestStatus(error), { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    // Comparing an old report's export with ZLens's own table. Comparing reads
+    // the database as this person and writes nothing the project keeps;
+    // recording is its own step (route-actions: query.run, dataset.author).
+    if (req.method === 'POST' && path === '/api/report-match/compare') {
+      const reply = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      try {
+        const owner = currentRecordOwner();
+        if (owner === null) {
+          reply(403, { error: 'Sign in to compare a report.' });
+          return;
+        }
+        // A 50 MB file as base64, and the options around it.
+        const body = (await readJSON(req, 70 * 1024 * 1024)) as CompareRequestBody;
+        const problem = compareOptionProblem(body as Record<string, unknown>);
+        if (problem) {
+          reply(422, { error: problem, code: 'COMPARISON_STOPPED' });
+          return;
+        }
+        const active = requireActiveConnection();
+        const semanticDir = join(projectRoot, 'semantic-layer');
+        // HH-13: a metric the host keeps from this person is no column of their comparison.
+        const metricsInLayer = (await admitPlanContext([], semanticLayer?.listMetrics() ?? [])).metrics as MetricDefinition[];
+        const dimensionsInLayer = semanticLayer?.listDimensions() ?? [];
+        const inLayer = new Set(metricsInLayer.map((metric) => metric.name.toLowerCase()));
+        const dimensionNames = new Set(dimensionsInLayer.map((dimension) => dimension.name.toLowerCase()));
+        let tables: Awaited<ReturnType<typeof listWarehouseTables>>['tables'] = [];
+        try {
+          const list = async (sql: string, purpose: 'data' | 'metadata' = 'metadata') => (await executor.executePositional(sql, [], active, { maxRows: 50_000, maxBytes: 32 * 1024 * 1024, batchSize: 5_000, deadlineMs: 60_000, purpose })).rows as Array<Record<string, unknown>>;
+          tables = (await listWarehouseTables({ projectRoot, driver: active.driver, run: list })).tables;
+        } catch {
+          // Without a table list, a key needs a dimension.
+        }
+        const name = sqlNamer(active.driver);
+        const bare = (relation: string) => relation.replace(/["`\[\]]/g, '').toLowerCase();
+        const drafts = (await admitPlanContext([], existsSync(semanticDir) ? loadSemanticMetricDraftsFromDir(semanticDir) : [])).metrics as MetricDefinition[];
+        const catalog = {
+          // A draft a metric has replaced is not a second meaning of its name.
+          metrics: [...metricsInLayer, ...drafts.filter((draft) => !inLayer.has(draft.name.toLowerCase()))],
+          dimensions: [...dimensionsInLayer, ...(existsSync(semanticDir) ? loadSemanticDimensionDraftsFromDir(semanticDir) : []).filter((draft) => !dimensionNames.has(draft.name.toLowerCase()))],
+          cubes: semanticLayer?.listCubes() ?? [],
+        };
+        const tableMapping = await resolveSemanticTableMapping(executor, active, comparisonLayer(catalog), projectRoot);
+        const outcome = await runComparison({
+          ...(body.file ? { file: { name: String(body.file.name), bytes: Buffer.from(String(body.file.base64), 'base64') } } : {}),
+          ...(typeof body.metric === 'string' ? { metric: body.metric } : {}),
+          ...(typeof body.value === 'string' ? { value: body.value } : {}),
+          ...(typeof body.query === 'string' ? { query: body.query } : {}),
+          ...(body.parameters && typeof body.parameters === 'object' ? { parameters: body.parameters } : {}),
+          ...(typeof body.report === 'string' ? { report: body.report } : {}),
+          ...(typeof body.worksheet === 'string' ? { worksheet: body.worksheet } : {}),
+          ...(body.map && typeof body.map === 'object' ? { map: body.map } : {}),
+          keys: stringList(body.keys),
+          ignore: stringList(body.ignore),
+          filters: stringList(body.filters),
+          waive: stringList(body.waive),
+          fileRows: body.fileRows === true,
+          ...(typeof body.tolerance === 'string' ? { tolerance: body.tolerance } : {}),
+          ...(body.dates === 'dmy' || body.dates === 'mdy' ? { dates: body.dates } : {}),
+        }, {
+          catalog: {
+            ...catalog,
+            columnsOf: (table) => {
+              const found = tables.find((candidate) => [candidate.schema, candidate.name].filter(Boolean).join('.').toLowerCase() === bare(table) || candidate.name.toLowerCase() === bare(table));
+              return found?.columns.map((column) => ({ name: column.name, sql: name(column.name) }));
+            },
+          },
+          tableMapping,
+          driver: active.driver,
+          connection: { driver: active.driver, ...(active.database ? { database: active.database } : {}) },
+          worksheet: (worksheet) => findImportedWorksheet(projectRoot, worksheet),
+          run: async (sql, saved) => {
+            const refused = readOnlySqlValidationError(sql, 'A report comparison', active.driver);
+            if (refused) throw new Error(refused);
+            const execution = await analyticalExecutionService.execute({
+              sql,
+              subject: 'Report comparison',
+              connection: active,
+              // One row more than a file holds says the result is too large to compare.
+              rowLimit: MAX_EXPORT_ROWS + 1,
+              rowCeiling: MAX_EXPORT_ROWS + 1,
+              resultRows: MAX_EXPORT_ROWS + 1,
+              ...(saved?.sqlParams ? { sqlParams: saved.sqlParams as NonNullable<Parameters<typeof analyticalExecutionService.execute>[0]['sqlParams']> } : {}),
+              ...(saved?.variables ? { variables: saved.variables } : {}),
+            });
+            return { rows: execution.result.rows as Array<Record<string, unknown>>, truncated: Boolean(execution.result.truncated) || execution.result.rows.length > MAX_EXPORT_ROWS };
+          },
+          savedQuery: async (queryName, parameters) => {
+            const wanted = queryName.trim().toLowerCase();
+            const block = Object.values(projectSnapshot().manifest.blocks ?? {}).find((candidate) => candidate.name.toLowerCase() === wanted);
+            if (!block?.filePath) return undefined;
+            // HH-13: a saved query compared by name is its Dataset, as when it is run by name.
+            const refusal = await restrictedBlockRefusal({ name: block.name, filePath: block.filePath, ...(block.domain ? { domain: block.domain } : {}) });
+            if (refusal) throw new ComparisonStopped(refusal.error);
+            const preview = await runBlockStudioPreviewSource(readFileSync(join(projectRoot, block.filePath), 'utf-8'), active, parameters);
+            return { name: block.name, sql: preview.sql, ...(preview.sqlParams ? { sqlParams: preview.sqlParams } : {}), variables: preview.variables };
+          },
+        });
+        writeComparisonDetail(projectRoot, comparisonPerson(owner), outcome);
+        reply(200, { comparison: outcome });
+      } catch (error) {
+        const stopped = error instanceof ComparisonStopped || error instanceof ExportRefused;
+        reply(stopped ? 422 : 500, { error: error instanceof Error ? error.message : String(error), ...(stopped ? { code: 'COMPARISON_STOPPED' } : {}) });
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && path === '/api/report-match/record') {
+      const reply = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      try {
+        const body = (await readJSON(req)) as { id?: unknown; via?: unknown };
+        const owner = currentRecordOwner();
+        if (owner === null || hostedRequest()) {
+          reply(403, { error: 'Recording a comparison on a server is not available yet.' });
+          return;
+        }
+        const outcome = readComparisonDetail(projectRoot, comparisonPerson(owner), String(body.id ?? ''));
+        if (!outcome) {
+          reply(404, { error: 'There is no such comparison. Compare the file again.' });
+          return;
+        }
+        const paths = writeMatchRecords(projectRoot, outcome, {
+          comparedBy: hostActor() ?? localPersonIdentity(projectRoot) ?? 'local',
+          via: body.via === 'cli' ? 'cli' : 'screen',
+        });
+        reply(200, { recorded: paths });
+      } catch (error) {
+        reply(/Invalid comparison id/.test(error instanceof Error ? error.message : '') ? 400 : 500, { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -37048,6 +37195,34 @@ export function buildSkillPathSettings(projectRoot: string): SkillPathSettings {
   };
 }
 
+/** What the compare route takes: a file, or one typed number, and the person's choices. */
+interface CompareRequestBody {
+  file?: { name?: unknown; base64?: unknown };
+  metric?: unknown;
+  value?: unknown;
+  query?: unknown;
+  parameters?: Record<string, unknown>;
+  report?: unknown;
+  worksheet?: unknown;
+  map?: Record<string, string>;
+  keys?: unknown;
+  ignore?: unknown;
+  filters?: unknown;
+  waive?: unknown;
+  fileRows?: unknown;
+  tolerance?: unknown;
+  dates?: unknown;
+}
+
+function stringList(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0) : [];
+}
+
+/** Whose folder a comparison's values go in: on a server they came from that person's row rules. */
+function comparisonPerson(owner: string | undefined): string {
+  return owner === undefined ? 'local' : `p-${createHash('sha256').update(owner).digest('hex').slice(0, 32)}`;
+}
+
 /** An import id that is not one is the caller's mistake; one that is not theirs reads as not found. */
 function importRequestStatus(error: unknown): number {
   const message = error instanceof Error ? error.message : '';
@@ -40942,11 +41117,26 @@ function isAbsoluteLikePath(value: string): boolean {
   return value.startsWith('/') || value.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(value);
 }
 
-function readJSON(req: import('node:http').IncomingMessage): Promise<any> {
+function readJSON(req: import('node:http').IncomingMessage, maxBytes?: number): Promise<any> {
   return new Promise((resolvePromise, reject) => {
     const chunks: Buffer[] = [];
-    req.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+    let size = 0;
+    let refused = false;
+    req.on('data', (chunk) => {
+      if (refused) return;
+      const piece = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += piece.length;
+      if (maxBytes !== undefined && size > maxBytes) {
+        // Stop keeping it; the rest of the request is read and dropped.
+        refused = true;
+        chunks.length = 0;
+        reject(new Error(`The request is larger than ${Math.round(maxBytes / 1024 / 1024)} MB.`));
+        return;
+      }
+      chunks.push(piece);
+    });
     req.on('end', () => {
+      if (refused) return;
       try {
         const raw = Buffer.concat(chunks).toString('utf-8');
         resolvePromise(raw ? JSON.parse(raw) : {});

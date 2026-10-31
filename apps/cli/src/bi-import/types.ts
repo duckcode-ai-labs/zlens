@@ -20,6 +20,14 @@ export interface ExtractedBiFile {
   inventory?: BiInventory;
   /** Where each field of each data source (Tableau) or model (Power BI) reads from, for turning calculations into metrics. */
   models?: BiCalculationModel[];
+  /** Tableau worksheets and the filters saved on them, which an export of the worksheet does not show. */
+  worksheets?: BiWorksheet[];
+}
+
+export interface BiWorksheet {
+  name: string;
+  /** The filters saved on it that narrow its rows, as the workbook has them: the person may have changed them before exporting. */
+  filters: Array<{ field: string; words: string }>;
 }
 
 export type BiDataType = 'integer' | 'number' | 'string' | 'date' | 'boolean' | 'unknown';
