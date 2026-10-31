@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { AgentRun } from '../api/client';
-import { HostAnswerActions, HostAnswerStatusView, answerNeedsReview } from '../components/agent/HostAnswerActions';
+import { HostAnswerActions, HostAnswerStatusView, HostNoteBox, actionsForAnswer, answerActionInput, answerCanBeCertified, answerNeedsReview, answerRanSql } from '../components/agent/HostAnswerActions';
 import { HostPersonMenu } from '../components/shell/HostPersonMenu';
 import { HostBanner } from '../components/shell/HostBanner';
 import { themes } from '../themes/notebook-theme';
-import { HOST_UNREACHABLE_AFTER_MS, HostConnecting, HostUiProvider, hostAllows, hostPageSrc, hostProposesCertification, hostReader, hostRefusal, hostUiFrom, navItemAllowed, pageSaysHosted, type HostUi, type HostUiState } from './host-ui';
+import { HOST_UNREACHABLE_AFTER_MS, HostConnecting, HostUiProvider, hostAllows, hostPageSrc, hostProposesCertification, hostReader, hostRefusal, hostUiFrom, navItemAllowed, pageSaysHosted, runHostAnswerAction, type HostUi, type HostUiState } from './host-ui';
 import { appLibraryWords } from '../components/apps/app-library-words';
 
 const NO_HOST: HostUiState = { host: false };
@@ -19,7 +19,7 @@ function hosted(overrides: Partial<HostUi> = {}): HostUi {
     environment: 'Production',
     links: [{ id: 'requests', label: 'My requests', href: '/e/requests', placement: 'nav' }],
     answerActions: [
-      { id: 'certify', label: 'Ask an analyst to check this', url: '/enterprise/api/requests' },
+      { id: 'check', label: 'Ask an analyst to check this', url: '/enterprise/api/requests' },
       { id: 'note', label: 'Add a note', url: '/enterprise/api/notes' },
     ],
     ...overrides,
@@ -118,14 +118,14 @@ describe('host UI (RFC 0010 HH-9)', () => {
     expect(html).toContain('Add a note');
   });
 
-  it('offers only the actions meant for questions ZLens could not answer on a blocked answer', () => {
+  it('offers an action meant for questions ZLens could not answer on a blocked answer, and nothing else', () => {
     const withUnanswered = hosted({ answerActions: [
       { id: 'check', label: 'Ask an analyst to check this', url: '/x' },
-      { id: 'certify', label: 'Make this a certified answer', url: '/y', on: ['review', 'unanswered'] },
+      { id: 'ask', label: 'Ask a data person', url: '/y', on: ['unanswered'] },
     ] });
     const blocked = run({ status: 'blocked', trustState: 'blocked' } as Partial<AgentRun>);
     const html = render(withUnanswered, <HostAnswerActions run={blocked} t={t} />);
-    expect(html).toContain('Make this a certified answer');
+    expect(html).toContain('Ask a data person');
     expect(html).not.toContain('Ask an analyst to check this');
     expect(html).toContain('could not answer this');
     expect(render(hosted(), <HostAnswerActions run={blocked} t={t} />)).toBe('');
@@ -143,6 +143,95 @@ describe('host UI (RFC 0010 HH-9)', () => {
     expect(html).not.toContain('Ask an analyst to check this');
     // On a review answer it sits with the other actions.
     expect(render(withWrong, <HostAnswerActions run={run()} t={t} />)).toContain('This looks wrong');
+  });
+});
+
+describe('"Make this a certified answer" (only an AI answer that ran SQL)', () => {
+  const certify = { id: 'certify', label: 'Make this a certified answer', url: '/y', on: ['review', 'unanswered'] as Array<'review' | 'unanswered'> };
+  const ran = (payload: Record<string, unknown> = { result: { sql: 'SELECT 1', columns: ['a'], rows: [] } }) =>
+    [{ id: 'a1', kind: 'answer', title: 'Answer', trustState: 'review_required', payload }] as AgentRun['artifacts'];
+  const offered = (overrides: Partial<AgentRun>) => actionsForAnswer(run(overrides), [certify])?.actions.map((action) => action.id) ?? [];
+
+  it('is offered on a needs-review answer whose SQL ran', () => {
+    expect(offered({ artifacts: ran() })).toEqual(['certify']);
+    expect(render(hosted({ answerActions: [certify] }), <HostAnswerActions run={run({ artifacts: ran() })} t={t} />)).toContain('Make this a certified answer');
+  });
+
+  it('is still offered where the figures are withheld, and on a run rebuilt from its thread', () => {
+    expect(answerRanSql({ artifacts: ran({ result: { rows: [], rowCount: 3, sql: 'SELECT 1' } }) })).toBe(true);
+    expect(answerRanSql({ artifacts: ran({ sql: 'SELECT 1', result: { columns: ['a'], rows: [] } }) })).toBe(true);
+  });
+
+  it('is never offered on a blocked answer, whatever the host says about it', () => {
+    const warehouseError = run({ status: 'blocked', trustState: 'blocked', artifacts: ran({ sql: 'SELECT 1', executionError: 'The warehouse could not run this statement.' }) });
+    const refusal = run({ status: 'blocked', trustState: 'blocked', artifacts: [] });
+    const blockedAfterRunning = run({ status: 'blocked', trustState: 'review_required', artifacts: ran() });
+    for (const blocked of [warehouseError, refusal, blockedAfterRunning]) {
+      expect(answerCanBeCertified(blocked)).toBe(false);
+      expect(actionsForAnswer(blocked, [certify])).toBeNull();
+      expect(render(hosted({ answerActions: [certify] }), <HostAnswerActions run={blocked} t={t} />)).toBe('');
+    }
+  });
+
+  it('is never offered where no SQL ran', () => {
+    expect(offered({ artifacts: [] })).toEqual([]);
+    expect(offered({ artifacts: ran({ sql: 'SELECT 1', executionError: 'It failed.' }) })).toEqual([]);
+    expect(offered({ artifacts: ran({ sql: 'SELECT 1', result: { sql: 'SELECT 1', rows: [] }, executionError: 'It failed.' }) })).toEqual([]);
+    expect(offered({ artifacts: ran({ proposedSql: 'SELECT 1' }) })).toEqual([]);
+    expect(offered({ artifacts: ran({ sql: 'SELECT 1' }) })).toEqual([]);
+    expect(offered({ artifacts: ran({ result: { columns: ['a'], rows: [] } }) })).toEqual([]);
+  });
+
+  it('is never offered on a clarification, a conversational reply, a stopped run or a trusted answer', () => {
+    const artifacts = ran();
+    expect(offered({ status: 'needs_clarification', trustState: 'review_required', artifacts })).toEqual([]);
+    expect(offered({ status: 'cancelled', trustState: 'review_required', artifacts })).toEqual([]);
+    expect(offered({ status: 'completed', trustState: 'not_applicable', answerKind: 'conversational', artifacts: [] })).toEqual([]);
+    expect(offered({ status: 'needs_review', trustState: 'not_applicable', artifacts })).toEqual([]);
+    expect(offered({ status: 'completed', trustState: 'certified', artifacts })).toEqual([]);
+  });
+
+  it('leaves the other actions on a review answer alone', () => {
+    const check = { id: 'check', label: 'Ask an analyst to check this', url: '/x' };
+    expect(actionsForAnswer(run({ artifacts: [] }), [check, certify])?.actions).toEqual([check]);
+  });
+});
+
+describe('"This looks wrong" takes a note first', () => {
+  const wrong = { id: 'wrong', label: 'This looks wrong', url: '/enterprise/api/requests?kind=correction', on: ['answered', 'review'] as Array<'answered' | 'review'> };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shows one optional line and Send', () => {
+    const html = renderToStaticMarkup(<HostNoteBox action={wrong} sending={false} onSend={vi.fn()} onCancel={vi.fn()} t={t} />);
+    expect(html).toContain('data-testid="host-note-box"');
+    expect(html).toContain('<input');
+    expect(html).not.toContain('<textarea');
+    expect(html).not.toContain('required');
+    expect(html).toContain('placeholder="What looks wrong? (optional)"');
+    expect(html).toContain('>Send<');
+    expect(html).toContain('>Cancel<');
+    expect(renderToStaticMarkup(<HostNoteBox action={wrong} sending onSend={vi.fn()} onCancel={vi.fn()} t={t} />)).toContain('>Sending…<');
+  });
+
+  it('files nothing until the person sends: the card only shows the action', () => {
+    const certified = run({ status: 'completed', trustState: 'certified' } as Partial<AgentRun>);
+    expect(render(hosted({ answerActions: [wrong] }), <HostAnswerActions run={certified} t={t} />)).not.toContain('host-note-box');
+  });
+
+  it('sends what was written with the request, and no note when nothing was', () => {
+    const answer = run({ trustState: 'certified' } as Partial<AgentRun>);
+    expect(answerActionInput(answer, '  The total counts refunds twice.  ')).toEqual({ runId: 'run_1', question: 'Claims paid last month?', trustState: 'certified', note: 'The total counts refunds twice.' });
+    expect(answerActionInput(answer, '   ')).toEqual({ runId: 'run_1', question: 'Claims paid last month?', trustState: 'certified' });
+    expect(answerActionInput(answer)).not.toHaveProperty('note');
+  });
+
+  it('posts the note to the host', async () => {
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => new Response(JSON.stringify({ message: 'Reported as R-7.' }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const message = await runHostAnswerAction(wrong, answerActionInput(run(), 'The total counts refunds twice.'));
+    expect(message).toBe('Reported as R-7.');
+    expect(fetchMock.mock.calls[0][0]).toBe(wrong.url);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ runId: 'run_1', note: 'The total counts refunds twice.' });
   });
 });
 
