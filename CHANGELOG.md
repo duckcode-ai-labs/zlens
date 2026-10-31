@@ -21,6 +21,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   CALCULATE replacing the report's filter, another database). What cannot
   become a metric is listed with why. `--no-metrics` and `--no-check` skip the
   drafts or their check.
+- **Approved metrics can group.** The text, date and true/false columns of the
+  tables the drafts read become dimension drafts, approved with the metric, so
+  "East Sales by month" answers From Metrics in a project that starts from a
+  workbook.
 - **Approve on the Import screen or with `zlens semantic approve`**
   (`--all-from <import>`; `zlens semantic drafts` lists them, `discard` deletes
   them). Approving moves the draft's text out of `_drafts/` with `status:

@@ -187,10 +187,13 @@ draft, with:
   filter, another database);
 - for a ratio, the parts that are approved with it.
 
+The text, date and true/false columns of those tables come with them as
+dimension drafts, so an approved metric can answer "by region" or "by month".
+
 **Approve** makes it answer: its file moves from
 `semantic-layer/metrics/_drafts/<domain>/` to `semantic-layer/metrics/<domain>/`
-with `status: certified`, who approved it and when, and Ask labels its answers
-**From Metrics**. **Discard** deletes the draft. **Approve all that ran (N)**
+with `status: certified`, who approved it and when, its table's dimensions
+come with it, and Ask labels its answers **From Metrics**. **Discard** deletes the draft. **Approve all that ran (N)**
 approves every draft whose check ran. Below them: calculations that are
 already a metric, ones whose check failed on the database, and ones left out,
 each with why. See [Migrate from other tools](../guides/migrate.md#bring-the-calculations-over-as-metrics).

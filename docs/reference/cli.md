@@ -114,7 +114,7 @@ mark for recertification; otherwise it exits 0, including when there is no
 | --- | --- |
 | `zlens semantic list\|validate\|query\|pull` | Semantic layer operations |
 | `zlens semantic drafts` | List metric drafts waiting for review, with each one's value over all rows |
-| `zlens semantic approve <name…>` | Approve metric drafts: each moves out of `semantic-layer/metrics/_drafts/` with `status: certified`, who and when, and answers from then on; a ratio brings its parts. `--all-from <import id\|latest>` approves every draft an import wrote that ran |
+| `zlens semantic approve <name…>` | Approve metric drafts: each moves out of `semantic-layer/metrics/_drafts/` with `status: certified`, who and when, and answers from then on; a ratio brings its parts, and a metric brings its table's dimension drafts. `--all-from <import id\|latest>` approves every draft an import wrote that ran |
 | `zlens semantic discard <name…>` | Delete metric drafts |
 | `zlens sync dbt [path]` | Diff, compile, and reindex dbt-backed ZLens state |
 | `zlens sync dbt --check [path]` | Report dbt/DQL drift without writing |

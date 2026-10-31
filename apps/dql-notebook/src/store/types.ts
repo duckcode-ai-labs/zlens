@@ -1367,6 +1367,8 @@ export interface ImportMetricDrafts {
   notWrittenReason?: string;
   checked: boolean;
   items: ImportMetricDraftItem[];
+  /** Columns of the drafts' tables written as dimension drafts: what the metrics can group by once approved. */
+  dimensions: Array<{ name: string; label: string; table: string; path: string }>;
 }
 
 export interface BlockStudioImportSkippedStatement {

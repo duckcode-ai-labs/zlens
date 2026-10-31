@@ -23,6 +23,7 @@ import {
   parseCubeDefinition,
   parseSegmentDefinition,
   parsePreAggregationDefinition,
+  type DimensionDefinition,
   type MetricDefinition,
 } from './semantic-layer.js';
 import { expandDefinitions, addIfNamed } from './yaml-loader.js';
@@ -85,18 +86,27 @@ export function loadSemanticLayerFromDir(semanticLayerDir: string): SemanticLaye
  * BI file), for the places that review them. Never added to a layer.
  */
 export function loadSemanticMetricDraftsFromDir(semanticLayerDir: string): MetricDefinition[] {
-  const dir = join(semanticLayerDir, 'metrics', '_drafts');
+  return loadDraftsFromDir(semanticLayerDir, 'metrics', parseMetricDefinition);
+}
+
+/** The dimension drafts under `dimensions/_drafts/`, which come with the metrics on their table when those are approved. */
+export function loadSemanticDimensionDraftsFromDir(semanticLayerDir: string): DimensionDefinition[] {
+  return loadDraftsFromDir(semanticLayerDir, 'dimensions', parseDimensionDefinition);
+}
+
+function loadDraftsFromDir<T extends { name: string }>(semanticLayerDir: string, folder: 'metrics' | 'dimensions', parse: (raw: Record<string, unknown>) => T): T[] {
+  const dir = join(semanticLayerDir, folder, '_drafts');
   if (!existsSync(dir)) return [];
-  const drafts: MetricDefinition[] = [];
+  const drafts: T[] = [];
   for (const filePath of collectYamlFiles(dir, { includeDrafts: true })) {
     try {
       const raw = yaml.load(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
       if (!raw || typeof raw !== 'object') continue;
-      for (const item of expandDefinitions(raw, ['metrics'])) {
-        const located = withLocalSemanticSource(item, semanticLayerDir, filePath, 'metrics') as { source: { extra: { path: string } } };
+      for (const item of expandDefinitions(raw, [folder])) {
+        const located = withLocalSemanticSource(item, semanticLayerDir, filePath, folder) as { source: { extra: { path: string } } };
         // Review moves and deletes this file, so the path is where it is, not what its YAML says.
         located.source.extra.path = relative(semanticLayerDir, filePath).replace(/\\/g, '/');
-        addIfNamed(parseMetricDefinition(located as unknown as Record<string, unknown>), (metric) => drafts.push(metric));
+        addIfNamed(parse(located as unknown as Record<string, unknown>), (draft) => drafts.push(draft));
       }
     } catch {
       // Skip malformed YAML files

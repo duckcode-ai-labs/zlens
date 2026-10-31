@@ -6314,7 +6314,7 @@ export const api = {
     },
 
     /** A person approves metric drafts (by name, or every one an import wrote that ran): they answer from then on. */
-    async approveMetricDrafts(body: { names?: string[]; importId?: string }): Promise<{ approved: Array<{ name: string; from: string; to: string }>; approvedBy: string }> {
+    async approveMetricDrafts(body: { names?: string[]; importId?: string }): Promise<{ approved: Array<{ name: string; from: string; to: string; dimension?: boolean }>; approvedBy: string }> {
       return request('/api/semantic-layer/metric-drafts/approve', { method: 'POST', body: JSON.stringify(body) });
     },
 

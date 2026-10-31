@@ -359,7 +359,7 @@ const COMMAND_HELP: Record<string, string> = {
   A metric draft answers no question until a person approves it. Approving
   moves its file out of semantic-layer/metrics/_drafts/ with status:
   certified, who approved it and when; a ratio brings the drafts it is built
-  from.
+  from, and a metric brings its table's dimension drafts.
   `,
   eval: `
   zlens eval — Score the answer agent's routing accuracy

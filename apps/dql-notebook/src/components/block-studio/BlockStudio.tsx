@@ -4294,8 +4294,10 @@ function BlockStudioImportWorkspace({
     setMetricDraftsMessage(null);
     try {
       const result = await api.approveMetricDrafts(body);
-      setMetricDraftsDone((current) => ({ ...current, ...Object.fromEntries(result.approved.map((item) => [item.name, 'approved' as const])) }));
-      setMetricDraftsMessage(`Approved ${result.approved.length} metric${result.approved.length === 1 ? '' : 's'} as ${result.approvedBy}: ${result.approved.length === 1 ? 'it answers' : 'they answer'} from now on.`);
+      const metrics = result.approved.filter((item) => !item.dimension);
+      const dimensions = result.approved.length - metrics.length;
+      setMetricDraftsDone((current) => ({ ...current, ...Object.fromEntries(metrics.map((item) => [item.name, 'approved' as const])) }));
+      setMetricDraftsMessage(`Approved ${metrics.length} metric${metrics.length === 1 ? '' : 's'} as ${result.approvedBy}: ${metrics.length === 1 ? 'it answers' : 'they answer'} from now on.${dimensions ? ` ${dimensions} dimension${dimensions === 1 ? '' : 's'} came with ${metrics.length === 1 ? 'it' : 'them'}.` : ''}`);
     } catch (err: any) {
       setMetricDraftsMessage(err?.message ?? 'Approve failed.');
     } finally {
@@ -5855,6 +5857,11 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
             : record.notWrittenReason ?? 'Nothing was written.'}
         </span>
         {sharedNotes.map((note) => <span key={note} style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{note}</span>)}
+        {(record.dimensions?.length ?? 0) > 0 && (
+          <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+            Approving a metric also adds its table's columns as dimensions, so questions can group by them: {record.dimensions.slice(0, 8).map((dimension) => dimension.name).join(', ')}{record.dimensions.length > 8 ? ', …' : ''}.
+          </span>
+        )}
         {drafted.map((item) => {
           const state = item.metric ? done[item.metric] : undefined;
           const canAct = record.written && item.metric && item.path && !state;

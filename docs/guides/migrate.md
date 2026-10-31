@@ -116,6 +116,10 @@ simple, filtered and ratio calculation into a **metric draft** in
   synonym. A draft never takes or replaces a metric's name; a calculation that
   is already a metric or a draft is reused. A ratio's parts become drafts of
   their own.
+- **With the columns to group by.** A metric groups only by dimensions, so the
+  text, date and true/false columns of the tables the drafts read come with
+  them as dimension drafts in `semantic-layer/dimensions/_drafts/<domain>/`.
+  Date columns are time dimensions, so "by month" works.
 - **Notes say where the numbers can differ:** a Tableau data source that joins
   tables (the metric counts each row of its own table once), a workbook that
   reads an extract, a DAX filter that replaces the report's own filter on that
@@ -137,9 +141,11 @@ zlens semantic approve --all-from latest
 ```
 
 Approving moves the file out of `_drafts/` unchanged apart from `status:
-certified`, who approved it and when; a ratio brings its parts. From then on
-Ask answers "East Sales by month" **From Metrics**. Agents can list drafts
-(MCP `list_proposals`) but not approve them.
+certified`, who approved it and when; a ratio brings its parts, and a metric
+brings the dimensions of its table. From then on Ask answers "East Sales by
+month" **From Metrics**. Grouping by a column of another table needs a certified
+relationship, as any join does. Agents can list drafts (MCP `list_proposals`)
+but not approve them.
 
 A project whose metrics live in dbt (dbt semantic models, or dbt-first) gets
 no files: the import lists each definition in words to add in dbt.

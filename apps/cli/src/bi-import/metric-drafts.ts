@@ -1,4 +1,4 @@
-import type { MetricDefinition } from '@zlens/core';
+import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { classifyCalculations, formulaWithoutComments, type BiCalculation, type ClassifiedCalculation } from './calculations.js';
 import { FormulaError, parseFormula, type FormulaNode } from './formula.js';
 import type { BiCalculationModel, BiDataType, BiLiteral, BiModelField, BiModelTable, BiSourceFilter, BiTableSource } from './types.js';
@@ -31,6 +31,8 @@ export interface MetricDraftOptions {
   existingDrafts?: MetricDefinition[];
   /** Other names already taken. */
   takenNames?: Iterable<string>;
+  /** The project's dimensions and dimension drafts: one on the same column is not drafted again. */
+  existingDimensions?: DimensionDefinition[];
   /** A text value as this database's SQL writes it. Without it, the standard form (`'it''s'`). */
   stringLiteral?: (value: string) => string;
 }
@@ -73,6 +75,12 @@ export interface MetricDraftsResult {
   conversions: CalculationConversion[];
   /** Every draft to write: the calculations' own, and the parts a ratio needs. */
   drafts: MetricDraft[];
+  /**
+   * The text, date and true/false columns of the tables those drafts read, as
+   * dimension drafts: a metric groups only by dimensions, and a project that
+   * starts from a workbook has none. They come with the metrics when approved.
+   */
+  dimensions: DimensionDefinition[];
 }
 
 // ── Values while translating ────────────────────────────────────────────────
@@ -142,6 +150,9 @@ class LeftOut extends Error {}
 /** Said when DISTINCTCOUNT reuses a metric: nothing ran, so whether the column has empty values is not known. */
 const COUNTS_BLANK_NOTE = "Power BI's DISTINCTCOUNT counts an empty value as one more, and the metric it reuses does not: the two differ by one if the column has empty values.";
 
+/** Column types a question groups by. Numbers are what metrics add up. */
+const DIMENSION_TYPES: Partial<Record<BiDataType, DimensionDefinition['type']>> = { string: 'string', date: 'date', boolean: 'boolean' };
+
 const AGGREGATE_WORDS: Record<AggregateFn, string> = {
   sum: 'Sum', avg: 'Average', min: 'Minimum', max: 'Maximum', count: 'Count', count_distinct: 'Distinct count',
 };
@@ -162,7 +173,7 @@ export function convertCalculationsToMetricDrafts(
   const converter = new Converter(calculations, models, options);
   // `classified` keeps the order: each is its calculation with a kind added.
   const conversions = classified.map((calculation, index) => converter.convert(calculation, calculations[index]!));
-  return { conversions, drafts: converter.drafts() };
+  return { conversions, drafts: converter.drafts(), dimensions: converter.dimensions() };
 }
 
 class Converter {
@@ -176,6 +187,8 @@ class Converter {
   private readonly notesOf = new Map<BiCalculation, Set<string>>();
   private readonly stack = new Set<BiCalculation>();
   private readonly text: (value: string) => string;
+  /** The tables this run's calculations read, for their dimensions. */
+  private readonly readTables = new Map<string, TableInfo>();
 
   constructor(
     private readonly calculations: BiCalculation[],
@@ -200,6 +213,56 @@ class Converter {
 
   drafts(): MetricDraft[] {
     return this.ordered;
+  }
+
+  dimensions(): DimensionDefinition[] {
+    const existing = this.options.existingDimensions ?? [];
+    const onColumn = new Set(existing.map((dimension) => `${dimension.table.trim().toLowerCase()}\u0000${dimension.sql.trim()}`));
+    const names = new Set([...this.taken, ...existing.map((dimension) => dimension.name.toLowerCase())]);
+    const drafted: DimensionDefinition[] = [];
+    for (const table of this.readTables.values()) {
+      for (const field of table.model.fields) {
+        if (field.table !== table.bi.name || !DIMENSION_TYPES[field.dataType]) continue;
+        let sql: string;
+        try {
+          sql = this.column(field, table.model).sql;
+        } catch {
+          // A column the database lacks or Power Query changes is no dimension.
+          continue;
+        }
+        const key = `${table.sql.trim().toLowerCase()}\u0000${sql}`;
+        if (onColumn.has(key)) continue;
+        onColumn.add(key);
+        const label = field.caption ?? field.name;
+        const base = metricName(label);
+        // The same name on another table, or a metric's: the table says which.
+        let name = names.has(base) ? `${metricName(table.bi.name)}_${base}` : base;
+        for (let suffix = 2; names.has(name); suffix += 1) name = `${metricName(table.bi.name)}_${base}_${suffix}`;
+        names.add(name);
+        const tool = table.model.tool;
+        drafted.push({
+          name,
+          label,
+          description: `Column ${field.column} of ${table.sql}, from ${table.model.tool === 'tableau' ? 'Tableau data source' : 'Power BI model'} ${table.model.name}.`,
+          domain: this.options.domain,
+          status: 'draft',
+          sql,
+          type: DIMENSION_TYPES[field.dataType]!,
+          table: table.sql,
+          ...(field.dataType === 'date' ? { isTimeDimension: true } : {}),
+          ...(this.options.owner ? { owner: this.options.owner } : {}),
+          tags: ['imported', tool, 'human-review'],
+          source: {
+            provider: tool,
+            objectType: 'field',
+            objectId: `${table.model.sourcePath}#${table.model.name}/${field.name}`,
+            objectName: label,
+            importedAt: this.options.importedAt,
+          },
+        });
+      }
+    }
+    return drafted;
   }
 
   convert(calculation: ClassifiedCalculation, original: BiCalculation): CalculationConversion {
@@ -647,6 +710,7 @@ class Converter {
 
   private draft(calculation: ClassifiedCalculation, original: BiCalculation, tree: Tree): CalculationConversion {
     const notes = Array.from(new Set([...treeNotes(tree), ...(this.notesOf.get(original) ?? [])]));
+    for (const part of treeParts(tree)) this.readTables.set(part.table.key, part.table);
     if (tree.k === 'part') {
       const part = { ...tree.part, label: calculation.name };
       const existing = this.existing.get(definitionKeyOf(part));
@@ -1138,14 +1202,14 @@ function renderTree(tree: Tree, nameOf: (part: Part) => string): string {
   return render(tree);
 }
 
+function treeParts(tree: Tree): Part[] {
+  if (tree.k === 'part') return [tree.part];
+  if (tree.k === 'op') return [...treeParts(tree.left), ...treeParts(tree.right)];
+  if (tree.k === 'negate') return treeParts(tree.operand);
+  if (tree.k === 'fn') return tree.args.flatMap(treeParts);
+  return [];
+}
+
 function treeNotes(tree: Tree): string[] {
-  const notes = new Set<string>();
-  const walk = (node: Tree) => {
-    if (node.k === 'part') node.part.notes.forEach((note) => notes.add(note));
-    else if (node.k === 'op') { walk(node.left); walk(node.right); }
-    else if (node.k === 'negate') walk(node.operand);
-    else if (node.k === 'fn') node.args.forEach(walk);
-  };
-  walk(tree);
-  return Array.from(notes);
+  return Array.from(new Set(treeParts(tree).flatMap((part) => part.notes)));
 }

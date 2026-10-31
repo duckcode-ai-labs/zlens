@@ -39,6 +39,7 @@ const WORKBOOK = `<?xml version='1.0' encoding='utf-8' ?>
         <metadata-record class='column'><remote-name>sales</remote-name><local-name>[sales]</local-name><parent-name>[orders]</parent-name><local-type>real</local-type></metadata-record>
         <metadata-record class='column'><remote-name>profit</remote-name><local-name>[profit]</local-name><parent-name>[orders]</parent-name><local-type>real</local-type></metadata-record>
         <metadata-record class='column'><remote-name>discount</remote-name><local-name>[discount]</local-name><parent-name>[orders]</parent-name><local-type>real</local-type></metadata-record>
+        <metadata-record class='column'><remote-name>ordered_at</remote-name><local-name>[ordered_at]</local-name><parent-name>[orders]</parent-name><local-type>date</local-type></metadata-record>
       </metadata-records>
     </connection>
     <column caption='Total Sales' datatype='real' name='[Calculation_1]' role='measure' type='quantitative'><calculation class='tableau' formula='SUM([sales])' /></column>
@@ -49,7 +50,7 @@ const WORKBOOK = `<?xml version='1.0' encoding='utf-8' ?>
 </datasources></workbook>`;
 
 const TABLES: WarehouseTableSummary[] = [
-  { id: 'analytics.orders', name: 'orders', schema: 'analytics', relation: 'analytics.orders', kind: 'table', columns: [{ name: 'Region' }, { name: 'sales' }, { name: 'profit' }, { name: 'discount' }] },
+  { id: 'analytics.orders', name: 'orders', schema: 'analytics', relation: 'analytics.orders', kind: 'table', columns: [{ name: 'Region' }, { name: 'sales' }, { name: 'profit' }, { name: 'discount' }, { name: 'ordered_at' }] },
   { id: 'public.orders', name: 'orders', schema: 'public', relation: 'public.orders', kind: 'table', columns: [{ name: 'id' }] },
 ];
 
@@ -187,7 +188,7 @@ describe('approving metric drafts', () => {
     await makeImportMetricDrafts(input(root));
     const before = readFileSync(join(root, 'semantic-layer/metrics/_drafts/sales/profit_ratio.yaml'), 'utf-8');
     const approved = approveMetricDrafts(root, ['profit_ratio'], 'maya@retail.example', new Date('2026-11-01T09:00:00Z'));
-    expect(approved.map((item) => item.name)).toEqual(['sum_of_profit', 'total_sales', 'profit_ratio']);
+    expect(approved.filter((item) => !item.dimension).map((item) => item.name)).toEqual(['sum_of_profit', 'total_sales', 'profit_ratio']);
     expect(approved[2]).toEqual({ name: 'profit_ratio', from: 'semantic-layer/metrics/_drafts/sales/profit_ratio.yaml', to: 'semantic-layer/metrics/sales/profit_ratio.yaml' });
     const after = readFileSync(join(root, 'semantic-layer/metrics/sales/profit_ratio.yaml'), 'utf-8');
     expect(after).toBe(before.replace('status: draft', 'status: certified\napprovedBy: "maya@retail.example"\napprovedAt: 2026-11-01T09:00:00.000Z'));
@@ -206,6 +207,48 @@ describe('approving metric drafts', () => {
     expect(() => approveMetricDrafts(root, ['nope'], 'maya')).toThrow('There is no metric draft named nope.');
     expect(discardMetricDrafts(root, ['east_sales'])).toEqual(['east_sales']);
     expect(listMetricDrafts(root).map((draft) => draft.name)).not.toContain('east_sales');
+  });
+
+  it('brings the columns of a metric\'s table as dimensions, so the metric can group by them', async () => {
+    const root = project();
+    const record = await makeImportMetricDrafts(input(root));
+    expect(record.dimensions.map((dimension) => dimension.name)).toEqual(['region', 'ordered_at']);
+    expect(record.dimensions[0]).toMatchObject({ table: 'analytics.orders', path: 'semantic-layer/dimensions/_drafts/sales/region.yaml' });
+    // Drafts answer nothing, and a metric alone cannot group.
+    expect(loadSemanticLayerFromDir(join(root, 'semantic-layer')).listDimensions()).toHaveLength(0);
+
+    const approved = approveMetricDrafts(root, ['total_sales'], 'maya');
+    expect(approved.filter((item) => item.dimension).map((item) => item.to)).toEqual(['semantic-layer/dimensions/sales/ordered_at.yaml', 'semantic-layer/dimensions/sales/region.yaml']);
+    expect(readFileSync(join(root, 'semantic-layer/dimensions/sales/region.yaml'), 'utf-8')).toContain('status: certified');
+    const layer = loadSemanticLayerFromDir(join(root, 'semantic-layer'));
+    expect(layer.getDimension('ordered_at')).toMatchObject({ isTimeDimension: true, type: 'date', sql: 'ordered_at' });
+    const byRegion = layer.composeQuery({ metrics: ['total_sales'], dimensions: ['region'], driver: 'postgres' });
+    expect(byRegion?.sql).toContain('"Region" AS region');
+    expect(byRegion?.sql).toContain('GROUP BY "Region"');
+    const byMonth = layer.composeQuery({ metrics: ['total_sales'], dimensions: [], timeDimension: { name: 'ordered_at', granularity: 'month' }, driver: 'postgres' });
+    expect(byMonth?.sql).toContain("DATE_TRUNC('month'");
+
+    // A second import finds them on the column, and drafts none again.
+    const again = await makeImportMetricDrafts(input(root, { importId: 'imp_test2' }));
+    expect(again.dimensions).toEqual([]);
+  });
+
+  it('takes dimension drafts away with the last metric draft on their table', async () => {
+    const root = project();
+    await makeImportMetricDrafts(input(root));
+    discardMetricDrafts(root, ['east_sales']);
+    expect(existsSync(join(root, 'semantic-layer/dimensions/_drafts/sales/region.yaml'))).toBe(true);
+    discardMetricDrafts(root, ['total_sales', 'sum_of_profit', 'profit_ratio']);
+    expect(existsSync(join(root, 'semantic-layer/dimensions/_drafts'))).toBe(false);
+  });
+
+  it('writes no dimension for a table with no metric written, or when the metrics live in dbt', async () => {
+    const root = project();
+    const none = await makeImportMetricDrafts(input(root, { run: async () => { throw new Error('nope'); } }));
+    expect(none.dimensions).toEqual([]);
+    expect(existsSync(join(root, 'semantic-layer/dimensions'))).toBe(false);
+    const dbt = await makeImportMetricDrafts(input(root, { metricsLiveElsewhere: 'dbt' }));
+    expect(dbt.dimensions).toEqual([]);
   });
 
   it('moves all of them or none, and refuses a part that is gone', async () => {

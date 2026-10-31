@@ -194,6 +194,9 @@ export function printMetricDrafts(record: ImportMetricDrafts): void {
   }
   const rowLevel = record.items.filter((item) => item.outcome === 'row-level').length;
   if (rowLevel) console.log(`  ${rowLevel} row-level calculation${rowLevel === 1 ? ' is a value per row' : 's are values per row'}: used inside the metrics that add them up, not metrics of their own.`);
+  if (record.dimensions.length) {
+    console.log(`  ${record.dimensions.length} column${record.dimensions.length === 1 ? '' : 's'} of those tables came with them as dimension drafts, to group by: ${record.dimensions.slice(0, 8).map((dimension) => dimension.name).join(', ')}${record.dimensions.length > 8 ? ', …' : ''}.`);
+  }
   if (record.written && drafted.some((item) => item.path)) {
     console.log(`  They answer nothing until approved. Check each value against the old report, then: zlens semantic approve --all-from ${record.importId}`);
   }

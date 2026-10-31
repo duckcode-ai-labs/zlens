@@ -381,6 +381,24 @@ describe('DAX rules the review checked against the docs', () => {
   });
 });
 
+describe('dimensions of the tables metrics read', () => {
+  it('drafts text, date and true/false columns, never a number, and names them apart from metrics', () => {
+    const result = convertTableau([['Total Sales', 'SUM([Sales])'], ['Region', 'SUM(IF [Region] = "East" THEN [Sales] END)']]);
+    expect(result.dimensions.map((dimension) => dimension.name)).toEqual(['orders_region', 'order_id']);
+    expect(result.dimensions[0]).toMatchObject({ label: 'Region', sql: 'region', type: 'string', table: 'analytics.orders', status: 'draft', domain: 'sales', tags: ['imported', 'tableau', 'human-review'] });
+  });
+
+  it('drafts none for a table no metric reads, and none on a column that already has one', () => {
+    expect(convertTableau([['Sales LY', '{FIXED [Region] : SUM([Sales])}']]).dimensions).toEqual([]);
+    const file = extractTableauWorkbook(workbook([['Total Sales', 'SUM([Sales])']]), 'Sales Overview.twb');
+    const result = convertCalculationsToMetricDrafts(file.inventory!.calculations, file.models!, {
+      domain: 'sales', importedAt: 'now', resolveTable: resolveOrders,
+      existingDimensions: [{ name: 'sales_region', label: 'Region', description: '', sql: 'region', type: 'string', table: 'analytics.orders' }],
+    });
+    expect(result.dimensions.map((dimension) => dimension.name)).toEqual(['order_id']);
+  });
+});
+
 describe('drafts compile in the semantic layer', () => {
   it('composes every drafted metric, ratios and derived ones included', () => {
     const file = extractTableauWorkbook(workbook([

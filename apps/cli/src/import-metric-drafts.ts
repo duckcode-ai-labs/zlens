@@ -3,9 +3,12 @@ import { dirname, join, relative } from 'node:path';
 import {
   SemanticLayer,
   getDialect,
+  loadSemanticDimensionDraftsFromDir,
   loadSemanticLayerFromDir,
   loadSemanticMetricDraftsFromDir,
+  serializeDimensionDefinitionToYaml,
   serializeMetricDefinitionToYaml,
+  type DimensionDefinition,
   type MetricDefinition,
 } from '@zlens/core';
 import type { CalculationKind } from './bi-import/calculations.js';
@@ -56,6 +59,8 @@ export interface ImportMetricDrafts {
   /** Whether the drafts were run once on the database (`--no-check` skips it). */
   checked: boolean;
   items: ImportMetricDraftItem[];
+  /** The columns of the drafts' tables written as dimension drafts: what the metrics can group by once approved. */
+  dimensions: Array<{ name: string; label: string; table: string; path: string }>;
 }
 
 export interface MakeImportMetricDraftsInput {
@@ -83,12 +88,14 @@ export interface MakeImportMetricDraftsInput {
 }
 
 const DRAFTS_DIR = join('semantic-layer', 'metrics', '_drafts');
+const DIMENSION_DRAFTS_DIR = join('semantic-layer', 'dimensions', '_drafts');
 
 export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput): Promise<ImportMetricDrafts> {
   const ranAt = (input.now ?? new Date()).toISOString();
   const semanticDir = join(input.projectRoot, 'semantic-layer');
   const existingMetrics = existsSync(semanticDir) ? loadSemanticLayerFromDir(semanticDir).listMetrics() : [];
   const existingDrafts = existsSync(semanticDir) ? loadSemanticMetricDraftsFromDir(semanticDir) : [];
+  const existingDimensions = existsSync(semanticDir) ? [...loadSemanticLayerFromDir(semanticDir).listDimensions(), ...loadSemanticDimensionDraftsFromDir(semanticDir)] : [];
   const base = { importId: input.importId, domain: input.domain, ranAt };
 
   let tables: WarehouseTableSummary[] | null = null;
@@ -124,6 +131,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     ...(resolveTable ? { resolveTable } : {}),
     existingMetrics,
     existingDrafts,
+    existingDimensions,
     stringLiteral: stringLiteralFor(driver),
   });
 
@@ -158,6 +166,17 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     }
   }
 
+  // Dimensions come only with a metric that was written: alone they would wait for a metric that never comes.
+  const writtenTables = new Set(converted.drafts.filter((draft) => paths.has(draft.definition.name)).map((draft) => draft.definition.table).filter(Boolean));
+  const dimensions: ImportMetricDrafts['dimensions'] = [];
+  for (const dimension of converted.dimensions) {
+    if (!written || !writtenTables.has(dimension.table)) continue;
+    const path = join(DIMENSION_DRAFTS_DIR, slug(input.domain), `${dimension.name}.yaml`);
+    mkdirSync(join(input.projectRoot, dirname(path)), { recursive: true });
+    writeFileSync(join(input.projectRoot, path), serializeDimensionDefinitionToYaml(dimension), 'utf-8');
+    dimensions.push({ name: dimension.name, label: dimension.label, table: dimension.table, path: path.replaceAll('\\', '/') });
+  }
+
   const items = converted.conversions.map((conversion): ImportMetricDraftItem => {
     const calculation = conversion.calculation;
     const draft = conversion.metric ? draftsByName.get(conversion.metric) : undefined;
@@ -187,6 +206,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     ...(input.metricsLiveElsewhere ? { notWrittenReason: input.metricsLiveElsewhere } : tablesError ? { notWrittenReason: `ZLens could not read the database's tables: ${tablesError}` } : {}),
     checked: written && input.check,
     items,
+    dimensions,
   };
   return result;
 }
@@ -428,6 +448,8 @@ export interface ApprovedMetric {
   name: string;
   from: string;
   to: string;
+  /** A dimension of an approved metric's table, which came with it. */
+  dimension?: boolean;
 }
 
 export class MetricDraftApprovalError extends Error {
@@ -489,14 +511,34 @@ export function approveMetricDrafts(projectRoot: string, names: string[], actor:
     if (existsSync(to)) throw new MetricDraftApprovalError(`${relative(projectRoot, to)} already exists, so ${draft.name} was not approved.`, 'NAME_TAKEN');
     return { name: draft.name, from, to };
   });
+  const dimensionMoves = dimensionsOfTables(semanticDir, new Set(wanted.map((draft) => draft.table).filter(Boolean)));
   const approvedAt = now.toISOString();
-  for (const move of moves) {
+  for (const move of [...moves, ...dimensionMoves]) {
     mkdirSync(dirname(move.to), { recursive: true });
     writeFileSync(move.to, approvedText(readFileSync(move.from, 'utf-8'), actor, approvedAt), 'utf-8');
   }
-  for (const move of moves) rmSync(move.from);
+  for (const move of [...moves, ...dimensionMoves]) rmSync(move.from);
   removeEmptyFolders(join(semanticDir, 'metrics', '_drafts'));
-  return moves.map((move) => ({ name: move.name, from: relative(projectRoot, move.from).replaceAll('\\', '/'), to: relative(projectRoot, move.to).replaceAll('\\', '/') }));
+  removeEmptyFolders(join(semanticDir, 'dimensions', '_drafts'));
+  const shown = (move: { name: string; from: string; to: string }) => ({ name: move.name, from: relative(projectRoot, move.from).replaceAll('\\', '/'), to: relative(projectRoot, move.to).replaceAll('\\', '/') });
+  return [...moves.map(shown), ...dimensionMoves.map((move) => ({ ...shown(move), dimension: true }))];
+}
+
+/**
+ * The dimension drafts on these tables, to move with their metrics. One whose
+ * name is taken, or that is not a plain name in a file of its own, stays a draft:
+ * it does not stop the metric.
+ */
+function dimensionsOfTables(semanticDir: string, tables: Set<string>): Array<{ name: string; from: string; to: string }> {
+  const drafts = loadSemanticDimensionDraftsFromDir(semanticDir);
+  const taken = new Set(loadSemanticLayerFromDir(semanticDir).listDimensions().map((dimension) => dimension.name.toLowerCase()));
+  return drafts.flatMap((draft) => {
+    if (!tables.has(draft.table) || taken.has(draft.name.toLowerCase()) || !PLAIN_METRIC_NAME.test(draft.name)) return [];
+    if (drafts.filter((other) => other.source?.extra?.path === draft.source?.extra?.path).length > 1) return [];
+    const from = join(semanticDir, String(draft.source!.extra!.path));
+    const to = join(semanticDir, 'dimensions', relative(join(semanticDir, 'dimensions', '_drafts'), dirname(from)), `${draft.name}.yaml`);
+    return existsSync(to) ? [] : [{ name: draft.name, from, to }];
+  });
 }
 
 /** Discard drafts by name: their files are deleted. */
@@ -509,7 +551,14 @@ export function discardMetricDrafts(projectRoot: string, names: string[]): strin
     return { name: draft.name, file: join(semanticDir, singleDraftFile(draft, drafts)) };
   });
   for (const draft of wanted) rmSync(draft.file);
+  // Dimensions wait for a metric on their table: with none left, they go too.
+  const waitingTables = new Set(loadSemanticMetricDraftsFromDir(semanticDir).map((draft) => draft.table));
+  const discardedTables = new Set(drafts.filter((draft) => wanted.some((item) => item.name === draft.name)).map((draft) => draft.table));
+  for (const dimension of loadSemanticDimensionDraftsFromDir(semanticDir)) {
+    if (discardedTables.has(dimension.table) && !waitingTables.has(dimension.table)) rmSync(join(semanticDir, String(dimension.source!.extra!.path)), { force: true });
+  }
   removeEmptyFolders(join(semanticDir, 'metrics', '_drafts'));
+  removeEmptyFolders(join(semanticDir, 'dimensions', '_drafts'));
   return wanted.map((draft) => draft.name);
 }
 

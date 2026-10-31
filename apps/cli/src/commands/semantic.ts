@@ -134,8 +134,11 @@ function semanticApprove(projectRoot: string, rest: string[], flags: CLIFlags): 
       console.log(JSON.stringify({ approved, approvedBy: actor }, null, 2));
       return;
     }
-    console.log(`\n  Approved ${approved.length} metric${approved.length === 1 ? '' : 's'} as ${actor}: they answer from now on.`);
-    for (const item of approved) console.log(`  ✓ ${item.name}  →  ${item.to}`);
+    const metrics = approved.filter((item) => !item.dimension);
+    const dimensions = approved.filter((item) => item.dimension);
+    console.log(`\n  Approved ${metrics.length} metric${metrics.length === 1 ? '' : 's'} as ${actor}: ${metrics.length === 1 ? 'it answers' : 'they answer'} from now on.`);
+    for (const item of metrics) console.log(`  ✓ ${item.name}  →  ${item.to}`);
+    if (dimensions.length) console.log(`  With ${dimensions.length} dimension${dimensions.length === 1 ? '' : 's'} of their tables, to group by: ${dimensions.map((item) => item.name).join(', ')}.`);
     console.log('');
   } catch (error) {
     console.error(`\n  ✗ ${error instanceof Error ? error.message : String(error)}\n`);
