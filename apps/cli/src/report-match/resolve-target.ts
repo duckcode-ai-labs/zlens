@@ -256,6 +256,8 @@ export function resolveMetricTarget(table: ExportTable, catalog: TargetCatalog, 
 }
 
 function grainOfValues(values: string[], header: string): DateGrain {
+  // A date column formatted to show only its year.
+  if (values.length && values.every((cell) => /^\d{4}$/.test(cell.trim()))) return 'year';
   const grains = new Set(values.map((cell) => (parseDateCell(cell) ?? parseDateCell(cell, 'dmy'))?.grain).filter(Boolean));
   if (grains.size > 1) throw new ComparisonStopped(`${header} mixes dates and periods, so it has no single grain.`);
   return (grains.values().next().value as DateGrain | undefined) ?? 'day';

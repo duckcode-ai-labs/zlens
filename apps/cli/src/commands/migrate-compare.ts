@@ -62,7 +62,8 @@ function optionsFromFlags(flags: CLIFlags): ExportOptions {
 
 /** A folder's exports, each with what `exports.yaml` says about it. */
 function exportsIn(folder: string, shared: ExportOptions): Array<{ path: string; options: ExportOptions }> {
-  const entries = readdirSync(folder).filter((entry) => EXPORT_FILE.test(entry) && statSync(join(folder, entry)).isFile()).sort();
+  // `~$Sales.xlsx` is Excel's lock file for an open workbook.
+  const entries = readdirSync(folder).filter((entry) => EXPORT_FILE.test(entry) && !entry.startsWith('~$') && statSync(join(folder, entry)).isFile()).sort();
   const listed = join(folder, 'exports.yaml');
   const named = existsSync(listed) ? namedExports(yaml.load(readFileSync(listed, 'utf-8')), entries) : {};
   return entries.map((entry) => ({ path: join(folder, entry), options: { ...shared, ...(named[entry] ?? {}) } }));

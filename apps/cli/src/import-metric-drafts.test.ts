@@ -127,8 +127,8 @@ describe('the import\'s metric drafts', () => {
     expect(again.items.find((item) => item.calculation === 'Total Sales')).toMatchObject({ outcome: 'reused', metric: 'total_sales', reason: 'Total Sales is already the metric draft total_sales.' });
     expect(again.items.find((item) => item.calculation === 'Profit Ratio')).toMatchObject({ outcome: 'reused', metric: 'profit_ratio' });
     // The second import only found them waiting: they are the first import's to approve.
-    expect(importDraftsToApprove(root, again)).toEqual([]);
-    expect(importDraftsToApprove(root, unchecked).sort()).toEqual(['discounts', 'east_sales', 'profit_ratio', 'total_sales']);
+    expect(importDraftsToApprove(root, again).names).toEqual([]);
+    expect(importDraftsToApprove(root, unchecked).names.sort()).toEqual(['discounts', 'east_sales', 'profit_ratio', 'total_sales']);
   });
 
   it('runs a ratio through the SQL the layer composes, and does not write one the database refuses', async () => {

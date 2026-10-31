@@ -786,12 +786,15 @@ import {
 } from './block-studio-import.js';
 import { findImportedWorksheet, readBlockStudioImportCalculations } from './block-studio-import.js';
 import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, runComparison } from './report-match/run.js';
+import { readExportAside } from './report-match/read-export-aside.js';
 import { readComparisonDetail, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
+import { catalogWithDrafts, latestMatch, queryChanged, receiptLines, UNREADABLE_RECORD } from './report-match/status.js';
 import {
   MetricDraftApprovalError,
   approveMetricDrafts,
   discardMetricDrafts,
   importDraftsToApprove,
+  importDraftsWithMatches,
   listMetricDrafts,
   makeImportMetricDrafts,
   readImportMetricDraftsRecord,
@@ -889,7 +892,7 @@ import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPri
 import { isRunPass, issueRunPass, redeemRunPass, revokeRunPass } from './host/schedule-runs.js';
 import { setDeliverySink } from './schedule/notifiers/index.js';
 import { routeAction, type DqlAction } from './host/route-actions.js';
-import { relationsOfStatements, withHostQueryHooks } from './host/row-policy.js';
+import { relationsOf, relationsOfStatements, withHostQueryHooks } from './host/row-policy.js';
 import { exportFile, exportFormat, type ExportFile } from './export/result-file.js';
 import { auditActor, auditModelUsage, auditRequest, otlpHeadersFromEnv, traceQuestionKey, withAnswerAudit, withTraceExport } from './host/observability.js';
 import { isProgramError, logUnderReference, plainFailureMessage } from './host/plain-errors.js';
@@ -13591,14 +13594,16 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
    * passed: who certified (the host's signed-in person, else the local owner),
    * which surface, which rule set, and which exact source.
    */
-  const explicitCertificationReceipt = (input: {
+  const explicitCertificationReceipt = async (input: {
     source: string;
     via: CertificationSurface;
     enterprise: boolean;
     verdict: Awaited<ReturnType<typeof certifyBlockStudioSource>>;
     /** Plain-word checks this surface ran beyond the Certify checklist (row key, number formats). */
     extraChecks?: string[];
-  }): CertificationReceipt => buildCertificationReceipt({
+  }): Promise<CertificationReceipt> => {
+    const compared = await reportMatchLines(input.source);
+    return buildCertificationReceipt({
     source: input.source,
     // The person certifying, never the project's configured owner (B6).
     certifiedBy: hostActor() ?? (hostHooks ? undefined : localPersonIdentity(projectRoot)) ?? parseBlockSourceMetadata(input.source).owner,
@@ -13606,9 +13611,26 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     certifiedByName: hostActor() ? hostActorDisplayName() : hostHooks ? undefined : gitUserName(projectRoot),
     via: input.via,
     enterprise: input.enterprise,
-    checks: [...(input.extraChecks ?? []), ...passedCheckNames(input.verdict.checklist)],
-    warnings: input.verdict.certification.warnings.map((warning) => `${warning.rule}: ${warning.message}`),
-  });
+    checks: [...(input.extraChecks ?? []), ...passedCheckNames(input.verdict.checklist), ...compared.checks],
+    warnings: [...input.verdict.certification.warnings.map((warning) => `${warning.rule}: ${warning.message}`), ...compared.warnings],
+    });
+  };
+
+  /** The receipt's lines for this block's latest comparison with an old report, checked against the query as it is now. */
+  const reportMatchLines = async (source: string): Promise<{ checks: string[]; warnings: string[] }> => {
+    const { name } = parseBlockSourceMetadata(source);
+    const record = name ? latestMatch(projectRoot, 'query', name) : undefined;
+    if (!record) return { checks: [], warnings: [] };
+    if (record === 'unreadable') return { checks: [], warnings: [UNREADABLE_RECORD] };
+    try {
+      const active = requireActiveConnection();
+      const preview = await runBlockStudioPreviewSource(source, active, {});
+      const sameConnection = record.connection.driver === active.driver && (record.connection.database ?? '') === (active.database ?? '');
+      return receiptLines(record, queryChanged(record, preview.sql, preview.variables), sameConnection);
+    } catch {
+      return receiptLines(record, undefined);
+    }
+  };
 
   /**
    * "Check and use" (design Q1): the block passed the same checks as Certify,
@@ -18169,8 +18191,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       };
       try {
         if (req.method === 'GET') {
-          readBlockStudioImportCalculations(projectRoot, importId);
-          reply(200, { metricDrafts: readImportMetricDraftsRecord(projectRoot, importId) });
+          const { worksheets } = readBlockStudioImportCalculations(projectRoot, importId);
+          const record = readImportMetricDraftsRecord(projectRoot, importId);
+          if (!record) {
+            reply(200, { metricDrafts: null });
+            return;
+          }
+          // HH-13: a comparison of a metric the host keeps from this person stays out of what they read.
+          const read = importDraftsWithMatches(projectRoot, record);
+          const admitted = new Set((await admitPlanContext([], read.items.filter((item) => item.metric).map((item) => ({ name: item.metric })))).metrics.map((metric) => metric.name));
+          const items = read.items.map(({ match, ...item }) => (item.metric && admitted.has(item.metric) && match ? { ...item, match } : item));
+          reply(200, { metricDrafts: { ...read, items, worksheets: worksheets ?? [] } });
           return;
         }
         if (req.method !== 'POST') {
@@ -18239,12 +18270,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
         const active = requireActiveConnection();
-        const semanticDir = join(projectRoot, 'semantic-layer');
+        const known = catalogWithDrafts(projectRoot, { metrics: semanticLayer?.listMetrics() ?? [], dimensions: semanticLayer?.listDimensions() ?? [], cubes: semanticLayer?.listCubes() ?? [] });
         // HH-13: a metric the host keeps from this person is no column of their comparison.
-        const metricsInLayer = (await admitPlanContext([], semanticLayer?.listMetrics() ?? [])).metrics as MetricDefinition[];
-        const dimensionsInLayer = semanticLayer?.listDimensions() ?? [];
-        const inLayer = new Set(metricsInLayer.map((metric) => metric.name.toLowerCase()));
-        const dimensionNames = new Set(dimensionsInLayer.map((dimension) => dimension.name.toLowerCase()));
+        const catalog = { ...known, metrics: (await admitPlanContext([], known.metrics)).metrics as MetricDefinition[] };
+        let readerDependent = false;
         let tables: Awaited<ReturnType<typeof listWarehouseTables>>['tables'] = [];
         try {
           const list = async (sql: string, purpose: 'data' | 'metadata' = 'metadata') => (await executor.executePositional(sql, [], active, { maxRows: 50_000, maxBytes: 32 * 1024 * 1024, batchSize: 5_000, deadlineMs: 60_000, purpose })).rows as Array<Record<string, unknown>>;
@@ -18254,15 +18283,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const name = sqlNamer(active.driver);
         const bare = (relation: string) => relation.replace(/["`\[\]]/g, '').toLowerCase();
-        const drafts = (await admitPlanContext([], existsSync(semanticDir) ? loadSemanticMetricDraftsFromDir(semanticDir) : [])).metrics as MetricDefinition[];
-        const catalog = {
-          // A draft a metric has replaced is not a second meaning of its name.
-          metrics: [...metricsInLayer, ...drafts.filter((draft) => !inLayer.has(draft.name.toLowerCase()))],
-          dimensions: [...dimensionsInLayer, ...(existsSync(semanticDir) ? loadSemanticDimensionDraftsFromDir(semanticDir) : []).filter((draft) => !dimensionNames.has(draft.name.toLowerCase()))],
-          cubes: semanticLayer?.listCubes() ?? [],
-        };
         const tableMapping = await resolveSemanticTableMapping(executor, active, comparisonLayer(catalog), projectRoot);
-        const outcome = await runComparison({
+        const compared = await runComparison({
           ...(body.file ? { file: { name: String(body.file.name), bytes: Buffer.from(String(body.file.base64), 'base64') } } : {}),
           ...(typeof body.metric === 'string' ? { metric: body.metric } : {}),
           ...(typeof body.value === 'string' ? { value: body.value } : {}),
@@ -18287,12 +18309,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             },
           },
           tableMapping,
+          readFile: readExportAside,
           driver: active.driver,
           connection: { driver: active.driver, ...(active.database ? { database: active.database } : {}) },
           worksheet: (worksheet) => findImportedWorksheet(projectRoot, worksheet),
           run: async (sql, saved) => {
             const refused = readOnlySqlValidationError(sql, 'A report comparison', active.driver);
             if (refused) throw new Error(refused);
+            // With a host, the figures may be this person's own.
+            readerDependent ||= await hostFiguresDependOnReader(currentHostHooks() ?? hostHooks, relationsOf(sql, active.driver));
             const execution = await analyticalExecutionService.execute({
               sql,
               subject: 'Report comparison',
@@ -18317,8 +18342,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             return { name: block.name, sql: preview.sql, ...(preview.sqlParams ? { sqlParams: preview.sqlParams } : {}), variables: preview.variables };
           },
         });
+        const outcome = readerDependent ? { ...compared, readerDependent } : compared;
         writeComparisonDetail(projectRoot, comparisonPerson(owner), outcome);
-        reply(200, { comparison: outcome });
+        // On a person's own computer comparing records too; on a server recording is a second step.
+        reply(200, { comparison: outcome, recording: !hostedRequest() ? 'with-compare' : readerDependent ? 'refused' : 'separate' });
       } catch (error) {
         const stopped = error instanceof ComparisonStopped || error instanceof ExportRefused;
         reply(stopped ? 422 : 500, { error: error instanceof Error ? error.message : String(error), ...(stopped ? { code: 'COMPARISON_STOPPED' } : {}) });
@@ -18334,13 +18361,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       try {
         const body = (await readJSON(req)) as { id?: unknown; via?: unknown };
         const owner = currentRecordOwner();
-        if (owner === null || hostedRequest()) {
-          reply(403, { error: 'Recording a comparison on a server is not available yet.' });
+        if (owner === null) {
+          reply(403, { error: 'Sign in to record a comparison.' });
           return;
         }
         const outcome = readComparisonDetail(projectRoot, comparisonPerson(owner), String(body.id ?? ''));
         if (!outcome) {
           reply(404, { error: 'There is no such comparison. Compare the file again.' });
+          return;
+        }
+        if (outcome.readerDependent) {
+          reply(403, { error: ROW_RULES_NARROWED, code: 'ROW_RULES_NARROWED' });
           return;
         }
         const paths = writeMatchRecords(projectRoot, outcome, {
@@ -18355,8 +18386,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     }
 
     if (path === '/api/semantic-layer/metric-drafts' && req.method === 'GET') {
+      // HH-13: a draft the host keeps from this person is not listed, and neither is what was compared with it.
+      const { metrics: drafts } = await admitPlanContext([], listMetricDrafts(projectRoot));
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-      res.end(serializeJSON({ drafts: listMetricDrafts(projectRoot) }));
+      res.end(serializeJSON({ drafts }));
       return;
     }
 
@@ -18366,11 +18399,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       try {
         const body = (await readJSON(req).catch(() => ({}))) as { names?: unknown; importId?: unknown };
         let names = Array.isArray(body.names) ? body.names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
+        let leftOut: string[] = [];
         if (typeof body.importId === 'string' && body.importId) {
           // "Approve all that ran": every draft the import wrote whose check ran. Reading it checks it is theirs.
           readBlockStudioImportCalculations(projectRoot, body.importId);
           const record = readImportMetricDraftsRecord(projectRoot, body.importId);
-          names = [...names, ...(record ? importDraftsToApprove(projectRoot, record) : [])];
+          const fromImport = record ? importDraftsToApprove(projectRoot, record) : { names: [], leftOut: [] };
+          names = [...names, ...fromImport.names];
+          leftOut = fromImport.leftOut;
+        }
+        if (!names.length && leftOut.length) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ approved: [], approvedBy: hostActor() ?? resolveLocalOwner(projectRoot), leftOut }));
+          return;
         }
         if (!names.length) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -18398,7 +18439,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const approved = approveMetricDrafts(projectRoot, Array.from(new Set(names)), actor);
         await reloadSemanticLayer();
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ approved, approvedBy: actor }));
+        res.end(serializeJSON({ approved, approvedBy: actor, ...(leftOut.length ? { leftOut } : {}) }));
       } catch (error) {
         const status = error instanceof MetricDraftApprovalError ? (error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID' ? 400 : 409) : importRequestStatus(error);
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -21759,7 +21800,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             writeFileSync(join(projectRoot, savedQueryCompanion), dumpYaml({ name: meta.name, block: meta.name, ...(meta.domain ? { domain: meta.domain } : {}), ...(meta.owner ? { owner: meta.owner } : {}), reviewStatus: 'draft' }, { lineWidth: 200, noRefs: true }), 'utf-8');
           }
           const certifiedSource = setBlockStudioStatusInSource(candidate, 'certified');
-          const receipt = explicitCertificationReceipt({ source: certifiedSource, via: 'app-dataset', enterprise, verdict, extraChecks: review.checks });
+          const receipt = await explicitCertificationReceipt({ source: certifiedSource, via: 'app-dataset', enterprise, verdict, extraChecks: review.checks });
           setBlockStudioStatus(projectRoot, blockPath, 'certified', receipt);
           if (verdict.preview) writeBlockStudioRunSummary(projectRoot, blockPath, certifiedSource, verdict.preview.result);
           await refreshLocalMetadataCatalog(projectRoot);
@@ -21790,7 +21831,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const certifiedSource = setBlockStudioStatusInSource(blockSource, 'certified');
         const plainChecks = (check?.checks ?? []).filter((line) => /\s/.test(line));
-        const receipt = explicitCertificationReceipt({
+        const receipt = await explicitCertificationReceipt({
           source: certifiedSource,
           via: 'app-dataset',
           enterprise,
@@ -27808,7 +27849,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             description: certifiedMetadata.description,
             owner: certifiedMetadata.owner,
             tags: certifiedMetadata.tags,
-            certification: explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result }),
+            certification: await explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result }),
           });
           if (canonicalPath && draftPath !== savedPath) {
             try { deleteBlockStudioArtifacts(projectRoot, draftPath); } catch { /* certified source is already durable */ }
@@ -27967,7 +28008,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
         const certifiedSource = setBlockStudioStatusInSource(source, 'certified');
-        const receipt = explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result });
+        const receipt = await explicitCertificationReceipt({ source: certifiedSource, via: 'block-studio', enterprise: certificationEnterprise, verdict: result });
         const certifiedPayload: ReturnType<typeof openBlockStudioDocument> | null = blockPath
           ? await timer.time('write_certified_block', async () => {
           const normalizedBlockPath = normalize(blockPath).replace(/^\/+/, '');
@@ -28330,7 +28371,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               sourceKind: readiness.candidate.sourceKind,
               sourcePath: readiness.candidate.sourcePath,
             },
-            certification: explicitCertificationReceipt({ source: certifiedSource, via: 'sql-import', enterprise: false, verdict: certification }),
+            certification: await explicitCertificationReceipt({ source: certifiedSource, via: 'sql-import', enterprise: false, verdict: certification }),
           });
           const next: DqlGenerationCandidate = {
             ...readiness.candidate,
@@ -37219,6 +37260,9 @@ function stringList(value: unknown): string[] {
 }
 
 /** Whose folder a comparison's values go in: on a server they came from that person's row rules. */
+/** Why a comparison can't be recorded for everyone. */
+const ROW_RULES_NARROWED = 'Another person could see different figures here, so this result can\'t stand for everyone. Someone who sees every row can compare the file and record it.';
+
 function comparisonPerson(owner: string | undefined): string {
   return owner === undefined ? 'local' : `p-${createHash('sha256').update(owner).digest('hex').slice(0, 32)}`;
 }
@@ -41198,7 +41242,7 @@ function safeJoin(rootDir: string, requestPath: string): string | null {
  * `.dql/local/private/notebooks` only where one person uses the server.
  */
 const HOSTED_FILE_EXTENSIONS = new Set(['.dqlnb', '.dql', '.dqld', '.md', '.sql', '.yaml', '.yml', '.json']);
-const HOSTED_DENIED_FOLDERS = new Set(['node_modules', 'target', 'data', 'dist', 'logs', 'seeds']);
+const HOSTED_DENIED_FOLDERS = new Set(['report-matches', 'node_modules', 'target', 'data', 'dist', 'logs', 'seeds']);
 const HOSTED_DENIED_NAMES = new Set(['dql.config.json', 'profiles.yml', 'profiles.yaml', 'package.json', 'package-lock.json']);
 export const HOSTED_FILE_REFUSED = 'This file is not one ZLens opens here: only notebooks, blocks, Apps, domains, the semantic layer and docs. Open it from the Files list.';
 export const HOSTED_SETTINGS_FILE_REFUSED = "This file holds the workspace's connections and settings. They belong to Production and are changed there, not from a draft space. Ask an admin to change them in Production.";

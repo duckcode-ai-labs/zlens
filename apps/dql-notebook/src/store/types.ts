@@ -1341,8 +1341,60 @@ export interface BlockStudioImportSession {
   candidates: BlockStudioImportCandidate[];
 }
 
+export type ReportVerdict = 'matches' | 'differs' | 'not-proven';
+
+/** A draft's latest comparison with an old report. `changed`: it no longer compiles to what was compared. */
+export interface ReportMatchStatus {
+  verdict: ReportVerdict;
+  words: string;
+  changed: boolean;
+  unreadable?: boolean;
+}
+
+export interface ReportCompareRequest {
+  file?: { name: string; base64: string };
+  query?: string;
+  worksheet?: string;
+  report?: string;
+  filters?: string[];
+  waive?: string[];
+  map?: Record<string, string>;
+  keys?: string[];
+  ignore?: string[];
+  fileRows?: boolean;
+  tolerance?: string;
+  dates?: 'mdy' | 'dmy';
+}
+
+/** How this result gets recorded: at once on a person's own computer, as a second step on a server, or not at all. */
+export type ReportCompareRecording = 'with-compare' | 'separate' | 'refused';
+
+export interface ReportComparison {
+  id: string;
+  report: string;
+  file: { name: string; sha256: string; rows: number };
+  comparedAt: string;
+  mapping: Record<string, string>;
+  filters: { stated: string[]; waived: string[]; seen: string[] };
+  comparison: {
+    verdict: ReportVerdict;
+    rows: { inFile: number; inBoth: number; onlyInFile: number; onlyInZLens: number; emptySetAside: number; totalsSetAside: number };
+    values: { compared: number; equal: number };
+    numbers: Array<{ column: string; name: string; precision: string }>;
+    differences: Array<{ key: string[]; column: string; old: string; zlens: number | null }>;
+    onlyInFile: string[][];
+    onlyInZLens: string[][];
+    missing: string[];
+    reasons: string[];
+    notes: string[];
+  };
+}
+
 /** What an import made of one Tableau or Power BI calculation (D3): a metric draft, an existing metric, or why not. */
 export interface ImportMetricDraftItem {
+  match?: ReportMatchStatus;
+  /** Approve all leaves it out. The server decides: it knows what is still a draft. */
+  heldBack?: boolean;
   calculation: string;
   formula: string;
   language: 'tableau' | 'dax';
@@ -1369,6 +1421,8 @@ export interface ImportMetricDrafts {
   items: ImportMetricDraftItem[];
   /** Columns of the drafts' tables written as dimension drafts: what the metrics can group by once approved. */
   dimensions: Array<{ name: string; label: string; table: string; path: string }>;
+  /** The file's worksheets and the filters saved on each, to compare an export of one. */
+  worksheets?: Array<{ name: string; filters: Array<{ field: string; words: string }> }>;
 }
 
 export interface BlockStudioImportSkippedStatement {

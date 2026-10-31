@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { extractTableauWorkbook } from '../bi-import/tableau.js';
 import { matchReportMarkdown, matchWords, readComparisonDetail, readMatchRecords, writeComparisonDetail, writeMatchRecords } from './record.js';
+import { readExport } from './read-export.js';
 import { compareOptionProblem, ComparisonStopped, ExportRefused, queryFingerprint, runComparison, type CompareDeps, type CompareRequest } from './run.js';
 
 const metric = (name: string, label: string, extra: Partial<MetricDefinition> = {}): MetricDefinition => ({ name, label, description: '', domain: 'sales', type: 'sum', sql: name, table: 'analytics.orders', ...extra });
@@ -86,6 +87,16 @@ describe('a comparison from start to finish', () => {
     expect((await runComparison(request(text, { waive: ['Applied filters: this export has every region'] }), deps(rows))).comparison.verdict).toBe('matches');
   });
 
+  it('counts a part of the file it did not read like an unanswered filter', async () => {
+    const context = deps(rows);
+    const table = { ...readExport(Buffer.from(byRegion), 'a.csv'), unread: ['the hidden sheet Old'] };
+    const withUnread = { ...context, readFile: async () => table };
+    const held = await runComparison(request(byRegion), withUnread);
+    expect(held.comparison.verdict).toBe('not-proven');
+    expect(held.filters.seen).toContain('the hidden sheet Old');
+    expect((await runComparison(request(byRegion, { waive: ['Applied filters: an old copy'] }), withUnread)).comparison.verdict).toBe('matches');
+  });
+
   it('does not let another waiver, or one stated filter, answer the whole line', async () => {
     const text = `Applied filters: Region is East, Year is 2026\n${byRegion}`;
     expect((await runComparison(request(text, { waive: ['Colour: x'] }), deps(rows))).comparison.verdict).toBe('not-proven');
@@ -163,8 +174,9 @@ describe('a comparison from start to finish', () => {
     await expect(runComparison({ file: { name: 'x.pbix', bytes: Buffer.from('x') } }, deps(rows))).rejects.toThrow(ExportRefused);
   });
 
-  it('changes the fingerprint when the query or its filters change, not when spacing does', () => {
-    expect(queryFingerprint('select  1', [])).toBe(queryFingerprint('select 1', []));
+  it('changes the fingerprint when the query or its filters change, spacing inside it included', () => {
+    expect(queryFingerprint(" select 'a  b' ", [])).toBe(queryFingerprint("select 'a  b'", []));
+    expect(queryFingerprint("select 'a  b'", [])).not.toBe(queryFingerprint("select 'a b'", []));
     expect(queryFingerprint('select 1', [])).not.toBe(queryFingerprint('select 2', []));
     expect(queryFingerprint('select 1', [])).not.toBe(queryFingerprint('select 1', ['x']));
   });
