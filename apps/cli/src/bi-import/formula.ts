@@ -187,7 +187,8 @@ class Parser {
     for (;;) {
       if (this.peekOp('=', '==', '!=', '<>', '<', '>', '<=', '>=')) {
         const op = (this.tokens[this.index++] as { text: string }).text;
-        left = { k: 'binary', op: op === '==' ? '=' : op === '!=' ? '<>' : op, left, right: this.concatenation() };
+        // DAX `==` is strict (a blank is not 0); in Tableau it is `=`.
+        left = { k: 'binary', op: op === '==' && this.language === 'tableau' ? '=' : op === '!=' ? '<>' : op, left, right: this.concatenation() };
       } else if (this.peekWord('IN')) {
         this.index += 1;
         const open = this.language === 'dax' ? '{' : '(';

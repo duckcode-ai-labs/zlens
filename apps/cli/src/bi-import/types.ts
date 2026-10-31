@@ -42,7 +42,7 @@ export interface BiModelTable {
   /** Why it is not one database table (Custom SQL, a file, Power Query steps that change rows). */
   noTable?: string;
   /** Power BI: how the report reads it. Text compares ignoring case in import mode. */
-  mode?: 'import' | 'directQuery';
+  mode?: 'import' | 'directQuery' | 'dual';
   /** Power BI: database columns (lower case) Power Query changes to a whole number or a date, with the type. */
   changedTypes?: Record<string, string>;
 }

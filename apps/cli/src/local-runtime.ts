@@ -5867,9 +5867,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
   };
   /**
    * With a host, whether this person may do an action that sees the server's own configuration
-   * (`connection.manage`, `settings.manage`); without a host, the one user may.
+   * (`connection.manage`, `settings.manage`) or certifies (`dataset.certify`); without a host, the one user may.
    */
-  const hostedMay = async (action: 'connection.manage' | 'settings.manage'): Promise<boolean> => {
+  const hostedMay = async (action: 'connection.manage' | 'settings.manage' | 'dataset.certify'): Promise<boolean> => {
     if (!hostedRequest()) return true;
     const principal = currentPrincipal();
     if (!principal || !hostHooks) return false;
@@ -18189,17 +18189,20 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             return (await listWarehouseTables({ projectRoot, driver: active.driver, run })).tables;
           },
           driver: active?.driver ?? 'duckdb',
-          connection: { database: (active as { database?: string } | null)?.database },
+          connection: { database: active?.database, server: active?.account ?? active?.host },
           run: async (sql) => {
             if (!active) throw new Error('No database is connected.');
+            const refused = readOnlySqlValidationError(sql, 'A metric draft check', active.driver);
+            if (refused) throw new Error(refused);
             return (await executor.executePositional(sql, [], active, { maxRows: 1, maxBytes: 1024 * 1024, batchSize: 1, deadlineMs: 120_000, purpose: 'data' })).rows as Array<Record<string, unknown>>;
           },
           check: body.check !== false,
+          privateValues: hostedRequest(),
         });
         writeImportMetricDraftsRecord(projectRoot, record);
         reply(200, { metricDrafts: record });
       } catch (error) {
-        reply(error instanceof Error && /Invalid import session id|not found|ENOENT/i.test(error.message) ? 404 : 500, { error: error instanceof Error ? error.message : String(error) });
+        reply(importRequestStatus(error), { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -18217,7 +18220,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const body = (await readJSON(req).catch(() => ({}))) as { names?: unknown; importId?: unknown };
         let names = Array.isArray(body.names) ? body.names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
         if (typeof body.importId === 'string' && body.importId) {
-          // "Approve all that ran": every draft the import wrote whose check ran.
+          // "Approve all that ran": every draft the import wrote whose check ran. Reading it checks it is theirs.
+          readBlockStudioImportCalculations(projectRoot, body.importId);
           const record = readImportMetricDraftsRecord(projectRoot, body.importId);
           names = [...names, ...(record ? importDraftsToApprove(projectRoot, record) : [])];
         }
@@ -18227,6 +18231,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           return;
         }
         if (path.endsWith('/discard')) {
+          // With a host, a draft is its importer's to discard, or a steward's: those who may certify.
+          if (!(await hostedMay('dataset.certify'))) {
+            const waiting = listMetricDrafts(projectRoot);
+            for (const name of names) {
+              const importId = waiting.find((draft) => draft.name.toLowerCase() === name.toLowerCase())?.importId;
+              if (importId) readBlockStudioImportCalculations(projectRoot, importId);
+              else if (waiting.some((draft) => draft.name.toLowerCase() === name.toLowerCase())) throw new Error(`Import session not found for ${name}.`);
+            }
+          }
           const discarded = discardMetricDrafts(projectRoot, names);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({ discarded }));
@@ -18238,7 +18251,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ approved, approvedBy: actor }));
       } catch (error) {
-        const status = error instanceof MetricDraftApprovalError ? (error.code === 'NOT_FOUND' ? 404 : 409) : 500;
+        const status = error instanceof MetricDraftApprovalError ? (error.code === 'NOT_FOUND' ? 404 : error.code === 'INVALID' ? 400 : 409) : importRequestStatus(error);
         res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error), ...(error instanceof MetricDraftApprovalError ? { code: error.code } : {}) }));
       }
@@ -37031,6 +37044,13 @@ export function buildSkillPathSettings(projectRoot: string): SkillPathSettings {
     skillCount: loaded.skills.filter((skill) => skill.scope === 'project').length,
     errorCount: loaded.errors.length,
   };
+}
+
+/** An import id that is not one is the caller's mistake; one that is not theirs reads as not found. */
+function importRequestStatus(error: unknown): number {
+  const message = error instanceof Error ? error.message : '';
+  if (/Invalid import session id/i.test(message)) return 400;
+  return /Import session not found|ENOENT/i.test(message) ? 404 : 500;
 }
 
 function dbtFirstOwnsSemanticAuthoring(config: ProjectConfig): boolean {

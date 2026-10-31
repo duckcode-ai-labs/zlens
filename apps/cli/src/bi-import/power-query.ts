@@ -90,7 +90,7 @@ export interface PowerQueryTable {
   source?: BiTableSource;
   /** The column's name after Power Query (lower case) → the database column, through `Table.RenameColumns`. */
   renames: Map<string, string>;
-  /** Database columns (lower case) changed to a whole number or a date, with the type as written. */
+  /** Database columns (lower case) changed to a type that changes their values, with the type as written. */
   changedTypes: Record<string, string>;
   /** Steps that change the rows or values (`Table.SelectRows`, `Table.AddColumn`), so the table is no longer the database's. */
   changingSteps: string[];
@@ -98,7 +98,8 @@ export interface PowerQueryTable {
 
 /** Steps that keep the table's rows and values: renaming, picking or ordering columns, changing types. */
 const KEEPING_STEPS = /^Table\.(?:RenameColumns|TransformColumnTypes|SelectColumns|RemoveColumns|ReorderColumns|Sort|Buffer)$/i;
-const WHOLE_OR_DATE = /^(?:Int64\.Type|Int32\.Type|Int16\.Type|Int8\.Type|Byte\.Type|Date\.Type|DateTime\.Type|DateTimeZone\.Type|type\s+(?:date|datetime|datetimezone))$/i;
+/** Types that change a column's values: a whole number or a fixed decimal rounds, a date drops the time. */
+const CHANGES_VALUES = /^(?:Int64\.Type|Int32\.Type|Int16\.Type|Int8\.Type|Byte\.Type|Currency\.Type|Date\.Type|DateTime\.Type|DateTimeZone\.Type|type\s+(?:date|datetime|datetimezone))$/i;
 
 /**
  * The database table a Power Query loads (`Source{[Schema="dbo",Item="ORDERS"]}`),
@@ -137,7 +138,7 @@ export function readPowerQueryTable(expression: string, context: { shared: Map<s
     } else if (/^Table\.TransformColumnTypes$/i.test(token.text)) {
       for (const [column, type] of pairs) {
         if (typeof column !== 'string' || typeof type !== 'object') continue;
-        if (WHOLE_OR_DATE.test(type.written)) result.changedTypes[(result.renames.get(column.toLowerCase()) ?? column).toLowerCase()] = type.written;
+        if (CHANGES_VALUES.test(type.written)) result.changedTypes[(result.renames.get(column.toLowerCase()) ?? column).toLowerCase()] = type.written;
       }
     }
   }

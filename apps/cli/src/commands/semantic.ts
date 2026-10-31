@@ -165,6 +165,7 @@ function latestImportWithMetricDrafts(projectRoot: string): string | null {
   if (!existsSync(root)) return null;
   const sessions = readdirSync(root)
     .filter((entry) => /^imp_[A-Za-z0-9_-]+$/.test(entry) && existsSync(join(root, entry, 'metric-drafts.json')))
+    .filter((entry) => (readImportMetricDraftsRecord(projectRoot, entry)?.items ?? []).some((item) => item.outcome === 'drafted' && item.path))
     .map((entry) => ({ entry, at: statSync(join(root, entry, 'metric-drafts.json')).mtimeMs }))
     .sort((a, b) => b.at - a.at);
   return sessions[0]?.entry ?? null;

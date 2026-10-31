@@ -427,6 +427,8 @@ describe('SemanticLayer', () => {
     it('leaves qualified columns, date-part units and subqueries in a text filter as written', () => {
       expect(qualifyBareSqlIdentifiers("customers.segment = 'SMB' and extract(year from order_date) = 2024", 'orders'))
         .toBe("customers.segment = 'SMB' and extract(year from orders.order_date) = 2024");
+      // SQL Server's quoted name is one name.
+      expect(qualifyBareSqlIdentifiers('SUM([Order ID])', 'orders')).toBe('SUM([Order ID])');
     });
 
         it('refuses when a per-metric filter targets an unparseable (ratio) aggregate', () => {

@@ -197,7 +197,7 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
     }
   }
   for (const [folder, folderFiles] of tmdlFolders) {
-    const modelFiles = folderFiles.filter((file) => file.includes(`${sep}tables${sep}`) || basename(file).toLowerCase() === 'expressions.tmdl' || folderFiles.length === 1);
+    const modelFiles = folderFiles.filter((file) => file.includes(`${sep}tables${sep}`) || /^(?:expressions|model)\.tmdl$/i.test(basename(file)) || folderFiles.length === 1);
     if (!modelFiles.length) continue;
     const path = shown(folder);
     try {

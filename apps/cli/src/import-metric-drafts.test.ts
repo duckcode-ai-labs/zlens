@@ -8,11 +8,11 @@ import {
   approveMetricDrafts,
   approvedText,
   discardMetricDrafts,
-  evaluate,
   importDraftsToApprove,
   listMetricDrafts,
   makeImportMetricDrafts,
   MetricDraftApprovalError,
+  stringLiteralFor,
   type MakeImportMetricDraftsInput,
 } from './import-metric-drafts.js';
 import type { WarehouseTableSummary } from './datasets/table-dataset.js';
@@ -67,6 +67,8 @@ function input(root: string, overrides: Partial<MakeImportMetricDraftsInput> = {
     // One query per table; a query naming `discount` fails, as a column the connection's role cannot read would.
     run: async (sql) => {
       if (/discount/.test(sql)) throw new Error('permission denied for column discount');
+      // A ratio's value comes from the SQL the semantic layer composes for it.
+      if (/ratio_inputs/.test(sql)) return [{ profit_ratio: 56.09 / 460.74 }];
       const row: Record<string, unknown> = {};
       const values: Record<string, number> = { 'sum(sales)': 460.74, "sum(case when \"Region\" = 'East' then sales end)": 150.75, 'sum(profit)': 56.09 };
       for (const [expression, column] of Array.from(sql.matchAll(/(?:select |, )(.+?) as (zlens_m\d+)/g), (match) => [match[1]!, match[2]!])) row[column] = values[expression] ?? null;
@@ -124,7 +126,57 @@ describe('the import\'s metric drafts', () => {
     const again = await makeImportMetricDrafts(input(root, { importId: 'imp_test2', check: false }));
     expect(again.items.find((item) => item.calculation === 'Total Sales')).toMatchObject({ outcome: 'reused', metric: 'total_sales', reason: 'Total Sales is already the metric draft total_sales.' });
     expect(again.items.find((item) => item.calculation === 'Profit Ratio')).toMatchObject({ outcome: 'reused', metric: 'profit_ratio' });
-    expect(importDraftsToApprove(root, again).sort()).toEqual(['discounts', 'east_sales', 'profit_ratio', 'total_sales']);
+    // The second import only found them waiting: they are the first import's to approve.
+    expect(importDraftsToApprove(root, again)).toEqual([]);
+    expect(importDraftsToApprove(root, unchecked).sort()).toEqual(['discounts', 'east_sales', 'profit_ratio', 'total_sales']);
+  });
+
+  it('runs a ratio through the SQL the layer composes, and does not write one the database refuses', async () => {
+    const root = project();
+    const sent: string[] = [];
+    const record = await makeImportMetricDrafts(input(root, {
+      run: async (sql) => {
+        sent.push(sql);
+        if (/discount/.test(sql)) throw new Error('permission denied for column discount');
+        if (/ratio_inputs/.test(sql)) throw new Error('function round(double precision, integer) does not exist');
+        return [{ zlens_m0: 1, zlens_m1: 2, zlens_m2: 3 }];
+      },
+    }));
+    expect(sent.some((sql) => sql.includes('1.0 * ratio_inputs.sum_of_profit / NULLIF(ratio_inputs.total_sales, 0)'))).toBe(true);
+    expect(record.items.find((item) => item.calculation === 'Profit Ratio')).toMatchObject({ outcome: 'failed', reason: 'function round(double precision, integer) does not exist' });
+    expect(existsSync(join(root, 'semantic-layer/metrics/_drafts/sales/profit_ratio.yaml'))).toBe(false);
+  });
+
+  it('says when the file reads another schema or server, and keeps a check value out of the files with a host', async () => {
+    const root = project();
+    const record = await makeImportMetricDrafts(input(root, {
+      listTables: async () => [{ ...TABLES[0]!, schema: 'staging', id: 'staging.orders' }],
+      connection: { database: 'shop', server: 'localhost' },
+      privateValues: true,
+    }));
+    const notes = record.items.find((item) => item.calculation === 'Total Sales')!.notes.join(' ');
+    expect(notes).toContain('The file reads server db.acme.internal; ZLens is connected to localhost.');
+    expect(notes).toContain('The file reads analytics.orders; ZLens found staging.orders, the only table of that name.');
+    expect(record.items.find((item) => item.calculation === 'Total Sales')!.value).toBe(460.74);
+    const yaml = readFileSync(join(root, 'semantic-layer/metrics/_drafts/sales/total_sales.yaml'), 'utf-8');
+    expect(yaml).toContain('ran: true');
+    expect(yaml).not.toContain('460.74');
+  });
+
+  it('quotes reserved words, and escapes text the way each database reads it', async () => {
+    const root = project();
+    const record = await makeImportMetricDrafts(input(root, {
+      listTables: async () => [{ ...TABLES[0]!, name: 'orders', columns: [{ name: 'Region' }, { name: 'sales' }, { name: 'user' }, { name: 'discount' }, { name: 'profit' }] }],
+      calculations: (() => {
+        const file = extractTableauWorkbook(WORKBOOK.replace('<remote-name>discount</remote-name>', '<remote-name>user</remote-name>'), 'legacy/Sales.twb');
+        return { calculations: file.inventory!.calculations, models: file.models! };
+      })(),
+      check: false,
+    }));
+    expect(record.items.find((item) => item.calculation === 'Discounts')!.inWords).toBe('sum("user"), on analytics.orders');
+    expect(stringLiteralFor('postgres')("it's \\ ok")).toBe("'it''s \\ ok'");
+    expect(stringLiteralFor('snowflake')("it's \\ ok")).toBe("'it''s \\\\ ok'");
+    expect(stringLiteralFor('bigquery')("it's \\ ok")).toBe("'it\\'s \\\\ ok'");
   });
 });
 
@@ -155,19 +207,38 @@ describe('approving metric drafts', () => {
     expect(listMetricDrafts(root).map((draft) => draft.name)).not.toContain('east_sales');
   });
 
+  it('moves all of them or none, and refuses a part that is gone', async () => {
+    const root = project();
+    await makeImportMetricDrafts(input(root));
+    // The ratio's target is taken, so its parts must not move either.
+    mkdirSync(join(root, 'semantic-layer/metrics/sales'), { recursive: true });
+    writeFileSync(join(root, 'semantic-layer/metrics/sales/profit_ratio.yaml'), 'not yaml a metric: [');
+    expect(() => approveMetricDrafts(root, ['profit_ratio'], 'maya')).toThrow('already exists');
+    expect(existsSync(join(root, 'semantic-layer/metrics/_drafts/sales/total_sales.yaml'))).toBe(true);
+    rmSync(join(root, 'semantic-layer/metrics/sales/profit_ratio.yaml'));
+    discardMetricDrafts(root, ['sum_of_profit', 'sum_of_profit']);
+    expect(() => approveMetricDrafts(root, ['profit_ratio'], 'maya')).toThrow('built from sum_of_profit, which is neither a metric nor a draft');
+  });
+
+  it('uses the file\'s real path, refuses a name that leaves the folder, and will not split a file of several metrics', () => {
+    const root = project();
+    const drafts = join(root, 'semantic-layer/metrics/_drafts/sales');
+    mkdirSync(drafts, { recursive: true });
+    writeFileSync(join(root, 'victim.txt'), 'keep me');
+    writeFileSync(join(drafts, 'bad_path.yaml'), 'name: bad_path\ntype: sum\nsql: a\ntable: t\nstatus: draft\nsource:\n  extra:\n    path: ../victim.txt\n');
+    writeFileSync(join(drafts, 'bad_name.yaml'), 'name: ../../../pwned\ntype: sum\nsql: a\ntable: t\nstatus: draft\n');
+    writeFileSync(join(drafts, 'pair.yaml'), 'metrics:\n  - name: m1\n    type: sum\n    sql: a\n    table: t\n  - name: m2\n    type: sum\n    sql: b\n    table: t\n');
+    expect(discardMetricDrafts(root, ['bad_path'])).toEqual(['bad_path']);
+    expect(readFileSync(join(root, 'victim.txt'), 'utf-8')).toBe('keep me');
+    expect(existsSync(join(drafts, 'bad_path.yaml'))).toBe(false);
+    expect(() => approveMetricDrafts(root, ['../../../pwned'], 'maya')).toThrow('not a plain name');
+    expect(() => approveMetricDrafts(root, ['m1'], 'maya')).toThrow('holds several metrics');
+    expect(() => discardMetricDrafts(root, ['m1'])).toThrow('holds several metrics');
+    expect(existsSync(join(drafts, 'pair.yaml'))).toBe(true);
+  });
+
   it('sets the status line once, adding it when the file has none', () => {
     expect(approvedText('name: a\nstatus: draft\napprovedBy: old\ntype: sum\n', 'me', 'T')).toBe('name: a\nstatus: certified\napprovedBy: "me"\napprovedAt: T\ntype: sum\n');
     expect(approvedText('name: a\ntype: sum\n', 'me', 'T')).toBe('name: a\nstatus: certified\napprovedBy: "me"\napprovedAt: T\ntype: sum\n');
-  });
-});
-
-describe('a derived draft\'s value from its parts', () => {
-  it('evaluates arithmetic with SQL\'s empty values', () => {
-    const values: Record<string, number | null> = { a: 56.09, b: 460.74, z: 0, n: null };
-    const value = (name: string) => values[name] ?? null;
-    expect(evaluate('a / NULLIF(b, 0) * 100', value)).toBeCloseTo(12.1739, 3);
-    expect(evaluate('a / NULLIF(z, 0)', value)).toBeNull();
-    expect(evaluate('COALESCE(n, 0) - COALESCE(a, 0)', value)).toBeCloseTo(-56.09, 5);
-    expect(evaluate('ROUND(-a, 1)', value)).toBe(-56.1);
   });
 });

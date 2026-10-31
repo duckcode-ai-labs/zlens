@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import {
+  SemanticLayer,
   getDialect,
   loadSemanticLayerFromDir,
   loadSemanticMetricDraftsFromDir,
@@ -8,7 +9,7 @@ import {
   type MetricDefinition,
 } from '@zlens/core';
 import type { CalculationKind } from './bi-import/calculations.js';
-import { convertCalculationsToMetricDrafts, type MetricDraft, type ResolvedTable } from './bi-import/metric-drafts.js';
+import { convertCalculationsToMetricDrafts, isPlainSqlName, type MetricDraft, type ResolvedTable } from './bi-import/metric-drafts.js';
 import type { BiTableSource } from './bi-import/types.js';
 import type { ImportCalculations } from './block-studio-import.js';
 import type { WarehouseTableSummary } from './datasets/table-dataset.js';
@@ -73,6 +74,11 @@ export interface MakeImportMetricDraftsInput {
   /** Runs one read-only statement on the connected database. */
   run: (sql: string) => Promise<Array<Record<string, unknown>>>;
   check: boolean;
+  /**
+   * With a host, a check's value is computed under the importer's row rules,
+   * so it stays in their own import record and out of the project's files.
+   */
+  privateValues?: boolean;
   now?: Date;
 }
 
@@ -94,18 +100,15 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
       tablesError = error instanceof Error ? error.message : String(error);
     }
   }
-  const dialect = getDialect(input.driver);
-  const fold = FOLDS[input.driver.trim().toLowerCase()];
+  const driver = input.driver.trim().toLowerCase();
+  const dialect = getDialect(driver);
+  const fold = FOLDS[driver];
   const name = (part: string) => (needsQuotes(part, fold) ? dialect.quoteIdentifier(part) : part);
   const resolveTable = tables
     ? (source: BiTableSource): ResolvedTable | { error: string } => {
       const matched = matchTable(source, tables!);
       if ('error' in matched) return matched;
-      const notes: string[] = [];
-      const database = input.connection?.database?.trim();
-      if (source.database && database && source.database.toLowerCase() !== database.toLowerCase()) {
-        notes.push(`The file reads database ${source.database}${source.server ? ` on ${source.server}` : ''}; ZLens is connected to ${database}. Compare the value with the old report.`);
-      }
+      const notes = connectionNotes(source, matched, input.connection);
       return {
         sql: [matched.schema, matched.name].filter(Boolean).map((part) => name(part!)).join('.'),
         columns: new Map(matched.columns.map((column) => [column.name.toLowerCase(), name(column.name)])),
@@ -121,20 +124,23 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     ...(resolveTable ? { resolveTable } : {}),
     existingMetrics,
     existingDrafts,
+    stringLiteral: stringLiteralFor(driver),
   });
 
   const draftsByName = new Map(converted.drafts.map((draft) => [draft.definition.name, draft]));
   const values = new Map<string, number | null>();
   const failures = new Map<string, string>();
+  const checkNotes = new Map<string, string[]>();
   const written = Boolean(tables) && !input.metricsLiveElsewhere;
   if (written && input.check) {
-    await checkDrafts(converted.drafts, input.run, values, failures);
+    await checkDrafts(converted.drafts, input.run, values, failures, checkNotes);
+    const layerMetrics = [...existingDrafts, ...existingMetrics, ...converted.drafts.map((draft) => draft.definition)];
+    await checkCombinedDrafts(converted.drafts, layerMetrics, driver, input.run, values, failures, checkNotes);
     for (const draft of converted.drafts) {
-      if (!draft.combine) continue;
-      const parts = 'numerator' in draft.combine ? [draft.combine.numerator, draft.combine.denominator] : draft.combine.metrics;
-      const failed = parts.find((part) => failures.has(part));
-      if (failed) failures.set(draft.definition.name, `Its part ${failed} did not run: ${failures.get(failed)}`);
-      else values.set(draft.definition.name, combinedValue(draft, values));
+      const notes = checkNotes.get(draft.definition.name);
+      if (!notes?.length) continue;
+      const extra = draft.definition.source!.extra!;
+      extra.notes = Array.from(new Set([...((extra.notes as string[] | undefined) ?? []), ...notes]));
     }
   }
 
@@ -143,7 +149,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
   if (written) {
     for (const draft of converted.drafts) {
       if (failures.has(draft.definition.name)) continue;
-      const definition = withCheck(draft.definition, input.check ? values.get(draft.definition.name) : undefined, input.check, ranAt, input.importId, draft);
+      const definition = withCheck(draft.definition, input.check ? values.get(draft.definition.name) : undefined, input.check, ranAt, input.importId, draft, Boolean(input.privateValues));
       const path = join(DRAFTS_DIR, slug(input.domain), `${draft.definition.name}.yaml`);
       mkdirSync(join(input.projectRoot, dirname(path)), { recursive: true });
       writeFileSync(join(input.projectRoot, path), serializeMetricDefinitionToYaml(definition), 'utf-8');
@@ -155,7 +161,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     const calculation = conversion.calculation;
     const draft = conversion.metric ? draftsByName.get(conversion.metric) : undefined;
     const failure = conversion.outcome === 'drafted' && conversion.metric ? failures.get(conversion.metric) : undefined;
-    const parts = draft?.combine ? ('numerator' in draft.combine ? [draft.combine.numerator, draft.combine.denominator] : draft.combine.metrics) : undefined;
+    const parts = draft?.combine ? partsOf(draft) : undefined;
     return {
       calculation: calculation.name,
       formula: calculation.formula,
@@ -169,7 +175,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
       ...(conversion.inWords ? { inWords: conversion.inWords } : {}),
       ...(conversion.metric && values.has(conversion.metric) ? { value: values.get(conversion.metric) } : {}),
       ...(failure ? { reason: failure } : conversion.reason && conversion.outcome !== 'drafted' ? { reason: conversion.reason } : {}),
-      notes: conversion.notes,
+      notes: Array.from(new Set([...conversion.notes, ...((conversion.metric && checkNotes.get(conversion.metric)) || [])])),
       ...(parts ? { parts: parts.filter((part) => draftsByName.has(part)) } : {}),
     };
   });
@@ -188,10 +194,46 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
 const FOLDS: Record<string, 'lower' | 'upper'> = { postgres: 'lower', postgresql: 'lower', redshift: 'lower', snowflake: 'upper', oracle: 'upper' };
 
 function needsQuotes(name: string, fold: 'lower' | 'upper' | undefined): boolean {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return true;
+  if (!isPlainSqlName(name)) return true;
   if (fold === 'lower') return name !== name.toLowerCase();
   if (fold === 'upper') return name !== name.toUpperCase();
   return false;
+}
+
+/**
+ * A text value as this database reads it. Several read a backslash as an
+ * escape, and BigQuery and Databricks escape a quote with one too, so a value
+ * from a BI file can never end the string early.
+ */
+export function stringLiteralFor(driver: string): (value: string) => string {
+  if (driver === 'bigquery' || driver === 'databricks') {
+    return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r')}'`;
+  }
+  if (driver === 'mysql' || driver === 'snowflake' || driver === 'clickhouse') {
+    return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
+  }
+  return (value) => `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Where the file reads something other than what ZLens is connected to: the same table name need not be the same numbers. */
+function connectionNotes(source: BiTableSource, matched: WarehouseTableSummary, connection: MakeImportMetricDraftsInput['connection']): string[] {
+  const compare = 'Compare the value with the old report.';
+  const known = (value: string | undefined) => value?.trim().toLowerCase() ?? '';
+  const database = known(source.database);
+  const server = known(source.server);
+  const connectedDatabase = known(connection?.database);
+  const connectedServer = known(connection?.server);
+  const notes: string[] = [];
+  if (database && connectedDatabase && database !== connectedDatabase) {
+    notes.push(`The file reads database ${source.database}${source.server ? ` on ${source.server}` : ''}; ZLens is connected to ${connection!.database}. ${compare}`);
+    // A server may be written in part: `acme` and `acme.snowflakecomputing.com` are one account.
+  } else if (server && connectedServer && !server.includes(connectedServer) && !connectedServer.includes(server)) {
+    notes.push(`The file reads server ${source.server}; ZLens is connected to ${connection!.server}. ${compare}`);
+  }
+  if (source.schema && matched.schema && source.schema.toLowerCase() !== matched.schema.toLowerCase()) {
+    notes.push(`The file reads ${source.schema}.${source.table}; ZLens found ${matched.schema}.${matched.name}, the only table of that name. ${compare}`);
+  }
+  return notes;
 }
 
 /**
@@ -216,6 +258,7 @@ async function checkDrafts(
   run: (sql: string) => Promise<Array<Record<string, unknown>>>,
   values: Map<string, number | null>,
   failures: Map<string, string>,
+  notes: Map<string, string[]>,
 ): Promise<void> {
   const byTable = new Map<string, MetricDraft[]>();
   for (const draft of drafts) {
@@ -233,9 +276,7 @@ async function checkDrafts(
       values.set(draft.definition.name, numberOrNull(pick(row, `zlens_m${index}`)));
       const empty = draft.check!.emptyValues ? numberOrNull(pick(row, `zlens_e${index}`)) : null;
       if (empty && empty > 0) {
-        const note = `The column has ${empty.toLocaleString('en-US')} empty value${empty === 1 ? '' : 's'}: Power BI's DISTINCTCOUNT counts them as one more, so this count is one lower than Power BI's.`;
-        const notes = (draft.definition.source!.extra!.notes as string[] | undefined) ?? [];
-        draft.definition.source!.extra!.notes = [...notes, note];
+        notes.set(draft.definition.name, [`The column has ${empty.toLocaleString('en-US')} empty value${empty === 1 ? '' : 's'}: Power BI's DISTINCTCOUNT counts them as one more, so this count is one lower than Power BI's.`]);
       }
     });
   };
@@ -264,82 +305,66 @@ function numberOrNull(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
-/** A ratio's or derived draft's value from its parts' values, as the layer computes it. */
-function combinedValue(draft: MetricDraft, values: Map<string, number | null>): number | null {
-  const combine = draft.combine!;
-  if ('numerator' in combine) {
-    const numerator = values.get(combine.numerator) ?? null;
-    const denominator = values.get(combine.denominator) ?? null;
-    return numerator === null || denominator === null || denominator === 0 ? null : numerator / denominator;
+/**
+ * Ratio and derived drafts run the SQL the semantic layer composes for them,
+ * all in one query, then alone when that fails: what the check shows is what
+ * the approved metric answers, and one the layer cannot run is not written.
+ */
+async function checkCombinedDrafts(
+  drafts: MetricDraft[],
+  layerMetrics: MetricDefinition[],
+  driver: string,
+  run: (sql: string) => Promise<Array<Record<string, unknown>>>,
+  values: Map<string, number | null>,
+  failures: Map<string, string>,
+  notes: Map<string, string[]>,
+): Promise<void> {
+  const runnable: MetricDraft[] = [];
+  for (const draft of drafts) {
+    if (!draft.combine) continue;
+    const name = draft.definition.name;
+    const parts = partsOf(draft);
+    const failed = parts.find((part) => failures.has(part));
+    if (failed) {
+      failures.set(name, `Its part ${failed} did not run: ${failures.get(failed)}`);
+      continue;
+    }
+    runnable.push(draft);
+    const inherited = parts.flatMap((part) => notes.get(part) ?? []);
+    if (inherited.length) notes.set(name, Array.from(new Set(inherited)));
   }
-  return evaluate(combine.expr, (name) => values.get(name) ?? null);
+  if (!runnable.length) return;
+  const layer = new SemanticLayer({ metrics: layerMetrics, dimensions: [] });
+  const query = async (group: MetricDraft[]) => {
+    const composed = layer.composeQuery({ metrics: group.map((draft) => draft.definition.name), dimensions: [], driver });
+    if (!composed) throw new Error('The semantic layer cannot compute it, so it would answer nothing.');
+    const row = (await run(composed.sql))[0] ?? {};
+    for (const draft of group) values.set(draft.definition.name, numberOrNull(pick(row, draft.definition.name)));
+  };
+  try {
+    await query(runnable);
+  } catch {
+    for (const draft of runnable) {
+      try {
+        await query([draft]);
+      } catch (error) {
+        failures.set(draft.definition.name, error instanceof Error ? error.message.replace(/\s+/g, ' ').trim() : String(error));
+      }
+    }
+  }
 }
 
-/** `+ - * /`, parentheses, numbers and NULLIF/COALESCE/ROUND/ABS over named values, with SQL's empty values. */
-export function evaluate(expr: string, value: (name: string) => number | null): number | null {
-  const tokens = expr.match(/\d+(?:\.\d+)?|[A-Za-z_]\w*|[-+*/(),]/g) ?? [];
-  let index = 0;
-  const peek = () => tokens[index];
-  const take = () => tokens[index++];
-  const arith = (a: number | null, op: string, b: number | null): number | null => {
-    if (a === null || b === null) return null;
-    if (op === '+') return a + b;
-    if (op === '-') return a - b;
-    if (op === '*') return a * b;
-    return b === 0 ? null : a / b;
-  };
-  const primary = (): number | null => {
-    const token = take();
-    if (token === undefined) throw new Error('The expression ends early.');
-    if (token === '(') {
-      const inner = sum();
-      take();
-      return inner;
-    }
-    if (token === '-') {
-      const operand = primary();
-      return operand === null ? null : -operand;
-    }
-    if (/^\d/.test(token)) return Number(token);
-    if (peek() === '(') {
-      take();
-      const args: Array<number | null> = [sum()];
-      while (peek() === ',') {
-        take();
-        args.push(sum());
-      }
-      take();
-      const fn = token.toUpperCase();
-      if (fn === 'NULLIF') return args[0] === args[1] ? null : args[0] ?? null;
-      if (fn === 'COALESCE') return args.find((arg) => arg !== null) ?? null;
-      if (fn === 'ABS') return args[0] === null || args[0] === undefined ? null : Math.abs(args[0]);
-      if (fn === 'ROUND') {
-        if (args[0] === null || args[0] === undefined) return null;
-        const places = args[1] ?? 0;
-        return Math.round(args[0] * 10 ** places) / 10 ** places;
-      }
-      throw new Error(`Unknown function ${token}.`);
-    }
-    return value(token);
-  };
-  const product = (): number | null => {
-    let left = primary();
-    while (peek() === '*' || peek() === '/') left = arith(left, take()!, primary());
-    return left;
-  };
-  const sum = (): number | null => {
-    let left = product();
-    while (peek() === '+' || peek() === '-') left = arith(left, take()!, product());
-    return left;
-  };
-  return sum();
+function partsOf(draft: MetricDraft): string[] {
+  const combine = draft.combine;
+  if (!combine) return [];
+  return 'numerator' in combine ? [combine.numerator, combine.denominator] : combine.metrics;
 }
 
-function withCheck(definition: MetricDefinition, value: number | null | undefined, checked: boolean, ranAt: string, importId: string, draft: MetricDraft): MetricDefinition {
+function withCheck(definition: MetricDefinition, value: number | null | undefined, checked: boolean, ranAt: string, importId: string, draft: MetricDraft, privateValue: boolean): MetricDefinition {
   const extra = { ...(definition.source?.extra ?? {}) };
   extra.importId = importId;
   extra.inWords = draft.inWords;
-  extra.check = checked ? { value: value ?? null, ranAt } : { ran: false };
+  extra.check = !checked ? { ran: false } : privateValue ? { ran: true, ranAt } : { value: value ?? null, ranAt };
   if (!(extra.notes as string[] | undefined)?.length) delete extra.notes;
   return { ...definition, source: { ...definition.source!, extra } };
 }
@@ -404,16 +429,29 @@ export interface ApprovedMetric {
 }
 
 export class MetricDraftApprovalError extends Error {
-  constructor(message: string, readonly code: 'NOT_FOUND' | 'NAME_TAKEN') {
+  constructor(message: string, readonly code: 'NOT_FOUND' | 'NAME_TAKEN' | 'INVALID') {
     super(message);
   }
+}
+
+/** Metric names are plain, so a name can never lead a file out of its folder. */
+const PLAIN_METRIC_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+/** A draft's file path; one holding several definitions cannot be moved or deleted for one of them. */
+function singleDraftFile(draft: MetricDefinition, drafts: MetricDefinition[]): string {
+  const path = String(draft.source!.extra!.path);
+  if (drafts.filter((other) => other.source?.extra?.path === path).length > 1) {
+    throw new MetricDraftApprovalError(`semantic-layer/${path} holds several metrics. Put each in its own file, then try again.`, 'INVALID');
+  }
+  return path;
 }
 
 /**
  * Approve drafts by name: each moves from `metrics/_drafts/<domain>/` to
  * `metrics/<domain>/`, its text unchanged apart from `status: certified`,
  * who approved it and when, and then answers. A ratio or derived draft
- * brings the drafts it is built from. A name a metric already has is refused.
+ * brings the drafts it is built from. Everything is checked first, so either
+ * all of them move or none does; a name a metric already has is refused.
  */
 export function approveMetricDrafts(projectRoot: string, names: string[], actor: string, now: Date = new Date()): ApprovedMetric[] {
   const semanticDir = join(projectRoot, 'semantic-layer');
@@ -421,52 +459,56 @@ export function approveMetricDrafts(projectRoot: string, names: string[], actor:
   const byName = new Map(drafts.map((draft) => [draft.name.toLowerCase(), draft]));
   const metrics = existsSync(semanticDir) ? new Set(loadSemanticLayerFromDir(semanticDir).listMetrics().map((metric) => metric.name.toLowerCase())) : new Set<string>();
   const wanted: MetricDefinition[] = [];
+  const seen = new Set<MetricDefinition>();
   const add = (name: string) => {
     const draft = byName.get(name.toLowerCase());
     if (!draft) {
       if (metrics.has(name.toLowerCase())) return;
       throw new MetricDraftApprovalError(`There is no metric draft named ${name}. List them with zlens semantic drafts.`, 'NOT_FOUND');
     }
-    if (wanted.includes(draft)) return;
-    for (const part of draftParts(draft)) if (byName.has(part.toLowerCase())) add(part);
+    if (seen.has(draft)) return;
+    seen.add(draft);
+    if (!PLAIN_METRIC_NAME.test(draft.name)) throw new MetricDraftApprovalError(`The draft's name "${draft.name}" is not a plain name (letters, digits and _).`, 'INVALID');
+    for (const part of draftParts(draft)) {
+      if (!byName.has(part.toLowerCase()) && !metrics.has(part.toLowerCase())) {
+        throw new MetricDraftApprovalError(`${draft.name} is built from ${part}, which is neither a metric nor a draft, so it would answer nothing.`, 'NOT_FOUND');
+      }
+      add(part);
+    }
     wanted.push(draft);
   };
   for (const name of names) add(name);
-  for (const draft of wanted) {
+  const moves = wanted.map((draft) => {
     if (metrics.has(draft.name.toLowerCase())) {
       throw new MetricDraftApprovalError(`A metric named ${draft.name} already exists, so the draft was not approved. Rename the draft (its name: line and file) and approve it again.`, 'NAME_TAKEN');
     }
-  }
-  const approvedAt = now.toISOString();
-  const moved: ApprovedMetric[] = [];
-  for (const draft of wanted) {
-    const from = join(semanticDir, String(draft.source!.extra!.path));
-    const domainFolder = relative(join(semanticDir, 'metrics', '_drafts'), dirname(from));
-    const to = join(semanticDir, 'metrics', domainFolder.startsWith('..') ? '' : domainFolder, `${draft.name}.yaml`);
+    const from = join(semanticDir, singleDraftFile(draft, drafts));
+    const to = join(semanticDir, 'metrics', relative(join(semanticDir, 'metrics', '_drafts'), dirname(from)), `${draft.name}.yaml`);
     if (existsSync(to)) throw new MetricDraftApprovalError(`${relative(projectRoot, to)} already exists, so ${draft.name} was not approved.`, 'NAME_TAKEN');
-    const text = readFileSync(from, 'utf-8');
-    mkdirSync(dirname(to), { recursive: true });
-    writeFileSync(to, approvedText(text, actor, approvedAt), 'utf-8');
-    rmSync(from);
-    moved.push({ name: draft.name, from: relative(projectRoot, from).replaceAll('\\', '/'), to: relative(projectRoot, to).replaceAll('\\', '/') });
+    return { name: draft.name, from, to };
+  });
+  const approvedAt = now.toISOString();
+  for (const move of moves) {
+    mkdirSync(dirname(move.to), { recursive: true });
+    writeFileSync(move.to, approvedText(readFileSync(move.from, 'utf-8'), actor, approvedAt), 'utf-8');
   }
+  for (const move of moves) rmSync(move.from);
   removeEmptyFolders(join(semanticDir, 'metrics', '_drafts'));
-  return moved;
+  return moves.map((move) => ({ name: move.name, from: relative(projectRoot, move.from).replaceAll('\\', '/'), to: relative(projectRoot, move.to).replaceAll('\\', '/') }));
 }
 
 /** Discard drafts by name: their files are deleted. */
 export function discardMetricDrafts(projectRoot: string, names: string[]): string[] {
   const semanticDir = join(projectRoot, 'semantic-layer');
   const drafts = existsSync(semanticDir) ? loadSemanticMetricDraftsFromDir(semanticDir) : [];
-  const removed: string[] = [];
-  for (const name of names) {
-    const draft = drafts.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+  const wanted = Array.from(new Set(names.map((name) => name.toLowerCase()))).map((name) => {
+    const draft = drafts.find((candidate) => candidate.name.toLowerCase() === name);
     if (!draft) throw new MetricDraftApprovalError(`There is no metric draft named ${name}.`, 'NOT_FOUND');
-    rmSync(join(semanticDir, String(draft.source!.extra!.path)));
-    removed.push(draft.name);
-  }
+    return { name: draft.name, file: join(semanticDir, singleDraftFile(draft, drafts)) };
+  });
+  for (const draft of wanted) rmSync(draft.file);
   removeEmptyFolders(join(semanticDir, 'metrics', '_drafts'));
-  return removed;
+  return wanted.map((draft) => draft.name);
 }
 
 /** The YAML as written, with its `status:` set to certified and who approved it and when after it. */
@@ -486,20 +528,21 @@ function removeEmptyFolders(dir: string): void {
   if (!existsSync(dir)) return;
   for (const entry of readdirSync(dir)) {
     const full = join(dir, entry);
-    if (statSync(full).isDirectory()) removeEmptyFolders(full);
+    if (lstatSync(full).isDirectory()) removeEmptyFolders(full);
   }
   if (!readdirSync(dir).length) rmSync(dir, { recursive: true });
 }
 
 /**
- * "Approve all that ran": the drafts an import wrote whose check ran (or all
- * it wrote, when the check was skipped), and the drafts it found already
- * waiting for its calculations (a second import of the same file).
+ * "Approve all that ran": the drafts this import wrote whose check ran (or
+ * all it wrote, when the check was skipped). A draft it only found waiting
+ * belongs to the import that made it, and is not listed here for a person to
+ * see, so it is not approved here either.
  */
 export function importDraftsToApprove(projectRoot: string, record: ImportMetricDrafts): string[] {
   const waiting = new Set(listMetricDrafts(projectRoot).map((draft) => draft.name));
   return Array.from(new Set(record.items
-    .filter((item) => (item.outcome === 'drafted' && item.path && (item.value !== undefined || !record.checked)) || item.outcome === 'reused')
+    .filter((item) => item.outcome === 'drafted' && item.path && (item.value !== undefined || !record.checked))
     .map((item) => item.metric!)
     .filter((name) => waiting.has(name))));
 }

@@ -31,6 +31,8 @@ export interface MetricDraftOptions {
   existingDrafts?: MetricDefinition[];
   /** Other names already taken. */
   takenNames?: Iterable<string>;
+  /** A text value as this database's SQL writes it. Without it, the standard form (`'it''s'`). */
+  stringLiteral?: (value: string) => string;
 }
 
 export interface ResolvedTable {
@@ -98,6 +100,12 @@ interface Row {
   literal?: BiLiteral;
   /** DAX: the column it is, for the blank and case rules of a comparison. */
   column?: { sql: string; type: BiDataType };
+  /**
+   * DAX `+` or `-` of columns, each read as 0 when blank. Right inside SUM. A
+   * row where both are blank is blank in DAX, which AVERAGE, MIN, MAX and
+   * COUNT skip, but 0 here.
+   */
+  blankAsZero?: boolean;
 }
 
 /** One aggregate on one table: a simple or filtered metric. */
@@ -164,16 +172,21 @@ class Converter {
   /** Notes found while translating each calculation (and the ones it builds on). */
   private readonly notesOf = new Map<BiCalculation, Set<string>>();
   private readonly stack = new Set<BiCalculation>();
+  private readonly text: (value: string) => string;
 
   constructor(
     private readonly calculations: BiCalculation[],
     private readonly models: BiCalculationModel[],
     private readonly options: MetricDraftOptions,
   ) {
+    this.text = options.stringLiteral ?? sqlString;
     const known = (metric: MetricDefinition, draft: boolean) => {
       this.taken.add(metric.name.toLowerCase());
-      const key = definitionKey(metric.table, metric.type, metric.sql, typeof metric.filter === 'string' ? metric.filter : undefined);
-      if (!metric.metricType && metric.table && metric.type !== 'custom' && !this.existing.has(key)) this.existing.set(key, { name: metric.name, draft });
+      // Only a filter written as text can be compared; a metric with another filter form is never "the same".
+      if (metric.filter === undefined || metric.filter === null || typeof metric.filter === 'string') {
+        const key = definitionKey(metric.table, metric.type, metric.sql, metric.filter ?? undefined);
+        if (!metric.metricType && metric.table && metric.type !== 'custom' && !this.existing.has(key)) this.existing.set(key, { name: metric.name, draft });
+      }
       const combined = combinedKey(metric.metricType, metric.typeParams);
       if (combined && !this.existing.has(combined)) this.existing.set(combined, { name: metric.name, draft });
     };
@@ -200,8 +213,7 @@ class Converter {
     try {
       return this.draft(calculation, original, value.tree);
     } catch (error) {
-      if (error instanceof LeftOut) return { calculation, outcome: 'left-out', reason: error.message, notes: [] };
-      throw error;
+      return { calculation, outcome: 'left-out', reason: leftOutReason(error), notes: [] };
     }
   }
 
@@ -224,8 +236,8 @@ class Converter {
       this.notesOf.set(calculation, context.notes);
       value = this.translate(node, context);
     } catch (error) {
-      if (error instanceof LeftOut || error instanceof FormulaError) value = new LeftOut(error.message);
-      else throw error;
+      // One calculation ZLens cannot read never stops the rest.
+      value = new LeftOut(leftOutReason(error));
     } finally {
       this.stack.delete(calculation);
     }
@@ -238,12 +250,14 @@ class Converter {
   private translate(node: FormulaNode, context: Context): Value {
     const dax = context.calculation.language === 'dax';
     switch (node.k) {
-      case 'number':
-        return constant(node.text, 'number', { kind: 'number', value: node.value });
+      case 'number': {
+        const text = plainNumber(node);
+        return constant(text, /^\d+$/.test(text) ? 'integer' : 'number', { kind: 'number', value: node.value });
+      }
       case 'string':
-        return constant(sqlString(node.value), 'string', { kind: 'string', value: node.value });
+        return constant(this.text(node.value), 'string', { kind: 'string', value: node.value });
       case 'date':
-        return constant(sqlString(node.value), 'date', { kind: 'date', value: node.value });
+        return constant(this.text(node.value), 'date', { kind: 'date', value: node.value });
       case 'boolean':
         return constant(node.value ? 'true' : 'false', 'boolean', { kind: 'boolean', value: node.value });
       case 'null':
@@ -259,13 +273,11 @@ class Converter {
         if (operand.k === 'measure') return { k: 'measure', tree: { k: 'negate', operand: operand.tree } };
         return { ...numeric(operand, '-'), sql: `-${wrap(operand.sql)}`, literal: undefined, column: undefined };
       }
-      case 'not': {
-        const operand = this.condition(node.operand, context);
-        return { ...operand, sql: `not ${wrap(operand.sql)}`, literal: undefined, column: undefined };
-      }
+      case 'not':
+        return this.condition(node, context);
       case 'in':
       case 'binary':
-        if (node.k === 'in' || ['=', '<>', '<', '>', '<=', '>=', 'and', 'or'].includes(node.op)) return this.condition(node, context);
+        if (node.k === 'in' || ['=', '==', '<>', '<', '>', '<=', '>=', 'and', 'or'].includes(node.op)) return this.condition(node, context);
         return this.arithmetic(node, context);
       case 'if':
         throw new LeftOut('It uses IF outside an aggregate: a condition on aggregated values or a value per row.');
@@ -276,6 +288,7 @@ class Converter {
 
   private tableauField(node: Extract<FormulaNode, { k: 'field' }>, context: Context): Value {
     if (node.table && /^parameters$/i.test(node.table)) throw new LeftOut(`It uses the parameter ${node.name}.`);
+    if (node.table) throw new LeftOut(`It reads [${node.table}].[${node.name}], a field of another data source.`);
     const scope = this.calculations.filter((calculation) => calculation !== context.calculation && calculation.language === 'tableau' && calculation.sourcePath === context.calculation.sourcePath && calculation.owner === context.calculation.owner);
     const fields = context.model.fields;
     const byId = scope.find((calculation) => calculation.id === node.name);
@@ -336,7 +349,7 @@ class Converter {
     const table = this.table(bi, model);
     const changedType = bi.changedTypes?.[field.column.toLowerCase()];
     if (changedType) throw new LeftOut(`Power Query changes the column ${field.column} to ${changedType}, so the database's values differ from the report's.`);
-    let sql = quoteColumn(field.column);
+    let sql = quoteName(field.column);
     if (table.columns) {
       const found = table.columns.get(field.column.toLowerCase());
       if (!found) throw new LeftOut(`The column ${field.column} is not in ${table.sql}.`);
@@ -380,6 +393,7 @@ class Converter {
         // A blank counts as 0 in DAX + and -.
         leftTree = blankAsZero(leftTree);
         rightTree = blankAsZero(rightTree);
+        context.notes.add('Where both sides are empty, Power BI shows an empty value; the metric shows 0.');
       }
       if (op === '/' && dax && !divides && rightTree.k !== 'number') context.notes.add('Power BI shows infinity when the denominator is 0; the metric shows an empty value.');
       return { k: 'measure', tree: { k: 'op', op: op as '+' | '-' | '*' | '/', left: leftTree, right: rightTree } };
@@ -387,34 +401,52 @@ class Converter {
     const a = numeric(left, op);
     const b = numeric(right, op);
     const table = sameTable(a, b);
-    const sql = op === '/' ? `${wrap(a.sql)} * 1.0 / nullif(${b.sql}, 0)` : `${wrap(a.sql)} ${op} ${wrap(b.sql)}`;
+    // A blank counts as 0 in DAX + and -, row by row too.
+    const addsBlanks = dax && (op === '+' || op === '-');
+    const operand = (row: Row) => (addsBlanks && !row.literal ? `coalesce(${row.sql}, 0)` : wrap(row.sql));
+    const sql = op === '/' ? `${wrap(a.sql)} * 1.0 / nullif(${b.sql}, 0)` : `${operand(a)} ${op} ${operand(b)}`;
     if (op === '/' && dax && !divides && !b.literal) context.notes.add('Power BI gives infinity for a division by 0 in a row; the metric gives an empty value.');
-    return { k: 'row', sql, ...(table ? { table } : {}), type: 'number', columns: new Set([...a.columns, ...b.columns]) };
+    const blankAsZeroRow = addsBlanks || a.blankAsZero || b.blankAsZero;
+    return {
+      k: 'row',
+      sql,
+      ...(table ? { table } : {}),
+      type: op !== '/' && a.type === 'integer' && b.type === 'integer' ? 'integer' : 'number',
+      columns: new Set([...a.columns, ...b.columns]),
+      ...(blankAsZeroRow ? { blankAsZero: true } : {}),
+    };
   }
 
-  /** A condition on one table's columns, as SQL. DAX comparisons follow DAX's rules for blanks and text. */
-  private condition(node: FormulaNode, context: Context): Row {
+  /**
+   * A condition on one table's columns, as SQL. DAX comparisons follow DAX's
+   * rules for blanks and text. A DAX comparison is true or false, never empty,
+   * so `NOT` is pushed down to the comparison (`NOT T[x] = 1` is `T[x] <> 1`
+   * by DAX's rules) rather than written as SQL's `not`, which drops empty rows.
+   */
+  private condition(node: FormulaNode, context: Context, negated = false): Row {
     const dax = context.calculation.language === 'dax';
     if (node.k === 'binary' && (node.op === 'and' || node.op === 'or')) {
-      const left = this.condition(node.left, context);
-      const right = this.condition(node.right, context);
+      const left = this.condition(node.left, context, negated);
+      const right = this.condition(node.right, context, negated);
       const table = sameTable(left, right);
-      const side = (row: Row) => (node.op === 'and' ? andOperand(row.sql) : row.sql);
-      return { k: 'row', sql: `${side(left)} ${node.op} ${side(right)}`, ...(table ? { table } : {}), type: 'boolean', columns: new Set([...left.columns, ...right.columns]) };
+      const op = negated ? (node.op === 'and' ? 'or' : 'and') : node.op;
+      const side = (row: Row) => (op === 'and' ? andOperand(row.sql) : row.sql);
+      return { k: 'row', sql: `${side(left)} ${op} ${side(right)}`, ...(table ? { table } : {}), type: 'boolean', columns: new Set([...left.columns, ...right.columns]) };
     }
     if (node.k === 'not') {
+      if (dax) return this.condition(node.operand, context, !negated);
       const operand = this.condition(node.operand, context);
-      return { ...operand, sql: `not ${wrap(operand.sql)}` };
+      return { ...operand, sql: `not ${wrap(operand.sql)}`, literal: undefined, column: undefined };
     }
     if (node.k === 'in') {
       const operand = this.rowOf(node.operand, context);
       const values = node.values.map((value) => this.rowOf(value, context));
+      if (!values.length) throw new LeftOut('It compares with an empty list.');
       if (values.some((value) => !value.literal)) throw new LeftOut('It compares with a list that is not plain values.');
-      const literals = values.map((value) => value.literal!);
-      const sql = dax ? daxIn(operand, literals, operand.table?.bi) : `${operand.sql} in (${values.map((value) => value.sql).join(', ')})`;
+      const sql = dax ? daxIn(operand, values, operand.table?.bi, this.text, negated) : `${operand.sql} in (${values.map((value) => value.sql).join(', ')})`;
       return { k: 'row', sql, ...(operand.table ? { table: operand.table } : {}), type: 'boolean', columns: operand.columns };
     }
-    if (node.k === 'binary' && ['=', '<>', '<', '>', '<=', '>='].includes(node.op)) {
+    if (node.k === 'binary' && ['=', '==', '<>', '<', '>', '<=', '>='].includes(node.op)) {
       let left = this.rowOf(node.left, context);
       let right = this.rowOf(node.right, context);
       let op = node.op;
@@ -424,16 +456,19 @@ class Converter {
           op = flip(op);
         }
         if (!right.literal || !left.column) throw new LeftOut('It compares two columns; a DAX filter compares a column with a value.');
-        const sql = daxComparison(left, op, right.literal, left.table?.bi);
+        if (left.table?.bi.mode === 'dual' && left.column.type === 'string') context.notes.add(`Table ${left.table.bi.name} is dual: Power BI can compare its text either ignoring case or as the database does.`);
+        const sql = daxComparison(left, negated ? opposite(op) : op, right, left.table?.bi, this.text);
         return { k: 'row', sql, ...(left.table ? { table: left.table } : {}), type: 'boolean', columns: left.columns };
       }
       const table = sameTable(left, right);
       return { k: 'row', sql: `${left.sql} ${op} ${right.sql}`, ...(table ? { table } : {}), type: 'boolean', columns: new Set([...left.columns, ...right.columns]) };
     }
-    if (node.k === 'call' && ((node.name === 'ISNULL' && !dax) || (node.name === 'ISBLANK' && dax)) && node.args.length === 1) {
+    if (node.k === 'call' && (node.name === 'ISNULL' || node.name === 'ISBLANK')) {
+      if (node.name !== (dax ? 'ISBLANK' : 'ISNULL') || node.args.length !== 1) throw new LeftOut(`It uses ${node.name} in a form ZLens does not translate.`);
       const operand = this.rowOf(node.args[0]!, context);
-      return { k: 'row', sql: `${wrap(operand.sql)} is null`, ...(operand.table ? { table: operand.table } : {}), type: 'boolean', columns: operand.columns };
+      return { k: 'row', sql: `${wrap(operand.sql)} is ${negated ? 'not ' : ''}null`, ...(operand.table ? { table: operand.table } : {}), type: 'boolean', columns: operand.columns };
     }
+    if (negated) throw new LeftOut('It uses NOT on a value ZLens does not translate.');
     const value = this.rowOf(node, context);
     if (value.type !== 'boolean' && value.type !== 'unknown') throw new LeftOut('It uses a value as a condition.');
     return value;
@@ -472,6 +507,9 @@ class Converter {
       throw new LeftOut(`It uses ${node.name}, which a ZLens metric has no type for.`);
     }
     if ((node.name === 'ZN' && !dax) || node.name === 'ABS' || node.name === 'ROUND' || (node.name === 'IFNULL' && !dax) || (node.name === 'COALESCE' && dax)) {
+      const count = node.args.length;
+      const fits = node.name === 'ZN' || node.name === 'ABS' ? count === 1 : node.name === 'ROUND' ? count === 1 || count === 2 : node.name === 'IFNULL' ? count === 2 : count >= 2;
+      if (!fits) throw new LeftOut(`It uses ${node.name} with ${count} argument${count === 1 ? '' : 's'}.`);
       const args = node.args.map((arg) => this.translate(arg, context));
       const measures = args.some((arg) => arg.k === 'measure');
       if (measures) {
@@ -489,15 +527,17 @@ class Converter {
       for (const row of rows) table = sameTable({ ...row, table }, row);
       const sqlArgs = node.name === 'ZN' ? [rows[0]!.sql, '0'] : rows.map((row) => row.sql);
       const name = node.name === 'ZN' || node.name === 'IFNULL' ? 'coalesce' : node.name.toLowerCase();
-      return { k: 'row', sql: `${name}(${sqlArgs.join(', ')})`, ...(table ? { table } : {}), type: node.name === 'ROUND' || node.name === 'ABS' ? 'number' : rows[0]!.type, columns: new Set(rows.flatMap((row) => [...row.columns])) };
+      return { k: 'row', sql: `${name}(${sqlArgs.join(', ')})`, ...(table ? { table } : {}), type: rows[0]!.type, columns: new Set(rows.flatMap((row) => [...row.columns])), ...(rows.some((row) => row.blankAsZero) ? { blankAsZero: true } : {}) };
     }
     if (dax && node.name === 'DATE' && node.args.length === 3 && node.args.every((arg) => arg.k === 'number')) {
-      const [year, month, day] = node.args.map((arg) => (arg as { value: number }).value);
+      const [year, month, day] = node.args.map((arg) => (arg as { value: number }).value) as [number, number, number];
+      // DAX rolls DATE(2024, 13, 1) over to the next year, and reads a small year as 19xx.
+      const date = new Date(Date.UTC(year, month - 1, day));
+      if (year < 1900 || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) throw new LeftOut(`It uses DATE(${year}, ${month}, ${day}), which DAX rolls over to another date.`);
       const value = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-      return constant(sqlString(value), 'date', { kind: 'date', value });
+      return constant(this.text(value), 'date', { kind: 'date', value });
     }
     if (node.name === 'ISNULL' || node.name === 'ISBLANK') return this.condition(node, context);
-    if (dax && node.name === 'NOT' && node.args.length === 1) return this.condition({ k: 'not', operand: node.args[0]! }, context);
     throw new LeftOut(`It uses ${node.name}, which ZLens does not translate.`);
   }
 
@@ -509,12 +549,13 @@ class Converter {
   private aggregate(fn: AggregateFn, written: string, arg: FormulaNode, context: Context): Part {
     let valueNode = arg;
     let conditionNode: FormulaNode | undefined;
+    let elseZero = false;
     if (arg.k === 'if' || (arg.k === 'call' && arg.name === 'IIF' && context.calculation.language === 'tableau')) {
       const branches = arg.k === 'if' ? arg.branches : [{ condition: arg.args[0]!, then: arg.args[1]! }];
       const otherwise = arg.k === 'if' ? arg.otherwise : arg.args[2];
       if (arg.k === 'call' && (arg.args.length < 2 || arg.args.length > 3)) throw new LeftOut('It uses IIF with other than two or three arguments.');
       if (branches.length !== 1) throw new LeftOut('It uses ELSEIF inside the aggregate: more than one condition.');
-      const elseZero = otherwise?.k === 'number' && otherwise.value === 0;
+      elseZero = otherwise?.k === 'number' && otherwise.value === 0;
       if (otherwise && otherwise.k !== 'null' && !(elseZero && fn === 'sum')) {
         throw new LeftOut(elseZero ? `It uses ELSE 0 inside ${written}, which changes what ${written} gives.` : 'It has an ELSE value inside the aggregate.');
       }
@@ -530,8 +571,10 @@ class Converter {
       throw new LeftOut(`Its condition reads ${condition.table.bi.name} and its value reads ${value.table.bi.name}: a filter on another table.`);
     }
     if (value.type === 'string' && (fn === 'sum' || fn === 'avg')) throw new LeftOut(`It uses ${written} of text.`);
+    if (value.blankAsZero && fn !== 'sum') throw new LeftOut(`It uses ${written} of a column built with + or -: DAX skips a row where both sides are blank, and a metric would read it as 0.`);
     const label = `${AGGREGATE_WORDS[fn]} of ${describeRow(valueNode, value)}`;
     const notes = [...table.notes];
+    if (elseZero) notes.push('With ELSE 0, Tableau shows 0 for a group with no matching rows; a metric leaves that group out when a question groups by a column.');
     const sql = fn === 'avg' && value.type === 'integer' ? `1.0 * ${wrap(value.sql)}` : value.sql;
     const part: Part = {
       fn,
@@ -554,7 +597,7 @@ class Converter {
       const field = model.fields.find((candidate) => candidate.name === filter.field);
       if (!field) throw new LeftOut(`A ${filter.from} filter on ${filter.field} reads a calculation, which ZLens does not translate.`);
       if (field.table !== part.table.bi.name) throw new LeftOut(`A ${filter.from} filter on ${field.caption ?? field.name} reads ${field.table}, not ${part.table.bi.name}: a filter on another table.`);
-      filters.push(sourceFilterSql(filter, this.column(field, model).sql));
+      filters.push(sourceFilterSql(filter, this.column(field, model).sql, this.text));
     }
     const notes = [...part.notes];
     if (model.joins) {
@@ -603,7 +646,7 @@ class Converter {
     const notes = Array.from(new Set([...treeNotes(tree), ...(this.notesOf.get(original) ?? [])]));
     if (tree.k === 'part') {
       const part = { ...tree.part, label: calculation.name };
-      const existing = this.existing.get(partKey(part));
+      const existing = this.existing.get(definitionKeyOf(part));
       if (existing) {
         return { calculation, outcome: 'reused', metric: existing.name, reason: `${calculation.name} is already the metric${existing.draft ? ' draft' : ''} ${existing.name}.`, notes, inWords: partWords(part) };
       }
@@ -614,7 +657,7 @@ class Converter {
     const nameOf = (part: Part): string => {
       const known = parts.get(part);
       if (known) return known;
-      const existing = this.existing.get(partKey(part));
+      const existing = this.existing.get(definitionKeyOf(part));
       const name = existing?.name ?? this.partDraft(part, calculation, true).definition.name;
       parts.set(part, name);
       return name;
@@ -730,8 +773,58 @@ function sameTable(a: Row, b: Row): TableInfo | undefined {
   return a.table ?? b.table;
 }
 
+/** Why a calculation is left out, whatever stopped it. */
+function leftOutReason(error: unknown): string {
+  if (error instanceof LeftOut || error instanceof FormulaError) return error.message;
+  if (error instanceof RangeError) return 'Its formula is nested too deeply for ZLens to read.';
+  return `ZLens could not translate it: ${error instanceof Error ? error.message : String(error)}`;
+}
+
+/** `.5` → `0.5`, `1e3` → `1000`: a number as metric expressions read it, kept as written so a long one keeps its digits. */
+function plainNumber(node: Extract<FormulaNode, { k: 'number' }>): string {
+  if (/^\d+(?:\.\d+)?$/.test(node.text)) return node.text;
+  const text = String(node.value);
+  if (!/^\d+(?:\.\d+)?$/.test(text)) throw new LeftOut(`It uses the number ${node.text}, which ZLens does not translate.`);
+  return text;
+}
+
+/**
+ * The parts of a SQL expression that matter for parentheses, read outside
+ * quoted text and quoted names: whether one pair of parentheses holds all of
+ * it, and whether it has an `or` of its own.
+ */
+function sqlShape(sql: string): { wrapped: boolean; topLevelOr: boolean } {
+  let depth = 0;
+  let firstClose = -1;
+  let topLevelOr = false;
+  for (let index = 0; index < sql.length; index += 1) {
+    const char = sql[index]!;
+    if (char === "'" || char === '"' || char === '`' || char === '[') {
+      const close = char === '[' ? ']' : char;
+      index += 1;
+      while (index < sql.length) {
+        if (sql[index] === close) {
+          if (sql[index + 1] !== close) break;
+          index += 1;
+        }
+        index += 1;
+      }
+    } else if (char === '(') {
+      depth += 1;
+    } else if (char === ')') {
+      depth -= 1;
+      if (depth === 0 && firstClose < 0) firstClose = index;
+    } else if (depth === 0 && /^ or /i.test(sql.slice(index, index + 4))) {
+      topLevelOr = true;
+    }
+  }
+  return { wrapped: sql.startsWith('(') && firstClose === sql.length - 1, topLevelOr };
+}
+
+/** Parentheses around an expression, unless it is one name, one value, or already all inside one pair. */
 function wrap(sql: string): string {
-  return /^[\w."]+$|^\(.*\)$|^'(?:[^']|'')*'$/.test(sql) && !/^-/.test(sql) ? sql : `(${sql})`;
+  if (/^[\w.]+$|^'(?:[^']|'')*'$|^"(?:[^"]|"")*"$|^`[^`]*`$|^\[[^\]]*\]$/.test(sql)) return sql;
+  return sqlShape(sql).wrapped ? sql : `(${sql})`;
 }
 
 /** Conditions joined with `and`; one that has a top-level `or` is put in parentheses. */
@@ -741,41 +834,56 @@ function andAll(conditions: Array<string | undefined>): string {
 }
 
 function andOperand(sql: string): string {
-  let depth = 0;
-  let quoted = false;
-  for (let index = 0; index < sql.length; index += 1) {
-    const char = sql[index];
-    if (char === "'") quoted = !quoted;
-    else if (quoted) continue;
-    else if (char === '(') depth += 1;
-    else if (char === ')') depth -= 1;
-    else if (depth === 0 && /^ or /i.test(sql.slice(index, index + 4))) return `(${sql})`;
-  }
-  return sql;
+  return sqlShape(sql).topLevelOr ? `(${sql})` : sql;
 }
 
+/** The same comparison with its sides swapped. */
 function flip(op: string): string {
   return op === '<' ? '>' : op === '>' ? '<' : op === '<=' ? '>=' : op === '>=' ? '<=' : op;
+}
+
+/** The comparison that is true exactly when `op` is false. `!==` is the opposite of DAX's strict `==`. */
+function opposite(op: string): string {
+  const opposites: Record<string, string> = { '=': '<>', '<>': '=', '<': '>=', '>=': '<', '>': '<=', '<=': '>', '==': '!==', '!==': '==' };
+  return opposites[op]!;
 }
 
 function sqlString(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function literalSql(literal: BiLiteral): string {
+function literalSql(literal: BiLiteral, text: (value: string) => string): string {
   if (literal.kind === 'null') return 'null';
   if (literal.kind === 'number') return String(literal.value);
   if (literal.kind === 'boolean') return literal.value ? 'true' : 'false';
-  return sqlString(literal.value);
+  return text(literal.value);
 }
 
-/** `Order ID` → `"Order ID"`; a plain name stays as written. */
-function quoteColumn(column: string): string {
-  return quoteName(column);
+/**
+ * Words a column or table cannot be called without quotes. Most only fail
+ * (the check then says so); `user`, `current_date` and the like run and read
+ * something else, so a column with such a name gives a wrong number silently.
+ */
+const RESERVED_SQL_WORDS = new Set([
+  'all', 'alter', 'analyse', 'analyze', 'and', 'any', 'array', 'as', 'asc', 'asymmetric', 'between', 'bigint', 'both', 'by', 'case', 'cast', 'check',
+  'collate', 'column', 'constraint', 'create', 'cross', 'current', 'current_catalog', 'current_date', 'current_role', 'current_schema', 'current_time',
+  'current_timestamp', 'current_user', 'database', 'date', 'default', 'deferrable', 'delete', 'desc', 'distinct', 'do', 'drop', 'else', 'end', 'except',
+  'exists', 'false', 'fetch', 'for', 'foreign', 'from', 'full', 'grant', 'group', 'having', 'if', 'ilike', 'in', 'index', 'initially', 'inner', 'insert',
+  'intersect', 'interval', 'into', 'is', 'join', 'key', 'lateral', 'leading', 'left', 'like', 'limit', 'localtime', 'localtimestamp', 'natural', 'not',
+  'null', 'offset', 'on', 'only', 'or', 'order', 'outer', 'over', 'partition', 'percent', 'primary', 'qualify', 'range', 'references', 'returning', 'right',
+  'row', 'rows', 'schema', 'select', 'session_user', 'set', 'similar', 'some', 'symmetric', 'sysdate', 'system_user', 'table', 'tablesample', 'then', 'time',
+  'timestamp', 'to', 'top', 'trailing', 'true', 'unbounded', 'union', 'unique', 'update', 'user', 'using', 'values', 'variadic', 'view', 'when', 'where',
+  'window', 'with',
+]);
+
+/** Whether a name can be written in SQL without quotes on any database. */
+export function isPlainSqlName(name: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) && !RESERVED_SQL_WORDS.has(name.toLowerCase());
 }
 
+/** `Order ID` → `"Order ID"`, `user` → `"user"`; a plain name stays as written. */
 function quoteName(name: string): string {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) ? name : `"${name.replace(/"/g, '""')}"`;
+  return isPlainSqlName(name) ? name : `"${name.replace(/"/g, '""')}"`;
 }
 
 /** `Total Sales` → `total_sales`; `_SumTotalPrice` → `sum_total_price`; `Profit %` → `profit_pct`. */
@@ -790,9 +898,10 @@ export function metricName(label: string): string {
   return /^\d/.test(name) ? `metric_${name}` : name;
 }
 
+/** Two metrics are the same only when table, type, expression and filter are: text in a filter keeps its case. */
 function definitionKey(table: string, type: string, sql: string, filter: string | undefined): string {
-  const normalize = (text: string | undefined) => (text ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
-  return [normalize(table), type, normalize(sql), normalize(filter)].join('\u0000');
+  const spaces = (text: string | undefined) => (text ?? '').replace(/\s+/g, ' ').trim();
+  return [spaces(table).toLowerCase(), type, spaces(sql), spaces(filter)].join('\u0000');
 }
 
 /** A ratio's or derived metric's identity: its kind and what it combines. */
@@ -804,8 +913,13 @@ function combinedKey(metricType: string | undefined, typeParams: Record<string, 
   return undefined;
 }
 
-function partKey(part: Part): string {
+function definitionKeyOf(part: Part): string {
   return definitionKey(part.table.sql, part.fn, part.sql, part.filter);
+}
+
+/** A draft of this run: DISTINCTCOUNT stays apart from DISTINCTCOUNTNOBLANK, because its check also counts empty values. */
+function partKey(part: Part): string {
+  return `${definitionKeyOf(part)}\u0000${part.countsBlank ? 'counts blank' : ''}`;
 }
 
 function aggregateSql(part: Part): string {
@@ -881,47 +995,74 @@ function calculationDefinition(calculation: ClassifiedCalculation | BiCalculatio
   };
 }
 
-/** A DAX comparison of a column with a value, as Power BI evaluates it: a blank is 0, "" or false, and imported text ignores case. */
-function daxComparison(column: Row, op: string, literal: BiLiteral, table: BiModelTable | undefined): string {
+/**
+ * A DAX comparison of a column with a value, as Power BI evaluates it: a blank
+ * is 0, "" or false, and imported text ignores case. Strict `==` (and `!==`,
+ * its opposite here) does not treat a blank as anything else.
+ */
+function daxComparison(column: Row, op: string, value: Row, table: BiModelTable | undefined, text: (value: string) => string): string {
+  const literal = value.literal!;
+  const strict = op === '==' || op === '!==';
+  const sqlOp = op === '==' ? '=' : op === '!==' ? '<>' : op;
+  // Strictly, the opposite of "is this value" keeps the blank rows.
+  const orBlank = (sql: string, blankMatches: boolean) => (blankMatches || op === '!==' ? `(${sql} or ${column.sql} is null)` : sql);
+  if (literal.kind === 'null') {
+    if (strict) return `${column.sql} is ${op === '!==' ? 'not ' : ''}null`;
+    throw new LeftOut('It compares with BLANK(), which also matches 0 and "" in DAX.');
+  }
   const type = column.column?.type && column.column.type !== 'unknown' ? column.column.type : literalType(literal);
-  if (literal.kind === 'null') throw new LeftOut('It compares with BLANK(), which also matches 0 and "" in DAX.');
   if (type === 'string') {
     const insensitive = table?.mode !== 'directQuery';
-    const text = literal.kind === 'string' ? literal.value : String(literalSql(literal));
-    const sql = `${insensitive ? `lower(${column.sql})` : column.sql} ${op} ${sqlString(insensitive ? text.toLowerCase() : text)}`;
-    return compare('', op, insensitive ? text.toLowerCase() : text) ? `(${sql} or ${column.sql} is null)` : sql;
+    const written = literal.kind === 'string' ? literal.value : value.sql;
+    const compared = insensitive ? written.toLowerCase() : written;
+    const sql = `${insensitive ? `lower(${column.sql})` : column.sql} ${sqlOp} ${text(compared)}`;
+    return orBlank(sql, !strict && compare('', op, compared));
   }
   if (type === 'integer' || type === 'number') {
     if (literal.kind !== 'number') throw new LeftOut('It compares a number with a value that is not a number.');
-    return compare(0, op, literal.value) ? `coalesce(${column.sql}, 0) ${op} ${literal.value}` : `${column.sql} ${op} ${literal.value}`;
+    if (strict) return orBlank(`${column.sql} ${sqlOp} ${value.sql}`, false);
+    return compare(0, op, literal.value) ? `coalesce(${column.sql}, 0) ${sqlOp} ${value.sql}` : `${column.sql} ${sqlOp} ${value.sql}`;
   }
   if (type === 'boolean') {
     if (literal.kind !== 'boolean') throw new LeftOut('It compares TRUE/FALSE with another value.');
-    return compare(0, op, literal.value ? 1 : 0) ? `coalesce(${column.sql}, false) ${op} ${literal.value}` : `${column.sql} ${op} ${literal.value}`;
+    if (strict) return orBlank(`${column.sql} ${sqlOp} ${literal.value}`, false);
+    return compare(0, op, literal.value ? 1 : 0) ? `coalesce(${column.sql}, false) ${sqlOp} ${literal.value}` : `${column.sql} ${sqlOp} ${literal.value}`;
   }
   if (type === 'date') {
     // A blank date is the earliest date.
-    const sql = `${column.sql} ${op} ${literalSql(literal)}`;
-    return op === '<' || op === '<=' || op === '<>' ? `(${sql} or ${column.sql} is null)` : sql;
+    return orBlank(`${column.sql} ${sqlOp} ${value.sql}`, !strict && (op === '<' || op === '<=' || op === '<>'));
   }
   throw new LeftOut('ZLens could not tell the type of the column it compares.');
 }
 
-function daxIn(column: Row, literals: BiLiteral[], table: BiModelTable | undefined): string {
+/**
+ * DAX `IN` compares strictly: a blank is not 0 or "", and only BLANK() in the
+ * list matches one. Imported text still ignores case.
+ */
+function daxIn(column: Row, values: Row[], table: BiModelTable | undefined, text: (value: string) => string, negated: boolean): string {
   if (!column.column) throw new LeftOut('It compares a value that is not a column with a list.');
-  const type = column.column.type !== 'unknown' ? column.column.type : literalType(literals[0] ?? { kind: 'null' });
+  const present = values.filter((value) => value.literal!.kind !== 'null');
+  const blank = present.length < values.length;
+  const type = column.column.type !== 'unknown' ? column.column.type : literalType(present[0]?.literal ?? { kind: 'null' });
+  let target = column.sql;
+  let listed = present.map((value) => value.sql);
   if (type === 'string') {
     const insensitive = table?.mode !== 'directQuery';
-    const values = literals.map((literal) => (literal.kind === 'string' ? literal.value : String(literalSql(literal))));
-    const sql = `${insensitive ? `lower(${column.sql})` : column.sql} in (${values.map((value) => sqlString(insensitive ? value.toLowerCase() : value)).join(', ')})`;
-    return values.includes('') ? `(${sql} or ${column.sql} is null)` : sql;
+    if (insensitive) target = `lower(${column.sql})`;
+    listed = present.map((value) => {
+      const written = value.literal!.kind === 'string' ? (value.literal as { value: string }).value : value.sql;
+      return text(insensitive ? written.toLowerCase() : written);
+    });
+  } else if ((type === 'integer' || type === 'number') && present.some((value) => value.literal!.kind !== 'number')) {
+    throw new LeftOut('It compares a number with a list of values that are not numbers.');
   }
-  if (type === 'integer' || type === 'number') {
-    if (literals.some((literal) => literal.kind !== 'number')) throw new LeftOut('It compares a number with a list of values that are not numbers.');
-    const numbers = literals.map((literal) => (literal as { value: number }).value);
-    return `${numbers.includes(0) ? `coalesce(${column.sql}, 0)` : column.sql} in (${numbers.join(', ')})`;
+  if (!listed.length) return `${column.sql} is ${negated ? 'not ' : ''}null`;
+  if (negated) {
+    const sql = `${target} not in (${listed.join(', ')})`;
+    return blank ? sql : `(${sql} or ${column.sql} is null)`;
   }
-  return `${column.sql} in (${literals.map(literalSql).join(', ')})`;
+  const sql = `${target} in (${listed.join(', ')})`;
+  return blank ? `(${sql} or ${column.sql} is null)` : sql;
 }
 
 function literalType(literal: BiLiteral): BiDataType {
@@ -944,15 +1085,15 @@ function compare(left: string | number, op: string, right: string | number): boo
   }
 }
 
-function sourceFilterSql(filter: BiSourceFilter, column: string): string {
+function sourceFilterSql(filter: BiSourceFilter, column: string, text: (value: string) => string): string {
   if (filter.kind === 'range') {
-    const parts = [filter.min ? `${column} >= ${literalSql(filter.min)}` : '', filter.max ? `${column} <= ${literalSql(filter.max)}` : ''].filter(Boolean);
+    const parts = [filter.min ? `${column} >= ${literalSql(filter.min, text)}` : '', filter.max ? `${column} <= ${literalSql(filter.max, text)}` : ''].filter(Boolean);
     const range = parts.join(' and ') || `${column} is not null`;
     return filter.includeNull ? `(${range} or ${column} is null)` : range;
   }
   const values = filter.values ?? [];
   const nulls = values.some((value) => value.kind === 'null');
-  const plain = values.filter((value) => value.kind !== 'null').map(literalSql);
+  const plain = values.filter((value) => value.kind !== 'null').map((value) => literalSql(value, text));
   if (filter.kind === 'include') {
     const listed = plain.length ? `${column} in (${plain.join(', ')})` : '';
     if (nulls) return listed ? `(${listed} or ${column} is null)` : `${column} is null`;

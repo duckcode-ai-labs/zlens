@@ -32,6 +32,8 @@ interface PowerBiModel {
     dataColumns: Array<{ name: string; dataType?: string; sourceColumn?: string }>;
   }>;
   expressions: Array<{ name: string; expression: string }>;
+  /** The model's storage mode, for a partition that does not name its own. */
+  defaultMode?: string;
 }
 
 export function extractPowerBiTemplate(zip: Buffer, displayPath: string): ExtractedBiFile {
@@ -122,7 +124,7 @@ export function powerBiReportWithoutModel(displayPath: string): ExtractedBiFile 
 }
 
 export function extractPowerBiModelJson(text: string, displayPath: string): ExtractedBiFile {
-  const json = JSON.parse(text) as { model?: { tables?: any[]; expressions?: any[] } };
+  const json = JSON.parse(text) as { model?: { tables?: any[]; expressions?: any[]; defaultMode?: string } };
   const joined = (value: unknown) => (Array.isArray(value) ? value.join('\n') : typeof value === 'string' ? value : '');
   const model: PowerBiModel = {
     tables: (json.model?.tables ?? []).map((table: any) => ({
@@ -146,6 +148,7 @@ export function extractPowerBiModelJson(text: string, displayPath: string): Extr
         })),
     })),
     expressions: (json.model?.expressions ?? []).map((expression: any) => ({ name: String(expression.name ?? ''), expression: joined(expression.expression) })),
+    ...(json.model?.defaultMode ? { defaultMode: json.model.defaultMode } : {}),
   };
   return extractFromModel(model, displayPath);
 }
@@ -157,6 +160,7 @@ export function extractPowerBiTmdl(files: Array<{ path: string; text: string }>,
     const parsed = parseTmdl(file.text);
     model.tables.push(...parsed.tables);
     model.expressions.push(...parsed.expressions);
+    if (parsed.defaultMode) model.defaultMode = parsed.defaultMode;
   }
   return extractFromModel(model, displayPath);
 }
@@ -185,7 +189,7 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
   const measures: string[] = [];
   const calculation = (name: string, formula: string, role: BiCalculation['role'], owner: string): BiCalculation => ({ name, formula, language: 'dax', role, owner, sourcePath: displayPath });
   for (const table of model.tables) {
-    calculationModel.tables.push(modelTable(table, shared));
+    calculationModel.tables.push(modelTable(table, shared, model.defaultMode));
     const renames = table.partitions.length === 1 && table.partitions[0]!.type === 'm' ? readPowerQueryTable(table.partitions[0]!.expression, { shared }).renames : new Map<string, string>();
     for (const column of table.dataColumns) {
       const loaded = column.sourceColumn ?? column.name;
@@ -267,9 +271,10 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
  * partition. A table with several partitions, a native query, a file, a
  * calculated table, or Power Query steps that change rows has none.
  */
-function modelTable(table: PowerBiModel['tables'][number], shared: Map<string, string>): BiModelTable {
+function modelTable(table: PowerBiModel['tables'][number], shared: Map<string, string>, defaultMode: string | undefined): BiModelTable {
   const partitions = table.partitions;
-  const mode = partitions.some((partition) => partition.mode === 'directQuery') ? 'directQuery' as const : 'import' as const;
+  const modes = partitions.map((partition) => (partition.mode ?? defaultMode ?? 'import').toLowerCase());
+  const mode = modes.includes('directquery') ? 'directQuery' as const : modes.includes('dual') ? 'dual' as const : 'import' as const;
   if (partitions.length !== 1) return { name: table.name, mode, noTable: partitions.length ? 'It loads several partitions.' : 'It loads no data.' };
   const partition = partitions[0]!;
   if (partition.type !== 'm') return { name: table.name, mode, noTable: partition.type === 'calculated' ? 'It is a calculated table.' : `It loads with a ${partition.type} partition.` };
@@ -301,10 +306,11 @@ function powerBiDataType(dataType: string | undefined): BiDataType {
  * `source =` (inline or the indented lines under it, or a ``` block), its
  * `measure`s, and `expression`s (parameters and shared queries).
  */
-export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressions'> {
+export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressions' | 'defaultMode'> {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const tables: PowerBiModel['tables'] = [];
   const expressions: PowerBiModel['expressions'] = [];
+  let defaultMode: string | undefined;
   let table: PowerBiModel['tables'][number] | null = null;
   const indentOf = (line: string) => /^[\t ]*/.exec(line)![0].replace(/ {4}/g, '\t').length;
   const objectName = (raw: string) => raw.trim().replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
@@ -339,6 +345,8 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
+    const modeMatch = !table ? /^\s+defaultMode:\s*(\w+)/.exec(line) : null;
+    if (modeMatch) defaultMode = modeMatch[1];
     const tableMatch = /^table\s+(.+)$/.exec(line);
     if (tableMatch) {
       table = { name: objectName(tableMatch[1]), partitions: [], measures: [], columns: [], dataColumns: [] };
@@ -407,7 +415,7 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
     }
     if (trimmed.startsWith('calculationGroup')) continue;
   }
-  return { tables, expressions };
+  return { tables, expressions, ...(defaultMode ? { defaultMode } : {}) };
 }
 
 /** A TMDL value's own lines end where the object's properties (`lineageTag: …`, `annotation …`) start. */

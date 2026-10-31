@@ -1794,7 +1794,7 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
     // Tables and shared expressions (parameters) make up the model's queries.
     const expressions = join(folder, 'expressions.tmdl');
     const modelFiles = Array.from(new Set([...folderFiles, ...(existsSync(expressions) && (!options.fileAllowed || options.fileAllowed(expressions)) ? [expressions] : [])]))
-      .filter((file) => file.includes(`${sep}tables${sep}`) || basename(file).toLowerCase() === 'expressions.tmdl' || folderFiles.length === 1);
+      .filter((file) => file.includes(`${sep}tables${sep}`) || /^(?:expressions|model)\.tmdl$/i.test(basename(file)) || folderFiles.length === 1);
     if (modelFiles.length === 0) continue;
     readSafely(displayPath(projectRoot, folder), () => readTmdlFolder(modelFiles.map((file) => ({ absolutePath: file, displayPath: displayPath(projectRoot, file) })), displayPath(projectRoot, folder)));
   }

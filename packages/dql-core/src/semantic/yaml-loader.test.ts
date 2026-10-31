@@ -77,6 +77,10 @@ describe('loadSemanticLayerFromDir', () => {
     expect(layer.getMetric('revenue')).toMatchObject({ sql: 'amount', status: 'certified' });
     expect(layer.getDimension('region')).toBeUndefined();
     expect(loadSemanticMetricDraftsFromDir(semanticDir).map((draft) => draft.sql)).toEqual(['amount * 2']);
+
+    // Review moves and deletes this file, so its path is where it is, not what its YAML claims.
+    writeFileSync(join(semanticDir, 'metrics', '_drafts', 'sales', 'revenue.yaml'), 'name: revenue\ntype: sum\nsql: a\ntable: t\nsource:\n  extra:\n    path: ../../elsewhere.txt\n');
+    expect(loadSemanticMetricDraftsFromDir(semanticDir)[0]?.source?.extra?.path).toBe('metrics/_drafts/sales/revenue.yaml');
   });
 
   it('reads and writes synonyms', () => {

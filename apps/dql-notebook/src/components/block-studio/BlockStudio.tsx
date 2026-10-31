@@ -5820,6 +5820,8 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
   const failed = record.items.filter((item) => item.outcome === 'failed');
   const leftOut = record.items.filter((item) => item.outcome === 'left-out' || item.outcome === 'advanced');
   const rowLevel = record.items.filter((item) => item.outcome === 'row-level').length;
+  // A note on every draft is said once, above them.
+  const sharedNotes = drafted.length > 1 ? drafted[0]!.notes.filter((note) => drafted.every((item) => item.notes.includes(note))) : [];
   const formatted = (value: number | null | undefined) => {
     if (!record.checked) return 'not run';
     if (value === undefined) return '';
@@ -5852,6 +5854,7 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
             ? `From the file's calculations, placed on the tables they read. They answer no question until you approve them: check each value against the old report first.`
             : record.notWrittenReason ?? 'Nothing was written.'}
         </span>
+        {sharedNotes.map((note) => <span key={note} style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{note}</span>)}
         {drafted.map((item) => {
           const state = item.metric ? done[item.metric] : undefined;
           const canAct = record.written && item.metric && item.path && !state;
@@ -5865,7 +5868,7 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
               <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>{item.inWords}</span>
               <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>from {item.formula.replace(/\s+/g, ' ').slice(0, 140)}</span>
               {item.parts && item.parts.length > 0 && <span style={{ fontSize: 10, color: t.textMuted }}>Approving it also approves {item.parts.join(', ')}.</span>}
-              {item.notes.map((note) => <span key={note} style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{note}</span>)}
+              {item.notes.filter((note) => !sharedNotes.includes(note)).map((note) => <span key={note} style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{note}</span>)}
               {canAct && (
                 <span style={{ display: 'flex', gap: 6 }}>
                   <button onClick={() => onApprove(item.metric!)} disabled={Boolean(busy)} style={primaryImportButtonStyle(t)}>{busy === `approve:${item.metric}` ? 'Approving...' : 'Approve'}</button>

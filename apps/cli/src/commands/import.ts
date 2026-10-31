@@ -168,9 +168,12 @@ export function printMetricDrafts(record: ImportMetricDrafts): void {
     for (const item of drafted) row(item.calculation, item.inWords ?? '');
   } else if (drafted.length) {
     console.log(`  ${drafted.length} calculation${drafted.length === 1 ? ' became a metric draft' : 's became metric drafts'} (semantic-layer/metrics/_drafts/${record.domain}/):`);
+    // A note on every draft is said once.
+    const shared = drafted.length > 1 ? drafted[0]!.notes.filter((note) => drafted.every((item) => item.notes.includes(note))) : [];
+    for (const note of shared) console.log(`    note on all of them: ${note}`);
     for (const item of drafted) {
       row(item.calculation, item.inWords ?? item.metric ?? '', value(item));
-      for (const note of item.notes) console.log(`    ${''.padEnd(width)}  note: ${note}`);
+      for (const note of item.notes.filter((candidate) => !shared.includes(candidate))) console.log(`    ${''.padEnd(width)}  note: ${note}`);
     }
   }
   const reused = record.items.filter((item) => item.outcome === 'reused');

@@ -244,6 +244,121 @@ describe('Power BI measures to metric drafts', () => {
   });
 });
 
+describe('what the review of the converter found', () => {
+  const tableau = (calculations: Array<[string, string, string?]>, options: Parameters<typeof convertTableau>[1] = {}) => convertTableau(calculations, options);
+
+  it('keeps parentheses that hold only part of an expression', () => {
+    const result = tableau([['Doubled', 'SUM((([Sales] + [Profit]) - ([Price] + [Qty])) * 2)']]);
+    expect(draft(result, 'doubled')!.sql).toBe('((sales + profit) - (price + qty)) * 2');
+    const filtered = tableau([['Kept', `SUM(IF NOT (([Region] = "a" OR [Region] = "b") AND ([Qty] > 1 OR [Qty] < 0)) THEN [Sales] END)`]]);
+    expect(draft(filtered, 'kept')!.filter).toBe("not ((region = 'a' or region = 'b') and (qty > 1 or qty < 0))");
+  });
+
+  it('never reuses a metric whose filter it cannot compare, and tells text of another case apart', () => {
+    const existing: MetricDefinition = { name: 'paid_sales', label: 'Paid', description: '', domain: 'sales', type: 'sum', sql: 'sales', table: 'analytics.orders', filter: { field: 'status', operator: 'equals', value: 'paid' } };
+    expect(tableau([['Total Sales', 'SUM([Sales])']], { existing: [existing] }).conversions[0]).toMatchObject({ outcome: 'drafted', metric: 'total_sales' });
+    const cased = tableau([['Open', 'SUM(IF [Region] = "Open" THEN [Sales] END)'], ['OPEN', 'SUM(IF [Region] = "OPEN" THEN [Sales] END)']]);
+    expect(cased.drafts).toHaveLength(2);
+  });
+
+  it('leaves out a field of another data source, and says what ELSE 0 changes', () => {
+    expect(outcome(tableau([['Blend', 'SUM([Other Source].[Sales])']]), 'Blend')).toMatchObject({ outcome: 'left-out', reason: expect.stringContaining('a field of another data source') });
+    expect(outcome(tableau([['East', 'SUM(IF [Region] = "East" THEN [Sales] ELSE 0 END)']]), 'East').notes.join(' ')).toContain('Tableau shows 0 for a group with no matching rows');
+  });
+
+  it('keeps whole numbers whole through arithmetic, so an average of them keeps its decimals', () => {
+    expect(draft(tableau([['Avg', 'AVG([Qty] * 2)']]), 'avg')!.sql).toBe('1.0 * (qty * 2)');
+    expect(draft(tableau([['Avg', 'AVG([Qty] * 1.5)']]), 'avg')!.sql).toBe('qty * 1.5');
+  });
+
+  it('writes numbers as metric expressions read them', () => {
+    const result = tableau([['Half', 'SUM([Sales]) * .5'], ['Thousand', 'SUM([Sales]) * 1e3']]);
+    expect(draft(result, 'half')!.typeParams).toMatchObject({ expr: 'sum_of_sales * 0.5' });
+    expect(draft(result, 'thousand')!.typeParams).toMatchObject({ expr: 'sum_of_sales * 1000' });
+  });
+
+  it('keeps parentheses around a quoted name with an apostrophe', () => {
+    const file = extractTableauWorkbook(workbook([['Odd', `SUM(IF ([Bob's] = 1 OR [Region] = "E") AND [Qty] = 2 THEN [Sales] END)`]]).replace(
+      '<metadata-records>',
+      "<metadata-records><metadata-record class='column'><remote-name>Bob's</remote-name><local-name>[Bob's]</local-name><parent-name>[ORDERS]</parent-name><local-type>integer</local-type></metadata-record>",
+    ), 'Sales.twb');
+    const result = convertCalculationsToMetricDrafts(file.inventory!.calculations, file.models!, { domain: 'sales', importedAt: 'now' });
+    expect(result.drafts[0]!.definition.filter).toBe(`("Bob's" = 1 or REGION = 'E') and QTY = 2`);
+  });
+
+  it('turns any formula it cannot read into a reason, and carries on with the rest', () => {
+    const deep = `SUM(${'('.repeat(20000)}[Sales]${')'.repeat(20000)})`;
+    const result = tableau([
+      ['Empty ZN', 'SUM(ZN())'], ['Empty IFNULL', 'SUM(IFNULL())'], ['Two ISNULL', 'SUM(IF ISNULL([Sales], [Qty]) THEN 1 END)'],
+      ['Tableau ISBLANK', 'SUM(IF ISBLANK([Sales]) THEN 1 END)'], ['Deep', deep], ['Total Sales', 'SUM([Sales])'],
+    ]);
+    for (const name of ['Empty ZN', 'Empty IFNULL', 'Two ISNULL', 'Tableau ISBLANK', 'Deep']) expect(outcome(result, name).outcome, name).toBe('left-out');
+    expect(outcome(result, 'Total Sales').outcome).toBe('drafted');
+  });
+});
+
+describe('DAX rules the review checked against the docs', () => {
+  const dax = (measures: string[], options: { columns?: string[] } = {}) => {
+    const lines = [
+      'table T', '\tcolumn Qty', '\t\tdataType: int64', '\t\tsourceColumn: Qty', '\tcolumn Region', '\t\tdataType: string', '\t\tsourceColumn: Region',
+      '\tcolumn Amount', '\t\tdataType: decimal', '\t\tsourceColumn: Amount', '\tcolumn Cost', '\t\tdataType: decimal', '\t\tsourceColumn: Cost',
+      ...(options.columns ?? []), ...measures.map((measure) => `\tmeasure ${measure}`),
+      '\tpartition T = m', '\t\tmode: import', '\t\tsource =', '\t\t\t\tlet', '\t\t\t\t    Source = Sql.Database("s", "d"),', '\t\t\t\t    t = Source{[Schema="dbo",Item="T"]}[Data]', '\t\t\t\tin', '\t\t\t\t    t',
+    ];
+    const file = extractPowerBiTmdl([{ path: 'tables/T.tmdl', text: lines.join('\n') }], 'M.SemanticModel/definition');
+    return convertCalculationsToMetricDrafts(file.inventory!.calculations, file.models!, { domain: 'sales', importedAt: 'now' });
+  };
+  const filterOf = (formula: string) => draft(dax([`M = ${formula}`]), 'm')?.filter;
+
+  it('keeps == strict: a blank is not 0', () => {
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Qty] == 0)')).toBe('Qty = 0');
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Qty] = 0)')).toBe('coalesce(Qty, 0) = 0');
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Region] == BLANK())')).toBe('Region is null');
+  });
+
+  it('reads IN strictly: a blank matches only BLANK()', () => {
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Qty] IN {0, 1})')).toBe('Qty in (0, 1)');
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Region] IN {"", "East"})')).toBe("lower(Region) in ('', 'east')");
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Region] IN {BLANK(), "East"})')).toBe("(lower(Region) in ('east') or Region is null)");
+  });
+
+  it('pushes NOT down to the comparison, so empty rows stay as they do in DAX', () => {
+    expect(filterOf('CALCULATE(SUM(T[Amount]), NOT T[Region] = "East")')).toBe("(lower(Region) <> 'east' or Region is null)");
+    expect(filterOf('CALCULATE(SUM(T[Amount]), NOT T[Qty] > 5)')).toBe('coalesce(Qty, 0) <= 5');
+    expect(filterOf('CALCULATE(SUM(T[Amount]), NOT T[Region] IN {"East"})')).toBe("(lower(Region) not in ('east') or Region is null)");
+    // Sorted as advanced, so it stays out rather than being translated.
+    expect(filterOf('CALCULATE(SUM(T[Amount]), NOT (T[Qty] > 5 && T[Qty] < 9))')).toBeUndefined();
+  });
+
+  it('reads a blank as 0 in a calculated column built with + or -, and leaves out what that would change', () => {
+    const margin = ["column Margin = T[Amount] - T[Cost]".replace(/^/, '\t')];
+    const result = dax(['Total = SUM(T[Margin])', 'Average = AVERAGE(T[Margin])'], { columns: margin });
+    expect(draft(result, 'total')!.sql).toBe('coalesce(Amount, 0) - coalesce(Cost, 0)');
+    expect(outcome(result, 'Average')).toMatchObject({ outcome: 'left-out', reason: expect.stringContaining('a metric would read it as 0') });
+  });
+
+  it('keeps a long number\'s digits, leaves out a DATE that rolls over, and notes where both sides are empty', () => {
+    expect(filterOf('CALCULATE(SUM(T[Amount]), T[Qty] = 12345678901234567890)')).toBe('Qty = 12345678901234567890');
+    expect(outcome(dax(['M = CALCULATE(SUM(T[Amount]), T[Qty] = 1, T[Region] = "a", T[Cost] > DATE(2024, 13, 1))']), 'M')).toMatchObject({ outcome: 'left-out' });
+    const result = dax(['A = SUM(T[Amount])', 'C = SUM(T[Cost])', 'Margin = [A] - [C]']);
+    expect(outcome(result, 'Margin').notes.join(' ')).toContain('Where both sides are empty');
+  });
+
+  it('keeps DISTINCTCOUNT apart from DISTINCTCOUNTNOBLANK, since only its check counts empty values', () => {
+    const result = dax(['Both = DISTINCTCOUNT(T[Region])', 'Plain = DISTINCTCOUNTNOBLANK(T[Region])']);
+    expect(result.drafts.filter((candidate) => candidate.check?.emptyValues)).toHaveLength(1);
+    expect(result.drafts).toHaveLength(2);
+  });
+
+  it('reads the model\'s default mode and a dual table', () => {
+    const lines = (mode: string) => ['table T', '\tcolumn Region', '\t\tdataType: string', '\t\tsourceColumn: Region', '\tcolumn Amount', '\t\tdataType: decimal', '\t\tsourceColumn: Amount', '\tmeasure M = CALCULATE(SUM(T[Amount]), T[Region] = "East")', '\tpartition T = m', ...(mode ? [`\t\tmode: ${mode}`] : []), '\t\tsource =', '\t\t\t\tlet', '\t\t\t\t    Source = Sql.Database("s", "d"),', '\t\t\t\t    t = Source{[Schema="dbo",Item="T"]}[Data]', '\t\t\t\tin', '\t\t\t\t    t'].join('\n');
+    const direct = extractPowerBiTmdl([{ path: 'model.tmdl', text: 'model Model\n\tdefaultMode: directQuery\n' }, { path: 'tables/T.tmdl', text: lines('') }], 'M.SemanticModel/definition');
+    expect(draft(convertCalculationsToMetricDrafts(direct.inventory!.calculations, direct.models!, { domain: 'sales', importedAt: 'now' }), 'm')!.filter).toBe("Region = 'East'");
+    const dual = extractPowerBiTmdl([{ path: 'tables/T.tmdl', text: lines('dual') }], 'M.SemanticModel/definition');
+    expect(convertCalculationsToMetricDrafts(dual.inventory!.calculations, dual.models!, { domain: 'sales', importedAt: 'now' }).conversions[0]!.notes.join(' ')).toContain('is dual');
+  });
+});
+
 describe('drafts compile in the semantic layer', () => {
   it('composes every drafted metric, ratios and derived ones included', () => {
     const file = extractTableauWorkbook(workbook([

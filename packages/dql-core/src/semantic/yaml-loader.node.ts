@@ -93,7 +93,10 @@ export function loadSemanticMetricDraftsFromDir(semanticLayerDir: string): Metri
       const raw = yaml.load(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
       if (!raw || typeof raw !== 'object') continue;
       for (const item of expandDefinitions(raw, ['metrics'])) {
-        addIfNamed(parseMetricDefinition(withLocalSemanticSource(item, semanticLayerDir, filePath, 'metrics')), (metric) => drafts.push(metric));
+        const located = withLocalSemanticSource(item, semanticLayerDir, filePath, 'metrics') as { source: { extra: { path: string } } };
+        // Review moves and deletes this file, so the path is where it is, not what its YAML says.
+        located.source.extra.path = relative(semanticLayerDir, filePath).replace(/\\/g, '/');
+        addIfNamed(parseMetricDefinition(located as unknown as Record<string, unknown>), (metric) => drafts.push(metric));
       }
     } catch {
       // Skip malformed YAML files
