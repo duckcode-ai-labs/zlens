@@ -292,7 +292,8 @@ describe('native semantic engine on an insurance book', () => {
     it('evaluates the expression per output row over inputs from two fact tables', () => {
       const composed = layer.composeQuery({ metrics: ['loss_per_claim'], dimensions: ['line_of_business'], orderBy: [{ name: 'line_of_business', direction: 'asc' }] });
       expect(composed).not.toBeNull();
-      expect(composed!.sql).toContain('ratio_inputs.incurred_losses / NULLIF(ratio_inputs.claim_count, 0) AS loss_per_claim');
+      // `* 1.0` keeps the decimals where whole numbers divide to a whole number (Postgres, SQL Server).
+      expect(composed!.sql).toContain('ratio_inputs.incurred_losses * 1.0 / NULLIF(ratio_inputs.claim_count, 0) AS loss_per_claim');
       if (!DUCKDB_CLI) return;
       const inputs = run(layer.composeQuery({ metrics: ['incurred_losses', 'claim_count'], dimensions: ['line_of_business'], orderBy: [{ name: 'line_of_business', direction: 'asc' }] })!.sql);
       expect(rounded(run(composed!.sql))).toEqual(rounded(inputs.map((row) => ({

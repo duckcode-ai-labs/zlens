@@ -173,7 +173,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import type { Server } from 'node:http';
-import { buildManifest, createWarehouseTargetIdentity, loadSemanticLayerFromDir, SemanticLayer } from '@zlens/core';
+import { buildManifest, createWarehouseTargetIdentity, loadSemanticLayerFromDir, loadSemanticMetricDraftsFromDir, SemanticLayer } from '@zlens/core';
 import type { DQLManifest } from '@zlens/core';
 import type { AggregationSafetyProofV1 } from '@zlens/core';
 import {
@@ -11638,7 +11638,9 @@ describe('semantic composting changesets', () => {
     expect(existsSync(join(projectRoot, 'semantic-layer', 'metrics', '_drafts', 'sales', 'completed_revenue.yaml'))).toBe(true);
     expect(readFileSync(join(projectRoot, 'semantic-layer', 'metrics', '_drafts', 'PR_BODY.md'), 'utf-8')).toContain('Semantic Composting Changeset');
 
-    const metric = loadSemanticLayerFromDir(join(projectRoot, 'semantic-layer')).getMetric('completed_revenue');
+    // The draft answers nothing until a person approves it out of _drafts/.
+    expect(loadSemanticLayerFromDir(join(projectRoot, 'semantic-layer')).getMetric('completed_revenue')).toBeUndefined();
+    const metric = loadSemanticMetricDraftsFromDir(join(projectRoot, 'semantic-layer')).find((draft) => draft.name === 'completed_revenue');
     expect(metric).toMatchObject({
       name: 'completed_revenue',
       status: 'draft',

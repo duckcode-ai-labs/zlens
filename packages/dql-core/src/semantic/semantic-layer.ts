@@ -399,8 +399,15 @@ export function parseMetricDefinition(raw: Record<string, unknown>): MetricDefin
     filter: parseSemanticFilter(raw.filter),
     aggTimeDimension: raw.aggTimeDimension ? String(raw.aggTimeDimension) : raw.agg_time_dimension ? String(raw.agg_time_dimension) : undefined,
     displayFormat: parseSemanticDisplayFormat(raw),
+    ...(parseSynonyms(raw.synonyms).length ? { synonyms: parseSynonyms(raw.synonyms) } : {}),
     source: parseSourceMetadata(raw.source),
   };
+}
+
+/** `synonyms: [East Sales, eastern revenue]`, or one name as a string. */
+function parseSynonyms(value: unknown): string[] {
+  const items = Array.isArray(value) ? value : typeof value === 'string' ? [value] : [];
+  return items.map((item) => String(item ?? '').trim()).filter(Boolean);
 }
 
 export function parseDimensionDefinition(raw: Record<string, unknown>): DimensionDefinition {
@@ -1066,7 +1073,7 @@ export class SemanticLayer {
       const column = ref.includes('__') ? ref.split('__').pop() ?? ref : ref;
       return qualifyForTable(column, primaryTable);
     };
-    const metricFilters = resolvedMetrics.map((m) => computeMetricFilterPredicate(m, resolveFilterColumn));
+    const metricFilters = resolvedMetrics.map((m) => computeMetricFilterPredicate(m, resolveFilterColumn, (sql) => qualifyForTable(sql, m.table)));
     // A metric that declares a filter we cannot render fails the whole compose.
     if (metricFilters.some((r) => r.kind === 'fail')) return null;
     if (filterOutsideQuery) return null;
@@ -2609,8 +2616,23 @@ function resolveFilterJinja(raw: string, resolveColumn: (ref: string) => string)
   return out.includes('{{') ? null : out;
 }
 
+/**
+ * A filter written as SQL text reads its metric's own table: once another
+ * table is joined, `region = 'East'` is tied to it (`orders.region`), or a
+ * joined table with its own `region` makes it ambiguous. Text with Jinja
+ * (its dimensions resolve themselves) or a subquery is left as written.
+ */
+function qualifyTextFilter(sql: string, qualify: ((sql: string) => string) | undefined): string {
+  if (!qualify || sql.includes('{{') || /\bselect\b/i.test(sql)) return sql;
+  return qualify(sql);
+}
+
 /** Render a single object-shaped metric filter (`{ field, operator, value(s) }`). */
-function renderObjectFilter(raw: Record<string, unknown>, resolveColumn: (ref: string) => string): string | null {
+function renderObjectFilter(
+  raw: Record<string, unknown>,
+  resolveColumn: (ref: string) => string,
+  qualify?: (sql: string) => string,
+): string | null {
   // semantic_manifest.json represents compiled MetricFlow filters as
   // `{ where_filters: [{ where_sql_template: "..." }] }`. Normalize that
   // provider shape here so native fallback preserves the governed predicate.
@@ -2628,7 +2650,7 @@ function renderObjectFilter(raw: Record<string, unknown>, resolveColumn: (ref: s
   }
   const field = raw.field ?? raw.dimension ?? raw.column ?? raw.name;
   if (field == null || String(field).trim() === '') {
-    if (typeof raw.sql === 'string' && raw.sql.trim()) return resolveFilterJinja(raw.sql.trim(), resolveColumn);
+    if (typeof raw.sql === 'string' && raw.sql.trim()) return resolveFilterJinja(qualifyTextFilter(raw.sql.trim(), qualify), resolveColumn);
     return null;
   }
   const col = resolveColumn(String(field));
@@ -2660,22 +2682,23 @@ function renderObjectFilter(raw: Record<string, unknown>, resolveColumn: (ref: s
 function renderFilterSpec(
   spec: string | Record<string, unknown> | Array<Record<string, unknown>>,
   resolveColumn: (ref: string) => string,
+  qualify?: (sql: string) => string,
 ): string | null {
   if (typeof spec === 'string') {
     const trimmed = spec.trim();
-    return trimmed ? resolveFilterJinja(trimmed, resolveColumn) : '';
+    return trimmed ? resolveFilterJinja(qualifyTextFilter(trimmed, qualify), resolveColumn) : '';
   }
   if (Array.isArray(spec)) {
     const parts: string[] = [];
     for (const item of spec) {
       if (!item || typeof item !== 'object') return null;
-      const r = renderObjectFilter(item, resolveColumn);
+      const r = renderObjectFilter(item, resolveColumn, qualify);
       if (r === null) return null;
       if (r) parts.push(`(${r})`);
     }
     return parts.length ? parts.join(' AND ') : '';
   }
-  if (spec && typeof spec === 'object') return renderObjectFilter(spec, resolveColumn);
+  if (spec && typeof spec === 'object') return renderObjectFilter(spec, resolveColumn, qualify);
   return null;
 }
 
@@ -2717,10 +2740,11 @@ function combineMetricFilters(
 function computeMetricFilterPredicate(
   metric: MetricDefinition,
   resolveColumn: (ref: string) => string,
+  qualify?: (sql: string) => string,
 ): MetricFilterResult {
   const f = metric.filter;
   if (f === undefined || f === null) return { kind: 'none' };
-  const rendered = renderFilterSpec(f, resolveColumn);
+  const rendered = renderFilterSpec(f, resolveColumn, qualify);
   if (rendered === null) return { kind: 'fail' };
   if (!rendered) return { kind: 'none' };
   return { kind: 'ok', sql: rendered };
@@ -2904,6 +2928,10 @@ function renderDerivedExpression(expr: string, resolve: (name: string) => string
       const resolved = resolve(identifier);
       if (!resolved) return undefined;
       out += resolved;
+    } else if (symbol === '/') {
+      // Whole numbers divide to a whole number on Postgres, SQL Server and
+      // Redshift (12345 / 1000 = 12); a ratio keeps its decimals everywhere.
+      out += ' * 1.0 / ';
     } else {
       out += ` ${number ?? symbol} `;
     }
@@ -2932,6 +2960,8 @@ const SQL_EXPRESSION_KEYWORDS = new Set([
   'asc', 'desc', 'rows', 'range', 'current', 'row', 'unbounded', 'preceding', 'following',
   'interval', 'date', 'timestamp', 'varchar', 'string', 'numeric', 'decimal', 'integer',
   'float', 'double', 'boolean', 'cast', 'extract', 'from', 'at', 'time', 'zone',
+  'ilike', 'similar', 'escape', 'exists', 'any', 'all', 'some', 'unknown',
+  'current_date', 'current_time', 'current_timestamp', 'localtime', 'localtimestamp',
 ]);
 
 /** Replace semantic/physical qualifiers with the compiler-owned stable alias. */
@@ -2990,7 +3020,10 @@ export function qualifyBareSqlIdentifiers(sql: string, alias: string): string {
     const nextNonSpace = sql.slice(end).match(/^\s*(.)/)?.[1];
     const alreadyQualified = previousNonSpace === '.';
     const functionName = nextNonSpace === '(';
-    if (alreadyQualified || functionName || lower === alias.toLowerCase() || SQL_EXPRESSION_KEYWORDS.has(lower)) {
+    // `customers.segment` is already tied to its table; `EXTRACT(year FROM d)` names a unit.
+    const qualifier = nextNonSpace === '.';
+    const unitBeforeFrom = /^\s+from\b/i.test(sql.slice(end));
+    if (alreadyQualified || functionName || qualifier || unitBeforeFrom || lower === alias.toLowerCase() || SQL_EXPRESSION_KEYWORDS.has(lower)) {
       output += token;
     } else {
       output += `${alias}.${token}`;

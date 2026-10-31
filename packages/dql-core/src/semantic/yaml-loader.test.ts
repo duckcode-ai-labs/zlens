@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { loadSemanticLayerFromDir } from './yaml-loader.node.js';
+import { loadSemanticLayerFromDir, loadSemanticMetricDraftsFromDir } from './yaml-loader.node.js';
 import { serializeMetricDefinitionToYaml } from './yaml-loader.js';
 
 const tempDirs: string[] = [];
@@ -45,7 +45,9 @@ describe('loadSemanticLayerFromDir', () => {
     });
     writeFileSync(join(semanticDir, 'metrics', '_drafts', 'finance', 'completed_revenue.yaml'), yaml);
 
-    const metric = loadSemanticLayerFromDir(semanticDir).getMetric('completed_revenue');
+    // A draft answers nothing: the layer skips `_drafts/`, and review reads it on its own.
+    expect(loadSemanticLayerFromDir(semanticDir).getMetric('completed_revenue')).toBeUndefined();
+    const metric = loadSemanticMetricDraftsFromDir(semanticDir).find((draft) => draft.name === 'completed_revenue');
 
     expect(metric).toMatchObject({
       name: 'completed_revenue',
@@ -58,6 +60,46 @@ describe('loadSemanticLayerFromDir', () => {
       owner: 'analytics@example.com',
     });
     expect(metric?.source?.extra?.support).toBe(2);
+    expect(metric?.source?.extra?.path).toBe('metrics/_drafts/finance/completed_revenue.yaml');
+  });
+
+  it('never lets a draft replace the metric of the same name', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-semantic-drafts-'));
+    tempDirs.push(root);
+    const semanticDir = join(root, 'semantic-layer');
+    mkdirSync(join(semanticDir, 'metrics', '_drafts', 'sales'), { recursive: true });
+    mkdirSync(join(semanticDir, 'dimensions', '_drafts'), { recursive: true });
+    writeFileSync(join(semanticDir, 'metrics', 'revenue.yaml'), 'name: revenue\ntype: sum\nsql: amount\ntable: orders\nstatus: certified\n');
+    writeFileSync(join(semanticDir, 'metrics', '_drafts', 'sales', 'revenue.yaml'), 'name: revenue\ntype: sum\nsql: amount * 2\ntable: orders\nstatus: draft\n');
+    writeFileSync(join(semanticDir, 'dimensions', '_drafts', 'region.yaml'), 'name: region\nsql: region\ntable: orders\n');
+
+    const layer = loadSemanticLayerFromDir(semanticDir);
+    expect(layer.getMetric('revenue')).toMatchObject({ sql: 'amount', status: 'certified' });
+    expect(layer.getDimension('region')).toBeUndefined();
+    expect(loadSemanticMetricDraftsFromDir(semanticDir).map((draft) => draft.sql)).toEqual(['amount * 2']);
+  });
+
+  it('reads and writes synonyms', () => {
+    const yaml = serializeMetricDefinitionToYaml({
+      name: 'east_sales',
+      label: 'East Sales',
+      description: '',
+      domain: 'sales',
+      sql: 'sales',
+      type: 'sum',
+      table: 'orders',
+      filter: "region = 'East'",
+      synonyms: ['East Sales', 'eastern revenue'],
+    });
+    expect(yaml).toContain('synonyms:');
+    const root = mkdtempSync(join(tmpdir(), 'dql-semantic-synonyms-'));
+    tempDirs.push(root);
+    mkdirSync(join(root, 'metrics'), { recursive: true });
+    writeFileSync(join(root, 'metrics', 'east_sales.yaml'), yaml);
+    writeFileSync(join(root, 'metrics', 'orders.yaml'), 'name: order_count\ntype: count\nsql: "*"\ntable: orders\nsynonyms: orders placed\n');
+    const layer = loadSemanticLayerFromDir(root);
+    expect(layer.getMetric('east_sales')?.synonyms).toEqual(['East Sales', 'eastern revenue']);
+    expect(layer.getMetric('order_count')?.synonyms).toEqual(['orders placed']);
   });
 
   it('loads nested semantic folders recursively, including segments and pre-aggregations', () => {

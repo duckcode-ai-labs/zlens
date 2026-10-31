@@ -23,6 +23,7 @@ import {
   parseCubeDefinition,
   parseSegmentDefinition,
   parsePreAggregationDefinition,
+  type MetricDefinition,
 } from './semantic-layer.js';
 import { expandDefinitions, addIfNamed } from './yaml-loader.js';
 
@@ -39,6 +40,10 @@ import { expandDefinitions, addIfNamed } from './yaml-loader.js';
  *     segments/      → *.yaml segment definitions
  *     pre_aggregations/ → *.yaml pre-aggregation definitions
  *     blocks/        → *.yaml block companion definitions (metadata only, not loaded into layer)
+ *
+ * `_drafts/` folders are skipped: a draft answers nothing until a person
+ * approves it out of there. {@link loadSemanticMetricDraftsFromDir} reads them
+ * for review.
  */
 export function loadSemanticLayerFromDir(semanticLayerDir: string): SemanticLayer {
   const layer = new SemanticLayer();
@@ -73,6 +78,28 @@ export function loadSemanticLayerFromDir(semanticLayerDir: string): SemanticLaye
   }
 
   return layer;
+}
+
+/**
+ * The metric drafts under `metrics/_drafts/` (composted, or converted from a
+ * BI file), for the places that review them. Never added to a layer.
+ */
+export function loadSemanticMetricDraftsFromDir(semanticLayerDir: string): MetricDefinition[] {
+  const dir = join(semanticLayerDir, 'metrics', '_drafts');
+  if (!existsSync(dir)) return [];
+  const drafts: MetricDefinition[] = [];
+  for (const filePath of collectYamlFiles(dir, { includeDrafts: true })) {
+    try {
+      const raw = yaml.load(readFileSync(filePath, 'utf-8')) as Record<string, unknown>;
+      if (!raw || typeof raw !== 'object') continue;
+      for (const item of expandDefinitions(raw, ['metrics'])) {
+        addIfNamed(parseMetricDefinition(withLocalSemanticSource(item, semanticLayerDir, filePath, 'metrics')), (metric) => drafts.push(metric));
+      }
+    } catch {
+      // Skip malformed YAML files
+    }
+  }
+  return drafts;
 }
 
 function withLocalSemanticSource(
@@ -113,14 +140,15 @@ function semanticObjectTypeForFolder(folder: string): string {
   return folder.replace(/s$/, '');
 }
 
-function collectYamlFiles(dir: string): string[] {
+function collectYamlFiles(dir: string, options: { includeDrafts?: boolean } = {}): string[] {
   const results: string[] = [];
   for (const entry of readdirSync(dir)) {
     const filePath = join(dir, entry);
     try {
       const stat = statSync(filePath);
       if (stat.isDirectory()) {
-        results.push(...collectYamlFiles(filePath));
+        if (entry === '_drafts' && !options.includeDrafts) continue;
+        results.push(...collectYamlFiles(filePath, options));
       } else if (stat.isFile() && (extname(entry) === '.yaml' || extname(entry) === '.yml')) {
         results.push(filePath);
       }

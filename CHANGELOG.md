@@ -8,6 +8,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Metric drafts answer nothing until a person approves them
+
+- **Drafts no longer answer questions.** The semantic layer loaded every file
+  under `semantic-layer/metrics/`, `_drafts/` included, so a composted draft
+  answered Ask and `query_semantic_model` as From Metrics before anyone had
+  reviewed it, and a draft could replace the reviewed metric of the same name.
+  `_drafts/` folders are now skipped; MCP `list_proposals` reads the drafts
+  itself and still lists them for review.
+- **Derived metrics keep their decimals.** A derived metric's `/` divided
+  whole numbers to a whole number on Postgres, SQL Server and Redshift
+  (`total_qty / 1000` with 12,345 gave 12). It now gives 12.345, as `ratio`
+  metrics already did.
+- **A metric's text filter reads its own table.** Once a question joined
+  another table that also has the column, `filter: "region = 'East'"` became
+  ambiguous and the query failed; it is now tied to the metric's table
+  (`orders.region`).
+- **`synonyms:` in metric YAML is read and written**, so Ask matches the
+  other names you give a native metric, as it already did for dbt metrics.
+
 ### See what moves before you migrate: `zlens migrate assess`
 
 - **`zlens migrate assess <folder>`** reads a folder of Tableau workbooks,
