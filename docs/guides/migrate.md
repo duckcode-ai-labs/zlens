@@ -27,9 +27,9 @@ reports:
 
     | Kind | For example | In ZLens |
     |---|---|---|
-    | Simple | `SUM([Sales])`, `DISTINCTCOUNT(Orders[customer_id])` | one metric |
-    | Filtered | `SUM(IF [Region] = "East" THEN [Sales] END)`, `CALCULATE(SUM(Orders[total]), Orders[status] = "paid")` | one metric with a filter |
-    | Ratio | `SUM([Profit]) / SUM([Sales])`, `DIVIDE([Total Sales], [Orders])` | one metric built from others |
+    | Simple | `SUM([Sales])`, `DISTINCTCOUNT(Orders[customer_id])` | a metric draft |
+    | Filtered | `SUM(IF [Region] = "East" THEN [Sales] END)`, `CALCULATE(SUM(Orders[total]), Orders[status] = "paid")` | a metric draft with a filter |
+    | Ratio | `SUM([Profit]) / SUM([Sales])`, `DIVIDE([Total Sales], [Orders])` | a metric draft built from others |
     | Row-level | `[Price] * [Quantity]`, a DAX calculated column | a column or dimension |
     | Advanced | `{FIXED …}`, `RUNNING_SUM`, `TOTALYTD`, `SUMX`, `ALL`, `USERNAME()` | rewritten by hand or with a coding agent; the report says why |
 
@@ -41,6 +41,11 @@ It prints a summary and writes the full report to
 `--format json` prints the assessment instead and writes nothing). It reads
 files only: nothing runs against a database, no AI is asked, and nothing
 leaves your computer. You do not need a ZLens project to run it.
+
+For simple, filtered and ratio calculations the report also says what the
+import makes: the metric in words (`sum(sales) where region = 'East', on
+analytics.orders`), or why it cannot yet (it reads Custom SQL, it filters on
+another table, it uses a parameter).
 
 The calculation kinds come from reading each formula, not running it.
 Comments and text in quotes are not read as code, and neither are field and
@@ -78,6 +83,66 @@ report says so under **Not read** rather than counting it as empty.
     Fix the rest (often a parameter that needs a default value) and run it
     again. You can also do all of this in the workbench, where **Certify all
     that ran** does the same. See [Import SQL](../blocks/import-sql.md).
+
+## Bring the calculations over as metrics
+
+From a Tableau workbook or a Power BI model, the same import also turns each
+simple, filtered and ratio calculation into a **metric draft** in
+`semantic-layer/metrics/_drafts/<domain>/`:
+
+```text
+4 calculations became metric drafts (semantic-layer/metrics/_drafts/sales/):
+  Total Sales    sum(sales), on analytics.orders                      all rows: 2,297,200.86
+  East Sales     sum(sales) where region = 'East', on analytics.orders all rows: 678,781.24
+  Profit Ratio   sum(profit) / sum(sales), on analytics.orders         all rows: 0.1247
+1 calculation is left out:
+  Sales LY       {FIXED [Year] : SUM([Sales])}   A level of detail expression …
+```
+
+- **On the real table and column.** Each field's database column and table
+  come from the file (Tableau's field metadata, Power BI's source column
+  through Power Query renames), matched against the connected database's
+  tables: schema and table, else the table name alone when only one table has
+  it.
+- **Run once.** One query per table computes every draft on it over all rows,
+  so you can compare each value with the old report's grand total.
+  `--no-check` skips the query; a draft whose query fails is listed with the
+  database's error and not written.
+- **Translated as the tool computes.** DAX filters follow DAX: an empty value
+  counts as 0 or `""` (`coalesce(qty, 0) < 5`), and text on an imported table
+  compares ignoring case (`lower(region) = 'east'`). Every division gives an
+  empty value for 0 and keeps its decimals.
+- **Named after the caption** (`East Sales` → `east_sales`), kept as label and
+  synonym. A draft never takes or replaces a metric's name; a calculation that
+  is already a metric or a draft is reused. A ratio's parts become drafts of
+  their own.
+- **Notes say where the numbers can differ:** a Tableau data source that joins
+  tables (the metric counts each row of its own table once), a workbook that
+  reads an extract, a DAX filter that replaces the report's own filter on that
+  column, or a file that reads another database than ZLens's connection.
+
+What is left out, with why: calculations on Custom SQL or a Power BI native
+query, filters on another table (`CALCULATE([Total], part[container] =
+"BAG")` on `orders`), parameters, `DIVIDE` with an alternate result, MEDIAN,
+and everything advanced. `--no-metrics` makes no metric drafts.
+
+**A draft answers nothing until a person approves it.** Review them on the
+Import screen (**Approve**, **Discard**, **Approve all that ran**) or in the
+terminal:
+
+```bash
+zlens semantic drafts
+zlens semantic approve east_sales
+zlens semantic approve --all-from latest
+```
+
+Approving moves the file out of `_drafts/` unchanged apart from `status:
+certified`, who approved it and when; a ratio brings its parts. From then on
+Ask answers "East Sales by month" **From Metrics**. Agents can list drafts
+(MCP `list_proposals`) but not approve them.
+
+A project whose metrics live in dbt (dbt semantic models, or dbt-first) gets
+no files: the import lists each definition in words to add in dbt.
 
 Each query becomes a draft block with a name, description, grain and outputs,
 a preview of its rows, and a default test. Scripts become one query each:

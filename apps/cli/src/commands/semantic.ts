@@ -6,10 +6,14 @@
  *   zlens semantic pull [path]       — Pull/refresh a remote semantic layer repo cache
  *   zlens semantic import <provider> [path] — Import provider metadata into local semantic-layer YAML
  *   zlens semantic sync [path]       — Re-run the last semantic import from manifest
+ *   zlens semantic drafts            — List metric drafts waiting for review
+ *   zlens semantic approve <name…>   — Approve metric drafts (or --all-from <import id|latest>)
+ *   zlens semantic discard <name…>   — Delete metric drafts
  */
 
 import { resolve, join } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { resolveLocalOwner } from '@zlens/agent';
 import {
   resolveSemanticLayerWithDiagnostics,
   pullCachedRepo,
@@ -18,6 +22,7 @@ import { QueryExecutor } from '@zlens/connectors';
 import type { CLIFlags } from '../args.js';
 import { findProjectRoot, loadProjectConfig, normalizeProjectConnection, resolveProjectSemanticConfig } from '../local-runtime.js';
 import { loadSemanticImportManifest, performSemanticImport, syncSemanticImport } from '../semantic-import.js';
+import { MetricDraftApprovalError, approveMetricDrafts, discardMetricDrafts, importDraftsToApprove, listMetricDrafts, readImportMetricDraftsRecord } from '../import-metric-drafts.js';
 
 export async function runSemantic(
   subcommand: string | null,
@@ -26,7 +31,7 @@ export async function runSemantic(
 ): Promise<void> {
   const targetArg = subcommand === 'import'
     ? (rest[1] ?? '.')
-    : subcommand === 'query'
+    : subcommand === 'query' || subcommand === 'approve' || subcommand === 'discard'
       ? '.'
       : (rest[0] ?? '.');
   const baseDir = resolve(targetArg);
@@ -54,6 +59,12 @@ export async function runSemantic(
       return semanticImport(projectRoot, rest, flags);
     case 'sync':
       return semanticSync(projectRoot, flags);
+    case 'drafts':
+      return semanticDrafts(projectRoot, flags);
+    case 'approve':
+      return semanticApprove(projectRoot, rest, flags);
+    case 'discard':
+      return semanticDiscard(projectRoot, rest, flags);
     default:
       console.log(`
   zlens semantic — Semantic layer management
@@ -65,6 +76,10 @@ export async function runSemantic(
     zlens semantic pull [path]                 Refresh remote semantic layer cache
     zlens semantic import <provider> [path]    Import provider metadata into local semantic-layer YAML
     zlens semantic sync [path]                 Refresh the last semantic import from manifest
+    zlens semantic drafts                      List metric drafts waiting for review
+    zlens semantic approve <name> [name…]      Approve metric drafts: they answer from now on
+    zlens semantic approve --all-from <import> Approve every draft an import wrote and ran
+    zlens semantic discard <name> [name…]      Delete metric drafts
 
   Options:
     --format json|text    Output format (default: text)
@@ -72,6 +87,93 @@ export async function runSemantic(
 `.trim());
       break;
   }
+}
+
+// ── metric drafts ─────────────────────────────────────────────────────────────
+
+function semanticDrafts(projectRoot: string, flags: CLIFlags): void {
+  const drafts = listMetricDrafts(projectRoot);
+  if (flags.format === 'json') {
+    console.log(JSON.stringify({ drafts }, null, 2));
+    return;
+  }
+  if (!drafts.length) {
+    console.log('\n  No metric drafts. zlens import sql <workbook> makes them from a Tableau or Power BI file\'s calculations.\n');
+    return;
+  }
+  console.log(`\n  Metric drafts (${drafts.length}): they answer no question until approved.\n`);
+  const width = Math.min(32, Math.max(...drafts.map((draft) => draft.name.length)));
+  for (const draft of drafts) {
+    const value = draft.value === undefined ? 'not run' : draft.value === null ? 'all rows: empty' : `all rows: ${formatValue(draft.value)}`;
+    console.log(`  ${draft.name.padEnd(width)}  ${draft.inWords ?? draft.label}   ${value}`);
+    if (draft.formula) console.log(`  ${''.padEnd(width)}  from ${draft.formula.replace(/\s+/g, ' ').slice(0, 100)}`);
+    for (const note of draft.notes) console.log(`  ${''.padEnd(width)}  note: ${note}`);
+  }
+  console.log('\n  Approve: zlens semantic approve <name> (a ratio brings its parts), or --all-from <import id>.\n');
+}
+
+function semanticApprove(projectRoot: string, rest: string[], flags: CLIFlags): void {
+  let names = rest.filter(Boolean);
+  if (flags.allFrom) {
+    const importId = flags.allFrom === 'latest' ? latestImportWithMetricDrafts(projectRoot) : flags.allFrom;
+    const record = importId ? readImportMetricDraftsRecord(projectRoot, importId) : null;
+    if (!record) {
+      console.error(`\n  ✗ ${flags.allFrom === 'latest' ? 'No import has made metric drafts yet.' : `Import ${flags.allFrom} made no metric drafts.`}\n`);
+      process.exit(1);
+    }
+    names = [...names, ...importDraftsToApprove(projectRoot, record)];
+  }
+  if (!names.length) {
+    console.error('\n  ✗ Name the metric drafts to approve, or --all-from <import id|latest>. List them with zlens semantic drafts.\n');
+    process.exit(1);
+  }
+  const actor = resolveLocalOwner(projectRoot);
+  try {
+    const approved = approveMetricDrafts(projectRoot, Array.from(new Set(names)), actor);
+    if (flags.format === 'json') {
+      console.log(JSON.stringify({ approved, approvedBy: actor }, null, 2));
+      return;
+    }
+    console.log(`\n  Approved ${approved.length} metric${approved.length === 1 ? '' : 's'} as ${actor}: they answer from now on.`);
+    for (const item of approved) console.log(`  ✓ ${item.name}  →  ${item.to}`);
+    console.log('');
+  } catch (error) {
+    console.error(`\n  ✗ ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(error instanceof MetricDraftApprovalError ? 2 : 1);
+  }
+}
+
+function semanticDiscard(projectRoot: string, rest: string[], flags: CLIFlags): void {
+  const names = rest.filter(Boolean);
+  if (!names.length) {
+    console.error('\n  ✗ Name the metric drafts to discard. List them with zlens semantic drafts.\n');
+    process.exit(1);
+  }
+  try {
+    const discarded = discardMetricDrafts(projectRoot, names);
+    if (flags.format === 'json') console.log(JSON.stringify({ discarded }, null, 2));
+    else console.log(`\n  Discarded ${discarded.join(', ')}.\n`);
+  } catch (error) {
+    console.error(`\n  ✗ ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
+}
+
+/** The most recent import session that made metric drafts. */
+function latestImportWithMetricDrafts(projectRoot: string): string | null {
+  const root = join(projectRoot, '.dql', 'imports');
+  if (!existsSync(root)) return null;
+  const sessions = readdirSync(root)
+    .filter((entry) => /^imp_[A-Za-z0-9_-]+$/.test(entry) && existsSync(join(root, entry, 'metric-drafts.json')))
+    .map((entry) => ({ entry, at: statSync(join(root, entry, 'metric-drafts.json')).mtimeMs }))
+    .sort((a, b) => b.at - a.at);
+  return sessions[0]?.entry ?? null;
+}
+
+export function formatValue(value: number): string {
+  const abs = Math.abs(value);
+  const digits = abs !== 0 && abs < 1 ? 4 : Number.isInteger(value) ? 0 : 2;
+  return value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 // ── list ──────────────────────────────────────────────────────────────────────

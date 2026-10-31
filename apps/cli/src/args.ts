@@ -48,6 +48,12 @@ export interface CLIFlags {
   fromImport?: string;
   /** `zlens import sql --no-preview`: make the drafts without running them. */
   preview?: boolean;
+  /** `zlens import sql --no-metrics`: make no metric drafts from the BI file's calculations. */
+  metrics?: boolean;
+  /** `zlens import sql --no-check`: write the metric drafts without running them once on the database. */
+  checkMetrics?: boolean;
+  /** `zlens semantic approve --all-from <import id|latest>`: approve every metric draft that import wrote and ran. */
+  allFrom?: string;
   /** `--contract <id@version>` — DataLex contract id to bind during certify. */
   contract?: string;
   /** Optional path to datalex-manifest.json for datalex_contract validation. */
@@ -269,6 +275,13 @@ export function parseArgs(argv: string[]): ParsedArgs {
       flags.fromImport = value && !value.startsWith('--') ? argv[++i] : 'latest';
     } else if (arg === '--no-preview') {
       flags.preview = false;
+    } else if (arg === '--no-metrics') {
+      flags.metrics = false;
+    } else if (arg === '--no-check') {
+      flags.checkMetrics = false;
+    } else if (arg === '--all-from') {
+      const value = argv[i + 1];
+      flags.allFrom = value && !value.startsWith('--') ? argv[++i] : 'latest';
     } else if (arg === '--contract' && i + 1 < argv.length) {
       flags.contract = argv[++i];
     } else if (arg === '--datalex-manifest' && i + 1 < argv.length) {

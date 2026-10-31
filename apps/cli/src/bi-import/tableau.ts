@@ -1,6 +1,16 @@
 import { variableName, type ImportedParameterType, type ImportedSqlParameter } from '../sql-import-script.js';
 import type { BiCalculation } from './calculations.js';
-import { listNames, sqlSourceContent, type BiInventory, type ExtractedBiFile } from './types.js';
+import {
+  listNames,
+  sqlSourceContent,
+  type BiCalculationModel,
+  type BiDataType,
+  type BiInventory,
+  type BiLiteral,
+  type BiModelTable,
+  type BiSourceFilter,
+  type ExtractedBiFile,
+} from './types.js';
 import { child, descendants, parseXml, type XmlElement } from './xml.js';
 import { readZipFile } from './zip.js';
 
@@ -37,7 +47,7 @@ export function extractTableauWorkbook(xml: string, displayPath: string): Extrac
   const parameters = readParameters(dataSources.find((source) => source.attributes.name === 'Parameters'));
   const worksheetsBySource = worksheetsUsing(workbook);
   const inventory: BiInventory = { tool: 'tableau', dataSources: [], calculations: [], tablesWithoutSql: 0, pages: reportPages(workbook) };
-  const result: ExtractedBiFile = { sources: [], skipped: [], inventory };
+  const result: ExtractedBiFile = { sources: [], skipped: [], inventory, models: [] };
 
   for (const source of dataSources) {
     if (source.attributes.name === 'Parameters' || source.attributes.hasconnection === 'false') continue;
@@ -102,11 +112,12 @@ export function extractTableauWorkbook(xml: string, displayPath: string): Extrac
       return calculation?.attributes.class === 'tableau' && (calculation.attributes.formula ?? '').trim() !== '1';
     });
     inventory.calculations.push(...calculatedFields(calculations, source, caption, displayPath));
+    result.models!.push(calculationModel(source, caption, displayPath, namedConnections, ownConnection));
     if (calculations.length) {
       result.skipped.push({
         sourcePath: `${displayPath}#${caption}`,
         kind: 'calculations',
-        reason: `${calculations.length} calculated field${calculations.length === 1 ? ' is' : 's are'} not imported from data source ${caption}. Rebuild the ones your reports need as metrics.`,
+        reason: `${calculations.length} calculated field${calculations.length === 1 ? '' : 's'} from data source ${caption} ${calculations.length === 1 ? 'has' : 'have'} no SQL to import. Simple, filtered and ratio calculations become metric drafts; the rest are listed with why.`,
         sql: listNames(calculations.map((column) => `${column.attributes.caption ?? column.attributes.name}: ${(child(column, 'calculation')!.attributes.formula ?? '').replace(/\s+/g, ' ').slice(0, 80)}`), 4),
       });
     }
@@ -132,8 +143,11 @@ function calculatedFields(columns: XmlElement[], source: XmlElement, caption: st
   return columns.map((column) => {
     const formula = (child(column, 'calculation')!.attributes.formula ?? '').replace(/\r\n?/g, '\n');
     const references = Array.from(new Set(Array.from(formula.matchAll(/\[([^\]]+)\]/g), (match) => calculationNames.get(match[1]!)).filter((name): name is string => Boolean(name))));
+    const id = (column.attributes.name ?? '').replace(/^\[|\]$/g, '');
     return {
-      name: calculationNames.get((column.attributes.name ?? '').replace(/^\[|\]$/g, '')) ?? 'Calculation',
+      name: calculationNames.get(id) ?? 'Calculation',
+      id,
+      rawFormula: formula,
       formula: formula.replace(/\[([^\]]+)\]/g, (whole, name: string) => (captions.has(name) ? `[${captions.get(name)}]` : whole)),
       references,
       language: 'tableau' as const,
@@ -142,6 +156,191 @@ function calculatedFields(columns: XmlElement[], source: XmlElement, caption: st
       sourcePath: displayPath,
     };
   });
+}
+
+const NO_DATABASE: Record<string, string> = {
+  hyper: 'a Tableau extract with no live connection',
+  textscan: 'a text file',
+  'excel-direct': 'an Excel file',
+  sqlproxy: 'a published Tableau data source, whose tables are on Tableau Server',
+};
+
+/**
+ * Where the fields of a data source read from: each field's metadata record
+ * names its column (`remote-name`) and the relation it is in (`parent-name`),
+ * and the relation names its table (`[public].[users]`). Also the data
+ * source's and its extract's filters, and its joins, which change what its
+ * calculations add up.
+ */
+function calculationModel(
+  source: XmlElement,
+  caption: string,
+  displayPath: string,
+  namedConnections: Map<string | undefined, XmlElement | undefined>,
+  ownConnection: XmlElement | undefined,
+): BiCalculationModel {
+  const model: BiCalculationModel = { tool: 'tableau', name: caption, sourcePath: displayPath, tables: [], fields: [], filters: [], unreadableFilters: [] };
+  const extract = source.children.find((element) => element.name === 'extract');
+  const live = ownConnection ? [ownConnection] : [];
+  const relations = live.flatMap((connection) => descendants(connection, 'relation'));
+  const tables = new Map<string, BiModelTable>();
+  for (const relation of relations) {
+    const name = relation.attributes.name;
+    if (!name || tables.has(name) || relation.attributes.type === 'join' || relation.attributes.type === 'collection') continue;
+    const connection = namedConnections.get(relation.attributes.connection) ?? ownConnection;
+    const connectionClass = connection?.attributes.class ?? '';
+    if (NO_DATABASE[connectionClass]) {
+      tables.set(name, { name, noTable: `It reads ${NO_DATABASE[connectionClass]}.` });
+    } else if (relation.attributes.type === 'table' && relation.attributes.table) {
+      const parts = Array.from(relation.attributes.table.matchAll(/\[((?:[^\]]|\]\])+)\]|([^.[\]]+)/g), (match) => (match[1] ?? match[2]!).replace(/\]\]/g, ']'));
+      const table = parts[parts.length - 1]!;
+      tables.set(name, {
+        name,
+        source: {
+          ...(parts.length > 1 ? { schema: parts[parts.length - 2] } : {}),
+          table,
+          ...(connection?.attributes.server ? { server: connection.attributes.server } : {}),
+          ...(connection?.attributes.dbname ? { database: connection.attributes.dbname } : {}),
+          ...(connectionClass && connectionClass !== 'federated' ? { connector: CONNECTION_NAMES[connectionClass] ?? connectionClass } : {}),
+        },
+      });
+    } else {
+      tables.set(name, { name, noTable: relation.attributes.type === 'text' ? 'It reads Custom SQL, a query rather than a table.' : `It reads a ${relation.attributes.type ?? 'relation'}, not a table.` });
+    }
+  }
+  model.tables = Array.from(tables.values());
+  if (!model.tables.length) {
+    const connectionClass = ownConnection?.attributes.class ?? '';
+    model.noTables = NO_DATABASE[connectionClass] ? `It reads ${NO_DATABASE[connectionClass]}.` : 'It reads no database table.';
+  }
+
+  const captions = new Map<string, string>();
+  for (const column of source.children.filter((element) => element.name === 'column')) {
+    if (column.attributes.caption) captions.set((column.attributes.name ?? '').replace(/^\[|\]$/g, ''), column.attributes.caption);
+  }
+  const seen = new Set<string>();
+  for (const record of live.flatMap((connection) => descendants(connection, 'metadata-record'))) {
+    if (record.attributes.class !== 'column') continue;
+    const name = (child(record, 'local-name')?.text ?? '').trim().replace(/^\[|\]$/g, '');
+    const table = (child(record, 'parent-name')?.text ?? '').trim().replace(/^\[|\]$/g, '');
+    const column = (child(record, 'remote-name')?.text ?? '').trim();
+    if (!name || !column || seen.has(name)) continue;
+    seen.add(name);
+    model.fields.push({
+      name,
+      ...(captions.get(name) ? { caption: captions.get(name) } : {}),
+      table,
+      column,
+      dataType: tableauDataType(child(record, 'local-type')?.text),
+    });
+  }
+
+  const joins = relations.filter((relation) => relation.attributes.type === 'join');
+  if (joins.length) {
+    const firstTable = (relation: XmlElement | undefined): string => {
+      if (!relation) return '?';
+      if (relation.attributes.type !== 'join') return relation.attributes.name ?? '?';
+      return firstTable(relation.children.find((element) => element.name === 'relation'));
+    };
+    model.joins = {
+      tables: new Set(relations.filter((relation) => relation.attributes.type !== 'join').map((relation) => relation.attributes.name)).size,
+      inner: joins.filter((join) => join.attributes.join === 'inner').map((join) => {
+        const sides = join.children.filter((element) => element.name === 'relation');
+        return `${firstTable(sides[0])} with ${firstTable(sides[1])}`;
+      }),
+    };
+  }
+
+  const readFilter = (filter: XmlElement, from: BiSourceFilter['from']) => {
+    const read = readSourceFilter(filter, from);
+    if (typeof read === 'string') model.unreadableFilters.push(read);
+    else if (read) model.filters.push(read);
+  };
+  for (const filter of source.children.filter((element) => element.name === 'filter')) readFilter(filter, 'data source');
+  if (extract && extract.attributes.enabled !== 'false') {
+    model.readsExtract = true;
+    for (const filter of descendants(extract, 'filter')) readFilter(filter, 'extract');
+  }
+  return model;
+}
+
+function tableauDataType(localType: string | undefined): BiDataType {
+  const type = (localType ?? '').trim().toLowerCase();
+  if (type === 'integer') return 'integer';
+  if (type === 'real') return 'number';
+  if (type === 'string') return 'string';
+  if (type === 'date' || type === 'datetime') return 'date';
+  if (type === 'boolean') return 'boolean';
+  return 'unknown';
+}
+
+/**
+ * A data source or extract filter as values kept or dropped, or a range. A
+ * filter ZLens cannot read (a condition, a top N, a relative date) comes back
+ * as words; null when it keeps every row.
+ */
+function readSourceFilter(filter: XmlElement, from: BiSourceFilter['from']): BiSourceFilter | string | null {
+  const rawColumn = filter.attributes.column ?? '';
+  // `[federated.0abc].[none:region:nk]` → region; `[region]` → region.
+  const last = /\[((?:[^\]]|\]\])+)\]$/.exec(rawColumn)?.[1]?.replace(/\]\]/g, ']') ?? rawColumn;
+  const derived = /^(\w+):(.+):(\w+)$/.exec(last);
+  const field = derived ? derived[2]! : last;
+  const words = `A ${from} filter on ${field || 'a field'} (${filter.attributes.class ?? 'unknown'})`;
+  if (!field || (derived && derived[1] !== 'none')) return `${words} that ZLens cannot read.`;
+  if (filter.attributes.class === 'quantitative') {
+    const included = filter.attributes['included-values'] ?? 'in-range';
+    const min = child(filter, 'min')?.text.trim();
+    const max = child(filter, 'max')?.text.trim();
+    if (included === 'all') return null;
+    if (included === 'non-null') return { field, kind: 'exclude', values: [{ kind: 'null' }], from };
+    if (included === 'null') return { field, kind: 'include', values: [{ kind: 'null' }], from };
+    if (included !== 'in-range' && included !== 'in-range-or-null') return `${words} that ZLens cannot read.`;
+    return {
+      field,
+      kind: 'range',
+      ...(min ? { min: tableauLiteral(min) } : {}),
+      ...(max ? { max: tableauLiteral(max) } : {}),
+      ...(included === 'in-range-or-null' ? { includeNull: true } : {}),
+      from,
+    };
+  }
+  if (filter.attributes.class !== 'categorical') return `${words} that ZLens cannot read.`;
+  const group = child(filter, 'groupfilter');
+  if (!group) return `${words} that ZLens cannot read.`;
+  const members = (element: XmlElement): BiLiteral[] | null => {
+    const fn = element.attributes.function;
+    if (fn === 'member') return element.attributes.member === undefined ? null : [tableauLiteral(element.attributes.member)];
+    if (fn === 'union') {
+      const all = element.children.filter((item) => item.name === 'groupfilter').map(members);
+      return all.every((item): item is BiLiteral[] => item !== null) ? all.flat() : null;
+    }
+    return null;
+  };
+  const fn = group.attributes.function;
+  if (fn === 'level-members') return null;
+  if (fn === 'member' || fn === 'union') {
+    const values = members(group);
+    return values ? { field, kind: 'include', values, from } : `${words} that ZLens cannot read.`;
+  }
+  if (fn === 'except') {
+    const [everything, dropped] = group.children.filter((item) => item.name === 'groupfilter');
+    const values = dropped ? members(dropped) : null;
+    return everything?.attributes.function === 'level-members' && values ? { field, kind: 'exclude', values, from } : `${words} that ZLens cannot read.`;
+  }
+  return `${words} that ZLens cannot read.`;
+}
+
+/** `"East"`, `3`, `#2024-01-01#`, `%null%`, `true` as Tableau writes a member or a range end. */
+function tableauLiteral(raw: string): BiLiteral {
+  const value = raw.trim();
+  if (value === '%null%' || /^null$/i.test(value)) return { kind: 'null' };
+  const date = /^#([^#]+)#$/.exec(value);
+  if (date) return { kind: 'date', value: date[1]!.replace(/ 00:00:00$/, '') };
+  const text = /^"((?:[^"]|"")*)"$/.exec(value);
+  if (text) return { kind: 'string', value: text[1]!.replace(/""/g, '"') };
+  if (/^(?:true|false)$/i.test(value)) return { kind: 'boolean', value: value.toLowerCase() === 'true' };
+  if (value !== '' && Number.isFinite(Number(value))) return { kind: 'number', value: Number(value) };
+  return { kind: 'string', value };
 }
 
 /** Worksheets (with the mark each draws) and dashboards. */

@@ -1341,6 +1341,34 @@ export interface BlockStudioImportSession {
   candidates: BlockStudioImportCandidate[];
 }
 
+/** What an import made of one Tableau or Power BI calculation (D3): a metric draft, an existing metric, or why not. */
+export interface ImportMetricDraftItem {
+  calculation: string;
+  formula: string;
+  language: 'tableau' | 'dax';
+  sourcePath: string;
+  owner?: string;
+  kind: 'simple' | 'filtered' | 'ratio' | 'row-level' | 'advanced';
+  outcome: 'drafted' | 'reused' | 'failed' | 'left-out' | 'row-level' | 'advanced';
+  metric?: string;
+  path?: string;
+  inWords?: string;
+  value?: number | null;
+  reason?: string;
+  notes: string[];
+  parts?: string[];
+}
+
+export interface ImportMetricDrafts {
+  importId: string;
+  domain: string;
+  ranAt: string;
+  written: boolean;
+  notWrittenReason?: string;
+  checked: boolean;
+  items: ImportMetricDraftItem[];
+}
+
 export interface BlockStudioImportSkippedStatement {
   sourcePath: string;
   kind: 'writes' | 'duplicate' | 'runs-procedure' | 'not-a-query' | 'no-sql' | 'calculations' | 'unreadable';

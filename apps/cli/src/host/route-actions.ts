@@ -122,6 +122,8 @@ function actionFor(method: string, path: string): DqlAction {
     /\/certify(\/|$)/.test(path)
     || /^\/api\/block-studio\/certifications(\/|$)/.test(path)
     || /^\/api\/apps\/[^/]+\/dashboards\/[^/]+\/approve-semantic$/.test(path)
+    // Approving a metric draft makes it answer, labelled From Metrics.
+    || path === '/api/semantic-layer/metric-drafts/approve'
   )) return 'dataset.certify';
   if (!read && /^\/api\/agent\/hints\/[^/]+(\/(review|lifecycle))?$/.test(path)) return 'hint.review';
   // Ask observability (the list of recent questions and a trace's detail) is the steward's screen: people who

@@ -8,6 +8,33 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Tableau and Power BI calculations become metric drafts
+
+- **`zlens import sql <workbook>`** now turns each simple, filtered and ratio
+  calculation in a Tableau workbook or Power BI model into a metric draft in
+  `semantic-layer/metrics/_drafts/<domain>/`, placed on the database table and
+  column the report read (Tableau field metadata; Power BI source columns
+  through Power Query renames), and runs it once over all rows so its value
+  sits next to the original formula. DAX filters follow DAX's rules for empty
+  values and text case; every division keeps decimals and gives an empty value
+  for 0. Notes say where the numbers can differ (joined data sources, extracts,
+  CALCULATE replacing the report's filter, another database). What cannot
+  become a metric is listed with why. `--no-metrics` and `--no-check` skip the
+  drafts or their check.
+- **Approve on the Import screen or with `zlens semantic approve`**
+  (`--all-from <import>`; `zlens semantic drafts` lists them, `discard` deletes
+  them). Approving moves the draft's text out of `_drafts/` with `status:
+  certified`, who approved it and when, and it answers From Metrics; a ratio
+  brings its parts. Agents can list drafts but not approve them; on a hosted
+  server approving is a certification (`dataset.certify`).
+- **`zlens migrate assess`** counts what the import will make: "10 become
+  metric drafts", and the simple, filtered or ratio calculations that cannot
+  yet, each with why.
+- A workbook with calculations and no Custom SQL now imports (it used to stop
+  with "No SQL statements found").
+- In a project whose metrics live in dbt, nothing is written; the import lists
+  each definition to add there.
+
 ### Metric drafts answer nothing until a person approves them
 
 - **Drafts no longer answer questions.** The semantic layer loaded every file

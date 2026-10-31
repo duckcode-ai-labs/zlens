@@ -28,6 +28,7 @@ import type {
   SemanticDimension,
   SemanticCompatibility,
   Domain,
+  ImportMetricDrafts,
 } from '../../store/types';
 
 /** Display name for the engine that will actually execute a semantic query. */
@@ -4049,7 +4050,7 @@ function SegmentedTab({ active, onClick, label, t }: { active: boolean; onClick:
 }
 
 type ImportSourceMode = 'path' | 'paste' | 'upload';
-type SmartImportPhase = 'idle' | 'creating' | 'running' | 'saving' | 'complete';
+type SmartImportPhase = 'idle' | 'creating' | 'running' | 'metrics' | 'saving' | 'complete';
 type SmartImportItemStatus = 'queued' | 'running' | 'ready' | 'saving' | 'saved' | 'needs_attention';
 
 interface SmartImportCounts {
@@ -4200,6 +4201,7 @@ function isAiGeneratedCandidate(candidate: BlockStudioImportCandidate): boolean 
 function smartImportPhaseLabel(phase: SmartImportPhase): string {
   if (phase === 'creating') return 'Reading SQL';
   if (phase === 'running') return 'Running previews';
+  if (phase === 'metrics') return 'Making metric drafts';
   if (phase === 'saving') return 'Saving';
   if (phase === 'complete') return 'Import complete';
   return 'Ready';
@@ -4268,6 +4270,51 @@ function BlockStudioImportWorkspace({
   // Certify refused only because the description still says "review
   // required": the fix the server suggested, offered as one explicit click.
   const [certifyFix, setCertifyFix] = useState<{ candidateId: string; suggestedDescription: string } | null>(null);
+  // The file's calculations as metric drafts (D3): made after the previews, approved by a person here.
+  const [metricDrafts, setMetricDrafts] = useState<ImportMetricDrafts | null>(null);
+  const [metricDraftsBusy, setMetricDraftsBusy] = useState<string | null>(null);
+  const [metricDraftsMessage, setMetricDraftsMessage] = useState<string | null>(null);
+  const [metricDraftsDone, setMetricDraftsDone] = useState<Record<string, 'approved' | 'discarded'>>({});
+
+  useEffect(() => {
+    setMetricDraftsMessage(null);
+    setMetricDraftsDone({});
+    if (!session?.id) {
+      setMetricDrafts(null);
+      return;
+    }
+    const id = session.id;
+    void api.getImportMetricDrafts(id)
+      .then((record) => setMetricDrafts((current) => record ?? (current?.importId === id ? current : null)))
+      .catch(() => setMetricDrafts((current) => (current?.importId === id ? current : null)));
+  }, [session?.id]);
+
+  const approveMetricDrafts = async (body: { names?: string[]; importId?: string }, label: string) => {
+    setMetricDraftsBusy(label);
+    setMetricDraftsMessage(null);
+    try {
+      const result = await api.approveMetricDrafts(body);
+      setMetricDraftsDone((current) => ({ ...current, ...Object.fromEntries(result.approved.map((item) => [item.name, 'approved' as const])) }));
+      setMetricDraftsMessage(`Approved ${result.approved.length} metric${result.approved.length === 1 ? '' : 's'} as ${result.approvedBy}: ${result.approved.length === 1 ? 'it answers' : 'they answer'} from now on.`);
+    } catch (err: any) {
+      setMetricDraftsMessage(err?.message ?? 'Approve failed.');
+    } finally {
+      setMetricDraftsBusy(null);
+    }
+  };
+
+  const discardMetricDraft = async (name: string) => {
+    setMetricDraftsBusy(`discard:${name}`);
+    setMetricDraftsMessage(null);
+    try {
+      await api.discardMetricDrafts([name]);
+      setMetricDraftsDone((current) => ({ ...current, [name]: 'discarded' }));
+    } catch (err: any) {
+      setMetricDraftsMessage(err?.message ?? 'Discard failed.');
+    } finally {
+      setMetricDraftsBusy(null);
+    }
+  };
 
   const selectedCandidate = useMemo(() => {
     if (!session) return null;
@@ -4434,6 +4481,16 @@ function BlockStudioImportWorkspace({
           updateItem(candidate.id, (item) => ({ ...item, status: 'needs_attention', message }));
           }
         });
+
+        // A Tableau or Power BI file's simple, filtered and ratio calculations become metric drafts, run once.
+        if (/tableau|powerbi|folder|upload/.test(workingSession.sourceKind) || workingSession.inputMode === 'upload') {
+          setSmartPhase('metrics');
+          try {
+            setMetricDrafts(await api.makeImportMetricDrafts(workingSession.id));
+          } catch (err: any) {
+            setMetricDraftsMessage(`Metric drafts were not made: ${err?.message ?? 'the request failed.'}`);
+          }
+        }
 
         onSessionChange(workingSession);
         setSelectedId(workingSession.candidates.find((candidate) => candidate.reviewStatus !== 'rejected')?.id ?? workingSession.candidates[0]?.id ?? null);
@@ -4939,6 +4996,21 @@ function BlockStudioImportWorkspace({
                       ))}
                     </div>
                   </details>
+                )}
+                {metricDrafts && metricDrafts.importId === session.id && metricDrafts.items.length > 0 && (
+                  <ImportMetricDraftsSection
+                    record={metricDrafts}
+                    done={metricDraftsDone}
+                    busy={metricDraftsBusy}
+                    message={metricDraftsMessage}
+                    onApprove={(name) => void approveMetricDrafts({ names: [name] }, `approve:${name}`)}
+                    onApproveAll={() => void approveMetricDrafts({ importId: metricDrafts.importId }, 'approve-all')}
+                    onDiscard={(name) => void discardMetricDraft(name)}
+                    t={t}
+                  />
+                )}
+                {!metricDrafts && metricDraftsMessage && (
+                  <span role="status" style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{metricDraftsMessage}</span>
                 )}
                 {!session.candidates.some(isAiGeneratedCandidate) && smartCounts.ready > 0 && (
                   <button onClick={() => void saveAll()} disabled={savingAll} style={primaryImportButtonStyle(t)}>{savingAll ? 'Saving...' : 'Save all valid'}</button>
@@ -5722,6 +5794,103 @@ function InfoLine({ label, value, t }: { label: string; value: string; t: Theme 
       <span style={{ color: t.textMuted }}>{label}</span>
       <span title={value} style={{ color: t.textSecondary, overflowWrap: 'anywhere' }}>{value}</span>
     </div>
+  );
+}
+
+/**
+ * The import's metric drafts: each calculation that became one, in words with
+ * its value over all rows and the formula it came from, with Approve and
+ * Discard; then the ones already a metric, the ones that did not run, and
+ * the ones left out, each with why. Approving is a person's act, as
+ * certifying is.
+ */
+function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onApproveAll, onDiscard, t }: {
+  record: ImportMetricDrafts;
+  done: Record<string, 'approved' | 'discarded'>;
+  busy: string | null;
+  message: string | null;
+  onApprove: (name: string) => void;
+  onApproveAll: () => void;
+  onDiscard: (name: string) => void;
+  t: Theme;
+}) {
+  const drafted = record.items.filter((item) => item.outcome === 'drafted');
+  const waiting = drafted.filter((item) => item.metric && item.path && !done[item.metric] && (item.value !== undefined || !record.checked));
+  const reused = record.items.filter((item) => item.outcome === 'reused');
+  const failed = record.items.filter((item) => item.outcome === 'failed');
+  const leftOut = record.items.filter((item) => item.outcome === 'left-out' || item.outcome === 'advanced');
+  const rowLevel = record.items.filter((item) => item.outcome === 'row-level').length;
+  const formatted = (value: number | null | undefined) => {
+    if (!record.checked) return 'not run';
+    if (value === undefined) return '';
+    if (value === null) return 'all rows: empty';
+    const digits = Math.abs(value) !== 0 && Math.abs(value) < 1 ? 4 : Number.isInteger(value) ? 0 : 2;
+    return `all rows: ${value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits })}`;
+  };
+  const list = (title: string, items: typeof record.items, why: (item: typeof record.items[number]) => string) => items.length > 0 && (
+    <details style={{ display: 'grid', gap: 6 }}>
+      <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700, color: t.textSecondary }}>{title} ({items.length})</summary>
+      <div style={{ display: 'grid', gap: 6, marginTop: 6 }}>
+        {items.map((item, index) => (
+          <div key={`${item.calculation}-${index}`} style={{ display: 'grid', gap: 2 }}>
+            <span style={{ fontSize: 11, color: t.textPrimary, fontWeight: 700 }}>{item.calculation}</span>
+            <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>{why(item)}</span>
+            <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>{item.formula.replace(/\s+/g, ' ').slice(0, 140)}</span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+  return (
+    <details open style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
+      <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: t.textSecondary, fontFamily: t.font }}>
+        Metric drafts ({drafted.length})
+      </summary>
+      <div style={{ display: 'grid', gap: 8, marginTop: 8 }}>
+        <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+          {record.written
+            ? `From the file's calculations, placed on the tables they read. They answer no question until you approve them: check each value against the old report first.`
+            : record.notWrittenReason ?? 'Nothing was written.'}
+        </span>
+        {drafted.map((item) => {
+          const state = item.metric ? done[item.metric] : undefined;
+          const canAct = record.written && item.metric && item.path && !state;
+          return (
+            <div key={`${item.sourcePath}-${item.calculation}`} style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: 8, display: 'grid', gap: 4, minWidth: 0 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 12, fontWeight: 800, color: t.textPrimary, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{item.calculation}</span>
+                {record.written && <ImportPill label={formatted(item.value) || 'not run'} tone={item.value === undefined && record.checked ? 'warn' : 'info'} t={t} />}
+                {state && <ImportPill label={state} tone={state === 'approved' ? 'ok' : 'warn'} t={t} />}
+              </span>
+              <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>{item.inWords}</span>
+              <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>from {item.formula.replace(/\s+/g, ' ').slice(0, 140)}</span>
+              {item.parts && item.parts.length > 0 && <span style={{ fontSize: 10, color: t.textMuted }}>Approving it also approves {item.parts.join(', ')}.</span>}
+              {item.notes.map((note) => <span key={note} style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{note}</span>)}
+              {canAct && (
+                <span style={{ display: 'flex', gap: 6 }}>
+                  <button onClick={() => onApprove(item.metric!)} disabled={Boolean(busy)} style={primaryImportButtonStyle(t)}>{busy === `approve:${item.metric}` ? 'Approving...' : 'Approve'}</button>
+                  <button onClick={() => onDiscard(item.metric!)} disabled={Boolean(busy)} style={secondaryImportButtonStyle(t)}>{busy === `discard:${item.metric}` ? 'Discarding...' : 'Discard'}</button>
+                </span>
+              )}
+            </div>
+          );
+        })}
+        {record.written && waiting.length > 1 && (
+          <button onClick={onApproveAll} disabled={Boolean(busy)} style={primaryImportButtonStyle(t)}>
+            {busy === 'approve-all' ? 'Approving...' : `Approve all that ran (${waiting.length})`}
+          </button>
+        )}
+        {message && <span role="status" style={{ fontSize: 11, color: t.textSecondary, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{message}</span>}
+        {list('Already a metric', reused, (item) => item.reason ?? `The metric ${item.metric}.`)}
+        {list('Did not run on the database', failed, (item) => item.reason ?? '')}
+        {list('Left out', leftOut, (item) => item.reason ?? '')}
+        {rowLevel > 0 && (
+          <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+            {rowLevel} row-level calculation{rowLevel === 1 ? ' is a value per row' : 's are values per row'}: used inside the metrics that add them up.
+          </span>
+        )}
+      </div>
+    </details>
   );
 }
 

@@ -189,6 +189,7 @@ import type {
   BlockStudioDiagnostic,
   BlockStudioImportSession,
   BlockStudioImportSessionSummary,
+  ImportMetricDrafts,
   BlockStudioImportCandidate,
   DqlGenerationSession,
   DqlGenerationCandidate,
@@ -6296,6 +6297,29 @@ export const api = {
         `/api/block-studio/ai-imports/${encodeURIComponent(importId)}/candidates/${encodeURIComponent(candidateId)}/preview`,
         { method: 'POST' },
       );
+    },
+
+    /** Turn the import's Tableau or Power BI calculations into metric drafts, run once on the database. */
+    async makeImportMetricDrafts(importId: string, options: { check?: boolean } = {}): Promise<ImportMetricDrafts> {
+      const result = await request<{ metricDrafts: ImportMetricDrafts }>(`/api/block-studio/ai-imports/${encodeURIComponent(importId)}/metric-drafts`, {
+        method: 'POST',
+        body: JSON.stringify(options),
+      });
+      return result.metricDrafts;
+    },
+
+    async getImportMetricDrafts(importId: string): Promise<ImportMetricDrafts | null> {
+      const result = await request<{ metricDrafts: ImportMetricDrafts | null }>(`/api/block-studio/ai-imports/${encodeURIComponent(importId)}/metric-drafts`);
+      return result.metricDrafts;
+    },
+
+    /** A person approves metric drafts (by name, or every one an import wrote that ran): they answer from then on. */
+    async approveMetricDrafts(body: { names?: string[]; importId?: string }): Promise<{ approved: Array<{ name: string; from: string; to: string }>; approvedBy: string }> {
+      return request('/api/semantic-layer/metric-drafts/approve', { method: 'POST', body: JSON.stringify(body) });
+    },
+
+    async discardMetricDrafts(names: string[]): Promise<{ discarded: string[] }> {
+      return request('/api/semantic-layer/metric-drafts/discard', { method: 'POST', body: JSON.stringify({ names }) });
     },
 
     async certifyDqlGenerationCandidate(importId: string, candidateId: string): Promise<{ candidate: DqlGenerationCandidate; block: BlockStudioOpenPayload }> {

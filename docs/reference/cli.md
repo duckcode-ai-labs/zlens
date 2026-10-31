@@ -69,7 +69,7 @@ local databases, data files, AI pins, saved views, and layout overrides.
 | `zlens new domain <name>` | Create `domains/<domain>/domain.dql` plus domain-local `terms/`, `blocks/`, `views/`, and `apps/` folders |
 | `zlens new block --domain <domain> --pattern <pattern> <name>` | Create a draft block scaffold with enterprise contract metadata |
 | `zlens new view --domain <domain> <name>` | Create a domain-local business view scaffold |
-| `zlens import sql <path>` | Draft saved queries from `.sql` files, Tableau workbooks (`.twb`, `.twbx`), Power BI files (`.pbit`, PBIP) or a folder of them, and run each draft once |
+| `zlens import sql <path>` | Draft saved queries from `.sql` files, Tableau workbooks (`.twb`, `.twbx`), Power BI files (`.pbit`, PBIP) or a folder of them, and run each draft once. A Tableau or Power BI file's simple, filtered and ratio calculations also become metric drafts, run once over all rows |
 | `zlens import sql <path> --save` | Compatibility alias; generated drafts autosave before certification |
 | `zlens propose [path]` | Rank dbt models and write review-only DQL block proposals |
 | `zlens propose [path] --dry-run` | Preview ranked proposals without writing files |
@@ -113,6 +113,9 @@ mark for recertification; otherwise it exits 0, including when there is no
 | Command | What it does |
 | --- | --- |
 | `zlens semantic list\|validate\|query\|pull` | Semantic layer operations |
+| `zlens semantic drafts` | List metric drafts waiting for review, with each one's value over all rows |
+| `zlens semantic approve <name…>` | Approve metric drafts: each moves out of `semantic-layer/metrics/_drafts/` with `status: certified`, who and when, and answers from then on; a ratio brings its parts. `--all-from <import id\|latest>` approves every draft an import wrote that ran |
+| `zlens semantic discard <name…>` | Delete metric drafts |
 | `zlens sync dbt [path]` | Diff, compile, and reindex dbt-backed ZLens state |
 | `zlens sync dbt --check [path]` | Report dbt/DQL drift without writing |
 | `zlens sync warehouse [path]` | Read the selected schemas' tables, columns, comments, declared keys and view SQL (metadata only, never rows). No dbt needed |
@@ -258,6 +261,9 @@ zlens lineage --dashboard daily_ops      # consumption lineage
 | `--from-draft <path>` | Draft source for `zlens certify --from-draft` |
 | `--from-import [id\|latest]` | The SQL import whose drafts `zlens certify --from-import` checks or, with `--apply`, certifies |
 | `--no-preview` | `zlens import sql`: make the drafts without running them |
+| `--no-metrics` | `zlens import sql`: make no metric drafts from a Tableau or Power BI file's calculations |
+| `--no-check` | `zlens import sql`: write the metric drafts without running each once on the database |
+| `--all-from [id\|latest]` | `zlens semantic approve`: approve every metric draft that import wrote and ran |
 | `--contract <id@version>` | DataLex contract bound during draft certification |
 | `--datalex-manifest <path>` | DataLex manifest used for contract validation or compilation |
 | `--open-pr` | Push the certification branch and open a GitHub pull request |

@@ -16,6 +16,10 @@ describe('what each API request does (RFC 0010 HH-2)', () => {
     ['POST', '/api/block-studio/certifications', 'dataset.certify', 'project'],
     ['POST', '/api/blocks/save-from-cell', 'dataset.author', 'project'],
     ['POST', '/api/apps/claims/dashboards/overview/approve-semantic', 'dataset.certify', 'app'],
+    // Approving a metric draft makes it answer; making and discarding drafts is authoring.
+    ['POST', '/api/semantic-layer/metric-drafts/approve', 'dataset.certify', 'project'],
+    ['POST', '/api/semantic-layer/metric-drafts/discard', 'dataset.author', 'project'],
+    ['POST', '/api/block-studio/ai-imports/imp_abc/metric-drafts', 'dataset.author', 'project'],
     ['POST', '/api/block-studio/certification-check', 'dataset.author', 'project'],
     // "Check and use" leaves data Checked · Needs certifying; certifying is its own route (design Q1).
     ['POST', '/api/app-datasets/tables/create', 'dataset.author', 'project'],

@@ -782,6 +782,17 @@ import {
   type DqlCandidateRecommendedAction,
   type DqlParameterDecision,
 } from './block-studio-import.js';
+import { readBlockStudioImportCalculations } from './block-studio-import.js';
+import {
+  MetricDraftApprovalError,
+  approveMetricDrafts,
+  discardMetricDrafts,
+  importDraftsToApprove,
+  listMetricDrafts,
+  makeImportMetricDrafts,
+  readImportMetricDraftsRecord,
+  writeImportMetricDraftsRecord,
+} from './import-metric-drafts.js';
 import {
   MetricFlowUnavailableError,
   hasDbtSemanticManifest,
@@ -18132,6 +18143,104 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
+      }
+      return;
+    }
+
+    // An import's metric drafts (D3): its BI calculations placed on the
+    // connected database's tables, run once, and written under
+    // semantic-layer/metrics/_drafts. They answer nothing until approved.
+    const importMetricDraftsMatch = path.match(/^\/api\/block-studio\/ai-imports\/([^/]+)\/metric-drafts$/);
+    if (importMetricDraftsMatch) {
+      const importId = decodeURIComponent(importMetricDraftsMatch[1]!);
+      const reply = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      try {
+        if (req.method === 'GET') {
+          readBlockStudioImportCalculations(projectRoot, importId);
+          reply(200, { metricDrafts: readImportMetricDraftsRecord(projectRoot, importId) });
+          return;
+        }
+        if (req.method !== 'POST') {
+          reply(405, { error: 'Use GET or POST.' });
+          return;
+        }
+        const body = (await readJSON(req).catch(() => ({}))) as { check?: unknown };
+        const calculations = readBlockStudioImportCalculations(projectRoot, importId);
+        const session = loadBlockStudioImportSession(projectRoot, importId);
+        const semanticOwner = semanticConfig?.provider ?? semanticDetectedProvider;
+        const dbtFirst = dbtFirstOwnsSemanticAuthoring(projectConfig);
+        const metricsLiveElsewhere = dbtFirst || (semanticOwner && semanticOwner !== 'dql')
+          ? `This project's metrics live in ${dbtFirst || semanticOwner === 'dbt' ? 'dbt' : semanticOwner}, so ZLens wrote no metric drafts. Add these definitions there.`
+          : undefined;
+        const active = connection;
+        const record = await makeImportMetricDrafts({
+          projectRoot,
+          importId,
+          domain: session.defaults.domain,
+          ...(session.defaults.owner ? { owner: session.defaults.owner } : {}),
+          calculations,
+          ...(metricsLiveElsewhere ? { metricsLiveElsewhere } : {}),
+          listTables: async () => {
+            if (!active) throw new Error('No database is connected.');
+            const run = async (sql: string, purpose: 'data' | 'metadata' = 'metadata') => (await executor.executePositional(sql, [], active, { maxRows: 50_000, maxBytes: 32 * 1024 * 1024, batchSize: 5_000, deadlineMs: 60_000, purpose })).rows as Array<Record<string, unknown>>;
+            return (await listWarehouseTables({ projectRoot, driver: active.driver, run })).tables;
+          },
+          driver: active?.driver ?? 'duckdb',
+          connection: { database: (active as { database?: string } | null)?.database },
+          run: async (sql) => {
+            if (!active) throw new Error('No database is connected.');
+            return (await executor.executePositional(sql, [], active, { maxRows: 1, maxBytes: 1024 * 1024, batchSize: 1, deadlineMs: 120_000, purpose: 'data' })).rows as Array<Record<string, unknown>>;
+          },
+          check: body.check !== false,
+        });
+        writeImportMetricDraftsRecord(projectRoot, record);
+        reply(200, { metricDrafts: record });
+      } catch (error) {
+        reply(error instanceof Error && /Invalid import session id|not found|ENOENT/i.test(error.message) ? 404 : 500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    if (path === '/api/semantic-layer/metric-drafts' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ drafts: listMetricDrafts(projectRoot) }));
+      return;
+    }
+
+    // Approving is a person's act, as certifying is (route-actions: dataset.certify):
+    // the draft moves out of _drafts/ with status certified, and answers.
+    if ((path === '/api/semantic-layer/metric-drafts/approve' || path === '/api/semantic-layer/metric-drafts/discard') && req.method === 'POST') {
+      try {
+        const body = (await readJSON(req).catch(() => ({}))) as { names?: unknown; importId?: unknown };
+        let names = Array.isArray(body.names) ? body.names.filter((name): name is string => typeof name === 'string' && name.trim().length > 0) : [];
+        if (typeof body.importId === 'string' && body.importId) {
+          // "Approve all that ran": every draft the import wrote whose check ran.
+          const record = readImportMetricDraftsRecord(projectRoot, body.importId);
+          names = [...names, ...(record ? importDraftsToApprove(projectRoot, record) : [])];
+        }
+        if (!names.length) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: 'Name the metric drafts, or the import whose drafts to approve.' }));
+          return;
+        }
+        if (path.endsWith('/discard')) {
+          const discarded = discardMetricDrafts(projectRoot, names);
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ discarded }));
+          return;
+        }
+        const actor = hostActor() ?? resolveLocalOwner(projectRoot);
+        const approved = approveMetricDrafts(projectRoot, Array.from(new Set(names)), actor);
+        await reloadSemanticLayer();
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ approved, approvedBy: actor }));
+      } catch (error) {
+        const status = error instanceof MetricDraftApprovalError ? (error.code === 'NOT_FOUND' ? 404 : 409) : 500;
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error), ...(error instanceof MetricDraftApprovalError ? { code: error.code } : {}) }));
       }
       return;
     }
