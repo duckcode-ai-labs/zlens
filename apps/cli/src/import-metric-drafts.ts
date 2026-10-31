@@ -138,7 +138,8 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
     await checkCombinedDrafts(converted.drafts, layerMetrics, driver, input.run, values, failures, checkNotes);
     for (const draft of converted.drafts) {
       const notes = checkNotes.get(draft.definition.name);
-      if (!notes?.length) continue;
+      // A count of empty values comes from the importer's rows too, so with a host it stays in their record.
+      if (!notes?.length || input.privateValues) continue;
       const extra = draft.definition.source!.extra!;
       extra.notes = Array.from(new Set([...((extra.notes as string[] | undefined) ?? []), ...notes]));
     }
@@ -207,7 +208,8 @@ function needsQuotes(name: string, fold: 'lower' | 'upper' | undefined): boolean
  */
 export function stringLiteralFor(driver: string): (value: string) => string {
   if (driver === 'bigquery' || driver === 'databricks') {
-    return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n').replace(/\r/g, '\\r')}'`;
+    // A quote as \u0027, so nothing reading the SQL later has to know that `\'` does not end the string.
+    return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, '\\u0027').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}'`;
   }
   if (driver === 'mysql' || driver === 'snowflake' || driver === 'clickhouse') {
     return (value) => `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;

@@ -176,7 +176,8 @@ describe('the import\'s metric drafts', () => {
     expect(record.items.find((item) => item.calculation === 'Discounts')!.inWords).toBe('sum("user"), on analytics.orders');
     expect(stringLiteralFor('postgres')("it's \\ ok")).toBe("'it''s \\ ok'");
     expect(stringLiteralFor('snowflake')("it's \\ ok")).toBe("'it''s \\\\ ok'");
-    expect(stringLiteralFor('bigquery')("it's \\ ok")).toBe("'it\\'s \\\\ ok'");
+    // No `\\'`: a quote inside a literal must not look like its end to anything that reads the SQL later.
+    expect(stringLiteralFor('bigquery')("it's \\ ok")).toBe("'it\\u0027s \\\\ ok'");
   });
 });
 

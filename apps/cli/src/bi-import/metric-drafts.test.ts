@@ -259,6 +259,8 @@ describe('what the review of the converter found', () => {
     expect(tableau([['Total Sales', 'SUM([Sales])']], { existing: [existing] }).conversions[0]).toMatchObject({ outcome: 'drafted', metric: 'total_sales' });
     const cased = tableau([['Open', 'SUM(IF [Region] = "Open" THEN [Sales] END)'], ['OPEN', 'SUM(IF [Region] = "OPEN" THEN [Sales] END)']]);
     expect(cased.drafts).toHaveLength(2);
+    const spaced = tableau([['One', 'SUM(IF [Region] = "a b" THEN [Sales] END)'], ['Two', 'SUM(IF [Region] = "a  b" THEN [Sales] END)']]);
+    expect(spaced.drafts.map((candidate) => candidate.definition.filter)).toEqual(["region = 'a b'", "region = 'a  b'"]);
   });
 
   it('leaves out a field of another data source, and says what ELSE 0 changes', () => {
@@ -284,6 +286,15 @@ describe('what the review of the converter found', () => {
     ), 'Sales.twb');
     const result = convertCalculationsToMetricDrafts(file.inventory!.calculations, file.models!, { domain: 'sales', importedAt: 'now' });
     expect(result.drafts[0]!.definition.filter).toBe(`("Bob's" = 1 or REGION = 'E') and QTY = 2`);
+  });
+
+  it('leaves out arithmetic on dates, which each tool computes differently', () => {
+    const file = extractTableauWorkbook(workbook([['Age', 'SUM([Shipped] - [Ordered])']]).replace(
+      '<metadata-records>',
+      "<metadata-records><metadata-record class='column'><remote-name>SHIPPED</remote-name><local-name>[Shipped]</local-name><parent-name>[ORDERS]</parent-name><local-type>date</local-type></metadata-record><metadata-record class='column'><remote-name>ORDERED</remote-name><local-name>[Ordered]</local-name><parent-name>[ORDERS]</parent-name><local-type>date</local-type></metadata-record>",
+    ), 'Sales.twb');
+    const result = convertCalculationsToMetricDrafts(file.inventory!.calculations, file.models!, { domain: 'sales', importedAt: 'now' });
+    expect(result.conversions[0]).toMatchObject({ outcome: 'left-out', reason: expect.stringContaining('on a date') });
   });
 
   it('turns any formula it cannot read into a reason, and carries on with the rest', () => {
@@ -342,6 +353,17 @@ describe('DAX rules the review checked against the docs', () => {
     expect(outcome(dax(['M = CALCULATE(SUM(T[Amount]), T[Qty] = 1, T[Region] = "a", T[Cost] > DATE(2024, 13, 1))']), 'M')).toMatchObject({ outcome: 'left-out' });
     const result = dax(['A = SUM(T[Amount])', 'C = SUM(T[Cost])', 'Margin = [A] - [C]']);
     expect(outcome(result, 'Margin').notes.join(' ')).toContain('Where both sides are empty');
+  });
+
+  it('says what differs when DISTINCTCOUNT reuses a metric, since no check ran', () => {
+    const lines = ['table T', '\tcolumn Region', '\t\tdataType: string', '\t\tsourceColumn: Region', '\tmeasure Regions = DISTINCTCOUNT(T[Region])', '\tpartition T = m', '\t\tmode: import', '\t\tsource =', '\t\t\t\tlet', '\t\t\t\t    Source = Sql.Database("s", "d"),', '\t\t\t\t    t = Source{[Schema="dbo",Item="T"]}[Data]', '\t\t\t\tin', '\t\t\t\t    t'];
+    const file = extractPowerBiTmdl([{ path: 'tables/T.tmdl', text: lines.join('\n') }], 'M.SemanticModel/definition');
+    const result = convertCalculationsToMetricDrafts(file.inventory!.calculations, file.models!, {
+      domain: 'sales', importedAt: 'now',
+      existingMetrics: [{ name: 'regions', label: 'Regions', description: '', domain: 'sales', type: 'count_distinct', sql: 'Region', table: 'dbo.T' }],
+    });
+    expect(result.conversions[0]).toMatchObject({ outcome: 'reused', metric: 'regions' });
+    expect(result.conversions[0]!.notes.join(' ')).toContain('differ by one if the column has empty values');
   });
 
   it('keeps DISTINCTCOUNT apart from DISTINCTCOUNTNOBLANK, since only its check counts empty values', () => {

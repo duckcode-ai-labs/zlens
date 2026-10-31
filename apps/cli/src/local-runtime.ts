@@ -18235,9 +18235,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           if (!(await hostedMay('dataset.certify'))) {
             const waiting = listMetricDrafts(projectRoot);
             for (const name of names) {
-              const importId = waiting.find((draft) => draft.name.toLowerCase() === name.toLowerCase())?.importId;
-              if (importId) readBlockStudioImportCalculations(projectRoot, importId);
-              else if (waiting.some((draft) => draft.name.toLowerCase() === name.toLowerCase())) throw new Error(`Import session not found for ${name}.`);
+              const draft = waiting.find((candidate) => candidate.name.toLowerCase() === name.toLowerCase());
+              if (!draft) continue;
+              // A deleted import is nobody's: loading it refuses, as it does someone else's.
+              if (!draft.importId) throw new Error(`Import session not found for ${name}.`);
+              loadBlockStudioImportSession(projectRoot, draft.importId);
             }
           }
           const discarded = discardMetricDrafts(projectRoot, names);

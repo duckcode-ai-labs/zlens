@@ -139,6 +139,9 @@ type Value = Row | Measure;
 
 class LeftOut extends Error {}
 
+/** Said when DISTINCTCOUNT reuses a metric: nothing ran, so whether the column has empty values is not known. */
+const COUNTS_BLANK_NOTE = "Power BI's DISTINCTCOUNT counts an empty value as one more, and the metric it reuses does not: the two differ by one if the column has empty values.";
+
 const AGGREGATE_WORDS: Record<AggregateFn, string> = {
   sum: 'Sum', avg: 'Average', min: 'Minimum', max: 'Maximum', count: 'Count', count_distinct: 'Distinct count',
 };
@@ -648,6 +651,7 @@ class Converter {
       const part = { ...tree.part, label: calculation.name };
       const existing = this.existing.get(definitionKeyOf(part));
       if (existing) {
+        if (part.countsBlank) notes.push(COUNTS_BLANK_NOTE);
         return { calculation, outcome: 'reused', metric: existing.name, reason: `${calculation.name} is already the metric${existing.draft ? ' draft' : ''} ${existing.name}.`, notes, inWords: partWords(part) };
       }
       const draft = this.partDraft({ ...part, notes }, calculation, false);
@@ -658,6 +662,7 @@ class Converter {
       const known = parts.get(part);
       if (known) return known;
       const existing = this.existing.get(definitionKeyOf(part));
+      if (existing && part.countsBlank && !notes.includes(COUNTS_BLANK_NOTE)) notes.push(COUNTS_BLANK_NOTE);
       const name = existing?.name ?? this.partDraft(part, calculation, true).definition.name;
       parts.set(part, name);
       return name;
@@ -765,6 +770,7 @@ function constant(sql: string, type: BiDataType, literal: BiLiteral): Row {
 
 function numeric(row: Row, op: string): Row {
   if (row.type === 'string') throw new LeftOut(`It uses ${op} on text${op === '+' ? ' (joining text)' : ''}.`);
+  if (row.type === 'date') throw new LeftOut(`It uses ${op} on a date, which each database and BI tool computes differently.`);
   return row;
 }
 
@@ -873,7 +879,7 @@ const RESERVED_SQL_WORDS = new Set([
   'null', 'offset', 'on', 'only', 'or', 'order', 'outer', 'over', 'partition', 'percent', 'primary', 'qualify', 'range', 'references', 'returning', 'right',
   'row', 'rows', 'schema', 'select', 'session_user', 'set', 'similar', 'some', 'symmetric', 'sysdate', 'system_user', 'table', 'tablesample', 'then', 'time',
   'timestamp', 'to', 'top', 'trailing', 'true', 'unbounded', 'union', 'unique', 'update', 'user', 'using', 'values', 'variadic', 'view', 'when', 'where',
-  'window', 'with',
+  'window', 'with', 'utc_date', 'utc_time', 'utc_timestamp',
 ]);
 
 /** Whether a name can be written in SQL without quotes on any database. */
@@ -898,10 +904,9 @@ export function metricName(label: string): string {
   return /^\d/.test(name) ? `metric_${name}` : name;
 }
 
-/** Two metrics are the same only when table, type, expression and filter are: text in a filter keeps its case. */
+/** Two metrics are the same only when table, type, expression and filter are, to the letter: `'a  b'` is not `'a b'`. */
 function definitionKey(table: string, type: string, sql: string, filter: string | undefined): string {
-  const spaces = (text: string | undefined) => (text ?? '').replace(/\s+/g, ' ').trim();
-  return [spaces(table).toLowerCase(), type, spaces(sql), spaces(filter)].join('\u0000');
+  return [table.trim().toLowerCase(), type, sql.trim(), (filter ?? '').trim()].join('\u0000');
 }
 
 /** A ratio's or derived metric's identity: its kind and what it combines. */
