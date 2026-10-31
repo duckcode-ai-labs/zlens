@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, type Dirent } from 'node:fs';
 import { join } from 'node:path';
 import type { DQLContext } from '../context.js';
-import type { DimensionDefinition, MetricDefinition, SemanticLayer } from '@zlens/core';
+import { loadSemanticMetricDraftsFromDir, type DimensionDefinition, type MetricDefinition, type SemanticLayer } from '@zlens/core';
 import { zodInputShapeForTool } from '../tool-schema.js';
 
 export const listProposalsInput = zodInputShapeForTool('list_proposals');
@@ -162,12 +162,10 @@ function collectSemanticRecertificationProposals(ctx: DQLContext): ProposalSumma
   return proposals;
 }
 
+/** Metric drafts are never loaded into the layer (they answer nothing), so they are read from their folder. */
 function collectSemanticMetricDraftProposals(ctx: DQLContext): ProposalSummary[] {
-  const layer = safeSemanticLayer(ctx);
-  if (!layer) return [];
   const proposals: ProposalSummary[] = [];
-  for (const metric of layer.listMetrics()) {
-    if (metric.status !== 'draft') continue;
+  for (const metric of loadSemanticMetricDraftsFromDir(join(ctx.projectRoot, 'semantic-layer'))) {
     const path = semanticDefinitionPath(metric, 'metric');
     if (!isSemanticMetricDraftPath(path)) continue;
     proposals.push(semanticMetricDraftProposal(metric, path));

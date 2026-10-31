@@ -114,7 +114,9 @@ draft metric YAML under `semantic-layer/metrics/_drafts/` plus a PR-body summary
 with the donor blocks that proved the pattern. The preview endpoint is
 read-only (`/api/propose/composting`); the generate endpoint writes only selected
 candidate ids (`/api/propose/composting/generate`). These drafts are still
-human-reviewed and start with `status: draft`.
+human-reviewed and start with `status: draft`. A draft answers no question:
+Ask, `query_semantic_model` and the semantic panel read only metrics outside
+`_drafts/`, and MCP `list_proposals` lists the drafts for review.
 
 Measure the follow-up path with an eval suite:
 

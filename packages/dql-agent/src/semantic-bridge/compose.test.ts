@@ -585,7 +585,7 @@ describe('composeSemanticQueryForQuestion — closest metric by name or label (M
     const result = compose('What is the average order value by customer type?');
     expect(result?.metrics).toEqual(['average_order_value']);
     expect(result?.dimensions).toEqual(['customer_type']);
-    expect(result?.sql).toContain('lifetime_spend_pretax / ratio_inputs.count_lifetime_orders AS average_order_value');
+    expect(result?.sql).toContain('lifetime_spend_pretax * 1.0 / ratio_inputs.count_lifetime_orders AS average_order_value');
   });
 
   it('reads "new versus returning customers" as the documented values of customer_type, not a customers count', () => {

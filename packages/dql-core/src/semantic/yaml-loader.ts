@@ -95,6 +95,7 @@ export function serializeMetricDefinitionToYaml(metric: MetricDefinition): strin
     table: metric.table,
     filters: metric.filters,
     filter: metric.filter,
+    synonyms: metric.synonyms,
     tags: metric.tags,
     owner: metric.owner,
     cube: metric.cube,

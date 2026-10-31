@@ -6,6 +6,7 @@ import {
   parseHierarchyDefinition,
   parseBlockCompanionDefinition,
   parseSemanticDisplayFormat,
+  qualifyBareSqlIdentifiers,
 } from './semantic-layer.js';
 import { getDialect } from './sql-dialect.js';
 
@@ -400,7 +401,35 @@ describe('SemanticLayer', () => {
       expect(layer.composeQuery({ metrics: ['weird'], dimensions: ['region'], driver: 'duckdb' })).toBeNull();
     });
 
-    it('refuses when a per-metric filter targets an unparseable (ratio) aggregate', () => {
+    it('ties a text filter to its own table once another table is joined', () => {
+      // Both tables have `region`: unqualified, `WHERE region = 'East'` is ambiguous.
+      const layer = new SemanticLayer();
+      const cube = (name: string, table: string, joins: Array<{ name: string; left: string; right: string; type: 'left'; sql: string }> = []) => ({
+        name, label: name, description: '', sql: `SELECT * FROM ${table}`, table, domain: 'sales',
+        measures: [], dimensions: [], timeDimensions: [], joins, segments: [], preAggregations: [],
+      });
+      layer.addCube(cube('orders', 'orders', [
+        { name: 'customers', left: 'orders', right: 'customers', type: 'left', sql: '${left}.customer_id = ${right}.customer_id' },
+      ]));
+      layer.addCube(cube('customers', 'customers'));
+      layer.addMetric({ name: 'east_sales', label: 'East Sales', description: '', domain: 'sales', sql: 'sales', type: 'sum', table: 'orders', filter: "region = 'East' and order_date >= current_date - interval '30 days'" });
+      layer.addMetric({ name: 'total_sales', label: 'Total Sales', description: '', domain: 'sales', sql: 'sales', type: 'sum', table: 'orders' });
+      layer.addDimension({ name: 'segment', label: 'Segment', description: '', sql: 'segment', type: 'string', table: 'customers' });
+
+      const hoisted = layer.composeQuery({ metrics: ['east_sales'], dimensions: ['segment'], driver: 'duckdb' });
+      expect(hoisted?.sql).toContain("WHERE orders.region = 'East' and orders.order_date >= current_date - interval '30 days'");
+      const scoped = layer.composeQuery({ metrics: ['east_sales', 'total_sales'], dimensions: ['segment'], driver: 'duckdb' });
+      expect(scoped?.sql).toContain("SUM(CASE WHEN orders.region = 'East' and orders.order_date >= current_date - interval '30 days' THEN orders.sales END) AS east_sales");
+      // With no join, the filter stays as written.
+      expect(layer.composeQuery({ metrics: ['east_sales'], dimensions: [], driver: 'duckdb' })?.sql).toContain("WHERE region = 'East'");
+    });
+
+    it('leaves qualified columns, date-part units and subqueries in a text filter as written', () => {
+      expect(qualifyBareSqlIdentifiers("customers.segment = 'SMB' and extract(year from order_date) = 2024", 'orders'))
+        .toBe("customers.segment = 'SMB' and extract(year from orders.order_date) = 2024");
+    });
+
+        it('refuses when a per-metric filter targets an unparseable (ratio) aggregate', () => {
       const layer = new SemanticLayer({
         metrics: [
           { name: 'plain', label: 'Plain', description: '', domain: 'sales', sql: 'amount', type: 'sum', table: 'orders' },
