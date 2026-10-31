@@ -109,8 +109,7 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
   }
   const driver = input.driver.trim().toLowerCase();
   const dialect = getDialect(driver);
-  const fold = FOLDS[driver];
-  const name = (part: string) => (needsQuotes(part, fold) ? dialect.quoteIdentifier(part) : part);
+  const name = sqlNamer(driver);
   const resolveTable = tables
     ? (source: BiTableSource): ResolvedTable | { error: string } => {
       const matched = matchTable(source, tables!);
@@ -213,6 +212,14 @@ export async function makeImportMetricDrafts(input: MakeImportMetricDraftsInput)
 
 /** Postgres and Redshift fold unquoted names to lower case, Snowflake and Oracle to upper case. */
 const FOLDS: Record<string, 'lower' | 'upper'> = { postgres: 'lower', postgresql: 'lower', redshift: 'lower', snowflake: 'upper', oracle: 'upper' };
+
+/** A table or column name as this database's SQL must write it. */
+export function sqlNamer(driver: string): (name: string) => string {
+  const normalized = driver.trim().toLowerCase();
+  const dialect = getDialect(normalized);
+  const fold = FOLDS[normalized];
+  return (name) => (needsQuotes(name, fold) ? dialect.quoteIdentifier(name) : name);
+}
 
 function needsQuotes(name: string, fold: 'lower' | 'upper' | undefined): boolean {
   if (!isPlainSqlName(name)) return true;

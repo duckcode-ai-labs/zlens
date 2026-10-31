@@ -157,10 +157,103 @@ temp tables turn into `WITH` clauses and report parameters (`:start_date`,
 Statements that change data get no draft. Nothing is certified until a person
 runs Certify.
 
+## Prove the numbers match
+
+A metric draft shows its value over all rows, but a report is a whole table.
+`zlens migrate compare` takes an export of the old report, builds the same
+table in ZLens, and compares every value. It works on drafts, so you can check
+before you approve.
+
+1. Export the report as CSV: in Tableau, **Download → Crosstab**; in Power BI, a
+   visual's **Export data**. Excel files are not read yet.
+2. Compare it:
+
+    ```bash
+    zlens migrate compare "Sales by Region.csv" --worksheet "Sales by Region"
+    ```
+
+    ```text
+    Sales by Region.csv: 4 rows, 1 total row set aside
+
+      Region        the dimension region
+      Total Sales   the metric total_sales, at 2 decimals
+      Profit Ratio  the metric profit_ratio, at 0.1%
+
+    Differs: 4 of 4 rows, 2 of 8 values.
+      Central  Total Sales  old report $501,239.89  ZLens 612004.13
+      …
+
+    Possible reasons:
+      The report filters Order Date, and no filter was stated. Filters are not
+      in an export, so this run read every row.
+    ```
+
+3. State the report's filters and compare again:
+
+    ```bash
+    zlens migrate compare "Sales by Region.csv" --worksheet "Sales by Region" \
+      --filter "order_date >= 2024-01-01"
+    ```
+
+**What counts as equal.** A value is equal when ZLens's lies within half a
+printed unit of the file's, using the most decimals in that column: `14.93%`
+equals a printed `14.9%`, and `14.96%` does not. `--tolerance 0.5%` loosens it for
+a report known to lag, and is recorded. An empty value is equal only to an empty
+value.
+
+**Three verdicts.** Each metric gets its own, and the file gets the worst:
+
+| Verdict | Means |
+|---|---|
+| **Matches** | Every row is in both, every value is equal, every number column was compared, and each filter ZLens can see was answered. |
+| **Differs** | A value differs, or a row is in only one side. |
+| **Not proven** | Nothing disagrees, but something is missing: a column not compared, an export cut short, or a filter nobody answered. |
+
+The command exits 0, 1 or 2 for those, so a script can read it.
+
+**Filters decide most comparisons.** An export does not show a filter on a field
+the report does not display, and ZLens applies no filter by itself. With
+`--worksheet`, it reads the filters saved on that worksheet in your imported
+workbook, and a Power BI filter line in the file counts too. Each one must be
+stated or waived, or the best result is Not proven:
+
+```bash
+--filter "region in (East, West)"          # = != > >= < <= in between
+--waive "Order Date: covers every row"     # with your reason, kept in the record
+```
+
+A filter that can't be written this way (top N, sets, `OR`) can be waived, and
+`--file-rows` compares only the rows in the file. That proves the values on those
+rows, not that the rows are the right ones, and the result says so.
+
+**Which columns are compared.** Columns are matched by name to metrics and
+dimensions: `Total Sales`, `SUM(Sales)` and `Sum of Sales` all find their metric.
+The mapping is printed. Change it with `--map "Sales=total_sales"`, `--key
+Column` or `--ignore Column`. To compare a saved query instead, use `--query
+<name>`, with `--param name=value` for its parameters. For one number:
+
+```bash
+zlens migrate compare --metric total_sales --value 2297200.86
+```
+
+**A folder of exports.** `zlens migrate compare ./exports` runs each file and
+writes `zlens-migration-match.md` (`--out` to choose), the page to hand to whoever
+signs off the migration. An `exports.yaml` in the folder gives each file its own
+options, under the file's name: `worksheet`, `report`, `query`, `filters`,
+`waive`, `map`, `keys`, `ignore`, `fileRows`, `tolerance`.
+
+**What is kept.** Each metric or saved query gets a record in
+`semantic-layer/report-matches/`: who compared which file (by its fingerprint),
+with which filters and mapping, and the counts. Records hold no values, so no
+data enters git; the differences stay in `.dql/`, which git ignores. A record says
+a named person compared a named file. It can't prove the file came from Tableau,
+and it never certifies anything. `--no-record` compares without keeping one.
+
 ## What `zlens migrate <tool>` does today
 
 `zlens migrate assess <folder>` reports what moves; see
-[See what moves first](#see-what-moves-first).
+[See what moves first](#see-what-moves-first). `zlens migrate compare` checks the
+numbers; see [Prove the numbers match](#prove-the-numbers-match).
 
 `zlens migrate tableau --input <path>` and `zlens migrate powerbi --input
 <path>` run the import above. Without `--input` they print the command to

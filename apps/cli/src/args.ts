@@ -54,6 +54,35 @@ export interface CLIFlags {
   checkMetrics?: boolean;
   /** `zlens semantic approve --all-from <import id|latest>`: approve every metric draft that import wrote and ran. */
   allFrom?: string;
+  /** `zlens migrate compare --worksheet <name>`: the Tableau worksheet the export is of. */
+  worksheet?: string;
+  /** `zlens migrate compare --report <name>`: the report's name in the record. */
+  report?: string;
+  /** `zlens migrate compare --query <name>`: compare a saved query rather than metrics. */
+  query?: string;
+  /** `zlens migrate compare --metric <name> --value <n>`: one number, typed. */
+  metric?: string;
+  value?: string;
+  /** `--filter "order_date >= 2024-01-01"`, repeatable: a filter the old report had. */
+  compareFilters?: string[];
+  /** `--waive "Order Date: reason"`, repeatable. */
+  waive?: string[];
+  /** `--map "Sales=total_sales"`, repeatable. */
+  compareMap?: string[];
+  /** `--key <column>`, repeatable: a column that is a key, whatever it looks like. */
+  compareKeys?: string[];
+  /** `--ignore <column>`, repeatable: a column left out by choice. */
+  compareIgnore?: string[];
+  /** `--param name=value`, repeatable: a saved query's report parameter. */
+  compareParams?: string[];
+  /** `--file-rows`: compare only the rows in the file. */
+  fileRows?: boolean;
+  /** `--tolerance 0.5%`. */
+  tolerance?: string;
+  /** `--dates dmy`: the file's dates are day first. */
+  dates?: string;
+  /** `--no-record`: compare without keeping a record. */
+  record?: boolean;
   /** `--contract <id@version>` — DataLex contract id to bind during certify. */
   contract?: string;
   /** Optional path to datalex-manifest.json for datalex_contract validation. */
@@ -275,6 +304,36 @@ export function parseArgs(argv: string[]): ParsedArgs {
       flags.fromImport = value && !value.startsWith('--') ? argv[++i] : 'latest';
     } else if (arg === '--no-preview') {
       flags.preview = false;
+    } else if (arg === '--worksheet' && i + 1 < argv.length) {
+      flags.worksheet = argv[++i];
+    } else if (arg === '--report' && i + 1 < argv.length) {
+      flags.report = argv[++i];
+    } else if (arg === '--query' && i + 1 < argv.length) {
+      flags.query = argv[++i];
+    } else if (arg === '--metric' && i + 1 < argv.length) {
+      flags.metric = argv[++i];
+    } else if (arg === '--value' && i + 1 < argv.length) {
+      flags.value = argv[++i];
+    } else if (arg === '--filter' && i + 1 < argv.length) {
+      (flags.compareFilters ??= []).push(argv[++i]);
+    } else if (arg === '--waive' && i + 1 < argv.length) {
+      (flags.waive ??= []).push(argv[++i]);
+    } else if (arg === '--map' && i + 1 < argv.length) {
+      (flags.compareMap ??= []).push(argv[++i]);
+    } else if (arg === '--key' && i + 1 < argv.length) {
+      (flags.compareKeys ??= []).push(argv[++i]);
+    } else if (arg === '--ignore' && i + 1 < argv.length) {
+      (flags.compareIgnore ??= []).push(argv[++i]);
+    } else if (arg === '--param' && i + 1 < argv.length) {
+      (flags.compareParams ??= []).push(argv[++i]);
+    } else if (arg === '--file-rows') {
+      flags.fileRows = true;
+    } else if (arg === '--tolerance' && i + 1 < argv.length) {
+      flags.tolerance = argv[++i];
+    } else if (arg === '--dates' && i + 1 < argv.length) {
+      flags.dates = argv[++i];
+    } else if (arg === '--no-record') {
+      flags.record = false;
     } else if (arg === '--no-metrics') {
       flags.metrics = false;
     } else if (arg === '--no-check') {

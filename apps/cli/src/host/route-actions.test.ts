@@ -18,6 +18,9 @@ describe('what each API request does (RFC 0010 HH-2)', () => {
     ['POST', '/api/apps/claims/dashboards/overview/approve-semantic', 'dataset.certify', 'app'],
     // Approving a metric draft makes it answer; making and discarding drafts is authoring.
     ['POST', '/api/semantic-layer/metric-drafts/approve', 'dataset.certify', 'project'],
+    // Comparing reads as the person; recording changes the project.
+    ['POST', '/api/report-match/compare', 'query.run', 'project'],
+    ['POST', '/api/report-match/record', 'dataset.author', 'project'],
     ['POST', '/api/semantic-layer/metric-drafts/discard', 'dataset.author', 'project'],
     ['POST', '/api/block-studio/ai-imports/imp_abc/metric-drafts', 'dataset.author', 'project'],
     ['POST', '/api/block-studio/certification-check', 'dataset.author', 'project'],

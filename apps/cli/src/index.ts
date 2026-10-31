@@ -64,6 +64,7 @@ const HELP = `
                                      surfaces datalex-manifest.json patch)
     zlens info <file.dql>           Show block metadata
     zlens migrate assess <folder>   Read Tableau, Power BI and SQL files and report what moves to ZLens
+    zlens migrate compare <file>    Compare an old report's export with ZLens's own numbers
                                     (queries, calculations by kind, reports, databases); files only,
                                     nothing leaves this computer. --out <file.md>, --format json
     zlens migrate <source>          Scaffold migration from looker/tableau/dbt/metabase/raw-sql

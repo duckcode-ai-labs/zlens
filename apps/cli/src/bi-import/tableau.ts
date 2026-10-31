@@ -9,6 +9,7 @@ import {
   type BiLiteral,
   type BiModelTable,
   type BiSourceFilter,
+  type BiWorksheet,
   type ExtractedBiFile,
 } from './types.js';
 import { child, descendants, parseXml, type XmlElement } from './xml.js';
@@ -47,7 +48,7 @@ export function extractTableauWorkbook(xml: string, displayPath: string): Extrac
   const parameters = readParameters(dataSources.find((source) => source.attributes.name === 'Parameters'));
   const worksheetsBySource = worksheetsUsing(workbook);
   const inventory: BiInventory = { tool: 'tableau', dataSources: [], calculations: [], tablesWithoutSql: 0, pages: reportPages(workbook) };
-  const result: ExtractedBiFile = { sources: [], skipped: [], inventory, models: [] };
+  const result: ExtractedBiFile = { sources: [], skipped: [], inventory, models: [], worksheets: worksheetFilters(workbook, dataSources) };
 
   for (const source of dataSources) {
     if (source.attributes.name === 'Parameters' || source.attributes.hasconnection === 'false') continue;
@@ -341,6 +342,39 @@ function tableauLiteral(raw: string): BiLiteral {
   if (/^(?:true|false)$/i.test(value)) return { kind: 'boolean', value: value.toLowerCase() === 'true' };
   if (value !== '' && Number.isFinite(Number(value))) return { kind: 'number', value: Number(value) };
   return { kind: 'string', value };
+}
+
+/** The filters saved on each worksheet that narrow its rows. Fields only filtered on are not in an export of it. */
+function worksheetFilters(workbook: XmlElement, dataSources: XmlElement[]): BiWorksheet[] {
+  const captions = new Map<string, string>();
+  for (const source of dataSources) {
+    for (const column of source.children.filter((element) => element.name === 'column')) {
+      if (column.attributes.caption) captions.set((column.attributes.name ?? '').replace(/^\[|\]$/g, ''), column.attributes.caption);
+    }
+  }
+  const sheets = (child(workbook, 'worksheets')?.children ?? []).filter((element) => element.name === 'worksheet');
+  return sheets.map((sheet) => {
+    const view = descendants(sheet, 'view')[0];
+    const filters = (view?.children ?? []).filter((element) => element.name === 'filter').flatMap((filter) => {
+      const read = readSourceFilter(filter, 'data source');
+      if (read === null) return [];
+      const field = typeof read === 'string' ? fieldOfFilter(filter) : read.field;
+      const label = captions.get(field) ?? field;
+      return [{ field: label, words: typeof read === 'string' ? `${label}: a ${filter.attributes.class ?? 'filter'} ZLens cannot read` : filterWords(label, read) }];
+    });
+    return { name: sheet.attributes.name ?? 'Worksheet', filters };
+  });
+}
+
+function fieldOfFilter(filter: XmlElement): string {
+  const last = /\[((?:[^\]]|\]\])+)\]$/.exec(filter.attributes.column ?? '')?.[1]?.replace(/\]\]/g, ']') ?? filter.attributes.column ?? 'a field';
+  return /^\w+:(.+):\w+$/.exec(last)?.[1] ?? last;
+}
+
+function filterWords(label: string, filter: BiSourceFilter): string {
+  const shown = (literal: BiLiteral) => (literal.kind === 'null' ? 'empty' : String(literal.value));
+  if (filter.kind === 'range') return [filter.min ? `${label} >= ${shown(filter.min)}` : '', filter.max ? `${label} <= ${shown(filter.max)}` : ''].filter(Boolean).join(' and ') || `${label} has a value`;
+  return `${label} ${filter.kind === 'include' ? 'in' : 'not in'} (${(filter.values ?? []).map(shown).join(', ')})`;
 }
 
 /** Worksheets (with the mark each draws) and dashboards. */

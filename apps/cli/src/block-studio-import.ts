@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, wri
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { biSourceKind, isBiImportFile, readBiFile, readTmdlFolder, unreadableBiFile, type ExtractedBiFile } from './bi-import/index.js';
 import { classifyCalculations, type BiCalculation } from './bi-import/calculations.js';
-import type { BiCalculationModel } from './bi-import/types.js';
+import type { BiCalculationModel, BiWorksheet } from './bi-import/types.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import {
   foldSqlScript,
@@ -349,6 +349,18 @@ export function planBlockStudioImport(
 export interface ImportCalculations {
   calculations: BiCalculation[];
   models: BiCalculationModel[];
+  /** Tableau worksheets and their saved filters, for comparing an export of one. */
+  worksheets?: BiWorksheet[];
+}
+
+/** The newest imported worksheet of this name, for the filters an export of it does not show. */
+export function findImportedWorksheet(projectRoot: string, name: string): BiWorksheet | undefined {
+  const wanted = name.trim().toLowerCase();
+  for (const session of listBlockStudioImportSessions(projectRoot)) {
+    const found = (readBlockStudioImportCalculations(projectRoot, session.id).worksheets ?? []).find((worksheet) => worksheet.name.trim().toLowerCase() === wanted);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 /** Whether any calculation could become a metric draft (simple, filtered or ratio). */
@@ -388,7 +400,7 @@ export function createBlockStudioImportSession(
   };
   const session = { ...manifest, candidates };
   writeBlockStudioImportSession(projectRoot, session);
-  if (calculations.calculations.length) writeFileSync(join(importRoot(projectRoot, importId), 'calculations.json'), JSON.stringify(calculations) + '\n', 'utf-8');
+  if (calculations.calculations.length || calculations.worksheets?.length) writeFileSync(join(importRoot(projectRoot, importId), 'calculations.json'), JSON.stringify(calculations) + '\n', 'utf-8');
   return session;
 }
 
@@ -1730,12 +1742,13 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
 } {
   const sources: SqlSource[] = [];
   const skipped: SkippedSqlStatement[] = [];
-  const calculations: ImportCalculations = { calculations: [], models: [] };
+  const calculations: ImportCalculations = { calculations: [], models: [], worksheets: [] };
   const add = (extracted: ExtractedBiFile) => {
     sources.push(...extracted.sources);
     skipped.push(...extracted.skipped);
     calculations.calculations.push(...(extracted.inventory?.calculations ?? []));
     calculations.models.push(...(extracted.models ?? []));
+    calculations.worksheets!.push(...(extracted.worksheets ?? []));
   };
   const readSafely = (displayName: string, read: () => ExtractedBiFile) => {
     try {
