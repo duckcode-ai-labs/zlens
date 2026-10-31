@@ -202,7 +202,7 @@ GROUP BY 1
       { name: 'store', written: '<Parameters.Store>', valueType: 'string', default: 'Philadelphia' },
     ]);
     expect(extracted.skipped.map((item) => [item.kind, item.reason, item.sql])).toEqual([
-      ['calculations', '1 calculated field is not imported from data source Orders. Rebuild the ones your reports need as metrics.', 'Revenue per Store: SUM([revenue]) / COUNTD([location_name])'],
+      ['calculations', '1 calculated field from data source Orders has no SQL to import. Simple, filtered and ratio calculations become metric drafts; the rest are listed with why.', 'Revenue per Store: SUM([revenue]) / COUNTD([location_name])'],
       ['no-sql', 'Tableau data source Customers reads a table directly, with no Custom SQL to import. ZLens reads those tables from the database itself.', 'dev.customers'],
     ]);
   });
@@ -254,7 +254,7 @@ select location_id, sum(order_total) as revenue from dev.orders group by 1
       ['no-sql', 'Targets (Csv.Document, File.Contents)'],
       ['calculations', "Total Revenue = SUM('Store revenue'[revenue])"],
     ]);
-    expect(extracted.skipped[2].reason).toBe('1 DAX measure is not imported. Rebuild the ones your reports need as metrics.');
+    expect(extracted.skipped[2].reason).toBe('1 DAX measure has no SQL to import. Simple, filtered and ratio measures become metric drafts; the rest are listed with why.');
   });
 
   it('marks Power Query code it cannot read as a parameter to check', () => {

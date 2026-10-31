@@ -1,7 +1,16 @@
 import { humanizeObjectName } from '../sql-import-script.js';
-import { readPowerQuery, readPowerQueryParameter, type PowerQueryParameter } from './power-query.js';
+import { readPowerQuery, readPowerQueryParameter, readPowerQueryTable, type PowerQueryParameter } from './power-query.js';
 import type { BiCalculation } from './calculations.js';
-import { listNames, sqlSourceContent, type BiInventory, type BiReportPage, type ExtractedBiFile } from './types.js';
+import {
+  listNames,
+  sqlSourceContent,
+  type BiCalculationModel,
+  type BiDataType,
+  type BiInventory,
+  type BiModelTable,
+  type BiReportPage,
+  type ExtractedBiFile,
+} from './types.js';
 import { decodeModelText, readZipFile } from './zip.js';
 
 /**
@@ -19,8 +28,12 @@ interface PowerBiModel {
     measures: Array<{ name: string; expression: string }>;
     /** Calculated columns (a data column has no expression). */
     columns: Array<{ name: string; expression: string }>;
+    /** Data columns: the name the report uses, its type, and the column Power Query gives it. */
+    dataColumns: Array<{ name: string; dataType?: string; sourceColumn?: string }>;
   }>;
   expressions: Array<{ name: string; expression: string }>;
+  /** The model's storage mode, for a partition that does not name its own. */
+  defaultMode?: string;
 }
 
 export function extractPowerBiTemplate(zip: Buffer, displayPath: string): ExtractedBiFile {
@@ -111,7 +124,7 @@ export function powerBiReportWithoutModel(displayPath: string): ExtractedBiFile 
 }
 
 export function extractPowerBiModelJson(text: string, displayPath: string): ExtractedBiFile {
-  const json = JSON.parse(text) as { model?: { tables?: any[]; expressions?: any[] } };
+  const json = JSON.parse(text) as { model?: { tables?: any[]; expressions?: any[]; defaultMode?: string } };
   const joined = (value: unknown) => (Array.isArray(value) ? value.join('\n') : typeof value === 'string' ? value : '');
   const model: PowerBiModel = {
     tables: (json.model?.tables ?? []).map((table: any) => ({
@@ -126,8 +139,16 @@ export function extractPowerBiModelJson(text: string, displayPath: string): Extr
       columns: (table.columns ?? [])
         .filter((column: any) => column.type === 'calculated' && joined(column.expression).trim())
         .map((column: any) => ({ name: String(column.name ?? ''), expression: joined(column.expression) })),
+      dataColumns: (table.columns ?? [])
+        .filter((column: any) => (column.type ?? 'data') === 'data' && column.name)
+        .map((column: any) => ({
+          name: String(column.name),
+          ...(column.dataType ? { dataType: String(column.dataType) } : {}),
+          ...(column.sourceColumn ? { sourceColumn: String(column.sourceColumn) } : {}),
+        })),
     })),
     expressions: (json.model?.expressions ?? []).map((expression: any) => ({ name: String(expression.name ?? ''), expression: joined(expression.expression) })),
+    ...(json.model?.defaultMode ? { defaultMode: json.model.defaultMode } : {}),
   };
   return extractFromModel(model, displayPath);
 }
@@ -139,6 +160,7 @@ export function extractPowerBiTmdl(files: Array<{ path: string; text: string }>,
     const parsed = parseTmdl(file.text);
     model.tables.push(...parsed.tables);
     model.expressions.push(...parsed.expressions);
+    if (parsed.defaultMode) model.defaultMode = parsed.defaultMode;
   }
   return extractFromModel(model, displayPath);
 }
@@ -157,7 +179,8 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
     }
   }
   const inventory: BiInventory = { tool: 'powerbi', dataSources: [], calculations: [], tablesWithoutSql: 0, pages: [] };
-  const result: ExtractedBiFile = { sources: [], skipped: [], inventory };
+  const calculationModel: BiCalculationModel = { tool: 'powerbi', name: fileName, sourcePath: displayPath, tables: [], fields: [], filters: [], unreadableFilters: [] };
+  const result: ExtractedBiFile = { sources: [], skipped: [], inventory, models: [calculationModel] };
   const connectors = new Map<string, BiInventory['dataSources'][number]>();
   const tableLoads: string[] = [];
   const tablesLoaded = new Set<string>();
@@ -166,6 +189,12 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
   const measures: string[] = [];
   const calculation = (name: string, formula: string, role: BiCalculation['role'], owner: string): BiCalculation => ({ name, formula, language: 'dax', role, owner, sourcePath: displayPath });
   for (const table of model.tables) {
+    calculationModel.tables.push(modelTable(table, shared, model.defaultMode));
+    const renames = table.partitions.length === 1 && table.partitions[0]!.type === 'm' ? readPowerQueryTable(table.partitions[0]!.expression, { shared }).renames : new Map<string, string>();
+    for (const column of table.dataColumns) {
+      const loaded = column.sourceColumn ?? column.name;
+      calculationModel.fields.push({ name: column.name, table: table.name, column: renames.get(loaded.toLowerCase()) ?? loaded, dataType: powerBiDataType(column.dataType) });
+    }
     measures.push(...table.measures.map((measure) => `${measure.name} = ${measure.expression.replace(/\s+/g, ' ').slice(0, 60)}`));
     inventory.calculations.push(...table.measures.map((measure) => calculation(measure.name, measure.expression, 'measure', table.name)));
     inventory.calculations.push(...table.columns.map((column) => calculation(column.name, column.expression, 'column', table.name)));
@@ -230,11 +259,44 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
     result.skipped.push({
       sourcePath: displayPath,
       kind: 'calculations',
-      reason: `${parts} ${measures.length + calculatedTables.length === 1 ? 'is' : 'are'} not imported. Rebuild the ones your reports need as metrics.`,
+      reason: `${parts} ${measures.length + calculatedTables.length === 1 ? 'has' : 'have'} no SQL to import. Simple, filtered and ratio measures become metric drafts; the rest are listed with why.`,
       sql: listNames([...measures, ...calculatedTables.map((name) => `${name} (calculated table)`)], 4),
     });
   }
   return result;
+}
+
+/**
+ * The database table a Power BI table loads, read from its one Power Query
+ * partition. A table with several partitions, a native query, a file, a
+ * calculated table, or Power Query steps that change rows has none.
+ */
+function modelTable(table: PowerBiModel['tables'][number], shared: Map<string, string>, defaultMode: string | undefined): BiModelTable {
+  const partitions = table.partitions;
+  const modes = partitions.map((partition) => (partition.mode ?? defaultMode ?? 'import').toLowerCase());
+  const mode = modes.includes('directquery') ? 'directQuery' as const : modes.includes('dual') ? 'dual' as const : 'import' as const;
+  if (partitions.length !== 1) return { name: table.name, mode, noTable: partitions.length ? 'It loads several partitions.' : 'It loads no data.' };
+  const partition = partitions[0]!;
+  if (partition.type !== 'm') return { name: table.name, mode, noTable: partition.type === 'calculated' ? 'It is a calculated table.' : `It loads with a ${partition.type} partition.` };
+  const reading = readPowerQuery(partition.expression, { parameters: new Map(), shared });
+  if (reading.queries.length) return { name: table.name, mode, noTable: 'It loads a native query, not a table.' };
+  if (reading.otherSources.length) return { name: table.name, mode, noTable: `It loads from ${reading.otherSources.join(', ')}, not a database.` };
+  const loaded = readPowerQueryTable(partition.expression, { shared });
+  if (!loaded.source) return { name: table.name, mode, noTable: 'ZLens cannot tell which database table it loads.' };
+  if (loaded.changingSteps.length) {
+    return { name: table.name, mode, noTable: `Its Power Query changes the rows or values after loading (${Array.from(new Set(loaded.changingSteps)).join(', ')}).` };
+  }
+  return { name: table.name, mode, source: loaded.source, ...(Object.keys(loaded.changedTypes).length ? { changedTypes: loaded.changedTypes } : {}) };
+}
+
+function powerBiDataType(dataType: string | undefined): BiDataType {
+  const type = (dataType ?? '').toLowerCase();
+  if (type === 'int64') return 'integer';
+  if (type === 'double' || type === 'decimal') return 'number';
+  if (type === 'string') return 'string';
+  if (type === 'datetime') return 'date';
+  if (type === 'boolean') return 'boolean';
+  return 'unknown';
 }
 
 // ── TMDL ────────────────────────────────────────────────────────────────────
@@ -244,10 +306,11 @@ function extractFromModel(model: PowerBiModel, displayPath: string): ExtractedBi
  * `source =` (inline or the indented lines under it, or a ``` block), its
  * `measure`s, and `expression`s (parameters and shared queries).
  */
-export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressions'> {
+export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressions' | 'defaultMode'> {
   const lines = text.replace(/\r\n?/g, '\n').split('\n');
   const tables: PowerBiModel['tables'] = [];
   const expressions: PowerBiModel['expressions'] = [];
+  let defaultMode: string | undefined;
   let table: PowerBiModel['tables'][number] | null = null;
   const indentOf = (line: string) => /^[\t ]*/.exec(line)![0].replace(/ {4}/g, '\t').length;
   const objectName = (raw: string) => raw.trim().replace(/^'(.*)'$/, '$1').replace(/''/g, "'");
@@ -282,9 +345,11 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
     const trimmed = line.trim();
+    const modeMatch = !table ? /^\s+defaultMode:\s*(\w+)/.exec(line) : null;
+    if (modeMatch) defaultMode = modeMatch[1];
     const tableMatch = /^table\s+(.+)$/.exec(line);
     if (tableMatch) {
-      table = { name: objectName(tableMatch[1]), partitions: [], measures: [], columns: [] };
+      table = { name: objectName(tableMatch[1]), partitions: [], measures: [], columns: [], dataColumns: [] };
       tables.push(table);
       continue;
     }
@@ -311,6 +376,21 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
       index = next - 1;
       continue;
     }
+    // A data column has no `=`; its type and source column are properties under it.
+    const dataColumnMatch = /^\s+column\s+('(?:[^']|'')+'|[^\s=]+)\s*$/.exec(line);
+    if (dataColumnMatch) {
+      const column: PowerBiModel['tables'][number]['dataColumns'][number] = { name: objectName(dataColumnMatch[1]) };
+      const own = indentOf(line);
+      let at = index + 1;
+      while (at < lines.length && (!lines[at].trim() || indentOf(lines[at]) > own)) {
+        const property = /^\s+(dataType|sourceColumn)\s*:\s*(.+)$/.exec(lines[at]);
+        if (property && indentOf(lines[at]) === own + 1) column[property[1] as 'dataType' | 'sourceColumn'] = objectName(property[2]);
+        at += 1;
+      }
+      table.dataColumns.push(column);
+      index = at - 1;
+      continue;
+    }
     const partitionMatch = /^\s+partition\s+('(?:[^']|'')+'|[^\s=]+)\s*=\s*(\w+)\s*$/.exec(line);
     if (partitionMatch) {
       const partition = { name: objectName(partitionMatch[1]), type: partitionMatch[2], expression: '', mode: undefined as string | undefined };
@@ -335,7 +415,7 @@ export function parseTmdl(text: string): Pick<PowerBiModel, 'tables' | 'expressi
     }
     if (trimmed.startsWith('calculationGroup')) continue;
   }
-  return { tables, expressions };
+  return { tables, expressions, ...(defaultMode ? { defaultMode } : {}) };
 }
 
 /** A TMDL value's own lines end where the object's properties (`lineageTag: …`, `annotation …`) start. */

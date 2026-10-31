@@ -35,6 +35,10 @@ export interface BiCalculation {
    * share a caption). Without it, a `[Name]` matching a calculation counts.
    */
   references?: string[];
+  /** Tableau: the field's internal name (`Calculation_1234`), which other formulas use. */
+  id?: string;
+  /** Tableau: the formula as stored, naming fields by internal name, for turning it into a metric. */
+  rawFormula?: string;
 }
 
 export interface ClassifiedCalculation extends BiCalculation {

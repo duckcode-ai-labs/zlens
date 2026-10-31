@@ -180,7 +180,11 @@ describe('zlens migrate assess', () => {
     const summary = migrationAssessmentSummary(assessment, 'zlens-migration-assessment.md').join('\n');
     expect(summary).toContain('Read:          reports (1 Tableau workbook, 2 Power BI files, 3 SQL files)');
     expect(summary).toContain('Queries:       4 queries become draft saved queries with zlens import sql');
-    expect(summary).toContain('Calculations:  8 (4 simple, filtered or ratio: one metric each; 2 row-level: a column or dimension; 2 advanced: rewrite by hand or with a coding agent)');
+    expect(summary).toContain('Calculations:  8 (4 simple, filtered or ratio that cannot yet, with why in the report; 2 row-level: a column or dimension; 2 advanced: rewrite by hand or with a coding agent)');
+    // They read Custom SQL and a native query: a query, not a table a metric can sit on.
+    expect(markdown).toContain('### Simple, filtered or ratio, but not a metric yet (4)');
+    expect(markdown).toContain('| Revenue | Data source Orders reads Revenue by store (Custom SQL). It reads Custom SQL, a query rather than a table. |');
+    expect(markdown).toContain('| Total Sales | The field order_total is in Orders. It loads a native query, not a table. |');
     expect(summary).toContain('Full report:   zlens-migration-assessment.md');
   });
 

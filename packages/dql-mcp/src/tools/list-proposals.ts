@@ -225,7 +225,8 @@ function semanticMetricDraftProposal(metric: MetricDefinition, path: string): Pr
     proposedEntity: metric.name,
     upstreamRefs: [metric.table, ...donorPaths, ...donorBlocks].filter(Boolean),
     status: metric.status,
-    certifyHint: `Review ${path}, confirm expression/grain/filters, then move it out of _drafts and set status to "certified" after human approval.`,
+    // Approving is a person's act: an agent lists drafts but never approves them.
+    certifyHint: `A person reviews ${path} (its expression, filter and value over all rows), then approves it with: zlens semantic approve ${metric.name}`,
   };
 }
 

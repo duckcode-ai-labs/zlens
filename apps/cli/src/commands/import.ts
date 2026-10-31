@@ -2,6 +2,8 @@ import type { CLIFlags } from '../args.js';
 import type { BlockStudioImportCandidate } from '../block-studio-import.js';
 import { importFailureKind, previewImportCandidate, withImportRuntime, type ImportPreviewOutcome } from '../import-runtime.js';
 import { createDqlGenerationSessionForProject } from '../local-runtime.js';
+import type { ImportMetricDrafts } from '../import-metric-drafts.js';
+import { formatValue } from './semantic.js';
 
 export async function runImport(source: string, rest: string[], flags: CLIFlags): Promise<void> {
   if (source !== 'sql') {
@@ -45,10 +47,20 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
   // ones work before anyone opens them.
   const previews = new Map<string, ImportPreviewOutcome>();
   let previewError: string | null = null;
-  if (flags.preview !== false && drafts.length > 0) {
+  // The BI file's simple, filtered and ratio calculations become metric drafts, checked on the database (D3).
+  let metricDrafts: ImportMetricDrafts | null = null;
+  let metricDraftsError: string | null = null;
+  const wantsPreviews = flags.preview !== false && drafts.length > 0;
+  const wantsMetrics = flags.metrics !== false && /tableau|powerbi|folder|upload/.test(session.sourceKind);
+  if (wantsPreviews || wantsMetrics) {
     try {
       await withImportRuntime(process.cwd(), flags, async (call) => {
-        for (const draft of drafts) previews.set(draft.candidateId, await previewImportCandidate(call, session.id, draft.candidateId));
+        if (wantsPreviews) for (const draft of drafts) previews.set(draft.candidateId, await previewImportCandidate(call, session.id, draft.candidateId));
+        if (wantsMetrics) {
+          const response = await call('POST', `/api/block-studio/ai-imports/${encodeURIComponent(session.id)}/metric-drafts`, { check: flags.checkMetrics !== false });
+          if (response.status === 200) metricDrafts = response.body?.metricDrafts ?? null;
+          else metricDraftsError = String(response.body?.error ?? `HTTP ${response.status}`);
+        }
       });
     } catch (error) {
       previewError = error instanceof Error ? error.message : String(error);
@@ -68,6 +80,8 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
       errors,
       previews: Object.fromEntries(previews),
       ...(previewError ? { previewError } : {}),
+      ...(metricDrafts ? { metricDrafts } : {}),
+      ...(metricDraftsError ? { metricDraftsError } : {}),
     }, null, 2));
     return;
   }
@@ -132,8 +146,60 @@ export async function runImport(source: string, rest: string[], flags: CLIFlags)
     console.log(`  The drafts were not run: ${previewError}`);
     console.log(`  Fix the connection, then check them with: zlens certify --from-import ${session.id}`);
   }
+  if (metricDrafts) printMetricDrafts(metricDrafts);
+  else if (metricDraftsError) {
+    console.log('');
+    console.log(`  Metric drafts were not made: ${metricDraftsError}`);
+  }
   console.log('');
   if (errors.length > 0) process.exitCode = 1;
+}
+
+/** The import's metric drafts: what each calculation became, its value over all rows, and what was left out with why. */
+export function printMetricDrafts(record: ImportMetricDrafts): void {
+  if (!record.items.length) return;
+  const width = Math.min(28, Math.max(12, ...record.items.map((item) => item.calculation.length)));
+  const row = (name: string, text: string, tail = '') => console.log(`    ${name.padEnd(width)}  ${text}${tail ? `   ${tail}` : ''}`);
+  const value = (item: ImportMetricDrafts['items'][number]) => (!record.checked ? 'not run' : item.value === undefined ? '' : item.value === null ? 'all rows: empty' : `all rows: ${formatValue(item.value)}`);
+  const drafted = record.items.filter((item) => item.outcome === 'drafted');
+  console.log('');
+  if (!record.written) {
+    console.log(`  Metric drafts: not written. ${record.notWrittenReason ?? ''}`);
+    for (const item of drafted) row(item.calculation, item.inWords ?? '');
+  } else if (drafted.length) {
+    console.log(`  ${drafted.length} calculation${drafted.length === 1 ? ' became a metric draft' : 's became metric drafts'} (semantic-layer/metrics/_drafts/${record.domain}/):`);
+    // A note on every draft is said once.
+    const shared = drafted.length > 1 ? drafted[0]!.notes.filter((note) => drafted.every((item) => item.notes.includes(note))) : [];
+    for (const note of shared) console.log(`    note on all of them: ${note}`);
+    for (const item of drafted) {
+      row(item.calculation, item.inWords ?? item.metric ?? '', value(item));
+      for (const note of item.notes.filter((candidate) => !shared.includes(candidate))) console.log(`    ${''.padEnd(width)}  note: ${note}`);
+    }
+  }
+  const reused = record.items.filter((item) => item.outcome === 'reused');
+  if (reused.length) {
+    console.log(`  ${reused.length} ${reused.length === 1 ? 'is already a metric or a draft' : 'are already metrics or drafts'}:`);
+    for (const item of reused) row(item.calculation, item.reason ?? `the metric ${item.metric}`);
+  }
+  const failed = record.items.filter((item) => item.outcome === 'failed');
+  if (failed.length) {
+    console.log(`  ${failed.length} did not run on the database, so ${failed.length === 1 ? 'it was' : 'they were'} not written:`);
+    for (const item of failed) row(item.calculation, item.inWords ?? '', item.reason);
+  }
+  const leftOut = record.items.filter((item) => item.outcome === 'left-out' || item.outcome === 'advanced');
+  if (leftOut.length) {
+    console.log(`  ${leftOut.length} calculation${leftOut.length === 1 ? ' is' : 's are'} left out:`);
+    for (const item of leftOut.slice(0, 20)) row(item.calculation, item.formula.replace(/\s+/g, ' ').slice(0, 60), item.reason);
+    if (leftOut.length > 20) console.log(`    … and ${leftOut.length - 20} more (zlens import sql … --format json lists them all).`);
+  }
+  const rowLevel = record.items.filter((item) => item.outcome === 'row-level').length;
+  if (rowLevel) console.log(`  ${rowLevel} row-level calculation${rowLevel === 1 ? ' is a value per row' : 's are values per row'}: used inside the metrics that add them up, not metrics of their own.`);
+  if (record.dimensions.length) {
+    console.log(`  ${record.dimensions.length} column${record.dimensions.length === 1 ? '' : 's'} of those tables came with them as dimension drafts, to group by: ${record.dimensions.slice(0, 8).map((dimension) => dimension.name).join(', ')}${record.dimensions.length > 8 ? ', …' : ''}.`);
+  }
+  if (record.written && drafted.some((item) => item.path)) {
+    console.log(`  They answer nothing until approved. Check each value against the old report, then: zlens semantic approve --all-from ${record.importId}`);
+  }
 }
 
 function validationErrorsFor(candidate: BlockStudioImportCandidate): string[] {

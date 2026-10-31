@@ -244,11 +244,17 @@ const COMMAND_HELP: Record<string, string> = {
   Usage:
     zlens import sql <file-or-folder> [--domain <name>] [--owner <name>]
     zlens import sql <file-or-folder> --save [--domain <name>] [--owner <name>]
+    zlens import sql <workbook> [--no-preview] [--no-metrics] [--no-check]
 
   Notes:
     Import creates AI-first draft blocks under _drafts, parameterizes safe
     runtime literals, checks for similar certified blocks, and never certifies
     generated DQL automatically.
+    From a Tableau workbook or a Power BI model, each simple, filtered or
+    ratio calculation also becomes a metric draft in
+    semantic-layer/metrics/_drafts/<domain>/, on the database table it reads,
+    run once over all rows (--no-check skips that; --no-metrics skips the
+    drafts). Approve them with zlens semantic approve.
   `,
   propose: `
   zlens propose — Draft a governance layer from dbt evidence
@@ -345,6 +351,15 @@ const COMMAND_HELP: Record<string, string> = {
     zlens semantic list [path]
     zlens semantic validate [path]
     zlens semantic query <metrics> [dimensions]
+    zlens semantic drafts                       List metric drafts waiting for review
+    zlens semantic approve <name> [name…]       Approve metric drafts: they answer from now on
+    zlens semantic approve --all-from <import>  Approve every draft an import wrote and ran (or latest)
+    zlens semantic discard <name> [name…]       Delete metric drafts
+
+  A metric draft answers no question until a person approves it. Approving
+  moves its file out of semantic-layer/metrics/_drafts/ with status:
+  certified, who approved it and when; a ratio brings the drafts it is built
+  from, and a metric brings its table's dimension drafts.
   `,
   eval: `
   zlens eval — Score the answer agent's routing accuracy

@@ -48,7 +48,7 @@ export {
 // Node-only (reads from disk); imported by node consumers via this barrel.
 // Kept in a separate module so the browser-safe helpers above never drag
 // node:fs/node:path into a browser bundle.
-export { loadSemanticLayerFromDir, loadSemanticMetricDraftsFromDir } from './yaml-loader.node.js';
+export { loadSemanticLayerFromDir, loadSemanticMetricDraftsFromDir, loadSemanticDimensionDraftsFromDir } from './yaml-loader.node.js';
 export { resolveSemanticLayer, resolveSemanticLayerWithDiagnostics, resolveSemanticLayerAsync, pullCachedRepo, resolveRepoSource } from './providers/index.js';
 export type { SemanticLayerProviderConfig, SemanticLayerResult, RepoResolveResult } from './providers/index.js';
 export { DbtProvider, CubejsProvider, SnowflakeSemanticProvider } from './providers/index.js';

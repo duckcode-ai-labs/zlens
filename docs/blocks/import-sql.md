@@ -77,8 +77,9 @@ not covered:
 - **Data sources and tables that load a table directly**, without SQL: most
   Power BI tables and many Tableau data sources. ZLens reads those tables from
   the database itself.
-- **Calculated fields and DAX measures:** rebuild the ones your reports need
-  as metrics.
+- **Calculated fields and DAX measures:** they have no SQL. The simple,
+  filtered and ratio ones become metric drafts (below); the rest are listed
+  there with why.
 - **A `.pbix`**, which stores its model compressed. In Power BI Desktop choose
   **File → Export → Power BI template** and import the `.pbit`, or save the
   report as a Power BI project.
@@ -90,8 +91,8 @@ Upload is fine for workbooks without extracts. For a large `.twbx`, point the
 
 Optionally set **Domain** and **Owner**. Then click **Generate DQL drafts**.
 
-ZLens works through **Reading SQL** and **Running previews**, then **Import
-complete**. Nothing is written to your project yet: a draft becomes a saved query
+ZLens works through **Reading SQL**, **Running previews** and, for a Tableau
+or Power BI file, **Making metric drafts**, then **Import complete**. Nothing is written to your project yet: a draft becomes a saved query
 file only when you click **Save draft** on it, or when it is certified.
 
 ## 3. Review each draft
@@ -170,6 +171,32 @@ Each draft is still checked on its own and gets its own receipt; the ones
 that fail stay drafts, and a line under the button names them with the
 reason. Drafts that are certified already, rejected, or marked **reuse
 recommended** are not included. Nothing is certified until you click it.
+
+### Metric drafts
+
+For a Tableau workbook or a Power BI model, **Metric drafts (N)** under the
+drafts lists each simple, filtered or ratio calculation that became a metric
+draft, with:
+
+- the definition in words: `sum(sales) where region = 'East', on
+  analytics.orders`;
+- its value over all rows, from one query per table, to compare with the old
+  report's grand total;
+- the formula it came from, and notes where the numbers can differ (a joined
+  Tableau data source, an extract, a DAX filter that replaces the report's own
+  filter, another database);
+- for a ratio, the parts that are approved with it.
+
+The text, date and true/false columns of those tables come with them as
+dimension drafts, so an approved metric can answer "by region" or "by month".
+
+**Approve** makes it answer: its file moves from
+`semantic-layer/metrics/_drafts/<domain>/` to `semantic-layer/metrics/<domain>/`
+with `status: certified`, who approved it and when, its table's dimensions
+come with it, and Ask labels its answers **From Metrics**. **Discard** deletes the draft. **Approve all that ran (N)**
+approves every draft whose check ran. Below them: calculations that are
+already a metric, ones whose check failed on the database, and ones left out,
+each with why. See [Migrate from other tools](../guides/migrate.md#bring-the-calculations-over-as-metrics).
 
 ## Where the drafts go
 

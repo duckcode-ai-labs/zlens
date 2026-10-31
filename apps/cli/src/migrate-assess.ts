@@ -5,7 +5,8 @@ import { planBlockStudioImport, tmdlDefinitionFolder } from './block-studio-impo
 import { readBiFile, readTmdlFolder, unreadableBiFile } from './bi-import/index.js';
 import { CALCULATION_KIND_LABELS, classifyCalculations, formulaWithoutComments, type CalculationKind, type ClassifiedCalculation } from './bi-import/calculations.js';
 import { readPowerBiReportDefinition, readPowerBiReportLayout } from './bi-import/powerbi.js';
-import type { BiReportPage, ExtractedBiFile } from './bi-import/types.js';
+import { convertCalculationsToMetricDrafts, type ConversionOutcome } from './bi-import/metric-drafts.js';
+import type { BiCalculationModel, BiReportPage, ExtractedBiFile } from './bi-import/types.js';
 import type { SkippedSqlStatement } from './sql-import-script.js';
 
 /**
@@ -44,10 +45,22 @@ export interface MigrationAssessment {
   };
   /** BI tables and data sources that load tables without SQL: ZLens reads those tables itself. */
   tablesWithoutSql: number;
-  calculations: ClassifiedCalculation[];
+  calculations: AssessedCalculation[];
   databases: Array<{ database: string; files: number; connects: 'yes' | 'no' | 'check'; note: string }>;
   /** Files ZLens could not read, and other left-out items that are not counted above. */
   leftOut: SkippedSqlStatement[];
+}
+
+/** A calculation, sorted, with what `zlens import sql` makes of it. */
+export interface AssessedCalculation extends ClassifiedCalculation {
+  /**
+   * drafted: it becomes a metric draft (on its table, when the connected database has it).
+   * left-out: simple, filtered or ratio, but the converter cannot place or translate it (`metricReason`).
+   */
+  asMetric: ConversionOutcome;
+  /** The metric it becomes, in words: `sum(sales) where region = 'East', on analytics.orders`. */
+  metricInWords?: string;
+  metricReason?: string;
 }
 
 const BI_FILE = /\.(?:twb|twbx|pbit|pbix)$/i;
@@ -147,9 +160,10 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
     assessed.set(path, created);
     return created;
   };
-  const calculations: ClassifiedCalculation[] = [];
+  const calculations: AssessedCalculation[] = [];
   const leftOut: SkippedSqlStatement[] = [];
   const unclassified: Parameters<typeof classifyCalculations>[0] = [];
+  const models: BiCalculationModel[] = [];
   let tablesWithoutSql = 0;
   const take = (path: string, tool: AssessedTool, extracted: ExtractedBiFile) => {
     leftOut.push(...extracted.skipped.filter((item) => item.kind === 'unreadable'));
@@ -161,6 +175,7 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
     entry.pages.push(...extracted.inventory.pages);
     entry.dataSources.push(...extracted.inventory.dataSources);
     unclassified.push(...extracted.inventory.calculations);
+    models.push(...(extracted.models ?? []));
   };
 
   // Tableau and Power BI files, one at a time; a PBIP model's TMDL files as one model.
@@ -182,7 +197,7 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
     }
   }
   for (const [folder, folderFiles] of tmdlFolders) {
-    const modelFiles = folderFiles.filter((file) => file.includes(`${sep}tables${sep}`) || basename(file).toLowerCase() === 'expressions.tmdl' || folderFiles.length === 1);
+    const modelFiles = folderFiles.filter((file) => file.includes(`${sep}tables${sep}`) || /^(?:expressions|model)\.tmdl$/i.test(basename(file)) || folderFiles.length === 1);
     if (!modelFiles.length) continue;
     const path = shown(folder);
     try {
@@ -204,7 +219,14 @@ export function assessMigrationFolder(inputPath: string, options: { cwd?: string
       leftOut.push({ sourcePath: path, kind: 'unreadable', reason: `ZLens could not read this report: ${error instanceof Error ? error.message : String(error)}`, sql: basename(folder) });
     }
   }
-  calculations.push(...classifyCalculations(unclassified));
+  // The import's own converter, run without a database: what becomes a metric draft, and why the rest does not.
+  const converted = convertCalculationsToMetricDrafts(unclassified, models, { domain: 'imported', importedAt: (options.now ?? new Date()).toISOString() });
+  calculations.push(...converted.conversions.map((conversion): AssessedCalculation => ({
+    ...conversion.calculation,
+    asMetric: conversion.outcome === 'reused' ? 'drafted' : conversion.outcome,
+    ...(conversion.inWords ? { metricInWords: conversion.inWords } : {}),
+    ...(conversion.outcome === 'left-out' && conversion.reason ? { metricReason: conversion.reason } : {}),
+  })));
 
   // The import's own plan: the drafts it would make, duplicates folded.
   let plan: ReturnType<typeof planBlockStudioImport> | null = null;
@@ -305,11 +327,13 @@ function reportPhrase(files: AssessedFile[]): string {
   return parts.join(', ') || 'none';
 }
 
-function calculationPhrase(calculations: ClassifiedCalculation[]): string {
+function calculationPhrase(calculations: AssessedCalculation[]): string {
   const counts = countBy(calculations, (calculation) => calculation.kind);
-  const metric = (counts.get('simple') ?? 0) + (counts.get('filtered') ?? 0) + (counts.get('ratio') ?? 0);
+  const drafted = calculations.filter((calculation) => calculation.asMetric === 'drafted').length;
+  const leftOut = calculations.filter((calculation) => calculation.asMetric === 'left-out').length;
   return [
-    metric ? `${metric.toLocaleString('en-US')} simple, filtered or ratio: one metric each` : '',
+    drafted ? `${drafted.toLocaleString('en-US')} become metric drafts` : '',
+    leftOut ? `${leftOut.toLocaleString('en-US')} simple, filtered or ratio that cannot yet, with why in the report` : '',
     counts.get('row-level') ? `${counts.get('row-level')!.toLocaleString('en-US')} row-level: a column or dimension` : '',
     counts.get('advanced') ? `${counts.get('advanced')!.toLocaleString('en-US')} advanced: rewrite by hand or with a coding agent` : '',
   ].filter(Boolean).join('; ');
@@ -359,7 +383,9 @@ export function migrationAssessmentMarkdown(assessment: MigrationAssessment): st
   out.push(`| Queries (Custom SQL, native SQL, scripts) | ${queries.drafts} | \`zlens import sql\` makes a draft saved query of each; certify the ones that run.${queries.withParameters ? ` ${queries.withParameters} take report parameters, which become saved query parameters.` : ''}${queries.duplicates ? ` ${plural(queries.duplicates, 'copy', 'copies')} of the same query ${queries.duplicates === 1 ? 'is' : 'are'} counted once.` : ''}${queries.writes ? ` ${plural(queries.writes, 'statement')} that change${queries.writes === 1 ? 's' : ''} data ${queries.writes === 1 ? 'is' : 'are'} left out.` : ''} |`);
   if (assessment.tablesWithoutSql) out.push(`| Tables loaded without SQL | ${assessment.tablesWithoutSql} | ZLens reads these tables from the database directly; there is nothing to import. |`);
   const kinds = countBy(assessment.calculations, (calculation) => calculation.kind);
-  out.push(`| Calculations | ${assessment.calculations.length} | ${KINDS.filter((kind) => kinds.get(kind)).map((kind) => `${CALCULATION_KIND_LABELS[kind].split(':')[0]} ${kinds.get(kind)}`).join(', ') || 'none'}. Simple, filtered and ratio calculations are one metric each; row-level ones are a column or dimension; advanced ones are rewritten by hand or with a coding agent. |`);
+  const drafted = assessment.calculations.filter((calculation) => calculation.asMetric === 'drafted').length;
+  const leftOut = assessment.calculations.filter((calculation) => calculation.asMetric === 'left-out').length;
+  out.push(`| Calculations | ${assessment.calculations.length} | ${KINDS.filter((kind) => kinds.get(kind)).map((kind) => `${CALCULATION_KIND_LABELS[kind].split(':')[0]} ${kinds.get(kind)}`).join(', ') || 'none'}. ${drafted ? `${drafted} become metric drafts with \`zlens import sql\`, placed on the table and column they read; a person approves each. ` : ''}${leftOut ? `${leftOut} simple, filtered or ratio ${leftOut === 1 ? 'calculation cannot' : 'calculations cannot'} yet, with why below. ` : ''}Row-level ones are a column or dimension; advanced ones are rewritten by hand or with a coding agent. |`);
   out.push(`| Report | ${reportPhrase(files)} | Rebuilt as App tiles, each with its trust label. |`);
   if (assessment.databases.length) out.push(`| Databases | ${assessment.databases.map((db) => db.database).join(', ')} | ${assessment.databases.every((db) => db.connects === 'yes') ? 'ZLens connects to all of them.' : 'See Databases below.'} |`);
   out.push('');
@@ -370,7 +396,7 @@ export function migrationAssessmentMarkdown(assessment: MigrationAssessment): st
   out.push('   Each query becomes a draft saved query and runs once, so the list says which work.', '');
   out.push('2. Certify the ones that ran, each with its own receipt:', '');
   out.push('   ```bash', '   npx zlens certify --from-import --apply', '   ```', '');
-  if (assessment.calculations.length) out.push('3. Rebuild the calculations your reports need: simple, filtered and ratio ones as metrics in the semantic layer, row-level ones as columns of a saved query. The advanced ones are listed below with why.', '');
+  if (assessment.calculations.length) out.push(`3. ${drafted ? 'Approve the metric drafts the import made from the calculations (`npx zlens semantic drafts`, then `npx zlens semantic approve <name>`), checking each value against the old report. ' : ''}Rebuild the rest your reports need: row-level ones as columns of a saved query, and the ones listed below with why.`, '');
   if (report.worksheets || report.pages) out.push(`${assessment.calculations.length ? 4 : 3}. Rebuild the dashboards as Apps from the certified saved queries.`, '');
 
   if (assessment.databases.length) {
@@ -382,17 +408,32 @@ export function migrationAssessmentMarkdown(assessment: MigrationAssessment): st
 
   if (assessment.calculations.length) {
     out.push('## Calculations', '');
-    out.push('Sorted by reading each formula; nothing was run. A formula that builds on another calculation counts as the harder of the two.', '');
-    for (const kind of KINDS) {
-      const items = assessment.calculations.filter((calculation) => calculation.kind === kind);
+    out.push('Sorted by reading each formula, then translated the way `zlens import sql` does; nothing was run. A metric draft is written only when the connected database has its table and columns.', '');
+    const from = (item: AssessedCalculation) => cell(`${item.sourcePath}${item.owner ? ` · ${item.owner}` : ''}`);
+    const draftedItems = assessment.calculations.filter((item) => item.asMetric === 'drafted');
+    if (draftedItems.length) {
+      out.push(`### Become metric drafts (${draftedItems.length})`, '');
+      out.push('| Name | As a metric | Formula | From |', '|---|---|---|---|');
+      for (const item of draftedItems) out.push(`| ${cell(item.name)} | ${code(item.metricInWords ?? '')} | ${code(formulaWithoutComments(item.formula, item.language))} | ${from(item)} |`);
+      out.push('');
+    }
+    const leftOutItems = assessment.calculations.filter((item) => item.asMetric === 'left-out');
+    if (leftOutItems.length) {
+      out.push(`### Simple, filtered or ratio, but not a metric yet (${leftOutItems.length})`, '');
+      out.push('| Name | Why | Formula | From |', '|---|---|---|---|');
+      for (const item of leftOutItems) out.push(`| ${cell(item.name)} | ${cell(item.metricReason ?? '')} | ${code(formulaWithoutComments(item.formula, item.language))} | ${from(item)} |`);
+      out.push('');
+    }
+    for (const kind of ['row-level', 'advanced'] as const) {
+      const items = assessment.calculations.filter((calculation) => calculation.asMetric === kind);
       if (!items.length) continue;
       out.push(`### ${CALCULATION_KIND_LABELS[kind]} (${items.length})`, '');
       if (kind === 'advanced') {
         out.push('| Name | Why | Formula | From |', '|---|---|---|---|');
-        for (const item of items) out.push(`| ${cell(item.name)} | ${cell(item.reason)} | ${code(formulaWithoutComments(item.formula, item.language))} | ${cell(`${item.sourcePath}${item.owner ? ` · ${item.owner}` : ''}`)} |`);
+        for (const item of items) out.push(`| ${cell(item.name)} | ${cell(item.reason)} | ${code(formulaWithoutComments(item.formula, item.language))} | ${from(item)} |`);
       } else {
         out.push('| Name | Formula | From |', '|---|---|---|');
-        for (const item of items) out.push(`| ${cell(item.name)} | ${code(formulaWithoutComments(item.formula, item.language))} | ${cell(`${item.sourcePath}${item.owner ? ` · ${item.owner}` : ''}`)} |`);
+        for (const item of items) out.push(`| ${cell(item.name)} | ${code(formulaWithoutComments(item.formula, item.language))} | ${from(item)} |`);
       }
       out.push('');
     }

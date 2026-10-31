@@ -3007,6 +3007,14 @@ export function qualifyBareSqlIdentifiers(sql: string, alias: string): string {
       index += 1;
       continue;
     }
+    // SQL Server's quoted name: `[Order ID]` is one name, not two.
+    if (char === '[') {
+      const close = sql.indexOf(']', index);
+      const end = close < 0 ? sql.length : close + 1;
+      output += sql.slice(index, end);
+      index = end;
+      continue;
+    }
     if (!/[A-Za-z_]/.test(char)) {
       output += char;
       index += 1;

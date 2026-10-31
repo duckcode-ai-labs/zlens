@@ -76,7 +76,7 @@ const SUBCOMMANDS = {
   model: { words: ['list', 'validate', 'discover', 'apply-discovery', 'import', 'explain', 'validate-relationship', 'reject-discovery'] },
   schedule: { words: ['list', 'run', 'start', 'stop', 'status'] },
   promote: { words: ['notebook', 'app', 'dashboard'] },
-  semantic: { words: ['list', 'validate', 'query', 'pull', 'import', 'sync'] },
+  semantic: { words: ['list', 'validate', 'query', 'pull', 'import', 'sync', 'drafts', 'approve', 'discard'] },
   import: { words: ['sql'] },
   slack: { words: ['serve'] },
   new: { words: ['block', 'semantic-block', 'business-view', 'term', 'domain', 'dashboard', 'workbook'], optional: true },

@@ -311,6 +311,6 @@ describe('listProposals', () => {
       ]),
       status: 'draft',
     });
-    expect(out.proposals[0].certifyHint).toContain('move it out of _drafts');
+    expect(out.proposals[0].certifyHint).toContain('zlens semantic approve completed_revenue');
   });
 });

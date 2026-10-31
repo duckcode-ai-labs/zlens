@@ -1,4 +1,5 @@
 import { variableName, type ImportedParameterType, type ImportedSqlParameter } from '../sql-import-script.js';
+import type { BiTableSource } from './types.js';
 
 /**
  * Reading the SQL out of Power Query (M) code: a Power BI table loads its rows
@@ -82,6 +83,118 @@ export function readPowerQuery(expression: string, context: { parameters: Map<st
     ? []
     : Array.from(new Set(tokens.filter((token) => token.kind === 'identifier' && FILE_SOURCES.test(token.text)).map((token) => token.text)));
   return { queries, tables, otherSources, ...(connector ? { connector } : {}) };
+}
+
+/** What a Power Query that loads a database table does after picking it. */
+export interface PowerQueryTable {
+  source?: BiTableSource;
+  /** The column's name after Power Query (lower case) → the database column, through `Table.RenameColumns`. */
+  renames: Map<string, string>;
+  /** Database columns (lower case) changed to a type that changes their values, with the type as written. */
+  changedTypes: Record<string, string>;
+  /** Steps that change the rows or values (`Table.SelectRows`, `Table.AddColumn`), so the table is no longer the database's. */
+  changingSteps: string[];
+}
+
+/** Steps that keep the table's rows and values: renaming, picking or ordering columns, changing types. */
+const KEEPING_STEPS = /^Table\.(?:RenameColumns|TransformColumnTypes|SelectColumns|RemoveColumns|ReorderColumns|Sort|Buffer)$/i;
+/** Types that change a column's values: a whole number or a fixed decimal rounds, a date drops the time. */
+const CHANGES_VALUES = /^(?:Int64\.Type|Int32\.Type|Int16\.Type|Int8\.Type|Byte\.Type|Currency\.Type|Date\.Type|DateTime\.Type|DateTimeZone\.Type|type\s+(?:date|datetime|datetimezone))$/i;
+
+/**
+ * The database table a Power Query loads (`Source{[Schema="dbo",Item="ORDERS"]}`),
+ * the server and database it connects to, and the steps after it: renames
+ * are followed back to the database column, a change to a whole number or a
+ * date is noted per column, and any other step means the table changed.
+ */
+export function readPowerQueryTable(expression: string, context: { shared: Map<string, string> }): PowerQueryTable {
+  const tokens = tokenize(expression);
+  const result: PowerQueryTable = { renames: new Map(), changedTypes: {}, changingSteps: [] };
+  const tables = navigationTables(tokens);
+  if (tables.length === 1) {
+    const dot = tables[0]!.lastIndexOf('.');
+    const connection = connectionOf(tokens, context.shared);
+    result.source = {
+      ...(dot > 0 ? { schema: tables[0]!.slice(0, dot) } : {}),
+      table: dot > 0 ? tables[0]!.slice(dot + 1) : tables[0]!,
+      ...connection,
+    };
+  }
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    if (token.kind !== 'identifier' || !/^Table\./i.test(token.text) || tokens[index + 1]?.text !== '(') continue;
+    if (!KEEPING_STEPS.test(token.text)) {
+      result.changingSteps.push(token.text);
+      continue;
+    }
+    const args = callArguments(tokens, index + 1);
+    const pairs = args[1] ? listPairs(tokens, args[1]) : [];
+    if (/^Table\.RenameColumns$/i.test(token.text)) {
+      for (const [from, to] of pairs) {
+        if (typeof from !== 'string' || typeof to !== 'string') continue;
+        const original = result.renames.get(from.toLowerCase()) ?? from;
+        result.renames.set(to.toLowerCase(), original);
+      }
+    } else if (/^Table\.TransformColumnTypes$/i.test(token.text)) {
+      for (const [column, type] of pairs) {
+        if (typeof column !== 'string' || typeof type !== 'object') continue;
+        if (CHANGES_VALUES.test(type.written)) result.changedTypes[(result.renames.get(column.toLowerCase()) ?? column).toLowerCase()] = type.written;
+      }
+    }
+  }
+  return result;
+}
+
+/** `{{"a", "b"}, {"c", Int64.Type}}` or `{"a", "b"}` → [a, b] pairs; a value that is not text comes back as written. */
+function listPairs(tokens: MToken[], [start, end]: [number, number]): Array<[string | { written: string }, string | { written: string }]> {
+  const value = (range: [number, number]): string | { written: string } => {
+    const [from, to] = range;
+    if (to - from === 1 && tokens[from]!.kind === 'string') return tokens[from]!.value;
+    return { written: tokens.slice(from, to).map((token) => token.text).join(' ').replace(/\s*\.\s*/g, '.') };
+  };
+  let at = start;
+  while (at < end && tokens[at]!.text !== '{') at += 1;
+  if (at >= end) return [];
+  const inner = splitTopLevel(tokens, at + 1, closing(tokens, at), ',');
+  const nested = inner.every(([from]) => tokens[from]?.text === '{');
+  const lists = nested ? inner.map(([from]) => splitTopLevel(tokens, from + 1, closing(tokens, from), ',')) : [inner];
+  return lists.filter((items) => items.length >= 2).map((items) => [value(items[0]!), value(items[1]!)]);
+}
+
+/** The server and database a connector call names: `Sql.Database("server", "db")`, or the `Kind="Database"` it navigates to. */
+function connectionOf(tokens: MToken[], shared: Map<string, string>, depth = 0): Omit<BiTableSource, 'table' | 'schema'> {
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]!;
+    const known = token.kind === 'identifier' ? CONNECTORS.find(([pattern]) => pattern.test(token.text)) : undefined;
+    if (!known || tokens[index + 1]?.text !== '(') continue;
+    const args = callArguments(tokens, index + 1).map(([from, to]) => (to - from === 1 && tokens[from]!.kind === 'string' ? tokens[from]!.value : undefined));
+    const navigated = navigationDatabase(tokens);
+    const namesDatabase = /^(?:Sql\.Database|PostgreSQL\.Database|AmazonRedshift\.Database|MySQL\.Database|Oracle\.Database|Teradata\.Database)$/i.test(token.text);
+    const database = (namesDatabase ? args[1] : undefined) ?? navigated;
+    return { connector: known[1], ...(args[0] ? { server: args[0] } : {}), ...(database ? { database } : {}) };
+  }
+  if (depth < 2) {
+    for (const token of tokens) {
+      const sharedExpression = token.kind === 'identifier' ? shared.get(token.text) : undefined;
+      if (!sharedExpression) continue;
+      const found = connectionOf(tokenize(sharedExpression), shared, depth + 1);
+      if (found.connector) return { ...found, ...(found.database ? {} : navigationDatabase(tokens) ? { database: navigationDatabase(tokens) } : {}) };
+    }
+  }
+  return {};
+}
+
+function navigationDatabase(tokens: MToken[]): string | undefined {
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (tokens[index]!.text !== '{' || tokens[index + 1]?.text !== '[') continue;
+    const end = closing(tokens, index + 1);
+    const fields = new Map<string, string>();
+    for (let field = index + 2; field < end - 2; field += 1) {
+      if (tokens[field]!.kind === 'identifier' && tokens[field + 1]!.text === '=' && tokens[field + 2]!.kind === 'string') fields.set(tokens[field]!.text.toLowerCase(), tokens[field + 2]!.value);
+    }
+    if ((fields.get('kind') ?? '').toLowerCase() === 'database' && fields.get('name')) return fields.get('name');
+  }
+  return undefined;
 }
 
 // ── Assembling the SQL text ────────────────────────────────────────────────

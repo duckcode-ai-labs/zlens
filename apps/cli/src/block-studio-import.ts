@@ -2,6 +2,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, extname, join, relative, resolve, sep } from 'node:path';
 import { biSourceKind, isBiImportFile, readBiFile, readTmdlFolder, unreadableBiFile, type ExtractedBiFile } from './bi-import/index.js';
+import { classifyCalculations, type BiCalculation } from './bi-import/calculations.js';
+import type { BiCalculationModel } from './bi-import/types.js';
 import { currentRecordOwner, ownedBy } from './host/record-owner.js';
 import {
   foldSqlScript,
@@ -284,6 +286,8 @@ export function planBlockStudioImport(
   importId: string;
   defaults: { domain: string; owner: string; tags: string[] };
   createdAt: string;
+  /** The BI files' calculations and where their fields read from, for metric drafts. */
+  calculations: ImportCalculations;
 } {
   const sourceBundle = collectSqlSources(projectRoot, options);
   const sourceKind = sourceBundle.sourceKind;
@@ -297,7 +301,8 @@ export function planBlockStudioImport(
     owner: options.owner?.trim() ?? '',
     tags: normalizeTags(['imported', 'raw-sql', ...(options.tags ?? [])]),
   };
-  const collected = collectSqlStatements(sourceBundle.sources);
+  // A BI file with calculations and no SQL has no statements: its calculations become metric drafts instead.
+  const collected = sourceBundle.sources.length ? collectSqlStatements(sourceBundle.sources) : { statements: [], skipped: [] };
   collected.skipped.unshift(...sourceBundle.skipped);
   const importId = buildImportId(sourceKind, sourceBundle.inputPath, now);
   const built = collected.statements.map((statement) => buildSqlCandidate({
@@ -336,7 +341,26 @@ export function planBlockStudioImport(
     importId,
     defaults,
     createdAt: now,
+    calculations: sourceBundle.calculations,
   };
+}
+
+/** The calculations a BI file holds, with the tables and fields they read: what metric drafts are made from. */
+export interface ImportCalculations {
+  calculations: BiCalculation[];
+  models: BiCalculationModel[];
+}
+
+/** Whether any calculation could become a metric draft (simple, filtered or ratio). */
+function hasMetricCalculations(calculations: ImportCalculations): boolean {
+  return classifyCalculations(calculations.calculations).some((calculation) => calculation.kind === 'simple' || calculation.kind === 'filtered' || calculation.kind === 'ratio');
+}
+
+export function readBlockStudioImportCalculations(projectRoot: string, importId: string): ImportCalculations {
+  ownImportManifest(projectRoot, importId);
+  const file = join(importRoot(projectRoot, importId), 'calculations.json');
+  if (!existsSync(file)) return { calculations: [], models: [] };
+  return JSON.parse(readFileSync(file, 'utf-8')) as ImportCalculations;
 }
 
 export function createBlockStudioImportSession(
@@ -344,8 +368,9 @@ export function createBlockStudioImportSession(
   options: CreateBlockStudioImportOptions,
 ): BlockStudioImportSession {
   const inputMode = options.inputMode ?? (options.sources?.length ? 'upload' : 'path');
-  const { sourceKind, inputPath, sourceFiles, candidates, skippedStatements, importId, defaults, createdAt: now } = planBlockStudioImport(projectRoot, options);
-  if (candidates.length === 0) {
+  const { sourceKind, inputPath, sourceFiles, candidates, skippedStatements, importId, defaults, createdAt: now, calculations } = planBlockStudioImport(projectRoot, options);
+  // A workbook with calculations and no SQL still imports: its calculations become metric drafts.
+  if (candidates.length === 0 && !hasMetricCalculations(calculations)) {
     throw new Error(`Nothing to import: ${skippedStatements.length === 1 ? 'the one statement' : `all ${skippedStatements.length} statements`} found ${skippedStatements.length === 1 ? 'was' : 'were'} left out. ${skippedStatements.slice(0, 3).map((item) => item.reason).join(' ')}`);
   }
   giveUniqueNames(candidates);
@@ -363,6 +388,7 @@ export function createBlockStudioImportSession(
   };
   const session = { ...manifest, candidates };
   writeBlockStudioImportSession(projectRoot, session);
+  if (calculations.calculations.length) writeFileSync(join(importRoot(projectRoot, importId), 'calculations.json'), JSON.stringify(calculations) + '\n', 'utf-8');
   return session;
 }
 
@@ -1700,12 +1726,16 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
   inputPath: string;
   sources: SqlSource[];
   skipped: SkippedSqlStatement[];
+  calculations: ImportCalculations;
 } {
   const sources: SqlSource[] = [];
   const skipped: SkippedSqlStatement[] = [];
+  const calculations: ImportCalculations = { calculations: [], models: [] };
   const add = (extracted: ExtractedBiFile) => {
     sources.push(...extracted.sources);
     skipped.push(...extracted.skipped);
+    calculations.calculations.push(...(extracted.inventory?.calculations ?? []));
+    calculations.models.push(...(extracted.models ?? []));
   };
   const readSafely = (displayName: string, read: () => ExtractedBiFile) => {
     try {
@@ -1738,6 +1768,7 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
       inputPath: options.inputMode === 'paste' ? 'pasted SQL' : `${options.sources.length} uploaded file(s)`,
       sources,
       skipped,
+      calculations,
     };
   }
 
@@ -1763,7 +1794,7 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
     // Tables and shared expressions (parameters) make up the model's queries.
     const expressions = join(folder, 'expressions.tmdl');
     const modelFiles = Array.from(new Set([...folderFiles, ...(existsSync(expressions) && (!options.fileAllowed || options.fileAllowed(expressions)) ? [expressions] : [])]))
-      .filter((file) => file.includes(`${sep}tables${sep}`) || basename(file).toLowerCase() === 'expressions.tmdl' || folderFiles.length === 1);
+      .filter((file) => file.includes(`${sep}tables${sep}`) || /^(?:expressions|model)\.tmdl$/i.test(basename(file)) || folderFiles.length === 1);
     if (modelFiles.length === 0) continue;
     readSafely(displayPath(projectRoot, folder), () => readTmdlFolder(modelFiles.map((file) => ({ absolutePath: file, displayPath: displayPath(projectRoot, file) })), displayPath(projectRoot, folder)));
   }
@@ -1773,6 +1804,7 @@ function collectSqlSources(projectRoot: string, options: CreateBlockStudioImport
     inputPath: displayPath(projectRoot, inputPath),
     sources,
     skipped,
+    calculations,
   };
 }
 
