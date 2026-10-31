@@ -185,7 +185,9 @@ draft, with:
 - the formula it came from, and notes where the numbers can differ (a joined
   Tableau data source, an extract, a DAX filter that replaces the report's own
   filter, another database);
-- for a ratio, the parts that are approved with it.
+- for a ratio, the parts that are approved with it;
+- its latest comparison with the old report: **Matches**, **Differs** or **Not
+  proven**, with **Changed since compared** if the definition moved since.
 
 The text, date and true/false columns of those tables come with them as
 dimension drafts, so an approved metric can answer "by region" or "by month".
@@ -194,7 +196,11 @@ dimension drafts, so an approved metric can answer "by region" or "by month".
 `semantic-layer/metrics/_drafts/<domain>/` to `semantic-layer/metrics/<domain>/`
 with `status: certified`, who approved it and when, its table's dimensions
 come with it, and Ask labels its answers **From Metrics**. **Discard** deletes the draft. **Approve all that ran (N)**
-approves every draft whose check ran. Below them: calculations that are
+approves every draft whose check ran, leaving out any that differs from the old
+report, and any ratio that would bring one along: those are approved one at a
+time. **Compare with the old report** takes an export of a report and compares
+every value, as [`zlens migrate compare`](../guides/migrate.md#prove-the-numbers-match)
+does; a saved query draft has the same section. Below them: calculations that are
 already a metric, ones whose check failed on the database, and ones left out,
 each with why. See [Migrate from other tools](../guides/migrate.md#bring-the-calculations-over-as-metrics).
 

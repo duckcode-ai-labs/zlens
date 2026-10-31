@@ -16,6 +16,7 @@ import { convertCalculationsToMetricDrafts, isPlainSqlName, type MetricDraft, ty
 import type { BiTableSource } from './bi-import/types.js';
 import type { ImportCalculations } from './block-studio-import.js';
 import type { WarehouseTableSummary } from './datasets/table-dataset.js';
+import { catalogWithDrafts, metricMatchStatus, type MatchStatus } from './report-match/status.js';
 
 /**
  * The import's metric drafts (D3): a BI file's simple, filtered and ratio
@@ -28,6 +29,10 @@ import type { WarehouseTableSummary } from './datasets/table-dataset.js';
 export type ImportMetricDraftOutcome = 'drafted' | 'reused' | 'failed' | 'left-out' | 'row-level' | 'advanced';
 
 export interface ImportMetricDraftItem {
+  /** The draft's latest comparison with an old report, added when it is read. */
+  match?: MatchStatus;
+  /** Approve all leaves it out: it, or a part it would bring along, differs from the old report. */
+  heldBack?: boolean;
   calculation: string;
   formula: string;
   language: 'tableau' | 'dax';
@@ -390,6 +395,8 @@ function slug(value: string): string {
 
 export interface MetricDraftSummary {
   name: string;
+  /** The latest comparison with an old report. */
+  match?: MatchStatus;
   label: string;
   path: string;
   domain?: string;
@@ -408,12 +415,16 @@ export function listMetricDrafts(projectRoot: string): MetricDraftSummary[] {
   const semanticDir = join(projectRoot, 'semantic-layer');
   if (!existsSync(semanticDir)) return [];
   const drafts = loadSemanticMetricDraftsFromDir(semanticDir);
-  const names = new Set(drafts.map((draft) => draft.name));
+  // Approving finds a part whatever its case, so this must too.
+  const names = new Map(drafts.map((draft) => [draft.name.toLowerCase(), draft.name]));
+  const catalog = existsSync(join(semanticDir, 'report-matches', 'metric')) ? catalogWithDrafts(projectRoot) : null;
   return drafts.map((draft) => {
     const extra = draft.source?.extra ?? {};
     const check = extra.check as { value?: number | null; ranAt?: string } | undefined;
+    const match = catalog ? metricMatchStatus(projectRoot, draft.name, catalog) : undefined;
     return {
       name: draft.name,
+      ...(match ? { match } : {}),
       label: draft.label,
       path: `semantic-layer/${String(extra.path ?? '')}`,
       ...(draft.domain ? { domain: draft.domain } : {}),
@@ -423,7 +434,7 @@ export function listMetricDrafts(projectRoot: string): MetricDraftSummary[] {
       ...(check?.ranAt ? { checkedAt: check.ranAt } : {}),
       ...(typeof extra.importId === 'string' ? { importId: extra.importId } : {}),
       notes: Array.isArray(extra.notes) ? extra.notes.map(String) : [],
-      parts: draftParts(draft).filter((part) => names.has(part)),
+      parts: draftParts(draft).flatMap((part) => names.get(part.toLowerCase()) ?? []),
     };
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -579,14 +590,40 @@ function removeEmptyFolders(dir: string): void {
  * "Approve all that ran": the drafts this import wrote whose check ran (or
  * all it wrote, when the check was skipped). A draft it only found waiting
  * belongs to the import that made it, and is not listed here for a person to
- * see, so it is not approved here either.
+ * see, so it is not approved here either. A draft whose latest comparison says
+ * Differs is left out, to be approved one at a time; so is one that would bring
+ * it along as a part.
  */
-export function importDraftsToApprove(projectRoot: string, record: ImportMetricDrafts): string[] {
-  const waiting = new Set(listMetricDrafts(projectRoot).map((draft) => draft.name));
-  return Array.from(new Set(record.items
+export function importDraftsToApprove(projectRoot: string, record: ImportMetricDrafts): { names: string[]; leftOut: string[] } {
+  const drafts = listMetricDrafts(projectRoot);
+  const waiting = new Set(drafts.map((draft) => draft.name));
+  const differs = new Set(drafts.filter((draft) => draft.match?.verdict === 'differs' || draft.match?.unreadable).map((draft) => draft.name));
+  for (let grew = differs.size > 0; grew;) {
+    grew = false;
+    for (const draft of drafts) {
+      if (differs.has(draft.name) || !draft.parts.some((part) => differs.has(part))) continue;
+      differs.add(draft.name);
+      grew = true;
+    }
+  }
+  const wrote = Array.from(new Set(record.items
     .filter((item) => item.outcome === 'drafted' && item.path && (item.value !== undefined || !record.checked))
     .map((item) => item.metric!)
     .filter((name) => waiting.has(name))));
+  return { names: wrote.filter((name) => !differs.has(name)), leftOut: wrote.filter((name) => differs.has(name)) };
+}
+
+/** The record as a person reads it: each draft beside its latest comparison. */
+export function importDraftsWithMatches(projectRoot: string, record: ImportMetricDrafts): ImportMetricDrafts {
+  const waiting = new Map(listMetricDrafts(projectRoot).map((draft) => [draft.name, draft]));
+  const { leftOut } = importDraftsToApprove(projectRoot, record);
+  return {
+    ...record,
+    items: record.items.map((item) => {
+      const match = item.metric ? waiting.get(item.metric)?.match : undefined;
+      return { ...item, ...(match ? { match } : {}), ...(item.metric && leftOut.includes(item.metric) ? { heldBack: true } : {}) };
+    }),
+  };
 }
 
 // ── The import's record ─────────────────────────────────────────────────────

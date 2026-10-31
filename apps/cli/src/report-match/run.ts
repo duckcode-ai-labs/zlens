@@ -65,19 +65,31 @@ export interface CompareOutcome {
   comparedAt: string;
   connection: { driver: string; database?: string };
   target:
-    | { kind: 'metrics'; metrics: string[]; dimensions: string[]; timeDimension?: { name: string; granularity: string }; filters: Array<{ dimension: string; operator: string; values: string[] }> }
+    | { kind: 'metrics'; metrics: string[]; dimensions: string[]; timeDimension?: { name: string; granularity: string }; filters: Array<{ dimension: string; operator: string; values: string[] }>; throwaway?: DimensionDefinition[] }
     | { kind: 'query'; name: string; parameters: Record<string, unknown> };
   /** A hash of the compiled SQL and filters: per metric, or `query` for a saved query. */
   querySha256: Record<string, string>;
   mapping: Record<string, string>;
-  filters: { stated: string[]; waived: string[]; seen: string[] };
+  /** `shape` is each stated filter without its values, which is all a record keeps. */
+  filters: { stated: string[]; shape: string[]; waived: string[]; seen: string[] };
   scope: 'all rows' | "the file's rows";
   tolerance?: string;
+  /** On a server: another reader could see other figures, so this can't be recorded for everyone. */
+  readerDependent?: boolean;
   comparison: Comparison;
 }
 
+/** Whitespace counts: inside a quoted value, it is the value. */
 export function queryFingerprint(sql: string, filters: unknown): string {
-  return createHash('sha256').update(`${sql.replace(/\s+/g, ' ').trim()}\u0000${JSON.stringify(filters ?? [])}`).digest('hex');
+  return createHash('sha256').update(`${sql.trim()}\u0000${JSON.stringify(filters ?? [])}`).digest('hex');
+}
+
+/**
+ * A filter as a record keeps it: the field, the operator and how many values.
+ * A record is tracked in git, and a filter's value may be a customer's name.
+ */
+export function maskedFilters(filters: Array<{ dimension: string; operator: string; values: string[] }>): Array<{ dimension: string; operator: string; values: string[] }> {
+  return filters.map((filter) => ({ ...filter, values: filter.values.map((_, index) => `value${index + 1}`) }));
 }
 
 /** A layer for one comparison: drafts are in it, as they are not in the answering layer. */
@@ -154,7 +166,7 @@ export async function runComparison(request: CompareRequest, deps: CompareDeps):
     file: { name: table.fileName, sha256: table.sha256, rows: table.rows.length },
     comparedAt: (deps.now ?? new Date()).toISOString(),
     connection: deps.connection,
-    filters: { stated: stated.map((filter) => filter.text), waived, seen },
+    filters: { stated: stated.map((filter) => filter.text), shape: stated.map((filter) => `${filter.field} ${filter.operator}`), waived, seen },
     scope: request.fileRows ? ("the file's rows" as const) : ('all rows' as const),
     ...(request.tolerance ? { tolerance: request.tolerance } : {}),
   };
@@ -171,7 +183,8 @@ export async function runComparison(request: CompareRequest, deps: CompareDeps):
     return {
       ...base,
       target: { kind: 'query', name: saved.name, parameters },
-      querySha256: { query: queryFingerprint(saved.sql, parameters) },
+      // What the parameters resolved to: a changed default changes the rows, not the SQL.
+      querySha256: { query: queryFingerprint(saved.sql, saved.variables ?? parameters) },
       mapping,
       comparison: compareExport(table, plan, result.rows, {
         ...options,
@@ -185,22 +198,24 @@ export async function runComparison(request: CompareRequest, deps: CompareDeps):
   const target = resolveMetricTarget(table, deps.catalog, choices);
   const filters = stated.map((filter) => ({ dimension: resolveFilterField(filter.field, deps.catalog, target), operator: filter.operator, values: filter.values }));
   const layer = comparisonLayer(deps.catalog, target.throwaway);
-  const compose = (metrics: string[], tableMapping?: Record<string, string>) => layer.composeQuery({
+  const compose = (metrics: string[], applied = filters, tableMapping?: Record<string, string>) => layer.composeQuery({
     metrics,
     dimensions: target.dimensions,
     ...(target.timeDimension ? { timeDimension: target.timeDimension } : {}),
-    filters,
+    filters: applied,
     driver: deps.driver,
     ...(tableMapping ? { tableMapping } : {}),
   });
   const names = target.metrics.map((metric) => metric.name);
-  const composed = names.length ? compose(names, deps.tableMapping) : null;
+  const composed = names.length ? compose(names, filters, deps.tableMapping) : null;
   if (names.length && !composed) {
     throw new ComparisonStopped(`ZLens can't build this table from ${names.join(', ')}. A column of another table needs a certified relationship; otherwise compare a saved query with --query.`);
   }
   const result = composed ? await deps.run(composed.sql) : { rows: [], truncated: false };
-  // Without the table mapping: a record speaks for the definition, wherever the tables are.
-  const querySha256 = Object.fromEntries(names.map((name) => [name, queryFingerprint(compose([name])?.sql ?? '', filters)]));
+  // Without the table mapping or the filters' values: a record speaks for the definition, and has to be
+  // able to compile it again from what it keeps.
+  const masked = maskedFilters(filters);
+  const querySha256 = Object.fromEntries(names.map((name) => [name, queryFingerprint(compose([name], masked)?.sql ?? '', masked)]));
   return {
     ...base,
     target: {
@@ -209,6 +224,7 @@ export async function runComparison(request: CompareRequest, deps: CompareDeps):
       dimensions: target.dimensions,
       ...(target.timeDimension ? { timeDimension: target.timeDimension } : {}),
       filters,
+      ...(target.throwaway.length ? { throwaway: target.throwaway } : {}),
     },
     querySha256,
     mapping: target.mapping,

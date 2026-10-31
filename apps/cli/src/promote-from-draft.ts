@@ -1,3 +1,4 @@
+import { latestMatch, receiptLines, UNREADABLE_RECORD } from './report-match/status.js';
 import { existsSync, mkdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
@@ -154,13 +155,16 @@ export async function promoteFromDraft(
   // that the certified file is on disk.
   unlinkSync(draftAbs);
 
+  // No connection here to compile the query, so a comparison can't count as a passed check.
+  const blockName = /^\s*block\s+"([^"]+)"/m.exec(promoted)?.[1];
+  const compared = blockName ? latestMatch(projectRoot, 'query', blockName) : undefined;
   const receipt = buildCertificationReceipt({
     source: promoted,
     certifiedBy: options.certifiedBy || pickField(promoted, 'owner'),
     via: 'cli',
     enterprise: verdict.enterprise === true,
     checks: verdict.checks,
-    warnings: verdict.warnings,
+    warnings: [...(verdict.warnings ?? []), ...(compared === 'unreadable' ? [UNREADABLE_RECORD] : compared ? receiptLines(compared, undefined).warnings : [])],
     now: options.now,
   });
   const companionPath = writePromotedCompanion(projectRoot, {

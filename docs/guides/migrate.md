@@ -252,12 +252,31 @@ signs off the migration. An `exports.yaml` in the folder gives each file its own
 options, under the file's name: `worksheet`, `report`, `query`, `filters`,
 `waive`, `map`, `keys`, `ignore`, `fileRows`, `tolerance`.
 
+**On the Import screen.** **Compare with the old report**, in the *Metric drafts*
+section and on a saved query draft, does the same thing: drop the file, state the
+filters, read the differences. Each draft then shows its verdict, and **Approve
+all that ran** leaves out what differs.
+
 **What is kept.** Each metric or saved query gets a record in
 `semantic-layer/report-matches/`: who compared which file (by its fingerprint),
-with which filters and mapping, and the counts. Records hold no values, so no
-data enters git; the differences stay in `.dql/`, which git ignores. A record says
+which fields were filtered and how, the mapping, and the counts. Records hold no
+values, not even a filter's or a parameter's, so no data enters git; the differences
+stay in `.dql/`, which git ignores. A waiver's reason is kept as you wrote it. A record says
 a named person compared a named file. It can't prove the file came from Tableau,
 and it never certifies anything. `--no-record` compares without keeping one.
+
+A record holds a hash of the compiled query, so a draft shows **Changed since
+compared** when its definition, or a part of it, moves on. The newest comparison
+with each report counts, but a narrower look at the same query, such as fewer rows
+or `--file-rows`, does not clear a difference. With several reports, the worst
+stands. Certifying a saved query adds that comparison to the receipt: as a passed
+check when it matches every row and the query is unchanged, otherwise as a warning.
+A match is not required to certify.
+
+**On a server.** Comparing runs as you, with your row rules, and the differences
+stay yours. Recording is a second step that takes the right to author datasets. It
+is refused when another person could see different figures, because a result your
+rules narrowed can't stand for everyone.
 
 ## What `zlens migrate <tool>` does today
 

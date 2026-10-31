@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import type { DimensionDefinition } from '@zlens/core';
 import * as yaml from 'js-yaml';
 import { keyWords, type Verdict } from './compare.js';
-import type { CompareOutcome } from './run.js';
+import { maskedFilters, type CompareOutcome } from './run.js';
 
 /**
  * What stays after a comparison. Records are their own tracked files, one per
@@ -23,6 +24,15 @@ export interface MatchRecord {
   connection: { driver: string; database?: string };
   /** A hash of the compiled SQL and filters: when it no longer matches, the record shows Changed since compared. */
   querySha256: string;
+  /** A metric's question, to compile it again and check that hash. Its filters hold placeholders, not values. */
+  asked?: {
+    dimensions: string[];
+    timeDimension?: { name: string; granularity: string };
+    filters: Array<{ dimension: string; operator: string; values: string[] }>;
+    throwaway?: DimensionDefinition[];
+  };
+  /** A saved query's parameters that were set, by name. */
+  parameterNames?: string[];
   mapping: Record<string, string>;
   filters: { stated: string[]; waived: string[] };
   scope: string;
@@ -42,12 +52,19 @@ function recordFile(projectRoot: string, kind: 'metric' | 'query', name: string)
   return join(projectRoot, 'semantic-layer', 'report-matches', kind, `${file}.yaml`);
 }
 
+/** Newest first, by when each was compared, not when it was written. Throws on a file it can't read. */
 export function readMatchRecords(projectRoot: string, kind: 'metric' | 'query', name: string): MatchRecord[] {
   const file = recordFile(projectRoot, kind, name);
   if (!existsSync(file)) return [];
   const parsed = yaml.load(readFileSync(file, 'utf-8'), { schema: yaml.JSON_SCHEMA }) as { matches?: MatchRecord[] } | null;
-  return Array.isArray(parsed?.matches) ? parsed.matches : [];
+  const matches = parsed?.matches;
+  if (!Array.isArray(matches) || !matches.every((record) => ['matches', 'differs', 'not-proven'].includes(record?.verdict))) {
+    throw new Error(`The record file for ${name} can't be read. Fix it, or delete it and compare again.`);
+  }
+  return newestFirst(matches);
 }
+
+const newestFirst = (records: MatchRecord[]) => [...records].sort((a, b) => String(b.comparedAt).localeCompare(String(a.comparedAt)));
 
 /** One record per metric compared, or one for the saved query. Newest first. */
 export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, who: { comparedBy: string; via: string }): string[] {
@@ -61,7 +78,7 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
     via: who.via,
     connection: outcome.connection,
     mapping: outcome.mapping,
-    filters: { stated: outcome.filters.stated, waived: outcome.filters.waived },
+    filters: { stated: outcome.filters.shape, waived: outcome.filters.waived },
     scope: outcome.scope,
     rows: outcome.comparison.rows,
     tolerance: outcome.tolerance ?? 'none',
@@ -69,7 +86,7 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
   const write = (kind: 'metric' | 'query', name: string, record: MatchRecord) => {
     const file = recordFile(projectRoot, kind, name);
     mkdirSync(dirname(file), { recursive: true });
-    const matches = [record, ...readMatchRecords(projectRoot, kind, name)].slice(0, MAX_RECORDS);
+    const matches = newestFirst([record, ...readMatchRecords(projectRoot, kind, name)]).slice(0, MAX_RECORDS);
     writeFileSync(file, yaml.dump({ matches }, { lineWidth: 200, noRefs: true }), 'utf-8');
     return file.slice(projectRoot.length + 1).replaceAll('\\', '/');
   };
@@ -78,15 +95,19 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
     return [write('query', outcome.target.name, {
       ...shared,
       querySha256: outcome.querySha256.query!,
+      ...(Object.keys(outcome.target.parameters).length ? { parameterNames: Object.keys(outcome.target.parameters) } : {}),
       values: { compared, equal },
       precision: Array.from(new Set(outcome.comparison.numbers.map((number) => number.precision))).join('; ') || 'nothing compared',
       verdict: outcome.comparison.verdict,
     })];
   }
   // Each metric on its own, so one does not inherit another's difference.
+  const { dimensions, timeDimension, filters, throwaway } = outcome.target;
+  const asked = { dimensions, ...(timeDimension ? { timeDimension } : {}), filters: maskedFilters(filters), ...(throwaway ? { throwaway } : {}) };
   return outcome.comparison.numbers.map((number) => write('metric', number.name, {
     ...shared,
     querySha256: outcome.querySha256[number.name]!,
+    asked,
     values: { compared: number.compared, equal: number.equal },
     precision: number.precision,
     verdict: number.verdict,
@@ -97,7 +118,14 @@ export function writeMatchRecords(projectRoot: string, outcome: CompareOutcome, 
 export function matchWords(record: MatchRecord): string {
   const tool = record.tool === 'tableau' ? ' (Tableau)' : record.tool === 'powerbi' ? ' (Power BI)' : '';
   const verdict = record.verdict === 'matches' ? 'Matches' : record.verdict === 'differs' ? 'Differs from' : 'Not proven against';
-  return `${verdict} ${record.report}${tool}, ${record.comparedAt.slice(0, 10)}: ${record.values.equal} of ${record.values.compared} values at ${record.precision}${record.scope === 'all rows' ? '' : `, ${record.scope}`}`;
+  const leftOut = Object.entries(record.mapping ?? {}).filter(([, meaning]) => meaning === 'left out, as asked').map(([column]) => column);
+  const waived = record.filters?.waived.length ?? 0;
+  const limits = [
+    ...(record.scope === 'all rows' ? [] : [`only ${record.scope}`]),
+    ...(leftOut.length ? [`left out: ${leftOut.join(', ')}`] : []),
+    ...(waived ? [`${waived} filter${waived === 1 ? '' : 's'} waived`] : []),
+  ];
+  return `${verdict} ${record.report}${tool}, ${record.comparedAt.slice(0, 10)}: ${record.values.equal} of ${record.values.compared} values at ${record.precision}${limits.map((limit) => `, ${limit}`).join('')}`;
 }
 
 // ── Per-person detail ───────────────────────────────────────────────────────

@@ -174,8 +174,9 @@ describe('a comparison from start to finish', () => {
     await expect(runComparison({ file: { name: 'x.pbix', bytes: Buffer.from('x') } }, deps(rows))).rejects.toThrow(ExportRefused);
   });
 
-  it('changes the fingerprint when the query or its filters change, not when spacing does', () => {
-    expect(queryFingerprint('select  1', [])).toBe(queryFingerprint('select 1', []));
+  it('changes the fingerprint when the query or its filters change, spacing inside it included', () => {
+    expect(queryFingerprint(" select 'a  b' ", [])).toBe(queryFingerprint("select 'a  b'", []));
+    expect(queryFingerprint("select 'a  b'", [])).not.toBe(queryFingerprint("select 'a b'", []));
     expect(queryFingerprint('select 1', [])).not.toBe(queryFingerprint('select 2', []));
     expect(queryFingerprint('select 1', [])).not.toBe(queryFingerprint('select 1', ['x']));
   });

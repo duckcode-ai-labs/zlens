@@ -16,7 +16,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   It reads what these tools really write: UTF-16 with tabs, `$1,234`, `($41,000)`,
   `8.7%`, decimal commas, `Measure Names`, total rows. Each metric gets its own
   verdict: **Matches**, **Differs**, or **Not proven** when nothing disagrees but
-  something is missing. Exit codes follow (0, 1, 2).
+  something is missing. Exit codes follow (0, 1, 2). The Import screen has the same
+  thing as **Compare with the old report**: each draft shows its verdict, and
+  **Approve all that ran** leaves out what differs. A draft shows **Changed since
+  compared** when its definition moves on, and certifying a saved query adds its
+  latest comparison to the receipt. On a server, comparing runs under your row
+  rules, and recording is a separate step, refused when those rules narrowed
+  what you saw.
 - **Filters decide most comparisons,** and an export does not show them. ZLens
   applies none by itself: with `--worksheet` it reads the filters saved on an
   imported worksheet, and each must be stated (`--filter`) or waived with a reason

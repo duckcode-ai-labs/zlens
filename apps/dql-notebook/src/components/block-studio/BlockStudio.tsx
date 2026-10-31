@@ -70,6 +70,7 @@ function selectedTimeGrains(
 }
 import { themes } from '../../themes/notebook-theme';
 import type { Theme, ThemeMode } from '../../themes/notebook-theme';
+import { ReportComparePanel, verdictTone } from './ReportComparePanel';
 import { SQLCellEditor } from '../cells/SQLCellEditor';
 import { ChartOutput, CHART_TYPE_OPTIONS, resolveChartType } from '../output/ChartOutput';
 import { MiniLineageGraph } from '../lineage/MiniLineageGraph';
@@ -4297,12 +4298,24 @@ function BlockStudioImportWorkspace({
       const metrics = result.approved.filter((item) => !item.dimension);
       const dimensions = result.approved.length - metrics.length;
       setMetricDraftsDone((current) => ({ ...current, ...Object.fromEntries(metrics.map((item) => [item.name, 'approved' as const])) }));
-      setMetricDraftsMessage(`Approved ${metrics.length} metric${metrics.length === 1 ? '' : 's'} as ${result.approvedBy}: ${metrics.length === 1 ? 'it answers' : 'they answer'} from now on.${dimensions ? ` ${dimensions} dimension${dimensions === 1 ? '' : 's'} came with ${metrics.length === 1 ? 'it' : 'them'}.` : ''}`);
+      const leftOut = result.leftOut?.length ? `Left out, because the old report differs or the comparison can't be read: ${result.leftOut.join(', ')}. Approve each one once you have looked at why.` : '';
+      const said = metrics.length ? `Approved ${metrics.length} metric${metrics.length === 1 ? '' : 's'} as ${result.approvedBy}: ${metrics.length === 1 ? 'it answers' : 'they answer'} from now on.${dimensions ? ` ${dimensions} dimension${dimensions === 1 ? '' : 's'} came with ${metrics.length === 1 ? 'it' : 'them'}.` : ''}` : '';
+      setMetricDraftsMessage([said, leftOut].filter(Boolean).join(' '));
+      // What is held back can change: a part approved by hand is no longer a draft.
+      refreshMetricDrafts();
     } catch (err: any) {
       setMetricDraftsMessage(err?.message ?? 'Approve failed.');
     } finally {
       setMetricDraftsBusy(null);
     }
+  };
+
+  const refreshMetricDrafts = () => {
+    const id = metricDrafts?.importId;
+    if (!id) return;
+    void api.getImportMetricDrafts(id).then((record) => {
+      if (record) setMetricDrafts((current) => (current?.importId === id ? record : current));
+    }).catch(() => undefined);
   };
 
   const discardMetricDraft = async (name: string) => {
@@ -5008,6 +5021,7 @@ function BlockStudioImportWorkspace({
                     onApprove={(name) => void approveMetricDrafts({ names: [name] }, `approve:${name}`)}
                     onApproveAll={() => void approveMetricDrafts({ importId: metricDrafts.importId }, 'approve-all')}
                     onDiscard={(name) => void discardMetricDraft(name)}
+                    onCompared={refreshMetricDrafts}
                     t={t}
                   />
                 )}
@@ -5498,6 +5512,12 @@ export function ImportCandidateDetail({
           You changed the review details. Save draft, Certify and Edit full DQL use the values shown.
         </div>
       )}
+      {candidate.savedPath && (
+        <details style={{ border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '8px 10px' }}>
+          <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 800, color: t.textSecondary, fontFamily: t.font }}>Compare with the old report</summary>
+          <ReportComparePanel query={candidate.name} primaryButton={primaryImportButtonStyle(t)} t={t} />
+        </details>
+      )}
       {editError && <div role="alert" style={{ fontSize: 12, color: '#f85149', background: '#f8514914', borderRadius: 8, padding: 10 }}>{editError}</div>}
       {runError && (
         <div role="alert" style={{ fontSize: 12, color: '#f85149', background: '#f8514914', border: `1px solid #f8514933`, borderRadius: 8, padding: 10, lineHeight: 1.45, overflowWrap: 'anywhere' }}>
@@ -5806,7 +5826,7 @@ function InfoLine({ label, value, t }: { label: string; value: string; t: Theme 
  * the ones left out, each with why. Approving is a person's act, as
  * certifying is.
  */
-function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onApproveAll, onDiscard, t }: {
+export function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onApproveAll, onDiscard, onCompared, t }: {
   record: ImportMetricDrafts;
   done: Record<string, 'approved' | 'discarded'>;
   busy: string | null;
@@ -5814,10 +5834,13 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
   onApprove: (name: string) => void;
   onApproveAll: () => void;
   onDiscard: (name: string) => void;
+  onCompared: () => void;
   t: Theme;
 }) {
   const drafted = record.items.filter((item) => item.outcome === 'drafted');
-  const waiting = drafted.filter((item) => item.metric && item.path && !done[item.metric] && (item.value !== undefined || !record.checked));
+  const ran = drafted.filter((item) => item.metric && item.path && !done[item.metric] && (item.value !== undefined || !record.checked));
+  // Approve all leaves these out, and each is approved on its own.
+  const waiting = ran.filter((item) => !item.heldBack);
   const reused = record.items.filter((item) => item.outcome === 'reused');
   const failed = record.items.filter((item) => item.outcome === 'failed');
   const leftOut = record.items.filter((item) => item.outcome === 'left-out' || item.outcome === 'advanced');
@@ -5870,11 +5893,14 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
               <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                 <span style={{ fontSize: 12, fontWeight: 800, color: t.textPrimary, flex: 1, minWidth: 0, overflowWrap: 'anywhere' }}>{item.calculation}</span>
                 {record.written && <ImportPill label={formatted(item.value) || 'not run'} tone={item.value === undefined && record.checked ? 'warn' : 'info'} t={t} />}
+                {item.match && <ImportPill label={REPORT_VERDICT_LABELS[item.match.verdict]} tone={verdictTone(item.match.verdict)} t={t} />}
+                {item.match?.changed && <ImportPill label="Changed since compared" tone="warn" t={t} />}
                 {state && <ImportPill label={state} tone={state === 'approved' ? 'ok' : 'warn'} t={t} />}
               </span>
               <span style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>{item.inWords}</span>
               <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono, overflowWrap: 'anywhere' }}>from {item.formula.replace(/\s+/g, ' ').slice(0, 140)}</span>
               {item.parts && item.parts.length > 0 && <span style={{ fontSize: 10, color: t.textMuted }}>Approving it also approves {item.parts.join(', ')}.</span>}
+              {item.match && <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{item.match.words}</span>}
               {item.notes.filter((note) => !sharedNotes.includes(note)).map((note) => <span key={note} style={{ fontSize: 11, color: '#d29922', lineHeight: 1.4 }}>{note}</span>)}
               {canAct && (
                 <span style={{ display: 'flex', gap: 6 }}>
@@ -5890,6 +5916,17 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
             {busy === 'approve-all' ? 'Approving...' : `Approve all that ran (${waiting.length})`}
           </button>
         )}
+        {record.written && ran.length > waiting.length && (
+          <span style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.4 }}>
+            {ran.length - waiting.length} left out of Approve all, because the old report differs or the comparison can't be read: approve each one once you have looked at why.
+          </span>
+        )}
+        {record.written && (
+          <details style={{ borderTop: `1px solid ${t.headerBorder}`, paddingTop: 6 }}>
+            <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 700, color: t.textSecondary }}>Compare with the old report</summary>
+            <ReportComparePanel worksheets={record.worksheets} onRecorded={onCompared} primaryButton={primaryImportButtonStyle(t)} t={t} />
+          </details>
+        )}
         {message && <span role="status" style={{ fontSize: 11, color: t.textSecondary, lineHeight: 1.4, overflowWrap: 'anywhere' }}>{message}</span>}
         {list('Already a metric', reused, (item) => item.reason ?? `The metric ${item.metric}.`)}
         {list('Did not run on the database', failed, (item) => item.reason ?? '')}
@@ -5903,6 +5940,8 @@ function ImportMetricDraftsSection({ record, done, busy, message, onApprove, onA
     </details>
   );
 }
+
+const REPORT_VERDICT_LABELS = { matches: 'Matches', differs: 'Differs', 'not-proven': 'Not proven' };
 
 function ImportPill({ label, tone, t }: { label: string; tone: 'ok' | 'warn' | 'info'; t: Theme }) {
   const color = tone === 'ok' ? '#2ea043' : tone === 'warn' ? '#d29922' : t.accent;

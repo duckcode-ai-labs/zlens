@@ -190,6 +190,9 @@ import type {
   BlockStudioImportSession,
   BlockStudioImportSessionSummary,
   ImportMetricDrafts,
+  ReportCompareRecording,
+  ReportCompareRequest,
+  ReportComparison,
   BlockStudioImportCandidate,
   DqlGenerationSession,
   DqlGenerationCandidate,
@@ -6314,8 +6317,18 @@ export const api = {
     },
 
     /** A person approves metric drafts (by name, or every one an import wrote that ran): they answer from then on. */
-    async approveMetricDrafts(body: { names?: string[]; importId?: string }): Promise<{ approved: Array<{ name: string; from: string; to: string; dimension?: boolean }>; approvedBy: string }> {
+    async approveMetricDrafts(body: { names?: string[]; importId?: string }): Promise<{ approved: Array<{ name: string; from: string; to: string; dimension?: boolean }>; approvedBy: string; leftOut?: string[] }> {
       return request('/api/semantic-layer/metric-drafts/approve', { method: 'POST', body: JSON.stringify(body) });
+    },
+
+    /** Compare an old report's export with ZLens's own table. */
+    async compareWithReport(body: ReportCompareRequest): Promise<{ comparison: ReportComparison; recording: ReportCompareRecording }> {
+      return request('/api/report-match/compare', { method: 'POST', body: JSON.stringify(body) });
+    },
+
+    /** Keep a comparison's counts in the project, beside what was compared. */
+    async recordComparison(id: string): Promise<{ recorded: string[] }> {
+      return request('/api/report-match/record', { method: 'POST', body: JSON.stringify({ id, via: 'screen' }) });
     },
 
     async discardMetricDrafts(names: string[]): Promise<{ discarded: string[] }> {

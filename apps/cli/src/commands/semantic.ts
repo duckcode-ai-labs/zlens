@@ -107,6 +107,7 @@ function semanticDrafts(projectRoot: string, flags: CLIFlags): void {
     const value = draft.value === undefined ? 'not run' : draft.value === null ? 'all rows: empty' : `all rows: ${formatValue(draft.value)}`;
     console.log(`  ${draft.name.padEnd(width)}  ${draft.inWords ?? draft.label}   ${value}`);
     if (draft.formula) console.log(`  ${''.padEnd(width)}  from ${draft.formula.replace(/\s+/g, ' ').slice(0, 100)}`);
+    if (draft.match) console.log(`  ${''.padEnd(width)}  ${draft.match.words}${draft.match.changed ? '. Changed since compared.' : ''}`);
     for (const note of draft.notes) console.log(`  ${''.padEnd(width)}  note: ${note}`);
   }
   console.log('\n  Approve: zlens semantic approve <name> (a ratio brings its parts), or --all-from <import id>.\n');
@@ -114,6 +115,7 @@ function semanticDrafts(projectRoot: string, flags: CLIFlags): void {
 
 function semanticApprove(projectRoot: string, rest: string[], flags: CLIFlags): void {
   let names = rest.filter(Boolean);
+  let leftOut: string[] = [];
   if (flags.allFrom) {
     const importId = flags.allFrom === 'latest' ? latestImportWithMetricDrafts(projectRoot) : flags.allFrom;
     const record = importId ? readImportMetricDraftsRecord(projectRoot, importId) : null;
@@ -121,7 +123,14 @@ function semanticApprove(projectRoot: string, rest: string[], flags: CLIFlags): 
       console.error(`\n  ✗ ${flags.allFrom === 'latest' ? 'No import has made metric drafts yet.' : `Import ${flags.allFrom} made no metric drafts.`}\n`);
       process.exit(1);
     }
-    names = [...names, ...importDraftsToApprove(projectRoot, record)];
+    const fromImport = importDraftsToApprove(projectRoot, record);
+    names = [...names, ...fromImport.names];
+    leftOut = fromImport.leftOut;
+  }
+  const saidOfLeftOut = `Left out, because the old report differs or the comparison can't be read: ${leftOut.join(', ')}. Approve each by name once you have looked at why.`;
+  if (!names.length && leftOut.length) {
+    console.log(flags.format === 'json' ? JSON.stringify({ approved: [], leftOut }, null, 2) : `\n  ${saidOfLeftOut}\n`);
+    return;
   }
   if (!names.length) {
     console.error('\n  ✗ Name the metric drafts to approve, or --all-from <import id|latest>. List them with zlens semantic drafts.\n');
@@ -131,7 +140,7 @@ function semanticApprove(projectRoot: string, rest: string[], flags: CLIFlags): 
   try {
     const approved = approveMetricDrafts(projectRoot, Array.from(new Set(names)), actor);
     if (flags.format === 'json') {
-      console.log(JSON.stringify({ approved, approvedBy: actor }, null, 2));
+      console.log(JSON.stringify({ approved, approvedBy: actor, ...(leftOut.length ? { leftOut } : {}) }, null, 2));
       return;
     }
     const metrics = approved.filter((item) => !item.dimension);
@@ -139,6 +148,7 @@ function semanticApprove(projectRoot: string, rest: string[], flags: CLIFlags): 
     console.log(`\n  Approved ${metrics.length} metric${metrics.length === 1 ? '' : 's'} as ${actor}: ${metrics.length === 1 ? 'it answers' : 'they answer'} from now on.`);
     for (const item of metrics) console.log(`  ✓ ${item.name}  →  ${item.to}`);
     if (dimensions.length) console.log(`  With ${dimensions.length} dimension${dimensions.length === 1 ? '' : 's'} of their tables, to group by: ${dimensions.map((item) => item.name).join(', ')}.`);
+    if (leftOut.length) console.log(`  ${saidOfLeftOut}`);
     console.log('');
   } catch (error) {
     console.error(`\n  ✗ ${error instanceof Error ? error.message : String(error)}\n`);
