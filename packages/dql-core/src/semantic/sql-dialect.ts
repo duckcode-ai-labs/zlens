@@ -16,6 +16,12 @@ export interface SQLDialect {
   /** Quote an identifier (table/column name). */
   quoteIdentifier(name: string): string;
 
+  /**
+   * A text value as this database reads it. A value can come from a person, an
+   * agent or a BI file, so it must never be able to end the string.
+   */
+  quoteString(value: string): string;
+
   /** CURRENT_TIMESTAMP expression. */
   currentTimestamp(): string;
 
@@ -35,6 +41,25 @@ export interface SQLDialect {
   ilike(column: string, pattern: string): string;
 }
 
+/** Standard SQL: a quote doubles, and a backslash is an ordinary character. */
+function standardString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+/** Databases that read a backslash as an escape: left alone, `\'` would end the string. */
+function backslashString(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, "''")}'`;
+}
+
+/**
+ * BigQuery and Databricks, where `''` does not mean a quote. It is written as
+ * \u0027 rather than `\'`, so nothing that scans the SQL later (for parentheses
+ * or column names) has to know the escape does not end the string.
+ */
+function escapedString(value: string): string {
+  return `'${value.replace(/\\/g, '\\\\').replace(/'/g, '\\u0027').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}'`;
+}
+
 // ── PostgreSQL / Redshift ────────────────────────────────────────────────────
 
 class PostgreSQLDialect implements SQLDialect {
@@ -47,6 +72,10 @@ class PostgreSQLDialect implements SQLDialect {
 
   quoteIdentifier(name: string): string {
     return `"${name.replace(/"/g, '""')}"`;
+  }
+
+  quoteString(value: string): string {
+    return standardString(value);
   }
 
   currentTimestamp(): string {
@@ -84,6 +113,10 @@ class DuckDBDialect implements SQLDialect {
     return `"${name.replace(/"/g, '""')}"`;
   }
 
+  quoteString(value: string): string {
+    return standardString(value);
+  }
+
   currentTimestamp(): string {
     return 'CURRENT_TIMESTAMP';
   }
@@ -117,6 +150,10 @@ class SnowflakeDialect implements SQLDialect {
 
   quoteIdentifier(name: string): string {
     return `"${name.replace(/"/g, '""')}"`;
+  }
+
+  quoteString(value: string): string {
+    return backslashString(value);
   }
 
   currentTimestamp(): string {
@@ -155,6 +192,10 @@ class BigQueryDialect implements SQLDialect {
   quoteIdentifier(name: string): string {
     // BigQuery reads backslash escapes inside backticks: a backslash is escaped too, or it would escape the closing one.
     return `\`${name.replace(/\\/g, '\\\\').replace(/`/g, '\\`')}\``;
+  }
+
+  quoteString(value: string): string {
+    return escapedString(value);
   }
 
   currentTimestamp(): string {
@@ -206,6 +247,10 @@ class MySQLDialect implements SQLDialect {
     return `\`${name.replace(/`/g, '``')}\``;
   }
 
+  quoteString(value: string): string {
+    return backslashString(value);
+  }
+
   currentTimestamp(): string {
     return 'NOW()';
   }
@@ -255,6 +300,10 @@ class SQLiteDialect implements SQLDialect {
     return `"${name.replace(/"/g, '""')}"`;
   }
 
+  quoteString(value: string): string {
+    return standardString(value);
+  }
+
   currentTimestamp(): string {
     return "DATETIME('now')";
   }
@@ -291,6 +340,10 @@ class MSSQLDialect implements SQLDialect {
 
   quoteIdentifier(name: string): string {
     return `[${name.replace(/\]/g, ']]')}]`;
+  }
+
+  quoteString(value: string): string {
+    return standardString(value);
   }
 
   currentTimestamp(): string {
@@ -344,6 +397,10 @@ class ClickHouseDialect implements SQLDialect {
     return `"${name.replace(/\\/g, '\\\\').replace(/"/g, '""')}"`;
   }
 
+  quoteString(value: string): string {
+    return backslashString(value);
+  }
+
   currentTimestamp(): string {
     return 'now()';
   }
@@ -377,6 +434,10 @@ class DatabricksDialect implements SQLDialect {
 
   quoteIdentifier(name: string): string {
     return `\`${name.replace(/`/g, '``')}\``;
+  }
+
+  quoteString(value: string): string {
+    return escapedString(value);
   }
 
   currentTimestamp(): string {
@@ -414,6 +475,10 @@ class TrinoDialect implements SQLDialect {
     return `"${name.replace(/"/g, '""')}"`;
   }
 
+  quoteString(value: string): string {
+    return standardString(value);
+  }
+
   currentTimestamp(): string {
     return 'CURRENT_TIMESTAMP';
   }
@@ -437,9 +502,16 @@ class TrinoDialect implements SQLDialect {
 
 // ── Dialect Registry ─────────────────────────────────────────────────────────
 
+/** Redshift reads Postgres's SQL, from before a backslash in a string became an ordinary character. */
+class RedshiftDialect extends PostgreSQLDialect {
+  override quoteString(value: string): string {
+    return backslashString(value);
+  }
+}
+
 const DIALECT_MAP: Record<string, SQLDialect> = {
   postgresql: new PostgreSQLDialect(),
-  redshift: new PostgreSQLDialect(),
+  redshift: new RedshiftDialect(),
   duckdb: new DuckDBDialect(),
   file: new DuckDBDialect(),
   snowflake: new SnowflakeDialect(),

@@ -444,6 +444,41 @@ describe('SemanticLayer', () => {
     });
   });
 
+  describe('requested filters are applied or refused, never dropped', () => {
+    const layer = () => new SemanticLayer({
+      metrics: [{ name: 'sales', label: 'Sales', description: '', domain: 'x', sql: 'amount', type: 'sum', table: 'orders' }],
+      dimensions: [{ name: 'region', label: 'Region', description: '', sql: 'region', type: 'string', table: 'orders' }],
+    });
+    const compose = (operator: string, values: string[], driver = 'postgresql') =>
+      layer().composeQuery({ metrics: ['sales'], dimensions: [], filters: [{ dimension: 'region', operator, values }], driver })?.sql;
+
+    it('refuses an operator it does not know, or one missing its values', () => {
+      expect(compose('whatever', ['a'])).toBeUndefined();
+      expect(compose('in', [])).toBeUndefined();
+      expect(compose('not_in', [])).toBeUndefined();
+      expect(compose('equals', [])).toBeUndefined();
+      expect(compose('between', ['a'])).toBeUndefined();
+      expect(compose('gte', [])).toBeUndefined();
+    });
+
+    it('reads the usual spellings of an operator, and applies every value', () => {
+      expect(compose('>=', ['a'])).toContain("WHERE region >= 'a'");
+      expect(compose('<>', ['a'])).toContain("WHERE region != 'a'");
+      expect(compose('GTE', ['5'])).toContain('WHERE region >= 5');
+      expect(compose('not_equals', ['a', 'b'])).toContain("WHERE region NOT IN ('a', 'b')");
+      expect(compose('is_null', [])).toContain('WHERE region IS NULL');
+    });
+
+    it('never lets a value end its string, on any database', () => {
+      const value = "x\\' OR 1=1 --";
+      expect(compose('equals', [value], 'postgresql')).toContain("WHERE region = 'x\\'' OR 1=1 --'");
+      expect(compose('equals', [value], 'snowflake')).toContain("WHERE region = 'x\\\\'' OR 1=1 --'");
+      expect(compose('equals', [value], 'redshift')).toContain("WHERE region = 'x\\\\'' OR 1=1 --'");
+      expect(compose('equals', [value], 'bigquery')).toContain("WHERE region = 'x\\\\\\u0027 OR 1=1 --'");
+      expect(compose('contains', [value], 'databricks')).toContain("LIKE '%x\\\\\\u0027 OR 1=1 --%'");
+    });
+  });
+
   it('supports hierarchy registration and drill-path resolution', () => {
     const layer = new SemanticLayer({
       metrics: [],

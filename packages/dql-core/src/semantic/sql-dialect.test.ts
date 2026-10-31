@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeDialectForPrompt, getDialect } from './sql-dialect.js';
+import { describeDialectForPrompt, getDialect, listDialectDrivers } from './sql-dialect.js';
 
 describe('describeDialectForPrompt (W1.5)', () => {
   it('describes DuckDB conventions (LIMIT at end, ILIKE, double-quote)', () => {
@@ -40,5 +40,14 @@ describe('quoted names keep their closing quote on every engine', () => {
     // Engines whose quoted names take no backslash escapes double the quote only.
     expect(getDialect('postgresql').quoteIdentifier('a\\"b')).toBe('"a\\""b"');
     expect(getDialect('mysql').quoteIdentifier('a`b')).toBe('`a``b`');
+  });
+
+  it('writes text so it cannot end its string, on every database', () => {
+    for (const driver of listDialectDrivers()) {
+      const literal = getDialect(driver).quoteString("a\\' b");
+      // Strip each database's escapes: nothing inside may still be a quote that closes the string.
+      const inside = literal.slice(1, -1).replace(/\\\\/g, '').replace(/''/g, '').replace(/\\u0027/g, '');
+      expect(inside, driver).not.toContain("'");
+    }
   });
 });

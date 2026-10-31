@@ -1073,7 +1073,7 @@ export class SemanticLayer {
       const column = ref.includes('__') ? ref.split('__').pop() ?? ref : ref;
       return qualifyForTable(column, primaryTable);
     };
-    const metricFilters = resolvedMetrics.map((m) => computeMetricFilterPredicate(m, resolveFilterColumn, (sql) => qualifyForTable(sql, m.table)));
+    const metricFilters = resolvedMetrics.map((m) => computeMetricFilterPredicate(m, resolveFilterColumn, (sql) => qualifyForTable(sql, m.table), dialect));
     // A metric that declares a filter we cannot render fails the whole compose.
     if (metricFilters.some((r) => r.kind === 'fail')) return null;
     if (filterOutsideQuery) return null;
@@ -1164,66 +1164,11 @@ export class SemanticLayer {
       const dimSql = useStableAliases
         ? dimensionSql(dimDef)
         : (dimDef.sql.includes('.') || dimDef.table === primaryTable ? dimDef.sql : `${dimDef.table}.${dimDef.sql}`);
-      const v0 = f.values?.[0] ?? '';
-      const v1 = f.values?.[1] ?? '';
-      // Detect if value looks numeric (no quoting needed)
-      const isNumeric = (v: string) => /^-?\d+(\.\d+)?$/.test(v.trim());
-      const quote = (v: string) => isNumeric(v) ? v : `'${v.replace(/'/g, "''")}'`;
-
-      switch (f.operator) {
-        case 'equals':
-          if (f.values.length <= 1) {
-            whereParts.push(`${dimSql} = ${quote(v0)}`);
-          } else {
-            whereParts.push(`${dimSql} IN (${f.values.map(quote).join(', ')})`);
-          }
-          break;
-        case 'not_equals':
-          whereParts.push(`${dimSql} != ${quote(v0)}`);
-          break;
-        case 'in':
-          if (f.values.length > 0) {
-            whereParts.push(`${dimSql} IN (${f.values.map(quote).join(', ')})`);
-          }
-          break;
-        case 'not_in':
-          if (f.values.length > 0) {
-            whereParts.push(`${dimSql} NOT IN (${f.values.map(quote).join(', ')})`);
-          }
-          break;
-        case 'contains':
-          whereParts.push(`${dimSql} LIKE '%${v0.replace(/'/g, "''")}%'`);
-          break;
-        case 'starts_with':
-          whereParts.push(`${dimSql} LIKE '${v0.replace(/'/g, "''")}%'`);
-          break;
-        case 'ends_with':
-          whereParts.push(`${dimSql} LIKE '%${v0.replace(/'/g, "''")}'`);
-          break;
-        case 'gt':
-          whereParts.push(`${dimSql} > ${quote(v0)}`);
-          break;
-        case 'gte':
-          whereParts.push(`${dimSql} >= ${quote(v0)}`);
-          break;
-        case 'lt':
-          whereParts.push(`${dimSql} < ${quote(v0)}`);
-          break;
-        case 'lte':
-          whereParts.push(`${dimSql} <= ${quote(v0)}`);
-          break;
-        case 'between':
-          if (v0 && v1) {
-            whereParts.push(`${dimSql} BETWEEN ${quote(v0)} AND ${quote(v1)}`);
-          }
-          break;
-        case 'is_null':
-          whereParts.push(`${dimSql} IS NULL`);
-          break;
-        case 'is_not_null':
-          whereParts.push(`${dimSql} IS NOT NULL`);
-          break;
-      }
+      // A filter this cannot apply refuses the composition: dropping it would
+      // answer a different question under the same label.
+      const predicate = renderDimensionFilter(f, dimSql, dialect);
+      if (predicate === null) return null;
+      whereParts.push(predicate);
     }
 
     // Governed metric filter shared by every metric: applied once as WHERE.
@@ -2597,8 +2542,64 @@ function normalizeMeasureMetricType(agg: string): MetricDefinition['type'] | nul
 type MetricFilterResult = { kind: 'none' } | { kind: 'ok'; sql: string } | { kind: 'fail' };
 
 /** Quote a scalar value for SQL, matching composeQuery's WHERE conventions. */
-function quoteSqlValue(v: string): string {
-  return /^-?\d+(\.\d+)?$/.test(v.trim()) ? v : `'${v.replace(/'/g, "''")}'`;
+function quoteSqlValue(v: string, dialect: SQLDialect): string {
+  return /^-?\d+(\.\d+)?$/.test(v.trim()) ? v : dialect.quoteString(v);
+}
+
+const FILTER_OPERATOR_ALIASES: Record<string, string> = {
+  '=': 'equals', '==': 'equals', eq: 'equals',
+  '!=': 'not_equals', '<>': 'not_equals', neq: 'not_equals',
+  '>': 'gt', '>=': 'gte', '<': 'lt', '<=': 'lte',
+};
+
+/**
+ * One requested dimension filter as a predicate, or null when it cannot be
+ * applied: an operator this does not know, or one missing its values. Callers
+ * refuse rather than drop it, so a filter is applied or the answer says it
+ * could not be.
+ */
+function renderDimensionFilter(
+  filter: { operator: string; values: string[] },
+  column: string,
+  dialect: SQLDialect,
+): string | null {
+  const operator = String(filter.operator ?? '').trim().toLowerCase();
+  const named = FILTER_OPERATOR_ALIASES[operator] ?? operator;
+  const values = (filter.values ?? []).map(String);
+  const quote = (value: string) => quoteSqlValue(value, dialect);
+  const like = (pattern: string) => `${column} LIKE ${dialect.quoteString(pattern)}`;
+  const [first, second] = values;
+  if (named === 'is_null') return `${column} IS NULL`;
+  if (named === 'is_not_null') return `${column} IS NOT NULL`;
+  if (first === undefined) return null;
+  switch (named) {
+    case 'equals':
+      return values.length === 1 ? `${column} = ${quote(first)}` : `${column} IN (${values.map(quote).join(', ')})`;
+    case 'not_equals':
+      return values.length === 1 ? `${column} != ${quote(first)}` : `${column} NOT IN (${values.map(quote).join(', ')})`;
+    case 'in':
+      return `${column} IN (${values.map(quote).join(', ')})`;
+    case 'not_in':
+      return `${column} NOT IN (${values.map(quote).join(', ')})`;
+    case 'contains':
+      return like(`%${first}%`);
+    case 'starts_with':
+      return like(`${first}%`);
+    case 'ends_with':
+      return like(`%${first}`);
+    case 'gt':
+      return `${column} > ${quote(first)}`;
+    case 'gte':
+      return `${column} >= ${quote(first)}`;
+    case 'lt':
+      return `${column} < ${quote(first)}`;
+    case 'lte':
+      return `${column} <= ${quote(first)}`;
+    case 'between':
+      return first && second ? `${column} BETWEEN ${quote(first)} AND ${quote(second)}` : null;
+    default:
+      return null;
+  }
 }
 
 /**
@@ -2632,6 +2633,7 @@ function renderObjectFilter(
   raw: Record<string, unknown>,
   resolveColumn: (ref: string) => string,
   qualify?: (sql: string) => string,
+  dialect: SQLDialect = getDialect(),
 ): string | null {
   // semantic_manifest.json represents compiled MetricFlow filters as
   // `{ where_filters: [{ where_sql_template: "..." }] }`. Normalize that
@@ -2657,7 +2659,7 @@ function renderObjectFilter(
   const rawValues = raw.values ?? (raw.value !== undefined ? [raw.value] : []);
   const values = (Array.isArray(rawValues) ? rawValues : [rawValues]).map((v) => String(v));
   const op = String(raw.operator ?? raw.op ?? (values.length > 1 ? 'in' : 'equals')).toLowerCase();
-  const q = quoteSqlValue;
+  const q = (value: string) => quoteSqlValue(value, dialect);
   switch (op) {
     case 'equals': case '=': case 'eq':
       return values.length > 1 ? `${col} IN (${values.map(q).join(', ')})` : `${col} = ${q(values[0] ?? '')}`;
@@ -2671,7 +2673,7 @@ function renderObjectFilter(
     case 'gte': case '>=': return `${col} >= ${q(values[0] ?? '')}`;
     case 'lt': case '<': return `${col} < ${q(values[0] ?? '')}`;
     case 'lte': case '<=': return `${col} <= ${q(values[0] ?? '')}`;
-    case 'contains': return `${col} LIKE '%${String(values[0] ?? '').replace(/'/g, "''")}%'`;
+    case 'contains': return `${col} LIKE ${dialect.quoteString(`%${String(values[0] ?? '')}%`)}`;
     case 'is_null': return `${col} IS NULL`;
     case 'is_not_null': return `${col} IS NOT NULL`;
     default: return null;
@@ -2683,6 +2685,7 @@ function renderFilterSpec(
   spec: string | Record<string, unknown> | Array<Record<string, unknown>>,
   resolveColumn: (ref: string) => string,
   qualify?: (sql: string) => string,
+  dialect?: SQLDialect,
 ): string | null {
   if (typeof spec === 'string') {
     const trimmed = spec.trim();
@@ -2692,13 +2695,13 @@ function renderFilterSpec(
     const parts: string[] = [];
     for (const item of spec) {
       if (!item || typeof item !== 'object') return null;
-      const r = renderObjectFilter(item, resolveColumn, qualify);
+      const r = renderObjectFilter(item, resolveColumn, qualify, dialect);
       if (r === null) return null;
       if (r) parts.push(`(${r})`);
     }
     return parts.length ? parts.join(' AND ') : '';
   }
-  if (spec && typeof spec === 'object') return renderObjectFilter(spec, resolveColumn, qualify);
+  if (spec && typeof spec === 'object') return renderObjectFilter(spec, resolveColumn, qualify, dialect);
   return null;
 }
 
@@ -2741,10 +2744,11 @@ function computeMetricFilterPredicate(
   metric: MetricDefinition,
   resolveColumn: (ref: string) => string,
   qualify?: (sql: string) => string,
+  dialect?: SQLDialect,
 ): MetricFilterResult {
   const f = metric.filter;
   if (f === undefined || f === null) return { kind: 'none' };
-  const rendered = renderFilterSpec(f, resolveColumn, qualify);
+  const rendered = renderFilterSpec(f, resolveColumn, qualify, dialect);
   if (rendered === null) return { kind: 'fail' };
   if (!rendered) return { kind: 'none' };
   return { kind: 'ok', sql: rendered };
