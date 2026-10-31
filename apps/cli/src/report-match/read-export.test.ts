@@ -44,6 +44,40 @@ describe('reading an export', () => {
     expect(table.rows).toEqual([['=East', '1']]);
   });
 
+  it('refuses a row wider than the header, which would drop its values', () => {
+    expect(() => readExport(Buffer.from('Region,Sales\nEast,12,7\n'), 'a.csv')).toThrow('more values than it has columns');
+  });
+
+  it('takes a separator at the end of each line for nothing', () => {
+    const table = readExport(Buffer.from('Region,Sales,\nEast,12,\n'), 'a.csv');
+    expect(table.headers).toEqual(['Region', 'Sales']);
+    expect(table.rows).toEqual([['East', '12']]);
+  });
+
+  it('refuses a measure twice for one key, which would keep only the last', () => {
+    expect(() => readExport(Buffer.from('Region,Measure Names,Measure Values\nEast,Total Sales,100\nEast,Total Sales,200\n'), 'a.csv')).toThrow('Total Sales twice');
+  });
+
+  it('refuses a quote that never closes, which would swallow rows', () => {
+    expect(() => readExport(Buffer.from('Region,Sales\n"East,1\nWest,2\nNorth,3\n'), 'a.csv')).toThrow('never closes');
+  });
+
+  it('keeps every Applied filters line', () => {
+    const table = readExport(Buffer.from('Applied filters: Region is East\nApplied filters: Year is 2026\nRegion,Sales\nEast,1\n'), 'a.csv');
+    expect(table.appliedFilters).toBe('Region is East; Year is 2026');
+  });
+
+  it('survives an odd byte at the end of UTF-16, and reads Latin-1', () => {
+    const big = Buffer.from('a\tb\nx\t1\n', 'utf16le');
+    big.swap16();
+    expect(readExport(Buffer.concat([Buffer.from([0xfe, 0xff]), big, Buffer.from([0x20])]), 'a.csv').rows).toEqual([['x', '1']]);
+    expect(readExport(Buffer.from('Region,Sales\nEast,£12.50\n', 'latin1'), 'a.csv').rows).toEqual([['East', '£12.50']]);
+  });
+
+  it('keeps the rows it sets aside as totals, for the comparison to check', () => {
+    expect(readExport(Buffer.from('Region,Sales\nEast,1\nTotal,1\n'), 'a.csv').totals).toEqual([['Total', '1']]);
+  });
+
   it('refuses what it cannot compare, saying what to do', () => {
     expect(() => readExport(Buffer.from('x'), 'Sales.twbx')).toThrow(ExportRefused);
     expect(() => readExport(Buffer.from('x'), 'shot.png')).toThrow('Export the worksheet');
@@ -71,6 +105,10 @@ describe('reading a number as it was printed', () => {
     expect(parseNumberCell('1 234,56 €', 'comma')).toMatchObject({ value: 1234.56 });
     expect(parseNumberCell('USD 12')).toMatchObject({ value: 12 });
     expect(parseNumberCell('.5')).toMatchObject({ value: 0.5, decimals: 1 });
+    expect(parseNumberCell('+12.5%')).toMatchObject({ decimals: 1, percent: true });
+    expect(parseNumberCell('+12.5%')!.value).toBeCloseTo(0.125, 10);
+    expect(parseNumberCell('$ -')).toMatchObject({ value: 0, decimals: 0 });
+    expect(parseNumberCell('1.234.567', 'comma')).toMatchObject({ value: 1234567, decimals: 0 });
   });
 
   it('says no to text that is not a number', () => {
@@ -82,6 +120,8 @@ describe('reading a number as it was printed', () => {
     expect(decimalStyleOf(['1,234.56', '12.5'])).toEqual({ style: 'point', ambiguous: false });
     expect(decimalStyleOf(['1,234', '5,678'])).toEqual({ style: 'point', ambiguous: true });
     expect(decimalStyleOf(['1,234', '12,5'])).toEqual({ style: 'comma', ambiguous: false });
+    expect(decimalStyleOf(['1.234.567'])).toEqual({ style: 'comma', ambiguous: false });
+    expect(decimalStyleOf(['1,234,567'])).toEqual({ style: 'point', ambiguous: false });
   });
 
   it('knows every way an empty value is written', () => {

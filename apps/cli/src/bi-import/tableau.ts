@@ -344,7 +344,10 @@ function tableauLiteral(raw: string): BiLiteral {
   return { kind: 'string', value };
 }
 
-/** The filters saved on each worksheet that narrow its rows. Fields only filtered on are not in an export of it. */
+/**
+ * The filters saved on each worksheet that narrow its rows. Fields only filtered on are not in an export of it.
+ * Filters on a data source or shared across worksheets narrow them too, so each worksheet lists them as well.
+ */
 function worksheetFilters(workbook: XmlElement, dataSources: XmlElement[]): BiWorksheet[] {
   const captions = new Map<string, string>();
   for (const source of dataSources) {
@@ -352,16 +355,20 @@ function worksheetFilters(workbook: XmlElement, dataSources: XmlElement[]): BiWo
       if (column.attributes.caption) captions.set((column.attributes.name ?? '').replace(/^\[|\]$/g, ''), column.attributes.caption);
     }
   }
+  const describe = (elements: XmlElement[]) => elements.filter((element) => element.name === 'filter').flatMap((filter) => {
+    const read = readSourceFilter(filter, 'data source');
+    if (read === null) return [];
+    const field = typeof read === 'string' ? fieldOfFilter(filter) : read.field;
+    // `:Measure Names` picks the measures shown, not rows.
+    if (field.startsWith(':')) return [];
+    const label = captions.get(field) ?? field;
+    return [{ field: label, words: typeof read === 'string' ? `${label}: a ${filter.attributes.class ?? 'filter'} ZLens cannot read` : filterWords(label, read) }];
+  });
+  const shared = describe([...dataSources.flatMap((source) => source.children), ...descendants(workbook, 'shared-view').flatMap((view) => view.children)]);
   const sheets = (child(workbook, 'worksheets')?.children ?? []).filter((element) => element.name === 'worksheet');
   return sheets.map((sheet) => {
-    const view = descendants(sheet, 'view')[0];
-    const filters = (view?.children ?? []).filter((element) => element.name === 'filter').flatMap((filter) => {
-      const read = readSourceFilter(filter, 'data source');
-      if (read === null) return [];
-      const field = typeof read === 'string' ? fieldOfFilter(filter) : read.field;
-      const label = captions.get(field) ?? field;
-      return [{ field: label, words: typeof read === 'string' ? `${label}: a ${filter.attributes.class ?? 'filter'} ZLens cannot read` : filterWords(label, read) }];
-    });
+    const own = describe(descendants(sheet, 'view')[0]?.children ?? []);
+    const filters = Array.from(new Map([...own, ...shared].map((filter) => [filter.words, filter])).values());
     return { name: sheet.attributes.name ?? 'Worksheet', filters };
   });
 }

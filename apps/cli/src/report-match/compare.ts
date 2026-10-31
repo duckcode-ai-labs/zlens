@@ -52,6 +52,8 @@ export interface CompareOptions {
   dateOrder?: DateOrder;
   /** Notes on the metrics compared, shown as possible reasons. */
   metricNotes?: string[];
+  /** Metrics or columns whose definition multiplies by 100, so `14.9%` may be held as 14.9. */
+  pointColumns?: Set<string>;
 }
 
 export interface ValueDifference {
@@ -106,6 +108,7 @@ export class ComparisonStopped extends Error {}
 
 const EMPTY_KEY = '\u0000empty';
 const ONE_DAY = 86_400_000;
+const ONE_HOUR = 3_600_000;
 
 export function compareExport(table: ExportTable, plan: ComparisonPlan, rows: Array<Record<string, unknown>>, options: CompareOptions = {}): Comparison {
   const notes = [...table.notes];
@@ -139,15 +142,26 @@ export function compareExport(table: ExportTable, plan: ComparisonPlan, rows: Ar
     if (fileRows.has(id)) throw new ComparisonStopped(`The key ${describeKey(key)} repeats in the file, so the view has a field the export does not show. Add that field to the view, or compare a saved query at that grain.`);
     fileRows.set(id, { key, cells: row });
   }
+  const nearestMidnight = new Map(plan.keys.filter((column) => column.kind === 'date').map((column) => [column.header, sharesOneClock(rows, column)]));
   const resultRows = new Map<string, { key: string[]; row: Record<string, unknown> }>();
   for (const row of rows) {
-    const key = plan.keys.map((column) => resultKey(pick(row, column.output), column));
+    const key = plan.keys.map((column) => resultKey(pick(row, column.output), column, nearestMidnight.get(column.header) ?? true));
     const id = key.join('\u0001');
     if (resultRows.has(id)) throw new ComparisonStopped(`The key ${describeKey(key)} repeats in ZLens's result, so its grain is finer than the file's.`);
     resultRows.set(id, { key, row });
   }
 
-  const counts: RowCounts = { inFile: fileRows.size, inBoth: 0, onlyInFile: 0, onlyInZLens: 0, emptySetAside: 0, totalsSetAside: table.totalsSetAside };
+  // A row labelled Total may be a real key, a region called Total. ZLens's rows tell.
+  let totalsSetAside = table.totalsSetAside;
+  for (const row of table.totals ?? []) {
+    const key = totalRowKey(row, plan, headerAt, dateOrders);
+    const id = key?.join('\u0001');
+    if (!key || !id || !resultRows.has(id) || fileRows.has(id)) continue;
+    fileRows.set(id, { key, cells: row });
+    totalsSetAside -= 1;
+  }
+
+  const counts: RowCounts = { inFile: fileRows.size, inBoth: 0, onlyInFile: 0, onlyInZLens: 0, emptySetAside: 0, totalsSetAside };
   const onlyInFile: string[][] = [];
   const onlyInZLens: string[][] = [];
   const pairs: Array<{ key: string[]; cells: string[]; row: Record<string, unknown> }> = [];
@@ -227,17 +241,18 @@ function compareColumn(
     const cell = pair.cells[at] ?? '';
     return { pair, cell, parsed: isEmptyCell(cell) ? null : parseNumberCell(cell, style), ours: toNumber(pick(pair.row, number.output)) };
   });
-  const decimals = Math.max(0, ...printed.map((item) => item.parsed?.decimals ?? 0));
+  const decimals = printed.reduce((most, item) => Math.max(most, item.parsed?.decimals ?? 0), 0);
   const tolerance = options.tolerance ?? 0;
-  const equalAt = (shift: number) => printed.filter((item) => item.parsed && item.ours !== null && isEqual(item.parsed, item.ours / shift, decimals, tolerance)).length;
-  // `14.9%` against a metric that holds 14.9.
-  const percentCells = printed.filter((item) => item.parsed?.percent).length;
-  const percentPoints = percentCells > 0 && equalAt(100) > equalAt(1);
-  const shift = percentPoints ? 100 : 1;
+  // `14.9%` against a metric that holds 14.9: only a percent cell, and only when the definition multiplies
+  // by 100. Otherwise a number 100 times too small would pass.
+  const percents = printed.filter((item) => item.parsed?.percent && item.ours !== null);
+  const equalPercents = (shift: number) => percents.filter((item) => isEqual(item.parsed!, item.ours! / shift, decimals, tolerance)).length;
+  const percentPoints = Boolean(options.pointColumns?.has(number.name)) && equalPercents(100) > equalPercents(1);
 
   let compared = 0;
   let equal = 0;
   for (const { pair, cell, parsed, ours } of printed) {
+    const shift = percentPoints && parsed?.percent ? 100 : 1;
     const empty = isEmptyCell(cell);
     if (empty && ours === null) continue;
     compared += 1;
@@ -260,7 +275,7 @@ function compareColumn(
     verdict,
     compared,
     equal,
-    precision: precisionWords(sample ?? undefined, decimals, tolerance),
+    precision: `${precisionWords(sample ?? undefined, decimals, tolerance)}${percentPoints ? ', the metric holding 14.9 for 14.9%' : ''}`,
     coarse: (sample?.scale ?? 1) > 1,
     percentPoints,
   };
@@ -270,7 +285,9 @@ function compareColumn(
 function isEqual(printed: PrintedNumber, ours: number, columnDecimals: number, tolerance: number): boolean {
   const places = printed.decimals === null ? null : columnDecimals;
   const unit = places === null ? 0 : 10 ** -places * printed.scale * (printed.percent ? 0.01 : 1);
-  const limit = Math.max(unit / 2, Math.abs(ours) * 1e-9, Math.abs(printed.value) * tolerance) * (1 + 1e-9);
+  // A number with no printed form is its full value, so only the float's own noise is allowed.
+  const noise = places === null ? Math.max(Math.abs(ours), Math.abs(printed.value)) * 1e-9 : 0;
+  const limit = Math.max(unit / 2, noise, Math.abs(printed.value) * tolerance) * (1 + 1e-9);
   return Math.abs(ours - printed.value) <= limit;
 }
 
@@ -308,9 +325,18 @@ function fileKey(cell: string, key: KeyColumn, order: DateOrder | undefined): st
   return textKey(cell);
 }
 
-function resultKey(value: unknown, key: KeyColumn): string {
-  if (value === null || value === undefined || value === '') return EMPTY_KEY;
-  if (key.kind === 'date') return dayOf(value);
+function totalRowKey(row: string[], plan: ComparisonPlan, headerAt: Map<string, number>, dateOrders: Map<string, DateOrder>): string[] | null {
+  try {
+    return plan.keys.map((column) => fileKey(row[headerAt.get(column.header)!] ?? '', column, dateOrders.get(column.header)));
+  } catch {
+    // `Grand Total` in a date column is no date.
+    return null;
+  }
+}
+
+function resultKey(value: unknown, key: KeyColumn, nearestMidnight: boolean): string {
+  if (value === undefined || value === null || isEmptyCell(String(value))) return EMPTY_KEY;
+  if (key.kind === 'date') return dayOf(value, nearestMidnight);
   return textKey(String(value));
 }
 
@@ -319,20 +345,46 @@ function textKey(text: string): string {
   if (/^(?:true|false)$/i.test(trimmed)) return trimmed.toLowerCase();
   // An id written with thousands separators is still that id. `02134` keeps its zero.
   if (/^-?\d{1,3}(?:,\d{3})+$/.test(trimmed)) return trimmed.replace(/,/g, '');
+  // A year that came back as text from a decimal column.
+  if (/^-?\d+\.0+$/.test(trimmed)) return trimmed.replace(/\.0+$/, '');
   return trimmed;
+}
+
+function instantOf(value: unknown): Date | null {
+  if (value instanceof Date) return value;
+  const text = String(value).trim();
+  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}.*(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(text)) return null;
+  const parsed = Date.parse(text.replace(' ', 'T'));
+  return Number.isFinite(parsed) ? new Date(parsed) : null;
+}
+
+/**
+ * Whether a column's dates all fall at one time of day, as truncated dates do and real timestamps do not.
+ * Local midnight moves by an hour across daylight saving, so two times an hour apart are still one.
+ */
+function sharesOneClock(rows: Array<Record<string, unknown>>, key: KeyColumn): boolean {
+  const clocks = new Set<number>();
+  for (const row of rows) {
+    const instant = instantOf(pick(row, key.output));
+    if (instant) clocks.add(((instant.getTime() % ONE_DAY) + ONE_DAY) % ONE_DAY);
+    if (clocks.size > 2) return false;
+  }
+  const [first, second] = Array.from(clocks);
+  if (first === undefined || second === undefined) return true;
+  const apart = Math.abs(first - second);
+  return Math.min(apart, ONE_DAY - apart) <= ONE_HOUR;
 }
 
 /**
  * The day a result's date stands for. A truncated date can come back as a
  * timestamp at local midnight, which in UTC falls on either side of the day,
- * so it is taken to the nearest midnight.
+ * so it is taken to the nearest midnight. A real timestamp keeps its own day.
  */
-function dayOf(value: unknown): string {
-  if (value instanceof Date) return new Date(Math.round(value.getTime() / ONE_DAY) * ONE_DAY).toISOString().slice(0, 10);
-  const text = String(value).trim();
-  const zoned = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}.*(?:Z|[+-]\d{2}(?::?\d{2})?)$/.test(text);
-  if (zoned && Number.isFinite(Date.parse(text.replace(' ', 'T')))) return dayOf(new Date(Date.parse(text.replace(' ', 'T'))));
-  return text.slice(0, 10);
+function dayOf(value: unknown, nearestMidnight: boolean): string {
+  const instant = instantOf(value);
+  if (!instant) return String(value).trim().slice(0, 10);
+  const day = nearestMidnight ? Math.round(instant.getTime() / ONE_DAY) * ONE_DAY : instant.getTime();
+  return new Date(day).toISOString().slice(0, 10);
 }
 
 function describeKey(key: string[]): string {

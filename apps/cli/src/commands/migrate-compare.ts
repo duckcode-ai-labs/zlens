@@ -5,7 +5,7 @@ import type { CLIFlags } from '../args.js';
 import { withImportRuntime, type ImportRuntimeCall } from '../import-runtime.js';
 import { keyWords, type Verdict } from '../report-match/compare.js';
 import { DEFAULT_MATCH_REPORT, matchReportMarkdown, verdictWords } from '../report-match/record.js';
-import type { CompareOutcome } from '../report-match/run.js';
+import { COMPARE_OPTIONS, compareOptionProblem, MAX_EXPORT_BYTES, type CompareOutcome } from '../report-match/run.js';
 
 /**
  * `zlens migrate compare <file|folder>`: an old report's export against
@@ -62,12 +62,28 @@ function optionsFromFlags(flags: CLIFlags): ExportOptions {
 
 /** A folder's exports, each with what `exports.yaml` says about it. */
 function exportsIn(folder: string, shared: ExportOptions): Array<{ path: string; options: ExportOptions }> {
+  const entries = readdirSync(folder).filter((entry) => EXPORT_FILE.test(entry) && statSync(join(folder, entry)).isFile()).sort();
   const listed = join(folder, 'exports.yaml');
-  const named = existsSync(listed) ? (yaml.load(readFileSync(listed, 'utf-8')) as Record<string, ExportOptions> | null) ?? {} : {};
-  return readdirSync(folder)
-    .filter((entry) => EXPORT_FILE.test(entry) && statSync(join(folder, entry)).isFile())
-    .sort()
-    .map((entry) => ({ path: join(folder, entry), options: { ...shared, ...(named[entry] ?? {}) } }));
+  const named = existsSync(listed) ? namedExports(yaml.load(readFileSync(listed, 'utf-8')), entries) : {};
+  return entries.map((entry) => ({ path: join(folder, entry), options: { ...shared, ...(named[entry] ?? {}) } }));
+}
+
+/** A slip here would silently lose an export's filters, so anything unknown stops the run. */
+export function namedExports(parsed: unknown, entries: string[]): Record<string, ExportOptions> {
+  if (parsed === null || parsed === undefined) return {};
+  if (typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('exports.yaml must list each file by name, with its options under it.');
+  for (const [file, options] of Object.entries(parsed)) {
+    if (!entries.includes(file)) {
+      const near = entries.find((entry) => entry.toLowerCase() === file.toLowerCase());
+      throw new Error(`exports.yaml names ${file}, which is not in this folder.${near ? ` Did you mean ${near}?` : ''}`);
+    }
+    if (!options || typeof options !== 'object' || Array.isArray(options)) throw new Error(`exports.yaml: ${file} needs its options under it.`);
+    const unknown = Object.keys(options).find((name) => !COMPARE_OPTIONS.includes(name));
+    if (unknown) throw new Error(`exports.yaml: ${file} has the option ${unknown}, which ZLens does not know. The options are ${COMPARE_OPTIONS.join(', ')}.`);
+    const problem = compareOptionProblem(options as Record<string, unknown>);
+    if (problem) throw new Error(`exports.yaml: ${file}: ${problem}`);
+  }
+  return parsed as Record<string, ExportOptions>;
 }
 
 async function compareOne(call: ImportRuntimeCall, body: Record<string, unknown>, flags: CLIFlags): Promise<{ outcome?: CompareOutcome; stopped?: string; recorded: string[] }> {
@@ -101,7 +117,13 @@ export async function runMigrateCompare(input: string | undefined, flags: CLIFla
     process.exit(1);
   }
   const isFolder = Boolean(input) && statSync(target).isDirectory();
-  const work = typed ? [] : isFolder ? exportsIn(target, shared) : [{ path: target, options: shared }];
+  let work: Array<{ path: string; options: ExportOptions }> = [];
+  try {
+    work = typed ? [] : isFolder ? exportsIn(target, shared) : [{ path: target, options: shared }];
+  } catch (error) {
+    console.error(`\n  ✗ ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exit(1);
+  }
   if (!typed && !work.length) {
     console.error(`\n  ✗ ${input} has no .csv or .tsv files.\n`);
     process.exit(1);
@@ -121,11 +143,21 @@ export async function runMigrateCompare(input: string | undefined, flags: CLIFla
       return;
     }
     for (const item of work) {
-      const result = await compareOne(call, { file: { name: basename(item.path), base64: readFileSync(item.path).toString('base64') }, ...item.options }, flags);
-      if (result.stopped) stopped.push({ file: basename(item.path), reason: result.stopped });
-      if (result.outcome) {
-        outcomes.push(result.outcome);
-        recordedBy.set(result.outcome.id, result.recorded);
+      const file = basename(item.path);
+      // One file that can't be compared does not lose the others' results.
+      try {
+        if (statSync(item.path).size > MAX_EXPORT_BYTES) {
+          stopped.push({ file, reason: `${file} is larger than ${MAX_EXPORT_BYTES / 1024 / 1024} MB.` });
+          continue;
+        }
+        const result = await compareOne(call, { file: { name: file, base64: readFileSync(item.path).toString('base64') }, ...item.options }, flags);
+        if (result.stopped) stopped.push({ file, reason: result.stopped });
+        if (result.outcome) {
+          outcomes.push(result.outcome);
+          recordedBy.set(result.outcome.id, result.recorded);
+        }
+      } catch (error) {
+        stopped.push({ file, reason: error instanceof Error ? error.message : String(error) });
       }
     }
   });

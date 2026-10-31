@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import * as yaml from 'js-yaml';
 import { keyWords, type Verdict } from './compare.js';
@@ -34,6 +34,7 @@ export interface MatchRecord {
 }
 
 const MAX_RECORDS = 20;
+const MAX_DETAILS = 50;
 
 function recordFile(projectRoot: string, kind: 'metric' | 'query', name: string): string {
   const plain = /^[A-Za-z0-9_-]+$/.test(name);
@@ -44,7 +45,7 @@ function recordFile(projectRoot: string, kind: 'metric' | 'query', name: string)
 export function readMatchRecords(projectRoot: string, kind: 'metric' | 'query', name: string): MatchRecord[] {
   const file = recordFile(projectRoot, kind, name);
   if (!existsSync(file)) return [];
-  const parsed = yaml.load(readFileSync(file, 'utf-8')) as { matches?: MatchRecord[] } | null;
+  const parsed = yaml.load(readFileSync(file, 'utf-8'), { schema: yaml.JSON_SCHEMA }) as { matches?: MatchRecord[] } | null;
   return Array.isArray(parsed?.matches) ? parsed.matches : [];
 }
 
@@ -110,6 +111,11 @@ export function writeComparisonDetail(projectRoot: string, person: string, outco
   const file = detailFile(projectRoot, person, outcome.id);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify(outcome)}\n`, 'utf-8');
+  // Each holds values from the old report, so they don't pile up.
+  const kept = readdirSync(dirname(file))
+    .map((name) => join(dirname(file), name))
+    .sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+  for (const old of kept.slice(MAX_DETAILS)) rmSync(old, { force: true });
 }
 
 export function readComparisonDetail(projectRoot: string, person: string, id: string): CompareOutcome | null {
@@ -126,6 +132,16 @@ export function verdictWords(verdict: Verdict): string {
   return VERDICT_WORDS[verdict];
 }
 
+/** What a reader must know to weigh a verdict. */
+function limitsOf(outcome: CompareOutcome): string[] {
+  const leftOut = Object.entries(outcome.mapping).filter(([, meaning]) => meaning === 'left out, as asked').map(([column]) => column);
+  return [
+    ...(outcome.scope === 'all rows' ? [] : [`only ${outcome.scope}`]),
+    ...(outcome.tolerance ? [`within ${outcome.tolerance}`] : []),
+    ...(leftOut.length ? [`left out: ${cell(leftOut.join(', '))}`] : []),
+  ];
+}
+
 /** The page a migration lead hands over. Unlike a record it holds values, because a person chose to write it. */
 export function matchReportMarkdown(outcomes: CompareOutcome[], stopped: Array<{ file: string; reason: string }>, writtenAt: string): string {
   const out: string[] = ['# Old report comparison', ''];
@@ -138,7 +154,7 @@ export function matchReportMarkdown(outcomes: CompareOutcome[], stopped: Array<{
     const { rows, values, verdict } = outcome.comparison;
     const compared = outcome.target.kind === 'query' ? `saved query ${outcome.target.name}` : outcome.target.metrics.join(', ');
     const filters = [...outcome.filters.stated, ...outcome.filters.waived.map((text) => `waived ${text}`)].join('; ') || 'none stated';
-    out.push(`| ${cell(outcome.report)} | ${VERDICT_WORDS[verdict]} | ${rows.inBoth} of ${rows.inFile} | ${values.equal} of ${values.compared} | ${cell(filters)} | ${cell(compared)} |`);
+    out.push(`| ${cell(outcome.report)} | ${[VERDICT_WORDS[verdict], ...limitsOf(outcome)].join('; ')} | ${rows.inBoth} of ${rows.inFile} | ${values.equal} of ${values.compared} | ${cell(filters)} | ${cell(compared)} |`);
   }
   for (const item of stopped) out.push(`| ${cell(item.file)} | Could not be compared | | | | ${cell(item.reason)} |`);
   out.push('');

@@ -95,9 +95,29 @@ describe('equal at the printed precision', () => {
   });
 
   it('reads a percent against a metric holding percent points, and says so', () => {
-    const result = compare('Region,Sales\nEast,14.9%\nWest,15.0%\n', [{ region: 'East', sales: 14.93 }, { region: 'West', sales: 15.01 }]);
+    const result = compare('Region,Sales\nEast,14.9%\nWest,15.0%\n', [{ region: 'East', sales: 14.93 }, { region: 'West', sales: 15.01 }], byRegion, { pointColumns: new Set(['sales']) });
     expect(result.verdict).toBe('matches');
-    expect(result.numbers[0]).toMatchObject({ percentPoints: true, precision: '0.1%' });
+    expect(result.numbers[0]).toMatchObject({ percentPoints: true, precision: '0.1%, the metric holding 14.9 for 14.9%' });
+  });
+
+  it('does not let the percent retry hide a number 100 times too small', () => {
+    // 0.05% is 0.0005: a metric holding 0.05 is 5%.
+    expect(compare('Region,Sales\nEast,0.05%\nWest,0.12%\n', [{ region: 'East', sales: 0.05 }, { region: 'West', sales: 0.12 }]).verdict).toBe('differs');
+    // Only a percent cell moves: 5 is 5.
+    const mixed = compare('Region,Sales\nEast,12%\nWest,5\n', [{ region: 'East', sales: 12 }, { region: 'West', sales: 500 }], byRegion, { pointColumns: new Set(['sales']) });
+    expect(mixed.verdict).toBe('differs');
+    expect(mixed.differences.map((item) => item.key[0])).toEqual(['West']);
+  });
+
+  it('allows a printed number only its printed unit, however large', () => {
+    expect(compare('Region,Sales\nEast,"$5,000,000,000.00"\n', [{ region: 'East', sales: 5_000_000_004.99 }]).verdict).toBe('differs');
+    expect(compare('Region,Sales\nEast,"$5,000,000,000.00"\n', [{ region: 'East', sales: 5_000_000_000.004 }]).verdict).toBe('matches');
+  });
+
+  it('compares the most rows a file can hold', () => {
+    const rows = Array.from({ length: 150_000 }, (_, index) => ({ region: `R${index}`, sales: index }));
+    const text = `Region,Sales\n${rows.map((row) => `${row.region},${row.sales}`).join('\n')}\n`;
+    expect(compare(text, rows).verdict).toBe('matches');
   });
 
   it('applies a tolerance only when asked, and says it did', () => {
@@ -163,8 +183,21 @@ describe('dates as keys', () => {
     const text = 'Month,Sales\nJanuary 2026,10\nFebruary 2026,20\n';
     expect(compare(text, [{ order_date_month: '2026-01-01', sales: 10 }, { order_date_month: '2026-02-01 00:00:00', sales: 20 }], byMonth).verdict).toBe('matches');
     // Local midnight in a zone west and east of UTC is still that day.
-    expect(compare(text, [{ order_date_month: new Date('2026-01-01T06:00:00Z'), sales: 10 }, { order_date_month: new Date('2026-01-31T19:00:00Z'), sales: 20 }], byMonth).verdict).toBe('matches');
-    expect(compare(text, [{ order_date_month: '2026-01-01 00:00:00-06', sales: 10 }, { order_date_month: '2026-02-01 00:00:00+05', sales: 20 }], byMonth).verdict).toBe('matches');
+    expect(compare(text, [{ order_date_month: new Date('2026-01-01T06:00:00Z'), sales: 10 }, { order_date_month: new Date('2026-02-01T06:00:00Z'), sales: 20 }], byMonth).verdict).toBe('matches');
+    expect(compare(text, [{ order_date_month: new Date('2025-12-31T19:00:00Z'), sales: 10 }, { order_date_month: new Date('2026-01-31T19:00:00Z'), sales: 20 }], byMonth).verdict).toBe('matches');
+    expect(compare(text, [{ order_date_month: '2026-01-01 00:00:00-06', sales: 10 }, { order_date_month: '2026-02-01 00:00:00-06', sales: 20 }], byMonth).verdict).toBe('matches');
+  });
+
+  it('keeps truncated dates on their day across a clock change, even at midnight UTC', () => {
+    const across = 'Month,Sales\nMarch 2026,10\nApril 2026,20\n';
+    expect(compare(across, [{ order_date_month: new Date('2026-03-01T06:00:00Z'), sales: 10 }, { order_date_month: new Date('2026-04-01T05:00:00Z'), sales: 20 }], byMonth).verdict).toBe('matches');
+    expect(compare(across, [{ order_date_month: new Date('2026-03-01T00:00:00Z'), sales: 10 }, { order_date_month: new Date('2026-03-31T23:00:00Z'), sales: 20 }], byMonth).verdict).toBe('matches');
+  });
+
+  it('leaves a real timestamp on its own day', () => {
+    const plan: ComparisonPlan = { ...byMonth, keys: [{ header: 'Day', output: 'day', kind: 'date', grain: 'day' }] };
+    const rows = [{ day: new Date('2026-02-01T18:00:00Z'), sales: 1 }, { day: new Date('2026-02-02T09:15:00Z'), sales: 2 }, { day: new Date('2026-02-03T13:30:00Z'), sales: 3 }];
+    expect(compare('Day,Sales\n2026-02-01,1\n2026-02-02,2\n2026-02-03,3\n', rows, plan).verdict).toBe('matches');
   });
 
   it('reads day first when a value settles it, or when told', () => {
@@ -203,3 +236,29 @@ describe('possible reasons, only from evidence', () => {
     expect(compare('Region,Sales\nEast,1\n', [{ region: 'East', sales: 1 }]).reasons).toEqual([]);
   });
 });
+
+describe('keys that look like something else', () => {
+  it('reads an empty key the same way on both sides', () => {
+    for (const written of ['N/A', '-', 'Null', '(Blank)']) {
+      expect(compare('Region,Sales\n,5\nEast,1\n', [{ region: written, sales: 5 }, { region: 'East', sales: 1 }]).verdict, written).toBe('matches');
+    }
+  });
+
+  it('keeps a row labelled Total when ZLens has that key, and sets it aside when it does not', () => {
+    const text = 'Region,Sales\nEast,1\nTotal,2\n';
+    const real = compare(text, [{ region: 'East', sales: 1 }, { region: 'Total', sales: 2 }]);
+    expect(real).toMatchObject({ verdict: 'matches', rows: { inFile: 2, totalsSetAside: 0 } });
+    expect(compare(text, [{ region: 'East', sales: 1 }, { region: 'Total', sales: 3 }]).verdict).toBe('differs');
+    expect(compare(text, [{ region: 'East', sales: 1 }]).rows).toMatchObject({ inFile: 1, totalsSetAside: 1 });
+  });
+
+  it('sets aside a Total in a date column', () => {
+    const plan: ComparisonPlan = { ...byRegion, keys: [{ header: 'Month', output: 'order_date_month', kind: 'date', grain: 'month' }] };
+    expect(compare('Month,Sales\nJanuary 2026,1\nGrand Total,1\n', [{ order_date_month: '2026-01-01', sales: 1 }], plan).rows.totalsSetAside).toBe(1);
+  });
+
+  it('takes a key held as a decimal for the whole number it is', () => {
+    expect(compare('Region,Sales\n2026,1\n', [{ region: '2026.00', sales: 1 }]).verdict).toBe('matches');
+  });
+});
+

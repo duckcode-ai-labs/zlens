@@ -37,7 +37,8 @@ export interface ResolvedTarget {
   mapping: Record<string, string>;
 }
 
-const normalize = (name: string) => name.toLowerCase().replace(/[^a-z0-9]+/g, '');
+/** `Total Sales` and `total_sales` are one name. Letters of any language and `%` tell names apart. */
+const normalize = (name: string) => name.toLowerCase().replace(/[^\p{L}\p{N}%]+/gu, '');
 
 type Shape = 'empty' | 'date' | 'plain-number' | 'marked-number' | 'text';
 
@@ -170,6 +171,13 @@ export function resolveMetricTarget(table: ExportTable, catalog: TargetCatalog, 
     }
     keyHeaders.push({ header, shape, index });
   });
+
+  const byMetric = new Map<string, string>();
+  for (const number of numbers) {
+    const other = byMetric.get(number.name);
+    if (other) throw new ComparisonStopped(`${other} and ${number.header} both match the metric ${number.name}, and a record has one result per metric. Leave one out: --ignore "${number.header}".`);
+    byMetric.set(number.name, number.header);
+  }
 
   if (!numbers.length && !table.headers.some((header) => mapping[header]?.startsWith('not compared'))) {
     throw new ComparisonStopped(`No column of the file matches a metric. It has ${table.headers.join(', ')}. Map one with --map "Column=metric_name", or name a saved query with --query.`);

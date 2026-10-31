@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CLIFlags } from '../args.js';
 import { applyModelingMigration, planModelingMigration, runMigrate } from './migrate.js';
+import { namedExports } from './migrate-compare.js';
 
 const tempDirs: string[] = [];
 
@@ -299,3 +300,23 @@ describe('runMigrate assess', () => {
     }
   });
 });
+
+describe('a folder\'s exports.yaml', () => {
+  const files = ['Sales by Region.csv', 'Orders.xlsx'];
+
+  it('takes the options of files in the folder', () => {
+    const options = { 'Orders.xlsx': { worksheet: 'Orders', filters: ['region = East'] } };
+    expect(namedExports(options, files)).toEqual(options);
+    expect(namedExports(null, files)).toEqual({});
+  });
+
+  it('stops on a slip that would lose a file\'s filters', () => {
+    expect(() => namedExports({ 'orders.xlsx': { worksheet: 'Orders' } }, files)).toThrow('Did you mean Orders.xlsx?');
+    expect(() => namedExports({ 'Missing.csv': {} }, files)).toThrow('not in this folder');
+    expect(() => namedExports([{ file: 'Orders.xlsx' }], files)).toThrow('must list each file by name');
+    expect(() => namedExports({ 'Orders.xlsx': { filter: ['a = b'] } }, files)).toThrow('the option filter');
+    expect(() => namedExports({ 'Orders.xlsx': { filters: 'a = b' } }, files)).toThrow('filters must be a list');
+    expect(() => namedExports({ 'Orders.xlsx': null }, files)).toThrow('needs its options');
+  });
+});
+

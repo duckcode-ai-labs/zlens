@@ -356,11 +356,12 @@ export interface ImportCalculations {
 /** The newest imported worksheet of this name, for the filters an export of it does not show. */
 export function findImportedWorksheet(projectRoot: string, name: string): BiWorksheet | undefined {
   const wanted = name.trim().toLowerCase();
-  for (const session of listBlockStudioImportSessions(projectRoot)) {
-    const found = (readBlockStudioImportCalculations(projectRoot, session.id).worksheets ?? []).find((worksheet) => worksheet.name.trim().toLowerCase() === wanted);
-    if (found) return found;
-  }
-  return undefined;
+  const found = listBlockStudioImportSessions(projectRoot)
+    .flatMap((session) => (readBlockStudioImportCalculations(projectRoot, session.id).worksheets ?? []).filter((worksheet) => worksheet.name.trim().toLowerCase() === wanted));
+  if (!found.length) return undefined;
+  // Two imports may hold the name with different filters: all of them must be answered, not the newest.
+  const filters = new Map(found.flatMap((worksheet) => worksheet.filters).map((filter) => [filter.words, filter]));
+  return { name: found[0]!.name, filters: Array.from(filters.values()) };
 }
 
 /** Whether any calculation could become a metric draft (simple, filtered or ratio). */

@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { DimensionDefinition, MetricDefinition } from '@zlens/core';
 import { extractTableauWorkbook } from '../bi-import/tableau.js';
 import { matchReportMarkdown, matchWords, readComparisonDetail, readMatchRecords, writeComparisonDetail, writeMatchRecords } from './record.js';
-import { ComparisonStopped, ExportRefused, queryFingerprint, runComparison, type CompareDeps, type CompareRequest } from './run.js';
+import { compareOptionProblem, ComparisonStopped, ExportRefused, queryFingerprint, runComparison, type CompareDeps, type CompareRequest } from './run.js';
 
 const metric = (name: string, label: string, extra: Partial<MetricDefinition> = {}): MetricDefinition => ({ name, label, description: '', domain: 'sales', type: 'sum', sql: name, table: 'analytics.orders', ...extra });
 const dimension = (name: string, label: string, extra: Partial<DimensionDefinition> = {}): DimensionDefinition => ({ name, label, description: '', sql: name, type: 'string', table: 'analytics.orders', ...extra });
@@ -83,7 +83,54 @@ describe('a comparison from start to finish', () => {
   it('counts Power BI\'s filter line as a filter to answer', async () => {
     const text = `Applied filters: Region is East\n${byRegion}`;
     expect((await runComparison(request(text), deps(rows))).comparison.verdict).toBe('not-proven');
-    expect((await runComparison(request(text, { waive: ['Region: this export has every region'] }), deps(rows))).comparison.verdict).toBe('matches');
+    expect((await runComparison(request(text, { waive: ['Applied filters: this export has every region'] }), deps(rows))).comparison.verdict).toBe('matches');
+  });
+
+  it('does not let another waiver, or one stated filter, answer the whole line', async () => {
+    const text = `Applied filters: Region is East, Year is 2026\n${byRegion}`;
+    expect((await runComparison(request(text, { waive: ['Colour: x'] }), deps(rows))).comparison.verdict).toBe('not-proven');
+    expect((await runComparison(request(text, { filters: ['region = East'] }), deps(rows))).comparison.verdict).toBe('not-proven');
+  });
+
+  it('tries a percent at 100 times only for a definition that multiplies by 100', async () => {
+    const points = metric('profit_pct', 'Profit %', { type: 'custom', sql: 'profit_pct', table: '', metricType: 'derived', typeParams: { expr: 'sum_of_profit / NULLIF(total_sales, 0) * 100', metrics: ['sum_of_profit', 'total_sales'] } });
+    const context = deps([{ region: 'East', profit_pct: 14.9 }]);
+    const held = await runComparison(request('Region,Profit %\nEast,14.9%\n'), { ...context, catalog: { ...context.catalog, metrics: [...context.catalog.metrics, points] } });
+    expect(held.comparison.numbers[0]!.percentPoints).toBe(true);
+    const ratio = await runComparison(request('Region,Profit Ratio\nEast,14.9%\n'), deps([{ region: 'East', profit_ratio: 14.9 }]));
+    expect(ratio.comparison.verdict).toBe('differs');
+  });
+
+  it('runs on the tables and joins of the real layer, and fingerprints without them', async () => {
+    const sent: string[] = [];
+    const context = deps(rows, { tableMapping: { 'analytics.orders': 'main.orders' }, run: async (sql) => { sent.push(sql); return { rows, truncated: false }; } });
+    const mapped = await runComparison(request(byRegion), context);
+    expect(sent[0]).toContain('main.orders');
+    const plain = await runComparison(request(byRegion), deps(rows));
+    expect(mapped.querySha256).toEqual(plain.querySha256);
+  });
+
+  it('passes a saved query\'s bound parameters to the run', async () => {
+    const seen: unknown[] = [];
+    const context = deps([{ region: 'East', revenue: 1.5 }], {
+      savedQuery: async (name) => ({ name, sql: 'select region, revenue from t where year = $1', sqlParams: [{ name: 'year', position: 1 }], variables: { year: 2026 } }),
+      run: async (_sql, saved) => { seen.push(saved); return { rows: [{ region: 'East', revenue: 1.5 }], truncated: false }; },
+    });
+    await runComparison({ file: { name: 'q.csv', bytes: Buffer.from('region,revenue\nEast,1.50\n') }, query: 'Revenue', parameters: { year: 2026 } }, context);
+    expect(seen[0]).toEqual({ sqlParams: [{ name: 'year', position: 1 }], variables: { year: 2026 } });
+  });
+
+  it('caps the tolerance, so no report can agree with anything', async () => {
+    await expect(runComparison(request(byRegion, { tolerance: '5000%' }), deps(rows))).rejects.toThrow('The most is 10%');
+    expect((await runComparison(request(byRegion, { tolerance: '10%' }), deps(rows))).tolerance).toBe('10%');
+  });
+
+  it('refuses options of the wrong type, which would lose a filter', () => {
+    expect(compareOptionProblem({ filters: 'region = East' })).toContain('filters must be a list');
+    expect(compareOptionProblem({ worksheet: 5 })).toContain('worksheet must be text');
+    expect(compareOptionProblem({ map: { 'Total Sales': 5 } })).toContain('map must be');
+    expect(compareOptionProblem({ fileRows: 'yes' })).toContain('fileRows must be');
+    expect(compareOptionProblem({ filters: ['a = b'], map: { a: 'b' }, parameters: { year: 2026 }, fileRows: true, worksheet: 'x' })).toBeNull();
   });
 
   it('is Not proven when the database\'s result was cut, and passes on what a draft says', async () => {
@@ -178,6 +225,23 @@ describe('what stays after a comparison', () => {
   });
 });
 
+describe('what a reader of the report is told', () => {
+  it('says when a verdict covers less than the whole report', async () => {
+    const narrow = await runComparison(request('Region,Total Sales,Discount\nEast,$10.50,$1.00\n', { fileRows: true, tolerance: '5%', ignore: ['Discount'] }), deps([{ region: 'East', total_sales: 10.5 }]));
+    const page = matchReportMarkdown([narrow], [], '2026-11-02T00:00:00Z');
+    expect(page).toContain("Matches; only the file's rows; within 5%; left out: Discount");
+  });
+
+  it('keeps only the newest comparisons of a person', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'report-details-'));
+    roots.push(root);
+    const outcome = await runComparison(request(byRegion), deps(rows));
+    for (let index = 0; index < 55; index += 1) writeComparisonDetail(root, 'maya', { ...outcome, id: `cmp_${index.toString(16).padStart(4, '0')}` });
+    expect(readdirSync(join(root, '.dql/local/private/comparisons/maya')).length).toBeLessThanOrEqual(50);
+    expect(readComparisonDetail(root, 'maya', 'cmp_0036')).not.toBeNull();
+  });
+});
+
 describe('a worksheet\'s saved filters', () => {
   it('reads the filters that narrow rows, by the field\'s caption, and skips one that keeps everything', () => {
     const file = extractTableauWorkbook(`<workbook><datasources><datasource caption='Orders' name='federated.abc'><connection class='postgres' /><column caption='Order Date' name='[ordered_at]' /></datasource></datasources>
@@ -194,5 +258,20 @@ describe('a worksheet\'s saved filters', () => {
       { field: 'region', words: 'region in (East)' },
       { field: 'shipped', words: 'shipped: a relative-date ZLens cannot read' },
     ] }]);
+  });
+
+  it('does not take the choice of measures for a filter on rows', () => {
+    const file = extractTableauWorkbook(`<workbook><datasources><datasource name='federated.abc'><connection class='postgres' /></datasource></datasources>
+<worksheets><worksheet name='Sales'><table><view>
+  <filter class='categorical' column='[federated.abc].[:Measure Names]'><groupfilter function='member' level='[:Measure Names]' member='&quot;Sales&quot;' /></filter>
+</view></table></worksheet></worksheets></workbook>`, 'Sales.twb');
+    expect(file.worksheets![0]!.filters).toEqual([]);
+  });
+
+  it('lists filters on the data source and shared across worksheets on each worksheet', () => {
+    const file = extractTableauWorkbook(`<workbook><datasources><datasource name='federated.abc'><connection class='postgres' /><filter class='categorical' column='[none:region:nk]'><groupfilter function='member' level='[none:region:nk]' member='&quot;East&quot;' /></filter></datasource></datasources>
+<shared-views><shared-view name='federated.abc'><filter class='categorical' column='[federated.abc].[none:segment:nk]'><groupfilter function='member' level='[none:segment:nk]' member='&quot;SMB&quot;' /></filter></shared-view></shared-views>
+<worksheets><worksheet name='Sales'><table><view /></table></worksheet></worksheets></workbook>`, 'Sales.twb');
+    expect(file.worksheets![0]!.filters.map((filter) => filter.words)).toEqual(['region in (East)', 'segment in (SMB)']);
   });
 });

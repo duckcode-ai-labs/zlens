@@ -198,8 +198,9 @@ before you approve.
 **What counts as equal.** A value is equal when ZLens's lies within half a
 printed unit of the file's, using the most decimals in that column: `14.93%`
 equals a printed `14.9%`, and `14.96%` does not. `--tolerance 0.5%` loosens it for
-a report known to lag, and is recorded. An empty value is equal only to an empty
-value.
+a report known to lag, up to 10%, and is recorded. An empty value is equal only to
+an empty value. A percent is also tried at 100 times when the metric's definition
+multiplies by 100, so `14.9%` matches a metric that holds 14.9.
 
 **Three verdicts.** Each metric gets its own, and the file gets the worst:
 
@@ -214,13 +215,16 @@ The command exits 0, 1 or 2 for those, so a script can read it.
 **Filters decide most comparisons.** An export does not show a filter on a field
 the report does not display, and ZLens applies no filter by itself. With
 `--worksheet`, it reads the filters saved on that worksheet in your imported
-workbook, and a Power BI filter line in the file counts too. Each one must be
-stated or waived, or the best result is Not proven:
+workbook, along with filters on its data source. Each one must be stated or
+waived, or the best result is Not proven:
 
 ```bash
 --filter "region in (East, West)"          # = != > >= < <= in between
 --waive "Order Date: covers every row"     # with your reason, kept in the record
 ```
+
+A Power BI `Applied filters:` line can name several filters, so stating one does
+not answer it. State them, then waive the line: `--waive "Applied filters: all stated"`.
 
 A filter that can't be written this way (top N, sets, `OR`) can be waived, and
 `--file-rows` compares only the rows in the file. That proves the values on those

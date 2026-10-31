@@ -785,7 +785,7 @@ import {
   type DqlParameterDecision,
 } from './block-studio-import.js';
 import { findImportedWorksheet, readBlockStudioImportCalculations } from './block-studio-import.js';
-import { ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, runComparison } from './report-match/run.js';
+import { comparisonLayer, compareOptionProblem, ComparisonStopped, ExportRefused, MAX_EXPORT_ROWS, runComparison } from './report-match/run.js';
 import { readComparisonDetail, writeComparisonDetail, writeMatchRecords } from './report-match/record.js';
 import {
   MetricDraftApprovalError,
@@ -13256,6 +13256,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     invocation: ReturnType<typeof prepareBlockInvocation>;
     tests: NonNullable<ReturnType<typeof buildExecutionPlan>>['tests'];
     validation: BlockStudioValidationResult;
+    /** What the statement in `sql` binds, to run it again. */
+    sqlParams?: NonNullable<ReturnType<typeof buildExecutionPlan>>['sqlParams'];
+    variables: Record<string, unknown>;
   }> => {
     const activeConnection = requireActiveConnection(targetConnection);
     let tableMapping: Record<string, string> | undefined;
@@ -13322,6 +13325,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       invocation,
       tests: plan?.tests ?? [],
       validation,
+      ...(plan?.sqlParams ? { sqlParams: plan.sqlParams } : {}),
+      variables: { ...(plan?.variables ?? {}), ...invocation.values },
     };
   };
 
@@ -18228,9 +18233,15 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         // A 50 MB file as base64, and the options around it.
         const body = (await readJSON(req, 70 * 1024 * 1024)) as CompareRequestBody;
+        const problem = compareOptionProblem(body as Record<string, unknown>);
+        if (problem) {
+          reply(422, { error: problem, code: 'COMPARISON_STOPPED' });
+          return;
+        }
         const active = requireActiveConnection();
         const semanticDir = join(projectRoot, 'semantic-layer');
-        const metricsInLayer = semanticLayer?.listMetrics() ?? [];
+        // HH-13: a metric the host keeps from this person is no column of their comparison.
+        const metricsInLayer = (await admitPlanContext([], semanticLayer?.listMetrics() ?? [])).metrics as MetricDefinition[];
         const dimensionsInLayer = semanticLayer?.listDimensions() ?? [];
         const inLayer = new Set(metricsInLayer.map((metric) => metric.name.toLowerCase()));
         const dimensionNames = new Set(dimensionsInLayer.map((dimension) => dimension.name.toLowerCase()));
@@ -18243,6 +18254,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const name = sqlNamer(active.driver);
         const bare = (relation: string) => relation.replace(/["`\[\]]/g, '').toLowerCase();
+        const drafts = (await admitPlanContext([], existsSync(semanticDir) ? loadSemanticMetricDraftsFromDir(semanticDir) : [])).metrics as MetricDefinition[];
+        const catalog = {
+          // A draft a metric has replaced is not a second meaning of its name.
+          metrics: [...metricsInLayer, ...drafts.filter((draft) => !inLayer.has(draft.name.toLowerCase()))],
+          dimensions: [...dimensionsInLayer, ...(existsSync(semanticDir) ? loadSemanticDimensionDraftsFromDir(semanticDir) : []).filter((draft) => !dimensionNames.has(draft.name.toLowerCase()))],
+          cubes: semanticLayer?.listCubes() ?? [],
+        };
+        const tableMapping = await resolveSemanticTableMapping(executor, active, comparisonLayer(catalog), projectRoot);
         const outcome = await runComparison({
           ...(body.file ? { file: { name: String(body.file.name), bytes: Buffer.from(String(body.file.base64), 'base64') } } : {}),
           ...(typeof body.metric === 'string' ? { metric: body.metric } : {}),
@@ -18261,18 +18280,17 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ...(body.dates === 'dmy' || body.dates === 'mdy' ? { dates: body.dates } : {}),
         }, {
           catalog: {
-            // A draft a metric has replaced is not a second meaning of its name.
-            metrics: [...metricsInLayer, ...(existsSync(semanticDir) ? loadSemanticMetricDraftsFromDir(semanticDir) : []).filter((draft) => !inLayer.has(draft.name.toLowerCase()))],
-            dimensions: [...dimensionsInLayer, ...(existsSync(semanticDir) ? loadSemanticDimensionDraftsFromDir(semanticDir) : []).filter((draft) => !dimensionNames.has(draft.name.toLowerCase()))],
+            ...catalog,
             columnsOf: (table) => {
               const found = tables.find((candidate) => [candidate.schema, candidate.name].filter(Boolean).join('.').toLowerCase() === bare(table) || candidate.name.toLowerCase() === bare(table));
               return found?.columns.map((column) => ({ name: column.name, sql: name(column.name) }));
             },
           },
+          tableMapping,
           driver: active.driver,
           connection: { driver: active.driver, ...(active.database ? { database: active.database } : {}) },
           worksheet: (worksheet) => findImportedWorksheet(projectRoot, worksheet),
-          run: async (sql) => {
+          run: async (sql, saved) => {
             const refused = readOnlySqlValidationError(sql, 'A report comparison', active.driver);
             if (refused) throw new Error(refused);
             const execution = await analyticalExecutionService.execute({
@@ -18283,6 +18301,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
               rowLimit: MAX_EXPORT_ROWS + 1,
               rowCeiling: MAX_EXPORT_ROWS + 1,
               resultRows: MAX_EXPORT_ROWS + 1,
+              ...(saved?.sqlParams ? { sqlParams: saved.sqlParams as NonNullable<Parameters<typeof analyticalExecutionService.execute>[0]['sqlParams']> } : {}),
+              ...(saved?.variables ? { variables: saved.variables } : {}),
             });
             return { rows: execution.result.rows as Array<Record<string, unknown>>, truncated: Boolean(execution.result.truncated) || execution.result.rows.length > MAX_EXPORT_ROWS };
           },
@@ -18290,8 +18310,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             const wanted = queryName.trim().toLowerCase();
             const block = Object.values(projectSnapshot().manifest.blocks ?? {}).find((candidate) => candidate.name.toLowerCase() === wanted);
             if (!block?.filePath) return undefined;
+            // HH-13: a saved query compared by name is its Dataset, as when it is run by name.
+            const refusal = await restrictedBlockRefusal({ name: block.name, filePath: block.filePath, ...(block.domain ? { domain: block.domain } : {}) });
+            if (refusal) throw new ComparisonStopped(refusal.error);
             const preview = await runBlockStudioPreviewSource(readFileSync(join(projectRoot, block.filePath), 'utf-8'), active, parameters);
-            return { name: block.name, sql: preview.sql };
+            return { name: block.name, sql: preview.sql, ...(preview.sqlParams ? { sqlParams: preview.sqlParams } : {}), variables: preview.variables };
           },
         });
         writeComparisonDetail(projectRoot, comparisonPerson(owner), outcome);

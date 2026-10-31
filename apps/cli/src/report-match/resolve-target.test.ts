@@ -74,6 +74,21 @@ describe('working out what the columns are', () => {
     expect(() => resolveMetricTarget(file('Region,Total Sales\nEast,1.5\n'), catalog, { map: { Region: 'nope' } })).toThrow('no metric or dimension named nope');
   });
 
+  it('keeps Profit % apart from Profit, and non-Latin names apart from each other', () => {
+    const ignored = resolveMetricTarget(file('Region,Profit %,Sum of Profit\nEast,5%,1.5\n'), catalog, { ignore: ['Profit %'] });
+    expect(ignored.metrics.map((item) => item.name)).toEqual(['sum_of_profit']);
+    const chinese = file('Region,利润,销售额\nEast,1.5,2.5\n');
+    const named: TargetCatalog = { ...catalog, metrics: [metric('profit_cn', '利润'), metric('sales_cn', '销售额')] };
+    const target = resolveMetricTarget(chinese, named, { ignore: ['利润'] });
+    expect(target.metrics.map((item) => item.name)).toEqual(['sales_cn']);
+    expect(isFilterAnswered('地区', [], ['日期: 全部'])).toBe(false);
+    expect(isFilterAnswered('地区', [], ['地区: 全部'])).toBe(true);
+  });
+
+  it('stops on two columns that mean one metric, since a record holds one result for it', () => {
+    expect(() => resolveMetricTarget(file('Region,Total Sales,SUM(Sales)\nEast,1.5,1.6\n'), catalog)).toThrow('both match the metric total_sales');
+  });
+
   it('settles a name that means two things from how the column looks, and otherwise asks', () => {
     const both: TargetCatalog = { ...catalog, metrics: [...catalog.metrics, metric('region_sales', 'Region')] };
     expect(resolveMetricTarget(file('Region,Total Sales\nEast,1.5\n'), both).dimensions).toEqual(['region']);

@@ -17,6 +17,8 @@ export interface ExportTable {
   rows: string[][];
   /** Rows labelled Total or Grand Total, set aside. */
   totalsSetAside: number;
+  /** Those rows: one may be a real key, which only the other side can tell. */
+  totals?: string[][];
   /** Only when the file itself shows it (see `toolFromFile`). */
   tool?: 'tableau' | 'powerbi';
   /** Power BI's `Applied filters: …` line, as written. */
@@ -40,7 +42,7 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
   const sha256 = createHash('sha256').update(bytes).digest('hex');
   const { text, encoding } = decode(bytes);
   const separator = detectSeparator(text);
-  const table = parseDelimited(text, separator);
+  const table = parseDelimited(text, separator, fileName);
   const notes: string[] = [];
   let appliedFilters: string | undefined;
   let cutShort: string | undefined;
@@ -49,7 +51,8 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
   const body = table.filter((row) => {
     const first = (row[0] ?? '').trim();
     if (/^applied filters:/i.test(first)) {
-      appliedFilters = row.join(' ').replace(/^applied filters:\s*/i, '').trim();
+      const line = row.join(' ').replace(/^applied filters:\s*/i, '').trim();
+      appliedFilters = appliedFilters ? `${appliedFilters}; ${line}` : line;
       return false;
     }
     if (/exported data exceeded the allowed volume/i.test(row.join(' '))) {
@@ -61,7 +64,11 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
   if (!body.length) throw new ExportRefused(`${fileName} has no rows.`);
 
   const headers = body[0]!.map(cleanHeader);
+  // A separator at the end of each line.
+  while (headers.length > 1 && !headers[headers.length - 1]) headers.pop();
   refuseShapes(headers, fileName);
+  const overlong = body.slice(1).find((row) => row.slice(headers.length).some((cell) => cell.trim() !== ''));
+  if (overlong) throw new ExportRefused(`${fileName} has a row with more values than it has columns: ${overlong.join(', ').slice(0, 80)}. Export it again.`);
   let rows = body.slice(1).map((row) => headers.map((_, index) => cleanCell(row[index] ?? '')));
   if (rows.length > MAX_EXPORT_ROWS) throw new ExportRefused(`${fileName} has ${rows.length.toLocaleString('en-US')} rows; ZLens compares up to ${MAX_EXPORT_ROWS.toLocaleString('en-US')}.`);
 
@@ -69,14 +76,17 @@ export function readExport(bytes: Buffer, fileName: string): ExportTable {
   rows = shaped.rows;
   const measures = new Set(shaped.measures);
   const keyColumns = shaped.headers.map((header, index) => (measures.has(header) ? -1 : index)).filter((index) => index >= 0);
-  const kept = rows.filter((row) => !keyColumns.some((index) => isTotalLabel(row[index] ?? '')));
+  const isTotal = (row: string[]) => keyColumns.some((index) => isTotalLabel(row[index] ?? ''));
+  const kept = rows.filter((row) => !isTotal(row));
+  const totals = rows.filter(isTotal);
 
   return {
     fileName,
     sha256,
     headers: shaped.headers,
     rows: kept,
-    totalsSetAside: rows.length - kept.length,
+    totalsSetAside: totals.length,
+    ...(totals.length ? { totals } : {}),
     ...(toolFromFile(encoding, separator, headers, appliedFilters) ? { tool: toolFromFile(encoding, separator, headers, appliedFilters) } : {}),
     ...(appliedFilters ? { appliedFilters } : {}),
     ...(cutShort ? { cutShort } : {}),
@@ -99,11 +109,7 @@ function refuseOtherFiles(fileName: string): void {
 
 function decode(bytes: Buffer): { text: string; encoding: 'utf-8' | 'utf-16le' | 'utf-16be' } {
   if (bytes[0] === 0xff && bytes[1] === 0xfe) return { text: bytes.subarray(2).toString('utf16le'), encoding: 'utf-16le' };
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) {
-    const swapped = Buffer.from(bytes.subarray(2));
-    swapped.swap16();
-    return { text: swapped.toString('utf16le'), encoding: 'utf-16be' };
-  }
+  if (bytes[0] === 0xfe && bytes[1] === 0xff) return { text: fromBigEndian(bytes.subarray(2)), encoding: 'utf-16be' };
   if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return { text: bytes.subarray(3).toString('utf8'), encoding: 'utf-8' };
   // UTF-16 with no mark: the high bytes of plain text are all zero.
   const sample = bytes.subarray(0, Math.min(bytes.length, 400));
@@ -116,12 +122,23 @@ function decode(bytes: Buffer): { text: string; encoding: 'utf-8' | 'utf-16le' |
     }
   }
   if (sample.length >= 4 && zeroOdd > sample.length / 4) return { text: bytes.toString('utf16le'), encoding: 'utf-16le' };
-  if (sample.length >= 4 && zeroEven > sample.length / 4) {
-    const swapped = Buffer.from(bytes.subarray(0, bytes.length - (bytes.length % 2)));
-    swapped.swap16();
-    return { text: swapped.toString('utf16le'), encoding: 'utf-16be' };
+  if (sample.length >= 4 && zeroEven > sample.length / 4) return { text: fromBigEndian(bytes), encoding: 'utf-16be' };
+  return { text: utf8OrLatin1(bytes), encoding: 'utf-8' };
+}
+
+function fromBigEndian(bytes: Buffer): string {
+  const swapped = Buffer.from(bytes.subarray(0, bytes.length - (bytes.length % 2)));
+  swapped.swap16();
+  return swapped.toString('utf16le');
+}
+
+/** Older tools write Latin-1, whose `£` is not valid UTF-8. */
+function utf8OrLatin1(bytes: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return bytes.toString('latin1');
   }
-  return { text: bytes.toString('utf8'), encoding: 'utf-8' };
 }
 
 function detectSeparator(text: string): string {
@@ -155,7 +172,7 @@ function countOutsideQuotes(line: string, separator: string): number {
   return count;
 }
 
-function parseDelimited(text: string, separator: string): string[][] {
+function parseDelimited(text: string, separator: string, fileName: string): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = '';
@@ -188,6 +205,8 @@ function parseDelimited(text: string, separator: string): string[][] {
       cell += char;
     }
   }
+  // Every row after it would have been swallowed into one cell.
+  if (quoted) throw new ExportRefused(`${fileName} has a quote that never closes, so rows could be lost. Export it again.`);
   if (cell !== '' || row.length) {
     row.push(cell);
     rows.push(row);
@@ -249,7 +268,9 @@ function reshapeMeasures(headers: string[], rows: string[][]): { headers: string
     const at = output.findIndex((header, index) => index >= keyAt.length && header.toLowerCase() === name.toLowerCase());
     if (at < 0) continue;
     const column = isWide ? measureColumns.find((index) => headers[index]!.toLowerCase() === name.toLowerCase()) : valuesAt;
-    target[at] = row[column!] ?? '';
+    const value = row[column!] ?? '';
+    if (target[at] && value) throw new ExportRefused(`${keyAt.map((index) => row[index]).join(' / ') || 'A row'} has ${name} twice, so the view has a field the export does not show. Add that field to the view and export again.`);
+    target[at] = value || target[at]!;
   }
   return { headers: output, rows: Array.from(merged.values()), measures: output.slice(keyAt.length) };
 }
@@ -298,6 +319,9 @@ export function parseNumberCell(cell: string, style: DecimalStyle = 'point'): Pr
   }
   // A currency, before or after: a symbol, or a three-letter code.
   text = text.replace(/^[$€£¥₹₩₽]\s*/, '').replace(/\s*[$€£¥₹₩₽]$/, '').replace(/^[A-Z]{3}\s+/, '').replace(/\s+[A-Z]{3}$/, '');
+  // The accounting format's zero: `$ -`.
+  if (text === '-' && /[$€£¥₹₩₽]/.test(cell)) return { value: 0, decimals: 0, scale: 1, percent: false };
+  text = text.replace(/^\+\s*/, '');
   if (/^-/.test(text)) {
     negative = !negative;
     text = text.slice(1).trim();
@@ -334,8 +358,8 @@ export function decimalStyleOf(cells: string[]): { style: DecimalStyle; ambiguou
   for (const cell of cells) {
     const text = cell.replace(/[^\d.,]/g, '');
     if (!text) continue;
-    if (/\d,\d{3}\.\d/.test(text) || /^\d+\.\d{1,2}$/.test(text) || /^\d+\.\d{4,}$/.test(text)) point = true;
-    else if (/\d\.\d{3},\d/.test(text) || /^\d+,\d{1,2}$/.test(text) || /^\d+,\d{4,}$/.test(text)) comma = true;
+    if (/\d,\d{3}\.\d/.test(text) || /^\d+\.\d{1,2}$/.test(text) || /^\d+\.\d{4,}$/.test(text) || /^\d{1,3}(?:,\d{3}){2,}$/.test(text)) point = true;
+    else if (/\d\.\d{3},\d/.test(text) || /^\d+,\d{1,2}$/.test(text) || /^\d+,\d{4,}$/.test(text) || /^\d{1,3}(?:\.\d{3}){2,}$/.test(text)) comma = true;
     else if (/^\d{1,3}(?:,\d{3})+$/.test(text) || /^\d{1,3}(?:\.\d{3})+$/.test(text)) thousandsOnly = true;
   }
   if (comma && !point) return { style: 'comma', ambiguous: false };
