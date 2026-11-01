@@ -431,14 +431,17 @@ export interface DqlHostUi {
   links?: Array<{ id: string; label: string; href: string; placement: 'menu' | 'nav'; badge?: number; icon?: DqlHostIcon }>;
   /**
    * Offered on an answer that needs review. DQL posts
-   * `{ runId, question, threadId?, trustState }` to `url` (same origin) and
-   * shows the `message` the host answers with.
+   * `{ runId, question, threadId?, trustState, note? }` to `url` (same origin)
+   * and shows the `message` the host answers with.
    */
   /**
    * Buttons on an answer. `on` says which answers get it: `review` (an AI
    * answer no certified source backs; the default), `unanswered` (ZLens could
    * not answer at all) and/or `answered` (a certified or governed answer —
-   * e.g. "This looks wrong", shown quietly).
+   * e.g. "This looks wrong", shown quietly). Two ids mean something to DQL:
+   * `certify` asks for a certified version built from the AI's SQL, so it is
+   * offered only on an AI answer that ran SQL, whatever `on` says; `wrong`
+   * takes an optional one-line `note` before it is sent.
    */
   answerActions?: Array<{ id: string; label: string; url: string; description?: string; on?: Array<'review' | 'unanswered' | 'answered'> }>;
   /** A name for the environment, e.g. "Claims · Production". */

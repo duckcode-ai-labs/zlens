@@ -359,7 +359,7 @@ export function hostLandingView(state: HostUiState, here: { pathname: string; ma
 }
 
 /** Post an answer action to the host; returns the message to show. */
-export async function runHostAnswerAction(action: HostUi['answerActions'][number], input: { runId: string; question: string; threadId?: string; trustState?: string }): Promise<string> {
+export async function runHostAnswerAction(action: HostUi['answerActions'][number], input: { runId: string; question: string; threadId?: string; trustState?: string; note?: string }): Promise<string> {
   const response = await authorizedFetch(action.url, {
     method: 'POST',
     credentials: 'same-origin',
