@@ -2,9 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { certifiedByLabel, plainCertificationChecks } from '@zlens/core/apps/reader-trust';
 import { useShallow } from 'zustand/react/shallow';
 import { useQuery } from '@tanstack/react-query';
-import { renderSemanticBlockSource } from '@zlens/core/blocks';
+import { certificationFieldGaps, certificationFieldLabel, renderSemanticBlockSource } from '@zlens/core/blocks';
 import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Code2, Database, FileInput, Loader2, MoreHorizontal, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
-import { hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
+import { hostProposesCertification, hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api, DqlApiError, type BlockCertificationOperationResult } from '../../api/client';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { useOperations } from '../../operations/OperationsProvider';
@@ -84,7 +84,7 @@ import { MetricDetailPanel } from '../panels/MetricDetailPanel';
 import { SemanticSearchBar } from '../panels/SemanticSearchBar';
 import { SemanticTreeNode as TreeRow } from '../panels/SemanticTreeNode';
 import type { AiSqlDraftMeta } from '../agent/AiSqlDraftDialog';
-import { BlockStatusBadge } from '../blocks/BlockStatusBadge';
+import { BlockStatusBadge, blockDisplayStatus } from '../blocks/BlockStatusBadge';
 import { BlockReplacementLink, OpenReplacementButton } from '../blocks/BlockRetirement';
 import { UnifiedAgentRunPanel, usePersistedAgentThreadId, type InsertDqlPayload } from '../agent/UnifiedAgentRunPanel';
 import { AiSidePanel, AI_SIDE_PANEL_EXPANDED_WIDTH } from '../agent/AiSidePanel';
@@ -143,6 +143,8 @@ export function BlockStudio() {
   const hostUi = useHostUi();
   const readOnlyBlocks = hostReadOnly(hostUi, 'block_library');
   const readOnlyBlocksReason = readOnlyBlocks ? readOnlyReason(hostUi, 'block_library') : '';
+  // The host certifies through its own review: Certify here proposes (RFC 0010 HH-9).
+  const proposesCertification = hostProposesCertification(hostUi);
   const state = useNotebookStore(useShallow((store) => ({
     activeBlockPath: store.activeBlockPath,
     authoredDomains: store.authoredDomains,
@@ -920,7 +922,7 @@ export function BlockStudio() {
       }
       if (certificationAssessment?.ok) {
         setCertificationResult(null);
-        setRepairNotice(`${repaired.repairMode === 'ai' ? 'AI repaired' : 'ZLens repaired'} the draft, and every certification check now passes. Review the changes, then click Certify.`);
+        setRepairNotice(`${repaired.repairMode === 'ai' ? 'AI repaired' : 'ZLens repaired'} the draft, and every certification check now passes. Review the changes, then click ${certifyButtonLabel(false, proposesCertification)}.`);
       } else {
         setRepairNotice(`${repaired.repairMode === 'ai' ? 'AI fixed' : 'ZLens fixed'} the draft and the corrected saved query ran successfully. Review the changes, then save the draft.`);
       }
@@ -937,6 +939,41 @@ export function BlockStudio() {
       setRecoveryScope('run');
       setResultTab('results');
       setBottomPaneCollapsed(false);
+    } finally {
+      if (scopeEpoch === blockScopeEpochRef.current) setRepairing(false);
+    }
+  };
+
+  /**
+   * "Fix with AI & run" for a certification field: nothing in the query is wrong, so no repair runs. ZLens fills
+   * what the query and its result say, shows it for review, and says what it could not fill.
+   */
+  const handleFillCertificationFields = async () => {
+    if (repairing) return;
+    const originalSource = state.blockStudioDraft;
+    const scopeEpoch = blockScopeEpochRef.current;
+    setRepairing(true);
+    setSaveError(null);
+    setRepairNotice(null);
+    setRepairWarning(null);
+    try {
+      const filled = await api.prefillBlockStudioCertification(originalSource);
+      if (scopeEpoch !== blockScopeEpochRef.current) return;
+      if (liveDraftRef.current !== originalSource) {
+        throw new Error('The saved query changed while ZLens was filling the certification fields. Nothing was applied.');
+      }
+      handleDraftChange(filled.source);
+      if (filled.preview) dispatch({ type: 'SET_BLOCK_STUDIO_PREVIEW', preview: filled.preview });
+      const words = certificationFillWords(filled.suggested.map((entry) => entry.field), filled.unknown);
+      if (words.filled) setRepairNotice(`${words.filled} Review ${filled.suggested.length === 1 ? 'it' : 'them'}, then click ${certifyButtonLabel(state.blockStudioMetadata?.reviewStatus === 'certified', proposesCertification)}.`);
+      if (words.missing) setRepairWarning(words.missing);
+      setCertificationResult(null);
+      setEditorMode('visual');
+      setResultTab('save');
+      setBottomPaneCollapsed(false);
+    } catch (error) {
+      if (scopeEpoch !== blockScopeEpochRef.current) return;
+      setRepairWarning(error instanceof Error ? error.message : String(error));
     } finally {
       if (scopeEpoch === blockScopeEpochRef.current) setRepairing(false);
     }
@@ -1627,7 +1664,7 @@ export function BlockStudio() {
             {activeBlockName || state.blockStudioMetadata?.name || (hasActiveDraft ? 'new_block' : (isSemanticBlock ? 'semantic' : 'sql'))}
           </span>
           {state.blockStudioMetadata?.reviewStatus && (
-            <BlockStatusBadge status={state.blockStudioMetadata.reviewStatus} t={t} />
+            <BlockStatusBadge status={blockDisplayStatus(state.blockStudioMetadata.reviewStatus, state.blockStudioMetadata, proposesCertification)} t={t} />
           )}
           {state.blockStudioMetadata?.reviewStatus === 'deprecated' && (
             <BlockReplacementLink
@@ -1664,6 +1701,7 @@ export function BlockStudio() {
             saving={saving}
             certifying={Boolean(certificationOperationId)}
             certified={state.blockStudioMetadata?.reviewStatus === 'certified'}
+            proposes={proposesCertification}
             onDelete={() => requestDeleteBlock(state.activeBlockPath!, state.blockStudioMetadata?.name || activeBlockName || state.activeBlockPath!)}
             onNew={beginNewWorkspace}
             onAsk={() => openAskAi({ kind: 'ask' })}
@@ -1776,6 +1814,7 @@ export function BlockStudio() {
               lineageDetail={lineageDetail}
               isSemanticBlock={isSemanticBlock}
               running={running}
+              proposes={proposesCertification}
               onOpenBuilder={() => setEditorMode('visual')}
               onOpenSource={() => setEditorMode('source')}
               onOpenReplacement={openReplacementBlock}
@@ -1808,6 +1847,8 @@ export function BlockStudio() {
                       dispatch({ type: 'SET_SETTINGS_TAB', tab: 'project' });
                       dispatch({ type: 'SET_MAIN_VIEW', view: 'settings' });
                     }}
+                    onFillCertification={() => void handleFillCertificationFields()}
+                    fillingCertification={repairing}
                     t={t}
                   />
                 ) : (
@@ -1820,6 +1861,8 @@ export function BlockStudio() {
                     onChange={handleDraftChange}
                     onMetadataChange={(next) => state.blockStudioMetadata && dispatch({ type: 'SET_BLOCK_STUDIO_METADATA', metadata: { ...state.blockStudioMetadata, ...next } })}
                     onConvertToDql={() => setEditorMode('source')}
+                    onFillCertification={() => void handleFillCertificationFields()}
+                    fillingCertification={repairing}
                     t={t}
                   />
                 )}
@@ -2029,7 +2072,7 @@ export function BlockStudio() {
               {state.activeBlockPath && state.blockStudioMetadata && (
                 <div style={{ padding: '12px 12px 0' }}>
                   <StatusWorkflow
-                    currentStatus={state.blockStudioMetadata.reviewStatus ?? 'draft'}
+                    currentStatus={blockDisplayStatus(state.blockStudioMetadata.reviewStatus ?? 'draft', state.blockStudioMetadata, proposesCertification)}
                     blockPath={state.activeBlockPath}
                     onStatusChanged={(newStatus) => {
                       if (state.blockStudioMetadata) {
@@ -2044,6 +2087,7 @@ export function BlockStudio() {
               {certificationResult && (
                 <CertificationChecklistPanel
                   result={certificationResult}
+                  proposes={proposesCertification}
                   t={t}
                   repairing={repairing}
                   onEditSource={() => setEditorMode('source')}
@@ -2054,10 +2098,10 @@ export function BlockStudio() {
                     setEditorMode('visual');
                   }}
                   onRun={() => void handleRun()}
-                  onFix={(issue) => void handleFixAndRun(
-                    issue.technicalDetails ?? issue.message,
-                    { requireCertificationReady: true },
-                  )}
+                  onEditFields={() => setEditorMode('visual')}
+                  onFix={(issue) => void (issue.action === 'fill_certification_fields'
+                    ? handleFillCertificationFields()
+                    : handleFixAndRun(issue.technicalDetails ?? issue.message, { requireCertificationReady: true }))}
                   onFixDescription={(description) => {
                     // The person's explicit one-click fix: write the shown
                     // description into the source, then certify that source.
@@ -2169,6 +2213,7 @@ export function BlockStudio() {
         <BlockIdentityDialog
           metadata={state.blockStudioMetadata}
           action={pendingIdentityActionRef.current === 'certify' ? 'certify' : 'save'}
+          proposes={proposesCertification}
           domains={pendingIdentityActionRef.current === 'certify' && certifyNeedsDomain(state.blockStudioDraft, state.blockStudioMetadata.domain, state.authoredDomains)
             ? state.authoredDomains
             : undefined}
@@ -2297,6 +2342,8 @@ export function BlockToolbarActions(props: {
   saving: boolean;
   certifying: boolean;
   certified: boolean;
+  /** The host certifies through its own review, so the button proposes. */
+  proposes?: boolean;
   onDelete: () => void;
   onNew: () => void;
   onAsk: () => void;
@@ -2332,12 +2379,14 @@ export function BlockToolbarActions(props: {
                 title="Save changes as a review-required draft"
               />
               <TemplateButton
-                label={props.certified ? 'Re-certify' : 'Certify'}
+                label={certifyButtonLabel(props.certified, props.proposes)}
                 Icon={ShieldCheck}
                 variant="primary"
                 busy={props.saving || props.certifying}
                 onClick={props.onCertify}
-                title="Run validation, query, tests, chart, and lineage gates before certification"
+                title={props.proposes
+                  ? 'Run validation, query, tests, chart, and lineage gates, then propose it for certification; a reviewer certifies it'
+                  : 'Run validation, query, tests, chart, and lineage gates before certification'}
               />
             </>
           )}
@@ -2472,7 +2521,10 @@ function selectionChipStyle(t: Theme, selected: boolean): React.CSSProperties {
  * keeps a draft and never certifies; certifying is its own step and says what
  * it checks.
  */
-export function blockIdentityDialogCopy(action: 'save' | 'certify'): { title: string; body: string } {
+export function blockIdentityDialogCopy(action: 'save' | 'certify', proposes = false): { title: string; body: string } {
+  if (action === 'certify' && proposes) {
+    return { title: 'Name this saved query', body: 'Every saved query needs a name and an owner (the person or team to ask about it). Then ZLens checks that it runs and its tests pass, and proposes it for certification with your name and today\'s date. It takes effect when a reviewer approves.' };
+  }
   return action === 'certify'
     ? { title: 'Name this saved query', body: 'Every saved query needs a name and an owner (the person or team to ask about it). Then ZLens checks that it runs and its tests pass, and certifies it with your name and today\'s date.' }
     : { title: 'Name this saved query', body: 'Every saved query needs a name and an owner (the person or team to ask about it). Saving keeps it as a draft; certifying it is a separate step.' };
@@ -2481,6 +2533,7 @@ export function blockIdentityDialogCopy(action: 'save' | 'certify'): { title: st
 function BlockIdentityDialog({
   metadata,
   action = 'save',
+  proposes = false,
   domains,
   onCancel,
   onConfirm,
@@ -2489,6 +2542,8 @@ function BlockIdentityDialog({
   metadata: BlockStudioOpenPayload['metadata'];
   /** What happens after the name and owner are set: Save draft or Certify. */
   action?: 'save' | 'certify';
+  /** The host certifies through its own review, so Certify proposes. */
+  proposes?: boolean;
   /** Set when certifying needs a Domain first (an Ask draft in no Domain): the dialog asks for one. */
   domains?: Domain[];
   onCancel: () => void;
@@ -2504,8 +2559,8 @@ function BlockIdentityDialog({
     <div role="dialog" aria-modal="true" aria-label="Save query" style={{ position: 'absolute', inset: 0, zIndex: 70, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,.32)', padding: 18 }}>
       <div style={{ width: 420, maxWidth: '100%', display: 'grid', gap: 14, padding: 18, borderRadius: 10, border: `1px solid ${t.headerBorder}`, background: t.cellBg, boxShadow: '0 24px 70px rgba(0,0,0,.35)' }}>
         <div>
-          <div style={{ fontSize: 15, fontWeight: 850, color: t.textPrimary }}>{blockIdentityDialogCopy(action).title}</div>
-          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: t.textMuted }}>{blockIdentityDialogCopy(action).body}</div>
+          <div style={{ fontSize: 15, fontWeight: 850, color: t.textPrimary }}>{blockIdentityDialogCopy(action, proposes).title}</div>
+          <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.45, color: t.textMuted }}>{blockIdentityDialogCopy(action, proposes).body}</div>
         </div>
         <FieldLabel label="Saved query name" t={t}><input autoFocus value={name} onChange={(event) => setName(event.target.value)} style={importInputStyle(t)} /></FieldLabel>
         <FieldLabel label="Owner" t={t}><input value={owner} onChange={(event) => setOwner(event.target.value)} placeholder="analytics@company.com or team name" style={importInputStyle(t)} /></FieldLabel>
@@ -2521,7 +2576,7 @@ function BlockIdentityDialog({
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
           <button type="button" onClick={onCancel} style={secondaryImportButtonStyle(t)}>Cancel</button>
-          <button type="button" disabled={!ready} onClick={() => ready && onConfirm({ name: name.trim(), owner: owner.trim(), ...(domains ? { domain } : {}) })} style={{ ...primaryImportButtonStyle(t), opacity: ready ? 1 : .55 }}>{domains ? 'Certify' : 'Save'}</button>
+          <button type="button" disabled={!ready} onClick={() => ready && onConfirm({ name: name.trim(), owner: owner.trim(), ...(domains ? { domain } : {}) })} style={{ ...primaryImportButtonStyle(t), opacity: ready ? 1 : .55 }}>{domains ? (proposes ? 'Propose' : 'Certify') : 'Save'}</button>
         </div>
       </div>
     </div>
@@ -2968,6 +3023,68 @@ function BlockContextInspector({
   );
 }
 
+const REVIEW_CADENCES = ['daily', 'weekly', 'monthly', 'quarterly', 'annually'];
+
+/**
+ * What a certified saved query declares, in fields, so a creator never has to hand-edit source to certify. Each field
+ * writes the same DQL the source editor would, and the same check as the certifier says what is still empty.
+ */
+export function CertificationFieldsPanel({ source, onChange, onFill, filling, testPlaceholder, t }: {
+  source: string;
+  onChange: (next: string) => void;
+  onFill: () => void;
+  filling: boolean;
+  testPlaceholder: string;
+  t: Theme;
+}) {
+  const input = compactBuilderInputStyle(t);
+  const text = (name: string) => source.match(new RegExp(`\\b${name}\\s*=\\s*"([^"]*)"`, 'i'))?.[1] ?? '';
+  const list = (name: string) => (source.match(new RegExp(`\\b${name}\\s*=\\s*\\[([\\s\\S]*?)\\]`, 'i'))?.[1].match(/"([^"]*)"/g) ?? [])
+    .map((value) => value.slice(1, -1));
+  const cadence = text('reviewCadence');
+  const gaps = certificationFieldGaps(source);
+  return (
+    <PanelBox title="Certification" hint="What reviewers read. A workspace with every gate on refuses to certify without these." t={t}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 10 }}>
+        <FieldLabel label="Grain" t={t}>
+          <SourceTextField value={text('grain')} onChange={(next) => onChange(setBlockStringField(source, 'grain', next))} placeholder="one row per region" style={input} />
+        </FieldLabel>
+        <FieldLabel label="Review cadence" t={t}>
+          <select aria-label="Review cadence" value={cadence} onChange={(event) => onChange(setBlockStringField(source, 'reviewCadence', event.target.value))} style={input}>
+            <option value="">Choose…</option>
+            {Array.from(new Set([...REVIEW_CADENCES, ...(cadence ? [cadence] : [])])).map((value) => <option key={value} value={value}>{value}</option>)}
+          </select>
+        </FieldLabel>
+        <ContextTokenEditor label="Outputs" hint="region, open_claims" values={list('outputs')} onChange={(values) => onChange(setBlockArray(source, 'outputs', values))} t={t} />
+        <ContextTokenEditor label="Source systems" hint="model.harbor.claims" values={list('sourceSystems')} onChange={(values) => onChange(setBlockArray(source, 'sourceSystems', values))} t={t} />
+      </div>
+      <FieldLabel label="Tests" t={t}>
+        <SourceTextField multiline value={getDqlSectionBody(source, 'tests')} onChange={(next) => onChange(setDqlSectionBody(source, 'tests', next))} placeholder={testPlaceholder} style={{ ...input, minHeight: 64, resize: 'vertical', fontFamily: t.fontMono }} />
+      </FieldLabel>
+      <div style={{ fontSize: 10.5, color: t.textMuted }}>{BLOCK_TESTS_HINT}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+        <span data-testid="certification-field-gaps" style={{ fontSize: 11, color: gaps.length ? 'var(--status-warning)' : t.textMuted }}>
+          {gaps.length ? `Not filled yet: ${gaps.map(certificationFieldLabel).join(', ')}.` : 'Every certification field is filled.'}
+        </span>
+        {gaps.length > 0 && (
+          <button type="button" onClick={onFill} disabled={filling} style={secondaryImportButtonStyle(t)}>
+            {filling ? 'Filling…' : 'Fill from the query'}
+          </button>
+        )}
+      </div>
+    </PanelBox>
+  );
+}
+
+/** What the fill did, in plain words: which fields it filled and which it could not, so nothing is left to guess. */
+export function certificationFillWords(filled: string[], unknown: string[]): { filled: string; missing: string } {
+  const named = (fields: string[]) => Array.from(new Set(fields.map(certificationFieldLabel))).join(', ');
+  return {
+    filled: filled.length ? `ZLens filled ${named(filled)}.` : '',
+    missing: unknown.length ? `ZLens could not fill ${named(unknown)}: the query does not say. Fill ${unknown.length === 1 ? 'it' : 'them'} in the Certification panel.` : '',
+  };
+}
+
 function ContextTokenEditor({ label, hint, values, onChange, t, splitOnComma = true }: { label: string; hint: string; values: string[]; onChange: (values: string[]) => void; t: Theme; /** A question keeps its commas: one entry per Enter. */ splitOnComma?: boolean }) {
   const [input, setInput] = useState('');
   const add = () => {
@@ -3118,6 +3235,18 @@ export const BLOCK_TESTS_HINT = 'Optional. Certify runs them: a declared test mu
 /** Why a certified block shows Recertify: its source changed after the receipt was written. */
 export const CERTIFIED_SOURCE_CHANGED_LINE = 'Edited after it was certified: this source no longer matches its certification receipt, so Ask treats the saved query as needing recertification. Open it in the builder and Re-certify.';
 
+/** The Certify button's words: under a host that certifies through review, it proposes. */
+export function certifyButtonLabel(certified: boolean, proposes = false): string {
+  if (proposes) return certified ? 'Propose again' : 'Propose certification';
+  return certified ? 'Re-certify' : 'Certify';
+}
+
+/** One line saying who proposed certifying this block and when: nothing is live until a reviewer approves. */
+export function certificationProposalLine(receipt: BlockStudioMetadata['certification'] | undefined): string {
+  const byline = receipt ? certifiedByLabel({ by: receipt.certifiedBy, name: receipt.certifiedByName, at: receipt.certifiedAt }) : 'Certified';
+  return `${byline.replace(/^Certified/, 'Certification proposed')}: takes effect when a reviewer approves.`;
+}
+
 /** One line saying who certified this block and when (D5) — or that no receipt exists. */
 export function certificationReceiptLine(receipt: BlockStudioMetadata['certification'] | undefined): string {
   if (!receipt) return 'Certified · no certification receipt on file (certified before receipts were recorded, or edited by hand).';
@@ -3146,6 +3275,7 @@ export function BlockDetailView({
   lineageDetail,
   isSemanticBlock,
   running,
+  proposes = false,
   onOpenBuilder,
   onOpenSource,
   onOpenReplacement,
@@ -3162,6 +3292,8 @@ export function BlockDetailView({
   lineageDetail: { incoming: Array<unknown>; outgoing: Array<unknown> } | null;
   isSemanticBlock: boolean;
   running: boolean;
+  /** The host certifies through its own review (RFC 0010 HH-9). */
+  proposes?: boolean;
   onOpenBuilder: () => void;
   onOpenSource: () => void;
   onOpenReplacement?: (path: string) => void;
@@ -3171,6 +3303,7 @@ export function BlockDetailView({
   t: Theme;
 }) {
   const certified = (metadata?.reviewStatus ?? '').toLowerCase() === 'certified';
+  const proposed = certified && blockDisplayStatus('certified', metadata, proposes) === 'proposed';
   const name = metadata?.name || 'block';
   const semanticFields = isSemanticBlock ? parseSemanticVisualFields(source) : null;
   const queryBody = source.match(/query\s*=\s*"""([\s\S]*?)"""/i)?.[1]?.trim() ?? '';
@@ -3200,13 +3333,13 @@ export function BlockDetailView({
       <div style={{ width: 'min(860px, 100% - 48px)', margin: '0 auto', padding: '26px 0 40px', display: 'flex', flexDirection: 'column', gap: 20, animation: 'dql-agent-fadein 0.25s ease-out', fontFamily: t.font }}>
         {/* header */}
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14 }}>
-          <span style={{ width: 42, height: 42, borderRadius: 10, background: certified ? 'var(--status-success-bg)' : 'var(--accent-dim)', color: certified ? 'var(--status-success)' : t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid var(--border-subtle)' }}>
+          <span style={{ width: 42, height: 42, borderRadius: 10, background: certified && !proposed ? 'var(--status-success-bg)' : 'var(--accent-dim)', color: certified && !proposed ? 'var(--status-success)' : t.accent, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, border: '1px solid var(--border-subtle)' }}>
             <Blocks size={20} strokeWidth={1.75} />
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap' }}>
               <span style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.fontMono, letterSpacing: '-0.01em' }}>{name}</span>
-              {metadata?.reviewStatus ? <BlockStatusBadge status={certified && metadata.certificationSourceChanged ? 'pending_recertification' : metadata.reviewStatus} t={t} /> : null}
+              {metadata?.reviewStatus ? <BlockStatusBadge status={certified && metadata.certificationSourceChanged ? 'pending_recertification' : proposed ? 'proposed' : metadata.reviewStatus} t={t} /> : null}
               {metadata?.reviewStatus === 'deprecated' ? (
                 <BlockReplacementLink info={{ status: metadata.reviewStatus, replacedBy: metadata.replacedBy, deprecatedOn: metadata.deprecatedOn, replacement: metadata.replacement }} t={t} onOpen={onOpenReplacement} />
               ) : null}
@@ -3216,7 +3349,7 @@ export function BlockDetailView({
             </div>
             {certified ? (
               <div data-testid="block-certification-receipt" style={{ fontSize: 11.5, color: t.textMuted, marginTop: 4 }}>
-                {certificationReceiptLine(metadata?.certification)}
+                {proposed ? certificationProposalLine(metadata?.certification) : certificationReceiptLine(metadata?.certification)}
                 {metadata?.certification && plainCertificationChecks(metadata.certification.checks).length ? (
                   <div data-testid="block-certification-checks">Checks passed: {plainCertificationChecks(metadata.certification.checks).join(' · ')}</div>
                 ) : null}
@@ -3359,6 +3492,8 @@ function SemanticBlockBuilder({
   onMetadataChange,
   onOpenAi,
   onSetupRuntime,
+  onFillCertification,
+  fillingCertification,
   t,
 }: {
   source: string;
@@ -3371,6 +3506,8 @@ function SemanticBlockBuilder({
   onMetadataChange: (next: Partial<BlockStudioOpenPayload['metadata']>) => void;
   onOpenAi: () => void;
   onSetupRuntime: () => void;
+  onFillCertification: () => void;
+  fillingCertification: boolean;
   t: Theme;
 }) {
   const parsedValues = parseSemanticVisualFields(source);
@@ -3450,7 +3587,6 @@ function SemanticBlockBuilder({
   ), [allDimensions, eligibleDimensions]);
   const metricMatches = useMemo(() => findSemanticFieldMatches(semanticLayer.metrics, metricSearch), [semanticLayer.metrics, metricSearch]);
   const dimensionMatches = useMemo(() => findSemanticFieldMatches(eligibleDimensions, dimensionSearch), [eligibleDimensions, dimensionSearch]);
-  const testsBody = getDqlSectionBody(source, 'tests');
   const outputFields = Array.from(new Set([...values.dimensions, ...(values.timeDimension ? [values.timeDimension] : []), ...values.metrics]));
   const updateText = (field: 'name' | 'domain' | 'description' | 'owner', value: string) => {
     onMetadataChange({ [field]: value });
@@ -3634,9 +3770,7 @@ function SemanticBlockBuilder({
       <PanelBox title={`Output fields${outputFields.length ? ` · ${outputFields.length}` : ''}`} hint="What consumers see when this saved query answers a question." t={t}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>{outputFields.length > 0 ? outputFields.map((field) => <span key={field} style={selectionChipStyle(t, true)}>{businessLabel(field)}</span>) : <span style={{ fontSize: 11, color: t.textMuted }}>Select metrics and dimensions to define outputs.</span>}</div>
       </PanelBox>
-      <PanelBox title="Tests" hint={BLOCK_TESTS_HINT} t={t}>
-        <SourceTextField multiline value={testsBody} onChange={(next) => onChange(setDqlSectionBody(source, 'tests', next))} placeholder={'assert row_count >= 1\nassert total_revenue >= 0'} style={{ ...compactInput, minHeight: 64, resize: 'vertical', fontFamily: t.fontMono }} />
-      </PanelBox>
+      <CertificationFieldsPanel source={source} onChange={onChange} onFill={onFillCertification} filling={fillingCertification} testPlaceholder={'assert row_count >= 1\nassert total_revenue >= 0'} t={t} />
 
       <details style={{ padding: '14px 0', color: t.textSecondary, fontFamily: t.font }}>
         <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 750 }}>Generated DQL preview</summary>
@@ -3903,6 +4037,8 @@ function SqlBlockVisualBuilder({
   onChange,
   onMetadataChange,
   onConvertToDql,
+  onFillCertification,
+  fillingCertification,
   t,
 }: {
   source: string;
@@ -3912,6 +4048,8 @@ function SqlBlockVisualBuilder({
   onChange: (next: string) => void;
   onMetadataChange: (next: Partial<BlockStudioOpenPayload['metadata']>) => void;
   onConvertToDql: () => void;
+  onFillCertification: () => void;
+  fillingCertification: boolean;
   t: Theme;
 }) {
   const input = compactBuilderInputStyle(t);
@@ -3920,7 +4058,6 @@ function SqlBlockVisualBuilder({
   // builder is remounted with a fresh key when the edited block changes).
   const [sqlDraft, setSqlDraft] = useState(parsedQuery);
   const outputs = extractSelectAliases(sqlDraft);
-  const testsBody = getDqlSectionBody(source, 'tests');
   const editSql = (value: string) => {
     setSqlDraft(value);
     onChange(setBlockQuery(source, value));
@@ -3984,9 +4121,7 @@ function SqlBlockVisualBuilder({
         </div>
       </PanelBox>
       <VisualParameterEditor source={source} kind="custom" onChange={onChange} t={t} />
-      <PanelBox title="Tests" hint={BLOCK_TESTS_HINT} t={t}>
-        <SourceTextField multiline value={testsBody} onChange={(next) => onChange(setDqlSectionBody(source, 'tests', next))} placeholder={'assert row_count >= 1\nassert revenue >= 0'} style={{ ...input, minHeight: 64, resize: 'vertical', fontFamily: t.fontMono }} />
-      </PanelBox>
+      <CertificationFieldsPanel source={source} onChange={onChange} onFill={onFillCertification} filling={fillingCertification} testPlaceholder={'assert row_count >= 1\nassert revenue >= 0'} t={t} />
       <details style={{ padding: '14px 0', color: t.textSecondary, fontFamily: t.font }}>
         <summary style={{ cursor: 'pointer', fontSize: 11, fontWeight: 750 }}>Generated DQL preview</summary>
         <pre style={{ maxHeight: 240, overflow: 'auto', margin: '10px 0 0', whiteSpace: 'pre-wrap', color: t.textSecondary, fontSize: 11, lineHeight: 1.45, fontFamily: t.fontMono, border: '1px solid var(--border-subtle)', background: 'var(--bg-2)', borderRadius: 9, padding: '12px 14px' }}>{source}</pre>
@@ -6446,6 +6581,7 @@ const STATUS_COLORS: Record<string, string> = {
   review: '#d29922',
   certified: '#3fb950',
   deprecated: '#f85149',
+  proposed: '#d29922',
 };
 
 const STATUS_TRANSITIONS: Record<string, string[]> = {
@@ -6514,6 +6650,7 @@ function StatusWorkflow({
 
 function CertificationChecklistPanel({
   result,
+  proposes = false,
   t,
   repairing,
   onEditSource,
@@ -6522,6 +6659,7 @@ function CertificationChecklistPanel({
   onRun,
   onFix,
   onFixDescription,
+  onEditFields,
 }: {
   result: {
     ok?: boolean;
@@ -6549,6 +6687,8 @@ function CertificationChecklistPanel({
     progress?: number;
     message?: string;
   };
+  /** The host certifies through its own review: passing proposes, nothing is live yet. */
+  proposes?: boolean;
   t: Theme;
   repairing: boolean;
   onEditSource: () => void;
@@ -6557,6 +6697,7 @@ function CertificationChecklistPanel({
   onRun: () => void;
   onFix: (issue: BlockStudioDiagnostic) => void;
   onFixDescription?: (description: string) => void;
+  onEditFields?: () => void;
 }) {
   const checklist = result.checklist;
   const testsAreBlocking = Boolean(
@@ -6587,7 +6728,7 @@ function CertificationChecklistPanel({
     <div style={{ margin: '12px 12px 0', border: `1px solid ${accent}55`, borderRadius: 8, background: `${accent}0d`, padding: 12, display: 'grid', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ fontSize: 12, fontWeight: 800, color: accent, fontFamily: t.font }}>
-          {result.pending ? 'Certification running' : result.ok ? 'Saved query certified' : 'Unable to certify'}
+          {certificationPanelHeading(result, proposes)}
         </span>
         {checklist?.checkedAt && <span style={{ fontSize: 10, color: t.textMuted, fontFamily: t.fontMono }}>{checklist.checkedAt}</span>}
       </div>
@@ -6595,9 +6736,7 @@ function CertificationChecklistPanel({
         {result.pending
           ? result.message ?? 'The exact draft is saved and the certification gates are running in the background.'
           : result.ok
-          ? checklist?.tests
-            ? 'Latest edits were saved, the saved query ran successfully, tests passed, and status was updated to certified.'
-            : 'Latest edits were saved, the saved query ran successfully, no tests are defined, and status was updated to certified.'
+          ? certificationPassedLine(Boolean(checklist?.tests), proposes)
           : `The draft is saved. Certification stopped with ${issues.length || 1} required fix${issues.length === 1 ? '' : 'es'}; nothing was partially certified.`}
       </div>
       {result.pending && (
@@ -6637,14 +6776,18 @@ function CertificationChecklistPanel({
                     ? 'Review runtime'
                     : issue.action === 'fix_description'
                       ? 'Edit the description myself'
-                      : 'Edit source';
+                      : issue.action === 'fill_certification_fields' && onEditFields
+                        ? 'Open the Certification fields'
+                        : 'Edit source';
             const handleAction = issue.action === 'review_metrics' || issue.action === 'configure_runtime'
               ? onReviewMetrics
               : issue.action === 'run_again'
                 ? onRun
                 : issue.action === 'edit_parameters'
                   ? onEditParameters
-                : onEditSource;
+                  : issue.action === 'fill_certification_fields' && onEditFields
+                    ? onEditFields
+                    : onEditSource;
             return (
               <div key={`${issue.code ?? issue.message}-${index}`} style={{ display: 'grid', gap: 7, border: `1px solid ${accent}44`, borderRadius: 8, background: t.cellBg, padding: 10 }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
@@ -6695,6 +6838,20 @@ function CertificationChecklistPanel({
       )}
     </div>
   );
+}
+
+/** The checklist panel's heading: under a host that certifies through review, Certify proposes. */
+export function certificationPanelHeading(result: { pending?: boolean; ok?: boolean }, proposes = false): string {
+  if (proposes) return result.pending ? 'Proposing certification' : result.ok ? 'Certification proposed' : 'Unable to propose certification';
+  return result.pending ? 'Certification running' : result.ok ? 'Saved query certified' : 'Unable to certify';
+}
+
+/** What a passed Certify did: under a host that certifies through review, nothing is live until a reviewer approves. */
+export function certificationPassedLine(testsPassed: boolean, proposes = false): string {
+  const start = `Latest edits were saved, the saved query ran successfully, ${testsPassed ? 'tests passed' : 'no tests are defined'}`;
+  return proposes
+    ? `${start}, and certification is proposed. It takes effect when a reviewer approves.`
+    : `${start}, and status was updated to certified.`;
 }
 
 function formatCertificationBlocker(blocker: string): string {

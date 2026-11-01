@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseBlockSourceMetadata } from './local-runtime.js';
+import { certificationFieldGaps, certificationFieldLabel } from '@zlens/core';
 import { prefillCertificationMetadata } from './block-studio-prefill.js';
 
 const sqlDraft = `block "revenue_by_region" {
@@ -21,7 +22,31 @@ const sqlDraft = `block "revenue_by_region" {
 }
 `;
 
+describe('certificationFieldGaps', () => {
+  it('names every field a draft has not filled, and none once they are', () => {
+    expect(certificationFieldGaps(sqlDraft)).toEqual(['grain', 'outputs', 'reviewCadence', 'sourceSystems', 'tests']);
+    expect(certificationFieldGaps(prefillCertificationMetadata(sqlDraft).source)).toEqual([]);
+  });
+
+  it('reads an empty value or an empty tests section as not filled', () => {
+    const emptied = sqlDraft.replace('type = "custom"', 'type = "custom"\n  grain = ""\n  outputs = []\n  reviewCadence = ""').replace('visualization {', 'tests {\n  }\n\n  visualization {');
+    expect(certificationFieldGaps(emptied)).toEqual(['grain', 'outputs', 'reviewCadence', 'sourceSystems', 'tests']);
+  });
+
+  it('has the words a person reads for each field', () => {
+    expect(certificationFieldLabel('reviewCadence')).toBe('review cadence');
+    expect(certificationFieldLabel('tests')).toBe('a test');
+    expect(certificationFieldLabel('entities')).toBe('entities');
+  });
+});
+
 describe('prefillCertificationMetadata', () => {
+  it('fills an empty tests section in place, so the block keeps one', () => {
+    const { source } = prefillCertificationMetadata(sqlDraft.replace('visualization {', 'tests {\n  }\n\n  visualization {'));
+    expect(source.match(/\btests\s*\{/g)).toHaveLength(1);
+    expect(source).toMatch(/tests \{\s+assert row_count > 0\s+\}/);
+  });
+
   it('fills the seven certification fields from what the answer knows', () => {
     const { source, suggested, unknown } = prefillCertificationMetadata(sqlDraft, {
       columns: ['region', 'revenue'],

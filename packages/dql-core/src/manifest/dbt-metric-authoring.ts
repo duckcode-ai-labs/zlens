@@ -53,6 +53,26 @@ export interface DbtMetricPatchPreview {
   fingerprint: string;
   /** Things the check could not prove (for example, columns when no dbt manifest exists). */
   warnings: string[];
+  /** Where the patches go: dbt's YAML, or the project's own `semantic-layer/` folder. */
+  writesTo?: 'dbt' | 'semantic-layer';
+}
+
+/** A semantic model the project already has, and the dbt model it sits on. */
+export interface ExistingSemanticModel {
+  name: string;
+  /** The dbt model's name, from `model: ref('…')`, else the last part of `table:`. */
+  dbtModel?: string;
+  /** Project-relative for `semantic-layer`, dbt-project-relative for `dbt`. */
+  path: string;
+  owner: 'dbt' | 'semantic-layer';
+}
+
+/** Where a project keeps metrics. `semanticLayerDir` is set only when ZLens reads the project's own semantic layer. */
+export interface MetricAuthoringPaths {
+  dbtProjectRoot: string;
+  manifestPath: string;
+  projectRoot: string;
+  semanticLayerDir?: string;
 }
 
 interface Loaded { path: string; before: string; document: UnknownRecord }
@@ -93,6 +113,45 @@ function modelPathsOf(root: string): string[] {
 
 function listOf(document: UnknownRecord, key: string): UnknownRecord[] {
   return Array.isArray(document[key]) ? (document[key] as unknown[]).map(asRecord) : [];
+}
+
+/** The dbt model a `model:` field names: `ref('claims')`, `ref('pkg', 'claims')`, `ref('claims', v=2)` or a bare name. */
+function refTarget(value: unknown): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) return undefined;
+  const call = /^ref\((.*)\)$/s.exec(text);
+  if (!call) return /^[A-Za-z_][A-Za-z0-9_]*$/.test(text) ? text : undefined;
+  const positional = call[1]!.split(',').map((part) => part.trim()).filter((part) => /^['"]/.test(part));
+  return positional.pop()?.replace(/^['"]|['"]$/g, '');
+}
+
+/** The last part of a table name, unquoted: `"harbor"."main"."claims"` and `main.claims` both read as `claims`. */
+function tableName(value: unknown): string | undefined {
+  const text = typeof value === 'string' ? value.trim() : '';
+  return text.split('.').filter(Boolean).pop()?.replace(/^["`\[]|["`\]]$/g, '') || undefined;
+}
+
+/** Every semantic model the project has, dbt's and (when ZLens reads it) its own semantic layer's, so nothing is created twice. */
+export function listExistingSemanticModels(paths: Pick<MetricAuthoringPaths, 'dbtProjectRoot' | 'projectRoot' | 'semanticLayerDir'>): ExistingSemanticModel[] {
+  const found: ExistingSemanticModel[] = [];
+  if (paths.semanticLayerDir) {
+    for (const entry of readNativeModels(paths.projectRoot, paths.semanticLayerDir)) {
+      // A cube beside a semantic model on the same dbt model is one model, not two.
+      if (entry.kind === 'cube' && found.some((seen) => seen.dbtModel === entry.dbtModel)) continue;
+      found.push({ name: entry.name, ...(entry.dbtModel ? { dbtModel: entry.dbtModel } : {}), path: entry.file.path, owner: 'semantic-layer' });
+    }
+  }
+  const root = resolve(paths.dbtProjectRoot);
+  for (const file of yamlFiles(root, modelPathsOf(root))) {
+    let document: UnknownRecord;
+    try { document = asRecord(yaml.load(readFileSync(file, 'utf8'))); } catch { continue; }
+    for (const model of listOf(document, 'semantic_models')) {
+      if (typeof model.name !== 'string') continue;
+      const dbtModel = refTarget(model.model);
+      found.push({ name: model.name, ...(dbtModel ? { dbtModel } : {}), path: relative(root, file).replace(/\\/g, '/'), owner: 'dbt' });
+    }
+  }
+  return found;
 }
 
 /** Names of the other metrics (in the loaded YAML or the dbt manifest) whose inputs name `name`, a measure or a metric. */
@@ -166,7 +225,7 @@ export function previewDbtMetricPatch(
     const pickedName = pickedNode.resource_type === 'model' ? stringValue(pickedNode.name) : undefined;
     if (pickedName) {
       for (const file of all) {
-        const found = listOf(file.document, 'semantic_models').find((candidate) => /ref\(\s*['"]([^'"]+)['"]/.exec(String(candidate.model ?? ''))?.[1] === pickedName);
+        const found = listOf(file.document, 'semantic_models').find((candidate) => refTarget(candidate.model) === pickedName);
         if (found) {
           semanticOwner = file;
           semanticModelName = String(found.name);
@@ -192,7 +251,7 @@ export function previewDbtMetricPatch(
   if (semanticOwner) {
     const model = listOf(semanticOwner.document, 'semantic_models').find((candidate) => candidate.name === semanticModelName)!;
     target = { file: semanticOwner, model };
-    modelNode = /ref\(\s*['"]([^'"]+)['"]/.exec(String(model.model ?? ''))?.[1];
+    modelNode = refTarget(model.model);
   } else if (input.mode === 'edit') {
     issues.push(`Semantic model "${semanticModelName}" is not defined in the dbt project YAML.`);
   } else {
@@ -334,7 +393,7 @@ export function previewDbtMetricPatch(
     const after = dumpYaml(entry.document);
     return { path: entry.path, before: entry.before, after, changed: entry.before !== after };
   });
-  return { semanticModel: semanticModelName, metric: metricName, patches, fingerprint: hash({ input, patches }), warnings };
+  return { semanticModel: semanticModelName, metric: metricName, patches, fingerprint: hash({ input, patches }), warnings, writesTo: 'dbt' };
 }
 
 export function applyDbtMetricPatch(
@@ -352,6 +411,239 @@ export function applyDbtMetricPatch(
     mkdirSync(dirname(absolute), { recursive: true });
     // Re-check after mkdir so a concurrently-created symlink cannot redirect the write outside the dbt project.
     assertContainedPath(dbtProjectRoot, patch.path, 'dbt source patch');
+    writeFileSync(absolute, patch.after, 'utf8');
+  }
+  return preview;
+}
+
+// ── The project's own semantic layer ──────────────────────────────────────────────────────────────────────────────
+// A project with `semanticLayer.provider: dql` keeps its semantic models in `semantic-layer/`, and that is all Ask reads.
+// A metric for one of those models belongs beside them: written to dbt's YAML it would answer nothing, and would need
+// a second, competing semantic model on the same dbt model.
+
+interface NativeFile { path: string; before: string; document: UnknownRecord }
+interface NativeModel { name: string; kind: 'semantic_model' | 'cube'; dbtModel?: string; file: NativeFile; record: UnknownRecord }
+
+const NATIVE_SQL: Record<DbtMetricAggregation, (column: string) => string> = {
+  sum: (column) => `SUM(${column})`,
+  count: (column) => `COUNT(${column})`,
+  count_distinct: (column) => `COUNT(DISTINCT ${column})`,
+  average: (column) => `AVG(${column})`,
+  min: (column) => `MIN(${column})`,
+  max: (column) => `MAX(${column})`,
+};
+
+/** Each YAML file in one folder of the semantic layer, drafts left out, as `{ <key>: [...] }` or one object per file. */
+function nativeFiles(projectRoot: string, semanticLayerDir: string, folder: string): NativeFile[] {
+  const files: NativeFile[] = [];
+  const walk = (dir: string): void => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isSymbolicLink() || entry.name.startsWith('.') || entry.name === '_drafts') continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.ya?ml$/i.test(entry.name)) continue;
+      const before = readFileSync(full, 'utf8');
+      let document: UnknownRecord;
+      try { document = asRecord(yaml.load(before)); } catch { continue; }
+      files.push({ path: relative(projectRoot, full).replace(/\\/g, '/'), before, document });
+    }
+  };
+  walk(join(semanticLayerDir, folder));
+  return files;
+}
+
+function nativeEntries(file: NativeFile, keys: string[]): { keyed: string | undefined; entries: UnknownRecord[] } {
+  const keyed = keys.find((key) => Array.isArray(file.document[key]));
+  return { keyed, entries: keyed ? listOf(file.document, keyed) : typeof file.document.name === 'string' ? [file.document] : [] };
+}
+
+/** The semantic layer's models: semantic models first, then cubes, the older way to say the same thing. */
+function readNativeModels(projectRoot: string, semanticLayerDir: string): NativeModel[] {
+  const read = (folder: string, keys: string[], kind: NativeModel['kind']): NativeModel[] => nativeFiles(projectRoot, semanticLayerDir, folder).flatMap((file) =>
+    nativeEntries(file, keys).entries
+      .filter((record) => typeof record.name === 'string')
+      .map((record) => {
+        const dbtModel = refTarget(record.model) ?? tableName(record.table);
+        return { name: String(record.name), kind, ...(dbtModel ? { dbtModel } : {}), file, record };
+      }));
+  return [...read('semantic_models', ['semantic_models', 'semanticModels'], 'semantic_model'), ...read('cubes', ['cubes'], 'cube')];
+}
+
+/** The native model an Add metric change is for: named by the change, or sitting on its dbt model. */
+function nativeModelFor(models: NativeModel[], input: DbtMetricAuthoringInput, dbtModelName: string | undefined): NativeModel | undefined {
+  const wanted = String(input.semanticModel ?? '').trim();
+  const on = (name: string | undefined) => (name ? models.find((model) => model.dbtModel?.toLowerCase() === name.toLowerCase()) : undefined);
+  return models.find((model) => model.name === wanted) ?? on(dbtModelName) ?? on(wanted);
+}
+
+function dbtModelNameOf(manifestPath: string, root: string, uniqueId: string | undefined): string | undefined {
+  if (!uniqueId || !existsSync(manifestPath)) return undefined;
+  const node = asRecord(asRecord(readJson(assertContainedPath(root, manifestPath, 'dbt manifest')).nodes)[uniqueId]);
+  return node.resource_type === 'model' ? stringValue(node.name) : undefined;
+}
+
+function previewNativeMetricPatch(paths: MetricAuthoringPaths & { semanticLayerDir: string }, input: DbtMetricAuthoringInput, target: NativeModel, models: NativeModel[]): DbtMetricPatchPreview {
+  const issues: string[] = [];
+  const warnings: string[] = [];
+  const metricInput = input.metric ?? ({} as DbtMetricAuthoringInput['metric']);
+  const metricName = String(metricInput.name ?? '').trim();
+  const aggregationRaw = String(metricInput.aggregation ?? '').trim().toLowerCase();
+  const aggregation = (aggregationRaw === 'avg' ? 'average' : aggregationRaw) as DbtMetricAggregation;
+  const column = String(metricInput.column ?? '').trim();
+  if (input.mode !== 'add' && input.mode !== 'edit') issues.push('mode must be "add" or "edit".');
+  if (!NAME.test(metricName)) issues.push(`Metric name "${metricName}" must be lowercase letters, digits and single underscores, starting with a letter (for example average_claimed_amount).`);
+  if (!DBT_METRIC_AGGREGATIONS.includes(aggregation)) issues.push(`Unsupported aggregation "${metricInput.aggregation ?? ''}". Use one of: ${DBT_METRIC_AGGREGATIONS.join(', ')}.`);
+  if (!COLUMN.test(column)) issues.push(`Column "${column}" must be a single column name; expressions are not supported here.`);
+  if (issues.length) invalid(issues);
+
+  // The dbt model's documented columns, when there is one: an undocumented model is unproven, not wrong.
+  const manifestRoot = resolve(paths.dbtProjectRoot);
+  const manifest = existsSync(paths.manifestPath) ? readJson(assertContainedPath(manifestRoot, paths.manifestPath, 'dbt manifest')) : undefined;
+  const uniqueId = input.modelUniqueId ?? Object.entries(asRecord(manifest?.nodes)).find(([, node]) => asRecord(node).resource_type === 'model' && asRecord(node).name === target.dbtModel)?.[0];
+  const knownColumns = new Map<string, string>();
+  for (const item of (manifest && uniqueId ? loadDbtNodeAuthoringDetail(paths.manifestPath, uniqueId)?.columns : undefined) ?? []) knownColumns.set(item.name.toLowerCase(), item.name);
+  if (knownColumns.size === 0) warnings.push(`The columns of "${target.dbtModel ?? target.name}" are not documented in the manifest, so column names were not checked.`);
+  const checkColumn = (value: string, what: string): string => {
+    if (!COLUMN.test(value)) { issues.push(`${what} column "${value}" must be a single column name.`); return value; }
+    if (knownColumns.size === 0) return value;
+    const known = knownColumns.get(value.toLowerCase());
+    if (!known) issues.push(`Unknown column "${value}" for ${what} on "${target.dbtModel ?? target.name}". Columns: ${[...knownColumns.values()].sort().join(', ')}.`);
+    return known ?? value;
+  };
+  const measureColumn = checkColumn(column, 'the metric');
+
+  const cube = target.kind === 'cube' ? target : models.find((model) => model.kind === 'cube' && (model.name === target.name || (target.dbtModel && model.dbtModel === target.dbtModel)));
+  const metricFiles = nativeFiles(paths.projectRoot, paths.semanticLayerDir, 'metrics');
+  const metricOwner = metricFiles.find((file) => nativeEntries(file, ['metrics']).entries.some((metric) => metric.name === metricName));
+  if (input.mode === 'add' && metricOwner) issues.push(`A metric named "${metricName}" already exists in ${metricOwner.path}. Pick another name, or edit that metric.`);
+  if (input.mode === 'add' && !metricOwner && cube && listOf(cube.record, 'measures').some((measure) => measure.name === metricName)) issues.push(`A measure named "${metricName}" already exists in ${cube.file.path}. Pick another name.`);
+  if (input.mode === 'edit' && !metricOwner) issues.push(`There is no metric named "${metricName}" in the semantic layer to edit.`);
+
+  const dimensions = (input.dimensions ?? []).map((requested) => {
+    const name = String(requested.name ?? '').trim();
+    if (!NAME.test(name)) issues.push(`Dimension name "${name}" must be lowercase letters, digits and single underscores.`);
+    return { name, column: checkColumn(String(requested.column ?? name).trim(), `dimension "${name}"`) };
+  });
+  if (issues.length) invalid(issues);
+
+  const table = String(cube?.record.table ?? target.record.table ?? target.dbtModel ?? target.name);
+  const sql = NATIVE_SQL[aggregation](measureColumn);
+  const type = aggregation === 'average' ? 'avg' : aggregation;
+  const label = metricInput.label?.trim() || metricName.split('_').map((word) => word[0]!.toUpperCase() + word.slice(1)).join(' ');
+  const description = metricInput.description?.trim();
+  const timeDimensions = [...listOf(cube?.record ?? {}, 'time_dimensions')];
+  const aggTimeDimension = stringValue((timeDimensions.find((dimension) => dimension.primary_time === true) ?? timeDimensions[0])?.name)
+    ?? (Array.isArray(target.record.time_dimensions) ? stringValue(target.record.time_dimensions[0]) : undefined);
+  const synonyms = Array.from(new Set((metricInput.synonyms ?? []).map((word) => String(word).trim()).filter(Boolean)));
+  const domain = metricInput.domain?.trim() || stringValue(cube?.record.domain ?? target.record.domain);
+  const definition: UnknownRecord = {
+    name: metricName,
+    label,
+    ...(description ? { description } : {}),
+    ...(domain ? { domain } : {}),
+    ...(cube ? { cube: cube.name } : {}),
+    table,
+    sql,
+    type,
+    aggregation,
+    metric_type: 'simple',
+    type_params: { measure: metricName },
+    ...(aggTimeDimension ? { agg_time_dimension: aggTimeDimension } : {}),
+    ...(synonyms.length ? { synonyms } : {}),
+  };
+
+  // Each touched file is written once, its other entries left as they are.
+  const edits = new Map<string, NativeFile>();
+  const touch = (file: NativeFile): UnknownRecord => {
+    const entry = edits.get(file.path) ?? { ...file, document: { ...file.document } };
+    edits.set(file.path, entry);
+    return entry.document;
+  };
+  /** Changes the one entry `name` in its file: a keyed list keeps its other entries. */
+  const update = (file: NativeFile, keys: string[], name: string, change: (record: UnknownRecord) => UnknownRecord) => {
+    const document = touch(file);
+    const { keyed, entries } = nativeEntries({ ...file, document }, keys);
+    if (keyed) document[keyed] = entries.map((entry) => (entry.name === name ? change(entry) : entry));
+    else Object.assign(document, change(document));
+  };
+
+  if (metricOwner) {
+    update(metricOwner, ['metrics'], metricName, (metric) => ({ ...metric, ...definition }));
+  } else {
+    const sameModel = metricFiles.find((file) => {
+      const { keyed, entries } = nativeEntries(file, ['metrics']);
+      return keyed && entries.some((metric) => (cube ? metric.cube === cube.name : metric.table === table));
+    });
+    if (sameModel) {
+      const document = touch(sameModel);
+      document.metrics = [...listOf(sameModel.document, 'metrics'), definition];
+    } else {
+      const path = relative(paths.projectRoot, join(paths.semanticLayerDir, 'metrics', `${metricName}.yaml`)).replace(/\\/g, '/');
+      Object.assign(touch({ path, before: '', document: {} }), definition);
+    }
+  }
+  if (cube) {
+    update(cube.file, ['cubes'], cube.name, (record) => {
+      const measures = listOf(record, 'measures');
+      const measure: UnknownRecord = { name: metricName, label, ...(description ? { description } : {}), sql, type, aggregation, ...(aggTimeDimension ? { agg_time_dimension: aggTimeDimension } : {}) };
+      const known = listOf(record, 'dimensions');
+      const added = dimensions.filter((dimension) => !known.some((existing) => existing.name === dimension.name))
+        .map((dimension) => ({ name: dimension.name, label: titleOf(dimension.name), sql: dimension.column, type: 'string' }));
+      return {
+        ...record,
+        measures: measures.some((item) => item.name === metricName) ? measures.map((item) => (item.name === metricName ? { ...item, ...measure } : item)) : [...measures, measure],
+        ...(added.length ? { dimensions: [...known, ...added] } : {}),
+      };
+    });
+  }
+  if (target.kind === 'semantic_model') {
+    update(target.file, ['semantic_models', 'semanticModels'], target.name, (record) => ({
+      ...record,
+      measures: Array.from(new Set([...(Array.isArray(record.measures) ? record.measures.map(String) : []), metricName])),
+      ...(dimensions.length ? { dimensions: Array.from(new Set([...(Array.isArray(record.dimensions) ? record.dimensions.map(String) : []), ...dimensions.map((dimension) => dimension.name)])) } : {}),
+    }));
+  }
+
+  const patches: ModelingSourcePatch[] = [...edits.values()].map((entry) => {
+    const after = dumpYaml(entry.document);
+    return { path: entry.path, before: entry.before, after, changed: entry.before !== after };
+  });
+  return { semanticModel: target.name, metric: metricName, patches, fingerprint: hash({ input, patches }), warnings, writesTo: 'semantic-layer' };
+}
+
+function titleOf(name: string): string {
+  return name.split('_').filter(Boolean).map((word) => word[0]!.toUpperCase() + word.slice(1)).join(' ');
+}
+
+function resolveNativeTarget(paths: MetricAuthoringPaths, input: DbtMetricAuthoringInput): { dir: string; models: NativeModel[]; target: NativeModel } | undefined {
+  const dir = paths.semanticLayerDir;
+  if (!dir) return undefined;
+  const models = readNativeModels(paths.projectRoot, dir);
+  const target = nativeModelFor(models, input, dbtModelNameOf(paths.manifestPath, resolve(paths.dbtProjectRoot), input.modelUniqueId));
+  return target ? { dir, models, target } : undefined;
+}
+
+/** Add metric's preview: into the project's own semantic model when one sits on the dbt model, else into dbt's YAML. */
+export function previewProjectMetricPatch(paths: MetricAuthoringPaths, input: DbtMetricAuthoringInput): DbtMetricPatchPreview {
+  const native = resolveNativeTarget(paths, input);
+  return native
+    ? previewNativeMetricPatch({ ...paths, semanticLayerDir: native.dir }, input, native.target, native.models)
+    : previewDbtMetricPatch(paths.dbtProjectRoot, paths.manifestPath, input);
+}
+
+/** Add metric's apply: writes exactly what was previewed, or nothing if the files moved since. */
+export function applyProjectMetricPatch(paths: MetricAuthoringPaths, input: DbtMetricAuthoringInput, expectedFingerprint: string): DbtMetricPatchPreview {
+  const native = resolveNativeTarget(paths, input);
+  if (!native) return applyDbtMetricPatch(paths.dbtProjectRoot, paths.manifestPath, input, expectedFingerprint);
+  const preview = previewNativeMetricPatch({ ...paths, semanticLayerDir: native.dir }, input, native.target, native.models);
+  if (!expectedFingerprint || preview.fingerprint !== expectedFingerprint) {
+    throw new Error('The semantic layer changed after the preview. Refresh the preview before applying.');
+  }
+  for (const patch of preview.patches.filter((item) => item.changed)) {
+    const absolute = assertContainedPath(paths.projectRoot, patch.path, 'semantic layer patch');
+    mkdirSync(dirname(absolute), { recursive: true });
+    assertContainedPath(paths.projectRoot, patch.path, 'semantic layer patch');
     writeFileSync(absolute, patch.after, 'utf8');
   }
   return preview;

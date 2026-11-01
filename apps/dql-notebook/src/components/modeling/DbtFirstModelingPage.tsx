@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Blocks, BookOpen, Boxes, CheckCircle2, Columns3, Download, EyeOff, FileSearch, FolderTree, GitBranch, GraduationCap, Link2, Maximize2, MessageCircle, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, RotateCcw, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, XCircle } from 'lucide-react';
 import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
-import type { DbtMetricAuthoringInput, DbtMetricPatchPreview, DbtNodeAuthoringDetail, DbtSourceAuthoringInput, DbtSourcePatchPreview, ManifestModelArea, ManifestModelEntity, ManifestModelRelationship, ModelingAuthoringChange, ModelingChangePreview } from '@zlens/core';
+import type { DbtMetricAuthoringInput, DbtMetricPatchPreview, ExistingSemanticModel, DbtNodeAuthoringDetail, DbtSourceAuthoringInput, DbtSourcePatchPreview, ManifestModelArea, ManifestModelEntity, ManifestModelRelationship, ModelingAuthoringChange, ModelingChangePreview } from '@zlens/core';
 import { hostAllows, hostReadOnly, readOnlyReason, useHostUi, type HostUiState } from '../../host/host-ui';
 import { api, type AgentRunArtifact, type ContextAuthoringProposalV1, type DbtFirstModelingResponse, type WaitingWarehouseDrafts } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
@@ -2496,13 +2496,23 @@ export function canAddDbtMetric(hostUi: HostUiState): boolean {
   return !hostReadOnly(hostUi, 'domains') && hostAllows(hostUi, 'project.write');
 }
 
-export function AddDbtMetricDrawer({ data, domain, snapshotId, t, onClose, onApplied }: { data: DbtFirstModelingResponse; domain: string | null; snapshotId: string; t: Theme; onClose: () => void; onApplied: (message: string) => Promise<void> }) {
+/** The semantic models that already sit on a dbt model. Only a model with none needs a new one. */
+export function semanticModelsOnDbtModel(models: ExistingSemanticModel[] | undefined, dbtModel: string | undefined): ExistingSemanticModel[] {
+  const wanted = dbtModel?.toLowerCase();
+  return wanted ? (models ?? []).filter((model) => model.dbtModel?.toLowerCase() === wanted) : [];
+}
+
+export function AddDbtMetricDrawer({ data, domain, snapshotId, initialNodeId = '', t, onClose, onApplied }: { data: DbtFirstModelingResponse; domain: string | null; snapshotId: string; initialNodeId?: string; t: Theme; onClose: () => void; onApplied: (message: string) => Promise<void> }) {
   const models = useMemo(() => Object.values(data.dbtProvenance.nodes)
     .filter((node) => node.resourceType === 'model')
     .sort((a, b) => a.name.localeCompare(b.name)), [data.dbtProvenance.nodes]);
-  const [nodeId, setNodeId] = useState('');
+  const [nodeId, setNodeId] = useState(initialNodeId);
   const [columns, setColumns] = useState<string[]>([]);
   const [semanticModel, setSemanticModel] = useState('');
+  const existing = semanticModelsOnDbtModel(data.semanticModels, models.find((node) => node.uniqueId === nodeId)?.name);
+  // The first one is pre-selected; a project with two on one dbt model picks between them.
+  const chosen = existing.find((model) => model.name === semanticModel) ?? existing[0];
+  const inSemanticLayer = chosen?.owner === 'semantic-layer';
   const [aggregation, setAggregation] = useState('average');
   const [column, setColumn] = useState('');
   const [name, setName] = useState('');
@@ -2531,10 +2541,10 @@ export function AddDbtMetricDrawer({ data, domain, snapshotId, t, onClose, onApp
   const csvList = (value: string) => value.split(',').map((item) => item.trim()).filter(Boolean);
   const change = (): DbtMetricAuthoringInput => ({
     mode: 'add',
-    semanticModel: slug(semanticModel) || slug(models.find((node) => node.uniqueId === nodeId)?.name ?? ''),
+    semanticModel: chosen?.name ?? (slug(semanticModel) || slug(models.find((node) => node.uniqueId === nodeId)?.name ?? '')),
     modelUniqueId: nodeId,
-    ...(entity.trim() && entityColumn.trim() ? { primaryEntity: { name: slug(entity), column: entityColumn.trim() } } : {}),
-    ...(timeColumn.trim() ? { timeDimension: { name: slug(timeColumn), column: timeColumn.trim() } } : {}),
+    ...(!chosen && entity.trim() && entityColumn.trim() ? { primaryEntity: { name: slug(entity), column: entityColumn.trim() } } : {}),
+    ...(!chosen && timeColumn.trim() ? { timeDimension: { name: slug(timeColumn), column: timeColumn.trim() } } : {}),
     metric: { name: metricName, label: label.trim() || titleCase(metricName), description: description.trim(), aggregation, column, ...(domain ? { domain } : {}), ...(csvList(synonyms).length ? { synonyms: csvList(synonyms) } : {}) },
     dimensions: csvList(dimensions).map((item) => ({ name: slug(item), column: item, type: 'categorical' as const })),
   });
@@ -2554,7 +2564,9 @@ export function AddDbtMetricDrawer({ data, domain, snapshotId, t, onClose, onApp
   });
   return (
     <Modal title="Add metric" t={t} onClose={onClose}>
-      <Message text="The metric lives in your dbt project's YAML, where dbt/MetricFlow owns it. ZLens previews the exact change first; nothing is written until you apply." t={t} />
+      <Message text={inSemanticLayer
+        ? `The metric goes into this project's semantic layer, beside the semantic model "${chosen.name}" (${chosen.path}). ZLens previews the exact change first; nothing is written until you apply.`
+        : "The metric lives in your dbt project's YAML, where dbt/MetricFlow owns it. ZLens previews the exact change first; nothing is written until you apply."} t={t} />
       {!preview ? (
         <div style={{ display: 'grid', gap: 12 }}>
           <Field label="dbt model"><Select value={nodeId} onChange={(value) => { setNodeId(value); setSemanticModel(''); }} values={models.map((node) => node.uniqueId)} labels={Object.fromEntries(models.map((node) => [node.uniqueId, node.name]))} t={t} /></Field>
@@ -2566,18 +2578,22 @@ export function AddDbtMetricDrawer({ data, domain, snapshotId, t, onClose, onApp
           <Field label="Label"><Input value={label} onChange={setLabel} t={t} placeholder="Average claimed amount" /></Field>
           <Field label="What it measures"><Input value={description} onChange={setDescription} t={t} placeholder="Mean amount claimed per claim." /></Field>
           <Field label="Dimensions to add (columns, comma separated)"><Input value={dimensions} onChange={setDimensions} t={t} placeholder="product, region" /></Field>
-          <Field label="Also known as (synonyms, comma separated; saved in the dbt YAML)"><Input value={synonyms} onChange={setSynonyms} t={t} placeholder="avg claim, mean claim size" /></Field>
-          <details>
-            <summary style={{ cursor: 'pointer', fontSize: 11, color: t.textMuted }}>This dbt model has no semantic model yet</summary>
-            <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
-              <Field label="Semantic model name"><Input value={semanticModel} onChange={setSemanticModel} t={t} placeholder="claims" /></Field>
-              <Field label="Primary entity name"><Input value={entity} onChange={setEntity} t={t} placeholder="claim" /></Field>
-              <Field label="Primary entity column"><Select value={entityColumn} onChange={setEntityColumn} values={columns} t={t} /></Field>
-              <Field label="Time column"><Select value={timeColumn} onChange={setTimeColumn} values={columns} t={t} /></Field>
-            </div>
-          </details>
+          <Field label={`Also known as (synonyms, comma separated; saved in the ${inSemanticLayer ? 'semantic layer' : 'dbt YAML'})`}><Input value={synonyms} onChange={setSynonyms} t={t} placeholder="avg claim, mean claim size" /></Field>
+          {chosen ? (
+            <Field label="Semantic model"><Select value={chosen.name} onChange={(value) => setSemanticModel(value)} values={existing.map((model) => model.name)} labels={Object.fromEntries(existing.map((model) => [model.name, `${model.name} (${model.path})`]))} t={t} /></Field>
+          ) : nodeId ? (
+            <details>
+              <summary style={{ cursor: 'pointer', fontSize: 11, color: t.textMuted }}>This dbt model has no semantic model yet</summary>
+              <div style={{ display: 'grid', gap: 10, marginTop: 8 }}>
+                <Field label="Semantic model name"><Input value={semanticModel} onChange={setSemanticModel} t={t} placeholder="claims" /></Field>
+                <Field label="Primary entity name"><Input value={entity} onChange={setEntity} t={t} placeholder="claim" /></Field>
+                <Field label="Primary entity column"><Select value={entityColumn} onChange={setEntityColumn} values={columns} t={t} /></Field>
+                <Field label="Time column"><Select value={timeColumn} onChange={setTimeColumn} values={columns} t={t} /></Field>
+              </div>
+            </details>
+          ) : null}
           {error ? <p role="alert" style={{ margin: 0, color: 'var(--status-error)', fontSize: 11.5 }}>{error}</p> : null}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7 }}><Button t={t} onClick={onClose}>Cancel</Button><Button primary t={t} disabled={!ready || busy} onClick={() => void previewPatch()}>Preview dbt YAML</Button></div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7 }}><Button t={t} onClick={onClose}>Cancel</Button><Button primary t={t} disabled={!ready || busy} onClick={() => void previewPatch()}>{inSemanticLayer ? 'Preview the change' : 'Preview dbt YAML'}</Button></div>
         </div>
       ) : (
         <div style={{ display: 'grid', gap: 10 }}>
@@ -2585,14 +2601,14 @@ export function AddDbtMetricDrawer({ data, domain, snapshotId, t, onClose, onApp
             <div key={patch.path} style={{ display: 'grid', gap: 6 }}>
               <div style={{ color: t.textSecondary, fontSize: 11 }}>Source: <code>{patch.path}</code></div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <SourcePreview title="Current dbt YAML" source={patch.before || '# New dbt YAML file'} t={t} />
-                <SourcePreview title="Proposed dbt YAML" source={patch.after} t={t} />
+                <SourcePreview title={inSemanticLayer ? 'Current YAML' : 'Current dbt YAML'} source={patch.before || (inSemanticLayer ? '# New YAML file' : '# New dbt YAML file')} t={t} />
+                <SourcePreview title={inSemanticLayer ? 'Proposed YAML' : 'Proposed dbt YAML'} source={patch.after} t={t} />
               </div>
             </div>
           ))}
           {preview.warnings.map((warning) => <Message key={warning} text={warning} t={t} />)}
           {error ? <p role="alert" style={{ margin: 0, color: 'var(--status-error)', fontSize: 11.5 }}>{error}</p> : null}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7 }}><Button t={t} onClick={() => setPreview(null)}>Back</Button><Button primary t={t} disabled={busy || !preview.patches.some((patch) => patch.changed)} onClick={() => void applyPatch()}>{busy ? 'Applying…' : 'Apply to dbt'}</Button></div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 7 }}><Button t={t} onClick={() => setPreview(null)}>Back</Button><Button primary t={t} disabled={busy || !preview.patches.some((patch) => patch.changed)} onClick={() => void applyPatch()}>{busy ? 'Applying…' : inSemanticLayer ? 'Apply' : 'Apply to dbt'}</Button></div>
         </div>
       )}
     </Modal>

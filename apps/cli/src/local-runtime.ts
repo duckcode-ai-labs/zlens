@@ -100,6 +100,8 @@ import {
   appBuildPreviewIntentFingerprint,
   APP_SOURCE_POLICY,
   serializeMetricDefinitionToYaml,
+  certificationFieldLabel,
+  type CertificationField,
   resolveSemanticLayerAsync,
   resolveRepoSource,
   getDialect,
@@ -198,8 +200,10 @@ import {
   applyModelingChange,
   previewDbtSourcePatch,
   applyDbtSourcePatch,
-  previewDbtMetricPatch,
-  applyDbtMetricPatch,
+  previewProjectMetricPatch,
+  applyProjectMetricPatch,
+  listExistingSemanticModels,
+  type MetricAuthoringPaths,
   loadDomainPackageRegistry,
   loadDbtNodeAuthoringDetail,
   type ModelingAuthoringChange,
@@ -294,6 +298,7 @@ import {
   bylineForViewer,
   certificationByline,
   checkByline,
+  currentGitBranch,
   gitUserName,
   localPersonIdentity,
   buildDeprecationRecord,
@@ -13589,6 +13594,36 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     };
   };
 
+  /** Where Add metric reads and writes. The project's own semantic layer counts only when ZLens reads it. */
+  const metricAuthoringPaths = (): MetricAuthoringPaths => {
+    const { dbtProjectDir, manifestPath } = onboardingDbtPaths({});
+    const native = semanticConfig ? semanticConfig.provider === 'dql' : semanticDetectedProvider === 'dql';
+    return {
+      dbtProjectRoot: dbtProjectDir,
+      manifestPath,
+      projectRoot,
+      ...(native ? { semanticLayerDir: resolve(projectRoot, semanticConfig?.path ?? 'semantic-layer') } : {}),
+    };
+  };
+
+  /** A project whose dbt paths cannot be read lists none; the page still opens. */
+  const existingProjectSemanticModels = () => {
+    try {
+      return listExistingSemanticModels(metricAuthoringPaths());
+    } catch {
+      return [];
+    }
+  };
+
+  /** The dbt model behind a table a draft's SQL reads, when lineage knows it. */
+  const dbtModelForTable = (table: string): string | undefined => {
+    const wanted = table.toLowerCase();
+    const found = Object.values(projectSnapshot().manifest?.sources ?? {}).find((entry) =>
+      entry.origin === 'dbt' && entry.dbtModel
+      && (entry.name.toLowerCase() === wanted || entry.name.toLowerCase() === wanted.split('.').pop()));
+    return found?.dbtModel?.uniqueId;
+  };
+
   /**
    * The receipt an explicit Certify action leaves once `certifyBlockStudioSource`
    * passed: who certified (the host's signed-in person, else the local owner),
@@ -13613,6 +13648,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     enterprise: input.enterprise,
     checks: [...(input.extraChecks ?? []), ...passedCheckNames(input.verdict.checklist), ...compared.checks],
     warnings: [...input.verdict.certification.warnings.map((warning) => `${warning.rule}: ${warning.message}`), ...compared.warnings],
+    // Under a host, so a draft space can tell what it proposed from what it inherited as certified.
+    branch: hostHooks ? currentGitBranch(projectRoot) : undefined,
     });
   };
 
@@ -15804,6 +15841,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         manifestVersion: manifest.manifestVersion,
         dbtProvenance: manifest.dbtProvenance,
         modeling: manifest.modeling,
+        semanticModels: existingProjectSemanticModels(),
         domainAssets: collectDomainPackageAssets(projectRoot, loadDomainPackageRegistry(projectRoot)),
         lineage: manifest.lineage,
         diagnostics: manifest.diagnostics ?? [],
@@ -16240,8 +16278,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
           throw Object.assign(new Error('Project sources changed after the model was loaded.'), { code: 'SOURCE_CHANGED' });
         }
-        const { dbtProjectDir, manifestPath } = onboardingDbtPaths({});
-        const preview = previewDbtMetricPatch(dbtProjectDir, manifestPath, body.change);
+        const preview = previewProjectMetricPatch(metricAuthoringPaths(), body.change);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ requestId, snapshotId: snapshot.snapshotId, ...preview }));
       } catch (error) {
@@ -16275,18 +16312,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const expectedFingerprint = body.expectedFingerprint ?? body.fingerprint;
         if (!expectedFingerprint) throw Object.assign(new Error('The reviewed source patch fingerprint is required.'), { code: 'SOURCE_CHANGED' });
-        const { dbtProjectDir, manifestPath } = onboardingDbtPaths({});
-        const applied = applyDbtMetricPatch(dbtProjectDir, manifestPath, body.change, expectedFingerprint);
+        const applied = applyProjectMetricPatch(metricAuthoringPaths(), body.change, expectedFingerprint);
         // ZLens reads dbt's compiled manifest first, so the new metric is only visible once dbt has parsed the YAML.
         // This route writes the reviewed YAML and nothing else: running dbt on the server is a settings.manage
         // action (route-actions.ts) and would block the server while it runs. The next step is named instead.
         const changed = applied.patches.some((patch) => patch.changed);
-        const manifestRefresh: { refreshed: boolean; reason: string } = {
-          refreshed: false,
-          reason: changed
-            ? 'The YAML is written. Run `dbt parse` in the dbt project (or merge and let your dbt job run) to make the metric visible to Ask.'
-            : 'No YAML changed.',
-        };
+        const manifestRefresh: { refreshed: boolean; reason: string } = applied.writesTo === 'semantic-layer'
+          ? { refreshed: true, reason: '' }
+          : {
+              refreshed: false,
+              reason: changed
+                ? 'The YAML is written. Run `dbt parse` in the dbt project (or merge and let your dbt job run) to make the metric visible to Ask.'
+                : 'No YAML changed.',
+            };
         projectSnapshots.invalidate();
         invalidateAgentProjectState(projectRoot);
         await reloadSemanticLayer();
@@ -27191,8 +27229,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           deprecatedOn?: string;
           /** The active block a deprecated block's replacedBy leads to; null when it resolves to none. */
           replacement?: { name: string; path: string } | null;
+          /** Certified on the branch being served: under a host that certifies through review, not reviewed yet. */
+          certificationProposed?: boolean;
         }> = [];
         const seen = new Set<string>();
+        const servedBranch = hostHooks ? currentGitBranch(projectRoot) : undefined;
         let packageRegistry: ReturnType<typeof loadDomainPackageRegistry> | undefined;
         const companionRegistry = {
           packageForPath: (filePath: string) => (packageRegistry ??= loadDomainPackageRegistry(projectRoot)).packageForPath(filePath),
@@ -27234,6 +27275,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                 const status = declaredStatus === 'certified' && certifiedBlockFileState(projectRoot, relPath, source, companionRegistry).state === 'changed'
                   ? 'pending_recertification'
                   : declaredStatus;
+                const companionPath = servedBranch && status === 'certified' ? coreBlockCompanionRelativePath(projectRoot, relPath, companionRegistry) : null;
+                const certificationProposed = Boolean(companionPath && existsSync(join(projectRoot, companionPath))
+                  && readCompanionCertification(readFileSync(join(projectRoot, companionPath), 'utf-8'))?.branch === servedBranch);
                 blocks.push({
                   name: nameMatch?.[1] ?? entry.name.replace('.dql', ''),
                   domain: (domainMatch?.[1] ?? inferBlockStudioPathDomain(projectRoot, relPath)) || 'uncategorized',
@@ -27247,6 +27291,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
                   visibility: isPrivateBlockPath(relPath) ? 'private' : 'shared',
                   ...(replacedByMatch ? { replacedBy: replacedByMatch[1] } : {}),
                   ...(deprecatedOnMatch ? { deprecatedOn: deprecatedOnMatch[1] } : {}),
+                  ...(certificationProposed ? { certificationProposed } : {}),
                 });
               } catch { /* skip unreadable files */ }
             }
@@ -27969,6 +28014,42 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ok: result.certification.certified && blockers.length === 0,
           ...result,
           blockers,
+        }));
+      } catch (error) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error) }));
+      }
+      return;
+    }
+
+    // Fills the certification fields a draft can derive from its own query and first run, in memory only:
+    // the client applies the source to the editor, and the person reviews it before certifying.
+    if (req.method === 'POST' && path === '/api/block-studio/certification-prefill') {
+      try {
+        const body = await readJSON(req);
+        const source = typeof body.source === 'string' ? body.source : '';
+        if (!source.trim()) {
+          res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: 'source is required' }));
+          return;
+        }
+        // The columns the query really returns beat reading them out of the SQL (`SELECT *`). A query that does
+        // not run yet still gets the fields its text can give.
+        const preview = await runBlockStudioPreviewSource(source).catch(() => null);
+        const prefill = prefillCertificationMetadata(source, {
+          columns: preview?.result.columns,
+          question: typeof body.question === 'string' ? body.question : undefined,
+          knownRelations: knownRelationKeys(projectRoot),
+          owner: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot)),
+          entities: semanticEntitiesForSource(source, semanticLayer),
+          sourceSystemFor: dbtModelForTable,
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({
+          source: prefill.source,
+          suggested: prefill.suggested,
+          unknown: prefill.unknown,
+          ...(preview ? { preview: { sql: preview.sql, result: preview.result } } : {}),
         }));
       } catch (error) {
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -28942,7 +29023,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // The creator opening the draft is the human the AI draft is assigned to.
         // Pre-fill what the answer already knows so certification is not a seven-field form;
         // each value is written into the source as a visible suggestion to review.
-        const manifestSources = projectSnapshot().manifest?.sources ?? {};
         const prefill = prefillCertificationMetadata(cleanedSource, {
           sql: typeof body.sql === 'string' ? body.sql : undefined,
           columns: Array.isArray(body.columns) ? (body.columns as unknown[]).filter((column): column is string => typeof column === 'string') : undefined,
@@ -28951,13 +29031,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           knownRelations: knownRelationKeys(projectRoot),
           owner: hostActor() ?? (hostHooks ? undefined : resolveLocalOwner(projectRoot)),
           entities: semanticEntitiesForSource(cleanedSource, semanticLayer),
-          sourceSystemFor: (table) => {
-            const wanted = table.toLowerCase();
-            const found = Object.values(manifestSources).find((entry) =>
-              entry.origin === 'dbt' && entry.dbtModel
-              && (entry.name.toLowerCase() === wanted || entry.name.toLowerCase() === wanted.split('.').pop()));
-            return found?.dbtModel?.uniqueId;
-          },
+          sourceSystemFor: dbtModelForTable,
         });
         const source = prefill.source;
         const savedPath = saveBlockStudioDraftArtifacts(projectRoot, {
@@ -42154,6 +42228,8 @@ export function openBlockStudioDocument(
     reviewStatus?: string;
     /** A certified source edited after its certification receipt was written; Ask treats it as pending recertification. */
     certificationSourceChanged?: boolean;
+    /** Certified on the branch being served: under a host that certifies through review, not reviewed yet. */
+    certificationProposed?: boolean;
     sourceFingerprint: string;
     /** Retired blocks: the block named as the replacement, and the retirement date. */
     replacedBy?: string;
@@ -42199,6 +42275,9 @@ export function openBlockStudioDocument(
     ...(certificationReceipt ? { certification: certificationReceipt } : {}),
     ...(certificationReceipt && certifiedBlockFileState(projectRoot, normalizedPath, source).state === 'changed'
       ? { certificationSourceChanged: true }
+      : {}),
+    ...(certificationReceipt?.branch && certificationReceipt.branch === currentGitBranch(projectRoot)
+      ? { certificationProposed: true }
       : {}),
     sourceFingerprint: createHash('sha256').update(source).digest('hex'),
     ...blockStudioRetirement(projectRoot, normalizedPath, parsedMetadata),
@@ -42366,7 +42445,7 @@ type BlockStudioDiagnostic = {
   references?: string[];
   correction?: string;
   technicalDetails?: string;
-  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description';
+  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description' | 'fill_certification_fields';
   /** For `fix_description`: the description the one-click fix would write. */
   suggestedDescription?: string;
   location?: { line?: number; column?: number };
@@ -44926,6 +45005,15 @@ function evaluateBlockStudioTests(
   return { passed, failed, skipped: 0, duration: Date.now() - startedAt, assertions, runAt: new Date() };
 }
 
+/** The certifier's rules a builder field answers, by the name a rule reports. */
+const CERTIFICATION_FIELD_RULES: Record<string, CertificationField> = {
+  'Block declares grain': 'grain',
+  'Block declares outputs': 'outputs',
+  'Block declares review cadence': 'reviewCadence',
+  'Block declares lineage context': 'sourceSystems',
+  'Block has tests': 'tests',
+};
+
 function buildBlockStudioCertificationChecklist(input: {
   source: string;
   validation: ReturnType<typeof validateBlockStudioSource>;
@@ -44961,6 +45049,19 @@ function buildBlockStudioCertificationChecklist(input: {
         message: 'One or more declared tests did not pass against the latest preview result.',
         correction: 'Review the failed assertion and result, correct the query or expectation, then run certification again.',
         action: 'edit_source',
+        technicalDetails: combined,
+      });
+    } else if (CERTIFICATION_FIELD_RULES[error.rule]) {
+      // A field the builder has a place for, and one ZLens can often derive: say so, instead of "Edit source".
+      const field = CERTIFICATION_FIELD_RULES[error.rule];
+      issues.push({
+        severity: 'error',
+        code: `certification_field_${field}`,
+        title: `Add ${field === 'tests' ? 'a test' : `the ${certificationFieldLabel(field)}`}`,
+        field: 'Certification',
+        message: compactSemanticRuntimeFailure(combined),
+        correction: 'Fill it in the Certification panel of the Visual Builder, or let ZLens fill what it can derive from the query.',
+        action: 'fill_certification_fields',
         technicalDetails: combined,
       });
     } else {

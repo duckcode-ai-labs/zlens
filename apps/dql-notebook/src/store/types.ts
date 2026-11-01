@@ -1089,7 +1089,7 @@ export interface BlockStudioDiagnostic {
   /** Raw parser/compiler text, rendered only in a collapsed technical-details control. */
   technicalDetails?: string;
   /** Stable UI intent; the browser still decides how to perform the action. */
-  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description';
+  action?: 'edit_source' | 'review_metrics' | 'configure_runtime' | 'edit_parameters' | 'run_again' | 'fix_description' | 'fill_certification_fields';
   /** For `fix_description`: the description the one-click fix writes before certifying. */
   suggestedDescription?: string;
   location?: { line?: number; column?: number };
@@ -1171,6 +1171,8 @@ export interface BlockStudioMetadata {
    * recertification until it is certified again.
    */
   certificationSourceChanged?: boolean;
+  /** Certified on the branch being served: under a host that certifies through review, not reviewed yet. */
+  certificationProposed?: boolean;
   /** Fingerprint of the source that was opened; used for save/certify conflict checks. */
   sourceFingerprint?: string;
   sourceKind?: string;

@@ -53,6 +53,12 @@ describe('certification receipts record the certifier (D5)', () => {
     expect(certificationByline(receipt)).toEqual({ by: 'maria@acme.com', name: 'Maria Lopez', at: '2026-10-21T09:30:00.000Z', checks: receipt.checks });
   });
 
+  it('keeps the branch a certification was made on, when one was given', () => {
+    const receipt = buildCertificationReceipt({ source: SOURCE, certifiedBy: 'dan', via: 'block-studio', branch: 'draft/d-1' });
+    expect(readCompanionCertification(applyCompanionCertification('name: Orders\n', 'certified', receipt))).toMatchObject({ branch: 'draft/d-1' });
+    expect(buildCertificationReceipt({ source: SOURCE, certifiedBy: 'dan', via: 'block-studio' })).not.toHaveProperty('branch');
+  });
+
   it('records no display name when none is known, and "local" when nobody is', () => {
     const anonymous = buildCertificationReceipt({ source: SOURCE, certifiedBy: undefined, via: 'cli' });
     expect(anonymous.certifiedBy).toBe('local');

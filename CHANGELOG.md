@@ -8,6 +8,26 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Certifying, from the first field to the review
+
+- **Certify under a host that reviews says what happened.** Where the host sets
+  `certification: 'proposes'`, Block Studio's button reads **Propose
+  certification**, and passing reads "Certification proposed by … · …: takes effect
+  when a reviewer approves", on the saved query and in the list, with a Proposed
+  badge. A saved query certified before the draft, or merged since, stays
+  Certified. Without a host nothing changes.
+- **The Visual Builder has the certification fields.** Grain, outputs, review
+  cadence, source systems and tests are fields in a Certification panel, which says
+  what is still empty. **Fix with AI & run** on one of them fills what the query
+  and its run can say (outputs from the result, grain from the `GROUP BY`, a
+  `row_count > 0` test) and names what it could not, without running a SQL repair
+  on a query that is fine.
+- **Add metric finds the semantic model you already have.** A project that keeps
+  its models in `semantic-layer/` no longer hears "This dbt model has no semantic
+  model yet": the model on that dbt model is pre-selected, by `model:` or `table:`,
+  and the metric is written beside it, where Ask reads it. The new-model path, with
+  its primary entity and time column, stays for a dbt model that truly has none.
+
 ### Fixed
 
 - **DQL Source no longer crashes the app.** With a block's closing brace gone, the
