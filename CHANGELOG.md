@@ -28,6 +28,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   and the metric is written beside it, where Ask reads it. The new-model path, with
   its primary entity and time column, stays for a dbt model that truly has none.
 
+### Fixed
+
+- **DQL Source no longer crashes the app.** With a block's closing brace gone, the
+  check reports the problem on the empty line after the text, and the editor threw
+  `Mark decorations may not be empty` trying to underline it: a blank page, and the
+  unsaved text lost. It now underlines the last thing written, its mark follows the
+  text as you type, and if an editor ever does throw, the page stays, with your text
+  to copy and a reload link.
+- **A certified answer is offered only on an AI answer that ran SQL.** A host's
+  `certify` action no longer appears on a blocked answer, a refusal, a failure, a
+  clarification or a conversational reply, whatever its `on` says, because there is
+  no SQL to build from. A host can still offer other actions on `unanswered`.
+- **"This looks wrong" asks for a note first.** A host's `wrong` action opens one
+  optional line with Send; the note goes with the request as `note`.
+
 ### Prove the numbers match the old report
 
 - **`zlens migrate compare <file|folder>`** takes a CSV or `.xlsx` export of an
