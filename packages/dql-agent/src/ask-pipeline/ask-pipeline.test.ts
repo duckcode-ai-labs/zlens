@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { extractBlockContract } from './block-contract.js';
-import { applyDerivedColumns, classifyWarehouseError, executeCandidate, statementFailure, warehouseDiagnosis, type WarehouseFailure } from './execute.js';
+import { applyDerivedColumns, classifyWarehouseError, emptyAggregateCause, executeCandidate, statementFailure, warehouseDiagnosis, type WarehouseFailure } from './execute.js';
 import { ANALYTICAL_INTENT_JSON_SCHEMA, describeIntent, intentExecutionFingerprint, intentRefs, parseIntent, unaccountedInheritedRefs, type AnalyticalIntentV1 } from './intent.js';
 import { isGovernedEntry, readingLane, applyGovernedDefaults, applySelectedMeaning, auditLedger, bindExactNames, freezeSuperlativeShape, droppedChange, identityClauseWords, keepMembersApart, unmetFacets, preferGovernedDefinition, relativePeriodProblem, scopedColumnOf, buildIntentSystemPrompt, buildLedger, calendarBasisProblem, droppedGrain, droppedYears, proveClauseCoverage, proveTimeRoles, resolveIntent, widenedPopulation, unaccountedQuestionWords, uncoveredQuestionTerms, coverageStates, validateIntentRefs, facetStem, promoteSoleMeasureScope, timeAxesFor } from './resolve-intent.js';
 import { bindSemanticRequest } from './prepare/index.js';
 import { composeAnsweredText, composeFailedText, describeResultColumns, formatValue } from './outcomes.js';
-import { applyMemberSelection, bindNamedSubject, memberOptionId, namesInQuestion, parseMemberOption, pinnedRefsFor, proveSubjectMatchesPopulation, retiredBlockNamedBy, runAskPipeline, unmetDisplayObligation } from './pipeline.js';
+import { applyMemberSelection, bindNamedSubject, dropSelfNamedFilters, memberOptionId, namesInQuestion, parseMemberOption, pinnedRefsFor, proveSubjectMatchesPopulation, retiredBlockNamedBy, runAskPipeline, unmetDisplayObligation } from './pipeline.js';
 import { fillPeriodGaps } from './execute.js';
 import { suggestSameGrainColumns, suggestSameRelationFields, buildVocabularyIndex, renderCard, trigramSimilarity, type VocabularySource } from './vocabulary.js';
 import type { AgentMessage, AgentProvider } from '../providers/types.js';
@@ -404,6 +404,67 @@ describe('an empty aggregate is not an answer about a member', () => {
   it('a real value passes', async () => {
     const outcome = await executeCandidate(candidate, intent, { run: async () => ({ columns: ['revenue'], rows: [{ revenue: 2581 }], rowCount: 1, executionTimeMs: 1 }) });
     expect(outcome.ok).toBe(true);
+  });
+});
+
+describe('a literal that is the field\'s own name is never a missing member (walkthrough D4)', () => {
+  const vocabulary = buildVocabularyIndex(jaffle);
+  const make = (filters: Array<Record<string, unknown>>, groupBy: Array<Record<string, unknown>> = [{ ref: 'dimension:products.product_type', role: 'categorical' }]) => parseIntent({
+    version: 1, kind: 'analytics', reading: 'x', measures: [{ ref: 'metric:order_item.revenue' }], groupBy, display: [], filters, unresolved: [], provenance: {}, expectedShape: 'grouped',
+  }).intent!;
+  const empty = { columns: ['product_type', 'revenue'], rows: [], rowCount: 0, executionTimeMs: 1 };
+
+  it('an empty aggregate under product_type = "product type" is a restriction, not a member nobody could find', () => {
+    const cause = emptyAggregateCause(make([{ ref: 'dimension:products.product_type', op: 'eq', values: ['product type'], source: 'question' }]), empty);
+    expect(cause).toEqual({ kind: 'predicate', refs: ['dimension:products.product_type'] });
+    // The field's label and aliases count too, in singular lower case.
+    const names = (ref: string) => (ref === 'dimension:products.product_type' ? ['product_type', 'Product line', 'lines of business'] : []);
+    expect(emptyAggregateCause(make([{ ref: 'dimension:products.product_type', op: 'eq', values: ['Product Lines'], source: 'question' }]), empty, names)?.kind).toBe('predicate');
+    expect(emptyAggregateCause(make([{ ref: 'dimension:products.product_type', op: 'eq', values: ['Line of Business'], source: 'question' }]), empty, names)?.kind).toBe('predicate');
+    // A proper name is still a member.
+    expect(emptyAggregateCause(make([{ ref: 'dimension:products.product_type', op: 'eq', values: ['jaffle'], source: 'question' }]), empty, names)).toEqual({ kind: 'member', literals: ['jaffle'] });
+  });
+
+  it('the pipeline hands the field\'s words to the executor, so the refusal never says "member" about a column', async () => {
+    const reply = JSON.stringify({ version: 1, kind: 'analytics', reading: 'x', measures: [{ ref: 'metric:order_item.revenue' }], groupBy: [], display: [], filters: [{ ref: 'dimension:products.product_type', op: 'neq', values: ['product type'], source: 'inherited' }], unresolved: [], provenance: {}, expectedShape: 'scalar' });
+    const outcome = await runAskPipeline({
+      question: 'revenue outside the product type', vocabulary, prepareDeps: { compileSemantic: async () => ({ sql: "SELECT SUM(x) AS revenue FROM t WHERE product_type <> 'product type'", engine: 'native' }) },
+      provider: { name: 'ollama', available: async () => true, generate: async () => reply },
+      executeDeps: { run: async () => ({ columns: ['revenue'], rows: [{ revenue: null }], rowCount: 1, executionTimeMs: 1 }) },
+    });
+    expect(outcome.kind).toBe('gap');
+    if (outcome.kind !== 'gap') return;
+    expect(outcome.text).toContain('no rows matched the restriction on dimension:products.product_type');
+    expect(outcome.text).not.toContain('member');
+    // The statement ran before the refusal: the host's audit fingerprints it on the refused answer too.
+    expect(outcome.executedSql).toBe("SELECT SUM(x) AS revenue FROM t WHERE product_type <> 'product type'");
+  });
+
+  it('drops a question-sourced eq/in filter whose value is the name or label of its field or of a group-by field', () => {
+    const wes = make([{ ref: 'dimension:products.product_type', op: 'eq', values: ['product'], source: 'question' }], [{ ref: 'entity:products.product', role: 'key' }]);
+    const dropped = dropSelfNamedFilters(wes, vocabulary);
+    expect(dropped.intent.filters).toEqual([]);
+    expect(dropped.intent.groupBy.map((group) => group.ref)).toEqual(['entity:products.product']);
+    expect(dropped.notes).toEqual(['filter dropped: product_type = "product" was the dimension\'s own name, not one of its values']);
+    // Its own name, plural, in any case; and `in` with only such values.
+    expect(dropSelfNamedFilters(make([{ ref: 'dimension:products.product_type', op: 'eq', values: ['Product Types'], source: 'question' }]), vocabulary).intent.filters).toEqual([]);
+    expect(dropSelfNamedFilters(make([{ ref: 'dimension:products.product_type', op: 'in', values: ['product_type', 'Product Types'], source: 'question' }]), vocabulary).intent.filters).toEqual([]);
+  });
+
+  it('keeps every other filter: a member, a mixed list, an inherited clause, a comparison', () => {
+    for (const filter of [
+      { ref: 'dimension:products.product_type', op: 'eq', values: ['jaffle'], source: 'question' },
+      { ref: 'dimension:products.product_type', op: 'in', values: ['product type', 'jaffle'], source: 'question' },
+      { ref: 'dimension:products.product_type', op: 'eq', values: ['product type'], source: 'inherited' },
+      { ref: 'dimension:products.product_type', op: 'neq', values: ['product type'], source: 'question' },
+      // The name of a field the reading does not filter or group by is a value like any other.
+      { ref: 'dimension:customers.customer_name', op: 'eq', values: ['supply name'], source: 'question' },
+    ]) {
+      const intent = make([filter]);
+      const kept = dropSelfNamedFilters(intent, vocabulary);
+      expect(kept.intent, JSON.stringify(filter)).toBe(intent);
+      expect(kept.notes).toEqual([]);
+    }
   });
 });
 

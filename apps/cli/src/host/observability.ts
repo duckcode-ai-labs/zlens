@@ -43,7 +43,15 @@ export type DqlAuditEvent =
     principalId: string | null;
     status: string;
     trustState: string;
-    /** sha256 of each SQL statement the answer's artifacts carry; never the SQL or its values. */
+    /** Why the run stopped (`certified_answer_found`, `blocked`, `needs_clarification`, …), the engine's own code. */
+    stopReason?: string;
+    /** The route the run resolved to (`certified_answer`, `semantic_answer`, `generated_answer`, `clarify`, `conversation`, …). */
+    resolvedRoute?: string;
+    /** The Ask tier whose statement ran (`certified`, `semantic`, `relational`, `exploratory`); absent when nothing ran. */
+    tier?: string;
+    /** On a run that stopped short of an answer: the typed refusal (`no_data`, `ambiguous`, `modeling_gap`, `policy_blocked`, …), never its sentence. */
+    answerRefusalCode?: string;
+    /** sha256 of each SQL statement the answer's artifacts carry, on a refused answer too when a statement ran before the refusal; never the SQL or its values. */
     sqlSha256: string[];
     sources: string[];
   }
@@ -145,14 +153,25 @@ type AuditableRun = {
   id?: unknown;
   status?: unknown;
   trustState?: unknown;
+  route?: unknown;
+  stopReason?: unknown;
+  answerRefusalCode?: unknown;
+  diagnosticReceiptV9?: { executed?: { tier?: unknown } };
   artifacts?: Array<{ payload?: Record<string, unknown>; sourceId?: unknown; kind?: unknown }>;
 };
 
-/** The answer event for a finished run: no question text, no SQL, no values. */
+const code = (value: unknown): string | undefined => (typeof value === 'string' && /^[a-z0-9_.-]{1,64}$/i.test(value) ? value : undefined);
+
+/** The answer event for a finished run: codes only — no question text, no SQL, no values, no sentence. */
 export function answerAuditEvent(run: AuditableRun, who: { principal: DqlPrincipal | null; actor: string | null }): DqlAuditEvent | null {
   if (typeof run.id !== 'string' || typeof run.status !== 'string' || !TERMINAL.has(run.status)) return null;
   // The same identifiers a host gets with the answer's facts (answer-facts.ts).
   const { sqlSha256, sources } = answerIdentities(run as { artifacts?: unknown[] });
+  const stopReason = code(run.stopReason);
+  const resolvedRoute = code(run.route);
+  const tier = code(run.diagnosticReceiptV9?.executed?.tier);
+  // A refusal code belongs to a run that stopped short of an answer; a completed run carries none.
+  const answerRefusalCode = run.status === 'completed' ? undefined : code(run.answerRefusalCode);
   return {
     kind: 'answer',
     at: new Date().toISOString(),
@@ -161,6 +180,10 @@ export function answerAuditEvent(run: AuditableRun, who: { principal: DqlPrincip
     principalId: who.principal?.id ?? null,
     status: run.status,
     trustState: typeof run.trustState === 'string' ? run.trustState : 'unknown',
+    ...(stopReason ? { stopReason } : {}),
+    ...(resolvedRoute ? { resolvedRoute } : {}),
+    ...(tier ? { tier } : {}),
+    ...(answerRefusalCode ? { answerRefusalCode } : {}),
     sqlSha256,
     sources,
   };

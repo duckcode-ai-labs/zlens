@@ -28677,7 +28677,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
 
         if (req.method === 'POST' && candidateId && action === 'run') {
           const candidate = readBlockStudioImportCandidate(projectRoot, importId, candidateId);
-          const preview = await runBlockStudioPreviewSource(candidate.dqlSource);
+          let preview: Awaited<ReturnType<typeof runBlockStudioPreviewSource>>;
+          try {
+            preview = await runBlockStudioPreviewSource(candidate.dqlSource);
+          } catch (error) {
+            // A refusal (the host's row policy or credentials, a connection the server chooses) is a 403 in the
+            // refuser's own words, as /api/block-studio/run answers it: not a preview failure, and nothing to repair.
+            if (isPolicyRefusal(error)) {
+              res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+              res.end(serializeJSON({ error: error instanceof Error ? error.message : String(error), code: 'POLICY_DENIED' }));
+              return;
+            }
+            throw error;
+          }
           const next = { ...candidate, preview, validation: validateBlockStudioSource(candidate.dqlSource, semanticLayer) };
           writeBlockStudioImportCandidate(projectRoot, importId, next);
           res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

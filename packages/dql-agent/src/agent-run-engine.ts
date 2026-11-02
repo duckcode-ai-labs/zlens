@@ -700,6 +700,8 @@ export interface AgentRun {
   knowledge?: AgentRunKnowledgeV1;
   /** How to read `answer` for trust; defaults to "governed". */
   answerKind?: AgentRunAnswerKind;
+  /** Why the run stopped short of an answer, as the executor typed it (`no_data`, `ambiguous`, `policy_blocked`, …): the code a host's audit reads, never a sentence. */
+  answerRefusalCode?: AgentRouteExecutorResult['answerRefusalCode'];
   artifacts: AgentRunArtifact[];
   evaluations: AgentRunEvaluation[];
   events: AgentRunEvent[];
@@ -3039,6 +3041,7 @@ export class AgentRunEngine {
         narrationIntegrityReceipt: finalResult.narrationIntegrityReceipt,
       } : {}),
       ...(finalResult.askPipelineReceipt ? { diagnosticReceiptV9: finalResult.askPipelineReceipt } : {}),
+      ...(finalResult.answerRefusalCode ? { answerRefusalCode: finalResult.answerRefusalCode } : {}),
       ...(finalResult.askAnalystState ? { askAnalystState: finalResult.askAnalystState } : {}),
       ...(finalResult.businessAnswer ? { businessAnswer: finalResult.businessAnswer } : {}),
       ...(finalResult.knowledge ? { knowledge: finalResult.knowledge } : {}),

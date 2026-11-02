@@ -111,6 +111,18 @@ describe('a ref outside the envelope is explained as out of scope, never as none
     expect(effectiveAnsweredTrust({ certified: true, reviewRequired: false, coverageDoubt: true }).trustState).toBe('certified');
   });
 
+  it('a gap declared after the statement ran keeps that statement on the refused answer, for the audit', () => {
+    const intent = { version: 1, kind: 'analytics', reading: 'Total claimed amount by product.', measures: [{ ref: 'metric:claims.claimed_amount' }], groupBy: [{ ref: 'dimension:claims.product', role: 'key' }], display: [], filters: [], expectedShape: 'grouped', unresolved: [], provenance: {} } as unknown as AnalyticalIntentV1;
+    const receipt = { version: 1, vocabularyFingerprint: 'test', dispatches: [], candidates: [], refusals: [], tiers: [], timings: {}, executed: { tier: 'semantic', sqlFingerprint: 'd485a8ae', rowCount: 0, ms: 17, proofs: [] } };
+    const sql = 'SELECT product, SUM(claimed_amount) AS claimed_amount FROM claims GROUP BY product';
+    const gap = toExecutorResult('run:gap', { kind: 'gap', gap: 'not_retrieved', message: 'no rows matched the restriction on dimension:claims.product; the aggregate was empty', nearest: [], text: 'The governed query ran, but no rows matched the restriction on dimension:claims.product; the aggregate was empty.', receipt, intent, offerExploration: false, executedSql: sql } as unknown as Parameters<typeof toExecutorResult>[1], Date.now());
+    expect(gap).toMatchObject({ status: 'blocked', stopReason: 'blocked', answerRefusalCode: 'no_data' });
+    expect(gap.artifacts![0]!.payload).toMatchObject({ kind: 'no_answer', executedSql: sql });
+    // A gap declared before anything ran carries no statement.
+    const unrun = toExecutorResult('run:unrun', { kind: 'gap', gap: 'not_modeled', message: 'nothing models it', nearest: [], text: 'Nothing models it.', receipt: { ...receipt, executed: undefined }, intent, offerExploration: false } as unknown as Parameters<typeof toExecutorResult>[1], Date.now());
+    expect(unrun.artifacts![0]!.payload).not.toHaveProperty('executedSql');
+  });
+
   it('a governed answer downgraded for coverage says review required in the payload, the run and the result alike', () => {
     const intent = { version: 1, kind: 'analytics', reading: 'Total amount.', measures: [{ ref: 'metric:ins.amount' }], groupBy: [], display: [], filters: [], expectedShape: 'scalar', unresolved: [], provenance: {} } as unknown as AnalyticalIntentV1;
     const outcome = (uncovered: string[]) => ({
