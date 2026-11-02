@@ -1,4 +1,4 @@
-import type { AnalyticalIntentV1 } from './intent.js';
+import type { AnalyticalIntentV1, IntentPredicate } from './intent.js';
 import type { PreparedCandidate, SemanticExecutionProgram } from './prepare/types.js';
 import { divideDecimal, formatDecimal, parseExactDecimal, subtractDecimal } from '../analytical-execution-graph.js';
 
@@ -56,6 +56,8 @@ export interface ExecuteDeps {
   signal?: AbortSignal;
   /** Validate a frozen candidate before any physical statement is submitted. */
   validateCandidate?: (candidate: PreparedCandidate, intent: AnalyticalIntentV1) => Promise<void> | void;
+  /** The words a field is called by (name, label, aliases): a literal that is one of them is not a member of it. */
+  fieldNames?: (ref: string) => string[];
 }
 
 /**
@@ -579,14 +581,29 @@ export function statementFailure(error: unknown, statement?: { sql?: string; rel
 /** Why a single all-null aggregate row is empty: the restriction that matched nothing. */
 export type EmptyAggregateCause = { kind: 'member'; literals: string[] } | { kind: 'window'; start: string; end: string } | { kind: 'predicate'; refs: string[] };
 
+const plainWord = (word: string): string => word.replace(/ies$/, 'y').replace(/(ses|xes|shes|ches)$/, (m) => m.slice(0, -2)).replace(/s$/, '');
+/** Text in one spelling: lower case, one space between words, each word singular. */
+export const plainName = (value: string): string => value.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).map(plainWord).join(' ');
+
+/**
+ * Is a literal one of the words the filtered field itself is called by (its
+ * name, label or alias, or the last segment of its ref)? Such a literal is
+ * not a member the question named: `product = "product"` names no product.
+ */
+export function literalIsFieldName(predicate: Pick<IntentPredicate, 'ref'>, literal: string, fieldNames?: (ref: string) => string[]): boolean {
+  const own = new Set([...(fieldNames?.(predicate.ref) ?? []), predicate.ref.replace(/^[^:]*:/, '').split('.').pop() ?? ''].map(plainName).filter(Boolean));
+  return own.has(plainName(literal));
+}
+
 /**
  * A result that holds nothing (no rows, or one row whose every cell is null)
  * did not aggregate anything. Under a restriction (a member literal, a time
  * window, any predicate) that is the absence of matching rows, not a value,
  * and the cause is named. An unrestricted empty result stays an answer: the
- * table is empty, which is what the rows say.
+ * table is empty, which is what the rows say. A literal that is the field's
+ * own name is a restriction, never a member nobody could find.
  */
-export function emptyAggregateCause(intent: AnalyticalIntentV1, result: ExecutedRows): EmptyAggregateCause | undefined {
+export function emptyAggregateCause(intent: AnalyticalIntentV1, result: ExecutedRows, fieldNames?: (ref: string) => string[]): EmptyAggregateCause | undefined {
   if (result.rows.length > 1) return undefined;
   if (result.rows.length === 1) {
     // A sum over no rows is NULL; a count over the same no rows is 0. One row
@@ -599,7 +616,7 @@ export function emptyAggregateCause(intent: AnalyticalIntentV1, result: Executed
     if (cells.length === 0 || !cells.some(isNull) || !cells.every((value) => isNull(value) || isZero(value))) return undefined;
   }
   const predicates = [...intent.filters, ...intent.measures.flatMap((measure) => measure.scope ?? [])];
-  const literals = predicates.flatMap((predicate) => predicate.values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0 && !/^(true|false)$/i.test(value)));
+  const literals = predicates.flatMap((predicate) => predicate.values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0 && !/^(true|false)$/i.test(value) && !literalIsFieldName(predicate, value, fieldNames)));
   if (literals.length > 0) return { kind: 'member', literals };
   if (intent.time?.window) return { kind: 'window', start: intent.time.window.start, end: intent.time.window.end };
   if (predicates.length > 0) return { kind: 'predicate', refs: [...new Set(predicates.map((predicate) => predicate.ref))] };
@@ -675,7 +692,7 @@ export async function executeCandidate(candidate: PreparedCandidate, intent: Ana
     proofs.push(`executed on the warehouse: ${result.rowCount} row${result.rowCount === 1 ? '' : 's'} in ${Math.round(result.executionTimeMs)} ms`);
     if (candidate.derived?.length) proofs.push(`ratio${candidate.derived.length > 1 ? 's' : ''} ${candidate.derived.map((item) => `${item.alias} = ${item.numerator} / ${item.denominator}`).join('; ')} computed from the executed columns`);
     if (candidate.changes?.length) proofs.push(`comparison${candidate.changes.length > 1 ? 's' : ''} ${candidate.changes.map((item) => `${item.alias} = ${item.comparison} - ${item.base}${item.as === 'percent' ? ` over ${item.base}` : ''}`).join('; ')} computed from the semantic result${candidate.changes.some((item) => item.as === 'percent') ? ' (null when the earlier value is 0)' : ''}`);
-    const cause = emptyAggregateCause(intent, result);
+    const cause = emptyAggregateCause(intent, result, deps.fieldNames);
     if (cause) return { ok: false, code: 'no_rows_matched', message: describeEmptyAggregate(cause), proofs, cause };
     return { ok: true, result, proofs };
   } catch (error) {
