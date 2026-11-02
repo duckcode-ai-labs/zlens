@@ -78,7 +78,7 @@ describe('RFC 0010 lists every hook and field once, with a default', () => {
   it('reads the hook types (guards the parser)', () => {
     expect(hooks.length).toBeGreaterThanOrEqual(30);
     expect(hooks).toEqual(expect.arrayContaining(['resolvePrincipal', 'authorize', 'rowPolicy', 'stores', 'purposeAttributes', 'keepsAnswerText', 'figuresDependOnReader', 'columnsVisible', 'statements', 'traceSalt']));
-    expect(uiFields).toEqual(expect.arrayContaining(['signOutUrl', 'links', 'answerActions', 'environment', 'banner', 'audience', 'appNotFound', 'certification']));
+    expect(uiFields).toEqual(expect.arrayContaining(['signOutUrl', 'links', 'answerActions', 'environment', 'banner', 'audience', 'appNotFound', 'certification', 'nav', 'roleLabel']));
   });
 
   it('the RFC\'s DqlHostHooks block lists every hook in request-context.ts, and nothing that is not there', () => {

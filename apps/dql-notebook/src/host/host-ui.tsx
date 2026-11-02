@@ -29,6 +29,28 @@ export interface HostUi {
    * its own review. The App Studio's certify words say "propose" instead. Absent: the person certifies here.
    */
   certification?: 'proposes';
+  /**
+   * How the host reshapes the rail for this person: its own labels for ZLens's items, items not drawn, and its own
+   * grouping (see `applyHostNav`). Items are ZLens's stable nav ids. Absent: the rail's own words and groups.
+   */
+  nav?: HostNav;
+  /** The person's role in the host's words ("Steward"), drawn beside their name in the account menu. */
+  roleLabel?: string;
+}
+
+/** The stable ids of ZLens's own navigation items, as a host names them in `nav`. */
+export const NAV_IDS = ['apps', 'ask', 'notebooks', 'blocks', 'lineage', 'modeling', 'ask-traces', 'source-control', 'settings'] as const;
+export type NavId = (typeof NAV_IDS)[number];
+
+export interface HostNavGroupAction { label: string; href: string }
+export interface HostNavGroup { id: string; label: string; items: string[]; action?: HostNavGroupAction }
+export interface HostNav {
+  /** Nav id → the label shown instead of ZLens's own. */
+  labels?: Record<string, string>;
+  /** Nav ids not drawn at all. */
+  hidden?: string[];
+  /** Replaces the rail's own grouping when present; `action` is a host page drawn as the group's header link. */
+  groups?: HostNavGroup[];
 }
 
 export interface HostBanner { text: string; tone?: 'info' | 'caution'; links?: Array<{ label: string; href: string }> }
@@ -305,6 +327,49 @@ export function navItemAllowed(state: HostUiState, key: string): boolean {
   if (needs.some((action) => hostAllows(state, action))) return true;
   if (NAV_SHOWN_READ_ONLY.has(key) && needs.some((action) => hostRefusal(state, action)?.readOnly === true)) return true;
   return NAV_SHOWN_WITH_NEXT.has(key) && readOnlyNext(state, key) !== null;
+}
+
+/** One group of the rail as it is drawn: its items in order, and the host's header link when it sent one. */
+export interface RailGroup<T> { id: string; label: string; items: T[]; action?: HostNavGroupAction }
+
+/**
+ * The rail's groups as this person sees them. The capability rules decide first (`allowed`): nothing a host's
+ * `nav` says shows an item they hide. Then the host's override, when there is one: `hidden` items are left out,
+ * `labels` replace the shown titles, and `groups` replace the rail's own grouping (items by nav id, in the host's
+ * order, each drawn once; a group with no visible item is not drawn). Without a host, or without `nav`, the rail's
+ * own groups come back with only the capability filter applied — nothing changes for open-source users.
+ */
+export function applyHostNav<T extends { id: string; title: string }>(
+  state: HostUiState,
+  groups: Array<RailGroup<T>>,
+  allowed: (item: T) => boolean,
+): Array<RailGroup<T>> {
+  const nav = state.host ? state.nav : undefined;
+  const hidden = new Set(Array.isArray(nav?.hidden) ? nav.hidden : []);
+  const visible = (item: T) => allowed(item) && !hidden.has(item.id);
+  const relabel = (item: T): T => {
+    const label = nav?.labels?.[item.id];
+    return typeof label === 'string' && label.trim() ? { ...item, title: label.trim() } : item;
+  };
+  if (Array.isArray(nav?.groups)) {
+    const byId = new Map<string, T>();
+    for (const group of groups) for (const item of group.items) byId.set(item.id, item);
+    const placed = new Set<string>();
+    return nav.groups
+      .filter((group) => !!group && typeof group === 'object' && typeof group.id === 'string' && typeof group.label === 'string')
+      .map((group) => {
+        const items = (Array.isArray(group.items) ? group.items : [])
+          .map((id) => byId.get(id))
+          .filter((item): item is T => !!item && visible(item) && !placed.has(item.id))
+          .map((item) => { placed.add(item.id); return relabel(item); });
+        const action = group.action && typeof group.action.label === 'string' && typeof group.action.href === 'string' ? group.action : undefined;
+        return { id: group.id, label: group.label, items, ...(action ? { action } : {}) };
+      })
+      .filter((group) => group.items.length > 0);
+  }
+  return groups
+    .map((group) => ({ ...group, items: group.items.filter(visible).map(relabel) }))
+    .filter((group) => group.items.length > 0);
 }
 
 /** A screen the person may open but not edit: under a host, without that screen's write action. Never without a host. */

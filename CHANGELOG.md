@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### A host reshapes the rail in its own words
+
+- **A host can relabel, hide and regroup ZLens's navigation rail.** The host UI
+  answer (RFC 0010 HH-9) gains `nav` — `labels` (nav id → the label shown),
+  `hidden` (nav ids not drawn) and `groups` (its own grouping of the rail, in
+  its order, each group optionally with an `action` drawn as the group's header
+  link and opened inside ZLens) — and `roleLabel`, the person's role drawn
+  beside their name in the account menu. Every rail item has a stable nav id
+  for this: `apps`, `ask`, `notebooks`, `blocks`, `lineage`, `modeling`,
+  `ask-traces`, `source-control`, `settings`. What a person's capabilities hide
+  stays hidden whatever the override says; a group with no visible item is not
+  drawn. Without a host, or without `nav`, nothing changes.
+
 ### Certifying, from the first field to the review
 
 - **Certify under a host that reviews says what happened.** Where the host sets

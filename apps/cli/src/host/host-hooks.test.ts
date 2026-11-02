@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { QueryExecutor } from '@zlens/connectors';
-import { capHostLinksByPlacement, startLocalServer } from '../local-runtime.js';
+import { capHostLinksByPlacement, safeHostUiExtras, startLocalServer } from '../local-runtime.js';
 import { HostModelUnavailableError, hostActor, hostModelProvider, normalizeHostPrincipal, resultValuesMayReachModel, setHostModelHooks, withRequestContext, type DqlHostHooks, type DqlPrincipal } from './request-context.js';
 
 /**
@@ -335,5 +335,42 @@ describe('host links in DQL\'s rail and menu (HH-9)', () => {
     const kept = capHostLinksByPlacement([...menu.slice(0, 7), ...nav, ...menu.slice(7)], 12);
     expect(kept.filter((link) => link.placement === 'nav').map((link) => link.id)).toEqual(nav.map((link) => link.id));
     expect(kept.filter((link) => link.placement === 'menu').map((link) => link.id)).toEqual(menu.slice(0, 12).map((link) => link.id));
+  });
+});
+
+describe('a host\'s reshaping of DQL\'s rail and the person\'s role (HH-9 `nav`, `roleLabel`)', () => {
+  it('passes known nav ids, plain labels and same-origin actions through, in the host\'s order', () => {
+    const { nav, roleLabel } = safeHostUiExtras({
+      roleLabel: '  Steward \n ',
+      nav: {
+        labels: { blocks: 'Blocks', 'ask-traces': 'Ask  traces', unknown: 'X', settings: '' },
+        hidden: ['notebooks', 'notebooks', 'nope'],
+        groups: [
+          { id: 'insights', label: 'Insights', items: ['apps', 'ask', 'nope'] },
+          { id: 'build', label: 'Build', items: ['blocks', 'lineage', 'apps'], action: { label: 'My draft spaces', href: '/e/drafts' } },
+          { id: 'elsewhere', label: 'Elsewhere', items: ['settings'], action: { label: 'Away', href: 'https://example.com' } },
+          { id: '', label: 'No id', items: ['modeling'] },
+        ],
+      },
+    });
+    expect(roleLabel).toBe('Steward');
+    expect(nav).toEqual({
+      labels: { blocks: 'Blocks', 'ask-traces': 'Ask traces' },
+      hidden: ['notebooks'],
+      groups: [
+        { id: 'insights', label: 'Insights', items: ['apps', 'ask'] },
+        // An item is in one group only (the first that names it); an action that is not same-origin is dropped.
+        { id: 'build', label: 'Build', items: ['blocks', 'lineage'], action: { label: 'My draft spaces', href: '/e/drafts' } },
+        { id: 'elsewhere', label: 'Elsewhere', items: ['settings'] },
+      ],
+    });
+  });
+
+  it('leaves both out when the host sends nothing usable', () => {
+    expect(safeHostUiExtras({})).not.toHaveProperty('nav');
+    expect(safeHostUiExtras({})).not.toHaveProperty('roleLabel');
+    expect(safeHostUiExtras({ nav: 'all', roleLabel: 7 })).not.toHaveProperty('nav');
+    expect(safeHostUiExtras({ nav: { labels: { nope: 'X' }, hidden: 'apps', groups: [] } })).not.toHaveProperty('nav');
+    expect(safeHostUiExtras({ nav: 'all' })).not.toHaveProperty('roleLabel');
   });
 });
