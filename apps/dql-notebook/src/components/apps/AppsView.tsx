@@ -107,6 +107,7 @@ import {
   valuesForDashboardPage,
   writePersistedAppFilterValues,
 } from './app-dashboard-filter-scope';
+import { appFilterMemoryKey, appFilterMemoryStorage, syncAppFilterMemoryPerson } from './app-filter-memory';
 import { authoredDomainOptions, resolveAuthoredDomainId } from '../domains/authored-domain-options';
 import { useOperations } from '../../operations/OperationsProvider';
 import { BUILD_NEW_APP_EVENT, appLibraryLaunchExpanded, buildNewAppRequested, type AppLibraryLaunchPreference } from './app-library-launch';
@@ -146,7 +147,6 @@ interface AppPromptExample {
 // never a value a typed request would be appended to (or named after).
 const DEFAULT_PROMPT = '';
 const ACTIVE_APP_BUILD_STORAGE_KEY = 'dql.apps.active-ai-build.v1';
-const APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX = 'dql.apps.dashboard-filter-values.v1:';
 
 interface PersistedAppBuild {
   sessionId: string;
@@ -222,6 +222,10 @@ export function AppsView(): JSX.Element {
   const dispatch = useDispatch();
   const queryClient = useQueryClient();
   const { operations } = useOperations();
+  const hostUi = useHostUi();
+  // Whose App filters this browser remembers: the signed-in person under a
+  // host (a stable id, never the email), nobody in particular without one.
+  const hostPersonId = hostUi.host ? hostUi.person.id : null;
   const appTheme = useMemo(() => normalizeAppTheme(state.themeMode), [state.themeMode]);
   const [surface, setSurface] = useState<AppSurface>(() => state.activeAppDraftId ? 'create' : state.activeAppId ? 'workspace' : 'library');
   const experience = state.activeAppExperience;
@@ -280,10 +284,12 @@ export function AppsView(): JSX.Element {
   // applied only to that same filter (id, type and field), never to a filter
   // that was re-created or changed since.
   const [appScopedDashboardFilterFingerprints, setAppScopedDashboardFilterFingerprints] = useState<Record<string, string>>({});
-  // Filters whose value came back from this browser's last visit rather than
-  // a choice made now: the filter row says so next to Reset.
+  // Filters whose value came back from this person's last visit in this
+  // browser rather than a choice made now: the filter row says so next to Reset.
   const [rememberedDashboardFilterIds, setRememberedDashboardFilterIds] = useState<ReadonlySet<string>>(() => new Set());
-  const [dashboardFilterPersistenceAppId, setDashboardFilterPersistenceAppId] = useState<string | null>(null);
+  // The storage key the current App's filters are read from and written to
+  // (the App, and under a host the person): a write never lands under another key.
+  const [dashboardFilterPersistenceKey, setDashboardFilterPersistenceKey] = useState<string | null>(null);
   const [dashboardNavigationStack, setDashboardNavigationStack] = useState<DashboardNavigationEntry[]>([]);
   const [explainOpen, setExplainOpen] = useState(false);
   const [explainExpanded, setExplainExpanded] = useState(false);
@@ -507,6 +513,10 @@ export function AppsView(): JSX.Element {
   // it across an App reopen, but reapply it only where the persisted page
   // declares that same control as App-scoped. Values never become a saved
   // dashboard mutation or a source binding.
+  // Under a host the memory is the signed-in person's: another person's
+  // filters are never reopened (and are dropped the moment someone else signs
+  // in), so "Opened with your last filters" only ever means this person's.
+  const person = useMemo(() => (hostPersonId ? { id: hostPersonId } : null), [hostPersonId]);
   useEffect(() => {
     const appId = state.activeAppId;
     setDashboardFilterValuesByPage({});
@@ -516,14 +526,16 @@ export function AppsView(): JSX.Element {
       setAppliedAppScopedDashboardFilterValues({});
       setAppScopedDashboardFilterFingerprints({});
       setRememberedDashboardFilterIds(new Set());
-      setDashboardFilterPersistenceAppId(null);
+      setDashboardFilterPersistenceKey(null);
       return;
     }
+    const key = appFilterMemoryKey(appId, person);
     try {
-      const persisted = readPersistedAppFilterValues(
-        window.localStorage,
-        `${APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX}${appId}`,
-      );
+      const storage = appFilterMemoryStorage();
+      if (storage) syncAppFilterMemoryPerson(storage, person);
+      const persisted = storage
+        ? readPersistedAppFilterValues(storage, key)
+        : { draft: {}, applied: {}, fingerprints: {} };
       setAppScopedDashboardFilterValues(persisted.draft);
       setAppliedAppScopedDashboardFilterValues(persisted.applied);
       setAppScopedDashboardFilterFingerprints(persisted.fingerprints);
@@ -534,15 +546,17 @@ export function AppsView(): JSX.Element {
       setAppScopedDashboardFilterFingerprints({});
       setRememberedDashboardFilterIds(new Set());
     }
-    setDashboardFilterPersistenceAppId(appId);
-  }, [state.activeAppId]);
+    setDashboardFilterPersistenceKey(key);
+  }, [person, state.activeAppId]);
 
   useEffect(() => {
-    if (!state.activeAppId || dashboardFilterPersistenceAppId !== state.activeAppId) return;
+    if (!state.activeAppId || dashboardFilterPersistenceKey !== appFilterMemoryKey(state.activeAppId, person)) return;
     try {
+      const storage = appFilterMemoryStorage();
+      if (!storage) return;
       writePersistedAppFilterValues(
-        window.localStorage,
-        `${APP_DASHBOARD_FILTER_VALUES_STORAGE_PREFIX}${state.activeAppId}`,
+        storage,
+        dashboardFilterPersistenceKey,
         {
           draft: appScopedDashboardFilterValues,
           applied: appliedAppScopedDashboardFilterValues,
@@ -553,7 +567,7 @@ export function AppsView(): JSX.Element {
       // Browser storage is not execution authority. The current App still
       // receives its in-memory scope when persistence is unavailable.
     }
-  }, [appScopedDashboardFilterFingerprints, appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterPersistenceAppId, state.activeAppId]);
+  }, [appScopedDashboardFilterFingerprints, appScopedDashboardFilterValues, appliedAppScopedDashboardFilterValues, dashboardFilterPersistenceKey, person, state.activeAppId]);
 
   // Only App-scoped values chosen for this page's filters as they are today.
   // Computed on the render path, so a stale value never reaches a run, Ask or
@@ -905,7 +919,8 @@ export function AppsView(): JSX.Element {
     }
     setRememberedDashboardFilterIds(new Set());
   }, [activeDashboardFilterPageId, dashboardFilters]);
-  // The page opened with a value this browser remembered (and still applies):
+  // The page opened with a value this browser remembered for this person (and
+  // still applies):
   // the filter row says so beside Reset, so the narrowing is never silent.
   const dashboardFiltersRemembered = useMemo(() => dashboardFilters.some((filter) => (
     rememberedDashboardFilterIds.has(filter.id)

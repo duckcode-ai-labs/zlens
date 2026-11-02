@@ -42,6 +42,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   no SQL to build from. A host can still offer other actions on `unanswered`.
 - **"This looks wrong" asks for a note first.** A host's `wrong` action opens one
   optional line with Send; the note goes with the request as `note`.
+- **An App remembers your last filters, not the last person's.** Under a host the
+  filters an App reopens with ("Opened with your last filters") are kept per
+  signed-in person (by a token of the host's stable id, never the email), so on a
+  shared browser the next person never opens an App narrowed to someone else's
+  region and sees nothing. Another person signing in, or Sign out, drops what the
+  browser remembered. Without a host nothing changes.
 
 ### Prove the numbers match the old report
 

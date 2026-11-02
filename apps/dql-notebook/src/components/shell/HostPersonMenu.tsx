@@ -1,5 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { useHostUi } from '../../host/host-ui';
+import { appFilterMemoryStorage, forgetAppFilterMemory } from '../apps/app-filter-memory';
+
+/**
+ * Sign-out leaves nothing of this person's App reading behind for the next
+ * person on this browser: the App filters it remembered are dropped first.
+ */
+export function forgetThisPersonsAppFilters(): void {
+  const storage = appFilterMemoryStorage();
+  if (storage) forgetAppFilterMemory(storage);
+}
 
 /**
  * The signed-in person, with the host's links and sign-out (RFC 0010 HH-9).
@@ -52,7 +62,7 @@ export function HostPersonMenu() {
             <a key={link.id} role="menuitem" href={link.href} style={{ display: 'block', padding: '7px 10px', borderRadius: 6, color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13 }}>{link.label}</a>
           ))}
           {hostUi.signOutUrl ? (
-            <a role="menuitem" href={hostUi.signOutUrl} style={{ display: 'block', padding: '7px 10px', borderRadius: 6, color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13 }}>Sign out</a>
+            <a role="menuitem" href={hostUi.signOutUrl} onClick={forgetThisPersonsAppFilters} style={{ display: 'block', padding: '7px 10px', borderRadius: 6, color: 'var(--text-primary)', textDecoration: 'none', fontSize: 13 }}>Sign out</a>
           ) : null}
         </div>
       ) : null}
