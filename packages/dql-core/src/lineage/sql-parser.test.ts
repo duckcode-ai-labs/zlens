@@ -581,3 +581,16 @@ describe('analyzeSqlReferences', () => {
     );
   });
 });
+
+describe('the names a WITH list defines', () => {
+  const names = (sql: string) => analyzeSqlReferences(sql).ctes;
+  it('reads column lists, MATERIALIZED and every entry of the list', () => {
+    expect(names('WITH RECURSIVE tree(id, n) AS (SELECT 1, 2 UNION ALL SELECT id, n FROM tree), a AS MATERIALIZED (SELECT 1), b AS NOT MATERIALIZED (SELECT 2) SELECT * FROM tree, a, b').sort()).toEqual(['a', 'b', 'tree']);
+  });
+  it('a CTE can only be defined at the head of a list entry', () => {
+    expect(names("SELECT 1 FROM a WHERE x <> 'WITH salaries AS ('")).toEqual([]);
+    expect(names('SELECT 1 /* WITH salaries AS ( */ FROM a')).toEqual([]);
+    expect(names('WITH k AS (SELECT 1) SELECT 1 FROM a WINDOW salaries AS (PARTITION BY x)')).toEqual(['k']);
+    expect(names('WITH "main.salaries" AS (SELECT 1) SELECT 1 FROM a')).toEqual([]);
+  });
+});

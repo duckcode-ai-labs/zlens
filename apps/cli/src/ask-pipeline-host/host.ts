@@ -73,7 +73,7 @@ import {
   type PhysicalIdentifierPartV1,
   renderCard,
   validateSqlAgainstLocalContext,
-  inFromKeywordCall,
+  sqlForRelationScan,
   inspectedRelationMatches,
   type AgentMessage,
   type RuntimeSchemaTable,
@@ -141,6 +141,8 @@ export interface AskPipelineHostDeps {
    * profile is opt-in because its values reach the provider with the prompt.
    */
   valueProfileAllowed?(): boolean;
+  /** Refuse AI-written SQL no grammar can read, rather than prove it by the names in it. On with a host. */
+  unreadableSqlRefused?: boolean;
   /**
    * Whether the project turned the result review on (`agent.resultReview`),
    * asked at every question. Absent: off. `ZLENS_ASK_RESULT_REVIEW=1|0`
@@ -2421,17 +2423,17 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           enforceGenerationReadiness: false,
         });
         if (!validation.ok) {
-          // A parser that cannot read this dialect is not evidence against the
-          // draft: prove it by the relations it reads, exactly as the frozen
-          // statement is proven before execution. Read-only-ness is proven by
-          // the tier itself.
           if (!/could not be parsed/i.test(validation.error)) return { error: `the drafted SQL was not accepted: ${validation.error}` };
-          // One matcher with the validator: on DuckDB `main.claim` is the inspected `acme.main.claim`.
+          // No grammar could read it. Most of that is the warehouse's own dialect
+          // (ASOF JOIN, LATERAL VIEW), so it's proved by the relations it names.
+          // With a host, what a statement reads decides what a person sees, and a
+          // name can't prove that: it gets the one correction, then it's refused.
+          if (deps.unreadableSqlRefused) return { error: `the drafted SQL was not accepted: ${validation.error}` };
           const read = relationsInSql(sql).filter((relation) => parsePhysicalIdentifier(relation).length >= 2);
           const foreign = read.find((relation) => !inspectedRelationMatches(relation, runtimeSchema, dialect));
           if (foreign) return { error: `the drafted SQL reads ${foreign}, which this request did not inspect` };
           if (read.length === 0) return { error: 'the drafted SQL names no inspected relation' };
-          return { sql, relations: read, proof: [`reads only the inspected physical bindings: ${read.join(', ')} (the SQL parser could not read this dialect; relations proven by name)`], engine: dialect };
+          return { sql, relations: read, proof: [`reads only the inspected physical bindings: ${read.join(', ')} (no SQL grammar could read this statement; relations proven by name)`], engine: dialect };
         }
         return { sql, relations: validation.referencedRelations, proof: [`validated against the inspected physical bindings: it reads ${validation.referencedRelations.join(', ') || 'admitted relations only'}`, ...validation.warnings.slice(0, 3)], engine: dialect };
       };
@@ -3403,8 +3405,7 @@ const DIALECT_NOTES: Record<string, string> = {
 /** Relation names as SQL writes them, lowercased and unquoted. */
 function relationsInSql(sql: string): string[] {
   const found = new Set<string>();
-  for (const match of sql.matchAll(/(?:FROM|JOIN)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)){0,2})/gi)) {
-    if (inFromKeywordCall(sql, match.index)) continue;
+  for (const match of sqlForRelationScan(sql).matchAll(/(?:FROM|JOIN)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)){0,2})/gi)) {
     const name = (match[1] ?? '').trim();
     if (name) found.add(name);
   }

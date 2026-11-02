@@ -41,6 +41,8 @@ interface Setup {
   resultReview?: boolean;
   /** Every text column may be searched for a stated value. */
   probeAllowed?: boolean;
+  /** Served through a host. */
+  hosted?: boolean;
 }
 
 function project(setup: Setup) {
@@ -99,6 +101,7 @@ async function ask(setup: Setup, question: string, draft: (prompt: string) => st
     ...(setup.valueProfile?.allowed !== undefined ? { valueProfileAllowed: () => setup.valueProfile!.allowed! } : {}),
     ...(setup.resultReview !== undefined ? { resultReviewConfigured: () => setup.resultReview! } : {}),
     ...(setup.probeAllowed ? { literalProbeAllowed: () => true } : {}),
+    ...(setup.hosted ? { unreadableSqlRefused: true } : {}),
     resolveConnection: async () => ({ driver: setup.driver ?? 'sqlite' } as ConnectionConfig),
     getSemanticLayer: () => undefined,
     getManifest: () => ({ snapshotId: `snapshot:${projectRoot}`, manifest: manifest as never }),
@@ -243,6 +246,46 @@ describe('a drafted statement that reads a value with FROM', () => {
     const { result, executed } = await ask({ tables }, 'Invoice total by year', () => 'SELECT EXTRACT(YEAR FROM i.invoice_date) AS y, SUM(i.total) AS total FROM main.invoices i GROUP BY 1', [{ y: 2026, total: 1 }]);
     expect(result.status).toBe('completed');
     expect(executed.some((sql) => sql.includes('EXTRACT'))).toBe(true);
+  });
+});
+
+describe('a drafted statement can only read what the request inspected', () => {
+  const read = (statement: string) => ask({ driver: 'duckdb' }, 'Total invoice amount for each customer country', () => statement, [{ total: 1 }]);
+  const ran = (executed: string[], table: string) => executed.some((sql) => sql.includes(table));
+
+  it.each([
+    ['a comma join', 'SELECT 1 AS total FROM main.invoices i, main.secret_salaries s'],
+    ['a comma join one grammar cannot read', 'SELECT i.total FROM main.invoices i, main.secret_salaries s QUALIFY ROW_NUMBER() OVER (ORDER BY i.total) = 1'],
+    ['a fully quoted comma join', 'SELECT 1 AS total FROM "main"."invoices" i, "main"."secret_salaries" s'],
+    ['a bare name beside a qualified one', 'SELECT 1 AS total FROM main.invoices i JOIN secret_salaries s ON s.id = i.invoice_id'],
+    ['an alias spelled like a schema', 'SELECT 1 AS total FROM main.invoices hr JOIN hr.salaries x ON x.id = hr.invoice_id'],
+    ['a string that hides nothing', "SELECT 'trim(' AS tag, s.pay AS total FROM main.secret_salaries s"],
+    ['a statement no grammar can read', 'SELECT 1 AS total FROM main.invoices i JOIN main.secret_salaries s ON TRUE WHERE (('],
+  ])('%s is not run', async (_, statement) => {
+    const { executed, result } = await read(statement);
+    expect(ran(executed, 'secret_salaries')).toBe(false);
+    expect(result.status).not.toBe('completed');
+  });
+
+  // Dialect only one engine knows: no grammar reads it, and it reads inspected tables.
+  const unreadable = 'SELECT i.total FROM main.invoices i ASOF JOIN main.customers c ON c.customer_id = i.customer_id WHERE ((1 = 1) AND TRUE) QUALIFY 1 = 1 SAMPLE 10';
+
+  it('without a host, a statement no grammar can read is proved by the tables it names', async () => {
+    const { result } = await read(unreadable);
+    expect(result.status).toBe('completed');
+  });
+
+  it('with a host, it is sent back once and then not run', async () => {
+    const { result, prompts, executed } = await ask({ driver: 'duckdb', hosted: true }, 'Total invoice amount for each customer country', () => unreadable, [{ total: 1 }]);
+    expect(prompts.length).toBeGreaterThan(1);
+    expect(result.status).not.toBe('completed');
+    expect(executed.some((sql) => sql.includes('ASOF'))).toBe(false);
+  });
+
+  it('a comma join of inspected tables still runs', async () => {
+    const { executed, result } = await read('SELECT SUM(i.total) AS total FROM main.invoices i, main.customers c WHERE c.customer_id = i.customer_id');
+    expect(result.status).toBe('completed');
+    expect(ran(executed, 'main.customers')).toBe(true);
   });
 });
 

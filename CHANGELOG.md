@@ -74,6 +74,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   its primary entity and time column, stays for a dbt model that truly has none.
 
 ### Fixed
+- **Every table an AI-written statement reads has to be one the request inspected.**
+  A comma join, a bare table name beside a qualified one, or a statement the parser
+  could not read could reach a table no one admitted. The parser's list now counts,
+  and a statement one grammar can't read is read with the others. With a host,
+  AI-written SQL none of them can read is sent back once and then refused.
+- **A statement can't excuse a table by spelling a CTE.** A CTE name now has to head an
+  entry of a WITH list, so `x AS (` in a string or a WINDOW clause doesn't count, and
+  a recursive CTE with a column list is no longer reported as a table.
 - **Ask no longer refuses a question because its words miss a table's name.** On a
   database-only project, tables too many to show in full now appear in brief: the
   tables chosen for the question keep their detail, and every other table is one
