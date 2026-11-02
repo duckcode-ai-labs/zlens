@@ -194,6 +194,8 @@ export function BlockStudio() {
   const [running, setRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
   const [runErrorDetails, setRunErrorDetails] = useState<string | null>(null);
+  /** The host refused the run (its row policy, credentials, or connection choice): shown in its words, nothing for AI to fix. */
+  const [runRefused, setRunRefused] = useState(false);
   const [queryDetailsOpen, setQueryDetailsOpen] = useState(false);
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null);
   const [runElapsedMs, setRunElapsedMs] = useState(0);
@@ -826,6 +828,7 @@ export function BlockStudio() {
     setRunning(true);
     setRunError(null);
     setRunErrorDetails(null);
+    setRunRefused(false);
     setQueryDetailsOpen(false);
     setRunStartedAt(Date.now());
     setRunElapsedMs(0);
@@ -841,6 +844,16 @@ export function BlockStudio() {
     } catch (error) {
       if (scopeEpoch !== blockScopeEpochRef.current) return;
       const message = error instanceof Error ? error.message : String(error);
+      if (isHostRefusal(error)) {
+        // The host did not allow this run: say so in its words, and offer no repair (AI cannot change what a person may see).
+        setRunError(message);
+        setRunErrorDetails(null);
+        setRunRefused(true);
+        setRecoveryError(null);
+        setRecoveryScope(null);
+        setResultTab('results');
+        return;
+      }
       const technicalDetails = blockStudioErrorTechnicalDetails(error);
       setRunError(message);
       setRunErrorDetails(technicalDetails);
@@ -2013,6 +2026,7 @@ export function BlockStudio() {
               <BlockStudioRunErrorCard
                 message={runError}
                 technicalDetails={runErrorDetails}
+                refused={runRefused}
                 repairing={repairing}
                 onFix={() => void handleFixAndRun(runErrorDetails ?? runError)}
                 onEdit={() => setEditorMode('source')}
@@ -6514,15 +6528,23 @@ function blockStudioErrorTechnicalDetails(error: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
+/** The host refused the request (its row policy, credentials, or connection choice): a 403, as /api/query answers one. */
+function isHostRefusal(error: unknown): boolean {
+  return error instanceof DqlApiError && (error.status === 403 || error.code === 'POLICY_DENIED');
+}
+
 function BlockStudioRunErrorCard({
   message,
   technicalDetails,
+  refused = false,
   repairing,
   onFix,
   onEdit,
 }: {
   message: string;
   technicalDetails?: string | null;
+  /** The host refused the run: its sentence is the whole story, and AI repair is not offered. */
+  refused?: boolean;
   repairing: boolean;
   onFix: () => void;
   onEdit: () => void;
@@ -6533,31 +6555,35 @@ function BlockStudioRunErrorCard({
       <div style={{
         display: 'grid',
         gap: 8,
-        border: '1px solid rgba(248, 81, 73, 0.35)',
+        border: refused ? `1px solid ${t.headerBorder}` : '1px solid rgba(248, 81, 73, 0.35)',
         borderRadius: 8,
-        background: 'rgba(248, 81, 73, 0.08)',
+        background: refused ? t.pillBg : 'rgba(248, 81, 73, 0.08)',
         color: t.textPrimary,
         fontFamily: t.font,
         padding: 12,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: '#f85149' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 700, color: refused ? t.textSecondary : '#f85149' }}>
           <AlertTriangle size={16} strokeWidth={2} aria-hidden="true" />
-          <span>Preview failed</span>
+          <span>{refused ? 'Not run' : 'Preview failed'}</span>
         </div>
         <div style={{ color: t.textPrimary, fontSize: 12, lineHeight: 1.5, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
           {message}
         </div>
         <div style={{ color: t.textMuted, fontSize: 11.5, lineHeight: 1.45 }}>
-          Correct the named field or runtime problem, then run the same draft again. Nothing was saved or certified.
+          {refused
+            ? 'Your organization decides what this query may show you; the saved query itself is not at fault. Nothing was saved or certified.'
+            : 'Correct the named field or runtime problem, then run the same draft again. Nothing was saved or certified.'}
         </div>
         <div style={{ display: 'flex', gap: 7, flexWrap: 'wrap' }}>
-          <button type="button" onClick={onFix} disabled={repairing} style={{ ...primaryImportButtonStyle(t), display: 'inline-flex', alignItems: 'center', gap: 6, opacity: repairing ? .72 : 1 }}>
-            {repairing ? <Loader2 size={13} style={{ animation: 'dql-agent-run-spin 0.8s linear infinite' }} /> : <Sparkles size={13} />}
-            {repairing ? 'Fixing & running…' : 'Fix with AI & run'}
-          </button>
+          {!refused && (
+            <button type="button" onClick={onFix} disabled={repairing} style={{ ...primaryImportButtonStyle(t), display: 'inline-flex', alignItems: 'center', gap: 6, opacity: repairing ? .72 : 1 }}>
+              {repairing ? <Loader2 size={13} style={{ animation: 'dql-agent-run-spin 0.8s linear infinite' }} /> : <Sparkles size={13} />}
+              {repairing ? 'Fixing & running…' : 'Fix with AI & run'}
+            </button>
+          )}
           <button type="button" onClick={onEdit} style={secondaryImportButtonStyle(t)}>Edit DQL</button>
         </div>
-        {technicalDetails && technicalDetails !== message && (
+        {!refused && technicalDetails && technicalDetails !== message && (
           <details style={{ borderTop: `1px solid ${t.headerBorder}`, paddingTop: 7 }}>
             <summary style={{ cursor: 'pointer', color: t.textMuted, fontSize: 10.5, fontWeight: 700 }}>Technical details</summary>
             <pre style={{ margin: '7px 0 0', maxHeight: 180, overflow: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: t.textMuted, fontSize: 10, lineHeight: 1.4, fontFamily: t.fontMono }}>{technicalDetails}</pre>

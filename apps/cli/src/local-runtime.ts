@@ -28992,6 +28992,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         res.end(serializeJSON(preview));
       } catch (error) {
         const raw = error instanceof Error ? error.message : String(error);
+        // A refusal (the host's row policy or credentials, a connection the server chooses) is a 403 in the
+        // refuser's own words, as /api/query answers it: not a preview failure, and nothing for AI to repair.
+        if (isPolicyRefusal(error)) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: raw, code: 'POLICY_DENIED' }));
+          return;
+        }
         const friendlyMessage = compactBlockStudioRuntimeFailure(raw);
         res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
         // Keep the result surface concise. Raw compiler output remains available
