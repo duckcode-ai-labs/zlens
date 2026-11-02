@@ -8,6 +8,38 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Ask answers "total X by Y" the same way every time
+
+- **"What is the total claimed amount by product?" is read by the semantic layer's own words, without
+  the model.** "Total", "sum", "count", "number of", "average" and "mean" ask for the aggregate the metric
+  already is and are read as such when they agree with it (an average asked of a sum metric still goes to the
+  model); a dimension name that several models share ("product" on claims and on claim payments) is the one on
+  the metric's model. Seen in the Enterprise walkthrough: the same question came back From Metrics for one
+  person and "No matching data" for the next, because the model read it each time and once added a filter
+  `product = "product"` beside the group-by.
+- **A filter whose value is the dimension's own name is dropped, not run.** Where a model reading does carry
+  `product = "product"` (or the field's label or alias, singular or plural, in any case) on a question-sourced
+  `=`/`in` filter, the predicate is dropped, the receipt says `filter dropped: Product = "product" was the
+  dimension's own name, not one of its values`, and the rest of the reading stands.
+- **An empty aggregate under such a literal is a restriction, never a missing member.** The refusal reads "no
+  rows matched the restriction on …", not "nothing about the member was answered. Check the spelling of the
+  member", about a column.
+
+### The `answer` audit event carries the codes a host keeps
+
+- **`answerAuditEvent` adds `stopReason`, `resolvedRoute`, `tier` and `answerRefusalCode`**, all short codes
+  (`blocked`, `generated_answer`, `semantic`, `no_data`), never a sentence or a value; the run now persists
+  `answerRefusalCode`. When a statement ran before the refusal (the semantic SQL ran and matched no row), its
+  sha256 is in `sqlSha256` on the refused row as on an answered one: the pipeline's gap and execute-failure
+  outcomes carry `executedSql`, and the host puts it on the refused answer's artifact.
+
+### Import SQL answers a host refusal as the Block Studio Run does
+
+- **`POST /api/block-studio/imports/:id/candidates/:id/run` answers a host policy refusal as 403
+  `{ error, code: 'POLICY_DENIED' }`**, in the rule's words, as `/api/block-studio/run` has since #238, not as a
+  500 preview failure. The Import SQL page shows it beside the draft as **Not run** with that sentence, offers no
+  repair, and does not raise a page-wide error.
+
 ### A host reshapes the rail in its own words
 
 - **A host can relabel, hide and regroup ZLens's navigation rail.** The host UI

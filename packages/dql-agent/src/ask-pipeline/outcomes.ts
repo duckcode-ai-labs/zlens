@@ -131,8 +131,9 @@ export type PipelineOutcome =
   | { kind: 'answered'; intent: AnalyticalIntentV1; candidate: PreparedCandidate; result: ExecutedRows; text: string; receipt: PipelineReceipt }
   | { kind: 'clarify'; intent: AnalyticalIntentV1; question: string; options: Array<{ ref: string; label: string; description?: string }>; text: string; receipt: PipelineReceipt }
   | { kind: 'conversation' | 'definition'; reply: string; text: string; receipt: PipelineReceipt; intent?: AnalyticalIntentV1 }
-  | { kind: 'gap'; gap: GapKind; message: string; nearest: string[]; text: string; receipt: PipelineReceipt; intent?: AnalyticalIntentV1; offerExploration: boolean }
-  | { kind: 'failed'; stage: 'resolve' | 'prepare' | 'execute'; message: string; text: string; receipt: PipelineReceipt; intent?: AnalyticalIntentV1 }
+  /** `executedSql`: the statement that ran on the warehouse before the gap or failure was declared (an empty aggregate, a failed statement), for the host's audit; absent when nothing ran. */
+  | { kind: 'gap'; gap: GapKind; message: string; nearest: string[]; text: string; receipt: PipelineReceipt; intent?: AnalyticalIntentV1; offerExploration: boolean; executedSql?: string }
+  | { kind: 'failed'; stage: 'resolve' | 'prepare' | 'execute'; message: string; text: string; receipt: PipelineReceipt; intent?: AnalyticalIntentV1; executedSql?: string }
   /** Only with `stopAfter: 'reading'`: the proven, policed reading, before anything is prepared. */
   | { kind: 'reading'; intent: AnalyticalIntentV1; lane: 'governed' | 'ai'; text: string; receipt: PipelineReceipt };
 

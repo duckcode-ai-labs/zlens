@@ -84,6 +84,32 @@ describe('a block\'s last Block Studio run', () => {
     expect(ran.status, ran.text.slice(0, 300)).toBe(200);
   });
 
+  it('the Import SQL candidate run answers a refusal by the host\'s row policy as the same 403, not a 500', async () => {
+    // Seen in the Enterprise walkthrough (D4 prep): /api/block-studio/run answered 403 since #238, the import candidate's Run still said "Preview failed".
+    const sentence = 'Your profile has no region, which claims needs to show you any rows. Ask an admin.';
+    const policy: DqlRowPolicy = ({ principal, sql, purpose }) => {
+      if (purpose === 'metadata' || principal === null) return { sql };
+      return typeof principal.attributes?.region === 'string' ? { sql } : { refuse: sentence };
+    };
+    const { call } = await serve(true, policy);
+    // Import previews are each person's own under a host, so each creates their own draft.
+    const draft = async (person: string) => {
+      const created = await call(person, 'POST', '/api/block-studio/imports', { inputMode: 'paste', sources: [{ path: 'claims.sql', content: 'SELECT region FROM claims' }], domain: 'claims', owner: `${person}@harbor.example` });
+      expect(created.status, created.text.slice(0, 300)).toBe(200);
+      return { id: created.body.id as string, candidateId: created.body.candidates[0].id as string };
+    };
+    const run = async (person: string) => { const { id, candidateId } = await draft(person); return { ...await call(person, 'POST', `/api/block-studio/imports/${encodeURIComponent(id)}/candidates/${encodeURIComponent(candidateId)}/run`), id }; };
+    const refused = await run('priya');
+    expect(refused.status, refused.text.slice(0, 300)).toBe(403);
+    expect(refused.body).toEqual({ error: sentence, code: 'POLICY_DENIED' });
+    // Nothing was recorded on the draft.
+    expect((await call('priya', 'GET', `/api/block-studio/imports/${encodeURIComponent(refused.id)}`)).body.candidates[0].preview ?? null).toBeNull();
+    // A person the policy lets through runs it as before.
+    const ran = await run('mei');
+    expect(ran.status, ran.text.slice(0, 300)).toBe(200);
+    expect(ran.body.preview.result.rowCount).toBe(7);
+  });
+
   it('without a host, is the one project-wide record as before', async () => {
     const { call, projectRoot } = await serve(false);
     expect((await call('', 'POST', '/api/block-studio/run', { source: BLOCK, path: 'blocks/claims.dql' })).status).toBe(200);

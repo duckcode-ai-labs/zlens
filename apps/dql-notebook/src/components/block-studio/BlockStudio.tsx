@@ -6,6 +6,7 @@ import { certificationFieldGaps, certificationFieldLabel, renderSemanticBlockSou
 import { AlertTriangle, Blocks, Bot, CheckCircle2, CheckSquare, ChevronLeft, ChevronRight, Code2, Database, FileInput, Loader2, MoreHorizontal, PanelRightOpen, Pencil, Play, Plus, Search, ShieldCheck, Sparkles, Square, Trash2, X, type LucideIcon } from 'lucide-react';
 import { hostProposesCertification, hostReadOnly, readOnlyReason, useHostUi } from '../../host/host-ui';
 import { api, DqlApiError, type BlockCertificationOperationResult } from '../../api/client';
+import { importRunError, isHostRefusal, type ImportRunError } from './import-run-error';
 import { useDispatch, useNotebookStore } from '../../store/NotebookStore';
 import { useOperations } from '../../operations/OperationsProvider';
 import { newestMatchingBlockCertificationOperation } from '../../operations/operation-state';
@@ -4414,7 +4415,7 @@ function BlockStudioImportWorkspace({
   const [sourceOpen, setSourceOpen] = useState(true);
   const [candidateSearch, setCandidateSearch] = useState('');
   const [showAllCandidates, setShowAllCandidates] = useState(false);
-  const [candidateErrors, setCandidateErrors] = useState<Record<string, string>>({});
+  const [candidateErrors, setCandidateErrors] = useState<Record<string, ImportRunError>>({});
   const [smartPhase, setSmartPhase] = useState<SmartImportPhase>('idle');
   const [smartItems, setSmartItems] = useState<Record<string, SmartImportItem>>({});
   // Certify refused only because the description still says "review
@@ -4749,11 +4750,12 @@ function BlockStudioImportWorkspace({
         delete cleared[candidate.id];
         return cleared;
       });
-    } catch (err: any) {
-      const message = err?.message ?? 'Candidate run failed.';
-      setError(message);
+    } catch (err: unknown) {
+      // A host refusal is shown in the rule's words beside the draft, not as a page-wide failure.
+      const failure = importRunError(err);
+      if (!failure.refused) setError(failure.message);
       setSelectedId(candidate.id);
-      setCandidateErrors((current) => ({ ...current, [candidate.id]: message }));
+      setCandidateErrors((current) => ({ ...current, [candidate.id]: failure }));
     } finally {
       setLoading(false);
     }
@@ -5107,7 +5109,7 @@ function BlockStudioImportWorkspace({
                         setSelectedId(candidate.id);
                       }}
                       style={{
-                        border: `1px solid ${selected ? t.accent : runError ? '#f8514955' : t.headerBorder}`,
+                        border: `1px solid ${selected ? t.accent : runError && !runError.refused ? '#f8514955' : t.headerBorder}`,
                         borderRadius: 8,
                         background: selected ? `${t.accent}10` : t.appBg,
                         color: t.textPrimary,
@@ -5133,8 +5135,8 @@ function BlockStudioImportWorkspace({
                         {warnings.length > 0 && <ImportPill label={`${warnings.length} warning`} tone="warn" t={t} />}
                       </span>
                       {(runError || item.message) && (
-                        <span style={{ fontSize: 11, color: runError ? '#f85149' : t.textMuted, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
-                          {runError ?? item.message}
+                        <span style={{ fontSize: 11, color: runError && !runError.refused ? '#f85149' : t.textMuted, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
+                          {runError ? (runError.refused ? `Not run: ${runError.message}` : runError.message) : item.message}
                         </span>
                       )}
                     </button>
@@ -5497,7 +5499,7 @@ export function ImportCandidateDetail({
   onCertify: (candidate: BlockStudioImportCandidate) => Promise<void>;
   onReject: (candidate: BlockStudioImportCandidate) => Promise<void>;
   onReviewInEditor: (candidate: BlockStudioImportCandidate) => void;
-  runError?: string | null;
+  runError?: ImportRunError | null;
   themeMode: ThemeMode;
   /** Whether "Show context" starts open. */
   initialContextOpen?: boolean;
@@ -5668,9 +5670,16 @@ export function ImportCandidateDetail({
         </details>
       )}
       {editError && <div role="alert" style={{ fontSize: 12, color: '#f85149', background: '#f8514914', borderRadius: 8, padding: 10 }}>{editError}</div>}
-      {runError && (
+      {runError && runError.refused && (
+        <div role="status" data-testid="import-run-refused" style={{ display: 'grid', gap: 6, fontSize: 12, color: t.textPrimary, background: t.pillBg, border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: 10, lineHeight: 1.45, overflowWrap: 'anywhere' }}>
+          <span style={{ fontWeight: 700, color: t.textSecondary }}>Not run</span>
+          <span>{runError.message}</span>
+          <span style={{ color: t.textMuted, fontSize: 11.5 }}>Your organization decides what this query may show you; the draft itself is not at fault. Nothing was saved or certified.</span>
+        </div>
+      )}
+      {runError && !runError.refused && (
         <div role="alert" style={{ fontSize: 12, color: '#f85149', background: '#f8514914', border: `1px solid #f8514933`, borderRadius: 8, padding: 10, lineHeight: 1.45, overflowWrap: 'anywhere' }}>
-          Preview failed: {runError}
+          Preview failed: {runError.message}
         </div>
       )}
 
@@ -6526,11 +6535,6 @@ function blockStudioErrorTechnicalDetails(error: unknown): string | null {
   }
   const value = (error.details as { technicalDetails?: unknown }).technicalDetails;
   return typeof value === 'string' && value.trim() ? value : null;
-}
-
-/** The host refused the request (its row policy, credentials, or connection choice): a 403, as /api/query answers one. */
-function isHostRefusal(error: unknown): boolean {
-  return error instanceof DqlApiError && (error.status === 403 || error.code === 'POLICY_DENIED');
 }
 
 function BlockStudioRunErrorCard({

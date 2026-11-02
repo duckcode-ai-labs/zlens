@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { AgentProvider, ProviderRunOptions } from '../providers/types.js';
-import { executeCandidate, fillPeriodGaps, statementFailure, type ExecuteDeps, type ExecutedRows } from './execute.js';
+import { executeCandidate, fillPeriodGaps, literalIsFieldName, statementFailure, type ExecuteDeps, type ExecutedRows } from './execute.js';
 import { describeIntent, intentExecutionFingerprint, intentRefs, type AnalyticalIntentV1, type IntentPredicate } from './intent.js';
 import { composeAnsweredText, composeFailedText, composeGapText, describeResultColumns, labelFor, type AskStoryStepV1, type ContextLedgerV1, type GapKind, type PipelineOutcome, type PipelineReceipt } from './outcomes.js';
 import { entails, prepare, type PrepareDeps, type PreparedCandidate, type PreparedRefusal, type PrepareResult } from './prepare/index.js';
@@ -279,6 +279,33 @@ export function namesInQuestion(question: string, vocabulary: VocabularyIndex): 
   }
   // A word this project already names something by is a term, not a person.
   return [...new Set(names)].filter((name) => !vocabulary.lookup(name, { limit: 1, minScore: 0.9 }).length);
+}
+
+/**
+ * A FILTER WHOSE VALUE IS THE FIELD'S OWN NAME IS NOT A FILTER. Asked "total
+ * claimed amount by product", a model sometimes returns `product = "product"`
+ * beside the group-by, reading the word as the proper-name literal the prompt
+ * told it to look for. No product is called "product": the predicate matches
+ * no row and the empty result was blamed on a member nobody named. A
+ * question-sourced eq/in filter whose every literal is, in singular lower
+ * case, the name, label or alias of the field it filters or of a group-by
+ * field is dropped here, and the receipt says so.
+ */
+export function dropSelfNamedFilters(intent: AnalyticalIntentV1, vocabulary: VocabularyIndex): { intent: AnalyticalIntentV1; notes: string[] } {
+  const fieldNames = (ref: string): string[] => { const entry = vocabulary.get(ref); return entry ? [entry.name, entry.label ?? '', ...entry.aliases].filter(Boolean) : []; };
+  const groupRefs = intent.groupBy.map((group) => group.ref);
+  const notes: string[] = [];
+  const filters = intent.filters.filter((predicate) => {
+    if (predicate.source !== 'question' || (predicate.op !== 'eq' && predicate.op !== 'in')) return true;
+    const literals = predicate.values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (literals.length === 0 || literals.length !== predicate.values.length) return true;
+    const ownName = (literal: string) => [predicate.ref, ...groupRefs].some((ref) => literalIsFieldName({ ref }, literal, fieldNames));
+    if (!literals.every(ownName)) return true;
+    const entry = vocabulary.get(predicate.ref);
+    notes.push(`filter dropped: ${entry?.label ?? entry?.name ?? predicate.ref} ${predicate.op === 'eq' ? '=' : 'in'} ${literals.map((value) => JSON.stringify(value)).join(', ')} was the dimension's own name, not one of its values`);
+    return false;
+  });
+  return notes.length === 0 ? { intent, notes } : { intent: { ...intent, filters }, notes };
 }
 
 /**
@@ -645,6 +672,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
     // as one warehouse attempt merely because the adapter predates hooks.
     let invoked = 0;
     const notedDeps: ExecuteDeps = {
+      // A literal that is the field's own name is not a member of it (execute.ts, emptyAggregateCause).
+      fieldNames: (ref) => { const entry = input.vocabulary.get(ref); return entry ? [entry.name, entry.label ?? '', ...entry.aliases].filter(Boolean) : []; },
       ...executeDeps,
       run: (sql, params, options) => {
         invoked += 1;
@@ -1309,6 +1338,18 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       return { kind: 'clarify', intent, question, options: [], text: question, receipt };
     }
   }
+  // A FILTER WHOSE VALUE IS THE FIELD'S OWN NAME IS NOT A FILTER. A model
+  // reading "total claimed amount by product" sometimes emits product =
+  // "product" beside the group-by; compiled as written it matches no row, and
+  // the empty result was blamed on a member nobody named. The predicate is
+  // dropped, the receipt says so, and the rest of the reading stands.
+  {
+    const dropped = dropSelfNamedFilters(intent, input.vocabulary);
+    if (dropped.notes.length) {
+      intent = dropped.intent;
+      receipt.grounding = [...(receipt.grounding ?? []), ...dropped.notes];
+    }
+  }
   // What the first reading promised to SHOW. A repair may drop a label the
   // engine could not reach; the answer must say so rather than quietly
   // identifying its rows by an opaque key.
@@ -1688,6 +1729,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   if (!executed.ok && executed.code === 'no_rows_matched') {
     receipt.refusals.push({ tier: candidate.tier, code: executed.code, message: executed.message, repairable: false } as unknown as PreparedRefusal);
     receipt.executed = { tier: candidate.tier, sqlFingerprint: fingerprintSql(candidate.sql), rowCount: 0, ms: Math.round(now() - executeStarted), proofs: executed.proofs };
+    // The statement ran: the host's audit fingerprints it on the refused answer as on an answered one.
+    const executedSql = candidate.sql;
     const nearest = (receipt.grounding ?? []).filter((note) => note.includes('nearest'));
     const advice = executed.cause?.kind === 'window'
       ? 'The data may end before that period; ask for the latest period it holds.'
@@ -1705,14 +1748,14 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       if (intent.time?.window) others.push(`the period ${intent.time.window.start.slice(0, 10)}..${intent.time.window.end.slice(0, 10)}`);
       const named = cause.literals.map((value) => JSON.stringify(value)).join(', ');
       const message = `${named} ${cause.literals.length === 1 ? 'is' : 'are'} on the warehouse, but no rows matched ${cause.literals.length === 1 ? 'it' : 'them'} together with ${others.length ? others.join('; ') : 'the other restrictions'}; the aggregate was empty`;
-      return { kind: 'gap', gap: 'not_retrieved', message, nearest, text: `The governed query ran, but ${message}. Loosen one of those restrictions, or ask for the values that field holds.`, receipt, intent, offerExploration: false };
+      return { kind: 'gap', gap: 'not_retrieved', message, nearest, text: `The governed query ran, but ${message}. Loosen one of those restrictions, or ask for the values that field holds.`, receipt, intent, offerExploration: false, executedSql };
     }
-    return { kind: 'gap', gap: 'not_retrieved', message: executed.message, nearest, text: `The governed query ran, but ${executed.message}.${nearest.length ? ` ${nearest.join('; ')}.` : ''} ${advice}`, receipt, intent, offerExploration: false };
+    return { kind: 'gap', gap: 'not_retrieved', message: executed.message, nearest, text: `The governed query ran, but ${executed.message}.${nearest.length ? ` ${nearest.join('; ')}.` : ''} ${advice}`, receipt, intent, offerExploration: false, executedSql };
   }
   if (!executed.ok) {
     receipt.refusals.push({ tier: candidate.tier, code: executed.code, message: executed.message, repairable: false } as unknown as PreparedRefusal);
     receipt.failure = { stage: 'execute', reason: executed.code, message: executed.message, ...(executed.warehouse ? { warehouse: executed.warehouse } : {}) };
-    return { kind: 'failed', stage: 'execute', message: executed.message, text: composeFailedText('execute', executed.message, executed.warehouse), receipt, intent };
+    return { kind: 'failed', stage: 'execute', message: executed.message, text: composeFailedText('execute', executed.message, executed.warehouse), receipt, intent, ...(executed.code === 'execution_failed' ? { executedSql: candidate.sql } : {}) };
   }
   const cacheKey = `${input.cacheScope ?? ''}|${intentExecutionFingerprint(intent)}`;
   if (input.preparationCache) {
