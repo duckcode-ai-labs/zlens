@@ -252,6 +252,19 @@ relationships:
     expect(manifest.diagnostics?.some((diagnostic) => diagnostic.message.includes('compatible certified contract'))).toBe(true);
   });
 
+  it('a draft cross-domain join without an export is a warning; certifying one is an error', () => {
+    for (const domain of ['commerce', 'growth']) rmSync(join(projectRoot, 'domains', domain, 'modeling', 'interfaces.dql.yaml'));
+    const modelPath = join(projectRoot, 'domains', 'growth', 'modeling', 'relationships.dql.yaml');
+    const missing = (manifest: ReturnType<typeof buildManifest>) => manifest.diagnostics?.filter((diagnostic) => diagnostic.message.includes('to export entity')) ?? [];
+
+    expect(missing(buildManifest({ projectRoot, dbtManifestPath }))[0]?.severity).toBe('error');
+
+    writeFileSync(modelPath, readFileSync(modelPath, 'utf8').replace('status: certified', 'status: draft'));
+    const drafted = missing(buildManifest({ projectRoot, dbtManifestPath }));
+    expect(drafted).toHaveLength(1);
+    expect(drafted[0]?.severity).toBe('warning');
+  });
+
   it('compiles a business concept: bindings resolve, a cross-domain binding needs a route, a rule derives conformance, refs resolve (A-005)', () => {
     writeYaml(projectRoot, 'domains/commerce/modeling/concepts.dql.yaml', `concepts:
   - id: customer

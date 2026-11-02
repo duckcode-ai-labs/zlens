@@ -39,6 +39,8 @@ interface Setup {
   review?: (prompt: string, system: string) => string;
   /** The project's `agent.resultReview` setting as the host reports it (absent: the dep is not given). */
   resultReview?: boolean;
+  /** Every text column may be searched for a stated value. */
+  probeAllowed?: boolean;
 }
 
 function project(setup: Setup) {
@@ -96,6 +98,7 @@ async function ask(setup: Setup, question: string, draft: (prompt: string) => st
     }) } as unknown as QueryExecutor,
     ...(setup.valueProfile?.allowed !== undefined ? { valueProfileAllowed: () => setup.valueProfile!.allowed! } : {}),
     ...(setup.resultReview !== undefined ? { resultReviewConfigured: () => setup.resultReview! } : {}),
+    ...(setup.probeAllowed ? { literalProbeAllowed: () => true } : {}),
     resolveConnection: async () => ({ driver: setup.driver ?? 'sqlite' } as ConnectionConfig),
     getSemanticLayer: () => undefined,
     getManifest: () => ({ snapshotId: `snapshot:${projectRoot}`, manifest: manifest as never }),
@@ -152,6 +155,127 @@ describe('a warehouse-first draft reads the whole schema with its declared keys'
     const prompt = prompts[0] ?? '';
     expect((prompt.match(/executable relation:/g) ?? []).length).toBeLessThanOrEqual(8);
     expect(prompt).toContain('executable relation:main.customers');
+  }, 20_000);
+});
+
+describe('a table the question\'s words miss is still shown', () => {
+  // Wide enough that full cards are over the budget, narrow enough that one line a table is not.
+  const ledgers = (count: number) => Object.fromEntries(Array.from({ length: count }, (_, index) => [`ledger_${index}`, {
+    columns: Array.from({ length: 30 }, (_, column) => `amount_${column}`),
+    primaryKey: ['amount_0'],
+    foreignKeys: [{ columns: ['amount_1'], references: { relation: 'main.customers', columns: ['customer_id'] } }],
+  } satisfies Table]));
+
+  it('a question that names no table reaches every table when the schema fits, not "no table matches"', async () => {
+    const { prompts, result } = await ask({}, 'How much did we earn last spring', declined);
+    expect(prompts).not.toHaveLength(0);
+    for (const name of Object.keys(TABLES)) expect(prompts[0]).toContain(`executable relation:main.${name}`);
+    expect(JSON.stringify(result)).not.toContain('could be chosen from the words');
+  });
+
+  it('above the budget the chosen tables keep their detail and every other table comes in brief, with its keys', async () => {
+    const tables = { customers: TABLES.customers!, ...ledgers(40) };
+    const { prompts } = await ask({ tables }, 'How many customers are there in each country', declined);
+    const prompt = prompts[0]!;
+    expect(prompt).toContain('executable relation:main.customers [');
+    expect(prompt).toMatch(/executable relation:main\.customers \[(?!in brief)/);
+    expect(prompt).toContain('executable relation:main.ledger_39 [in brief]: amount_0 ');
+    expect(prompt).toMatch(/amount_29/);
+    expect(prompt).toContain('primary key (amount_0)');
+    expect(prompt).toContain('foreign key (amount_1) references main.customers (customer_id)');
+  });
+
+  it('wide chosen tables never push a table off the list: past their budget they go in brief too', async () => {
+    const wideName = (index: number) => `invoice_${index}`;
+    const tables: Record<string, Table> = {};
+    for (let index = 0; index < 5; index += 1) tables[wideName(index)] = { columns: Array.from({ length: 90 }, (_, column) => `invoice_measure_${column}`) };
+    for (let index = 0; index < 100; index += 1) tables[`ref_${index}`] = { columns: ['ref_id', 'label'] };
+    tables.ref_99 = { columns: ['ref_id', 'discount_rate'] };
+    const { prompts, result } = await ask({ tables }, 'invoice discount rate', declined);
+    for (const name of [...Object.keys(tables)]) expect(prompts[0]).toContain(`executable relation:main.${name} `);
+    expect(prompts[0]).toContain('discount_rate');
+    expect(JSON.stringify(result)).not.toContain('no table in this project matches');
+  });
+
+  it('a decline looks past the detailed tables: the table in the brief list that has the field moves up, and the draft runs again', async () => {
+    const tables: Record<string, Table> = { invoices: TABLES.invoices!, ...ledgers(40), ledger_7: { columns: [...Array.from({ length: 30 }, (_, column) => `amount_${column}`), 'discount_rate'] } };
+    let calls = 0;
+    const { prompts, result } = await ask({ tables }, 'invoices total', () => (calls++ === 0 ? 'NO_SQL: no column holds the discount rate.' : 'SELECT AVG(discount_rate) AS rate FROM main.ledger_7'), [{ rate: 1 }]);
+    expect(calls).toBeGreaterThan(1);
+    expect(prompts.at(-1)).toMatch(/executable relation:main\.ledger_7 \[(?!in brief)/);
+    expect(result.status).toBe('completed');
+  });
+
+  it('a decline nothing can answer says every table was searched only because every table was', async () => {
+    const tables = { invoices: TABLES.invoices!, ...ledgers(40) };
+    const { prompts, result } = await ask({ tables }, 'invoices total', () => 'NO_SQL: no column holds the discount rate.');
+    for (const name of Object.keys(tables)) expect(prompts[0]).toContain(`executable relation:main.${name} `);
+    expect(JSON.stringify(result)).toContain('searched all 41 tables');
+  });
+
+  it('the value search still starts from the chosen tables', async () => {
+    const tables: Record<string, Table> = { vendors: { columns: ['vendor_id', 'name', 'country'] }, ...Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`archive_${index}`, { columns: Array.from({ length: 30 }, (_, column) => `note_${column}`) }])) };
+    const { executed } = await ask({ tables, probeAllowed: true }, 'How many vendors are named Contoso', declined);
+    const probes = executed.filter((sql) => /LIKE '%contoso%'/.test(sql));
+    expect(probes.length).toBeGreaterThan(0);
+    expect(probes.some((sql) => /vendors/.test(sql) && /"name"/.test(sql))).toBe(true);
+  });
+
+  it('a table shown in brief can be drafted over', async () => {
+    const tables = { customers: TABLES.customers!, ...ledgers(40) };
+    const { result, executed } = await ask({ tables }, 'How many customers are there in each country', () => 'SELECT SUM(amount_3) AS total FROM main.ledger_39', [{ total: 1 }]);
+    expect(result.status).toBe('completed');
+    expect(executed.some((sql) => sql.includes('main.ledger_39'))).toBe(true);
+  });
+
+  it('with no words to go on and a schema too large even in brief, it says so without claiming no table exists', async () => {
+    const wide: Record<string, Table> = {};
+    for (let index = 0; index < 120; index += 1) wide[`t_${index}`] = { columns: Array.from({ length: 60 }, (_, column) => `c_${column}`) };
+    const { result, prompts } = await ask({ tables: wide }, 'How much did we earn last spring', declined);
+    expect(prompts).toHaveLength(0);
+    expect(JSON.stringify(result)).toContain('none of the 120 tables this project lists could be chosen from the words of the question');
+  }, 20_000);
+});
+
+describe('a drafted statement that reads a value with FROM', () => {
+  it('EXTRACT(YEAR FROM i.invoice_date) is a column, not a table the request did not inspect', async () => {
+    const tables = { ...TABLES, invoices: { ...TABLES.invoices!, columns: [...TABLES.invoices!.columns, 'invoice_date'] } };
+    const { result, executed } = await ask({ tables }, 'Invoice total by year', () => 'SELECT EXTRACT(YEAR FROM i.invoice_date) AS y, SUM(i.total) AS total FROM main.invoices i GROUP BY 1', [{ y: 2026, total: 1 }]);
+    expect(result.status).toBe('completed');
+    expect(executed.some((sql) => sql.includes('EXTRACT'))).toBe(true);
+  });
+});
+
+describe('a capitalised word in a question', () => {
+  const sql = 'SELECT c.country, SUM(i.total) AS total FROM main.invoices i JOIN main.customers c ON c.customer_id = i.customer_id GROUP BY c.country';
+  const rows = [{ country: 'NO', total: 10 }];
+
+  it('an instruction is not a value: the answer runs, and the drafter is not asked twice', async () => {
+    let calls = 0;
+    const { result } = await ask({}, 'Total invoice amount for each customer country Return only those fields', () => { calls += 1; return sql; }, rows);
+    expect(calls).toBe(1);
+    expect(result.status).toBe('completed');
+  });
+
+  it.each(['Total invoice amount for Contoso by customer country', 'Total invoice amount excluding Contoso by customer country', 'How many Contoso invoices by customer country'])('a real value stays required: %s', async (question) => {
+    const { result, executed } = await ask({}, question, () => sql, rows);
+    expect(result.status).not.toBe('completed');
+    expect(executed.filter((statement) => /SUM\(i\.total\)/.test(statement))).toHaveLength(0);
+    expect(JSON.stringify(result)).toContain('Contoso');
+  });
+});
+
+describe('a list longer than ZLens shows', () => {
+  it('a LIMIT 500 the question did not ask for comes off, so the host\'s guard can see there is more', async () => {
+    const { executed } = await ask({}, 'List every customer', () => 'SELECT customer_id, name FROM main.customers ORDER BY customer_id LIMIT 500', [{ customer_id: 1, name: 'a' }]);
+    const statement = executed.find((sql) => sql.includes('main.customers') && !/HAVING/.test(sql))!;
+    expect(statement).toMatch(/LIMIT 501\s*$/);
+    expect(statement).not.toContain('LIMIT 500');
+  });
+
+  it('a question that asks for 500 keeps them', async () => {
+    const { executed } = await ask({}, 'List the first 500 customers', () => 'SELECT customer_id, name FROM main.customers ORDER BY customer_id LIMIT 500', [{ customer_id: 1, name: 'a' }]);
+    expect(executed.find((sql) => sql.includes('main.customers') && !/HAVING/.test(sql))).toMatch(/LIMIT 500\s*$/);
   });
 });
 

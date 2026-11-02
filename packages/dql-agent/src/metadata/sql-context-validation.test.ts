@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LocalContextPack } from './catalog.js';
-import { inspectedRelationMatches, validateSqlAgainstLocalContext } from './sql-context-validation.js';
+import { inFromKeywordCall, inspectedRelationMatches, validateSqlAgainstLocalContext } from './sql-context-validation.js';
 
 describe('validateSqlAgainstLocalContext', () => {
   it('rejects unresolved internal graph relation identities before warehouse execution', () => {
@@ -1010,6 +1010,52 @@ describe('the default database may be left out where a connection holds one data
     expect(validate('SELECT claim_id FROM main.claim', ['acme_insurance.main.claim'], 'sqlite').ok).toBe(false);
     expect(validate('SELECT claim_id FROM main.claim', ['db_a.main.claim', 'db_b.main.claim'], 'duckdb').ok).toBe(false);
     expect(validate('SELECT claim_id FROM other_db.main.claim', ['acme_insurance.main.claim'], 'duckdb').ok).toBe(false);
+  });
+});
+
+describe('FROM inside a call reads a value, not a table', () => {
+  const runtimeSchema = [{ relation: 'shop.sales.orders', columns: [{ name: 'orderdate' }, { name: 'orderid' }] }];
+  const options = { dialect: 'postgres', runtimeSchema, runtimeSchemaExact: true, enforceGenerationReadiness: false } as never;
+
+  it('EXTRACT, SUBSTRING and TRIM over a qualified column are not relations', () => {
+    expect(inFromKeywordCall('SELECT EXTRACT(YEAR FROM o.orderdate) FROM a.b o', 'SELECT EXTRACT(YEAR '.length)).toBe(true);
+    expect(validateSqlAgainstLocalContext('SELECT EXTRACT(YEAR FROM o.orderdate) AS y, COUNT(*) FROM shop.sales.orders o GROUP BY 1', undefined, options).ok).toBe(true);
+    const substring = 'SELECT SUBSTRING(o.orderid FROM 1 FOR 2) AS p FROM shop.sales.orders o';
+    expect(inFromKeywordCall(substring, substring.indexOf('FROM'))).toBe(true);
+    expect(inFromKeywordCall(substring, substring.lastIndexOf('FROM'))).toBe(false);
+  });
+
+  it('a table read inside one is still a table: a subquery has its own parenthesis', () => {
+    const sql = 'SELECT EXTRACT(YEAR FROM (SELECT MAX(s.d) FROM shop.secret.salaries s)) AS y FROM shop.sales.orders o';
+    expect(inFromKeywordCall(sql, sql.indexOf('FROM shop.secret'))).toBe(false);
+    const result = validateSqlAgainstLocalContext(sql, undefined, options);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain('shop.secret.salaries');
+  });
+
+  it('TRIM with a character that looks like a parenthesis is still a value read', () => {
+    const sql = "SELECT TRIM(BOTH ')' FROM o.orderid) AS p FROM shop.sales.orders o";
+    expect(inFromKeywordCall(sql, sql.indexOf('FROM o.orderid'))).toBe(true);
+    expect(validateSqlAgainstLocalContext(sql, undefined, options).ok).toBe(true);
+  });
+
+  it.each([
+    ["a string", "SELECT 'trim(' AS tag, x.pay FROM shop.secret.salaries x"],
+    ["a string that ends in the word", "SELECT 'extract(year ' FROM shop.secret.salaries"],
+    ['a block comment', 'SELECT 1 /* trim( */ FROM shop.secret.salaries'],
+    ['a line comment', 'SELECT 1 -- extract(year\n FROM shop.secret.salaries'],
+    ['a quoted alias', 'SELECT 1 AS "trim(" FROM shop.secret.salaries'],
+    ['a subquery in a call', "SELECT TRIM((SELECT ')' || x.pay FROM shop.secret.salaries x)) AS p FROM shop.sales.orders o"],
+  ])('a table cannot hide behind %s', (_, sql) => {
+    expect(inFromKeywordCall(sql, sql.toLowerCase().indexOf('from shop.secret'))).toBe(false);
+    const result = validateSqlAgainstLocalContext(sql, undefined, options);
+    expect(result.ok).toBe(false);
+  });
+
+  it('an ordinary FROM after a closed call is a relation', () => {
+    const sql = 'SELECT EXTRACT(YEAR FROM o.orderdate) AS y FROM shop.secret.salaries o';
+    expect(inFromKeywordCall(sql, sql.lastIndexOf('FROM'))).toBe(false);
+    expect(validateSqlAgainstLocalContext(sql, undefined, options).ok).toBe(false);
   });
 });
 

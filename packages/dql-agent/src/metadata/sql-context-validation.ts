@@ -192,9 +192,27 @@ function sqlForReferenceParsing(sql: string): { sql: string; positionalParameter
  * and case inside quoted parts. This supplements, never replaces, the general
  * parser for the exact-target check and emitted receipt references.
  */
+/**
+ * FROM in `EXTRACT(YEAR FROM o.orderdate)` or `TRIM(BOTH ' ' FROM o.name)` reads
+ * a value, not a table. This guards what a statement may read, so only the plain
+ * forms on one line count: a subquery has its own parenthesis, and anything that
+ * could put the call inside a string or a comment leaves the FROM a relation.
+ */
+const FROM_IN_A_CALL = /\b(?:extract[ \t]*\([ \t]*\w+|substring[ \t]*\([ \t]*[\w.]+|trim[ \t]*\([ \t]*(?:(?:both|leading|trailing)[ \t]+)?(?:'[^'\n]*'[ \t]*)?)[ \t]*$/i;
+
+export function inFromKeywordCall(sql: string, index: number): boolean {
+  const before = sql.slice(0, index);
+  if (!FROM_IN_A_CALL.test(before)) return false;
+  const count = (mark: string) => before.split(mark).length - 1;
+  if (count("'") % 2 === 1 || count('"') % 2 === 1 || count('`') % 2 === 1) return false;
+  if (before.lastIndexOf('/*') > before.lastIndexOf('*/')) return false;
+  return !before.slice(before.lastIndexOf('\n') + 1).includes('--');
+}
+
 function physicalRelationsInSql(sql: string): string[] {
   const byIdentity = new Map<string, string>();
   for (const match of sql.matchAll(SQL_PHYSICAL_RELATION)) {
+    if (inFromKeywordCall(sql, match.index)) continue;
     const relation = match[1]?.trim();
     if (!relation) continue;
     const parts = parsePhysicalIdentifier(relation);

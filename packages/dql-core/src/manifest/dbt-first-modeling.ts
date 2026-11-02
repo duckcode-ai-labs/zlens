@@ -801,7 +801,10 @@ function buildRelationships(
       });
     }
     if (crossDomain && !interfacesGranted && !structuredInterfaces) {
-      diagnostics.push(modelingError(sourcePath, `cross-domain relationship "${id}" requires ${fromEntity.domain} to export entity "${from}"`));
+      const message = `cross-domain relationship "${id}" requires ${fromEntity.domain} to export entity "${from}"`;
+      // A draft is a proposal: granting the export is a person's decision, made
+      // when it is certified, so an unreviewed draft model still validates.
+      diagnostics.push(status === 'draft' ? { kind: 'modeling', filePath: sourcePath, severity: 'warning', message } : modelingError(sourcePath, message));
     }
     const automaticJoinAllowed = status === 'certified'
       && !staleCertification
