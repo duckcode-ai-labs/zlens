@@ -25,6 +25,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   rows matched the restriction on …", not "nothing about the member was answered. Check the spelling of the
   member", about a column.
 
+### The `answer` audit event carries the codes a host keeps
+
+- **`answerAuditEvent` adds `stopReason`, `resolvedRoute`, `tier` and `answerRefusalCode`**, all short codes
+  (`blocked`, `generated_answer`, `semantic`, `no_data`), never a sentence or a value; the run now persists
+  `answerRefusalCode`. When a statement ran before the refusal (the semantic SQL ran and matched no row), its
+  sha256 is in `sqlSha256` on the refused row as on an answered one: the pipeline's gap and execute-failure
+  outcomes carry `executedSql`, and the host puts it on the refused answer's artifact.
+
 ### A host reshapes the rail in its own words
 
 - **A host can relabel, hide and regroup ZLens's navigation rail.** The host UI

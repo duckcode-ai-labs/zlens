@@ -92,6 +92,26 @@ describe('audit (RFC 0010 HH-6)', () => {
     expect(answerAuditEvent({ ...run, status: 'running' }, { principal: null, actor: null })).toBeNull();
   });
 
+  it('carries the codes a host keeps beside the answer: how it stopped, which route, which tier, why it was refused', () => {
+    // Enterprise walkthrough D4 (Wes): the semantic statement ran, matched no row, and the answer was blocked.
+    const refused = {
+      id: 'run-wes', status: 'blocked', trustState: 'blocked', route: 'generated_answer', stopReason: 'blocked', answerRefusalCode: 'no_data',
+      diagnosticReceiptV9: { executed: { tier: 'semantic', sqlFingerprint: 'd485a8ae', rowCount: 0, ms: 17, proofs: [] } },
+      artifacts: [{ kind: 'answer', payload: { kind: 'no_answer', text: 'The governed query ran, but no rows matched the restriction on product.', executedSql: "SELECT product, SUM(claimed_amount) FROM claims WHERE product = 'product' GROUP BY product" } }],
+    };
+    const event = answerAuditEvent(refused, { principal: maria, actor: 'maria@insurer.example' });
+    expect(event).toMatchObject({ kind: 'answer', runId: 'run-wes', status: 'blocked', trustState: 'blocked', stopReason: 'blocked', resolvedRoute: 'generated_answer', tier: 'semantic', answerRefusalCode: 'no_data' });
+    // The statement that ran before the refusal is fingerprinted as on an answered run; nothing of it is in the event.
+    expect((event as { sqlSha256: string[] }).sqlSha256).toHaveLength(1);
+    expect(JSON.stringify(event)).not.toMatch(/SELECT|claimed_amount|'product'|governed query ran/);
+    // A completed run says how it stopped and where, and carries no refusal code; a sentence where a code should be is dropped.
+    const answered = answerAuditEvent({ id: 'run-ok', status: 'completed', trustState: 'governed', route: 'semantic_answer', stopReason: 'governed_semantic_answer', answerRefusalCode: 'no_data', diagnosticReceiptV9: { executed: { tier: 'semantic' } }, artifacts: [] }, { principal: null, actor: null });
+    expect(answered).toMatchObject({ stopReason: 'governed_semantic_answer', resolvedRoute: 'semantic_answer', tier: 'semantic' });
+    expect(answered).not.toHaveProperty('answerRefusalCode');
+    const prose = answerAuditEvent({ id: 'run-x', status: 'blocked', trustState: 'blocked', stopReason: 'no rows matched "product" on the warehouse', artifacts: [] }, { principal: null, actor: null });
+    expect(prose).not.toHaveProperty('stopReason');
+  });
+
   it('reports each run once, when it first finishes', () => {
     const events: DqlAuditEvent[] = [];
     const saved: unknown[] = [];

@@ -436,6 +436,8 @@ describe('a literal that is the field\'s own name is never a missing member (wal
     if (outcome.kind !== 'gap') return;
     expect(outcome.text).toContain('no rows matched the restriction on dimension:products.product_type');
     expect(outcome.text).not.toContain('member');
+    // The statement ran before the refusal: the host's audit fingerprints it on the refused answer too.
+    expect(outcome.executedSql).toBe("SELECT SUM(x) AS revenue FROM t WHERE product_type <> 'product type'");
   });
 
   it('drops a question-sourced eq/in filter whose value is the name or label of its field or of a group-by field', () => {

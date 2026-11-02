@@ -1729,6 +1729,8 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
   if (!executed.ok && executed.code === 'no_rows_matched') {
     receipt.refusals.push({ tier: candidate.tier, code: executed.code, message: executed.message, repairable: false } as unknown as PreparedRefusal);
     receipt.executed = { tier: candidate.tier, sqlFingerprint: fingerprintSql(candidate.sql), rowCount: 0, ms: Math.round(now() - executeStarted), proofs: executed.proofs };
+    // The statement ran: the host's audit fingerprints it on the refused answer as on an answered one.
+    const executedSql = candidate.sql;
     const nearest = (receipt.grounding ?? []).filter((note) => note.includes('nearest'));
     const advice = executed.cause?.kind === 'window'
       ? 'The data may end before that period; ask for the latest period it holds.'
@@ -1746,14 +1748,14 @@ export async function runAskPipeline(input: RunAskPipelineInput): Promise<Pipeli
       if (intent.time?.window) others.push(`the period ${intent.time.window.start.slice(0, 10)}..${intent.time.window.end.slice(0, 10)}`);
       const named = cause.literals.map((value) => JSON.stringify(value)).join(', ');
       const message = `${named} ${cause.literals.length === 1 ? 'is' : 'are'} on the warehouse, but no rows matched ${cause.literals.length === 1 ? 'it' : 'them'} together with ${others.length ? others.join('; ') : 'the other restrictions'}; the aggregate was empty`;
-      return { kind: 'gap', gap: 'not_retrieved', message, nearest, text: `The governed query ran, but ${message}. Loosen one of those restrictions, or ask for the values that field holds.`, receipt, intent, offerExploration: false };
+      return { kind: 'gap', gap: 'not_retrieved', message, nearest, text: `The governed query ran, but ${message}. Loosen one of those restrictions, or ask for the values that field holds.`, receipt, intent, offerExploration: false, executedSql };
     }
-    return { kind: 'gap', gap: 'not_retrieved', message: executed.message, nearest, text: `The governed query ran, but ${executed.message}.${nearest.length ? ` ${nearest.join('; ')}.` : ''} ${advice}`, receipt, intent, offerExploration: false };
+    return { kind: 'gap', gap: 'not_retrieved', message: executed.message, nearest, text: `The governed query ran, but ${executed.message}.${nearest.length ? ` ${nearest.join('; ')}.` : ''} ${advice}`, receipt, intent, offerExploration: false, executedSql };
   }
   if (!executed.ok) {
     receipt.refusals.push({ tier: candidate.tier, code: executed.code, message: executed.message, repairable: false } as unknown as PreparedRefusal);
     receipt.failure = { stage: 'execute', reason: executed.code, message: executed.message, ...(executed.warehouse ? { warehouse: executed.warehouse } : {}) };
-    return { kind: 'failed', stage: 'execute', message: executed.message, text: composeFailedText('execute', executed.message, executed.warehouse), receipt, intent };
+    return { kind: 'failed', stage: 'execute', message: executed.message, text: composeFailedText('execute', executed.message, executed.warehouse), receipt, intent, ...(executed.code === 'execution_failed' ? { executedSql: candidate.sql } : {}) };
   }
   const cacheKey = `${input.cacheScope ?? ''}|${intentExecutionFingerprint(intent)}`;
   if (input.preparationCache) {
