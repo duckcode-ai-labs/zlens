@@ -33,6 +33,13 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   sha256 is in `sqlSha256` on the refused row as on an answered one: the pipeline's gap and execute-failure
   outcomes carry `executedSql`, and the host puts it on the refused answer's artifact.
 
+### Import SQL answers a host refusal as the Block Studio Run does
+
+- **`POST /api/block-studio/imports/:id/candidates/:id/run` answers a host policy refusal as 403
+  `{ error, code: 'POLICY_DENIED' }`**, in the rule's words, as `/api/block-studio/run` has since #238, not as a
+  500 preview failure. The Import SQL page shows it beside the draft as **Not run** with that sentence, offers no
+  repair, and does not raise a page-wide error.
+
 ### A host reshapes the rail in its own words
 
 - **A host can relabel, hide and regroup ZLens's navigation rail.** The host UI
