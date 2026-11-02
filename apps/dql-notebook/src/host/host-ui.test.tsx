@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { AgentRun } from '../api/client';
 import { HostAnswerActions, HostAnswerStatusView, HostNoteBox, actionsForAnswer, answerActionInput, answerCanBeCertified, answerNeedsReview, answerRanSql } from '../components/agent/HostAnswerActions';
-import { HostPersonMenu } from '../components/shell/HostPersonMenu';
+import { HostPersonMenu, forgetThisPersonsAppFilters } from '../components/shell/HostPersonMenu';
 import { HostBanner } from '../components/shell/HostBanner';
 import { themes } from '../themes/notebook-theme';
 import { HOST_UNREACHABLE_AFTER_MS, HostConnecting, HostUiProvider, hostAllows, hostPageSrc, hostProposesCertification, hostReader, hostRefusal, hostUiFrom, navItemAllowed, pageSaysHosted, runHostAnswerAction, type HostUi, type HostUiState } from './host-ui';
@@ -102,6 +102,30 @@ describe('host UI (RFC 0010 HH-9)', () => {
     expect(html).toContain('Account: Priya Shah');
     expect(html).toContain('>PS<');
     expect(html).toContain('Production');
+  });
+
+  it('sign-out drops the App filters this browser remembered for the person, and nothing else (B7)', () => {
+    const entries = new Map<string, string>([
+      ['dql.apps.dashboard-filter-values.v1:claims-weekly:p:abc', '{"applied":{"region":"West"}}'],
+      ['dql.apps.dashboard-filter-values.v1:claims-weekly', '{"applied":{"region":"West"}}'],
+      ['dql.apps.dashboard-filter-memory.person.v1', 'abc'],
+      ['dql-theme', 'paper'],
+    ]);
+    vi.stubGlobal('window', {
+      localStorage: {
+        get length() { return entries.size; },
+        key: (index: number) => [...entries.keys()][index] ?? null,
+        getItem: (key: string) => entries.get(key) ?? null,
+        setItem: (key: string, value: string) => { entries.set(key, value); },
+        removeItem: (key: string) => { entries.delete(key); },
+      },
+    });
+    try {
+      forgetThisPersonsAppFilters();
+      expect([...entries.keys()]).toEqual(['dql-theme']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('offers the host answer actions only on answers that need review', () => {
