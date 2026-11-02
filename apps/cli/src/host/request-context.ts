@@ -477,6 +477,69 @@ export interface DqlHostUi {
    * person certifies here, and the screens say so.
    */
   certification?: 'proposes';
+  /**
+   * How the host reshapes ZLens's own navigation rail for this person: which
+   * of its items are relabelled or hidden, and how they are grouped. Items are
+   * ZLens's stable nav ids (`apps`, `ask`, `notebooks`, `blocks`, `lineage`,
+   * `modeling`, `ask-traces`, `source-control`, `settings`). What a person's
+   * capabilities hide stays hidden whatever the override says. Absent: the
+   * rail's own words and groups, as in the open-source product.
+   */
+  nav?: DqlHostNav;
+  /** The person's role in the host's words ("Steward"), drawn beside their name in the account menu. */
+  roleLabel?: string;
+}
+
+/** A host's reshaping of ZLens's navigation rail (HH-9). */
+export interface DqlHostNav {
+  /** Nav id → the label shown instead of ZLens's own ("blocks": "Blocks"). */
+  labels?: Record<string, string>;
+  /** Nav ids not drawn at all. */
+  hidden?: string[];
+  /**
+   * Replaces the rail's own grouping when present: each group lists nav ids in
+   * the order shown. A group with no visible item is not drawn. `action` is a
+   * same-origin host page drawn as the group's header link, opened inside ZLens.
+   */
+  groups?: Array<{ id: string; label: string; items: string[]; action?: { label: string; href: string } }>;
+}
+
+/** The nav ids the ZLens app knows; anything else in a host's override is dropped. */
+export const DQL_NAV_IDS = ['apps', 'ask', 'notebooks', 'blocks', 'lineage', 'modeling', 'ask-traces', 'source-control', 'settings'] as const;
+
+/** A host's nav override as ZLens passes it to the app: known ids only, plain labels, same-origin actions, or left out. */
+export function safeHostNav(value: unknown): DqlHostNav | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const known = (id: unknown): id is string => typeof id === 'string' && (DQL_NAV_IDS as readonly string[]).includes(id);
+  const plain = (text: unknown, max: number): string => (typeof text === 'string' ? text.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  const labels: Record<string, string> = {};
+  if (raw.labels && typeof raw.labels === 'object' && !Array.isArray(raw.labels)) {
+    for (const [id, label] of Object.entries(raw.labels as Record<string, unknown>)) {
+      const text = plain(label, 40);
+      if (known(id) && text) labels[id] = text;
+    }
+  }
+  const hidden = Array.isArray(raw.hidden) ? [...new Set(raw.hidden.filter(known))] : [];
+  const seen = new Set<string>();
+  const groups = (Array.isArray(raw.groups) ? raw.groups : [])
+    .filter((group): group is Record<string, unknown> => !!group && typeof group === 'object' && !Array.isArray(group))
+    .map((group) => {
+      const id = plain(group.id, 40);
+      const label = plain(group.label, 40);
+      const items = Array.isArray(group.items) ? group.items.filter((item): item is string => known(item) && !seen.has(item)) : [];
+      for (const item of items) seen.add(item);
+      const action = safeNextLink(group.action as DqlDecision['next']);
+      return { id, label, items, ...(action ? { action: { label: action.label.slice(0, 40), href: action.href } } : {}) };
+    })
+    .filter((group) => group.id && group.label)
+    .slice(0, 12);
+  const nav: DqlHostNav = {
+    ...(Object.keys(labels).length ? { labels } : {}),
+    ...(hidden.length ? { hidden } : {}),
+    ...(Array.isArray(raw.groups) && groups.length ? { groups } : {}),
+  };
+  return Object.keys(nav).length ? nav : undefined;
 }
 
 /** `appNotFound` as ZLens passes it on: plain text, a same-origin link only. */

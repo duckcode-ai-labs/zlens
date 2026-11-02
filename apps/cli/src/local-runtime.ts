@@ -893,7 +893,7 @@ import {
 import { prepareBlockInvocation } from './block-invocation.js';
 import { readPrivateConnections, redactConnections, resolveSecretReferences, storeConnectionSecrets } from './connection-secrets.js';
 import { connectionEnvironmentReferences } from './connection-env.js';
-import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPrincipal, currentRequestContext, destinationForRequest, hostActor, hostActorDisplayName, hostAllowedSources, hostFiguresDependOnReader, hostGitAuthor, anyHostedServer, hostModelProvider, HOST_IDENTITY_UNAVAILABLE, installHostPersonaSlots, processHostHooks, registerServerHooks, resolveHostPrincipal, resolveHostPrincipalOutcome, resultValuesMayReachModel, safeAppNotFound, safeHomeCards, safeHostBanner, safeNextLink, scopedHostHooks, setHostGitHooks, setHostModelHooks, setProcessToolHooks, currentToolHooks, unregisterServerHooks, withRequestContext, withServerScope, type DqlServerScope, type DqlFollow, type DqlHostHooks, type DqlRunStoreLike } from './host/request-context.js';
+import { authorizeHostRequest, currentHostGitHooks, currentHostHooks, currentPrincipal, currentRequestContext, destinationForRequest, hostActor, hostActorDisplayName, hostAllowedSources, hostFiguresDependOnReader, hostGitAuthor, anyHostedServer, hostModelProvider, HOST_IDENTITY_UNAVAILABLE, installHostPersonaSlots, processHostHooks, registerServerHooks, resolveHostPrincipal, resolveHostPrincipalOutcome, resultValuesMayReachModel, safeAppNotFound, safeHomeCards, safeHostBanner, safeHostNav, safeNextLink, scopedHostHooks, setHostGitHooks, setHostModelHooks, setProcessToolHooks, currentToolHooks, unregisterServerHooks, withRequestContext, withServerScope, type DqlServerScope, type DqlFollow, type DqlHostHooks, type DqlRunStoreLike } from './host/request-context.js';
 import { isRunPass, issueRunPass, redeemRunPass, revokeRunPass } from './host/schedule-runs.js';
 import { setDeliverySink } from './schedule/notifiers/index.js';
 import { routeAction, type DqlAction } from './host/route-actions.js';
@@ -44690,6 +44690,8 @@ export function safeHostUiExtras(answer: unknown): {
   signOutUrl?: string;
   environment?: string;
   banner?: ReturnType<typeof safeHostBanner>;
+  nav?: ReturnType<typeof safeHostNav>;
+  roleLabel?: string;
   links: Array<{ id: string; label: string; href: string; placement: 'menu' | 'nav'; badge?: number; icon?: string }>;
   answerActions: Array<{ id: string; label: string; url: string; description?: string; on: Array<'review' | 'unanswered' | 'answered'> }>;
 } {
@@ -44699,6 +44701,8 @@ export function safeHostUiExtras(answer: unknown): {
   const appNotFound = safeAppNotFound(extras.appNotFound);
   const banner = safeHostBanner(extras.banner);
   const environment = typeof extras.environment === 'string' ? extras.environment.replace(/\s+/g, ' ').trim().slice(0, 80) : '';
+  const nav = safeHostNav(extras.nav);
+  const roleLabel = typeof extras.roleLabel === 'string' ? extras.roleLabel.replace(/\s+/g, ' ').trim().slice(0, 40) : '';
   return {
     ...(extras.audience === 'reader' ? { audience: 'reader' as const } : {}),
     ...(appNotFound ? { appNotFound } : {}),
@@ -44707,6 +44711,9 @@ export function safeHostUiExtras(answer: unknown): {
     ...(sameOrigin(extras.signOutUrl) ? { signOutUrl: extras.signOutUrl } : {}),
     ...(environment ? { environment } : {}),
     ...(banner ? { banner } : {}),
+    // The host's reshaping of ZLens's own rail (known nav ids only) and the person's role in its words.
+    ...(nav ? { nav } : {}),
+    ...(roleLabel ? { roleLabel } : {}),
     // At most 12 links in DQL's rail and 12 in the person menu, each in the host's order.
     links: capHostLinksByPlacement(entries(extras.links).filter((link) => sameOrigin(link.href) && typeof link.label === 'string' && link.label.trim()), 12)
       .map((link) => {

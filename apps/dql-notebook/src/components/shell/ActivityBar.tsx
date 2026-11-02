@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { Activity, Boxes, ClipboardList, ExternalLink, GitPullRequest, Hammer, Inbox, MessageCircle, Settings, ShieldCheck, Users } from 'lucide-react';
-import { navItemAllowed, useHostPage, useHostUi } from '../../host/host-ui';
+import { applyHostNav, navItemAllowed, useHostPage, useHostUi, type NavId, type RailGroup } from '../../host/host-ui';
 import { Tooltip } from '@zlens/ui';
 import {
   FileText,
@@ -38,6 +38,15 @@ function persistExpanded(v: boolean) {
   } catch {
     // ignore quota / privacy-mode failures — it's a preference
   }
+}
+
+/** One of ZLens's own rail items: its stable nav id (what a host names), the panel it opens, and how it is drawn. */
+interface RailNavItem {
+  id: NavId;
+  key: SidebarPanel | 'ask' | 'modeling' | 'ask_observability';
+  title: string;
+  icon: React.ReactNode;
+  active: boolean;
 }
 
 interface RailItemProps {
@@ -180,45 +189,52 @@ export function ActivityBar() {
   // Grouped, labelled navigation: Insights (deliver/consume) → Build (analyst
   // create/explore) → Govern (configure/control). Home + Get Started moved into
   // the onboarding flow (Settings → Setup); the app lands on Apps.
-  const navGroups: Array<{
-    label: string;
-    items: Array<{ key: SidebarPanel | 'ask' | 'modeling' | 'ask_observability'; title: string; icon: React.ReactNode; active: boolean }>;
-  }> = [
+  // `id` is the item's stable nav id, the name a host uses to relabel, hide or
+  // regroup it (RFC 0010 HH-9 `nav`); `key` is the panel it opens.
+  const navGroups: Array<RailGroup<RailNavItem>> = [
     {
+      id: 'insights',
       label: 'Insights',
       items: [
-        { key: 'apps', title: 'Apps', icon: <Package size={16} strokeWidth={1.75} />, active: state.mainView === 'apps' },
-        { key: 'ask', title: 'Ask', icon: <MessageCircle size={16} strokeWidth={1.75} />, active: state.mainView === 'ask' },
+        { id: 'apps', key: 'apps', title: 'Apps', icon: <Package size={16} strokeWidth={1.75} />, active: state.mainView === 'apps' },
+        { id: 'ask', key: 'ask', title: 'Ask', icon: <MessageCircle size={16} strokeWidth={1.75} />, active: state.mainView === 'ask' },
       ],
     },
     {
+      id: 'build',
       label: 'Build',
       items: [
-        { key: 'files', title: 'Notebooks', icon: <FileText size={16} strokeWidth={1.75} />, active: state.sidebarPanel === 'files' && state.sidebarOpen },
-        { key: 'block_library', title: 'Saved queries', icon: <BlockIcon size={16} />, active: state.sidebarPanel === 'block_library' && state.sidebarOpen },
-        { key: 'lineage', title: 'Lineage', icon: <LineageNodeIcon size={16} />, active: state.mainView === 'lineage' || state.mainView === 'lineage_detail' },
+        { id: 'notebooks', key: 'files', title: 'Notebooks', icon: <FileText size={16} strokeWidth={1.75} />, active: state.sidebarPanel === 'files' && state.sidebarOpen },
+        { id: 'blocks', key: 'block_library', title: 'Saved queries', icon: <BlockIcon size={16} />, active: state.sidebarPanel === 'block_library' && state.sidebarOpen },
+        { id: 'lineage', key: 'lineage', title: 'Lineage', icon: <LineageNodeIcon size={16} />, active: state.mainView === 'lineage' || state.mainView === 'lineage_detail' },
       ],
     },
     {
+      id: 'govern',
       label: 'Govern',
       items: [
         // The workspace behind this item is the Modeling canvas, so it says so.
         // "Domains" sent people looking for a domain list and left Modeling
         // undiscoverable — the word only appeared after you already arrived.
-        { key: 'domains', title: 'Modeling', icon: <Boxes size={16} strokeWidth={1.75} />, active: state.mainView === 'domains' || state.mainView === 'modeling' || state.mainView === 'skills' },
-        { key: 'ask_observability', title: 'Ask observability', icon: <Activity size={16} strokeWidth={1.75} />, active: state.mainView === 'ask_observability' || state.mainView === 'ask_trace' },
-        { key: 'git', title: 'Source control', icon: <GitBranch size={16} strokeWidth={1.75} />, active: state.mainView === 'git' },
-        { key: 'settings', title: 'Settings', icon: <Settings size={16} strokeWidth={1.75} />, active: state.mainView === 'settings' || state.mainView === 'connection' },
+        { id: 'modeling', key: 'domains', title: 'Modeling', icon: <Boxes size={16} strokeWidth={1.75} />, active: state.mainView === 'domains' || state.mainView === 'modeling' || state.mainView === 'skills' },
+        { id: 'ask-traces', key: 'ask_observability', title: 'Ask observability', icon: <Activity size={16} strokeWidth={1.75} />, active: state.mainView === 'ask_observability' || state.mainView === 'ask_trace' },
+        { id: 'source-control', key: 'git', title: 'Source control', icon: <GitBranch size={16} strokeWidth={1.75} />, active: state.mainView === 'git' },
+        { id: 'settings', key: 'settings', title: 'Settings', icon: <Settings size={16} strokeWidth={1.75} />, active: state.mainView === 'settings' || state.mainView === 'connection' },
       ],
     },
   ];
 
-  // RFC 0010 HH-9: with a host, only what this person's role can use, plus
-  // the host's own pages. Without a host nothing changes.
-  const visibleNavGroups = navGroups
-    .map((group) => ({ ...group, items: group.items.filter((item) => navItemAllowed(hostUi, String(item.key))) }))
-    .filter((group) => group.items.length > 0);
+  // RFC 0010 HH-9: with a host, only what this person's role can use, reshaped
+  // as the host asks (its labels, hidden items and groups), plus the host's own
+  // pages. Without a host nothing changes.
+  const visibleNavGroups = applyHostNav(hostUi, navGroups, (item) => navItemAllowed(hostUi, String(item.key)));
   const hostNavLinks = hostUi.host ? hostUi.links.filter((link) => link.placement === 'nav') : [];
+  const groupPageId = (groupId: string) => `nav-group:${groupId}`;
+  const openGroupAction = (group: RailGroup<RailNavItem>) => {
+    if (!group.action) return;
+    hostPage.openPage({ id: groupPageId(group.id), label: group.action.label, href: group.action.href });
+    dispatch({ type: 'SET_MAIN_VIEW', view: 'host_page' });
+  };
 
   const bottomItems: Array<{
     key: string;
@@ -295,14 +311,36 @@ export function ActivityBar() {
       </div>
 
       {visibleNavGroups.map((group, groupIndex) => (
-        <React.Fragment key={group.label}>
+        <React.Fragment key={group.id}>
           {groupIndex > 0 ? (
             <div style={{ height: 1, margin: expanded ? '8px 10px 2px' : '8px 12px', background: t.headerBorder }} />
           ) : null}
           {expanded ? (
-            <div style={{ fontSize: 11, fontWeight: 600, color: t.textMuted, letterSpacing: '0.04em', padding: '4px 12px 2px' }}>
-              {group.label}
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 6, padding: '4px 12px 2px' }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: t.textMuted, letterSpacing: '0.04em' }}>{group.label}</span>
+              {group.action ? (
+                // The host's page for this group (e.g. "My draft spaces"), opened inside ZLens like its other links.
+                <button
+                  type="button"
+                  data-testid={`nav-group-action-${group.id}`}
+                  aria-label={group.action.label}
+                  onClick={() => openGroupAction(group)}
+                  style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', fontFamily: t.font, fontSize: 11, fontWeight: 500, color: state.mainView === 'host_page' && hostPage.page?.id === groupPageId(group.id) ? t.accent : t.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
+                >
+                  {group.action.label}
+                </button>
+              ) : null}
             </div>
+          ) : group.action ? (
+            // Collapsed: no header to hang the link on, so it is a rail item of its own (the tooltip names it).
+            <RailItem
+              title={group.action.label}
+              icon={<ExternalLink size={16} strokeWidth={1.75} />}
+              active={state.mainView === 'host_page' && hostPage.page?.id === groupPageId(group.id)}
+              expanded={expanded}
+              onClick={() => openGroupAction(group)}
+              t={t}
+            />
           ) : null}
           {group.items.map((item) => (
             <RailItem

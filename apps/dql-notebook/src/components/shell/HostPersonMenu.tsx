@@ -15,9 +15,9 @@ export function forgetThisPersonsAppFilters(): void {
  * The signed-in person, with the host's links and sign-out (RFC 0010 HH-9).
  * Renders nothing without a host.
  */
-export function HostPersonMenu() {
+export function HostPersonMenu({ defaultOpen = false }: { defaultOpen?: boolean } = {}) {
   const hostUi = useHostUi();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -46,7 +46,7 @@ export function HostPersonMenu() {
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label={`Account: ${name}`}
-        title={name}
+        title={hostUi.roleLabel ? `${name} · ${hostUi.roleLabel}` : name}
         onClick={() => setOpen((value) => !value)}
         style={{ width: 28, height: 28, borderRadius: 999, border: 0, background: 'var(--accent)', color: 'var(--accent-fg, #fff)', fontWeight: 600, fontSize: 11, cursor: 'pointer' }}
       >
@@ -55,7 +55,15 @@ export function HostPersonMenu() {
       {open ? (
         <div role="menu" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', minWidth: 220, background: 'var(--bg-2)', border: '1px solid var(--border-default)', borderRadius: 8, boxShadow: '0 8px 24px rgba(0,0,0,0.18)', padding: 4, zIndex: 1000, display: 'grid', gap: 1 }}>
           <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-subtle)', marginBottom: 4, display: 'grid' }}>
-            <strong style={{ fontSize: 13, color: 'var(--text-primary)' }}>{name}</strong>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <strong style={{ fontSize: 13, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</strong>
+              {hostUi.roleLabel ? (
+                // The person's role in the host's words (RFC 0010 HH-9 `roleLabel`), e.g. "Steward".
+                <span data-testid="host-role-label" style={{ font: '500 11px/1 var(--font-sans, inherit)', padding: '3px 7px', borderRadius: 999, background: 'var(--accent-dim)', color: 'color-mix(in srgb, var(--accent) 80%, var(--text-primary))', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                  {hostUi.roleLabel}
+                </span>
+              ) : null}
+            </span>
             {hostUi.person.email && hostUi.person.email !== name ? <span style={{ fontSize: 12, color: 'var(--text-tertiary)' }}>{hostUi.person.email}</span> : null}
           </div>
           {menuLinks.map((link) => (

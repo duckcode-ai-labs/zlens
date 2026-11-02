@@ -142,6 +142,12 @@ export interface DqlHostHooks {
     audience?: 'reader';                                                         // reader words on stakeholder screens
     appNotFound?: { message: string; next?: { label: string; href: string } };  // an App link this host cannot open here
     certification?: 'proposes';                                                  // certifying here proposes; the host certifies through review, so screens say "propose" and a certification made on the served branch reads as a proposal
+    nav?: {                                                                      // reshapes ZLens's own rail by its stable nav ids (apps, ask, notebooks, blocks, lineage, modeling, ask-traces, source-control, settings); never shows what capabilities hide
+      labels?: Record<string, string>;                                           // nav id → label shown ("blocks": "Blocks")
+      hidden?: string[];                                                         // nav ids not drawn
+      groups?: Array<{ id: string; label: string; items: string[]; action?: { label: string; href: string } }>; // replaces the rail's groups; `action` is a same-origin page drawn as the group's header link
+    };
+    roleLabel?: string;                                                          // the person's role in the host's words, beside their name in the account menu
   }>;
   homeCards?(principal: DqlPrincipal): Promise<DqlHomeCard[]>;
   follows?: { list(principal: DqlPrincipal): Promise<DqlFollow[]>; set(principal: DqlPrincipal, follow: DqlFollow, following: boolean): Promise<void> };
