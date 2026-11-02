@@ -1013,6 +1013,79 @@ describe('the default database may be left out where a connection holds one data
   });
 });
 
+describe('every table a statement reads has to be inspected', () => {
+  const inspected = (...relations: string[]) => relations.map((relation) => ({ relation, columns: [{ name: 'orderdate' }, { name: 'orderid' }, { name: 'name' }, { name: 'items' }] }));
+  const check = (sql: string, dialect = 'postgres', schema = inspected('shop.sales.orders')) => validateSqlAgainstLocalContext(sql, undefined, { dialect, runtimeSchema: schema, runtimeSchemaExact: true, enforceGenerationReadiness: false } as never);
+
+  it.each([
+    ['EXTRACT', 'SELECT EXTRACT(YEAR FROM o.orderdate) AS y, COUNT(*) FROM shop.sales.orders o GROUP BY 1'],
+    ['TRIM with a parenthesis', "SELECT TRIM(BOTH ')' FROM o.name) AS p FROM shop.sales.orders o"],
+    ['IS DISTINCT FROM', 'SELECT o.orderid FROM shop.sales.orders o WHERE o.name IS DISTINCT FROM o.orderid'],
+    ['a comma join of one table', 'SELECT a.orderid FROM shop.sales.orders a, shop.sales.orders b'],
+    ['a CTE', 'WITH recent AS (SELECT orderid FROM shop.sales.orders) SELECT r.orderid FROM shop.sales.orders o JOIN recent r ON r.orderid = o.orderid'],
+  ])('%s reads only the inspected table', (_, sql) => {
+    expect(check(sql)).toMatchObject({ ok: true });
+  });
+
+  it.each([
+    ['a comma join', 'SELECT o.orderid, s.pay FROM shop.sales.orders o, shop.secret.salaries s'],
+    ['a fully quoted comma join', 'SELECT 1 FROM "shop"."sales"."orders" o, "shop"."secret"."salaries" s'],
+    ['a comma join after a derived table', 'SELECT 1 FROM (SELECT 1 AS a) x, shop.secret.salaries s, shop.sales.orders o'],
+    ['a bare name beside a qualified one', 'SELECT 1 FROM shop.sales.orders o JOIN salaries s ON s.id = o.orderid'],
+    ['a table of the same name elsewhere', 'SELECT 1 FROM shop.sales.orders o, other.sales.orders x'],
+    ['spaces around the dots', 'SELECT 1 FROM shop.sales.orders o JOIN shop . secret . salaries s ON s.id = o.orderid'],
+    ['a string that looks like a call', "SELECT 'trim(' AS tag, s.pay FROM shop.secret.salaries s"],
+    ['a block comment', 'SELECT 1 /* trim( */ FROM shop.secret.salaries'],
+    ['a line comment', 'SELECT 1 -- extract(year\n FROM shop.secret.salaries'],
+    ['a quoted alias', 'SELECT 1 AS "trim(" FROM shop.secret.salaries'],
+    ['a subquery in a call', 'SELECT EXTRACT(YEAR FROM (SELECT MAX(s.d) FROM shop.secret.salaries s)) AS y FROM shop.sales.orders o'],
+  ])('%s cannot reach a table no one inspected', (_, sql) => {
+    expect(check(sql).ok).toBe(false);
+  });
+
+  it.each([
+    ['an alias spelled like a schema', 'SELECT 1 FROM shop.sales.orders hr JOIN hr.salaries x ON x.id = hr.orderid'],
+    ['a table spelled like an alias', 'SELECT 1 FROM shop.sales.orders salaries, salaries.payroll p'],
+    ['a same-named CTE in a string', "SELECT 1 FROM shop.sales.orders o JOIN salaries s ON s.id = o.orderid WHERE o.name <> 'WITH salaries AS ('"],
+    ['a CTE named with a dot', 'WITH "shop.secret.salaries" AS (SELECT 1 AS id) SELECT 1 FROM shop.sales.orders o, shop.secret.salaries s'],
+    ['a WINDOW clause', 'WITH k AS (SELECT 1 AS id) SELECT 1 FROM shop.sales.orders o JOIN salaries s ON s.id = o.orderid WINDOW salaries AS (PARTITION BY o.orderid)'],
+    ['a name in another script', 'SELECT 1 FROM shop.sales.orders o JOIN 工资 s ON s.id = o.orderid'],
+    ['a field-like name on an engine without that form', 'SELECT 1 FROM shop.sales.orders hr, hr.name s'],
+  ])('%s cannot excuse a table', (_, sql) => {
+    expect(check(sql).ok).toBe(false);
+  });
+
+  it('names that differ only by case are two tables on a quote-sensitive engine', () => {
+    expect(check('SELECT 1 FROM shop."Sales"."orders" o, shop."sales"."orders" s', 'postgres', inspected('shop."Sales"."orders"')).ok).toBe(false);
+  });
+
+  it('a column of a joined alias is not a table', () => {
+    const schema = inspected('proj.ds.orders');
+    expect(check('SELECT li.sku FROM proj.ds.orders o, o.items AS li', 'bigquery', schema).ok).toBe(true);
+    expect(check('SELECT li.sku FROM proj.ds.orders o, o.items AS li', 'redshift', schema).ok).toBe(true);
+    expect(check('SELECT li.sku FROM proj.ds.orders, orders.items AS li', 'bigquery', schema).ok).toBe(true);
+  });
+
+  it('a grammar that cannot read a statement is not the last word', () => {
+    expect(check('SELECT o.orderid FROM shop.sales.orders o', 'sqlite').ok).toBe(true);
+    expect(check('SELECT o.orderid FROM shop.sales.orders o', 'databricks').ok).toBe(true);
+    expect(check('SELECT o.orderid FROM shop.sales.orders o QUALIFY ROW_NUMBER() OVER (ORDER BY o.orderid) = 1', 'duckdb').ok).toBe(true);
+    expect(check('SELECT o.orderid FROM shop.sales.orders o, shop.secret.salaries s', 'sqlite').ok).toBe(false);
+    expect(check('SELECT o.orderid FROM shop.sales.orders o, shop.secret.salaries s', 'databricks').ok).toBe(false);
+    expect(check('SELECT 1 FROM shop.sales.orders o, shop.secret.salaries s QUALIFY ROW_NUMBER() OVER (ORDER BY o.orderid) = 1', 'duckdb').ok).toBe(false);
+  });
+
+  it('a statement no grammar can read is not proved', () => {
+    expect(check('SELECT FROM WHERE shop.sales.orders ((').ok).toBe(false);
+  });
+
+  it('a quoted name with a dot in it stays one exact table', () => {
+    const schema = inspected('"Db.With.Dot"."Public"."Events"');
+    expect(check('SELECT 1 FROM "Db.With.Dot"."Public"."Events" e', 'snowflake', schema).ok).toBe(true);
+    expect(check('SELECT 1 FROM "Db.With.Dot"."Public"."Events" e, "Db"."Secret"."Pay" p', 'snowflake', schema).ok).toBe(false);
+  });
+});
+
 describe('the frozen-SQL check and the drafted-SQL check read inspected relations the same way', () => {
   const schema = (...relations: string[]) => relations.map((relation) => ({ relation }));
   it('accepts main.claim for an inspected acme_insurance.main.claim on DuckDB, quoted or not', () => {

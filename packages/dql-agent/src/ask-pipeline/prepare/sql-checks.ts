@@ -22,6 +22,17 @@ const NOT_VALUES = new Set([
   'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday',
 ]);
 
+/** An instruction that opens a clause, not a value: "count them by name Return only those fields". */
+const INSTRUCTION_WORDS = new Set(['return', 'include', 'exclude', 'display', 'sort', 'order', 'group', 'rank', 'filter', 'limit', 'use', 'select', 'calculate', 'compute', 'count', 'sum', 'average', 'break', 'split', 'only', 'please', 'then', 'also']);
+/** After one of these a word sits where a value goes, even an instruction word: "orders marked Return". */
+const BEFORE_A_VALUE = new Set(['for', 'in', 'at', 'of', 'from', 'by', 'with', 'to', 'on', 'is', 'are', 'named', 'called', 'marked', 'like', 'vs', 'versus', 'than', 'and', 'or', 'status', 'type', 'kind', 'category', 'tag', 'label', 'code']);
+
+function opensAClause(tokens: string[], index: number): boolean {
+  if (BEFORE_A_VALUE.has(tokens[index - 1]!.toLowerCase())) return false;
+  const next = tokens.slice(index + 1, index + 4);
+  return next.length === 3 && next.every((word) => /^[a-z]/.test(word) && !['and', 'or'].includes(word));
+}
+
 function properNouns(text: string): string[] {
   const found: string[] = [];
   for (const sentence of text.split(/[.?!\n]+/)) {
@@ -33,6 +44,7 @@ function properNouns(text: string): string[] {
       // names or acronyms the user typed, not values the data must hold.
       if (!/^[A-Z][a-z][A-Za-z0-9&-]*$/.test(word)) return;
       if (NOT_VALUES.has(word.toLowerCase())) return;
+      if (INSTRUCTION_WORDS.has(word.toLowerCase()) && opensAClause(tokens, index)) return;
       found.push(word);
     });
   }
@@ -397,6 +409,19 @@ export function aggregatesColumnOf(sql: string, qualifier: string): boolean {
 /** Whether a statement aggregates rows, where a join that repeats keys on both sides counts a row more than once. */
 export function aggregatesRows(sql: string): boolean {
   return /\b(count|sum|avg|min|max)\s*\(|\bgroup\s+by\b/i.test(sql);
+}
+
+/**
+ * The drafter is told never to return more rows than the host shows, so it
+ * writes that LIMIT on a plain list. Left there, exactly that many rows come
+ * back and nothing can tell there were more. A LIMIT of that size comes off
+ * unless the question asks for that many, so the host's own guard sees the rest.
+ * A wrong guess is harmless: the same first rows come back, marked as bounded.
+ */
+export function withoutDrafterCap(sql: string, maxRows: number, asked: string): string {
+  const askedFor = new RegExp(`\\b(?:top|first|last|bottom|limit(?:ed)?(?:\\s+(?:to|of))?|highest|lowest|best|worst)\\b(?:\\s+\\w+){0,2}\\s+${maxRows}\\b|\\b(?:show|list|give|get|return|fetch)(?:\\s+(?:me|us))?(?:\\s+the)?\\s+${maxRows}\\b`, 'i');
+  if (askedFor.test(asked)) return sql;
+  return sql.trim().replace(/;\s*$/, '').replace(new RegExp(`\\s+limit\\s+${maxRows}\\s*$`, 'i'), '');
 }
 
 /** A statement with a top-level row limit: the one it has, or one added. */

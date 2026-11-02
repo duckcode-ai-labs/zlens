@@ -1,4 +1,4 @@
-import { analyzeSqlReferences } from '@zlens/core';
+import { analyzeSqlReferences, blankStringsAndComments, maskExpressionFromKeywords } from '@zlens/core';
 import type {
   LocalContextPack,
   MetadataAgentIntent,
@@ -192,9 +192,67 @@ function sqlForReferenceParsing(sql: string): { sql: string; positionalParameter
  * and case inside quoted parts. This supplements, never replaces, the general
  * parser for the exact-target check and emitted receipt references.
  */
+/**
+ * Every relation a statement reads: the names as spelled, which keep a quoted
+ * name exact, and everything else the parser found, so a comma join or a bare
+ * name beside a qualified one has to pass too. On the engines that allow it,
+ * `alias.field` is a read of a column only when the aliased relation really
+ * has that column.
+ */
+/**
+ * One engine's grammar not reading a statement says nothing about the statement:
+ * SQLite's and Hive's have no three-part names, and neither has QUALIFY. What it
+ * reads is proved by any grammar that can read it.
+ */
+const OTHER_GRAMMARS = ['postgresql', 'snowflake', 'bigquery', 'mysql', 'mssql'];
+
+function analyzedByAnyGrammar(sql: string, dialect: string | undefined): ReturnType<typeof analyzeSqlReferences> {
+  const own = analyzeSqlReferences(sql, dialect);
+  if (own.parsed || !dialect) return own;
+  for (const grammar of OTHER_GRAMMARS) {
+    const other = analyzeSqlReferences(sql, grammar);
+    if (other.parsed) return other;
+  }
+  return own;
+}
+
+/** Engines where `FROM orders o, o.items` reads a column. Elsewhere `o.items` is a table in a schema called o. */
+const ALIAS_FIELD_IN_FROM = new Set(['bigquery', 'redshift']);
+
+function relationsReadBy(
+  spelled: string[],
+  analysis: ReturnType<typeof analyzeSqlReferences>,
+  runtimeSchema: RuntimeSchemaTable[] | undefined,
+  dialect: string | undefined,
+): string[] {
+  if (spelled.length === 0) return analysis.tables;
+  // Case kept: on a quote-sensitive engine `main."Orders"` and `main."orders"` are two tables.
+  const plain = (name: string) => parsePhysicalIdentifier(name).map((part) => part.value).join('.');
+  const known = new Set(spelled.map(plain));
+  const aliases = new Map(Object.entries(analysis.aliasToRelation).map(([alias, relation]) => [alias.toLowerCase(), relation]));
+  for (const relation of spelled) aliases.set(parsePhysicalIdentifier(relation).at(-1)!.value.toLowerCase(), relation);
+  const readsAColumn = (parts: Array<{ value: string }>): boolean => {
+    if (parts.length !== 2 || !ALIAS_FIELD_IN_FROM.has(dialect?.trim().toLowerCase() ?? '')) return false;
+    const relation = aliases.get(parts[0]!.value.toLowerCase());
+    if (!relation) return false;
+    const table = runtimeSchema?.find((item) => inspectedRelationMatches(relation, [item], dialect));
+    return (table?.columns ?? []).some((column) => column.name.toLowerCase() === parts[1]!.value.toLowerCase());
+  };
+  return [...spelled, ...analysis.tables.filter((table) => {
+    // A dotted quoted name leaves a fragment of quotes and dots behind in the parser.
+    if (!/[\p{L}\p{N}_]/u.test(table)) return false;
+    return !known.has(plain(table)) && !readsAColumn(parsePhysicalIdentifier(table));
+  })];
+}
+
+/** The SQL with strings, comments and the FROM of an expression gone: what's left names tables. */
+export function sqlForRelationScan(sql: string): string {
+  return maskExpressionFromKeywords(blankStringsAndComments(sql));
+}
+
 function physicalRelationsInSql(sql: string): string[] {
   const byIdentity = new Map<string, string>();
-  for (const match of sql.matchAll(SQL_PHYSICAL_RELATION)) {
+  for (const match of sqlForRelationScan(sql).matchAll(SQL_PHYSICAL_RELATION)) {
     const relation = match[1]?.trim();
     if (!relation) continue;
     const parts = parsePhysicalIdentifier(relation);
@@ -316,10 +374,10 @@ export function validateSqlAgainstLocalContext(
       aggregationSafetyProof,
     };
   }
-  const analysis = analyzeSqlReferences(parserSql.sql, options.dialect);
+  const analysis = analyzedByAnyGrammar(parserSql.sql, options.dialect);
   // Prefer the quote-aware relation spelling where it is available. The core
   // parser remains the source for aliases, columns and CTE scopes.
-  const referencedRelations = quotedPhysicalRelations.length > 0 ? quotedPhysicalRelations : analysis.tables;
+  const referencedRelations = relationsReadBy(quotedPhysicalRelations, analysis, options.runtimeSchema, options.dialect);
   const referencedColumns = analysis.columns.map((column) => ({
     relation: column.relation,
     column: column.column,

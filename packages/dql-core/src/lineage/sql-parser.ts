@@ -935,26 +935,75 @@ function collectAggregateArgumentColumnRefs(
 }
 
 /** Extract CTE names from WITH ... AS (...) patterns */
-function extractCteNames(sql: string): string[] {
-  const ctes: string[] = [];
-  // Match WITH ... AS and recursive WITH
-  const withPattern = /\bWITH\s+(?:RECURSIVE\s+)?/gi;
-  const withMatch = withPattern.exec(sql);
-  if (!withMatch) return ctes;
+const CTE_IDENTIFIER = '"(?:[^"]|"")+"|`[^`]+`|\\[[^\\]]+\\]|[\\p{L}_][\\p{L}\\p{N}_$]*';
+const CTE_HEAD = new RegExp(`\\s*(${CTE_IDENTIFIER})\\s*(?:\\([^()]*\\)\\s*)?AS\\s*(?:(?:NOT\\s+)?MATERIALIZED\\s*)?\\(`, 'iuy');
 
-  // From the WITH keyword, extract comma-separated CTE definitions
-  const afterWith = sql.slice(withMatch.index + withMatch[0].length);
-  // AGT-005 / E2E-008: generated SQL commonly quotes internal aliases (for example Snowflake
-  // emits `WITH "subq_2" AS (...)`). Treat every supported identifier quoting
-  // style as a CTE name; otherwise the alias is later mistaken for a physical
-  // warehouse relation and the validation probe tries to query it directly.
-  const cteDefPattern = /("(?:[^"]|"")+"|`[^`]+`|\[[^\]]+\]|[a-zA-Z_][a-zA-Z0-9_$]*)\s+AS\s*\(/gi;
-
-  for (const match of afterWith.matchAll(cteDefPattern)) {
-    const name = normalizeSqlIdentifier(match[1]);
-    if (name) ctes.push(name);
+/** Strings and comments blanked in one pass, so neither can hide the other. */
+export function blankStringsAndComments(sql: string): string {
+  let out = '';
+  let index = 0;
+  while (index < sql.length) {
+    const char = sql[index]!;
+    let end = index;
+    if (char === "'") {
+      end = index + 1;
+      while (end < sql.length && (sql[end] !== "'" || sql[end + 1] === "'")) end += sql[end] === "'" ? 2 : 1;
+      end += 1;
+    } else if (char === '-' && sql[index + 1] === '-') {
+      end = sql.indexOf('\n', index);
+      if (end < 0) end = sql.length;
+    } else if (char === '/' && sql[index + 1] === '*') {
+      end = sql.indexOf('*/', index + 2);
+      end = end < 0 ? sql.length : end + 2;
+    } else if (char === '"' || char === '`') {
+      const close = sql.indexOf(char, index + 1);
+      const stop = close < 0 ? sql.length : close + 1;
+      out += sql.slice(index, stop);
+      index = stop;
+      continue;
+    } else {
+      out += char;
+      index += 1;
+      continue;
+    }
+    out += ' '.repeat(Math.min(end, sql.length) - index);
+    index = Math.min(end, sql.length);
   }
+  return out;
+}
 
+/**
+ * The names a statement's WITH lists define. A name counts only where it heads
+ * a list entry: `x AS (` elsewhere (a WINDOW clause, a string) is not a CTE, and
+ * a statement must not be able to excuse a real table by spelling one. A dotted
+ * name is never a CTE.
+ */
+function extractCteNames(sql: string): string[] {
+  const clean = blankStringsAndComments(sql);
+  const ctes: string[] = [];
+  for (const withMatch of clean.matchAll(/\bWITH\s+(?:RECURSIVE\s+)?/gi)) {
+    let at = withMatch.index + withMatch[0].length;
+    for (;;) {
+      CTE_HEAD.lastIndex = at;
+      const head = CTE_HEAD.exec(clean);
+      if (!head) break;
+      const name = normalizeSqlIdentifier(head[1]!);
+      if (name && !name.includes('.')) ctes.push(name);
+      // Past the entry's own parentheses: a comma means another entry.
+      let depth = 1;
+      at = head.index + head[0].length;
+      while (at < clean.length && depth > 0) {
+        if (clean[at] === '(') depth += 1;
+        else if (clean[at] === ')') depth -= 1;
+        at += 1;
+      }
+      const next = /\s*,/y;
+      next.lastIndex = at;
+      const comma = next.exec(clean);
+      if (!comma) break;
+      at = next.lastIndex;
+    }
+  }
   return ctes;
 }
 

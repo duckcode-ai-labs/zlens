@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { aggregatesRows, appliedConditions, groupedColumns, joinKeyGroups, joinKeyPairs, questionProper, mentionsColumn, missingRequiredFilters, missingStatedValues, requiredFilterFromText, statedValues, withRowGuard, aggregatesColumnOf } from './sql-checks.js';
+import { withoutDrafterCap, aggregatesRows, appliedConditions, groupedColumns, joinKeyGroups, joinKeyPairs, questionProper, mentionsColumn, missingRequiredFilters, missingStatedValues, requiredFilterFromText, statedValues, withRowGuard, aggregatesColumnOf } from './sql-checks.js';
 
 describe('the checks an AI-drafted statement passes before it runs', () => {
   const office = 'Lost opportunities count ,Lost Amount by month for fiscal year FY26 and competitor involved is Splunk';
@@ -13,6 +13,33 @@ describe('the checks an AI-drafted statement passes before it runs', () => {
     const reading = { filters: [{ ref: 'dimension:orders.has_refund', op: 'eq', values: ['true'] }, { ref: 'dimension:orders.status', op: 'eq', values: ['shipped'] }], measures: [], unresolved: [] } as unknown as Parameters<typeof statedValues>[1];
     expect(statedValues('What is the average order size of refunded orders?', reading)).toEqual([{ value: 'shipped', kind: 'text' }]);
     expect(statedValues('how many opportunities did we lose to splunk', { version: 1, kind: 'analytics', reading: 'x', measures: [], groupBy: [], display: [], filters: [{ ref: 'column:a.b.c', op: 'eq', values: ['Splunk'], source: 'question' }], unresolved: [], provenance: {}, expectedShape: 'scalar' } as never)).toEqual([{ value: 'Splunk', kind: 'text' }]);
+  });
+
+  it('a LIMIT of the size the drafter is told to keep to comes off unless the question asked for it', () => {
+    expect(withoutDrafterCap('SELECT id FROM t ORDER BY id\nLIMIT 500;', 500, 'list the invoices')).toBe('SELECT id FROM t ORDER BY id');
+    expect(withoutDrafterCap('SELECT id FROM t LIMIT 500', 500, 'top 500 customers')).toBe('SELECT id FROM t LIMIT 500');
+    expect(withoutDrafterCap('SELECT id FROM t LIMIT 500', 500, 'the first 500 orders')).toBe('SELECT id FROM t LIMIT 500');
+    expect(withoutDrafterCap('SELECT id FROM t LIMIT 100', 500, 'list the invoices')).toBe('SELECT id FROM t LIMIT 100');
+    expect(withoutDrafterCap('SELECT id FROM t LIMIT 500 OFFSET 10', 500, 'list the invoices')).toBe('SELECT id FROM t LIMIT 500 OFFSET 10');
+    // A number that is not a row count does not keep the cap.
+    expect(withoutDrafterCap('SELECT id FROM t LIMIT 500', 500, 'invoices over 500 dollars')).toBe('SELECT id FROM t');
+    // T-SQL has no LIMIT: FETCH is left alone, or the guard would add one it can't run.
+    expect(withoutDrafterCap('SELECT id FROM t ORDER BY id OFFSET 0 ROWS FETCH NEXT 500 ROWS ONLY', 500, 'list the invoices')).toBe('SELECT id FROM t ORDER BY id OFFSET 0 ROWS FETCH NEXT 500 ROWS ONLY');
+    expect(withoutDrafterCap('SELECT id FROM t LIMIT 500', 500, 'show the 500 biggest')).toBe('SELECT id FROM t LIMIT 500');
+    // Only the statement's own last LIMIT: a subquery's stays.
+    expect(withoutDrafterCap('SELECT * FROM (SELECT id FROM t LIMIT 500) x', 500, 'list')).toBe('SELECT * FROM (SELECT id FROM t LIMIT 500) x');
+  });
+
+  it('an instruction word is not a value; every other capitalised word still is', () => {
+    expect(statedValues('count customers by state name Return only those fields')).toEqual([]);
+    expect(statedValues('count orders marked Return')).toEqual([{ value: 'Return', kind: 'text' }]);
+    expect(statedValues('invoices with status Return')).toEqual([{ value: 'Return', kind: 'text' }]);
+    expect(statedValues('invoices with status Return or Exchange').map((item) => item.value)).toEqual(['Return', 'Exchange']);
+    expect(statedValues('invoices Return last month')).toEqual([{ value: 'Return', kind: 'text' }]);
+    for (const question of ['Total excluding Contoso', 'How many Contoso orders', 'orders in the Contoso account', 'pay via Contoso']) {
+      expect(statedValues(question).map((item) => item.value), question).toEqual(['Contoso']);
+    }
+    expect(statedValues('Sales for Acme, Contoso, Fabrikam').map((item) => item.value)).toEqual(['Acme', 'Contoso', 'Fabrikam']);
   });
 
   it('a statement that leaves a stated value out is caught; a fiscal year stored as its digits or its calendar years passes', () => {

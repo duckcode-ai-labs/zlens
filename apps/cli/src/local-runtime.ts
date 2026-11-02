@@ -7684,6 +7684,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // The column value profile reaches the drafter only while the project opts
     // in and never under a host, whose policies decide what each reader may see.
     valueProfileAllowed: () => valueProfileAllowed(loadProjectConfig(projectRoot), Boolean(hostHooks)),
+    unreadableSqlRefused: Boolean(hostHooks),
     // The result review is opt-in, read at every question like the value profile.
     resultReviewConfigured: () => resolveResultReviewMode(loadProjectConfig(projectRoot)) === 'on',
     // The engine the semantic candidate will compile on, decided the same

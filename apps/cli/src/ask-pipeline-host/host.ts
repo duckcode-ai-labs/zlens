@@ -64,6 +64,7 @@ import {
   aggregatesColumnOf,
   missingRequiredFilters,
   missingStatedValues,
+  withoutDrafterCap,
   requiredFilterFromText,
   statedValues,
   blocksNamedByQuestion,
@@ -72,6 +73,7 @@ import {
   type PhysicalIdentifierPartV1,
   renderCard,
   validateSqlAgainstLocalContext,
+  sqlForRelationScan,
   inspectedRelationMatches,
   type AgentMessage,
   type RuntimeSchemaTable,
@@ -139,6 +141,8 @@ export interface AskPipelineHostDeps {
    * profile is opt-in because its values reach the provider with the prompt.
    */
   valueProfileAllowed?(): boolean;
+  /** Refuse AI-written SQL no grammar can read, rather than prove it by the names in it. On with a host. */
+  unreadableSqlRefused?: boolean;
   /**
    * Whether the project turned the result review on (`agent.resultReview`),
    * asked at every question. Absent: off. `ZLENS_ASK_RESULT_REVIEW=1|0`
@@ -2069,23 +2073,6 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           }
         } catch { /* the relations named so far stand */ }
       }
-      if (relations.length === 0) {
-        // NO TABLES AT ALL is a setup problem, said as one: "nothing matches"
-        // would read as an answer about the data (ZLens 0.1.0 e2e, F3).
-        const readable = (view.source ?? (await baseSourceFor(connection).catch(() => undefined))?.source)?.relations?.length ?? 0;
-        if (readable === 0) {
-          const builtManifest = deps.getManifest().manifest;
-          const modelingMode = builtManifest?.modeling?.mode;
-          const warehouseModeling = modelingMode === 'warehouse-first' || modelingMode === 'hybrid' || Boolean(builtManifest?.dbtProvenance?.warehouseCatalogPath);
-          return {
-            unavailable: true,
-            error: warehouseModeling
-              ? 'this project lists no tables Ask may read: warehouse modeling is on (modeling.mode in dql.config.json) and no warehouse catalog has been synced yet. Sync the schema from Settings, run `zlens sync warehouse`, or apply the dbt project from Settings → Project & dbt'
-              : 'this project lists no tables Ask may read for this request. Check that the dbt manifest is readable (target/manifest.json) or sync the warehouse schema from Settings',
-          };
-        }
-        return { error: 'no table in this project matches the question' };
-      }
       // THE TABLES BETWEEN: when the team modeled how the chosen tables
       // connect, the tables on that route are drafted over too, and each hop
       // is shown as a preferred join. Only relations this request admits are added.
@@ -2189,16 +2176,74 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // The values take room: the whole schema may be larger when they are shown.
       const wholeSchemaChars = profiled.size ? WHOLE_SCHEMA_WITH_VALUES_CHARS : WHOLE_SCHEMA_CHARS;
       let wholeSchema = false;
+      // THE REST IN BRIEF. Above the budget the chosen tables keep their detail
+      // and every other table is one line of column names and types, with its
+      // keys. Word overlap can miss a table ("revenue" is no table's name), and
+      // a table the drafter never sees is a table it says does not exist.
+      const chosenTables = new Set(relations.map((relation) => physicalRelationIdentity(relation)));
+      const briefRelations = new Set<string>();
+      const declaredKeyLines = (relation: string): string[] => {
+        const declared = warehouseKeys?.keysOf(relation);
+        // A foreign key names the table it points at as the cards spell it.
+        const shownAs = (target: string) => { const table = warehouseKeys?.keysOf(target); return (table && relations.find((known) => warehouseKeys?.keysOf(known) === table)) ?? target; };
+        return [
+          // What one row is, and how this table points at others, as the
+          // warehouse declares them (warehouse-first projects only).
+          ...(declared?.primaryKey ? [`  primary key (${declared.primaryKey.join(', ')}): one row per ${declared.primaryKey.join(', ')}`] : []),
+          ...(declared?.foreignKeys ?? []).map((key) => `  foreign key (${key.columns.join(', ')}) references ${shownAs(key.references.relation)} (${key.references.columns.join(', ')})`),
+        ];
+      };
+      const briefColumns = new Map<string, string[]>();
+      const briefCard = (relation: string): string => `- executable relation:${relation} [in brief]: ${(briefColumns.get(physicalRelationIdentity(relation)) ?? []).join(', ')}`;
       if (warehouseKeys) {
         const described = current.entries
           .filter((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && current.entries.some((column) => column.kind === 'column' && samePhysicalEntry(column, item)))
           .map((item) => entryPhysicalRelation(item)!);
-        const size = current.entries.filter((item) => item.kind === 'column').reduce((total, item) => total + columnCard(item).length + 1, 0) + described.length * 160;
+        const keyChars = (names: string[]) => names.reduce((total, relation) => total + declaredKeyLines(relation).join('\n').length + 1, 0);
+        const size = current.entries.filter((item) => item.kind === 'column').reduce((total, item) => total + columnCard(item).length + 1, 0) + described.length * 160 + keyChars(described);
         const unseen = described.filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
         if (unseen.length > 0 && size <= wholeSchemaChars) {
           relations.push(...unseen);
           wholeSchema = true;
+        } else if (unseen.length > 0) {
+          let chosenSize = 0;
+          for (const item of current.entries) {
+            const physical = item.kind === 'column' ? entryPhysicalRelation(item) : undefined;
+            if (!physical) continue;
+            const identity = physicalRelationIdentity(physical);
+            const named = [item.physical?.column ?? item.name.split('.').pop()!, item.dataType].filter(Boolean).join(' ');
+            const columns = briefColumns.get(identity);
+            if (columns) columns.push(named);
+            else briefColumns.set(identity, [named]);
+            if (chosenTables.has(identity)) chosenSize += columnCard(item).length + 1;
+          }
+          const briefChars = (names: string[]) => names.reduce((total, relation) => total + briefCard(relation).length + 1, 0) + keyChars(names);
+          // Every table is always listed: a chosen table past its budget goes in brief too.
+          const chosenChars = chosenSize + relations.length * 160 + keyChars(relations);
+          const reserved = chosenChars <= DRAFT_TABLES_CHARS ? chosenChars : DRAFT_TABLES_CHARS + briefChars(relations);
+          if (reserved + briefChars(unseen) <= wholeSchemaChars) {
+            for (const relation of unseen) briefRelations.add(physicalRelationIdentity(relation));
+            relations.push(...unseen);
+            wholeSchema = true;
+          }
         }
+      }
+      if (relations.length === 0) {
+        // NO TABLES AT ALL is a setup problem, said as one: "nothing matches"
+        // would read as an answer about the data (ZLens 0.1.0 e2e, F3).
+        const readable = (view.source ?? (await baseSourceFor(connection).catch(() => undefined))?.source)?.relations?.length ?? 0;
+        if (readable === 0) {
+          const builtManifest = deps.getManifest().manifest;
+          const modelingMode = builtManifest?.modeling?.mode;
+          const warehouseModeling = modelingMode === 'warehouse-first' || modelingMode === 'hybrid' || Boolean(builtManifest?.dbtProvenance?.warehouseCatalogPath);
+          return {
+            unavailable: true,
+            error: warehouseModeling
+              ? 'this project lists no tables Ask may read: warehouse modeling is on (modeling.mode in dql.config.json) and no warehouse catalog has been synced yet. Sync the schema from Settings, run `zlens sync warehouse`, or apply the dbt project from Settings → Project & dbt'
+              : 'this project lists no tables Ask may read for this request. Check that the dbt manifest is readable (target/manifest.json) or sync the warehouse schema from Settings',
+          };
+        }
+        return { error: `none of the ${readable} tables this project lists could be chosen from the words of the question; name a table or a field` };
       }
       const needsColumns = relations.filter((relation) => {
         const entry = current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && physicalRelationIdentity(entryPhysicalRelation(item)!) === physicalRelationIdentity(relation));
@@ -2222,7 +2267,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Only tables whose columns are known can be drafted over.
       relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}` });
+      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
@@ -2275,13 +2320,14 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // THE TEAM'S CERTIFIED REPORTS NEAR THE QUESTION: their SQL is how the
       // team joins and defines these tables, reused where the question
       // overlaps. Draft blocks are never shown; the answer stays review-required.
-      const draftBlocks = certifiedBlocksForDraft(current.entries, `${question} ${intent?.reading ?? ''}`, relations);
+      const draftTables = briefRelations.size ? relations.filter((relation) => chosenTables.has(physicalRelationIdentity(relation))) : [...relations];
+      const draftBlocks = certifiedBlocksForDraft(current.entries, `${question} ${intent?.reading ?? ''}`, draftTables);
       const blockLines = draftBlocks
         .map((entry) => `- certified block ${entry.label ?? entry.name} (how the team joins these tables and defines its measures, for a report near this question: reuse its joins and definitions where the question overlaps it; which rows to keep, the grouping and the output come from the question, not the block; write the SQL for ${connection?.driver === 'file' ? 'duckdb' : connection?.driver ?? 'duckdb'} even where the block's syntax differs)${entry.description ? `: ${entry.description.replace(/\s+/g, ' ').slice(0, 300)}` : ''}. Its certified SQL: ${entry.sql!.replace(/\s+/g, ' ').slice(0, 1500)}`);
       // THE PROJECT'S WRITTEN RULES: the skills selected for this request whose
       // text shares the most words with the question and the chosen tables,
       // long enough to carry a definition (the reading step sees a short card).
-      const skillLines = skillsForDraft(current.entries, `${question} ${intent?.reading ?? ''} ${relations.join(' ')}`)
+      const skillLines = skillsForDraft(current.entries, `${question} ${intent?.reading ?? ''} ${draftTables.join(' ')}`)
         .map((entry) => `- project skill ${entry.label ?? entry.name}: ${(entry.skill?.guidance ?? entry.description ?? '').replace(/\s+/g, ' ').slice(0, 1500)}`);
       const contextLines = [
         ...(contextText ? [`- conversation so far: ${contextText.slice(0, 600)}`] : []),
@@ -2316,18 +2362,14 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             const physical = entryPhysicalRelation(item);
             return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation);
           });
-          const declared = warehouseKeys?.keysOf(relation);
-          // A foreign key names the table it points at as the cards spell it.
-          const shownAs = (target: string) => { const table = warehouseKeys?.keysOf(target); return (table && relations.find((known) => warehouseKeys?.keysOf(known) === table)) ?? target; };
-          const lines = [
+          const fullCard = [
             entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]` : `- executable relation:${relation}`,
             ...current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => columnCard(item)),
-            // What one row is, and how this table points at others, as the
-            // warehouse declares them (warehouse-first projects only).
-            ...(declared?.primaryKey ? [`  primary key (${declared.primaryKey.join(', ')}): one row per ${declared.primaryKey.join(', ')}`] : []),
-            ...(declared?.foreignKeys ?? []).map((key) => `  foreign key (${key.columns.join(', ')}) references ${shownAs(key.references.relation)} (${key.references.columns.join(', ')})`),
+            ...declaredKeyLines(relation),
           ];
-          const cap = wholeSchema ? wholeSchemaChars : 18_000;
+          const inBrief = briefRelations.has(physicalRelationIdentity(relation)) || (briefRelations.size > 0 && chars + fullCard.join('\n').length + 1 > DRAFT_TABLES_CHARS);
+          const lines = inBrief ? [briefCard(relation), ...declaredKeyLines(relation)] : fullCard;
+          const cap = wholeSchema ? wholeSchemaChars : DRAFT_TABLES_CHARS;
           for (const line of lines) { if (chars + line.length > cap) break; cards.push(line); chars += line.length + 1; }
         }
         const dialect = connection?.driver ?? 'duckdb';
@@ -2381,17 +2423,17 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           enforceGenerationReadiness: false,
         });
         if (!validation.ok) {
-          // A parser that cannot read this dialect is not evidence against the
-          // draft: prove it by the relations it reads, exactly as the frozen
-          // statement is proven before execution. Read-only-ness is proven by
-          // the tier itself.
           if (!/could not be parsed/i.test(validation.error)) return { error: `the drafted SQL was not accepted: ${validation.error}` };
-          // One matcher with the validator: on DuckDB `main.claim` is the inspected `acme.main.claim`.
+          // No grammar could read it. Most of that is the warehouse's own dialect
+          // (ASOF JOIN, LATERAL VIEW), so it's proved by the relations it names.
+          // With a host, what a statement reads decides what a person sees, and a
+          // name can't prove that: it gets the one correction, then it's refused.
+          if (deps.unreadableSqlRefused) return { error: `the drafted SQL was not accepted: ${validation.error}` };
           const read = relationsInSql(sql).filter((relation) => parsePhysicalIdentifier(relation).length >= 2);
           const foreign = read.find((relation) => !inspectedRelationMatches(relation, runtimeSchema, dialect));
           if (foreign) return { error: `the drafted SQL reads ${foreign}, which this request did not inspect` };
           if (read.length === 0) return { error: 'the drafted SQL names no inspected relation' };
-          return { sql, relations: read, proof: [`reads only the inspected physical bindings: ${read.join(', ')} (the SQL parser could not read this dialect; relations proven by name)`], engine: dialect };
+          return { sql, relations: read, proof: [`reads only the inspected physical bindings: ${read.join(', ')} (no SQL grammar could read this statement; relations proven by name)`], engine: dialect };
         }
         return { sql, relations: validation.referencedRelations, proof: [`validated against the inspected physical bindings: it reads ${validation.referencedRelations.join(', ') || 'admitted relations only'}`, ...validation.warnings.slice(0, 3)], engine: dialect };
       };
@@ -2580,7 +2622,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         hostStep({ phase: 'schema', title: 'Checked the drafted SQL', state: 'done', detail: [stated.length ? `applies ${stated.map((item) => item.value).join(', ')}` : '', required.length ? `required filters present: ${required.map((item) => item.text).join(', ')}` : '', applied ? `filters on ${applied}` : ''].filter(Boolean).join('; ') || 'read-only and in scope' });
         return {
           ...chosen,
-          sql: withRowGuard(chosen.sql, (deps.maxRows ?? 500) + 1),
+          sql: withRowGuard(withoutDrafterCap(chosen.sql, deps.maxRows ?? 500, `${question} ${open}`), (deps.maxRows ?? 500) + 1),
           proof: [
             ...chosen.proof,
             ...(applied ? [`applied on the data: ${applied}`] : []),
@@ -2599,7 +2641,6 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const textValues = stated.filter((item) => item.kind === 'text').slice(0, 3);
       if (textValues.length > 0 && connection) {
         const allowed = deps.literalProbeAllowed;
-        const chosen = new Set(relations.map((relation) => physicalRelationIdentity(relation)));
         const asked = relevanceWords([`${question} ${open} ${contextText}`], true);
         const candidates: Array<{ relation: string; column: string; rank: number }> = [];
         if (allowed) {
@@ -2609,7 +2650,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
               if (column.dataType && !/char|text|string|variant|array|json|object/i.test(column.dataType)) continue;
               if (!allowed(name, column.name)) continue;
               const overlap = [...relevanceWords([column.name, column.description], true)].filter((word) => asked.has(word)).length;
-              candidates.push({ relation: name, column: column.name, rank: (chosen.has(physicalRelationIdentity(name)) ? 10 : 0) + (reachesReading(name) ? 5 : 0) + overlap });
+              candidates.push({ relation: name, column: column.name, rank: (chosenTables.has(physicalRelationIdentity(name)) ? 10 : 0) + (reachesReading(name) ? 5 : 0) + overlap });
             }
           }
         }
@@ -2650,6 +2691,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
       }
       const shown = [...relations];
+      const searched = (names: string[]) => wholeSchema ? `all ${names.length} tables` : names.join(', ');
       const first = await attemptDraft();
       if (!first || !('declined' in first)) return finalize(first);
       // THE WIDER LOOK: a decline over the tables first chosen is not a
@@ -2661,8 +2703,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       try {
         const source = view.source ?? (await baseSourceFor(connection)).source;
         // A missing FIELD is found by its column, not by a table's name.
-        const fromCatalog = catalogPick(words.join(' '), relations, 3, ['dbt_column']);
-        wider = rankByReach([...fromCatalog, ...relationsWithColumnWords(source, words, `${question} ${open} ${contextText}`, [...relations, ...fromCatalog], 6, (name) => entityTexts.filter((item) => sameRelation(item.relation, name)).map((item) => item.text).join(' ') || undefined)]).slice(0, 3);
+        // A table listed in brief can still be the one: the search looks past the detailed tables only.
+        const fromCatalog = catalogPick(words.join(' '), draftTables, 3, ['dbt_column']);
+        wider = rankByReach([...fromCatalog, ...relationsWithColumnWords(source, words, `${question} ${open} ${contextText}`, [...draftTables, ...fromCatalog], 6, (name) => entityTexts.filter((item) => sameRelation(item.relation, name)).map((item) => item.text).join(' ') || undefined)]).slice(0, 3);
       } catch { wider = []; }
       if (wider.length > 0) {
         try {
@@ -2676,12 +2719,15 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       }
       if (wider.length === 0) {
         hostStep({ phase: 'search', title: 'Searched every table for the missing field: none has it', state: 'missed', detail: `looked for ${words.slice(0, 4).join(', ') || 'the missing field'} beyond ${shown.join(', ')}` });
-        return { declined: `${first.declined.replace(/[.\s]+$/, '')} (searched ${shown.join(', ')}, and no other table has a column for ${words.slice(0, 3).join(', ') || 'it'})` };
+        return { declined: `${first.declined.replace(/[.\s]+$/, '')} (searched ${searched(shown)}, and no other table has a column for ${words.slice(0, 3).join(', ') || 'it'})` };
       }
-      relations = [...relations, ...wider];
+      // A table found in the brief list moves up to full detail, beside the chosen ones.
+      const found = new Set(wider.map((relation) => physicalRelationIdentity(relation)));
+      for (const identity of found) briefRelations.delete(identity);
+      relations = [...draftTables, ...wider, ...relations.filter((relation) => !chosenTables.has(physicalRelationIdentity(relation)) && !found.has(physicalRelationIdentity(relation)))];
       hostStep({ phase: 'search', title: `Searched every table for the missing field: found ${wider.join(', ')}`, state: 'done', detail: `looked for ${words.slice(0, 4).join(', ')}; the first draft over ${shown.join(', ')} found none` });
       const second = await attemptDraft(`A first draft over ${shown.join(', ')} found no field for this ("${first.declined.slice(0, 240)}"). The tables ${wider.join(', ')} have columns named for it and were added; use them, joining on a key both tables carry.`, 'widen');
-      if (second && 'declined' in second) return { declined: `${second.declined.replace(/[.\s]+$/, '')} (searched ${relations.join(', ')})` };
+      if (second && 'declined' in second) return { declined: `${second.declined.replace(/[.\s]+$/, '')} (searched ${searched(relations)})` };
       return finalize(second);
     };
     // THE SECOND LOOK at an AI-drafted result, where the project turns it on
@@ -3288,6 +3334,8 @@ export function connectionKey(connection: ConnectionConfig): string {
     .join('|');
 }
 
+/** What the tables chosen for a draft may take: about four and a half thousand tokens. */
+const DRAFT_TABLES_CHARS = 18_000;
 /** The schema a warehouse-first draft may read whole: about ten thousand tokens. */
 const WHOLE_SCHEMA_CHARS = 40_000;
 /** The same with the column value profile beside each column: about fifteen thousand tokens. */
@@ -3357,7 +3405,7 @@ const DIALECT_NOTES: Record<string, string> = {
 /** Relation names as SQL writes them, lowercased and unquoted. */
 function relationsInSql(sql: string): string[] {
   const found = new Set<string>();
-  for (const match of sql.matchAll(/(?:FROM|JOIN)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)){0,2})/gi)) {
+  for (const match of sqlForRelationScan(sql).matchAll(/(?:FROM|JOIN)\s+((?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)(?:\s*\.\s*(?:"[^"]+"|`[^`]+`|\[[^\]]+\]|[A-Za-z_][\w$]*)){0,2})/gi)) {
     const name = (match[1] ?? '').trim();
     if (name) found.add(name);
   }

@@ -74,6 +74,29 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   its primary entity and time column, stays for a dbt model that truly has none.
 
 ### Fixed
+- **Every table an AI-written statement reads has to be one the request inspected.**
+  A comma join, a bare table name beside a qualified one, or a statement the parser
+  could not read could reach a table no one admitted. The parser's list now counts,
+  and a statement one grammar can't read is read with the others. With a host,
+  AI-written SQL none of them can read is sent back once and then refused.
+- **A statement can't excuse a table by spelling a CTE.** A CTE name now has to head an
+  entry of a WITH list, so `x AS (` in a string or a WINDOW clause doesn't count, and
+  a recursive CTE with a column list is no longer reported as a table.
+- **Ask no longer refuses a question because its words miss a table's name.** On a
+  database-only project, tables too many to show in full now appear in brief: the
+  tables chosen for the question keep their detail, and every other table is one
+  line of column names and types with its keys. A question that matches no table by
+  name reaches them all. A very large schema is still chosen from, and Ask now says
+  it couldn't choose rather than that no table matches.
+- **`EXTRACT(YEAR FROM o.orderdate)` is not a table.** Ask rejected valid SQL that
+  used a qualified column in `EXTRACT`, `SUBSTRING` or `TRIM`.
+- **An instruction is not a value.** A capitalised word like "Return" in the middle
+  of a question blocked the answer, because Ask read it as a value to filter on.
+  Other capitalised words stay required.
+- **A draft model passes `zlens model validate`.** A draft join between two domains
+  with no export is now a warning. Certifying one still needs the export.
+- **A list Ask cut off says so.** A `LIMIT 500` the drafter added on its own hid that
+  more rows existed, so it now comes off unless the question asked for 500.
 
 - **DQL Source no longer crashes the app.** With a block's closing brace gone, the
   check reports the problem on the empty line after the text, and the editor threw
