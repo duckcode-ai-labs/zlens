@@ -20,6 +20,14 @@ describe('the table index', () => {
     expect(lines.join('\n').length).toBeLessThanOrEqual(60);
   });
 
+  it('shortens every line before it leaves a table out', () => {
+    const relations = Array.from({ length: 20 }, (_, index) => ({ name: `s.t${index}`, columns: Array.from({ length: 30 }, (_, column) => `column_${column}`) }));
+    const lines = tableIndexLines(relations, [], 2_000);
+    expect(lines).toHaveLength(20);
+    expect(lines.join('\n').length).toBeLessThanOrEqual(2_000);
+    expect(tableIndexLines(relations, [], 100_000)[0]!.length).toBeGreaterThan(lines[0]!.length);
+  });
+
   it('reads the tables a reply names, among those offered, as the index spells them', () => {
     expect(parseTablePicks('Sure: {"tables":["SALES.Lines","sales.imagined"," sales.orders "]}', ['sales.lines', 'sales.orders'])).toEqual(['sales.lines', 'sales.orders']);
   });

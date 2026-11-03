@@ -17,7 +17,8 @@ import type { AgentMessage } from '@zlens/agent';
 export const TABLE_INDEX_CHARS = 60_000;
 /** How many tables the model may choose. */
 export const TABLE_INDEX_PICKS = 8;
-const MAX_LINE_WORDS_CHARS = 140;
+/** How much of a line may say what a table holds: shorter lines before fewer tables. */
+const LINE_WIDTHS = [140, 110, 80, 60, 40];
 
 export const TABLE_INDEX_SYSTEM = 'You choose which database tables a question needs. You are given one line per table: its name, then what it holds, or its columns when nothing says what it holds. ' +
   'Choose every table needed to answer the question, including tables needed only to join others or to name what the answer groups by. ' +
@@ -31,19 +32,26 @@ interface IndexedRelation {
 }
 
 /** One table, one line. */
-export function tableIndexLine(relation: IndexedRelation): string {
+export function tableIndexLine(relation: IndexedRelation, width = LINE_WIDTHS[0]!): string {
   const words = (relation.description ?? '').replace(/^AI draft:\s*/, '').replace(/\s+/g, ' ').trim() || `columns: ${relation.columns.join(', ')}`;
-  return `- ${relation.name}: ${words.length > MAX_LINE_WORDS_CHARS ? `${words.slice(0, MAX_LINE_WORDS_CHARS - 1)}…` : words}`;
+  return `- ${relation.name}: ${words.length > width ? `${words.slice(0, width - 1)}…` : words}`;
 }
 
-/** The index, the tables search ranked first, as many as the budget holds. */
+/**
+ * The index. Every table is listed if shorter lines make it fit; only past the
+ * shortest are tables left out, the ones search ranked last.
+ */
 export function tableIndexLines(relations: IndexedRelation[], ranked: string[] = [], budget = TABLE_INDEX_CHARS): string[] {
   const order = new Map(ranked.map((name, index) => [name.toLowerCase(), index]));
   const sorted = [...relations].sort((left, right) => (order.get(left.name.toLowerCase()) ?? Infinity) - (order.get(right.name.toLowerCase()) ?? Infinity));
+  for (const width of LINE_WIDTHS) {
+    const lines = sorted.map((relation) => tableIndexLine(relation, width));
+    if (lines.reduce((total, line) => total + line.length + 1, 0) <= budget) return lines;
+  }
   const lines: string[] = [];
   let chars = 0;
   for (const relation of sorted) {
-    const line = tableIndexLine(relation);
+    const line = tableIndexLine(relation, LINE_WIDTHS.at(-1));
     if (chars + line.length + 1 > budget) break;
     lines.push(line);
     chars += line.length + 1;
