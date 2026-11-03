@@ -240,7 +240,7 @@ async function runSyncWarehouse(rest: string[], flags: CLIFlags): Promise<void> 
         const profile = catalog.valueProfile;
         if (profile && 'error' in profile) console.log(`    ! Value profile not read: ${profile.error}`);
         else if (profile && 'skipped' in profile) console.log(`    Value profile not read: ${profile.skipped}.`);
-        else if (profile) console.log(`  ✓ Value profile (agent.valueProfile): example values of ${profile.columns} column(s) in ${profile.relations} relation(s), ${profile.skippedSensitive} sensitive column(s) left out → .dql/cache/value-profile.json. These values reach your AI provider with drafting prompts.`);
+        else if (profile) console.log(`  ✓ Value profile (agent.valueProfile): example values of ${profile.columns} column(s) in ${profile.relations} relation(s), ${profile.skippedSensitive} column(s) left out by name and ${profile.skippedIdentifying ?? 0} because their values could identify someone → .dql/cache/value-profile.json. These values reach your AI provider with drafting prompts; if your column names don't say what they hold, list the columns to read in agent.valueProfile.include.`);
         if (catalog.drift) {
           const drift = catalog.drift;
           console.log('  Changed since the last sync:');

@@ -237,11 +237,13 @@ Fields:
 - **`dbt`** — `{ projectDir, manifestPath }` for in-place or sibling dbt projects. `zlens compile` and `zlens sync dbt` read from here
 - **`datalex`** — optional `{ manifestPath }` for validating `datalex_contract` references. ZLens works without DataLex; this only enables interop checks when a DataLex manifest exists
 - **`governance`** — required fields every block must declare to pass `zlens certify`
-- **`agent.valueProfile`** — `{ mode: "off" | "sampled", exclude: [patterns] }`,
+- **`agent.valueProfile`** — `{ mode: "off" | "sampled", exclude: [patterns], include: [patterns] }`,
   off by default. `sampled`: each warehouse-first schema sync also reads a few
   example values and the range of each column for Ask's SQL drafter; those
-  values reach your AI provider with the drafting prompt. Sensitive columns
-  and values are never read, and never under a hosted server. See
+  values reach your AI provider with the drafting prompt. Columns named as
+  sensitive, values that look like contact details or credentials, and text
+  that could identify someone are left out, and nothing is read under a
+  hosted server. `include` limits reading to the columns listed. See
   [value profile](../get-started/no-dbt.md#optional-show-the-drafter-what-the-columns-hold).
 - **`agent.meaningDrafts`** — `"on"` lets an administrator run AI drafts of
   meanings, terms and metrics on a hosted server, where they are off by default.

@@ -218,7 +218,8 @@ describe('warehouse-first modeling in the local runtime', () => {
     const db = new Database(join(projectRoot, 'shop.sqlite'));
     db.exec(`
       CREATE TABLE customers (customer_id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT, status TEXT);
-      INSERT INTO customers VALUES (1, 'Ann', 'ann@example.com', 'active'), (2, 'Bo', 'bo@example.com', 'active'), (3, 'Cy', NULL, 'lapsed');
+      INSERT INTO customers VALUES (1, 'Ann', 'ann@example.com', 'active'), (2, 'Bo', 'bo@example.com', 'active'), (3, 'Cy', NULL, 'lapsed'),
+        (4, 'Di', NULL, 'active'), (5, 'Ed', NULL, 'lapsed'), (6, 'Flo', NULL, 'active'), (7, 'Gus', NULL, 'lapsed');
     `);
     db.close();
     const config = (agent?: Record<string, unknown>) => writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
