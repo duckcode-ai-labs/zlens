@@ -68,6 +68,7 @@ import {
 import { loadDbtRunState, applyBlockDataState, type DbtRunStateIndex } from './dbt-freshness.js';
 import { blockParameterDefinitions } from '../blocks/parameters.js';
 import { loadDbtFirstModeling, loadWarehouseModeling, siblingDbtArtifact } from './dbt-first-modeling.js';
+import { MEANINGS_DIR } from './meaning-files.js';
 import { WAREHOUSE_CATALOG_PATH, readWarehouseCatalog } from './warehouse-catalog.js';
 import { domainFolderSlug } from './domain-writer.js';
 import { loadDomainPackageRegistry } from './domain-package-registry.js';
@@ -193,6 +194,8 @@ export function collectInputFiles(options: ManifestBuildOptions): string[] {
     for (const f of scanFilesRecursive(join(projectRoot, 'domains'), ['.yaml', '.yml'], scanCache)) files.add(f);
     // Warehouse-first and hybrid entities bind to the warehouse catalog snapshot (RFC 0007).
     if (modelingModeOf(config) !== 'dbt-first' && existsSync(join(projectRoot, WAREHOUSE_CATALOG_PATH))) files.add(join(projectRoot, WAREHOUSE_CATALOG_PATH));
+    // What the tables mean feeds search and the model's cards, so an edit counts as a change.
+    for (const f of scanFilesRecursive(join(projectRoot, MEANINGS_DIR), ['.yaml'], scanCache)) files.add(f);
     const registry = loadDomainPackageRegistry(projectRoot);
     for (const f of manifestKnowledgeSkillInputFiles(projectRoot, registry)) files.add(f);
   }

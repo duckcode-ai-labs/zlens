@@ -9,7 +9,7 @@ import { applyRerank, type RerankOutcome } from '../agentic/rerank.js';
  */
 
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { brotliCompressSync, brotliDecompressSync, constants as zlibConstants } from 'node:zlib';
@@ -38,10 +38,15 @@ import {
   type SemanticLayer,
   type ColumnLineageEntry,
   type ColumnSource,
+  meaningText,
   normalizeDqlArtifactReference,
+  readMeaningFiles,
+  readWarehouseCatalog,
+  relationMeaning,
   composeEffectiveTrust,
   type DqlArtifactReference,
   type ResolvedTrustLabel,
+  type WarehouseCatalogRelationV1,
   type AnalyticalPolicyContract,
   type DatasetDescriptor,
   normalizeMetricCapabilityContract,
@@ -957,6 +962,8 @@ const COLUMN_OBJECT_TYPES = new Set(['dbt_column', 'warehouse_column', 'runtime_
 // columns.  This must invalidate older snapshots: enterprise imports above
 // the individual-column object threshold otherwise retain the old first-500
 // column projection and cannot discover a relevant later column.
+/** Meaning files for dbt models and sources: `dbt.<unique id>`. */
+const DBT_MEANING_PREFIX = 'dbt.';
 const METADATA_INDEX_VERSION = 'metadata-index-v7-qualified-vector-lanes-relation-columns';
 const DEFAULT_VECTOR_PROVIDER = new HashedTokenEmbeddingProvider();
 
@@ -2476,6 +2483,8 @@ export function buildMetadataSnapshot(
   addSkillObjects(skills, objects, edges);
   addDbtDagObjects(manifest, objects, edges, diagnostics);
   addRawDbtManifestCatalogObjects(projectRoot, manifest, objects, edges, diagnostics);
+  addWarehouseCatalogObjects(projectRoot, manifest, objects);
+  addDbtMeaningObjects(projectRoot, manifest, objects);
   addBlockDependencyEdges(manifest, edges);
   addBlockOutputLineageObjects(manifest, objects, edges);
   addCertifiedBlockAnalyticalCapabilities(objects);
@@ -5002,6 +5011,150 @@ function addDbtDagObjects(
       severity: 'warning',
       message: `dbt manifest loaded from ${manifest.dbtImport.manifestPath}, but 0 of ${manifest.dbtImport.totalDbtModels} models matched DQL table references. Check database/schema aliases or dbtImport anchors.`,
     });
+  }
+}
+
+const dbtMeaningCache = new Map<string, { key: string; relations: WarehouseCatalogRelationV1[] }>();
+
+/**
+ * A dbt project's models and sources as meaning files see them, so an AI draft
+ * can fill the gaps its descriptions leave. A dbt description plays the part of
+ * a warehouse comment: a draft never replaces one. The columns are the ones
+ * catalog.json lists when it's there, since a manifest holds only documented ones.
+ */
+export function dbtMeaningRelations(manifestPath: string): WarehouseCatalogRelationV1[] {
+  let key: string;
+  try {
+    const stat = statSync(manifestPath);
+    key = `${stat.mtimeMs}|${stat.size}`;
+  } catch {
+    return [];
+  }
+  const cached = dbtMeaningCache.get(manifestPath);
+  if (cached?.key === key) return cached.relations;
+  let raw: { nodes?: Record<string, Record<string, unknown>>; sources?: Record<string, Record<string, unknown>> };
+  try {
+    raw = JSON.parse(readFileSync(manifestPath, 'utf-8')) as typeof raw;
+  } catch {
+    return [];
+  }
+  const catalogColumns = loadRawDbtCatalogColumns(join(dirname(manifestPath), 'catalog.json'));
+  const relations: WarehouseCatalogRelationV1[] = [];
+  for (const [uniqueId, node] of [...Object.entries(raw.nodes ?? {}), ...Object.entries(raw.sources ?? {})]) {
+    if (node.resource_type !== 'model' && node.resource_type !== 'source') continue;
+    const name = rawDbtName(node);
+    if (!name) continue;
+    const documented = rawDbtColumns(node.columns);
+    const described = new Map(documented.map((column) => [column.name.toLowerCase(), column.description]));
+    const listed = catalogColumns.get(uniqueId);
+    const database = stringValue(node.database);
+    const schema = stringValue(node.schema);
+    const comment = stringValue(node.description);
+    relations.push({
+      id: `${DBT_MEANING_PREFIX}${uniqueId}`,
+      ...(database ? { database } : {}),
+      ...(schema ? { schema } : {}),
+      name,
+      relation: (stringValue(node.relation_name) ?? [database, schema, name].filter(Boolean).join('.')).replace(/["`]/g, ''),
+      kind: 'table',
+      ...(comment ? { comment } : {}),
+      columns: (listed?.length ? listed : documented).map((column) => {
+        const words = described.get(column.name.toLowerCase());
+        return { name: column.name, ...(column.type ? { type: column.type } : {}), ...(words ? { comment: words } : {}) };
+      }),
+    });
+  }
+  dbtMeaningCache.clear();
+  dbtMeaningCache.set(manifestPath, { key, relations });
+  return relations;
+}
+
+/** A dbt model's or source's drafted and reviewed words, on top of what dbt says. */
+function addDbtMeaningObjects(
+  projectRoot: string,
+  manifest: DQLManifest,
+  objects: Map<string, MetadataObject>,
+): void {
+  const meanings = readMeaningFiles(projectRoot);
+  if (![...meanings.keys()].some((id) => id.startsWith(DBT_MEANING_PREFIX))) return;
+  const manifestPath = manifest.dbtImport?.manifestPath ?? resolveDbtManifestPath(projectRoot);
+  if (!manifestPath) return;
+  const relations = new Map(dbtMeaningRelations(manifestPath).map((relation) => [relation.id, relation]));
+  for (const object of [...objects.values()]) {
+    if (object.objectType !== 'dbt_model' && object.objectType !== 'dbt_source') continue;
+    const id = `${DBT_MEANING_PREFIX}${String(object.payload?.uniqueId ?? '')}`;
+    const relation = relations.get(id);
+    const meaning = relation ? relationMeaning(meanings.get(id), relation) : undefined;
+    if (!meaning) continue;
+    const columns = Array.isArray(object.payload?.columns) ? object.payload.columns as Array<Record<string, unknown>> : [];
+    objects.set(object.objectKey, {
+      ...object,
+      ...(meaning.description ? { description: meaningText(meaning.description) } : {}),
+      payload: compactObject({
+        ...object.payload,
+        aliases: [...new Set([...stringArrayFromPayload(object.payload?.aliases), ...meaning.otherNames])],
+        columns: columns.map((column) => {
+          const words = meaning.columns.get(String(column.name).toLowerCase());
+          return words ? { ...column, description: meaningText(words) } : column;
+        }),
+      }),
+    });
+    for (const [column, words] of meaning.columns) {
+      const key = `dbt:column:${object.name}.${relation!.columns.find((item) => item.name.toLowerCase() === column)?.name}`;
+      const existing = objects.get(key);
+      if (existing) objects.set(key, { ...existing, description: meaningText(words) });
+    }
+  }
+}
+
+/**
+ * WHAT SEARCH KNOWS ABOUT A WAREHOUSE TABLE. The knowledge graph carries only a
+ * table's name, so a warehouse comment never reached search. For a table that
+ * has words (a comment, or a meaning file), this is the warehouse's half of
+ * what addRawDbtManifestCatalogObjects does for a dbt model: its columns, its
+ * comments and the words in its meaning file, an unreviewed draft labelled as one.
+ *
+ * Two schemas can hold a table of the same name; the graph's key is the bare
+ * name, so the second keeps a key of its own instead of merging into the first.
+ */
+function addWarehouseCatalogObjects(
+  projectRoot: string,
+  manifest: DQLManifest,
+  objects: Map<string, MetadataObject>,
+): void {
+  const admitted = manifest.dbtProvenance?.nodes ?? {};
+  const { snapshot } = readWarehouseCatalog(projectRoot);
+  if (!snapshot) return;
+  const meanings = readMeaningFiles(projectRoot);
+  for (const relation of snapshot.relations) {
+    if (!admitted[relation.id]) continue;
+    const bare = objects.get(`warehouse:table:${relation.name}`);
+    const objectKey = !bare || bare.payload?.relation === relation.relation
+      ? `warehouse:table:${relation.name}`
+      : `warehouse:table:${relation.relation}`;
+    const own = objects.get(objectKey);
+    const meaning = relationMeaning(meanings.get(relation.id), relation);
+    // A table nothing describes keeps the entry it had: indexing its columns
+    // alone would change which tables every existing project's questions pick.
+    if (!meaning && !relation.comment && !relation.columns.some((column) => column.comment)) continue;
+    const drafted = meaning?.description;
+    objects.set(objectKey, mergeObject(own, {
+      objectKey,
+      objectType: 'warehouse_table',
+      name: relation.name,
+      fullName: relation.relation,
+      status: bare?.status,
+      description: drafted ? meaningText(drafted) : relation.comment ?? own?.description,
+      sourceSystem: bare?.sourceSystem ?? 'warehouse catalog',
+      payload: compactObject({
+        relation: relation.relation,
+        aliases: [...new Set([relation.name, relation.relation, ...stringArrayFromPayload(own?.payload?.aliases), ...(meaning?.otherNames ?? [])])],
+        columns: relation.columns.map((column) => {
+          const words = meaning?.columns.get(column.name.toLowerCase());
+          return compactObject({ name: column.name, type: column.type, description: words ? meaningText(words) : column.comment });
+        }),
+      }),
+    }));
   }
 }
 

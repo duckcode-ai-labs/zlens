@@ -123,6 +123,10 @@ mark for recertification; otherwise it exits 0, including when there is no
 | `zlens model validate [path]` | Validate Domain Packages and relationship proofs |
 | `zlens model discover [path]` | Preview draft domains, entities and joins: from dbt in a dbt-first project, from the warehouse catalog in a warehouse-first one |
 | `zlens model apply-discovery [path] --apply` | Write the previewed drafts as Domain Package proposals (without `--apply`, preview only) |
+| `zlens model draft-meanings [path] [--dry-run] [--max-tables <n>]` | AI first draft of what tables and columns mean, into `meanings/`. Fills gaps only, and a run resumes where it stopped. `--dry-run` shows what it would send and cost, with no model call |
+| `zlens model meanings [path]` | Count the tables that are drafted, reviewed, stale or undescribed |
+| `zlens model draft-terms [path] [--domain <id>]` | AI drafts of the words people use, as draft terms that count only once certified |
+| `zlens model draft-metrics [path] [--domain <id>]` | Metric drafts from the aggregates recent queries repeat, each run once on the warehouse (Snowflake, PostgreSQL with `pg_stat_statements`, Databricks, BigQuery) |
 | `zlens model explain <id> [path]` | Explain whether a relationship has automatic-join proof |
 | `zlens model validate-relationship <id>\|--all [path] [--certify] [--dry-run]` | Check authored relationships on the warehouse (the Modeling page's Validate) and record the evidence |
 | `zlens model reject-discovery <id> [path] [--reason <text>]` | Stop warehouse discovery proposing a join a reviewer turned down |

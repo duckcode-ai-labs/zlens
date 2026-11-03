@@ -39,7 +39,7 @@ const AUTHORING_FAMILIES = [
   '/api/blocks', '/api/block-studio', '/api/modeling', '/api/semantic-layer', '/api/semantic-builder',
   '/api/domains', '/api/domain-workspaces', '/api/domain-packages', '/api/terms', '/api/propose',
   '/api/context-proposals', '/api/context-bootstrap', '/api/onboarding', '/api/skills', '/api/datasets',
-  '/api/app-datasets', '/api/lineage',
+  '/api/app-datasets', '/api/lineage', '/api/meanings',
 ];
 
 /** Families whose routes are asking or investigating; a route under them not listed below is classed as a change. */
@@ -109,6 +109,9 @@ function actionFor(method: string, path: string): DqlAction {
   if (under(path, '/api/settings') || under(path, '/api/server') || under(path, '/api/semantic-runtime')) return read ? 'project.read' : 'settings.manage';
   // Setting the project up and installing drivers run programs on the server (dbt, npm): the server's administrator's.
   if (!read && (under(path, '/api/onboarding') || under(path, '/api/connectors'))) return 'settings.manage';
+  // A draft sends the project's table and column names to a model, or reads what
+  // people ran, so an administrator runs it.
+  if (!read && (path === '/api/meanings/draft' || path === '/api/terms/draft' || path === '/api/semantic-layer/metric-drafts/from-history')) return 'settings.manage';
   if (under(path, '/api/git')) return read ? 'project.read' : 'git.review';
 
   // Trust decisions. Every route that can leave something certified is a

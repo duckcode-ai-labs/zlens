@@ -5,7 +5,7 @@ import { buildExecutionPlan } from '@zlens/notebook';
 import { prepareBlockInvocation } from '../block-invocation.js';
 import { writeFileSync } from 'node:fs';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { getDialect, type DQLManifest, type SemanticLayer } from '@zlens/core';
+import { getDialect, readMeaningFiles, type DQLManifest, type SemanticLayer } from '@zlens/core';
 import {
   type ProjectionScope,
   type PreparedRefusal,
@@ -80,7 +80,8 @@ import {
   priorWithoutValues,
   sqlStringValues,
 } from '@zlens/agent';
-import { buildProjectVocabulary, buildVocabularySource, embeddedManifestRelations, namedBlockNotServed, normalizeRelationName, warehouseFirstCatalog, type VocabularySourceInput } from './vocabulary-source.js';
+import { parseTablePicks, tableIndexLines, tableIndexMessages, TABLE_INDEX_PICKS } from './table-index.js';
+import { buildProjectVocabulary, buildVocabularySource, draftedMeaningRelations, embeddedManifestRelations, namedBlockNotServed, normalizeRelationName, warehouseFirstCatalog, type VocabularySourceInput } from './vocabulary-source.js';
 import { groupingKeyLabels, keyLabelLine, keyLabels, unnamedGroupingKeys, unnamedKeyFailure, type EntityKey, type KeyLabel, type KeyReference } from './key-labels.js';
 import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, sameRelation, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
 import { readEnv } from '@zlens/core';
@@ -1340,6 +1341,8 @@ interface AskRunState {
   hostChecks: Array<{ id: 'stated_values' | 'required_filters' | 'join_fanout' | 'certified_joins' | 'catalog_columns' | 'read_only' | 'key_labels'; label: string; passed: boolean; message: string; attempt: number }>;
   /** The joins the last checked AI-written statement made, each with the Modeling relationship behind it (or none). */
   hostJoins?: LedgerJoin[];
+  /** The tables the model chose from the table index, once per question. */
+  tableIndexPicks?: string[];
   checkRound: number;
   steps: AskStoryStepV1[];
   onStep(step: AskStoryStepV1): void;
@@ -2060,9 +2063,50 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           return rankByReach(relationsFromCatalogHits(hits, view.source, exclude, 12)).slice(0, max);
         } catch { return []; }
       };
-      const catalogPicked = catalogPick(`${question} ${open} ${contextText}`, relations, 3);
+      // THE TABLE INDEX (table-index.ts): a warehouse-first schema too large to
+      // show whole, so the model chooses from one line per table.
+      const indexSource = warehouseFirstCatalog(deps.getManifest().manifest, deps.projectRoot)
+        ? view.source ?? (await baseSourceFor(connection).catch(() => undefined))?.source
+        : undefined;
+      const indexRelations = (indexSource?.relations ?? []).map((item) => ({
+        name: (item.binding ? physicalRelationText(item.binding) : [item.schema, item.name].filter(Boolean).join('.')),
+        ...(item.description ? { description: item.description } : {}),
+        columns: [...item.columns, ...(item.embeddedColumns ?? [])].map((column) => column.name),
+      }));
+      const briefChars = indexRelations.reduce((total, item) => total + item.name.length + 30 + item.columns.reduce((sum, column) => sum + column.length + 16, 0), 0);
+      let indexPicked = state.tableIndexPicks ?? [];
+      if (briefChars > WHOLE_SCHEMA_CHARS && !state.tableIndexPicks) {
+        const ranked = catalogPick(`${question} ${open} ${contextText}`, [], indexRelations.length);
+        const lines = tableIndexLines(indexRelations, ranked);
+        const offered = lines.map((line) => line.slice(2, line.indexOf(': ')));
+        const trace = deps.dispatchOptions?.('draft', request);
+        const started = Date.now();
+        const dispatch: AskRunState['draftDispatches'][number] = { purpose: 'intent:tables', ms: 0, attempt: state.draftDispatches.length + 1 };
+        const messages = tableIndexMessages(`${question} ${open} ${contextText}`.trim(), lines);
+        try {
+          const reply = await provider.generate(messages, { temperature: 0, ...(trace?.options ?? {}), ...(request.signal ? { signal: request.signal } : {}) });
+          trace?.settle('ok');
+          indexPicked = parseTablePicks(reply, offered);
+          Object.assign(dispatch, { reply: reply.slice(0, 1500), outcome: indexPicked.length ? 'sql' : 'declined' });
+        } catch (error) {
+          trace?.settle(request.signal?.aborted ? 'cancelled' : 'error', error);
+          if (request.signal?.aborted) throw error;
+          Object.assign(dispatch, { reply: (error instanceof Error ? error.message : String(error)).slice(0, 300), outcome: 'error' });
+        } finally {
+          Object.assign(dispatch, { ms: Date.now() - started, at: Date.now(), promptChars: messages.reduce((sum, message) => sum + message.content.length, 0) });
+          state.draftDispatches.push(dispatch);
+        }
+        // A second attempt at the same question reads the same tables.
+        state.tableIndexPicks = indexPicked;
+      }
+      if (indexPicked.length > 0) {
+        for (const relation of indexPicked) {
+          if (relations.length < TABLE_INDEX_PICKS && !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation))) relations.push(relation);
+        }
+      }
+      const catalogPicked = indexPicked.length ? [] : catalogPick(`${question} ${open} ${contextText}`, relations, 3);
       for (const relation of catalogPicked) if (relations.length < 5) relations.push(relation);
-      if (relations.length < 4) {
+      if (relations.length < 4 && indexPicked.length === 0) {
         try {
           // THE ENVELOPE HOLDS: drafted SQL chooses among the relations this
           // request admits, not every relation in the project.
@@ -2158,6 +2202,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // the tables that name a grouped key, added above, among them), with the
       // keys the warehouse declares. Above the budget it chooses as before.
       const warehouseKeys = warehouseFirstCatalog(deps.getManifest().manifest, deps.projectRoot);
+      const hasMeaningFiles = deps.projectRoot ? readMeaningFiles(deps.projectRoot).size > 0 : false;
       // WHAT THE COLUMNS HOLD, when the project opted in (agent.valueProfile)
       // and the profile describes this catalog: a few stored values or the
       // range beside each column. The values reach the provider with this
@@ -2267,7 +2312,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Only tables whose columns are known can be drafted over.
       relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}` });
+      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
@@ -2276,6 +2321,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         .filter((entry) => entry.kind === 'term' && [entry.name, entry.label ?? '', ...entry.aliases].some((name) => name.length > 2 && spoken.includes(name.toLowerCase())))
         .slice(0, 5)
         .map((entry) => `- business term ${entry.label ?? entry.name}: ${[entry.description, ...(entry.rules ?? [])].filter(Boolean).join(' ').slice(0, 300)}`);
+      const draftedTerms = current.entries
+        .filter((entry) => entry.kind === 'term' && entry.description?.startsWith('AI draft:') && termLines.some((line) => line.startsWith(`- business term ${entry.label ?? entry.name}:`)))
+        .map((entry) => entry.label ?? entry.name);
       const briefing = view.pack?.domainBriefing;
       const hintLines = (view.pack?.appliedHints ?? []).slice(0, 5)
         .map((hint) => hint.lesson?.rule || hint.guidance)
@@ -2363,7 +2411,10 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation);
           });
           const fullCard = [
-            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]` : `- executable relation:${relation}`,
+            // What a table is, in a warehouse's, a person's or a draft's words,
+            // where the project has them. A dbt project with no meaning files
+            // keeps the prompt it had.
+            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${(warehouseKeys || hasMeaningFiles) && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}` : `- executable relation:${relation}`,
             ...current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => columnCard(item)),
             ...declaredKeyLines(relation),
           ];
@@ -2619,6 +2670,11 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           unnamed = unnamedKeysOf(chosen.sql);
         }
         const applied = appliedConditions(chosen.sql);
+        // AI-DRAFTED WORDS ARE SAID, every time they stand behind an answer.
+        // They help find a table; they change no trust label.
+        const draftedWords = draftedMeaningRelations(deps.getManifest().manifest, deps.projectRoot)
+          .filter((relation) => chosen.relations.some((read) => sameRelation(read, relation)))
+          .map((relation) => relation.split('.').slice(-2).join('.'));
         hostStep({ phase: 'schema', title: 'Checked the drafted SQL', state: 'done', detail: [stated.length ? `applies ${stated.map((item) => item.value).join(', ')}` : '', required.length ? `required filters present: ${required.map((item) => item.text).join(', ')}` : '', applied ? `filters on ${applied}` : ''].filter(Boolean).join('; ') || 'read-only and in scope' });
         return {
           ...chosen,
@@ -2629,6 +2685,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...(stated.length ? [`stated values applied: ${stated.map((item) => item.value).join(', ')}`] : []),
             ...(required.length ? [`required filters present: ${required.map((item) => item.text).join(', ')}`] : []),
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
+            ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
+            ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
             ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${item.labelRelation.split('.').pop()!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
           ],
         };

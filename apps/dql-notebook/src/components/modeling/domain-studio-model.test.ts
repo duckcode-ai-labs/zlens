@@ -26,6 +26,7 @@ describe('Domain Studio navigation', () => {
     expect(DOMAIN_STUDIO_NAVIGATION.flatMap((group) => group.items.map((item) => item.label))).toEqual([
       'Map',
       'Terms & concepts',
+      'Meanings',
       'Skills',
       'Saved queries',
       'Used by',

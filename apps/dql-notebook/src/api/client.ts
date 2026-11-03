@@ -5123,6 +5123,53 @@ function appSourceCandidateToRecommendation(source: AppSourceCandidateWire): App
   };
 }
 
+export type MeaningTableState = 'needs_review' | 'reviewed' | 'stale' | 'described' | 'undescribed';
+export type MeaningWordSource = 'ai' | 'person' | 'warehouse';
+
+export interface MeaningTableSummary {
+  id: string;
+  relation: string;
+  schema?: string;
+  name: string;
+  kind: string;
+  domain?: string;
+  state: MeaningTableState;
+  description?: string;
+  source?: MeaningWordSource;
+  columns: number;
+  describedColumns: number;
+  drafts: number;
+}
+
+export interface MeaningTableDetail extends MeaningTableSummary {
+  otherNames: string[];
+  model?: string;
+  date?: string;
+  evidence: string[];
+  columnDetails: Array<{ name: string; type?: string; description?: string; source?: MeaningWordSource; model?: string; date?: string }>;
+}
+
+export interface MeaningDraftJob {
+  running: boolean;
+  done: number;
+  total: number;
+  error?: string;
+  report?: {
+    tablesDrafted: number;
+    columnsDrafted: number;
+    dropped: Array<{ relation: string; column?: string; reason: string }>;
+    failed: Array<{ tables: string[]; reason: string }>;
+    stopped?: string;
+  };
+}
+
+export interface MeaningsOverview {
+  status: { tables: number; drafted: number; reviewed: number; stale: number; undescribed: number };
+  tables: MeaningTableSummary[];
+  plan: { tables: number; columns: number; calls: number; alreadyDone: number; overLimit: number; estimatedInputTokens: number; estimatedOutputTokens: number; sendsSampleValues: boolean };
+  drafting: { available: boolean; reason?: string; job?: MeaningDraftJob };
+}
+
 export const api = {
   async listOperations(limit = 50): Promise<{ operations: LocalOperation[] }> {
     return request(`/api/operations?limit=${Math.max(1, Math.min(100, Math.floor(limit)))}`);
@@ -9414,6 +9461,36 @@ export const api = {
   /** What Ask will use and enforce for a domain or subject area. → GET /api/modeling/ask-impact */
   async getAskImpact(domain: string, area?: string | null): Promise<AskImpactResponse> {
     return request<AskImpactResponse>(`/api/modeling/ask-impact?domain=${encodeURIComponent(domain)}${area ? `&area=${encodeURIComponent(area)}` : ''}`);
+  },
+
+  /** Every table's standing, and what a draft would send and cost. → GET /api/meanings */
+  async getMeanings(): Promise<MeaningsOverview> {
+    return request<MeaningsOverview>('/api/meanings');
+  },
+
+  /** One table's words, column by column. → GET /api/meanings/table */
+  async getMeaningTable(id: string): Promise<{ table: MeaningTableDetail }> {
+    return request<{ table: MeaningTableDetail }>(`/api/meanings/table?id=${encodeURIComponent(id)}`);
+  },
+
+  /** A person's edit. → PUT /api/meanings/table */
+  async saveMeaningTable(edit: { id: string; description?: string; otherNames?: string[]; columns?: Record<string, string> }): Promise<{ table: MeaningTableDetail }> {
+    return request<{ table: MeaningTableDetail }>('/api/meanings/table', { method: 'PUT', body: JSON.stringify(edit) });
+  },
+
+  /** Keep these drafts: the AI label comes off. → POST /api/meanings/accept */
+  async acceptMeanings(ids: string[]): Promise<{ accepted: number; skippedStale: number }> {
+    return request<{ accepted: number; skippedStale: number }>('/api/meanings/accept', { method: 'POST', body: JSON.stringify({ ids }) });
+  },
+
+  /** Start the AI first draft. It runs on; getMeanings reports its progress. → POST /api/meanings/draft */
+  async startMeaningDraft(): Promise<{ job: MeaningDraftJob }> {
+    return request<{ job: MeaningDraftJob }>('/api/meanings/draft', { method: 'POST', body: '{}' });
+  },
+
+  /** AI drafts of the words people use, as draft terms. → POST /api/terms/draft */
+  async draftTerms(domain?: string | null): Promise<{ drafted: Array<{ name: string; path: string }>; dropped: Array<{ term: string; reason: string }> }> {
+    return request<{ drafted: Array<{ name: string; path: string }>; dropped: Array<{ term: string; reason: string }> }>('/api/terms/draft', { method: 'POST', body: JSON.stringify(domain ? { domain } : {}) });
   },
 
   /** Business terms Ask maps words through. → GET /api/terms */

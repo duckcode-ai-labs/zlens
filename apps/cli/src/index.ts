@@ -108,6 +108,13 @@ const HELP = `
                                     Write reviewed sparse Domain Package proposals
     zlens model import <file-or-directory> --domain <id> --area <id> --dry-run|--apply
                                     Import DQL/dbt YAML through the guarded proposal service
+    zlens model draft-meanings [path] [--dry-run] [--max-tables <n>]
+                                    AI first draft of what tables and columns mean, into meanings/
+    zlens model meanings [path]     How many tables are drafted, reviewed, stale or undescribed
+    zlens model draft-terms [path] [--domain <id>]
+                                    AI drafts of the words people use; they answer nothing until certified
+    zlens model draft-metrics [path] [--domain <id>]
+                                    Metric drafts from the aggregates recent queries repeat
     zlens model explain <id> [path] Explain whether a relationship is automatic join proof
     zlens model validate-relationship <id>|--all [path] [--certify] [--dry-run]
                                     Check an authored relationship on the warehouse and record the evidence

@@ -1,0 +1,110 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readMeaningFiles, relationColumnsFingerprint, relationMeaning, writeMeaningFile, type DQLManifest, type WarehouseCatalogRelationV1 } from '@zlens/core';
+import { routeAction } from './host/route-actions.js';
+import { acceptMeanings, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
+
+const lines: WarehouseCatalogRelationV1 = {
+  id: 'warehouse.sales.lines', schema: 'sales', name: 'lines', relation: 'sales.lines', kind: 'table',
+  columns: [{ name: 'price', type: 'numeric' }, { name: 'tax', type: 'numeric', comment: 'Tax on this line' }],
+};
+const bare: WarehouseCatalogRelationV1 = { id: 'warehouse.sales.bare', schema: 'sales', name: 'bare', relation: 'sales.bare', kind: 'table', columns: [{ name: 'a' }] };
+const snapshot = { relations: [lines, bare] };
+const manifest = { modeling: { entities: { orders: { dbtUniqueId: lines.id, domain: 'sales_area' } } } } as unknown as DQLManifest;
+
+describe('reviewing what the data means', () => {
+  let root: string;
+  const draft = (over: Record<string, unknown> = {}) => writeMeaningFile(root, {
+    version: 1, id: lines.id, relation: lines.relation, columnsFingerprint: relationColumnsFingerprint(lines),
+    table: { description: 'One row per line.', source: 'ai', model: 'm', date: '2026-11-01', otherNames: ['revenue lines'], evidence: ['the names and types of 2 columns'] },
+    columns: { price: { description: 'What it sold for', source: 'ai', model: 'm', date: '2026-11-01' } },
+    ...over,
+  });
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), 'meaning-routes-')); });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it('lists every table with its standing and domain', () => {
+    draft();
+    const tables = meaningsOverview(root, snapshot, manifest);
+    expect(tables.map((table) => [table.name, table.state, table.domain])).toEqual([['bare', 'undescribed', undefined], ['lines', 'needs_review', 'sales_area']]);
+    expect(tables[1]).toMatchObject({ source: 'ai', columns: 2, describedColumns: 2, drafts: 2 });
+  });
+
+  it('shows who wrote each column, and why a draft says what it says', () => {
+    draft();
+    const detail = meaningTableDetail(root, snapshot, manifest, lines.id)!;
+    expect(detail.columnDetails).toEqual([
+      { name: 'price', type: 'numeric', description: 'What it sold for', source: 'ai', model: 'm', date: '2026-11-01' },
+      { name: 'tax', type: 'numeric', description: 'Tax on this line', source: 'warehouse' },
+    ]);
+    expect(detail.evidence).toEqual(['the names and types of 2 columns']);
+    expect(detail.otherNames).toEqual(['revenue lines']);
+  });
+
+  it('a stale draft is shown as stale and its words are not offered as current', () => {
+    draft({ columnsFingerprint: 'old' });
+    const detail = meaningTableDetail(root, snapshot, manifest, lines.id)!;
+    expect(detail.state).toBe('stale');
+    expect(detail.describedColumns).toBe(1);
+    expect(detail.description).toBeUndefined();
+    expect(detail.columnDetails[0]?.description).toBeUndefined();
+  });
+
+  it('an edit is the person\'s, and the rest of the table stays a draft', () => {
+    draft();
+    expect(saveMeaningEdit(root, snapshot, { id: lines.id, columns: { PRICE: 'Line total  including tax' } }, '2026-11-02')).toBe('saved');
+    const file = readMeaningFiles(root).get(lines.id)!;
+    expect(file.columns.price).toEqual({ description: 'Line total including tax', source: 'person', date: '2026-11-02' });
+    expect(file.table?.source).toBe('ai');
+  });
+
+  it("an edit to a column the warehouse commented is the person's and wins", () => {
+    saveMeaningEdit(root, snapshot, { id: lines.id, columns: { tax: 'Tax in local currency' } }, '2026-11-02');
+    expect(relationMeaning(readMeaningFiles(root).get(lines.id), lines)?.columns.get('tax')?.text).toBe('Tax in local currency');
+  });
+
+  it('an empty description removes the entry', () => {
+    draft();
+    saveMeaningEdit(root, snapshot, { id: lines.id, columns: { price: '  ' } }, '2026-11-02');
+    expect(readMeaningFiles(root).get(lines.id)?.columns.price).toBeUndefined();
+  });
+
+  it('other names need a table description', () => {
+    expect(saveMeaningEdit(root, snapshot, { id: bare.id, otherNames: ['things'] }, '2026-11-02')).toBe('needs_description');
+    expect(saveMeaningEdit(root, snapshot, { id: bare.id, description: 'Things', otherNames: ['things', ' things '] }, '2026-11-02')).toBe('saved');
+    expect(readMeaningFiles(root).get(bare.id)?.table?.otherNames).toEqual(['things']);
+  });
+
+  it('a table not in the catalog is refused, and a column not on the table is ignored', () => {
+    expect(saveMeaningEdit(root, snapshot, { id: 'warehouse.gone', description: 'x' }, '2026-11-02')).toBe('no_table');
+    saveMeaningEdit(root, snapshot, { id: lines.id, columns: { imaginary: 'x' } }, '2026-11-02');
+    expect(readMeaningFiles(root).get(lines.id)?.columns).toEqual({});
+  });
+
+  it('Accept takes the AI label off and keeps the words, the model and the other names', () => {
+    draft();
+    expect(acceptMeanings(root, snapshot, [lines.id], '2026-11-02')).toEqual({ accepted: 1, skippedStale: 0 });
+    const file = readMeaningFiles(root).get(lines.id)!;
+    expect(file.table).toEqual({ description: 'One row per line.', source: 'person', model: 'm', date: '2026-11-02', otherNames: ['revenue lines'] });
+    expect(file.columns.price?.source).toBe('person');
+    expect(meaningTableDetail(root, snapshot, manifest, lines.id)?.state).toBe('reviewed');
+  });
+
+  it('Accept never takes a stale draft, and a second Accept changes nothing', () => {
+    draft({ columnsFingerprint: 'old' });
+    expect(acceptMeanings(root, snapshot, [lines.id], '2026-11-02')).toEqual({ accepted: 0, skippedStale: 1 });
+    draft();
+    acceptMeanings(root, snapshot, [lines.id], '2026-11-02');
+    expect(acceptMeanings(root, snapshot, [lines.id], '2026-11-03')).toEqual({ accepted: 0, skippedStale: 0 });
+    expect(readMeaningFiles(root).get(lines.id)?.table?.date).toBe('2026-11-02');
+  });
+
+  it('on a hosted server reading needs read, editing is authoring, and a draft needs an administrator', () => {
+    expect(routeAction('GET', '/api/meanings')?.action).toBe('project.read');
+    expect(routeAction('PUT', '/api/meanings/table')?.action).toBe('dataset.author');
+    expect(routeAction('POST', '/api/meanings/accept')?.action).toBe('dataset.author');
+    expect(routeAction('POST', '/api/meanings/draft')?.action).toBe('settings.manage');
+  });
+});

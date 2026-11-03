@@ -13,7 +13,11 @@ import {
   type DomainProposal,
 } from '@zlens/core';
 import type { CLIFlags } from '../args.js';
-import { rejectDiscoveredRelationship, startLocalServer, validateProjectRelationships } from '../local-runtime.js';
+import { draftProjectMetricsFromHistory, meaningDraftProvider, rejectDiscoveredRelationship, startLocalServer, termDirectoryFor, validateProjectRelationships } from '../local-runtime.js';
+import { draftMeanings, meaningsStatus, planMeaningDrafts } from '../meaning-draft.js';
+import { meaningCatalog } from '../meaning-routes.js';
+import { draftTerms } from '../term-draft.js';
+import { readValueProfile, valueProfileAllowed } from '../value-profile.js';
 
 /** `zlens model` — inspect/validate v3 and preview evidence-bounded discovery (AGT-002/API-001). */
 export async function runModel(file: string | null, rest: string[], flags: CLIFlags): Promise<void> {
@@ -36,6 +40,22 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
   }
   if (subcommand === 'reject-discovery') {
     runRejectDiscovery(rest, flags);
+    return;
+  }
+  if (subcommand === 'draft-meanings') {
+    await runDraftMeanings(rest, flags);
+    return;
+  }
+  if (subcommand === 'meanings') {
+    runMeaningsStatus(rest, flags);
+    return;
+  }
+  if (subcommand === 'draft-terms') {
+    await runDraftTerms(rest, flags);
+    return;
+  }
+  if (subcommand === 'draft-metrics') {
+    await runDraftMetrics(rest, flags);
     return;
   }
   const args = rest.filter((value) => !value.startsWith('-'));
@@ -119,6 +139,148 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
     console.log('Relationships');
     for (const relationship of output.relationships) console.log(`  ${relationship.id}: ${relationship.from} → ${relationship.to} [${relationship.automaticJoinAllowed ? 'safe' : relationship.fanout}] · ${relationship.status}${relationship.validation ? ` · warehouse ${relationship.validation.status}` : ''}`);
   }
+}
+
+/** The project's warehouse catalog, or an error said once. */
+function meaningsCatalog(rest: string[], flags: CLIFlags): { projectRoot: string; snapshot: NonNullable<ReturnType<typeof meaningCatalog>> } | undefined {
+  const projectRoot = resolve(positionalArgs(rest, ['--max-tables'])[0] ?? '.');
+  if (!existsSync(resolve(projectRoot, 'dql.config.json'))) {
+    modelImportError(flags, 'PROJECT_NOT_FOUND', `No ZLens project found at ${projectRoot} (missing dql.config.json).`);
+    return undefined;
+  }
+  const snapshot = meaningCatalog(projectRoot);
+  if (!snapshot) {
+    modelImportError(flags, 'NO_WAREHOUSE_CATALOG', 'No tables to describe yet. Run `zlens sync warehouse` or `zlens sync dbt` first.');
+    return undefined;
+  }
+  return { projectRoot, snapshot };
+}
+
+/**
+ * `zlens model draft-meanings [path]`: an AI first draft of what the tables and
+ * columns mean. `--dry-run` says what would be sent and roughly what it costs,
+ * with no model call. `--max-tables <n>` lowers the limit on one run.
+ */
+async function runDraftMeanings(rest: string[], flags: CLIFlags): Promise<void> {
+  const catalog = meaningsCatalog(rest, flags);
+  if (!catalog) return;
+  const { projectRoot, snapshot } = catalog;
+  const limitIndex = rest.indexOf('--max-tables');
+  const maxTables = limitIndex >= 0 ? Number(rest[limitIndex + 1]) : undefined;
+  if (maxTables !== undefined && !(Number.isInteger(maxTables) && maxTables > 0)) {
+    modelImportError(flags, 'INVALID_REQUEST', '--max-tables takes a whole number above zero.');
+    return;
+  }
+  const config = loadProjectConfig(projectRoot);
+  const valueProfile = valueProfileAllowed(config as Parameters<typeof valueProfileAllowed>[0], false) ? readValueProfile(projectRoot, snapshot.fingerprint) : undefined;
+  const plan = planMeaningDrafts(projectRoot, snapshot, { ...(maxTables ? { maxTables } : {}), ...(valueProfile ? { valueProfile } : {}) });
+  const planSummary = { tables: plan.tables, columns: plan.columns, batches: plan.batches.length, alreadyDone: plan.alreadyDone, overLimit: plan.overLimit, estimatedInputTokens: plan.estimatedInputTokens, estimatedOutputTokens: plan.estimatedOutputTokens, sendsSampleValues: Boolean(valueProfile) };
+  const human = flags.format !== 'json';
+  if (human) {
+    console.log(`To draft: ${plan.tables} tables, ${plan.columns} columns, in ${plan.batches.length} model calls.`);
+    if (plan.alreadyDone) console.log(`Already done: ${plan.alreadyDone} tables.`);
+    if (plan.overLimit) console.log(`Past the limit, left for the next run: ${plan.overLimit} tables.`);
+    console.log(`Sends table names, column names, types and keys${valueProfile ? ', and sample values from the value profile' : ''}. ${valueProfile ? '' : 'No rows. '}About ${plan.estimatedInputTokens.toLocaleString('en-US')} tokens in and ${plan.estimatedOutputTokens.toLocaleString('en-US')} out.`);
+  }
+  if (flags.dryRun === true || plan.tables === 0) {
+    if (!human) console.log(JSON.stringify({ plan: planSummary }, null, 2));
+    return;
+  }
+  const selected = await meaningDraftProvider(projectRoot);
+  if (!selected) {
+    modelImportError(flags, 'NO_AI_PROVIDER', 'No AI provider is connected. Add one in Settings → AI, then run this again.');
+    return;
+  }
+  const report = await draftMeanings({
+    projectRoot,
+    snapshot,
+    provider: selected.provider,
+    ...(selected.model ? { model: selected.model } : {}),
+    ...(maxTables ? { maxTables } : {}),
+    ...(valueProfile ? { valueProfile } : {}),
+    date: new Date().toISOString().slice(0, 10),
+    ...(human ? { onBatch: ({ done, total }: { done: number; total: number }) => console.log(`  ${done} of ${total} calls done`) } : {}),
+  });
+  if (!human) {
+    console.log(JSON.stringify({ plan: planSummary, report }, null, 2));
+  } else {
+    console.log(`Drafted ${report.tablesDrafted} tables and ${report.columnsDrafted} column descriptions into meanings/. Nothing is reviewed yet.`);
+    for (const item of report.dropped) console.log(`  dropped ${item.relation}${item.column ? `.${item.column}` : ''}: ${item.reason}`);
+    for (const item of report.failed) console.log(`  not drafted (${item.tables.length} tables): ${item.reason}`);
+    if (report.stopped) console.log(`Stopped early: ${report.stopped}`);
+    if (report.failed.length) console.log('Run this again to draft what is left.');
+  }
+  if (report.tablesDrafted === 0 && report.failed.length > 0) process.exitCode = 1;
+}
+
+/**
+ * `zlens model draft-terms [path] [--domain <id>]`: AI drafts of the words people
+ * use, as draft terms that answer nothing until someone certifies them.
+ */
+async function runDraftTerms(rest: string[], flags: CLIFlags): Promise<void> {
+  const catalog = meaningsCatalog(rest, flags);
+  if (!catalog) return;
+  const selected = await meaningDraftProvider(catalog.projectRoot);
+  if (!selected) {
+    modelImportError(flags, 'NO_AI_PROVIDER', 'No AI provider is connected. Add one in Settings → AI, then run this again.');
+    return;
+  }
+  const domain = flags.domain || undefined;
+  const manifest = buildManifest({ projectRoot: catalog.projectRoot, dbtManifestPath: resolveDbtManifestPath(catalog.projectRoot) ?? undefined });
+  const report = await draftTerms({
+    projectRoot: catalog.projectRoot,
+    snapshot: catalog.snapshot,
+    terms: Object.values(manifest.terms ?? {}),
+    provider: selected.provider,
+    ...(domain ? { domain } : {}),
+    directory: termDirectoryFor(catalog.projectRoot, domain),
+  });
+  if (flags.format === 'json') {
+    console.log(JSON.stringify(report, null, 2));
+  } else {
+    console.log(`Drafted ${report.drafted.length} terms. They answer nothing until someone certifies them.`);
+    for (const term of report.drafted) console.log(`  ${term.name}: ${term.path}`);
+    for (const item of report.dropped) console.log(`  dropped ${item.term}: ${item.reason}`);
+    if (report.failed) console.log(`Failed: ${report.failed}`);
+  }
+  if (report.failed) process.exitCode = 1;
+}
+
+/**
+ * `zlens model draft-metrics [path] [--domain <id>]`: metric
+ * drafts from the aggregates recent queries repeat. Reads query text in memory
+ * and keeps only expressions and counts.
+ */
+async function runDraftMetrics(rest: string[], flags: CLIFlags): Promise<void> {
+  const catalog = meaningsCatalog(rest, flags);
+  if (!catalog) return;
+  const { WorkbenchRoutedQueryExecutor } = await import('../workbench-query-route.js');
+  const executor = new WorkbenchRoutedQueryExecutor(catalog.projectRoot, { onRoute: (via) => { if (flags.format !== 'json') console.error(`  Running the reads through ${via}`); } });
+  const outcome = await draftProjectMetricsFromHistory(catalog.projectRoot, { executor, ...(flags.domain ? { domain: flags.domain } : {}) });
+  if (flags.format === 'json') {
+    console.log(JSON.stringify(outcome, null, 2));
+  } else if (outcome.error) {
+    console.error(outcome.error);
+  } else {
+    console.log(`Read ${outcome.statements} statements; ${outcome.repeated} aggregates repeat.`);
+    for (const item of outcome.items) {
+      console.log(item.failed ? `  not drafted ${item.name}: ${item.failed}` : `  ${item.name}: ${item.inWords}${item.value !== undefined ? ` Ran: ${item.value}.` : ''}`);
+    }
+    console.log('These are drafts and answer nothing. Review them with `zlens semantic drafts`, prove them with `zlens migrate compare`, then `zlens semantic approve`.');
+  }
+  if (outcome.error) process.exitCode = 1;
+}
+
+/** `zlens model meanings [path]`: how far the descriptions have got. */
+function runMeaningsStatus(rest: string[], flags: CLIFlags): void {
+  const catalog = meaningsCatalog(rest, flags);
+  if (!catalog) return;
+  const status = meaningsStatus(catalog.projectRoot, catalog.snapshot);
+  if (flags.format === 'json') {
+    console.log(JSON.stringify(status, null, 2));
+    return;
+  }
+  console.log(`${status.tables} tables: ${status.drafted} with unreviewed AI drafts, ${status.reviewed} reviewed, ${status.stale} stale, ${status.undescribed} with no description.`);
 }
 
 /** Positional arguments, skipping the value after a flag that takes one. */

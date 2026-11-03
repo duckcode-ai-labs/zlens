@@ -7,6 +7,7 @@ import { themes } from '../../themes/notebook-theme';
 import { ConnectionPanel } from '../panels/ConnectionPanel';
 import { ConnectionRuntimeSettings } from '../settings/SettingsPage';
 import { DbtProjectEditor, type DbtProjectConfigured } from '../settings/DbtProjectEditor';
+import { DraftMeaningsCard } from '../modeling/MeaningsPanel';
 import { DraftModelsCard, ExistingProjectSyncCard, ModelSourceChooser } from './ModelSourceChooser';
 import {
   draftErrorMessage,
@@ -458,6 +459,7 @@ export function SetupOnboarding({
                 <h2 style={{ margin: '7px 0 0', fontSize: 22, color: t.textPrimary }}>Where do you want to start?</h2>
                 {aiState === 'missing' || aiSkipped ? <div style={{ fontSize: 12, color: t.textMuted, marginTop: 7 }}>AI is not set up. You can run queries and build Apps without it; connect a provider in Settings when you want Ask.</div> : null}
               </div>
+              {draftsFromWarehouse(source) && aiState !== 'missing' && !aiSkipped ? <DraftMeaningsCard t={t} quiet /> : null}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 11 }}>
                 {drafted ? (
                   <StartCard icon={<Boxes size={17} />} title="Review drafted models" body="Check the drafted models and joins, certify the ones that are right, then Ask." action="Open Modeling" onClick={() => finishTo('domains')} t={t} primary={finishTarget === 'domains'} />

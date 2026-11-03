@@ -871,24 +871,35 @@ interface ViewJoin {
  * reader for the common `FROM a [AS] x JOIN b [AS] y ON x.c = y.d` shape; a
  * statement it cannot read yields nothing rather than a guess.
  */
-export function viewJoins(sql: string): ViewJoin[] {
+const SQL_IDENTIFIER = '(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$]*)';
+const SQL_QUALIFIED = `${SQL_IDENTIFIER}(?:\\s*\\.\\s*${SQL_IDENTIFIER}){0,2}`;
+const cleanSqlName = (value: string) => value.replace(/["`\[\]]/g, '').replace(/\s*\.\s*/g, '.');
+
+/** The tables a statement reads, by every name its text can use for them: alias, bare name and spelled name, lower case. */
+export function statementTables(sql: string): Map<string, string> {
   const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\s+/g, ' ');
-  const identifier = '(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$]*)';
-  const qualified = `${identifier}(?:\\s*\\.\\s*${identifier}){0,2}`;
   const reserved = new Set(['on', 'using', 'join', 'left', 'right', 'inner', 'outer', 'full', 'cross', 'where', 'group', 'order', 'limit', 'natural', 'lateral', 'union', 'having', 'window', 'qualify']);
   const aliases = new Map<string, string>();
   // The alias may not be a keyword: `FROM a JOIN b` has no alias, and reading
   // JOIN as one would swallow the next table.
   const notKeyword = `(?!(?:${[...reserved].join('|')})\\b)`;
-  const tableRef = new RegExp(`\\b(?:from|join)\\s+(${qualified})(?:\\s+(?:as\\s+)?${notKeyword}(${identifier}))?`, 'gi');
-  const clean = (value: string) => value.replace(/["`\[\]]/g, '').replace(/\s*\.\s*/g, '.');
+  const tableRef = new RegExp(`\\b(?:from|join)\\s+(${SQL_QUALIFIED})(?:\\s+(?:as\\s+)?${notKeyword}(${SQL_IDENTIFIER}))?`, 'gi');
   for (const match of text.matchAll(tableRef)) {
-    const relation = clean(match[1]!);
+    const relation = cleanSqlName(match[1]!);
     if (relation.startsWith('(')) continue;
-    const alias = match[2] ? clean(match[2]) : undefined;
+    const alias = match[2] ? cleanSqlName(match[2]) : undefined;
     aliases.set((alias ?? relation.split('.').pop()!).toLowerCase(), relation);
     aliases.set(relation.toLowerCase(), relation);
   }
+  return aliases;
+}
+
+export function viewJoins(sql: string): ViewJoin[] {
+  const text = sql.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/\s+/g, ' ');
+  const identifier = SQL_IDENTIFIER;
+  const qualified = SQL_QUALIFIED;
+  const clean = cleanSqlName;
+  const aliases = statementTables(text);
   const joins: ViewJoin[] = [];
   const condition = new RegExp(`(${qualified})\\s*\\.\\s*(${identifier})\\s*=\\s*(${qualified})\\s*\\.\\s*(${identifier})`, 'g');
   for (const on of text.matchAll(/\bon\b(.*?)(?=\b(?:join|left|right|inner|full|cross|where|group|order|limit|union|having|qualify)\b|\)|$)/gi)) {
@@ -906,9 +917,10 @@ export function viewJoins(sql: string): ViewJoin[] {
  * The statement that lists recent query text a warehouse role can see, per
  * driver; undefined where the warehouse keeps no readable history.
  */
-export function queryHistorySql(driver: string, options: { database?: string; location?: string; limit?: number } = {}): string | undefined {
+export function queryHistorySql(driver: string, options: { database?: string; location?: string; limit?: number; aggregates?: boolean } = {}): string | undefined {
   const limit = Math.max(1, Math.min(options.limit ?? 5_000, 20_000));
   const d = driver.toLowerCase();
+  if (options.aggregates) return aggregateHistorySql(d, options, limit);
   if (d === 'snowflake') {
     const db = options.database ? `"${options.database.replace(/"/g, '""')}".` : '';
     return `SELECT query_text FROM TABLE(${db}INFORMATION_SCHEMA.QUERY_HISTORY(RESULT_LIMIT => ${Math.min(limit, 10_000)})) WHERE execution_status = 'SUCCESS' AND query_type = 'SELECT' AND query_text ILIKE '%join%'`;
@@ -919,6 +931,26 @@ export function queryHistorySql(driver: string, options: { database?: string; lo
   if (d === 'bigquery') {
     const region = `region-${(options.location ?? 'US').toLowerCase()}`;
     return `SELECT query AS query_text FROM \`${region}\`.INFORMATION_SCHEMA.JOBS_BY_PROJECT WHERE statement_type = 'SELECT' AND state = 'DONE' AND error_result IS NULL AND creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) AND LOWER(query) LIKE '%join%' LIMIT ${limit}`;
+  }
+  return undefined;
+}
+
+/**
+ * The same history for the statements that aggregate, with who ran them so
+ * people can be counted, and how often where the warehouse keeps that. The
+ * names are read in memory, counted and dropped.
+ */
+function aggregateHistorySql(d: string, options: { database?: string; location?: string }, limit: number): string | undefined {
+  const anyAggregate = (column: string, like: string) => ['sum(', 'avg(', 'min(', 'max(', 'count(distinct'].map((word) => `${column} ${like} '%${word}%'`).join(' OR ');
+  if (d === 'snowflake') {
+    const db = options.database ? `"${options.database.replace(/"/g, '""')}".` : '';
+    return `SELECT query_text, user_name AS query_user FROM TABLE(${db}INFORMATION_SCHEMA.QUERY_HISTORY(RESULT_LIMIT => ${Math.min(limit, 10_000)})) WHERE execution_status = 'SUCCESS' AND query_type = 'SELECT' AND (${anyAggregate('query_text', 'ILIKE')})`;
+  }
+  if (d === 'postgres' || d === 'postgresql') return `SELECT query AS query_text, userid::text AS query_user, calls AS query_calls FROM pg_stat_statements WHERE ${anyAggregate('query', 'ILIKE')} ORDER BY calls DESC LIMIT ${limit}`;
+  if (d === 'databricks') return `SELECT statement_text AS query_text, executed_by AS query_user FROM system.query.history WHERE statement_type = 'SELECT' AND execution_status = 'FINISHED' AND (${anyAggregate('lower(statement_text)', 'LIKE')}) ORDER BY start_time DESC LIMIT ${limit}`;
+  if (d === 'bigquery') {
+    const region = `region-${(options.location ?? 'US').toLowerCase()}`;
+    return `SELECT query AS query_text, user_email AS query_user FROM \`${region}\`.INFORMATION_SCHEMA.JOBS_BY_PROJECT WHERE statement_type = 'SELECT' AND state = 'DONE' AND error_result IS NULL AND creation_time > TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 30 DAY) AND (${anyAggregate('LOWER(query)', 'LIKE')}) ORDER BY creation_time DESC LIMIT ${limit}`;
   }
   return undefined;
 }

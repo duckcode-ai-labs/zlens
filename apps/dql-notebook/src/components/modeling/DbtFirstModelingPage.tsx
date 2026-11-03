@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Blocks, BookOpen, Boxes, CheckCircle2, Columns3, Download, EyeOff, FileSearch, FolderTree, GitBranch, GraduationCap, Link2, Maximize2, MessageCircle, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, RotateCcw, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, XCircle } from 'lucide-react';
+import { Blocks, BookOpen, Boxes, CheckCircle2, Columns3, Download, EyeOff, FileSearch, FolderTree, GitBranch, GraduationCap, Link2, Maximize2, MessageCircle, MessageSquareText, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, RotateCcw, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, XCircle } from 'lucide-react';
 import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
 import type { DbtMetricAuthoringInput, DbtMetricPatchPreview, ExistingSemanticModel, DbtNodeAuthoringDetail, DbtSourceAuthoringInput, DbtSourcePatchPreview, ManifestModelArea, ManifestModelEntity, ManifestModelRelationship, ModelingAuthoringChange, ModelingChangePreview } from '@zlens/core';
 import { hostAllows, hostReadOnly, readOnlyReason, useHostUi, type HostUiState } from '../../host/host-ui';
@@ -11,6 +11,7 @@ import { parseNotebookFile } from '../../utils/parse-workbook';
 import { SkillsPage } from '../skills/SkillsPage';
 import { DomainSettingsDrawer, type DomainSettingsMode } from '../domains/DomainSettingsDrawer';
 import { authoredDomainOptions } from '../domains/authored-domain-options';
+import { MeaningsPanel } from './MeaningsPanel';
 import { TermsAndConceptsPanel } from './TermsAndConceptsPanel';
 import { RelationshipBuilder } from './RelationshipBuilder';
 import { AskImpactDrawer } from './AskImpactDrawer';
@@ -611,6 +612,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
               </div>
             )}
             {tab === 'terms' && <TermsAndConceptsPanel data={data} domain={selectedDomain} t={t} onProposal={setProposal} />}
+            {tab === 'meanings' && <MeaningsPanel domain={selectedDomain} t={t} />}
             {tab === 'skills' && <SkillsPage embedded domainFilter={selectedDomain} modelAreaFilter={selectedAreaId} sourcePathFilter={domainSkillPaths} />}
             {tab === 'blocks' && <DomainBlocksPanel data={data} domain={selectedDomain} t={t} />}
             {tab === 'used_by' && (
@@ -946,9 +948,11 @@ function domainSectionIcon(section: Tab, size: number, t: Theme, active = false)
         ? GraduationCap
         : section === 'terms'
           ? BookOpen
-          : section === 'used_by'
-            ? FolderTree
-            : Boxes;
+          : section === 'meanings'
+            ? MessageSquareText
+            : section === 'used_by'
+              ? FolderTree
+              : Boxes;
   return <Icon size={size} color={active ? t.accent : t.textMuted} />;
 }
 
