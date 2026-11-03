@@ -270,9 +270,9 @@ views with their keys and comments**.
 A column list says `ordered_at TEXT`; it does not say the text reads
 `12/31/2021 11:45 PM`, or that a status is spelled `delivered`. With a value
 profile, each sync also reads the three most frequent values of every text
-column and the smallest and largest value of every number column (over at
-most 50,000 rows per table, within two minutes), and Ask's SQL drafter sees
-them beside each column.
+column and the range of every number column (over at most 50,000 rows per
+table, within two minutes), and Ask's SQL drafter sees them beside each
+column.
 
 It is **off by default**, because those values are sent to your AI provider
 with the drafting prompt. Turn it on in `dql.config.json`, then sync again:
@@ -294,6 +294,21 @@ with the drafting prompt. Turn it on in `dql.config.json`, then sync again:
 - A sampled value that looks like an email address, a phone or social
   security number, a URL or a credential is dropped, whatever its column is
   called.
+- What the values themselves show is checked too, because a column called
+  `fll_nm` doesn't say it holds names. A value is kept only when at least three
+  sampled rows share it. Text with letters is kept only from a column of
+  categories: at most 50 distinct values that repeat, two rows or more each on
+  average. So people's names, addresses and free text stay out even when the
+  same person appears on many rows. Dates and other values with no letters
+  are kept. Lookup tables of one row per label lose their examples.
+- A number column shows its range to two significant figures (`41000 to
+  87000`), the scale and never one row's exact value.
+- If your column names don't say what they hold, list the columns to read
+  with `include` (patterns matched against `column` or `table.column`), and
+  nothing else is read:
+  `"valueProfile": { "mode": "sampled", "include": ["^status$", "^t_ord\\.sts$"] }`.
+  Even with the checks above, a small set of names that repeats like a
+  category (ten salespeople on every order) can still be sampled.
 - The profile is kept in `.dql/cache/value-profile.json` (never committed),
   rebuilt at each sync, and ignored when it describes another catalog.
 - Under a hosted server (RFC 0010 host hooks), where row and column policies

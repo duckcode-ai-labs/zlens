@@ -48,17 +48,29 @@ export interface ValueProfileV1 {
   relations: Record<string, Record<string, ColumnValueProfile>>;
   /** Columns left out because their names mark them sensitive. */
   skippedSensitive: number;
+  /**
+   * Text columns whose sampled values could identify someone: no value shared
+   * by enough rows, or too many distinct values with letters in them. None of
+   * their values was kept. Absent in profiles written before it.
+   */
+  skippedIdentifying?: number;
 }
 
 export interface ValueProfilePolicy {
   mode: 'off' | 'sampled';
   /** More column-name patterns to leave out, as case-insensitive regular expressions. */
   exclude: RegExp[];
+  /**
+   * When set, only columns matching one of these are read: the safe choice on
+   * a warehouse whose column names don't say what they hold. Matched against
+   * the column name and against `table.column`.
+   */
+  include: RegExp[];
 }
 
 /** What a sync reports about the profile: what was read, why nothing was, or the error. */
 export type ValueProfileSummary =
-  | { relations: number; columns: number; skippedSensitive: number }
+  | { relations: number; columns: number; skippedSensitive: number; skippedIdentifying: number }
   | { skipped: string }
   | { error: string };
 
@@ -87,14 +99,56 @@ const SENSITIVE_VALUE = [
 const EXAMPLE_CHARS = 40;
 const MAX_COLUMNS_PER_RELATION = 80;
 const SAMPLE_ROWS = 50_000;
+/**
+ * A value is kept only when this many sampled rows share it. Names, emails,
+ * addresses and free text are close to one value per row, so they never
+ * qualify, whatever their column is called; a status or a category does.
+ */
+export const MIN_SHARED_ROWS = 3;
+/**
+ * A column with more distinct values than this, or whose values don't repeat
+ * on average, is not a list of categories. Its examples are kept only when
+ * they hold no letters (dates, times, codes of digits): names, places and free
+ * text have letters, and a name repeated on many rows (a person recorded on
+ * each invoice, or each version of a customer in an archive) is still a name.
+ */
+export const MAX_CATEGORY_VALUES = 50;
+const MONTHS_AND_MARKERS = /\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|june?|july?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|mon|tue|wed|thu|fri|sat|sun|am|pm|utc|gmt)\b|(?<=\d)[tz](?=\d|$)/gi;
 
-export function resolveValueProfilePolicy(config: { agent?: { valueProfile?: { mode?: string; exclude?: string[] } } } | undefined): ValueProfilePolicy {
-  const configured = config?.agent?.valueProfile;
-  const exclude: RegExp[] = [];
-  for (const pattern of Array.isArray(configured?.exclude) ? configured.exclude : []) {
-    try { exclude.push(new RegExp(String(pattern), 'i')); } catch { /* an invalid pattern excludes nothing */ }
+/** Whether a value holds no letters but those a date or time is written with. */
+export function letterFree(value: string): boolean {
+  return !/\p{L}/u.test(value.replace(MONTHS_AND_MARKERS, ''));
+}
+
+/** A range is kept to two significant figures: the scale, not one row's exact value. */
+const RANGE_FIGURES = 2;
+
+function patterns(values: unknown): RegExp[] {
+  const out: RegExp[] = [];
+  for (const pattern of Array.isArray(values) ? values : []) {
+    try { out.push(new RegExp(String(pattern), 'i')); } catch { /* an invalid pattern matches nothing */ }
   }
-  return { mode: configured?.mode === 'sampled' ? 'sampled' : 'off', exclude };
+  return out;
+}
+
+export function resolveValueProfilePolicy(config: { agent?: { valueProfile?: { mode?: string; exclude?: string[]; include?: string[] } } } | undefined): ValueProfilePolicy {
+  const configured = config?.agent?.valueProfile;
+  return { mode: configured?.mode === 'sampled' ? 'sampled' : 'off', exclude: patterns(configured?.exclude), include: patterns(configured?.include) };
+}
+
+/** Whether `include` lets this column be read: no list means every column a name rule doesn't stop. */
+export function includedColumn(column: string, policy: Pick<ValueProfilePolicy, 'include'>, relation?: string): boolean {
+  if (!policy.include.length) return true;
+  const table = relation?.split('.').pop()?.replace(/^"|"$/g, '') ?? '';
+  return policy.include.some((pattern) => pattern.test(column) || (table !== '' && pattern.test(`${table}.${column}`)));
+}
+
+/** A number rounded to two significant figures, as text: 171233410.25 -> 170000000, 0.987 -> 0.99. */
+export function roundedRange(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number === 0) return value;
+  return String(Number(number.toPrecision(RANGE_FIGURES)));
 }
 
 /** Tables of people: a name column there is a person's name. */
@@ -139,6 +193,7 @@ export async function profileWarehouseValues(input: {
   const options = { maxRows: 5, maxBytes: 1024 * 1024, deadlineMs: 10_000 };
   const relations: ValueProfileV1['relations'] = {};
   let skippedSensitive = 0;
+  let skippedIdentifying = 0;
   const run = async (sql: string): Promise<Array<Record<string, unknown>>> => {
     try {
       const result = await input.executor.executePositional(sql, [], input.connection, options);
@@ -152,6 +207,7 @@ export async function profileWarehouseValues(input: {
     if (now() > deadline) break;
     const table = relation.relation.split('.').map((part) => quote(part.replace(/^"|"$/g, ''))).join('.');
     const columns = relation.columns.slice(0, MAX_COLUMNS_PER_RELATION).filter((column) => {
+      if (!includedColumn(column.name, input.policy, relation.relation)) return false;
       if (!isSensitiveColumn(column.name, input.policy, relation.relation)) return true;
       skippedSensitive += 1;
       return false;
@@ -162,8 +218,8 @@ export async function profileWarehouseValues(input: {
       const select = numeric.flatMap((column, index) => [`MIN(${quote(column.name)}) AS ${quote(`min_${index}`)}`, `MAX(${quote(column.name)}) AS ${quote(`max_${index}`)}`]).join(', ');
       const [row] = await run(`SELECT ${select} FROM (SELECT * FROM ${table} ${dialect.limitClause(SAMPLE_ROWS)}) AS sampled`);
       numeric.forEach((column, index) => {
-        const min = text(row?.[`min_${index}`]);
-        const max = text(row?.[`max_${index}`]);
+        const min = roundedRange(text(row?.[`min_${index}`]));
+        const max = roundedRange(text(row?.[`max_${index}`]));
         if (min !== undefined || max !== undefined) profile[column.name] = { ...(min !== undefined ? { min } : {}), ...(max !== undefined ? { max } : {}) };
       });
     }
@@ -171,13 +227,25 @@ export async function profileWarehouseValues(input: {
       if (numeric.includes(column)) continue;
       if (now() > deadline) break;
       const name = quote(column.name);
-      const rows = await run(`SELECT ${name} AS ${quote('value')}, COUNT(*) AS ${quote('n')} FROM (SELECT ${name} FROM ${table} ${dialect.limitClause(SAMPLE_ROWS)}) AS sampled WHERE ${name} IS NOT NULL GROUP BY ${name} ORDER BY COUNT(*) DESC ${dialect.limitClause(3)}`);
-      const examples = rows.map((row) => text(row.value ?? row.VALUE)).filter((value): value is string => value !== undefined && !isSensitiveValue(value));
+      // The three most frequent values, and how many distinct values the sample holds.
+      const rows = await run(`SELECT ${quote('value')}, ${quote('n')}, COUNT(*) OVER () AS ${quote('d')}, SUM(${quote('n')}) OVER () AS ${quote('t')} FROM (SELECT ${name} AS ${quote('value')}, COUNT(*) AS ${quote('n')} FROM (SELECT ${name} FROM ${table} ${dialect.limitClause(SAMPLE_ROWS)}) AS sampled WHERE ${name} IS NOT NULL GROUP BY ${name}) AS grouped ORDER BY ${quote('n')} DESC ${dialect.limitClause(3)}`);
+      const distinct = Number(rows[0]?.d ?? rows[0]?.D ?? 0);
+      const total = Number(rows[0]?.t ?? rows[0]?.T ?? 0);
+      // A category repeats: few distinct values, each on two rows or more on average.
+      const category = distinct <= MAX_CATEGORY_VALUES && distinct * 2 <= total;
+      // Only values enough rows share: what one row holds alone is that row's, not the column's.
+      const values = rows
+        .filter((row) => Number(row.n ?? row.N) >= MIN_SHARED_ROWS)
+        .map((row) => text(row.value ?? row.VALUE))
+        .filter((value): value is string => value !== undefined && !isSensitiveValue(value));
+      const examples = category || values.every(letterFree) ? values : [];
+      // Counted as identifying unless a value pattern (an email, a key) is what emptied it.
+      if (rows.length > 0 && examples.length === 0 && !rows.some((row) => isSensitiveValue(text(row.value ?? row.VALUE) ?? ''))) skippedIdentifying += 1;
       if (examples.length) profile[column.name] = { examples };
     }
     if (Object.keys(profile).length) relations[relation.relation] = profile;
   }
-  return { version: 1, catalogFingerprint: input.snapshot.fingerprint ?? '', capturedAt: new Date(now()).toISOString(), relations, skippedSensitive };
+  return { version: 1, catalogFingerprint: input.snapshot.fingerprint ?? '', capturedAt: new Date(now()).toISOString(), relations, skippedSensitive, skippedIdentifying };
 }
 
 export function writeValueProfile(projectRoot: string, profile: ValueProfileV1): string {
@@ -237,6 +305,7 @@ export async function refreshValueProfile(input: {
       relations: Object.keys(profile.relations).length,
       columns: Object.values(profile.relations).reduce((total, columns) => total + Object.keys(columns).length, 0),
       skippedSensitive: profile.skippedSensitive,
+      skippedIdentifying: profile.skippedIdentifying ?? 0,
     };
   } catch (error) {
     return { error: error instanceof Error ? error.message : String(error) };
