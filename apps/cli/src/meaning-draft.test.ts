@@ -117,6 +117,20 @@ describe('AI first draft of meanings', () => {
     expect(readMeaningFiles(root).size).toBe(0);
   });
 
+  it('a bare name two tables in a batch share goes to neither', async () => {
+    const sales = table('orders');
+    const archive = { ...table('orders'), id: 'warehouse.wwi.archive.orders', schema: 'archive', relation: 'wwi.archive.orders' };
+    const report = await draftMeanings({
+      projectRoot: root,
+      snapshot: { relations: [sales, archive] },
+      provider: provider(() => JSON.stringify({ tables: [{ relation: 'orders', description: 'Which one?' }, { relation: 'wwi.archive.orders', description: 'Old orders.' }] })),
+      date: '2026-11-02',
+    });
+    expect(report.dropped).toContainEqual({ relation: 'orders', reason: 'the model named a table it was not given' });
+    expect(readMeaningFiles(root).get(archive.id)?.table?.description).toBe('Old orders.');
+    expect(readMeaningFiles(root).get(sales.id)).toBeUndefined();
+  });
+
   it('a table the model invents is dropped and listed', async () => {
     const report = await draftMeanings({
       projectRoot: root,

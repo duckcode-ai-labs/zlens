@@ -1187,6 +1187,18 @@ export function withJoinTrust(compiled: SemanticCompileOutput, manifest: DQLMani
 }
 
 /**
+ * A governed answer that read a table with AI-drafted words says so too. The
+ * words may have steered which field the reading chose; they change no trust.
+ */
+export function withDraftedWords(compiled: SemanticCompileOutput, manifest: DQLManifest | undefined, projectRoot: string | undefined): SemanticCompileOutput {
+  const read = ` ${compiled.sql.toLowerCase().replace(/["`[\]]/g, '')} `;
+  const drafted = draftedMeaningRelations(manifest, projectRoot)
+    .filter((relation) => new RegExp(`[^a-z0-9_]${relation.split('.').slice(-2).join('.').toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^a-z0-9_]`).test(read))
+    .map((relation) => relation.split('.').slice(-2).join('.'));
+  return drafted.length ? { ...compiled, wordsCaveat: `used AI-drafted descriptions of ${drafted.join(', ')}, which nobody has reviewed` } : compiled;
+}
+
+/**
  * The answer card's title, from the ONE trust decision and the source of the
  * figures. A certified block served as evidence is never headed "certified"
  * unless the run is, and nothing but SQL the AI wrote is headed AI-drafted:
@@ -1840,7 +1852,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     };
     return {
       ...(layer ? {
-        compileSemantic: async (request) => withJoinTrust(await deps.compileSemantic({ ...request, ...(signal ? { signal } : {}) }, connection, semanticCompileContext(request)), deps.getManifest().manifest),
+        compileSemantic: async (request) => withDraftedWords(withJoinTrust(await deps.compileSemantic({ ...request, ...(signal ? { signal } : {}) }, connection, semanticCompileContext(request)), deps.getManifest().manifest), deps.getManifest().manifest, deps.projectRoot),
         // Different periods are separate MetricFlow/dbt semantic requests, but
         // every branch retains the same selected adapter, connection and
         // cancellation signal.  The host returns executable SQL per branch;
@@ -2412,9 +2424,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           });
           const fullCard = [
             // What a table is, in a warehouse's, a person's or a draft's words,
-            // where the project has them. A dbt project with no meaning files
+            // once the project keeps meaning files. A project without them
             // keeps the prompt it had.
-            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${(warehouseKeys || hasMeaningFiles) && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}` : `- executable relation:${relation}`,
+            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${hasMeaningFiles && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}` : `- executable relation:${relation}`,
             ...current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => columnCard(item)),
             ...declaredKeyLines(relation),
           ];

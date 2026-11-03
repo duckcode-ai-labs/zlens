@@ -6,6 +6,7 @@
 
 import { dbtMeaningRelations } from '@zlens/agent';
 import {
+  meaningEntryInUse,
   meaningFileStale,
   readMeaningFiles,
   readWarehouseCatalog,
@@ -78,24 +79,31 @@ function domainsByRelation(manifest: DQLManifest | undefined): Map<string, strin
 function summarize(relation: WarehouseCatalogRelationV1, file: MeaningFileV1 | undefined, domain: string | undefined): MeaningTableSummary {
   const entries = new Map(Object.entries(file?.columns ?? {}).map(([name, entry]) => [name.toLowerCase(), entry]));
   const stale = file ? meaningFileStale(file, relation) : false;
-  const written = [...(file?.table ? [file.table] : []), ...entries.values()];
-  const drafts = written.filter((entry) => entry.source === 'ai').length;
-  const inUse = (name: string) => {
-    const entry = entries.get(name.toLowerCase());
-    return entry !== undefined && (entry.source === 'person' || !stale);
-  };
-  const describedColumns = relation.columns.filter((column) => column.comment || inUse(column.name)).length;
-  const table = file?.table;
-  const state: MeaningTableState = drafts > 0 && stale
+  const comments = new Map(relation.columns.map((column) => [column.name.toLowerCase(), column.comment]));
+  // Only what is in use counts: a draft behind a comment is hidden everywhere,
+  // so it is neither shown, counted nor offered for Accept.
+  const live = [
+    ...(meaningEntryInUse(file?.table, stale, relation.comment) ? [file!.table!] : []),
+    ...[...entries].filter(([name, entry]) => comments.has(name) && meaningEntryInUse(entry, stale, comments.get(name))).map(([, entry]) => entry),
+  ];
+  const drafts = live.filter((entry) => entry.source === 'ai').length;
+  // Drafts that would be in use but for a column change: these want a redraft.
+  const staleDrafts = stale && (
+    (file?.table?.source === 'ai' && !relation.comment)
+    || [...entries].some(([name, entry]) => entry.source === 'ai' && comments.has(name) && !comments.get(name))
+  );
+  const describedColumns = relation.columns.filter((column) => column.comment || meaningEntryInUse(entries.get(column.name.toLowerCase()), stale, undefined)).length;
+  const table = meaningEntryInUse(file?.table, stale, relation.comment) ? file!.table : undefined;
+  const state: MeaningTableState = staleDrafts
     ? 'stale'
     : drafts > 0
       ? 'needs_review'
-      : written.length > 0
+      : live.length > 0
         ? 'reviewed'
         : relation.comment || describedColumns > 0
           ? 'described'
           : 'undescribed';
-  const description = table && !(table.source === 'ai' && (relation.comment || stale)) ? table.description : relation.comment;
+  const description = table?.description ?? relation.comment;
   return {
     id: relation.id,
     relation: relation.relation,
@@ -104,7 +112,7 @@ function summarize(relation: WarehouseCatalogRelationV1, file: MeaningFileV1 | u
     kind: relation.kind,
     ...(domain ? { domain } : {}),
     state,
-    ...(description ? { description, source: description === relation.comment ? 'warehouse' as const : table!.source } : {}),
+    ...(description ? { description, source: table ? table.source : 'warehouse' as const } : {}),
     columns: relation.columns.length,
     describedColumns,
     drafts,
@@ -127,15 +135,19 @@ export function meaningTableDetail(projectRoot: string, snapshot: Pick<Warehouse
   const file = readMeaningFiles(projectRoot).get(id);
   const entries = new Map(Object.entries(file?.columns ?? {}).map(([name, entry]) => [name.toLowerCase(), entry]));
   const stale = file ? meaningFileStale(file, relation) : false;
+  // A stale draft's names, model and evidence are not offered: saving the
+  // screen would otherwise make them a person's words.
+  // Other names are in use whenever their draft is current, even where a comment covers the description.
+  const table = file?.table && (file.table.source === 'person' || !stale) ? file.table : undefined;
   return {
     ...summarize(relation, file, domainsByRelation(manifest).get(id)),
-    otherNames: file?.table?.otherNames ?? [],
-    ...(file?.table?.model ? { model: file.table.model } : {}),
-    ...(file?.table?.date ? { date: file.table.date } : {}),
-    evidence: file?.table?.evidence ?? [],
+    otherNames: table?.otherNames ?? [],
+    ...(table?.model ? { model: table.model } : {}),
+    ...(table?.date ? { date: table.date } : {}),
+    evidence: table?.evidence ?? [],
     columnDetails: relation.columns.map((column) => {
       const entry = entries.get(column.name.toLowerCase());
-      const usable = entry && (entry.source === 'person' || (!stale && !column.comment)) ? entry : undefined;
+      const usable = meaningEntryInUse(entry, stale, column.comment) ? entry : undefined;
       return {
         name: column.name,
         ...(column.type ? { type: column.type } : {}),
@@ -171,10 +183,13 @@ export function saveMeaningEdit(
   const file = readMeaningFiles(projectRoot).get(edit.id) ?? emptyFile(relation);
   const next: MeaningFileV1 = { ...file, columns: { ...file.columns } };
   const person = (description: string): MeaningEntryV1 => ({ description, source: 'person', date });
+  const stale = meaningFileStale(file, relation);
+  // What the table says now: only words in use carry over into a person's save.
+  const current = meaningEntryInUse(file.table, stale, relation.comment) ? file.table : undefined;
   const names = edit.otherNames === undefined
-    ? file.table?.otherNames ?? []
+    ? current?.otherNames ?? []
     : [...new Set(edit.otherNames.map(trimmed).filter(Boolean))].slice(0, MAX_OTHER_NAMES);
-  const description = edit.description === undefined ? file.table?.description ?? '' : trimmed(edit.description);
+  const description = edit.description === undefined ? current?.description ?? '' : trimmed(edit.description);
   if (edit.description !== undefined || edit.otherNames !== undefined) {
     if (!description && names.length > 0) return 'needs_description';
     if (description) next.table = { ...person(description), ...(names.length ? { otherNames: names } : {}) };
@@ -209,21 +224,23 @@ export function acceptMeanings(
     const relation = snapshot.relations.find((item) => item.id === id);
     const file = files.get(id);
     if (!relation || !file) continue;
-    const reviewed = (entry: MeaningEntryV1): MeaningEntryV1 => {
-      if (entry.source !== 'ai') return entry;
-      const { evidence: _evidence, ...kept } = entry;
-      return { ...kept, source: 'person', date };
-    };
-    const columnsChanged = Object.values(file.columns).some((entry) => entry.source === 'ai');
-    if (!columnsChanged && file.table?.source !== 'ai') continue;
+    if (!Object.values(file.columns).some((entry) => entry.source === 'ai') && file.table?.source !== 'ai') continue;
     if (meaningFileStale(file, relation)) {
       outcome.skippedStale += 1;
       continue;
     }
+    // Only drafts in use are accepted. A draft behind a warehouse comment or a
+    // dbt description was never shown, so it stays a draft, out of use.
+    const comments = new Map(relation.columns.map((column) => [column.name.toLowerCase(), column.comment]));
+    const reviewed = (entry: MeaningEntryV1, comment: string | undefined): MeaningEntryV1 => {
+      if (entry.source !== 'ai' || comment) return entry;
+      const { evidence: _evidence, ...kept } = entry;
+      return { ...kept, source: 'person', date };
+    };
     writeMeaningFile(projectRoot, {
       ...file,
-      ...(file.table ? { table: { ...reviewed(file.table), ...(file.table.otherNames ? { otherNames: file.table.otherNames } : {}) } } : {}),
-      columns: Object.fromEntries(Object.entries(file.columns).map(([name, entry]) => [name, reviewed(entry)])),
+      ...(file.table ? { table: { ...reviewed(file.table, relation.comment), ...(file.table.otherNames ? { otherNames: file.table.otherNames } : {}) } } : {}),
+      columns: Object.fromEntries(Object.entries(file.columns).map(([name, entry]) => [name, reviewed(entry, comments.get(name.toLowerCase()))])),
     });
     outcome.accepted += 1;
   }

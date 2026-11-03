@@ -5059,7 +5059,8 @@ export function dbtMeaningRelations(manifestPath: string): WarehouseCatalogRelat
       kind: 'table',
       ...(comment ? { comment } : {}),
       columns: (listed?.length ? listed : documented).map((column) => {
-        const words = described.get(column.name.toLowerCase());
+        // A dbt description or the warehouse's own comment in catalog.json: either is words a draft never replaces.
+        const words = described.get(column.name.toLowerCase()) ?? column.description;
         return { name: column.name, ...(column.type ? { type: column.type } : {}), ...(words ? { comment: words } : {}) };
       }),
     });
@@ -5123,9 +5124,11 @@ function addWarehouseCatalogObjects(
   objects: Map<string, MetadataObject>,
 ): void {
   const admitted = manifest.dbtProvenance?.nodes ?? {};
+  const meanings = readMeaningFiles(projectRoot);
+  // A project that never wrote a meaning file keeps the search it had.
+  if (meanings.size === 0) return;
   const { snapshot } = readWarehouseCatalog(projectRoot);
   if (!snapshot) return;
-  const meanings = readMeaningFiles(projectRoot);
   for (const relation of snapshot.relations) {
     if (!admitted[relation.id]) continue;
     const bare = objects.get(`warehouse:table:${relation.name}`);

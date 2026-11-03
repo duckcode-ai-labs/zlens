@@ -190,12 +190,13 @@ export function collectInputFiles(options: ManifestBuildOptions): string[] {
     if (semanticManifestPath) files.add(semanticManifestPath);
   }
 
+  // What the tables mean feeds search and the model's cards, so an edit counts as a change, in any mode.
+  for (const f of scanFilesRecursive(join(projectRoot, MEANINGS_DIR), ['.yaml'], scanCache)) files.add(f);
+
   if (modelingModeOf(config)) {
     for (const f of scanFilesRecursive(join(projectRoot, 'domains'), ['.yaml', '.yml'], scanCache)) files.add(f);
     // Warehouse-first and hybrid entities bind to the warehouse catalog snapshot (RFC 0007).
     if (modelingModeOf(config) !== 'dbt-first' && existsSync(join(projectRoot, WAREHOUSE_CATALOG_PATH))) files.add(join(projectRoot, WAREHOUSE_CATALOG_PATH));
-    // What the tables mean feeds search and the model's cards, so an edit counts as a change.
-    for (const f of scanFilesRecursive(join(projectRoot, MEANINGS_DIR), ['.yaml'], scanCache)) files.add(f);
     const registry = loadDomainPackageRegistry(projectRoot);
     for (const f of manifestKnowledgeSkillInputFiles(projectRoot, registry)) files.add(f);
   }

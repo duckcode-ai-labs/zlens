@@ -67,6 +67,33 @@ describe('reading what queries repeat', () => {
     expect(found.map((item) => [item.aggregate, item.expression])).toEqual([['count_distinct', 'customerid']]);
   });
 
+  it('anything but arithmetic over names is left out', () => {
+    for (const text of ['select sum(quantity; drop table x) from sales.invoicelines', 'select sum(quantity) || chr(59) from sales.invoicelines where sum(quantity < 1)', 'select sum(quantity::text) from sales.invoicelines']) {
+      expect(repeatedAggregates([{ text }, { text }], snapshot).filter((item) => item.expression.includes(';') || item.expression.includes('<') || item.expression.includes(':'))).toEqual([]);
+    }
+  });
+
+  it('a long number is someone\'s data: left out', () => {
+    const text = 'select sum(quantity * 4111111111111111) from sales.invoicelines';
+    expect(repeatedAggregates([statement(text), statement(text)], snapshot)).toEqual([]);
+    const small = 'select sum(quantity * 100) from sales.invoicelines';
+    expect(repeatedAggregates([statement(small), statement(small)], snapshot)[0]?.expression).toBe('quantity * 100');
+  });
+
+  it('comment markers hidden in quotes are left out', () => {
+    for (const text of ['select sum(quantity -"-" extendedprice) from sales.invoicelines', 'select sum(quantity /"*"  extendedprice) from sales.invoicelines']) {
+      expect(repeatedAggregates([statement(text), statement(text)], snapshot)).toEqual([]);
+    }
+  });
+
+  it('a huge statement is skipped, and an unclosed bracket is not read to the end', () => {
+    const huge = `select sum(quantity) from sales.invoicelines ${'x '.repeat(30_000)}`;
+    expect(repeatedAggregates([statement(huge), statement(huge)], snapshot)).toEqual([]);
+    const started = Date.now();
+    repeatedAggregates([statement(`select ${'sum('.repeat(5_000)} from sales.invoicelines`)], snapshot);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
   it('a subquery is left out', () => {
     const text = 'select sum((select max(quantity) from sales.invoicelines)) from sales.invoices';
     expect(repeatedAggregates([statement(text), statement(text)], snapshot).filter((item) => item.aggregate === 'sum')).toEqual([]);

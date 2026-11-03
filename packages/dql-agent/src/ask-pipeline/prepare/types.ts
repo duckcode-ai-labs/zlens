@@ -175,6 +175,8 @@ export interface SemanticCompileOutput {
    * Absent: the host could not tell, and the compile keeps its governed trust.
    */
   joinTrust?: { certified: boolean; caveat?: string };
+  /** Words the answer leaned on that nobody has reviewed (AI-drafted descriptions); said in the answer, trust unchanged. */
+  wordsCaveat?: string;
 }
 
 export interface RelationalJoinStep {

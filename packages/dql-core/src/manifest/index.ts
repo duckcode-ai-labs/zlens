@@ -29,6 +29,7 @@ export {
   MEANINGS_DIR,
   catalogWithMeanings,
   meaningFilePath,
+  meaningEntryInUse,
   meaningFileStale,
   meaningHasDraft,
   meaningText,

@@ -16562,15 +16562,19 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             json(409, { error: 'A draft is already running.', job: meaningDraftJob });
             return;
           }
+          // Claimed before anything is awaited, so a second request can't start a second draft.
+          const job: MeaningDraftJob = { running: true, done: 0, total: 0 };
+          meaningDraftJob = job;
           const selected = await meaningDraftProvider(projectRoot);
           if (!selected) {
+            job.running = false;
+            job.error = 'No AI provider is connected.';
             json(409, { error: 'No AI provider is connected. Add one in Settings → AI, then try again.' });
             return;
           }
           const body = (await readJSON(req).catch(() => ({}))) as { maxTables?: unknown };
           const maxTables = typeof body.maxTables === 'number' && Number.isInteger(body.maxTables) && body.maxTables > 0 ? body.maxTables : undefined;
-          const job: MeaningDraftJob = { running: true, done: 0, total: planMeaningDrafts(projectRoot, catalog, { ...(maxTables ? { maxTables } : {}), ...(valueProfile ? { valueProfile } : {}) }).batches.length };
-          meaningDraftJob = job;
+          job.total = planMeaningDrafts(projectRoot, catalog, { ...(maxTables ? { maxTables } : {}), ...(valueProfile ? { valueProfile } : {}) }).batches.length;
           // A draft takes minutes, so it runs on and the screen reads its progress.
           void draftMeanings({
             projectRoot,

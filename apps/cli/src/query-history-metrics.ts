@@ -47,10 +47,14 @@ export interface RepeatedAggregate {
 const AGGREGATE_CALL = /\b(sum|avg|min|max|count)\s*\(/gi;
 const EXPRESSION_WORDS = new Set(['case', 'when', 'then', 'else', 'end', 'and', 'or', 'not', 'null', 'is', 'coalesce', 'nullif', 'abs', 'round', 'cast', 'as', 'numeric', 'decimal', 'float', 'double', 'precision', 'integer', 'int', 'bigint', 'real', 'number', 'true', 'false']);
 
-/** What is inside the bracket at `open`, or undefined when it never closes. */
+/** How far a bracket is read, and how long a statement may be: history is anyone's text. */
+const MAX_BRACKET_CHARS = 2_000;
+const MAX_STATEMENT_CHARS = 50_000;
+
+/** What is inside the bracket at `open`, or undefined when it never closes nearby. */
 function bracketed(text: string, open: number): { inner: string; end: number } | undefined {
   let depth = 0;
-  for (let index = open; index < text.length; index += 1) {
+  for (let index = open; index < Math.min(text.length, open + MAX_BRACKET_CHARS); index += 1) {
     if (text[index] === '(') depth += 1;
     else if (text[index] === ')') {
       depth -= 1;
@@ -69,6 +73,12 @@ const clean = (value: string) => value.replace(/["`\[\]]/g, '').replace(/\s*\.\s
  */
 function resolveExpression(inner: string, tables: Map<string, WarehouseCatalogRelationV1>): { relation: WarehouseCatalogRelationV1; expression: string } | undefined {
   if (/'|\$\d|\?|\bselect\b/i.test(inner)) return undefined;
+  // Arithmetic over names and small numbers only: this text is run on the
+  // warehouse, and anyone who can run a query can put text in the history. A
+  // long number is someone's data, so it is a literal and is left out.
+  const unquoted = clean(inner);
+  if (!/^[\w\s.$+\-*/%(),]+$/.test(unquoted) || /--|\/\*|\*\//.test(unquoted)) return undefined;
+  if ((unquoted.match(/(?<![\w.])\d+(?:\.\d+)?(?![\w.])/g) ?? []).some((number) => number.replace('.', '').length > 4)) return undefined;
   const single = new Set(tables.values()).size === 1 ? [...tables.values()][0] : undefined;
   let relation: WarehouseCatalogRelationV1 | undefined;
   let failed = false;
@@ -112,6 +122,7 @@ export function repeatedAggregates(statements: Iterable<HistoryStatement>, snaps
   }
   const counts = new Map<string, Omit<RepeatedAggregate, 'people'> & { users: Set<string> }>();
   for (const statement of statements) {
+    if (statement.text.length > MAX_STATEMENT_CHARS) continue;
     const text = statement.text.replace(/--[^\n]*/g, ' ').replace(/\/\*[\s\S]*?\*\//g, ' ');
     const aliases = new Map<string, WarehouseCatalogRelationV1>();
     for (const [alias, name] of statementTables(text)) {

@@ -51,11 +51,24 @@ describe('what search knows about a warehouse table', () => {
     }
   };
 
+  // A project opts in by keeping meaning files; one about another table will do.
+  const optIn = () => {
+    const relation = relations[2]!;
+    writeMeaningFile(root, { version: 1, id: relation.id, relation: relation.relation, columnsFingerprint: relationColumnsFingerprint(relation), table: { description: 'Customers as the website sees them.', source: 'person' }, columns: {} });
+  };
+
+  it('a project with no meaning files keeps the search it had', () => {
+    expect(search('taxamount')).toEqual([]);
+    expect(search('total with tax')).toEqual([]);
+  });
+
   it('finds a table by a column it holds', () => {
+    optIn();
     expect(search('taxamount')).toEqual(['sales.invoicelines']);
   });
 
   it("finds a table by the warehouse's own comments", () => {
+    optIn();
     expect(search('invoice line')).toContain('sales.invoicelines');
     expect(search('total with tax')).toContain('sales.invoicelines');
   });
@@ -67,6 +80,7 @@ describe('what search knows about a warehouse table', () => {
   });
 
   it('a table nothing describes keeps the entry it had', () => {
+    optIn();
     expect(search('customerid')).toEqual([]);
   });
 

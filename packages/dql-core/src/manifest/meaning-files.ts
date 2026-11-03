@@ -71,10 +71,17 @@ export function relationColumnsFingerprint(relation: Pick<WarehouseCatalogRelati
   return createHash('sha256').update(columns.join('\n')).digest('hex').slice(0, 16);
 }
 
-/** The file that holds a relation's meanings: its id without the `warehouse.` prefix. */
+/**
+ * The file that holds a relation's meanings: its id without the `warehouse.`
+ * prefix. Two ids that clean to one name (`order items` and `order_items`, or
+ * `Orders` and `orders` on a filesystem that ignores case) get a short hash, so
+ * one table's file can never be another's.
+ */
 export function meaningFilePath(projectRoot: string, id: string): string {
-  const stem = id.replace(/^warehouse\./, '').replace(/[^A-Za-z0-9_.-]/g, '_').replace(/^\.+/, '_');
-  return join(projectRoot, MEANINGS_DIR, `${stem}.yaml`);
+  const bare = id.replace(/^warehouse\./, '');
+  const stem = bare.toLowerCase().replace(/[^a-z0-9_.-]/g, '_').replace(/^\.+/, '_');
+  const unique = stem === bare ? stem : `${stem}-${createHash('sha256').update(id).digest('hex').slice(0, 8)}`;
+  return join(projectRoot, MEANINGS_DIR, `${unique}.yaml`);
 }
 
 function asEntry(value: unknown): MeaningEntryV1 | undefined {
@@ -117,10 +124,20 @@ const meaningFilesCache = new Map<string, { key: string; files: Map<string, Mean
 export function readMeaningFiles(projectRoot: string): Map<string, MeaningFileV1> {
   const dir = join(projectRoot, MEANINGS_DIR);
   if (!existsSync(dir)) return new Map();
-  const names = readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
+  let names: string[];
+  try {
+    names = readdirSync(dir).filter((name) => name.endsWith('.yaml')).sort();
+  } catch {
+    return new Map();
+  }
+  // A file removed while listing, or a link to nothing, is skipped, never thrown.
   const key = names.map((name) => {
-    const stat = statSync(join(dir, name));
-    return `${name}:${stat.mtimeMs}:${stat.size}`;
+    try {
+      const stat = statSync(join(dir, name));
+      return `${name}:${stat.mtimeMs}:${stat.size}`;
+    } catch {
+      return `${name}:gone`;
+    }
   }).join('|');
   const cached = meaningFilesCache.get(dir);
   if (cached?.key === key) return cached.files;
@@ -165,8 +182,7 @@ export function meaningFileStale(file: Pick<MeaningFileV1, 'columnsFingerprint'>
 export function relationMeaning(file: MeaningFileV1 | undefined, relation: Pick<WarehouseCatalogRelationV1, 'comment' | 'columns'>): RelationMeaning | undefined {
   if (!file) return undefined;
   const stale = meaningFileStale(file, relation);
-  const usable = (entry: MeaningEntryV1 | undefined, comment: string | undefined): entry is MeaningEntryV1 =>
-    Boolean(entry) && (entry!.source === 'person' || (!stale && !comment));
+  const usable = (entry: MeaningEntryV1 | undefined, comment: string | undefined): entry is MeaningEntryV1 => meaningEntryInUse(entry, stale, comment);
   const columns: RelationMeaning['columns'] = new Map();
   const entries = new Map(Object.entries(file.columns).map(([name, entry]) => [name.toLowerCase(), entry]));
   for (const column of relation.columns) {
@@ -205,6 +221,14 @@ export function catalogWithMeanings<T extends { relations: WarehouseCatalogRelat
 /** The words as a reader sees them: an unreviewed draft always says so. */
 export function meaningText(words: { text: string; source: MeaningSource }): string {
   return words.source === 'ai' ? `AI draft: ${words.text}` : words.text;
+}
+
+/**
+ * Whether an entry's words are the ones in use: a person's always; a draft only
+ * while it's current and nothing the warehouse or dbt says covers the same thing.
+ */
+export function meaningEntryInUse(entry: MeaningEntryV1 | undefined, stale: boolean, comment: string | undefined): entry is MeaningEntryV1 {
+  return Boolean(entry) && (entry!.source === 'person' || (!stale && !comment));
 }
 
 /** Whether a table's words include a draft nobody has reviewed. */

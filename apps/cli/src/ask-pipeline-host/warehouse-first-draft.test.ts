@@ -14,7 +14,7 @@ import { certifiedBlocksForDraft, createAskPipelineRouteExecutor } from './host.
  * question itself; and on DuckDB a statement may leave the default database
  * out of a table's name.
  */
-type Table = { columns: string[]; primaryKey?: string[]; foreignKeys?: Array<{ columns: string[]; references: { relation: string; columns: string[] } }> };
+type Table = { columns: string[]; comment?: string; primaryKey?: string[]; foreignKeys?: Array<{ columns: string[]; references: { relation: string; columns: string[] } }> };
 
 // Six tables; the question names one. A plain text-to-SQL prompt shows all
 // six with their keys, and so must the drafter when they fit.
@@ -61,6 +61,7 @@ function project(setup: Setup) {
     id: `warehouse.main.${name}`, ...(setup.database ? { database: setup.database } : {}), schema: 'main', name, relation: `${prefix}.${name}`, kind: 'table',
     columns: table.columns.map((column) => ({ name: column, type: column.endsWith('_id') || column === 'line_no' ? 'INTEGER' : 'TEXT' })),
     ...(table.primaryKey ? { primaryKey: table.primaryKey } : {}), ...(table.foreignKeys ? { foreignKeys: table.foreignKeys } : {}),
+    ...(table.comment ? { comment: table.comment } : {}),
   }));
   writeFileSync(join(projectRoot, '.dql', 'warehouse-catalog.json'), JSON.stringify({ version: 1, driver: setup.driver ?? 'sqlite', connectionId: 'default', scopes: [{ catalogOrDatabase: setup.database ?? 'main', schemas: ['main'] }], relations, capturedAt: '2026-09-22T00:00:00.000Z', fingerprint: 'sha256:test' }));
   for (const [name, meaning] of Object.entries(setup.meanings ?? {})) {
@@ -226,6 +227,12 @@ describe('what the data means, as drafted by AI', () => {
     const { prompts } = await ask({ meanings: { invoice_lines: draft } }, 'Total invoice amount for each customer country', declined);
     expect(prompts[0]).toContain('AI draft: One row per product on an invoice. Also called: revenue lines.');
     expect(prompts[0]).toContain('AI draft: Price of one unit before tax');
+  });
+
+  it('a project with no meaning files keeps the prompt it had, warehouse comments and all', async () => {
+    const commented = { ...TABLES, invoice_lines: { ...TABLES.invoice_lines!, comment: 'DBA_COMMENT_MARKER' } };
+    const { prompts } = await ask({ tables: commented }, 'Total invoice amount for each customer country', declined);
+    expect(prompts[0]).not.toContain('DBA_COMMENT_MARKER');
   });
 
   it("a person's words reach the drafter with no label", async () => {

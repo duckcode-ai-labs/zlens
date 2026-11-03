@@ -346,7 +346,10 @@ export async function draftMeanings(input: {
       report.failed.push({ tables: names, reason });
       return;
     }
-    const byName = new Map(batch.flatMap((relation) => [relation.relation, [relation.schema, relation.name].filter(Boolean).join('.'), relation.name].map((name) => [name.toLowerCase(), relation] as const)));
+    // A bare name stands for a table only when one table in the batch has it.
+    const bare = new Map<string, number>();
+    for (const relation of batch) bare.set(relation.name.toLowerCase(), (bare.get(relation.name.toLowerCase()) ?? 0) + 1);
+    const byName = new Map(batch.flatMap((relation) => [relation.relation, [relation.schema, relation.name].filter(Boolean).join('.'), ...(bare.get(relation.name.toLowerCase()) === 1 ? [relation.name] : [])].map((name) => [name.toLowerCase(), relation] as const)));
     const answered = new Set<string>();
     for (const item of reply.tables as Array<Record<string, unknown>>) {
       const relation = typeof item?.relation === 'string' ? byName.get(item.relation.toLowerCase()) : undefined;

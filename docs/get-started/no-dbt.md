@@ -408,9 +408,10 @@ request.
 Each draft shows what it was read from. The model saw names, not rows, so it can
 be wrong about what a column means, and that's what the review is for.
 
-On a schema too large to show whole, Ask gives the model one line per table and
-lets it choose the tables a question needs. The drafts are what make those lines
-useful.
+On a schema too large to show whole, Ask gives the model one line per table,
+what the table holds when something says so and its columns when nothing does,
+and lets it choose the tables a question needs. That works with or without
+drafts.
 
 ### Optional: draft terms and metrics
 

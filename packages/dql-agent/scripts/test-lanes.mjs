@@ -165,7 +165,7 @@ const EXPECTED_TEST_FILES = 192;
 // (catalog.test.ts, +2; ZLens Enterprise kept-up sandbox run 40724556538, W2 B6).
 // 2616 with "total X by Y" read by the semantic layer's own words, a self-named filter dropped and an empty
 // aggregate never called a member (lexical-reading.test.ts +5, ask-pipeline.test.ts +4; Enterprise walkthrough D4).
-const EXPECTED_TESTS = 2655;
+const EXPECTED_TESTS = 2656;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2536.

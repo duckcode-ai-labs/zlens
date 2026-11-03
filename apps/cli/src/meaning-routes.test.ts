@@ -101,6 +101,38 @@ describe('reviewing what the data means', () => {
     expect(readMeaningFiles(root).get(lines.id)?.table?.date).toBe('2026-11-02');
   });
 
+  it('Accept never turns a draft hidden behind a warehouse comment into a person\'s words', () => {
+    const commented: WarehouseCatalogRelationV1 = { ...lines, comment: 'DBA: one line of an invoice' };
+    const snapshotWithComment = { relations: [commented, bare] };
+    writeMeaningFile(root, {
+      version: 1, id: lines.id, relation: lines.relation, columnsFingerprint: relationColumnsFingerprint(lines),
+      table: { description: 'AI table words', source: 'ai' },
+      columns: { tax: { description: 'AI tax words', source: 'ai' }, price: { description: 'AI price words', source: 'ai' } },
+    });
+    acceptMeanings(root, snapshotWithComment, [lines.id], '2026-11-02');
+    const file = readMeaningFiles(root).get(lines.id)!;
+    expect(file.table?.source).toBe('ai');
+    expect(file.columns.tax?.source).toBe('ai');
+    expect(file.columns.price?.source).toBe('person');
+    expect(relationMeaning(file, commented)?.description).toBeUndefined();
+    expect(relationMeaning(file, commented)?.columns.has('tax')).toBe(false);
+  });
+
+  it('a draft hidden behind a comment is not counted as waiting for review', () => {
+    const commented: WarehouseCatalogRelationV1 = { ...lines, comment: 'DBA words' };
+    writeMeaningFile(root, { version: 1, id: lines.id, relation: lines.relation, columnsFingerprint: relationColumnsFingerprint(lines), table: { description: 'AI words', source: 'ai' }, columns: { tax: { description: 'AI tax', source: 'ai' } } });
+    const [, summary] = meaningsOverview(root, { relations: [commented, bare] }, manifest);
+    expect(summary).toMatchObject({ state: 'described', drafts: 0, description: 'DBA words', source: 'warehouse' });
+  });
+
+  it("a stale draft's other names are not offered, and a save can't make them a person's", () => {
+    draft({ columnsFingerprint: 'old' });
+    expect(meaningTableDetail(root, snapshot, manifest, lines.id)?.otherNames).toEqual([]);
+    expect(meaningTableDetail(root, snapshot, manifest, lines.id)?.evidence).toEqual([]);
+    expect(saveMeaningEdit(root, snapshot, { id: lines.id, otherNames: ['revenue lines'] }, '2026-11-02')).toBe('needs_description');
+    expect(readMeaningFiles(root).get(lines.id)?.table?.source).toBe('ai');
+  });
+
   it('on a hosted server reading needs read, editing is authoring, and a draft needs an administrator', () => {
     expect(routeAction('GET', '/api/meanings')?.action).toBe('project.read');
     expect(routeAction('PUT', '/api/meanings/table')?.action).toBe('dataset.author');

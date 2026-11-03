@@ -56,6 +56,12 @@ describe('meaning files', () => {
     expect(meaningFilePath(root, 'warehouse.../../etc/passwd')).not.toContain('/../');
   });
 
+  it('two ids that clean to one name never share a file', () => {
+    expect(meaningFilePath(root, 'warehouse.db.sales.order items')).not.toBe(meaningFilePath(root, 'warehouse.db.sales.order_items'));
+    expect(meaningFilePath(root, 'dbt.model.shop.Orders').toLowerCase()).not.toBe(meaningFilePath(root, 'dbt.model.shop.orders').toLowerCase());
+    expect(meaningFilePath(root, 'warehouse.db.sales.order_items')).toBe(join(root, 'meanings', 'db.sales.order_items.yaml'));
+  });
+
   it('ignores a file that does not parse, and reads the rest', () => {
     writeMeaningFile(root, file());
     writeFileSync(join(root, 'meanings', 'broken.yaml'), 'version: [');
