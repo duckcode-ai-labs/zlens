@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -145,6 +145,11 @@ async function ask(setup: Setup, question: string, draft: (prompt: string) => st
 }
 
 const declined = () => 'NO_SQL: nothing to draft in this test.';
+
+// Every provider and executor here answers at once, so without this the whole
+// file runs as one chain of promises and never lets the worker read Vitest's
+// own messages; past 60 s on a slow runner the worker's report then times out.
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
 
 describe('a warehouse-first draft reads the whole schema with its declared keys', () => {
   it('shows every table once, the primary keys and the foreign keys the warehouse declares', async () => {
