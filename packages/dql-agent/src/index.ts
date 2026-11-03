@@ -1089,6 +1089,7 @@ export {
   MetadataCatalog,
   buildLocalContextPack,
   buildMetadataSnapshot,
+  dbtMeaningRelations,
   defaultMetadataPath,
   metadataSnapshotPath,
   activeMetadataSnapshotPath,

@@ -68,6 +68,7 @@ import {
 import { loadDbtRunState, applyBlockDataState, type DbtRunStateIndex } from './dbt-freshness.js';
 import { blockParameterDefinitions } from '../blocks/parameters.js';
 import { loadDbtFirstModeling, loadWarehouseModeling, siblingDbtArtifact } from './dbt-first-modeling.js';
+import { MEANINGS_DIR } from './meaning-files.js';
 import { WAREHOUSE_CATALOG_PATH, readWarehouseCatalog } from './warehouse-catalog.js';
 import { domainFolderSlug } from './domain-writer.js';
 import { loadDomainPackageRegistry } from './domain-package-registry.js';
@@ -188,6 +189,9 @@ export function collectInputFiles(options: ManifestBuildOptions): string[] {
     if (catalogPath) files.add(catalogPath);
     if (semanticManifestPath) files.add(semanticManifestPath);
   }
+
+  // What the tables mean feeds search and the model's cards, so an edit counts as a change, in any mode.
+  for (const f of scanFilesRecursive(join(projectRoot, MEANINGS_DIR), ['.yaml'], scanCache)) files.add(f);
 
   if (modelingModeOf(config)) {
     for (const f of scanFilesRecursive(join(projectRoot, 'domains'), ['.yaml', '.yml'], scanCache)) files.add(f);

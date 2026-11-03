@@ -9,7 +9,7 @@
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { BookOpen, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { BookOpen, Loader2, Pencil, Plus, Sparkles, Trash2, X } from 'lucide-react';
 import { hostReadOnly, useHostUi } from '../../host/host-ui';
 import { api, type BusinessTerm, type BusinessTermInput, type ContextAuthoringProposalV1, type DbtFirstModelingResponse } from '../../api/client';
 import type { themes } from '../../themes/notebook-theme';
@@ -37,6 +37,18 @@ export function termReadiness(term: Pick<BusinessTerm, 'synonyms' | 'metricRefs'
   if (!(term.synonyms ?? []).length) gaps.push('Add the words people use, so Ask recognizes this term in a question.');
   if (term.termType === 'metric' && !(term.metricRefs ?? []).length) gaps.push('Link the metric this word means, so Ask measures the governed definition.');
   return gaps;
+}
+
+/** A term AI drafted and nobody has certified. It reaches Ask as labelled context and answers nothing. */
+export function isAiDraftTerm(term: Pick<BusinessTerm, 'tags' | 'status'>): boolean {
+  return (term.tags ?? []).includes('ai-draft') && term.status !== 'certified';
+}
+
+/** What a run of the term drafter did, in a line. */
+export function termDraftLine(report: { drafted: unknown[]; dropped: unknown[] }): string {
+  const count = report.drafted.length;
+  const words = count === 0 ? 'No new terms.' : `Drafted ${count} ${count === 1 ? 'term' : 'terms'}. They answer nothing until someone certifies them.`;
+  return report.dropped.length ? `${words} ${report.dropped.length} dropped by the checks.` : words;
 }
 
 /** Why a term whose file says certified counts as a draft. */
@@ -69,6 +81,9 @@ export function TermsAndConceptsPanel({ data, domain, t, onProposal }: {
   const [termForm, setTermForm] = useState<{ term?: BusinessTerm } | null>(null);
   const [conceptForm, setConceptForm] = useState<{ concept?: ManifestBusinessConcept } | null>(null);
 
+  const [drafting, setDrafting] = useState(false);
+  const [draftLine, setDraftLine] = useState<{ text: string; failed?: boolean } | null>(null);
+
   const load = useCallback(() => {
     setLoading(true);
     setLoadError(null);
@@ -88,6 +103,18 @@ export function TermsAndConceptsPanel({ data, domain, t, onProposal }: {
   );
   const domainLabel = domain ?? 'all domains';
   const readOnly = hostReadOnly(useHostUi(), 'domains');
+  const draftWithAi = async () => {
+    setDrafting(true);
+    setDraftLine(null);
+    try {
+      setDraftLine({ text: termDraftLine(await api.draftTerms(domain)) });
+      load();
+    } catch (error) {
+      setDraftLine({ text: error instanceof Error ? error.message : 'Could not draft terms.', failed: true });
+    } finally {
+      setDrafting(false);
+    }
+  };
 
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: 20 }}>
@@ -101,10 +128,11 @@ export function TermsAndConceptsPanel({ data, domain, t, onProposal }: {
         </div>
       </div>
 
+      {draftLine ? <div role={draftLine.failed ? 'alert' : 'status'} style={{ fontSize: 11.5, color: draftLine.failed ? t.error : t.textSecondary, marginBottom: 10 }}>{draftLine.text}</div> : null}
       <Section
         title={`Terms in ${domainLabel}`}
         count={domainTerms.length}
-        action={readOnly ? undefined : <button type="button" onClick={() => setTermForm({})} style={primaryButton(t)}><Plus size={13} /> New term</button>}
+        action={readOnly ? undefined : <span style={{ display: 'inline-flex', gap: 6 }}><button type="button" onClick={() => void draftWithAi()} disabled={drafting} title="AI reads the table descriptions and proposes the words people use. Nothing answers until someone certifies it." style={secondaryButton(t)}>{drafting ? <Loader2 size={13} className="spin" aria-hidden /> : <Sparkles size={13} />} {drafting ? 'Drafting…' : 'Draft with AI'}</button><button type="button" onClick={() => setTermForm({})} style={primaryButton(t)}><Plus size={13} /> New term</button></span>}
         t={t}
       >
         {loading ? <Empty text="Loading terms…" t={t} /> : loadError ? <Empty text={loadError} t={t} tone="error" /> : domainTerms.length ? (
@@ -165,6 +193,7 @@ function TermCard({ term, t, onEdit }: { term: BusinessTerm; t: Theme; onEdit?: 
         <b style={{ fontSize: 12.5 }}>{term.name}</b>
         {kind ? <Pill t={t}>{kind}</Pill> : null}
         <Pill t={t} tone={term.status === 'certified' ? 'good' : 'muted'}>{term.status ?? 'draft'}</Pill>
+        {isAiDraftTerm(term) ? <Pill t={t}>AI draft</Pill> : null}
         {onEdit ? <button type="button" onClick={onEdit} aria-label={`Edit term ${term.name}`} title="Edit" style={{ ...iconButton(t), marginLeft: 'auto' }}><Pencil size={13} /></button> : null}
       </div>
       {term.description ? <p style={{ margin: '7px 0 0', color: t.textSecondary, fontSize: 11, lineHeight: 1.5 }}>{term.description}</p> : null}
@@ -513,7 +542,7 @@ function Line({ label, t, children }: { label: string; t: Theme; children: React
 }
 
 function Pill({ children, t, tone = 'muted' }: { children: React.ReactNode; t: Theme; tone?: 'good' | 'muted' }) {
-  return <span style={{ fontSize: 9.5, fontWeight: 700, borderRadius: 999, padding: '1px 7px', border: `1px solid ${tone === 'good' ? 'var(--status-success)' : t.headerBorder}`, color: tone === 'good' ? 'var(--status-success)' : t.textMuted }}>{children}</span>;
+  return <span style={{ fontSize: 9.5, fontWeight: 700, whiteSpace: 'nowrap', borderRadius: 999, padding: '1px 7px', border: `1px solid ${tone === 'good' ? 'var(--status-success)' : t.headerBorder}`, color: tone === 'good' ? 'var(--status-success)' : t.textMuted }}>{children}</span>;
 }
 
 function Empty({ text, t, tone }: { text: string; t: Theme; tone?: 'error' }) {

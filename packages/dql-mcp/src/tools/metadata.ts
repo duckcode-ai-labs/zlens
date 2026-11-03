@@ -14,7 +14,7 @@
  * gracefully (a clear hint) when no dbt manifest is present.
  */
 
-import { readWarehouseCatalog, resolveDbtManifestPath } from '@zlens/core';
+import { catalogWithMeanings, readWarehouseCatalog, resolveDbtManifestPath } from '@zlens/core';
 import {
   artifactsFromWarehouseCatalog,
   buildSchemaGrounding,
@@ -48,7 +48,7 @@ function loadArtifacts(ctx: DQLContext): DbtArtifacts | undefined {
     }
   }
   const { snapshot } = readWarehouseCatalog(ctx.projectRoot);
-  return snapshot && snapshot.relations.length > 0 ? artifactsFromWarehouseCatalog(snapshot) : undefined;
+  return snapshot && snapshot.relations.length > 0 ? artifactsFromWarehouseCatalog(catalogWithMeanings(ctx.projectRoot, snapshot)) : undefined;
 }
 
 const NO_MANIFEST_HINT =

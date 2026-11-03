@@ -71,7 +71,7 @@ const REQUIRED_TEST_FILES = [
 // 189 with a question that names a certified block (named-block.test.ts, +1 file, +13 tests).
 // 190 with the certified-join check of a semantic compile (semantic-join-trust.test.ts, +1 file, +8 tests).
 // 191 with a certified block answering its own question before any model reads it (certified-question.test.ts, +1 file, +14 tests).
-const EXPECTED_TEST_FILES = 191;
+const EXPECTED_TEST_FILES = 192;
 // Keep the aggregate receipt exact. The Ask pipeline suites (intent contract,
 // vocabulary, governed defaults and host proofs, prepare tiers), the engine,
 // observability, retrieval, semantic-proof, research-ledger, conversation and
@@ -165,7 +165,7 @@ const EXPECTED_TEST_FILES = 191;
 // (catalog.test.ts, +2; ZLens Enterprise kept-up sandbox run 40724556538, W2 B6).
 // 2616 with "total X by Y" read by the semantic layer's own words, a self-named filter dropped and an empty
 // aggregate never called a member (lexical-reading.test.ts +5, ask-pipeline.test.ts +4; Enterprise walkthrough D4).
-const EXPECTED_TESTS = 2646;
+const EXPECTED_TESTS = 2656;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2536.

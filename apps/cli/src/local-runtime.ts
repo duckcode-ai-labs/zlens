@@ -872,7 +872,11 @@ import {
   type ConnectionMetadataScopeV1,
 } from './warehouse-metadata.js';
 import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
-import { refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
+import { draftMeanings, meaningsStatus, planMeaningDrafts, type MeaningDraftReport } from './meaning-draft.js';
+import { acceptMeanings, meaningCatalog, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
+import { draftMetricsFromHistory, repeatedAggregates, type HistoryMetricDraftItem, type HistoryStatement } from './query-history-metrics.js';
+import { draftTerms } from './term-draft.js';
+import { readValueProfile, refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
 import { resolveResultReviewMode } from './result-review-setting.js';
 import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import {
@@ -5379,6 +5383,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       : null;
   let connection = configuredConnection ?? resolveDbtProfileRuntimeConnection(projectRoot, projectConfig);
   const projectSnapshots = new ProjectSnapshotService<DQLManifest>();
+  let meaningDraftJob: MeaningDraftJob | undefined;
   // Server-lifetime registry for exact compiler-owned SQL. The downstream DQL
   // artifact executor uses this to preserve the selected adapter and target
   // rather than treating compiled semantic SQL as unrelated generic SQL.
@@ -16486,6 +16491,116 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
+    // WHAT THE DATA MEANS: every table's standing and what a draft would cost,
+    // one table's words, a person's edit, Accept, and the AI first draft. A
+    // draft runs only when someone chooses it; on a hosted server an
+    // administrator turns it on and runs it (agent.meaningDrafts).
+    if (path === '/api/meanings' || path.startsWith('/api/meanings/')) {
+      const json = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      const catalog = meaningCatalog(projectRoot);
+      if (!catalog) {
+        json(409, { error: 'Sync the warehouse schema first: there are no tables to describe yet.' });
+        return;
+      }
+      const today = () => new Date().toISOString().slice(0, 10);
+      const cfg = loadProjectConfig(projectRoot);
+      const hostedOff = Boolean(hostHooks) && (cfg as { agent?: { meaningDrafts?: string } }).agent?.meaningDrafts !== 'on';
+      const valueProfile = valueProfileAllowed(cfg, Boolean(hostHooks)) ? readValueProfile(projectRoot, catalog.fingerprint) : undefined;
+      try {
+        if (req.method === 'GET' && path === '/api/meanings') {
+          const plan = planMeaningDrafts(projectRoot, catalog, valueProfile ? { valueProfile } : {});
+          json(200, {
+            status: meaningsStatus(projectRoot, catalog),
+            tables: meaningsOverview(projectRoot, catalog, projectSnapshot().manifest),
+            plan: { tables: plan.tables, columns: plan.columns, calls: plan.batches.length, alreadyDone: plan.alreadyDone, overLimit: plan.overLimit, estimatedInputTokens: plan.estimatedInputTokens, estimatedOutputTokens: plan.estimatedOutputTokens, sendsSampleValues: Boolean(valueProfile) },
+            drafting: { available: !hostedOff, ...(hostedOff ? { reason: 'An administrator has to turn this on for this server (agent.meaningDrafts).' } : {}), job: meaningDraftJob },
+          });
+          return;
+        }
+        if (req.method === 'GET' && path === '/api/meanings/table') {
+          const detail = meaningTableDetail(projectRoot, catalog, projectSnapshot().manifest, url.searchParams.get('id') ?? '');
+          if (detail) json(200, { table: detail });
+          else json(404, { error: 'That table is no longer in the warehouse catalog. Refresh the list.' });
+          return;
+        }
+        if (req.method === 'PUT' && path === '/api/meanings/table') {
+          const body = (await readJSON(req).catch(() => ({}))) as { id?: unknown; description?: unknown; otherNames?: unknown; columns?: unknown };
+          const edit = {
+            id: typeof body.id === 'string' ? body.id : '',
+            ...(typeof body.description === 'string' ? { description: body.description } : {}),
+            ...(Array.isArray(body.otherNames) ? { otherNames: body.otherNames.filter((name): name is string => typeof name === 'string') } : {}),
+            ...(body.columns && typeof body.columns === 'object' && !Array.isArray(body.columns)
+              ? { columns: Object.fromEntries(Object.entries(body.columns as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) }
+              : {}),
+          };
+          const saved = saveMeaningEdit(projectRoot, catalog, edit, today());
+          if (saved !== 'saved') {
+            json(saved === 'no_table' ? 404 : 400, { error: saved === 'no_table' ? 'That table is no longer in the warehouse catalog. Refresh the list.' : 'Other names need a table description. Add one, or remove the other names.' });
+            return;
+          }
+          await refreshUnifiedProjectIndexes(projectRoot);
+          json(200, { table: meaningTableDetail(projectRoot, catalog, projectSnapshot().manifest, edit.id) });
+          return;
+        }
+        if (req.method === 'POST' && path === '/api/meanings/accept') {
+          const body = (await readJSON(req).catch(() => ({}))) as { ids?: unknown };
+          const ids = Array.isArray(body.ids) ? body.ids.filter((id): id is string => typeof id === 'string') : [];
+          const outcome = acceptMeanings(projectRoot, catalog, ids, today());
+          await refreshUnifiedProjectIndexes(projectRoot);
+          json(200, outcome);
+          return;
+        }
+        if (req.method === 'POST' && path === '/api/meanings/draft') {
+          if (hostedOff) {
+            json(403, { error: 'An administrator has to turn this on for this server (agent.meaningDrafts).' });
+            return;
+          }
+          if (meaningDraftJob?.running) {
+            json(409, { error: 'A draft is already running.', job: meaningDraftJob });
+            return;
+          }
+          // Claimed before anything is awaited, so a second request can't start a second draft.
+          const job: MeaningDraftJob = { running: true, done: 0, total: 0 };
+          meaningDraftJob = job;
+          const selected = await meaningDraftProvider(projectRoot);
+          if (!selected) {
+            job.running = false;
+            job.error = 'No AI provider is connected.';
+            json(409, { error: 'No AI provider is connected. Add one in Settings → AI, then try again.' });
+            return;
+          }
+          const body = (await readJSON(req).catch(() => ({}))) as { maxTables?: unknown };
+          const maxTables = typeof body.maxTables === 'number' && Number.isInteger(body.maxTables) && body.maxTables > 0 ? body.maxTables : undefined;
+          job.total = planMeaningDrafts(projectRoot, catalog, { ...(maxTables ? { maxTables } : {}), ...(valueProfile ? { valueProfile } : {}) }).batches.length;
+          // A draft takes minutes, so it runs on and the screen reads its progress.
+          void draftMeanings({
+            projectRoot,
+            snapshot: catalog,
+            provider: selected.provider,
+            ...(selected.model ? { model: selected.model } : {}),
+            ...(maxTables ? { maxTables } : {}),
+            ...(valueProfile ? { valueProfile } : {}),
+            date: today(),
+            onBatch: ({ done }) => { job.done = done; },
+          }).then(async (report) => {
+            job.report = report;
+            await refreshUnifiedProjectIndexes(projectRoot).catch(() => undefined);
+          }).catch((error: unknown) => {
+            job.error = error instanceof Error ? error.message : String(error);
+          }).finally(() => { job.running = false; });
+          json(202, { job });
+          return;
+        }
+        json(404, { error: 'Not found' });
+      } catch (error) {
+        json(500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     // Drafts kept automatically: the newest "Draft my models" proposal that
     // waits for review, in a few words, for setup, Modeling and Apps.
     if (req.method === 'GET' && path === '/api/modeling/warehouse/drafts') {
@@ -18424,6 +18539,33 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       return;
     }
 
+    // Metric drafts from query history: opt-in, an administrator's to run on a
+    // hosted server, and off there until turned on, like every AI draft.
+    if (path === '/api/semantic-layer/metric-drafts/from-history' && req.method === 'POST') {
+      const json = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      try {
+        if (hostHooks && (loadProjectConfig(projectRoot) as { agent?: { meaningDrafts?: string } }).agent?.meaningDrafts !== 'on') {
+          json(403, { error: 'An administrator has to turn this on for this server (agent.meaningDrafts).' });
+          return;
+        }
+        const body = (await readJSON(req).catch(() => ({}))) as { domain?: unknown };
+        const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim() : undefined;
+        const outcome = await draftProjectMetricsFromHistory(projectRoot, { executor, ...(domain ? { domain } : {}), privateValues: Boolean(hostHooks) });
+        if (outcome.error) {
+          json(409, outcome);
+          return;
+        }
+        await refreshUnifiedProjectIndexes(projectRoot);
+        json(200, outcome);
+      } catch (error) {
+        json(500, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
     if (path === '/api/semantic-layer/metric-drafts' && req.method === 'GET') {
       // HH-13: a draft the host keeps from this person is not listed, and neither is what was compared with it.
       const { metrics: drafts } = await admitPlanContext([], listMetricDrafts(projectRoot));
@@ -19477,6 +19619,47 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         json(200, { ok: true, term: certified ?? term });
       } catch (error) {
         json(400, { error: error instanceof Error ? error.message : String(error) });
+      }
+      return;
+    }
+
+    // AI drafts of the words people use: draft terms that answer nothing until
+    // someone certifies them. Same rule on a hosted server as drafting meanings.
+    if (path === '/api/terms/draft' && req.method === 'POST') {
+      const json = (status: number, body: unknown) => {
+        res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(body));
+      };
+      try {
+        const cfg = loadProjectConfig(projectRoot);
+        if (hostHooks && (cfg as { agent?: { meaningDrafts?: string } }).agent?.meaningDrafts !== 'on') {
+          json(403, { error: 'An administrator has to turn this on for this server (agent.meaningDrafts).' });
+          return;
+        }
+        const catalog = meaningCatalog(projectRoot);
+        if (!catalog) {
+          json(409, { error: 'Sync the warehouse schema first: there are no tables to read yet.' });
+          return;
+        }
+        const selected = await meaningDraftProvider(projectRoot);
+        if (!selected) {
+          json(409, { error: 'No AI provider is connected. Add one in Settings → AI, then try again.' });
+          return;
+        }
+        const body = (await readJSON(req).catch(() => ({}))) as { domain?: unknown };
+        const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim() : undefined;
+        const report = await draftTerms({
+          projectRoot,
+          snapshot: catalog,
+          terms: Object.values(buildManifest({ projectRoot, dqlVersion: 'notebook' }).terms ?? {}),
+          provider: selected.provider,
+          ...(domain ? { domain } : {}),
+          directory: termDirectoryFor(projectRoot, domain),
+        });
+        await refreshUnifiedProjectIndexes(projectRoot);
+        json(report.failed ? 502 : 200, report.failed ? { error: report.failed, ...report } : report);
+      } catch (error) {
+        json(500, { error: error instanceof Error ? error.message : String(error) });
       }
       return;
     }
@@ -46517,6 +46700,68 @@ async function createBlockStudioAssistProvider(
   options: { availability?: AssistProviderAvailabilityMode } = {},
 ): Promise<AgentProvider | null> {
   return (await selectAssistProvider(projectRoot, requestedProvider, options))?.provider ?? null;
+}
+
+/**
+ * Metric drafts from what people already run (query-history-metrics.ts). Opt-in:
+ * it reads recent query text in memory and keeps only expressions and counts.
+ */
+export async function draftProjectMetricsFromHistory(projectRoot: string, options: {
+  executor: Pick<QueryExecutor, 'executePositional'>;
+  domain?: string;
+  maxDrafts?: number;
+  privateValues?: boolean;
+}): Promise<{ statements: number; repeated: number; items: HistoryMetricDraftItem[]; error?: string }> {
+  const cfg = loadProjectConfig(projectRoot);
+  const { snapshot } = readWarehouseCatalog(projectRoot);
+  const nothing = (error: string) => ({ statements: 0, repeated: 0, items: [], error });
+  if (!snapshot) return nothing('No warehouse catalog yet. Run `zlens sync warehouse` first.');
+  const connection = projectConnectionById(projectRoot, cfg, snapshot.connectionId || warehouseCatalogConnectionId(cfg));
+  if (!connection) return nothing(`Reading query history needs the connection "${snapshot.connectionId}" the catalog was read from.`);
+  const sql = queryHistorySql(connection.driver, { aggregates: true, database: connection.database ?? connection.catalog, location: (connection as { location?: string }).location });
+  if (!sql) return nothing(`${connection.driver} keeps no query history ZLens can read.`);
+  const limits = { maxRows: 20_000, maxBytes: 64 * 1024 * 1024, batchSize: 1_000, timeoutMs: 60_000 };
+  let statements: HistoryStatement[];
+  try {
+    const result = await options.executor.executePositional(sql, [], connection, limits);
+    statements = result.rows.map((row) => {
+      const item = row as Record<string, unknown>;
+      const text = String(item.query_text ?? item.QUERY_TEXT ?? '');
+      const user = item.query_user ?? item.QUERY_USER;
+      const calls = Number(item.query_calls ?? item.QUERY_CALLS);
+      return { text, ...(user ? { user: String(user) } : {}), ...(Number.isFinite(calls) && calls > 0 ? { calls } : {}) };
+    });
+  } catch (error) {
+    return nothing(`Query history could not be read: ${error instanceof Error ? error.message.split('\n')[0] : String(error)}`);
+  }
+  const repeated = repeatedAggregates(statements, snapshot);
+  const items = await draftMetricsFromHistory({
+    projectRoot,
+    aggregates: repeated,
+    domain: options.domain ?? 'query_history',
+    driver: connection.driver,
+    run: async (statement) => (await options.executor.executePositional(statement, [], connection, limits)).rows as Array<Record<string, unknown>>,
+    ...(options.maxDrafts ? { maxDrafts: options.maxDrafts } : {}),
+    ...(options.privateValues ? { privateValues: true } : {}),
+  });
+  return { statements: statements.length, repeated: repeated.length, items };
+}
+
+/** A running or finished AI draft, for the screen to read. */
+interface MeaningDraftJob {
+  running: boolean;
+  done: number;
+  total: number;
+  report?: MeaningDraftReport;
+  error?: string;
+}
+
+/** The project's own model, and its name, for an AI draft of what the data means. */
+export async function meaningDraftProvider(projectRoot: string): Promise<{ provider: AgentProvider; model?: string } | null> {
+  const selected = await selectAssistProvider(projectRoot);
+  if (!selected) return null;
+  const model = getEffectiveProviderConfig(projectRoot, selected.id).model;
+  return { provider: selected.provider, ...(model ? { model } : {}) };
 }
 
 /**

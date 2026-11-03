@@ -14,6 +14,7 @@ import type { ManifestDbtFirstModeling, ManifestModelArea, ManifestModelEntity, 
 export type DomainStudioSection =
   | 'diagram'
   | 'terms'
+  | 'meanings'
   | 'skills'
   | 'blocks'
   | 'used_by';
@@ -35,6 +36,7 @@ export const DOMAIN_STUDIO_NAVIGATION: DomainStudioNavigationGroup[] = [
       // lives in the Map toolbar and docks beside the diagram it edits.
       { id: 'diagram', label: 'Map' },
       { id: 'terms', label: 'Terms & concepts' },
+      { id: 'meanings', label: 'Meanings' },
       { id: 'skills', label: 'Skills' },
       { id: 'blocks', label: 'Saved queries' },
       { id: 'used_by', label: 'Used by' },

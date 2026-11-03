@@ -407,8 +407,10 @@ export function bindSemanticExecutionProgram(
  * review-required, and the caveat naming the join is said in the answer.
  */
 function semanticTrust(compiled: SemanticCompileOutput): Pick<PreparedCandidate, 'trust' | 'trustCaveat'> {
-  if (!compiled.joinTrust || compiled.joinTrust.certified) return { trust: 'governed' };
-  return { trust: 'review_required', ...(compiled.joinTrust.caveat ? { trustCaveat: compiled.joinTrust.caveat } : {}) };
+  const said = (caveat: string | undefined) => [caveat, compiled.wordsCaveat].filter(Boolean).join('; ');
+  if (!compiled.joinTrust || compiled.joinTrust.certified) return { trust: 'governed', ...(compiled.wordsCaveat ? { trustCaveat: compiled.wordsCaveat } : {}) };
+  const caveat = said(compiled.joinTrust.caveat);
+  return { trust: 'review_required', ...(caveat ? { trustCaveat: caveat } : {}) };
 }
 
 /** The answer's DQL artifact carries the same trust as the answer. */

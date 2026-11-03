@@ -243,6 +243,10 @@ Fields:
   values reach your AI provider with the drafting prompt. Sensitive columns
   and values are never read, and never under a hosted server. See
   [value profile](../get-started/no-dbt.md#optional-show-the-drafter-what-the-columns-hold).
+- **`agent.meaningDrafts`** — `"on"` lets an administrator run AI drafts of
+  meanings, terms and metrics on a hosted server, where they are off by default.
+  Locally they run only when someone chooses them. See
+  [draft what the tables mean](../get-started/no-dbt.md#optional-draft-what-the-tables-mean).
 - **`agent.resultReview`** — `{ mode: "off" | "on" }`, off by default. `on`:
   before an AI-drafted answer is shown, one more AI call checks its result
   against the question and may revise the SQL once. It sends the question,

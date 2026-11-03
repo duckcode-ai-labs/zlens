@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AgentMessage, AgentProvider, AgentRunRequest } from '@zlens/agent';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
+import { relationColumnsFingerprint, writeMeaningFile, type MeaningFileV1 } from '@zlens/core';
 import { certifiedBlocksForDraft, createAskPipelineRouteExecutor } from './host.js';
 
 /**
@@ -13,7 +14,7 @@ import { certifiedBlocksForDraft, createAskPipelineRouteExecutor } from './host.
  * question itself; and on DuckDB a statement may leave the default database
  * out of a table's name.
  */
-type Table = { columns: string[]; primaryKey?: string[]; foreignKeys?: Array<{ columns: string[]; references: { relation: string; columns: string[] } }> };
+type Table = { columns: string[]; comment?: string; primaryKey?: string[]; foreignKeys?: Array<{ columns: string[]; references: { relation: string; columns: string[] } }> };
 
 // Six tables; the question names one. A plain text-to-SQL prompt shows all
 // six with their keys, and so must the drafter when they fit.
@@ -43,6 +44,12 @@ interface Setup {
   probeAllowed?: boolean;
   /** Served through a host. */
   hosted?: boolean;
+  /** What the model answers when it is asked to choose tables from the index. */
+  pick?: (prompt: string) => string;
+  /** Terms in the manifest. */
+  terms?: Array<{ name: string; description: string; status?: string; tags?: string[]; synonyms?: string[] }>;
+  /** Meaning files, by table name. */
+  meanings?: Record<string, Pick<MeaningFileV1, 'table' | 'columns'> & { stale?: boolean }>;
 }
 
 function project(setup: Setup) {
@@ -54,8 +61,13 @@ function project(setup: Setup) {
     id: `warehouse.main.${name}`, ...(setup.database ? { database: setup.database } : {}), schema: 'main', name, relation: `${prefix}.${name}`, kind: 'table',
     columns: table.columns.map((column) => ({ name: column, type: column.endsWith('_id') || column === 'line_no' ? 'INTEGER' : 'TEXT' })),
     ...(table.primaryKey ? { primaryKey: table.primaryKey } : {}), ...(table.foreignKeys ? { foreignKeys: table.foreignKeys } : {}),
+    ...(table.comment ? { comment: table.comment } : {}),
   }));
   writeFileSync(join(projectRoot, '.dql', 'warehouse-catalog.json'), JSON.stringify({ version: 1, driver: setup.driver ?? 'sqlite', connectionId: 'default', scopes: [{ catalogOrDatabase: setup.database ?? 'main', schemas: ['main'] }], relations, capturedAt: '2026-09-22T00:00:00.000Z', fingerprint: 'sha256:test' }));
+  for (const [name, meaning] of Object.entries(setup.meanings ?? {})) {
+    const relation = relations.find((item) => item.name === name)!;
+    writeMeaningFile(projectRoot, { version: 1, id: relation.id, relation: relation.relation, columnsFingerprint: meaning.stale ? 'old' : relationColumnsFingerprint(relation), ...(meaning.table ? { table: meaning.table } : {}), columns: meaning.columns });
+  }
   if (setup.valueProfile?.written) {
     // What the columns hold, as a sync with agent.valueProfile writes it.
     mkdirSync(join(projectRoot, '.dql', 'cache'), { recursive: true });
@@ -67,6 +79,7 @@ function project(setup: Setup) {
   }]));
   const manifest = {
     sources: {},
+    ...(setup.terms ? { terms: Object.fromEntries(setup.terms.map((term) => [term.name, { ...term, filePath: `terms/${term.name}.dql` }])) } : {}),
     ...(setup.blocks ? { blocks } : {}),
     ...(setup.project === 'hybrid' ? { modeling: { mode: 'hybrid', packages: {}, areas: {} } } : {}),
     dbtProvenance: {
@@ -88,6 +101,7 @@ async function ask(setup: Setup, question: string, draft: (prompt: string) => st
   const { projectRoot, manifest } = project(setup);
   const prompts: string[] = [];
   const reviews: string[] = [];
+  const indexPrompts: string[] = [];
   let readings = 0;
   const executed: string[] = [];
   const route = createAskPipelineRouteExecutor({
@@ -108,6 +122,10 @@ async function ask(setup: Setup, question: string, draft: (prompt: string) => st
     selectProvider: async () => ({
       name: 'ollama', available: async () => true,
       generate: async (messages: AgentMessage[]) => {
+        if (messages[0]!.content.startsWith('You choose which database tables')) {
+          indexPrompts.push(messages[1]!.content);
+          return setup.pick?.(messages[1]!.content) ?? 'not JSON';
+        }
         if (isReview(messages)) { reviews.push(messages[1]!.content); return setup.review?.(messages[1]!.content, messages[0]!.content) ?? '{"answers": true}'; }
         if (!isDraft(messages)) { readings += 1; return READING; }
         const prompt = messages.map((message) => message.content).join('\n');
@@ -120,13 +138,18 @@ async function ask(setup: Setup, question: string, draft: (prompt: string) => st
   });
   try {
     const result = await route({ runId: `run:${question}`, request: { question, requestedMode: 'ask' } as AgentRunRequest, route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {} });
-    return { result, prompts, readings, executed, reviews };
+    return { result, prompts, readings, executed, reviews, indexPrompts };
   } finally {
     rmSync(projectRoot, { recursive: true, force: true });
   }
 }
 
 const declined = () => 'NO_SQL: nothing to draft in this test.';
+
+// Every provider and executor here answers at once, so without this the whole
+// file runs as one chain of promises and never lets the worker read Vitest's
+// own messages; past 60 s on a slow runner the worker's report then times out.
+afterEach(() => new Promise<void>((resolve) => setImmediate(resolve)));
 
 describe('a warehouse-first draft reads the whole schema with its declared keys', () => {
   it('shows every table once, the primary keys and the foreign keys the warehouse declares', async () => {
@@ -159,6 +182,103 @@ describe('a warehouse-first draft reads the whole schema with its declared keys'
     expect((prompt.match(/executable relation:/g) ?? []).length).toBeLessThanOrEqual(8);
     expect(prompt).toContain('executable relation:main.customers');
   }, 20_000);
+});
+
+describe('a schema too large to show: the model chooses from an index', () => {
+  // Just past the whole-schema budget: enough to need the index, no more.
+  const large: Record<string, Table> = { ...TABLES };
+  for (let index = 0; index < 22; index += 1) large[`ledger_${index}`] = { columns: Array.from({ length: 40 }, (_, column) => `measure_${column}_of_a_long_ledger_column_name`), primaryKey: ['measure_0_of_a_long_ledger_column_name'] };
+
+  it('offers every table one line each, and shows full cards for what it chose', async () => {
+    const { prompts, indexPrompts } = await ask({ tables: large, pick: () => '{"tables":["main.invoice_lines","main.imagined"]}' }, 'What was revenue last spring', declined);
+    expect(indexPrompts).toHaveLength(1);
+    expect((indexPrompts[0]!.match(/^- main\./gm) ?? []).length).toBe(28);
+    expect(prompts[0]).toContain('column:main.invoice_lines.unit_price');
+    expect(prompts[0]).not.toContain('main.imagined');
+  }, 20_000);
+
+  it('an index line says what a table holds, from its meaning file', async () => {
+    const meanings = { invoice_lines: { table: { description: 'One row per product sold.', source: 'ai' as const, otherNames: ['revenue lines'] }, columns: {} } };
+    const { indexPrompts } = await ask({ tables: large, meanings, pick: () => '{"tables":["main.invoice_lines"]}' }, 'What was revenue last spring', declined);
+    expect(indexPrompts[0]).toContain('- main.invoice_lines: One row per product sold. Also called: revenue lines.');
+  }, 20_000);
+
+  it('a reply it cannot read falls back to the words of the question', async () => {
+    const { prompts, indexPrompts } = await ask({ tables: large }, 'How many customers are there in each country', declined);
+    expect(indexPrompts).toHaveLength(1);
+    expect(prompts[0]).toContain('executable relation:main.customers');
+  }, 20_000);
+
+  it('a call that fails falls back the same way', async () => {
+    const { prompts } = await ask({ tables: large, pick: () => { throw new Error('model unavailable'); } }, 'How many customers are there in each country', declined);
+    expect(prompts[0]).toContain('executable relation:main.customers');
+  }, 20_000);
+
+  it('a schema that fits is shown whole and no index call is made', async () => {
+    const { indexPrompts } = await ask({ pick: () => '{"tables":[]}' }, 'What was revenue last spring', declined);
+    expect(indexPrompts).toHaveLength(0);
+  });
+
+  it('a dbt or hybrid project gets no index call, however large', async () => {
+    for (const kind of ['dbt', 'hybrid'] as const) {
+      expect((await ask({ tables: large, project: kind, pick: () => '{"tables":[]}' }, 'How many customers are there', declined)).indexPrompts).toHaveLength(0);
+    }
+  }, 20_000);
+});
+
+describe('what the data means, as drafted by AI', () => {
+  const draft = { table: { description: 'One row per product on an invoice.', source: 'ai' as const, otherNames: ['revenue lines'] }, columns: { unit_price: { description: 'Price of one unit before tax', source: 'ai' as const } } };
+
+  it('reaches the drafter labelled as a draft, with its other names', async () => {
+    const { prompts } = await ask({ meanings: { invoice_lines: draft } }, 'Total invoice amount for each customer country', declined);
+    expect(prompts[0]).toContain('AI draft: One row per product on an invoice. Also called: revenue lines.');
+    expect(prompts[0]).toContain('AI draft: Price of one unit before tax');
+  });
+
+  it('a project with no meaning files keeps the prompt it had, warehouse comments and all', async () => {
+    const commented = { ...TABLES, invoice_lines: { ...TABLES.invoice_lines!, comment: 'DBA_COMMENT_MARKER' } };
+    const { prompts } = await ask({ tables: commented }, 'Total invoice amount for each customer country', declined);
+    expect(prompts[0]).not.toContain('DBA_COMMENT_MARKER');
+  });
+
+  it("a person's words reach the drafter with no label", async () => {
+    const reviewed = { table: { description: 'One row per product on an invoice.', source: 'person' as const }, columns: {} };
+    const { prompts } = await ask({ meanings: { invoice_lines: reviewed } }, 'Total invoice amount for each customer country', declined);
+    expect(prompts[0]).toContain('One row per product on an invoice.');
+    expect(prompts[0]).not.toContain('AI draft');
+  });
+
+  it('a stale draft is not used', async () => {
+    const { prompts } = await ask({ meanings: { invoice_lines: { ...draft, stale: true } } }, 'Total invoice amount for each customer country', declined);
+    expect(prompts[0]).not.toContain('One row per product');
+  });
+
+  it('an answer that read a drafted table says so, and stays an AI-drafted answer', async () => {
+    const { result } = await ask({ meanings: { invoice_lines: draft } }, 'What is the total price of all invoice lines', () => 'SELECT SUM(unit_price) AS total FROM main.invoice_lines', [{ total: 12 }]);
+    const answer = (result as { answerMarkdown?: string; outcome?: { text?: string } });
+    const text = JSON.stringify(answer);
+    expect(text).toContain('used AI-drafted descriptions of main.invoice_lines');
+    expect(text).not.toMatch(/"trustLabel":\s*"(certified|from_metrics)"/i);
+  });
+
+  it('an AI-drafted term reaches the drafter labelled, and the answer says it was used', async () => {
+    const terms = [{ name: 'revenue', description: 'Line totals net of tax.', status: 'draft', tags: ['ai-draft'] }];
+    const { prompts, result } = await ask({ terms }, 'What is our revenue', () => 'SELECT SUM(unit_price) AS total FROM main.invoice_lines', [{ total: 12 }]);
+    expect(prompts[0]).toContain('- business term revenue: AI draft: Line totals net of tax.');
+    expect(JSON.stringify(result)).toContain('used AI-drafted term revenue');
+  });
+
+  it('a certified term loses the label', async () => {
+    const terms = [{ name: 'revenue', description: 'Line totals net of tax.', status: 'certified', tags: ['ai-draft'] }];
+    const { prompts, result } = await ask({ terms }, 'What is our revenue', () => 'SELECT SUM(unit_price) AS total FROM main.invoice_lines', [{ total: 12 }]);
+    expect(prompts[0]).toContain('- business term revenue: Line totals net of tax.');
+    expect(JSON.stringify(result)).not.toContain('AI-drafted term');
+  });
+
+  it('an answer that read other tables does not mention the draft', async () => {
+    const { result } = await ask({ meanings: { invoice_lines: draft } }, 'How many customers are there', () => 'SELECT COUNT(*) AS customers FROM main.customers', [{ customers: 3 }]);
+    expect(JSON.stringify(result)).not.toContain('AI-drafted descriptions');
+  });
 });
 
 describe('a table the question\'s words miss is still shown', () => {

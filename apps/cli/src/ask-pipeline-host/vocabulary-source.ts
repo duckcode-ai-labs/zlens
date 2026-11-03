@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { resolveBlockReplacement, type DQLManifest, type SemanticLayer, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
-import { blocksNamedByQuestion, buildVocabularyIndex, extractBlockContract, parsePhysicalIdentifier, physicalRelationBinding, physicalRelationIdentity, physicalRelationText, mergePhysicalRelationBinding, renderPhysicalIdentifier, type PhysicalRelationBindingV1, type VocabularyEntry, type VocabularyIndex, type VocabularySource } from '@zlens/agent';
+import { meaningHasDraft, meaningText, readMeaningFiles, relationMeaning, resolveBlockReplacement, type MeaningFileV1, type WarehouseCatalogRelationV1, type DQLManifest, type SemanticLayer, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
+import { blocksNamedByQuestion, buildVocabularyIndex, dbtMeaningRelations, extractBlockContract, parsePhysicalIdentifier, physicalRelationBinding, physicalRelationIdentity, physicalRelationText, mergePhysicalRelationBinding, renderPhysicalIdentifier, type PhysicalRelationBindingV1, type VocabularyEntry, type VocabularyIndex, type VocabularySource } from '@zlens/agent';
 
 /**
  * The whole authorized vocabulary of a project, from the objects the host
@@ -284,13 +284,21 @@ function warehouseCatalogRelations(manifest: DQLManifest | undefined, projectRoo
   const snapshot = warehouseCatalogSnapshot(join(projectRoot, catalogPath));
   if (!snapshot) return [];
   const admitted = new Set(Object.keys(manifest?.dbtProvenance?.nodes ?? {}));
+  const meanings = readMeaningFiles(projectRoot);
   return snapshot.relations
     .filter((relation) => admitted.has(relation.id))
-    .map((relation) => ({
+    .map((relation) => {
+      // THE WORDS NOBODY WROTE IN THE WAREHOUSE (meaning-files.ts): a person's
+      // edit, or a draft that is labelled as one wherever it shows. The other
+      // names join the description, because that is what search reads.
+      const meaning = relationMeaning(meanings.get(relation.id), relation);
+      const stated = meaning?.description ? meaningText(meaning.description) : relation.comment;
+      const description = [stated, meaning?.otherNames.length ? `Also called: ${meaning.otherNames.join(', ')}.` : ''].filter(Boolean).join(' ');
+      return {
       ...(relation.database ? { database: relation.database } : {}),
       ...(relation.schema ? { schema: relation.schema } : {}),
       name: relation.name,
-      ...(relation.comment ? { description: relation.comment } : {}),
+      ...(description ? { description } : {}),
       // THE WAREHOUSE CATALOG IS THE COLUMNS, NOT A HINT ABOUT THEM. A dbt
       // manifest keeps columns off the relation because a large one carries
       // tens of thousands of them for ranking alone; a warehouse catalog is
@@ -298,13 +306,37 @@ function warehouseCatalogRelations(manifest: DQLManifest | undefined, projectRoo
       // is complete. Leaving these off the relation showed Ask a warehouse as
       // a list of bare table names — it then reported columns it had never
       // been shown as missing, and declined questions the tables could answer.
-      columns: relation.columns.slice(0, MAX_CATALOG_COLUMNS_PER_RELATION).map((column) => ({
-        name: column.name,
-        ...(column.type ? { dataType: column.type } : {}),
-        ...(column.comment ? { description: column.comment } : {}),
-      })),
+      columns: relation.columns.slice(0, MAX_CATALOG_COLUMNS_PER_RELATION).map((column) => {
+        const words = meaning?.columns.get(column.name.toLowerCase());
+        const columnText = words ? meaningText(words) : column.comment;
+        return {
+          name: column.name,
+          ...(column.type ? { dataType: column.type } : {}),
+          ...(columnText ? { description: columnText } : {}),
+        };
+      }),
       columnCompleteness: (relation.columns.length <= MAX_CATALOG_COLUMNS_PER_RELATION ? 'complete' : 'partial') as 'complete' | 'partial',
-    }));
+      };
+    });
+}
+
+/** The dbt models and sources that have a meaning file, by that file's id. */
+function dbtRelationsWithMeanings(manifest: DQLManifest | undefined, meanings: Map<string, MeaningFileV1>): Map<string, WarehouseCatalogRelationV1> {
+  if (![...meanings.keys()].some((id) => id.startsWith('dbt.'))) return new Map();
+  return new Map(dbtMeaningRelations(manifest?.dbtProvenance?.manifestPath ?? '').map((relation) => [relation.id, relation]));
+}
+
+/** The tables whose words include a draft nobody has reviewed, as the catalog spells them. */
+export function draftedMeaningRelations(manifest: DQLManifest | undefined, projectRoot: string | undefined): string[] {
+  if (!projectRoot) return [];
+  const meanings = readMeaningFiles(projectRoot);
+  if (meanings.size === 0) return [];
+  const catalogPath = manifest?.dbtProvenance?.warehouseCatalogPath;
+  const warehouse = catalogPath ? warehouseCatalogSnapshot(join(projectRoot, catalogPath))?.relations ?? [] : [];
+  return [...warehouse, ...dbtRelationsWithMeanings(manifest, meanings).values()].filter((relation) => {
+    const meaning = relationMeaning(meanings.get(relation.id), relation);
+    return meaning !== undefined && meaningHasDraft(meaning);
+  }).map((relation) => relation.relation);
 }
 
 export function embeddedManifestRelations(manifest: DQLManifest | undefined, projectRoot?: string): NonNullable<VocabularySourceInput['relations']> {
@@ -312,6 +344,8 @@ export function embeddedManifestRelations(manifest: DQLManifest | undefined, pro
   const nodes = dbtArtifactNodes(manifest?.dbtProvenance?.manifestPath);
   if (nodes.length === 0) return warehouse;
   const admitted = new Set(Object.keys(manifest?.dbtProvenance?.nodes ?? {}));
+  const meanings = projectRoot ? readMeaningFiles(projectRoot) : new Map<string, MeaningFileV1>();
+  const meaningRelations = dbtRelationsWithMeanings(manifest, meanings);
   const result: NonNullable<VocabularySourceInput['relations']> = [];
   for (const node of nodes) {
     if (admitted.size > 0 && !admitted.has(node.uniqueId)) continue;
@@ -321,14 +355,27 @@ export function embeddedManifestRelations(manifest: DQLManifest | undefined, pro
     if (!name) continue;
     const schema = physical.at(-2)?.value ?? node.schema;
     const database = physical.at(-3)?.value ?? node.database;
+    // WHAT dbt LEAVES BLANK (meaning-files.ts): dbt's own words stand, and a
+    // draft fills the gaps, labelled as one.
+    const meaningRelation = meaningRelations.get(`dbt.${node.uniqueId}`);
+    const meaning = meaningRelation ? relationMeaning(meanings.get(meaningRelation.id), meaningRelation) : undefined;
+    const stated = meaning?.description ? meaningText(meaning.description) : node.description;
+    const description = [stated, meaning?.otherNames.length ? `Also called: ${meaning.otherNames.join(', ')}.` : ''].filter(Boolean).join(' ');
+    const embeddedColumns = meaning
+      ? meaningRelation!.columns.map((column) => {
+        const words = meaning.columns.get(column.name.toLowerCase());
+        const text = words ? meaningText(words) : column.comment;
+        return { name: column.name, ...(column.type ? { dataType: column.type } : {}), ...(text ? { description: text } : {}) };
+      })
+      : node.columns;
     result.push({
       ...(database ? { database } : {}),
       ...(schema ? { schema } : {}),
       name,
-      ...(node.description ? { description: node.description } : {}),
+      ...(description ? { description } : {}),
       columns: [],
       // Shared with the cache on purpose: the source builder copies what it keeps.
-      ...(node.columns.length ? { embeddedColumns: node.columns } : {}),
+      ...(embeddedColumns.length ? { embeddedColumns } : {}),
       columnCompleteness: 'partial',
     });
   }
@@ -961,7 +1008,8 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
     const identifiers = (term as { identifiers?: string[] }).identifiers ?? [];
     source.terms!.push({
       name: term.name, ...(term.synonyms?.length || identifiers.length ? { synonyms: [...new Set([...(term.synonyms ?? []), ...identifiers])] } : {}),
-      ...(term.description ? { description: term.description } : {}), ...(rules.length ? { rules } : {}),
+      // An AI-drafted term says so until someone certifies it (term-draft.ts).
+      ...(term.description ? { description: term.tags?.includes('ai-draft') && (term.status ?? '').toLowerCase() !== 'certified' ? `AI draft: ${term.description}` : term.description } : {}), ...(rules.length ? { rules } : {}),
       ...(term.metricRefs?.length ? { metricRefs: term.metricRefs } : {}), ...(term.domain ? { domain: term.domain } : {}),
     });
   }

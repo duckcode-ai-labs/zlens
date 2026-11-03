@@ -371,6 +371,73 @@ Drafts are kept until you save or discard them. Close the review with
 *N drafted models waiting for review*, with **Review drafts** and
 **Discard**.
 
+### Optional: draft what the tables mean
+
+A database with no comments gives Ask nothing but names, and no name says
+"revenue". AI can draft a first version of what each table and column holds:
+
+```bash
+zlens model draft-meanings --dry-run
+```
+
+That says how many tables, how many model calls and roughly how many tokens,
+and sends nothing. Then run it:
+
+```bash
+zlens model draft-meanings
+```
+
+It uses your own AI provider and sends table names, column names, types, keys
+and any comment the database already has. No rows, unless you turned on
+[the value profile](#optional-show-the-drafter-what-the-columns-hold). Guided
+Setup and **Modeling → Meanings** offer the same step, with the cost on screen.
+
+The drafts land in `meanings/`, one file per table, so a review shows in a pull
+request.
+
+- **It fills gaps only.** A database comment or your own edit is never replaced.
+- **A draft helps, and says so.** Ask searches the drafts, and any answer that
+  used one says `used AI-drafted descriptions of sales.invoicelines`. A draft
+  never raises an answer's trust label.
+- **You review by domain.** In **Modeling → Meanings**, edit what's wrong and
+  **Accept** the rest, a table at a time or a whole domain. Accepting takes the
+  AI label off. It certifies nothing.
+- **Drafts follow the schema.** When a table's columns change, its drafts stop
+  being used and the next run redrafts that table alone. Your own words stay.
+
+Each draft shows what it was read from. The model saw names, not rows, so it can
+be wrong about what a column means, and that's what the review is for.
+
+On a schema too large to show whole, Ask gives the model one line per table,
+what the table holds when something says so and its columns when nothing does,
+and lets it choose the tables a question needs. That works with or without
+drafts.
+
+### Optional: draft terms and metrics
+
+With descriptions in place, two more drafts are available:
+
+```bash
+zlens model draft-terms
+```
+
+This proposes the words people use, such as "revenue" or "backorder", as draft
+terms that name their columns. They reach Ask as labelled context, and they
+count only after someone gives them an owner and
+[certifies them](../datalex-and-dql.md#certify-business-terms).
+
+```bash
+zlens model draft-metrics
+```
+
+This reads recent query history, counts the aggregates people repeat, runs each
+one on the warehouse, and writes the ones that run as metric drafts. It reads
+query text in memory and keeps only the expression and the counts, and leaves
+out any expression holding a literal. A metric draft answers nothing until it's
+approved: `zlens semantic drafts` lists them, `zlens migrate compare` proves one
+against an old report, and `zlens semantic approve` makes it a metric. Metric
+names come from the expression, so rename them when you review.
+
 ## 6. Review and certify
 
 ```bash

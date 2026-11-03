@@ -26,6 +26,24 @@ export {
   type RetirementValidationInput,
 } from './retirement.js';
 export {
+  MEANINGS_DIR,
+  catalogWithMeanings,
+  meaningFilePath,
+  meaningEntryInUse,
+  meaningFileStale,
+  meaningHasDraft,
+  meaningText,
+  readMeaningFiles,
+  relationColumnsFingerprint,
+  relationMeaning,
+  writeMeaningFile,
+  type MeaningEntryV1,
+  type MeaningFileV1,
+  type MeaningSource,
+  type MeaningTableEntryV1,
+  type RelationMeaning,
+} from './meaning-files.js';
+export {
   WAREHOUSE_CATALOG_PATH,
   diffWarehouseCatalogs,
   normalizeWarehouseCatalog,
