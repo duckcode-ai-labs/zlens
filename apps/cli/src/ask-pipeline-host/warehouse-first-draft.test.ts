@@ -180,13 +180,14 @@ describe('a warehouse-first draft reads the whole schema with its declared keys'
 });
 
 describe('a schema too large to show: the model chooses from an index', () => {
+  // Just past the whole-schema budget: enough to need the index, no more.
   const large: Record<string, Table> = { ...TABLES };
-  for (let index = 0; index < 80; index += 1) large[`ledger_${index}`] = { columns: Array.from({ length: 40 }, (_, column) => `measure_${column}_of_a_long_ledger_column_name`), primaryKey: ['measure_0_of_a_long_ledger_column_name'] };
+  for (let index = 0; index < 22; index += 1) large[`ledger_${index}`] = { columns: Array.from({ length: 40 }, (_, column) => `measure_${column}_of_a_long_ledger_column_name`), primaryKey: ['measure_0_of_a_long_ledger_column_name'] };
 
   it('offers every table one line each, and shows full cards for what it chose', async () => {
     const { prompts, indexPrompts } = await ask({ tables: large, pick: () => '{"tables":["main.invoice_lines","main.imagined"]}' }, 'What was revenue last spring', declined);
     expect(indexPrompts).toHaveLength(1);
-    expect((indexPrompts[0]!.match(/^- main\./gm) ?? []).length).toBe(86);
+    expect((indexPrompts[0]!.match(/^- main\./gm) ?? []).length).toBe(28);
     expect(prompts[0]).toContain('column:main.invoice_lines.unit_price');
     expect(prompts[0]).not.toContain('main.imagined');
   }, 20_000);
