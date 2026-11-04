@@ -27,6 +27,12 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
       await runWarehouseDiscovery(subcommand, rest, flags);
       return;
     }
+    // A dbt project checked on the warehouse drafts the whole model from
+    // both (RFC 0012, decision M5); without --validate, dbt alone proposes Domains.
+    if (rest.includes('--validate')) {
+      await runWarehouseDiscovery(subcommand, rest, flags, { fromDbt: true });
+      return;
+    }
     runDomainDiscovery(subcommand, rest, flags);
     return;
   }
@@ -473,31 +479,44 @@ function usesWarehouseDiscovery(rest: string[]): boolean {
  * Staging copies of a final table (`stg_customers` beside `customers`) are
  * left out, as in Guided Setup; `--include-staging` drafts them too.
  */
-async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery', rest: string[], flags: CLIFlags): Promise<void> {
+async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery', rest: string[], flags: CLIFlags, mode: { fromDbt?: boolean } = {}): Promise<void> {
   const pathArg = rest.find((value, index) => !value.startsWith('-') && rest[index - 1] !== '--source' && rest[index - 1] !== '--dbt-manifest');
   const projectRoot = resolve(pathArg ?? '.');
   const validate = rest.includes('--validate');
+  const dbtManifestIndex = rest.indexOf('--dbt-manifest');
+  const dbtManifestPath = dbtManifestIndex >= 0 ? rest[dbtManifestIndex + 1] : undefined;
+  // Opt-in on a warehouse other than DuckDB or SQLite: read views that join or aggregate (decision M4).
+  const readViews = rest.includes('--read-views');
   // Opt-in: read recent query text in memory and keep only which columns were joined.
   const queryHistory = rest.includes('--query-history');
   const includeStaging = rest.includes('--include-staging');
-  const { discoverProjectWarehouseModel, applyProjectWarehouseDiscovery } = await import('../local-runtime.js');
+  const { discoverProjectDbtModel, discoverProjectWarehouseModel, applyProjectWarehouseDiscovery } = await import('../local-runtime.js');
   // A running workbench holds a DuckDB file open; the checks then run through it.
   const { WorkbenchRoutedQueryExecutor } = await import('../workbench-query-route.js');
   const executor = validate || queryHistory ? new WorkbenchRoutedQueryExecutor(projectRoot, { onRoute: (via) => { if (flags.format !== 'json') console.error(`  Running the warehouse checks through ${via}, which has the DuckDB file open.`); } }) : undefined;
   try {
-    const report = await discoverProjectWarehouseModel(projectRoot, {
-      ...(flags.domain ? { domain: flags.domain } : {}),
-      validate,
-      queryHistory,
-      hideStagingDuplicates: !includeStaging,
-      ...(executor ? { executor } : {}),
-    });
+    const report = mode.fromDbt && executor
+      ? await discoverProjectDbtModel(projectRoot, {
+        ...(flags.domain ? { domain: flags.domain } : {}),
+        hideStagingDuplicates: !includeStaging,
+        readViews,
+        ...(dbtManifestPath ? { dbtManifestPath } : {}),
+        executor,
+      })
+      : await discoverProjectWarehouseModel(projectRoot, {
+        ...(flags.domain ? { domain: flags.domain } : {}),
+        validate,
+        queryHistory,
+        hideStagingDuplicates: !includeStaging,
+        readViews,
+        ...(executor ? { executor } : {}),
+      });
     const writing = subcommand === 'apply-discovery' && flags.apply === true && flags.dryRun !== true;
     if (!writing) {
       if (flags.format === 'json') {
         console.log(JSON.stringify(subcommand === 'apply-discovery' ? { mode: 'preview', ...report } : report, null, 2));
       } else {
-        printWarehouseDiscovery(report);
+        printWarehouseDiscovery(report, mode.fromDbt ? 'ZLens model discovery from dbt and the warehouse' : undefined);
         console.log(subcommand === 'apply-discovery'
           ? 'No files written. Re-run with --apply to add these drafts.'
           : 'Add them as drafts with: zlens model apply-discovery --apply' + (validate ? ' --validate' : ''));
@@ -508,7 +527,7 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
     if (flags.format === 'json') {
       console.log(JSON.stringify({ catalogFingerprint: report.catalogFingerprint, applied }, null, 2));
     } else {
-      console.log('ZLens warehouse discovery apply');
+      console.log(mode.fromDbt ? 'ZLens model discovery apply (dbt and the warehouse)' : 'ZLens warehouse discovery apply');
       console.log(`  ${applied.changes} draft change(s) written:`);
       for (const path of applied.paths) console.log(`    ${path}`);
       console.log('  Everything is a draft. Review and certify on the Modeling page.');
@@ -521,9 +540,9 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
   }
 }
 
-function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport): void {
+function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport, title = 'ZLens warehouse discovery'): void {
   const newEntities = report.entities.filter((entity) => !entity.existing);
-  console.log(`ZLens warehouse discovery (draft only${report.validated ? ', checked on the warehouse' : ''})`);
+  console.log(`${title} (draft only${report.validated ? ', checked on the warehouse' : ''})`);
   console.log(`  catalog ${report.catalogFingerprint.slice(0, 12)} · ${report.relations} relations · ${newEntities.length} new entities · ${report.relationships.length} new relationships${report.existingRelationships ? ` · ${report.existingRelationships} already modeled` : ''}`);
   if (report.queryHistory) {
     console.log('error' in report.queryHistory

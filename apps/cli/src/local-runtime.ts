@@ -269,6 +269,7 @@ import {
   blockCompanionRelativePath as coreBlockCompanionRelativePath,
   certifiedBlockFileState,
   meaningfulDatabaseName,
+  sentenceCaseName,
 } from '@zlens/core';
 import {
   dashboardSemanticFiltersForTile,
@@ -871,7 +872,8 @@ import {
   type ConnectionMetadataScopeInput,
   type ConnectionMetadataScopeV1,
 } from './warehouse-metadata.js';
-import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
+import { readWarehouseCatalogRelations, syncWarehouseCatalog } from './warehouse-catalog-sync.js';
+import { dbtModelSnapshot, dbtWarehouseNodes, dbtWarehouseScopes, readDbtManifest } from './dbt-model-discovery.js';
 import { draftMeanings, meaningsStatus, planMeaningDrafts, plannedWithoutColumnList, type MeaningDraftReport } from './meaning-draft.js';
 import { acceptMeanings, meaningCatalog, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
 import { draftMetricsFromHistory, repeatedAggregates, type HistoryMetricDraftItem, type HistoryStatement } from './query-history-metrics.js';
@@ -38924,6 +38926,8 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   queryHistory?: boolean;
   /** Leave out staging copies of tables a final table already holds (setup and Modeling's drafts). */
   hideStagingDuplicates?: boolean;
+  /** Read views that join or aggregate on a warehouse other than DuckDB or SQLite (decision M4: off unless asked). */
+  readViews?: boolean;
   executor?: QueryExecutor;
 }): Promise<WarehouseDiscoveryReport> {
   const cfg = loadProjectConfig(projectRoot);
@@ -38979,17 +38983,29 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   });
   const report = queryHistory ? { ...drafted, queryHistory } : drafted;
   if (!options.validate || !connection || !options.executor) return report;
-  const executor = options.executor;
+  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true });
+}
+
+/**
+ * Check a drafted model on the warehouse (RFC 0007, RFC 0012): each join and
+ * naming-key grain, then layers, row identity and table picks, then joins on
+ * the picks' row identities. A local file warehouse reads every view;
+ * elsewhere a view that joins or aggregates is read only when asked.
+ */
+async function checkDraftOnWarehouse(
+  projectRoot: string,
+  cfg: ProjectConfig,
+  report: WarehouseDiscoveryReport,
+  snapshot: Parameters<typeof validateWarehouseDiscovery>[1],
+  connection: ConnectionConfig,
+  executor: QueryExecutor,
+  options: { readViews?: boolean } = {},
+): Promise<WarehouseDiscoveryReport> {
   const run = (sql: string) => executor.executeQuery(sql, [], {}, connection);
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
-  // A local file warehouse reads every view; elsewhere a view that joins or
-  // aggregates waits for a person, as before.
-  const localEngine = /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
-  const readable = (relation: Parameters<typeof cheapToRead>[0]) => localEngine || cheapToRead(relation);
+  const allViews = options.readViews === true || /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
+  const readable = (relation: Parameters<typeof cheapToRead>[0]) => allViews || cheapToRead(relation);
   const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, { dialect: connection.driver, readable });
-  // Layers, row identity and one table per business thing (RFC 0012). A local
-  // file warehouse reads every view; elsewhere a view that joins or
-  // aggregates waits for the budgeted checks.
   const dbtManifestPath = resolveDbtManifestPath(projectRoot, cfg);
   let dbt: ReturnType<typeof readDbtRelationFacts> | undefined;
   try {
@@ -38998,6 +39014,61 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   const picked = await draftTablePicks(validated, snapshot, run, quote, { ...(dbt ? { dbt } : {}), readViews: readable });
   // Joins on the picks' row identities: several columns, roles, periods, itself.
   return draftIdentityJoins(picked, snapshot, run, quote, { dialect: connection.driver, readable });
+}
+
+/**
+ * `zlens model discover --validate` in a dbt-first project (RFC 0012,
+ * decision M5): dbt alone drafts no join it does not test, so the warehouse
+ * is read too. The relations dbt builds and reads are read with the metadata
+ * statements `zlens sync warehouse` runs (nothing is written), keyed by their
+ * dbt nodes, and drafted and checked as a warehouse-first project's are.
+ * Domains come from dbt's groups, meta, tags or business folders, else one
+ * for the project. Entities bind with `dbt_model:`.
+ */
+export async function discoverProjectDbtModel(projectRoot: string, options: {
+  manifest?: DQLManifest;
+  domain?: string;
+  hideStagingDuplicates?: boolean;
+  readViews?: boolean;
+  dbtManifestPath?: string;
+  executor: QueryExecutor;
+}): Promise<WarehouseDiscoveryReport> {
+  const cfg = loadProjectConfig(projectRoot);
+  const dbtManifestPath = options.dbtManifestPath ? resolve(projectRoot, options.dbtManifestPath) : resolveDbtManifestPath(projectRoot, cfg);
+  if (!dbtManifestPath || !existsSync(dbtManifestPath)) {
+    throw Object.assign(new Error('No dbt manifest found. Run dbt parse or pass --dbt-manifest <path>.'), { code: 'DBT_MANIFEST_MISSING' });
+  }
+  const connectionId = warehouseCatalogConnectionId(cfg);
+  const connection = projectConnectionById(projectRoot, cfg, connectionId);
+  if (!connection) throw Object.assign(new Error(`Checking the warehouse needs the connection "${connectionId}".`), { code: 'CONNECTION_NOT_FOUND' });
+  const dbtManifest = readDbtManifest(dbtManifestPath);
+  const nodes = dbtWarehouseNodes(dbtManifest);
+  const scopes = dbtWarehouseScopes(nodes, (connection as { database?: string }).database ?? (connection as { catalog?: string }).catalog);
+  const { relations } = await readWarehouseCatalogRelations({ executor: options.executor, connection, scopes });
+  const snapshot = dbtModelSnapshot({ dbtManifest, relations, driver: connection.driver, connectionId, scopes });
+  if (snapshot.relations.length === 0) {
+    throw Object.assign(new Error('None of the dbt project\'s models, sources or snapshots were found in the warehouse. Run dbt build, or check the connection.'), { code: 'WAREHOUSE_CATALOG_MISSING' });
+  }
+  // Domains: what dbt says (groups, meta, tags, business folders), else one for the project.
+  const domains = discoverDbtDomains({ projectRoot, dbtManifestPath });
+  const nameOf = new Map(domains.proposals.map((proposal) => [proposal.id, proposal.name]));
+  const domainOfNode = new Map(domains.memberships.flatMap((membership) => (membership.proposedDomain ? [[membership.dbtUniqueId, membership.proposedDomain] as const] : [])));
+  const projectDomain = domains.proposals.length === 1 ? domains.proposals[0]! : undefined;
+  const manifest = options.manifest ?? buildManifest({ projectRoot, dbtManifestPath });
+  const report = discoverWarehouseModel({
+    snapshot,
+    manifest,
+    ...(options.domain ? { domain: options.domain } : {}),
+    domainFor: (relation) => {
+      const id = domainOfNode.get(relation.id) ?? projectDomain?.id;
+      return id ? { id, name: nameOf.get(id) ?? sentenceCaseName(id) } : undefined;
+    },
+    ...(cfg.project ? { projectName: cfg.project } : {}),
+    ...(options.hideStagingDuplicates ? { hideStagingDuplicates: true } : {}),
+    existingDomains: loadDomainPackageRegistry(projectRoot).values().map((pkg) => pkg.id),
+    decisions: readDiscoveryLedger(projectRoot).relationships,
+  });
+  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true });
 }
 
 /** Write a discovery report's drafts (optionally only the chosen ones) through the reviewed modeling path. */

@@ -341,9 +341,33 @@ export async function syncWarehouseCatalog(input: {
   connection: ConnectionConfig;
   scope: ConnectionMetadataScopeV1;
 }): Promise<WarehouseCatalogSyncResult> {
+  const { relations, warnings } = await readWarehouseCatalogRelations({ executor: input.executor, connection: input.connection, scopes: input.scope.scopes });
+  if (relations.length === 0) {
+    throw new Error('The warehouse catalog sync found no tables in the selected schemas. Check the schema selection and the connection role\'s permissions.');
+  }
+  const snapshot = writeWarehouseCatalog(input.projectRoot, {
+    version: 1,
+    driver: input.connection.driver,
+    connectionId: input.scope.connectionId,
+    scopes: input.scope.scopes.map((scope) => ({ catalogOrDatabase: scope.catalogOrDatabase, schemas: [...scope.schemas] })),
+    capturedAt: new Date().toISOString(),
+    relations,
+  });
+  return { snapshot, warnings };
+}
+
+/**
+ * Read the scopes' catalog from the warehouse, writing nothing: the same
+ * metadata statements `zlens sync warehouse` runs.
+ */
+export async function readWarehouseCatalogRelations(input: {
+  executor: QueryExecutor;
+  connection: ConnectionConfig;
+  scopes: ReadonlyArray<{ catalogOrDatabase: string; schemas: string[] }>;
+}): Promise<{ relations: WarehouseCatalogRelationV1[]; warnings: string[] }> {
   const warnings: string[] = [];
   const results: Array<{ query: CatalogQuery; rows: Row[] }> = [];
-  for (const scope of input.scope.scopes) {
+  for (const scope of input.scopes) {
     for (const query of buildWarehouseCatalogQueries(input.connection.driver, scope)) {
       try {
         const result = await input.executor.executePositional(query.sql, [], input.connection, QUERY_OPTIONS);
@@ -366,17 +390,5 @@ export async function syncWarehouseCatalog(input: {
       }
     }
   }
-  const relations = assembleWarehouseCatalog(input.connection.driver, results);
-  if (relations.length === 0) {
-    throw new Error('The warehouse catalog sync found no tables in the selected schemas. Check the schema selection and the connection role\'s permissions.');
-  }
-  const snapshot = writeWarehouseCatalog(input.projectRoot, {
-    version: 1,
-    driver: input.connection.driver,
-    connectionId: input.scope.connectionId,
-    scopes: input.scope.scopes.map((scope) => ({ catalogOrDatabase: scope.catalogOrDatabase, schemas: [...scope.schemas] })),
-    capturedAt: new Date().toISOString(),
-    relations,
-  });
-  return { snapshot, warnings };
+  return { relations: assembleWarehouseCatalog(input.connection.driver, results), warnings };
 }

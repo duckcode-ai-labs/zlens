@@ -263,6 +263,11 @@ export function discoverWarehouseModel(input: {
   hideStagingDuplicates?: boolean;
   /** Existing Domain Package ids. */
   existingDomains?: Iterable<string>;
+  /**
+   * The Domain for a relation from other evidence (a dbt project's groups,
+   * meta, tags or business folders, else the project), before schema names.
+   */
+  domainFor?: (relation: WarehouseCatalogRelationV1) => { id: string; name: string } | undefined;
   /** Opt-in: joins seen in recent query history. */
   observedJoins?: ObservedJoin[];
   /** What reviewers decided about earlier drafts (`.dql/modeling-discovery.json`). */
@@ -302,6 +307,11 @@ export function discoverWarehouseModel(input: {
       const id = slug(input.domain);
       domainNames.set(id, input.domain.trim());
       return id;
+    }
+    const given = input.domainFor?.(relation);
+    if (given) {
+      domainNames.set(given.id, given.name);
+      return given.id;
     }
     const schema = relation.schema?.toLowerCase();
     if (schema && !GENERIC_SCHEMAS.has(schema) && (!isTechnicalSchema(schema) || existingDomains.has(slug(schema)))) return slug(schema);

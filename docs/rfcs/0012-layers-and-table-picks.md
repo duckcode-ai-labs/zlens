@@ -7,7 +7,7 @@
 | **Created** | 2026-11-04 |
 | **Targets** | The next ZLens release |
 | **Discussion** | — |
-| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity |
+| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse |
 | **Supersedes** | — |
 
 ## Summary
@@ -186,6 +186,38 @@ On DuckDB and SQLite every view is read, including the existing name and key
 checks. Elsewhere, a view that joins or aggregates waits for a person, as
 before.
 
+### dbt projects read the warehouse (P2, decision M5)
+
+dbt alone drafts only the joins its `relationships` tests hold. On NBA that is
+none. In a dbt-first project, `zlens model discover --validate` does this:
+
+1. **Reads the warehouse.** The databases and schemas the dbt nodes live in are
+   read with the metadata statements `zlens sync warehouse` runs. Nothing is
+   written.
+2. **Keys each relation by its dbt node.** That covers models, snapshots, seeds
+   and sources; ephemeral models are not in the warehouse. A relation no dbt
+   node owns is left out.
+3. **Adds what dbt knows.**
+   - A model's compiled SQL is its lineage.
+   - Its `relationships` tests are declared keys.
+   - Its `unique` tests are tried first for row identity.
+4. **Picks Domains** from dbt's groups, meta, tags or business folders, else one
+   for the project.
+5. **Drafts and checks** the same way as for a warehouse-first project.
+6. **Binds entities with `dbt_model:`.**
+
+Without `--validate`, dbt discovery proposes Domains only, as before.
+
+### Views on other warehouses (decision M4)
+
+- **DuckDB and SQLite:** every view is read.
+- **Elsewhere:** a view that joins or aggregates is read only with
+  `--read-views`. It can take minutes to compute, and decision M4 keeps it off
+  unless asked.
+
+The estimate-first budget that decision M4 names is not built yet. The flag is
+the opt-in until it is.
+
 ### Manifest
 
 An entity gains an optional field:
@@ -263,6 +295,11 @@ The 5 joins the hand model does not have are real references:
 
 The stop rule (at least 12 of 17 joins and 6 of 8 picks after P2) passes.
 
+The same draft from the dbt project (dbt-first, `--validate`) scores the same:
+8 of 8 picks, 7 of 7 legacy tables, 14 of 15 identities and 17 of 17 joins.
+Applied, it compiles to 19 entities and 22 joins bound with `dbt_model:`.
+Running discovery again proposes nothing new.
+
 ## Alternatives considered
 
 - **Furthest downstream wins.** That picks `fct_player_journey`, the 2009–2019
@@ -276,10 +313,12 @@ The stop rule (at least 12 of 17 joins and 6 of 8 picks after P2) passes.
 
 ## Unresolved questions
 
-- Views that join or aggregate are read only on DuckDB and SQLite until P2 adds
-  the estimate and budget (decision M4).
+- Views that join or aggregate are read on other warehouses only with
+  `--read-views`. The estimate-first budget is still to build.
 - On a warehouse with no dbt manifest, lineage is known only for views. A table
   built from another table is grouped by its identity alone.
+- Entity names still come from table names, so a staging copy can take the
+  plain name (`src_players` → `player`). P3 names entities from what a row is.
 - The thresholds (0.5% repeats, 95% of rows, 10% more periods, 80% of columns)
   are set from one project. The blind second project in P6 tests them.
 
