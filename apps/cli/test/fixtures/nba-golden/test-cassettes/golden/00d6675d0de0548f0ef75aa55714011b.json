@@ -1,0 +1,23 @@
+{
+  "key": "00d6675d0de0548f0ef75aa55714011b",
+  "operation": "generate",
+  "text": "SELECT strftime('%Y-%m', game_date) AS game_month, SUM(pts) AS total_points\nFROM \"nba_golden\".\"dev\".\"player_game_stats\"\nWHERE game_date >= '2017-01-01' AND game_date < '2018-01-01'\nGROUP BY strftime('%Y-%m', game_date)\nORDER BY game_month ASC",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T20:27:23.985Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "00d6675d0de0548f0ef75aa55714011bb2da3f93dac056e9ad09073792caa768",
+    "postCanonicalHash": "00d6675d0de0548f0ef75aa55714011bb2da3f93dac056e9ad09073792caa768",
+    "appliedRuleClasses": []
+  }
+}

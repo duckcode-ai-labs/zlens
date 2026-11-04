@@ -1621,6 +1621,74 @@ describe('a drafted table pick (RFC 0012)', () => {
   });
 });
 
+describe('the drafter sees the whole business model (RFC 0012, F1)', () => {
+  const connection: ConnectionConfig = { driver: 'duckdb', path: ':memory:' } as ConnectionConfig;
+  const tables: Record<string, string[]> = {
+    player_games: ['game_id', 'player_id', 'season', 'points'],
+    player_seasons: ['player_id', 'season', 'total_points'],
+    teams: ['team_id', 'city'],
+    old_season_stats: ['player_id', 'season', 'total_points'],
+    raw_box: ['game_id', 'player_id', 'pts'],
+  };
+  const source = (name: string) => ({ name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'ins', columns: Object.fromEntries(tables[name]!.map((column) => [column, { name: column }])) } });
+  const entity = (localId: string, table: string, extra: Record<string, unknown> = {}) => ({ id: `nba::entity::${localId}`, localId, domain: 'nba', dbtUniqueId: `model.${table}`, status: 'draft', ...extra });
+  const manifest = {
+    sources: Object.fromEntries(Object.keys(tables).map((name) => [name, source(name)])),
+    dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `ins.${name}` }])) },
+    modeling: {
+      entities: {
+        'nba::entity::player_game': entity('player_game', 'player_games'),
+        'nba::entity::player_season': entity('player_season', 'player_seasons'),
+        'nba::entity::team': entity('team', 'teams'),
+        'nba::entity::old_season_stat': entity('old_season_stat', 'old_season_stats', { useInstead: { entity: 'nba::entity::player_season', reason: 'covers season 2009–2019' } }),
+        'nba::entity::raw_box': entity('raw_box', 'raw_box', { status: 'deprecated' }),
+      },
+      relationships: {},
+    },
+  };
+  const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Total points per season from player_seasons.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
+
+  it('shows every table the model answers from, not only the ones the words of the question found', async () => {
+    const prompts: string[] = [];
+    const provider: AgentProvider = {
+      name: 'ollama', available: async () => true,
+      generate: async (messages) => {
+        if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return reading;
+        prompts.push(messages.map((message) => message.content).join('\n'));
+        return 'NO_SQL: nothing to draft in this test.';
+      },
+    };
+    const route = createAskPipelineRouteExecutor({
+      projectRoot: '/tmp/ask-whole-model',
+      executor: { executeQuery: vi.fn(async (sql: string) => {
+        if (sql.includes('information_schema.columns')) {
+          const rows = Object.entries(tables).filter(([name]) => sql.includes(`'${name}'`))
+            .flatMap(([name, columns]) => columns.map((column) => ({ table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR' })));
+          return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+        }
+        return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
+      }) } as unknown as QueryExecutor,
+      resolveConnection: async () => connection,
+      getSemanticLayer: () => undefined,
+      getManifest: () => ({ snapshotId: 'snapshot:whole-model-f1', manifest: manifest as never }),
+      selectProvider: async () => provider,
+      compileSemantic: async () => { throw new Error('no semantic layer'); },
+      priorIntent: () => undefined,
+    });
+    const result = await route({
+      runId: 'run:whole-model-f1',
+      request: { question: 'Total points per season for each player', requestedMode: 'ask' } as AgentRunRequest,
+      route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
+    });
+    const first = prompts[0]!;
+    for (const table of ['player_seasons', 'player_games', 'teams']) expect(first).toContain(`executable relation:ins.${table}`);
+    // A deprecated table and a drafted look-alike are not part of the model to answer from.
+    expect(first).not.toContain('executable relation:ins.raw_box');
+    expect(first).not.toContain('executable relation:ins.old_season_stats');
+    expect(JSON.stringify(result)).toContain('Showed the whole model: the 3 tables it answers from');
+  });
+});
+
 describe('a join on a composite key is judged by the whole key', () => {
   const connection = { driver: 'duckdb' } as ConnectionConfig;
   // One row per (match_id, ball_id) on each side, while each column alone
@@ -1766,6 +1834,8 @@ describe('on a modeled project, tables are ranked by the Modeling map', () => {
     policy_no_a: ['policy_ref', 'claim_id'],
     policy_no_b: ['policy_ref', 'claim_id'],
     policy_no_c: ['policy_ref', 'claim_id'],
+    // A model too large to show whole (RFC 0012, F1), so Ask still chooses.
+    ...Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`archive_${index}`, ['archive_id', 'note']])),
   };
   const relationship = (id: string, from: string, to: string, key: string) => ({ id, from, to, keys: [{ from: key, to: key }], cardinality: 'many_to_one', status: 'draft' });
   const manifest = {

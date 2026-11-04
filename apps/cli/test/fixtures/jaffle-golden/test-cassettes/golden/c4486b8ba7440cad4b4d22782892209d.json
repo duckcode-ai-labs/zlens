@@ -1,0 +1,23 @@
+{
+  "key": "c4486b8ba7440cad4b4d22782892209d",
+  "operation": "generate",
+  "text": "SELECT r.revenue - c.cost AS gross_profit_2025,\n       100.0 * (r.revenue - c.cost) / r.revenue AS gross_margin_pct\nFROM (\n  SELECT SUM(product_price) AS revenue\n  FROM \"jaffle_shop\".\"dev\".\"order_items\"\n  WHERE ordered_at >= '2025-01-01' AND ordered_at < '2026-01-01'\n) AS r\nCROSS JOIN (\n  SELECT SUM(order_cost) AS cost\n  FROM \"jaffle_shop\".\"dev\".\"orders\"\n  WHERE ordered_at >= '2025-01-01' AND ordered_at < '2026-01-01'\n) AS c",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T20:29:05.498Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "c4486b8ba7440cad4b4d22782892209da9eac0ac48577cb721cbe2fd06027b34",
+    "postCanonicalHash": "c4486b8ba7440cad4b4d22782892209da9eac0ac48577cb721cbe2fd06027b34",
+    "appliedRuleClasses": []
+  }
+}

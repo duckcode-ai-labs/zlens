@@ -2312,6 +2312,31 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           }
         }
       }
+      // THE WHOLE MODEL (RFC 0012, F1). A project with a business model shows
+      // the drafter every table the model answers from: the tables its
+      // entities bind, less the ones a person deprecated and the look-alikes a
+      // drafted pick says to use another instead of, the chosen ones first.
+      // Choosing a few by word overlap left the right table out of 17 of 40
+      // fresh NBA questions on a dbt project whose drafted model named it.
+      // Only a model small enough to read whole; a larger one chooses as before.
+      let wholeModel = 0;
+      if (!wholeSchema) {
+        const builtManifest = deps.getManifest().manifest;
+        const modeledEntities = Object.values(builtManifest?.modeling?.entities ?? {});
+        const answerTables = [...new Set(modeledEntities
+          .filter((entity) => entity.status !== 'deprecated' && !entity.useInstead)
+          .map((entity) => normalizeRelationName(builtManifest?.dbtProvenance?.nodes[entity.dbtUniqueId]?.relation))
+          .filter((relation): relation is string => Boolean(relation)))];
+        const answerRelations = answerTables
+          .map((model) => current.entries.find((item) => item.kind === 'relation' && item.model === model))
+          .map((item) => (item ? entryPhysicalRelation(item) : undefined))
+          .filter((relation): relation is string => Boolean(relation));
+        if (answerRelations.length > 0 && answerRelations.length <= WHOLE_MODEL_TABLES) {
+          const unseen = answerRelations.filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
+          relations.push(...unseen);
+          wholeModel = answerRelations.length;
+        }
+      }
       if (relations.length === 0) {
         // NO TABLES AT ALL is a setup problem, said as one: "nothing matches"
         // would read as an answer about the data (ZLens 0.1.0 e2e, F3).
@@ -2383,7 +2408,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Only tables whose columns are known can be drafted over.
       relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}` });
+      hostStep({ phase: 'schema', title: wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
@@ -2405,7 +2430,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         .map((rule) => ({ rule, named: chosenNames.some((name) => rule.expression.toLowerCase().includes(name)) }))
         .sort((a, b) => Number(b.named) - Number(a.named) || a.rule.localId.localeCompare(b.rule.localId))
         .slice(0, MODEL_RULES_IN_DRAFT)
-        .map(({ rule }) => `- model rule ${rule.localId}: ${clipText(rule.expression, 500)}`);
+        .map(({ rule }) => `- model rule ${rule.localId}: ${clipText(rule.expression, MODEL_RULE_CHARS)}`);
       const briefing = view.pack?.domainBriefing;
       const hintLines = (view.pack?.appliedHints ?? []).slice(0, 5)
         .map((hint) => hint.lesson?.rule || hint.guidance)
@@ -3482,7 +3507,9 @@ export function connectionKey(connection: ConnectionConfig): string {
 /** What the tables chosen for a draft may take: about four and a half thousand tokens. */
 const DRAFT_TABLES_CHARS = 18_000;
 /** The model rules a draft reads, at most: a domain's rules are few and each is a sentence or two. */
-const MODEL_RULES_IN_DRAFT = 8;
+/** Measured rules (RFC 0012) are short facts with numbers; a drafted model holds about ten. */
+const MODEL_RULES_IN_DRAFT = 12;
+const MODEL_RULE_CHARS = 800;
 
 /**
  * What a modeled entity says about the table it binds, for the SQL drafter:
@@ -3498,6 +3525,8 @@ export function modeledMeaning(entry: Pick<VocabularyEntry, 'grain' | 'businessC
   ].filter(Boolean);
   return parts.length ? ` modeled: ${parts.join('. ').replace(/\.\./g, '.')}` : '';
 }
+/** A business model of up to this many tables is shown to the drafter whole (RFC 0012, F1). */
+const WHOLE_MODEL_TABLES = 30;
 /** The schema a warehouse-first draft may read whole: about ten thousand tokens. */
 const WHOLE_SCHEMA_CHARS = 40_000;
 /** The same with the column value profile beside each column: about fifteen thousand tokens. */

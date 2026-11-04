@@ -1,0 +1,23 @@
+{
+  "key": "747aeeb829c196f3c2f7f0a4dfd31ad0",
+  "operation": "generate",
+  "text": "SELECT products.product_id, products.product_name, products.product_type, SUM(order_items.product_price) AS beverage_revenue\nFROM dev.order_items AS order_items\nJOIN dev.products AS products ON order_items.product_id = products.product_id\nWHERE products.is_drink_item = 1\nGROUP BY products.product_id, products.product_name, products.product_type\nORDER BY beverage_revenue DESC, products.product_name",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T20:27:56.952Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "747aeeb829c196f3c2f7f0a4dfd31ad08f5f059f03276e61acb68de45437b70a",
+    "postCanonicalHash": "747aeeb829c196f3c2f7f0a4dfd31ad08f5f059f03276e61acb68de45437b70a",
+    "appliedRuleClasses": []
+  }
+}

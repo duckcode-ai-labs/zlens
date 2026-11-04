@@ -7,7 +7,7 @@
 | **Created** | 2026-11-04 |
 | **Targets** | The next ZLens release |
 | **Discussion** | — |
-| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse. P3 and P4: names, descriptions and concepts, and rules measured on the data. P5: the review screen and `zlens model draft` |
+| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse. P3 and P4: names, descriptions and concepts, and rules measured on the data. P5: the review screen and `zlens model draft`. After P6: Ask shows the whole model (F1), and two more measured facts (F2) |
 | **Supersedes** | — |
 
 ## Summary
@@ -299,6 +299,24 @@ empty map. The proposal route runs the dbt draft (decision M5).
 
 **The CLI.** `zlens model draft [path]` prints the same groups. `--apply` writes all of it as drafts, and
 `--apply --passed-only` leaves out the joins that need a look.
+
+### After P6: what the measurement asked for
+
+P6 measured the draft on 40 fresh, blind NBA questions: 21 right in substance, against 7 for plain dbt and 27 for the hand-built model. Two causes stood out.
+
+**F1. Ask shows the whole model.**
+- **The cause:** in a dbt project, Ask chose a few tables by search, and the drafted model's right table reached the SQL writer on only 23 of 40 questions. When it did, the answer was right on 19 of them.
+- **The change:** when a project has a business model of up to 30 tables to answer from, Ask shows the SQL writer every one of them, the chosen tables first, and the step reads "Showed the whole model".
+  - The tables to answer from are the ones its entities bind, less those marked `status: deprecated` and the look-alikes a drafted pick sets aside.
+  - A larger model chooses as before.
+
+**F2. Two more facts measured.** Both cover where Ask read the right table but the wrong rows.
+- **A summary built from every row of a detail table:** a measure of a picked summary (`total_points`) sums to exactly a detail table's (`points`), and to more than its rows of one code. Then the rule says so, and how to get one code: "local_player_season_facts adds up every row of local_player_game_facts, every first character of game_id included … LIKE '2%' gives 1,769,070."
+  - It is measured for each summary against the smallest picked detail table that matches. A measure prefix (`total_`) and a table word (`team_`) are set aside when matching names.
+  - Five regular-season questions were answered from season totals that include the playoffs.
+- **Code values that fall in the next calendar year:** the season rule now adds the codes whose rows all fall in the calendar year after their season. "Rows whose game_id starts with 4 … for those rows, calendar year Y is season Y − 1." That is "the 2016 playoffs" (season 2015), which every arm missed.
+
+Ask now shows up to 12 model rules of up to 800 characters each (was 8 and 500): a drafted NBA model holds 9.
 
 ### Manifest
 

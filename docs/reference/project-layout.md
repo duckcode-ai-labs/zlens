@@ -104,7 +104,8 @@ my-dql-project/
   - the domain's rules (`rules:`).
 
   It leaves out a table whose entity is `status: deprecated`, unless the
-  question names that table.
+  question names that table. A model of up to 30 tables to answer from is
+  shown to Ask whole; a larger one has its tables chosen per question.
 
   An entity can carry a drafted table pick: `use_instead: { entity: <id>,
   reason: <text> }`. It says another entity holds the same rows better, and
