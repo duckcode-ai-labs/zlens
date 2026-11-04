@@ -360,6 +360,69 @@ A table the question names is kept, labelled "the drafted model prefers X
   `cleansed`, `refined` …) join the technical schemas, which map into the one
   Domain named after the database.
 
+#### Business words at enterprise scale (decisions S-D4, S-D12)
+
+A large dbt project names its business areas inside folder names that also
+carry layer and access words, and tags its models for runs and access. On
+GitLab's public analytics project (3,335 models), the finder used to propose
+53 Domains, most of them tags: `sources` (1,221 models), `workspace`, `safe`,
+`mnpi_exception`, `six_hourly`. Of the 442 business tables, 226 got no Domain.
+
+- **Business words only.** A folder or tag name keeps its business words.
+  - Layer words go: `common`, `mart`, `facts`, `dimensions`, `prep`, `reports`, `workspace`, `legacy`…
+  - Access words go: `safe`, `restricted`, `sensitive`, `mnpi`, `pii`…
+  - Schedule words go: `hourly`, `six_hourly`, `daily`…
+
+  So `common_mart_sales` names *sales*, and `restricted_safe` names nothing.
+- **Source systems are never Domains.**
+  - A tag naming a dbt source (`zuora`) is not a Domain.
+  - A staging model of a source (`sources/zuora/…`) takes no Domain from its folders or tags. Its membership names the `sourceSystem` instead, for the Sources shelf.
+  - The models of a dbt package (`dbt_artifacts`) take no Domain from their folders or tags either.
+- **Compound Domains hold subject areas.** A folder named `sales_and_marketing` is the Domain. A folder naming one of its parts (`common_mart_sales`) places its models in that Domain, with `proposedArea: sales`. The report lists these as `areaProposals`; nothing writes them yet.
+- **Lineage places the rest.** A model nothing else places:
+  - is `shared` when models in three or more Domains read it;
+  - otherwise takes the Domain that two thirds of the models it reads share, or failing that, of the models that read it.
+
+  This is low-confidence evidence (`lineage`) and always needs review.
+- **The evidence order is unchanged:** tags still rank above folders. Ranking plain tags below folders was measured, and scored 2.5 points worse on GitLab, whose `product` tag is meaningful.
+
+**Measured** against 442 GitLab business tables, each labelled from what it is about by a separate agent, with 24 spot-checked (`gitlab/` in the benchmark repository):
+
+| | Before | After |
+|---|---|---|
+| Business tables in the right Domain, one-to-one (majority) | 24.0% (32.6%) | 75.3% (78.1%) |
+| In the right subject area, one-to-one (majority) | 22.9% (30.1%) | 56.8% (66.7%) |
+| Business tables placed | 287 | 439 |
+| Domains proposed over the whole project | 53 | 25 |
+
+"Majority" counts a proposed Domain as the true one most of its tables carry.
+"One-to-one" matches each true Domain to at most one proposed Domain, so
+splitting a Domain is not rewarded.
+
+Most of the remaining misses are tables whose folder disagrees with what they
+are about, which no folder rule can fix: ARR tables in the sales folder, and
+trials and product events in the sales-and-marketing folder.
+
+**Warehouse discovery without dbt** reads schema names the same way
+(`warehouseSchemaDomains`):
+
+- A schema keeps its business words.
+- A compound schema holds its parts as subject areas.
+- A schema is a source system, joining the database's Domain instead of making its own, when it is:
+  - named for a source application or a loader (`salesforce`, `zuora_fivetran`, `tap_postgres`);
+  - or holds no business table (`dim_`, `fct_`, `mart_`…) in a warehouse that names them, and its words match no business schema.
+
+On an empty DuckDB with GitLab's 180 schemas and 4,779 tables:
+
+| | Before | After |
+|---|---|---|
+| Domains | 177, one per schema | 12 |
+| Business tables in the right Domain, one-to-one | 36.2% | 40.7% |
+
+280 of the 442 business tables still sit in the database's Domain: their
+schemas (`common`, `restricted_safe_common`) name no business area. Query
+history (decision S-D11) is the evidence that can place them.
+
 ## Backward compatibility
 
 - No existing field changes.
