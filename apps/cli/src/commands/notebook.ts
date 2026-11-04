@@ -174,7 +174,7 @@ export async function ensureNotebookProject(
   const interactive = io.interactive ?? Boolean(process.stdin.isTTY && process.stdout.isTTY);
   const decision = await bare.decideBareFolder({
     folder: baseDir,
-    contents: detectFolderContents(baseDir),
+    contents: detectFolderContents(baseDir, { warehouseFirst: flags.warehouseFirst === true }),
     yes: flags.yes === true,
     interactive,
     ask: io.ask ?? bare.askInTerminal,

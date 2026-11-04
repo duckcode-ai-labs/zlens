@@ -872,7 +872,7 @@ import {
   type ConnectionMetadataScopeV1,
 } from './warehouse-metadata.js';
 import { syncWarehouseCatalog } from './warehouse-catalog-sync.js';
-import { draftMeanings, meaningsStatus, planMeaningDrafts, type MeaningDraftReport } from './meaning-draft.js';
+import { draftMeanings, meaningsStatus, planMeaningDrafts, plannedWithoutColumnList, type MeaningDraftReport } from './meaning-draft.js';
 import { acceptMeanings, meaningCatalog, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
 import { draftMetricsFromHistory, repeatedAggregates, type HistoryMetricDraftItem, type HistoryStatement } from './query-history-metrics.js';
 import { draftTerms } from './term-draft.js';
@@ -16515,7 +16515,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           json(200, {
             status: meaningsStatus(projectRoot, catalog),
             tables: meaningsOverview(projectRoot, catalog, projectSnapshot().manifest),
-            plan: { tables: plan.tables, columns: plan.columns, calls: plan.batches.length, alreadyDone: plan.alreadyDone, overLimit: plan.overLimit, estimatedInputTokens: plan.estimatedInputTokens, estimatedOutputTokens: plan.estimatedOutputTokens, sendsSampleValues: Boolean(valueProfile), columnsUnlisted: catalog.columnsUnlisted.length },
+            plan: { tables: plan.tables, columns: plan.columns, calls: plan.batches.length, alreadyDone: plan.alreadyDone, overLimit: plan.overLimit, estimatedInputTokens: plan.estimatedInputTokens, estimatedOutputTokens: plan.estimatedOutputTokens, sendsSampleValues: Boolean(valueProfile), columnsUnlisted: plannedWithoutColumnList(plan, catalog.columnsUnlisted) },
             drafting: { available: !hostedOff, ...(hostedOff ? { reason: 'An administrator has to turn this on for this server (agent.meaningDrafts).' } : {}), job: meaningDraftJob },
           });
           return;

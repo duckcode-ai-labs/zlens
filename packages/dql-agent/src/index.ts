@@ -1107,6 +1107,8 @@ export {
   planAgentAnswer,
   recordRuntimeSchemaSnapshot,
   latestRuntimeSchemaSnapshotForProject,
+  latestSchemaSync,
+  SCHEMA_SYNC_SOURCE,
   recordQueryRun,
   applyContextPackCompatibility,
   toAgentRetrievalEvidence,

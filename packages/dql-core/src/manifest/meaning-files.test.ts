@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   meaningFilePath,
   meaningFileStale,
+  meaningFilesHaveWords,
   meaningHasDraft,
   meaningText,
   readMeaningFiles,
@@ -102,6 +103,13 @@ describe('meaning files', () => {
   it('the fingerprint ignores column order and case', () => {
     expect(relationColumnsFingerprint({ columns: [...columns].reverse() })).toBe(relationColumnsFingerprint(relation));
     expect(relationColumnsFingerprint({ columns: [{ name: 'ExtendedPrice', type: 'NUMERIC' }, columns[1]!] })).toBe(relationColumnsFingerprint(relation));
+  });
+
+  it('a file with no words does not make a project one that uses meanings', () => {
+    writeMeaningFile(root, file({ table: undefined, columns: {} }));
+    expect(meaningFilesHaveWords(readMeaningFiles(root))).toBe(false);
+    writeMeaningFile(root, file());
+    expect(meaningFilesHaveWords(readMeaningFiles(root))).toBe(true);
   });
 
   it('an unreviewed draft always says so, and a reviewed one does not', () => {

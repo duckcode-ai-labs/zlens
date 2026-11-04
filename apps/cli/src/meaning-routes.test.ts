@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readMeaningFiles, relationColumnsFingerprint, relationMeaning, writeMeaningFile, type DQLManifest, type WarehouseCatalogRelationV1 } from '@zlens/core';
-import { recordRuntimeSchemaSnapshot } from '@zlens/agent';
+import { recordRuntimeSchemaSnapshot, SCHEMA_SYNC_SOURCE } from '@zlens/agent';
 import { draftedMeaningRelations } from './ask-pipeline-host/vocabulary-source.js';
 import { routeAction } from './host/route-actions.js';
 import { draftMeanings } from './meaning-draft.js';
@@ -165,6 +165,8 @@ describe('a dbt project with no catalog.json', () => {
   it('drafts against every column once the schema is synced, and Ask uses the draft', async () => {
     recordRuntimeSchemaSnapshot(root, {
       generationId: 'nba-1',
+      source: SCHEMA_SYNC_SOURCE,
+      connectionId: 'default',
       tables: [{ relation: 'transformed.team_game_facts', catalogOrDatabase: 'nba', schema: 'transformed', name: 'team_game_facts', columns: [{ name: 'game_id', type: 'BIGINT' }, { name: 'team_id', type: 'BIGINT' }, { name: 'pts', type: 'DOUBLE' }, { name: 'is_home', type: 'BOOLEAN' }] }],
     });
     const catalog = meaningCatalog(root)!;

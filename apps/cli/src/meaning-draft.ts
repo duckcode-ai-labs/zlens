@@ -168,6 +168,12 @@ export function planMeaningDrafts(
   };
 }
 
+/** How many tables a run would draft that list only the columns their dbt YAML documents. */
+export function plannedWithoutColumnList(plan: Pick<MeaningDraftPlan, 'batches'>, columnsUnlisted: string[]): number {
+  const unlisted = new Set(columnsUnlisted);
+  return plan.batches.flat().filter((relation) => unlisted.has(relation.relation)).length;
+}
+
 /** The first balanced JSON object in a model's reply. */
 function replyObject(text: string): Record<string, unknown> | undefined {
   const start = text.indexOf('{');
@@ -353,9 +359,11 @@ export async function draftMeanings(input: {
     for (const relation of batch) bare.set(relation.name.toLowerCase(), (bare.get(relation.name.toLowerCase()) ?? 0) + 1);
     const byName = new Map(batch.flatMap((relation) => [relation.relation, [relation.schema, relation.name].filter(Boolean).join('.'), ...(bare.get(relation.name.toLowerCase()) === 1 ? [relation.name] : [])].map((name) => [name.toLowerCase(), relation] as const)));
     const answered = new Set<string>();
+    let unmatched = 0;
     for (const item of reply.tables as Array<Record<string, unknown>>) {
       const relation = typeof item?.relation === 'string' ? byName.get(item.relation.toLowerCase()) : undefined;
       if (!relation) {
+        unmatched += 1;
         report.dropped.push({ relation: String(item?.relation), reason: 'the model named a table it was not given' });
         continue;
       }
@@ -370,9 +378,12 @@ export async function draftMeanings(input: {
     }
     // A table described already that the model leaves out had nothing to add,
     // as one it answers with no columns: its file says so, so a rerun skips it.
+    // Not when the reply answered nothing, or named a table it wasn't given:
+    // that may be this one, misspelt.
+    const trusted = answered.size > 0 && unmatched === 0;
     const missing: string[] = [];
     for (const relation of batch.filter((item) => !answered.has(item.id))) {
-      if (!relation.comment) {
+      if (!relation.comment || !trusted) {
         missing.push(relation.relation);
         continue;
       }

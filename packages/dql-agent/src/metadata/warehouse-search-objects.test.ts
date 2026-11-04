@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { relationColumnsFingerprint, writeMeaningFile, type DQLManifest } from '@zlens/core';
-import { buildMetadataSnapshot, dbtMeaningCatalog, dbtMeaningRelations, defaultMetadataPath, MetadataCatalog, recordRuntimeSchemaSnapshot } from './catalog.js';
+import { buildMetadataSnapshot, dbtMeaningCatalog, dbtMeaningRelations, defaultMetadataPath, MetadataCatalog, recordRuntimeSchemaSnapshot, SCHEMA_SYNC_SOURCE } from './catalog.js';
 
 const relations = [
   { id: 'warehouse.sales.invoicelines', schema: 'sales', name: 'invoicelines', relation: 'sales.invoicelines', kind: 'table', comment: 'One line of an invoice', columns: [{ name: 'extendedprice', type: 'numeric', comment: 'Line total with tax' }, { name: 'taxamount', type: 'numeric' }] },
@@ -137,6 +137,8 @@ describe('what dbt leaves blank', () => {
     expect(existsSync(defaultMetadataPath(root))).toBe(false);
     recordRuntimeSchemaSnapshot(root, {
       generationId: 'g1',
+      source: SCHEMA_SYNC_SOURCE,
+      connectionId: 'default',
       tables: [
         // As a DuckDB sync spells it: no database in the name, and the file's name as the database.
         { relation: 'analytics.orders', catalogOrDatabase: 'shop_copy', schema: 'analytics', name: 'orders', columns: [{ name: 'order_id', type: 'INTEGER' }, { name: 'amount', type: 'DECIMAL' }] },
@@ -159,6 +161,8 @@ describe('what dbt leaves blank', () => {
     writeFileSync(manifestPath(), JSON.stringify({ nodes: { 'model.shop.orders': { resource_type: 'model', name: 'orders', schema: 'analytics', columns: {} } }, sources: {} }));
     recordRuntimeSchemaSnapshot(root, {
       generationId: 'g2',
+      source: SCHEMA_SYNC_SOURCE,
+      connectionId: 'default',
       // As a Snowflake sync spells them: the database is part of the name.
       tables: [
         { relation: 'SHOP.ANALYTICS.ORDERS', catalogOrDatabase: 'SHOP', schema: 'ANALYTICS', name: 'ORDERS', columns: [{ name: 'ORDER_ID' }] },
@@ -166,6 +170,29 @@ describe('what dbt leaves blank', () => {
       ],
     });
     expect(dbtMeaningCatalog(manifestPath(), root)).toMatchObject({ relations: [{ columns: [] }], columnsUnlisted: ['analytics.orders'] });
+  });
+
+  it("reads the schema sync, never a partial snapshot Ask records after it, and keeps the sync however many come", () => {
+    rmSync(join(root, 'target', 'catalog.json'));
+    const sync = { relation: 'analytics.orders', schema: 'analytics', name: 'orders', columns: [{ name: 'order_id', type: 'INTEGER' }, { name: 'amount', type: 'DECIMAL' }] };
+    recordRuntimeSchemaSnapshot(root, { generationId: 'sync-1', source: SCHEMA_SYNC_SOURCE, connectionId: 'default', capturedAt: '2026-11-03T00:00:00.000Z', tables: [sync] });
+    for (let index = 0; index < 60; index += 1) {
+      recordRuntimeSchemaSnapshot(root, { source: 'agent schema context', status: 'partial', capturedAt: `2026-11-04T00:00:${String(index).padStart(2, '0')}.000Z`, tables: [{ relation: 'analytics.orders', schema: 'analytics', name: 'orders', columns: [{ name: 'order_id' }] }] });
+    }
+    expect(dbtMeaningCatalog(manifestPath(), root).relations[0]?.columns.map((column) => column.name)).toEqual(['order_id', 'amount']);
+  });
+
+  it('with syncs of two connections, reads the default connection\'s', () => {
+    rmSync(join(root, 'target', 'catalog.json'));
+    writeFileSync(join(root, 'dql.config.json'), JSON.stringify({ defaultConnectionName: 'warehouse', connections: { warehouse: { driver: 'duckdb' }, other: { driver: 'duckdb' } } }));
+    recordRuntimeSchemaSnapshot(root, { generationId: 'w', source: SCHEMA_SYNC_SOURCE, connectionId: 'warehouse', capturedAt: '2026-11-03T00:00:00.000Z', tables: [{ relation: 'analytics.orders', schema: 'analytics', name: 'orders', columns: [{ name: 'order_id' }, { name: 'amount' }] }] });
+    recordRuntimeSchemaSnapshot(root, { generationId: 'o', source: SCHEMA_SYNC_SOURCE, connectionId: 'other', capturedAt: '2026-11-04T00:00:00.000Z', tables: [{ relation: 'analytics.orders', schema: 'analytics', name: 'orders', columns: [{ name: 'other_id' }] }] });
+    expect(dbtMeaningCatalog(manifestPath(), root).relations[0]?.columns.map((column) => column.name)).toEqual(['order_id', 'amount']);
+  });
+
+  it('leaves out an ephemeral model: nothing can query it', () => {
+    writeFileSync(manifestPath(), JSON.stringify({ nodes: { 'model.shop.stage': { resource_type: 'model', name: 'stage', schema: 'analytics', config: { materialized: 'ephemeral' }, columns: {} } }, sources: {} }));
+    expect(dbtMeaningCatalog(manifestPath(), root)).toEqual({ relations: [], columnsUnlisted: [] });
   });
 
   it('sees a catalog.json built after the manifest', () => {

@@ -160,6 +160,15 @@ describe('AI first draft of meanings', () => {
     expect(planMeaningDrafts(root, { relations: [described, table('lines')] }).tables).toBe(0);
   });
 
+  it('a described table is not marked done when the reply named a table it was not given, or nothing', async () => {
+    const described = table('team_game_facts', { comment: 'One row per team per game.' });
+    const misspelt = await draftMeanings({ projectRoot: root, snapshot: { relations: [described, table('lines')] }, provider: provider(() => JSON.stringify({ tables: [{ relation: 'wwi.sales.lines', description: 'One row per line.' }, { relation: '"wwi"."sales"."team_game_facts"', columns: { extendedprice: 'Line total' } }] })), date: '2026-11-03' });
+    expect(misspelt).toMatchObject({ nothingToAdd: 0, failed: [{ tables: ['wwi.sales.team_game_facts'], reason: 'the model left these tables out' }] });
+    const empty = await draftMeanings({ projectRoot: root, snapshot: { relations: [described] }, provider: provider(() => JSON.stringify({ tables: [] })), date: '2026-11-03' });
+    expect(empty).toMatchObject({ nothingToAdd: 0, failed: [{ tables: ['wwi.sales.team_game_facts'] }] });
+    expect(readMeaningFiles(root).has(described.id)).toBe(false);
+  });
+
   it('a table with no description the model leaves out still fails, and is sent again', async () => {
     const report = await draftMeanings({ projectRoot: root, snapshot: { relations: [table('lines')] }, provider: provider(() => JSON.stringify({ tables: [] })), date: '2026-11-03' });
     expect(report).toMatchObject({ nothingToAdd: 0, failed: [{ tables: ['wwi.sales.lines'], reason: 'the model left these tables out' }] });

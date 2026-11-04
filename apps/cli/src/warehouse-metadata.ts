@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  SCHEMA_SYNC_SOURCE,
   latestRuntimeSchemaSnapshotForProject,
   recordRuntimeSchemaSnapshot,
   type RuntimeSchemaObservedTarget,
@@ -239,7 +240,7 @@ export async function syncWarehouseMetadata(input: {
     scopeFingerprint: input.scope.scopeFingerprint,
     connectionId: input.scope.connectionId,
     status: 'ready',
-    source: 'activated warehouse metadata generation',
+    source: SCHEMA_SYNC_SOURCE,
     capturedAt,
     observedTarget,
     scopes: input.scope.scopes,
@@ -531,7 +532,7 @@ function addMetadataRow(
     catalogOrDatabase: catalog,
     schema,
     name: tableName,
-    source: 'activated warehouse metadata generation',
+    source: SCHEMA_SYNC_SOURCE,
     columns: [],
   };
   if (

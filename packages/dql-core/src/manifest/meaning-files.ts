@@ -152,6 +152,16 @@ export function readMeaningFiles(projectRoot: string): Map<string, MeaningFileV1
   return files;
 }
 
+/**
+ * Whether any file holds words. A file can hold none: a table the drafter had
+ * nothing to add to keeps one so the next run skips it. Only words make a
+ * project one that uses meanings.
+ */
+export function meaningFilesHaveWords(files: Map<string, MeaningFileV1>): boolean {
+  for (const file of files.values()) if (file.table || Object.keys(file.columns).length > 0) return true;
+  return false;
+}
+
 /** Write one table's file. The rename means a reader never sees half a file. */
 export function writeMeaningFile(projectRoot: string, file: MeaningFileV1): void {
   const path = meaningFilePath(projectRoot, file.id);

@@ -32,6 +32,7 @@ export {
   meaningEntryInUse,
   meaningFileStale,
   meaningHasDraft,
+  meaningFilesHaveWords,
   meaningText,
   readMeaningFiles,
   relationColumnsFingerprint,
