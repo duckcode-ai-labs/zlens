@@ -1,0 +1,23 @@
+{
+  "key": "00a8b1150954fbf553c1796ba30fcd2b",
+  "operation": "generate",
+  "text": "SELECT\n  SUM(product_price) AS revenue,\n  SUM(supply_cost) AS cost,\n  SUM(product_price) - SUM(supply_cost) AS gross_profit,\n  100.0 * (SUM(product_price) - SUM(supply_cost)) / NULLIF(SUM(product_price), 0) AS gross_margin_pct\nFROM jaffle_shop.dev.order_items\nWHERE strftime('%Y', ordered_at) = '2025'",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:24:09.763Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "00a8b1150954fbf553c1796ba30fcd2b044911168028b3c1f4706d9883c1626a",
+    "postCanonicalHash": "00a8b1150954fbf553c1796ba30fcd2b044911168028b3c1f4706d9883c1626a",
+    "appliedRuleClasses": []
+  }
+}

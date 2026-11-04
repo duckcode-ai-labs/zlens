@@ -83,7 +83,7 @@ import {
 import { parseTablePicks, tableIndexLines, tableIndexMessages, TABLE_INDEX_PICKS } from './table-index.js';
 import { buildProjectVocabulary, buildVocabularySource, draftedMeaningRelations, embeddedManifestRelations, namedBlockNotServed, normalizeRelationName, warehouseFirstCatalog, type VocabularySourceInput } from './vocabulary-source.js';
 import { groupingKeyLabels, keyLabelLine, keyLabels, unnamedGroupingKeys, unnamedKeyFailure, type EntityKey, type KeyLabel, type KeyReference } from './key-labels.js';
-import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, sameRelation, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
+import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, modelingRelationshipTables, sameRelation, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
 import { readEnv } from '@zlens/core';
 import { readValueProfile, renderColumnProfile } from '../value-profile.js';
 import { resultReviewEnabled } from '../result-review-setting.js';
@@ -774,13 +774,38 @@ export type PreferredJoin = { name: string; certified: boolean; from: string; to
  * Domain Studio becomes a hint when two chosen tables carry its key columns.
  * A certified one is preferred; a draft is named as not validated. Neither is
  * a gate: the AI may join differently when the question needs it.
+ *
+ * A modeled relationship joins the two tables its entities are bound to and
+ * no others (`tablesOf`; null when they can't be told). Two other chosen
+ * tables that happen to carry its key columns are not it: naming them with
+ * its certified name told the model a join was certified that no one made.
  */
-export function preferredJoinHints(entries: VocabularyEntry[], relations: string[], columnsOf: (relation: string) => string[]): PreferredJoin[] {
+export function preferredJoinHints(
+  entries: VocabularyEntry[],
+  relations: string[],
+  columnsOf: (relation: string) => string[],
+  tablesOf: (entry: VocabularyEntry) => { from: string; to: string } | null | undefined = () => undefined,
+): PreferredJoin[] {
   const carries = (relation: string, name: string) => columnsOf(relation).some((column) => column.toLowerCase() === name.toLowerCase());
+  const chosen = (table: string) => relations.find((relation) => sameRelation(relation, table));
   return entries
     .filter((entry) => entry.kind === 'relationship' && Boolean(entry.relationship?.keys.length))
     .flatMap((entry) => {
       const keys = entry.relationship!.keys;
+      const bound = tablesOf(entry);
+      if (bound !== undefined) {
+        const boundFrom = bound ? chosen(bound.from) : undefined;
+        const boundTo = bound ? chosen(bound.to) : undefined;
+        if (!boundFrom || !boundTo || boundFrom === boundTo) return [];
+        // Written as before when the columns allow: the first chosen of the
+        // two that carries the keys leads, so a pair already named right
+        // reads the same in the prompt.
+        const [first, second] = [boundFrom, boundTo].sort((a, b) => relations.indexOf(a) - relations.indexOf(b));
+        const leads = [first!, second!].find((relation, index) => keys.every((key) => carries(relation, key.from)) && keys.every((key) => carries(index === 0 ? second! : first!, key.to)));
+        const from = leads ?? boundFrom;
+        const to = from === boundFrom ? boundTo : boundFrom;
+        return [{ name: entry.name, certified: entry.joinAuthority === 'certified', from, to, keys, ...(entry.relationship!.cardinality ? { cardinality: entry.relationship!.cardinality } : {}) }];
+      }
       const from = relations.find((relation) => keys.every((key) => carries(relation, key.from)));
       const to = relations.find((relation) => relation !== from && keys.every((key) => carries(relation, key.to)));
       return from && to ? [{ name: entry.name, certified: entry.joinAuthority === 'certified', from, to, keys, ...(entry.relationship!.cardinality ? { cardinality: entry.relationship!.cardinality } : {}) }] : [];
@@ -2362,7 +2387,11 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           return `- semantic ${entry.kind} ${entry.label ?? entry.name}: ${definition}${physical?.relation ? ` on ${physical.relation}` : ''}${entry.timeRef ? `, time ${entry.timeRef}` : ''}${entry.description ? ` (${entry.description.slice(0, 120)})` : ''}`;
         });
       // PREFERRED JOINS: hints for how two of these tables join, never a gate.
-      const joinHints = preferredJoinHints(current.entries, relations, sourceColumns);
+      const relationshipTables = modelingRelationshipTables(deps.getManifest().manifest);
+      const joinHints = preferredJoinHints(current.entries, relations, sourceColumns, (entry) => {
+        const qualified = entry.domain ? relationshipTables.get(`${entry.domain}::relationship::${entry.name}`) : undefined;
+        return qualified ?? relationshipTables.get(entry.name);
+      });
       // A modeled hop is shown unless a hint above already covers that pair of
       // tables, so a draft that already had its joins reads the same as before.
       const pairKey = (a: string, b: string) => [physicalRelationIdentity(a), physicalRelationIdentity(b)].sort().join(' ~ ');

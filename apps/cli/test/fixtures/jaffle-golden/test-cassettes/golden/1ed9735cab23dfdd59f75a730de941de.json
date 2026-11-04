@@ -1,0 +1,23 @@
+{
+  "key": "1ed9735cab23dfdd59f75a730de941de",
+  "operation": "generate",
+  "text": "SELECT products.product_id, products.product_name, SUM(supplies.supply_cost) AS supply_cost\nFROM \"jaffle_shop\".\"dev\".\"supplies\" AS supplies\nJOIN \"jaffle_shop\".\"dev\".\"products\" AS products ON supplies.product_id = products.product_id\nGROUP BY products.product_id, products.product_name\nORDER BY supply_cost DESC",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:22:17.841Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "1ed9735cab23dfdd59f75a730de941de346528a4d869d5f7ccc21b55c977d3bf",
+    "postCanonicalHash": "1ed9735cab23dfdd59f75a730de941de346528a4d869d5f7ccc21b55c977d3bf",
+    "appliedRuleClasses": []
+  }
+}

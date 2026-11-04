@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { joinKeyPairs } from '@zlens/agent';
-import { businessIdentifierLine, businessIdentifiers, certifiedJoinViolations, classifySqlJoins, joinableRelations, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, sameRelation, sharedParentShortcuts, type ModelingRelationshipEdge } from './join-relationships.js';
+import type { DQLManifest } from '@zlens/core';
+import { businessIdentifierLine, businessIdentifiers, certifiedJoinViolations, classifySqlJoins, joinableRelations, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipTables, sameRelation, sharedParentShortcuts, type ModelingRelationshipEdge } from './join-relationships.js';
 
 const certified: ModelingRelationshipEdge = {
   relationshipId: 'commerce::relationship::orders_to_customers', name: 'orders_to_customers',
@@ -12,6 +13,36 @@ const draft: ModelingRelationshipEdge = {
 };
 
 const uses = (sql: string, edges = [certified, draft]) => classifySqlJoins(joinKeyPairs(sql), edges);
+
+describe('the tables a modeled relationship joins', () => {
+  const entity = (domain: string, localId: string, model: string) => ({ id: `${domain}::entity::${localId}`, localId, qualifiedId: `${domain}::entity::${localId}`, domain, dbtUniqueId: `model.nba.${model}` });
+  const relationship = (domain: string, localId: string, from: string, to: string) => ({ id: `${domain}::relationship::${localId}`, localId, qualifiedId: `${domain}::relationship::${localId}`, from: `${domain}::entity::${from}`, to: `${domain}::entity::${to}`, keys: [{ from: 'player_id', to: 'player_id' }] });
+  const manifest = {
+    dbtProvenance: { nodes: Object.fromEntries(['player_game_facts', 'player_season_facts', 'team_game_facts'].map((model) => [`model.nba.${model}`, { relation: `"nba"."transformed"."${model}"` }])) },
+    modeling: {
+      entities: Object.fromEntries([entity('nba', 'player_game', 'player_game_facts'), entity('nba', 'player_season', 'player_season_facts'), entity('nba', 'team_game', 'team_game_facts'), entity('archive', 'player_game', 'team_game_facts')].map((item) => [item.qualifiedId, item])),
+      relationships: Object.fromEntries([
+        relationship('nba', 'player_game_to_player_season', 'player_game', 'player_season'),
+        relationship('nba', 'team_game_to_opponent_line', 'team_game', 'team_game'),
+        relationship('nba', 'rolls_up', 'player_game', 'player_season'),
+        relationship('archive', 'rolls_up', 'player_game', 'player_game'),
+      ].map((item) => [item.qualifiedId, item])),
+    },
+  } as unknown as DQLManifest;
+
+  it('names the two tables its entities are bound to, a table joined to itself included', () => {
+    const tables = modelingRelationshipTables(manifest);
+    expect(tables.get('nba::relationship::player_game_to_player_season')).toEqual({ from: 'transformed.player_game_facts', to: 'transformed.player_season_facts' });
+    expect(tables.get('player_game_to_player_season')).toEqual(tables.get('nba::relationship::player_game_to_player_season'));
+    expect(tables.get('team_game_to_opponent_line')).toEqual({ from: 'transformed.team_game_facts', to: 'transformed.team_game_facts' });
+  });
+
+  it('a local id two domains share names no tables on its own', () => {
+    const tables = modelingRelationshipTables(manifest);
+    expect(tables.get('rolls_up')).toBeNull();
+    expect(tables.get('nba::relationship::rolls_up')).toEqual({ from: 'transformed.player_game_facts', to: 'transformed.player_season_facts' });
+  });
+});
 
 describe('AI-written joins against Modeling relationships', () => {
   it('matches relation spellings on schema and table', () => {

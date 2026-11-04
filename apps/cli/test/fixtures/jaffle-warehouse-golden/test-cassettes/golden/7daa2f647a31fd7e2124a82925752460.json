@@ -1,0 +1,23 @@
+{
+  "key": "7daa2f647a31fd7e2124a82925752460",
+  "operation": "generate",
+  "text": "SELECT SUM(product_price) AS beverage_revenue\nFROM jaffle_shop.dev.order_items\nWHERE is_drink_item",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:23:34.164Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "7daa2f647a31fd7e2124a82925752460a6b90653af22fff669f4870ae8939787",
+    "postCanonicalHash": "7daa2f647a31fd7e2124a82925752460a6b90653af22fff669f4870ae8939787",
+    "appliedRuleClasses": []
+  }
+}

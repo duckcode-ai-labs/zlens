@@ -27,16 +27,43 @@ export interface ModelingRelationshipEdge {
 
 const LEVEL_RANK: Record<RelationshipJoinLevel, number> = { certified: 3, validated: 2, stale: 1, draft: 0 };
 
-/** Every relationship on the map as an edge between warehouse relations, with what Ask may do with it. */
-export function modelingRelationshipEdges(manifest: DQLManifest | undefined): ModelingRelationshipEdge[] {
-  const modeling = manifest?.modeling;
-  if (!modeling) return [];
+/** The table each modeled entity is bound to, under every name the entity goes by. */
+function entityRelations(manifest: DQLManifest | undefined): Map<string, string> {
   const relationOf = new Map<string, string>();
-  for (const [recordKey, entity] of Object.entries(modeling.entities ?? {})) {
+  for (const [recordKey, entity] of Object.entries(manifest?.modeling?.entities ?? {})) {
     const relation = normalizeRelationName(manifest?.dbtProvenance?.nodes[entity.dbtUniqueId]?.relation);
     if (!relation) continue;
     for (const key of [recordKey, entity.id, entity.localId, entity.qualifiedId]) if (key) relationOf.set(key, relation);
   }
+  return relationOf;
+}
+
+/**
+ * The two tables each modeled relationship joins, a table joined to itself
+ * included, under its qualified id and its local id. A local id two domains
+ * share maps to null: which tables it means can't be told from it alone.
+ */
+export function modelingRelationshipTables(manifest: DQLManifest | undefined): Map<string, { from: string; to: string } | null> {
+  const relationOf = entityRelations(manifest);
+  const tables = new Map<string, { from: string; to: string } | null>();
+  for (const [recordKey, relationship] of Object.entries(manifest?.modeling?.relationships ?? {})) {
+    const from = relationOf.get(relationship.from);
+    const to = relationOf.get(relationship.to);
+    if (!from || !to) continue;
+    for (const key of new Set([recordKey, relationship.id, relationship.qualifiedId].filter((item): item is string => Boolean(item)))) tables.set(key, { from, to });
+    if (relationship.localId) {
+      const seen = tables.get(relationship.localId);
+      tables.set(relationship.localId, seen === undefined || (seen && seen.from === from && seen.to === to) ? { from, to } : null);
+    }
+  }
+  return tables;
+}
+
+/** Every relationship on the map as an edge between warehouse relations, with what Ask may do with it. */
+export function modelingRelationshipEdges(manifest: DQLManifest | undefined): ModelingRelationshipEdge[] {
+  const modeling = manifest?.modeling;
+  if (!modeling) return [];
+  const relationOf = entityRelations(manifest);
   const edges: ModelingRelationshipEdge[] = [];
   for (const relationship of Object.values(modeling.relationships ?? {})) {
     if (relationship.status === 'deprecated' || relationship.keys.length === 0) continue;

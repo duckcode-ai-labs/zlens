@@ -1,0 +1,23 @@
+{
+  "key": "c6cf49ad59ddd40bb6402ed6612524b3",
+  "operation": "generate",
+  "text": "SELECT strftime('%Y-%m', ordered_at) AS order_month,\n       SUM(product_price) AS revenue\nFROM jaffle_shop.dev.order_items\nGROUP BY strftime('%Y-%m', ordered_at)\nORDER BY order_month\nLIMIT 500",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:23:41.081Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "c6cf49ad59ddd40bb6402ed6612524b359ca72123249f97a9b16da56abb43bc0",
+    "postCanonicalHash": "c6cf49ad59ddd40bb6402ed6612524b359ca72123249f97a9b16da56abb43bc0",
+    "appliedRuleClasses": []
+  }
+}
