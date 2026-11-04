@@ -1,0 +1,23 @@
+{
+  "key": "db6bd49b7940f5c9596b566db53971f4",
+  "operation": "generate",
+  "text": "SELECT\n  CASE WHEN is_food_item THEN 'food' ELSE 'drink' END AS category,\n  SUM(product_price) AS revenue\nFROM jaffle_shop.dev.order_items\nWHERE is_food_item OR is_drink_item\nGROUP BY CASE WHEN is_food_item THEN 'food' ELSE 'drink' END\nORDER BY revenue DESC",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:25:36.429Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "db6bd49b7940f5c9596b566db53971f4cae191e6a88516dc66eacedaa12c7036",
+    "postCanonicalHash": "db6bd49b7940f5c9596b566db53971f4cae191e6a88516dc66eacedaa12c7036",
+    "appliedRuleClasses": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "key": "0e0f2aef22453132d0bf19eaf744f75a",
+  "operation": "generate",
+  "text": "NO_SQL: \"Large order\" has no definition in the context and no listed column holds an order-size category, so any threshold on order_total or count_order_items would be an invented definition.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:12.718Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "0e0f2aef22453132d0bf19eaf744f75acbf97d733795f5f15f0a7748487a7579",
+    "postCanonicalHash": "0e0f2aef22453132d0bf19eaf744f75acbf97d733795f5f15f0a7748487a7579",
+    "appliedRuleClasses": []
+  }
+}

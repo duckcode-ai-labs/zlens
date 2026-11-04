@@ -1,0 +1,23 @@
+{
+  "key": "372ec8266170fa948755b7367e04c81b",
+  "operation": "generate",
+  "text": "NO_SQL: The listed columns have no churn definition (no churned/active flag, inactivity window, or retention measure) and no region attribute, since locations only has location_name and opened_date.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:43.997Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "372ec8266170fa948755b7367e04c81bbfdf0fc38eaabe787cc4dabfc494d4b9",
+    "postCanonicalHash": "372ec8266170fa948755b7367e04c81bbfdf0fc38eaabe787cc4dabfc494d4b9",
+    "appliedRuleClasses": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "key": "f1896c512785dcfecde145884faae06b",
+  "operation": "generate",
+  "text": "SELECT player_id, player_name, SUM(pts) AS total_points, COUNT(DISTINCT game_id) AS games_played FROM \"nba_golden\".\"dev\".\"player_game_stats\" WHERE LOWER(player_name) LIKE '%totally%imaginary%person%' AND played = 1 AND CAST(strftime('%Y', game_date) AS INTEGER) = 2017 GROUP BY player_id, player_name LIMIT 500",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:45.061Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "f1896c512785dcfecde145884faae06bbe7e5bade1360a15495f522aa00ce3f1",
+    "postCanonicalHash": "f1896c512785dcfecde145884faae06bbe7e5bade1360a15495f522aa00ce3f1",
+    "appliedRuleClasses": []
+  }
+}

@@ -72,6 +72,8 @@ import {
   physicalRelationText,
   type PhysicalIdentifierPartV1,
   renderCard,
+  clipText,
+  grainText,
   validateSqlAgainstLocalContext,
   sqlForRelationScan,
   inspectedRelationMatches,
@@ -2327,6 +2329,16 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         return { error: `none of the ${readable} tables this project lists could be chosen from the words of the question; name a table or a field` };
       }
+      // A TABLE A PERSON MARKED DEPRECATED (the modeled entity that binds it)
+      // is left out of the draft unless the question names it or nothing else
+      // is left: the team said not to answer from its rows.
+      const relationEntryOf = (relation: string) => current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && physicalRelationIdentity(entryPhysicalRelation(item)!) === physicalRelationIdentity(relation));
+      const askedText = question.toLowerCase();
+      const deprecatedLeftOut = relations.filter((relation) => relationEntryOf(relation)?.deprecated === true
+        && !askedText.includes((relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase()));
+      if (deprecatedLeftOut.length > 0 && deprecatedLeftOut.length < relations.length) {
+        relations = relations.filter((relation) => !deprecatedLeftOut.includes(relation));
+      } else deprecatedLeftOut.length = 0;
       const needsColumns = relations.filter((relation) => {
         const entry = current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && physicalRelationIdentity(entryPhysicalRelation(item)!) === physicalRelationIdentity(relation));
         return !entry || entry.physical?.binding?.columnCompleteness !== 'complete' || !current.entries.some((item) => item.kind === 'column' && samePhysicalEntry(item, entry));
@@ -2349,7 +2361,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Only tables whose columns are known can be drafted over.
       relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}` });
+      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
@@ -2361,6 +2373,17 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const draftedTerms = current.entries
         .filter((entry) => entry.kind === 'term' && entry.description?.startsWith('AI draft:') && termLines.some((line) => line.startsWith(`- business term ${entry.label ?? entry.name}:`)))
         .map((entry) => entry.label ?? entry.name);
+      // THE MODEL'S RULES for the domains of the chosen tables' entities: which
+      // rows count, what a code means, how not to fan out. Rules that name a
+      // chosen table come first.
+      const chosenDomains = new Set(relations.map((relation) => relationEntryOf(relation)?.domain).filter((domain): domain is string => Boolean(domain)));
+      const chosenNames = relations.map((relation) => (relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase());
+      const modelRuleLines = Object.values(deps.getManifest().manifest?.modeling?.rules ?? {})
+        .filter((rule) => chosenDomains.has(rule.domain) && rule.expression.trim())
+        .map((rule) => ({ rule, named: chosenNames.some((name) => rule.expression.toLowerCase().includes(name)) }))
+        .sort((a, b) => Number(b.named) - Number(a.named) || a.rule.localId.localeCompare(b.rule.localId))
+        .slice(0, MODEL_RULES_IN_DRAFT)
+        .map(({ rule }) => `- model rule ${rule.localId}: ${clipText(rule.expression, 500)}`);
       const briefing = view.pack?.domainBriefing;
       const hintLines = (view.pack?.appliedHints ?? []).slice(0, 5)
         .map((hint) => hint.lesson?.rule || hint.guidance)
@@ -2424,6 +2447,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         ...(prior?.drafted && prior.sql ? [`- previous AI-drafted SQL in this conversation (this question follows up on it: edit it, and keep every restriction it applies unless the question changes it): ${shownToModel(prior.sql.replace(/\s+/g, ' ')).slice(0, 1500)}`] : []),
         ...(briefing ? [`- domain ${briefing.name}${briefing.description ? `: ${briefing.description.slice(0, 300)}` : ''}${briefing.caveats.length ? `; caveats: ${briefing.caveats.slice(0, 3).join('; ')}` : ''}${briefing.requiredFilters.length ? `; required filters: ${briefing.requiredFilters.slice(0, 3).join('; ')}` : ''}`] : []),
         ...termLines,
+        ...modelRuleLines,
         ...metricLines,
         ...joinLines,
         ...keyLines,
@@ -2455,7 +2479,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             // What a table is, in a warehouse's, a person's or a draft's words,
             // once the project keeps meaning files. A project without them
             // keeps the prompt it had.
-            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${hasMeaningFiles && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}` : `- executable relation:${relation}`,
+            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${hasMeaningFiles && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}${modeledMeaning(entry)}` : `- executable relation:${relation}`,
             ...current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => columnCard(item)),
             ...declaredKeyLines(relation),
           ];
@@ -3435,6 +3459,22 @@ export function connectionKey(connection: ConnectionConfig): string {
 
 /** What the tables chosen for a draft may take: about four and a half thousand tokens. */
 const DRAFT_TABLES_CHARS = 18_000;
+/** The model rules a draft reads, at most: a domain's rules are few and each is a sentence or two. */
+const MODEL_RULES_IN_DRAFT = 8;
+
+/**
+ * What a modeled entity says about the table it binds, for the SQL drafter:
+ * its grain and its business context (where its rows stop, which rows count).
+ * The reading saw the same words; the drafter writes the filters.
+ */
+export function modeledMeaning(entry: Pick<VocabularyEntry, 'grain' | 'businessContext' | 'deprecated'>): string {
+  const parts = [
+    entry.deprecated ? 'deprecated in the model: do not answer from it' : '',
+    entry.grain ? `one row per ${grainText(entry.grain)}` : '',
+    entry.businessContext ? clipText(entry.businessContext, 600) : '',
+  ].filter(Boolean);
+  return parts.length ? ` modeled: ${parts.join('. ').replace(/\.\./g, '.')}` : '';
+}
 /** The schema a warehouse-first draft may read whole: about ten thousand tokens. */
 const WHOLE_SCHEMA_CHARS = 40_000;
 /** The same with the column value profile beside each column: about fifteen thousand tokens. */

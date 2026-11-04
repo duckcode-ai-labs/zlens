@@ -1,0 +1,23 @@
+{
+  "key": "ecb6191ff47cd7c08235b206321cca38",
+  "operation": "generate",
+  "text": "SELECT locations.location_id, locations.location_name, SUM(orders.order_total) AS total_revenue\nFROM \"jaffle_shop\".\"dev\".\"orders\" AS orders\nJOIN \"jaffle_shop\".\"dev\".\"locations\" AS locations ON orders.location_id = locations.location_id\nGROUP BY locations.location_id, locations.location_name\nORDER BY total_revenue DESC",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:27.159Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "ecb6191ff47cd7c08235b206321cca386a8f03efec514a165a294867d008421e",
+    "postCanonicalHash": "ecb6191ff47cd7c08235b206321cca386a8f03efec514a165a294867d008421e",
+    "appliedRuleClasses": []
+  }
+}

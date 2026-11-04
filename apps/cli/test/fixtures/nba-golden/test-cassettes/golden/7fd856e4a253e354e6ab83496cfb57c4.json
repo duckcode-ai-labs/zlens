@@ -1,0 +1,24 @@
+{
+  "key": "7fd856e4a253e354e6ab83496cfb57c4",
+  "operation": "generate",
+  "text": "{\"version\":1,\"kind\":\"analytics\",\"reading\":\"Rank players by points per game (total points divided by games played) across games in calendar 2017, only players with at least 20 games played, top ten.\",\"measures\":[{\"derived\":{\"kind\":\"ratio\",\"numerator\":\"column:dev.player_game_stats.pts\",\"numeratorAggregation\":\"sum\",\"denominator\":\"column:dev.player_game_stats.played\",\"denominatorAggregation\":\"sum\"},\"alias\":\"points_per_game\"},{\"ref\":\"column:dev.player_game_stats.played\",\"aggregation\":\"sum\",\"alias\":\"games_played\"}],\"groupBy\":[{\"ref\":\"dimension:player_game_stats.player_id\",\"role\":\"key\"}],\"display\":[\"dimension:player_game_stats.player_name\"],\"filters\":[{\"ref\":\"measure:1\",\"op\":\"gte\",\"values\":[20],\"source\":\"question\"}],\"ordering\":{\"ref\":\"measure:0\",\"direction\":\"desc\"},\"limit\":10,\"time\":{\"ref\":\"dimension:player_game_stats.game_date\",\"window\":{\"start\":\"2017-01-01\",\"end\":\"2018-01-01\",\"expression\":\"calendar year 2017\"}},\"expectedShape\":\"ranking\",\"unresolved\":[],\"provenance\":{\"column:dev.player_game_stats.pts\":\"q:points per game\",\"column:dev.player_game_stats.played\":\"q:games played\",\"dimension:player_game_stats.player_id\":\"inherited\",\"dimension:player_game_stats.player_name\":\"inherited\",\"dimension:player_game_stats.game_date\":\"inherited\",\"block:nba.top_players_by_total_points\":\"removed:ranking is now by points per game, not total points\"}}",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:25:34.824Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 3,
+    "messageRoles": [
+      "system",
+      "user",
+      "user"
+    ],
+    "preCanonicalHash": "7fd856e4a253e354e6ab83496cfb57c4adbd99841b340adb0517dd17dfef5a85",
+    "postCanonicalHash": "7fd856e4a253e354e6ab83496cfb57c4adbd99841b340adb0517dd17dfef5a85",
+    "appliedRuleClasses": []
+  }
+}

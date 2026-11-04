@@ -5,7 +5,7 @@ import type { AgentMessage, AgentProvider, AgentRunRequest } from '@zlens/agent'
 import type { ConnectionConfig } from '@zlens/connectors';
 import { buildVocabularyIndex, classifyWarehouseError, createAgentRunBudget, parseIntent, physicalRelationBinding, type AnalyticalIntentV1 } from '@zlens/agent';
 import { SemanticLayer, type DQLManifest } from '@zlens/core';
-import { preferredJoinHints, resultShapeForReview, preferredJoinLine, skillsForDraft, mentionsName, joinHintUsed, hintsForQuestion, joinsAnyRelation, sharedKeyPair, relationsFromCatalogHits, missingFieldWords, relationsWithColumnWords, columnProbeBudgetMs, columnsForPhysicalEntry, connectionKey, physicalRelationName, relationColumnsProbeSql, relationDatabases, relationsFromProbeRows, relevantRelationsForQuestion, snowflakeShowColumnsRows, underAskedNames, coverageEvaluations, governedCoverageDoubt, effectiveAnsweredTrust, withJoinTrust, createAskPipelineRouteExecutor, explainOutOfScope, explainOutOfScopeWords, gapPresentation, groundIntentLiterals, knownMissingRelation, memberCandidatesSql, normalizeExecutedRow, prepareBlockForAsk, recordRelationEvidence, resetRelationEvidence, runtimeSchemaForVocabulary, toExecutorResult, tracedProbes, vocabularyViewKey } from './host.js';
+import { modeledMeaning, preferredJoinHints, resultShapeForReview, preferredJoinLine, skillsForDraft, mentionsName, joinHintUsed, hintsForQuestion, joinsAnyRelation, sharedKeyPair, relationsFromCatalogHits, missingFieldWords, relationsWithColumnWords, columnProbeBudgetMs, columnsForPhysicalEntry, connectionKey, physicalRelationName, relationColumnsProbeSql, relationDatabases, relationsFromProbeRows, relevantRelationsForQuestion, snowflakeShowColumnsRows, underAskedNames, coverageEvaluations, governedCoverageDoubt, effectiveAnsweredTrust, withJoinTrust, createAskPipelineRouteExecutor, explainOutOfScope, explainOutOfScopeWords, gapPresentation, groundIntentLiterals, knownMissingRelation, memberCandidatesSql, normalizeExecutedRow, prepareBlockForAsk, recordRelationEvidence, resetRelationEvidence, runtimeSchemaForVocabulary, toExecutorResult, tracedProbes, vocabularyViewKey } from './host.js';
 
 function scripted(replies: string[]): AgentProvider & { calls: AgentMessage[][] } {
   const calls: AgentMessage[][] = [];
@@ -1467,6 +1467,88 @@ describe('the tables between two named tables come from the Modeling map', () =>
   });
 });
 
+describe('the SQL drafter reads the whole model', () => {
+  const connection: ConnectionConfig = { driver: 'duckdb', path: ':memory:' } as ConnectionConfig;
+  const tables: Record<string, string[]> = {
+    player_seasons: ['player_id', 'season', 'total_points'],
+    legacy_journey: ['player_id', 'season', 'points'],
+  };
+  const source = (name: string) => ({ name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'ins', columns: Object.fromEntries(tables[name]!.map((column) => [column, { name: column }])) } });
+  const manifest = {
+    sources: Object.fromEntries(Object.keys(tables).map((name) => [name, source(name)])),
+    dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `ins.${name}` }])) },
+    modeling: {
+      entities: {
+        player_season: { id: 'nba::entity::player_season', localId: 'player_season', domain: 'nba', dbtUniqueId: 'model.player_seasons', grain: 'one row per player per season (player_id, season)', businessContext: 'A player\'s totals for one season, 2003-2022. Counts only games the player played. For career figures, sum the totals across rows and recompute ratios from the sums.', status: 'certified' },
+        legacy: { id: 'nba::entity::legacy', localId: 'legacy', domain: 'nba', dbtUniqueId: 'model.legacy_journey', grain: 'player_id, season', businessContext: 'Seasons 2009-2019 only.', status: 'deprecated' },
+      },
+      relationships: {},
+      rules: {
+        'nba::rule::season_is_start_year': { id: 'nba::rule::season_is_start_year', localId: 'season_is_start_year', qualifiedId: 'nba::rule::season_is_start_year', domain: 'nba', kind: 'custom', expression: 'season is the year a season starts: 2017 means 2017-18.', sourcePath: 'domains/nba/modeling/model.dql.yaml' },
+        'nba::rule::played_games_only': { id: 'nba::rule::played_games_only', localId: 'played_games_only', qualifiedId: 'nba::rule::played_games_only', domain: 'nba', kind: 'custom', expression: 'player_seasons counts only games played.', sourcePath: 'domains/nba/modeling/model.dql.yaml' },
+        'other::rule::elsewhere': { id: 'other::rule::elsewhere', localId: 'elsewhere', qualifiedId: 'other::rule::elsewhere', domain: 'other', kind: 'custom', expression: 'A rule of another domain.', sourcePath: 'domains/other/modeling/model.dql.yaml' },
+      },
+    },
+  };
+  const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Total points per season from player_seasons and legacy_journey.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
+  const ask = async (question: string) => {
+    const prompts: string[] = [];
+    const provider: AgentProvider = {
+      name: 'ollama', available: async () => true,
+      generate: async (messages) => {
+        if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return reading;
+        prompts.push(messages.map((message) => message.content).join('\n'));
+        return 'NO_SQL: nothing to draft in this test.';
+      },
+    };
+    const route = createAskPipelineRouteExecutor({
+      projectRoot: '/tmp/ask-whole-model',
+      executor: { executeQuery: vi.fn(async (sql: string) => {
+        if (sql.includes('information_schema.columns')) {
+          const rows = Object.entries(tables).filter(([name]) => sql.includes(`'${name}'`))
+            .flatMap(([name, columns]) => columns.map((column) => ({ table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR' })));
+          return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+        }
+        return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
+      }) } as unknown as QueryExecutor,
+      resolveConnection: async () => connection,
+      getSemanticLayer: () => undefined,
+      getManifest: () => ({ snapshotId: 'snapshot:whole-model', manifest: manifest as never }),
+      selectProvider: async () => provider,
+      compileSemantic: async () => { throw new Error('no semantic layer'); },
+      priorIntent: () => undefined,
+    });
+    const result = await route({
+      runId: 'run:whole-model',
+      request: { question, requestedMode: 'ask' } as AgentRunRequest,
+      route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
+    });
+    return { prompts, steps: JSON.stringify(result) };
+  };
+
+  it('leaves a deprecated table out, and gives the drafter the entity text and the domain rules', async () => {
+    const { prompts, steps } = await ask('Total points per season for each player');
+    expect(prompts.length).toBeGreaterThan(0);
+    const first = prompts[0]!;
+    expect(first).toContain('executable relation:ins.player_seasons');
+    expect(first).not.toContain('executable relation:ins.legacy_journey');
+    expect(first).toContain('modeled: one row per player per season (player_id, season). A player\'s totals for one season, 2003-2022.');
+    expect(first).toContain('For career figures, sum the totals across rows and recompute ratios from the sums.');
+    // The rule that names a chosen table comes first; another domain's rule is not shown.
+    expect(first.indexOf('- model rule played_games_only: player_seasons counts only games played.')).toBeGreaterThan(-1);
+    expect(first.indexOf('- model rule played_games_only')).toBeLessThan(first.indexOf('- model rule season_is_start_year'));
+    expect(first).not.toContain('A rule of another domain.');
+    expect(steps).toContain('left out as deprecated in the model: ins.legacy_journey');
+  });
+
+  it('keeps a deprecated table the question names, marked so', async () => {
+    const { prompts } = await ask('Total points per season for each player in legacy_journey');
+    const first = prompts[0]!;
+    expect(first).toContain('executable relation:ins.legacy_journey');
+    expect(first).toContain('modeled: deprecated in the model: do not answer from it. one row per player_id, season. Seasons 2009-2019 only.');
+  });
+});
+
 describe('a join on a composite key is judged by the whole key', () => {
   const connection = { driver: 'duckdb' } as ConnectionConfig;
   // One row per (match_id, ball_id) on each side, while each column alone
@@ -1880,5 +1962,17 @@ describe('the result review sees what a result looks like, never what it says', 
     const shape = resultShapeForReview({ columns: [{ name: 'n' }], rowCount: 900, rows: [{ n: 1n }, { n: 2n }] });
     expect(shape).toContain('rows: 900 (shape read from the first 2)');
     expect(shape).toContain('- n: 2 distinct');
+  });
+});
+
+describe('modeledMeaning', () => {
+  it('reads an authored grain once, and cuts the context at a sentence end', () => {
+    expect(modeledMeaning({ grain: 'one row per player per season' })).toBe(' modeled: one row per player per season');
+    expect(modeledMeaning({ grain: 'player_id, season', businessContext: 'Totals.' })).toBe(' modeled: one row per player_id, season. Totals.');
+    const long = `${'A sentence that keeps going. '.repeat(30)}The tail.`;
+    const cut = modeledMeaning({ businessContext: long });
+    expect(cut.length).toBeLessThanOrEqual(' modeled: '.length + 600);
+    expect(cut.endsWith('going.')).toBe(true);
+    expect(modeledMeaning({})).toBe('');
   });
 });

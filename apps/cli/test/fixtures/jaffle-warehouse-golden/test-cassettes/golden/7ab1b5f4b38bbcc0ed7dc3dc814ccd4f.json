@@ -1,0 +1,23 @@
+{
+  "key": "7ab1b5f4b38bbcc0ed7dc3dc814ccd4f",
+  "operation": "generate",
+  "text": "SELECT COUNT(DISTINCT order_id) AS order_count FROM jaffle_shop.dev.orders",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:27:37.669Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "7ab1b5f4b38bbcc0ed7dc3dc814ccd4f6832e9ecd684c997bd4aa6cac18f28cc",
+    "postCanonicalHash": "7ab1b5f4b38bbcc0ed7dc3dc814ccd4f6832e9ecd684c997bd4aa6cac18f28cc",
+    "appliedRuleClasses": []
+  }
+}

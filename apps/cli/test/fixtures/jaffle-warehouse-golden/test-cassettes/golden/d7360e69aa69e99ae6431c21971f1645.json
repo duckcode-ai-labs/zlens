@@ -1,0 +1,24 @@
+{
+  "key": "d7360e69aa69e99ae6431c21971f1645",
+  "operation": "generate",
+  "text": "{\"version\":1,\"kind\":\"analytics\",\"reading\":\"Show the top 10 customers by beverage revenue and number of beverage items, where beverage is the product category (product type) beverage, with customer name displayed.\",\"measures\":[{\"ref\":\"column:dev.order_items.product_price\",\"aggregation\":\"sum\",\"scope\":[{\"ref\":\"column:dev.products.product_type\",\"op\":\"eq\",\"values\":[\"beverage\"],\"source\":\"question\"}],\"alias\":\"beverage_revenue\"},{\"ref\":\"column:dev.order_items.order_item_id\",\"aggregation\":\"count\",\"scope\":[{\"ref\":\"column:dev.products.product_type\",\"op\":\"eq\",\"values\":[\"beverage\"],\"source\":\"question\"}],\"alias\":\"beverage_items\"}],\"groupBy\":[{\"ref\":\"column:dev.customers.customer_id\",\"role\":\"key\"}],\"display\":[\"column:dev.customers.customer_name\"],\"filters\":[],\"ordering\":{\"ref\":\"measure:0\",\"direction\":\"desc\"},\"limit\":10,\"expectedShape\":\"ranking\",\"unresolved\":[],\"provenance\":{\"column:dev.order_items.product_price\":\"inherited\",\"column:dev.order_items.order_item_id\":\"inherited\",\"column:dev.products.product_type\":\"q:beverage category\",\"column:dev.order_items.is_drink_item\":\"removed:user asked for the beverage category (product type) instead of the drink flag\",\"column:dev.customers.customer_id\":\"inherited\",\"column:dev.customers.customer_name\":\"inherited\"}}",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:29:16.741Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 3,
+    "messageRoles": [
+      "system",
+      "user",
+      "user"
+    ],
+    "preCanonicalHash": "d7360e69aa69e99ae6431c21971f1645ffd9e25b01d741844321e617187ea97f",
+    "postCanonicalHash": "d7360e69aa69e99ae6431c21971f1645ffd9e25b01d741844321e617187ea97f",
+    "appliedRuleClasses": []
+  }
+}

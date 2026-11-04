@@ -99,6 +99,8 @@ export interface VocabularyEntry {
   /** What this thing IS to the business (a modeled entity's context), and the grain its rows carry. */
   businessContext?: string;
   grain?: string;
+  /** A person marked the modeled entity this relation binds deprecated: it is shown so a question that names it is understood, never used for an answer. */
+  deprecated?: boolean;
   /** A term's business rules and caveats, kept apart from its description. */
   rules?: string[];
   /**
@@ -210,7 +212,7 @@ export class VocabularyIndex {
     // is a different vocabulary, and the receipt must say so.
     this.fingerprint = `sha256:${createHash('sha256').update(this.entries.map((entry) => [
       entry.ref, entry.kind, entry.roles.join(','), entry.description ?? '', entry.aliases.join(','), (entry.rules ?? []).join('|'),
-      entry.joinAuthority ?? '', entry.policy ? JSON.stringify(entry.policy) : '', (entry.preferredBy ?? []).join(','), entry.grain ?? '', entry.businessContext ?? '',
+      entry.joinAuthority ?? '', entry.policy ? JSON.stringify(entry.policy) : '', (entry.preferredBy ?? []).join(','), entry.grain ?? '', entry.businessContext ?? '', ...(entry.deprecated ? ['deprecated'] : []),
     ].join('\u0001')).join('\n')).digest('hex').slice(0, 24)}`;
     for (const entry of this.entries) {
       this.byRef.set(entry.ref.toLowerCase(), entry);
@@ -432,6 +434,7 @@ export function renderCard(entry: VocabularyEntry, options: { preferColumn?: (co
   // under one window must agree on it.
   if (entry.timeRef) bits.push(`time ${entry.timeRef.split('.').pop()}`);
   if (entry.certified) bits.push('certified');
+  if (entry.deprecated) bits.push('deprecated: do not use for answers');
   // A derived or ratio metric shows its formula: what it divides decides
   // whether it is a period ratio or a lifetime one.
   const formula = (entry.metricType === 'derived' || entry.metricType === 'ratio') && entry.expr ? ` = ${entry.expr.replace(/\s+/g, ' ').slice(0, 120)}` : '';
@@ -456,8 +459,8 @@ export function renderCard(entry: VocabularyEntry, options: { preferColumn?: (co
   const replaces = entry.supersedes?.length ? ` replaces retired ${entry.supersedes.slice(0, 4).map((retired) => `"${retired.name}"`).join(', ')}` : '';
   // What a modeled thing IS, and the grain its rows carry: authored context
   // the raw column list cannot say.
-  const meaning = entry.businessContext ? ` is: ${entry.businessContext.replace(/\s+/g, ' ').slice(0, 160)}` : '';
-  const grain = entry.grain ? ` one row per ${entry.grain}` : '';
+  const meaning = entry.businessContext ? ` is: ${clipText(entry.businessContext, ENTITY_CONTEXT_CHARS)}` : '';
+  const grain = entry.grain ? ` one row per ${grainText(entry.grain)}` : '';
   const rules = entry.rules?.length ? ` rules: ${entry.rules.join(' ').replace(/\s+/g, ' ').slice(0, 220)}` : '';
   const preferred = entry.preferredBy?.length ? ` preferred by ${entry.preferredBy.slice(0, 2).join(', ')}` : '';
   return `- ${entry.ref} [${bits.join('; ')}]${formula}${description}${meaning}${grain}${rules}${aka}${replaces}${preferred}${columns}${notes}${groupBy}${scope}${limit}${examples}`;
@@ -512,8 +515,8 @@ function renderHintCard(entry: VocabularyEntry): string {
 
 function renderConceptCard(entry: VocabularyEntry): string {
   const bits = ['concept', entry.status ?? '', entry.domain ?? ''].filter(Boolean);
-  const description = entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 160)}` : '';
-  const bindings = entry.bindings?.length ? ` bound to: ${entry.bindings.slice(0, 6).map((binding) => `${binding.entityRef}${binding.domain ? ` (${binding.domain}${binding.role ? `, ${binding.role}` : ''})` : ''}${binding.grain ? ` one row per ${binding.grain}` : ''}`).join('; ')}` : '';
+  const description = entry.description ? ` ${clipText(entry.description, CONCEPT_DESCRIPTION_CHARS)}` : '';
+  const bindings = entry.bindings?.length ? ` bound to: ${entry.bindings.slice(0, 6).map((binding) => `${binding.entityRef}${binding.domain ? ` (${binding.domain}${binding.role ? `, ${binding.role}` : ''})` : ''}${binding.grain ? ` one row per ${grainText(binding.grain)}` : ''}`).join('; ')}` : '';
   const aliases = entry.aliases.filter((alias) => normalizeVocabularyText(alias) !== normalizeVocabularyText(entry.name)).slice(0, 4);
   const aka = aliases.length ? ` aka ${aliases.join(', ')}` : '';
   return `- ${entry.ref} [${bits.join('; ')}]${description}${bindings}${aka}`;
@@ -541,7 +544,31 @@ export interface VocabularySource {
   /** The domain header rendered first, when the request resolved one. */
   domain?: VocabularyDomainHeader;
   /** Authored meaning for physical relations (a modeled entity's business context and grain), keyed by `schema.table`. */
-  relationMeaning?: Record<string, { businessName?: string; businessContext?: string; grain?: string; domain?: string }>;
+  relationMeaning?: Record<string, { businessName?: string; businessContext?: string; grain?: string; domain?: string; deprecated?: boolean }>;
+}
+
+/**
+ * A modeled entity's business context is authored to be read whole: where its
+ * rows stop, which rows count, what a code means. It is cut at a sentence
+ * end, never mid-sentence ("Use"), and few relations carry one.
+ */
+const ENTITY_CONTEXT_CHARS = 600;
+const CONCEPT_DESCRIPTION_CHARS = 400;
+
+/** Text on one line, cut at the last sentence end that fits, else at a word with an ellipsis. */
+export function clipText(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const head = flat.slice(0, max);
+  const sentenceEnd = Math.max(head.lastIndexOf('. '), head.lastIndexOf('; '), head.lastIndexOf('? '), head.lastIndexOf('! '));
+  if (sentenceEnd >= max / 2) return head.slice(0, sentenceEnd + 1);
+  const wordEnd = head.lastIndexOf(' ');
+  return `${(wordEnd > 0 ? head.slice(0, wordEnd) : head).replace(/[,;:]$/, '')}…`;
+}
+
+/** A grain as authored, read after "one row per": "one row per player per season" and "player_id, season" alike. */
+export function grainText(grain: string): string {
+  return grain.replace(/\s+/g, ' ').trim().replace(/^(?:one|1|a single)\s+row\s+(?:per|for each|for)\s+/i, '');
 }
 
 const LABEL_WORD = /(^|_)(name|label|title|description|display)(_|$)/i;
@@ -830,6 +857,7 @@ export function buildVocabularyIndex(source: VocabularySource): VocabularyIndex 
     if (meaning.businessContext) entry.businessContext = meaning.businessContext;
     if (meaning.grain) entry.grain = meaning.grain;
     if (meaning.domain) entry.domain = meaning.domain;
+    if (meaning.deprecated) entry.deprecated = true;
   }
   for (const relationship of source.relationships ?? []) {
     entries.push({

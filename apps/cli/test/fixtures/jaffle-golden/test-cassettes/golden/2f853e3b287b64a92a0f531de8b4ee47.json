@@ -1,0 +1,23 @@
+{
+  "key": "2f853e3b287b64a92a0f531de8b4ee47",
+  "operation": "generate",
+  "text": "NO_SQL: None of the listed tables or columns holds weather data such as temperature or conditions; \"Chicago\" appears only as a location_name in the locations table.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:25:14.330Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "2f853e3b287b64a92a0f531de8b4ee47e0e29be6f975d13311be9fe76e0a5d29",
+    "postCanonicalHash": "2f853e3b287b64a92a0f531de8b4ee47e0e29be6f975d13311be9fe76e0a5d29",
+    "appliedRuleClasses": []
+  }
+}

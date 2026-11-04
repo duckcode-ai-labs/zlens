@@ -1,0 +1,24 @@
+{
+  "key": "60fccdf4fcf01693403e0800e22b85b2",
+  "operation": "generate",
+  "text": "{\"version\":1,\"kind\":\"analytics\",\"reading\":\"Keeping the same top ten players by points per game in calendar 2017 (at least 20 games played), add turnovers per game and field goal percentage alongside rebounds and assists, so the players can be compared as a basis for a team-building decision.\",\"measures\":[{\"derived\":{\"kind\":\"ratio\",\"numerator\":\"column:dev.player_game_stats.pts\",\"denominator\":\"column:dev.player_game_stats.played\",\"numeratorAggregation\":\"sum\",\"denominatorAggregation\":\"sum\"},\"alias\":\"points_per_game\"},{\"ref\":\"column:dev.player_game_stats.played\",\"aggregation\":\"sum\",\"alias\":\"games_played\"},{\"derived\":{\"kind\":\"ratio\",\"numerator\":\"column:dev.player_game_stats.reb\",\"denominator\":\"column:dev.player_game_stats.played\",\"numeratorAggregation\":\"sum\",\"denominatorAggregation\":\"sum\"},\"alias\":\"rebounds_per_game\"},{\"derived\":{\"kind\":\"ratio\",\"numerator\":\"column:dev.player_game_stats.ast\",\"denominator\":\"column:dev.player_game_stats.played\",\"numeratorAggregation\":\"sum\",\"denominatorAggregation\":\"sum\"},\"alias\":\"assists_per_game\"},{\"derived\":{\"kind\":\"ratio\",\"numerator\":\"column:dev.player_game_stats.turnover\",\"denominator\":\"column:dev.player_game_stats.played\",\"numeratorAggregation\":\"sum\",\"denominatorAggregation\":\"sum\"},\"alias\":\"turnovers_per_game\"},{\"derived\":{\"kind\":\"ratio\",\"numerator\":\"column:dev.player_game_stats.fgm\",\"denominator\":\"column:dev.player_game_stats.fga\",\"numeratorAggregation\":\"sum\",\"denominatorAggregation\":\"sum\"},\"alias\":\"field_goal_pct\"}],\"groupBy\":[{\"ref\":\"dimension:player_game_stats.player_id\",\"role\":\"key\"}],\"display\":[\"dimension:player_game_stats.player_name\"],\"filters\":[{\"ref\":\"measure:1\",\"op\":\"gte\",\"values\":[20],\"source\":\"inherited\"}],\"ordering\":{\"ref\":\"measure:0\",\"direction\":\"desc\"},\"limit\":10,\"time\":{\"ref\":\"dimension:player_game_stats.game_date\",\"window\":{\"start\":\"2017-01-01\",\"end\":\"2018-01-01\",\"expression\":\"calendar year 2017\"}},\"expectedShape\":\"ranking\",\"unresolved\":[],\"provenance\":{\"column:dev.player_game_stats.pts\":\"inherited\",\"column:dev.player_game_stats.played\":\"inherited\",\"column:dev.player_game_stats.reb\":\"inherited\",\"column:dev.player_game_stats.ast\":\"inherited\",\"column:dev.player_game_stats.turnover\":\"q:build our team around (supporting stat: ball security)\",\"column:dev.player_game_stats.fgm\":\"q:build our team around (supporting stat: efficiency)\",\"column:dev.player_game_stats.fga\":\"q:build our team around (supporting stat: efficiency)\",\"dimension:player_game_stats.player_id\":\"inherited\",\"dimension:player_game_stats.player_name\":\"inherited\",\"dimension:player_game_stats.game_date\":\"inherited\"}}",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:10.284Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 3,
+    "messageRoles": [
+      "system",
+      "user",
+      "user"
+    ],
+    "preCanonicalHash": "60fccdf4fcf01693403e0800e22b85b2e15c54c107b4b5d14daf587159cb875a",
+    "postCanonicalHash": "60fccdf4fcf01693403e0800e22b85b2e15c54c107b4b5d14daf587159cb875a",
+    "appliedRuleClasses": []
+  }
+}

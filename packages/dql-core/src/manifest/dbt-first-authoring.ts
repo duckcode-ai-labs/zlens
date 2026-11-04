@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as yaml from 'js-yaml';
 import { domainFolderSlug, renderDomainDeclaration, type DomainInput } from './domain-writer.js';
 import { loadDomainPackageRegistry } from './domain-package-registry.js';
+import { dbtBindableKind } from './dbt-first-modeling.js';
 import { WAREHOUSE_CATALOG_PATH, readWarehouseCatalog } from './warehouse-catalog.js';
 import type {
   ManifestFanoutPolicy,
@@ -245,7 +246,7 @@ export interface ModelingChangesPreview {
 export interface DbtNodeAuthoringDetail {
   uniqueId: string;
   name: string;
-  resourceType: 'model' | 'source' | 'warehouse';
+  resourceType: 'model' | 'source' | 'snapshot' | 'seed' | 'warehouse';
   relation?: string;
   sourcePath?: string;
   description?: string;
@@ -520,7 +521,7 @@ export function loadDbtNodeAuthoringDetail(manifestPath: string, uniqueId: strin
   const manifest = readJson(manifestPath);
   const raw = asRecord(asRecord(manifest.nodes)[uniqueId] ?? asRecord(manifest.sources)[uniqueId]);
   if (Object.keys(raw).length === 0) return undefined;
-  const resourceType = raw.resource_type === 'source' ? 'source' : raw.resource_type === 'model' ? 'model' : undefined;
+  const resourceType = dbtBindableKind(raw.resource_type);
   if (!resourceType) return undefined;
   const catalogPath = join(dirname(manifestPath), 'catalog.json');
   const catalog = existsSync(catalogPath) ? readJson(catalogPath) : {};

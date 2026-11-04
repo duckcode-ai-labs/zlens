@@ -39050,7 +39050,7 @@ export function rejectDiscoveredRelationship(projectRoot: string, id: string, op
 }
 
 /** A modeled relationship by qualified id, or by local id when exactly one relationship has it. */
-function findModeledRelationship(manifest: DQLManifest, id: string): ManifestModelRelationship | undefined {
+export function findModeledRelationship(manifest: DQLManifest, id: string): ManifestModelRelationship | undefined {
   const relationships = manifest.modeling?.relationships ?? {};
   if (relationships[id]) return relationships[id];
   const matches = Object.values(relationships).filter((relationship) => (relationship.localId ?? relationship.id) === id);

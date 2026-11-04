@@ -1,0 +1,23 @@
+{
+  "key": "2055ede5f7e5d98566e5e45ff5de085f",
+  "operation": "generate",
+  "text": "NO_SQL: The listed tables hold no weather data (temperature, conditions, or forecasts), so the weather in Chicago cannot be answered from this warehouse.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:56.758Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "2055ede5f7e5d98566e5e45ff5de085f4e4a34e86d5304ba381aee17a6216bbe",
+    "postCanonicalHash": "2055ede5f7e5d98566e5e45ff5de085f4e4a34e86d5304ba381aee17a6216bbe",
+    "appliedRuleClasses": []
+  }
+}

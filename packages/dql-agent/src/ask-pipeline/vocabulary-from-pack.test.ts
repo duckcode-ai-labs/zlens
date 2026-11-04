@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { pinnedRefsFor } from './pipeline.js';
 import { projectVocabularySource, rankedRefsFromPack  } from './vocabulary-from-pack.js';
-import { buildVocabularyIndex, type VocabularySource } from './vocabulary.js';
+import { buildVocabularyIndex, clipText, grainText, renderCard, type VocabularySource } from './vocabulary.js';
 import type { EligibleContextSet, LocalContextSkill } from '../metadata/catalog.js';
 
 const base: VocabularySource = {
@@ -211,5 +211,49 @@ describe('columns the retrieval ranked reach the vocabulary and lead their relat
     expect(card).toMatch(/columns: (amount, col_59|col_59, amount)/);
     expect(card).toContain(', ...');
     expect(index.withEntries([{ ref: 'column:ada.ada_sfdc_opportunity.new_col', kind: 'column', name: 'new_col', aliases: [], model: 'ada.ada_sfdc_opportunity', roles: ['numeric'], dataType: 'NUMBER' }]).get('column:ada.ada_sfdc_opportunity.new_col')?.dataType).toBe('NUMBER');
+  });
+});
+
+describe('a modeled entity on its relation card', () => {
+  const source = (meaning: { businessContext?: string; grain?: string; deprecated?: boolean }): VocabularySource => ({
+    relations: [{ name: 'player_seasons', schema: 'nba', columns: [{ name: 'player_id' }, { name: 'season' }] }],
+    relationMeaning: { 'nba.player_seasons': { businessName: 'Player season', domain: 'nba', ...meaning } },
+  } as unknown as VocabularySource);
+  const card = (meaning: Parameters<typeof source>[0]) => {
+    const entry = buildVocabularyIndex(source(meaning)).entries.find((item) => item.kind === 'relation');
+    return entry ? renderCard(entry) : '';
+  };
+
+  it('says the grain once, however it was written', () => {
+    expect(card({ grain: 'one row per player per season (player_id, season)' })).toContain(' one row per player per season (player_id, season)');
+    expect(card({ grain: 'one row per player per season (player_id, season)' })).not.toContain('one row per one row');
+    expect(card({ grain: 'player_id, season' })).toContain(' one row per player_id, season');
+  });
+
+  it('keeps a long business context to a sentence end, past 160 characters', () => {
+    const context = 'A player\'s totals for one season, 2003-2022, all game types combined. Counts only games the player played. Use for season leaders and per-game averages. For career figures, sum the totals across rows and recompute ratios from the sums.';
+    const rendered = card({ businessContext: context });
+    expect(rendered).toContain('For career figures, sum the totals across rows and recompute ratios from the sums.');
+    expect(rendered).not.toMatch(/ Use$/);
+  });
+
+  it('marks a relation whose entity is deprecated', () => {
+    expect(card({ deprecated: true })).toContain('deprecated: do not use for answers');
+    expect(card({})).not.toContain('deprecated');
+  });
+});
+
+describe('clipText and grainText', () => {
+  it('cut at a sentence end, else at a word', () => {
+    expect(clipText('One two three. Four five six.', 20)).toBe('One two three.');
+    expect(clipText('One. Two three four.', 12)).toBe('One. Two…');
+    expect(clipText('alpha beta gamma delta', 12)).toBe('alpha beta…');
+    expect(clipText('  short  text ', 40)).toBe('short text');
+  });
+
+  it('read a grain after "one row per"', () => {
+    expect(grainText('One row per game')).toBe('game');
+    expect(grainText('1 row for each order')).toBe('order');
+    expect(grainText('order_id')).toBe('order_id');
   });
 });

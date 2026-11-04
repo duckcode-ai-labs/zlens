@@ -1,0 +1,23 @@
+{
+  "key": "ac6b4d6c6295b40d13857940dabca03c",
+  "operation": "generate",
+  "text": "SELECT p.product_id, p.product_name, COALESCE(SUM(s.supply_cost), 0) AS total_supply_cost\nFROM jaffle_shop.dev.products p\nLEFT JOIN jaffle_shop.dev.supplies s ON s.product_id = p.product_id\nGROUP BY p.product_id, p.product_name\nORDER BY total_supply_cost DESC\nLIMIT 500",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:28.529Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "ac6b4d6c6295b40d13857940dabca03c4e3e64c6c52cfd29e7b4f78b89d362b0",
+    "postCanonicalHash": "ac6b4d6c6295b40d13857940dabca03c4e3e64c6c52cfd29e7b4f78b89d362b0",
+    "appliedRuleClasses": []
+  }
+}

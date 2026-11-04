@@ -1071,11 +1071,16 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
     const relation = normalizeRelationName((nodes as Record<string, { relation?: string } | undefined>)[entity.dbtUniqueId]?.relation);
     if (!relation) continue;
     source.relationMeaning = source.relationMeaning ?? {};
+    // A relation an entity in use binds keeps that entity's meaning; it is
+    // deprecated only when every entity binding it is.
+    const known = source.relationMeaning[relation];
+    if (known && !known.deprecated && entity.status === 'deprecated') continue;
     source.relationMeaning[relation] = {
       ...(entity.businessName ? { businessName: entity.businessName } : {}),
       ...(entity.businessContext ? { businessContext: entity.businessContext } : {}),
       ...(entity.grain ? { grain: entity.grain } : {}),
       ...(entity.domain ? { domain: entity.domain } : {}),
+      ...(entity.status === 'deprecated' ? { deprecated: true } : {}),
     };
   }
   return source;

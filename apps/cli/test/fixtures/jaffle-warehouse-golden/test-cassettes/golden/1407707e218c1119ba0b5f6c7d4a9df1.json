@@ -1,0 +1,23 @@
+{
+  "key": "1407707e218c1119ba0b5f6c7d4a9df1",
+  "operation": "generate",
+  "text": "SELECT c.customer_type, SUM(o.order_total) AS revenue\nFROM jaffle_shop.dev.orders AS o\nJOIN jaffle_shop.dev.customers AS c ON c.customer_id = o.customer_id\nGROUP BY c.customer_type\nORDER BY revenue DESC\nLIMIT 500",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:27:26.772Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "1407707e218c1119ba0b5f6c7d4a9df1143be2d0eabe29dda4f15466e4199b83",
+    "postCanonicalHash": "1407707e218c1119ba0b5f6c7d4a9df1143be2d0eabe29dda4f15466e4199b83",
+    "appliedRuleClasses": []
+  }
+}

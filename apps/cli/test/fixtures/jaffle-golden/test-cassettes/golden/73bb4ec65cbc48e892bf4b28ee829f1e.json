@@ -1,0 +1,23 @@
+{
+  "key": "73bb4ec65cbc48e892bf4b28ee829f1e",
+  "operation": "generate",
+  "text": "SELECT products.product_id, products.product_name, SUM(order_items.product_price) AS revenue\nFROM \"jaffle_shop\".\"dev\".\"order_items\" AS order_items\nJOIN \"jaffle_shop\".\"dev\".\"products\" AS products ON order_items.product_id = products.product_id\nGROUP BY products.product_id, products.product_name\nORDER BY revenue DESC, products.product_name\nLIMIT 10",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:36.082Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "73bb4ec65cbc48e892bf4b28ee829f1e7d4fd109952667de3930b7ba3b657c07",
+    "postCanonicalHash": "73bb4ec65cbc48e892bf4b28ee829f1e7d4fd109952667de3930b7ba3b657c07",
+    "appliedRuleClasses": []
+  }
+}
