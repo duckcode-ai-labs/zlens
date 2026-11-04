@@ -17,6 +17,7 @@ import { dirname, join } from 'node:path';
 import {
   isTechnicalSchema,
   meaningfulDatabaseName,
+  warehouseSchemaDomains,
   resolveWarehouseRelation,
   sentenceCaseName,
   stagingDuplicates,
@@ -307,6 +308,13 @@ export function discoverWarehouseModel(input: {
     ) ?? input.projectName ?? 'warehouse';
     return { id: slug(name), name: sentenceCaseName(name) };
   })();
+  // A schema keeps its business words, and a schema of a source system's
+  // copies joins the database's Domain, never one of its own (design W2, W3).
+  const schemaTables = new Map<string, string[]>();
+  for (const relation of snapshot.relations) {
+    if (relation.schema) schemaTables.set(relation.schema, [...(schemaTables.get(relation.schema) ?? []), relation.name]);
+  }
+  const schemaDomains = warehouseSchemaDomains([...schemaTables].map(([schema, tables]) => ({ schema, tables })));
   const domainOf = (relation: WarehouseCatalogRelationV1): string => {
     if (input.domain) {
       const id = slug(input.domain);
@@ -319,7 +327,9 @@ export function discoverWarehouseModel(input: {
       return given.id;
     }
     const schema = relation.schema?.toLowerCase();
-    if (schema && !GENERIC_SCHEMAS.has(schema) && (!isTechnicalSchema(schema) || existingDomains.has(slug(schema)))) return slug(schema);
+    if (schema && existingDomains.has(slug(schema))) return slug(schema);
+    const found = schema && !GENERIC_SCHEMAS.has(schema) && !isTechnicalSchema(schema) ? schemaDomains.get(schema)?.domain : undefined;
+    if (found) return slug(found);
     domainNames.set(databaseDomain.id, databaseDomain.name);
     return databaseDomain.id;
   };

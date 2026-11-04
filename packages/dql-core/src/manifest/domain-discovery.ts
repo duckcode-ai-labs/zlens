@@ -13,11 +13,14 @@ export type DomainDiscoveryEvidenceKind =
   | 'dbt_tag'
   | 'configured_selector'
   | 'model_path'
+  | 'lineage'
   | 'dbt_project';
 
 export interface DomainDiscoveryEvidence {
   kind: DomainDiscoveryEvidenceKind;
   domain: string;
+  /** The subject area inside the domain, when the evidence names one (`common_mart_sales` in a project with `sales_and_marketing`). */
+  area?: string;
   value: string;
   rank: number;
   confidence: number;
@@ -32,6 +35,10 @@ export interface DomainMembershipProposal {
   modelName: string;
   sourcePath?: string;
   proposedDomain: string | null;
+  /** The subject area inside the proposed domain, when the winning evidence names one. */
+  proposedArea?: string;
+  /** The source system a staging or raw model belongs to (`zuora`, `sfdc`): never a domain (design S-D12). */
+  sourceSystem?: string;
   confidence: 'high' | 'medium' | 'low';
   confidenceScore: number;
   owner?: string;
@@ -59,6 +66,8 @@ export interface UnassignedDbtModel {
   reason: 'no_evidence' | 'ambiguous_membership';
   candidateDomains: string[];
   evidence: DomainDiscoveryEvidence[];
+  /** A staging or raw model of this source system: it belongs on the Sources shelf, not in a domain. */
+  sourceSystem?: string;
 }
 
 export interface RelationshipDraftCandidate {
@@ -91,8 +100,19 @@ export interface DomainDiscoveryReport {
   proposals: DomainProposal[];
   memberships: DomainMembershipProposal[];
   unassignedModels: UnassignedDbtModel[];
+  /** Subject areas inside the proposed domains (design S1), for a person to review before any is written. */
+  areaProposals?: AreaProposal[];
   relationshipDraftCandidates: RelationshipDraftCandidate[];
   skillDraftCandidates: SkillDraftCandidate[];
+}
+
+export interface AreaProposal {
+  /** `<domain>.<area>`. */
+  id: string;
+  domain: string;
+  area: string;
+  name: string;
+  matchedDbtUniqueIds: string[];
 }
 
 export interface DiscoverDbtDomainsOptions {
@@ -138,20 +158,25 @@ export function discoverDbtDomains(options: DiscoverDbtDomainsOptions): DomainDi
   const models = collectModels(manifest);
   const indexes = buildEvidenceIndexes(manifest, semanticManifest, models);
   const groupOwners = collectGroupOwners(manifest);
+  const projectName = stringValue(asRecord(manifest.metadata).project_name) ?? models[0]?.packageName;
+  const words: BusinessWords = { sourceSystems: collectSourceSystems(manifest), compounds: new Map(), rootPackage: projectName };
+  words.compounds = compoundParts(models.flatMap((model) => inferredPhrases(model, words)));
 
   let memberships = models.map((model) => resolveMembership(
     model,
     packages,
     indexes,
     groupOwners,
+    words,
   ));
   // Nothing names a business area (no meta, group, tag or business folder):
   // the project is one Domain, named after it (RFC 0012). Layer folders such
   // as `dim/` and `stg/` never become Domains.
-  const projectName = stringValue(asRecord(manifest.metadata).project_name) ?? models[0]?.packageName;
   const projectDomain = projectName ? normalizeDomainId(projectName) : undefined;
   if (projectDomain && memberships.length > 0 && memberships.every((membership) => membership.evidence.length === 0)) {
-    memberships = models.map((model) => resolveMembership(model, packages, indexes, groupOwners, [evidence('dbt_project', projectDomain, projectName!, 8, 0.4, model)]));
+    memberships = models.map((model) => resolveMembership(model, packages, indexes, groupOwners, words, [evidence('dbt_project', projectDomain, projectName!, 9, 0.4, model)]));
+  } else {
+    memberships = placeByLineage(models, memberships, words);
   }
   const assigned = new Map(memberships
     .filter((membership): membership is DomainMembershipProposal & { proposedDomain: string } => Boolean(membership.proposedDomain))
@@ -167,6 +192,7 @@ export function discoverDbtDomains(options: DiscoverDbtDomainsOptions): DomainDi
       reason: membership.evidence.length === 0 ? 'no_evidence' : 'ambiguous_membership',
       candidateDomains: unique(membership.evidence.map((item) => item.domain)),
       evidence: membership.evidence,
+      ...(membership.sourceSystem ? { sourceSystem: membership.sourceSystem } : {}),
     }));
 
   return {
@@ -176,6 +202,7 @@ export function discoverDbtDomains(options: DiscoverDbtDomainsOptions): DomainDi
     proposals,
     memberships,
     unassignedModels,
+    areaProposals: buildAreaProposals(memberships),
     relationshipDraftCandidates: collectRelationshipDrafts(manifest, assigned),
     skillDraftCandidates: proposals.map((proposal) => ({
       id: `${proposal.id.replace(/\./g, '_')}_analyst`,
@@ -218,9 +245,14 @@ function resolveMembership(
   packages: DomainPackageRecord[],
   indexes: EvidenceIndex,
   groupOwners: Map<string, string>,
+  words: BusinessWords,
   extra: DomainDiscoveryEvidence[] = [],
 ): DomainMembershipProposal {
-  const evidence = [...collectModelEvidence(model, packages, indexes, groupOwners), ...extra];
+  const evidence = [...collectModelEvidence(model, packages, indexes, groupOwners, words), ...extra];
+  return membershipFrom(model, evidence, sourceSystemOf(model, words));
+}
+
+function membershipFrom(model: ModelRecord, evidence: DomainDiscoveryEvidence[], sourceSystem?: string): DomainMembershipProposal {
   const strongestRank = evidence[0]?.rank;
   const strongest = strongestRank === undefined
     ? []
@@ -237,12 +269,15 @@ function resolveMembership(
     ? unique(evidence.filter((item) => item.domain !== proposedDomain).map((item) => item.domain))
     : strongestDomains;
   const owners = unique(winningEvidence.map((item) => item.owner).filter(isString));
+  const areas = unique(winningEvidence.map((item) => item.area).filter(isString));
 
   return {
     dbtUniqueId: model.uniqueId,
     modelName: model.name,
     sourcePath: model.sourcePath,
     proposedDomain,
+    ...(areas.length === 1 ? { proposedArea: areas[0] } : {}),
+    ...(!proposedDomain && sourceSystem ? { sourceSystem } : {}),
     confidence: confidenceLabel(confidenceScore),
     confidenceScore,
     owner: owners.length === 1 ? owners[0] : undefined,
@@ -257,6 +292,7 @@ function collectModelEvidence(
   packages: DomainPackageRecord[],
   indexes: EvidenceIndex,
   groupOwners: Map<string, string>,
+  words: BusinessWords,
 ): DomainDiscoveryEvidence[] {
   const output: DomainDiscoveryEvidence[] = [];
   const raw = model.raw;
@@ -279,9 +315,12 @@ function collectModelEvidence(
     ...stringArray(raw.tags),
     ...stringArray(asRecord(raw.config).tags),
   ]);
+  // A model of a dbt package, or a staging model of a source system, takes no
+  // domain from its tags or folders: those name the package or the source.
+  const inferable = inferableModel(model, words);
   for (const tag of tags) {
-    const domain = domainFromTag(tag, packages);
-    if (domain) output.push(evidence('dbt_tag', domain, tag, 5, 0.72, model));
+    const found = domainFromTag(tag, packages, words, inferable);
+    if (found) output.push({ ...evidence('dbt_tag', found.domain, tag, 5, 0.72, model), ...(found.area ? { area: found.area } : {}) });
   }
 
   for (const pkg of packages) {
@@ -290,10 +329,78 @@ function collectModelEvidence(
     }
   }
 
-  const pathDomain = domainFromPath(model.sourcePath, model.name);
-  if (pathDomain) output.push(evidence('model_path', pathDomain, model.sourcePath ?? '', 7, 0.55, model));
+  const pathDomain = inferable ? domainFromPath(model, words) : undefined;
+  if (pathDomain) output.push({ ...evidence('model_path', pathDomain.domain, model.sourcePath ?? '', 7, 0.55, model), ...(pathDomain.area ? { area: pathDomain.area } : {}) });
 
   return dedupeEvidence(output).sort(compareEvidence);
+}
+
+/**
+ * Place a model nothing else places by the models around it (design S2): one
+ * that models in three or more domains read is shared; otherwise it takes the
+ * domain two thirds of the models it reads share, or failing that, of the
+ * models that read it. A model of a source system stays on the Sources shelf.
+ * Runs a few rounds, so a chain of unplaced models fills in from either end.
+ */
+function placeByLineage(models: ModelRecord[], memberships: DomainMembershipProposal[], words: BusinessWords): DomainMembershipProposal[] {
+  const byId = new Map(memberships.map((membership) => [membership.dbtUniqueId, membership]));
+  const modelIds = new Set(models.map((model) => model.uniqueId));
+  const parents = new Map(models.map((model) => [model.uniqueId, stringArray(asRecord(model.raw.depends_on).nodes).filter((id) => modelIds.has(id) && id !== model.uniqueId)]));
+  const children = new Map<string, string[]>();
+  for (const [child, ids] of parents) for (const parent of ids) children.set(parent, [...(children.get(parent) ?? []), child]);
+  const top = (id: string): string | undefined => byId.get(id)?.proposedDomain?.split('.')[0];
+  const modelById = new Map(models.map((model) => [model.uniqueId, model]));
+
+  for (let round = 0; round < 3; round += 1) {
+    let changed = false;
+    for (const membership of [...byId.values()]) {
+      if (membership.proposedDomain || membership.evidence.length > 0 || membership.sourceSystem) continue;
+      const model = modelById.get(membership.dbtUniqueId)!;
+      if (!inferableModel(model, words)) continue;
+      const readers = unique((children.get(model.uniqueId) ?? []).map(top).filter(isString).filter((domain) => domain !== SHARED_DOMAIN));
+      let found: { domain: string; area?: string; value: string } | undefined;
+      if (readers.length >= 3) {
+        found = { domain: SHARED_DOMAIN, value: `read by models in ${readers.length} domains: ${readers.join(', ')}` };
+      } else {
+        found = lineageMajority(parents.get(model.uniqueId) ?? [], byId, 'reads')
+          ?? lineageMajority(children.get(model.uniqueId) ?? [], byId, 'is read by');
+      }
+      if (!found) continue;
+      const item = { ...evidence('lineage', found.domain, found.value, 8, 0.45, model), ...(found.area ? { area: found.area } : {}) };
+      // A placement read from the neighbours is a guess a person confirms.
+      byId.set(model.uniqueId, { ...membershipFrom(model, [item]), requiresReview: true });
+      changed = true;
+    }
+    if (!changed) break;
+  }
+  return memberships.map((membership) => byId.get(membership.dbtUniqueId)!);
+}
+
+function lineageMajority(
+  ids: string[],
+  byId: Map<string, DomainMembershipProposal>,
+  verb: string,
+): { domain: string; area?: string; value: string } | undefined {
+  const placed = ids.map((id) => byId.get(id)).filter((item): item is DomainMembershipProposal & { proposedDomain: string } => Boolean(item?.proposedDomain));
+  if (placed.length === 0) return undefined;
+  const counts = new Map<string, number>();
+  for (const item of placed) counts.set(item.proposedDomain, (counts.get(item.proposedDomain) ?? 0) + 1);
+  const [domain, count] = [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]!;
+  if (count * 3 < placed.length * 2) return undefined;
+  const areas = unique(placed.filter((item) => item.proposedDomain === domain).map((item) => item.proposedArea).filter(isString));
+  return { domain, ...(areas.length === 1 ? { area: areas[0] } : {}), value: `${verb} ${count} of ${placed.length} placed models in ${domain}` };
+}
+
+function buildAreaProposals(memberships: DomainMembershipProposal[]): AreaProposal[] {
+  const byArea = new Map<string, AreaProposal>();
+  for (const membership of memberships) {
+    if (!membership.proposedDomain || !membership.proposedArea) continue;
+    const id = `${membership.proposedDomain}.${membership.proposedArea}`;
+    const current = byArea.get(id) ?? { id, domain: membership.proposedDomain, area: membership.proposedArea, name: displayName(membership.proposedArea), matchedDbtUniqueIds: [] };
+    current.matchedDbtUniqueIds.push(membership.dbtUniqueId);
+    byArea.set(id, current);
+  }
+  return [...byArea.values()].map((area) => ({ ...area, matchedDbtUniqueIds: area.matchedDbtUniqueIds.sort() })).sort((a, b) => a.id.localeCompare(b.id));
 }
 
 function buildEvidenceIndexes(
@@ -571,27 +678,226 @@ function dependentModelIds(raw: UnknownRecord, modelIds: Set<string>, models: Mo
   return unique(direct);
 }
 
-function domainFromTag(tag: string, packages: DomainPackageRecord[]): string | undefined {
+function domainFromTag(tag: string, packages: DomainPackageRecord[], words: BusinessWords, inferable: boolean): { domain: string; area?: string } | undefined {
   const explicit = tag.match(/^domain[:/_-](.+)$/i)?.[1];
-  if (explicit) return normalizeDomainId(explicit);
-  const normalized = normalizeDomainId(tag);
-  if (!normalized || GENERIC_TAGS.has(normalized)) return undefined;
-  const existing = packages.find((pkg) => pkg.id === normalized || normalizeDomainId(pkg.name) === normalized);
-  return existing?.id ?? normalized;
+  if (explicit) {
+    const domain = normalizeDomainId(explicit);
+    return domain ? { domain } : undefined;
+  }
+  if (!inferable) return undefined;
+  // An access, schedule or layer tag (`safe`, `mnpi_exception`, `six_hourly`,
+  // `sources`) or one naming a source system (`zuora`) says who may read a
+  // model or when it runs, not what it is about (design S-D4).
+  const phrase = businessPhrase(tag);
+  if (!phrase || isSourceSystem(phrase, words.sourceSystems)) return undefined;
+  const existing = packages.find((pkg) => pkg.id === phrase || normalizeDomainId(pkg.name) === phrase);
+  return existing ? { domain: existing.id } : inCompound(phrase, words);
 }
 
-function domainFromPath(sourcePath: string | undefined, modelName?: string): string | undefined {
-  if (!sourcePath) return undefined;
-  const parts = sourcePath.replace(/\\/g, '/').split('/').filter(Boolean);
-  const modelsAt = parts.lastIndexOf('models');
-  // A folder named for a layer is not a business area, and neither is one
-  // whose models carry its name as a prefix (`local/local_player_game_facts`).
-  const folders = parts.slice(modelsAt >= 0 ? modelsAt + 1 : 0, -1)
-    .map(normalizeDomainId)
-    .filter((part): part is string => typeof part === 'string' && !GENERIC_PATHS.has(part) && !(modelName && modelName.toLowerCase().startsWith(`${part}_`)));
-  if (folders.length === 0) return undefined;
-  return folders.slice(0, 3).join('.');
+function domainFromPath(model: ModelRecord, words: BusinessWords): { domain: string; area?: string } | undefined {
+  const phrases = pathPhrases(model, words);
+  if (phrases.length === 0) return undefined;
+  const [first, ...rest] = phrases;
+  const grouped = inCompound(first!, words);
+  // A compound folder (`sales_and_marketing`) is the domain; a folder naming
+  // one of its parts (`common_mart_sales`) is a subject area inside it.
+  if (grouped.area) return grouped;
+  return { domain: [first!, ...rest].slice(0, 3).join('.') };
 }
+
+/** The business phrases a model's folders name, outermost first, with layer words and source systems left out. */
+function pathPhrases(model: ModelRecord, words: BusinessWords): string[] {
+  if (!model.sourcePath) return [];
+  const parts = model.sourcePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const modelsAt = parts.lastIndexOf('models');
+  const folders = parts.slice(modelsAt >= 0 ? modelsAt + 1 : 0, -1).map(normalizeDomainId).filter(isString);
+  const staging = inSourceLayer(model, folders);
+  const phrases: string[] = [];
+  for (const folder of folders) {
+    // A folder whose models carry its name as a prefix (`local/local_player_game_facts`) names a layer.
+    if (model.name.toLowerCase().startsWith(`${folder}_`)) continue;
+    const phrase = businessPhrase(folder);
+    if (!phrase) continue;
+    // Below the first business folder, a folder named for a source system
+    // (`workspace_people/level_up`) groups that system's copies, not a
+    // subject area. The first one is kept: a source can share a business
+    // word's name (`engineering`).
+    if ((staging || phrases.length > 0) && isSourceSystem(phrase, words.sourceSystems)) continue;
+    phrases.push(phrase);
+  }
+  return phrases;
+}
+
+function sourceSystemOf(model: ModelRecord, words: BusinessWords): string | undefined {
+  if (!model.sourcePath) return undefined;
+  const parts = model.sourcePath.replace(/\\/g, '/').split('/').filter(Boolean);
+  const modelsAt = parts.lastIndexOf('models');
+  const folders = parts.slice(modelsAt >= 0 ? modelsAt + 1 : 0, -1).map(normalizeDomainId).filter(isString);
+  if (!inSourceLayer(model, folders)) return undefined;
+  return folders.map((folder) => businessPhrase(folder)).find((phrase): phrase is string => Boolean(phrase && isSourceSystem(phrase, words.sourceSystems)));
+}
+
+function inferableModel(model: ModelRecord, words: BusinessWords): boolean {
+  if (words.rootPackage && model.packageName && model.packageName !== words.rootPackage) return false;
+  return !sourceSystemOf(model, words);
+}
+
+/** Staging and raw models sit in a source folder or carry a staging name; their folders name source systems. */
+function inSourceLayer(model: ModelRecord, folders: string[]): boolean {
+  return folders.some((folder) => SOURCE_LAYER_FOLDERS.has(folder)) || /(_source|_src|_raw)$/i.test(model.name) || /^(stg|src|raw|base)_/i.test(model.name);
+}
+
+/** Every phrase a tag or folder could make a domain of, for finding compound domains across the project. */
+function inferredPhrases(model: ModelRecord, words: BusinessWords): string[] {
+  const tags = [...stringArray(model.raw.tags), ...stringArray(asRecord(model.raw.config).tags)];
+  return [
+    ...tags.map((tag) => businessPhrase(tag)).filter((phrase): phrase is string => Boolean(phrase && !isSourceSystem(phrase, words.sourceSystems))),
+    ...pathPhrases(model, words).slice(0, 1),
+  ];
+}
+
+/**
+ * Compound domains (`sales_and_marketing`, `product_and_engineering`) and the
+ * parts they hold: a phrase that is one part of exactly one compound becomes a
+ * subject area of it.
+ */
+function compoundParts(phrases: string[]): Map<string, string> {
+  const owners = new Map<string, Set<string>>();
+  for (const phrase of new Set(phrases)) {
+    const head = phrase.split('.')[0]!;
+    if (!head.includes('_and_')) continue;
+    for (const part of head.split('_and_')) {
+      if (!part) continue;
+      owners.set(part, new Set([...(owners.get(part) ?? []), head]));
+    }
+  }
+  return new Map([...owners].filter(([, heads]) => heads.size === 1).map(([part, heads]) => [part, [...heads][0]!]));
+}
+
+function inCompound(phrase: string, words: BusinessWords): { domain: string; area?: string } {
+  const head = phrase.split('.')[0]!;
+  const compound = words.compounds.get(head);
+  return compound ? { domain: compound, area: head } : { domain: phrase };
+}
+
+function collectSourceSystems(manifest: UnknownRecord): Set<string> {
+  const names = new Set<string>();
+  for (const value of Object.values(asRecord(manifest.sources))) {
+    const name = stringValue(asRecord(value).source_name);
+    const id = name ? normalizeDomainId(name) : undefined;
+    if (!id) continue;
+    names.add(id.replace(/\./g, '_'));
+    // `zip_sandbox` and `google_analytics_360` are named `zip` and `google_analytics` once layer words and digits go.
+    const phrase = businessPhrase(id);
+    if (phrase) names.add(phrase.replace(/\./g, '_'));
+  }
+  return names;
+}
+
+function isSourceSystem(phrase: string, sourceSystems: ReadonlySet<string>): boolean {
+  if (sourceSystems.has(phrase)) return true;
+  for (const source of sourceSystems) if (phrase.startsWith(`${source}_`)) return true;
+  return false;
+}
+
+/**
+ * What a folder, tag or schema name says about the business, with the words
+ * that only say where a table sits, who may read it or when it runs left out
+ * (design S2, W2): `common_mart_sales` → `sales`, `facts_sales_and_marketing`
+ * → `sales_and_marketing`, `restricted_safe` → nothing. Undefined when no
+ * business word is left.
+ */
+export function businessPhrase(value: string): string | undefined {
+  const normalized = normalizeDomainId(value);
+  if (!normalized) return undefined;
+  const segments = normalized.split('.').map((segment) => {
+    const tokens = segment.split('_').filter((token) => token && !NON_BUSINESS_WORDS.has(token) && !/^v?\d+$/.test(token));
+    while (tokens[0] === 'and') tokens.shift();
+    while (tokens.at(-1) === 'and') tokens.pop();
+    const phrase = tokens.filter((token, index) => !(token === 'and' && tokens[index - 1] === 'and')).map((token) => WORD_FORMS[token] ?? token).join('_');
+    return phrase;
+  }).filter(Boolean);
+  return segments.length > 0 ? segments.join('.') : undefined;
+}
+
+/** Where a warehouse schema's tables belong (design W2, W3): a domain and subject area, a source system, or neither. */
+export interface WarehouseSchemaDomain {
+  domain?: string;
+  area?: string;
+  /** The schema holds a source system's copied tables (`salesforce`, `zuora_fivetran`): the Sources shelf, never a domain. */
+  sourceSystem?: string;
+}
+
+/**
+ * Domains for a warehouse with no dbt project, from its schema names (design
+ * W2, W3). A schema keeps its business words (`common_mart_sales` → sales,
+ * `restricted_safe_workspace_finance` → finance), and a compound schema
+ * (`sales_and_marketing`) holds the schemas named for its parts as subject
+ * areas. A schema named for a source application or a loader (`salesforce`,
+ * `zuora_fivetran`, `tap_postgres`) is a source system. So is a schema with no
+ * business table in a warehouse that names its business tables (`dim_`,
+ * `fct_`, `mart_`…), unless its business words match a business schema's.
+ * Keys are the schema names lower-cased.
+ */
+export function warehouseSchemaDomains(schemas: ReadonlyArray<{ schema: string; tables: readonly string[] }>): Map<string, WarehouseSchemaDomain> {
+  const businessTables = (tables: readonly string[]) => tables.filter((table) => BUSINESS_TABLE_NAME.test(table)).length;
+  const namesBusinessTables = schemas.reduce((count, item) => count + businessTables(item.tables), 0) >= MIN_NAMED_BUSINESS_TABLES;
+  const rows = schemas.map((item) => {
+    const phrase = businessPhrase(item.schema);
+    return { key: item.schema.toLowerCase(), phrase, source: phrase ? namedSourceSystem(phrase) : undefined, business: businessTables(item.tables) > 0 };
+  });
+  const businessHeads = new Set(rows.filter((row) => row.phrase && !row.source && (row.business || !namesBusinessTables)).map((row) => row.phrase!.split('.')[0]!));
+  const compounds = compoundParts([...businessHeads]);
+  const output = new Map<string, WarehouseSchemaDomain>();
+  for (const row of rows) {
+    if (!row.phrase) {
+      output.set(row.key, {});
+      continue;
+    }
+    const head = row.phrase.split('.')[0]!;
+    if (row.source) {
+      output.set(row.key, { sourceSystem: row.source });
+      continue;
+    }
+    // A schema of copies in a warehouse that names its business tables, whose
+    // words no business schema shares (`gitlab_dotcom`, `greenhouse`).
+    if (namesBusinessTables && !row.business && !businessHeads.has(head) && !compounds.has(head)) {
+      output.set(row.key, { sourceSystem: head });
+      continue;
+    }
+    const compound = compounds.get(head);
+    output.set(row.key, compound ? { domain: compound, area: head } : { domain: head });
+  }
+  return output;
+}
+
+function namedSourceSystem(phrase: string): string | undefined {
+  const tokens = phrase.split(/[._]/).filter(Boolean);
+  if (tokens.some((token) => LOADER_WORDS.has(token))) return tokens.filter((token) => !LOADER_WORDS.has(token)).join('_') || phrase;
+  if (KNOWN_SOURCE_SYSTEMS.has(tokens[0]!) || KNOWN_SOURCE_SYSTEMS.has(tokens.slice(0, 2).join('_'))) return phrase;
+  return undefined;
+}
+
+/** A warehouse names its business tables when at least this many carry a business-layer prefix. */
+const MIN_NAMED_BUSINESS_TABLES = 10;
+const BUSINESS_TABLE_NAME = /^(dim|dims|fct|fact|facts|mart|rpt|agg|bdg|obt)_/i;
+
+/** Tools that copy a source into the warehouse: a schema carrying one of these words holds copies. */
+const LOADER_WORDS = new Set([
+  'fivetran', 'stitch', 'airbyte', 'meltano', 'hevo', 'singer', 'tap', 'api', 'webhook', 'webhooks', 'export', 'exports',
+  'import', 'imports', 'extract', 'extracts', 'feed', 'feeds', 'ingest', 'ingestion', 'replica', 'replication', 'cdc', 'connector',
+]);
+
+/** Common source applications: a schema named for one holds its copied tables (design W3). */
+const KNOWN_SOURCE_SYSTEMS = new Set([
+  'salesforce', 'sfdc', 'hubspot', 'marketo', 'pardot', 'zuora', 'stripe', 'chargebee', 'recurly', 'netsuite', 'quickbooks', 'xero',
+  'workday', 'bamboohr', 'greenhouse', 'lever', 'adp', 'gusto', 'zendesk', 'intercom', 'freshdesk', 'servicenow', 'jira', 'github',
+  'asana', 'slack', 'google', 'google_ads', 'facebook_ads', 'linkedin_ads', 'bing_ads', 'reddit_ads', 'tiktok_ads', 'ga4', 'segment',
+  'snowplow', 'amplitude', 'mixpanel', 'heap', 'iterable', 'braze', 'mailchimp', 'mailgun', 'sendgrid', 'klaviyo', 'shopify', 'magento',
+  'gainsight', 'gong', 'outreach', 'salesloft', 'clari', 'xactly', 'coupa', 'concur', 'expensify', 'okta', 'qualtrics', 'surveymonkey',
+  'typeform', 'bizible', 'demandbase', 'sixsense', 'clearbit', 'zoominfo', 'airtable', 'sheetload', 'tableau', 'looker', 'postgres',
+  'mysql', 'mongodb', 'dynamodb', 'snowflake', 'bigquery', 'kantata', 'zengrc', 'hackerone',
+]);
 
 function domainValues(value: unknown): string[] {
   const values = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
@@ -728,10 +1034,43 @@ function isString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-/** Folders named for a pipeline layer (RFC 0012): where a model sits, not what it is about. */
-const GENERIC_PATHS = new Set([
-  'staging', 'stage', 'stg', 'marts', 'mart', 'intermediate', 'int', 'base', 'core', 'sources', 'source', 'src', 'raw', 'landing',
-  'dim', 'dims', 'dimension', 'dimensions', 'fct', 'fcts', 'fact', 'facts', 'snapshot', 'snapshots', 'seed', 'seeds',
-  'reporting', 'presentation', 'bronze', 'silver', 'gold',
+interface BusinessWords {
+  /** The project's dbt source names (`zuora`, `sfdc`): a source system, never a domain. */
+  sourceSystems: ReadonlySet<string>;
+  /** A part of a compound domain → the compound (`sales` → `sales_and_marketing`). */
+  compounds: Map<string, string>;
+  /** The dbt project's own package; models of other packages take no domain from their folders or tags. */
+  rootPackage?: string;
+}
+
+
+/** The domain for tables several domains read and none owns (design S1). */
+export const SHARED_DOMAIN = 'shared';
+
+/** Folders staging and raw models sit in: the folders below them name source systems. */
+const SOURCE_LAYER_FOLDERS = new Set(['sources', 'source', 'src', 'staging', 'stage', 'stg', 'raw', 'landing', 'base', 'legacy', 'snapshots']);
+
+/**
+ * Words that say where a table sits in the pipeline, who may read it or when
+ * it runs, never what it is about (RFC 0012, design S-D4). Matched as whole
+ * words inside a folder, tag or schema name.
+ */
+const NON_BUSINESS_WORDS = new Set([
+  // Layers.
+  'staging', 'stage', 'stg', 'marts', 'mart', 'intermediate', 'int', 'base', 'core', 'common', 'sources', 'source', 'src', 'raw',
+  'landing', 'dim', 'dims', 'dimension', 'dimensions', 'fct', 'fcts', 'fact', 'facts', 'snapshot', 'snapshots', 'seed', 'seeds',
+  'reporting', 'report', 'reports', 'rpt', 'presentation', 'bronze', 'silver', 'gold', 'prep', 'preparation', 'local', 'global',
+  'bridge', 'bridges', 'bdg', 'map', 'maps', 'mapping', 'mappings', 'xref', 'xf', 'transformed', 'curated', 'cleansed', 'conformed',
+  'modeled', 'modelled', 'refined', 'analytics', 'edm', 'edw', 'dw', 'dwh', 'workspace', 'workspaces', 'wk', 'legacy', 'deprecated', 'archive', 'archived',
+  'tmp', 'temp', 'scratch', 'sandbox', 'dev', 'prod', 'test', 'tests', 'specific', 'no', 'transformation', 'view', 'views', 'ephemeral',
+  'published', 'dedupe', 'deduped', 'incremental', 'partition', 'partitions', 'month', 'daily', 'hourly', 'weekly', 'monthly',
+  'nightly', 'quarterly', 'yearly', 'six', 'twelve', 'full', 'refresh', 'dbt',
+  // Access.
+  'safe', 'restricted', 'sensitive', 'secure', 'confidential', 'private', 'public', 'internal', 'pii', 'phi', 'mnpi', 'exception',
+  'exceptions',
+  // Connecting words, and copies.
+  'on', 'of', 'the', 'for', 'to', 'by', 'copy', 'copies', 'clone', 'clones',
 ]);
-const GENERIC_TAGS = new Set(['daily', 'hourly', 'weekly', 'pii', 'published', 'mart', 'marts', 'staging', 'intermediate']);
+
+/** Adjective and plural forms of the same business word. */
+const WORD_FORMS: Record<string, string> = { financial: 'finance', finances: 'finance', operational: 'operations' };

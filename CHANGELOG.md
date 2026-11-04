@@ -18,6 +18,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **A dbt project with more than 5,000 tables now reads the whole schemas those tables are in.** Before, the
   tables past the 5,000th were left out of Ask's schema metadata.
 
+### Domains from business words, not layer, access or schedule tags ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **dbt domain discovery reads the business words in folder and tag names.**
+  - `common_mart_sales` names *sales*.
+  - Layer, access and schedule words never make a Domain: `safe`, `mnpi_exception`, `six_hourly`, `sources`, `workspace`.
+  - A tag or staging folder naming a dbt source system (`zuora`) is never a Domain. The model is marked with its `sourceSystem` instead.
+- **Subject areas inside compound Domains.** A `sales_and_marketing` folder is the Domain, and `common_mart_sales` is its *sales* area. Memberships carry `proposedArea`, and the report lists `areaProposals`.
+- **Models nothing names are placed by lineage, always for review.** A model read by three or more Domains is `shared`. Otherwise it takes the Domain most of the models it reads share.
+- **On GitLab's 3,335-model analytics project:**
+  - 75% of the 442 business tables land in the right Domain, counting one proposed Domain per true one (was 24%);
+  - 439 are placed (was 287);
+  - 25 Domains are proposed (was 53).
+- **Warehouse discovery without dbt reads schema names the same way.** A schema of a source system's copies
+  (`salesforce`, `zuora_fivetran`) joins the database's Domain instead of making its own. On GitLab's
+  warehouse shape, 12 Domains are proposed instead of 177, one per schema.
+
 ### Ask reads the whole business model ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **A project with a business model of up to 30 tables to answer from shows every one of them to Ask's SQL
