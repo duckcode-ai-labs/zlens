@@ -445,6 +445,14 @@ project. Each run:
 - a footer that says, before anything runs, how many tables the pick drafts and what the budget leaves for later.
 
 A smaller project drafts in one click, as before.
+
+**The map (design S5).** A model of more than 60 tables opens at the level it needs:
+
+1. **Domains:** each with its tables, areas and joins to other Domains.
+2. **One Domain's areas:** the default area and tables outside any area count as one.
+3. **One area's tables:** with its boundary tables, and its joins into areas it does not draw folded into one stub per area.
+
+"Show every table" and search draw the tables directly.
 ## Backward compatibility
 
 - No existing field changes.
