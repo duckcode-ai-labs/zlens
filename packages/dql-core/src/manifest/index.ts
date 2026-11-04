@@ -161,6 +161,9 @@ export {
 export {
   discoverDbtDomains,
   collectDbtRelationshipTests,
+  businessPhrase,
+  SHARED_DOMAIN,
+  type AreaProposal,
   type DbtRelationshipTestEdge,
   type DiscoverDbtDomainsOptions,
   type DomainDiscoveryEvidenceKind,
