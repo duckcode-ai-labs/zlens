@@ -94,8 +94,8 @@ type Run = (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>;
 
 const LAYER_RANK: Record<TableLayer, number> = { snapshot: 0, raw: 1, staging: 2, intermediate: 3, final: 4 };
 const FOLDER_LAYER: Array<[RegExp, TableLayer]> = [
-  [/^(staging|stage|stg|src|base)$/i, 'staging'],
-  [/^(intermediate|int)$/i, 'intermediate'],
+  [/^(staging|stage|stg|src|base|sources?)$/i, 'staging'],
+  [/^(intermediate|int)$|(^|_)prep(aration)?$/i, 'intermediate'],
   [/^(marts?|dims?|dimensions?|fcts?|facts?|core|reporting|presentation|gold)$/i, 'final'],
   [/^snapshots?$/i, 'snapshot'],
   [/^(seeds?|raw|landing|bronze)$/i, 'raw'],
@@ -103,7 +103,9 @@ const FOLDER_LAYER: Array<[RegExp, TableLayer]> = [
 const PREFIX_LAYER: Array<[RegExp, TableLayer]> = [
   [/^raw_/i, 'raw'],
   [/^(stg|staging|src|base)_/i, 'staging'],
-  [/^(int|intermediate)_/i, 'intermediate'],
+  [/^(int|intermediate|prep)_/i, 'intermediate'],
+  // A staging model named for its source (`zuora_account_source`).
+  [/_(source|src|stg|staging)$/i, 'staging'],
   [/^(dim|fct|fact|mart|agg|rpt)_/i, 'final'],
   [/^(scd|snap|snapshot)_/i, 'snapshot'],
 ];

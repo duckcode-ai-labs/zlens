@@ -553,7 +553,32 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
  * look. A dbt-first project drafts from dbt and the warehouse together.
  */
 async function runModelDraft(rest: string[], flags: CLIFlags): Promise<void> {
-  const pathArg = rest.find((value, index) => !value.startsWith('-') && rest[index - 1] !== '--source' && rest[index - 1] !== '--dbt-manifest');
+  // `--select` takes every value up to the next flag, as dbt's does.
+  const consumed = new Set<number>();
+  const select: string[] = [];
+  rest.forEach((value, index) => {
+    if (value === '--source' || value === '--dbt-manifest' || value === '--hops' || value === '--budget') consumed.add(index + 1);
+    if (value !== '--select') return;
+    for (let next = index + 1; next < rest.length && !rest[next]!.startsWith('--'); next += 1) {
+      consumed.add(next);
+      select.push(rest[next]!);
+    }
+  });
+  if (flags.area) select.push(`area:${flags.area}`);
+  const numberAfter = (flag: string): number | undefined | null => {
+    const index = rest.indexOf(flag);
+    if (index < 0) return undefined;
+    const value = Number(rest[index + 1]);
+    return Number.isInteger(value) && value >= 0 ? value : null;
+  };
+  const hops = numberAfter('--hops');
+  const budget = numberAfter('--budget');
+  if (hops === null || budget === null || budget === 0) {
+    discoveryError(flags, 'INVALID_ARGUMENT', '--hops takes a whole number of steps, and --budget a whole number of tables above 0.');
+    return;
+  }
+  const scoped = select.length > 0 || hops !== undefined || budget !== undefined;
+  const pathArg = rest.find((value, index) => !value.startsWith('-') && !consumed.has(index));
   const projectRoot = resolve(pathArg ?? '.');
   if (!existsSync(resolve(projectRoot, 'dql.config.json'))) {
     discoveryError(flags, 'DBT_PROJECT_NOT_FOUND', `No ZLens project found at ${projectRoot} (missing dql.config.json).`);
@@ -563,22 +588,34 @@ async function runModelDraft(rest: string[], flags: CLIFlags): Promise<void> {
   const dbtManifestPath = dbtManifestIndex >= 0 ? rest[dbtManifestIndex + 1] : undefined;
   const passedOnly = rest.includes('--passed-only');
   const readViews = rest.includes('--read-views');
+  if (scoped && usesWarehouseDiscovery(rest)) {
+    discoveryError(flags, 'INVALID_ARGUMENT', '--select, --area, --hops and --budget pick tables of a dbt project. For a warehouse without dbt, choose its schemas with zlens sync warehouse --schemas.');
+    return;
+  }
   const { discoverProjectDbtModel, discoverProjectWarehouseModel, applyProjectWarehouseDiscovery } = await import('../local-runtime.js');
   const { WorkbenchRoutedQueryExecutor } = await import('../workbench-query-route.js');
   const executor = new WorkbenchRoutedQueryExecutor(projectRoot, { onRoute: (via) => { if (flags.format !== 'json') console.error(`  Running the warehouse checks through ${via}, which has the DuckDB file open.`); } });
   try {
     const report = usesWarehouseDiscovery(rest)
       ? await discoverProjectWarehouseModel(projectRoot, { ...(flags.domain ? { domain: flags.domain } : {}), validate: true, hideStagingDuplicates: !rest.includes('--include-staging'), readViews, executor })
-      : await discoverProjectDbtModel(projectRoot, { ...(flags.domain ? { domain: flags.domain } : {}), hideStagingDuplicates: !rest.includes('--include-staging'), readViews, ...(dbtManifestPath ? { dbtManifestPath } : {}), executor });
+      : await discoverProjectDbtModel(projectRoot, {
+        ...(flags.domain ? { domain: flags.domain } : {}),
+        hideStagingDuplicates: !rest.includes('--include-staging'),
+        readViews,
+        ...(dbtManifestPath ? { dbtManifestPath } : {}),
+        scope: { ...(select.length ? { select } : {}), ...(hops !== undefined ? { hops } : {}), ...(budget !== undefined ? { budget } : {}) },
+        executor,
+      });
     const needsLook = report.relationships.filter((relationship) => relationship.validation?.status !== 'passed');
     if (flags.apply === true && flags.dryRun !== true) {
       const selection = passedOnly ? { relationshipIds: report.relationships.filter((relationship) => relationship.validation?.status === 'passed').map((relationship) => relationship.id) } : {};
       const applied = applyProjectWarehouseDiscovery(projectRoot, report, selection);
       if (flags.format === 'json') {
-        console.log(JSON.stringify({ catalogFingerprint: report.catalogFingerprint, applied, ...(passedOnly ? { leftOut: needsLook.map((relationship) => relationship.id) } : {}) }, null, 2));
+        console.log(JSON.stringify({ catalogFingerprint: report.catalogFingerprint, applied, ...(passedOnly ? { leftOut: needsLook.map((relationship) => relationship.id) } : {}), ...(report.scope ? { scope: { ...report.scope, leftOut: report.scope.leftOut.length } } : {}) }, null, 2));
         return;
       }
       console.log('ZLens model draft apply');
+      printDraftScope(report);
       console.log(`  ${applied.changes} draft change(s) written${passedOnly && needsLook.length ? `; ${needsLook.length} join${needsLook.length === 1 ? '' : 's'} that need a look left out` : ''}:`);
       for (const path of applied.paths) console.log(`    ${path}`);
       console.log('  Everything is a draft. Certify joins that passed on the Modeling page or with zlens model validate-relationship --certify.');
@@ -597,6 +634,21 @@ async function runModelDraft(rest: string[], flags: CLIFlags): Promise<void> {
   }
 }
 
+/** What this run drafted of the project, and what it left over the budget (model-at-scale design S4). */
+function printDraftScope(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport): void {
+  const scope = report.scope;
+  if (!scope) return;
+  console.log(`  Scope: ${scope.description} · ${scope.drafted} of ${scope.asked} table${scope.asked === 1 ? '' : 's'} drafted (budget ${scope.budget} a run)`);
+  if (scope.leftOut.length === 0) return;
+  console.log(`Left out over the budget: ${scope.leftOut.length} (business tables, then tables an exposure uses, then tables many models read, were drafted first)`);
+  for (const item of scope.leftOut.slice(0, 8)) console.log(`  ${item.relation} · ${item.layer}`);
+  if (scope.leftOut.length > 8) console.log(`  … and ${scope.leftOut.length - 8} more (--format json lists them all)`);
+  if (scope.areas.length > 0) {
+    console.log('Draft one area at a time with --select (business tables in each):');
+    console.log(`  ${scope.areas.slice(0, 12).map((area) => `${area.id} (${area.tables})`).join(' · ')}`);
+  }
+}
+
 /** The drafted model by group, as the Modeling page's review shows it. */
 function printDraftReview(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport): void {
   const fresh = report.entities.filter((entity) => !entity.existing);
@@ -606,6 +658,7 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
   const needsLook = report.relationships.length - passed.length;
   const keyText = (keys: Array<{ from: string; to: string }>) => keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(', ');
   console.log('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
+  printDraftScope(report);
   console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} look-alike${lookAlikes.length === 1 ? '' : 's'} to skip · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
   console.log('Tables to answer from');
   for (const entity of tables) console.log(`  ${entity.domain}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);

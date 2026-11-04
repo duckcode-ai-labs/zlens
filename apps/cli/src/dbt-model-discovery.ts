@@ -14,7 +14,7 @@
 import { readFileSync } from 'node:fs';
 import { collectDbtRelationshipTests, normalizeWarehouseCatalog, type WarehouseCatalogRelationV1, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
 
-interface DbtNode {
+export interface DbtNode {
   uniqueId: string;
   /** `database.schema.name`, unquoted, as the warehouse spells it. */
   relation: string;

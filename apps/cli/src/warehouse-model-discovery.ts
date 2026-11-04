@@ -137,6 +137,18 @@ export interface WarehouseDiscoveryReport {
   catalogFingerprint: string;
   capturedAt: string;
   relations: number;
+  /**
+   * What this run drafted of a dbt project (model-at-scale design S4): the
+   * scope asked for, the budget, and the tables over it, most important first.
+   */
+  scope?: {
+    description: string;
+    asked: number;
+    drafted: number;
+    budget: number;
+    leftOut: Array<{ uniqueId: string; relation: string; layer: TableLayer }>;
+    areas: Array<{ id: string; tables: number }>;
+  };
   domains: DiscoveredDomain[];
   entities: DiscoveredEntity[];
   relationships: DiscoveredRelationship[];

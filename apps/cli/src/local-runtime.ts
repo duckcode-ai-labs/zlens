@@ -882,6 +882,7 @@ import { readValueProfile, refreshValueProfile, valueProfileAllowed, type ValueP
 import { resolveResultReviewMode } from './result-review-setting.js';
 import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import { draftTablePicks, readDbtRelationFacts } from './model-layers.js';
+import { resolveDraftScope, type DraftScopeOptions } from './draft-scope.js';
 import { draftIdentityJoins } from './model-joins.js';
 import { draftWordsAndRules } from './model-profile.js';
 import {
@@ -39046,6 +39047,8 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
   hideStagingDuplicates?: boolean;
   readViews?: boolean;
   dbtManifestPath?: string;
+  /** Which tables this run drafts, and the budget that caps it (model-at-scale design S3, S4). */
+  scope?: DraftScopeOptions;
   executor: QueryExecutor;
 }): Promise<WarehouseDiscoveryReport> {
   const cfg = loadProjectConfig(projectRoot);
@@ -39057,15 +39060,25 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
   const connection = projectConnectionById(projectRoot, cfg, connectionId);
   if (!connection) throw Object.assign(new Error(`Checking the warehouse needs the connection "${connectionId}".`), { code: 'CONNECTION_NOT_FOUND' });
   const dbtManifest = readDbtManifest(dbtManifestPath);
-  const nodes = dbtWarehouseNodes(dbtManifest);
+  // Domains: what dbt says (groups, meta, tags, business folders), else one for the project.
+  const domains = discoverDbtDomains({ projectRoot, dbtManifestPath });
+  // Only the tables this run drafts are read and measured: a scope picks them,
+  // and over the budget the most important are kept and the rest listed.
+  const allNodes = dbtWarehouseNodes(dbtManifest);
+  const draftScope = resolveDraftScope({ nodes: allNodes, dbtManifest: dbtManifest as unknown as Record<string, unknown>, facts: readDbtRelationFacts(dbtManifestPath), domains }, options.scope ?? {});
+  const inScope = new Set(draftScope.ids);
+  const nodes = allNodes.filter((node) => inScope.has(node.uniqueId));
+  if (nodes.length === 0) {
+    throw Object.assign(new Error(`Nothing in the dbt project matches ${draftScope.description}.`), { code: 'DRAFT_SCOPE_EMPTY' });
+  }
+  const scopedRelations = new Set(nodes.flatMap((node) => [node.relation.toLowerCase(), `${node.schema}.${node.relation.split('.').pop()}`.toLowerCase()]));
   const scopes = dbtWarehouseScopes(nodes, (connection as { database?: string }).database ?? (connection as { catalog?: string }).catalog);
-  const { relations } = await readWarehouseCatalogRelations({ executor: options.executor, connection, scopes });
+  const { relations: schemaRelations } = await readWarehouseCatalogRelations({ executor: options.executor, connection, scopes });
+  const relations = schemaRelations.filter((relation) => scopedRelations.has(relation.relation.toLowerCase()) || scopedRelations.has(`${relation.schema ?? ''}.${relation.name}`.toLowerCase()));
   const snapshot = dbtModelSnapshot({ dbtManifest, relations, driver: connection.driver, connectionId, scopes });
   if (snapshot.relations.length === 0) {
     throw Object.assign(new Error('None of the dbt project\'s models, sources or snapshots were found in the warehouse. Run dbt build, or check the connection.'), { code: 'WAREHOUSE_CATALOG_MISSING' });
   }
-  // Domains: what dbt says (groups, meta, tags, business folders), else one for the project.
-  const domains = discoverDbtDomains({ projectRoot, dbtManifestPath });
   const nameOf = new Map(domains.proposals.map((proposal) => [proposal.id, proposal.name]));
   const domainOfNode = new Map(domains.memberships.flatMap((membership) => (membership.proposedDomain ? [[membership.dbtUniqueId, membership.proposedDomain] as const] : [])));
   const projectDomain = domains.proposals.length === 1 ? domains.proposals[0]! : undefined;
@@ -39083,7 +39096,8 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
     existingDomains: loadDomainPackageRegistry(projectRoot).values().map((pkg) => pkg.id),
     decisions: readDiscoveryLedger(projectRoot).relationships,
   });
-  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest });
+  const checked = await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest });
+  return { ...checked, scope: { description: draftScope.description, asked: draftScope.asked, drafted: snapshot.relations.length, budget: draftScope.budget, leftOut: draftScope.leftOut, areas: draftScope.areas } };
 }
 
 /** Write a discovery report's drafts (optionally only the chosen ones) through the reviewed modeling path. */
