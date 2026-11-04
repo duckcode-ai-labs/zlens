@@ -16630,7 +16630,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // Staging copies of a final table are left out unless the person asks
         // for them ("Show staging tables"), so the map has one Customer.
         const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
-        const report = await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
+        // A dbt-first project drafts from dbt and the warehouse together (RFC 0012, decision M5).
+        const report = modelingModeOf(loadProjectConfig(projectRoot)) === 'dbt-first'
+          ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, executor })
+          : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
         // New Domains and subject areas are created by the proposal's own scope
         // step, as for dbt discovery, so the batch stays in dependency order.
         // A drafted join lives in the subject area of the entity it starts
@@ -16651,7 +16654,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const evidenceFor = (change: ModelingAuthoringChange): string[] => {
           if (change.operation === 'upsert_entity') {
             const entity = report.entities.find((item) => item.relationId === change.value.dbtModel);
-            return [`warehouse relation ${entity?.relation ?? change.value.dbtModel}`, ...(entity?.grainSource === 'primary_key' ? [`declared primary key ${entity.grain}`] : entity?.grainSource === 'unique_column' ? [`${entity.grain} is unique on the warehouse`] : [])];
+            return [
+              `warehouse relation ${entity?.relation ?? change.value.dbtModel}`,
+              ...(entity?.grainSource === 'primary_key' ? [`declared primary key ${entity.grain}`] : entity?.grainSource === 'unique_column' ? [`${entity.grain} is unique on the warehouse`] : []),
+              ...(entity?.useInstead ? [`use ${entity.useInstead.relation.split('.').pop()} instead: ${entity.useInstead.reason}`] : []),
+            ];
           }
           if (change.operation === 'upsert_relationship') {
             const relationship = report.relationships.find((item) => item.id === change.value.id && item.domain === change.value.domain);
@@ -48896,7 +48903,16 @@ function buildProjectLineageGraphUncached(
   }
 }
 
-function resolveDbtManifestPath(projectRoot: string, projectConfig: ProjectConfig = {}): string | undefined {
+function resolveDbtManifestPath(projectRoot: string, config?: ProjectConfig): string | undefined {
+  // Without the settings, read the project's own: a dbt project configured
+  // outside the default folders (`dbt.projectDir`) was not found, so Modeling
+  // could not read any model's columns or tests.
+  let projectConfig: ProjectConfig = config ?? {};
+  if (!config) {
+    try {
+      projectConfig = loadProjectConfig(projectRoot);
+    } catch { /* no readable dql.config.json: the default folders only */ }
+  }
   const candidates: string[] = [];
   if (projectConfig.dbt?.projectDir || projectConfig.semanticLayer?.provider === 'dbt') {
     const dbtProjectPath = findDbtProjectPath(projectRoot, projectConfig);

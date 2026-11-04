@@ -36,6 +36,10 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
     runDomainDiscovery(subcommand, rest, flags);
     return;
   }
+  if (subcommand === 'draft') {
+    await runModelDraft(rest, flags);
+    return;
+  }
   if (subcommand === 'import') {
     await runModelImport(rest, flags);
     return;
@@ -137,7 +141,7 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
   }
 
   if (subcommand !== 'list') {
-    console.error('Usage: zlens model list|validate|discover [path] | zlens model explain <relationship-id> [path] | zlens model validate-relationship <relationship-id>|--all [path] [--certify] [--dry-run] | zlens model reject-discovery <relationship-id> [path] [--reason <text>] | zlens model apply-discovery [path] --domain <id> --apply | zlens model import <file-or-directory> --domain <id> --area <id> --dry-run|--apply');
+    console.error('Usage: zlens model list|validate|discover [path] | zlens model draft [path] [--apply [--passed-only]] | zlens model explain <relationship-id> [path] | zlens model validate-relationship <relationship-id>|--all [path] [--certify] [--dry-run] | zlens model reject-discovery <relationship-id> [path] [--reason <text>] | zlens model apply-discovery [path] --domain <id> --apply | zlens model import <file-or-directory> --domain <id> --area <id> --dry-run|--apply');
     process.exitCode = 1;
     return;
   }
@@ -538,6 +542,100 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
   } finally {
     await executor?.disconnect().catch(() => undefined);
   }
+}
+
+/**
+ * `zlens model draft [path] [--apply [--passed-only]]` (RFC 0012, P5): draft
+ * the whole model, checked on the warehouse, and show it for review by group:
+ * the tables to answer from, the look-alikes Ask will skip, the joins with
+ * what the warehouse said about each, the measured rules and the concepts.
+ * `--apply --passed-only` writes everything except the joins that need a
+ * look. A dbt-first project drafts from dbt and the warehouse together.
+ */
+async function runModelDraft(rest: string[], flags: CLIFlags): Promise<void> {
+  const pathArg = rest.find((value, index) => !value.startsWith('-') && rest[index - 1] !== '--source' && rest[index - 1] !== '--dbt-manifest');
+  const projectRoot = resolve(pathArg ?? '.');
+  if (!existsSync(resolve(projectRoot, 'dql.config.json'))) {
+    discoveryError(flags, 'DBT_PROJECT_NOT_FOUND', `No ZLens project found at ${projectRoot} (missing dql.config.json).`);
+    return;
+  }
+  const dbtManifestIndex = rest.indexOf('--dbt-manifest');
+  const dbtManifestPath = dbtManifestIndex >= 0 ? rest[dbtManifestIndex + 1] : undefined;
+  const passedOnly = rest.includes('--passed-only');
+  const readViews = rest.includes('--read-views');
+  const { discoverProjectDbtModel, discoverProjectWarehouseModel, applyProjectWarehouseDiscovery } = await import('../local-runtime.js');
+  const { WorkbenchRoutedQueryExecutor } = await import('../workbench-query-route.js');
+  const executor = new WorkbenchRoutedQueryExecutor(projectRoot, { onRoute: (via) => { if (flags.format !== 'json') console.error(`  Running the warehouse checks through ${via}, which has the DuckDB file open.`); } });
+  try {
+    const report = usesWarehouseDiscovery(rest)
+      ? await discoverProjectWarehouseModel(projectRoot, { ...(flags.domain ? { domain: flags.domain } : {}), validate: true, hideStagingDuplicates: !rest.includes('--include-staging'), readViews, executor })
+      : await discoverProjectDbtModel(projectRoot, { ...(flags.domain ? { domain: flags.domain } : {}), hideStagingDuplicates: !rest.includes('--include-staging'), readViews, ...(dbtManifestPath ? { dbtManifestPath } : {}), executor });
+    const needsLook = report.relationships.filter((relationship) => relationship.validation?.status !== 'passed');
+    if (flags.apply === true && flags.dryRun !== true) {
+      const selection = passedOnly ? { relationshipIds: report.relationships.filter((relationship) => relationship.validation?.status === 'passed').map((relationship) => relationship.id) } : {};
+      const applied = applyProjectWarehouseDiscovery(projectRoot, report, selection);
+      if (flags.format === 'json') {
+        console.log(JSON.stringify({ catalogFingerprint: report.catalogFingerprint, applied, ...(passedOnly ? { leftOut: needsLook.map((relationship) => relationship.id) } : {}) }, null, 2));
+        return;
+      }
+      console.log('ZLens model draft apply');
+      console.log(`  ${applied.changes} draft change(s) written${passedOnly && needsLook.length ? `; ${needsLook.length} join${needsLook.length === 1 ? '' : 's'} that need a look left out` : ''}:`);
+      for (const path of applied.paths) console.log(`    ${path}`);
+      console.log('  Everything is a draft. Certify joins that passed on the Modeling page or with zlens model validate-relationship --certify.');
+      return;
+    }
+    if (flags.format === 'json') {
+      console.log(JSON.stringify(report, null, 2));
+      return;
+    }
+    printDraftReview(report);
+  } catch (error) {
+    const code = typeof error === 'object' && error && 'code' in error ? String((error as { code?: unknown }).code) : 'MODEL_DRAFT_FAILED';
+    discoveryError(flags, code, error instanceof Error ? error.message : String(error));
+  } finally {
+    await executor.disconnect().catch(() => undefined);
+  }
+}
+
+/** The drafted model by group, as the Modeling page's review shows it. */
+function printDraftReview(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport): void {
+  const fresh = report.entities.filter((entity) => !entity.existing);
+  const tables = fresh.filter((entity) => !entity.useInstead);
+  const lookAlikes = fresh.filter((entity) => entity.useInstead);
+  const passed = report.relationships.filter((relationship) => relationship.validation?.status === 'passed');
+  const needsLook = report.relationships.length - passed.length;
+  const keyText = (keys: Array<{ from: string; to: string }>) => keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(', ');
+  console.log('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
+  console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} look-alike${lookAlikes.length === 1 ? '' : 's'} to skip · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
+  console.log('Tables to answer from');
+  for (const entity of tables) console.log(`  ${entity.domain}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);
+  if (report.stagingHidden?.length) {
+    console.log('Staging copies left out (a final table holds the same rows; --include-staging drafts them)');
+    for (const item of report.stagingHidden) console.log(`  ${item.relation} · same as ${item.finalRelation}`);
+  }
+  if (lookAlikes.length) {
+    console.log('Look-alikes Ask will skip (it answers from the other table unless a question names this one)');
+    for (const entity of lookAlikes) console.log(`  ${entity.relation} → use ${entity.useInstead!.entity}: ${entity.useInstead!.reason}`);
+  }
+  console.log('Joins (each checked on the warehouse)');
+  if (report.relationships.length === 0) console.log('  none found');
+  for (const relationship of report.relationships) {
+    const status = relationship.validation?.status;
+    const mark = status === 'passed' ? '✓' : status ? '!' : '?';
+    const why = status === 'passed' ? '' : status ? `: ${relationship.validation?.message ?? 'the check did not pass'}` : `: not checked${relationship.validationError ? ` (${relationship.validationError})` : ''}`;
+    console.log(`  ${mark} ${relationship.from} → ${relationship.to} on ${keyText(relationship.keys)} · ${relationship.cardinality}${why}`);
+  }
+  if (report.rules?.length) {
+    console.log('Rules measured on the data (each number is what the saved query returned)');
+    for (const rule of report.rules) console.log(`  ${rule.id}: ${rule.expression}`);
+  }
+  if (report.concepts?.length) {
+    console.log('Concepts');
+    for (const concept of report.concepts) console.log(`  ${concept.id}: ${concept.description}`);
+  }
+  console.log(needsLook
+    ? `Write everything that passed with: zlens model draft --apply --passed-only (leaves out the ${needsLook} join${needsLook === 1 ? '' : 's'} that need${needsLook === 1 ? 's' : ''} a look), or all of it with --apply.`
+    : 'Write it as drafts with: zlens model draft --apply');
 }
 
 function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport, title = 'ZLens warehouse discovery'): void {

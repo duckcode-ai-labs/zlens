@@ -7,7 +7,7 @@
 | **Created** | 2026-11-04 |
 | **Targets** | The next ZLens release |
 | **Discussion** | — |
-| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse. P3 and P4: names, descriptions and concepts, and rules measured on the data |
+| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse. P3 and P4: names, descriptions and concepts, and rules measured on the data. P5: the review screen and `zlens model draft` |
 | **Supersedes** | — |
 
 ## Summary
@@ -277,6 +277,28 @@ two counting statements:
 On NBA, P4 finds five of the hand model's six rules: the participation flag, the two team rows per game, the
 repeated games, the game type digit and the season start year. It also finds the short and partial seasons. It
 does not find that team attributes are a 2019 snapshot, which no count shows.
+
+### Review (P5)
+
+**The Modeling page.** A drafted model opens in the review drawer, grouped:
+
+1. the tables to answer from, each with its measured description;
+2. the look-alikes Ask will skip, each with its reason;
+3. the joins, each marked passed, needs a look (with the warehouse's words) or not checked;
+4. the rules measured on the data, each with the query that measured it, one click away;
+5. the concepts;
+6. any other change (a new Domain or area), in the drawer's usual words.
+
+**Accept all that passed** saves every change except the joins whose check did not pass, together, in one step. A
+person can still tick and untick single changes and save those. Joins are certified one at a time from the map
+once saved (decision M3: nothing is certified automatically). The grouping is read from the drafted changes
+themselves, so a draft kept for later reviews the same way.
+
+**dbt-first projects.** They draft from the page too: "Draft the model", and a "Draft the whole model" card on an
+empty map. The proposal route runs the dbt draft (decision M5).
+
+**The CLI.** `zlens model draft [path]` prints the same groups. `--apply` writes all of it as drafts, and
+`--apply --passed-only` leaves out the joins that need a look.
 
 ### Manifest
 
