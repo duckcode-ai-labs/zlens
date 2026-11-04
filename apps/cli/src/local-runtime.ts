@@ -880,6 +880,7 @@ import { readValueProfile, refreshValueProfile, valueProfileAllowed, type ValueP
 import { resolveResultReviewMode } from './result-review-setting.js';
 import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import { draftTablePicks, readDbtRelationFacts } from './model-layers.js';
+import { draftIdentityJoins } from './model-joins.js';
 import {
   cheapToRead,
   discoverWarehouseModel,
@@ -38981,7 +38982,11 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   const executor = options.executor;
   const run = (sql: string) => executor.executeQuery(sql, [], {}, connection);
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
-  const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, { dialect: connection.driver });
+  // A local file warehouse reads every view; elsewhere a view that joins or
+  // aggregates waits for a person, as before.
+  const localEngine = /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
+  const readable = (relation: Parameters<typeof cheapToRead>[0]) => localEngine || cheapToRead(relation);
+  const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, { dialect: connection.driver, readable });
   // Layers, row identity and one table per business thing (RFC 0012). A local
   // file warehouse reads every view; elsewhere a view that joins or
   // aggregates waits for the budgeted checks.
@@ -38990,11 +38995,9 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   try {
     dbt = dbtManifestPath && existsSync(dbtManifestPath) ? readDbtRelationFacts(dbtManifestPath) : undefined;
   } catch { /* an unreadable dbt manifest adds no evidence */ }
-  const localEngine = /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
-  return draftTablePicks(validated, snapshot, run, quote, {
-    ...(dbt ? { dbt } : {}),
-    readViews: (relation) => localEngine || cheapToRead(relation),
-  });
+  const picked = await draftTablePicks(validated, snapshot, run, quote, { ...(dbt ? { dbt } : {}), readViews: readable });
+  // Joins on the picks' row identities: several columns, roles, periods, itself.
+  return draftIdentityJoins(picked, snapshot, run, quote, { dialect: connection.driver, readable });
 }
 
 /** Write a discovery report's drafts (optionally only the chosen ones) through the reviewed modeling path. */

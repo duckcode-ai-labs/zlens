@@ -8,6 +8,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Discovery drafts joins from row identity ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **`zlens model discover --validate` drafts a join wherever a table carries another table's row identity**, and
+  the warehouse finds the values. The match can be:
+  - on several columns (`game_id, team_id`);
+  - through a role (`opponent_team_id`, `home_team_id` → a team's `team_id`);
+  - to a period table (`season` → `season_id`);
+  - to the table itself (the opponent's line of the same game).
+
+  Each join carries the count that backs it, and the cardinality the warehouse shows.
+- **Joins that touch a table the draft says to use another instead of are left out**, and listed. The pick's
+  joins are drafted instead.
+- **On DuckDB and SQLite the name and key checks read every view.** A join to an aggregating view was drafted
+  unchecked before.
+- **On the NBA benchmark project the draft finds all 17 joins of the hand-built model** (it found none). The joins
+  it drafts that the hand model lacks went from 25 to 5, and all 5 are real references.
+
 ### Discovery proposes one table per business thing ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **`zlens model discover --validate` gives every table a layer and finds what one row is.**

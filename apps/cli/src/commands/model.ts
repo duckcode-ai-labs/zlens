@@ -563,6 +563,12 @@ function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js
     console.log(`  ${relationship.from} → ${relationship.to} on ${keys} · ${relationship.cardinality}${check}${nameOnly}`);
     for (const item of relationship.evidence) console.log(`      because ${item.reason}`);
   }
+  if (report.lookAlikeJoins?.length) {
+    console.log('Not proposed: these join a table the draft says to use another instead of (the pick\'s joins are drafted)');
+    for (const relationship of report.lookAlikeJoins) {
+      console.log(`  ${relationship.from} → ${relationship.to} on ${relationship.keys.map((pair) => `${pair.from} = ${pair.to}`).join(', ')} · ${relationship.reason}`);
+    }
+  }
   if (report.withheld?.length) {
     console.log('Not proposed: a name suggested these joins, the warehouse did not back them');
     for (const relationship of report.withheld) {
