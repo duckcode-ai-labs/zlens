@@ -8,6 +8,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Choose what to draft on the Modeling page (model-at-scale design S3)
+
+- **In a dbt project larger than one draft (150 tables), "Draft the model" opens Choose what to draft.** It shows the project by layer ("476 business tables to answer from; 4,420 more are not offered by area: …") and offers three ways to pick:
+  - **By area:** each Domain and subject area, the Shared area first, with its tables and the tables they read;
+  - **Tables:** search business tables, most read first, and optionally add their neighbours;
+  - **dbt selector:** the same terms as `zlens model draft --select`.
+- **The footer says what the pick drafts before anything runs:** "122 tables picked. Only these are read from the warehouse and checked." Over the budget, it says which tables go first and how many are left.
+- **A smaller project still drafts in one click.**
+- **New endpoint:** `POST /api/modeling/draft-scope`. The draft proposal route takes a `scope`.
+
 ### Drafts land in subject areas, with a Shared area (model-at-scale design S1, S4)
 
 - **`zlens model draft` places each drafted table in the subject area the domain finder proposed.**

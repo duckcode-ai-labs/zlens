@@ -3,7 +3,7 @@ import { Blocks, BookOpen, Boxes, CheckCircle2, Columns3, Download, EyeOff, File
 import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
 import type { DbtMetricAuthoringInput, DbtMetricPatchPreview, ExistingSemanticModel, DbtNodeAuthoringDetail, DbtSourceAuthoringInput, DbtSourcePatchPreview, ManifestModelArea, ManifestModelEntity, ManifestModelRelationship, ModelingAuthoringChange, ModelingChangePreview } from '@zlens/core';
 import { hostAllows, hostReadOnly, readOnlyReason, useHostUi, type HostUiState } from '../../host/host-ui';
-import { api, type AgentRunArtifact, type ContextAuthoringProposalV1, type DbtFirstModelingResponse, type WaitingWarehouseDrafts } from '../../api/client';
+import { api, type AgentRunArtifact, type ContextAuthoringProposalV1, type DbtFirstModelingResponse, type DraftScopeRequest, type WaitingWarehouseDrafts } from '../../api/client';
 import { useNotebook } from '../../store/NotebookStore';
 import type { NotebookFile } from '../../store/types';
 import { themes, type ThemeMode } from '../../themes/notebook-theme';
@@ -18,6 +18,10 @@ import { AskImpactDrawer } from './AskImpactDrawer';
 import { DomainModelingCanvas, type ColumnDisplayMode, type DiagramDensity, type DiagramLayoutMode, type ModelingViewMode, type RelationshipDraft } from './DomainModelingCanvas';
 import { UnifiedAgentRunPanel, usePersistedAgentThreadId } from '../agent/UnifiedAgentRunPanel';
 import { ContextProposalReviewDrawer } from './ContextProposalReviewDrawer';
+import { DraftScopeDrawer } from './DraftScopeDrawer';
+
+/** Tables one draft reads and checks (model-at-scale design S-D3); a larger dbt project picks what to draft first. */
+const DRAFT_BUDGET = 150;
 import { stagingLeftOutSentence, waitingDraftsSentence } from './proposal-review-words';
 import { AddModelsDrawer, ModelingYamlImportDrawer } from './ModelingStartDrawers';
 import { DOMAIN_STUDIO_LOCATION_KEY, DOMAIN_STUDIO_NAVIGATION, domainEntityRecords, domainPackageTree, domainStudioLocationHref, entityKindColor, isDescriptiveOnlyChange, modelingThreadScope, resolveDomainStudioLocation, type DomainStudioSection } from './domain-studio-model';
@@ -202,6 +206,8 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
   });
   const [notice, setNotice] = useState<string | null>(null);
   const [draftingFromWarehouse, setDraftingFromWarehouse] = useState(false);
+  // Choose what to draft first when a dbt project is larger than one draft (model-at-scale design S3).
+  const [draftPickerOpen, setDraftPickerOpen] = useState(false);
   // Drafts are kept automatically (new-user round 2, Q3): what "Draft my
   // models" drafted waits on the server until it is saved or discarded, so a
   // fresh browser, a reload or leaving without Save loses nothing.
@@ -245,11 +251,12 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
    * RFC 0007: draft domains, models and joins from the warehouse catalog,
    * checked on the warehouse, and open them in the ordinary review drawer.
    */
-  const draftFromWarehouse = async (options: { includeStaging?: boolean } = {}) => {
+  const draftFromWarehouse = async (options: { includeStaging?: boolean; scope?: DraftScopeRequest } = {}) => {
     setDraftingFromWarehouse(true);
     setNotice(null);
     try {
-      const result = await api.draftWarehouseModel({ expectedSnapshotId: data?.snapshotId, queryHistory: draftWithQueryHistory, ...(options.includeStaging ? { includeStaging: true } : {}) });
+      const result = await api.draftWarehouseModel({ expectedSnapshotId: data?.snapshotId, queryHistory: draftWithQueryHistory, ...(options.includeStaging ? { includeStaging: true } : {}), ...(options.scope ? { scope: options.scope } : {}) });
+      setDraftPickerOpen(false);
       const history = result.report.queryHistory;
       if (history && 'error' in history) setNotice(history.error);
       setStagingLeftOut(result.report.stagingHidden?.length ? result.report.stagingHidden : null);
@@ -341,6 +348,8 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
   const warehouseModeling = data.modeling.mode === 'warehouse-first' || data.modeling.mode === 'hybrid';
   // A dbt project drafts its model from dbt and the warehouse together (RFC 0012).
   const canDraftModel = warehouseModeling || data.modeling.mode === 'dbt-first';
+  // A dbt project larger than one draft's budget picks what to draft first.
+  const startDraft = () => (!warehouseModeling && Object.keys(data.dbtProvenance.nodes).length > DRAFT_BUDGET ? setDraftPickerOpen(true) : void draftFromWarehouse());
   const warehouseRelationCount = Object.values(data.dbtProvenance.nodes).filter((node) => node.resourceType === 'warehouse').length;
   const dbtNodeCount = Object.keys(data.dbtProvenance.nodes).length - warehouseRelationCount;
 
@@ -480,7 +489,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
           )}
           {readOnly && <span style={{ fontSize: 11, color: t.textMuted, alignSelf: 'center' }}>{readOnlyReason(hostUi, 'domains')}</span>}
           {!readOnly && canDraftModel && (
-            <Button t={t} onClick={() => void draftFromWarehouse()} disabled={draftingFromWarehouse}>
+            <Button t={t} onClick={startDraft} disabled={draftingFromWarehouse}>
               <Boxes size={14} /> {draftingFromWarehouse ? 'Drafting…' : warehouseModeling ? 'Draft from warehouse' : 'Draft the model'}
             </Button>
           )}
@@ -580,7 +589,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
                 {showLegend && <DiagramLegend t={t} />}
                 <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  {domainEntities.length === 0 ? (readOnly ? <Blank t={t} title="No models on this map yet" detail={readOnlyReason(hostUi, 'domains')} /> : <ModelingEmptyWorkspace t={t} connectedModels={Object.keys(data.dbtProvenance.nodes).length} warehouse={canDraftModel ? { tables: warehouseModeling ? warehouseRelationCount : Object.keys(data.dbtProvenance.nodes).length, drafting: draftingFromWarehouse, onDraft: () => void draftFromWarehouse(), fromDbt: !warehouseModeling } : undefined} onDbt={() => setStartDrawer('models')} onYaml={() => setStartDrawer('yaml')} onManual={() => setEditor({ kind: 'entity' })} />) : <DomainModelingCanvas modeling={ghostView.modeling} ghostEntityIds={ghostView.ghostEntityIds} ghostRelationshipIds={ghostView.ghostRelationshipIds} relationByDbtId={relationByDbtId} detailsByDbtId={detailsByDbtId} selectedDomain={selectedDomain} selectedAreaId={selectedAreaId} selectedId={selectedId} viewMode={modelingView} columnMode={columnMode} search={diagramSearch} layoutMode={layoutMode} density={diagramDensity} visibleLimit={visibleLimit} dimUnrelated={dimUnrelated} showEdgeLabels={showEdgeLabels} resetLayoutToken={resetLayoutToken} focusRequest={focusRequest ?? undefined} onVisibleDbtIdsChange={loadVisibleNodeDetails} onSelectEntity={setSelectedId} onSelectRelationship={setSelectedId} onEditRelationship={(recordKey) => { const relationship = data.modeling.relationships[recordKey]; if (relationship) setEditor({ kind: 'relationship', relationship }); }} onDraftRelationship={(draft) => setEditor({ kind: 'relationship', draft })} onAddRelatedModel={(origin) => setEditor({ kind: 'entity', relationshipFrom: origin })} onAddModel={() => setStartDrawer('models')} onCreateDomain={() => setDomainSettings({ kind: 'create' })} onEditEntity={(id) => { const entity = data.modeling.entities[id]; if (entity) setEditor({ kind: 'entity', entity, dbtUniqueId: entity.dbtUniqueId }); }} onOpenAi={(id) => {
+                  {domainEntities.length === 0 ? (readOnly ? <Blank t={t} title="No models on this map yet" detail={readOnlyReason(hostUi, 'domains')} /> : <ModelingEmptyWorkspace t={t} connectedModels={Object.keys(data.dbtProvenance.nodes).length} warehouse={canDraftModel ? { tables: warehouseModeling ? warehouseRelationCount : Object.keys(data.dbtProvenance.nodes).length, drafting: draftingFromWarehouse, onDraft: startDraft, fromDbt: !warehouseModeling } : undefined} onDbt={() => setStartDrawer('models')} onYaml={() => setStartDrawer('yaml')} onManual={() => setEditor({ kind: 'entity' })} />) : <DomainModelingCanvas modeling={ghostView.modeling} ghostEntityIds={ghostView.ghostEntityIds} ghostRelationshipIds={ghostView.ghostRelationshipIds} relationByDbtId={relationByDbtId} detailsByDbtId={detailsByDbtId} selectedDomain={selectedDomain} selectedAreaId={selectedAreaId} selectedId={selectedId} viewMode={modelingView} columnMode={columnMode} search={diagramSearch} layoutMode={layoutMode} density={diagramDensity} visibleLimit={visibleLimit} dimUnrelated={dimUnrelated} showEdgeLabels={showEdgeLabels} resetLayoutToken={resetLayoutToken} focusRequest={focusRequest ?? undefined} onVisibleDbtIdsChange={loadVisibleNodeDetails} onSelectEntity={setSelectedId} onSelectRelationship={setSelectedId} onEditRelationship={(recordKey) => { const relationship = data.modeling.relationships[recordKey]; if (relationship) setEditor({ kind: 'relationship', relationship }); }} onDraftRelationship={(draft) => setEditor({ kind: 'relationship', draft })} onAddRelatedModel={(origin) => setEditor({ kind: 'entity', relationshipFrom: origin })} onAddModel={() => setStartDrawer('models')} onCreateDomain={() => setDomainSettings({ kind: 'create' })} onEditEntity={(id) => { const entity = data.modeling.entities[id]; if (entity) setEditor({ kind: 'entity', entity, dbtUniqueId: entity.dbtUniqueId }); }} onOpenAi={(id) => {
                     setSelectedId(id);
                     openAsk(id);
                   }} theme={t} />}
@@ -748,6 +757,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
         />
       ) : null}
       {startDrawer === 'models' ? <AddModelsDrawer data={data} domain={selectedDomain} areaId={selectedAreaId} theme={t} onClose={() => setStartDrawer(null)} onProposal={(next) => { setStartDrawer(null); setProposal(next); }} /> : null}
+      {draftPickerOpen ? <DraftScopeDrawer theme={t} drafting={draftingFromWarehouse} onClose={() => setDraftPickerOpen(false)} onDraft={(scope) => void draftFromWarehouse({ scope })} /> : null}
       {startDrawer === 'yaml' ? <ModelingYamlImportDrawer data={data} domain={selectedDomain} areaId={selectedAreaId} theme={t} onClose={() => setStartDrawer(null)} onProposal={(next) => { setStartDrawer(null); setProposal(next); }} /> : null}
       {proposal ? (
         <ContextProposalReviewDrawer

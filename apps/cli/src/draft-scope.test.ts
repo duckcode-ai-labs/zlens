@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { DomainDiscoveryReport } from '@zlens/core';
 import type { DbtNode } from './dbt-model-discovery.js';
 import type { DbtRelationFacts } from './model-layers.js';
-import { DEFAULT_DRAFT_BUDGET, resolveDraftScope } from './draft-scope.js';
+import { DEFAULT_DRAFT_BUDGET, draftScopeChoices, draftScopeGraph, resolveDraftScope, searchDraftTables } from './draft-scope.js';
 
 // A small shop: raw orders, a staging model, two marts, a finance report and
 // a sales report. The finance report is the subject area `finance`.
@@ -90,5 +90,28 @@ describe('resolveDraftScope (model-at-scale design S3, S4)', () => {
     expect(resolve({ select: ['domain:commerce'] }).asked).toBe(4);
     expect(resolve({ select: ['dim_customers'], hops: 1 }).ids.sort()).toEqual(['model.shop.dim_customers', 'model.shop.fct_orders']);
     expect(resolve({ select: ['nothing_here'] }).ids).toEqual([]);
+  });
+});
+
+describe('what the draft picker offers (model-at-scale design S3)', () => {
+  const graph = draftScopeGraph({ nodes, dbtManifest, facts, domains });
+
+  it('counts the project by layer, and lists each Domain with its areas and what they read', () => {
+    const choices = draftScopeChoices(graph);
+    expect(choices).toMatchObject({ tables: 7, budget: DEFAULT_DRAFT_BUDGET, layers: { business: 4, staging: 2, raw: 1 } });
+    expect(choices.areas).toEqual([
+      { select: 'domain:commerce', domain: 'commerce', tables: 4, reads: 0 },
+      { select: 'area:commerce.finance', domain: 'commerce', area: 'finance', tables: 1, reads: 2 },
+      { select: 'area:commerce.sales', domain: 'commerce', area: 'sales', tables: 1, reads: 2 },
+    ]);
+    // Each choice drafts what it says: an area's tables and the business tables they read.
+    expect(resolveDraftScope(graph, { select: [choices.areas[1]!.select] }).asked).toBe(1 + 2);
+  });
+
+  it('searches tables to start from: business tables first, then the most read', () => {
+    const found = searchDraftTables(graph, { q: '', businessOnly: true });
+    expect(found.items.map((item) => item.name)).toEqual(['fct_orders', 'dim_customers', 'rpt_pipeline', 'rpt_revenue']);
+    expect(found.items[0]).toMatchObject({ business: true, domain: 'commerce', readers: 2 });
+    expect(searchDraftTables(graph, { q: 'orders', businessOnly: false }).items.map((item) => item.name)).toEqual(['fct_orders', 'stg_orders', 'orders']);
   });
 });
