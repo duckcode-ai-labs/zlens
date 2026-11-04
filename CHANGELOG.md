@@ -8,6 +8,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed: the warehouse sync no longer drops schemas without saying so
+
+- **`zlens sync warehouse` and Settings → Sync schema read every selected schema,** up to 1,000 per
+  database and 40 databases (was 100 and 20).
+  - Before, schemas past the 100th were left out with no message. On a warehouse with 180 schemas, the sync
+    read 2,318 of 4,791 tables and reported success.
+  - A scope past the new limits now fails, naming the count and asking for fewer.
+- **A dbt project with more than 5,000 tables now reads the whole schemas those tables are in.** Before, the
+  tables past the 5,000th were left out of Ask's schema metadata.
+
 ### Ask reads the whole business model ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **A project with a business model of up to 30 tables to answer from shows every one of them to Ask's SQL
