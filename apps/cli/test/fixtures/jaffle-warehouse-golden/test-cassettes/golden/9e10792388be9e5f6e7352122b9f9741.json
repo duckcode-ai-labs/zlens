@@ -1,0 +1,23 @@
+{
+  "key": "9e10792388be9e5f6e7352122b9f9741",
+  "operation": "generate",
+  "text": "SELECT product_id, product_name, product_type, product_description, product_price\nFROM jaffle_shop.dev.products\nWHERE LOWER(product_type) LIKE '%beverage%'\nORDER BY product_name\nLIMIT 500",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:23:55.167Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "9e10792388be9e5f6e7352122b9f97412f747205f614950ebca788e38a91c64d",
+    "postCanonicalHash": "9e10792388be9e5f6e7352122b9f97412f747205f614950ebca788e38a91c64d",
+    "appliedRuleClasses": []
+  }
+}

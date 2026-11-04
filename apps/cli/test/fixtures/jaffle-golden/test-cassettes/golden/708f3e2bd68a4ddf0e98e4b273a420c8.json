@@ -1,0 +1,23 @@
+{
+  "key": "708f3e2bd68a4ddf0e98e4b273a420c8",
+  "operation": "generate",
+  "text": "WITH item_rev AS (\n  SELECT order_id, SUM(product_price) AS revenue\n  FROM \"jaffle_shop\".\"dev\".\"order_items\"\n  GROUP BY order_id\n)\nSELECT\n  SUM(r.revenue) - SUM(o.order_cost) AS gross_profit_2025,\n  100.0 * (SUM(r.revenue) - SUM(o.order_cost)) / SUM(r.revenue) AS gross_margin_pct\nFROM \"jaffle_shop\".\"dev\".\"orders\" AS o\nJOIN item_rev AS r ON o.order_id = r.order_id\nWHERE o.ordered_at >= '2025-01-01' AND o.ordered_at < '2026-01-01'",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:23:06.352Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "708f3e2bd68a4ddf0e98e4b273a420c887c96300b9d8a4ee69aa930ca951cc27",
+    "postCanonicalHash": "708f3e2bd68a4ddf0e98e4b273a420c887c96300b9d8a4ee69aa930ca951cc27",
+    "appliedRuleClasses": []
+  }
+}

@@ -1771,6 +1771,28 @@ describe('preferred joins are hints for AI-written SQL, never gates', () => {
     expect(preferredJoinHints(entries, ['dev.orders'], (relation) => columns[relation] ?? [])).toEqual([]);
   });
 
+  it("a modeled relationship is hinted only between its own tables, never two look-alikes that carry its keys", () => {
+    const modeled = buildVocabularyIndex({ relationships: [
+      { id: 'player_game_to_player_season', domain: 'nba', from: 'nba::entity::player_game', to: 'nba::entity::player_season', keys: [{ from: 'player_id', to: 'player_id' }, { from: 'season', to: 'season' }], cardinality: 'many_to_one', joinAuthority: 'certified' },
+    ] }).entries;
+    const nba: Record<string, string[]> = {
+      'nba.transformed.local_player_game_facts': ['player_id', 'season', 'pts'],
+      'nba.transformed.local_player_season_facts': ['player_id', 'season', 'total_points'],
+      'nba.transformed.dim_players_cleansed': ['player_id', 'season', 'player_name'],
+    };
+    const bound = { from: 'nba.transformed.local_player_game_facts', to: 'nba.transformed.local_player_season_facts' };
+    // The season table is listed first and a look-alike carries both keys: by columns alone the hint would join those two.
+    const chosen = ['nba.transformed.local_player_season_facts', 'nba.transformed.dim_players_cleansed', 'nba.transformed.local_player_game_facts'];
+    expect(preferredJoinHints(modeled, chosen, (relation) => nba[relation] ?? []).map(preferredJoinLine)[0]).toContain('local_player_season_facts.player_id = nba.transformed.dim_players_cleansed.player_id');
+    expect(preferredJoinHints(modeled, chosen, (relation) => nba[relation] ?? [], () => bound).map(preferredJoinLine)).toEqual([
+      // Its own two tables, led by the first chosen, as the line read before for a pair it named right.
+      '- preferred join (certified in Domain Studio: player_game_to_player_season): nba.transformed.local_player_season_facts.player_id = nba.transformed.local_player_game_facts.player_id AND nba.transformed.local_player_season_facts.season = nba.transformed.local_player_game_facts.season [many_to_one]',
+    ]);
+    // Without one of its own tables chosen there is no hint, whatever else carries the keys; nor when its tables can't be told.
+    expect(preferredJoinHints(modeled, chosen.slice(0, 2), (relation) => nba[relation] ?? [], () => bound)).toEqual([]);
+    expect(preferredJoinHints(modeled, chosen, (relation) => nba[relation] ?? [], () => null)).toEqual([]);
+  });
+
   it('a statement that joins on the keys is disclosed; one that only selects the column is not', () => {
     const keys = [{ from: 'customer_id', to: 'customer_id' }];
     expect(joinHintUsed('SELECT c.name FROM dev.orders o JOIN dev.customers c ON c.customer_id = o.customer_id', keys)).toBe(true);

@@ -1,0 +1,23 @@
+{
+  "key": "236767e0a5663587d3adc6dd771a3546",
+  "operation": "generate",
+  "text": "NO_SQL: The listed Jaffle Shop commerce tables contain no weather data, so the weather in Chicago cannot be answered.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T04:22:34.889Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "236767e0a5663587d3adc6dd771a3546c90fc6fd83bc5e47d1fad56f62f453c1",
+    "postCanonicalHash": "236767e0a5663587d3adc6dd771a3546c90fc6fd83bc5e47d1fad56f62f453c1",
+    "appliedRuleClasses": []
+  }
+}
