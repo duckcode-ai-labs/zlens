@@ -3,6 +3,8 @@ import { AlertTriangle, CheckCircle2, FileDiff, Loader2, RefreshCw, ShieldCheck,
 import { api, DqlApiError, type ContextAuthoringProposalV1 } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
 import { describeProposalOperation, groupProposalDiagnostics, proposalOriginWords, proposalReviewTitle, proposalScopeNames } from './proposal-review-words';
+import { isModelDraft, modelDraftReview, modelDraftSummary } from './model-draft-review';
+import { ModelDraftReviewList } from './ModelDraftReviewList';
 
 export function ContextProposalReviewDrawer({
   proposal,
@@ -29,6 +31,8 @@ export function ContextProposalReviewDrawer({
   const scopeNames = useMemo(() => proposalScopeNames(current), [current]);
   // Drafts from the database wait until they are saved or discarded (new-user round 2, Q3).
   const keptDrafts = current.origin === 'warehouse_discovery' && current.status === 'proposed';
+  // A drafted model reviews by group, with each join's check (RFC 0012, P5).
+  const draft = useMemo(() => (current.origin === 'warehouse_discovery' && isModelDraft(current.operations) ? modelDraftReview(current.operations, (operation) => describeProposalOperation(operation, scopeNames)) : null), [current, scopeNames]);
 
   /**
    * Reviewing a large import means toggling many checkboxes in a row. Each
@@ -76,6 +80,30 @@ export function ContextProposalReviewDrawer({
       setError(cause instanceof Error ? cause.message : String(cause));
       // Only a change to what these drafts write is asked about; Save already
       // saves them as they are when other project files changed.
+      setRebaseAvailable(proposalNeedsUpdate(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** Accept everything whose checks passed: every change except joins the warehouse did not back, saved together. */
+  const acceptPassed = async () => {
+    if (!draft) return;
+    setBusy('commit');
+    setError(null);
+    setRebaseAvailable(false);
+    try {
+      const allPassed = draft.passedIds.length === current.operations.length;
+      const target = allPassed ? current : await api.repreviewContextProposal(current.id, draft.passedIds);
+      if (!allPassed) {
+        setCurrent(target);
+        setSelected(target.operations.map((operation) => operation.id));
+      }
+      const result = await api.commitContextProposal(target.id, target.proposalHash, crypto.randomUUID());
+      setCurrent(result.proposal);
+      onCommitted(result.proposal);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
       setRebaseAvailable(proposalNeedsUpdate(cause));
     } finally {
       setBusy(null);
@@ -145,7 +173,12 @@ export function ContextProposalReviewDrawer({
             ))}
           </div>
 
-          <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
+          {draft ? (
+            <>
+              <div role="status" aria-label="What was drafted" style={{ marginTop: 14, fontSize: 11.5, lineHeight: 1.5, color: theme.textPrimary }}>{modelDraftSummary(draft.counts)}</div>
+              <ModelDraftReviewList review={draft} selected={selected} busy={Boolean(busy)} patchesByOperation={patchesByOperation} onToggle={updateSelection} theme={theme} />
+            </>
+          ) : <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
             {current.operations.map((operation) => {
               const patches = patchesByOperation.get(operation.id) ?? [];
               return (
@@ -168,7 +201,7 @@ export function ContextProposalReviewDrawer({
                 </section>
               );
             })}
-          </div>
+          </div>}
           {error ? <div role="alert" style={{ color: 'var(--status-error, #c45555)', fontSize: 11, marginTop: 12 }}>{error}</div> : null}
 
           <details aria-label="Technical details" style={{ marginTop: 16, border: '1px solid var(--border-subtle)', borderRadius: 9, background: 'var(--bg-1)' }}>
@@ -197,11 +230,16 @@ export function ContextProposalReviewDrawer({
           </details>
         </div>
 
-        <footer style={{ padding: '12px 18px', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', gap: 9 }}>
-          <span style={{ flex: 1, fontSize: 10.5, color: theme.textMuted }}>{selected.length} of {current.operations.length} change{current.operations.length === 1 ? '' : 's'} ticked</span>
+        <footer style={{ padding: '12px 18px', borderTop: '1px solid var(--border-subtle)', display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 9 }}>
+          <span style={{ flex: '1 1 120px', fontSize: 10.5, color: theme.textMuted }}>{selected.length} of {current.operations.length} change{current.operations.length === 1 ? '' : 's'} ticked</span>
           {rebaseAvailable ? <button type="button" onClick={() => void rebase()} disabled={Boolean(busy)} style={secondaryButton(theme)}><RefreshCw size={13} /> {updateProposalLabel(current.origin)}</button> : null}
           {keptDrafts && onDiscarded ? <button type="button" onClick={() => void discard()} disabled={Boolean(busy)} style={secondaryButton(theme)}><Trash2 size={13} /> {busy === 'discard' ? 'Discarding…' : 'Discard drafts'}</button> : null}
           <button type="button" onClick={onClose} disabled={Boolean(busy)} style={secondaryButton(theme)}>{keptDrafts ? 'Keep for later' : 'Cancel'}</button>
+          {draft && draft.passedIds.length > 0 ? (
+            <button type="button" onClick={() => void acceptPassed()} disabled={Boolean(busy) || blocking.length > 0} style={secondaryButton(theme)}>
+              <CheckCircle2 size={13} /> Accept all that passed
+            </button>
+          ) : null}
           <button type="button" onClick={() => void commit()} disabled={Boolean(busy) || selected.length === 0 || blocking.length > 0} style={{ ...primaryButton(theme), opacity: busy || selected.length === 0 || blocking.length ? .55 : 1 }}>
             {busy ? <Loader2 size={13} /> : <ShieldCheck size={13} />} {busy === 'preview' ? 'Updating…' : busy === 'commit' ? 'Saving…' : 'Save'}
           </button>
@@ -231,5 +269,5 @@ function Patch({ title, value, theme }: { title: string; value: string; theme: T
 }
 
 const iconButton = (theme: Theme): React.CSSProperties => ({ border: '1px solid var(--border-subtle)', background: theme.cellBg, color: theme.textSecondary, width: 29, height: 29, borderRadius: 7, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' });
-const secondaryButton = (theme: Theme): React.CSSProperties => ({ border: '1px solid var(--border-default)', background: theme.cellBg, color: theme.textPrimary, minHeight: 31, borderRadius: 7, padding: '0 12px', cursor: 'pointer' });
+const secondaryButton = (theme: Theme): React.CSSProperties => ({ border: '1px solid var(--border-default)', background: theme.cellBg, color: theme.textPrimary, minHeight: 31, borderRadius: 7, padding: '0 12px', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' });
 const primaryButton = (theme: Theme): React.CSSProperties => ({ ...secondaryButton(theme), background: theme.accent, borderColor: theme.accent, color: 'var(--accent-fg)', display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 650 });

@@ -41,6 +41,38 @@ const firstRun = {
   proposalHash: 'abcdef0123456789',
 } as unknown as ContextAuthoringProposalV1;
 
+describe('a drafted model reviews by group (RFC 0012, P5)', () => {
+  it('shows the tables, look-alikes, joins with their checks and measured rules, and offers to accept what passed', () => {
+    const drafted = {
+      ...firstRun,
+      operations: [
+        ...firstRun.operations,
+        { id: 'warehouse:entity:jaffle_shop:stg_orders', kind: 'modeling_change', change: { operation: 'upsert_entity', value: { id: 'stg_orders', domain: 'jaffle_shop', dbtModel: 'warehouse.jaffle_shop.dev.stg_orders', businessName: 'Stg Order', status: 'draft', useInstead: { entity: 'orders', reason: 'a staging table (named stg_…); orders is the final table with the same rows' } } } },
+        { id: 'warehouse:relationship:jaffle_shop:order_to_customer', kind: 'modeling_change', change: { operation: 'upsert_relationship', value: { id: 'order_to_customer', domain: 'jaffle_shop', from: 'orders', to: 'customers', keys: [{ from: 'customer_id', to: 'customer_id' }], cardinality: 'many_to_one', fanout: 'safe', status: 'draft', validation: { status: 'passed' } } } },
+        { id: 'warehouse:relationship:jaffle_shop:order_to_store', kind: 'modeling_change', change: { operation: 'upsert_relationship', value: { id: 'order_to_store', domain: 'jaffle_shop', from: 'orders', to: 'stores', keys: [{ from: 'store_id', to: 'id' }], cardinality: 'many_to_many', fanout: 'forbidden', status: 'draft', validation: { status: 'failed', message: 'stores holds up to 2 rows for one key' } } } },
+        { id: 'warehouse:rule:jaffle_shop:order_repeats', kind: 'modeling_change', change: { operation: 'upsert_rule', value: { id: 'order_repeats', domain: 'jaffle_shop', expression: 'orders holds 12 rows for 10 distinct order_id: 2 rows repeat.', status: 'draft', evidence: { query: 'SELECT COUNT(*) FROM orders', measured: { rows: 12 } } } } },
+      ],
+    } as unknown as ContextAuthoringProposalV1;
+    const html = renderToStaticMarkup(<ContextProposalReviewDrawer proposal={drafted} theme={themes.paper} onClose={() => undefined} onCommitted={() => undefined} onDiscarded={() => undefined} />);
+    expect(html).toContain('2 tables to answer from · 1 look-alike to skip · 2 joins (1 passed) · 1 measured rule. 1 join needs a look before you keep it.');
+    for (const title of ['Tables to answer from', 'Look-alikes Ask will skip', 'Joins', 'Rules measured on the data', 'Other changes']) expect(html).toContain(`>${title}</strong>`);
+    expect(html).toContain('Use orders instead.');
+    expect(html).toContain('Passed');
+    expect(html).toContain('Needs a look');
+    expect(html).toContain('stores holds up to 2 rows for one key');
+    expect(html).toContain('The query that measured it');
+    expect(html).toContain('Accept all that passed');
+    // A new Domain reads in words, not as an operation name.
+    expect(html).not.toContain('upsert domain');
+  });
+
+  it('keeps the plain list for a proposal that drafts no tables or joins', () => {
+    const html = renderToStaticMarkup(<ContextProposalReviewDrawer proposal={{ ...firstRun, operations: firstRun.operations.slice(0, 2) }} theme={themes.paper} onClose={() => undefined} onCommitted={() => undefined} onDiscarded={() => undefined} />);
+    expect(html).not.toContain('Accept all that passed');
+    expect(html).not.toContain('Tables to answer from');
+  });
+});
+
 describe('the proposal review in plain words (new-user round 2, Q3)', () => {
   it('groups repeated notes into one plain line, keeping each one for the technical details', () => {
     const groups = groupProposalDiagnostics(firstRun.diagnostics, 'warehouse_discovery');

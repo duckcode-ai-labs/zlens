@@ -8,6 +8,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Review a drafted model by group ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **The Modeling page reviews a drafted model by group:**
+  - the tables to answer from;
+  - the look-alikes Ask will skip, with reasons;
+  - the joins, each marked passed, needs a look or not checked;
+  - the measured rules, with their queries;
+  - the concepts.
+
+  **Accept all that passed** saves everything except the joins that need a look, in one step.
+- **dbt-first projects can draft from the page:** "Draft the model".
+- **`zlens model draft` shows the same review in the terminal.** `--apply --passed-only` writes what passed.
+- **Fixed: Modeling could not read any model's columns or tests** in a dbt project configured outside the default
+  folders (`dbt.projectDir`). The manifest lookup now reads the project's settings.
+
 ### Discovery drafts names, concepts and rules from measured facts ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **The picked table of a group of look-alikes takes the plain name** (`local_player_game_facts` → "Player game").

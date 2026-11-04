@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import Database from 'better-sqlite3';
@@ -7,6 +7,8 @@ import { buildManifest, warehouseRelationId, type WarehouseCatalogRelationV1 } f
 import { QueryExecutor } from '@zlens/connectors';
 import { dbtModelSnapshot, dbtWarehouseNodes, dbtWarehouseScopes } from './dbt-model-discovery.js';
 import { applyProjectWarehouseDiscovery, discoverProjectDbtModel } from './local-runtime.js';
+import { runModel } from './commands/model.js';
+import type { CLIFlags } from './args.js';
 
 const model = (name: string, extra: Record<string, unknown> = {}) => ({
   resource_type: 'model', name, alias: name, schema: 'main', relation_name: `"main"."${name}"`,
@@ -59,8 +61,55 @@ describe('zlens model discover --validate in a dbt-first project', () => {
   const roots: string[] = [];
   const executors: QueryExecutor[] = [];
   afterEach(async () => {
+    vi.restoreAllMocks();
+    process.exitCode = undefined;
     for (const executor of executors.splice(0)) await executor.disconnect().catch(() => undefined);
     for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  const shop = () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-dbt-model-'));
+    roots.push(projectRoot);
+    const db = new Database(join(projectRoot, 'shop.sqlite'));
+    db.exec(`
+      CREATE TABLE customers (customer_id INTEGER, name TEXT);
+      CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER);
+      CREATE VIEW stg_orders AS SELECT order_id, customer_id, amount FROM orders;
+    `);
+    for (let customer = 1; customer <= 20; customer += 1) db.prepare('INSERT INTO customers VALUES (?, ?)').run(customer, `C${customer}`);
+    for (let order = 1; order <= 60; order += 1) db.prepare('INSERT INTO orders VALUES (?, ?, ?)').run(order, 1 + (order % 20), order * 3);
+    db.close();
+    mkdirSync(join(projectRoot, 'target'), { recursive: true });
+    writeFileSync(join(projectRoot, 'target', 'manifest.json'), JSON.stringify(MANIFEST));
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
+      project: 'shop', manifestVersion: 3, modeling: { mode: 'dbt-first' },
+      connections: { default: { driver: 'sqlite', filepath: './shop.sqlite' } },
+      dbt: { projectDir: '.', manifestPath: 'target/manifest.json' },
+    }));
+    return projectRoot;
+  };
+
+  it('zlens model draft shows the drafted model by group, and --apply --passed-only writes what passed', async () => {
+    const projectRoot = shop();
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { logs.push(String(line)); });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await runModel('draft', [projectRoot], {} as CLIFlags);
+    const text = logs.join('\n');
+    expect(text).toContain('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
+    expect(text).toContain('2 tables to answer from · 0 look-alikes to skip · 1 join (1 passed)');
+    // The staging view is left out by name, as discovery always has, and the review says so.
+    expect(text).toContain('Staging copies left out');
+    expect(text).toContain('main.stg_orders · same as main.orders');
+    expect(text).toMatch(/✓ order → customer on customer_id · many_to_one/);
+    expect(existsSync(join(projectRoot, 'domains'))).toBe(false);
+
+    logs.length = 0;
+    await runModel('draft', [projectRoot, '--passed-only'], { apply: true } as CLIFlags);
+    expect(logs.join('\n')).toContain('ZLens model draft apply');
+    const manifest = buildManifest({ projectRoot, dbtManifestPath: join(projectRoot, 'target', 'manifest.json') });
+    expect(manifest.diagnostics?.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(Object.values(manifest.modeling?.relationships ?? {}).every((relationship) => relationship.validation?.status === 'passed')).toBe(true);
   });
 
   it('drafts the model from dbt and the warehouse, binds it with dbt_model, and applies as a valid draft', async () => {

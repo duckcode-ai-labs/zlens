@@ -73,7 +73,7 @@ const SUBCOMMANDS = {
   app: { words: ['new', 'generate', 'ls', 'show', 'build', 'reindex', 'verify', 'key', 'diff', 'check'] },
   connect: { words: ['codex', 'claude-code', 'claude-desktop', 'cursor', 'all'] },
   sync: { words: ['dbt', 'warehouse'] },
-  model: { words: ['list', 'validate', 'discover', 'apply-discovery', 'import', 'explain', 'validate-relationship', 'reject-discovery', 'draft-meanings', 'meanings', 'draft-terms', 'draft-metrics'] },
+  model: { words: ['list', 'validate', 'discover', 'apply-discovery', 'draft', 'import', 'explain', 'validate-relationship', 'reject-discovery', 'draft-meanings', 'meanings', 'draft-terms', 'draft-metrics'] },
   schedule: { words: ['list', 'run', 'start', 'stop', 'status'] },
   promote: { words: ['notebook', 'app', 'dashboard'] },
   semantic: { words: ['list', 'validate', 'query', 'pull', 'import', 'sync', 'drafts', 'approve', 'discard'] },
