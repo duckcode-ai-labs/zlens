@@ -8,6 +8,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Discovery drafts names, concepts and rules from measured facts ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **The picked table of a group of look-alikes takes the plain name** (`local_player_game_facts` → "Player game").
+  Each drafted entity's description says what one row is, how many there are, and the period covered.
+- **A key several picked tables share, with no table of its own, becomes a concept** (a Player).
+- **`zlens model discover --validate` measures the traps on the picked tables** and writes each as a draft rule
+  with the query that measured it and what it returned:
+  - a flag that splits rows;
+  - a fixed few rows per key;
+  - repeated rows;
+  - a coded first character;
+  - whether a season number is its start year;
+  - short or partial periods.
+
+  The sentence is a template, so its numbers are the query's.
+- **Rules gain `status`, `entities` and `evidence`,** and a new `upsert_rule` modeling change writes them. Ask leaves
+  out a rule marked `status: deprecated`.
+- **On the NBA benchmark project the draft finds five of the hand-built model's six rules, and its Player concept.**
+
 ### dbt projects draft their model from the warehouse ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **`zlens model discover --validate` in a dbt-first project reads the warehouse too.**

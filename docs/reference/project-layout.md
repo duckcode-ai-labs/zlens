@@ -111,6 +111,11 @@ my-dql-project/
   why. `zlens model discover --validate` writes these (RFC 0012). Ask answers
   from the other table unless the question names this one. To confirm, mark
   the entity `status: deprecated`; to reject, remove `use_instead`.
+
+  A rule can say what measured it: `status`, the `entities` it is about, and
+  `evidence: { query, measured, checked_at }`. Discovery writes measured rules
+  this way, as drafts (RFC 0012). Ask leaves out a rule marked
+  `status: deprecated`.
 - **`blocks/`** — one `.dql` file per block. Governance fields (`domain`,
   `owner`) are required by default; the certification check runs on CI.
 - **`terms/`** — one `.dql` file per `term`. These define business vocabulary,

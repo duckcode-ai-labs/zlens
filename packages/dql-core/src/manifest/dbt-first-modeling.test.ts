@@ -167,6 +167,17 @@ describe('manifest v3 dbt-first modeling', () => {
     expect(manifest.diagnostics?.some((diagnostic) => diagnostic.severity === 'warning' && diagnostic.message === 'entity "lost" says to use "commerce::entity::nowhere" instead, and no entity has that id')).toBe(true);
   });
 
+  it('compiles a measured rule with its status, entities and the query that measured it (RFC 0012, P4)', () => {
+    const entities = join(projectRoot, 'domains', 'commerce', 'modeling', 'entities.dql.yaml');
+    writeFileSync(entities, `${readFileSync(entities, 'utf8')}rules:\n  - id: order_repeats\n    kind: custom\n    expression: fct_orders holds 12 rows for 10 distinct order_id.\n    status: draft\n    entities: [order]\n    evidence:\n      query: SELECT COUNT(*) AS row_count FROM fct_orders\n      measured: { rows: 12, distinct_keys: 10 }\n      checked_at: '2026-11-04T12:00:00.000Z'\n`);
+    const manifest = buildManifest({ projectRoot, dbtManifestPath });
+    expect(manifest.modeling?.rules['commerce::rule::order_repeats']).toMatchObject({
+      status: 'draft',
+      entities: ['commerce::entity::order'],
+      evidence: { query: 'SELECT COUNT(*) AS row_count FROM fct_orders', measured: { rows: 12, distinct_keys: 10 }, checkedAt: '2026-11-04T12:00:00.000Z' },
+    });
+  });
+
   it('preserves same-named blocks from separate domain packages in the canonical graph', () => {
     writeYaml(projectRoot, 'domains/commerce/blocks/executive_summary.dql', `block "Executive Summary" {
   status = "certified"

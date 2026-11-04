@@ -115,11 +115,11 @@ const SCHEMA_LAYER: Array<[RegExp, TableLayer]> = [
   [/^snapshots?$/i, 'snapshot'],
 ];
 /** dbt's snapshot bookkeeping: never part of what a row is. */
-const DBT_META_COLUMN = /^dbt_(scd_id|updated_at|valid_from|valid_to|is_deleted)$/i;
+export const DBT_META_COLUMN = /^dbt_(scd_id|updated_at|valid_from|valid_to|is_deleted)$/i;
 /** Columns named for a period: one row per season, per year, per day. */
 const PERIOD_NAME = /^(season|year|fiscal_year|month|week|quarter|period|date|day)(_id)?$|_(date|year|month|week|season|period)$/i;
 /** Coarse periods first: a season or year says what a table covers better than a date does. */
-const COARSE_PERIOD = /^(season|year|fiscal_year)(_id)?$|_(season|year)$/i;
+export const COARSE_PERIOD = /^(season|year|fiscal_year)(_id)?$|_(season|year)$/i;
 const TEXT_TYPE = /^(varchar|char|text|string|nvarchar|character)/i;
 const DATE_TYPE = /^date\b/i;
 /** Repeated rows a near identity may have: 0.5%. Above it, the columns are not what a row is. */
@@ -215,7 +215,7 @@ export function canonicalColumn(name: string, vocabulary: { shared: Set<string>;
   return bare !== lower && vocabulary.shared.has(bare) ? bare : lower;
 }
 
-function isPeriodColumn(column: { name: string; type?: string }): boolean {
+export function isPeriodColumn(column: { name: string; type?: string }): boolean {
   const type = column.type?.trim() ?? '';
   if (DATE_TYPE.test(type)) return true;
   return PERIOD_NAME.test(column.name) && !/^(double|float|real|decimal|numeric|bool|boolean|time|timestamp|datetime|interval)/i.test(type);
@@ -321,7 +321,7 @@ const tierSum = (set: string[], tierOf: Map<string, number>) => set.reduce((sum,
 const product = (set: string[], distinct: Map<string, number>) => set.reduce((total, column) => total * distinct.get(column)!, 1);
 
 /** The period a table covers, on its coarsest period column (a season before a date). */
-async function measurePeriod(relation: WarehouseCatalogRelationV1, column: string, run: Run, quote: (identifier: string) => string): Promise<PeriodCoverage | undefined> {
+export async function measurePeriod(relation: WarehouseCatalogRelationV1, column: string, run: Run, quote: (identifier: string) => string): Promise<PeriodCoverage | undefined> {
   const table = relation.relation.split('.').map(quote).join('.');
   const row = (await run(`SELECT MIN(${quote(column)}) AS lo, MAX(${quote(column)}) AS hi, COUNT(DISTINCT ${quote(column)}) AS n FROM ${table}`)).rows[0] ?? {};
   const value = (name: string) => {

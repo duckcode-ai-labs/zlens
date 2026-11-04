@@ -7,7 +7,7 @@
 | **Created** | 2026-11-04 |
 | **Targets** | The next ZLens release |
 | **Discussion** | — |
-| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse |
+| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity; dbt projects drafted from the warehouse. P3 and P4: names, descriptions and concepts, and rules measured on the data |
 | **Supersedes** | — |
 
 ## Summary
@@ -217,6 +217,66 @@ Without `--validate`, dbt discovery proposes Domains only, as before.
 
 The estimate-first budget that decision M4 names is not built yet. The flag is
 the opt-in until it is.
+
+### Names, descriptions and concepts (P3)
+
+- **Names.** The picked table of a group of look-alikes takes the plain name, without:
+  - layer prefixes (`stg_`, `src_`, `dim_`, `fct_`, `int_` …);
+  - a leading word three or more tables share that names no row identity (`local_` on NBA);
+  - layer suffixes (`_facts`, `_cleansed`, `_final` …).
+
+  So `local_player_game_facts` is `player_game`, "Player game". A look-alike holding that name gives it up and is
+  named after its table. Entities already in the model keep their ids, and the drafted joins are renamed with them
+  (`player_game_to_team_game`).
+- **Descriptions.** Each drafted entity's description comes from what was measured, after any warehouse comment:
+  - what one row is, with its repeats;
+  - how many rows;
+  - the season or date range it covers;
+  - for a pick, the look-alikes to answer from it rather than.
+
+  For example: "One row per game_id, player_id: 668,339 rows; season 2003–2022; answer from this table rather
+  than src_games_details, int_player_stats."
+- **Concepts.** A key that two or more picked tables carry in their row identity, with no picked table of one row
+  per key, is a concept. On NBA that is Player (`player_id` in player season and player game, and no players
+  table). It binds the pick with the fewest rows as canonical and the rest as conformed.
+
+The words come from templates over the measured facts, not from a model. Decision M1 allows AI for words. The
+templates keep every number exact and cost nothing, and the earlier NBA test found AI table descriptions added
+nothing to answers (34 → 33 of 40).
+
+### Rules measured on the data (P4)
+
+Rules are measured on the picked tables only: a look-alike's traps are why it was not picked. Each kind is one or
+two counting statements:
+
+| Rule | Measured | NBA |
+|---|---|---|
+| A true/false column whose smaller side is 1% to 35% of the rows | the true and false counts | 109,669 of 668,339 player-game rows have `participated = false` |
+| A fixed 2 to 4 rows for every value of one identity column | the minimum and maximum rows per value, and a flag true on exactly one | 2 team-game rows per `game_id`; `is_home = true` picks one |
+| A picked table whose identity repeats | rows and distinct keys | 29 games repeat in `src_games` |
+| A key whose values all have one length and whose first character takes 2 to 6 values | rows per first character | `game_id`'s first digit: 1, 2, 4, 5 |
+| A whole-number season or year whose dates run into the next year (or from the previous one) | the first and last date per period | season 2012 runs from 2012-10-06 to 2013-06-20 |
+| Periods holding under 90% of a typical period's rows | rows per period | 2011 holds 83%, 2022 holds 43% (through 2022-12-22) |
+
+- **Rules about a column:** measured once per column name, on the picked table with the most rows.
+- **What a rule holds.** It is written as `status: draft`, with the entities it is about and its evidence:
+  - the query;
+  - what it returned;
+  - when.
+
+  The sentence is a template, so each number in it is a number the query returned.
+- **What leaves the warehouse:**
+  - counts;
+  - period ranges;
+  - a flag's true or false;
+  - the first character of a code column, only where three or more rows share it (decision M7 and the #244
+    rule).
+- **Rules and concepts already in the model are not drafted again.** Ask leaves out a rule a person marked
+  `status: deprecated`.
+
+On NBA, P4 finds five of the hand model's six rules: the participation flag, the two team rows per game, the
+repeated games, the game type digit and the season start year. It also finds the short and partial seasons. It
+does not find that team attributes are a 2019 snapshot, which no count shows.
 
 ### Manifest
 

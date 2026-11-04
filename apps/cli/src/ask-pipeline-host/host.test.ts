@@ -1487,6 +1487,7 @@ describe('the SQL drafter reads the whole model', () => {
         'nba::rule::season_is_start_year': { id: 'nba::rule::season_is_start_year', localId: 'season_is_start_year', qualifiedId: 'nba::rule::season_is_start_year', domain: 'nba', kind: 'custom', expression: 'season is the year a season starts: 2017 means 2017-18.', sourcePath: 'domains/nba/modeling/model.dql.yaml' },
         'nba::rule::played_games_only': { id: 'nba::rule::played_games_only', localId: 'played_games_only', qualifiedId: 'nba::rule::played_games_only', domain: 'nba', kind: 'custom', expression: 'player_seasons counts only games played.', sourcePath: 'domains/nba/modeling/model.dql.yaml' },
         'other::rule::elsewhere': { id: 'other::rule::elsewhere', localId: 'elsewhere', qualifiedId: 'other::rule::elsewhere', domain: 'other', kind: 'custom', expression: 'A rule of another domain.', sourcePath: 'domains/other/modeling/model.dql.yaml' },
+        'nba::rule::rejected': { id: 'nba::rule::rejected', localId: 'rejected', qualifiedId: 'nba::rule::rejected', domain: 'nba', kind: 'custom', expression: 'A measured rule a person deprecated.', status: 'deprecated', sourcePath: 'domains/nba/modeling/model.dql.yaml' },
       },
     },
   };
@@ -1538,6 +1539,7 @@ describe('the SQL drafter reads the whole model', () => {
     expect(first.indexOf('- model rule played_games_only: player_seasons counts only games played.')).toBeGreaterThan(-1);
     expect(first.indexOf('- model rule played_games_only')).toBeLessThan(first.indexOf('- model rule season_is_start_year'));
     expect(first).not.toContain('A rule of another domain.');
+    expect(first).not.toContain('A measured rule a person deprecated.');
     expect(steps).toContain('left out as deprecated in the model: ins.legacy_journey');
   });
 

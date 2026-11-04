@@ -31,6 +31,7 @@ import {
 import { looksLikePlaceholder, profileRelationshipOnWarehouse, suggestRelationshipKeys } from '@zlens/agent';
 import type { LookAlikeGroup, RowIdentity, TableLayer, UseInstead } from './model-layers.js';
 import type { LookAlikeJoin } from './model-joins.js';
+import type { DiscoveredConcept, DiscoveredRule } from './model-profile.js';
 
 export type RelationshipEvidenceSource = 'declared_foreign_key' | 'view_join' | 'query_history' | 'row_identity' | 'shared_key' | 'named_for_table' | 'same_name';
 
@@ -157,6 +158,10 @@ export interface WarehouseDiscoveryReport {
   lookAlikes?: LookAlikeGroup[];
   /** Joins left out because one side is a look-alike: the pick's joins are drafted instead (validation only). */
   lookAlikeJoins?: LookAlikeJoin[];
+  /** Rules measured on the picked tables, each with its query (validation only, RFC 0012 P4). */
+  rules?: DiscoveredRule[];
+  /** Keys several picked tables share with no table of their own (validation only, RFC 0012 P3). */
+  concepts?: DiscoveredConcept[];
   validated: boolean;
   /** Opt-in query-history evidence: how much was read, or why it could not be. */
   queryHistory?: { statements: number; joins: number } | { error: string };
@@ -887,6 +892,13 @@ export function warehouseDiscoveryChanges(report: WarehouseDiscoveryReport, opti
         ...(relationship.validation ? { validation: relationship.validation } : {}),
       },
     });
+  }
+  // Concepts and rules drafted from measured facts (RFC 0012): drafts a person reviews.
+  for (const concept of report.concepts ?? []) {
+    changes.push({ operation: 'upsert_concept', value: { id: concept.id, domain: concept.domain, name: concept.name, description: concept.description, bindings: concept.bindings, status: 'draft', origin: 'ai_draft', ...(options.owner ? { owner: options.owner } : {}) } });
+  }
+  for (const rule of report.rules ?? []) {
+    changes.push({ operation: 'upsert_rule', value: { id: rule.id, domain: rule.domain, kind: rule.kind, expression: rule.expression, status: 'draft', entities: rule.entities, evidence: rule.evidence } });
   }
   return changes;
 }
