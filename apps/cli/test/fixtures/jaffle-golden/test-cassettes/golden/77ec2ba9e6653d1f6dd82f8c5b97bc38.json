@@ -1,0 +1,23 @@
+{
+  "key": "77ec2ba9e6653d1f6dd82f8c5b97bc38",
+  "operation": "generate",
+  "text": "NO_SQL: The listed columns have no region field (only location_name) and no churn status or inactivity window, so churn rate by region can't be computed without a definition of churn and a choice of geography.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:25:03.907Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "77ec2ba9e6653d1f6dd82f8c5b97bc389e13920b6280c55121ecca3d20eabb85",
+    "postCanonicalHash": "77ec2ba9e6653d1f6dd82f8c5b97bc389e13920b6280c55121ecca3d20eabb85",
+    "appliedRuleClasses": []
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "key": "2af2ea40167507a37177fcd18bc00dda",
+  "operation": "generate",
+  "text": "NO_SQL: No listed table or column holds weather data such as temperature or conditions; the only Chicago reference is a location name in the locations table.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:25:07.750Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "2af2ea40167507a37177fcd18bc00ddaab9983d605eae3aeff5c3df8b95d10e3",
+    "postCanonicalHash": "2af2ea40167507a37177fcd18bc00ddaab9983d605eae3aeff5c3df8b95d10e3",
+    "appliedRuleClasses": []
+  }
+}

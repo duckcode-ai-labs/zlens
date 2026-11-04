@@ -1,0 +1,23 @@
+{
+  "key": "5db917caed66e7dbececd09acf0c9431",
+  "operation": "generate",
+  "text": "SELECT customer_id, customer_name, lifetime_spend AS revenue\nFROM jaffle_shop.dev.customers\nORDER BY lifetime_spend DESC\nLIMIT 5",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:26.676Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "5db917caed66e7dbececd09acf0c943122e378ba7f296e501cf005a45ead346f",
+    "postCanonicalHash": "5db917caed66e7dbececd09acf0c943122e378ba7f296e501cf005a45ead346f",
+    "appliedRuleClasses": []
+  }
+}

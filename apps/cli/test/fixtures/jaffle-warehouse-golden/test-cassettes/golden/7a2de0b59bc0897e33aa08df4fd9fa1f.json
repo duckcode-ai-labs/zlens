@@ -1,0 +1,23 @@
+{
+  "key": "7a2de0b59bc0897e33aa08df4fd9fa1f",
+  "operation": "generate",
+  "text": "NO_SQL: The tables have no region column (only locations by location_name) and CONTEXT does not define churn rate, so neither the grouping nor the measure can be computed without inventing a definition.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:36.309Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "7a2de0b59bc0897e33aa08df4fd9fa1f6f91c46f860402e8f59b223accfa56e8",
+    "postCanonicalHash": "7a2de0b59bc0897e33aa08df4fd9fa1f6f91c46f860402e8f59b223accfa56e8",
+    "appliedRuleClasses": []
+  }
+}

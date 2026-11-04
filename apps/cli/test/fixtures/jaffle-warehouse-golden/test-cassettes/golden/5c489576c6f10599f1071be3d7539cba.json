@@ -1,0 +1,24 @@
+{
+  "key": "5c489576c6f10599f1071be3d7539cba",
+  "operation": "generate",
+  "text": "{\"version\":1,\"kind\":\"analytics\",\"reading\":\"Show customer \\\"Ryan byrd\\\"'s total revenue and, alongside it, his beverage revenue (product type beverage).\",\"measures\":[{\"ref\":\"column:dev.order_items.product_price\",\"aggregation\":\"sum\",\"alias\":\"total_revenue\"},{\"ref\":\"column:dev.order_items.product_price\",\"aggregation\":\"sum\",\"alias\":\"beverage_revenue\",\"scope\":[{\"ref\":\"column:dev.products.product_type\",\"op\":\"eq\",\"values\":[\"beverage\"],\"source\":\"question\"}]}],\"groupBy\":[],\"display\":[],\"filters\":[{\"ref\":\"column:dev.customers.customer_name\",\"op\":\"eq\",\"values\":[\"Ryan byrd\"],\"source\":\"question\"}],\"expectedShape\":\"comparison\",\"unresolved\":[],\"provenance\":{\"column:dev.order_items.product_price\":\"q:total revenue\",\"column:dev.products.product_type\":\"q:beverage revenue\",\"column:dev.customers.customer_name\":\"q:\\\"Ryan byrd\\\"\",\"column:dev.order_items.order_item_id\":\"removed:new subject, item count not asked\",\"column:dev.customers.customer_id\":\"removed:single named customer, no ranking\"}}",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:29:27.751Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 3,
+    "messageRoles": [
+      "system",
+      "user",
+      "user"
+    ],
+    "preCanonicalHash": "5c489576c6f10599f1071be3d7539cba3a4cc82de0bf028492cd698a6276ec2b",
+    "postCanonicalHash": "5c489576c6f10599f1071be3d7539cba3a4cc82de0bf028492cd698a6276ec2b",
+    "appliedRuleClasses": []
+  }
+}

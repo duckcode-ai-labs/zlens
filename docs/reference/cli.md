@@ -127,7 +127,7 @@ mark for recertification; otherwise it exits 0, including when there is no
 | `zlens model meanings [path]` | Count the tables that are drafted, reviewed, stale or undescribed |
 | `zlens model draft-terms [path] [--domain <id>]` | AI drafts of the words people use, as draft terms that count only once certified |
 | `zlens model draft-metrics [path] [--domain <id>]` | Metric drafts from the aggregates recent queries repeat, each run once on the warehouse (Snowflake, PostgreSQL with `pg_stat_statements`, Databricks, BigQuery) |
-| `zlens model explain <id> [path]` | Explain whether a relationship has automatic-join proof |
+| `zlens model explain <id> [path]` | Explain whether a relationship has automatic-join proof. `<id>` is the id `zlens model list` prints, or its short id when only one domain uses it |
 | `zlens model validate-relationship <id>\|--all [path] [--certify] [--dry-run]` | Check authored relationships on the warehouse (the Modeling page's Validate) and record the evidence |
 | `zlens model reject-discovery <id> [path] [--reason <text>]` | Stop warehouse discovery proposing a join a reviewer turned down |
 | `zlens lineage [block] [path]` | Answer-layer lineage analysis |

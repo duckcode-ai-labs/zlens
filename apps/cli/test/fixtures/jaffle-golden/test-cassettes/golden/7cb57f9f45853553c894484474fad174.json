@@ -1,0 +1,23 @@
+{
+  "key": "7cb57f9f45853553c894484474fad174",
+  "operation": "generate",
+  "text": "SELECT customer_id, customer_name, lifetime_spend FROM dev.customers ORDER BY lifetime_spend DESC, customer_name LIMIT 10",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:05.915Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "7cb57f9f45853553c894484474fad1746147937a5f30d6ab32132c3b5f1b0da2",
+    "postCanonicalHash": "7cb57f9f45853553c894484474fad1746147937a5f30d6ab32132c3b5f1b0da2",
+    "appliedRuleClasses": []
+  }
+}

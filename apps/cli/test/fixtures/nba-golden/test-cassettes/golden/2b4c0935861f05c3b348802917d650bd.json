@@ -1,0 +1,23 @@
+{
+  "key": "2b4c0935861f05c3b348802917d650bd",
+  "operation": "generate",
+  "text": "SELECT player_id, player_name, SUM(ast) * 1.0 / NULLIF(SUM(turnover), 0) AS ast_to_tov_ratio, COUNT(*) AS games_played\nFROM \"nba_golden\".\"dev\".\"player_game_stats\"\nWHERE played = 1 AND game_date >= '2017-01-01' AND game_date < '2018-01-01'\nGROUP BY player_id, player_name\nHAVING COUNT(*) >= 20 AND SUM(turnover) > 0\nORDER BY ast_to_tov_ratio DESC\nLIMIT 10",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:25:10.955Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "2b4c0935861f05c3b348802917d650bdfb9490840f189ee4d390cb363cf31a88",
+    "postCanonicalHash": "2b4c0935861f05c3b348802917d650bdfb9490840f189ee4d390cb363cf31a88",
+    "appliedRuleClasses": []
+  }
+}

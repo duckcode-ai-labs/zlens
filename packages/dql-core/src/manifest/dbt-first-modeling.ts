@@ -40,9 +40,16 @@ import type { ManifestModelingMode } from './types.js';
 
 type UnknownRecord = Record<string, unknown>;
 
+/** The dbt resources an entity can bind: every one dbt builds or reads as a table. */
+export function dbtBindableKind(value: unknown): 'model' | 'source' | 'snapshot' | 'seed' | undefined {
+  return value === 'model' || value === 'source' || value === 'snapshot' || value === 'seed' ? value : undefined;
+}
+
 interface DbtNodeFacts {
   uniqueId: string;
-  resourceType: 'model' | 'source' | 'warehouse';
+  resourceType: 'model' | 'source' | 'snapshot' | 'seed' | 'warehouse';
+  /** A snapshot or seed joins the provenance only when an entity binds it, so a project that binds none reads as before. */
+  provenanceWhenBound?: ManifestDbtNodeProvenance;
   name: string;
   packageName?: string;
   relation?: string;
@@ -267,7 +274,7 @@ function readDbtNodeFacts(
 
   for (const [uniqueId, node] of [...Object.entries(rawNodes), ...Object.entries(rawSources)]) {
     const raw = asRecord(node);
-    const resourceType = raw.resource_type === 'model' ? 'model' : raw.resource_type === 'source' ? 'source' : undefined;
+    const resourceType = dbtBindableKind(raw.resource_type);
     if (!resourceType) continue;
 
     const name = stringValue(raw.alias) ?? stringValue(raw.identifier) ?? stringValue(raw.name);
@@ -310,7 +317,7 @@ function readDbtNodeFacts(
       knownColumns,
       columnsComplete: catalogColumns.length > 0,
     });
-    nodeProvenance[uniqueId] = {
+    const nodeRecord: ManifestDbtNodeProvenance = {
       uniqueId,
       resourceType,
       name,
@@ -326,6 +333,8 @@ function readDbtNodeFacts(
         dqlMeta: Object.keys(dqlMeta).length > 0,
       },
     };
+    if (resourceType === 'snapshot' || resourceType === 'seed') nodeFacts.get(uniqueId)!.provenanceWhenBound = nodeRecord;
+    else nodeProvenance[uniqueId] = nodeRecord;
   }
 
   const metricFlow = collectMetricFlowProvenance(rawManifest, rawSemantic);
@@ -433,10 +442,13 @@ function compileModeling(
       }
       if (!dbtUniqueId) continue;
       const dbt = nodeFacts.get(dbtUniqueId);
-      if (!dbt || (dbt.resourceType !== 'model' && dbt.resourceType !== 'warehouse')) {
+      // A model, and also a raw source, snapshot or seed: an entity can mark
+      // a raw or history table deprecated, so Ask leaves it out.
+      if (!dbt) {
         diagnostics.push(modelingError(relPath, `entity "${id}" references unknown dbt model "${dbtUniqueId}"`));
         continue;
       }
+      if (dbt.provenanceWhenBound && !provenance.nodes[dbtUniqueId]) provenance.nodes[dbtUniqueId] = dbt.provenanceWhenBound;
       const explicitGrain = stringValue(rawEntity.grain);
       const explicitKeys = stringArray(rawEntity.keys);
       const grain = explicitGrain ?? dbt.grain;

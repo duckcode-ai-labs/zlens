@@ -1,0 +1,23 @@
+{
+  "key": "c5c7b00fa40752d2d5566bee6e9bab34",
+  "operation": "generate",
+  "text": "SELECT player_id, player_name, COUNT(*) AS double_doubles\nFROM \"nba_golden\".\"dev\".\"player_game_stats\"\nWHERE game_date >= '2017-01-01' AND game_date < '2018-01-01'\n  AND played = 1\n  AND ((pts >= 10) + (reb >= 10) + (ast >= 10) + (stl >= 10) + (blk >= 10)) >= 2\nGROUP BY player_id, player_name\nORDER BY double_doubles DESC, player_name ASC\nLIMIT 10",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:21.050Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "c5c7b00fa40752d2d5566bee6e9bab3449721b07566ae879e03de377ba8f4048",
+    "postCanonicalHash": "c5c7b00fa40752d2d5566bee6e9bab3449721b07566ae879e03de377ba8f4048",
+    "appliedRuleClasses": []
+  }
+}

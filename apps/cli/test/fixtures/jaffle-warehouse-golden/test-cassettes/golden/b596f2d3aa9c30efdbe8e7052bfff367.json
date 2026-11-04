@@ -1,0 +1,23 @@
+{
+  "key": "b596f2d3aa9c30efdbe8e7052bfff367",
+  "operation": "generate",
+  "text": "NO_SQL: The listed tables hold only Jaffle Shop orders, customers, products, supplies and locations, with no weather column, so the weather in Chicago cannot be answered.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:27:06.715Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "b596f2d3aa9c30efdbe8e7052bfff367326154c43df4c100ac5340fef398415d",
+    "postCanonicalHash": "b596f2d3aa9c30efdbe8e7052bfff367326154c43df4c100ac5340fef398415d",
+    "appliedRuleClasses": []
+  }
+}

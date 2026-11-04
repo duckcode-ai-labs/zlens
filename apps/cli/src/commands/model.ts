@@ -13,7 +13,7 @@ import {
   type DomainProposal,
 } from '@zlens/core';
 import type { CLIFlags } from '../args.js';
-import { draftProjectMetricsFromHistory, meaningDraftProvider, rejectDiscoveredRelationship, startLocalServer, termDirectoryFor, validateProjectRelationships } from '../local-runtime.js';
+import { draftProjectMetricsFromHistory, findModeledRelationship, meaningDraftProvider, rejectDiscoveredRelationship, startLocalServer, termDirectoryFor, validateProjectRelationships } from '../local-runtime.js';
 import { draftMeanings, meaningsStatus, planMeaningDrafts, plannedWithoutColumnList } from '../meaning-draft.js';
 import { meaningCatalog } from '../meaning-routes.js';
 import { draftTerms } from '../term-draft.js';
@@ -99,9 +99,17 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
       process.exitCode = 1;
       return;
     }
-    const relationship = manifest.modeling.relationships[relationshipId];
+    // The id `zlens model list` prints, or the local id when only one domain uses it.
+    let relationship: ReturnType<typeof findModeledRelationship>;
+    try {
+      relationship = findModeledRelationship(manifest, relationshipId);
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+      return;
+    }
     if (!relationship) {
-      console.error(`No relationship named "${relationshipId}".`);
+      console.error(`No relationship named "${relationshipId}". \`zlens model list\` shows their ids.`);
       process.exitCode = 1;
       return;
     }

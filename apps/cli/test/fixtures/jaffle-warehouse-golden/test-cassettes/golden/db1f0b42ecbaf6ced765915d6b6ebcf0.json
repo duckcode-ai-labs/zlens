@@ -1,0 +1,23 @@
+{
+  "key": "db1f0b42ecbaf6ced765915d6b6ebcf0",
+  "operation": "generate",
+  "text": "NO_SQL: The question \"hi\" is a greeting and does not ask for any measure, grouping, or data from the listed tables.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:26:49.930Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "db1f0b42ecbaf6ced765915d6b6ebcf06f92f6f0ccd8ec6e559f37d103064638",
+    "postCanonicalHash": "db1f0b42ecbaf6ced765915d6b6ebcf06f92f6f0ccd8ec6e559f37d103064638",
+    "appliedRuleClasses": []
+  }
+}

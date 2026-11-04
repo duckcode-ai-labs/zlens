@@ -1,0 +1,23 @@
+{
+  "key": "fd68c37b190b2df637d5ec103e3c7ea4",
+  "operation": "generate",
+  "text": "NO_SQL: No listed table or column holds ticket sales or revenue data; the project only contains NBA game statistics such as points, rebounds, assists, and shooting.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T15:24:48.864Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "fd68c37b190b2df637d5ec103e3c7ea4b8df298e9f3d58d1350143d30b127799",
+    "postCanonicalHash": "fd68c37b190b2df637d5ec103e3c7ea4b8df298e9f3d58d1350143d30b127799",
+    "appliedRuleClasses": []
+  }
+}

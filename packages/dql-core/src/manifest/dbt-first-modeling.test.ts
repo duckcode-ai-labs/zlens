@@ -133,6 +133,26 @@ describe('manifest v3 dbt-first modeling', () => {
     expect(manifest.modeling?.relationships['growth::relationship::acquisition_to_customer'].to).toBe('commerce::entity::customer');
   });
 
+  it('binds an entity to a dbt source, snapshot or seed, so a raw or history table can be marked deprecated', () => {
+    const raw = JSON.parse(requireManifest(dbtManifestPath)) as Record<string, any>;
+    raw.sources['source.commerce.raw.raw_orders'] = { resource_type: 'source', name: 'raw_orders', identifier: 'raw_orders', relation_name: 'raw.raw_orders', columns: {} };
+    raw.nodes['snapshot.commerce.scd_customers'] = { resource_type: 'snapshot', name: 'scd_customers', relation_name: 'snapshots.scd_customers', original_file_path: 'snapshots/scd_customers.sql', columns: {} };
+    raw.nodes['seed.commerce.country_codes'] = { resource_type: 'seed', name: 'country_codes', relation_name: 'seeds.country_codes', original_file_path: 'seeds/country_codes.csv', columns: {} };
+    raw.nodes['test.commerce.not_a_table'] = { resource_type: 'test', name: 'not_a_table', columns: {} };
+    writeFileSync(dbtManifestPath, JSON.stringify(raw));
+    const entities = join(projectRoot, 'domains', 'commerce', 'modeling', 'entities.dql.yaml');
+    writeFileSync(entities, `${readFileSync(entities, 'utf8')}  - id: raw_order\n    dbt_model: source.commerce.raw.raw_orders\n    status: deprecated\n  - id: customer_history\n    dbt_model: snapshot.commerce.scd_customers\n    status: deprecated\n  - id: country\n    dbt_model: seed.commerce.country_codes\n  - id: not_a_table\n    dbt_model: test.commerce.not_a_table\n`);
+
+    const manifest = buildManifest({ projectRoot, dbtManifestPath });
+
+    expect(manifest.modeling?.entities['commerce::entity::raw_order']).toMatchObject({ dbtUniqueId: 'source.commerce.raw.raw_orders', status: 'deprecated' });
+    expect(manifest.modeling?.entities['commerce::entity::customer_history']).toMatchObject({ dbtUniqueId: 'snapshot.commerce.scd_customers', status: 'deprecated' });
+    expect(manifest.dbtProvenance?.nodes['snapshot.commerce.scd_customers']).toMatchObject({ resourceType: 'snapshot', relation: 'snapshots.scd_customers' });
+    expect(manifest.modeling?.entities['commerce::entity::country']).toMatchObject({ dbtUniqueId: 'seed.commerce.country_codes' });
+    expect(manifest.modeling?.entities['commerce::entity::not_a_table']).toBeUndefined();
+    expect(manifest.diagnostics?.some((diagnostic) => diagnostic.message.includes('entity "not_a_table" references unknown dbt model "test.commerce.not_a_table"'))).toBe(true);
+  });
+
   it('preserves same-named blocks from separate domain packages in the canonical graph', () => {
     writeYaml(projectRoot, 'domains/commerce/blocks/executive_summary.dql', `block "Executive Summary" {
   status = "certified"

@@ -97,7 +97,14 @@ my-dql-project/
   `interfaces/`, `evaluations/`, and `tests/`.
 - **`domains/<domain>/modeling/`** — sparse analytical identity, relationship
   proof, cross-domain interfaces, contracts, conformance, and saved layouts.
-  It references dbt unique IDs and never copies dbt schema metadata.
+  It references dbt unique IDs and never copies dbt schema metadata. An entity
+  binds a dbt model, source, snapshot or seed (`dbt_model:`). Ask reads what
+  the model says when it writes SQL:
+  - an entity's grain and business context;
+  - the domain's rules (`rules:`).
+
+  It leaves out a table whose entity is `status: deprecated`, unless the
+  question names that table.
 - **`blocks/`** — one `.dql` file per block. Governance fields (`domain`,
   `owner`) are required by default; the certification check runs on CI.
 - **`terms/`** — one `.dql` file per `term`. These define business vocabulary,

@@ -1102,8 +1102,9 @@ export interface ManifestDbtNodeProvenance {
    * `warehouse` marks a relation read from the warehouse catalog, not from
    * dbt: the table a warehouse-first entity binds to. Every reader that
    * resolves `nodes[entity.dbtUniqueId].relation` works for it unchanged.
+   * A dbt snapshot or seed is read as a table like a model.
    */
-  resourceType: 'model' | 'source' | 'warehouse';
+  resourceType: 'model' | 'source' | 'snapshot' | 'seed' | 'warehouse';
   name: string;
   packageName?: string;
   relation?: string;
