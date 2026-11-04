@@ -7,7 +7,7 @@
 | **Created** | 2026-11-04 |
 | **Targets** | The next ZLens release |
 | **Discussion** | — |
-| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains |
+| **Implementation** | P1: layers, row identity, table picks, layer folders never Domains. P2: joins drafted from row identity |
 | **Supersedes** | — |
 
 ## Summary
@@ -145,6 +145,47 @@ three of these hold:
 On NBA, a 2009–2019 roster of (player, team, season) points at player game
 lines for 2003–2022.
 
+### Joins drafted from row identity (P2)
+
+A join is a table that carries another table's row identity. Every kept table
+(not a look-alike) is checked against every kept table whose identity holds a
+key and repeats on at most 0.5% of its rows. For each identity column, the
+referencing table's matching column is one of these:
+
+- **the same name, once made comparable:**
+  - `game_id` for `game_id`;
+  - `details_game_id` for `game_id`;
+  - `season` for a season table's `season_id`;
+- **a role:** a prefix that names no table, such as `opponent_team_id` or
+  `home_team_id` for `team_id`.
+
+Rules for what is drafted:
+
+- **One role per join.**
+- **A role inside a key of several columns is drafted only on the table
+  itself:** the opponent's line of the same game. Elsewhere it is a second way
+  to rows the same names already reach.
+- **A table's own identity on itself is no join.**
+
+Each candidate is checked with the statement the Modeling page's Validate
+runs.
+
+- **Drafted:** a candidate where at most 5% of the referencing rows with a key
+  find no row, and the misses are not one placeholder value. The proposed
+  cardinality and fanout come from the same statement.
+- **The evidence:** it says what the target is one row per, and how many
+  referencing rows found their key ("668,338 of 668,339 local_player_game_facts
+  rows find their game_id, team_id there").
+- **An existing join:** a candidate already drafted from a name gains this
+  evidence. If it was never checked, it also takes the check's result.
+
+A drafted join that touches a look-alike is left out and listed. The pick's
+own joins are drafted instead.
+
+On DuckDB and SQLite every view is read, including the existing name and key
+checks. Elsewhere, a view that joins or aggregates waits for a person, as
+before.
+
 ### Manifest
 
 An entity gains an optional field:
@@ -210,9 +251,17 @@ benchmark repository.
 | Tables picked right, of 8 | 0 | 8 |
 | Legacy tables flagged, of 7 | 0 | 7 (6 by picks, 1 left out as a staging copy) |
 | Row identities right, of 15 | 1 | 14 |
-| Joins found, of 17 | 0 | 0 (P2) |
+| Joins found, of 17 | 0 | 17 (P2) |
+| Joins drafted the hand model does not have | 25 | 5 (P2) |
 
 The whole validated discovery reads 26 relations in about a second on DuckDB.
+
+The 5 joins the hand model does not have are real references:
+- player game line → team season;
+- player game line → game;
+- the 2016 player bio table → team, season and team season.
+
+The stop rule (at least 12 of 17 joins and 6 of 8 picks after P2) passes.
 
 ## Alternatives considered
 

@@ -30,8 +30,9 @@ import {
 } from '@zlens/core';
 import { looksLikePlaceholder, profileRelationshipOnWarehouse, suggestRelationshipKeys } from '@zlens/agent';
 import type { LookAlikeGroup, RowIdentity, TableLayer, UseInstead } from './model-layers.js';
+import type { LookAlikeJoin } from './model-joins.js';
 
-export type RelationshipEvidenceSource = 'declared_foreign_key' | 'view_join' | 'query_history' | 'shared_key' | 'named_for_table' | 'same_name';
+export type RelationshipEvidenceSource = 'declared_foreign_key' | 'view_join' | 'query_history' | 'row_identity' | 'shared_key' | 'named_for_table' | 'same_name';
 
 /** A join seen in the warehouse's recent query history, and how often. */
 export interface ObservedJoin {
@@ -154,12 +155,14 @@ export interface WarehouseDiscoveryReport {
   withheld?: WithheldRelationship[];
   /** Tables that hold the same rows, the one proposed to answer from, and why not the others (validation only). */
   lookAlikes?: LookAlikeGroup[];
+  /** Joins left out because one side is a look-alike: the pick's joins are drafted instead (validation only). */
+  lookAlikeJoins?: LookAlikeJoin[];
   validated: boolean;
   /** Opt-in query-history evidence: how much was read, or why it could not be. */
   queryHistory?: { statements: number; joins: number } | { error: string };
 }
 
-const EVIDENCE_ORDER: RelationshipEvidenceSource[] = ['declared_foreign_key', 'view_join', 'query_history', 'shared_key', 'named_for_table', 'same_name'];
+const EVIDENCE_ORDER: RelationshipEvidenceSource[] = ['declared_foreign_key', 'view_join', 'query_history', 'row_identity', 'shared_key', 'named_for_table', 'same_name'];
 /** Column types that are never join keys: measures, flags and timestamps. */
 export const NON_KEY_TYPE = /^(double|float|real|decimal|numeric|money|bool|boolean|date|time|timestamp|datetime|interval|json|jsonb|blob|bytea|array|struct|map)/i;
 /** A column named like a key: `id`, `<thing>_id`, `_key`, `_code`, `_uuid`, `_ref`, `_number`, `_no`. */
@@ -717,14 +720,19 @@ export async function validateWarehouseDiscovery(
   snapshot: WarehouseCatalogSnapshotV1,
   execute: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>,
   quote: (identifier: string) => string,
-  options: { maxRelationships?: number; dialect?: string } = {},
+  options: {
+    maxRelationships?: number;
+    dialect?: string;
+    /** Which relations the checks may read; default: tables and views that only project one relation. */
+    readable?: (relation: WarehouseCatalogRelationV1) => boolean;
+  } = {},
 ): Promise<WarehouseDiscoveryReport> {
   // Joins the data proves come first, then every draft is checked the same way.
   report = await inferSharedKeyJoins(report, snapshot, execute, quote);
   const typesOf = new Map(snapshot.relations.map((relation) => [relation.relation, new Map(relation.columns.map((column) => [column.name.toLowerCase(), column.type?.toLowerCase()]))]));
   const quoteRelation = (relation: string) => relation.split('.').map(quote).join('.');
   const relationById = new Map(snapshot.relations.map((relation) => [relation.relation, relation]));
-  const cheap = (relation: string) => { const found = relationById.get(relation); return found ? cheapToRead(found) : false; };
+  const cheap = (relation: string) => { const found = relationById.get(relation); return found ? (options.readable ?? cheapToRead)(found) : false; };
   const entities: DiscoveredEntity[] = [];
   for (const entity of report.entities) {
     // The naming-convention key first, then the table's other identity
@@ -787,7 +795,7 @@ export async function validateWarehouseDiscovery(
  *   but the joined rows disagree on the other references both tables carry.
  * Aggregates only.
  */
-async function nameOnlyObjection(
+export async function nameOnlyObjection(
   relationship: DiscoveredRelationship,
   columnsOf: Map<string, WarehouseCatalogRelationV1['columns']>,
   execute: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>,
