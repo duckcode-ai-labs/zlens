@@ -8,6 +8,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Ask reads the whole business model ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **A project with a business model of up to 30 tables to answer from shows every one of them to Ask's SQL
+  writer,** not a few chosen by search. On fresh NBA questions, the right table had reached it on 23 of 40.
+- **Discovery measures two more facts:**
+  - a summary table that adds up every row of a detail table, every code included ("season totals add up
+    every game type; for one, sum the game rows");
+  - the code values whose rows fall in the calendar year after their season ("the 2016 playoffs are season
+    2015").
+- **Ask shows up to 12 model rules of up to 800 characters each** (was 8 and 500).
+
 ### Review a drafted model by group ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **The Modeling page reviews a drafted model by group:**

@@ -50,12 +50,11 @@ function league() {
   }
   // Two games appear twice in the raw games.
   db.exec('INSERT INTO src_games SELECT * FROM src_games WHERE rowid <= 2');
-  for (let season = 2003; season <= 2010; season += 1) {
-    for (const player of [11, 12, 13, 21, 22, 23]) {
-      db.prepare('INSERT INTO local_player_season_facts VALUES (?, ?, ?)').run(player, season, 100);
-      if (season >= 2006 && season <= 2008) db.prepare('INSERT INTO int_season_stats VALUES (?, ?, ?)').run(player, season, 100);
-    }
-  }
+  // Season totals add up every game, every game type included.
+  db.exec(`
+    INSERT INTO local_player_season_facts SELECT player_id, season, SUM(points) FROM local_player_game_facts GROUP BY player_id, season;
+    INSERT INTO int_season_stats SELECT player_id, season, total_points FROM local_player_season_facts WHERE season BETWEEN 2006 AND 2008;
+  `);
   const snapshot = normalizeWarehouseCatalog({
     version: 1,
     driver: 'sqlite',
@@ -106,7 +105,7 @@ describe('names, concepts and rules drafted from measured facts (RFC 0012, P3 an
   it('writes the traps as rules whose numbers are what the saved queries returned', async () => {
     const report = await draft();
     const rule = (id: string) => report.rules!.find((item) => item.id === id)!;
-    expect(report.rules!.map((item) => item.id).sort()).toEqual(['game_id_first_character', 'game_repeats', 'player_game_participated', 'season_is_start_year', 'season_short_periods', 'team_game_rows_per_game_id']);
+    expect(report.rules!.map((item) => item.id).sort()).toEqual(['game_id_first_character', 'game_repeats', 'player_game_participated', 'player_season_sums_every_game_id', 'season_is_start_year', 'season_short_periods', 'team_game_rows_per_game_id']);
 
     expect(rule('player_game_participated')).toMatchObject({
       kind: 'custom',
@@ -121,7 +120,15 @@ describe('names, concepts and rules drafted from measured facts (RFC 0012, P3 an
     });
     expect(rule('game_repeats').expression).toBe('src_games holds 442 rows for 440 distinct game_id: 2 rows repeat. Count with COUNT(DISTINCT game_id), or answer from a table that holds one row per key.');
     expect(rule('game_id_first_character').expression).toBe('Every game_id in local_player_game_facts has 8 characters, and the first one takes 3 values: 1 (240 rows), 2 (2,190 rows), 4 (210 rows). The first character is a code, such as a type: filter on it with CAST(game_id AS VARCHAR) LIKE \'2%\'.');
-    expect(rule('season_is_start_year').expression).toMatch(/^season is the year a season starts: in local_player_game_facts, season \d{4} runs from \d{4}-11-\d\d to \d{4}-03-\d\d \(7 of 8 seasons span two calendar years this way\)\.$/);
+    expect(rule('season_is_start_year').expression).toMatch(/^season is the year a season starts: in local_player_game_facts, season \d{4} runs from \d{4}-11-\d\d to \d{4}-03-\d\d \(7 of 8 seasons span two calendar years this way\)\./);
+    // The playoff rows (game id 4…) all fall in the next calendar year (RFC 0012, F2).
+    expect(rule('season_is_start_year').expression).toContain('Rows whose game_id starts with 4 (210 rows) all fall in the calendar year after their season (season 2006\'s 4 rows run 2007-03-01 to 2007-03-05): for those rows, calendar year Y is season Y − 1, so the 4 rows of 2007 are season 2006.');
+    // Season totals add up every game type: for one, sum the game rows (F2).
+    expect(rule('player_season_sums_every_game_id')).toMatchObject({
+      entities: ['player_season', 'player_game'],
+      expression: 'local_player_season_facts adds up every row of local_player_game_facts, every first character of game_id included: total_points totals 26,400, as points does in local_player_game_facts. For one kind (one first character of game_id), sum local_player_game_facts filtered on it: CAST(game_id AS VARCHAR) LIKE \'2%\' gives 21,900.',
+      evidence: { measured: { summary_total: 26400, detail_total: 26400, first_2_total: 21900 } },
+    });
     expect(rule('season_short_periods').expression).toBe('In local_player_game_facts, a typical season holds 360 rows (8 seasons, 2003–2010); 2010 holds 33% (the latest, through 2010-11-21). Compare those seasons with care.');
   });
 

@@ -129,8 +129,10 @@ export async function draftWordsAndRules(
   for (const item of picked) await safely(() => flagRules(item, run, quote, add));
   for (const item of picked) await safely(() => rowsPerKeyRule(item, run, quote, add));
   for (const item of picked) await safely(() => repeatRule(item, run, quote, add));
-  await safely(() => codeRules(picked, snapshot, run, quote, add));
-  await safely(() => periodRules(picked, run, quote, add));
+  const codes: CodeColumn[] = [];
+  await safely(() => codeRules(picked, snapshot, run, quote, add, codes));
+  await safely(() => periodRules(picked, run, quote, add, codes));
+  await safely(() => builtFromRules(picked, snapshot, codes, run, quote, add));
   const periods = new Map<string, { column: string; min: string; max: string }>();
   for (const item of picked) {
     const coverage = await safely(() => coverageOf(item, run, quote));
@@ -384,7 +386,16 @@ async function repeatRule(item: Picked, run: Run, quote: (identifier: string) =>
  * type). Measured once per column name, on the picked table with the most
  * rows. A character is named only where three or more rows share it.
  */
-async function codeRules(picked: Picked[], snapshot: WarehouseCatalogSnapshotV1, run: Run, quote: (identifier: string) => string, add: AddRule): Promise<void> {
+/** A key column whose first character is a code, as `codeRules` found it. */
+interface CodeColumn {
+  /** The column's comparable name: every picked table with it shares the code. */
+  canonical: string;
+  /** The character on the most rows (the regular season). */
+  largest: string;
+  groups: Array<{ first: string; rows: number }>;
+}
+
+async function codeRules(picked: Picked[], snapshot: WarehouseCatalogSnapshotV1, run: Run, quote: (identifier: string) => string, add: AddRule, codes: CodeColumn[] = []): Promise<void> {
   const vocabulary = columnVocabulary(snapshot.relations);
   const seen = new Set<string>();
   const byRows = [...picked].sort((a, b) => (b.entity.identity?.rows ?? 0) - (a.entity.identity?.rows ?? 0));
@@ -404,6 +415,7 @@ async function codeRules(picked: Picked[], snapshot: WarehouseCatalogSnapshotV1,
       if (distinct < 20) continue;
       const groups = rows.map((row) => ({ first: String(value(row, 'first_char')), rows: num(row, 'n') }));
       const largest = [...groups].sort((a, b) => b.rows - a.rows)[0]!;
+      codes.push({ canonical, largest: largest.first, groups });
       add({
         id: slug(`${canonical}_first_character`),
         domain: item.entity.domain,
@@ -424,7 +436,7 @@ async function codeRules(picked: Picked[], snapshot: WarehouseCatalogSnapshotV1,
  * is the year a period starts (2017 runs into 2018) or ends, and periods with
  * under 90% of a typical period's rows are short or partial.
  */
-async function periodRules(picked: Picked[], run: Run, quote: (identifier: string) => string, add: AddRule): Promise<void> {
+async function periodRules(picked: Picked[], run: Run, quote: (identifier: string) => string, add: AddRule, codes: CodeColumn[] = []): Promise<void> {
   const seen = new Set<string>();
   const byRows = [...picked].sort((a, b) => (b.entity.identity?.rows ?? 0) - (a.entity.identity?.rows ?? 0));
   for (const item of byRows) {
@@ -449,14 +461,17 @@ async function periodRules(picked: Picked[], run: Run, quote: (identifier: strin
       for (const kind of ['starts', 'ends'] as const) {
         if (kinds.filter((item) => item === kind).length < rows.length * 0.6) continue;
         const example = rows.filter((_, index) => kinds[index] === kind)[Math.floor(kinds.filter((item) => item === kind).length / 2)]!;
+        // Which coded rows (a game type) all fall in the other calendar year:
+        // the playoffs of spring 2016 belong to season 2015.
+        const shifted = kind === 'starts' ? await shiftedCodes(item, period.name, date.name, example.period, codes, run, quote) : undefined;
         add({
           id: slug(`${label}_is_${kind === 'starts' ? 'start' : 'end'}_year`),
           domain: item.entity.domain,
           kind: 'custom',
-          expression: `${period.name} is the year a ${label} ${kind}: in ${item.table}, ${period.name} ${example.period} runs from ${example.first} to ${example.last} (${kinds.filter((value) => value === kind).length} of ${rows.length} ${label}s span two calendar years this way).`,
+          expression: `${period.name} is the year a ${label} ${kind}: in ${item.table}, ${period.name} ${example.period} runs from ${example.first} to ${example.last} (${kinds.filter((value) => value === kind).length} of ${rows.length} ${label}s span two calendar years this way).${shifted?.text ?? ''}`,
           entities: [item.entity.id],
-          query,
-          measured: { periods: rows.length, [kind]: kinds.filter((value) => value === kind).length, [`example_${example.period}_first`]: example.first ?? '', [`example_${example.period}_last`]: example.last ?? '' },
+          query: shifted ? `${query};\n${shifted.query}` : query,
+          measured: { periods: rows.length, [kind]: kinds.filter((value) => value === kind).length, [`example_${example.period}_first`]: example.first ?? '', [`example_${example.period}_last`]: example.last ?? '', ...(shifted?.measured ?? {}) },
         });
       }
     }
@@ -474,6 +489,96 @@ async function periodRules(picked: Picked[], run: Run, quote: (identifier: strin
       query,
       measured: Object.fromEntries([['typical_rows', median], ...short.map((row) => [`${label}_${row.period}_rows`, row.n])]),
     });
+  }
+}
+
+/**
+ * The code values (the first character of a coded key) whose rows all fall
+ * in the calendar year after their period: in a season that starts in
+ * autumn, the playoffs. Measured on the table the period rule reads.
+ */
+async function shiftedCodes(
+  item: Picked,
+  period: string,
+  date: string,
+  example: number,
+  codes: CodeColumn[],
+  run: Run,
+  quote: (identifier: string) => string,
+): Promise<{ text: string; query: string; measured: Record<string, string | number> } | undefined> {
+  const vocabulary = columnVocabulary([item.relation]);
+  const coded = item.relation.columns.find((column) => codes.some((code) => code.canonical === canonicalColumn(column.name, vocabulary, item.table) || code.canonical === column.name.toLowerCase()));
+  if (!coded) return undefined;
+  const first = `SUBSTR(CAST(${quote(coded.name)} AS VARCHAR), 1, 1)`;
+  const year = `CAST(SUBSTR(CAST(${quote(date)} AS VARCHAR), 1, 4) AS INTEGER)`;
+  const query = `SELECT ${first} AS code, COUNT(*) AS n, SUM(CASE WHEN ${year} = ${quote(period)} + 1 THEN 1 ELSE 0 END) AS next_year, MIN(CASE WHEN ${quote(period)} = ${example} THEN ${quote(date)} END) AS first_day, MAX(CASE WHEN ${quote(period)} = ${example} THEN ${quote(date)} END) AS last_day FROM ${tableOf(item, quote)} WHERE ${quote(coded.name)} IS NOT NULL AND ${quote(date)} IS NOT NULL GROUP BY ${first} ORDER BY 1`;
+  const rows = (await run(query)).rows.map((row) => ({ code: String(value(row, 'code')), n: num(row, 'n'), next: num(row, 'next_year'), first: dateText(value(row, 'first_day')), last: dateText(value(row, 'last_day')) }));
+  // Every row of the code in the next year, and not every row of the table.
+  const later = rows.filter((row) => row.n >= MIN_SHARED_ROWS && row.next === row.n);
+  if (later.length === 0 || later.length === rows.length) return undefined;
+  const dated = later.find((row) => row.first && row.last);
+  const codesText = later.map((row) => `${row.code} (${count(row.n)} rows)`).join(' or ');
+  return {
+    text: ` Rows whose ${coded.name} starts with ${codesText} all fall in the calendar year after their ${period}${dated ? ` (${period} ${example}'s ${dated.code} rows run ${dated.first} to ${dated.last})` : ''}: for those rows, calendar year Y is ${period} Y − 1, so the ${later.map((row) => row.code).join(', ')} rows of ${example + 1} are ${period} ${example}.`,
+    query,
+    measured: Object.fromEntries(later.flatMap((row) => [[`code_${row.code}_rows`, row.n], [`code_${row.code}_next_year`, row.next]])),
+  };
+}
+
+/**
+ * A summary table that adds up every row of a detail table, codes and all: a
+ * player's season totals add up every game of every game type. Measured by
+ * the totals: a measure of the summary (`total_points`) sums to exactly the
+ * detail's (`points`), and to more than the detail's rows of one code. For
+ * each summary, the smallest detail table that matches. Without this, Ask
+ * answered "the regular season" from season totals that include the playoffs.
+ */
+async function builtFromRules(picked: Picked[], snapshot: WarehouseCatalogSnapshotV1, codes: CodeColumn[], run: Run, quote: (identifier: string) => string, add: AddRule): Promise<void> {
+  if (codes.length === 0) return;
+  const vocabulary = columnVocabulary(snapshot.relations);
+  const columnsOf = (item: Picked) => new Map(item.relation.columns.map((column) => [canonicalColumn(column.name, vocabulary, item.table), column]));
+  const measureName = (name: string) => {
+    const words = name.toLowerCase().replace(/^(total|sum|sum_of)_/, '').split('_');
+    // A table word in front (`team_points`) is not part of the measure.
+    while (words.length > 1 && vocabulary.tableWords.has(words[0]!)) words.shift();
+    return words.join('_');
+  };
+  const numeric = (type?: string) => /^(double|float|real|decimal|numeric|int|integer|bigint|smallint|hugeint|number)/i.test(type ?? '');
+  for (const summary of picked) {
+    const identity = summary.entity.identity;
+    if (!identity || identity.duplicates > 0) continue;
+    const identityNames = identity.columns.map((column) => canonicalColumn(column, vocabulary, summary.table));
+    const details = picked
+      .filter((detail) => detail !== summary && (detail.entity.identity?.rows ?? 0) > identity.rows)
+      .filter((detail) => identityNames.every((name) => columnsOf(detail).has(name)))
+      .map((detail) => ({ detail, code: [...columnsOf(detail).entries()].find(([name]) => codes.some((code) => code.canonical === name)) }))
+      .filter((candidate): candidate is { detail: Picked; code: [string, WarehouseCatalogRelationV1['columns'][number]] } => Boolean(candidate.code))
+      .sort((a, b) => (a.detail.entity.identity?.rows ?? 0) - (b.detail.entity.identity?.rows ?? 0));
+    for (const { detail, code } of details) {
+      const detailMeasures = new Map(detail.relation.columns.filter((column) => numeric(column.type)).map((column) => [measureName(column.name), column.name]));
+      const pair = summary.relation.columns
+        .filter((column) => numeric(column.type) && /^(total|sum)_/i.test(column.name))
+        .map((column) => ({ summary: column.name, detail: detailMeasures.get(measureName(column.name)) }))
+        .find((item): item is { summary: string; detail: string } => Boolean(item.detail));
+      if (!pair) continue;
+      const largest = codes.find((item) => item.canonical === code[0])!.largest;
+      const query = `SELECT (SELECT SUM(${quote(pair.summary)}) FROM ${tableOf(summary, quote)}) AS summary_total, (SELECT SUM(${quote(pair.detail)}) FROM ${tableOf(detail, quote)}) AS detail_total, (SELECT SUM(${quote(pair.detail)}) FROM ${tableOf(detail, quote)} WHERE CAST(${quote(code[1].name)} AS VARCHAR) LIKE '${largest}%') AS one_code_total`;
+      const row = (await run(query)).rows[0] ?? {};
+      const summaryTotal = num(row, 'summary_total');
+      const detailTotal = num(row, 'detail_total');
+      const oneCode = num(row, 'one_code_total');
+      if (!(detailTotal > 0) || Math.abs(summaryTotal - detailTotal) > Math.abs(detailTotal) * 1e-9 || !(oneCode < detailTotal)) continue;
+      add({
+        id: slug(`${summary.entity.id}_sums_every_${code[1].name}`),
+        domain: summary.entity.domain,
+        kind: 'custom',
+        expression: `${summary.table} adds up every row of ${detail.table}, every first character of ${code[1].name} included: ${pair.summary} totals ${count(summaryTotal)}, as ${pair.detail} does in ${detail.table}. For one kind (one first character of ${code[1].name}), sum ${detail.table} filtered on it: CAST(${code[1].name} AS VARCHAR) LIKE '${largest}%' gives ${count(oneCode)}.`,
+        entities: [summary.entity.id, detail.entity.id],
+        query,
+        measured: { summary_total: summaryTotal, detail_total: detailTotal, [`first_${largest}_total`]: oneCode },
+      });
+      break;
+    }
   }
 }
 

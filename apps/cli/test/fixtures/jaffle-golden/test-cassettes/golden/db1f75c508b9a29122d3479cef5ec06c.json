@@ -1,0 +1,23 @@
+{
+  "key": "db1f75c508b9a29122d3479cef5ec06c",
+  "operation": "generate",
+  "text": "NO_SQL: No column holds a region (the closest is location_name on locations), and the data has no churn status or inactivity window to define a churned customer.",
+  "providerName": "claude",
+  "recordedAt": "2026-11-04T20:28:11.373Z",
+  "provenance": {
+    "kind": "recorded_provider",
+    "replayClassification": "recorded_provider",
+    "providerQuality": "eligible"
+  },
+  "fingerprintDiagnostics": {
+    "version": 2,
+    "messageCount": 2,
+    "messageRoles": [
+      "system",
+      "user"
+    ],
+    "preCanonicalHash": "db1f75c508b9a29122d3479cef5ec06caa0eef6f2261ec07496ea9c6a8ec66ad",
+    "postCanonicalHash": "db1f75c508b9a29122d3479cef5ec06caa0eef6f2261ec07496ea9c6a8ec66ad",
+    "appliedRuleClasses": []
+  }
+}
