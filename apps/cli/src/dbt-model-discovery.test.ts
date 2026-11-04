@@ -153,3 +153,126 @@ describe('zlens model discover --validate in a dbt-first project', () => {
     expect(Object.values(manifest.modeling?.entities ?? {}).find((entity) => entity.dbtUniqueId === 'model.shop.stg_orders')?.useInstead).toMatchObject({ entity: expect.stringMatching(/::entity::order$/) });
   });
 });
+
+// Two subject areas and a Shared table (model-at-scale design S1, S4): a
+// marketing mart and a sales mart in one compound Domain, both reading an
+// account table that sits in a shared-dimensions folder.
+describe('zlens model draft places tables in subject areas', () => {
+  const roots: string[] = [];
+  const executors: QueryExecutor[] = [];
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    process.exitCode = undefined;
+    for (const executor of executors.splice(0)) await executor.disconnect().catch(() => undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  const reads = (...names: string[]) => ({ depends_on: { nodes: names.map((name) => `model.shop.${name}`) } });
+  const AREAS_MANIFEST = {
+    metadata: { project_name: 'shop' },
+    nodes: {
+      'model.shop.dim_account': model('dim_account', { original_file_path: 'models/common/dimensions_shared/dim_account.sql' }),
+      'model.shop.fct_opportunity': model('fct_opportunity', { original_file_path: 'models/common/facts_sales_and_marketing/fct_opportunity.sql', ...reads('dim_account') }),
+      'model.shop.mart_pipeline': model('mart_pipeline', { original_file_path: 'models/common_mart_sales/mart_pipeline.sql', ...reads('fct_opportunity') }),
+      'model.shop.mart_campaign': model('mart_campaign', { original_file_path: 'models/common_mart_marketing/mart_campaign.sql', ...reads('dim_account') }),
+      'test.shop.opportunity_account': relationshipsTest('fct_opportunity', 'account_id', 'dim_account', 'account_id'),
+      'test.shop.pipeline_opportunity': relationshipsTest('mart_pipeline', 'opportunity_id', 'fct_opportunity', 'opportunity_id'),
+      'test.shop.campaign_account': relationshipsTest('mart_campaign', 'account_id', 'dim_account', 'account_id'),
+    },
+    sources: {},
+    exposures: {},
+    groups: {},
+    semantic_models: {},
+  };
+
+  const shop = () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-dbt-areas-'));
+    roots.push(projectRoot);
+    const db = new Database(join(projectRoot, 'shop.sqlite'));
+    db.exec(`
+      CREATE TABLE dim_account (account_id INTEGER, account_name TEXT);
+      CREATE TABLE fct_opportunity (opportunity_id INTEGER, account_id INTEGER, amount INTEGER);
+      CREATE TABLE mart_pipeline (opportunity_id INTEGER, stage TEXT, amount INTEGER);
+      CREATE TABLE mart_campaign (campaign_id INTEGER, account_id INTEGER, spend INTEGER);
+    `);
+    for (let account = 1; account <= 20; account += 1) db.prepare('INSERT INTO dim_account VALUES (?, ?)').run(account, `A${account}`);
+    for (let opportunity = 1; opportunity <= 60; opportunity += 1) {
+      db.prepare('INSERT INTO fct_opportunity VALUES (?, ?, ?)').run(opportunity, 1 + (opportunity % 20), opportunity * 10);
+      db.prepare('INSERT INTO mart_pipeline VALUES (?, ?, ?)').run(opportunity, opportunity % 2 ? 'open' : 'won', opportunity * 10);
+    }
+    for (let campaign = 1; campaign <= 30; campaign += 1) db.prepare('INSERT INTO mart_campaign VALUES (?, ?, ?)').run(campaign, 1 + (campaign % 20), campaign * 5);
+    db.close();
+    mkdirSync(join(projectRoot, 'target'), { recursive: true });
+    writeFileSync(join(projectRoot, 'target', 'manifest.json'), JSON.stringify(AREAS_MANIFEST));
+    writeFileSync(join(projectRoot, 'dql.config.json'), JSON.stringify({
+      project: 'shop', manifestVersion: 3, modeling: { mode: 'dbt-first' },
+      connections: { default: { driver: 'sqlite', filepath: './shop.sqlite' } },
+      dbt: { projectDir: '.', manifestPath: 'target/manifest.json' },
+    }));
+    const executor = new QueryExecutor();
+    executors.push(executor);
+    return { projectRoot, executor };
+  };
+  const built = (projectRoot: string) => buildManifest({ projectRoot, dbtManifestPath: join(projectRoot, 'target', 'manifest.json') });
+  const entityOf = (projectRoot: string, dbtUniqueId: string) => Object.values(built(projectRoot).modeling?.entities ?? {}).find((entity) => entity.dbtUniqueId === dbtUniqueId);
+
+  it('drafts each table into its area and the account table into the Shared area', async () => {
+    const { projectRoot, executor } = shop();
+    const report = await discoverProjectDbtModel(projectRoot, { executor });
+    const areaOf = (id: string) => report.entities.find((entity) => entity.relationId === id)?.area;
+    expect(areaOf('model.shop.dim_account')).toBe('shared');
+    expect(areaOf('model.shop.mart_pipeline')).toBe('sales');
+    expect(areaOf('model.shop.mart_campaign')).toBe('marketing');
+    // A table of the compound Domain with no part named stays in the default area.
+    expect(areaOf('model.shop.fct_opportunity')).toBeUndefined();
+    expect(report.areas?.map((area) => [area.domain, area.id, area.shared ?? false])).toEqual([
+      ['sales_and_marketing', 'marketing', false],
+      ['sales_and_marketing', 'sales', false],
+      ['shared', 'shared', true],
+    ]);
+    // Each area shows the tables of other areas its joins reach at its edge.
+    expect(report.areas?.find((area) => area.id === 'marketing')?.references).toEqual([expect.stringMatching(/^shared::entity::/)]);
+
+    applyProjectWarehouseDiscovery(projectRoot, report);
+    const manifest = built(projectRoot);
+    expect(manifest.diagnostics?.filter((item) => item.severity === 'error')).toEqual([]);
+    const areas = Object.values(manifest.modeling?.areas ?? {});
+    expect(areas.find((area) => area.localId === 'shared')).toMatchObject({ shared: true, name: 'Shared' });
+    expect(areas.find((area) => area.localId === 'sales')?.entityIds).toEqual([expect.stringMatching(/::entity::/)]);
+    expect(entityOf(projectRoot, 'model.shop.mart_campaign')?.areaId).toMatch(/marketing$/);
+    expect(existsSync(join(projectRoot, 'domains', 'shared', 'modeling', 'areas', 'shared.dql.yaml'))).toBe(true);
+  });
+
+  it('drafts one area at a time: later runs reuse the Shared tables, draft joins to them, and list joins left for later', async () => {
+    const { projectRoot, executor } = shop();
+    // Marketing first: its mart and the account table it reads.
+    const marketing = await discoverProjectDbtModel(projectRoot, { executor, scope: { select: ['area:marketing'] } });
+    expect(marketing.entities.map((entity) => entity.relationId).sort()).toEqual(['model.shop.dim_account', 'model.shop.mart_campaign']);
+    applyProjectWarehouseDiscovery(projectRoot, marketing);
+    const accountId = entityOf(projectRoot, 'model.shop.dim_account')!.qualifiedId;
+
+    // Then only the opportunity fact: the account table is already modeled,
+    // so it is read for the join and not drafted again; the pipeline mart is
+    // not modeled yet, so its declared join waits for its own run.
+    const opportunity = await discoverProjectDbtModel(projectRoot, { executor, scope: { select: ['fct_opportunity'] } });
+    expect(opportunity.scope).toMatchObject({ drafted: 1, context: 1, outside: [{ from: 'main.mart_pipeline', to: 'main.fct_opportunity', column: 'opportunity_id' }] });
+    expect(opportunity.entities.filter((entity) => !entity.existing).map((entity) => entity.relationId)).toEqual(['model.shop.fct_opportunity']);
+    const toAccount = opportunity.relationships.find((relationship) => relationship.fromRelation === 'main.fct_opportunity' && relationship.toRelation === 'main.dim_account');
+    expect(toAccount).toMatchObject({ toDomain: 'shared', validation: { status: 'passed' } });
+    applyProjectWarehouseDiscovery(projectRoot, opportunity);
+    const manifest = built(projectRoot);
+    expect(manifest.diagnostics?.filter((item) => item.severity === 'error')).toEqual([]);
+    expect(entityOf(projectRoot, 'model.shop.dim_account')!.qualifiedId).toBe(accountId);
+    expect(Object.values(manifest.modeling?.relationships ?? {}).some((relationship) => relationship.to === accountId)).toBe(true);
+
+    // And the CLI says what it read and what it left.
+    const logs: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line?: unknown) => { logs.push(String(line)); });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await runModel('draft', [projectRoot, '--select', 'area:sales'], {} as CLIFlags);
+    const text = logs.join('\n');
+    expect(text).toContain('Scope: area:sales');
+    expect(text).toContain('Areas: sales_and_marketing/sales: 1 table');
+    expect(text).toMatch(/Also read \d+ tables? other areas already model/);
+  });
+});

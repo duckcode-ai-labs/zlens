@@ -105,6 +105,7 @@ interface RawModelArea {
   intent_examples?: unknown;
   intentExamples?: unknown;
   references?: unknown;
+  shared?: unknown;
 }
 
 interface RawRelationship {
@@ -400,6 +401,7 @@ function compileModeling(
         entityIds: [],
         relationshipIds: [],
         referencedEntityIds: stringArray(rawArea.references),
+        ...(rawArea.shared === true ? { shared: true } : {}),
         sourcePath: relPath,
       };
       if (!insertScopedRecord(areas, area)) {

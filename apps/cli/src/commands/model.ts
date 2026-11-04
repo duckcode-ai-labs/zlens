@@ -639,6 +639,16 @@ function printDraftScope(report: import('../warehouse-model-discovery.js').Wareh
   const scope = report.scope;
   if (!scope) return;
   console.log(`  Scope: ${scope.description} · ${scope.drafted} of ${scope.asked} table${scope.asked === 1 ? '' : 's'} drafted (budget ${scope.budget} a run)`);
+  if (scope.context) console.log(`  Also read ${scope.context} table${scope.context === 1 ? '' : 's'} other areas already model, to draft joins to them (not drafted again)`);
+  if (report.areas?.length) {
+    const fresh = report.entities.filter((entity) => !entity.existing);
+    console.log(`  Areas: ${report.areas.map((area) => `${area.domain}/${area.id}${area.shared ? ' (Shared)' : ''}: ${fresh.filter((entity) => entity.domain === area.domain && entity.area === area.id).length} table${fresh.filter((entity) => entity.domain === area.domain && entity.area === area.id).length === 1 ? '' : 's'}${area.references.length ? `, ${area.references.length} from other areas at its edge` : ''}`).join(' · ')}`);
+  }
+  if (scope.outside?.length) {
+    console.log(`Joins left for another run: ${scope.outside.length} declared join${scope.outside.length === 1 ? ' reaches a table' : 's reach tables'} not drafted yet (draft its area to add ${scope.outside.length === 1 ? 'it' : 'them'})`);
+    for (const edge of scope.outside.slice(0, 5)) console.log(`  ${edge.from} → ${edge.to} on ${edge.column}`);
+    if (scope.outside.length > 5) console.log(`  … and ${scope.outside.length - 5} more`);
+  }
   if (scope.leftOut.length === 0) return;
   console.log(`Left out over the budget: ${scope.leftOut.length} (business tables, then tables an exposure uses, then tables many models read, were drafted first)`);
   for (const item of scope.leftOut.slice(0, 8)) console.log(`  ${item.relation} · ${item.layer}`);
@@ -661,7 +671,7 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
   printDraftScope(report);
   console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} look-alike${lookAlikes.length === 1 ? '' : 's'} to skip · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
   console.log('Tables to answer from');
-  for (const entity of tables) console.log(`  ${entity.domain}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);
+  for (const entity of tables) console.log(`  ${entity.domain}${entity.area ? `/${entity.area}` : ''}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);
   if (report.stagingHidden?.length) {
     console.log('Staging copies left out (a final table holds the same rows; --include-staging drafts them)');
     for (const item of report.stagingHidden) console.log(`  ${item.relation} · same as ${item.finalRelation}`);

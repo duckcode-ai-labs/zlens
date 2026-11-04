@@ -48,6 +48,8 @@ export interface ModelAreaAuthoringInput {
   description?: string;
   intentExamples?: string[];
   references?: string[];
+  /** The Shared area: tables several areas read and none owns (model-at-scale design S1). */
+  shared?: boolean;
 }
 
 export interface EntityBindingAuthoringInput {
@@ -620,6 +622,7 @@ function previewArea(projectRoot: string, value: ModelAreaAuthoringInput): Model
     ...(value.description?.trim() ? { description: value.description.trim() } : {}),
     ...(cleanStrings(value.intentExamples).length > 0 ? { intent_examples: cleanStrings(value.intentExamples) } : {}),
     ...(cleanStrings(value.references).length > 0 ? { references: cleanStrings(value.references) } : {}),
+    ...(value.shared ? { shared: true } : {}),
   };
   const after = dumpYaml(document, before);
   return { path, before, after, changed: before !== after };
