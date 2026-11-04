@@ -8,6 +8,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### dbt projects draft their model from the warehouse ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **`zlens model discover --validate` in a dbt-first project reads the warehouse too.**
+  - The relations dbt builds and reads are read with the `zlens sync warehouse` statements (nothing is written)
+    and keyed by their dbt nodes.
+  - They are drafted and checked like a warehouse-first project's: layers, row identity, table picks and joins.
+  - dbt `relationships` tests count as declared keys, and compiled SQL as lineage.
+- **`apply-discovery --apply --validate` writes entities bound with `dbt_model:`.** Domains come from dbt's
+  groups, meta, tags or business folders, else one for the project.
+- **New `--read-views`:** reads views that join or aggregate on warehouses other than DuckDB and SQLite.
+- **The NBA dbt project scores the same as its warehouse:** 8 of 8 tables and 17 of 17 joins.
+
 ### Discovery drafts joins from row identity ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **`zlens model discover --validate` drafts a join wherever a table carries another table's row identity**, and
