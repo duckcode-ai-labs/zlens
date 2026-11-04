@@ -2401,7 +2401,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const chosenDomains = new Set(relations.map((relation) => relationEntryOf(relation)?.domain).filter((domain): domain is string => Boolean(domain)));
       const chosenNames = relations.map((relation) => (relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase());
       const modelRuleLines = Object.values(deps.getManifest().manifest?.modeling?.rules ?? {})
-        .filter((rule) => chosenDomains.has(rule.domain) && rule.expression.trim())
+        .filter((rule) => chosenDomains.has(rule.domain) && rule.expression.trim() && rule.status !== 'deprecated')
         .map((rule) => ({ rule, named: chosenNames.some((name) => rule.expression.toLowerCase().includes(name)) }))
         .sort((a, b) => Number(b.named) - Number(a.named) || a.rule.localId.localeCompare(b.rule.localId))
         .slice(0, MODEL_RULES_IN_DRAFT)

@@ -131,6 +131,18 @@ export interface ConceptAuthoringInput {
   origin?: 'manual' | 'ai_draft';
 }
 
+/** A model rule (RFC 0012, P4: discovery writes measured rules as drafts, with their query). */
+export interface RuleAuthoringInput {
+  id: string;
+  domain: string;
+  areaId?: string;
+  kind?: 'fanout' | 'export' | 'contract' | 'custom';
+  expression: string;
+  status?: ManifestModelLifecycle;
+  entities?: string[];
+  evidence?: { query: string; measured: Record<string, string | number>; checkedAt?: string };
+}
+
 export interface ContractAuthoringInput {
   id: string;
   domain: string;
@@ -185,6 +197,7 @@ export type ModelingAuthoringChange =
   | { operation: 'upsert_export'; value: DomainExportAuthoringInput }
   | { operation: 'upsert_import'; value: DomainImportAuthoringInput }
   | { operation: 'upsert_concept'; value: ConceptAuthoringInput }
+  | { operation: 'upsert_rule'; value: RuleAuthoringInput }
   // Removals. Modeling was upsert-only, so an entity, relationship or model
   // area authored by mistake could only be removed by hand-editing YAML.
   // Contract/export/import removal completes the set: every object the UI can
@@ -364,6 +377,7 @@ export function previewModelingChange(projectRoot: string, change: ModelingAutho
       case 'remove_export': return [previewRemoveListEntry(root, change.value, 'interfaces.dql.yaml', 'exports')];
       case 'remove_import': return [previewRemoveListEntry(root, change.value, 'interfaces.dql.yaml', 'imports')];
       case 'upsert_concept': return [previewConcept(root, change.value)];
+      case 'upsert_rule': return [previewRule(root, change.value)];
       case 'remove_concept': return [previewRemoveListEntry(root, change.value, 'concepts.dql.yaml', 'concepts')];
       case 'record_relationship_validation': return [previewRelationshipValidationRecord(root, change.value)];
       default: {
@@ -701,6 +715,21 @@ function previewRelationshipValidationRecord(projectRoot: string, value: Relatio
     validation: validationSource(value.validation),
     ...(value.certifiedAgainst ? { status: 'certified', certifiedAgainst: value.certifiedAgainst } : {}),
   });
+}
+
+function previewRule(projectRoot: string, value: RuleAuthoringInput): ModelingSourcePatch {
+  const id = requiredId(value.id, 'rule');
+  const domain = requiredId(value.domain, 'domain');
+  if (!value.expression?.trim()) throw new Error(`Rule "${id}" needs an expression.`);
+  const rule: UnknownRecord = {
+    id,
+    kind: value.kind ?? 'custom',
+    expression: value.expression.trim(),
+    ...(value.status ? { status: canonicalLifecycle(value.status) } : {}),
+    ...(cleanStrings(value.entities).length ? { entities: cleanStrings(value.entities) } : {}),
+    ...(value.evidence?.query ? { evidence: { query: value.evidence.query, measured: value.evidence.measured, ...(value.evidence.checkedAt ? { checked_at: value.evidence.checkedAt } : {}) } } : {}),
+  };
+  return upsertListPatch(projectRoot, modelingSourceFile(projectRoot, domain, 'rules.dql.yaml', 'rules', 'id', id, value.areaId), 'rules', 'id', rule);
 }
 
 function previewConcept(projectRoot: string, value: ConceptAuthoringInput): ModelingSourcePatch {

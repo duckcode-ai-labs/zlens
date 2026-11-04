@@ -567,6 +567,9 @@ function compileModeling(
         domain: ruleDomain,
         kind: ruleKind(rawRule.kind),
         expression,
+        ...(rawRule.status !== undefined ? { status: lifecycle(rawRule.status) } : {}),
+        ...(stringArray(rawRule.entities).length ? { entities: stringArray(rawRule.entities).map((entity) => (entity.includes('::') ? entity : qualifiedObjectId(ruleDomain, 'entity', entity))) } : {}),
+        ...ruleEvidence(rawRule.evidence),
         sourcePath: relPath,
       };
       if (!insertScopedRecord(rules, ruleValue)) diagnostics.push(modelingError(relPath, `duplicate rule "${ruleValue.qualifiedId}" in the same Domain Package`));
@@ -1530,6 +1533,17 @@ function lifecycle(value: unknown): 'draft' | 'evaluated' | 'reviewed' | 'certif
 function lifecycleDiagnostic(value: unknown, subject: string, filePath: string, diagnostics: ManifestDiagnostic[]): void {
   if (value === undefined || value === null || value === 'review' || (LIFECYCLE_VALUES as readonly unknown[]).includes(value)) return;
   diagnostics.push(modelingError(filePath, `${subject} has status "${String(value)}", which ZLens does not recognise (it would be read as draft); use one of ${LIFECYCLE_VALUES.join(', ')}`));
+}
+
+/** `evidence: { query, measured, checked_at }`: what measured a rule (RFC 0012, P4). */
+function ruleEvidence(value: unknown): { evidence?: { query: string; measured: Record<string, string | number>; checkedAt?: string } } {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const query = record ? stringValue(record.query) : undefined;
+  if (!record || !query) return {};
+  const measured = Object.fromEntries(Object.entries(record.measured && typeof record.measured === 'object' ? record.measured as Record<string, unknown> : {})
+    .filter((entry): entry is [string, string | number] => typeof entry[1] === 'string' || typeof entry[1] === 'number'));
+  const checkedAt = stringValue(record.checked_at ?? record.checkedAt);
+  return { evidence: { query, measured, ...(checkedAt ? { checkedAt } : {}) } };
 }
 
 function ruleKind(value: unknown): 'fanout' | 'export' | 'contract' | 'custom' {

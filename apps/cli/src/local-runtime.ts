@@ -883,6 +883,7 @@ import { resolveResultReviewMode } from './result-review-setting.js';
 import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import { draftTablePicks, readDbtRelationFacts } from './model-layers.js';
 import { draftIdentityJoins } from './model-joins.js';
+import { draftWordsAndRules } from './model-profile.js';
 import {
   cheapToRead,
   discoverWarehouseModel,
@@ -16656,6 +16657,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             const relationship = report.relationships.find((item) => item.id === change.value.id && item.domain === change.value.domain);
             return [...(relationship?.evidence.map((item) => item.reason) ?? []), ...(relationship?.validation ? [`warehouse check: ${relationship.validation.message}`] : [])];
           }
+          if (change.operation === 'upsert_rule' && change.value.evidence) return [`measured on the warehouse: ${change.value.evidence.query}`];
           return [`warehouse catalog ${report.catalogFingerprint.slice(0, 12)}`];
         };
         const operationId = (change: ModelingAuthoringChange): string => {
@@ -36343,7 +36345,7 @@ function parseContextAuthoringOperations(value: unknown): ContextAuthoringOperat
     const evidence = Array.isArray(operation.evidence) ? operation.evidence.filter((item): item is string => typeof item === 'string').slice(0, 32) : undefined;
     if (operation.kind === 'modeling_change') {
       const change = operation.change as ModelingAuthoringChange | undefined;
-      const allowed = new Set(['upsert_domain', 'upsert_area', 'upsert_entity', 'upsert_relationship', 'upsert_contract', 'upsert_export', 'upsert_import', 'upsert_concept', 'remove_entity', 'remove_relationship', 'remove_area', 'remove_contract', 'remove_export', 'remove_import', 'remove_concept']);
+      const allowed = new Set(['upsert_domain', 'upsert_area', 'upsert_entity', 'upsert_relationship', 'upsert_contract', 'upsert_export', 'upsert_import', 'upsert_concept', 'upsert_rule', 'remove_entity', 'remove_relationship', 'remove_area', 'remove_contract', 'remove_export', 'remove_import', 'remove_concept']);
       if (!change || typeof change !== 'object' || !allowed.has(change.operation) || !('value' in change) || !change.value || typeof change.value !== 'object') throw Object.assign(new Error(`Modeling operation ${id} is invalid.`), { code: 'INVALID_REQUEST' });
       return { id, kind: 'modeling_change', change, dependsOn, evidence };
     }
@@ -38983,7 +38985,7 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   });
   const report = queryHistory ? { ...drafted, queryHistory } : drafted;
   if (!options.validate || !connection || !options.executor) return report;
-  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true });
+  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest });
 }
 
 /**
@@ -38999,7 +39001,7 @@ async function checkDraftOnWarehouse(
   snapshot: Parameters<typeof validateWarehouseDiscovery>[1],
   connection: ConnectionConfig,
   executor: QueryExecutor,
-  options: { readViews?: boolean } = {},
+  options: { readViews?: boolean; manifest?: DQLManifest } = {},
 ): Promise<WarehouseDiscoveryReport> {
   const run = (sql: string) => executor.executeQuery(sql, [], {}, connection);
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
@@ -39013,7 +39015,13 @@ async function checkDraftOnWarehouse(
   } catch { /* an unreadable dbt manifest adds no evidence */ }
   const picked = await draftTablePicks(validated, snapshot, run, quote, { ...(dbt ? { dbt } : {}), readViews: readable });
   // Joins on the picks' row identities: several columns, roles, periods, itself.
-  return draftIdentityJoins(picked, snapshot, run, quote, { dialect: connection.driver, readable });
+  const joined = await draftIdentityJoins(picked, snapshot, run, quote, { dialect: connection.driver, readable });
+  // Names, descriptions and concepts, and rules measured on the picks.
+  const existing = {
+    rules: new Set(Object.keys(options.manifest?.modeling?.rules ?? {})),
+    concepts: new Set(Object.keys(options.manifest?.modeling?.concepts ?? {})),
+  };
+  return draftWordsAndRules(joined, snapshot, run, quote, { readable, existing });
 }
 
 /**
@@ -39068,7 +39076,7 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
     existingDomains: loadDomainPackageRegistry(projectRoot).values().map((pkg) => pkg.id),
     decisions: readDiscoveryLedger(projectRoot).relationships,
   });
-  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true });
+  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest });
 }
 
 /** Write a discovery report's drafts (optionally only the chosen ones) through the reviewed modeling path. */
@@ -39088,9 +39096,14 @@ export function applyProjectWarehouseDiscovery(projectRoot: string, report: Ware
   }
   const entities = report.entities.filter((entity) => wantedEntities.has(`${entity.domain}::${entity.id}`) || (selection.entityIds ?? []).includes(entity.id));
   const domains = report.domains.filter((domain) => entities.some((entity) => entity.domain === domain.id));
+  // A rule or concept comes along only when every entity it names does.
+  const written = new Set(entities.map((entity) => `${entity.domain}::${entity.id}`));
+  const has = (domain: string, id: string) => written.has(id.includes('::') ? id.replace('::entity::', '::') : `${domain}::${id}`);
+  const rules = report.rules?.filter((rule) => rule.entities.every((id) => has(rule.domain, id)));
+  const concepts = report.concepts?.filter((concept) => concept.bindings.every((binding) => has(concept.domain, binding.entity)));
   // Reading the owner must not write it: that would change the project's
   // sources under the batch being applied.
-  const changes = warehouseDiscoveryChanges({ ...report, domains, entities, relationships }, { owner: hostActor() ?? resolveLocalOwner(projectRoot, { persist: false }) ?? undefined });
+  const changes = warehouseDiscoveryChanges({ ...report, domains, entities, relationships, ...(rules ? { rules } : {}), ...(concepts ? { concepts } : {}) }, { owner: hostActor() ?? resolveLocalOwner(projectRoot, { persist: false }) ?? undefined });
   if (changes.length === 0) return { changes: 0, paths: [] };
   const preview = previewModelingChanges(projectRoot, changes);
   const applied = applyModelingChanges(projectRoot, changes, preview.fingerprint);

@@ -1457,6 +1457,12 @@ export interface ManifestModelRule {
   domain: string;
   kind: 'fanout' | 'export' | 'contract' | 'custom';
   expression: string;
+  /** A rule discovery measured is a draft until a person reviews it (RFC 0012); deprecated rules are not shown to Ask. */
+  status?: ManifestModelLifecycle;
+  /** The entities it is about, qualified. */
+  entities?: string[];
+  /** The query that measured it and what it returned (RFC 0012, P4): every number in the expression is one of these. */
+  evidence?: { query: string; measured: Record<string, string | number>; checkedAt?: string };
   sourcePath: string;
 }
 

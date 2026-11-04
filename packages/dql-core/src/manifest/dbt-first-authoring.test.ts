@@ -39,6 +39,17 @@ describe('dbt-first Domain Package authoring', () => {
     expect(after).toContain('use_instead:\n      entity: order\n      reason: covers year 2019–2021; orders covers year 2015–2024');
   });
 
+  it('writes a measured rule with its query (RFC 0012, P4)', () => {
+    const change = {
+      operation: 'upsert_rule' as const,
+      value: { id: 'order_repeats', domain: 'commerce', expression: 'orders holds 12 rows for 10 distinct order_id.', status: 'draft' as const, entities: ['order'], evidence: { query: 'SELECT COUNT(*) FROM orders', measured: { rows: 12 }, checkedAt: '2026-11-04T12:00:00.000Z' } },
+    };
+    const after = previewModelingChange(root, change).patches[0]?.after ?? '';
+    expect(after).toContain('rules:\n  - id: order_repeats\n    kind: custom\n    expression: orders holds 12 rows for 10 distinct order_id.\n    status: draft');
+    expect(after).toContain('query: SELECT COUNT(*) FROM orders');
+    expect(after).toContain("checked_at: '2026-11-04T12:00:00.000Z'");
+  });
+
 it('removes an authored entity, leaving the domain source intact', () => {
     // Modeling authoring was upsert-only: an entity added by mistake could only
     // be removed by hand-editing YAML.

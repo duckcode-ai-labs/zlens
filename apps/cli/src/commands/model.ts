@@ -543,7 +543,7 @@ async function runWarehouseDiscovery(subcommand: 'discover' | 'apply-discovery',
 function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js').WarehouseDiscoveryReport, title = 'ZLens warehouse discovery'): void {
   const newEntities = report.entities.filter((entity) => !entity.existing);
   console.log(`${title} (draft only${report.validated ? ', checked on the warehouse' : ''})`);
-  console.log(`  catalog ${report.catalogFingerprint.slice(0, 12)} · ${report.relations} relations · ${newEntities.length} new entities · ${report.relationships.length} new relationships${report.existingRelationships ? ` · ${report.existingRelationships} already modeled` : ''}`);
+  console.log(`  catalog ${report.catalogFingerprint.slice(0, 12)} · ${report.relations} relations · ${newEntities.length} new entities · ${report.relationships.length} new relationships${report.existingRelationships ? ` · ${report.existingRelationships} already modeled` : ''}${report.rules?.length ? ` · ${report.rules.length} measured rules` : ''}${report.concepts?.length ? ` · ${report.concepts.length} concepts` : ''}`);
   if (report.queryHistory) {
     console.log('error' in report.queryHistory
       ? `  query history: ${report.queryHistory.error}`
@@ -581,6 +581,14 @@ function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js
       : '';
     console.log(`  ${relationship.from} → ${relationship.to} on ${keys} · ${relationship.cardinality}${check}${nameOnly}`);
     for (const item of relationship.evidence) console.log(`      because ${item.reason}`);
+  }
+  if (report.concepts?.length) {
+    console.log('Concepts (a key several tables share, with no table of its own)');
+    for (const concept of report.concepts) console.log(`  ${concept.domain}.${concept.id}: ${concept.description}`);
+  }
+  if (report.rules?.length) {
+    console.log('Rules measured on the data (each with the query that measured it)');
+    for (const rule of report.rules) console.log(`  ${rule.domain}.${rule.id}: ${rule.expression}`);
   }
   if (report.lookAlikeJoins?.length) {
     console.log('Not proposed: these join a table the draft says to use another instead of (the pick\'s joins are drafted)');
