@@ -5199,6 +5199,7 @@ export function dbtMeaningCatalog(manifestPath: string, projectRoot?: string): D
       relation,
       kind: 'table',
       ...(comment ? { comment } : {}),
+      ...(listed?.length ? {} : { columnsIncomplete: true as const }),
       columns: (listed?.length ? listed : documented).map((column) => {
         // A dbt description or the warehouse's own comment: either is words a draft never replaces.
         const words = described.get(column.name.toLowerCase()) ?? column.description;
