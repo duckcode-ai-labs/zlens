@@ -1067,8 +1067,10 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
   // What a modeled thing IS: the business context and grain a Domain Studio
   // entity binding carries, attached to the physical relation it binds.
   const nodes = input.manifest?.dbtProvenance?.nodes ?? {};
-  for (const entity of Object.values(input.manifest?.modeling?.entities ?? {})) {
-    const relation = normalizeRelationName((nodes as Record<string, { relation?: string } | undefined>)[entity.dbtUniqueId]?.relation);
+  const modeledEntities = input.manifest?.modeling?.entities ?? {};
+  const relationOfEntity = (dbtUniqueId: string | undefined) => (dbtUniqueId ? normalizeRelationName((nodes as Record<string, { relation?: string } | undefined>)[dbtUniqueId]?.relation) : undefined);
+  for (const entity of Object.values(modeledEntities)) {
+    const relation = relationOfEntity(entity.dbtUniqueId);
     if (!relation) continue;
     source.relationMeaning = source.relationMeaning ?? {};
     // A relation an entity in use binds keeps that entity's meaning; it is
@@ -1081,9 +1083,17 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
       ...(entity.grain ? { grain: entity.grain } : {}),
       ...(entity.domain ? { domain: entity.domain } : {}),
       ...(entity.status === 'deprecated' ? { deprecated: true } : {}),
+      ...useInsteadRelation(entity),
     };
   }
   return source;
+
+  /** A drafted table pick (RFC 0012), as the relation to answer from instead. */
+  function useInsteadRelation(entity: { useInstead?: { entity: string; reason?: string }; status?: string }): { useInstead?: { relation: string; reason?: string } } {
+    if (!entity.useInstead || entity.status === 'deprecated') return {};
+    const target = relationOfEntity(modeledEntities[entity.useInstead.entity]?.dbtUniqueId);
+    return target ? { useInstead: { relation: target, ...(entity.useInstead.reason ? { reason: entity.useInstead.reason } : {}) } } : {};
+  }
 }
 
 const SQL_KEYWORDS = new Set(['select', 'from', 'where', 'as', 'case', 'when', 'then', 'else', 'end', 'and', 'or', 'not', 'null', 'true', 'false', 'is', 'in', 'distinct', 'group', 'by', 'order', 'having', 'on', 'join', 'left', 'right', 'inner', 'outer', 'over', 'partition', 'between', 'like', 'cast', 'integer', 'int', 'varchar', 'text', 'date', 'timestamp', 'boolean', 'double', 'decimal', 'numeric', 'bigint', 'interval', 'coalesce', 'nullif', 'sum', 'count', 'avg', 'min', 'max', 'round', 'abs', 'lower', 'upper', 'trim', 'concat', 'extract', 'year', 'month', 'day', 'with', 'union', 'all', 'limit', 'asc', 'desc', 'row_number', 'rank', 'dense_rank', 'lag', 'lead', 'first_value', 'last_value', 'if', 'ifnull', 'iff', 'greatest', 'least', 'current_date', 'current_timestamp', 'exists', 'any', 'some', 'values', 'using', 'natural', 'cross', 'full', 'filter', 'within', 'try_cast', 'date_trunc', 'datediff', 'dateadd', 'floor', 'ceil', 'ceiling', 'string', 'char', 'float', 'real', 'smallint', 'tinyint']);

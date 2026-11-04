@@ -8,6 +8,25 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Discovery proposes one table per business thing ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
+
+- **`zlens model discover --validate` gives every table a layer and finds what one row is.**
+  - Layers are raw, staging, intermediate, snapshot or final.
+  - Row identity is one to three columns, found with counting queries, with any repeated rows.
+- **Tables that hold the same rows are grouped, and one is proposed.** Every other gets
+  `use_instead: { entity, reason }`, for a measured reason only:
+  - it covers a shorter period;
+  - its rows repeat;
+  - it is an earlier layer or a history snapshot;
+  - the pick is built from it.
+
+  Fewer rows alone is never a reason.
+- **Ask answers from the picked table until a person decides.** It keeps a table the question names, labelled
+  with the draft's preference.
+- **Layer folders (`dim/`, `stg/`) and layer schemas (`transformed`) no longer become Domains.**
+- **On the NBA benchmark project the draft now picks 8 of 8 tables right** and knows the row identity of 14 of
+  15. Before, it picked none and knew one.
+
 ### Ask answers "total X by Y" the same way every time
 
 - **"What is the total claimed amount by product?" is read by the semantic layer's own words, without

@@ -29,6 +29,7 @@ import {
   type WarehouseCatalogSnapshotV1,
 } from '@zlens/core';
 import { looksLikePlaceholder, profileRelationshipOnWarehouse, suggestRelationshipKeys } from '@zlens/agent';
+import type { LookAlikeGroup, RowIdentity, TableLayer, UseInstead } from './model-layers.js';
 
 export type RelationshipEvidenceSource = 'declared_foreign_key' | 'view_join' | 'query_history' | 'shared_key' | 'named_for_table' | 'same_name';
 
@@ -62,6 +63,13 @@ export interface DiscoveredEntity {
   grainCandidate?: string;
   /** The qualified id of the entity that already binds this relation. */
   existing?: string;
+  /** Where the table sits in the pipeline, and why (validation only, RFC 0012). */
+  layer?: TableLayer;
+  layerEvidence?: string;
+  /** What one row is, found on the data, with its repeated rows (validation only). */
+  identity?: RowIdentity;
+  /** A look-alike that holds the same rows better: Ask should prefer it (validation only). */
+  useInstead?: UseInstead;
 }
 
 export interface DiscoveredRelationship {
@@ -144,6 +152,8 @@ export interface WarehouseDiscoveryReport {
   dismissedJoins?: string[];
   /** Joins only a name suggested that the warehouse did not back (validation only). */
   withheld?: WithheldRelationship[];
+  /** Tables that hold the same rows, the one proposed to answer from, and why not the others (validation only). */
+  lookAlikes?: LookAlikeGroup[];
   validated: boolean;
   /** Opt-in query-history evidence: how much was read, or why it could not be. */
   queryHistory?: { statements: number; joins: number } | { error: string };
@@ -151,9 +161,9 @@ export interface WarehouseDiscoveryReport {
 
 const EVIDENCE_ORDER: RelationshipEvidenceSource[] = ['declared_foreign_key', 'view_join', 'query_history', 'shared_key', 'named_for_table', 'same_name'];
 /** Column types that are never join keys: measures, flags and timestamps. */
-const NON_KEY_TYPE = /^(double|float|real|decimal|numeric|money|bool|boolean|date|time|timestamp|datetime|interval|json|jsonb|blob|bytea|array|struct|map)/i;
+export const NON_KEY_TYPE = /^(double|float|real|decimal|numeric|money|bool|boolean|date|time|timestamp|datetime|interval|json|jsonb|blob|bytea|array|struct|map)/i;
 /** A column named like a key: `id`, `<thing>_id`, `_key`, `_code`, `_uuid`, `_ref`, `_number`, `_no`. */
-const KEY_LIKE_NAME = /^(id|uuid|key)$|_(id|key|code|uuid|ref|number|no)$/i;
+export const KEY_LIKE_NAME = /^(id|uuid|key)$|_(id|key|code|uuid|ref|number|no)$/i;
 /** Types a surrogate key is stored as: whole numbers and uuids. */
 const KEY_TYPE = /^(int|integer|bigint|smallint|tinyint|hugeint|ubigint|uinteger|usmallint|utinyint|serial|bigserial|smallserial|uuid)\b/i;
 
@@ -835,6 +845,8 @@ export function warehouseDiscoveryChanges(report: WarehouseDiscoveryReport, opti
         ...(entity.description ? { businessContext: entity.description } : {}),
         ...(entity.grain ? { grain: entity.grain, keys: entity.keys } : {}),
         status: 'draft',
+        // A drafted table pick: Ask prefers the other table until a person decides.
+        ...(entity.useInstead ? { useInstead: { entity: entity.useInstead.domain === entity.domain ? entity.useInstead.entity : `${entity.useInstead.domain}::entity::${entity.useInstead.entity}`, reason: entity.useInstead.reason } } : {}),
       },
     });
   }

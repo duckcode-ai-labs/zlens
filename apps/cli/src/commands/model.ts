@@ -538,8 +538,17 @@ function printWarehouseDiscovery(report: import('../warehouse-model-discovery.js
   }
   console.log('Entities');
   for (const entity of report.entities) {
-    const grain = entity.grain ? `grain ${entity.grain} (${entity.grainSource === 'primary_key' ? 'primary key' : 'unique on the warehouse'})` : entity.grainCandidate ? `grain unset (candidate ${entity.grainCandidate}; --validate checks it)` : 'grain unset';
-    console.log(`  ${entity.domain}.${entity.id} ← ${entity.relation} · ${grain}${entity.existing ? ' · already bound' : ''}`);
+    const repeats = entity.identity?.duplicates ? `grain unset (${entity.identity.columns.join(', ')} repeats on ${entity.identity.duplicates.toLocaleString('en-US')} rows)` : undefined;
+    const grain = entity.grain ? `grain ${entity.grain} (${entity.grainSource === 'primary_key' ? 'primary key' : 'unique on the warehouse'})` : repeats ?? (entity.grainCandidate ? `grain unset (candidate ${entity.grainCandidate}; --validate checks it)` : 'grain unset');
+    console.log(`  ${entity.domain}.${entity.id} ← ${entity.relation} · ${grain}${entity.layer ? ` · ${entity.layer}` : ''}${entity.existing ? ' · already bound' : ''}`);
+  }
+  const picks = report.entities.filter((entity) => entity.useInstead);
+  if (picks.length) {
+    console.log('Table picks (Ask answers from the table on the right until a person decides)');
+    for (const entity of picks) {
+      console.log(`  ${entity.relation} → ${entity.useInstead!.relation}`);
+      console.log(`      ${entity.useInstead!.reason}`);
+    }
   }
   console.log('Relationships');
   if (report.relationships.length === 0) console.log('  none found');

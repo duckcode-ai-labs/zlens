@@ -30,6 +30,15 @@ describe('dbt-first Domain Package authoring', () => {
     expect(rebuilt.patches[0]?.changed).toBe(false);
   });
 
+  it('writes a drafted table pick as use_instead (RFC 0012)', () => {
+    const change = {
+      operation: 'upsert_entity' as const,
+      value: { id: 'old_order', domain: 'commerce', dbtModel: 'model.shop.old_orders', status: 'draft' as const, useInstead: { entity: 'order', reason: 'covers year 2019–2021; orders covers year 2015–2024' } },
+    };
+    const after = previewModelingChange(root, change).patches[0]?.after ?? '';
+    expect(after).toContain('use_instead:\n      entity: order\n      reason: covers year 2019–2021; orders covers year 2015–2024');
+  });
+
 it('removes an authored entity, leaving the domain source intact', () => {
     // Modeling authoring was upsert-only: an entity added by mistake could only
     // be removed by hand-editing YAML.

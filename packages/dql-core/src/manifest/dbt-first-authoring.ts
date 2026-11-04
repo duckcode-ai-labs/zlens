@@ -64,6 +64,8 @@ export interface EntityBindingAuthoringInput {
   owner?: string;
   grain?: string;
   keys?: string[];
+  /** A drafted table pick (RFC 0012): the entity to answer from instead, and why. */
+  useInstead?: { entity: string; reason?: string };
 }
 
 /**
@@ -630,6 +632,7 @@ function previewEntity(projectRoot: string, value: EntityBindingAuthoringInput):
     ...(value.owner?.trim() ? { owner: value.owner.trim() } : {}),
     ...(value.grain ? { grain: value.grain } : {}),
     ...(cleanStrings(value.keys).length > 0 ? { keys: cleanStrings(value.keys) } : {}),
+    ...(value.useInstead?.entity?.trim() ? { use_instead: { entity: value.useInstead.entity.trim(), ...(value.useInstead.reason?.trim() ? { reason: value.useInstead.reason.trim() } : {}) } } : {}),
   };
   return upsertMovingListPatches(projectRoot, domain, path, 'entities', entity);
 }

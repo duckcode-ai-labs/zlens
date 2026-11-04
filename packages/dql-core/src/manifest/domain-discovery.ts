@@ -12,7 +12,8 @@ export type DomainDiscoveryEvidenceKind =
   | 'exposure_owner_scope'
   | 'dbt_tag'
   | 'configured_selector'
-  | 'model_path';
+  | 'model_path'
+  | 'dbt_project';
 
 export interface DomainDiscoveryEvidence {
   kind: DomainDiscoveryEvidenceKind;
@@ -104,6 +105,7 @@ interface ModelRecord {
   uniqueId: string;
   name: string;
   sourcePath?: string;
+  packageName?: string;
   raw: UnknownRecord;
 }
 
@@ -137,12 +139,20 @@ export function discoverDbtDomains(options: DiscoverDbtDomainsOptions): DomainDi
   const indexes = buildEvidenceIndexes(manifest, semanticManifest, models);
   const groupOwners = collectGroupOwners(manifest);
 
-  const memberships = models.map((model) => resolveMembership(
+  let memberships = models.map((model) => resolveMembership(
     model,
     packages,
     indexes,
     groupOwners,
   ));
+  // Nothing names a business area (no meta, group, tag or business folder):
+  // the project is one Domain, named after it (RFC 0012). Layer folders such
+  // as `dim/` and `stg/` never become Domains.
+  const projectName = stringValue(asRecord(manifest.metadata).project_name) ?? models[0]?.packageName;
+  const projectDomain = projectName ? normalizeDomainId(projectName) : undefined;
+  if (projectDomain && memberships.length > 0 && memberships.every((membership) => membership.evidence.length === 0)) {
+    memberships = models.map((model) => resolveMembership(model, packages, indexes, groupOwners, [evidence('dbt_project', projectDomain, projectName!, 8, 0.4, model)]));
+  }
   const assigned = new Map(memberships
     .filter((membership): membership is DomainMembershipProposal & { proposedDomain: string } => Boolean(membership.proposedDomain))
     .map((membership) => [membership.dbtUniqueId, membership]));
@@ -208,8 +218,9 @@ function resolveMembership(
   packages: DomainPackageRecord[],
   indexes: EvidenceIndex,
   groupOwners: Map<string, string>,
+  extra: DomainDiscoveryEvidence[] = [],
 ): DomainMembershipProposal {
-  const evidence = collectModelEvidence(model, packages, indexes, groupOwners);
+  const evidence = [...collectModelEvidence(model, packages, indexes, groupOwners), ...extra];
   const strongestRank = evidence[0]?.rank;
   const strongest = strongestRank === undefined
     ? []
@@ -279,7 +290,7 @@ function collectModelEvidence(
     }
   }
 
-  const pathDomain = domainFromPath(model.sourcePath);
+  const pathDomain = domainFromPath(model.sourcePath, model.name);
   if (pathDomain) output.push(evidence('model_path', pathDomain, model.sourcePath ?? '', 7, 0.55, model));
 
   return dedupeEvidence(output).sort(compareEvidence);
@@ -528,6 +539,7 @@ function collectModels(manifest: UnknownRecord): ModelRecord[] {
         uniqueId,
         name: stringValue(raw.alias) ?? stringValue(raw.name) ?? uniqueId,
         sourcePath: stringValue(raw.original_file_path) ?? stringValue(raw.path),
+        packageName: stringValue(raw.package_name),
         raw,
       };
     })
@@ -568,13 +580,15 @@ function domainFromTag(tag: string, packages: DomainPackageRecord[]): string | u
   return existing?.id ?? normalized;
 }
 
-function domainFromPath(sourcePath: string | undefined): string | undefined {
+function domainFromPath(sourcePath: string | undefined, modelName?: string): string | undefined {
   if (!sourcePath) return undefined;
   const parts = sourcePath.replace(/\\/g, '/').split('/').filter(Boolean);
   const modelsAt = parts.lastIndexOf('models');
+  // A folder named for a layer is not a business area, and neither is one
+  // whose models carry its name as a prefix (`local/local_player_game_facts`).
   const folders = parts.slice(modelsAt >= 0 ? modelsAt + 1 : 0, -1)
     .map(normalizeDomainId)
-    .filter((part): part is string => typeof part === 'string' && !GENERIC_PATHS.has(part));
+    .filter((part): part is string => typeof part === 'string' && !GENERIC_PATHS.has(part) && !(modelName && modelName.toLowerCase().startsWith(`${part}_`)));
   if (folders.length === 0) return undefined;
   return folders.slice(0, 3).join('.');
 }
@@ -714,5 +728,10 @@ function isString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-const GENERIC_PATHS = new Set(['staging', 'stage', 'marts', 'mart', 'intermediate', 'base', 'core', 'sources', 'source']);
+/** Folders named for a pipeline layer (RFC 0012): where a model sits, not what it is about. */
+const GENERIC_PATHS = new Set([
+  'staging', 'stage', 'stg', 'marts', 'mart', 'intermediate', 'int', 'base', 'core', 'sources', 'source', 'src', 'raw', 'landing',
+  'dim', 'dims', 'dimension', 'dimensions', 'fct', 'fcts', 'fact', 'facts', 'snapshot', 'snapshots', 'seed', 'seeds',
+  'reporting', 'presentation', 'bronze', 'silver', 'gold',
+]);
 const GENERIC_TAGS = new Set(['daily', 'hourly', 'weekly', 'pii', 'published', 'mart', 'marts', 'staging', 'intermediate']);

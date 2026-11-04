@@ -94,6 +94,8 @@ interface RawEntity {
   business_context?: unknown;
   businessContext?: unknown;
   owner?: unknown;
+  use_instead?: unknown;
+  useInstead?: unknown;
 }
 
 interface RawModelArea {
@@ -476,6 +478,7 @@ function compileModeling(
         conceptRefs: stringArray(rawEntity.concept_refs ?? rawEntity.conceptRefs),
         owner: stringValue(rawEntity.owner),
         status: lifecycle(rawEntity.status),
+        ...useInsteadOf(rawEntity.use_instead ?? rawEntity.useInstead, entityDomain),
         sourcePath: relPath,
         identityFingerprint: fingerprint({
           dbt: dbt.identityFingerprint,
@@ -640,6 +643,12 @@ function compileModeling(
 
   validateInterfaces(domainExports, domainImports, entities, diagnostics);
   validateContracts(contracts, entities, diagnostics);
+  // A drafted table pick names an entity that exists.
+  for (const entity of Object.values(entities)) {
+    if (entity.useInstead && !entities[entity.useInstead.entity]) {
+      diagnostics.push({ kind: 'modeling', filePath: entity.sourcePath, severity: 'warning', message: `entity "${entity.localId}" says to use "${entity.useInstead.entity}" instead, and no entity has that id` });
+    }
+  }
   const relationships = buildRelationships(rawRelationships, entities, nodeFacts, domainSources, domainExports, domainImports, contracts, diagnostics);
   for (const relationship of Object.values(relationships)) {
     if (relationship.areaId && areas[relationship.areaId]) areas[relationship.areaId].relationshipIds.push(relationship.qualifiedId);
@@ -1570,6 +1579,15 @@ function stable(value: unknown): unknown {
   const record = asRecord(value);
   if (Object.keys(record).length === 0) return value;
   return Object.fromEntries(Object.keys(record).sort().map((key) => [key, stable(record[key])]));
+}
+
+/** `use_instead: { entity: <id>, reason: <text> }` (or just the id), the entity qualified in its Domain. */
+function useInsteadOf(value: unknown, domain: string): { useInstead?: { entity: string; reason?: string } } {
+  const record = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+  const entity = stringValue(record ? record.entity : value);
+  if (!entity) return {};
+  const reason = record ? stringValue(record.reason) : undefined;
+  return { useInstead: { entity: entity.includes('::') ? entity : qualifiedObjectId(domain, 'entity', entity), ...(reason ? { reason } : {}) } };
 }
 
 function modelingError(filePath: string, message: string): ManifestDiagnostic {

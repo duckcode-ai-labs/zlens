@@ -30,6 +30,8 @@ export const TECHNICAL_SCHEMAS: ReadonlySet<string> = new Set([
   'dev', 'development', 'prod', 'production', 'test', 'testing', 'qa', 'uat', 'sandbox', 'local',
   'staging', 'stg', 'raw', 'src', 'source', 'sources', 'landing', 'intermediate', 'int',
   'analytics', 'marts', 'mart', 'core', 'reporting', 'bronze', 'silver', 'gold',
+  // Layer names (RFC 0012): where data sits after a step, not a business area.
+  'transformed', 'curated', 'cleansed', 'conformed', 'modeled', 'modelled', 'refined', 'prep', 'presentation', 'snapshots',
   'warehouse', 'dw', 'dwh', 'edw', 'information_schema',
 ]);
 

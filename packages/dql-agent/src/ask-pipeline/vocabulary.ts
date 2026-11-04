@@ -101,6 +101,12 @@ export interface VocabularyEntry {
   grain?: string;
   /** A person marked the modeled entity this relation binds deprecated: it is shown so a question that names it is understood, never used for an answer. */
   deprecated?: boolean;
+  /**
+   * A drafted table pick (RFC 0012): the drafted model says this relation
+   * holds the same rows as `relation`, less well (`reason`). Ask answers from
+   * that one unless the question names this table.
+   */
+  useInstead?: { relation: string; reason?: string };
   /** A term's business rules and caveats, kept apart from its description. */
   rules?: string[];
   /**
@@ -212,7 +218,7 @@ export class VocabularyIndex {
     // is a different vocabulary, and the receipt must say so.
     this.fingerprint = `sha256:${createHash('sha256').update(this.entries.map((entry) => [
       entry.ref, entry.kind, entry.roles.join(','), entry.description ?? '', entry.aliases.join(','), (entry.rules ?? []).join('|'),
-      entry.joinAuthority ?? '', entry.policy ? JSON.stringify(entry.policy) : '', (entry.preferredBy ?? []).join(','), entry.grain ?? '', entry.businessContext ?? '', ...(entry.deprecated ? ['deprecated'] : []),
+      entry.joinAuthority ?? '', entry.policy ? JSON.stringify(entry.policy) : '', (entry.preferredBy ?? []).join(','), entry.grain ?? '', entry.businessContext ?? '', ...(entry.deprecated ? ['deprecated'] : []), ...(entry.useInstead ? [`use_instead:${entry.useInstead.relation}`] : []),
     ].join('\u0001')).join('\n')).digest('hex').slice(0, 24)}`;
     for (const entry of this.entries) {
       this.byRef.set(entry.ref.toLowerCase(), entry);
@@ -435,6 +441,7 @@ export function renderCard(entry: VocabularyEntry, options: { preferColumn?: (co
   if (entry.timeRef) bits.push(`time ${entry.timeRef.split('.').pop()}`);
   if (entry.certified) bits.push('certified');
   if (entry.deprecated) bits.push('deprecated: do not use for answers');
+  if (entry.useInstead) bits.push(`a drafted table pick prefers ${entry.useInstead.relation}${entry.useInstead.reason ? ` (${clipText(entry.useInstead.reason, 200)})` : ''}`);
   // A derived or ratio metric shows its formula: what it divides decides
   // whether it is a period ratio or a lifetime one.
   const formula = (entry.metricType === 'derived' || entry.metricType === 'ratio') && entry.expr ? ` = ${entry.expr.replace(/\s+/g, ' ').slice(0, 120)}` : '';
@@ -544,7 +551,7 @@ export interface VocabularySource {
   /** The domain header rendered first, when the request resolved one. */
   domain?: VocabularyDomainHeader;
   /** Authored meaning for physical relations (a modeled entity's business context and grain), keyed by `schema.table`. */
-  relationMeaning?: Record<string, { businessName?: string; businessContext?: string; grain?: string; domain?: string; deprecated?: boolean }>;
+  relationMeaning?: Record<string, { businessName?: string; businessContext?: string; grain?: string; domain?: string; deprecated?: boolean; useInstead?: { relation: string; reason?: string } }>;
 }
 
 /**
@@ -858,6 +865,7 @@ export function buildVocabularyIndex(source: VocabularySource): VocabularyIndex 
     if (meaning.grain) entry.grain = meaning.grain;
     if (meaning.domain) entry.domain = meaning.domain;
     if (meaning.deprecated) entry.deprecated = true;
+    if (meaning.useInstead) entry.useInstead = meaning.useInstead;
   }
   for (const relationship of source.relationships ?? []) {
     entries.push({

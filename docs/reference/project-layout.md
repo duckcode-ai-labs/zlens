@@ -105,6 +105,12 @@ my-dql-project/
 
   It leaves out a table whose entity is `status: deprecated`, unless the
   question names that table.
+
+  An entity can carry a drafted table pick: `use_instead: { entity: <id>,
+  reason: <text> }`. It says another entity holds the same rows better, and
+  why. `zlens model discover --validate` writes these (RFC 0012). Ask answers
+  from the other table unless the question names this one. To confirm, mark
+  the entity `status: deprecated`; to reject, remove `use_instead`.
 - **`blocks/`** — one `.dql` file per block. Governance fields (`domain`,
   `owner`) are required by default; the certification check runs on CI.
 - **`terms/`** — one `.dql` file per `term`. These define business vocabulary,
