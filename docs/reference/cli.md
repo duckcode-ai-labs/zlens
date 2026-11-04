@@ -44,7 +44,7 @@ installation.
 | Command | What it does |
 | --- | --- |
 | `zlens init [dir]` | Initialize ZLens in a project. A dbt project makes a dbt project; a DuckDB file and no dbt makes a Database only project (`warehouse-first`); an empty folder leaves the choice to Guided Setup |
-| `zlens init [dir] --warehouse-first` | Initialize a project that models the database's own tables, no dbt needed (`manifestVersion: 3`, `modeling.mode: "warehouse-first"`) |
+| `zlens init [dir] --warehouse-first` | Initialize a project that models the database's own tables, no dbt needed (`manifestVersion: 3`, `modeling.mode: "warehouse-first"`), even beside a dbt project |
 | `zlens doctor [path]` | Run local setup checks |
 | `zlens doctor scale` | Report enterprise-scale manifest/cache/index health |
 | `zlens doctor git-hygiene` | Flag tracked local/generated files before commit |
@@ -123,7 +123,7 @@ mark for recertification; otherwise it exits 0, including when there is no
 | `zlens model validate [path]` | Validate Domain Packages and relationship proofs |
 | `zlens model discover [path]` | Preview draft domains, entities and joins: from dbt in a dbt-first project, from the warehouse catalog in a warehouse-first one |
 | `zlens model apply-discovery [path] --apply` | Write the previewed drafts as Domain Package proposals (without `--apply`, preview only) |
-| `zlens model draft-meanings [path] [--dry-run] [--max-tables <n>]` | AI first draft of what tables and columns mean, into `meanings/`. Fills gaps only, and a run resumes where it stopped. `--dry-run` shows what it would send and cost, with no model call |
+| `zlens model draft-meanings [path] [--dry-run] [--max-tables <n>]` | AI first draft of what tables and columns mean, into `meanings/`. Fills gaps only, and a run resumes where it stopped. `--dry-run` shows what it would send and cost, with no model call. On a dbt project, run `zlens sync warehouse` (or `dbt docs generate`) first, so the draft sees every column and not only the documented ones; the dry run says when it can't |
 | `zlens model meanings [path]` | Count the tables that are drafted, reviewed, stale or undescribed |
 | `zlens model draft-terms [path] [--domain <id>]` | AI drafts of the words people use, as draft terms that count only once certified |
 | `zlens model draft-metrics [path] [--domain <id>]` | Metric drafts from the aggregates recent queries repeat, each run once on the warehouse (Snowflake, PostgreSQL with `pg_stat_statements`, Databricks, BigQuery) |

@@ -174,12 +174,14 @@ async function runDraftMeanings(rest: string[], flags: CLIFlags): Promise<void> 
   const config = loadProjectConfig(projectRoot);
   const valueProfile = valueProfileAllowed(config as Parameters<typeof valueProfileAllowed>[0], false) ? readValueProfile(projectRoot, snapshot.fingerprint) : undefined;
   const plan = planMeaningDrafts(projectRoot, snapshot, { ...(maxTables ? { maxTables } : {}), ...(valueProfile ? { valueProfile } : {}) });
-  const planSummary = { tables: plan.tables, columns: plan.columns, batches: plan.batches.length, alreadyDone: plan.alreadyDone, overLimit: plan.overLimit, estimatedInputTokens: plan.estimatedInputTokens, estimatedOutputTokens: plan.estimatedOutputTokens, sendsSampleValues: Boolean(valueProfile) };
+  const planSummary = { tables: plan.tables, columns: plan.columns, batches: plan.batches.length, alreadyDone: plan.alreadyDone, overLimit: plan.overLimit, estimatedInputTokens: plan.estimatedInputTokens, estimatedOutputTokens: plan.estimatedOutputTokens, sendsSampleValues: Boolean(valueProfile), columnsUnlisted: snapshot.columnsUnlisted.length };
   const human = flags.format !== 'json';
   if (human) {
     console.log(`To draft: ${plan.tables} tables, ${plan.columns} columns, in ${plan.batches.length} model calls.`);
     if (plan.alreadyDone) console.log(`Already done: ${plan.alreadyDone} tables.`);
     if (plan.overLimit) console.log(`Past the limit, left for the next run: ${plan.overLimit} tables.`);
+    // A manifest holds only documented columns: a draft written from those is written nearly blind.
+    if (snapshot.columnsUnlisted.length) console.log(`! ${snapshot.columnsUnlisted.length} dbt ${snapshot.columnsUnlisted.length === 1 ? 'table lists only the columns its' : 'tables list only the columns their'} YAML documents. Run \`zlens sync warehouse\` (or \`dbt docs generate\`) first, so the draft sees every column.`);
     console.log(`Sends table names, column names, types and keys${valueProfile ? ', and sample values from the value profile' : ''}. ${valueProfile ? '' : 'No rows. '}About ${plan.estimatedInputTokens.toLocaleString('en-US')} tokens in and ${plan.estimatedOutputTokens.toLocaleString('en-US')} out.`);
   }
   if (flags.dryRun === true || plan.tables === 0) {
@@ -205,6 +207,7 @@ async function runDraftMeanings(rest: string[], flags: CLIFlags): Promise<void> 
     console.log(JSON.stringify({ plan: planSummary, report }, null, 2));
   } else {
     console.log(`Drafted ${report.tablesDrafted} tables and ${report.columnsDrafted} column descriptions into meanings/. Nothing is reviewed yet.`);
+    if (report.nothingToAdd) console.log(`  ${report.nothingToAdd} described ${report.nothingToAdd === 1 ? 'table' : 'tables'} had nothing to add.`);
     for (const item of report.dropped) console.log(`  dropped ${item.relation}${item.column ? `.${item.column}` : ''}: ${item.reason}`);
     for (const item of report.failed) console.log(`  not drafted (${item.tables.length} tables): ${item.reason}`);
     if (report.stopped) console.log(`Stopped early: ${report.stopped}`);

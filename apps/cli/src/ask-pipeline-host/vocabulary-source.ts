@@ -321,9 +321,9 @@ function warehouseCatalogRelations(manifest: DQLManifest | undefined, projectRoo
 }
 
 /** The dbt models and sources that have a meaning file, by that file's id. */
-function dbtRelationsWithMeanings(manifest: DQLManifest | undefined, meanings: Map<string, MeaningFileV1>): Map<string, WarehouseCatalogRelationV1> {
+function dbtRelationsWithMeanings(manifest: DQLManifest | undefined, meanings: Map<string, MeaningFileV1>, projectRoot: string | undefined): Map<string, WarehouseCatalogRelationV1> {
   if (![...meanings.keys()].some((id) => id.startsWith('dbt.'))) return new Map();
-  return new Map(dbtMeaningRelations(manifest?.dbtProvenance?.manifestPath ?? '').map((relation) => [relation.id, relation]));
+  return new Map(dbtMeaningRelations(manifest?.dbtProvenance?.manifestPath ?? '', projectRoot).map((relation) => [relation.id, relation]));
 }
 
 /** The tables whose words include a draft nobody has reviewed, as the catalog spells them. */
@@ -333,7 +333,7 @@ export function draftedMeaningRelations(manifest: DQLManifest | undefined, proje
   if (meanings.size === 0) return [];
   const catalogPath = manifest?.dbtProvenance?.warehouseCatalogPath;
   const warehouse = catalogPath ? warehouseCatalogSnapshot(join(projectRoot, catalogPath))?.relations ?? [] : [];
-  return [...warehouse, ...dbtRelationsWithMeanings(manifest, meanings).values()].filter((relation) => {
+  return [...warehouse, ...dbtRelationsWithMeanings(manifest, meanings, projectRoot).values()].filter((relation) => {
     const meaning = relationMeaning(meanings.get(relation.id), relation);
     return meaning !== undefined && meaningHasDraft(meaning);
   }).map((relation) => relation.relation);
@@ -345,7 +345,7 @@ export function embeddedManifestRelations(manifest: DQLManifest | undefined, pro
   if (nodes.length === 0) return warehouse;
   const admitted = new Set(Object.keys(manifest?.dbtProvenance?.nodes ?? {}));
   const meanings = projectRoot ? readMeaningFiles(projectRoot) : new Map<string, MeaningFileV1>();
-  const meaningRelations = dbtRelationsWithMeanings(manifest, meanings);
+  const meaningRelations = dbtRelationsWithMeanings(manifest, meanings, projectRoot);
   const result: NonNullable<VocabularySourceInput['relations']> = [];
   for (const node of nodes) {
     if (admitted.size > 0 && !admitted.has(node.uniqueId)) continue;

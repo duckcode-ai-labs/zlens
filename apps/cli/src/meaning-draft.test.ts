@@ -142,6 +142,30 @@ describe('AI first draft of meanings', () => {
     expect(report.failed[0]?.reason).toBe('the model left these tables out');
   });
 
+  it('a described table the model has nothing to add to is done, not failed, and never sent again', async () => {
+    // dbt describes the table; its columns say what they are (game_id, team_id).
+    const described = table('team_game_facts', { comment: 'One row per team per game.', columns: [{ name: 'game_id', type: 'integer' }, { name: 'team_id', type: 'integer' }] });
+    const seen: string[] = [];
+    const report = await draftMeanings({ projectRoot: root, snapshot: { relations: [described, table('lines')] }, provider: provider((prompt) => {
+      seen.push(prompt);
+      return JSON.stringify({ tables: [{ relation: 'wwi.sales.lines', description: 'One row per product on an invoice.', columns: { extendedprice: 'Line total including tax' } }] });
+    }), date: '2026-11-03' });
+    expect(seen[0]).toContain('For a table marked "described already", give no description and only the columns it lacks, or none.');
+    expect(report.failed).toEqual([]);
+    expect(report.nothingToAdd).toBe(1);
+    expect(report.tablesDrafted).toBe(1);
+    const file = readMeaningFiles(root).get(described.id)!;
+    expect(file).toMatchObject({ columns: {}, columnsFingerprint: relationColumnsFingerprint(described) });
+    expect(file.table).toBeUndefined();
+    expect(planMeaningDrafts(root, { relations: [described, table('lines')] }).tables).toBe(0);
+  });
+
+  it('a table with no description the model leaves out still fails, and is sent again', async () => {
+    const report = await draftMeanings({ projectRoot: root, snapshot: { relations: [table('lines')] }, provider: provider(() => JSON.stringify({ tables: [] })), date: '2026-11-03' });
+    expect(report).toMatchObject({ nothingToAdd: 0, failed: [{ tables: ['wwi.sales.lines'], reason: 'the model left these tables out' }] });
+    expect(planMeaningDrafts(root, { relations: [table('lines')] }).tables).toBe(1);
+  });
+
   it('checks: a made-up column is dropped and listed', () => {
     const checked = checkTableDraft(table('lines'), { description: 'One row per line.', columns: { imaginary: 'Not real', extendedprice: 'Line total including tax' } }, { date: '2026-11-02' });
     expect(Object.keys(checked.columns)).toEqual(['extendedprice']);

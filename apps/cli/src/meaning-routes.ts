@@ -4,7 +4,7 @@
  * of words may do. Accepting takes the AI label off; it certifies nothing.
  */
 
-import { dbtMeaningRelations } from '@zlens/agent';
+import { dbtMeaningCatalog } from '@zlens/agent';
 import {
   meaningEntryInUse,
   meaningFileStale,
@@ -23,17 +23,20 @@ import {
 /**
  * Every table meanings can be written for: the warehouse catalog, and a dbt
  * project's models and sources. A table dbt models counts once, as dbt's.
+ * `columnsUnlisted` names the dbt tables a draft would see only the documented
+ * columns of, until the schema is synced or catalog.json is built.
  */
-export function meaningCatalog(projectRoot: string): { relations: WarehouseCatalogRelationV1[]; fingerprint?: string } | undefined {
+export function meaningCatalog(projectRoot: string): { relations: WarehouseCatalogRelationV1[]; fingerprint?: string; columnsUnlisted: string[] } | undefined {
   const { snapshot } = readWarehouseCatalog(projectRoot);
   const manifestPath = resolveDbtManifestPath(projectRoot);
-  const dbt = manifestPath ? dbtMeaningRelations(manifestPath) : [];
-  if (!snapshot && dbt.length === 0) return undefined;
+  const dbt = manifestPath ? dbtMeaningCatalog(manifestPath, projectRoot) : { relations: [], columnsUnlisted: [] };
+  if (!snapshot && dbt.relations.length === 0) return undefined;
   const tail = (relation: string) => relation.toLowerCase().split('.').slice(-2).join('.');
-  const modeled = new Set(dbt.map((relation) => tail(relation.relation)));
+  const modeled = new Set(dbt.relations.map((relation) => tail(relation.relation)));
   return {
-    relations: [...dbt, ...(snapshot?.relations ?? []).filter((relation) => !modeled.has(tail(relation.relation)))],
+    relations: [...dbt.relations, ...(snapshot?.relations ?? []).filter((relation) => !modeled.has(tail(relation.relation)))],
     ...(snapshot ? { fingerprint: snapshot.fingerprint } : {}),
+    columnsUnlisted: dbt.columnsUnlisted,
   };
 }
 

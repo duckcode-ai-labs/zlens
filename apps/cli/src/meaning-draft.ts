@@ -74,6 +74,8 @@ export interface MeaningDraftReport {
   tablesDrafted: number;
   columnsDrafted: number;
   dropped: MeaningDraftDropped[];
+  /** Tables described already that the model had nothing to add to; a rerun doesn't send them again. */
+  nothingToAdd: number;
   /** Batches that failed; their tables are drafted by the next run. */
   failed: Array<{ tables: string[]; reason: string }>;
   /** Set when the run stopped early, with why. */
@@ -124,7 +126,7 @@ function userPrompt(facts: string[]): string {
   return `${facts.join('\n\n')}\n\n` +
     'Respond with JSON in exactly this shape:\n' +
     '{"tables":[{"relation":"<the table name as given>","description":"what one row is","otherNames":["..."],"columns":{"<column>":"what it holds"}}]}\n' +
-    'Include every table above. Leave out anything marked "described already".';
+    'Include every table above. For a table marked "described already", give no description and only the columns it lacks, or none. Leave out every column marked "described already".';
 }
 
 /** What a run would do, with no model call. The cost shown before anyone chooses to run it. */
@@ -314,7 +316,7 @@ export async function draftMeanings(input: {
 }): Promise<MeaningDraftReport> {
   const plan = planMeaningDrafts(input.projectRoot, input.snapshot, input);
   const referencedBy = referencedByMap(input.snapshot.relations);
-  const report: MeaningDraftReport = { tablesDrafted: 0, columnsDrafted: 0, dropped: [], failed: [] };
+  const report: MeaningDraftReport = { tablesDrafted: 0, columnsDrafted: 0, nothingToAdd: 0, dropped: [], failed: [] };
   const stamp = { ...(input.model ? { model: input.model } : {}), date: input.date };
   let cursor = 0;
   let done = 0;
@@ -366,7 +368,17 @@ export async function draftMeanings(input: {
       report.tablesDrafted += 1;
       report.columnsDrafted += Object.keys(checked.columns).length;
     }
-    const missing = batch.filter((relation) => !answered.has(relation.id)).map((relation) => relation.relation);
+    // A table described already that the model leaves out had nothing to add,
+    // as one it answers with no columns: its file says so, so a rerun skips it.
+    const missing: string[] = [];
+    for (const relation of batch.filter((item) => !answered.has(item.id))) {
+      if (!relation.comment) {
+        missing.push(relation.relation);
+        continue;
+      }
+      writeMeaningFile(input.projectRoot, mergeMeaningDraft(readMeaningFiles(input.projectRoot).get(relation.id), relation, { columns: {} }));
+      report.nothingToAdd += 1;
+    }
     if (missing.length) report.failed.push({ tables: missing, reason: 'the model left these tables out' });
   };
 

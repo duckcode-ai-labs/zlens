@@ -158,6 +158,23 @@ describe('runInit', () => {
     expect(config.modeling).toEqual({ mode: 'dbt-first' });
   });
 
+  it('--warehouse-first models the database even beside a dbt project, and still finds its DuckDB file', async () => {
+    const repoDir = mkdtempSync(join(tmpdir(), 'dql-init-dbt-warehouse-first-'));
+    const dqlDir = join(repoDir, 'dql');
+    writeFileSync(join(repoDir, 'dbt_project.yml'), 'name: "nba"\n');
+    writeFileSync(join(repoDir, 'nba.duckdb'), '');
+
+    await runInit(dqlDir, { ...INIT_FLAGS, warehouseFirst: true });
+
+    const config = JSON.parse(readFileSync(join(dqlDir, 'dql.config.json'), 'utf-8'));
+    expect(config.modeling).toEqual({ mode: 'warehouse-first' });
+    expect(config.manifestVersion).toBe(3);
+    expect(config.dbt).toBeUndefined();
+    expect(config.semanticLayer).toEqual({ provider: 'dql' });
+    expect(config.connections.default).toEqual({ driver: 'duckdb', filepath: '../nba.duckdb' });
+    expect(detectFolderContents(dqlDir, { warehouseFirst: true })).toMatchObject({ isDbt: false, dbtProjectDir: null });
+  });
+
   it('keeps dbt semantic definitions read-only instead of copying them into DQL', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-dbt-semantic-'));
     const metricsDir = join(projectDir, 'models', 'metrics');

@@ -5014,60 +5014,129 @@ function addDbtDagObjects(
   }
 }
 
-const dbtMeaningCache = new Map<string, { key: string; relations: WarehouseCatalogRelationV1[] }>();
+export interface DbtMeaningCatalog {
+  relations: WarehouseCatalogRelationV1[];
+  /**
+   * Models and sources whose columns are only the ones their YAML documents:
+   * neither catalog.json nor the schema ZLens synced lists them.
+   */
+  columnsUnlisted: string[];
+}
+
+const dbtMeaningCache = new Map<string, { key: string; catalog: DbtMeaningCatalog }>();
+
+/** A file's size and time, or `none`: enough to see that it changed. */
+function fileStamp(path: string): string {
+  try {
+    const stat = statSync(path);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return 'none';
+  }
+}
+
+/**
+ * The columns the schema ZLens synced from the warehouse lists for a relation.
+ * `schema.name` decides. Where the sync names a table with its database
+ * (Snowflake, Databricks, BigQuery) the database has to agree too; elsewhere it
+ * names none, since a DuckDB file's database is just the file's name. A name
+ * two databases share with nothing to tell them apart lists nothing.
+ */
+function syncedSchemaColumns(snapshot: RuntimeSchemaSnapshot | null): (relation: string) => RuntimeSchemaColumn[] | undefined {
+  const byName = new Map<string, Array<{ database?: string; columns: RuntimeSchemaColumn[] }>>();
+  for (const table of snapshot?.tables ?? []) {
+    const parts = table.relation.replace(/["`]/g, '').toLowerCase().split('.');
+    const name = table.name?.toLowerCase() ?? parts[parts.length - 1];
+    const schema = table.schema?.toLowerCase() ?? parts[parts.length - 2];
+    if (!name || !schema || table.columns.length === 0) continue;
+    const key = `${schema}.${name}`;
+    const database = parts.length >= 3 ? parts[parts.length - 3] : undefined;
+    byName.set(key, [...(byName.get(key) ?? []), { ...(database ? { database } : {}), columns: table.columns }]);
+  }
+  return (relation) => {
+    const parts = relation.toLowerCase().split('.');
+    const database = parts.length >= 3 ? parts[parts.length - 3] : undefined;
+    const found = (byName.get(parts.slice(-2).join('.')) ?? []).filter((table) => !database || !table.database || table.database === database);
+    return found.length === 1 ? found[0]!.columns : undefined;
+  };
+}
 
 /**
  * A dbt project's models and sources as meaning files see them, so an AI draft
  * can fill the gaps its descriptions leave. A dbt description plays the part of
- * a warehouse comment: a draft never replaces one. The columns are the ones
- * catalog.json lists when it's there, since a manifest holds only documented ones.
+ * a warehouse comment: a draft never replaces one. A manifest holds only the
+ * columns someone documented, so the columns are the ones catalog.json lists,
+ * else the ones the schema ZLens synced from the warehouse lists (Sync schema,
+ * `zlens sync warehouse`), else the documented ones. Every reader passes the
+ * project, so a draft and the readers checking it see the same columns.
  */
-export function dbtMeaningRelations(manifestPath: string): WarehouseCatalogRelationV1[] {
+export function dbtMeaningCatalog(manifestPath: string, projectRoot?: string): DbtMeaningCatalog {
+  const catalogPath = join(dirname(manifestPath), 'catalog.json');
   let key: string;
   try {
     const stat = statSync(manifestPath);
-    key = `${stat.mtimeMs}|${stat.size}`;
+    key = `${stat.mtimeMs}|${stat.size}|${fileStamp(catalogPath)}`;
   } catch {
-    return [];
+    return { relations: [], columnsUnlisted: [] };
   }
-  const cached = dbtMeaningCache.get(manifestPath);
-  if (cached?.key === key) return cached.relations;
+  // Reading the synced schema never creates the project's metadata catalog.
+  let synced: RuntimeSchemaSnapshot | null = null;
+  if (projectRoot && existsSync(defaultMetadataPath(projectRoot))) {
+    try {
+      synced = latestRuntimeSchemaSnapshotForProject(projectRoot);
+    } catch { /* a catalog that can't be read lists nothing */ }
+  }
+  key += `|${synced?.generationId ?? synced?.capturedAt ?? ''}`;
+  const cacheKey = `${manifestPath}\u0000${projectRoot ?? ''}`;
+  const cached = dbtMeaningCache.get(cacheKey);
+  if (cached?.key === key) return cached.catalog;
   let raw: { nodes?: Record<string, Record<string, unknown>>; sources?: Record<string, Record<string, unknown>> };
   try {
     raw = JSON.parse(readFileSync(manifestPath, 'utf-8')) as typeof raw;
   } catch {
-    return [];
+    return { relations: [], columnsUnlisted: [] };
   }
-  const catalogColumns = loadRawDbtCatalogColumns(join(dirname(manifestPath), 'catalog.json'));
+  const catalogColumns = loadRawDbtCatalogColumns(catalogPath);
+  const syncedColumns = syncedSchemaColumns(synced);
   const relations: WarehouseCatalogRelationV1[] = [];
+  const columnsUnlisted: string[] = [];
   for (const [uniqueId, node] of [...Object.entries(raw.nodes ?? {}), ...Object.entries(raw.sources ?? {})]) {
     if (node.resource_type !== 'model' && node.resource_type !== 'source') continue;
     const name = rawDbtName(node);
     if (!name) continue;
     const documented = rawDbtColumns(node.columns);
     const described = new Map(documented.map((column) => [column.name.toLowerCase(), column.description]));
-    const listed = catalogColumns.get(uniqueId);
     const database = stringValue(node.database);
     const schema = stringValue(node.schema);
     const comment = stringValue(node.description);
+    const relation = (stringValue(node.relation_name) ?? [database, schema, name].filter(Boolean).join('.')).replace(/["`]/g, '');
+    const fromCatalog = catalogColumns.get(uniqueId);
+    const listed = fromCatalog?.length ? fromCatalog : syncedColumns(relation);
+    if (!listed?.length) columnsUnlisted.push(relation);
     relations.push({
       id: `${DBT_MEANING_PREFIX}${uniqueId}`,
       ...(database ? { database } : {}),
       ...(schema ? { schema } : {}),
       name,
-      relation: (stringValue(node.relation_name) ?? [database, schema, name].filter(Boolean).join('.')).replace(/["`]/g, ''),
+      relation,
       kind: 'table',
       ...(comment ? { comment } : {}),
       columns: (listed?.length ? listed : documented).map((column) => {
-        // A dbt description or the warehouse's own comment in catalog.json: either is words a draft never replaces.
+        // A dbt description or the warehouse's own comment: either is words a draft never replaces.
         const words = described.get(column.name.toLowerCase()) ?? column.description;
         return { name: column.name, ...(column.type ? { type: column.type } : {}), ...(words ? { comment: words } : {}) };
       }),
     });
   }
+  const catalog = { relations, columnsUnlisted };
   dbtMeaningCache.clear();
-  dbtMeaningCache.set(manifestPath, { key, relations });
-  return relations;
+  dbtMeaningCache.set(cacheKey, { key, catalog });
+  return catalog;
+}
+
+/** The relations of {@link dbtMeaningCatalog}. */
+export function dbtMeaningRelations(manifestPath: string, projectRoot?: string): WarehouseCatalogRelationV1[] {
+  return dbtMeaningCatalog(manifestPath, projectRoot).relations;
 }
 
 /** A dbt model's or source's drafted and reviewed words, on top of what dbt says. */
@@ -5080,7 +5149,7 @@ function addDbtMeaningObjects(
   if (![...meanings.keys()].some((id) => id.startsWith(DBT_MEANING_PREFIX))) return;
   const manifestPath = manifest.dbtImport?.manifestPath ?? resolveDbtManifestPath(projectRoot);
   if (!manifestPath) return;
-  const relations = new Map(dbtMeaningRelations(manifestPath).map((relation) => [relation.id, relation]));
+  const relations = new Map(dbtMeaningRelations(manifestPath, projectRoot).map((relation) => [relation.id, relation]));
   for (const object of [...objects.values()]) {
     if (object.objectType !== 'dbt_model' && object.objectType !== 'dbt_source') continue;
     const id = `${DBT_MEANING_PREFIX}${String(object.payload?.uniqueId ?? '')}`;

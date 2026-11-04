@@ -1089,6 +1089,7 @@ export {
   MetadataCatalog,
   buildLocalContextPack,
   buildMetadataSnapshot,
+  dbtMeaningCatalog,
   dbtMeaningRelations,
   defaultMetadataPath,
   metadataSnapshotPath,
@@ -1348,6 +1349,7 @@ export type {
   RuntimeSchemaColumn,
   RuntimeSchemaScope,
   RuntimeSchemaObservedTarget,
+  DbtMeaningCatalog,
 } from "./metadata/catalog.js";
 export type {
   SqlContextValidationCode,

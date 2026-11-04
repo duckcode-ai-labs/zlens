@@ -228,6 +228,12 @@ describe('direct CLI Ask trace bridge (OBS-001, OBS-007)', () => {
 });
 
 describe('agent eval answer harness', () => {
+  it('reads an eval file from the project root, or from an absolute path as given', () => {
+    expect(__test__.evalFilePath('/work/project', 'tests/evals.yml')).toBe('/work/project/tests/evals.yml');
+    expect(__test__.evalFilePath('/work/project', '/bench/nba/evals.yml')).toBe('/bench/nba/evals.yml');
+    expect(__test__.evalFilePath('/work/project', undefined)).toBe('/work/project/agent-evals.yml');
+  });
+
   it('scores a benchmark question by its correct answer, ignoring column names', () => {
     const answered = answerResult({ result: { columns: ['policy', 'losses'], rows: [{ policy: 'P2', losses: 20 }, { policy: 'P1', losses: 10 }] } as AgentAnswer['result'] });
     const expected = { goldRows: [{ policy_number: 'P1', total_loss: 10 }, { policy_number: 'P2', total_loss: 20 }], goldSql: 'select ...' };
