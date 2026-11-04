@@ -423,6 +423,17 @@ On an empty DuckDB with GitLab's 180 schemas and 4,779 tables:
 schemas (`common`, `restricted_safe_common`) name no business area. Query
 history (decision S-D11) is the evidence that can place them.
 
+#### Drafting one subject area at a time (design S1, S4)
+
+`zlens model draft --select area:<id>` (zlens#258) drafts one area of a large
+project. Each run:
+
+- **places each drafted table in its proposed area,** writing the area's file first (`modeling/areas/<id>.dql.yaml`). A table with no area named stays in the Domain's default area;
+- **drafts a table that three or more Domains read into the Shared area** (`shared: true`, in the `shared` Domain), once;
+- **reads, without drafting again,** the tables other areas already model next to its own (what its tables read or are read by, or declare a join to) and every Shared table, so the joins to them are drafted and checked;
+- **lists each area's tables in other areas that its joins reach** as boundary references (`references:`). An area that exists keeps its name, and its references only grow;
+- **lists declared joins (dbt `relationships` tests)** to tables nobody has drafted yet, as "Joins left for another run".
+
 ## Backward compatibility
 
 - No existing field changes.

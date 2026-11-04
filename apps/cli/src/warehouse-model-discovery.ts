@@ -50,9 +50,22 @@ export interface DiscoveredDomain {
   existing: boolean;
 }
 
+/** A subject area a draft places tables in (model-at-scale design S1, S4). */
+export interface DiscoveredArea {
+  id: string;
+  domain: string;
+  name: string;
+  /** The Shared area: tables several areas read and none owns. */
+  shared?: boolean;
+  /** Tables of other areas its joins reach, shown read-only at the edge of its diagram (`domain::entity::id`). */
+  references: string[];
+}
+
 export interface DiscoveredEntity {
   id: string;
   domain: string;
+  /** The subject area inside the domain the draft places it in; none means the default area. */
+  area?: string;
   relationId: string;
   relation: string;
   kind: WarehouseCatalogRelationV1['kind'];
@@ -137,6 +150,8 @@ export interface WarehouseDiscoveryReport {
   catalogFingerprint: string;
   capturedAt: string;
   relations: number;
+  /** Subject areas the draft places tables in, each written before its tables. */
+  areas?: DiscoveredArea[];
   /**
    * What this run drafted of a dbt project (model-at-scale design S4): the
    * scope asked for, the budget, and the tables over it, most important first.
@@ -148,6 +163,10 @@ export interface WarehouseDiscoveryReport {
     budget: number;
     leftOut: Array<{ uniqueId: string; relation: string; layer: TableLayer }>;
     areas: Array<{ id: string; tables: number }>;
+    /** Tables other areas already model, read so joins to them can be drafted; never redrafted. */
+    context?: number;
+    /** Declared joins (dbt relationships tests) to tables neither drafted nor modeled yet: drafted with their own area. */
+    outside?: Array<{ from: string; to: string; column: string }>;
   };
   domains: DiscoveredDomain[];
   entities: DiscoveredEntity[];
@@ -878,6 +897,20 @@ export function warehouseDiscoveryChanges(report: WarehouseDiscoveryReport, opti
     if (domain.existing) continue;
     changes.push({ operation: 'upsert_domain', value: { id: domain.id, name: domain.name, ...(options.owner ? { owner: options.owner } : {}), description: 'Drafted from the warehouse catalog; review before governance use.' } });
   }
+  // Areas before their tables: a table placed in an area is written into its file.
+  for (const area of report.areas ?? []) {
+    changes.push({
+      operation: 'upsert_area',
+      value: {
+        id: area.id,
+        domain: area.domain,
+        name: area.name,
+        ...(area.shared ? { shared: true, description: 'Tables several areas read and none owns: modeled once, read by each.' } : {}),
+        ...(area.references.length ? { references: area.references } : {}),
+      },
+    });
+  }
+  const areaOf = new Map(report.entities.map((entity) => [`${entity.domain}::${entity.id}`, entity.area]));
   for (const entity of report.entities) {
     if (entity.existing) continue;
     changes.push({
@@ -885,6 +918,7 @@ export function warehouseDiscoveryChanges(report: WarehouseDiscoveryReport, opti
       value: {
         id: entity.id,
         domain: entity.domain,
+        ...(entity.area ? { areaId: entity.area } : {}),
         dbtModel: entity.relationId,
         businessName: entity.businessName,
         ...(entity.description ? { businessContext: entity.description } : {}),
@@ -902,7 +936,8 @@ export function warehouseDiscoveryChanges(report: WarehouseDiscoveryReport, opti
       value: {
         id: relationship.id,
         domain: relationship.domain,
-        // The relationship lives in the "from" entity's domain.
+        // The relationship lives in the "from" entity's domain, and in its area.
+        ...(areaOf.get(`${relationship.fromDomain}::${relationship.from}`) && relationship.domain === relationship.fromDomain ? { areaId: areaOf.get(`${relationship.fromDomain}::${relationship.from}`)! } : {}),
         from: relationship.from,
         to: crossDomain ? `${relationship.toDomain}::entity::${relationship.to}` : relationship.to,
         keys: relationship.keys,

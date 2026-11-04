@@ -27,6 +27,13 @@ owned by its active Area and may cross Areas; cross-domain policy remains the
 same explicit relationship/export/import/contract path. Area selection boosts
 retrieval only after the domain and lifecycle gates have passed.
 
+An Area marked `shared: true` is the Shared area (model-at-scale design S1):
+tables several Areas read and none owns, such as accounts and dates. It is
+modeled once, in its own `shared` Domain, and other Areas list its tables as
+boundary references instead of copying them. `zlens model draft` places each
+drafted table in the Area the domain finder proposes, and a table several
+Domains read in the Shared area.
+
 ## Entity bindings
 
 Each binding resolves a qualified entity to one dbt unique ID. It may add a

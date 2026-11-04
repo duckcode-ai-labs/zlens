@@ -1181,6 +1181,12 @@ export interface ManifestModelArea {
   relationshipIds: string[];
   /** Read-only boundary nodes shown in this area's focused diagram. */
   referencedEntityIds: string[];
+  /**
+   * The Shared area (model-at-scale design S1): tables several areas read
+   * and none owns, modeled once and shown at the edge of each area that
+   * reads them.
+   */
+  shared?: boolean;
   sourcePath: string;
   layoutPath?: string;
 }

@@ -8,6 +8,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Drafts land in subject areas, with a Shared area (model-at-scale design S1, S4)
+
+- **`zlens model draft` places each drafted table in the subject area the domain finder proposed.**
+  - It writes the area's file first, so `common_mart_sales` tables land in *sales*, not in the default area.
+- **A Shared area for tables several areas read** (`shared: true` on the area). An account or date table is drafted into it once.
+  - Each area lists the tables of other areas its joins reach, so its diagram can show them at its edge.
+  - An area that already exists keeps its name, and its list only grows.
+- **One area at a time.**
+  - A run also reads the tables other areas already model next to its own, and every Shared table, then drafts the joins to them, never drafting those tables again.
+  - Declared joins to tables nobody has drafted yet are listed, not lost: "Joins left for another run".
+- **On GitLab:** `--select area:sales` puts 46 tables in *sales* and 26 in *Shared*.
+
 ### Draft a large dbt project a piece at a time (model-at-scale design S3, S4)
 
 - **`zlens model draft --select <term>…` drafts only the picked tables, as dbt picks them.**

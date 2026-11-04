@@ -224,6 +224,7 @@ import {
   renderSemanticBlockSource,
   discoverDbtDomains,
   collectDbtRelationshipTests,
+  SHARED_DOMAIN,
   renderDomainDeclaration,
   writeTermDeclaration,
   deleteTermDeclaration,
@@ -894,6 +895,7 @@ import {
   recordDiscoveryDecisions,
   validateWarehouseDiscovery,
   warehouseDiscoveryChanges,
+  type DiscoveredArea,
   type DiscoveryDecision,
   type WarehouseDiscoveryReport,
 } from './warehouse-model-discovery.js';
@@ -39065,12 +39067,17 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
   // Only the tables this run drafts are read and measured: a scope picks them,
   // and over the budget the most important are kept and the rest listed.
   const allNodes = dbtWarehouseNodes(dbtManifest);
-  const draftScope = resolveDraftScope({ nodes: allNodes, dbtManifest: dbtManifest as unknown as Record<string, unknown>, facts: readDbtRelationFacts(dbtManifestPath), domains }, options.scope ?? {});
+  const relationFacts = readDbtRelationFacts(dbtManifestPath);
+  const draftScope = resolveDraftScope({ nodes: allNodes, dbtManifest: dbtManifest as unknown as Record<string, unknown>, facts: relationFacts, domains }, options.scope ?? {});
   const inScope = new Set(draftScope.ids);
-  const nodes = allNodes.filter((node) => inScope.has(node.uniqueId));
-  if (nodes.length === 0) {
+  if (inScope.size === 0) {
     throw Object.assign(new Error(`Nothing in the dbt project matches ${draftScope.description}.`), { code: 'DRAFT_SCOPE_EMPTY' });
   }
+  const manifest = options.manifest ?? buildManifest({ projectRoot, dbtManifestPath });
+  // Tables other areas already model are read too, so joins to them are
+  // drafted; they are never drafted again (model-at-scale design S4).
+  const around = tablesAroundScope(inScope, manifest, relationFacts, dbtManifest as unknown as Record<string, unknown>);
+  const nodes = allNodes.filter((node) => inScope.has(node.uniqueId) || around.context.has(node.uniqueId));
   const scopedRelations = new Set(nodes.flatMap((node) => [node.relation.toLowerCase(), `${node.schema}.${node.relation.split('.').pop()}`.toLowerCase()]));
   const scopes = dbtWarehouseScopes(nodes, (connection as { database?: string }).database ?? (connection as { catalog?: string }).catalog);
   const { relations: schemaRelations } = await readWarehouseCatalogRelations({ executor: options.executor, connection, scopes });
@@ -39082,7 +39089,6 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
   const nameOf = new Map(domains.proposals.map((proposal) => [proposal.id, proposal.name]));
   const domainOfNode = new Map(domains.memberships.flatMap((membership) => (membership.proposedDomain ? [[membership.dbtUniqueId, membership.proposedDomain] as const] : [])));
   const projectDomain = domains.proposals.length === 1 ? domains.proposals[0]! : undefined;
-  const manifest = options.manifest ?? buildManifest({ projectRoot, dbtManifestPath });
   const report = discoverWarehouseModel({
     snapshot,
     manifest,
@@ -39097,7 +39103,96 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
     decisions: readDiscoveryLedger(projectRoot).relationships,
   });
   const checked = await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest });
-  return { ...checked, scope: { description: draftScope.description, asked: draftScope.asked, drafted: snapshot.relations.length, budget: draftScope.budget, leftOut: draftScope.leftOut, areas: draftScope.areas } };
+  const relationOf = new Map(allNodes.map((node) => [node.uniqueId, node.relation]));
+  const outside = around.outside.map((edge) => ({ from: relationOf.get(edge.from) ?? edge.from, to: relationOf.get(edge.to) ?? edge.to, column: edge.column }));
+  const drafted = snapshot.relations.filter((relation) => inScope.has(relation.id)).length;
+  return {
+    ...placeInAreas(checked, domains, manifest),
+    scope: { description: draftScope.description, asked: draftScope.asked, drafted, budget: draftScope.budget, leftOut: draftScope.leftOut, areas: draftScope.areas, context: around.context.size, outside },
+  };
+}
+
+/**
+ * The tables around a draft's scope (model-at-scale design S4): those other
+ * areas already model that a scope table reads, is read by or declares a join
+ * to, and every table of the Shared area, read so joins to them are drafted;
+ * and the declared joins (dbt relationships tests) that reach a table neither
+ * drafted nor modeled yet, listed for its own area's run.
+ */
+function tablesAroundScope(
+  inScope: ReadonlySet<string>,
+  manifest: DQLManifest,
+  relationFacts: Map<string, { uniqueId: string; dependsOn: string[] }>,
+  dbtManifest: Record<string, unknown>,
+): { context: Set<string>; outside: Array<{ from: string; to: string; column: string }> } {
+  const modeled = Object.values(manifest.modeling?.entities ?? {});
+  const modeledIds = new Set(modeled.map((entity) => entity.dbtUniqueId).filter((id): id is string => Boolean(id)));
+  const near = new Set<string>();
+  for (const fact of relationFacts.values()) {
+    if (inScope.has(fact.uniqueId)) for (const parent of fact.dependsOn) near.add(parent);
+    if (fact.dependsOn.some((parent) => inScope.has(parent))) near.add(fact.uniqueId);
+  }
+  for (const entity of modeled) if (entity.domain === SHARED_DOMAIN && entity.dbtUniqueId) near.add(entity.dbtUniqueId);
+  const outside: Array<{ from: string; to: string; column: string }> = [];
+  for (const edge of collectDbtRelationshipTests(dbtManifest)) {
+    const fromIn = inScope.has(edge.fromDbtUniqueId);
+    const toIn = inScope.has(edge.toDbtUniqueId);
+    if (fromIn === toIn) continue;
+    const other = fromIn ? edge.toDbtUniqueId : edge.fromDbtUniqueId;
+    if (modeledIds.has(other)) near.add(other);
+    else outside.push({ from: edge.fromDbtUniqueId, to: edge.toDbtUniqueId, column: edge.fromColumn });
+  }
+  const context = new Set([...near].filter((id) => modeledIds.has(id) && !inScope.has(id)));
+  return { context, outside };
+}
+
+/**
+ * Place each drafted table in the subject area the domain finder proposed
+ * (model-at-scale design S1, S4): the Shared area for a table several domains
+ * read, its own area otherwise, and the default area when none is named. An
+ * area that exists keeps its name; the tables of other areas its joins reach
+ * are added to what it shows at its edge.
+ */
+function placeInAreas(report: WarehouseDiscoveryReport, domains: ReturnType<typeof discoverDbtDomains>, manifest: DQLManifest): WarehouseDiscoveryReport {
+  const membershipOf = new Map(domains.memberships.map((membership) => [membership.dbtUniqueId, membership]));
+  const areaSlug = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+  const entities = report.entities.map((entity) => {
+    if (entity.existing) return entity;
+    const membership = membershipOf.get(entity.relationId);
+    if (!membership?.proposedDomain || membership.proposedDomain !== entity.domain) return entity;
+    if (membership.proposedDomain === SHARED_DOMAIN) return { ...entity, area: SHARED_DOMAIN };
+    return membership.proposedArea ? { ...entity, area: areaSlug(membership.proposedArea) } : entity;
+  });
+  // Where each table sits, drafted or already modeled: `domain::area`, or `domain::` for the default area.
+  const modeledArea = new Map(Object.values(manifest.modeling?.entities ?? {}).map((entity) => [`${entity.domain}::${entity.localId ?? entity.id}`, entity.areaId?.split('::').pop() ?? '']));
+  const placeOf = (domain: string, id: string) => `${domain}::${entities.find((entity) => entity.domain === domain && entity.id === id && !entity.existing)?.area ?? modeledArea.get(`${domain}::${id}`) ?? ''}`;
+  const areaKeys = [...new Set(entities.filter((entity) => !entity.existing && entity.area).map((entity) => `${entity.domain}::${entity.area}`))].sort();
+  if (areaKeys.length === 0) return { ...report, entities };
+  const existingAreas = Object.values(manifest.modeling?.areas ?? {});
+  const areas: DiscoveredArea[] = areaKeys.map((key) => {
+    const [domain, id] = key.split('::') as [string, string];
+    const existing = existingAreas.find((area) => area.domain === domain && area.localId === id);
+    const references = new Set(existing?.referencedEntityIds ?? []);
+    for (const relationship of report.relationships) {
+      const ends = [
+        { domain: relationship.fromDomain, id: relationship.from },
+        { domain: relationship.toDomain, id: relationship.to },
+      ];
+      const inside = ends.filter((end) => placeOf(end.domain, end.id) === key);
+      if (inside.length !== 1) continue;
+      const other = ends.find((end) => placeOf(end.domain, end.id) !== key)!;
+      references.add(other.domain === domain ? other.id : `${other.domain}::entity::${other.id}`);
+    }
+    const shared = (domain === SHARED_DOMAIN && id === SHARED_DOMAIN) || existing?.shared === true;
+    return {
+      id,
+      domain,
+      name: existing?.name ?? (shared ? 'Shared' : id.split('_').filter(Boolean).map((word) => `${word[0]!.toUpperCase()}${word.slice(1)}`).join(' ')),
+      ...(shared ? { shared: true } : {}),
+      references: [...references].sort(),
+    };
+  });
+  return { ...report, entities, areas };
 }
 
 /** Write a discovery report's drafts (optionally only the chosen ones) through the reviewed modeling path. */
