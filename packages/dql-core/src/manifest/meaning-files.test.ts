@@ -86,6 +86,14 @@ describe('meaning files', () => {
     expect(relationMeaning(file(), changed)).toBeUndefined();
   });
 
+  it('a draft is not judged stale when only some of the columns can be seen', () => {
+    // A dbt model on a fresh clone: only its documented column, no schema sync yet.
+    const partial = { columns: [columns[0]!], columnsIncomplete: true as const };
+    expect(meaningFileStale(file(), partial)).toBe(false);
+    expect(relationMeaning(file(), partial)?.description?.text).toBe('One row per product on an invoice.');
+    expect(meaningFileStale(file(), { columns: [columns[0]!] })).toBe(true);
+  });
+
   it("a person's words outlive a schema change", () => {
     const changed = { columns: [...columns, { name: 'discount', type: 'numeric' }] };
     const edited = file({ columns: { extendedprice: { description: 'Line total', source: 'person' }, taxamount: { description: 'old draft', source: 'ai' } } });

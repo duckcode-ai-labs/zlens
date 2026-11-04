@@ -152,6 +152,8 @@ describe('what dbt leaves blank', () => {
     expect(catalog.relations[1]?.columns).toEqual([{ name: 'customer_id', type: 'INTEGER' }]);
     expect(catalog.relations[2]?.columns).toEqual([]);
     expect(catalog.columnsUnlisted).toEqual(['shop.raw.payments']);
+    // Only the table nothing lists is marked as showing some of its columns.
+    expect(catalog.relations.map((relation) => relation.columnsIncomplete)).toEqual([undefined, undefined, true]);
     // Without the project, only what dbt documents.
     expect(dbtMeaningRelations(manifestPath())[0]?.columns).toEqual([{ name: 'order_id', type: 'integer', comment: 'The order key' }]);
   });

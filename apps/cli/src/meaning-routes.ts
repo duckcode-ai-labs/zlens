@@ -233,17 +233,19 @@ export function acceptMeanings(
       continue;
     }
     // Only drafts in use are accepted. A draft behind a warehouse comment or a
-    // dbt description was never shown, so it stays a draft, out of use.
+    // dbt description was never shown, so it stays a draft, out of use; so
+    // does one for a column the table's list doesn't show (a dbt model whose
+    // other columns can't be seen yet).
     const comments = new Map(relation.columns.map((column) => [column.name.toLowerCase(), column.comment]));
-    const reviewed = (entry: MeaningEntryV1, comment: string | undefined): MeaningEntryV1 => {
-      if (entry.source !== 'ai' || comment) return entry;
+    const reviewed = (entry: MeaningEntryV1, comment: string | undefined, shown = true): MeaningEntryV1 => {
+      if (entry.source !== 'ai' || comment || !shown) return entry;
       const { evidence: _evidence, ...kept } = entry;
       return { ...kept, source: 'person', date };
     };
     writeMeaningFile(projectRoot, {
       ...file,
       ...(file.table ? { table: { ...reviewed(file.table, relation.comment), ...(file.table.otherNames ? { otherNames: file.table.otherNames } : {}) } } : {}),
-      columns: Object.fromEntries(Object.entries(file.columns).map(([name, entry]) => [name, reviewed(entry, comments.get(name.toLowerCase()))])),
+      columns: Object.fromEntries(Object.entries(file.columns).map(([name, entry]) => [name, reviewed(entry, comments.get(name.toLowerCase()), comments.has(name.toLowerCase()))])),
     });
     outcome.accepted += 1;
   }

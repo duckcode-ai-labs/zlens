@@ -179,8 +179,13 @@ export function writeMeaningFile(projectRoot: string, file: MeaningFileV1): void
   renameSync(temporary, path);
 }
 
-/** Whether a file was written against other columns than the table has now. */
-export function meaningFileStale(file: Pick<MeaningFileV1, 'columnsFingerprint'>, relation: Pick<WarehouseCatalogRelationV1, 'columns'>): boolean {
+/**
+ * Whether a file was written against other columns than the table has now.
+ * When only some of the columns can be seen, that can't be told, and the file
+ * stands: a fresh clone keeps its drafts in use, and a draft run leaves them.
+ */
+export function meaningFileStale(file: Pick<MeaningFileV1, 'columnsFingerprint'>, relation: Pick<WarehouseCatalogRelationV1, 'columns' | 'columnsIncomplete'>): boolean {
+  if (relation.columnsIncomplete) return false;
   return file.columnsFingerprint !== relationColumnsFingerprint(relation);
 }
 
@@ -189,7 +194,7 @@ export function meaningFileStale(file: Pick<MeaningFileV1, 'columnsFingerprint'>
  * own comment, then a draft that isn't stale. A column the table no longer has
  * says nothing.
  */
-export function relationMeaning(file: MeaningFileV1 | undefined, relation: Pick<WarehouseCatalogRelationV1, 'comment' | 'columns'>): RelationMeaning | undefined {
+export function relationMeaning(file: MeaningFileV1 | undefined, relation: Pick<WarehouseCatalogRelationV1, 'comment' | 'columns' | 'columnsIncomplete'>): RelationMeaning | undefined {
   if (!file) return undefined;
   const stale = meaningFileStale(file, relation);
   const usable = (entry: MeaningEntryV1 | undefined, comment: string | undefined): entry is MeaningEntryV1 => meaningEntryInUse(entry, stale, comment);

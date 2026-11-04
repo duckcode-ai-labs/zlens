@@ -43,6 +43,12 @@ export interface WarehouseCatalogRelationV1 {
   kind: 'table' | 'view' | 'materialized_view';
   comment?: string;
   columns: WarehouseCatalogColumnV1[];
+  /**
+   * The columns are only some of the table's: a dbt model's documented ones,
+   * with no catalog.json or schema sync to list the rest (a fresh clone, say).
+   * Nothing can be judged stale against them.
+   */
+  columnsIncomplete?: true;
   /** Declared primary key (enforced or informational). */
   primaryKey?: string[];
   foreignKeys?: WarehouseCatalogForeignKeyV1[];

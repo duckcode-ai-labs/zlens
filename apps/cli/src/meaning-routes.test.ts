@@ -6,7 +6,7 @@ import { readMeaningFiles, relationColumnsFingerprint, relationMeaning, writeMea
 import { recordRuntimeSchemaSnapshot, SCHEMA_SYNC_SOURCE } from '@zlens/agent';
 import { draftedMeaningRelations } from './ask-pipeline-host/vocabulary-source.js';
 import { routeAction } from './host/route-actions.js';
-import { draftMeanings } from './meaning-draft.js';
+import { draftMeanings, meaningsStatus, planMeaningDrafts } from './meaning-draft.js';
 import { acceptMeanings, meaningCatalog, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
 
 const lines: WarehouseCatalogRelationV1 = {
@@ -178,5 +178,26 @@ describe('a dbt project with no catalog.json', () => {
     // The readers see the same columns, so the draft is current, not stale.
     const manifest = { dbtProvenance: { manifestPath: join(root, 'target', 'manifest.json') } } as unknown as DQLManifest;
     expect(draftedMeaningRelations(manifest, root)).toEqual(['nba.transformed.team_game_facts']);
+  });
+
+  it('a fresh clone, with no schema sync yet, keeps the drafts in use and leaves them alone', async () => {
+    recordRuntimeSchemaSnapshot(root, {
+      generationId: 'nba-2', source: SCHEMA_SYNC_SOURCE, connectionId: 'default',
+      tables: [{ relation: 'transformed.team_game_facts', catalogOrDatabase: 'nba', schema: 'transformed', name: 'team_game_facts', columns: [{ name: 'game_id', type: 'BIGINT' }, { name: 'pts', type: 'DOUBLE' }] }],
+    });
+    const provider = { name: 'claude', available: async () => true, generate: async () => JSON.stringify({ tables: [{ relation: 'nba.transformed.team_game_facts', columns: { game_id: 'The game this row is about', pts: 'Points the team scored in the game' } }] }) };
+    await draftMeanings({ projectRoot: root, snapshot: meaningCatalog(root)!, provider: provider as never, date: '2026-11-03' });
+    // The cache is git-ignored: a clone has the meaning files and no sync.
+    rmSync(join(root, '.dql', 'cache'), { recursive: true, force: true });
+    const clone = meaningCatalog(root)!;
+    expect(clone.relations[0]).toMatchObject({ columnsIncomplete: true, columns: [{ name: 'game_id' }] });
+    const manifest = { dbtProvenance: { manifestPath: join(root, 'target', 'manifest.json') } } as unknown as DQLManifest;
+    expect(draftedMeaningRelations(manifest, root)).toEqual(['nba.transformed.team_game_facts']);
+    expect(meaningsStatus(root, clone)).toMatchObject({ drafted: 1, stale: 0 });
+    expect(planMeaningDrafts(root, clone).tables).toBe(0);
+    // Accept takes only what the review could show: game_id, not pts.
+    expect(acceptMeanings(root, clone, [clone.relations[0]!.id], '2026-11-03')).toEqual({ accepted: 1, skippedStale: 0 });
+    const columns = readMeaningFiles(root).get(clone.relations[0]!.id)!.columns;
+    expect([columns.game_id?.source, columns.pts?.source]).toEqual(['person', 'ai']);
   });
 });
