@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, 
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import * as yaml from 'js-yaml';
+import { yamlKeepingComments } from './yaml-keep-comments.js';
 import { domainFolderSlug, renderDomainDeclaration, type DomainInput } from './domain-writer.js';
 import { loadDomainPackageRegistry } from './domain-package-registry.js';
 import { dbtBindableKind } from './dbt-first-modeling.js';
@@ -310,7 +311,7 @@ export function previewDbtSourcePatch(
   else models.push(model);
   document.version = typeof document.version === 'number' ? document.version : 2;
   document.models = models;
-  const after = dumpYaml(document);
+  const after = dumpYaml(document, before);
   const patch = { path: patchPath, before, after, changed: before !== after };
   return {
     uniqueId: input.uniqueId,
@@ -604,7 +605,7 @@ function previewArea(projectRoot: string, value: ModelAreaAuthoringInput): Model
     ...(cleanStrings(value.intentExamples).length > 0 ? { intent_examples: cleanStrings(value.intentExamples) } : {}),
     ...(cleanStrings(value.references).length > 0 ? { references: cleanStrings(value.references) } : {}),
   };
-  const after = dumpYaml(document);
+  const after = dumpYaml(document, before);
   return { path, before, after, changed: before !== after };
 }
 
@@ -848,7 +849,7 @@ function upsertMovingListPatches(
     if (kept.length === list.length) continue;
     carried ??= asRecord(list.find((entry) => asRecord(entry).id === id));
     document[listKey] = kept;
-    const after = dumpYaml(document);
+    const after = dumpYaml(document, before);
     removals.push({ path: relativePath, before, after, changed: before !== after });
   }
   return [...removals, upsertListPatch(projectRoot, path, listKey, 'id', value, carried)];
@@ -878,7 +879,7 @@ function upsertListPatch(
   // the author chose, which matters for a Git-backed file people hand-edit.
   else list.push(value);
   document[listKey] = list;
-  const after = dumpYaml(document);
+  const after = dumpYaml(document, before);
   return { path, before, after, changed: before !== after };
 }
 
@@ -911,7 +912,7 @@ function previewRemoveListEntry(
   const next = list.filter((entry) => asRecord(entry).id !== id);
   if (next.length === list.length) return { path, before, after: before, changed: false };
   document[listKey] = next;
-  const after = dumpYaml(document);
+  const after = dumpYaml(document, before);
   return { path, before, after, changed: before !== after };
 }
 
@@ -1052,15 +1053,15 @@ export function assertContainedPath(projectRoot: string, inputPath: string, labe
  * Serialize authored modeling source.
  *
  * Key order and list order are preserved (`sortKeys: false`, and callers append
- * rather than re-sort). Comments are NOT preserved: `js-yaml` re-serializes the
- * parsed tree, so a comment in `model.dql.yaml` is dropped the first time the
- * UI writes that file. `02-object-model-and-project-layout.md` asks writers to
- * preserve comments "where feasible"; doing so needs a CST-based emitter (the
- * `yaml` package's Document API), which is a new runtime dependency for this
- * published package and is deliberately left as a separate decision.
+ * rather than re-sort). With the file as it was (`before`), comments and the
+ * style of untouched values are kept too (`yamlKeepingComments`, the `yaml`
+ * package's Document API), as `02-object-model-and-project-layout.md` asks;
+ * a file that reads back differently is written fresh, losing comments, never
+ * data.
  */
-export function dumpYaml(value: unknown): string {
-  return yaml.dump(value, { noRefs: true, lineWidth: -1, sortKeys: false, noCompatMode: true }).trimEnd() + '\n';
+export function dumpYaml(value: unknown, before?: string): string {
+  const fresh = (next: unknown) => yaml.dump(next, { noRefs: true, lineWidth: -1, sortKeys: false, noCompatMode: true }).trimEnd() + '\n';
+  return before?.trim() ? yamlKeepingComments(before, value, fresh) : fresh(value);
 }
 
 function canonicalLifecycle(value: ManifestModelLifecycle | undefined): Exclude<ManifestModelLifecycle, 'review'> {
