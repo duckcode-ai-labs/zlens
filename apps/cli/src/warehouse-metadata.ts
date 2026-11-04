@@ -82,8 +82,12 @@ export interface WarehouseMetadataDiscoveryResult {
   message: string;
 }
 
-const MAX_SCOPES = 20;
-const MAX_SCHEMAS = 100;
+// The scope a sync reads matches what discovery can list (40 databases, 1,000
+// schemas). A scope past these limits fails with a message; nothing is
+// dropped without saying so, which used to leave a large warehouse half read.
+const MAX_SCOPES = 40;
+const MAX_SCHEMAS = 1_000;
+/** One query lists dbt tables by name up to this many; a larger project reads their whole schemas. */
 const MAX_RELATIONS = 5_000;
 const MAX_TABLES = 10_000;
 const MAX_COLUMNS_PER_TABLE = 160;
@@ -109,14 +113,16 @@ export function normalizeConnectionMetadataScope(
   const currentDbtRelations = (defaults.relations?.length ?? 0) > 0
     ? defaults.relations!
     : input?.relations ?? [];
-  const relations = uniqueStrings(
+  const dbtRelations = uniqueStrings(
     mode === 'selected_scopes' ? [] : currentDbtRelations,
   )
     .map(normalizeRelation)
-    .filter((value): value is string => Boolean(value))
-    .slice(0, MAX_RELATIONS);
+    .filter((value): value is string => Boolean(value));
+  // Past MAX_RELATIONS the list of tables by name makes one query too long:
+  // read the whole schemas those tables are in instead, so none is left out.
+  const relations = dbtRelations.length > MAX_RELATIONS ? [] : dbtRelations;
   const explicitScopes = normalizeScopes(input?.scopes ?? []);
-  const relationScopes = scopesFromRelations(relations, defaultDatabase, defaultSchema);
+  const relationScopes = scopesFromRelations(dbtRelations, defaultDatabase, defaultSchema);
   const fallbackScopes = defaultDatabase && defaultSchema
     ? [{ catalogOrDatabase: defaultDatabase, schemas: [defaultSchema] }]
     : [];
@@ -573,16 +579,25 @@ function normalizeScopes(
   values: Array<{ catalogOrDatabase?: string; schemas?: string[] }>,
 ): RuntimeSchemaScope[] {
   const grouped = new Map<string, { catalogOrDatabase: string; schemas: Set<string> }>();
-  for (const value of values.slice(0, MAX_SCOPES)) {
+  for (const value of values) {
     const catalogOrDatabase = cleanIdentifier(value.catalogOrDatabase);
     if (!catalogOrDatabase) continue;
     const key = normalizeIdentifierKey(catalogOrDatabase);
     const current = grouped.get(key) ?? { catalogOrDatabase, schemas: new Set<string>() };
     for (const schema of value.schemas ?? []) {
       const clean = cleanIdentifier(schema);
-      if (clean && current.schemas.size < MAX_SCHEMAS) current.schemas.add(clean);
+      if (clean) current.schemas.add(clean);
     }
     grouped.set(key, current);
+  }
+  const withSchemas = Array.from(grouped.values()).filter((entry) => entry.schemas.size > 0);
+  if (withSchemas.length > MAX_SCOPES) {
+    throw new Error(`The metadata scope covers ${withSchemas.length} databases; ZLens reads up to ${MAX_SCOPES} per connection. Choose fewer databases.`);
+  }
+  for (const entry of withSchemas) {
+    if (entry.schemas.size > MAX_SCHEMAS) {
+      throw new Error(`The metadata scope covers ${entry.schemas.size} schemas in ${entry.catalogOrDatabase}; ZLens reads up to ${MAX_SCHEMAS.toLocaleString('en-US')} per database. Choose fewer schemas.`);
+    }
   }
   return Array.from(grouped.values())
     .map((entry) => ({
@@ -650,7 +665,7 @@ function relationParts(relation: string): {
 
 function buildExactRelationPredicate(relations: Array<{ schema: string; table: string }>): string | undefined {
   const grouped = new Map<string, { schema: string; tables: Set<string> }>();
-  for (const relation of relations.slice(0, MAX_RELATIONS)) {
+  for (const relation of relations) {
     const key = normalizeIdentifierKey(relation.schema);
     const current = grouped.get(key) ?? { schema: relation.schema, tables: new Set<string>() };
     current.tables.add(relation.table);

@@ -24,6 +24,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - `area:sales` drafts 122 tables (its 46 and the 76 business tables they read);
   - a whole-project run drafts the 150 most-used marts and dimensions first.
 
+### Fixed: the warehouse sync no longer drops schemas without saying so
+
+- **`zlens sync warehouse` and Settings → Sync schema read every selected schema,** up to 1,000 per
+  database and 40 databases (was 100 and 20).
+  - Before, schemas past the 100th were left out with no message. On a warehouse with 180 schemas, the sync
+    read 2,318 of 4,791 tables and reported success.
+  - A scope past the new limits now fails, naming the count and asking for fewer.
+- **A dbt project with more than 5,000 tables now reads the whole schemas those tables are in.** Before, the
+  tables past the 5,000th were left out of Ask's schema metadata.
+
 ### Domains from business words, not layer, access or schedule tags ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **dbt domain discovery reads the business words in folder and tag names.**

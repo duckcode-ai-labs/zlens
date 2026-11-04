@@ -87,6 +87,44 @@ describe('warehouse metadata scope', () => {
     expect(queries.every((query) => query.sql.includes('LIMIT 50000'))).toBe(true);
   });
 
+  it('reads every selected schema, past the old limit of 100', () => {
+    const schemas = Array.from({ length: 180 }, (_, index) => `SCHEMA_${String(index).padStart(3, '0')}`);
+    const scope = normalizeConnectionMetadataScope('primary', snowflakeConnection, {
+      mode: 'selected_scopes',
+      scopes: [{ catalogOrDatabase: 'ANALYTICS_PROD', schemas }],
+    });
+
+    expect(scope.scopes[0]?.schemas).toHaveLength(180);
+    const query = buildWarehouseMetadataQueries(snowflakeConnection, scope)[0]?.sql ?? '';
+    expect(query).toContain("UPPER('SCHEMA_000')");
+    expect(query).toContain("UPPER('SCHEMA_179')");
+  });
+
+  it('fails with a message instead of dropping schemas or databases past the limits', () => {
+    const schemas = Array.from({ length: 1_001 }, (_, index) => `S${index}`);
+    expect(() => normalizeConnectionMetadataScope('primary', snowflakeConnection, {
+      mode: 'selected_scopes',
+      scopes: [{ catalogOrDatabase: 'ANALYTICS_PROD', schemas }],
+    })).toThrow('The metadata scope covers 1001 schemas in ANALYTICS_PROD; ZLens reads up to 1,000 per database. Choose fewer schemas.');
+
+    const databases = Array.from({ length: 41 }, (_, index) => ({ catalogOrDatabase: `DB_${index}`, schemas: ['MAIN'] }));
+    expect(() => normalizeConnectionMetadataScope('primary', snowflakeConnection, {
+      mode: 'selected_scopes',
+      scopes: databases,
+    })).toThrow('The metadata scope covers 41 databases; ZLens reads up to 40 per connection. Choose fewer databases.');
+  });
+
+  it('reads the whole schemas of a dbt project past 5,000 tables instead of dropping some', () => {
+    const relations = Array.from({ length: 5_001 }, (_, index) => `ANALYTICS_PROD.${['SALES', 'FINANCE', 'PRODUCT'][index % 3]}.MODEL_${index}`);
+    const scope = normalizeConnectionMetadataScope('primary', snowflakeConnection, { mode: 'dbt_relations' }, { relations });
+
+    expect(scope.relations).toEqual([]);
+    expect(scope.scopes).toEqual([{ catalogOrDatabase: 'ANALYTICS_PROD', schemas: ['FINANCE', 'PRODUCT', 'SALES'] }]);
+    const query = buildWarehouseMetadataQueries(snowflakeConnection, scope)[0]?.sql ?? '';
+    expect(query).toContain("UPPER(table_schema) IN (UPPER('FINANCE'), UPPER('PRODUCT'), UPPER('SALES'))");
+    expect(query).not.toContain('UPPER(table_name) IN');
+  });
+
   it('does not fingerprint credentials but does fingerprint scope and role changes', () => {
     const base = normalizeConnectionMetadataScope('primary', snowflakeConnection, {
       mode: 'selected_scopes',
