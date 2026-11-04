@@ -153,6 +153,20 @@ describe('manifest v3 dbt-first modeling', () => {
     expect(manifest.diagnostics?.some((diagnostic) => diagnostic.message.includes('entity "not_a_table" references unknown dbt model "test.commerce.not_a_table"'))).toBe(true);
   });
 
+  it('compiles a drafted table pick, and warns when it names no entity (RFC 0012)', () => {
+    const raw = JSON.parse(requireManifest(dbtManifestPath)) as Record<string, any>;
+    raw.sources['source.commerce.raw.raw_orders'] = { resource_type: 'source', name: 'raw_orders', identifier: 'raw_orders', relation_name: 'raw.raw_orders', columns: {} };
+    writeFileSync(dbtManifestPath, JSON.stringify(raw));
+    const entities = join(projectRoot, 'domains', 'commerce', 'modeling', 'entities.dql.yaml');
+    writeFileSync(entities, `${readFileSync(entities, 'utf8')}  - id: raw_order\n    dbt_model: source.commerce.raw.raw_orders\n    status: draft\n    use_instead:\n      entity: order\n      reason: a raw table; fct_orders is the final table with the same rows\n  - id: lost\n    dbt_model: source.commerce.raw.raw_orders\n    use_instead: nowhere\n`);
+
+    const manifest = buildManifest({ projectRoot, dbtManifestPath });
+
+    expect(manifest.modeling?.entities['commerce::entity::raw_order']?.useInstead).toEqual({ entity: 'commerce::entity::order', reason: 'a raw table; fct_orders is the final table with the same rows' });
+    expect(manifest.modeling?.entities['commerce::entity::order']?.useInstead).toBeUndefined();
+    expect(manifest.diagnostics?.some((diagnostic) => diagnostic.severity === 'warning' && diagnostic.message === 'entity "lost" says to use "commerce::entity::nowhere" instead, and no entity has that id')).toBe(true);
+  });
+
   it('preserves same-named blocks from separate domain packages in the canonical graph', () => {
     writeYaml(projectRoot, 'domains/commerce/blocks/executive_summary.dql', `block "Executive Summary" {
   status = "certified"

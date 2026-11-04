@@ -2339,6 +2339,28 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       if (deprecatedLeftOut.length > 0 && deprecatedLeftOut.length < relations.length) {
         relations = relations.filter((relation) => !deprecatedLeftOut.includes(relation));
       } else deprecatedLeftOut.length = 0;
+      // A DRAFTED TABLE PICK (RFC 0012): a table the drafted model says
+      // another holds better (wider coverage, no repeated rows, a later
+      // layer) is swapped for that one, unless the question names it. A
+      // preference, not a removal: a person confirms it by deprecating.
+      const preferred: string[] = [];
+      relations = relations.flatMap((relation) => {
+        if (askedText.includes((relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase())) return [relation];
+        let target: string | undefined;
+        let reason: string | undefined;
+        for (let entry = relationEntryOf(relation), hops = 0; entry?.useInstead && hops < 3; hops += 1) {
+          const next = current.entries.find((item) => item.kind === 'relation' && item.model === entry!.useInstead!.relation);
+          const physical = next ? entryPhysicalRelation(next) : undefined;
+          if (!next || !physical) break;
+          reason = reason ?? entry.useInstead.reason;
+          target = physical;
+          entry = next;
+        }
+        if (!target || physicalRelationIdentity(target) === physicalRelationIdentity(relation)) return [relation];
+        preferred.push(`${target} instead of ${relation}${reason ? ` (${reason})` : ''}`);
+        return relations.some((other) => physicalRelationIdentity(other) === physicalRelationIdentity(target!)) ? [] : [target];
+      });
+      relations = relations.filter((relation, index) => relations.findIndex((other) => physicalRelationIdentity(other) === physicalRelationIdentity(relation)) === index);
       const needsColumns = relations.filter((relation) => {
         const entry = current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && physicalRelationIdentity(entryPhysicalRelation(item)!) === physicalRelationIdentity(relation));
         return !entry || entry.physical?.binding?.columnCompleteness !== 'complete' || !current.entries.some((item) => item.kind === 'column' && samePhysicalEntry(item, entry));
@@ -2361,7 +2383,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Only tables whose columns are known can be drafted over.
       relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}` });
+      hostStep({ phase: 'schema', title: wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
@@ -3467,9 +3489,10 @@ const MODEL_RULES_IN_DRAFT = 8;
  * its grain and its business context (where its rows stop, which rows count).
  * The reading saw the same words; the drafter writes the filters.
  */
-export function modeledMeaning(entry: Pick<VocabularyEntry, 'grain' | 'businessContext' | 'deprecated'>): string {
+export function modeledMeaning(entry: Pick<VocabularyEntry, 'grain' | 'businessContext' | 'deprecated' | 'useInstead'>): string {
   const parts = [
     entry.deprecated ? 'deprecated in the model: do not answer from it' : '',
+    !entry.deprecated && entry.useInstead ? `the drafted model prefers ${entry.useInstead.relation}${entry.useInstead.reason ? ` (${clipText(entry.useInstead.reason, 200)})` : ''}` : '',
     entry.grain ? `one row per ${grainText(entry.grain)}` : '',
     entry.businessContext ? clipText(entry.businessContext, 600) : '',
   ].filter(Boolean);

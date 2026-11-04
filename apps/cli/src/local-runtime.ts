@@ -879,7 +879,9 @@ import { draftTerms } from './term-draft.js';
 import { readValueProfile, refreshValueProfile, valueProfileAllowed, type ValueProfileSummary } from './value-profile.js';
 import { resolveResultReviewMode } from './result-review-setting.js';
 import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
+import { draftTablePicks, readDbtRelationFacts } from './model-layers.js';
 import {
+  cheapToRead,
   discoverWarehouseModel,
   observedJoinsFromQueries,
   queryHistorySql,
@@ -38977,13 +38979,22 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   const report = queryHistory ? { ...drafted, queryHistory } : drafted;
   if (!options.validate || !connection || !options.executor) return report;
   const executor = options.executor;
-  return validateWarehouseDiscovery(
-    report,
-    snapshot,
-    (sql) => executor.executeQuery(sql, [], {}, connection),
-    (identifier) => getDialect(connection.driver).quoteIdentifier(identifier),
-    { dialect: connection.driver },
-  );
+  const run = (sql: string) => executor.executeQuery(sql, [], {}, connection);
+  const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
+  const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, { dialect: connection.driver });
+  // Layers, row identity and one table per business thing (RFC 0012). A local
+  // file warehouse reads every view; elsewhere a view that joins or
+  // aggregates waits for the budgeted checks.
+  const dbtManifestPath = resolveDbtManifestPath(projectRoot, cfg);
+  let dbt: ReturnType<typeof readDbtRelationFacts> | undefined;
+  try {
+    dbt = dbtManifestPath && existsSync(dbtManifestPath) ? readDbtRelationFacts(dbtManifestPath) : undefined;
+  } catch { /* an unreadable dbt manifest adds no evidence */ }
+  const localEngine = /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
+  return draftTablePicks(validated, snapshot, run, quote, {
+    ...(dbt ? { dbt } : {}),
+    readViews: (relation) => localEngine || cheapToRead(relation),
+  });
 }
 
 /** Write a discovery report's drafts (optionally only the chosen ones) through the reviewed modeling path. */
@@ -38992,10 +39003,14 @@ export function applyProjectWarehouseDiscovery(projectRoot: string, report: Ware
     ? report.relationships.filter((relationship) => selection.relationshipIds!.includes(relationship.id))
     : report.relationships;
   const wantedEntities = new Set(selection.entityIds ?? report.entities.map((entity) => `${entity.domain}::${entity.id}`));
-  // A chosen relationship brings the two entities it joins.
+  // A chosen relationship brings the two entities it joins, and a drafted
+  // table pick brings the table to use instead.
   for (const relationship of relationships) {
     wantedEntities.add(`${relationship.fromDomain}::${relationship.from}`);
     wantedEntities.add(`${relationship.toDomain}::${relationship.to}`);
+  }
+  for (const entity of report.entities) {
+    if (entity.useInstead && (wantedEntities.has(`${entity.domain}::${entity.id}`) || (selection.entityIds ?? []).includes(entity.id))) wantedEntities.add(`${entity.useInstead.domain}::${entity.useInstead.entity}`);
   }
   const entities = report.entities.filter((entity) => wantedEntities.has(`${entity.domain}::${entity.id}`) || (selection.entityIds ?? []).includes(entity.id));
   const domains = report.domains.filter((domain) => entities.some((entity) => entity.domain === domain.id));

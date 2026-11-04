@@ -1212,6 +1212,13 @@ export interface ManifestModelEntity {
   conceptRefs?: string[];
   owner?: string;
   status?: ManifestModelLifecycle;
+  /**
+   * A drafted table pick (RFC 0012): another entity holds the same rows
+   * better (wider coverage, no repeated rows, a later layer). Ask answers
+   * from that one unless a question names this table. A reviewer confirms by
+   * marking this entity deprecated, or rejects by removing the field.
+   */
+  useInstead?: { entity: string; reason?: string };
   sourcePath: string;
   identityFingerprint: string;
 }

@@ -62,6 +62,7 @@ describe('staging tables (new-user round 2, Q3)', () => {
     expect(isTechnicalSchema('dev')).toBe(true);
     expect(isTechnicalSchema('main')).toBe(true);
     expect(isTechnicalSchema('dbt_kranthi')).toBe(true);
+    expect(isTechnicalSchema('TRANSFORMED')).toBe(true);
     expect(isTechnicalSchema('sales')).toBe(false);
     expect(meaningfulDatabaseName('/work/shop/jaffle_shop.duckdb')).toBe('jaffle_shop');
     expect(meaningfulDatabaseName('memory', 'main', 'ANALYTICS_PROD')).toBe('ANALYTICS_PROD');

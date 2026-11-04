@@ -1549,6 +1549,76 @@ describe('the SQL drafter reads the whole model', () => {
   });
 });
 
+describe('a drafted table pick (RFC 0012)', () => {
+  const connection: ConnectionConfig = { driver: 'duckdb', path: ':memory:' } as ConnectionConfig;
+  const tables: Record<string, string[]> = {
+    player_seasons: ['player_id', 'season', 'total_points'],
+    old_season_stats: ['player_id', 'season', 'total_points'],
+  };
+  const source = (name: string) => ({ name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'ins', columns: Object.fromEntries(tables[name]!.map((column) => [column, { name: column }])) } });
+  const manifest = {
+    sources: Object.fromEntries(Object.keys(tables).map((name) => [name, source(name)])),
+    dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `ins.${name}` }])) },
+    modeling: {
+      entities: {
+        'nba::entity::player_season': { id: 'nba::entity::player_season', localId: 'player_season', domain: 'nba', dbtUniqueId: 'model.player_seasons', grain: 'player_id, season', status: 'draft' },
+        'nba::entity::old_season_stat': { id: 'nba::entity::old_season_stat', localId: 'old_season_stat', domain: 'nba', dbtUniqueId: 'model.old_season_stats', grain: 'player_id, season', status: 'draft', useInstead: { entity: 'nba::entity::player_season', reason: 'covers season 2009–2019; player_seasons covers season 2003–2022' } },
+      },
+      relationships: {},
+    },
+  };
+  const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Total points per season from old_season_stats.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
+  const ask = async (question: string) => {
+    const prompts: string[] = [];
+    const provider: AgentProvider = {
+      name: 'ollama', available: async () => true,
+      generate: async (messages) => {
+        if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return reading;
+        prompts.push(messages.map((message) => message.content).join('\n'));
+        return 'NO_SQL: nothing to draft in this test.';
+      },
+    };
+    const route = createAskPipelineRouteExecutor({
+      projectRoot: '/tmp/ask-table-pick',
+      executor: { executeQuery: vi.fn(async (sql: string) => {
+        if (sql.includes('information_schema.columns')) {
+          const rows = Object.entries(tables).filter(([name]) => sql.includes(`'${name}'`))
+            .flatMap(([name, columns]) => columns.map((column) => ({ table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR' })));
+          return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+        }
+        return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
+      }) } as unknown as QueryExecutor,
+      resolveConnection: async () => connection,
+      getSemanticLayer: () => undefined,
+      getManifest: () => ({ snapshotId: 'snapshot:table-pick', manifest: manifest as never }),
+      selectProvider: async () => provider,
+      compileSemantic: async () => { throw new Error('no semantic layer'); },
+      priorIntent: () => undefined,
+    });
+    const result = await route({
+      runId: 'run:table-pick',
+      request: { question, requestedMode: 'ask' } as AgentRunRequest,
+      route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
+    });
+    return { prompts, steps: JSON.stringify(result) };
+  };
+
+  it('answers from the table the draft prefers, and says so', async () => {
+    const { prompts, steps } = await ask('Total points per season for each player');
+    const first = prompts[0]!;
+    expect(first).toContain('executable relation:ins.player_seasons');
+    expect(first).not.toContain('executable relation:ins.old_season_stats');
+    expect(steps).toContain('used as the drafted table pick: ins.player_seasons instead of ins.old_season_stats (covers season 2009–2019; player_seasons covers season 2003–2022)');
+  });
+
+  it('keeps a table the question names, with the draft’s preference beside it', async () => {
+    const { prompts } = await ask('Total points per season in old_season_stats');
+    const first = prompts[0]!;
+    expect(first).toContain('executable relation:ins.old_season_stats');
+    expect(first).toContain('modeled: the drafted model prefers ins.player_seasons (covers season 2009–2019; player_seasons covers season 2003–2022)');
+  });
+});
+
 describe('a join on a composite key is judged by the whole key', () => {
   const connection = { driver: 'duckdb' } as ConnectionConfig;
   // One row per (match_id, ball_id) on each side, while each column alone

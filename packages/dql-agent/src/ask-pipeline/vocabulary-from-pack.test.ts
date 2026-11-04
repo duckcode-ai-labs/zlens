@@ -237,9 +237,11 @@ describe('a modeled entity on its relation card', () => {
     expect(rendered).not.toMatch(/ Use$/);
   });
 
-  it('marks a relation whose entity is deprecated', () => {
+  it('marks a relation whose entity is deprecated, or that a drafted table pick prefers another over', () => {
     expect(card({ deprecated: true })).toContain('deprecated: do not use for answers');
     expect(card({})).not.toContain('deprecated');
+    expect(card({ useInstead: { relation: 'nba.player_seasons', reason: 'covers season 2009–2019; player_seasons covers season 2003–2022' } }))
+      .toContain('a drafted table pick prefers nba.player_seasons (covers season 2009–2019; player_seasons covers season 2003–2022)');
   });
 });
 

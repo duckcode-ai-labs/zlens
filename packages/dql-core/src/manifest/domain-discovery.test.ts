@@ -158,6 +158,34 @@ describe('deterministic dbt domain discovery (DOM-001, AGT-002, API-001)', () =>
     expect(second).toBe(first);
   });
 
+  it('never makes a layer folder a Domain; with nothing else to go on, the project is one Domain (RFC 0012)', () => {
+    writeManifest({
+      metadata: { project_name: 'nba_analysis' },
+      nodes: {
+        'model.nba_analysis.dim_teams': model('dim_teams', 'models/dim/dim_teams.sql'),
+        'model.nba_analysis.fct_games': model('fct_games', 'models/fct/fct_games.sql'),
+        'model.nba_analysis.stg_players': model('stg_players', 'models/stg/stg_players.sql'),
+        'model.nba_analysis.local_player_game_facts': model('local_player_game_facts', 'models/local/local_player_game_facts.sql'),
+      },
+    });
+    const report = discoverDbtDomains({ projectRoot, dbtManifestPath: manifestPath });
+    expect(report.proposals.map((proposal) => proposal.id)).toEqual(['nba_analysis']);
+    expect(report.proposals[0]).toMatchObject({ matchedDbtUniqueIds: expect.arrayContaining(['model.nba_analysis.local_player_game_facts']), requiresReview: true });
+    expect(report.memberships.every((membership) => membership.evidence.every((item) => item.kind === 'dbt_project'))).toBe(true);
+    expect(report.unassignedModels).toEqual([]);
+
+    // A business folder still names a Domain, and then the rest stay for a person to place.
+    writeManifest({
+      nodes: {
+        'model.demo.revenue': model('revenue', 'models/marts/finance/revenue.sql'),
+        'model.demo.dim_teams': model('dim_teams', 'models/dim/dim_teams.sql'),
+      },
+    });
+    const mixed = discoverDbtDomains({ projectRoot, dbtManifestPath: manifestPath });
+    expect(mixed.proposals.map((proposal) => proposal.id)).toEqual(['finance']);
+    expect(mixed.unassignedModels.map((item) => item.dbtUniqueId)).toEqual(['model.demo.dim_teams']);
+  });
+
   function writeManifest(value: Record<string, unknown>): void {
     writeFileSync(manifestPath, JSON.stringify({
       metadata: { project_name: 'demo' },
