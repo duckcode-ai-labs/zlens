@@ -390,7 +390,7 @@ export function previewDbtMetricPatch(
 
   const patches: ModelingSourcePatch[] = [...edits.values()].map((entry) => {
     entry.document.version = typeof entry.document.version === 'number' ? entry.document.version : 2;
-    const after = dumpYaml(entry.document);
+    const after = dumpYaml(entry.document, entry.before);
     return { path: entry.path, before: entry.before, after, changed: entry.before !== after };
   });
   return { semanticModel: semanticModelName, metric: metricName, patches, fingerprint: hash({ input, patches }), warnings, writesTo: 'dbt' };
@@ -606,7 +606,7 @@ function previewNativeMetricPatch(paths: MetricAuthoringPaths & { semanticLayerD
   }
 
   const patches: ModelingSourcePatch[] = [...edits.values()].map((entry) => {
-    const after = dumpYaml(entry.document);
+    const after = dumpYaml(entry.document, entry.before);
     return { path: entry.path, before: entry.before, after, changed: entry.before !== after };
   });
   return { semanticModel: target.name, metric: metricName, patches, fingerprint: hash({ input, patches }), warnings, writesTo: 'semantic-layer' };
