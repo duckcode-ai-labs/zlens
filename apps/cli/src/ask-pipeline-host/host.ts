@@ -5,7 +5,7 @@ import { buildExecutionPlan } from '@zlens/notebook';
 import { prepareBlockInvocation } from '../block-invocation.js';
 import { writeFileSync } from 'node:fs';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { getDialect, readMeaningFiles, type DQLManifest, type SemanticLayer } from '@zlens/core';
+import { getDialect, meaningFilesHaveWords, readMeaningFiles, type DQLManifest, type SemanticLayer } from '@zlens/core';
 import {
   type ProjectionScope,
   type PreparedRefusal,
@@ -2214,7 +2214,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // the tables that name a grouped key, added above, among them), with the
       // keys the warehouse declares. Above the budget it chooses as before.
       const warehouseKeys = warehouseFirstCatalog(deps.getManifest().manifest, deps.projectRoot);
-      const hasMeaningFiles = deps.projectRoot ? readMeaningFiles(deps.projectRoot).size > 0 : false;
+      const hasMeaningFiles = deps.projectRoot ? meaningFilesHaveWords(readMeaningFiles(deps.projectRoot)) : false;
       // WHAT THE COLUMNS HOLD, when the project opted in (agent.valueProfile)
       // and the profile describes this catalog: a few stored values or the
       // range beside each column. The values reach the provider with this

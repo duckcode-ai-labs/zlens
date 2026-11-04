@@ -1073,9 +1073,14 @@ interface AgentEvalTraceStage {
   payload?: unknown;
 }
 
+/** The eval file: a relative path is read from the project root, an absolute one as given. */
+function evalFilePath(projectRoot: string, arg: string | undefined): string {
+  return arg ? resolve(projectRoot, arg) : join(projectRoot, 'agent-evals.yml');
+}
+
 async function runEval(rest: string[], flags: CLIFlags): Promise<void> {
   const projectRoot = findProjectRoot(process.cwd());
-  const evalPath = rest[0] ? join(projectRoot, rest[0]) : join(projectRoot, 'agent-evals.yml');
+  const evalPath = evalFilePath(projectRoot, rest[0]);
   if (!existsSync(evalPath)) throw new Error(`Eval file not found: ${evalPath}`);
 
   const raw = loadYaml(readFileSync(evalPath, 'utf-8')) as AgentEvalFile | AgentEvalCase[] | null;
@@ -2177,6 +2182,7 @@ export const __test__ = {
   cliAnalysisDepth,
   cliReasoningEffort,
   computeEvalMetrics,
+  evalFilePath,
   narrationOutcomeForEval,
   evaluateCase,
   runtimeErrorResult,

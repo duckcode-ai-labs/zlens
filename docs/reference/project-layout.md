@@ -104,7 +104,7 @@ my-dql-project/
   identifiers, synonyms, business rules, and caveats without requiring SQL. A
   certified term has a receipt beside its file (`<name>.certification.yaml`);
   commit it with the term.
-- **`meanings/`** — one `.yaml` file per warehouse table: what a row is, what
+- **`meanings/`** — one `.yaml` file per warehouse table or dbt model: what a row is, what
   each column holds and what else people call the table. Each entry says who
   wrote it (`source: ai` or `source: person`). Commit these, so a review shows in
   a pull request. Fills gaps only: a warehouse comment or a person's words are

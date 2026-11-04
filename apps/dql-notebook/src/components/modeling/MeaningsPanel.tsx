@@ -46,7 +46,10 @@ export function draftPlanLine(plan: MeaningsOverview['plan']): string {
   const sent = plan.sendsSampleValues
     ? 'Sends table names, column names, types, keys and sample values from the value profile.'
     : 'Sends table names, column names, types and keys. No rows.';
-  return `${plan.tables.toLocaleString()} ${plan.tables === 1 ? 'table' : 'tables'} and ${plan.columns.toLocaleString()} columns, in ${plan.calls.toLocaleString()} ${plan.calls === 1 ? 'call' : 'calls'} on your own AI provider: about ${plan.estimatedInputTokens.toLocaleString()} tokens in and ${plan.estimatedOutputTokens.toLocaleString()} out. ${sent}`;
+  const unlisted = plan.columnsUnlisted
+    ? ` ${plan.columnsUnlisted.toLocaleString()} dbt ${plan.columnsUnlisted === 1 ? 'table lists only the columns its' : 'tables list only the columns their'} YAML documents. Sync schema in Settings → Connections first, so the draft sees every column.`
+    : '';
+  return `${plan.tables.toLocaleString()} ${plan.tables === 1 ? 'table' : 'tables'} and ${plan.columns.toLocaleString()} columns, in ${plan.calls.toLocaleString()} ${plan.calls === 1 ? 'call' : 'calls'} on your own AI provider: about ${plan.estimatedInputTokens.toLocaleString()} tokens in and ${plan.estimatedOutputTokens.toLocaleString()} out. ${sent}${unlisted}`;
 }
 
 /** The tables a group holds: its domain's model, or its schema when no model binds it. */
@@ -96,8 +99,9 @@ function useMeanings() {
 function draftResultLine(job: MeaningDraftJob): string | null {
   if (job.error) return `The draft failed: ${job.error}`;
   if (!job.report) return null;
-  const { tablesDrafted, columnsDrafted, failed, stopped } = job.report;
-  const words = `Drafted ${tablesDrafted.toLocaleString()} ${tablesDrafted === 1 ? 'table' : 'tables'} and ${columnsDrafted.toLocaleString()} column descriptions. None is reviewed yet.`;
+  const { tablesDrafted, columnsDrafted, nothingToAdd, failed, stopped } = job.report;
+  const nothing = nothingToAdd ? ` ${nothingToAdd.toLocaleString()} described ${nothingToAdd === 1 ? 'table' : 'tables'} had nothing to add.` : '';
+  const words = `Drafted ${tablesDrafted.toLocaleString()} ${tablesDrafted === 1 ? 'table' : 'tables'} and ${columnsDrafted.toLocaleString()} column descriptions. None is reviewed yet.${nothing}`;
   if (stopped) return `${words} Stopped early: ${stopped}`;
   return failed.length ? `${words} ${failed.reduce((total, item) => total + item.tables.length, 0)} tables were not drafted; run it again to finish them.` : words;
 }

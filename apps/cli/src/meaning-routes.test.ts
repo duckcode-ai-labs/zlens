@@ -1,10 +1,13 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readMeaningFiles, relationColumnsFingerprint, relationMeaning, writeMeaningFile, type DQLManifest, type WarehouseCatalogRelationV1 } from '@zlens/core';
+import { recordRuntimeSchemaSnapshot, SCHEMA_SYNC_SOURCE } from '@zlens/agent';
+import { draftedMeaningRelations } from './ask-pipeline-host/vocabulary-source.js';
 import { routeAction } from './host/route-actions.js';
-import { acceptMeanings, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
+import { draftMeanings } from './meaning-draft.js';
+import { acceptMeanings, meaningCatalog, meaningsOverview, meaningTableDetail, saveMeaningEdit } from './meaning-routes.js';
 
 const lines: WarehouseCatalogRelationV1 = {
   id: 'warehouse.sales.lines', schema: 'sales', name: 'lines', relation: 'sales.lines', kind: 'table',
@@ -138,5 +141,42 @@ describe('reviewing what the data means', () => {
     expect(routeAction('PUT', '/api/meanings/table')?.action).toBe('dataset.author');
     expect(routeAction('POST', '/api/meanings/accept')?.action).toBe('dataset.author');
     expect(routeAction('POST', '/api/meanings/draft')?.action).toBe('settings.manage');
+  });
+});
+
+describe('a dbt project with no catalog.json', () => {
+  let root: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'meaning-routes-dbt-'));
+    mkdirSync(join(root, 'target'), { recursive: true });
+    // dbt documents one of the four columns, and describes the table.
+    writeFileSync(join(root, 'target', 'manifest.json'), JSON.stringify({
+      nodes: { 'model.nba.team_game_facts': { resource_type: 'model', name: 'team_game_facts', database: 'nba', schema: 'transformed', relation_name: '"nba"."transformed"."team_game_facts"', description: 'One row per team per game.', columns: { game_id: { name: 'game_id', description: '' } } } },
+      sources: {},
+    }));
+  });
+  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+
+  it('says which tables a draft would see only the documented columns of', () => {
+    expect(meaningCatalog(root)?.columnsUnlisted).toEqual(['nba.transformed.team_game_facts']);
+    expect(meaningCatalog(root)?.relations[0]?.columns.map((column) => column.name)).toEqual(['game_id']);
+  });
+
+  it('drafts against every column once the schema is synced, and Ask uses the draft', async () => {
+    recordRuntimeSchemaSnapshot(root, {
+      generationId: 'nba-1',
+      source: SCHEMA_SYNC_SOURCE,
+      connectionId: 'default',
+      tables: [{ relation: 'transformed.team_game_facts', catalogOrDatabase: 'nba', schema: 'transformed', name: 'team_game_facts', columns: [{ name: 'game_id', type: 'BIGINT' }, { name: 'team_id', type: 'BIGINT' }, { name: 'pts', type: 'DOUBLE' }, { name: 'is_home', type: 'BOOLEAN' }] }],
+    });
+    const catalog = meaningCatalog(root)!;
+    expect(catalog.columnsUnlisted).toEqual([]);
+    expect(catalog.relations[0]?.columns.map((column) => column.name)).toEqual(['game_id', 'team_id', 'pts', 'is_home']);
+    const provider = { name: 'claude', available: async () => true, generate: async () => JSON.stringify({ tables: [{ relation: 'nba.transformed.team_game_facts', columns: { pts: 'Points the team scored in the game', is_home: 'Whether the team played at home' } }] }) };
+    const report = await draftMeanings({ projectRoot: root, snapshot: catalog, provider: provider as never, date: '2026-11-03' });
+    expect(report).toMatchObject({ tablesDrafted: 1, columnsDrafted: 2, failed: [] });
+    // The readers see the same columns, so the draft is current, not stale.
+    const manifest = { dbtProvenance: { manifestPath: join(root, 'target', 'manifest.json') } } as unknown as DQLManifest;
+    expect(draftedMeaningRelations(manifest, root)).toEqual(['nba.transformed.team_game_facts']);
   });
 });

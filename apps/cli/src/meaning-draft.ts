@@ -74,6 +74,8 @@ export interface MeaningDraftReport {
   tablesDrafted: number;
   columnsDrafted: number;
   dropped: MeaningDraftDropped[];
+  /** Tables described already that the model had nothing to add to; a rerun doesn't send them again. */
+  nothingToAdd: number;
   /** Batches that failed; their tables are drafted by the next run. */
   failed: Array<{ tables: string[]; reason: string }>;
   /** Set when the run stopped early, with why. */
@@ -124,7 +126,7 @@ function userPrompt(facts: string[]): string {
   return `${facts.join('\n\n')}\n\n` +
     'Respond with JSON in exactly this shape:\n' +
     '{"tables":[{"relation":"<the table name as given>","description":"what one row is","otherNames":["..."],"columns":{"<column>":"what it holds"}}]}\n' +
-    'Include every table above. Leave out anything marked "described already".';
+    'Include every table above. For a table marked "described already", give no description and only the columns it lacks, or none. Leave out every column marked "described already".';
 }
 
 /** What a run would do, with no model call. The cost shown before anyone chooses to run it. */
@@ -164,6 +166,12 @@ export function planMeaningDrafts(
     estimatedInputTokens: Math.ceil((inputChars + batches.length * (SYSTEM_PROMPT.length + 400)) / 4),
     estimatedOutputTokens: columns * REPLY_TOKENS_PER_COLUMN + chosen.length * REPLY_TOKENS_PER_TABLE,
   };
+}
+
+/** How many tables a run would draft that list only the columns their dbt YAML documents. */
+export function plannedWithoutColumnList(plan: Pick<MeaningDraftPlan, 'batches'>, columnsUnlisted: string[]): number {
+  const unlisted = new Set(columnsUnlisted);
+  return plan.batches.flat().filter((relation) => unlisted.has(relation.relation)).length;
 }
 
 /** The first balanced JSON object in a model's reply. */
@@ -314,7 +322,7 @@ export async function draftMeanings(input: {
 }): Promise<MeaningDraftReport> {
   const plan = planMeaningDrafts(input.projectRoot, input.snapshot, input);
   const referencedBy = referencedByMap(input.snapshot.relations);
-  const report: MeaningDraftReport = { tablesDrafted: 0, columnsDrafted: 0, dropped: [], failed: [] };
+  const report: MeaningDraftReport = { tablesDrafted: 0, columnsDrafted: 0, nothingToAdd: 0, dropped: [], failed: [] };
   const stamp = { ...(input.model ? { model: input.model } : {}), date: input.date };
   let cursor = 0;
   let done = 0;
@@ -351,9 +359,11 @@ export async function draftMeanings(input: {
     for (const relation of batch) bare.set(relation.name.toLowerCase(), (bare.get(relation.name.toLowerCase()) ?? 0) + 1);
     const byName = new Map(batch.flatMap((relation) => [relation.relation, [relation.schema, relation.name].filter(Boolean).join('.'), ...(bare.get(relation.name.toLowerCase()) === 1 ? [relation.name] : [])].map((name) => [name.toLowerCase(), relation] as const)));
     const answered = new Set<string>();
+    let unmatched = 0;
     for (const item of reply.tables as Array<Record<string, unknown>>) {
       const relation = typeof item?.relation === 'string' ? byName.get(item.relation.toLowerCase()) : undefined;
       if (!relation) {
+        unmatched += 1;
         report.dropped.push({ relation: String(item?.relation), reason: 'the model named a table it was not given' });
         continue;
       }
@@ -366,7 +376,20 @@ export async function draftMeanings(input: {
       report.tablesDrafted += 1;
       report.columnsDrafted += Object.keys(checked.columns).length;
     }
-    const missing = batch.filter((relation) => !answered.has(relation.id)).map((relation) => relation.relation);
+    // A table described already that the model leaves out had nothing to add,
+    // as one it answers with no columns: its file says so, so a rerun skips it.
+    // Not when the reply answered nothing, or named a table it wasn't given:
+    // that may be this one, misspelt.
+    const trusted = answered.size > 0 && unmatched === 0;
+    const missing: string[] = [];
+    for (const relation of batch.filter((item) => !answered.has(item.id))) {
+      if (!relation.comment || !trusted) {
+        missing.push(relation.relation);
+        continue;
+      }
+      writeMeaningFile(input.projectRoot, mergeMeaningDraft(readMeaningFiles(input.projectRoot).get(relation.id), relation, { columns: {} }));
+      report.nothingToAdd += 1;
+    }
     if (missing.length) report.failed.push({ tables: missing, reason: 'the model left these tables out' });
   };
 

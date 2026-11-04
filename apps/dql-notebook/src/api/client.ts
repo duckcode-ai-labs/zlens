@@ -5157,6 +5157,8 @@ export interface MeaningDraftJob {
   report?: {
     tablesDrafted: number;
     columnsDrafted: number;
+    /** Described tables the model had nothing to add to. */
+    nothingToAdd?: number;
     dropped: Array<{ relation: string; column?: string; reason: string }>;
     failed: Array<{ tables: string[]; reason: string }>;
     stopped?: string;
@@ -5166,7 +5168,7 @@ export interface MeaningDraftJob {
 export interface MeaningsOverview {
   status: { tables: number; drafted: number; reviewed: number; stale: number; undescribed: number };
   tables: MeaningTableSummary[];
-  plan: { tables: number; columns: number; calls: number; alreadyDone: number; overLimit: number; estimatedInputTokens: number; estimatedOutputTokens: number; sendsSampleValues: boolean };
+  plan: { tables: number; columns: number; calls: number; alreadyDone: number; overLimit: number; estimatedInputTokens: number; estimatedOutputTokens: number; sendsSampleValues: boolean; columnsUnlisted?: number };
   drafting: { available: boolean; reason?: string; job?: MeaningDraftJob };
 }
 

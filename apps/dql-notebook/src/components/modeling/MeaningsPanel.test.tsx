@@ -19,6 +19,12 @@ describe('the draft card', () => {
     expect(draftPlanLine({ ...plan, sendsSampleValues: true })).not.toContain('No rows');
   });
 
+  it('says when dbt tables would be drafted from their documented columns only', () => {
+    expect(draftPlanLine(plan)).not.toContain('YAML');
+    expect(draftPlanLine({ ...plan, columnsUnlisted: 1 })).toContain('1 dbt table lists only the columns its YAML documents.');
+    expect(draftPlanLine({ ...plan, columnsUnlisted: 20 })).toContain('20 dbt tables list only the columns their YAML documents. Sync schema in Settings → Connections first');
+  });
+
   it('reads right for one table', () => {
     expect(draftPlanLine({ ...plan, tables: 1, calls: 1 })).toContain('1 table and 5,200 columns, in 1 call');
   });

@@ -30,7 +30,7 @@ export interface FolderContents {
  * workspace OR the dbt project dir (the .duckdb often lives next to
  * dbt_project.yml, a level up from the ZLens workspace).
  */
-export function detectFolderContents(targetDir: string): FolderContents {
+export function detectFolderContents(targetDir: string, options: { warehouseFirst?: boolean } = {}): FolderContents {
   let isDbt = existsSync(join(targetDir, 'dbt_project.yml'));
   let dbtProjectDir: string | null = isDbt ? targetDir : null;
   if (!dbtProjectDir) {
@@ -44,6 +44,12 @@ export function detectFolderContents(targetDir: string): FolderContents {
     }
   }
   const duckdbPath = detectDuckDBFile(targetDir, dbtProjectDir);
+  // `--warehouse-first` models the database's own tables even beside a dbt
+  // project: dbt's folder is then only a place its DuckDB file may be.
+  if (options.warehouseFirst) {
+    isDbt = false;
+    dbtProjectDir = null;
+  }
   // A dbt project or a DuckDB file decides the project; otherwise a SQLite
   // file, then a folder of data files, is the database.
   const sqlitePath = isDbt || duckdbPath ? null : detectSQLiteFile(targetDir);
@@ -57,8 +63,9 @@ export function detectFolderContents(targetDir: string): FolderContents {
  * otherwise — Guided Setup then asks where the data lives.
  */
 export function initProjectKind(contents: FolderContents, warehouseFirstFlag = false): 'dbt' | 'database' | 'undecided' {
+  if (warehouseFirstFlag) return 'database';
   if (contents.isDbt) return 'dbt';
-  if (warehouseFirstFlag || contents.duckdbPath || contents.sqlitePath || contents.dataFolder) return 'database';
+  if (contents.duckdbPath || contents.sqlitePath || contents.dataFolder) return 'database';
   return 'undecided';
 }
 
@@ -87,7 +94,7 @@ export async function runInit(
     return;
   }
 
-  const contents = detectFolderContents(targetDir);
+  const contents = detectFolderContents(targetDir, { warehouseFirst: flags.warehouseFirst === true });
   const { isDbt, dbtProjectDir, duckdbPath } = contents;
   const database = databaseConnectionFor(contents);
   // A database file and no dbt project is a database-only project: no flag needed.
