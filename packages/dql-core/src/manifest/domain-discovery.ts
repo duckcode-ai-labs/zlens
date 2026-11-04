@@ -820,6 +820,85 @@ export function businessPhrase(value: string): string | undefined {
   return segments.length > 0 ? segments.join('.') : undefined;
 }
 
+/** Where a warehouse schema's tables belong (design W2, W3): a domain and subject area, a source system, or neither. */
+export interface WarehouseSchemaDomain {
+  domain?: string;
+  area?: string;
+  /** The schema holds a source system's copied tables (`salesforce`, `zuora_fivetran`): the Sources shelf, never a domain. */
+  sourceSystem?: string;
+}
+
+/**
+ * Domains for a warehouse with no dbt project, from its schema names (design
+ * W2, W3). A schema keeps its business words (`common_mart_sales` → sales,
+ * `restricted_safe_workspace_finance` → finance), and a compound schema
+ * (`sales_and_marketing`) holds the schemas named for its parts as subject
+ * areas. A schema named for a source application or a loader (`salesforce`,
+ * `zuora_fivetran`, `tap_postgres`) is a source system. So is a schema with no
+ * business table in a warehouse that names its business tables (`dim_`,
+ * `fct_`, `mart_`…), unless its business words match a business schema's.
+ * Keys are the schema names lower-cased.
+ */
+export function warehouseSchemaDomains(schemas: ReadonlyArray<{ schema: string; tables: readonly string[] }>): Map<string, WarehouseSchemaDomain> {
+  const businessTables = (tables: readonly string[]) => tables.filter((table) => BUSINESS_TABLE_NAME.test(table)).length;
+  const namesBusinessTables = schemas.reduce((count, item) => count + businessTables(item.tables), 0) >= MIN_NAMED_BUSINESS_TABLES;
+  const rows = schemas.map((item) => {
+    const phrase = businessPhrase(item.schema);
+    return { key: item.schema.toLowerCase(), phrase, source: phrase ? namedSourceSystem(phrase) : undefined, business: businessTables(item.tables) > 0 };
+  });
+  const businessHeads = new Set(rows.filter((row) => row.phrase && !row.source && (row.business || !namesBusinessTables)).map((row) => row.phrase!.split('.')[0]!));
+  const compounds = compoundParts([...businessHeads]);
+  const output = new Map<string, WarehouseSchemaDomain>();
+  for (const row of rows) {
+    if (!row.phrase) {
+      output.set(row.key, {});
+      continue;
+    }
+    const head = row.phrase.split('.')[0]!;
+    if (row.source) {
+      output.set(row.key, { sourceSystem: row.source });
+      continue;
+    }
+    // A schema of copies in a warehouse that names its business tables, whose
+    // words no business schema shares (`gitlab_dotcom`, `greenhouse`).
+    if (namesBusinessTables && !row.business && !businessHeads.has(head) && !compounds.has(head)) {
+      output.set(row.key, { sourceSystem: head });
+      continue;
+    }
+    const compound = compounds.get(head);
+    output.set(row.key, compound ? { domain: compound, area: head } : { domain: head });
+  }
+  return output;
+}
+
+function namedSourceSystem(phrase: string): string | undefined {
+  const tokens = phrase.split(/[._]/).filter(Boolean);
+  if (tokens.some((token) => LOADER_WORDS.has(token))) return tokens.filter((token) => !LOADER_WORDS.has(token)).join('_') || phrase;
+  if (KNOWN_SOURCE_SYSTEMS.has(tokens[0]!) || KNOWN_SOURCE_SYSTEMS.has(tokens.slice(0, 2).join('_'))) return phrase;
+  return undefined;
+}
+
+/** A warehouse names its business tables when at least this many carry a business-layer prefix. */
+const MIN_NAMED_BUSINESS_TABLES = 10;
+const BUSINESS_TABLE_NAME = /^(dim|dims|fct|fact|facts|mart|rpt|agg|bdg|obt)_/i;
+
+/** Tools that copy a source into the warehouse: a schema carrying one of these words holds copies. */
+const LOADER_WORDS = new Set([
+  'fivetran', 'stitch', 'airbyte', 'meltano', 'hevo', 'singer', 'tap', 'api', 'webhook', 'webhooks', 'export', 'exports',
+  'import', 'imports', 'extract', 'extracts', 'feed', 'feeds', 'ingest', 'ingestion', 'replica', 'replication', 'cdc', 'connector',
+]);
+
+/** Common source applications: a schema named for one holds its copied tables (design W3). */
+const KNOWN_SOURCE_SYSTEMS = new Set([
+  'salesforce', 'sfdc', 'hubspot', 'marketo', 'pardot', 'zuora', 'stripe', 'chargebee', 'recurly', 'netsuite', 'quickbooks', 'xero',
+  'workday', 'bamboohr', 'greenhouse', 'lever', 'adp', 'gusto', 'zendesk', 'intercom', 'freshdesk', 'servicenow', 'jira', 'github',
+  'asana', 'slack', 'google', 'google_ads', 'facebook_ads', 'linkedin_ads', 'bing_ads', 'reddit_ads', 'tiktok_ads', 'ga4', 'segment',
+  'snowplow', 'amplitude', 'mixpanel', 'heap', 'iterable', 'braze', 'mailchimp', 'mailgun', 'sendgrid', 'klaviyo', 'shopify', 'magento',
+  'gainsight', 'gong', 'outreach', 'salesloft', 'clari', 'xactly', 'coupa', 'concur', 'expensify', 'okta', 'qualtrics', 'surveymonkey',
+  'typeform', 'bizible', 'demandbase', 'sixsense', 'clearbit', 'zoominfo', 'airtable', 'sheetload', 'tableau', 'looker', 'postgres',
+  'mysql', 'mongodb', 'dynamodb', 'snowflake', 'bigquery', 'kantata', 'zengrc', 'hackerone',
+]);
+
 function domainValues(value: unknown): string[] {
   const values = Array.isArray(value) ? value : value === undefined || value === null ? [] : [value];
   return unique(values.map((item) => normalizeDomainId(String(item))).filter(isString));

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { businessPhrase, discoverDbtDomains } from './domain-discovery.js';
+import { businessPhrase, discoverDbtDomains, warehouseSchemaDomains } from './domain-discovery.js';
 
 describe('deterministic dbt domain discovery (DOM-001, AGT-002, API-001)', () => {
   let projectRoot: string;
@@ -276,6 +276,46 @@ describe('businessPhrase', () => {
     expect(businessPhrase('six_hourly')).toBeUndefined();
     expect(businessPhrase('mnpi_exception')).toBeUndefined();
     expect(businessPhrase('dimensions_local')).toBeUndefined();
+  });
+});
+
+describe('warehouseSchemaDomains (design W2, W3)', () => {
+  it('names domains from business words and puts source systems on the shelf', () => {
+    const facts = Array.from({ length: 10 }, (_, index) => `fct_fact_${index}`);
+    const domains = warehouseSchemaDomains([
+      { schema: 'COMMON', tables: ['dim_account', ...facts] },
+      { schema: 'COMMON_MART_SALES', tables: ['mart_pipeline'] },
+      { schema: 'COMMON_MART_FINANCE', tables: ['mart_arr'] },
+      { schema: 'RESTRICTED_SAFE_WORKSPACE_FINANCE', tables: ['wk_close'] },
+      { schema: 'SALESFORCE', tables: ['account', 'opportunity'] },
+      { schema: 'ZUORA_FIVETRAN', tables: ['subscription'] },
+      { schema: 'GITLAB_DOTCOM', tables: ['projects', 'issues'] },
+      { schema: 'RESTRICTED_SAFE', tables: ['x'] },
+    ]);
+    expect(Object.fromEntries(domains)).toEqual({
+      common: {},
+      common_mart_sales: { domain: 'sales' },
+      common_mart_finance: { domain: 'finance' },
+      // A workspace of copies keeps its domain when a business schema shares its words.
+      restricted_safe_workspace_finance: { domain: 'finance' },
+      salesforce: { sourceSystem: 'salesforce' },
+      zuora_fivetran: { sourceSystem: 'zuora' },
+      // No business table, in a warehouse that names them, and no business schema shares its words.
+      gitlab_dotcom: { sourceSystem: 'gitlab_dotcom' },
+      restricted_safe: {},
+    });
+  });
+
+  it('groups schemas named for the parts of a compound schema as its subject areas', () => {
+    const domains = warehouseSchemaDomains([
+      { schema: 'sales_and_marketing', tables: ['dim_campaign'] },
+      { schema: 'mart_sales', tables: ['mart_pipeline'] },
+      { schema: 'orders', tables: ['orders'] },
+    ]);
+    expect(domains.get('mart_sales')).toEqual({ domain: 'sales_and_marketing', area: 'sales' });
+    expect(domains.get('sales_and_marketing')).toEqual({ domain: 'sales_and_marketing' });
+    // A warehouse that does not name its business tables keeps every business-word schema.
+    expect(domains.get('orders')).toEqual({ domain: 'orders' });
   });
 });
 

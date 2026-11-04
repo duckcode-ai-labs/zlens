@@ -390,14 +390,38 @@ GitLab's public analytics project (3,335 models), the finder used to propose
 
 | | Before | After |
 |---|---|---|
-| Business tables in the right Domain | 144 (32.6%) | 345 (78.1%) |
-| In the right subject area | 133 (30.1%) | 295 (66.7%) |
+| Business tables in the right Domain, one-to-one (majority) | 24.0% (32.6%) | 75.3% (78.1%) |
+| In the right subject area, one-to-one (majority) | 22.9% (30.1%) | 56.8% (66.7%) |
 | Business tables placed | 287 | 439 |
 | Domains proposed over the whole project | 53 | 25 |
+
+"Majority" counts a proposed Domain as the true one most of its tables carry.
+"One-to-one" matches each true Domain to at most one proposed Domain, so
+splitting a Domain is not rewarded.
 
 Most of the remaining misses are tables whose folder disagrees with what they
 are about, which no folder rule can fix: ARR tables in the sales folder, and
 trials and product events in the sales-and-marketing folder.
+
+**Warehouse discovery without dbt** reads schema names the same way
+(`warehouseSchemaDomains`):
+
+- A schema keeps its business words.
+- A compound schema holds its parts as subject areas.
+- A schema is a source system, joining the database's Domain instead of making its own, when it is:
+  - named for a source application or a loader (`salesforce`, `zuora_fivetran`, `tap_postgres`);
+  - or holds no business table (`dim_`, `fct_`, `mart_`…) in a warehouse that names them, and its words match no business schema.
+
+On an empty DuckDB with GitLab's 180 schemas and 4,779 tables:
+
+| | Before | After |
+|---|---|---|
+| Domains | 177, one per schema | 12 |
+| Business tables in the right Domain, one-to-one | 36.2% | 40.7% |
+
+280 of the 442 business tables still sit in the database's Domain: their
+schemas (`common`, `restricted_safe_common`) name no business area. Query
+history (decision S-D11) is the evidence that can place them.
 
 ## Backward compatibility
 

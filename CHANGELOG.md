@@ -17,9 +17,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **Subject areas inside compound Domains.** A `sales_and_marketing` folder is the Domain, and `common_mart_sales` is its *sales* area. Memberships carry `proposedArea`, and the report lists `areaProposals`.
 - **Models nothing names are placed by lineage, always for review.** A model read by three or more Domains is `shared`. Otherwise it takes the Domain most of the models it reads share.
 - **On GitLab's 3,335-model analytics project:**
-  - 78% of the 442 business tables land in the right Domain (was 33%);
+  - 75% of the 442 business tables land in the right Domain, counting one proposed Domain per true one (was 24%);
   - 439 are placed (was 287);
   - 25 Domains are proposed (was 53).
+- **Warehouse discovery without dbt reads schema names the same way.** A schema of a source system's copies
+  (`salesforce`, `zuora_fivetran`) joins the database's Domain instead of making its own. On GitLab's
+  warehouse shape, 12 Domains are proposed instead of 177, one per schema.
 
 ### Ask reads the whole business model ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
