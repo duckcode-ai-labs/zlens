@@ -8,6 +8,22 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Draft a large dbt project a piece at a time (model-at-scale design S3, S4)
+
+- **`zlens model draft --select <term>…` drafts only the picked tables, as dbt picks them.**
+  - Names and graph operators: `fct_orders`, `+fct_orders`, `fct_orders+1`.
+  - Attributes: `path:`, `tag:`, `schema:`, `package:`, `source:`.
+  - The proposed Domain or subject area: `domain:finance`, `area:sales`. These bring the business tables they read.
+  - `--area <id>` is short for `--select area:<id>`, and `--hops <n>` adds neighbours.
+- **A run drafts at most 150 tables (`--budget`), and never drops the rest silently.**
+  - Over the budget, the most important tables are drafted first: business tables, then the ones an exposure uses, then the ones many models read.
+  - The rest are listed, with the areas to draft one at a time.
+  - Only the tables in the run are read from the warehouse and measured.
+- **Layers:** models in a `sources` folder, named `*_source`, or `prep` models are now read as staging or intermediate.
+- **On GitLab's 4,896-object project:**
+  - `area:sales` drafts 122 tables (its 46 and the 76 business tables they read);
+  - a whole-project run drafts the 150 most-used marts and dimensions first.
+
 ### Domains from business words, not layer, access or schedule tags ([RFC 0012](docs/rfcs/0012-layers-and-table-picks.md))
 
 - **dbt domain discovery reads the business words in folder and tag names.**
