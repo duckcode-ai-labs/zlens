@@ -8,6 +8,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed: `zlens agent eval --via runtime` no longer loses questions to a closing connection
+
+- **Each question opens its own connection to the runtime.**
+  - Before, the eval reused the previous question's kept-alive connection, which the runtime closes after five seconds idle. The eval reads the schema for a few seconds between questions, so some posts went out as the connection closed.
+  - Those questions failed with ECONNRESET or "socket hang up" and were scored as "the runtime did not answer": 8 of 27 on the GitLab project.
+
 ### One word for each thing on the Modeling page (simplification plan Z3, Z5)
 
 - **The same words everywhere:**
