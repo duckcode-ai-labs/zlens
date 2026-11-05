@@ -174,7 +174,7 @@ const EXPECTED_TEST_FILES = 193;
 // (analytical-request-policy.test.ts, +34; GitLab blind questions q29, q31, q40).
 // 2737 with emails and e-mail refused as contact data and counts of emails sent, opened or clicked
 // still answered (analytical-request-policy.test.ts, +28).
-const EXPECTED_TESTS = 2784;
+const EXPECTED_TESTS = 2818;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2629.
