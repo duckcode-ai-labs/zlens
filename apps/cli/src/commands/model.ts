@@ -645,7 +645,7 @@ function printDraftScope(report: import('../warehouse-model-discovery.js').Wareh
     console.log(`  Areas: ${report.areas.map((area) => `${area.domain}/${area.id}${area.shared ? ' (Shared)' : ''}: ${fresh.filter((entity) => entity.domain === area.domain && entity.area === area.id).length} table${fresh.filter((entity) => entity.domain === area.domain && entity.area === area.id).length === 1 ? '' : 's'}${area.references.length ? `, ${area.references.length} from other areas at its edge` : ''}`).join(' · ')}`);
   }
   if (scope.outside?.length) {
-    console.log(`Joins left for another run: ${scope.outside.length} declared join${scope.outside.length === 1 ? ' reaches a table' : 's reach tables'} not drafted yet (draft its area to add ${scope.outside.length === 1 ? 'it' : 'them'})`);
+    console.log(`Joins left for another run: ${scope.outside.length} declared join${scope.outside.length === 1 ? ' reaches a table' : 's reach tables'} not drafted yet (${scope.outside.length === 1 ? 'draft its area to add it' : 'draft their areas to add them'})`);
     for (const edge of scope.outside.slice(0, 5)) console.log(`  ${edge.from} → ${edge.to} on ${edge.column}`);
     if (scope.outside.length > 5) console.log(`  … and ${scope.outside.length - 5} more`);
   }
