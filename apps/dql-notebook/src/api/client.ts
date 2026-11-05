@@ -612,6 +612,37 @@ export interface WarehouseCatalogSummary {
 }
 
 /** What `Draft from warehouse` found, before anything is written. */
+/** A draft's scope, as `zlens model draft --select … --hops … --budget …` takes it (model-at-scale design S3, S4). */
+export interface DraftScopeRequest {
+  select?: string[];
+  hops?: number;
+  budget?: number;
+}
+
+export interface DraftScopeChoices {
+  tables: number;
+  budget: number;
+  layers: { business: number; intermediate: number; aside: number; snapshot: number; staging: number; raw: number };
+  areas: Array<{ select: string; domain: string; area?: string; shared?: boolean; tables: number; reads: number }>;
+}
+
+export interface DraftTableMatch {
+  id: string;
+  name: string;
+  relation: string;
+  layer: 'raw' | 'staging' | 'intermediate' | 'snapshot' | 'final';
+  business: boolean;
+  domain?: string;
+  area?: string;
+  readers: number;
+}
+
+export interface DraftScopeResponse {
+  choices: DraftScopeChoices;
+  preview: { description: string; asked: number; drafted: number; budget: number; leftOut: number; leftOutSample: Array<{ uniqueId: string; relation: string; layer: string }> };
+  tables?: { total: number; items: DraftTableMatch[] };
+}
+
 export interface WarehouseDiscoveryReport {
   catalogFingerprint: string;
   capturedAt: string;
@@ -5225,8 +5256,16 @@ export const api = {
    * warehouse, as a reviewable proposal. `proposal` is null when there is
    * nothing new to draft.
    */
-  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
+  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean; scope?: DraftScopeRequest } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
     return request('/api/modeling/warehouse/discover/proposal', { method: 'POST', body: JSON.stringify({ validate: true, ...input }) });
+  },
+
+  /**
+   * What a dbt project can draft, by layer and area, the tables to start
+   * from, and what a pick drafts (model-at-scale design S3).
+   */
+  async draftScope(input: DraftScopeRequest & { q?: string; businessOnly?: boolean; limit?: number } = {}): Promise<DraftScopeResponse> {
+    return request('/api/modeling/draft-scope', { method: 'POST', body: JSON.stringify(input) });
   },
 
   /** The drafted models that wait for review, or null. */

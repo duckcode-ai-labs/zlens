@@ -883,7 +883,7 @@ import { readValueProfile, refreshValueProfile, valueProfileAllowed, type ValueP
 import { resolveResultReviewMode } from './result-review-setting.js';
 import { TableDatasetError, applyTableDatasetChoices, draftSavedQueryDataset, draftTableDataset, listWarehouseTables, savedQueryRelation, tableDatasetLinks, tableModelStates, type TableDatasetLink, type TableModelState } from './datasets/table-dataset.js';
 import { draftTablePicks, readDbtRelationFacts } from './model-layers.js';
-import { resolveDraftScope, type DraftScopeOptions } from './draft-scope.js';
+import { draftScopeChoices, draftScopeGraph, resolveDraftScope, searchDraftTables, type DraftScopeGraph, type DraftScopeOptions } from './draft-scope.js';
 import { draftIdentityJoins } from './model-joins.js';
 import { draftWordsAndRules } from './model-profile.js';
 import {
@@ -16622,11 +16622,40 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // as an ordinary reviewable proposal. The operations, and any validation
     // evidence on them, come from this server's own discovery run, never from
     // the browser.
+    // The draft picker (model-at-scale design S3): what can be drafted, by
+    // area and layer, the tables to start from, and what a pick drafts.
+    if (req.method === 'POST' && path === '/api/modeling/draft-scope') {
+      const requestId = apiRequestId('modeling-draft-scope');
+      try {
+        const body = await readJSON(req).catch(() => ({})) as { select?: unknown; hops?: unknown; budget?: unknown; q?: unknown; businessOnly?: unknown; limit?: unknown };
+        const graph = draftScopeGraphFor(projectRoot);
+        const select = Array.isArray(body.select) ? body.select.filter((term): term is string => typeof term === 'string' && term.trim().length > 0).slice(0, 200) : [];
+        const hops = typeof body.hops === 'number' && Number.isInteger(body.hops) && body.hops > 0 ? Math.min(body.hops, 5) : undefined;
+        const budget = typeof body.budget === 'number' && Number.isInteger(body.budget) && body.budget > 0 ? Math.min(body.budget, 1_000) : undefined;
+        const scope = resolveDraftScope(graph, { select, ...(hops ? { hops } : {}), ...(budget ? { budget } : {}) });
+        const tables = typeof body.q === 'string'
+          ? searchDraftTables(graph, { q: body.q.slice(0, 120), businessOnly: body.businessOnly !== false, ...(typeof body.limit === 'number' ? { limit: body.limit } : {}) })
+          : undefined;
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON({
+          requestId,
+          choices: draftScopeChoices(graph, scope.budget),
+          preview: { description: scope.description, asked: scope.asked, drafted: scope.ids.length, budget: scope.budget, leftOut: scope.leftOut.length, leftOutSample: scope.leftOut.slice(0, 5) },
+          ...(tables ? { tables } : {}),
+        }));
+      } catch (error) {
+        const code = apiErrorCode(error, 'DRAFT_SCOPE_FAILED');
+        res.writeHead(code === 'DBT_MANIFEST_MISSING' ? 409 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(serializeJSON(apiErrorEnvelope({ requestId, code, message: apiErrorMessage(error), nextActions: [] })));
+      }
+      return;
+    }
+
     if (req.method === 'POST' && path === '/api/modeling/warehouse/discover/proposal') {
       const requestId = apiRequestId('modeling-warehouse-proposal');
       const snapshot = projectSnapshot();
       try {
-        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean };
+        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown } };
         if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
           throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
         }
@@ -16635,7 +16664,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
         // A dbt-first project drafts from dbt and the warehouse together (RFC 0012, decision M5).
         const report = modelingModeOf(loadProjectConfig(projectRoot)) === 'dbt-first'
-          ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, executor })
+          ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
           : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
         // New Domains and subject areas are created by the proposal's own scope
         // step, as for dbt discovery, so the batch stays in dependency order.
@@ -39110,6 +39139,41 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
     ...placeInAreas(checked, domains, manifest),
     scope: { description: draftScope.description, asked: draftScope.asked, drafted, budget: draftScope.budget, leftOut: draftScope.leftOut, areas: draftScope.areas, context: around.context.size, outside },
   };
+}
+
+/** A picker's scope from a request body, bounded. */
+function draftScopeFromBody(value: { select?: unknown; hops?: unknown; budget?: unknown } | undefined): DraftScopeOptions {
+  if (!value || typeof value !== 'object') return {};
+  const select = Array.isArray(value.select) ? value.select.filter((term): term is string => typeof term === 'string' && term.trim().length > 0).slice(0, 200) : [];
+  const hops = typeof value.hops === 'number' && Number.isInteger(value.hops) && value.hops > 0 ? Math.min(value.hops, 5) : undefined;
+  const budget = typeof value.budget === 'number' && Number.isInteger(value.budget) && value.budget > 0 ? Math.min(value.budget, 1_000) : undefined;
+  return { ...(select.length ? { select } : {}), ...(hops ? { hops } : {}), ...(budget ? { budget } : {}) };
+}
+
+/**
+ * The project's draft graph, kept while dbt's manifest and the Domain
+ * Packages stay the same: the picker asks for it on every change, and a
+ * large manifest takes a second or more to read.
+ */
+let draftScopeGraphCache: { key: string; graph: DraftScopeGraph } | undefined;
+function draftScopeGraphFor(projectRoot: string): DraftScopeGraph {
+  const dbtManifestPath = resolveDbtManifestPath(projectRoot);
+  if (!dbtManifestPath || !existsSync(dbtManifestPath)) {
+    throw Object.assign(new Error('No dbt manifest found. Run dbt parse, or connect the dbt project first.'), { code: 'DBT_MANIFEST_MISSING' });
+  }
+  const domainsDir = join(projectRoot, 'domains');
+  const domainStamp = existsSync(domainsDir) ? readdirSync(domainsDir).map((name) => `${name}:${statSync(join(domainsDir, name)).mtimeMs}`).join('|') : '';
+  const key = `${projectRoot}|${dbtManifestPath}|${statSync(dbtManifestPath).mtimeMs}|${domainStamp}`;
+  if (draftScopeGraphCache?.key === key) return draftScopeGraphCache.graph;
+  const dbtManifest = readDbtManifest(dbtManifestPath);
+  const graph = draftScopeGraph({
+    nodes: dbtWarehouseNodes(dbtManifest),
+    dbtManifest: dbtManifest as unknown as Record<string, unknown>,
+    facts: readDbtRelationFacts(dbtManifestPath),
+    domains: discoverDbtDomains({ projectRoot, dbtManifestPath }),
+  });
+  draftScopeGraphCache = { key, graph };
+  return graph;
 }
 
 /**

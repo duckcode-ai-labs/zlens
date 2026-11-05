@@ -434,6 +434,17 @@ project. Each run:
 - **lists each area's tables in other areas that its joins reach** as boundary references (`references:`). An area that exists keeps its name, and its references only grow;
 - **lists declared joins (dbt `relationships` tests)** to tables nobody has drafted yet, as "Joins left for another run".
 
+
+**On the Modeling page (design S3).** In a dbt project larger than one draft's budget, "Draft the model" opens **Choose what to draft**:
+
+- the project's size by layer;
+- three ways to pick:
+  - **By area:** every Domain and subject area, the Shared area first, each with its business tables and the business tables they read;
+  - **Tables:** search business tables, most read first, optionally with their neighbours one step each way;
+  - **dbt selector:** the same terms as `--select`;
+- a footer that says, before anything runs, how many tables the pick drafts and what the budget leaves for later.
+
+A smaller project drafts in one click, as before.
 ## Backward compatibility
 
 - No existing field changes.

@@ -53,7 +53,7 @@ export interface DraftScope {
   areas: Array<{ id: string; tables: number }>;
 }
 
-interface NodeFacts {
+export interface NodeFacts {
   node: DbtNode;
   name: string;
   path?: string;
@@ -63,13 +63,27 @@ interface NodeFacts {
   resourceType?: string;
 }
 
-export function resolveDraftScope(input: {
+export interface DraftScopeInput {
   nodes: readonly DbtNode[];
   dbtManifest: Record<string, unknown>;
   facts: Map<string, DbtRelationFacts>;
   domains: DomainDiscoveryReport;
-}, options: DraftScopeOptions = {}): DraftScope {
-  const budget = options.budget && options.budget > 0 ? Math.floor(options.budget) : DEFAULT_DRAFT_BUDGET;
+}
+
+/** The project's tables as one graph: lineage, layer, rank tier and proposed area. Built once, read by every pick. */
+export interface DraftScopeGraph {
+  byId: Map<string, NodeFacts>;
+  dbtFacts: Map<string, DbtRelationFacts>;
+  parents: Map<string, string[]>;
+  children: Map<string, string[]>;
+  membership: Map<string, DomainDiscoveryReport['memberships'][number]>;
+  layerOf: Map<string, TableLayer>;
+  tierOf: Map<string, number>;
+  /** The tables a business question is answered from: final tables outside team workspaces and legacy folders. */
+  business: (id: string) => boolean;
+}
+
+export function draftScopeGraph(input: DraftScopeInput): DraftScopeGraph {
   const byId = new Map(input.nodes.map((node) => [node.uniqueId, nodeFacts(node, input.dbtManifest)]));
   // dbt's facts are keyed by relation; this reads them by unique id.
   const dbtFacts = new Map([...input.facts.values()].map((fact) => [fact.uniqueId, fact]));
@@ -80,8 +94,13 @@ export function resolveDraftScope(input: {
   const membership = new Map(input.domains.memberships.map((item) => [item.dbtUniqueId, item]));
   const layerOf = new Map([...byId].map(([id, facts]) => [id, layerFor(facts, dbtFacts.get(id))]));
   const tierOf = new Map([...byId].map(([id, facts]) => [id, rankTier(facts, layerOf.get(id)!)]));
-  // The tables a business question is answered from: final tables outside team workspaces and legacy folders.
-  const business = (id: string) => tierOf.get(id)! <= 1;
+  return { byId, dbtFacts, parents, children, membership, layerOf, tierOf, business: (id) => tierOf.get(id)! <= 1 };
+}
+
+export function resolveDraftScope(input: DraftScopeInput | DraftScopeGraph, options: DraftScopeOptions = {}): DraftScope {
+  const budget = options.budget && options.budget > 0 ? Math.floor(options.budget) : DEFAULT_DRAFT_BUDGET;
+  const graph = 'byId' in input ? input : draftScopeGraph(input);
+  const { byId, dbtFacts, parents, children, membership, layerOf, tierOf, business } = graph;
 
   const terms = (options.select ?? []).flatMap((value) => value.split(/[\s,]+/)).map((term) => term.trim()).filter(Boolean);
   let picked: Set<string>;
@@ -104,7 +123,7 @@ export function resolveDraftScope(input: {
   const leftOut = ranked.slice(budget).map((id) => ({ uniqueId: id, relation: byId.get(id)!.node.relation, layer: layerOf.get(id)! }));
 
   const areaCounts = new Map<string, number>();
-  for (const item of input.domains.memberships) {
+  for (const item of membership.values()) {
     if (!item.proposedDomain || !byId.has(item.dbtUniqueId) || !business(item.dbtUniqueId)) continue;
     const id = item.proposedArea ? `area:${item.proposedArea}` : `domain:${item.proposedDomain.split('.')[0]}`;
     areaCounts.set(id, (areaCounts.get(id) ?? 0) + 1);
@@ -243,4 +262,80 @@ function globMatcher(pattern: string): (value: string) => boolean {
   const source = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
   const regex = new RegExp(`^${source}$`);
   return (value) => regex.test(value);
+}
+
+/** What a person can pick from (model-at-scale design S3): the project's size by layer, and its Domains and areas with their tables. */
+export interface DraftScopeChoices {
+  tables: number;
+  budget: number;
+  layers: { business: number; intermediate: number; aside: number; snapshot: number; staging: number; raw: number };
+  /** Domains, each followed by its areas, the Shared area first. `select` is the term that picks it. */
+  areas: Array<{ select: string; domain: string; area?: string; shared?: boolean; tables: number; reads: number }>;
+}
+
+export function draftScopeChoices(graph: DraftScopeGraph, budget = DEFAULT_DRAFT_BUDGET): DraftScopeChoices {
+  const layers = { business: 0, intermediate: 0, aside: 0, snapshot: 0, staging: 0, raw: 0 };
+  const tierLayer: Array<keyof typeof layers> = ['business', 'business', 'intermediate', 'aside', 'snapshot', 'staging', 'raw'];
+  for (const tier of graph.tierOf.values()) layers[tierLayer[tier] ?? 'raw'] += 1;
+  const members = new Map<string, { domain: string; area?: string; ids: string[] }>();
+  for (const [id, item] of graph.membership) {
+    if (!item.proposedDomain || !graph.byId.has(id) || !graph.business(id)) continue;
+    const domain = item.proposedDomain.split('.')[0]!;
+    for (const key of [`domain:${domain}`, ...(item.proposedArea ? [`area:${item.proposedDomain}.${item.proposedArea}`] : [])]) {
+      const entry = members.get(key) ?? { domain, ...(key.startsWith('area:') ? { area: item.proposedArea! } : {}), ids: [] };
+      entry.ids.push(id);
+      members.set(key, entry);
+    }
+  }
+  const reads = (ids: string[]) => {
+    const own = new Set(ids);
+    return walk(ids, (id) => (graph.parents.get(id) ?? []).filter(graph.business), Number.POSITIVE_INFINITY).filter((id) => !own.has(id)).length;
+  };
+  const domainRows = [...members].filter(([key]) => key.startsWith('domain:'))
+    .sort(([a, x], [b, y]) => Number(b === 'domain:shared') - Number(a === 'domain:shared') || y.ids.length - x.ids.length || a.localeCompare(b));
+  const areas: DraftScopeChoices['areas'] = [];
+  for (const [key, entry] of domainRows) {
+    areas.push({ select: key, domain: entry.domain, ...(entry.domain === 'shared' ? { shared: true } : {}), tables: entry.ids.length, reads: reads(entry.ids) });
+    const own = [...members].filter(([areaKey, area]) => areaKey.startsWith('area:') && area.domain === entry.domain)
+      .sort(([a, x], [b, y]) => y.ids.length - x.ids.length || a.localeCompare(b));
+    for (const [areaKey, area] of own) areas.push({ select: areaKey, domain: area.domain, area: area.area!, tables: area.ids.length, reads: reads(area.ids) });
+  }
+  return { tables: graph.byId.size, budget, layers, areas };
+}
+
+export interface DraftTableMatch {
+  id: string;
+  name: string;
+  relation: string;
+  layer: TableLayer;
+  business: boolean;
+  domain?: string;
+  area?: string;
+  /** Models that read it. */
+  readers: number;
+}
+
+/** Tables to start a draft from, by name (design S3 "starting tables"): business tables first, then the most read. */
+export function searchDraftTables(graph: DraftScopeGraph, options: { q?: string; businessOnly?: boolean; limit?: number } = {}): { total: number; items: DraftTableMatch[] } {
+  const q = (options.q ?? '').trim().toLowerCase();
+  const matches = [...graph.byId].filter(([id, facts]) => (!options.businessOnly || graph.business(id))
+    && (!q || facts.name.includes(q) || facts.node.relation.toLowerCase().includes(q)));
+  const readers = (id: string) => graph.children.get(id)?.length ?? 0;
+  matches.sort(([a, x], [b, y]) => graph.tierOf.get(a)! - graph.tierOf.get(b)! || readers(b) - readers(a) || x.name.localeCompare(y.name));
+  return {
+    total: matches.length,
+    items: matches.slice(0, Math.max(1, Math.min(options.limit ?? 50, 200))).map(([id, facts]) => {
+      const item = graph.membership.get(id);
+      return {
+        id,
+        name: facts.name,
+        relation: facts.node.relation,
+        layer: graph.layerOf.get(id)!,
+        business: graph.business(id),
+        ...(item?.proposedDomain ? { domain: item.proposedDomain.split('.')[0]! } : {}),
+        ...(item?.proposedArea ? { area: item.proposedArea } : {}),
+        readers: readers(id),
+      };
+    }),
+  };
 }
