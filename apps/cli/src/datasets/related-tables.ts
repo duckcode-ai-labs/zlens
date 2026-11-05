@@ -1,7 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
-  bareRelation,
+  tableKey,
+  tableName,
   collectDbtRelationshipTests,
   discoverDatasetJoins,
   withDatasetJoins,
@@ -53,7 +54,7 @@ export interface RelatedTablesContext {
 
 const object = (value: unknown): Record<string, unknown> => (value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {});
 const text = (value: unknown): string | undefined => (typeof value === 'string' && value.trim() ? value.trim() : undefined);
-const tableName = (relation: string): string => bareRelation(relation).split('.').pop() ?? relation;
+const shortName = (relation: string): string => tableName(relation).toLowerCase() || relation;
 
 /** Which side's key the warehouse check found unique. */
 function evidenceOf(validation: ManifestRelationshipValidationEvidence | undefined, current: boolean): RelatedRelationshipEdge['evidence'] {
@@ -95,7 +96,7 @@ export function relatedTablesContext(sources: RelatedTablesSources): RelatedTabl
   const nodes = sources.manifest.dbtProvenance?.nodes ?? {};
   const entities = sources.manifest.modeling?.entities ?? {};
   const relationOfNode = (uniqueId: string | undefined) => (uniqueId ? text(nodes[uniqueId]?.relation) : undefined);
-  const nameOfNode = (uniqueId: string | undefined, relation: string) => (uniqueId ? text(nodes[uniqueId]?.name) : undefined) ?? tableName(relation);
+  const nameOfNode = (uniqueId: string | undefined, relation: string) => (uniqueId ? text(nodes[uniqueId]?.name) : undefined) ?? shortName(relation);
   const edges: RelatedRelationshipEdge[] = [];
 
   // The model: Modeling relationships and the dbt / MetricFlow ones imported into it.
@@ -206,13 +207,13 @@ export function relatedTablesContext(sources: RelatedTablesSources): RelatedTabl
   // Columns: the warehouse catalog, then the dbt catalog (and manifest columns).
   const columns = new Map<string, Columns>();
   for (const relation of sources.warehouseCatalog?.relations ?? []) {
-    columns.set(bareRelation(relation.relation), relation.columns.map((column) => ({ name: column.name, ...(column.type ? { type: column.type } : {}) })));
+    columns.set(tableKey(relation.relation, 'object'), relation.columns.map((column) => ({ name: column.name, ...(column.type ? { type: column.type } : {}) })));
   }
   const dbtNodes = { ...object(object(sources.dbt?.manifest).nodes), ...object(object(sources.dbt?.manifest).sources) };
   const dbtCatalog = { ...object(object(sources.dbt?.catalog).nodes), ...object(object(sources.dbt?.catalog).sources) };
   for (const [uniqueId, node] of Object.entries(nodes)) {
     const relation = text(node.relation);
-    if (!relation || node.resourceType === 'warehouse' || columns.has(bareRelation(relation))) continue;
+    if (!relation || node.resourceType === 'warehouse' || columns.has(tableKey(relation, 'object'))) continue;
     const fromCatalog = Object.values(object(object(dbtCatalog[uniqueId]).columns)).flatMap((column) => {
       const record = object(column);
       return text(record.name) ? [{ name: text(record.name)!, ...(text(record.type) ? { type: text(record.type)! } : {}) }] : [];
@@ -222,9 +223,9 @@ export function relatedTablesContext(sources: RelatedTablesSources): RelatedTabl
       return text(record.name) ? [{ name: text(record.name)!, ...(text(record.data_type) ? { type: text(record.data_type)! } : {}) }] : [];
     });
     const list = fromCatalog.length ? fromCatalog : fromManifest;
-    if (list.length) columns.set(bareRelation(relation), list);
+    if (list.length) columns.set(tableKey(relation, 'object'), list);
   }
-  return { edges, columnsOf: (relation) => columns.get(bareRelation(relation)) };
+  return { edges, columnsOf: (relation) => columns.get(tableKey(relation, 'object')) };
 }
 
 const COMPLEX_SOURCE = /\b(join|group\s+by|union|intersect|except|having|distinct|qualify|window|over\s*\()/i;
@@ -256,9 +257,9 @@ export function relationSql(relation: string, quote: (identifier: string) => str
  * never two.
  */
 export function relationResolver(context: Pick<RelatedTablesContext, 'edges'>): (reference: string) => string | undefined {
-  const relations = new Set(context.edges.flatMap((edge) => [bareRelation(edge.fromRelation), bareRelation(edge.toRelation)]));
+  const relations = new Set(context.edges.flatMap((edge) => [tableKey(edge.fromRelation, 'object'), tableKey(edge.toRelation, 'object')]));
   return (reference: string) => {
-    const bare = bareRelation(reference);
+    const bare = tableKey(reference, 'object');
     if (relations.has(bare)) return bare;
     const matches = [...relations].filter((relation) => relation.endsWith(`.${bare}`));
     return matches.length === 1 ? matches[0] : undefined;
@@ -338,15 +339,15 @@ export function readDbtArtifacts(provenance: DQLManifest['dbtProvenance']): { ma
  */
 export function joinableTables(context: RelatedTablesContext, relation: string): string[] {
   // "dev.orders" from the warehouse listing is "jaffle_shop"."dev"."orders" in a dbt project's relationships.
-  const base = relationResolver(context)(relation) ?? bareRelation(relation);
+  const base = relationResolver(context)(relation) ?? tableKey(relation, 'object');
   const names = new Set<string>();
   // One table per foreign key, as the field list follows it (orders.customer_id → customers, not also stg_customers).
   for (const edge of withoutSupersededEdges(context.edges)) {
     if (edge.evidence?.failed) continue;
-    const forward = bareRelation(edge.fromRelation) === base && (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') && edge.evidence?.toUnique !== false;
-    const backward = bareRelation(edge.toRelation) === base && (edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one') && edge.evidence?.fromUnique !== false;
-    if (forward && bareRelation(edge.toRelation) !== base) names.add(edge.toTable);
-    if (backward && bareRelation(edge.fromRelation) !== base) names.add(edge.fromTable);
+    const forward = tableKey(edge.fromRelation, 'object') === base && (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') && edge.evidence?.toUnique !== false;
+    const backward = tableKey(edge.toRelation, 'object') === base && (edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one') && edge.evidence?.fromUnique !== false;
+    if (forward && tableKey(edge.toRelation, 'object') !== base) names.add(edge.toTable);
+    if (backward && tableKey(edge.fromRelation, 'object') !== base) names.add(edge.fromTable);
   }
   return [...names].sort();
 }

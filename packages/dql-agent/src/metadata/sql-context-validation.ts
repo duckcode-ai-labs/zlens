@@ -1,4 +1,4 @@
-import { analyzeSqlReferences, blankStringsAndComments, maskExpressionFromKeywords } from '@zlens/core';
+import { analyzeSqlReferences, blankStringsAndComments, maskExpressionFromKeywords, tableKey, tableName } from '@zlens/core';
 import type {
   LocalContextPack,
   MetadataAgentIntent,
@@ -695,7 +695,7 @@ function buildAllowedRelationLookup(
     for (const relation of analysis.tables) {
       putAllowed({
         relation,
-        name: relation.split('.').at(-1) ?? relation,
+        name: tableName(relation) || relation,
         objectKey: source.objectKey,
         source: 'certified source block SQL',
         columnCompleteness: 'partial',
@@ -714,7 +714,7 @@ function buildAllowedRelationLookup(
     const authoritativeColumns = table.columnCompleteness !== 'partial';
     putAllowed({
       relation: table.relation,
-      name: table.name ?? table.relation.split('.').at(-1) ?? table.relation,
+      name: table.name ?? (tableName(table.relation) || table.relation),
       source: table.source ?? 'runtime schema context',
       columnCompleteness: authoritativeColumns ? 'complete' : 'partial',
       columns: table.columns,
@@ -943,7 +943,7 @@ export function allowedRelationLookupFromTables(
   for (const table of tables) {
     const entry: MetadataAllowedSqlRelation = {
       relation: table.relation,
-      name: table.name ?? table.relation.split('.').at(-1) ?? table.relation,
+      name: table.name ?? (tableName(table.relation) || table.relation),
       source: table.source ?? 'grounded schema',
       columnCompleteness: 'complete',
       columns: table.columns.map((column) => ({ name: column.name, ...(column.type ? { type: column.type } : {}) })),
@@ -1114,21 +1114,13 @@ function uniqueAllowedRelations(allowed: Map<string, MetadataAllowedSqlRelation>
 }
 
 function relationLookupKeys(relation: string): string[] {
-  const normalized = normalizeRelation(relation).toLowerCase();
+  const normalized = tableKey(relation, 'object').toLowerCase();
   const parts = normalized.split('.').filter(Boolean);
   const keys = new Set<string>();
   if (normalized) keys.add(normalized);
   if (parts.length >= 2) keys.add(parts.slice(-2).join('.'));
   if (parts.length >= 1) keys.add(parts[parts.length - 1]!);
   return Array.from(keys);
-}
-
-function normalizeRelation(value: string): string {
-  return value
-    .replace(/["`]/g, '')
-    .replace(/\s*\.\s*/g, '.')
-    .replace(/\s+/g, ' ')
-    .trim();
 }
 
 function namesEqual(a: string, b: string): boolean {

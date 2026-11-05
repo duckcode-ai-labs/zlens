@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { tableName } from '@zlens/core';
 
 export interface ValueIndexColumn {
   name: string;
@@ -52,7 +53,7 @@ export function buildRuntimeValueIndex(snapshot: ValueIndexSnapshot): RuntimeVal
           valueKey,
           relation,
           schema: table.schema,
-          tableName: table.name ?? relation.split('.').at(-1) ?? relation,
+          tableName: table.name ?? (tableName(relation) || relation),
           columnName: column.name,
           columnType: column.type,
           value,

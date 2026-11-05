@@ -37,6 +37,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - Moved: saving a join, matching live columns to a table, the join-safety keys, table datasets, and the dbt tables a warehouse sync reads.
   - A name is quoted for a warehouse from its parts. It used to keep their quotes, so a quoted part could be quoted twice.
   - 90 older uses are left.
+- **Part 3: the module moves to `@zlens/core`,** so core, the agent and the apps answer from one place. `@zlens/agent` re-exports it.
+  - A fourth level, `shared`, compares the parts both names have: `s.t` matches `prod.s.t`, but `dev.s.t` does not. Certified blocks and value evidence match at this level, as before, so a block written against one database never answers for another.
+  - Moved: the agent's 17 own helpers (aggregation safety, certified blocks, meaning evidence, join trust, hints, policy, regrounding, proposals, join mining) and core's `bareRelation`. `bareRelation` stays exported, deprecated, for code outside ZLens.
+  - A table's short name no longer keeps quote marks: `"T"` reads as `T` in the catalog and on the SQL checks.
+  - 52 older uses are left: SQL renderers that keep each part's own quotes, the fuzzy exploratory match, and short names in the apps.
 
 ### Hybrid projects: dbt models and warehouse tables in one model, never drafted twice
 

@@ -255,7 +255,6 @@ import {
   isSavedQueryResultDataset,
   wordsFor,
   singularWords,
-  bareRelation,
   type BlockCheckRecord,
   resolveBlockReplacement,
   groupingIdentityGapOfSql,

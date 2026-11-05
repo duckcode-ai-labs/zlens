@@ -1,4 +1,4 @@
-import { analyzeSqlReferences } from '@zlens/core';
+import { analyzeSqlReferences, tableKey } from '@zlens/core';
 import type {
   Hint,
   HintDependencyKind,
@@ -43,10 +43,10 @@ export function buildHintGraphEdges(hint: Hint): HintGraphEdge[] {
   if (hint.correctedSql?.trim()) {
     const analysis = analyzeSqlReferences(hint.correctedSql, hint.scope.dialect);
     const internalRelations = new Set(
-      [...analysis.ctes, ...analysis.derivedRelations].map(normalizeRelation),
+      [...analysis.ctes, ...analysis.derivedRelations].map((name) => tableKey(name, 'object')),
     );
     for (const relation of analysis.tables) {
-      const normalizedRelation = normalizeRelation(relation);
+      const normalizedRelation = tableKey(relation, 'object');
       add({
         hintId: hint.id,
         kind: 'uses_relation',
@@ -58,7 +58,7 @@ export function buildHintGraphEdges(hint: Hint): HintGraphEdge[] {
     }
     for (const column of analysis.columns) {
       if (!column.relation || column.outputAliasReference) continue;
-      const normalizedRelation = normalizeRelation(column.relation);
+      const normalizedRelation = tableKey(column.relation, 'object');
       if (internalRelations.has(normalizedRelation)) continue;
       const normalizedColumn = normalizeName(column.column);
       add({
@@ -113,7 +113,7 @@ export function questionHintGraphTargetIds(scope: QuestionScope): Set<string> {
   const targets = new Set<string>();
   for (const edge of scopeEdges('__question__', scope)) targets.add(edge.targetId);
   for (const relation of scope.relations ?? []) {
-    targets.add(`relation:${normalizeRelation(relation)}`);
+    targets.add(`relation:${tableKey(relation, 'object')}`);
   }
   for (const column of scope.columns ?? []) {
     const normalized = normalizeQualifiedColumn(column);
@@ -223,10 +223,6 @@ function normalizeQualifiedColumn(value: string): string | undefined {
   if (parts.length < 2) return undefined;
   const column = parts.pop()!;
   return `${parts.join('.')}.${column}`;
-}
-
-function normalizeRelation(value: string): string {
-  return value.replace(/["`\[\]]/g, '').trim().toLowerCase();
 }
 
 function normalizeName(value: string): string {

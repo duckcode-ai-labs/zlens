@@ -17,3 +17,4 @@ export * from './trust/index.js';
 export * from './artifacts/index.js';
 export * from './blocks/index.js';
 export * from './env.js';
+export * from './table-names.js';

@@ -2,7 +2,7 @@
 // One answer to "is this the same table?" (simplification plan Z1, decision Z-D2).
 //
 // Table names are compared in one place: `tableKey` and `sameTable` in
-// packages/dql-agent/src/ask-pipeline/physical-binding.ts. This check finds
+// packages/dql-core/src/table-names.ts. This check finds
 // the other name helpers in source (a `sameRelation`, a `lastTwo`, a
 // `relation.split('.')` ...) and compares them with a baseline that only
 // shrinks: a new one fails, and one that is gone must leave the baseline.
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..');
 const BASELINE = join(ROOT, 'scripts', 'table-names-baseline.json');
-const MODULE = 'packages/dql-agent/src/ask-pipeline/physical-binding.ts';
+const MODULE = 'packages/dql-core/src/table-names.ts';
 
 /** What a table-name helper looks like. */
 export const PATTERNS = [

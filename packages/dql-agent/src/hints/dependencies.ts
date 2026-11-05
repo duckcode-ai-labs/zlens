@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { analyzeSqlReferences } from '@zlens/core';
+import { analyzeSqlReferences, tableKey } from '@zlens/core';
 import { normalizeScopeName, type HintDependency, type HintDependencyKind, type HintScope } from './types.js';
 
 export interface HintDependencyObject {
@@ -162,7 +162,7 @@ export function assessHintFreshness(input: {
 }
 
 function relationDependency(relation: HintDependencyRelation): HintDependency {
-  const name = normalizeRelation(relation.relation);
+  const name = tableKey(relation.relation, 'object');
   return {
     id: `relation:${name}`,
     kind: 'relation',
@@ -218,13 +218,9 @@ function findRelation(
 }
 
 function relationKeys(value: string): Set<string> {
-  const normalized = normalizeRelation(value);
+  const normalized = tableKey(value, 'object');
   const parts = normalized.split('.');
   return new Set([normalized, parts.at(-1) ?? normalized]);
-}
-
-function normalizeRelation(value: string): string {
-  return value.replace(/["`\[\]]/g, '').trim().toLowerCase();
 }
 
 function objectNames(object: HintDependencyObject): string[] {

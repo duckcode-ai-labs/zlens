@@ -8,7 +8,7 @@
  * proposing as a saved join (and its keys feed the grain ledger). Reuses the join
  * extraction from `analyzeSqlReferences` (W1.3), so it understands real SQL, not regex.
  */
-import { analyzeSqlReferences } from '@zlens/core';
+import { analyzeSqlReferences, tableName } from '@zlens/core';
 
 export interface JoinPatternCandidate {
   leftRelation: string;
@@ -17,12 +17,6 @@ export interface JoinPatternCandidate {
   rightColumn: string;
   support: number;
   donorBlocks: string[];
-}
-
-function normalizeRelation(relation: string | undefined): string | undefined {
-  if (!relation) return undefined;
-  const tail = relation.split('.').at(-1) ?? relation;
-  return tail.replace(/["`]/g, '').trim().toLowerCase() || undefined;
 }
 
 function normalizeColumn(column: string): string {
@@ -56,8 +50,8 @@ export function mineJoinPatterns(
     if (!analysis.parsed) continue;
     const seenInBlock = new Set<string>();
     for (const join of analysis.joins) {
-      const left = normalizeRelation(join.leftRelation);
-      const right = normalizeRelation(join.rightRelation);
+      const left = tableName(join.leftRelation ?? '').toLowerCase() || undefined;
+      const right = tableName(join.rightRelation ?? '').toLowerCase() || undefined;
       if (!left || !right || left === right) continue;
       const leftSide = { relation: left, column: normalizeColumn(join.leftColumn) };
       const rightSide = { relation: right, column: normalizeColumn(join.rightColumn) };
