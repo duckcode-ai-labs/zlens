@@ -40,6 +40,7 @@ import {
   onlyDiscoveredSchema,
   parseMetadataScopeEditor,
   toggleAdditionalMetadataScope,
+  metadataScopeMode,
 } from './connection-metadata-scope';
 import { AdvancedDisclosure } from '../modals/AdvancedDisclosure';
 import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
@@ -212,11 +213,12 @@ export function ConnectionPanel({
   const [providerReadiness, setProviderReadiness] = useState<ProviderSettings[]>([]);
   const [dbtConfigured, setDbtConfigured] = useState(false);
   const [dbtPreparation, setDbtPreparation] = useState<DbtOnboardingJob | null>(null);
-  const [metadataMode, setMetadataMode] = useState<ConnectionMetadataScopeV1['mode']>(initialInfo?.modelingMode === 'warehouse-first' ? 'selected_scopes' : 'dbt_relations');
   const [metadataScopeText, setMetadataScopeText] = useState('');
   const [metadataSyncing, setMetadataSyncing] = useState(false);
   const [metadataMessage, setMetadataMessage] = useState<string | null>(null);
   const [metadataDiscovery, setMetadataDiscovery] = useState<WarehouseMetadataDiscovery | null>(null);
+  // The project reads dbt when it has a dbt project or the warehouse sync found dbt's tables.
+  const projectHasDbt = dbtConfigured || (info?.modelingMode !== undefined && info.modelingMode !== null && info.modelingMode !== 'warehouse-first') || (metadataDiscovery?.dbtScopes.length ?? 0) > 0;
   // Staging and raw schemas wait behind "Show staging tables" (new-user round 2, Q3).
   const [showStagingSchemas, setShowStagingSchemas] = useState(false);
   const [metadataDiscovering, setMetadataDiscovering] = useState(false);
@@ -243,13 +245,9 @@ export function ConnectionPanel({
     api.getConnections().then((connInfo) => {
       setInfo(connInfo);
       if (connInfo.metadataScope) {
-        setMetadataMode(connInfo.metadataScope.mode);
         setMetadataScopeText(formatMetadataScopeEditor(
           connInfo.metadataScope.selectedScopes ?? connInfo.metadataScope.scopes,
         ));
-      } else if ((connInfo as ConnectionInfo).modelingMode === 'warehouse-first') {
-        // Without dbt there are no dbt relations to index: the chosen schemas are the model.
-        setMetadataMode('selected_scopes');
       }
     });
   }, []);
@@ -365,7 +363,6 @@ export function ConnectionPanel({
       metadataStatus: response.status,
       ...(response.warehouseCatalog ? { warehouseCatalog: response.warehouseCatalog } : {}),
     } : current);
-    setMetadataMode(response.scope.mode);
     setMetadataScopeText(formatMetadataScopeEditor(
       response.scope.selectedScopes ?? response.scope.scopes,
     ));
@@ -382,7 +379,6 @@ export function ConnectionPanel({
       const only = onlyDiscoveredSchema(discovery);
       if (isSetup && only && parseMetadataScopeEditor(metadataScopeText).length === 0) {
         setMetadataScopeText(formatMetadataScopeEditor([{ catalogOrDatabase: only.catalogOrDatabase, schemas: [only.schema] }]));
-        setMetadataMode('selected_scopes');
       }
     } catch (error) {
       setMetadataDiscovery(null);
@@ -416,14 +412,13 @@ export function ConnectionPanel({
       selected,
     );
     setMetadataScopeText(formatMetadataScopeEditor(next));
-    setMetadataMode((metadataDiscovery?.dbtScopes.length ?? 0) > 0
-      ? 'dbt_plus_selected'
-      : 'selected_scopes');
   };
 
   const handleMetadataApply = async () => {
     if (!info?.default) return;
     const scopes = parseMetadataScopeEditor(metadataScopeText);
+    // With dbt: the tables it builds, plus the schemas listed; without: the schemas listed.
+    const metadataMode = metadataScopeMode(projectHasDbt, scopes);
     if (metadataMode === 'selected_scopes' && scopes.length === 0) {
       setMetadataMessage('Add at least one line such as ANALYTICS_PROD: SALES, FINANCE.');
       return;
@@ -548,7 +543,6 @@ export function ConnectionPanel({
       const refreshed = await api.getConnections();
       setInfo(refreshed);
       if (refreshed.metadataScope) {
-        setMetadataMode(refreshed.metadataScope.mode);
         setMetadataScopeText(formatMetadataScopeEditor(
           refreshed.metadataScope.selectedScopes ?? refreshed.metadataScope.scopes,
         ));
@@ -1296,23 +1290,12 @@ export function ConnectionPanel({
           </div>
         ) : null}
       </div>
-      <AdvancedDisclosure enabled={isSetup} hint="index mode, typed schema list and index details" t={t}>
-      <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontFamily: t.font }}>
-        <span style={{ fontSize: 11.5, fontWeight: 650, color: t.textSecondary }}>Index mode</span>
-        <select
-          value={metadataMode}
-          onChange={(event) => setMetadataMode(event.target.value as ConnectionMetadataScopeV1['mode'])}
-          disabled={metadataSyncing}
-          style={{ height: 34, borderRadius: 7, border: `1px solid ${t.cellBorder}`, background: t.cellBg, color: t.textPrimary, padding: '0 10px', fontFamily: t.font }}
-        >
-          <option value="dbt_relations">Use exact dbt project relations (recommended)</option>
-          <option value="dbt_plus_selected">dbt relations plus selected schemas</option>
-          <option value="selected_scopes">Selected databases/catalogs and schemas</option>
-        </select>
-      </label>
-      {metadataMode !== 'dbt_relations' ? (
+      <AdvancedDisclosure enabled={isSetup} hint="typed schema list and index details" t={t}>
+      {!warehouseFirst ? (
+        <div style={{ fontSize: 11, color: t.textSecondary, fontFamily: t.font }}>The tables your dbt project builds are always read. List other schemas below to read them too.</div>
+      ) : null}
         <label style={{ display: 'flex', flexDirection: 'column', gap: 5, fontFamily: t.font }}>
-          <span style={{ fontSize: 11.5, fontWeight: 650, color: t.textSecondary }}>Databases/catalogs and schemas</span>
+          <span style={{ fontSize: 11.5, fontWeight: 650, color: t.textSecondary }}>{warehouseFirst ? 'Databases/catalogs and schemas' : 'Other schemas'}</span>
           <textarea
             value={metadataScopeText}
             onChange={(event) => setMetadataScopeText(event.target.value)}
@@ -1325,7 +1308,6 @@ export function ConnectionPanel({
             {warehouseFirst ? 'One line per database: DATABASE: SCHEMA, SCHEMA.' : 'Only additional schemas outside dbt belong here.'} Discovery is explicit and setup-only; Ask AI never scans the warehouse for available schemas.
           </span>
         </label>
-      ) : null}
       {metadataStatus ? (
         <div style={{ fontSize: 11.5, color: metadataStatus.state === 'ready' ? 'var(--status-success)' : 'var(--status-warning)', fontFamily: t.font }}>
           {metadataStatus.state === 'ready'

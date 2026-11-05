@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { modelingModeOf } from '@zlens/core';
 import { describe, expect, it, vi } from 'vitest';
 import { detectFolderContents, runInit } from './init.js';
 import { loadSkills } from '@zlens/agent';
@@ -127,7 +128,9 @@ describe('runInit', () => {
     expect(config.semanticLayer.provider).toBe('dbt');
     expect(config.semanticLayer.projectPath).toBe('.');
     expect(config.manifestVersion).toBe(3);
-    expect(config.modeling).toEqual({ mode: 'dbt-first' });
+    // No mode is written: it follows from the dbt project (simplification plan Z2).
+    expect(config.modeling).toBeUndefined();
+    expect(modelingModeOf(config)).toBe('dbt-first');
     expect(config.dbt).toEqual({ projectDir: '.', manifestPath: 'target/manifest.json' });
     expect(readdirSync(projectDir)).not.toContain('semantic-layer');
   });
@@ -155,7 +158,9 @@ describe('runInit', () => {
     expect(config.semanticLayer).toEqual({ provider: 'dbt', projectPath: '..' });
     expect(config.dbt).toEqual({ projectDir: '..', manifestPath: 'target/manifest.json' });
     expect(config.manifestVersion).toBe(3);
-    expect(config.modeling).toEqual({ mode: 'dbt-first' });
+    // No mode is written: it follows from the dbt project (simplification plan Z2).
+    expect(config.modeling).toBeUndefined();
+    expect(modelingModeOf(config)).toBe('dbt-first');
   });
 
   it('--warehouse-first models the database even beside a dbt project, and still finds its DuckDB file', async () => {
@@ -194,7 +199,9 @@ describe('runInit', () => {
 
     expect(config.semanticLayer).toEqual({ provider: 'dbt', projectPath: '.' });
     expect(config.manifestVersion).toBe(3);
-    expect(config.modeling).toEqual({ mode: 'dbt-first' });
+    // No mode is written: it follows from the dbt project (simplification plan Z2).
+    expect(config.modeling).toBeUndefined();
+    expect(modelingModeOf(config)).toBe('dbt-first');
     expect(readdirSync(projectDir)).not.toContain('semantic-layer');
   });
 

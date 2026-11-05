@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { modelingModeOf } from '@zlens/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CLIFlags } from '../args.js';
 import { acceptsCreate, bareFolderCommand, decideBareFolder } from './bare-folder.js';
@@ -103,7 +104,9 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     await ensureNotebookProject(folder, { ...FLAGS, yes: true }, { interactive: false });
     const config = JSON.parse(readFileSync(join(folder, 'dql.config.json'), 'utf8'));
-    expect(config.modeling).toEqual({ mode: 'dbt-first' });
+    // No mode is written: it follows from the dbt project (simplification plan Z2).
+    expect(config.modeling).toBeUndefined();
+    expect(modelingModeOf(config)).toBe('dbt-first');
     expect(config.semanticLayer.provider).toBe('dbt');
   });
 

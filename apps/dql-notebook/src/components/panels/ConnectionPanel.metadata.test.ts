@@ -2,10 +2,23 @@ import { describe, expect, it } from 'vitest';
 import {
   additionalDiscoveredSchemaCount,
   formatMetadataScopeEditor,
+  metadataScopeMode,
   metadataScopeIncludes,
   parseMetadataScopeEditor,
   toggleAdditionalMetadataScope,
 } from './connection-metadata-scope';
+
+describe('what Ask reads from a connection is chosen from what the project has (simplification plan Z2)', () => {
+  const sales = [{ catalogOrDatabase: 'ANALYTICS', schemas: ['SALES'] }];
+  it('reads the tables dbt builds, and adds the schemas listed', () => {
+    expect(metadataScopeMode(true, [])).toBe('dbt_relations');
+    expect(metadataScopeMode(true, sales)).toBe('dbt_plus_selected');
+  });
+  it('reads the schemas listed when there is no dbt', () => {
+    expect(metadataScopeMode(false, sales)).toBe('selected_scopes');
+    expect(metadataScopeMode(false, [])).toBe('selected_scopes');
+  });
+});
 
 describe('ConnectionPanel metadata scope editor', () => {
   it('round-trips multiple databases and schemas in the compact editor format', () => {

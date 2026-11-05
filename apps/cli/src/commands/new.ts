@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
-import { renderSemanticBlockSource, buildTermTemplate } from '@zlens/core';
+import { renderSemanticBlockSource, buildTermTemplate, modelingModeOf } from '@zlens/core';
 import type { CLIFlags } from '../args.js';
 import { findProjectRoot, loadProjectConfig } from '../local-runtime.js';
 
@@ -946,5 +946,5 @@ function toLabel(value: string): string {
 
 function isDbtFirstProject(projectRoot: string): boolean {
   const config = loadProjectConfig(projectRoot);
-  return config.manifestVersion === 3 && config.modeling?.mode === 'dbt-first';
+  return modelingModeOf(config) === 'dbt-first';
 }

@@ -79,7 +79,7 @@ export async function runModel(file: string | null, rest: string[], flags: CLIFl
   }
   const manifest = buildManifest({ projectRoot, dbtManifestPath: resolveDbtManifestPath(projectRoot) ?? undefined });
   if (manifest.manifestVersion !== 3 || !manifest.modeling || !manifest.dbtProvenance) {
-    console.error('dbt-first modeling is not enabled. Set manifestVersion: 3 and modeling.mode: "dbt-first" in dql.config.json.');
+    console.error('dbt-first modeling is not enabled. Set manifestVersion: 3 in dql.config.json; the mode follows from the dbt project.');
     process.exitCode = 1;
     return;
   }
