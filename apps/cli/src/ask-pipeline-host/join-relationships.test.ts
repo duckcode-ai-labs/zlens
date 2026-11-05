@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { joinKeyPairs } from '@zlens/agent';
+import { joinKeyPairs, sameTable } from '@zlens/agent';
 import type { DQLManifest } from '@zlens/core';
-import { businessIdentifierLine, businessIdentifiers, certifiedJoinViolations, classifySqlJoins, joinableRelations, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipTables, sameRelation, sharedParentShortcuts, type ModelingRelationshipEdge } from './join-relationships.js';
+import { businessIdentifierLine, businessIdentifiers, certifiedJoinViolations, classifySqlJoins, joinableRelations, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipTables, sharedParentShortcuts, type ModelingRelationshipEdge } from './join-relationships.js';
 
 const certified: ModelingRelationshipEdge = {
   relationshipId: 'commerce::relationship::orders_to_customers', name: 'orders_to_customers',
@@ -46,9 +46,9 @@ describe('the tables a modeled relationship joins', () => {
 
 describe('AI-written joins against Modeling relationships', () => {
   it('matches relation spellings on schema and table', () => {
-    expect(sameRelation('"jaffle"."dev"."orders"', 'dev.orders')).toBe(true);
-    expect(sameRelation('orders', 'dev.orders')).toBe(true);
-    expect(sameRelation('prod.orders', 'dev.orders')).toBe(false);
+    expect(sameTable('"jaffle"."dev"."orders"', 'dev.orders', 'tail')).toBe(true);
+    expect(sameTable('orders', 'dev.orders', 'tail')).toBe(true);
+    expect(sameTable('prod.orders', 'dev.orders', 'tail')).toBe(false);
   });
 
   it('passes a join on the certified keys, written in either direction', () => {

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { meaningHasDraft, meaningText, readMeaningFiles, relationMeaning, resolveBlockReplacement, type MeaningFileV1, type WarehouseCatalogRelationV1, type DQLManifest, type SemanticLayer, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
-import { blocksNamedByQuestion, buildVocabularyIndex, dbtMeaningRelations, extractBlockContract, parsePhysicalIdentifier, physicalRelationBinding, physicalRelationIdentity, physicalRelationText, mergePhysicalRelationBinding, renderPhysicalIdentifier, type PhysicalRelationBindingV1, type VocabularyEntry, type VocabularyIndex, type VocabularySource } from '@zlens/agent';
+import { blocksNamedByQuestion, buildVocabularyIndex, dbtMeaningRelations, extractBlockContract, parsePhysicalIdentifier, physicalRelationBinding, physicalRelationIdentity, physicalRelationText, tableKey, tableName, mergePhysicalRelationBinding, renderPhysicalIdentifier, type PhysicalRelationBindingV1, type VocabularyEntry, type VocabularyIndex, type VocabularySource } from '@zlens/agent';
 
 /**
  * The whole authorized vocabulary of a project, from the objects the host
@@ -549,7 +549,7 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
   // object; it merges here instead of founding a second relation whose
   // columns nobody can reach.
   const relationKeyByLooseIdentity = new Map<string, string>();
-  const looseIdentity = (binding: PhysicalRelationBindingV1) => [binding.database, binding.schema, binding.table].filter(Boolean).map((part) => part!.value.toLowerCase()).join('.');
+  const looseIdentity = (binding: PhysicalRelationBindingV1) => tableKey(physicalRelationText(binding), 'object');
   const relationKeyByLower = new Map<string, string>();
   // A physical name inside an expression is written as this warehouse reads it,
   // and a relation carries its database on a warehouse that addresses objects
@@ -589,7 +589,7 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
     addPhysicalCandidate(logical, physical);
   }
   const physicalOf = (relation: string): string | undefined => {
-    const candidates = physicalCandidates.get((normalizeRelationName(relation) ?? relation).toLowerCase());
+    const candidates = physicalCandidates.get(tableKey(relation, 'tail') || relation.toLowerCase());
     return candidates?.size === 1 ? [...candidates][0] : undefined;
   };
   const databaseOf = (relation: string): string | undefined => {
@@ -754,7 +754,7 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
       const relation = normalizeRelationName(cube.table) ?? cube.name;
       relationOfCube.set(cube.name, relation);
       if (!relationSeen.has(relation)) {
-        addRelation({ ...(relation.includes('.') ? { schema: relation.split('.')[0] } : {}), name: relation.split('.').pop()!, ...(cube.description ? { description: cube.description } : {}), columns: [...cube.dimensions.map((d) => ({ name: leafName(cube.name, d.name), dataType: d.type })), ...cube.measures.map((m) => ({ name: leafName(cube.name, m.name) }))] });
+        addRelation({ ...(relation.includes('.') ? { schema: relation.split('.')[0] } : {}), name: tableName(relation), ...(cube.description ? { description: cube.description } : {}), columns: [...cube.dimensions.map((d) => ({ name: leafName(cube.name, d.name), dataType: d.type })), ...cube.measures.map((m) => ({ name: leafName(cube.name, m.name) }))] });
       }
     }
     const columnsOf = (cubeName: string) => relationColumns.get(relationOfCube.get(cubeName) ?? '') ?? new Set<string>();
@@ -921,7 +921,7 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
       if (dimension.cube) return { model: dimension.cube, ...(relationOfCube.get(dimension.cube) ? { relation: relationOfCube.get(dimension.cube) } : {}) };
       const relation = normalizeRelationName(dimension.table);
       if (!relation || !relationColumns.has(relation)) return undefined;
-      return { model: relation.split('.').pop()!, relation };
+      return { model: tableName(relation), relation };
     };
     const timeNames = new Set<string>();
     for (const dimension of layer.listTimeDimensions(undefined, { includeVariants: true })) {
@@ -1031,7 +1031,7 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
     if (!relation.binding) continue;
     const keys = new Set([relation.binding.logicalRelation, relation.schema ? `${relation.schema}.${relation.name}` : relation.name, ...(relation.binding.aliases ?? [])]);
     for (const key of keys) {
-      const normalized = normalizeRelationName(key)?.toLowerCase();
+      const normalized = key ? tableKey(key, 'tail') : '';
       if (!normalized) continue;
       const bindings = bindingByLogical.get(normalized) ?? [];
       bindings.push(relation.binding);
@@ -1039,7 +1039,7 @@ export function buildVocabularySource(input: VocabularySourceInput): VocabularyS
     }
   }
   const bindingFor = (relation: string | undefined): PhysicalRelationBindingV1 | undefined => {
-    const normalized = normalizeRelationName(relation)?.toLowerCase();
+    const normalized = relation ? tableKey(relation, 'tail') : '';
     if (!normalized) return undefined;
     const candidates = bindingByLogical.get(normalized) ?? [];
     const physical = new Map(candidates.map((binding) => [physicalRelationIdentity(physicalRelationText(binding)), binding]));

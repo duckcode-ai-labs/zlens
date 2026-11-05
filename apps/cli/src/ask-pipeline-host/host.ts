@@ -81,12 +81,15 @@ import {
   type RuntimeSchemaTable,
   priorWithoutValues,
   sqlStringValues,
+  sameTable,
+  tableKey,
+  tableName,
 } from '@zlens/agent';
 import { parseTablePicks, tableIndexLines, tableIndexMessages, TABLE_INDEX_PICKS } from './table-index.js';
 import { modelAnswerGroups, routeQuestionToAreas, type ModelRoute } from './model-routing.js';
 import { buildProjectVocabulary, buildVocabularySource, draftedMeaningRelations, embeddedManifestRelations, namedBlockNotServed, normalizeRelationName, warehouseFirstCatalog, type VocabularySourceInput } from './vocabulary-source.js';
 import { groupingKeyLabels, keyLabelLine, keyLabels, unnamedGroupingKeys, unnamedKeyFailure, type EntityKey, type KeyLabel, type KeyReference } from './key-labels.js';
-import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, modelingRelationshipTables, sameRelation, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
+import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, modelingRelationshipTables, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
 import { readEnv } from '@zlens/core';
 import { readValueProfile, renderColumnProfile } from '../value-profile.js';
 import { resultReviewEnabled } from '../result-review-setting.js';
@@ -749,7 +752,7 @@ export function skillsForDraft(entries: VocabularyEntry[], text: string, max = 2
  */
 export function certifiedBlocksForDraft(entries: VocabularyEntry[], text: string, relations: string[], max = 2): VocabularyEntry[] {
   const words = (value: string) => new Set((value.toLowerCase().replace(/[_."]/g, ' ').match(SKILL_WORD) ?? []).filter((word) => !SKILL_STOPWORDS.has(word)));
-  const tail = (relation: string) => relation.replace(/["`\[\]]/g, '').split('.').pop()!.toLowerCase();
+  const tail = (relation: string) => tableName(relation).replace(/["`\[\]]/g, '').toLowerCase();
   const wanted = words(text);
   const chosen = new Set(relations.map(tail));
   return entries
@@ -790,7 +793,7 @@ export function preferredJoinHints(
   tablesOf: (entry: VocabularyEntry) => { from: string; to: string } | null | undefined = () => undefined,
 ): PreferredJoin[] {
   const carries = (relation: string, name: string) => columnsOf(relation).some((column) => column.toLowerCase() === name.toLowerCase());
-  const chosen = (table: string) => relations.find((relation) => sameRelation(relation, table));
+  const chosen = (table: string) => relations.find((relation) => sameTable(relation, table, 'tail'));
   return entries
     .filter((entry) => entry.kind === 'relationship' && Boolean(entry.relationship?.keys.length))
     .flatMap((entry) => {
@@ -2059,7 +2062,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         if (!entry || (entry.kind !== 'metric' && entry.kind !== 'measure')) return [];
         const definition = ` ${[entry.expr, entry.engineOnly, entry.description, entry.derived?.expr].filter(Boolean).join(' ')} `.toLowerCase();
         return current.entries
-          .filter((item) => item.kind === 'relation' && [item.name, item.model ?? ''].some((name) => name && mentionsName(definition, name.split('.').pop()!)))
+          .filter((item) => item.kind === 'relation' && [item.name, item.model ?? ''].some((name) => name && mentionsName(definition, tableName(name))))
           .map((item) => entryPhysicalRelation(item))
           .filter((relation): relation is string => Boolean(relation));
       });
@@ -2087,10 +2090,10 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // reaches the reading only through modeled relationships (two hops at
       // most), so a table that merely shares a column name ranks last.
       const modeledEdges = readingRelations.length > 0 ? modelingRelationshipEdges(deps.getManifest().manifest) : [];
-      const onMap = (name: string) => modeledEdges.some((edge) => sameRelation(edge.fromRelation, name) || sameRelation(edge.toRelation, name));
+      const onMap = (name: string) => modeledEdges.some((edge) => sameTable(edge.fromRelation, name, 'tail') || sameTable(edge.toRelation, name, 'tail'));
       const reachOf = (name: string): number => {
         if (modeledEdges.length > 0 && onMap(name)) {
-          return readingRelations.some((relation) => sameRelation(relation, name) || modeledJoinPaths([name, relation], modeledEdges, { maxHops: 2, maxAdded: 2 }).paths.length > 0) ? 2 : 0;
+          return readingRelations.some((relation) => sameTable(relation, name, 'tail') || modeledJoinPaths([name, relation], modeledEdges, { maxHops: 2, maxAdded: 2 }).paths.length > 0) ? 2 : 0;
         }
         return reachesReading(name) ? 1 : 0;
       };
@@ -2164,18 +2167,18 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const bridged: string[] = [];
       const draftSource = view.source ?? (await baseSourceFor(connection).catch(() => undefined))?.source;
       const admitted = (name: string): string | undefined => {
-        const found = (draftSource?.relations ?? []).find((item) => sameRelation(item.binding ? physicalRelationText(item.binding) : [item.schema, item.name].filter(Boolean).join('.'), name));
+        const found = (draftSource?.relations ?? []).find((item) => sameTable(item.binding ? physicalRelationText(item.binding) : [item.schema, item.name].filter(Boolean).join('.'), name, 'tail'));
         return found ? (found.binding ? physicalRelationText(found.binding) : [found.schema, found.name].filter(Boolean).join('.')) : undefined;
       };
       const mapEdges = modelingRelationshipEdges(deps.getManifest().manifest);
       // A MARKER TABLE brings the table its values live on.
       for (const item of markerTables(relations, mapEdges, sourceColumns)) {
-        const base = relations.find((relation) => sameRelation(relation, item.base)) ?? admitted(item.base);
+        const base = relations.find((relation) => sameTable(relation, item.base, 'tail')) ?? admitted(item.base);
         if (base && !relations.some((relation) => physicalRelationIdentity(relation) === physicalRelationIdentity(base))) { relations.push(base); bridged.push(base); }
       }
       if (relations.length >= 2) {
         try {
-          const physicalOf = (name: string) => relations.find((relation) => sameRelation(relation, name)) ?? admitted(name);
+          const physicalOf = (name: string) => relations.find((relation) => sameTable(relation, name, 'tail')) ?? admitted(name);
           const { paths } = modeledJoinPaths(relations, mapEdges);
           for (const path of paths) {
             const through = path.through.map(admitted);
@@ -2206,7 +2209,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
           const exact = physicalTables.find((table) => physicalRelationIdentity(table) === physicalRelationIdentity(name));
           if (exact) return exact;
         }
-        const matches = physicalTables.filter((table) => sameRelation(table, name));
+        const matches = physicalTables.filter((table) => sameTable(table, name, 'tail'));
         return matches.length === 1 ? matches[0] : undefined;
       };
       const knownColumns = (relation: string): string[] => {
@@ -2333,13 +2336,12 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // warehouse tables) is shown by its own relation, as the catalog
         // search names it.
         const relationEntries = current.entries.filter((entry) => entry.kind === 'relation');
-        const lastTwo = (value: string | undefined) => (value ? parsePhysicalIdentifier(value).map((part) => part.value.toLowerCase()).slice(-2).join('.') : '');
         const entryFor = (name: string | undefined) => {
           const model = normalizeRelationName(name);
           if (!model) return undefined;
           // By the vocabulary's own name, else by schema and table (a warehouse
           // relation spelled with its database).
-          return relationEntries.find((entry) => entry.model === model) ?? relationEntries.find((entry) => lastTwo(entryPhysicalRelation(entry) ?? entry.model) === lastTwo(model));
+          return relationEntries.find((entry) => entry.model === model) ?? relationEntries.find((entry) => sameTable(entryPhysicalRelation(entry) ?? entry.model, model, 'tail'));
         };
         const relationOfEntity = (entity: { dbtUniqueId: string; relation?: string }): string | undefined => {
           const item = entryFor(builtManifest?.dbtProvenance?.nodes[entity.dbtUniqueId]?.relation ?? entity.relation);
@@ -2379,7 +2381,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             joins,
             budget: WHOLE_MODEL_TABLES,
             // Search names a table with its database, the model by schema and table.
-            same: (a, b) => lastTwo(a) === lastTwo(b),
+            same: (a, b) => sameTable(a, b, 'tail'),
           });
           if (route.relations.length > 0) {
             relations.push(...unseenOf(route.relations));
@@ -2410,7 +2412,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const relationEntryOf = (relation: string) => current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && physicalRelationIdentity(entryPhysicalRelation(item)!) === physicalRelationIdentity(relation));
       const askedText = question.toLowerCase();
       const deprecatedLeftOut = relations.filter((relation) => relationEntryOf(relation)?.deprecated === true
-        && !askedText.includes((relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase()));
+        && !askedText.includes(((tableName(relation) || relation)).replace(/["`\[\]]/g, '').toLowerCase()));
       if (deprecatedLeftOut.length > 0 && deprecatedLeftOut.length < relations.length) {
         relations = relations.filter((relation) => !deprecatedLeftOut.includes(relation));
       } else deprecatedLeftOut.length = 0;
@@ -2420,7 +2422,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // preference, not a removal: a person confirms it by deprecating.
       const preferred: string[] = [];
       relations = relations.flatMap((relation) => {
-        if (askedText.includes((relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase())) return [relation];
+        if (askedText.includes(((tableName(relation) || relation)).replace(/["`\[\]]/g, '').toLowerCase())) return [relation];
         let target: string | undefined;
         let reason: string | undefined;
         for (let entry = relationEntryOf(relation), hops = 0; entry?.useInstead && hops < 3; hops += 1) {
@@ -2475,7 +2477,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // rows count, what a code means, how not to fan out. Rules that name a
       // chosen table come first.
       const chosenDomains = new Set(relations.map((relation) => relationEntryOf(relation)?.domain).filter((domain): domain is string => Boolean(domain)));
-      const chosenNames = relations.map((relation) => (relation.split('.').pop() ?? relation).replace(/["`\[\]]/g, '').toLowerCase());
+      const chosenNames = relations.map((relation) => ((tableName(relation) || relation)).replace(/["`\[\]]/g, '').toLowerCase());
       const modelRuleLines = Object.values(deps.getManifest().manifest?.modeling?.rules ?? {})
         .filter((rule) => chosenDomains.has(rule.domain) && rule.expression.trim() && rule.status !== 'deprecated')
         .map((rule) => ({ rule, named: chosenNames.some((name) => rule.expression.toLowerCase().includes(name)) }))
@@ -2523,7 +2525,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         .map(preferredJoinLine);
       const joinLines = [...new Set([...routeLines, ...joinHints.map(preferredJoinLine)])];
       const markerLines = markerTables(relations, mapEdges, sourceColumns)
-        .map((item) => ({ ...item, base: relations.find((relation) => sameRelation(relation, item.base)) ?? item.base }))
+        .map((item) => ({ ...item, base: relations.find((relation) => sameTable(relation, item.base, 'tail')) ?? item.base }))
         .map(markerTableLine);
       // The number people know a table's rows by, beside its internal key.
       const identifierLines = businessIdentifiers(relations, sourceColumns).map(businessIdentifierLine);
@@ -2705,7 +2707,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // restriction it stood for was not applied. Judged only with the
         // table's complete column list, so a bare column is never misread.
         const completeColumnsOf = (relation: string): string[] | undefined => {
-          const entry = current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && sameRelation(entryPhysicalRelation(item)!, relation));
+          const entry = current.entries.find((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && sameTable(entryPhysicalRelation(item)!, relation, 'tail'));
           const listed = entry && entry.physical?.binding?.columnCompleteness === 'complete'
             ? current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => item.physical?.column ?? item.name.split('.').pop()!)
             : [];
@@ -2717,7 +2719,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // of the other tables is counted once per match.
         const totals = /\b(sum|avg|count)\s*\(\s*(?!distinct\b)/i.test(sql);
         for (const join of unusedJoins(sql, completeColumnsOf)) {
-          const name = join.relation.split('.').pop()!.replace(/"/g, '');
+          const name = tableName(join.relation)!.replace(/"/g, '');
           if (join.left) {
             failures.push(`it LEFT JOINs ${name} but uses none of its columns, so the join restricts nothing (a LEFT JOIN keeps every row) and can only repeat rows; if ${name} marks which rows count, join it with an inner join, otherwise leave it out`);
             continue;
@@ -2836,7 +2838,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // AI-DRAFTED WORDS ARE SAID, every time they stand behind an answer.
         // They help find a table; they change no trust label.
         const draftedWords = draftedMeaningRelations(deps.getManifest().manifest, deps.projectRoot)
-          .filter((relation) => chosen.relations.some((read) => sameRelation(read, relation)))
+          .filter((relation) => chosen.relations.some((read) => sameTable(read, relation, 'tail')))
           .map((relation) => relation.split('.').slice(-2).join('.'));
         hostStep({ phase: 'schema', title: 'Checked the drafted SQL', state: 'done', detail: [stated.length ? `applies ${stated.map((item) => item.value).join(', ')}` : '', required.length ? `required filters present: ${required.map((item) => item.text).join(', ')}` : '', applied ? `filters on ${applied}` : ''].filter(Boolean).join('; ') || 'read-only and in scope' });
         return {
@@ -2850,7 +2852,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...joinHints.filter((hint) => joinHintUsed(chosen.sql, hint.keys)).map((hint) => `joined as the ${hint.certified ? 'certified' : 'declared (not validated)'} relationship ${hint.name} says`),
             ...(draftedWords.length ? [`caveat: used AI-drafted descriptions of ${draftedWords.join(', ')}, which nobody has reviewed`] : []),
             ...(draftedTerms.length ? [`caveat: used AI-drafted ${draftedTerms.length === 1 ? 'term' : 'terms'} ${draftedTerms.join(', ')}, which nobody has certified`] : []),
-            ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${item.labelRelation.split('.').pop()!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
+            ...unnamed.map((item) => `caveat: the rows are grouped by ${item.key}, an internal key; ${tableName(item.labelRelation)!.replace(/"/g, '')}.${item.label} names them, and the statement could not be made to show it`),
           ],
         };
       };
@@ -2926,7 +2928,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         // A missing FIELD is found by its column, not by a table's name.
         // A table listed in brief can still be the one: the search looks past the detailed tables only.
         const fromCatalog = catalogPick(words.join(' '), draftTables, 3, ['dbt_column']);
-        wider = rankByReach([...fromCatalog, ...relationsWithColumnWords(source, words, `${question} ${open} ${contextText}`, [...draftTables, ...fromCatalog], 6, (name) => entityTexts.filter((item) => sameRelation(item.relation, name)).map((item) => item.text).join(' ') || undefined)]).slice(0, 3);
+        wider = rankByReach([...fromCatalog, ...relationsWithColumnWords(source, words, `${question} ${open} ${contextText}`, [...draftTables, ...fromCatalog], 6, (name) => entityTexts.filter((item) => sameTable(item.relation, name, 'tail')).map((item) => item.text).join(' ') || undefined)]).slice(0, 3);
       } catch { wider = []; }
       if (wider.length > 0) {
         try {
@@ -3655,15 +3657,10 @@ function relationsInSql(sql: string): string[] {
 }
 
 /** Exact Snowflake-aware identity for a relation already written in SQL. */
-function relationKey(name: string): string {
-  return physicalRelationIdentity(name);
-}
 
 /** A legacy two-part alias is safe only for an unqualified SQL reference. */
 function relationTailKey(name: string): string | undefined {
-  const parts = parsePhysicalIdentifier(name);
-  if (parts.length < 2) return undefined;
-  return `tail:${parts.slice(-2).map((part) => part.value.toLowerCase()).join('.')}`;
+  return parsePhysicalIdentifier(name).length < 2 ? undefined : `tail:${tableKey(name, 'tail')}`;
 }
 
 /** The relation this query reads that the connection is already known to lack. */
@@ -3673,7 +3670,7 @@ export function knownMissingRelation(key: string, sql: string): string | undefin
   const now = Date.now();
   for (const [relation, evidence] of missing) if (evidence.expiresAt <= now) missing.delete(relation);
   for (const relation of relationsInSql(sql)) {
-    const evidence = missing.get(relationKey(relation));
+    const evidence = missing.get(tableKey(relation));
     if (evidence) return evidence.relation;
     // The current connection's database is part of its cache key, so a legacy
     // schema.table statement can reuse a definite failure learned from the
@@ -3693,7 +3690,7 @@ export function recordRelationEvidence(key: string, sql: string, failure?: { cla
     const missing = missingByConnection.get(key);
     if (!missing) return;
     for (const relation of relationsInSql(sql)) {
-      missing.delete(relationKey(relation));
+      missing.delete(tableKey(relation));
       const tail = relationTailKey(relation);
       if (tail) {
         // A success on a legacy schema.table reference disproves the bounded
@@ -3720,7 +3717,7 @@ export function recordRelationEvidence(key: string, sql: string, failure?: { cla
   // Use the exact relation that was actually submitted, since Snowflake error
   // text drops quote state. The original error spelling remains the user-facing
   // diagnostic.
-  missing.set(relationKey(sourceRelation), evidence);
+  missing.set(tableKey(sourceRelation), evidence);
   const tail = relationTailKey(namedRelation);
   if (tail) missing.set(tail, evidence);
   missingByConnection.set(key, missing);
@@ -3830,7 +3827,6 @@ export function toExecutorResult(runId: string, outcome: PipelineOutcome, starte
   };
   // A join the AI wrote with no relationship behind it can be saved as one.
   const undeclaredJoin = (receipt.context?.used?.joins ?? []).find((join) => join.authority === 'none' && join.relations?.length === 2 && (join.keys?.length ?? 0) > 0);
-  const tableName = (relation: string) => relation.replace(/"/g, '').split('.').pop() ?? relation;
   // An answer whose SQL the AI wrote from the schema is never headed as governed.
   // The card's title comes from the same trust decision as the run, the badge
   // and the payload, and names the source the figures came from.

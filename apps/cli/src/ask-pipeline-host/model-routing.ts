@@ -1,3 +1,4 @@
+import { sameTable, tableName } from '@zlens/agent';
 import type { DQLManifest } from '@zlens/core';
 
 /**
@@ -87,7 +88,7 @@ export function modelAnswerGroups(manifest: DQLManifest | undefined, relationOf:
       groups.set(key, group);
       continue;
     }
-    for (const word of routingWords(`${entity.localId ?? entity.id} ${entity.businessName ?? ''} ${relation.split('.').pop() ?? ''} ${columnsOf(relation).join(' ')}`)) group.words.add(word);
+    for (const word of routingWords(`${entity.localId ?? entity.id} ${entity.businessName ?? ''} ${tableName(relation)} ${columnsOf(relation).join(' ')}`)) group.words.add(word);
     if (!group.relations.includes(relation)) group.relations.push(relation);
     groups.set(key, group);
   }
@@ -110,7 +111,7 @@ export function routeQuestionToAreas(input: {
   /** Compares two spellings of one table. */
   same?: (a: string, b: string) => boolean;
 }): ModelRoute {
-  const same = input.same ?? ((a: string, b: string) => a.toLowerCase() === b.toLowerCase());
+  const same = input.same ?? ((a: string, b: string) => sameTable(a, b, 'object'));
   // One area or Domain is nothing to choose between: search chooses its tables, as before.
   if (input.groups.filter((group) => !group.shared).length < 2) return { groups: [], relations: [], shared: [] };
   const asked = new Set(routingWords(input.question));
