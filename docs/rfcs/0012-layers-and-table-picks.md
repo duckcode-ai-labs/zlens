@@ -453,6 +453,35 @@ A smaller project drafts in one click, as before.
 3. **One area's tables:** with its boundary tables, and its joins into areas it does not draw folded into one stub per area.
 
 "Show every table" and search draw the tables directly.
+
+**Ask picks the area (design S6).** F1 shows Ask the whole model only up to 30 tables to answer from. Above that, Ask now groups the model's answer tables by subject area, or by Domain for tables in no area, and shows the question's areas.
+
+- **How the areas are scored:**
+  - each table search already found for the question counts 3, and a look-alike search found counts for its area;
+  - each question word in the area's name, description, example questions, table names and column names counts 1.
+- **Which areas are shown:**
+  - the best area, plus any other area that scores at least half as much, within 30 tables;
+  - then the Shared tables the chosen tables join.
+- **When it does not apply:**
+  - a model with fewer than two areas or Domains to choose between;
+  - a question that matches no area. Search then chooses, as before.
+
+Measured on 40 NBA questions in a 95-table hybrid project. The NBA tables (9 to answer from) sit among 50 enterprise tables, 18 enterprise metric tables, 10 postcard tables and 8 others.
+
+| | Right in substance | Right with any name | Refused |
+|---|---|---|---|
+| The NBA project alone, whole model (P7) | 21 | 31 | 7 |
+| The crowd, routing on | 14 | 23 | 12 |
+| The crowd, routing off | 12 | 21 | 12 |
+
+- **Routing chose the NBA area on 39 of 40.** On answers, routing alone won 3 questions and lost 1 (McNemar p = 0.63).
+- **This crowd is easy for search,** since NBA words appear in no other area. The case routing is built for is related areas that share words, such as sales, finance and product. That case is not measured yet.
+- **The NBA project alone gets 8 questions right that routing misses:**
+  - 5 are refused drafts. For example, for Chris Paul's first game for the Houston Rockets, the SQL writer did not filter on the team. It then named a `team_city` column the table does not have.
+  - 2 are wrong answers from the right tables.
+  - 1 was routed to the wrong area: a Tim Duncan question, sent to enterprise tables.
+  - Routing got none right that the NBA project alone missed.
+- **A bug found and fixed on the way:** the model's meaning for a table did not reach a table listed in two databases (zlens#262). Both arms ran without the NBA Domain's rules until it was fixed. The fix raised both arms by 4.
 ## Backward compatibility
 
 - No existing field changes.
