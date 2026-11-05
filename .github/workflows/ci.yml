@@ -154,6 +154,10 @@ jobs:
         run: |
           node --test scripts/check-doc-commands.test.mjs
           node scripts/check-doc-commands.mjs
+      - name: table names are compared in one place (simplification plan Z1)
+        run: |
+          node --test scripts/check-table-names.test.mjs
+          node scripts/check-table-names.mjs
 
   # --- zlens fmt --check across the repo ---
   # Gates canonical .dql serialization — catches whitespace churn before

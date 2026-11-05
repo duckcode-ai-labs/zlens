@@ -8,6 +8,17 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### One answer to "is this the same table?" (simplification plan Z1)
+
+- **Ask now compares table names in one place:** `tableKey`, `sameTable` and `tableName` in `@zlens/agent`. Each comparison states its level:
+  - `exact`, the name as written;
+  - `object`, every part, ignoring quotes and case;
+  - `tail`, the same schema and table in any database.
+
+  Before, about 30 helpers each answered it their own way. That is how a table listed in two databases lost the model's meaning (zlens#262).
+- **The same model reaches Ask however dbt spells a table:** a dev database, quoted upper case, or the warehouse the project connects to. Ask gets the same Domain rules, grain, notes and deprecations in each case.
+- **CI fails on a new table-name helper** (`scripts/check-table-names.mjs`). 106 older uses outside the Ask path are listed in a baseline that only shrinks; later parts of the plan move them.
+
 ### Ask shows a large model one subject area at a time (model-at-scale design S6)
 
 - **A model of up to 30 tables to answer from is still shown whole.** A larger one is now shown by area:

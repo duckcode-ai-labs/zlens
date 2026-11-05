@@ -1,5 +1,5 @@
-import { groupedColumns, mentionsColumn } from '@zlens/agent';
-import { sameRelation, type ModelingRelationshipEdge } from './join-relationships.js';
+import { groupedColumns, mentionsColumn, sameTable, tableName } from '@zlens/agent';
+import type { ModelingRelationshipEdge } from './join-relationships.js';
 
 /**
  * NAMES, NOT KEYS.
@@ -42,7 +42,7 @@ export interface KeyLabel {
 const LABEL_NAME = /(^|_)(name|title|label|display_name)$/i;
 const KEY_NAME = /^(.+?)_(id|key|uuid)$/i;
 const bare = (name: string) => name.replace(/["`[\]]/g, '');
-const tableOf = (relation: string) => bare(relation.split('.').pop() ?? relation).toLowerCase();
+const tableOf = (relation: string) => bare((tableName(relation) || relation)).toLowerCase();
 const singular = (word: string) => word.endsWith('ies') ? `${word.slice(0, -3)}y` : word.endsWith('ses') ? word.slice(0, -2) : word.endsWith('s') && !word.endsWith('ss') ? word.slice(0, -1) : word;
 const sameColumn = (left: string, right: string) => bare(left).toLowerCase() === bare(right).toLowerCase();
 
@@ -94,9 +94,9 @@ export function keyLabels(keys: KeyReference[], input: {
     return label ? { keyRelation: key.relation, key: key.column, labelRelation: physical, labelKey: columns.find((column) => sameColumn(column, targetKey))!, label, via } : undefined;
   };
   for (const key of keys) {
-    if (found.some((item) => sameRelation(item.keyRelation, key.relation) && sameColumn(item.key, key.column))) continue;
+    if (found.some((item) => sameTable(item.keyRelation, key.relation, 'tail') && sameColumn(item.key, key.column))) continue;
     const stem = KEY_NAME.exec(bare(key.column))?.[1]?.toLowerCase();
-    const entity = (input.entities ?? []).find((item) => sameRelation(item.relation, key.relation) && sameColumn(item.column, key.column));
+    const entity = (input.entities ?? []).find((item) => sameTable(item.relation, key.relation, 'tail') && sameColumn(item.column, key.column));
     const candidates: Array<() => KeyLabel | undefined> = [
       // The key of the table itself: its own name column names its rows.
       () => (entity && entity.type !== 'foreign') || (stem && singular(tableOf(key.relation)) === singular(stem))
@@ -104,8 +104,8 @@ export function keyLabels(keys: KeyReference[], input: {
         : undefined,
       // A relationship on the Modeling map from this key to the "one" side.
       ...input.edges.flatMap((edge) => {
-        const forward = sameRelation(edge.fromRelation, key.relation) && (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one');
-        const backward = sameRelation(edge.toRelation, key.relation) && (edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one');
+        const forward = sameTable(edge.fromRelation, key.relation, 'tail') && (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one');
+        const backward = sameTable(edge.toRelation, key.relation, 'tail') && (edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one');
         const pair = forward ? edge.keys.find((item) => sameColumn(item.from, key.column)) : backward ? edge.keys.find((item) => sameColumn(item.to, key.column)) : undefined;
         if (!pair || edge.keys.length !== 1) return [];
         const target = forward ? edge.toRelation : edge.fromRelation;
@@ -114,13 +114,13 @@ export function keyLabels(keys: KeyReference[], input: {
       // A foreign entity of a semantic model, and the model where that entity is primary.
       ...(entity && entity.type === 'foreign'
         ? (input.entities ?? [])
-          .filter((item) => item.name.toLowerCase() === entity.name.toLowerCase() && item.type !== 'foreign' && !sameRelation(item.relation, key.relation))
+          .filter((item) => item.name.toLowerCase() === entity.name.toLowerCase() && item.type !== 'foreign' && !sameTable(item.relation, key.relation, 'tail'))
           .map((item) => () => named(key, item.relation, item.column, `the semantic entity ${entity.name}`, [entity.name]))
         : []),
       // The column names: `location_id` on the facts, a `locations` table that carries it.
       ...(stem
         ? input.relations
-          .filter((relation) => !sameRelation(relation, key.relation) && singular(tableOf(relation)) === singular(stem))
+          .filter((relation) => !sameTable(relation, key.relation, 'tail') && singular(tableOf(relation)) === singular(stem))
           .map((relation) => () => named(key, relation, key.column, 'the column names', [stem]))
         : []),
     ];
