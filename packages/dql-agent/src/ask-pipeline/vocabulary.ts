@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { BlockContractV1 } from './block-contract.js';
-import { physicalRelationBinding, physicalRelationText, type PhysicalRelationBindingV1, type PhysicalColumnCompleteness } from './physical-binding.js';
+import { physicalRelationBinding, physicalRelationText, tableKey, type PhysicalRelationBindingV1, type PhysicalColumnCompleteness } from './physical-binding.js';
 
 /**
  * OPEN-WORLD ADMISSION.
@@ -864,14 +864,13 @@ export function buildVocabularyIndex(source: VocabularySource): VocabularyIndex 
   // it, is matched by its schema and table; the one Ask runs must know its
   // Domain, grain and notes. Missing it left a crowded NBA project with no
   // model rules and no grain on any NBA table.
-  const twoPart = (name: string) => name.split('.').slice(-2).join('.').toLowerCase();
   const relationsByTwoPart = new Map<string, VocabularyEntry[]>();
   for (const candidate of entries) {
     if (candidate.kind !== 'relation' || !candidate.model) continue;
-    const key = twoPart(candidate.physical?.binding?.logicalRelation ?? candidate.model);
+    const key = tableKey(candidate.physical?.binding?.logicalRelation ?? candidate.model, 'tail');
     relationsByTwoPart.set(key, [...(relationsByTwoPart.get(key) ?? []), candidate]);
   }
-  for (const [relation, meaning] of Object.entries(source.relationMeaning ?? {})) for (const entry of relationsByTwoPart.get(twoPart(relation)) ?? []) {
+  for (const [relation, meaning] of Object.entries(source.relationMeaning ?? {})) for (const entry of relationsByTwoPart.get(tableKey(relation, 'tail')) ?? []) {
     if (meaning.businessName && !entry.aliases.includes(meaning.businessName)) entry.aliases.push(meaning.businessName);
     if (meaning.businessContext) entry.businessContext = meaning.businessContext;
     if (meaning.grain) entry.grain = meaning.grain;

@@ -1,4 +1,4 @@
-import { assessAnalyticalRelationship } from '@zlens/agent';
+import { assessAnalyticalRelationship, sameTable, tableName } from '@zlens/agent';
 import type { DQLManifest } from '@zlens/core';
 import { normalizeRelationName } from './vocabulary-source.js';
 
@@ -95,15 +95,6 @@ export function modelingEntityTexts(manifest: DQLManifest | undefined): Array<{ 
   return out;
 }
 
-/** Two spellings of a relation agree on schema and table; a bare table name matches on the table alone. */
-export function sameRelation(left: string, right: string): boolean {
-  const a = normalizeRelationName(left)?.toLowerCase();
-  const b = normalizeRelationName(right)?.toLowerCase();
-  if (!a || !b) return false;
-  if (a === b) return true;
-  if (a.includes('.') && b.includes('.')) return false;
-  return a.split('.').pop() === b.split('.').pop();
-}
 
 export interface SqlJoinPair { left: { relation: string; column: string }; right: { relation: string; column: string } }
 
@@ -126,21 +117,21 @@ const pairKey = (pair: { from: string; to: string }) => `${bare(pair.from)}=${ba
 export function classifySqlJoins(pairs: SqlJoinPair[], edges: ModelingRelationshipEdge[]): SqlJoinUse[] {
   const uses: SqlJoinUse[] = [];
   for (const pair of pairs) {
-    let use = uses.find((item) => (sameRelation(item.relations[0], pair.left.relation) && sameRelation(item.relations[1], pair.right.relation))
-      || (sameRelation(item.relations[0], pair.right.relation) && sameRelation(item.relations[1], pair.left.relation)));
+    let use = uses.find((item) => (sameTable(item.relations[0], pair.left.relation, 'tail') && sameTable(item.relations[1], pair.right.relation, 'tail'))
+      || (sameTable(item.relations[0], pair.right.relation, 'tail') && sameTable(item.relations[1], pair.left.relation, 'tail')));
     if (!use) {
       use = { relations: [pair.left.relation, pair.right.relation], keys: [], matchesRelationship: false };
       uses.push(use);
     }
-    const forward = sameRelation(use.relations[0], pair.left.relation);
+    const forward = sameTable(use.relations[0], pair.left.relation, 'tail');
     const key = forward ? { from: pair.left.column, to: pair.right.column } : { from: pair.right.column, to: pair.left.column };
     if (!use.keys.some((existing) => pairKey(existing) === pairKey(key))) use.keys.push(key);
   }
   for (const use of uses) {
     const candidates = edges
-      .map((edge) => sameRelation(edge.fromRelation, use.relations[0]) && sameRelation(edge.toRelation, use.relations[1])
+      .map((edge) => sameTable(edge.fromRelation, use.relations[0], 'tail') && sameTable(edge.toRelation, use.relations[1], 'tail')
         ? { edge, keys: edge.keys }
-        : sameRelation(edge.fromRelation, use.relations[1]) && sameRelation(edge.toRelation, use.relations[0])
+        : sameTable(edge.fromRelation, use.relations[1], 'tail') && sameTable(edge.toRelation, use.relations[0], 'tail')
           ? { edge, keys: edge.keys.map((key) => ({ from: key.to, to: key.from })) }
           : undefined)
       .filter((item): item is { edge: ModelingRelationshipEdge; keys: Array<{ from: string; to: string }> } => Boolean(item));
@@ -194,13 +185,13 @@ export function certifiedJoinViolations(sql: string, uses: SqlJoinUse[]): string
 export function joinableRelations(edges: ModelingRelationshipEdge[], relations: string[]): string[] {
   const reached: string[] = [];
   const add = (relation: string) => {
-    if (!relations.some((known) => sameRelation(known, relation)) && !reached.some((known) => sameRelation(known, relation))) reached.push(relation);
+    if (!relations.some((known) => sameTable(known, relation, 'tail')) && !reached.some((known) => sameTable(known, relation, 'tail'))) reached.push(relation);
   };
   for (const edge of edges) {
     if (edge.level !== 'certified' && edge.level !== 'validated') continue;
     for (const relation of relations) {
-      if ((edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') && sameRelation(edge.fromRelation, relation)) add(edge.toRelation);
-      if ((edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one') && sameRelation(edge.toRelation, relation)) add(edge.fromRelation);
+      if ((edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') && sameTable(edge.fromRelation, relation, 'tail')) add(edge.toRelation);
+      if ((edge.cardinality === 'one_to_many' || edge.cardinality === 'one_to_one') && sameTable(edge.toRelation, relation, 'tail')) add(edge.fromRelation);
     }
   }
   return reached;
@@ -271,8 +262,8 @@ export function modeledJoinPaths(
   const maxAdded = options.maxAdded ?? 4;
   const nodeOf = (relation: string): string | undefined => {
     for (const edge of edges) {
-      if (sameRelation(edge.fromRelation, relation)) return edge.fromRelation;
-      if (sameRelation(edge.toRelation, relation)) return edge.toRelation;
+      if (sameTable(edge.fromRelation, relation, 'tail')) return edge.fromRelation;
+      if (sameTable(edge.toRelation, relation, 'tail')) return edge.toRelation;
     }
     return undefined;
   };
@@ -360,14 +351,14 @@ export function sharedParentShortcuts(uses: SqlJoinUse[], edges: ModelingRelatio
   // The parents a table references, with the columns it references them by.
   const upTo = (relation: string) => edges.flatMap((edge) => {
     const cardinality = edge.cardinality.toLowerCase();
-    if (cardinality === 'many_to_one' && sameRelation(edge.fromRelation, relation)) return [{ parent: edge.toRelation, columns: new Set(edge.keys.map((key) => bare(key.from))) }];
-    if (cardinality === 'one_to_many' && sameRelation(edge.toRelation, relation)) return [{ parent: edge.fromRelation, columns: new Set(edge.keys.map((key) => bare(key.to))) }];
+    if (cardinality === 'many_to_one' && sameTable(edge.fromRelation, relation, 'tail')) return [{ parent: edge.toRelation, columns: new Set(edge.keys.map((key) => bare(key.from))) }];
+    if (cardinality === 'one_to_many' && sameTable(edge.toRelation, relation, 'tail')) return [{ parent: edge.fromRelation, columns: new Set(edge.keys.map((key) => bare(key.to))) }];
     return [];
   });
   const shortcuts: Array<{ left: string; right: string; parent: string }> = [];
   const note = (left: string, right: string, parent: string) => {
-    if (sameRelation(left, right)) return;
-    if (!shortcuts.some((item) => (sameRelation(item.left, left) && sameRelation(item.right, right)) || (sameRelation(item.left, right) && sameRelation(item.right, left)))) shortcuts.push({ left, right, parent });
+    if (sameTable(left, right, 'tail')) return;
+    if (!shortcuts.some((item) => (sameTable(item.left, left, 'tail') && sameTable(item.right, right, 'tail')) || (sameTable(item.left, right, 'tail') && sameTable(item.right, left, 'tail')))) shortcuts.push({ left, right, parent });
   };
   // On the two references directly: left.ref = right.ref, both keys of one parent.
   for (const use of uses) {
@@ -375,7 +366,7 @@ export function sharedParentShortcuts(uses: SqlJoinUse[], edges: ModelingRelatio
     const [left, right] = use.relations;
     for (const leftParent of upTo(left)) {
       for (const rightParent of upTo(right)) {
-        if (!sameRelation(leftParent.parent, rightParent.parent)) continue;
+        if (!sameTable(leftParent.parent, rightParent.parent, 'tail')) continue;
         if (use.keys.some((key) => leftParent.columns.has(bare(key.from)) && rightParent.columns.has(bare(key.to)))) note(left, right, leftParent.parent);
       }
     }
@@ -390,7 +381,7 @@ export function sharedParentShortcuts(uses: SqlJoinUse[], edges: ModelingRelatio
   });
   for (let i = 0; i < climbs.length; i += 1) {
     for (let j = i + 1; j < climbs.length; j += 1) {
-      if (sameRelation(climbs[i]!.parent, climbs[j]!.parent)) note(climbs[i]!.relations.find((relation) => sameRelation(relation, climbs[i]!.child)) ?? climbs[i]!.child, climbs[j]!.relations.find((relation) => sameRelation(relation, climbs[j]!.child)) ?? climbs[j]!.child, climbs[i]!.parent);
+      if (sameTable(climbs[i]!.parent, climbs[j]!.parent, 'tail')) note(climbs[i]!.relations.find((relation) => sameTable(relation, climbs[i]!.child, 'tail')) ?? climbs[i]!.child, climbs[j]!.relations.find((relation) => sameTable(relation, climbs[j]!.child, 'tail')) ?? climbs[j]!.child, climbs[i]!.parent);
     }
   }
   if (shortcuts.length === 0) return [];
@@ -402,14 +393,14 @@ export function sharedParentShortcuts(uses: SqlJoinUse[], edges: ModelingRelatio
     neighbours.get(edge.fromRelation)!.push({ to: edge.toRelation, edge });
     neighbours.get(edge.toRelation)!.push({ to: edge.fromRelation, edge });
   }
-  const nodeOf = (relation: string) => [...neighbours.keys()].find((node) => sameRelation(node, relation));
+  const nodeOf = (relation: string) => [...neighbours.keys()].find((node) => sameTable(node, relation, 'tail'));
   return shortcuts.flatMap(({ left, right, parent }) => {
     const start = nodeOf(left);
     const goal = nodeOf(right);
     if (!start || !goal) return [];
     const route = cheapestRoute(start, goal, neighbours, 3, () => false);
     if (!route || route.sharedParent) return [];
-    const name = (relation: string) => relation.split('.').pop()!.replace(/["`\[\]]/g, '');
+    const name = (relation: string) => tableName(relation).replace(/["`\[\]]/g, '');
     const shown = route.nodes.map(name).join(' -> ');
     return [`it relates ${name(left)} to ${name(right)} through ${name(parent)}, which both only reference, so each ${name(left)} row meets every ${name(right)} row of the same ${name(parent)}; the Modeling map connects them as ${shown}: join along that route`];
   });
@@ -450,13 +441,13 @@ export function markerTables(
       [edge.toRelation, edge.fromRelation, edge.keys.map((key) => ({ from: key.to, to: key.from }))],
     ];
     for (const [marker, base, keys] of sides) {
-      const chosen = relations.find((relation) => sameRelation(relation, marker));
+      const chosen = relations.find((relation) => sameTable(relation, marker, 'tail'));
       if (!chosen) continue;
       if (!onlyKeys(chosen, keys.map((key) => key.from))) continue;
       // A base that is itself only keys marks nothing; skip a key-only pair.
-      const baseChosen = relations.find((relation) => sameRelation(relation, base));
+      const baseChosen = relations.find((relation) => sameTable(relation, base, 'tail'));
       if (baseChosen && onlyKeys(baseChosen, keys.map((key) => key.to))) continue;
-      if (found.some((item) => sameRelation(item.marker, marker) && sameRelation(item.base, base))) continue;
+      if (found.some((item) => sameTable(item.marker, marker, 'tail') && sameTable(item.base, base, 'tail'))) continue;
       found.push({ marker: chosen, base: baseChosen ?? base, keys, relationshipName: edge.name });
     }
   }
@@ -465,7 +456,7 @@ export function markerTables(
 
 /** The line an AI drafting SQL reads for one marker table. */
 export function markerTableLine(item: MarkerTable): string {
-  const name = (relation: string) => relation.split('.').pop()!.replace(/"/g, '');
+  const name = (relation: string) => tableName(relation).replace(/"/g, '');
   const on = item.keys.map((key) => `${item.marker}.${key.from} = ${item.base}.${key.to}`).join(' AND ');
   return `- ${item.marker} holds no values of its own (only its key): a row in it marks the ${item.base} row with the same key as a ${name(item.marker).replace(/_/g, ' ')} (modeled one-to-one: ${item.relationshipName}). For "${name(item.marker).replace(/_/g, ' ')}" values, use the ${item.base} rows that have a matching ${item.marker} row (JOIN ${item.marker} ON ${on}); the values are the columns of ${item.base}.`;
 }
@@ -487,7 +478,7 @@ const nameTokens = (name: string) => name.replace(/"/g, '').replace(/([a-z0-9])(
 export function businessIdentifiers(relations: string[], columnsOf: (relation: string) => string[]): BusinessIdentifier[] {
   const found: BusinessIdentifier[] = [];
   for (const relation of relations) {
-    const table = nameTokens(relation.split('.').pop()!);
+    const table = nameTokens(tableName(relation));
     if (table.length === 0) continue;
     const stem = table[table.length - 1]!;
     const columns = columnsOf(relation);
@@ -510,6 +501,6 @@ export function businessIdentifiers(relations: string[], columnsOf: (relation: s
 
 /** The line an AI drafting SQL reads for one business identifier. */
 export function businessIdentifierLine(item: BusinessIdentifier): string {
-  const name = item.relation.split('.').pop()!.replace(/"/g, '');
+  const name = tableName(item.relation)!.replace(/"/g, '');
   return `- ${name} rows are known to people by ${item.identifier}; ${item.key} is the internal key. When the answer lists or groups ${name} rows, show ${item.identifier} beside ${item.key}.`;
 }

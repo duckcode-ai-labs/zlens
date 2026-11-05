@@ -121,6 +121,61 @@ export function physicalRelationTailIdentity(value: string): string {
   return parsePhysicalIdentifier(value).slice(-2).map(physicalIdentifierIdentity).join('.');
 }
 
+/**
+ * ONE ANSWER TO "IS THIS THE SAME TABLE?" (simplification plan Z1). Every
+ * comparison of two table names goes through `tableKey` or `sameTable`, at a
+ * stated level:
+ * - `exact`: the name as written. Unquoted parts fold to upper case, as
+ *   Snowflake does; quoted parts keep their spelling and never merge with
+ *   unquoted ones. This is `physicalRelationIdentity`. Choose what to run by it.
+ * - `object`: the same object in every part, ignoring quotes and case.
+ *   dbt-duckdb writes provenance quoted (`"nba"."dev"."t"`) and the warehouse
+ *   describes the object unquoted: one object.
+ * - `tail`: the same schema and table in any database, ignoring quotes and
+ *   case. The model's meaning for a table reaches each database that lists it
+ *   (decision Z-D1); a dbt dev target read in production is the same table.
+ *
+ * No other module keeps its own name helper (decision Z-D2):
+ * `scripts/check-table-names.mjs` fails CI on a new one. Before this, about
+ * 30 helpers each answered it their own way, and a table listed in two
+ * databases lost the model's meaning (zlens#262).
+ */
+export type TableMatch = 'exact' | 'object' | 'tail';
+
+/** The key two names share when they name the same table at `level`. */
+export function tableKey(name: string, level: TableMatch = 'exact'): string {
+  if (level === 'exact') return physicalRelationIdentity(name);
+  const parts = parsePhysicalIdentifier(name);
+  return (level === 'tail' ? parts.slice(-2) : parts).map((part) => part.value.toLowerCase()).join('.');
+}
+
+/**
+ * The table's own name, unquoted: `"nba"."dev"."T"` → `T`. For showing a
+ * table and matching it to the words of a question; compare two tables with
+ * `sameTable`.
+ */
+export function tableName(name: string): string {
+  return parsePhysicalIdentifier(name).at(-1)?.value ?? '';
+}
+
+/**
+ * Whether two names name the same table at `level`. At `tail`, a bare table
+ * name (no schema) matches on the table alone.
+ */
+export function sameTable(left: string | undefined, right: string | undefined, level: TableMatch = 'exact'): boolean {
+  if (!left || !right) return false;
+  if (level !== 'tail') {
+    const key = tableKey(left, level);
+    return key !== '' && key === tableKey(right, level);
+  }
+  const a = parsePhysicalIdentifier(left);
+  const b = parsePhysicalIdentifier(right);
+  const depth = Math.min(2, a.length, b.length);
+  if (depth === 0) return false;
+  const tail = (parts: PhysicalIdentifierPartV1[]) => parts.slice(-depth).map((part) => part.value.toLowerCase()).join('.');
+  return tail(a) === tail(b);
+}
+
 export function samePhysicalIdentifier(left: PhysicalIdentifierPartV1 | undefined, right: PhysicalIdentifierPartV1 | undefined): boolean {
   return (!left && !right)
     || Boolean(left && right && physicalIdentifierIdentity(left) === physicalIdentifierIdentity(right));
