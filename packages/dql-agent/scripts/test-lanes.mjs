@@ -169,7 +169,8 @@ const EXPECTED_TEST_FILES = 193;
 // 2668 with a table's model meaning reaching each database that lists it
 // (vocabulary-from-pack.test.ts, +1; zlens#262).
 // 2674 with one answer to "is this the same table?" (physical-binding.test.ts, +6; simplification plan Z1).
-const EXPECTED_TESTS = 2674;
+// 2675 with SQL Server brackets read as quotes (physical-binding.test.ts, +1; simplification plan Z1, part 2).
+const EXPECTED_TESTS = 2675;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
 // The ordinary lane's share is the difference: 2536.
