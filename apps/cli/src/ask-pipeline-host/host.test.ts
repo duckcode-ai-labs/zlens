@@ -1541,6 +1541,8 @@ describe('the SQL drafter reads the whole model', () => {
     expect(first).not.toContain('A rule of another domain.');
     expect(first).not.toContain('A measured rule a person deprecated.');
     expect(steps).toContain('left out as deprecated in the model: ins.legacy_journey');
+    // The schema step lists every table it showed, for observability and benchmarks.
+    expect(steps).toMatch(/"phase":"schema"[^}]*"relations":\["ins\.player_seasons"\]/);
   });
 
   it('keeps a deprecated table the question names, marked so', async () => {
@@ -1550,12 +1552,23 @@ describe('the SQL drafter reads the whole model', () => {
     expect(first).toContain('modeled: deprecated in the model: do not answer from it. one row per player_id, season. Seasons 2009-2019 only.');
   });
 
-  it('gives the domain rules when dbt names the tables in another database than the one Ask reads', async () => {
-    // dbt built the tables in a dev database; Ask reads them where the project connects.
-    const elsewhere = { ...manifest, dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `dev_db.ins.${name}` }])) } };
-    const { prompts } = await ask('Total points per season for each player', elsewhere);
-    expect(prompts[0]).toContain('- model rule played_games_only: player_seasons counts only games played.');
-    expect(prompts[0]).not.toContain('A rule of another domain.');
+  // One table, spelled the ways a project meets it (simplification plan Z1):
+  // dbt's dev target, the same table upper-case and quoted, and the warehouse
+  // the project connects to. Ask reads `ins.player_seasons` in every case and
+  // must get the model's Domain rules, grain, notes and deprecations.
+  it.each([
+    ['a dbt dev database', (name: string) => `dev_db.ins.${name}`],
+    ['quoted upper case', (name: string) => `"PROD"."INS"."${name.toUpperCase()}"`],
+    ['the connected warehouse', (name: string) => `prod.ins.${name}`],
+  ])('gives the model to Ask when dbt names the tables in %s', async (_label, spell) => {
+    const spelled = { ...manifest, dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: spell(name) }])) } };
+    const { prompts, steps } = await ask('Total points per season for each player', spelled);
+    const first = prompts[0]!;
+    expect(first).toContain('- model rule played_games_only: player_seasons counts only games played.');
+    expect(first).not.toContain('A rule of another domain.');
+    expect(first).toContain('modeled: one row per player per season (player_id, season). A player\'s totals for one season, 2003-2022.');
+    // Named as Ask reads it, in whichever spelling.
+    expect(steps).toMatch(/left out as deprecated in the model: [^;]*?ins\W*\.\W*legacy_journey/i);
   });
 });
 
