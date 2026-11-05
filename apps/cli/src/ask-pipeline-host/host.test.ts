@@ -1697,6 +1697,76 @@ describe('the drafter sees the whole business model (RFC 0012, F1)', () => {
   });
 });
 
+describe('a model too large to show whole is shown one area at a time (model-at-scale design S6)', () => {
+  const connection: ConnectionConfig = { driver: 'duckdb', path: ':memory:' } as ConnectionConfig;
+  // Basketball's own tables, and 30 tables of an unrelated postcard shop:
+  // 34 in all, past the 30 a model can be shown whole.
+  const tables: Record<string, string[]> = {
+    player_games: ['game_id', 'player_id', 'season', 'points'],
+    player_seasons: ['player_id', 'season', 'total_points'],
+    players: ['player_id', 'player_name'],
+    teams: ['team_id', 'city'],
+    ...Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`postcard_order_${index}`, ['order_id', 'amount']])),
+  };
+  const source = (name: string) => ({ name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'ins', columns: Object.fromEntries(tables[name]!.map((column) => [column, { name: column }])) } });
+  const entity = (domain: string, localId: string, table: string) => ({ id: `${domain}::entity::${localId}`, qualifiedId: `${domain}::entity::${localId}`, localId, domain, dbtUniqueId: `model.${table}`, status: 'draft' });
+  const manifest = {
+    sources: Object.fromEntries(Object.keys(tables).map((name) => [name, source(name)])),
+    dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `ins.${name}` }])) },
+    modeling: {
+      packages: { basketball: { name: 'Basketball' }, postcards: { name: 'Postcards' } },
+      areas: {},
+      entities: {
+        'basketball::entity::player_game': entity('basketball', 'player_game', 'player_games'),
+        'basketball::entity::player_season': entity('basketball', 'player_season', 'player_seasons'),
+        'basketball::entity::player': entity('basketball', 'player', 'players'),
+        'basketball::entity::team': entity('basketball', 'team', 'teams'),
+        ...Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`postcards::entity::order_${index}`, entity('postcards', `order_${index}`, `postcard_order_${index}`)])),
+      },
+      relationships: {},
+    },
+  };
+  const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Total points per season for each player.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
+
+  it('shows the tables of the Domain the question belongs to, not the other Domain\'s', async () => {
+    const prompts: string[] = [];
+    const provider: AgentProvider = {
+      name: 'ollama', available: async () => true,
+      generate: async (messages) => {
+        if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return reading;
+        prompts.push(messages.map((message) => message.content).join('\n'));
+        return 'NO_SQL: nothing to draft in this test.';
+      },
+    };
+    const route = createAskPipelineRouteExecutor({
+      projectRoot: '/tmp/ask-area-routing',
+      executor: { executeQuery: vi.fn(async (sql: string) => {
+        if (sql.includes('information_schema.columns')) {
+          const rows = Object.entries(tables).filter(([name]) => sql.includes(`'${name}'`))
+            .flatMap(([name, columns]) => columns.map((column) => ({ table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR' })));
+          return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+        }
+        return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
+      }) } as unknown as QueryExecutor,
+      resolveConnection: async () => connection,
+      getSemanticLayer: () => undefined,
+      getManifest: () => ({ snapshotId: 'snapshot:area-routing', manifest: manifest as never }),
+      selectProvider: async () => provider,
+      compileSemantic: async () => { throw new Error('no semantic layer'); },
+      priorIntent: () => undefined,
+    });
+    const result = await route({
+      runId: 'run:area-routing',
+      request: { question: 'Total points per season for each player', requestedMode: 'ask' } as AgentRunRequest,
+      route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
+    });
+    const first = prompts[0]!;
+    for (const table of ['player_seasons', 'player_games', 'players', 'teams']) expect(first).toContain(`executable relation:ins.${table}`);
+    expect(first).not.toContain('executable relation:ins.postcard_order_0');
+    expect(JSON.stringify(result)).toContain('Showed the Basketball area: the 4 tables it answers from');
+  });
+});
+
 describe('a join on a composite key is judged by the whole key', () => {
   const connection = { driver: 'duckdb' } as ConnectionConfig;
   // One row per (match_id, ball_id) on each side, while each column alone
