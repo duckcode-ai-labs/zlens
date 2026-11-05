@@ -1492,7 +1492,7 @@ describe('the SQL drafter reads the whole model', () => {
     },
   };
   const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Total points per season from player_seasons and legacy_journey.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
-  const ask = async (question: string) => {
+  const ask = async (question: string, built: unknown = manifest) => {
     const prompts: string[] = [];
     const provider: AgentProvider = {
       name: 'ollama', available: async () => true,
@@ -1514,7 +1514,7 @@ describe('the SQL drafter reads the whole model', () => {
       }) } as unknown as QueryExecutor,
       resolveConnection: async () => connection,
       getSemanticLayer: () => undefined,
-      getManifest: () => ({ snapshotId: 'snapshot:whole-model', manifest: manifest as never }),
+      getManifest: () => ({ snapshotId: 'snapshot:whole-model', manifest: built as never }),
       selectProvider: async () => provider,
       compileSemantic: async () => { throw new Error('no semantic layer'); },
       priorIntent: () => undefined,
@@ -1548,6 +1548,14 @@ describe('the SQL drafter reads the whole model', () => {
     const first = prompts[0]!;
     expect(first).toContain('executable relation:ins.legacy_journey');
     expect(first).toContain('modeled: deprecated in the model: do not answer from it. one row per player_id, season. Seasons 2009-2019 only.');
+  });
+
+  it('gives the domain rules when dbt names the tables in another database than the one Ask reads', async () => {
+    // dbt built the tables in a dev database; Ask reads them where the project connects.
+    const elsewhere = { ...manifest, dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `dev_db.ins.${name}` }])) } };
+    const { prompts } = await ask('Total points per season for each player', elsewhere);
+    expect(prompts[0]).toContain('- model rule played_games_only: player_seasons counts only games played.');
+    expect(prompts[0]).not.toContain('A rule of another domain.');
   });
 });
 

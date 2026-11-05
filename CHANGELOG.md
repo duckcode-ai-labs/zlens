@@ -8,6 +8,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed: Ask keeps a table's model meaning when two databases list it
+
+- **The problem:** two databases can list the same table. A hybrid project syncs a dbt-built table from the warehouse again, and dbt can build in another database than the one the project connects to. Ask then read the copy it could run without the model's meaning for it: no grain, no notes, no Domain, and so none of the Domain's model rules.
+- **The fix:** the meaning now reaches every copy of the table, matched by schema and table.
+- **Effect:** on a 95-table hybrid NBA project, regular-season questions again filter on the model's game-type rule (`CAST(game_id AS VARCHAR) LIKE '2%'`).
+
 ### Choose what to draft on the Modeling page (model-at-scale design S3)
 
 - **In a dbt project larger than one draft (150 tables), "Draft the model" opens Choose what to draft.** It shows the project by layer ("476 business tables to answer from; 4,420 more are not offered by area: …") and offers three ways to pick:
