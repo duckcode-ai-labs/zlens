@@ -21,6 +21,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   Before, the page drafted only the warehouse side.
 - **`zlens sync warehouse --schemas …` in a project with dbt adds the schemas to the dbt tables in Ask's scope,** as Settings → Sync schema does. Before, it replaced them, and Ask lost the dbt tables.
 
+### Ask shows a large model one subject area at a time (model-at-scale design S6)
+
+- **A model of up to 30 tables to answer from is still shown whole.** A larger one is now shown by area:
+  - the areas the question belongs to;
+  - the Shared tables they join;
+  - all within the same 30 tables.
+  - The step reads, for example, "Showed the Sales area: the 12 tables it answers from, and 3 Shared tables it joins".
+- **How an area is chosen:**
+  - first, the tables search already found for the question;
+  - then, the question's words in the area's name, description, example questions, table names and column names.
+  - Tables in no area are grouped by their Domain. When nothing matches, search chooses the tables as before.
+- **To turn it off:** `ZLENS_ASK_AREA_ROUTING=off`.
+- **Measured** on 40 NBA questions in a 95-table hybrid project, the NBA tables among enterprise and postcard tables:
+  - It chose the NBA area on 39 of 40.
+  - Right with any name: 23 with routing, 21 without. That gap is not significant (p = 0.63); routing alone won 3 questions and lost 1.
+  - The same questions on the NBA project alone score 31. Of the 8 it gets right and routing misses, 5 are refused drafts, 2 are wrong answers from the right tables, and 1 was routed to the wrong area.
+
 ### The model map opens at the right level: Domains, then areas, then tables (model-at-scale design S5)
 
 - **A model of more than 60 tables opens on its Domains.** Each card shows its tables, its areas and where its joins lead ("Shared 6 · Finance 2"), with the Shared Domain first.

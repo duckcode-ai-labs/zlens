@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { pinnedRefsFor } from './pipeline.js';
 import { projectVocabularySource, rankedRefsFromPack  } from './vocabulary-from-pack.js';
 import { buildVocabularyIndex, clipText, grainText, renderCard, type VocabularySource } from './vocabulary.js';
+import { physicalRelationBinding } from './physical-binding.js';
 import type { EligibleContextSet, LocalContextSkill } from '../metadata/catalog.js';
 
 const base: VocabularySource = {
@@ -235,6 +236,23 @@ describe('a modeled entity on its relation card', () => {
     const rendered = card({ businessContext: context });
     expect(rendered).toContain('For career figures, sum the totals across rows and recompute ratios from the sums.');
     expect(rendered).not.toMatch(/ Use$/);
+  });
+
+  it('reaches the same table in each database that lists it', () => {
+    // dbt names the table in the database it built it in; a hybrid project's
+    // warehouse sync lists it again where the project connects. Ask reads the
+    // one it can run, and that one must know its Domain, grain and notes too.
+    const binding = (database: string, schema: string) => physicalRelationBinding({ logicalRelation: `${schema}.player_seasons`, physicalRelation: `${database}.${schema}.player_seasons` });
+    const index = buildVocabularyIndex({
+      relations: [
+        { name: 'player_seasons', schema: 'NBA', columns: [{ name: 'player_id' }], binding: binding('dev_db', 'NBA') },
+        { name: 'player_seasons', schema: 'nba', columns: [{ name: 'player_id' }], binding: binding('prod_db', 'nba') },
+      ],
+      relationMeaning: { 'NBA.player_seasons': { domain: 'nba', grain: 'player_id, season' } },
+    } as unknown as VocabularySource);
+    const relations = index.entries.filter((item) => item.kind === 'relation');
+    expect(relations.map((item) => item.model)).toEqual(['dev_db.NBA.player_seasons', 'prod_db.nba.player_seasons']);
+    expect(relations.map((item) => [item.domain, item.grain])).toEqual([['nba', 'player_id, season'], ['nba', 'player_id, season']]);
   });
 
   it('marks a relation whose entity is deprecated, or that a drafted table pick prefers another over', () => {
