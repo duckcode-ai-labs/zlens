@@ -262,6 +262,22 @@ ${extra}${evidence}`;
     expect(modelingModeOf({})).toBeUndefined();
   });
 
+  it('follows from what the project has when no mode is written (simplification plan Z2)', () => {
+    const dbt = { manifestVersion: 3, dbt: { projectDir: '.', manifestPath: 'target/manifest.json' }, connections: { default: {} } };
+    expect(modelingModeOf(dbt)).toBe('dbt-first');
+    expect(modelingModeOf({ manifestVersion: 3, semanticLayer: { provider: 'dbt' } })).toBe('dbt-first');
+    expect(modelingModeOf({ ...dbt, metadataScopes: { default: { mode: 'dbt_relations' } } })).toBe('dbt-first');
+    expect(modelingModeOf({ ...dbt, metadataScopes: { default: { mode: 'dbt_plus_selected' } } })).toBe('hybrid');
+    expect(modelingModeOf({ manifestVersion: 3, connections: { default: {} } })).toBe('warehouse-first');
+    expect(modelingModeOf({ manifestVersion: 3, metadataScopes: { default: { mode: 'selected_scopes' } } })).toBe('warehouse-first');
+    expect(modelingModeOf({ manifestVersion: 3 })).toBeUndefined();
+    // A written mode wins: a project that chose one keeps it.
+    expect(modelingModeOf({ ...dbt, modeling: { mode: 'dbt-first' }, metadataScopes: { default: { mode: 'dbt_plus_selected' } } })).toBe('dbt-first');
+    expect(modelingModeOf({ ...dbt, modeling: { mode: 'warehouse-first' } })).toBe('warehouse-first');
+    // Manifest v3 is still opted into.
+    expect(modelingModeOf({ ...dbt, manifestVersion: 2 })).toBeUndefined();
+  });
+
   it('authors a warehouse relation as `relation:` and describes it from the snapshot', () => {
     expect(isWarehouseNodeId('warehouse.acme.sales.orders')).toBe(true);
     expect(isWarehouseNodeId('model.acme.orders')).toBe(false);

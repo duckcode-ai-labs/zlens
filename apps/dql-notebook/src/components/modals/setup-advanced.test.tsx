@@ -52,12 +52,13 @@ function insideClosedAdvanced(markup: string, text: string): boolean {
 }
 
 describe('Guided Setup: two plain questions, Advanced closed (D7)', () => {
-  it('Database only asks "Which schemas should ZLens read?" and hides index mode, the typed list and dbt profiles', () => {
+  it('Database only asks "Which schemas should ZLens read?", has no index mode, and hides the typed list and dbt profiles', () => {
     const markup = setupPanel('warehouse', 'warehouse-first');
     expect(markup).toContain('Which schemas should ZLens read?');
     expect(markup).toContain('Find available databases &amp; schemas');
     expect(markup).toContain('Apply and synchronize');
-    expect(insideClosedAdvanced(markup, 'Index mode')).toBe(true);
+    // Simplification plan Z2: what Ask reads follows from the project; there is no index mode to pick.
+    expect(markup).not.toContain('Index mode');
     expect(insideClosedAdvanced(markup, 'Databases/catalogs and schemas')).toBe(true);
     expect(markup).not.toContain('Metadata scope');
     // Personal ~/.dbt profiles never show without dbt.

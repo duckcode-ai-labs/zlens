@@ -3,6 +3,17 @@ import type {
   WarehouseMetadataDiscovery,
 } from '../../api/client';
 
+/**
+ * What Ask reads from a connection, chosen from what the project has
+ * (simplification plan Z2, decision Z-D4): with dbt, the tables dbt builds,
+ * plus any schemas listed; without dbt, the schemas listed. There is no
+ * "index mode" to pick.
+ */
+export function metadataScopeMode(hasDbt: boolean, scopes: ConnectionMetadataScopeV1['scopes']): ConnectionMetadataScopeV1['mode'] {
+  if (!hasDbt) return 'selected_scopes';
+  return scopes.length > 0 ? 'dbt_plus_selected' : 'dbt_relations';
+}
+
 export function formatMetadataScopeEditor(scopes: ConnectionMetadataScopeV1['scopes']): string {
   return scopes
     .map((scope) => `${scope.catalogOrDatabase}: ${scope.schemas.join(', ')}`)

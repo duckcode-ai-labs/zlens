@@ -2,7 +2,7 @@ import { closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, rea
 import { basename, join, relative, resolve } from 'node:path';
 import { createWelcomeNotebook, serializeNotebook } from '@zlens/notebook';
 import { resolveLocalOwner, seedDefaultSkills, seedDomainSkills } from '@zlens/agent';
-import { buildManifest } from '@zlens/core';
+import { buildManifest, modelingModeOf } from '@zlens/core';
 import { dataFolderTables } from '@zlens/connectors';
 import type { CLIFlags } from '../args.js';
 import { ensureDqlGitignore } from '../git-contract.js';
@@ -190,7 +190,7 @@ export async function runInit(
       created: true,
       dbt: isDbt,
       manifestVersion: projectConfig.manifestVersion ?? 2,
-      modelingMode: projectConfig.modeling?.mode ?? null,
+      modelingMode: modelingModeOf(projectConfig) ?? null,
       duckdb: duckdbPath ?? null,
       sqlite: contents.sqlitePath ?? null,
       dataFolder: contents.dataFolder?.path ?? null,
@@ -200,7 +200,7 @@ export async function runInit(
   }
 
   if (options.output === 'summary') {
-    const kind = isDbt ? 'dbt project' : projectConfig.modeling?.mode === 'warehouse-first' ? 'Database only' : 'no data source yet';
+    const kind = isDbt ? 'dbt project' : modelingModeOf(projectConfig) === 'warehouse-first' ? 'Database only' : 'no data source yet';
     const source = database ? ` · ${describeDatabase(contents)}` : '';
     console.log(`\n  ✓ Created a ZLens project in ${targetDir} (${kind}${source}).`);
     return;
@@ -219,12 +219,12 @@ export async function runInit(
   else if (contents.dataFolder) console.log(`    Data files: ${describeDatabase(contents)}`);
   else console.log(`    DuckDB file: ${duckdbPath ?? 'none'}`);
   if (isDbt) {
-    if (projectConfig.manifestVersion === 3 && projectConfig.modeling?.mode === 'dbt-first') {
+    if (modelingModeOf(projectConfig) === 'dbt-first') {
       console.log('    Modeling: manifest v3, dbt-first (dbt artifacts remain read-only)');
     } else {
       console.log(`    Modeling: preserved existing manifest v${projectConfig.manifestVersion ?? 2} configuration`);
     }
-  } else if (projectConfig.manifestVersion === 3 && projectConfig.modeling?.mode === 'warehouse-first') {
+  } else if (modelingModeOf(projectConfig) === 'warehouse-first') {
     console.log('    Project type: Database only (ZLens reads the database\'s tables; no dbt needed)');
   }
   console.log('');
@@ -250,7 +250,7 @@ export async function runInit(
     console.log(`    ${step + 2}. npx zlens notebook`);
     console.log(`    ${step + 3}. npx zlens compile .`);
     console.log(`    ${step + 4}. npx zlens sync dbt .`);
-  } else if (projectConfig.modeling?.mode === 'warehouse-first') {
+  } else if (modelingModeOf(projectConfig) === 'warehouse-first') {
     console.log(`    ${step + 2}. npx zlens notebook   (Guided Setup: choose the schemas ZLens reads, then Draft my models)`);
   } else {
     // No dbt project and no database file yet: Guided Setup asks where the data lives.
@@ -406,8 +406,10 @@ function buildConfig(
       provider: 'dbt',
       projectPath,
     };
+    // The mode follows from the dbt project (dbt-first), and becomes hybrid
+    // when schemas are listed beside it (simplification plan Z2): no
+    // `modeling.mode` to write.
     config.manifestVersion = 3;
-    config.modeling = { mode: 'dbt-first' };
     // Tell `zlens sync dbt` and `zlens compile` where to find target/manifest.json
     // without requiring --dbt-manifest on every invocation.
     config.dbt = {

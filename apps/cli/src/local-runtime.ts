@@ -15376,7 +15376,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         modeling: {
           enabled: modelingModeOf(projectConfig) !== undefined,
           manifestVersion: projectConfig.manifestVersion ?? 2,
-          mode: projectConfig.modeling?.mode,
+          mode: modelingModeOf(projectConfig),
           snapshotState,
         },
         domains: { count: registry.values().length, diagnostics: registry.diagnostics },
@@ -15794,7 +15794,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           message: 'dbt-first modeling is not enabled. Connect and apply a dbt project from Settings → Project & dbt.',
           details: {
             manifestVersion: projectConfig.manifestVersion ?? 2,
-            modelingMode: projectConfig.modeling?.mode ?? null,
+            modelingMode: modelingModeOf(projectConfig) ?? null,
             // The page offers warehouse-only modeling only to a project that has no dbt to lose.
             dbtDetected: projectReadsDbtModels(projectRoot, projectConfig),
           },
@@ -29055,7 +29055,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const includeSemantic = url.searchParams.get('includeSemantic') !== 'false';
         const dbtManifestPath = resolveDbtManifestPath(projectRoot, cfg);
         let databaseTree: ReturnType<typeof buildDbtDatabaseSchemaTree> = [];
-        if (cfg.manifestVersion === 3 && cfg.modeling?.mode === 'dbt-first' && dbtManifestPath) {
+        if (modelingModeOf(cfg) === 'dbt-first' && dbtManifestPath) {
           try {
             databaseTree = buildDbtDatabaseSchemaTree(
               projectSnapshot().manifest,
@@ -37614,7 +37614,7 @@ function importRequestStatus(error: unknown): number {
 }
 
 function dbtFirstOwnsSemanticAuthoring(config: ProjectConfig): boolean {
-  return config.manifestVersion === 3 && config.modeling?.mode === 'dbt-first';
+  return modelingModeOf(config) === 'dbt-first';
 }
 
 function sendDbtOwnedSemanticAuthoringError(res: {

@@ -226,15 +226,23 @@ export function buildManifest(options: ManifestBuildOptions): DQLManifest {
   // Load project config
   const config = loadProjectConfig(projectRoot);
   const projectName = config.project ?? 'dql-project';
-  const dbtFirstV3 = config.manifestVersion === 3 && config.modeling?.mode === 'dbt-first';
+  // The mode follows from what the project has (simplification plan Z2).
+  const derivedMode = modelingModeOf(config);
+  const dbtFirstV3 = derivedMode === 'dbt-first';
   // Warehouse-first and hybrid modeling (RFC 0007): entities bind to warehouse relations.
-  const warehouseV3 = config.manifestVersion === 3 && (config.modeling?.mode === 'warehouse-first' || config.modeling?.mode === 'hybrid');
+  const warehouseV3 = derivedMode === 'warehouse-first' || derivedMode === 'hybrid';
   const modelingV3 = dbtFirstV3 || warehouseV3;
-  if ((config.manifestVersion === 3 || config.modeling?.mode === 'dbt-first') && !modelingV3) {
+  if (config.manifestVersion === 3 && !modelingV3) {
     diagnostics.push({
       kind: 'config',
       severity: 'error',
-      message: 'manifest v3 requires both `manifestVersion: 3` and `modeling.mode: "dbt-first"`; compiling with manifest v2 compatibility defaults',
+      message: 'manifest v3 has nothing to model: add a dbt project or a warehouse connection; compiling with manifest v2 compatibility defaults',
+    });
+  } else if (config.manifestVersion !== 3 && config.modeling?.mode === 'dbt-first') {
+    diagnostics.push({
+      kind: 'config',
+      severity: 'error',
+      message: '`modeling.mode: "dbt-first"` requires `manifestVersion: 3`; compiling with manifest v2 compatibility defaults',
     });
   } else if ((config.modeling?.mode === 'warehouse-first' || config.modeling?.mode === 'hybrid') && !warehouseV3) {
     diagnostics.push({
@@ -317,7 +325,7 @@ export function buildManifest(options: ManifestBuildOptions): DQLManifest {
   const { metrics, dimensions } = loadSemanticDefinitions(projectRoot, semanticDir);
   // A block that declares which metric it answers must name a real one.
   diagnostics.push(...validateBlockMetricMappings(blocks, metrics, {
-    metricsKnown: (!config.semanticLayer?.provider || config.semanticLayer.provider === 'dql') && config.modeling?.mode !== 'dbt-first',
+    metricsKnown: (!config.semanticLayer?.provider || config.semanticLayer.provider === 'dql') && config.modeling?.mode !== 'dbt-first' && derivedMode !== 'dbt-first',
   }));
 
   // Collect all source tables
@@ -373,7 +381,7 @@ export function buildManifest(options: ManifestBuildOptions): DQLManifest {
     const catalog = readWarehouseCatalog(projectRoot);
     if (catalog.error) diagnostics.push({ kind: 'config', severity: 'error', message: `warehouse catalog snapshot ${WAREHOUSE_CATALOG_PATH} could not be read: ${catalog.error}` });
     dbtFirstModeling = loadWarehouseModeling(projectRoot, {
-      mode: config.modeling!.mode as 'warehouse-first' | 'hybrid',
+      mode: derivedMode as 'warehouse-first' | 'hybrid',
       ...(catalog.snapshot ? { catalog: catalog.snapshot, catalogPath: WAREHOUSE_CATALOG_PATH } : {}),
       ...(options.dbtManifestPath ? { dbtManifestPath: options.dbtManifestPath } : {}),
     });
@@ -534,9 +542,12 @@ interface ProjectConfig {
   /** Manifest v3 is opt-in and only active with `modeling.mode: "dbt-first"`. */
   manifestVersion?: 1 | 2 | 3;
   modeling?: {
-    /** `warehouse-first` and `hybrid` bind entities to warehouse relations (RFC 0007). */
+    /** `warehouse-first` and `hybrid` bind entities to warehouse relations (RFC 0007). Optional: the mode follows from what the project has (`modelingModeOf`). */
     mode?: 'dbt-first' | 'warehouse-first' | 'hybrid';
   };
+  /** Connections and what Ask reads from each: the modeling mode follows from them when `modeling.mode` is not written. */
+  connections?: Record<string, unknown>;
+  metadataScopes?: Record<string, { mode?: string } | undefined>;
   semanticLayer?: { provider?: string; path?: string; projectPath?: string };
   dataDir?: string;
   /** Selective dbt import filters; merged into buildManifest options. */
@@ -3613,13 +3624,33 @@ function normalizeTableName(name: string): string {
   return name;
 }
 
+/** What a project has, read from `dql.config.json`, that its modeling mode follows from. */
+export interface ModelingModeInput {
+  manifestVersion?: number;
+  modeling?: { mode?: string };
+  dbt?: { projectDir?: string; manifestPath?: string };
+  semanticLayer?: { provider?: string };
+  connections?: Record<string, unknown>;
+  metadataScopes?: Record<string, { mode?: string } | undefined>;
+}
+
 /**
  * The project's modeling mode when manifest v3 modeling is active, else
  * undefined. `dbt-first` binds entities to dbt models; `warehouse-first` and
  * `hybrid` bind them to warehouse relations (RFC 0007).
+ *
+ * The mode follows from what the project has (simplification plan Z2,
+ * decision Z-D3): a dbt project and warehouse schemas listed beside it is
+ * hybrid; a dbt project alone is dbt-first; warehouse schemas or a
+ * connection alone is warehouse-first. `modeling.mode`, when written,
+ * overrides it, so a project that wrote one keeps it.
  */
-export function modelingModeOf(config: { manifestVersion?: number; modeling?: { mode?: string } }): 'dbt-first' | 'warehouse-first' | 'hybrid' | undefined {
+export function modelingModeOf(config: ModelingModeInput): 'dbt-first' | 'warehouse-first' | 'hybrid' | undefined {
   if (config.manifestVersion !== 3) return undefined;
   const mode = config.modeling?.mode;
-  return mode === 'dbt-first' || mode === 'warehouse-first' || mode === 'hybrid' ? mode : undefined;
+  if (mode === 'dbt-first' || mode === 'warehouse-first' || mode === 'hybrid') return mode;
+  const hasDbt = Boolean(config.dbt?.projectDir || config.dbt?.manifestPath) || config.semanticLayer?.provider === 'dbt';
+  const listsSchemas = Object.values(config.metadataScopes ?? {}).some((scope) => scope?.mode === 'selected_scopes' || scope?.mode === 'dbt_plus_selected');
+  if (hasDbt) return listsSchemas ? 'hybrid' : 'dbt-first';
+  return listsSchemas || Object.keys(config.connections ?? {}).length > 0 ? 'warehouse-first' : undefined;
 }

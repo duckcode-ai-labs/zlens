@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### The modeling mode is chosen for you (simplification plan Z2)
+
+- **The mode follows from what the project has when `modeling.mode` is not written:**
+  - a dbt project alone → dbt-first;
+  - a dbt project with other schemas listed beside it → hybrid;
+  - warehouse schemas or a connection alone → warehouse-first.
+
+  A written `modeling.mode` still wins, so an existing project keeps the mode it has.
+- **`zlens init` no longer writes `modeling.mode: "dbt-first"` for a dbt project.** A new project becomes hybrid as soon as schemas are listed beside dbt.
+- **The connection panel has no "Index mode" to pick.** It says "The tables your dbt project builds are always read" and lists "Other schemas". What Ask reads follows from the project: the dbt tables, plus the schemas listed.
+- **Every reader of the mode** (compile, the Modeling page, `zlens init`, `zlens new`, the dbt database tree) uses the same derived value.
+- **A manifest v3 project with nothing to model** says so: "add a dbt project or a warehouse connection".
+
 ### Fixed: `zlens agent eval --via runtime` no longer loses questions to a closing connection
 
 - **Each question opens its own connection to the runtime.**
