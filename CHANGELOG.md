@@ -8,6 +8,23 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Ask ranks the tables inside a large subject area
+
+When Ask routes a question to an area of more than 30 tables, it no longer cuts the area in model-file order (roughly A to Z).
+
+- **The AI chooses first.** It reads one line per table of the chosen area, as it already does for a warehouse schema too large to show, and names up to 8 tables. That is one AI call, made only for an area over 30 tables.
+- **The question's words order the rest.** Each table is scored by its name, business name, dbt description and column names, and a word weighs more when fewer tables in the area have it. A failed AI call leaves the order to the words, and the step says so.
+- **The cards' order:**
+  1. the AI's picks;
+  2. what search and the reading chose that the model holds;
+  3. the area's tables, by the words.
+
+  A table outside the model that the reading named goes in brief, unless the catalog search also found it.
+- **Measured offline on 29 GitLab questions in areas over 30 tables, with the area given:**
+  - A-to-Z order put the right table in the first 30 for 14.
+  - The words alone found 29 as written, but only 10 in their top 8 when the questions were reworded without the tables' words.
+  - The AI pick then the words found 29 of 29 both ways.
+
 ### Fixed: every table Ask chooses for a drafted answer reaches the SQL writer
 
 - **On a model too large to show whole, Ask reads the columns of every table it chose** (up to 40), eight tables to a warehouse statement, within the existing time budget (`ZLENS_ASK_COLUMN_PROBE_MS`). This holds with area routing on or off.
