@@ -92,6 +92,8 @@ export interface AskStoryStepV1 {
   queryId?: string;
   title: string;
   detail?: string;
+  /** The schema step: every table shown to the SQL writer, in order. The title names the areas or the first few; this is the whole list, for observability and benchmarks. */
+  relations?: string[];
   state: 'done' | 'missed' | 'failed';
   ms?: number;
   /** Epoch milliseconds when the step finished; orders host and pipeline steps into one story. */
