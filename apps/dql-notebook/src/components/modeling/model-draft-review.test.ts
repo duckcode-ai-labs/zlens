@@ -33,7 +33,7 @@ describe('reviewing a drafted model by group (RFC 0012, P5)', () => {
     expect(review.passedIds).not.toContain('warehouse:relationship:nba:team_game_to_game');
     expect(review.passedIds).not.toContain('warehouse:relationship:nba:x_to_y');
     expect(review.passedIds).toHaveLength(operations.length - 2);
-    expect(modelDraftSummary(review.counts)).toBe('1 table to answer from · 1 look-alike to skip · 3 joins (1 passed) · 1 measured rule · 1 concept. 2 joins need a look before you keep them.');
+    expect(modelDraftSummary(review.counts)).toBe('1 table to answer from · 1 with a better table to use instead · 3 joins (1 passed) · 1 measured rule · 1 concept. 2 joins need a look before you keep them.');
   });
 
   it('treats a proposal as a drafted model only when it drafts tables or joins', () => {

@@ -46,7 +46,7 @@ export interface DraftReview {
 
 const GROUPS: Array<Omit<DraftReviewGroup, 'items'>> = [
   { key: 'tables', title: 'Tables to answer from', hint: 'One per business thing, with what one row is.' },
-  { key: 'lookalikes', title: 'Look-alikes Ask will skip', hint: 'Each holds the same rows as a table above, less well. Ask answers from the other table unless a question names this one.' },
+  { key: 'lookalikes', title: 'Use another table instead', hint: 'Each holds the same rows as a table above, less well. Ask answers from the other table unless a question names this one.' },
   { key: 'joins', title: 'Joins', hint: 'Each was checked on the warehouse. Certify a join that passed from the map once it is saved.' },
   { key: 'rules', title: 'Rules measured on the data', hint: 'Each number is what the saved query returned.' },
   { key: 'concepts', title: 'Concepts', hint: 'A key several tables share, with no table of its own.' },
@@ -131,7 +131,7 @@ export function isModelDraft(operations: readonly ContextAuthoringOperation[]): 
 export function modelDraftSummary(counts: DraftReview['counts']): string {
   const parts = [
     `${counts.tables} table${counts.tables === 1 ? '' : 's'} to answer from`,
-    ...(counts.lookalikes ? [`${counts.lookalikes} look-alike${counts.lookalikes === 1 ? '' : 's'} to skip`] : []),
+    ...(counts.lookalikes ? [`${counts.lookalikes} with a better table to use instead`] : []),
     `${counts.joins} join${counts.joins === 1 ? '' : 's'} (${counts.joinsPassed} passed)`,
     ...(counts.rules ? [`${counts.rules} measured rule${counts.rules === 1 ? '' : 's'}`] : []),
     ...(counts.concepts ? [`${counts.concepts} concept${counts.concepts === 1 ? '' : 's'}`] : []),

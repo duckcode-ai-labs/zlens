@@ -23,7 +23,7 @@ type DraftTile = AppStudioBuildDraft['pages'][number]['layout']['items'][number]
 export const FIELD_TILES_OFF_MESSAGE = 'Field-based tiles are turned off for this project (apps.datasets is false in dql.config.json).';
 
 /** Said once, where Domain first appears (the Start form; a tooltip in Add data). */
-export const DOMAIN_EXPLANATION = 'A Domain groups data by business area, like Sales or Finance.';
+export const DOMAIN_EXPLANATION = 'A Domain groups data by part of the business, like Sales or Finance.';
 
 export const TABLE_BECOMES_DATASET_HINT = 'ZLens checks a table once before Apps use it. Certify it when you are ready; until then readers see “Not certified yet” on its tiles.';
 

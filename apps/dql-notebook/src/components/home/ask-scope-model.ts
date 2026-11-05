@@ -6,7 +6,7 @@ export function scopeProblem(scope: DomainScope | undefined, options: AskScopeOp
   if (!scope || !options) return undefined;
   const domain = options.find((option) => option.id === scope.domain);
   if (!domain) return `The domain “${scope.domain}” no longer exists.`;
-  if (scope.modelAreaId && !domain.areas.some((area) => area.id === scope.modelAreaId)) return `The subject area “${scope.modelAreaId.split('::').pop()}” no longer exists in ${domain.label}.`;
+  if (scope.modelAreaId && !domain.areas.some((area) => area.id === scope.modelAreaId)) return `The area “${scope.modelAreaId.split('::').pop()}” no longer exists in ${domain.label}.`;
   return undefined;
 }
 

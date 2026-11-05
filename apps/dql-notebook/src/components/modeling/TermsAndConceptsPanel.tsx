@@ -331,7 +331,7 @@ function TermDrawer({ term, domain, domains, metrics, t, onClose, onSaved }: {
           </>
         ) : null}
       </Field>
-      <Field label="Business rules" hint="One per line. Ask shows these with answers that use the term." t={t}>
+      <Field label="Rules" hint="One per line. Ask shows these with answers that use the term." t={t}>
         <textarea value={(draft.businessRules ?? []).join('\n')} onChange={(event) => set('businessRules', event.target.value.split('\n'))} rows={3} placeholder="Use orders.order_total for gross revenue." style={textarea(t)} />
       </Field>
       <Field label="Caveats" hint="One per line." t={t}>

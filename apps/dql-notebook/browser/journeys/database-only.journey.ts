@@ -168,9 +168,9 @@ test('Database only from a bare folder: created, connected, schemas, synchronize
   const review = page.getByRole('dialog', { name: 'Review context proposal' });
   await expect(review.getByText('Review the models ZLens drafted')).toBeVisible({ timeout: 60_000 });
   await expect(review.getByText('Drafted from your database · needs review')).toBeVisible();
-  // One plain line for the tables placed in the default area; codes and ids only under Technical details.
-  await expect(review.getByRole('listitem').filter({ hasText: 'tables placed in the default area' })).toHaveCount(1);
-  await expect(review.getByText('5 tables placed in the default area. You can rename or move them later.', { exact: true })).toBeVisible();
+  // One plain line for the tables not in an area yet; codes and ids only under Technical details.
+  await expect(review.getByRole('listitem').filter({ hasText: 'tables not in an area yet' })).toHaveCount(1);
+  await expect(review.getByText('5 tables not in an area yet. You can move them into an area later.', { exact: true })).toBeVisible();
   await expect(review.getByText(/MODEL_AREA_DEFAULTED/)).toBeHidden();
   await expect(review.getByText(/scope:domain:/)).toBeHidden();
   await expect(review.getByText('Create the Domain Jaffle shop')).toBeVisible();

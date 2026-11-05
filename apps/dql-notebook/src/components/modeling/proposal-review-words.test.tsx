@@ -19,7 +19,7 @@ const entity = (table: string, name: string) => ({
   change: { operation: 'upsert_entity', value: { id: table, domain: 'jaffle_shop', areaId: 'core', dbtModel: `warehouse.jaffle_shop.dev.${table}`, businessName: name, status: 'draft' } },
 });
 
-/** A database-only first run: thirteen tables placed in the default area, as an older server wrote it (one line each). */
+/** A database-only first run: thirteen tables not in an area yet, as an older server wrote it (one line each). */
 const firstRun = {
   version: 1,
   id: 'proposal-1',
@@ -54,8 +54,8 @@ describe('a drafted model reviews by group (RFC 0012, P5)', () => {
       ],
     } as unknown as ContextAuthoringProposalV1;
     const html = renderToStaticMarkup(<ContextProposalReviewDrawer proposal={drafted} theme={themes.paper} onClose={() => undefined} onCommitted={() => undefined} onDiscarded={() => undefined} />);
-    expect(html).toContain('2 tables to answer from · 1 look-alike to skip · 2 joins (1 passed) · 1 measured rule. 1 join needs a look before you keep it.');
-    for (const title of ['Tables to answer from', 'Look-alikes Ask will skip', 'Joins', 'Rules measured on the data', 'Other changes']) expect(html).toContain(`>${title}</strong>`);
+    expect(html).toContain('2 tables to answer from · 1 with a better table to use instead · 2 joins (1 passed) · 1 measured rule. 1 join needs a look before you keep it.');
+    for (const title of ['Tables to answer from', 'Use another table instead', 'Joins', 'Rules measured on the data', 'Other changes']) expect(html).toContain(`>${title}</strong>`);
     expect(html).toContain('Use orders instead.');
     expect(html).toContain('Passed');
     expect(html).toContain('Needs a look');
@@ -77,19 +77,19 @@ describe('the proposal review in plain words (new-user round 2, Q3)', () => {
   it('groups repeated notes into one plain line, keeping each one for the technical details', () => {
     const groups = groupProposalDiagnostics(firstRun.diagnostics, 'warehouse_discovery');
     expect(groups).toHaveLength(1);
-    expect(groups[0]).toMatchObject({ code: 'MODEL_AREA_DEFAULTED', count: 13, summary: '13 tables placed in the default area. You can rename or move them later.' });
+    expect(groups[0]).toMatchObject({ code: 'MODEL_AREA_DEFAULTED', count: 13, summary: '13 tables not in an area yet. You can move them into an area later.' });
     expect(groups[0]!.details).toHaveLength(13);
   });
 
   it('keeps a note the server already grouped, and puts blocking notes first', () => {
     const groups = groupProposalDiagnostics([
-      { code: 'MODEL_AREA_DEFAULTED', severity: 'info', message: '3 tables placed in the default area. You can rename or move them later.', operationIds: ['a', 'b', 'c'] },
+      { code: 'MODEL_AREA_DEFAULTED', severity: 'info', message: '3 tables not in an area yet. You can move them into an area later.', operationIds: ['a', 'b', 'c'] },
       { code: 'AI_DELETE_FORBIDDEN', severity: 'blocking', message: 'Modeling AI cannot delete governed source.' },
       { code: 'AI_DELETE_FORBIDDEN', severity: 'blocking', message: 'Modeling AI cannot delete governed source.' },
     ], 'ai');
     expect(groups.map((group) => group.summary)).toEqual([
       'Modeling AI cannot delete governed source. (and 1 more note like this)',
-      '3 tables placed in the default area. You can rename or move them later.',
+      '3 tables not in an area yet. You can move them into an area later.',
     ]);
   });
 
@@ -109,7 +109,7 @@ describe('the proposal review in plain words (new-user round 2, Q3)', () => {
     expect(html).toContain('Review the models ZLens drafted');
     expect(html).toContain('Drafted from your database · needs review');
     expect(html).not.toContain('immutable revision');
-    expect(html.match(/13 tables placed in the default area/g)).toHaveLength(1);
+    expect(html.match(/13 tables not in an area yet/g)).toHaveLength(1);
     expect(html).toContain('kept until you save or discard them');
     expect(html).toContain('>Keep for later</button>');
     expect(html).toContain('Discard drafts');

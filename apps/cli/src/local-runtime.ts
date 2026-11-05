@@ -37201,8 +37201,8 @@ export function staleProposalMessage(reviewed: ContextAuthoringProposalV1, chang
 }
 
 /**
- * One plain note for every model placed in the default subject area (new-user
- * round 2, Q3): "13 tables placed in the default area", not thirteen
+ * One plain note for every model not in an area yet (new-user
+ * round 2, Q3): "13 tables not in an area yet", not thirteen
  * identical lines. The operations it covers stay listed for the technical
  * details.
  */
@@ -37235,7 +37235,7 @@ export function modelAreaDefaultedDiagnostic(operationIds: string[], origin: Con
     severity: 'info',
     operationId: operationIds[0],
     operationIds: [...operationIds],
-    message: `${count} ${noun}${count === 1 ? '' : 's'} placed in the default area. You can rename or move ${count === 1 ? 'it' : 'them'} later.`,
+    message: `${count} ${noun}${count === 1 ? '' : 's'} not in an area yet. You can move ${count === 1 ? 'it' : 'them'} into an area later.`,
   };
 }
 

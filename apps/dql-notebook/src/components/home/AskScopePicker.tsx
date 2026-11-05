@@ -67,7 +67,7 @@ export function AskScopePicker({ scope, onChange, t }: { scope: DomainScope | un
           </label>
           {chosen && chosen.areas.length ? (
             <label style={labelStyle(t)}>
-              Subject area
+              Area
               <select value={area} onChange={(event) => setArea(event.target.value)} style={selectStyle(t)}>
                 <option value="">Whole domain</option>
                 {chosen.areas.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}

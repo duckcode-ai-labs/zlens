@@ -26,7 +26,7 @@ const plural = (count: number, word: string) => `${count} ${word}${count === 1 ?
 
 /** One plain line for a code that repeats once per table or change. */
 const GROUP_SUMMARY: Record<string, (count: number, origin: ContextAuthoringOrigin) => string> = {
-  MODEL_AREA_DEFAULTED: (count, origin) => `${plural(count, origin === 'warehouse_discovery' ? 'table' : 'model')} placed in the default area. You can rename or move ${count === 1 ? 'it' : 'them'} later.`,
+  MODEL_AREA_DEFAULTED: (count, origin) => `${plural(count, origin === 'warehouse_discovery' ? 'table' : 'model')} not in an area yet. You can move ${count === 1 ? 'it' : 'them'} into an area later.`,
   DATASET_CHANGE_REVIEW_REQUIRED: (count) => `${plural(count, 'Dataset change')} will be saved as needing review. Nothing is certified or rebound.`,
   DATASET_DRAFT_REVIEW_REQUIRED: (count) => `${plural(count, 'new Dataset')} will be saved as ${count === 1 ? 'a draft' : 'drafts'} for review.`,
 };
@@ -147,7 +147,7 @@ export function describeProposalOperation(
     }
     case 'remove_entity': return `Remove model ${change.value.id}`;
     case 'remove_relationship': return `Remove relationship ${change.value.id}`;
-    case 'remove_area': return `Remove subject area ${change.value.id}`;
+    case 'remove_area': return `Remove area ${change.value.id}`;
     default: return change.operation.replace(/_/g, ' ');
   }
 }

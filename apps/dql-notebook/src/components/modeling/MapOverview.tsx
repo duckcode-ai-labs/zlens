@@ -26,7 +26,7 @@ export function MapOverview({ level, theme, onOpenDomain, onOpenArea, onShowAll 
     return onOpenDomain(join.domain);
   };
   const intro = level.kind === 'domains'
-    ? `${level.tables.toLocaleString('en-US')} tables in ${level.cards.length} Domains. Open a Domain to see its subject areas.`
+    ? `${level.tables.toLocaleString('en-US')} tables in ${level.cards.length} Domains. Open a Domain to see its areas.`
     : `${level.name}: ${level.tables.toLocaleString('en-US')} tables in ${level.cards.length} areas. Open an area to see its tables.`;
   return (
     <div style={{ height: '100%', overflow: 'auto', padding: '18px 20px', boxSizing: 'border-box' }}>
@@ -35,7 +35,7 @@ export function MapOverview({ level, theme, onOpenDomain, onOpenArea, onShowAll 
         <span style={{ fontSize: 12.5, color: theme.textSecondary, flex: 1, minWidth: 220 }}>{intro}</span>
         <button type="button" onClick={onShowAll} style={{ border: '1px solid var(--border-default)', borderRadius: 7, background: theme.cellBg, color: theme.textPrimary, padding: '6px 11px', cursor: 'pointer', fontSize: 11.5 }}>Show every table</button>
       </div>
-      <div role="list" aria-label={level.kind === 'domains' ? 'Domains' : 'Subject areas'} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 12 }}>
+      <div role="list" aria-label={level.kind === 'domains' ? 'Domains' : 'Areas'} style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 12 }}>
         {level.cards.map((card) => {
           const key = level.kind === 'domains' ? (card as Extract<MapLevel, { kind: 'domains' }>['cards'][number]).domain : String((card as Extract<MapLevel, { kind: 'areas' }>['cards'][number]).areaId);
           const open = () => (level.kind === 'domains' ? onOpenDomain(key) : onOpenArea((card as Extract<MapLevel, { kind: 'areas' }>['cards'][number]).areaId));
