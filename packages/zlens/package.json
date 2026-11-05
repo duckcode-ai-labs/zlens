@@ -1,6 +1,6 @@
 {
   "name": "zlens",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "description": "The zlens command with nothing installed first: npx zlens notebook ./my-data",
   "license": "Apache-2.0",
   "author": "ZLens",

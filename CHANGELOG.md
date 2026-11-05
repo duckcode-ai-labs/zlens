@@ -6,7 +6,38 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Unreleased
+## v0.2.12 - 2026-11-05
+
+ZLens drafts your business model for you to review.
+- **What a draft proposes:** one table per business thing, the joins between them (from row identity), names, business concepts, and rules measured on the data.
+- **Nothing is certified until a person accepts it.** Review a draft by group, and accept everything that passed its checks.
+- **Ask reads the whole drafted model.** On 40 fresh NBA questions it had never seen, Ask returned the right rows for:
+  - 31 with a drafted model;
+  - 10 with the plain dbt project;
+  - 25 with a model built by hand.
+- **Large projects work a piece at a time:**
+  - Domains come from business words;
+  - drafts land in subject areas, with a Shared area;
+  - `zlens model draft --select` and a draft picker choose what to draft;
+  - the map opens at Domains, then areas, then tables.
+- **Ask shows a large model one area at a time.** It picks the question's area, the AI chooses inside it, and every table it chooses reaches the SQL writer.
+- **dbt models and warehouse tables share one model,** and the modeling mode follows from what your project has.
+- **Migrate from Tableau, Power BI and SQL:**
+  - `zlens migrate assess` shows what moves before you start;
+  - Import SQL reads workbooks and Power BI files;
+  - calculations become metric drafts;
+  - `zlens migrate compare` proves the numbers match the old report.
+- **Start with `npx zlens`,** on a folder of CSV, Parquet or SQLite files too.
+
+To upgrade, run `npm i -D @zlens/cli@^0.2.12` in each project.
+
+### Fixed: the privacy wording guard reads questions more carefully
+
+- **Aggregate questions it used to refuse on words alone are now answered:** marketing email, email campaigns, contacts opted in, and health scores. (#272)
+- **It refuses more of what it should:**
+  - "emails" and "e-mail" (#275);
+  - column names such as `email_address` and `phone_number`, a mailing or bare "address", "contact details", and "date-of-birth" (#276);
+  - a list of people with their contact details, even beside a word like "total" (#277).
 
 ### Ask ranks the tables inside a large subject area
 
