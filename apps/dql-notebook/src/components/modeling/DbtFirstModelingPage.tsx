@@ -251,11 +251,11 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
    * RFC 0007: draft domains, models and joins from the warehouse catalog,
    * checked on the warehouse, and open them in the ordinary review drawer.
    */
-  const draftFromWarehouse = async (options: { includeStaging?: boolean; scope?: DraftScopeRequest } = {}) => {
+  const draftFromWarehouse = async (options: { includeStaging?: boolean; scope?: DraftScopeRequest; source?: 'dbt' | 'warehouse' } = {}) => {
     setDraftingFromWarehouse(true);
     setNotice(null);
     try {
-      const result = await api.draftWarehouseModel({ expectedSnapshotId: data?.snapshotId, queryHistory: draftWithQueryHistory, ...(options.includeStaging ? { includeStaging: true } : {}), ...(options.scope ? { scope: options.scope } : {}) });
+      const result = await api.draftWarehouseModel({ expectedSnapshotId: data?.snapshotId, queryHistory: draftWithQueryHistory, ...(options.includeStaging ? { includeStaging: true } : {}), ...(options.scope ? { scope: options.scope } : {}), ...(options.source ? { source: options.source } : {}) });
       setDraftPickerOpen(false);
       const history = result.report.queryHistory;
       if (history && 'error' in history) setNotice(history.error);
@@ -348,8 +348,10 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
   const warehouseModeling = data.modeling.mode === 'warehouse-first' || data.modeling.mode === 'hybrid';
   // A dbt project drafts its model from dbt and the warehouse together (RFC 0012).
   const canDraftModel = warehouseModeling || data.modeling.mode === 'dbt-first';
-  // A dbt project larger than one draft's budget picks what to draft first.
-  const startDraft = () => (!warehouseModeling && Object.keys(data.dbtProvenance.nodes).length > DRAFT_BUDGET ? setDraftPickerOpen(true) : void draftFromWarehouse());
+  // A dbt project larger than one draft's budget picks what to draft first;
+  // a hybrid project picks its side: its dbt models or its warehouse tables.
+  const hybridModeling = data.modeling.mode === 'hybrid';
+  const startDraft = () => (hybridModeling || (!warehouseModeling && Object.keys(data.dbtProvenance.nodes).length > DRAFT_BUDGET) ? setDraftPickerOpen(true) : void draftFromWarehouse());
   const warehouseRelationCount = Object.values(data.dbtProvenance.nodes).filter((node) => node.resourceType === 'warehouse').length;
   const dbtNodeCount = Object.keys(data.dbtProvenance.nodes).length - warehouseRelationCount;
 
@@ -490,7 +492,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
           {readOnly && <span style={{ fontSize: 11, color: t.textMuted, alignSelf: 'center' }}>{readOnlyReason(hostUi, 'domains')}</span>}
           {!readOnly && canDraftModel && (
             <Button t={t} onClick={startDraft} disabled={draftingFromWarehouse}>
-              <Boxes size={14} /> {draftingFromWarehouse ? 'Drafting…' : warehouseModeling ? 'Draft from warehouse' : 'Draft the model'}
+              <Boxes size={14} /> {draftingFromWarehouse ? 'Drafting…' : data.modeling.mode === 'warehouse-first' ? 'Draft from warehouse' : 'Draft the model'}
             </Button>
           )}
           {!readOnly && warehouseModeling && (
@@ -757,7 +759,7 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
         />
       ) : null}
       {startDrawer === 'models' ? <AddModelsDrawer data={data} domain={selectedDomain} areaId={selectedAreaId} theme={t} onClose={() => setStartDrawer(null)} onProposal={(next) => { setStartDrawer(null); setProposal(next); }} /> : null}
-      {draftPickerOpen ? <DraftScopeDrawer theme={t} drafting={draftingFromWarehouse} onClose={() => setDraftPickerOpen(false)} onDraft={(scope) => void draftFromWarehouse({ scope })} /> : null}
+      {draftPickerOpen ? <DraftScopeDrawer theme={t} drafting={draftingFromWarehouse} hybrid={hybridModeling} onClose={() => setDraftPickerOpen(false)} onDraft={(scope, source) => void draftFromWarehouse({ ...(source === 'dbt' ? { scope } : {}), ...(hybridModeling ? { source } : {}) })} /> : null}
       {startDrawer === 'yaml' ? <ModelingYamlImportDrawer data={data} domain={selectedDomain} areaId={selectedAreaId} theme={t} onClose={() => setStartDrawer(null)} onProposal={(next) => { setStartDrawer(null); setProposal(next); }} /> : null}
       {proposal ? (
         <ContextProposalReviewDrawer

@@ -1,4 +1,4 @@
-import type { DatasetCacheDeliveryReceiptV1, DatasetTileProvenanceV1, ProviderDispatchPhaseV1, ProviderEgressPurpose, SemanticAggregationCompilerReceiptV1, SemanticDisplayFormat, SemanticTileConversionProvenanceV1 } from '@zlens/core';
+import type { WarehouseCatalogSnapshotV1, DatasetCacheDeliveryReceiptV1, DatasetTileProvenanceV1, ProviderDispatchPhaseV1, ProviderEgressPurpose, SemanticAggregationCompilerReceiptV1, SemanticDisplayFormat, SemanticTileConversionProvenanceV1 } from '@zlens/core';
 import {
   terminalTitle,
   parsePhysicalIdentifier,
@@ -16638,9 +16638,21 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const tables = typeof body.q === 'string'
           ? searchDraftTables(graph, { q: body.q.slice(0, 120), businessOnly: body.businessOnly !== false, ...(typeof body.limit === 'number' ? { limit: body.limit } : {}) })
           : undefined;
+        // Hybrid: the warehouse side is the synced tables dbt does not build.
+        let warehouse: { tables: number; dbtBuilt: number; modeled: number; schemas: string[] } | undefined;
+        if (modelingModeOf(loadProjectConfig(projectRoot)) === 'hybrid') {
+          const catalog = readWarehouseCatalog(projectRoot).snapshot;
+          if (catalog) {
+            const split = hybridWarehouseTables(catalog, projectSnapshot().manifest);
+            const own = split.snapshot.relations.filter((relation) => relation.id.startsWith('warehouse.'));
+            const bound = new Set(Object.values(projectSnapshot().manifest.modeling?.entities ?? {}).map((entity) => entity.dbtUniqueId));
+            warehouse = { tables: own.length, dbtBuilt: catalog.relations.length - own.length, modeled: own.filter((relation) => bound.has(relation.id)).length, schemas: [...new Set(own.map((relation) => relation.schema ?? ''))].filter(Boolean).sort() };
+          }
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({
           requestId,
+          ...(warehouse ? { warehouse } : {}),
           choices: draftScopeChoices(graph, scope.budget),
           preview: { description: scope.description, asked: scope.asked, drafted: scope.ids.length, budget: scope.budget, leftOut: scope.leftOut.length, leftOutSample: scope.leftOut.slice(0, 5) },
           ...(tables ? { tables } : {}),
@@ -16657,7 +16669,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       const requestId = apiRequestId('modeling-warehouse-proposal');
       const snapshot = projectSnapshot();
       try {
-        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown } };
+        const body = await readJSON(req).catch(() => ({})) as { validate?: boolean; queryHistory?: boolean; domain?: string; expectedSnapshotId?: string; includeStaging?: boolean; scope?: { select?: unknown; hops?: unknown; budget?: unknown }; source?: 'dbt' | 'warehouse' };
         if (body.expectedSnapshotId && body.expectedSnapshotId !== snapshot.snapshotId) {
           throw Object.assign(new Error('Project sources changed. Refresh Modeling and draft again.'), { code: 'PROPOSAL_STALE' });
         }
@@ -16665,7 +16677,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         // for them ("Show staging tables"), so the map has one Customer.
         const domain = typeof body.domain === 'string' && body.domain.trim() ? body.domain.trim().slice(0, 80) : undefined;
         // A dbt-first project drafts from dbt and the warehouse together (RFC 0012, decision M5).
-        const report = modelingModeOf(loadProjectConfig(projectRoot)) === 'dbt-first'
+        // A hybrid project drafts either side: its dbt models, or the warehouse
+        // tables dbt does not build (the default, as before).
+        const projectMode = modelingModeOf(loadProjectConfig(projectRoot));
+        const report = projectMode === 'dbt-first' || (projectMode === 'hybrid' && body.source === 'dbt')
           ? await discoverProjectDbtModel(projectRoot, { manifest: snapshot.manifest, domain, hideStagingDuplicates: body.includeStaging !== true, scope: draftScopeFromBody(body.scope), executor })
           : await discoverProjectWarehouseModel(projectRoot, { manifest: snapshot.manifest, domain, validate: body.validate === true, queryHistory: body.queryHistory === true, hideStagingDuplicates: body.includeStaging !== true, executor });
         // New Domains and subject areas are created by the proposal's own scope
@@ -38928,7 +38943,12 @@ export async function syncProjectWarehouse(projectRoot: string, options: {
       ?? selectedConnection.catalog
       ?? selectedConnection.database
       ?? await databaseHoldingSchemas(options.executor, selectedConnection, connectionId, options.schemas);
-    input = { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: database, schemas: options.schemas }] };
+    // A project with dbt keeps its dbt tables in Ask's scope and adds the
+    // schemas named, as Settings → Sync schema does; without dbt the named
+    // schemas are the whole scope.
+    const dbtDefaults = metadataScopeDbtDefaults(projectRoot, cfg);
+    const withDbt = modelingModeOf(cfg) !== 'warehouse-first' && (dbtDefaults.relations?.length ?? 0) > 0;
+    input = { mode: withDbt ? 'dbt_plus_selected' : 'selected_scopes', scopes: [{ catalogOrDatabase: database, schemas: options.schemas }] };
   }
   const scope = normalizeConnectionMetadataScope(connectionId, selectedConnection, input, metadataScopeDbtDefaults(projectRoot, cfg));
   const modelBeforeSync = warehouseCatalogModeling(cfg)
@@ -38978,11 +38998,16 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
   if (mode !== 'warehouse-first' && mode !== 'hybrid') {
     throw Object.assign(new Error('Warehouse discovery needs "manifestVersion": 3 and "modeling": { "mode": "warehouse-first" } (or "hybrid") in dql.config.json.'), { code: 'WAREHOUSE_MODELING_NOT_ENABLED' });
   }
-  const { snapshot, error } = readWarehouseCatalog(projectRoot);
-  if (!snapshot) {
+  const { snapshot: catalogSnapshot, error } = readWarehouseCatalog(projectRoot);
+  if (!catalogSnapshot) {
     throw Object.assign(new Error(error ? `The warehouse catalog could not be read: ${error}` : 'No warehouse catalog yet. Run `zlens sync warehouse --schemas <schema>` or Sync schema in Settings first.'), { code: 'WAREHOUSE_CATALOG_MISSING' });
   }
   const manifest = options.manifest ?? buildManifest({ projectRoot, dbtManifestPath: resolveDbtManifestPath(projectRoot, cfg) ?? undefined });
+  // Hybrid: a warehouse table dbt builds is that dbt model, never a second
+  // table. One the model has is read as the model's, so joins to it are
+  // drafted; one it has not yet is left to the dbt draft.
+  const hybrid = mode === 'hybrid' ? hybridWarehouseTables(catalogSnapshot, manifest) : undefined;
+  const snapshot = hybrid?.snapshot ?? catalogSnapshot;
   const connectionId = snapshot.connectionId || warehouseCatalogConnectionId(cfg);
   const connection = options.validate || options.queryHistory ? projectConnectionById(projectRoot, cfg, connectionId) : null;
   if ((options.validate || options.queryHistory) && (!options.executor || !connection)) {
@@ -39024,9 +39049,36 @@ export async function discoverProjectWarehouseModel(projectRoot: string, options
     // A join a reviewer removed or rejected is not proposed again.
     decisions: readDiscoveryLedger(projectRoot).relationships,
   });
-  const report = queryHistory ? { ...drafted, queryHistory } : drafted;
+  const leftToDbt = hybrid?.leftToDbt.length ? { dbtLeftOut: hybrid.leftToDbt } : {};
+  const report = { ...drafted, ...(queryHistory ? { queryHistory } : {}), ...leftToDbt };
   if (!options.validate || !connection || !options.executor) return report;
-  return checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest });
+  return { ...(await checkDraftOnWarehouse(projectRoot, cfg, report, snapshot, connection, options.executor, { readViews: options.readViews === true, manifest })), ...leftToDbt };
+}
+
+/**
+ * A hybrid project's warehouse catalog holds the tables dbt builds too
+ * (Settings and `sync warehouse` keep them in Ask's scope). Matched by
+ * schema and table, a table dbt builds takes its dbt model's id: the model
+ * binds it already, or the dbt draft will. Only the tables dbt does not build
+ * are drafted as warehouse tables.
+ */
+function hybridWarehouseTables(snapshot: WarehouseCatalogSnapshotV1, manifest: DQLManifest): { snapshot: WarehouseCatalogSnapshotV1; leftToDbt: string[] } {
+  const key = (value: string | undefined) => (value ? parsePhysicalIdentifier(value).map((part) => part.value.toLowerCase()).slice(-2).join('.') : '');
+  const dbtByTable = new Map<string, string>();
+  for (const node of Object.values(manifest.dbtProvenance?.nodes ?? {})) {
+    if (!node.relation || node.uniqueId.startsWith('warehouse.')) continue;
+    dbtByTable.set(key(node.relation), node.uniqueId);
+  }
+  const modeled = new Set(Object.values(manifest.modeling?.entities ?? {}).map((entity) => entity.dbtUniqueId));
+  const leftToDbt: string[] = [];
+  const relations = snapshot.relations.flatMap((relation) => {
+    const dbtId = dbtByTable.get(key(relation.relation)) ?? dbtByTable.get(`${relation.schema ?? ''}.${relation.name}`.toLowerCase());
+    if (!dbtId) return [relation];
+    if (modeled.has(dbtId)) return [{ ...relation, id: dbtId }];
+    leftToDbt.push(relation.relation);
+    return [];
+  });
+  return { snapshot: { ...snapshot, relations }, leftToDbt };
 }
 
 /**

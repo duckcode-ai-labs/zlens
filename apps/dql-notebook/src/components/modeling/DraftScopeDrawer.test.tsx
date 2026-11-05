@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftScopeResponse } from '../../api/client';
-import { areaRow, layerNote, pickSummary } from './DraftScopeDrawer';
+import { areaRow, layerNote, pickSummary, warehouseNote } from './DraftScopeDrawer';
 
 const choices: DraftScopeResponse['choices'] = {
   tables: 4896,
@@ -29,5 +29,14 @@ describe('the draft picker (model-at-scale design S3)', () => {
     expect(pickSummary(true, false, preview({ asked: 1, drafted: 1 }))).toBe('1 table picked. Only this table is read from the warehouse and checked.');
     expect(pickSummary(true, false, preview({}))).toBe('122 tables picked. Only these are read from the warehouse and checked.');
     expect(pickSummary(true, false, preview({ asked: 233, drafted: 150, leftOut: 83 }))).toBe('233 tables picked. ZLens drafts the 150 most important now and lists the other 83: business tables first, then the ones dbt exposures use, then the ones many models read.');
+  });
+});
+
+describe('a hybrid project drafts its warehouse tables too', () => {
+  it('says which warehouse tables it drafts, and that dbt\'s tables are never drafted twice', () => {
+    expect(warehouseNote({ tables: 23, dbtBuilt: 26, modeled: 0, schemas: ['netsuite', 'zendesk'] })).toBe('23 warehouse tables dbt does not build, in netsuite, zendesk. The 26 synced tables dbt builds are drafted as dbt models, never twice; joins to the ones already in the model are drafted too.');
+    expect(warehouseNote({ tables: 136, dbtBuilt: 0, modeled: 136, schemas: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toBe('136 warehouse tables dbt does not build, in a, b, c, d, e and 2 more schemas. All of them are in the model already; a draft adds only what is new.');
+    expect(warehouseNote({ tables: 0, dbtBuilt: 4, modeled: 0, schemas: [] })).toBe('No warehouse tables outside dbt yet (the 4 synced tables dbt builds are drafted as dbt models). Choose their schemas in Settings → Connections → Sync schema.');
+    expect(warehouseNote(undefined)).toBe('Reading the warehouse catalog…');
   });
 });

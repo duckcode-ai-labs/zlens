@@ -6,7 +6,7 @@ import Database from 'better-sqlite3';
 import { buildManifest, warehouseRelationId, type WarehouseCatalogRelationV1 } from '@zlens/core';
 import { QueryExecutor } from '@zlens/connectors';
 import { dbtModelSnapshot, dbtWarehouseNodes, dbtWarehouseScopes } from './dbt-model-discovery.js';
-import { applyProjectWarehouseDiscovery, discoverProjectDbtModel } from './local-runtime.js';
+import { applyProjectWarehouseDiscovery, discoverProjectDbtModel, discoverProjectWarehouseModel, syncProjectWarehouse } from './local-runtime.js';
 import { runModel } from './commands/model.js';
 import type { CLIFlags } from './args.js';
 
@@ -274,5 +274,69 @@ describe('zlens model draft places tables in subject areas', () => {
     expect(text).toContain('Scope: area:sales');
     expect(text).toContain('Areas: sales_and_marketing/sales: 1 table');
     expect(text).toMatch(/Also read \d+ tables? other areas already model/);
+  });
+});
+
+// A hybrid project: the dbt shop, and a refunds table in the same warehouse
+// that dbt does not build (a loader's table).
+describe('a hybrid project drafts its warehouse tables beside its dbt models', () => {
+  const roots: string[] = [];
+  const executors: QueryExecutor[] = [];
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const executor of executors.splice(0)) await executor.disconnect().catch(() => undefined);
+    for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+  });
+
+  it('never drafts a dbt table twice, leaves unmodeled dbt tables to the dbt draft, and drafts the join across', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-hybrid-'));
+    roots.push(projectRoot);
+    const db = new Database(join(projectRoot, 'shop.sqlite'));
+    db.exec(`
+      CREATE TABLE customers (customer_id INTEGER, name TEXT);
+      CREATE TABLE orders (order_id INTEGER, customer_id INTEGER, amount INTEGER);
+      CREATE VIEW stg_orders AS SELECT order_id, customer_id, amount FROM orders;
+      CREATE TABLE refunds (refund_id INTEGER, order_id INTEGER, refunded INTEGER);
+    `);
+    for (let customer = 1; customer <= 20; customer += 1) db.prepare('INSERT INTO customers VALUES (?, ?)').run(customer, `C${customer}`);
+    for (let order = 1; order <= 60; order += 1) db.prepare('INSERT INTO orders VALUES (?, ?, ?)').run(order, 1 + (order % 20), order * 3);
+    for (let refund = 1; refund <= 12; refund += 1) db.prepare('INSERT INTO refunds VALUES (?, ?, ?)').run(refund, refund * 4, refund);
+    db.close();
+    mkdirSync(join(projectRoot, 'target'), { recursive: true });
+    writeFileSync(join(projectRoot, 'target', 'manifest.json'), JSON.stringify(MANIFEST));
+    const config = (mode: string) => JSON.stringify({
+      project: 'shop', manifestVersion: 3, modeling: { mode },
+      connections: { default: { driver: 'sqlite', filepath: './shop.sqlite' } },
+      dbt: { projectDir: '.', manifestPath: 'target/manifest.json' },
+    });
+    writeFileSync(join(projectRoot, 'dql.config.json'), config('dbt-first'));
+    const executor = new QueryExecutor();
+    executors.push(executor);
+    // The dbt side first, orders and customers only: stg_orders stays unmodeled.
+    applyProjectWarehouseDiscovery(projectRoot, await discoverProjectDbtModel(projectRoot, { executor, scope: { select: ['orders', 'customers'] } }));
+
+    // Then hybrid, with the warehouse's schema synced: dbt's tables stay in Ask's scope.
+    writeFileSync(join(projectRoot, 'dql.config.json'), config('hybrid'));
+    await syncProjectWarehouse(projectRoot, { schemas: ['main'], database: 'main', executor });
+    expect(JSON.parse(readFileSync(join(projectRoot, 'dql.config.json'), 'utf8')).metadataScopes.default.mode).toBe('dbt_plus_selected');
+
+    const report = await discoverProjectWarehouseModel(projectRoot, { validate: true, executor });
+    const fresh = report.entities.filter((entity) => !entity.existing);
+    // Only the table dbt does not build is drafted; the modeled dbt tables are read as the model's.
+    expect(fresh.map((entity) => entity.relation)).toEqual(['main.refunds']);
+    expect(report.entities.filter((entity) => entity.existing).map((entity) => entity.relationId).sort()).toEqual(['model.shop.customers', 'model.shop.orders']);
+    expect(report.dbtLeftOut).toEqual(['main.stg_orders']);
+    // The join from the warehouse table to the dbt model is drafted and checked on the data.
+    const refundToOrder = report.relationships.find((relationship) => relationship.fromRelation === 'main.refunds' && relationship.toRelation === 'main.orders');
+    expect(refundToOrder).toMatchObject({ keys: [{ from: 'order_id', to: 'order_id' }], validation: { status: 'passed' } });
+
+    applyProjectWarehouseDiscovery(projectRoot, report);
+    const manifest = buildManifest({ projectRoot, dbtManifestPath: join(projectRoot, 'target', 'manifest.json') });
+    expect(manifest.diagnostics?.filter((item) => item.severity === 'error')).toEqual([]);
+    const entities = Object.values(manifest.modeling?.entities ?? {});
+    // One orders entity, bound by dbt; refunds bound by its relation.
+    expect(entities.filter((entity) => entity.dbtUniqueId === 'model.shop.orders')).toHaveLength(1);
+    expect(entities.find((entity) => entity.relation === 'main.refunds')).toBeDefined();
+    expect(Object.values(manifest.modeling?.relationships ?? {}).some((relationship) => String(relationship.to).endsWith('order'))).toBe(true);
   });
 });

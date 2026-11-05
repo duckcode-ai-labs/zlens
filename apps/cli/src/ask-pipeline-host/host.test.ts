@@ -1541,6 +1541,8 @@ describe('the SQL drafter reads the whole model', () => {
     expect(first).not.toContain('A rule of another domain.');
     expect(first).not.toContain('A measured rule a person deprecated.');
     expect(steps).toContain('left out as deprecated in the model: ins.legacy_journey');
+    // The schema step lists every table it showed, for observability and benchmarks.
+    expect(steps).toMatch(/"phase":"schema"[^}]*"relations":\["ins\.player_seasons"\]/);
   });
 
   it('keeps a deprecated table the question names, marked so', async () => {

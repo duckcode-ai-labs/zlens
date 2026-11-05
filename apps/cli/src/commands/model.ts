@@ -669,6 +669,7 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
   const keyText = (keys: Array<{ from: string; to: string }>) => keys.map((pair) => (pair.from === pair.to ? pair.from : `${pair.from} = ${pair.to}`)).join(', ');
   console.log('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
   printDraftScope(report);
+  if (report.dbtLeftOut?.length) console.log(`  Left to the dbt draft: ${report.dbtLeftOut.length} table${report.dbtLeftOut.length === 1 ? '' : 's'} dbt builds (zlens model draft --source dbt drafts ${report.dbtLeftOut.length === 1 ? 'it' : 'them'} as dbt models)`);
   console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} look-alike${lookAlikes.length === 1 ? '' : 's'} to skip · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
   console.log('Tables to answer from');
   for (const entity of tables) console.log(`  ${entity.domain}${entity.area ? `/${entity.area}` : ''}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);
