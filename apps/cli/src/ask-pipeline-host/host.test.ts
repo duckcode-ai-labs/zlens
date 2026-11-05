@@ -1780,6 +1780,86 @@ describe('a model too large to show whole is shown one area at a time (model-at-
   });
 });
 
+describe('every table a routed area shows reaches the SQL writer (ask-area-ranking design, R1)', () => {
+  const connection: ConnectionConfig = { driver: 'duckdb', path: ':memory:' } as ConnectionConfig;
+  // A 40-table Basketball Domain of wide tables, none described in the
+  // request, and a 10-table Postcards Domain: past the 30 a model is shown
+  // whole, so Ask shows Basketball's first 30. One of them has no columns the
+  // warehouse can read.
+  const wide = Array.from({ length: 30 }, (_, index) => `m_${index}`);
+  const tables: Record<string, string[]> = {
+    ...Object.fromEntries(Array.from({ length: 40 }, (_, index) => [`stats_${String(index).padStart(2, '0')}`, ['game_id', 'season', ...wide]])),
+    ...Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`postcard_order_${index}`, ['order_id', 'amount']])),
+  };
+  const unreadable = 'stats_05';
+  const source = (name: string) => ({ name, origin: 'dbt', referencedBy: [], dbtModel: { uniqueId: `model.${name}`, schema: 'ins', columns: {} } });
+  const entity = (domain: string, table: string) => ({ id: `${domain}::entity::${table}`, qualifiedId: `${domain}::entity::${table}`, localId: table, domain, dbtUniqueId: `model.${table}`, status: 'draft' });
+  const manifest = {
+    sources: Object.fromEntries(Object.keys(tables).map((name) => [name, source(name)])),
+    dbtProvenance: { nodes: Object.fromEntries(Object.keys(tables).map((name) => [`model.${name}`, { relation: `ins.${name}` }])) },
+    modeling: {
+      packages: { basketball: { name: 'Basketball' }, postcards: { name: 'Postcards' } },
+      areas: {},
+      entities: Object.fromEntries(Object.keys(tables).map((name) => {
+        const domain = name.startsWith('stats_') ? 'basketball' : 'postcards';
+        return [`${domain}::entity::${name}`, entity(domain, name)];
+      })),
+      relationships: {},
+    },
+  };
+  const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Games per basketball season.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
+
+  it('reads every chosen table eight to a statement, shows the overflow in brief, and counts what reached the SQL writer', async () => {
+    const prompts: string[] = [];
+    const statements: string[] = [];
+    const provider: AgentProvider = {
+      name: 'ollama', available: async () => true,
+      generate: async (messages) => {
+        if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return reading;
+        prompts.push(messages.map((message) => message.content).join('\n'));
+        return 'NO_SQL: nothing to draft in this test.';
+      },
+    };
+    const route = createAskPipelineRouteExecutor({
+      projectRoot: '/tmp/ask-area-every-table',
+      executor: { executeQuery: vi.fn(async (sql: string) => {
+        if (sql.includes('information_schema.columns')) {
+          statements.push(sql);
+          const rows = Object.entries(tables).filter(([name]) => name !== unreadable && sql.includes(`'${name}'`))
+            .flatMap(([name, columns]) => columns.map((column, index) => ({ table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR', ordinal_position: index + 1, dql_column_total: columns.length })));
+          return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
+        }
+        return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
+      }) } as unknown as QueryExecutor,
+      resolveConnection: async () => connection,
+      getSemanticLayer: () => undefined,
+      getManifest: () => ({ snapshotId: 'snapshot:area-every-table', manifest: manifest as never }),
+      selectProvider: async () => provider,
+      compileSemantic: async () => { throw new Error('no semantic layer'); },
+      priorIntent: () => undefined,
+    });
+    const result = await route({
+      runId: 'run:area-every-table',
+      request: { question: 'How many games per basketball season?', requestedMode: 'ask' } as AgentRunRequest,
+      route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
+    });
+    const first = prompts[0]!;
+    const shown = Array.from({ length: 30 }, (_, index) => `stats_${String(index).padStart(2, '0')}`).filter((name) => name !== unreadable);
+    // All 29 readable tables of the 30 chosen reach the SQL writer, not five.
+    for (const table of shown) expect(first).toContain(`executable relation:ins.${table}`);
+    expect(first).not.toContain(`executable relation:ins.${unreadable}`);
+    expect(first).not.toContain('executable relation:ins.postcard_order_0');
+    // Thirty wide tables don't fit in full: the overflow is one line each.
+    expect(first).toContain('[in brief]: game_id VARCHAR, m_0 VARCHAR, m_1 VARCHAR');
+    // Read in batches of eight; none past the first batch is taken as absent.
+    expect(statements.length).toBeGreaterThanOrEqual(4);
+    const text = JSON.stringify(result);
+    expect(text).toContain('Showed the Basketball area: 29 of the 30 tables it answers from (');
+    expect(text).toMatch(/\(\d+ in full, \d+ in brief\)/);
+    expect(text).toContain(`left out, no columns could be read in time: ins.${unreadable}`);
+  });
+});
+
 describe('a join on a composite key is judged by the whole key', () => {
   const connection = { driver: 'duckdb' } as ConnectionConfig;
   // One row per (match_id, ball_id) on each side, while each column alone

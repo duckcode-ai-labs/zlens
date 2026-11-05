@@ -8,6 +8,16 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed: every table Ask chooses for a drafted answer reaches the SQL writer
+
+- **On a model too large to show whole, Ask reads the columns of every table it chose** (up to 40), eight tables to a warehouse statement, within the existing time budget (`ZLENS_ASK_COLUMN_PROBE_MS`). This holds with area routing on or off.
+  - A model of up to 30 tables, shown whole, keeps reading five for now. Reading more there changes what the jaffle golden suite's recorded drafts were written from, so it waits for a live re-record.
+  - Before, it read 5 at most, and the probe behind it read 8 and recorded the rest as absent for a minute. Every other table was dropped without a word.
+  - On GitLab's dbt project (4,742 tables), the step said "Showed the Product area: the 30 tables it answers from", and the SQL writer got 4 to 11. Tables the catalog search had found were lost on 10 of 40 blind questions with area routing off, and on 4 of 40 with it on.
+- **A table past the draft's table budget is shown in brief:** one line of column names and types, as warehouse-first projects already do, instead of being cut part-way.
+  - A routed subject area may take the whole-schema budget (40,000 characters).
+- **The step counts what reached the SQL writer.** For example: "Showed the Product area: 29 of the 30 tables it answers from (6 in full, 23 in brief)". It names any table left out: "no columns could be read in time", or "no room in the prompt".
+
 ### The modeling mode is chosen for you (simplification plan Z2)
 
 - **The mode follows from what the project has when `modeling.mode` is not written:**
