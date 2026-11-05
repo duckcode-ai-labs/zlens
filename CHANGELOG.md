@@ -14,6 +14,18 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **The fix:** the meaning now reaches every copy of the table, matched by schema and table.
 - **Effect:** on a 95-table hybrid NBA project, regular-season questions again filter on the model's game-type rule (`CAST(game_id AS VARCHAR) LIKE '2%'`).
 
+### The model map opens at the right level: Domains, then areas, then tables (model-at-scale design S5)
+
+- **A model of more than 60 tables opens on its Domains.** Each card shows its tables, its areas and where its joins lead ("Shared 6 · Finance 2"), with the Shared Domain first.
+- **Opening a Domain shows its subject areas** the same way. Tables not in an area yet, including the default `core` area a new model lands in, count as one "Default area".
+- **Opening an area draws its tables.**
+  - The tables of other areas it shows at its edge are drawn as before.
+  - A join into an area it does not draw is folded into one stub per area ("→ Finance · 4 joins") that opens that area.
+- **Escape hatches:** "Show every table" draws a level's tables anyway, and a search always draws the matching tables. A small model opens on its tables, as before.
+- **Auto layout:**
+  - Tables with no joins on the map go in a grid beside the joined ones, instead of one tall column.
+  - The view fits again when you open another Domain or area.
+
 ### Choose what to draft on the Modeling page (model-at-scale design S3)
 
 - **In a dbt project larger than one draft (150 tables), "Draft the model" opens Choose what to draft.** It shows the project by layer ("476 business tables to answer from; 4,420 more are not offered by area: …") and offers three ways to pick:

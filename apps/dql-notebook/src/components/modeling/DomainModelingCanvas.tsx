@@ -7,6 +7,8 @@ import type { DbtNodeAuthoringDetail, ManifestDbtFirstModeling, ManifestModelEnt
 import { themes } from '../../themes/notebook-theme';
 import { entityKindColor, entityRecords, resolveEntityRecordKey } from './domain-studio-model';
 import { relationshipStatusView } from './relationship-builder-model';
+import { areaStubs, mapLevel, type AreaStub } from './model-map-levels';
+import { MapOverview } from './MapOverview';
 
 export type ColumnDisplayMode = 'keys' | 'relevant' | 'all';
 export type ModelingViewMode = 'business' | 'data';
@@ -34,7 +36,13 @@ type EntityNodeData = {
   onResize: (id: string, width: number) => void;
 };
 
-export function DomainModelingCanvas({ modeling, ghostEntityIds, ghostRelationshipIds, relationByDbtId, detailsByDbtId, selectedDomain, selectedAreaId, selectedId, viewMode, columnMode, search, layoutMode, density, visibleLimit, dimUnrelated, showEdgeLabels, resetLayoutToken, focusRequest, onVisibleDbtIdsChange, onSelectEntity, onSelectRelationship, onEditRelationship, onDraftRelationship, onAddRelatedModel, onAddModel, onCreateDomain, onEditEntity, onOpenAi, theme }: { modeling: ManifestDbtFirstModeling; ghostEntityIds?: ReadonlySet<string>; ghostRelationshipIds?: ReadonlySet<string>; relationByDbtId: Record<string, string | undefined>; detailsByDbtId: Record<string, DbtNodeAuthoringDetail | undefined>; selectedDomain: string | null; selectedAreaId: string | null; selectedId: string | null; viewMode: ModelingViewMode; columnMode: ColumnDisplayMode; search: string; layoutMode: DiagramLayoutMode; density: DiagramDensity; visibleLimit: number; dimUnrelated: boolean; showEdgeLabels: boolean; resetLayoutToken: number; focusRequest?: { id: string; token: number }; onVisibleDbtIdsChange: (uniqueIds: string[]) => void; onSelectEntity: (id: string) => void; onSelectRelationship: (id: string) => void; onEditRelationship?: (recordKey: string) => void; onDraftRelationship: (draft: RelationshipDraft) => void; onAddRelatedModel: (origin: { from: string; fromColumn?: string }) => void; onAddModel: () => void; onCreateDomain: () => void; onEditEntity: (id: string) => void; onOpenAi: (id: string) => void; theme: Theme }) {
+export function DomainModelingCanvas({ modeling, ghostEntityIds, ghostRelationshipIds, relationByDbtId, detailsByDbtId, selectedDomain, selectedAreaId, selectedId, viewMode, columnMode, search, layoutMode, density, visibleLimit, dimUnrelated, showEdgeLabels, resetLayoutToken, focusRequest, onVisibleDbtIdsChange, onSelectEntity, onSelectRelationship, onEditRelationship, onDraftRelationship, onAddRelatedModel, onAddModel, onCreateDomain, onEditEntity, onOpenAi, onOpenDomain, onOpenArea, theme }: { modeling: ManifestDbtFirstModeling; ghostEntityIds?: ReadonlySet<string>; ghostRelationshipIds?: ReadonlySet<string>; relationByDbtId: Record<string, string | undefined>; detailsByDbtId: Record<string, DbtNodeAuthoringDetail | undefined>; selectedDomain: string | null; selectedAreaId: string | null; selectedId: string | null; viewMode: ModelingViewMode; columnMode: ColumnDisplayMode; search: string; layoutMode: DiagramLayoutMode; density: DiagramDensity; visibleLimit: number; dimUnrelated: boolean; showEdgeLabels: boolean; resetLayoutToken: number; focusRequest?: { id: string; token: number }; onVisibleDbtIdsChange: (uniqueIds: string[]) => void; onSelectEntity: (id: string) => void; onSelectRelationship: (id: string) => void; onEditRelationship?: (recordKey: string) => void; onDraftRelationship: (draft: RelationshipDraft) => void; onAddRelatedModel: (origin: { from: string; fromColumn?: string }) => void; onAddModel: () => void; onCreateDomain: () => void; onEditEntity: (id: string) => void; onOpenAi: (id: string) => void; onOpenDomain?: (domain: string) => void; onOpenArea?: (areaId: string) => void; theme: Theme }) {
+  // The map's zoom level (model-at-scale design S5): a large model opens on
+  // its Domains, a Domain on its areas, an area on its tables. "Show every
+  // table" draws the tables of the level in view anyway.
+  const [showAllAt, setShowAllAt] = useState<string | null>(null);
+  const levelKey = selectedDomain ?? '';
+  const level = useMemo(() => (showAllAt === levelKey ? { kind: 'tables' as const } : mapLevel(modeling, selectedDomain, selectedAreaId, search)), [modeling, selectedDomain, selectedAreaId, search, showAllAt, levelKey]);
   const layoutKey = `dql-model-layout:${selectedAreaId ?? selectedDomain ?? 'all'}`;
   const sizeKey = `${layoutKey}:sizes`;
   const [savedPositions, setSavedPositions] = useState<Record<string, { x: number; y: number }>>(() => readPositions(layoutKey));
@@ -54,11 +62,30 @@ export function DomainModelingCanvas({ modeling, ghostEntityIds, ghostRelationsh
   const [relPopover, setRelPopover] = useState<{ x: number; y: number; recordKey: string } | null>(null);
   const handleResize = (id: string, width: number) => { const next = { ...savedSizes, [id]: Math.round(width) }; setSavedSizes(next); localStorage.setItem(sizeKey, JSON.stringify(next)); };
   const { nodes: graphNodes, edges } = useMemo(() => buildGraph(modeling, relationByDbtId, detailsByDbtId, selectedDomain, selectedAreaId, selectedId, viewMode, columnMode, search, layoutMode, density, visibleLimit, dimUnrelated, showEdgeLabels, savedPositions, savedSizes, onAddRelatedModel, handleResize, theme, ghostEntityIds, ghostRelationshipIds), [modeling, relationByDbtId, detailsByDbtId, selectedDomain, selectedAreaId, selectedId, viewMode, columnMode, search, layoutMode, density, visibleLimit, dimUnrelated, showEdgeLabels, savedPositions, savedSizes, onAddRelatedModel, theme, ghostEntityIds, ghostRelationshipIds]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(graphNodes);
-  useEffect(() => setNodes(graphNodes), [graphNodes, setNodes]);
-  const visibleDbtIds = graphNodes.map((node) => (node.data as EntityNodeData).entity.dbtUniqueId);
+  // An area's joins into areas it does not draw, folded into one stub per area.
+  const stubs = useMemo<AreaStub[]>(() => (selectedAreaId && level.kind === 'tables' ? areaStubs(modeling, selectedAreaId, new Set(graphNodes.map((node) => node.id))) : []), [modeling, selectedAreaId, level.kind, graphNodes]);
+  const flowNodes = useMemo(() => {
+    if (!stubs.length) return graphNodes as Node[];
+    const right = Math.max(0, ...graphNodes.map((node) => node.position.x)) + 460;
+    return [...graphNodes, ...stubs.map((stub, index): Node => ({ id: stub.id, type: 'stub', position: { x: right, y: index * 110 }, data: { stub, theme }, draggable: true, connectable: false }))];
+  }, [graphNodes, stubs, theme]);
+  const flowEdges = useMemo(() => (stubs.length ? [...edges, ...stubs.flatMap((stub) => stub.from.map((from): Edge => ({ id: `${stub.id}:${from}`, source: from, target: stub.id, type: 'smoothstep', style: { strokeDasharray: '5 5', stroke: 'var(--border-strong)' }, markerEnd: { type: MarkerType.ArrowClosed } })))] : edges), [edges, stubs]);
+  const [nodes, setNodes, onNodesChange] = useNodesState(flowNodes);
+  useEffect(() => setNodes(flowNodes), [flowNodes, setNodes]);
+  const visibleDbtIds = level.kind === 'tables' ? graphNodes.map((node) => (node.data as EntityNodeData).entity.dbtUniqueId) : [];
   const visibleDbtKey = visibleDbtIds.join('|');
   useEffect(() => onVisibleDbtIdsChange(visibleDbtIds), [onVisibleDbtIdsChange, visibleDbtKey]);
+  if (level.kind !== 'tables') {
+    return (
+      <MapOverview
+        level={level}
+        theme={theme}
+        onOpenDomain={(domain) => onOpenDomain?.(domain)}
+        onOpenArea={(areaId) => (areaId ? onOpenArea?.(areaId) : setShowAllAt(levelKey))}
+        onShowAll={() => setShowAllAt(levelKey)}
+      />
+    );
+  }
   if (!graphNodes.length)
     return (
       <div
@@ -90,13 +117,15 @@ export function DomainModelingCanvas({ modeling, ghostEntityIds, ghostRelationsh
   return (
     <div style={{ height: '100%', position: 'relative' }} onClick={() => { setContextMenu(null); setRelPopover(null); }}>
     <style>{MODELING_CANVAS_STYLES}</style>
-    <ReactFlow key={`${layoutMode}:${density}:${visibleLimit}:${resetLayoutToken}:${search}`} nodes={nodes} edges={edges} onNodesChange={onNodesChange} nodeTypes={{ entity: EntityNode }} fitView fitViewOptions={{ padding: 0.16 }} minZoom={0.2} maxZoom={1.8} nodesDraggable nodesConnectable onConnect={handleConnect} onNodeDragStop={(_, node) => { const next = { ...savedPositions, [node.id]: node.position }; setSavedPositions(next); localStorage.setItem(layoutKey, JSON.stringify(next)); }} onNodeClick={(_, node) => onSelectEntity(node.id)} onNodeDoubleClick={(_, node) => onEditEntity(node.id)} onNodeContextMenu={(event, node) => { event.preventDefault(); setContextMenu({ x: event.clientX, y: event.clientY, nodeId: node.id }); }} onEdgeClick={(event, edge) => { event.stopPropagation(); onSelectRelationship(edge.id); setRelPopover({ x: Math.min(event.clientX, window.innerWidth - 340), y: Math.min(event.clientY, window.innerHeight - 320), recordKey: edge.id }); }} colorMode={theme.appBg.toLowerCase().includes('0') ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
+    <ReactFlow key={`${layoutMode}:${density}:${visibleLimit}:${resetLayoutToken}:${search}`} nodes={nodes} edges={flowEdges} onNodesChange={onNodesChange} nodeTypes={{ entity: EntityNode, stub: StubNode }} fitView fitViewOptions={{ padding: 0.16 }} minZoom={0.2} maxZoom={1.8} nodesDraggable nodesConnectable onConnect={handleConnect} onNodeDragStop={(_, node) => { const next = { ...savedPositions, [node.id]: node.position }; setSavedPositions(next); localStorage.setItem(layoutKey, JSON.stringify(next)); }} onNodeClick={(_, node) => { if (node.type === 'stub') { const stub = (node.data as { stub: AreaStub }).stub; if (stub.areaId) onOpenArea?.(stub.areaId); else onOpenDomain?.(stub.domain); return; } onSelectEntity(node.id); }} onNodeDoubleClick={(_, node) => { if (node.type !== 'stub') onEditEntity(node.id); }} onNodeContextMenu={(event, node) => { event.preventDefault(); if (node.type !== 'stub') setContextMenu({ x: event.clientX, y: event.clientY, nodeId: node.id }); }} onEdgeClick={(event, edge) => { event.stopPropagation(); onSelectRelationship(edge.id); setRelPopover({ x: Math.min(event.clientX, window.innerWidth - 340), y: Math.min(event.clientY, window.innerHeight - 320), recordKey: edge.id }); }} colorMode={theme.appBg.toLowerCase().includes('0') ? 'dark' : 'light'} proOptions={{ hideAttribution: true }}>
       {/* Pans/zooms to a model picked from the toolbar search. */}
       <FocusController focusRequest={focusRequest} />
+      {/* Fits the view again when the map opens another Domain or area. */}
+      <FitViewController fitKey={`${selectedDomain ?? ''}|${selectedAreaId ?? ''}|${flowNodes.length}`} />
       {/* Prototype dot grid: 22px spacing on the Paper canvas. */}
       <Background color="var(--border-strong)" gap={22} size={1} />
       <Controls showInteractive={false} />
-      <MiniMap pannable zoomable nodeColor={(node) => domainColor(String((node.data as EntityNodeData).entity.domain))} maskColor={`${theme.appBg}bb`} />
+      <MiniMap pannable zoomable nodeColor={(node) => domainColor(String((node.data as Partial<EntityNodeData>).entity?.domain ?? (node.data as { stub?: AreaStub }).stub?.domain ?? ''))} maskColor={`${theme.appBg}bb`} />
     </ReactFlow>
     {contextMenu && <div style={{ position: 'fixed', left: contextMenu.x, top: contextMenu.y, zIndex: 50, width: 178, border: `1px solid ${theme.headerBorder}`, borderRadius: 7, background: theme.cellBg, boxShadow: '0 12px 32px #0004', padding: 4 }} onClick={(event) => event.stopPropagation()}><MenuAction label="Inspect model" onClick={() => { onSelectEntity(contextMenu.nodeId); setContextMenu(null); }} theme={theme} /><MenuAction label="Edit model" onClick={() => { onEditEntity(contextMenu.nodeId); setContextMenu(null); }} theme={theme} /><MenuAction label="Ask about this model" onClick={() => { onOpenAi(contextMenu.nodeId); setContextMenu(null); }} theme={theme} /><MenuAction label="Start relationship" onClick={() => { onDraftRelationship({ from: contextMenu.nodeId, to: '' }); setContextMenu(null); }} theme={theme} /></div>}
     {relPopover && popoverRelationship && (
@@ -180,6 +209,18 @@ function RelationshipPopover({ relationship, entities, x, y, theme, onClose, onE
 // Prototype (Domain Studio Redesign) entity card: kind-square header with a
 // mono name + uppercase kind, business view = description + owner/grain pills,
 // data view = ER column rows with PK/FK glyphs. Handles/resize/plus preserved.
+/** A stub for an area's joins into another area: "Finance › Revenue · 4 joins", which opens that area. */
+function StubNode({ data }: NodeProps<Node<{ stub: AreaStub; theme: Theme }>>) {
+  const { stub, theme } = data;
+  return (
+    <div title={`Open ${stub.label.split(' · ')[0]}`} style={{ minWidth: 190, maxWidth: 260, border: '1.5px dashed var(--border-strong)', borderRadius: 10, background: theme.cellBg, padding: '10px 12px', cursor: 'pointer' }}>
+      <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
+      <b style={{ display: 'block', fontSize: 12, color: theme.textPrimary }}>→ {stub.label}</b>
+      <small style={{ color: theme.textMuted, fontSize: 10.5 }}>In another area. Click to open it.</small>
+    </div>
+  );
+}
+
 function EntityNode({ data }: NodeProps<Node<EntityNodeData>>) {
   const { recordKey, entity, detail, relation, selected, viewMode, columnMode, density, theme, onAddRelatedModel, onResize } = data;
   const [collapsed, setCollapsed] = useState(density === 'compact');
@@ -407,7 +448,13 @@ function buildGraph(modeling: ManifestDbtFirstModeling, relationByDbtId: Record<
     marginx: 35,
     marginy: 35,
   });
-  nodes.forEach((node) =>
+  // Tables with no join on the map would all land in one rank, a single tall
+  // column (an area of 47 tables and a few joins): the joined ones are laid
+  // out as a graph, and the rest go in a grid beside them.
+  const joined = new Set(edges.flatMap((edge) => [edge.source, edge.target]));
+  const isolated = layoutMode === 'auto' ? nodes.filter((node) => !joined.has(node.id)) : [];
+  const isolatedIds = new Set(isolated.map((node) => node.id));
+  nodes.filter((node) => !isolatedIds.has(node.id)).forEach((node) =>
     graph.setNode(node.id, {
       width: Number(node.style?.width ?? baseNodeWidth(density)),
       height: Number(node.style?.height ?? 100),
@@ -415,9 +462,15 @@ function buildGraph(modeling: ManifestDbtFirstModeling, relationByDbtId: Record<
   );
   edges.forEach((edge) => graph.setEdge(edge.source, edge.target));
   if (layoutMode === 'auto') Dagre.layout(graph);
+  const graphRight = Math.max(0, ...nodes.filter((node) => !isolatedIds.has(node.id)).map((node) => {
+    const p = graph.node(node.id) as { x: number } | undefined;
+    return p ? p.x + Number(node.style?.width ?? baseNodeWidth(density)) / 2 : 0;
+  }));
+  const isolatedColumns = Math.max(1, Math.ceil(Math.sqrt(isolated.length)));
   nodes.forEach((node) => {
     const saved = savedPositions[node.id];
     if (saved) { node.position = saved; return; }
+    if (isolatedIds.has(node.id)) { const index = isolated.indexOf(node); node.position = { x: graphRight + 140 + (index % isolatedColumns) * 340, y: Math.floor(index / isolatedColumns) * 240 }; return; }
     if (layoutMode === 'grid') { const index = nodes.indexOf(node); const cols = Math.max(1, Math.ceil(Math.sqrt(nodes.length))); node.position = { x: (index % cols) * 360, y: Math.floor(index / cols) * 260 }; return; }
     if (layoutMode === 'star') { const index = nodes.indexOf(node); if (index === 0) { node.position = { x: 0, y: 0 }; return; } const angle = ((index - 1) / Math.max(1, nodes.length - 1)) * Math.PI * 2; node.position = { x: Math.cos(angle) * 460, y: Math.sin(angle) * 330 }; return; }
     const p = graph.node(node.id) as { x: number; y: number } | undefined;
@@ -437,6 +490,20 @@ function buildGraph(modeling: ManifestDbtFirstModeling, relationByDbtId: Record<
 
 function cardinalitySymbol(value: string): string { return value === 'one_to_one' ? '1:1' : value === 'one_to_many' ? '1:N' : value === 'many_to_one' ? 'N:1' : value === 'many_to_many' ? 'N:N' : '?'; }
 // Centers the viewport on the model chosen from the toolbar search dropdown.
+/**
+ * The view fits once when the canvas first appears; a new Domain or area
+ * brings other tables, so it fits again once they are placed (otherwise the
+ * view stays on where the last level's tables were).
+ */
+function FitViewController({ fitKey }: { fitKey: string }) {
+  const flow = useReactFlow();
+  useEffect(() => {
+    const timer = window.setTimeout(() => void flow.fitView({ padding: 0.16, duration: 250 }), 80);
+    return () => window.clearTimeout(timer);
+  }, [fitKey, flow]);
+  return null;
+}
+
 function FocusController({ focusRequest }: { focusRequest?: { id: string; token: number } }) {
   const flow = useReactFlow();
   const lastToken = useRef(-1);
