@@ -83,6 +83,7 @@ import {
   sqlStringValues,
 } from '@zlens/agent';
 import { parseTablePicks, tableIndexLines, tableIndexMessages, TABLE_INDEX_PICKS } from './table-index.js';
+import { modelAnswerGroups, routeQuestionToAreas, type ModelRoute } from './model-routing.js';
 import { buildProjectVocabulary, buildVocabularySource, draftedMeaningRelations, embeddedManifestRelations, namedBlockNotServed, normalizeRelationName, warehouseFirstCatalog, type VocabularySourceInput } from './vocabulary-source.js';
 import { groupingKeyLabels, keyLabelLine, keyLabels, unnamedGroupingKeys, unnamedKeyFailure, type EntityKey, type KeyLabel, type KeyReference } from './key-labels.js';
 import { businessIdentifierLine, businessIdentifiers, modelingEntityTexts, certifiedJoinViolations, classifySqlJoins, ledgerJoins, markerTableLine, markerTables, modeledJoinPaths, modelingRelationshipEdges, modelingRelationshipTables, sameRelation, sharedParentShortcuts, type LedgerJoin } from './join-relationships.js';
@@ -2318,23 +2319,72 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // drafted pick says to use another instead of, the chosen ones first.
       // Choosing a few by word overlap left the right table out of 17 of 40
       // fresh NBA questions on a dbt project whose drafted model named it.
-      // Only a model small enough to read whole; a larger one chooses as before.
+      // Only a model small enough to read whole. A larger one, at enterprise
+      // scale, is shown one subject area at a time (model-at-scale design S6):
+      // the areas the question belongs to, and the Shared tables they join,
+      // within the same budget; when no area matches, search chooses as before.
       let wholeModel = 0;
+      let routed: ModelRoute | undefined;
       if (!wholeSchema) {
         const builtManifest = deps.getManifest().manifest;
+        // A dbt-bound table by the relation dbt builds; a warehouse-bound one
+        // (hybrid or warehouse-first) by its own relation.
+        // A warehouse-bound table not in the vocabulary (a hybrid project's
+        // warehouse tables) is shown by its own relation, as the catalog
+        // search names it.
+        const relationEntries = current.entries.filter((entry) => entry.kind === 'relation');
+        const lastTwo = (value: string | undefined) => (value ? parsePhysicalIdentifier(value).map((part) => part.value.toLowerCase()).slice(-2).join('.') : '');
+        const entryFor = (name: string | undefined) => {
+          const model = normalizeRelationName(name);
+          if (!model) return undefined;
+          // By the vocabulary's own name, else by schema and table (a warehouse
+          // relation spelled with its database).
+          return relationEntries.find((entry) => entry.model === model) ?? relationEntries.find((entry) => lastTwo(entryPhysicalRelation(entry) ?? entry.model) === lastTwo(model));
+        };
+        const relationOfEntity = (entity: { dbtUniqueId: string; relation?: string }): string | undefined => {
+          const item = entryFor(builtManifest?.dbtProvenance?.nodes[entity.dbtUniqueId]?.relation ?? entity.relation);
+          if (item) return entryPhysicalRelation(item);
+          return entity.relation && !entity.dbtUniqueId.startsWith('model.') ? entity.relation : undefined;
+        };
         const modeledEntities = Object.values(builtManifest?.modeling?.entities ?? {});
-        const answerTables = [...new Set(modeledEntities
+        const answerRelations = [...new Set(modeledEntities
           .filter((entity) => entity.status !== 'deprecated' && !entity.useInstead)
-          .map((entity) => normalizeRelationName(builtManifest?.dbtProvenance?.nodes[entity.dbtUniqueId]?.relation))
+          .map(relationOfEntity)
           .filter((relation): relation is string => Boolean(relation)))];
-        const answerRelations = answerTables
-          .map((model) => current.entries.find((item) => item.kind === 'relation' && item.model === model))
-          .map((item) => (item ? entryPhysicalRelation(item) : undefined))
-          .filter((relation): relation is string => Boolean(relation));
+        const unseenOf = (list: string[]) => list.filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
         if (answerRelations.length > 0 && answerRelations.length <= WHOLE_MODEL_TABLES) {
-          const unseen = answerRelations.filter((relation) => !relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
-          relations.push(...unseen);
+          relations.push(...unseenOf(answerRelations));
           wholeModel = answerRelations.length;
+        } else if (answerRelations.length > WHOLE_MODEL_TABLES && process.env.ZLENS_ASK_AREA_ROUTING !== 'off') {
+          // A join names its tables by record key, qualified id, or a local id unique in the model.
+          const byReference = new Map<string, (typeof modeledEntities)[number]>();
+          const localIds = new Map<string, number>();
+          for (const [key, entity] of Object.entries(builtManifest?.modeling?.entities ?? {})) {
+            byReference.set(key, entity);
+            if (entity.qualifiedId) byReference.set(entity.qualifiedId, entity);
+            localIds.set(entity.localId ?? entity.id, (localIds.get(entity.localId ?? entity.id) ?? 0) + 1);
+          }
+          for (const entity of modeledEntities) if (localIds.get(entity.localId ?? entity.id) === 1) byReference.set(entity.localId ?? entity.id, entity);
+          const joins = Object.values(builtManifest?.modeling?.relationships ?? {}).flatMap((relationship): Array<[string, string]> => {
+            const from = byReference.get(relationship.from);
+            const to = byReference.get(relationship.to);
+            const a = from ? relationOfEntity(from) : undefined;
+            const b = to ? relationOfEntity(to) : undefined;
+            return a && b ? [[a, b]] : [];
+          });
+          const route = routeQuestionToAreas({
+            groups: modelAnswerGroups(builtManifest, relationOfEntity, (relation) => entryFor(relation)?.columns ?? []),
+            question: `${question} ${open}`,
+            anchors: [...relations],
+            joins,
+            budget: WHOLE_MODEL_TABLES,
+            // Search names a table with its database, the model by schema and table.
+            same: (a, b) => lastTwo(a) === lastTwo(b),
+          });
+          if (route.relations.length > 0) {
+            relations.push(...unseenOf(route.relations));
+            routed = route;
+          }
         }
       }
       if (relations.length === 0) {
@@ -2408,7 +2458,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // Only tables whose columns are known can be drafted over.
       relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      hostStep({ phase: 'schema', title: wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}` });
+      const routedTables = routed ? routed.relations.length - routed.shared.length : 0;
+      hostStep({ phase: 'schema', title: routed ? `Showed the ${routed.groups.map((group) => group.name).join(' and ')} area${routed.groups.length === 1 ? '' : 's'}: the ${routedTables} table${routedTables === 1 ? '' : 's'} ${routed.groups.length === 1 ? 'it answers' : 'they answer'} from${routed.shared.length ? `, and ${routed.shared.length} Shared table${routed.shared.length === 1 ? '' : 's'} ${routedTables === 1 ? 'it joins' : 'they join'}` : ''}${relations.length > routed.relations.length ? `, and ${relations.length - routed.relations.length} more the question needs` : ''}` : wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
