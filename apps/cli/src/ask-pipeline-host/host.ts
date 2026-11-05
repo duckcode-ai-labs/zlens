@@ -1391,6 +1391,8 @@ interface AskRunState {
   hostJoins?: LedgerJoin[];
   /** The tables the model chose from the table index, once per question. */
   tableIndexPicks?: string[];
+  /** The tables the model chose from a routed area's index, once per question; `failed` when the call gave none. */
+  areaPicks?: { picks: string[]; offered: number; failed?: string };
   checkRound: number;
   steps: AskStoryStepV1[];
   onStep(step: AskStoryStepV1): void;
@@ -2348,6 +2350,8 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       // within the same budget; when no area matches, search chooses as before.
       let wholeModel = 0;
       let routed: ModelRoute | undefined;
+      // Tables outside the model the reading named, shown in brief beside a routed area (R3).
+      const outsideBrief = new Set<string>();
       if (!wholeSchema) {
         const builtManifest = deps.getManifest().manifest;
         // A dbt-bound table by the relation dbt builds; a warehouse-bound one
@@ -2394,17 +2398,61 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             const b = to ? relationOfEntity(to) : undefined;
             return a && b ? [[a, b]] : [];
           });
-          const route = routeQuestionToAreas({
-            groups: modelAnswerGroups(builtManifest, relationOfEntity, (relation) => entryFor(relation)?.columns ?? []),
+          const routeInput = {
+            groups: modelAnswerGroups(builtManifest, relationOfEntity, (relation) => entryFor(relation)?.columns ?? [], (relation) => entryFor(relation)?.description),
             question: `${question} ${open}`,
             anchors: [...relations],
             joins,
             budget: WHOLE_MODEL_TABLES,
             // Search names a table with its database, the model by schema and table.
-            same: (a, b) => sameTable(a, b, 'tail'),
-          });
+            same: (a: string, b: string) => sameTable(a, b, 'tail'),
+          };
+          let route = routeQuestionToAreas(routeInput);
+          // AN AREA TOO LARGE TO SHOW WHOLE (ask-area-ranking design, R2): the
+          // model chooses from one line per table of the chosen areas, as it
+          // does for a warehouse schema too large to show, and the question's
+          // words order the rest. Words alone missed the right table when the
+          // question's words were not the tables' (10 of 29 GitLab questions
+          // reworded; the pick found 28). A failed call leaves the words to it.
+          if (route.pool.length > WHOLE_MODEL_TABLES) {
+            if (!state.areaPicks) {
+              const lines = tableIndexLines(route.pool.map((relation) => ({ name: relation, ...(entryFor(relation)?.description ? { description: entryFor(relation)!.description! } : {}), columns: [...(entryFor(relation)?.columns ?? [])] })), route.relations);
+              const offered = lines.map((line) => line.slice(2, line.indexOf(': ')));
+              const trace = deps.dispatchOptions?.('draft', request);
+              const started = Date.now();
+              const dispatch: AskRunState['draftDispatches'][number] = { purpose: 'intent:tables', ms: 0, attempt: state.draftDispatches.length + 1 };
+              const messages = tableIndexMessages(`${question} ${open} ${contextText}`.trim(), lines);
+              try {
+                const reply = await provider.generate(messages, { temperature: 0, ...(trace?.options ?? {}), ...(request.signal ? { signal: request.signal } : {}) });
+                trace?.settle('ok');
+                const picks = parseTablePicks(reply, offered);
+                state.areaPicks = picks.length ? { picks, offered: offered.length } : { picks: [], offered: offered.length, failed: 'its reply named no table of the index' };
+                Object.assign(dispatch, { reply: reply.slice(0, 1500), outcome: picks.length ? 'sql' : 'declined' });
+              } catch (error) {
+                trace?.settle(request.signal?.aborted ? 'cancelled' : 'error', error);
+                if (request.signal?.aborted) throw error;
+                state.areaPicks = { picks: [], offered: offered.length, failed: 'the call failed' };
+                Object.assign(dispatch, { reply: (error instanceof Error ? error.message : String(error)).slice(0, 300), outcome: 'error' });
+              } finally {
+                Object.assign(dispatch, { ms: Date.now() - started, at: Date.now(), promptChars: messages.reduce((sum, message) => sum + message.content.length, 0) });
+                state.draftDispatches.push(dispatch);
+              }
+            }
+            if (state.areaPicks.picks.length) route = routeQuestionToAreas({ ...routeInput, picks: state.areaPicks.picks });
+          }
           if (route.relations.length > 0) {
-            relations.push(...unseenOf(route.relations));
+            // THE CARDS' ORDER (R3): the AI's picks first, then what search
+            // and the reading chose that the model holds, then the area by
+            // the question's words. A table outside the model the reading
+            // named (a raw source sharing a word, as `RAW.cornerstone.users`
+            // did on GitLab) goes last and in brief, unless the catalog search
+            // also found it: it took the room the area's tables needed.
+            const inModel = (relation: string) => answerRelations.some((known) => sameTable(known, relation, 'tail'));
+            const picked = (relation: string) => (state.areaPicks?.picks ?? []).some((pick) => sameTable(pick, relation, 'tail'));
+            const outside = relations.filter((relation) => !inModel(relation) && !catalogPicked.includes(relation));
+            const ordered = [...route.relations.filter(picked), ...relations.filter((relation) => !outside.includes(relation)), ...route.relations.filter((relation) => !picked(relation)), ...outside];
+            relations = ordered.filter((relation, index) => ordered.findIndex((other) => physicalRelationIdentity(other) === physicalRelationIdentity(relation)) === index);
+            for (const relation of outside) outsideBrief.add(physicalRelationIdentity(relation));
             routed = route;
           }
         }
@@ -2511,7 +2559,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
             ...declaredKeyLines(relation),
           ];
           const overflow = chars + fullCard.join('\n').length + 1 > DRAFT_TABLES_CHARS;
-          const inBrief = briefRelations.has(physicalRelationIdentity(relation)) || (overflow && (!wholeSchema || briefRelations.size > 0));
+          const inBrief = briefRelations.has(physicalRelationIdentity(relation)) || outsideBrief.has(physicalRelationIdentity(relation)) || (overflow && (!wholeSchema || briefRelations.size > 0));
           const lines = inBrief ? [briefCard(relation), ...declaredKeyLines(relation)] : fullCard;
           let shown = 0;
           for (const line of lines) { if (chars + line.length > cap) break; cards.push(line); chars += line.length + 1; shown += 1; }
@@ -2530,7 +2578,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       const routedShared = routed ? reachedWriter(routed.shared).length : 0;
       const plan = tableCards(relations);
       const room = plan.brief.length ? ` (${plan.full.length} in full, ${plan.brief.length} in brief)` : '';
-      hostStep({ phase: 'schema', title: routed ? `Showed the ${routed.groups.map((group) => group.name).join(' and ')} area${routed.groups.length === 1 ? '' : 's'}: ${routedTables === routedChosen ? `the ${routedTables} table${routedTables === 1 ? '' : 's'}` : `${routedTables} of the ${routedChosen} tables`} ${routed.groups.length === 1 ? 'it answers' : 'they answer'} from${routedShared ? `, and ${routedShared} Shared table${routedShared === 1 ? '' : 's'} ${routedTables === 1 ? 'it joins' : 'they join'}` : ''}${relations.length > routedTables + routedShared ? `, and ${relations.length - routedTables - routedShared} more the question needs` : ''}${room}` : wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', relations: relations.filter((relation) => !plan.cut.includes(relation)), detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}${unread.length ? `; left out, no columns could be read in time: ${unread.join(', ')}` : ''}${plan.cut.length ? `; left out, no room in the prompt: ${plan.cut.join(', ')}` : ''}` });
+      hostStep({ phase: 'schema', title: routed ? `Showed the ${routed.groups.map((group) => group.name).join(' and ')} area${routed.groups.length === 1 ? '' : 's'}: ${routedTables === routedChosen ? `the ${routedTables} table${routedTables === 1 ? '' : 's'}` : `${routedTables} of the ${routedChosen} tables`} ${routed.groups.length === 1 ? 'it answers' : 'they answer'} from${routedShared ? `, and ${routedShared} Shared table${routedShared === 1 ? '' : 's'} ${routedTables === 1 ? 'it joins' : 'they join'}` : ''}${relations.length > routedTables + routedShared ? `, and ${relations.length - routedTables - routedShared} more the question needs` : ''}${room}` : wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', relations: relations.filter((relation) => !plan.cut.includes(relation)), detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}${routed && state.areaPicks ? (state.areaPicks.picks.length ? `; the AI chose ${state.areaPicks.picks.join(', ')} from the area's index of ${state.areaPicks.offered} tables, and the question's words ordered the rest` : `; ordered by the question's words: the AI pick from the area's index of ${state.areaPicks.offered} tables gave none (${state.areaPicks.failed})`) : ''}${outsideBrief.size ? `; in brief, outside the model: ${relations.filter((relation) => outsideBrief.has(physicalRelationIdentity(relation))).join(', ')}` : ''}${unread.length ? `; left out, no columns could be read in time: ${unread.join(', ')}` : ''}${plan.cut.length ? `; left out, no room in the prompt: ${plan.cut.join(', ')}` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).

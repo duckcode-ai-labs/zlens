@@ -1809,12 +1809,13 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
   };
   const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Games per basketball season.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
 
-  it('reads every chosen table eight to a statement, shows the overflow in brief, and counts what reached the SQL writer', async () => {
+  const ask = async (indexReply: () => Promise<string>) => {
     const prompts: string[] = [];
     const statements: string[] = [];
     const provider: AgentProvider = {
       name: 'ollama', available: async () => true,
       generate: async (messages) => {
+        if (messages[0]!.content.startsWith('You choose which database tables')) return indexReply();
         if (!messages[0]!.content.startsWith('You write exactly ONE read-only SQL statement')) return reading;
         prompts.push(messages.map((message) => message.content).join('\n'));
         return 'NO_SQL: nothing to draft in this test.';
@@ -1843,6 +1844,11 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
       request: { question: 'How many games per basketball season?', requestedMode: 'ask' } as AgentRunRequest,
       route: 'generated_answer', maxRepairAttempts: 0, attempt: 0, emit: () => {},
     });
+    return { prompts, statements, text: JSON.stringify(result) };
+  };
+
+  it('reads every chosen table eight to a statement, shows the overflow in brief, and counts what reached the SQL writer', async () => {
+    const { prompts, statements, text } = await ask(async () => 'not an answer');
     const first = prompts[0]!;
     const shown = Array.from({ length: 30 }, (_, index) => `stats_${String(index).padStart(2, '0')}`).filter((name) => name !== unreadable);
     // All 29 readable tables of the 30 chosen reach the SQL writer, not five.
@@ -1853,10 +1859,24 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
     expect(first).toContain('[in brief]: game_id VARCHAR, m_0 VARCHAR, m_1 VARCHAR');
     // Read in batches of eight; none past the first batch is taken as absent.
     expect(statements.length).toBeGreaterThanOrEqual(4);
-    const text = JSON.stringify(result);
     expect(text).toContain('Showed the Basketball area: 29 of the 30 tables it answers from (');
     expect(text).toMatch(/\(\d+ in full, \d+ in brief\)/);
     expect(text).toContain(`left out, no columns could be read in time: ins.${unreadable}`);
+  });
+
+  it('lets the AI choose from the area\'s index, so a table past the first 30 A to Z leads the cards (R2)', async () => {
+    const { prompts, text } = await ask(async () => '{"tables":["ins.stats_35"]}');
+    const first = prompts[0]!;
+    expect(first).toContain('executable relation:ins.stats_35 [');
+    expect(first).not.toContain('executable relation:ins.stats_35 [in brief]');
+    expect(first.indexOf('executable relation:ins.stats_35')).toBeLessThan(first.indexOf('executable relation:ins.stats_00'));
+    expect(text).toContain("the AI chose ins.stats_35 from the area's index of 40 tables");
+  });
+
+  it('a failed pick leaves the order to the question\'s words, and says so', async () => {
+    const { prompts, text } = await ask(async () => { throw new Error('provider down'); });
+    expect(prompts[0]).toContain('executable relation:ins.stats_00');
+    expect(text).toContain("ordered by the question's words: the AI pick from the area's index of 40 tables gave none (the call failed)");
   });
 });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DQLManifest } from '@zlens/core';
-import { modelAnswerGroups, routeQuestionToAreas, routingWords } from './model-routing.js';
+import { modelAnswerGroups, rankByWords, routeQuestionToAreas, routingWords } from './model-routing.js';
 
 // Sales and Marketing areas, a Shared area, Finance tables in no area, and a
 // `core` default area: each a group Ask can be routed to (design S6).
@@ -82,8 +82,48 @@ describe('Ask picks the question’s areas (model-at-scale design S6)', () => {
   });
 
   it('routes nowhere when nothing matches, or there is one area to choose, so search chooses as before', () => {
-    expect(routeQuestionToAreas({ groups, question: 'Weather in Lisbon', anchors: [], joins, budget: 30 })).toEqual({ groups: [], relations: [], shared: [] });
+    expect(routeQuestionToAreas({ groups, question: 'Weather in Lisbon', anchors: [], joins, budget: 30 })).toEqual({ groups: [], relations: [], shared: [], pool: [] });
     const finance = groups.filter((group) => group.key === 'domain:finance' || group.shared);
     expect(routeQuestionToAreas({ groups: finance, question: 'invoice payments', anchors: ['ins.fct_invoice'], joins, budget: 30 }).relations).toEqual([]);
+  });
+});
+
+describe('inside an area too large to show whole (ask-area-ranking design, R2)', () => {
+  // A 40-table Billing area, A to Z, and a small Sales area: the table that
+  // answers the question is the 40th in file order and no search found it.
+  const billing = Array.from({ length: 39 }, (_, index) => `fct_billing_${String(index).padStart(2, '0')}`);
+  const large = {
+    modeling: {
+      packages: {},
+      areas: { ...area('finance', 'billing', 'Billing'), ...area('sales_and_marketing', 'sales', 'Sales') },
+      entities: {
+        ...Object.assign({}, ...billing.map((table) => entity('finance', table, table, 'billing'))),
+        ...entity('finance', 'zz_invoice_late_fees', 'zz_invoice_late_fees', 'billing'),
+        ...entity('sales_and_marketing', 'opportunity', 'fct_opportunity', 'sales'),
+      },
+      relationships: {},
+    },
+  } as unknown as DQLManifest;
+  const columns = (relation: string) => (relation.endsWith('zz_invoice_late_fees') ? ['invoice_id', 'late_fee_amount', 'billing_month'] : ['invoice_id', 'billing_month', 'amount']);
+  const describe_ = (relation: string) => (relation.endsWith('zz_invoice_late_fees') ? 'Late fees charged on overdue invoices' : 'Billing lines');
+  const largeGroups = modelAnswerGroups(large, relationOf, columns, describe_);
+
+  it('cuts by the question\'s words, not file order', () => {
+    const route = routeQuestionToAreas({ groups: largeGroups, question: 'How much did we charge in late fees on billing invoices last month?', anchors: [], joins: [], budget: 10 });
+    expect(route.groups.map((group) => group.name)).toEqual(['Billing']);
+    expect(route.pool).toHaveLength(40);
+    expect(route.relations[0]).toBe('ins.zz_invoice_late_fees');
+    expect(route.relations).toHaveLength(10);
+  });
+
+  it('puts the AI\'s picks first, then search\'s, then the words\' order', () => {
+    const route = routeQuestionToAreas({ groups: largeGroups, question: 'billing late fees', anchors: ['ins.fct_billing_07'], joins: [], budget: 5, picks: ['ins.fct_billing_20', 'ins.not_in_the_area'] });
+    expect(route.relations.slice(0, 3)).toEqual(['ins.fct_billing_20', 'ins.fct_billing_07', 'ins.zz_invoice_late_fees']);
+  });
+
+  it('weighs a word by how few tables have it, and keeps the list\'s order on a tie', () => {
+    const texts: Record<string, string> = { a: 'invoice amount', b: 'invoice amount', c: 'invoice dunning amount', d: 'refund' };
+    expect(rankByWords('dunning invoices', ['a', 'b', 'c', 'd'], (relation) => texts[relation]!)).toEqual(['c', 'a', 'b', 'd']);
+    expect(rankByWords('weather', ['a', 'b'], (relation) => texts[relation]!)).toEqual(['a', 'b']);
   });
 });
