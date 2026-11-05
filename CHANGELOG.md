@@ -8,6 +8,14 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed: a model table spelled without its database reaches the SQL writer
+
+- **In a hybrid project, the warehouse's entry for a model table can name it `schema.table`, while the warehouse describes it as `database.schema.table`.** Its columns never matched, so Ask dropped the table. In a 95-table project holding the NBA dbt project, none of the NBA area's routed tables reached the SQL writer; the answers came from the tables search found.
+- **Now:**
+  - A table already shown under its full name counts as shown.
+  - Otherwise, the one full name the warehouse described stands in for the short one.
+  - When two databases describe it, it is left as it was.
+
 ### Ask ranks the tables inside a large subject area
 
 When Ask routes a question to an area of more than 30 tables, it no longer cuts the area in model-file order (roughly A to Z).

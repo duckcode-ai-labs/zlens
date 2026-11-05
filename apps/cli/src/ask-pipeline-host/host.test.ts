@@ -1809,7 +1809,7 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
   };
   const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Games per basketball season.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
 
-  const ask = async (indexReply: () => Promise<string>) => {
+  const ask = async (indexReply: () => Promise<string>, catalog?: string) => {
     const prompts: string[] = [];
     const statements: string[] = [];
     const provider: AgentProvider = {
@@ -1827,14 +1827,14 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
         if (sql.includes('information_schema.columns')) {
           statements.push(sql);
           const rows = Object.entries(tables).filter(([name]) => name !== unreadable && sql.includes(`'${name}'`))
-            .flatMap(([name, columns]) => columns.map((column, index) => ({ table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR', ordinal_position: index + 1, dql_column_total: columns.length })));
+            .flatMap(([name, columns]) => columns.map((column, index) => ({ ...(catalog ? { table_catalog: catalog } : {}), table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR', ordinal_position: index + 1, dql_column_total: columns.length })));
           return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
         }
         return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
       }) } as unknown as QueryExecutor,
       resolveConnection: async () => connection,
       getSemanticLayer: () => undefined,
-      getManifest: () => ({ snapshotId: 'snapshot:area-every-table', manifest: manifest as never }),
+      getManifest: () => ({ snapshotId: `snapshot:area-every-table${catalog ? `:${catalog}` : ''}`, manifest: manifest as never }),
       selectProvider: async () => provider,
       compileSemantic: async () => { throw new Error('no semantic layer'); },
       priorIntent: () => undefined,
@@ -1871,6 +1871,17 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
     expect(first).not.toContain('executable relation:ins.stats_35 [in brief]');
     expect(first.indexOf('executable relation:ins.stats_35')).toBeLessThan(first.indexOf('executable relation:ins.stats_00'));
     expect(text).toContain("the AI chose ins.stats_35 from the area's index of 40 tables");
+  });
+
+  it('a table the model spells without its database is drafted under the database the warehouse describes it in', async () => {
+    // The warehouse answers `ins.stats_01` as `warehouse.ins.stats_01`: before,
+    // no column matched the model's spelling and every routed table was dropped.
+    const { prompts, text } = await ask(async () => 'not an answer', 'warehouse');
+    const first = prompts[0]!;
+    expect(first).toContain('executable relation:warehouse.ins.stats_01');
+    expect(first).toMatch(/executable relation:warehouse\.ins\.stats_01 \[in brief\]: game_id VARCHAR, m_0 VARCHAR|executable relation:warehouse\.ins\.stats_01 \[[^\]]*columns/);
+    expect(text).toContain('Showed the Basketball area: 29 of the 30 tables it answers from');
+    expect(text).not.toContain('left out, no columns could be read in time: ins.stats_01');
   });
 
   it('a failed pick leaves the order to the question\'s words, and says so', async () => {

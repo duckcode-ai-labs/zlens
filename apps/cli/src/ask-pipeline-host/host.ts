@@ -2567,12 +2567,28 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         }
         return { cards, full, brief, cut };
       };
+      // A TABLE SPELLED WITHOUT ITS DATABASE. A hybrid project's warehouse
+      // entry can name a model table `schema.table` while the warehouse
+      // describes it as `database.schema.table`, so its columns never matched
+      // and the table was dropped: in the 95-table NBA crowd, none of the
+      // NBA area's routed tables reached the SQL writer. A table already shown
+      // under a fuller spelling is that one; else the one fuller spelling the
+      // warehouse described stands in for it. Two databases describing it
+      // leave it as it was (ask-area-ranking design, R1).
+      const describedSpellings = [...new Set(current.entries.filter((item) => item.kind === 'column').map((item) => entryPhysicalRelation(item)).filter((relation): relation is string => Boolean(relation)))];
+      relations = relations.flatMap((relation) => {
+        if (describedColumns(relation).length > 0) return [relation];
+        if (relations.some((other) => other !== relation && sameTable(other, relation, 'shared') && describedColumns(other).length > 0)) return [];
+        const fuller = describedSpellings.filter((known) => sameTable(known, relation, 'shared'));
+        return fuller.length === 1 ? [fuller[0]!] : [relation];
+      });
+      relations = relations.filter((relation, index) => relations.findIndex((other) => physicalRelationIdentity(other) === physicalRelationIdentity(relation)) === index);
       // Only tables whose columns are known can be drafted over; the step
       // names the ones left out, so nothing is dropped without a word.
       const unread = relations.filter((relation) => describedColumns(relation).length === 0);
       relations = relations.filter((relation) => describedColumns(relation).length > 0);
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      const reachedWriter = (list: string[]) => list.filter((relation) => relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
+      const reachedWriter = (list: string[]) => list.filter((relation) => relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation) || sameTable(known, relation, 'shared')));
       const routedChosen = routed ? routed.relations.length - routed.shared.length : 0;
       const routedTables = routed ? reachedWriter(routed.relations.filter((relation) => !routed!.shared.includes(relation))).length : 0;
       const routedShared = routed ? reachedWriter(routed.shared).length : 0;
