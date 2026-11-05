@@ -59,11 +59,15 @@ export interface PhysicalRelationBindingInput {
   truncated?: boolean;
 }
 
-/** Split a dotted identifier without treating dots inside quoted identifiers as separators. */
+/**
+ * Split a dotted identifier without treating dots inside quoted identifiers as
+ * separators. A part may be quoted with `"…"`, `` `…` `` or `[…]` (SQL Server);
+ * a doubled closing quote is that character inside the part.
+ */
 export function parsePhysicalIdentifier(value: string): PhysicalIdentifierPartV1[] {
   const parts: PhysicalIdentifierPartV1[] = [];
   let current = '';
-  let quote: '"' | '`' | undefined;
+  let quote: '"' | '`' | ']' | undefined;
   let quoted = false;
   const flush = () => {
     const text = current.trim();
@@ -82,6 +86,7 @@ export function parsePhysicalIdentifier(value: string): PhysicalIdentifierPartV1
       continue;
     }
     if (char === '"' || char === '`') { quote = char; quoted = true; continue; }
+    if (char === '[') { quote = ']'; quoted = true; continue; }
     if (char === '.') { flush(); continue; }
     current += char;
   }

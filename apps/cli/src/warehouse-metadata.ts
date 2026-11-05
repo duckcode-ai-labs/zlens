@@ -7,6 +7,7 @@ import {
   type RuntimeSchemaScope,
   type RuntimeSchemaSnapshot,
   type RuntimeSchemaTable,
+  parsePhysicalIdentifier,
 } from '@zlens/agent';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
 import { observeWarehouseTargetIdentity } from './semantic-execution/connection-identity.js';
@@ -116,8 +117,9 @@ export function normalizeConnectionMetadataScope(
   const dbtRelations = uniqueStrings(
     mode === 'selected_scopes' ? [] : currentDbtRelations,
   )
-    .map(normalizeRelation)
-    .filter((value): value is string => Boolean(value));
+    // Each part unquoted, its case kept; a dot inside a quoted part stays (simplification plan Z1).
+    .map((value) => parsePhysicalIdentifier(value).map((part) => part.value).join('.'))
+    .filter(Boolean);
   // Past MAX_RELATIONS the list of tables by name makes one query too long:
   // read the whole schemas those tables are in instead, so none is left out.
   const relations = dbtRelations.length > MAX_RELATIONS ? [] : dbtRelations;
@@ -849,10 +851,6 @@ function defaultSchemaForDriver(driver: string): string | undefined {
   return driver === 'duckdb' || driver === 'file' || driver === 'sqlite' ? 'main' : undefined;
 }
 
-function normalizeRelation(value: string): string | undefined {
-  const parts = value.split('.').map(cleanIdentifier).filter((part): part is string => Boolean(part));
-  return parts.length > 0 ? parts.join('.') : undefined;
-}
 
 function cleanIdentifier(value: string | undefined): string | undefined {
   const clean = value?.trim().replace(/^["`\[]|["`\]]$/g, '');

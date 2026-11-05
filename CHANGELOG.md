@@ -32,7 +32,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
   Before, about 30 helpers each answered it their own way. That is how a table listed in two databases lost the model's meaning (zlens#262).
 - **The same model reaches Ask however dbt spells a table:** a dev database, quoted upper case, or the warehouse the project connects to. Ask gets the same Domain rules, grain, notes and deprecations in each case.
-- **CI fails on a new table-name helper** (`scripts/check-table-names.mjs`). 106 older uses outside the Ask path are listed in a baseline that only shrinks; later parts of the plan move them.
+- **CI fails on a new table-name helper** (`scripts/check-table-names.mjs`). The older uses outside the Ask path are listed in a baseline that only shrinks; later parts of the plan move them.
+- **Part 2: the local runtime moves onto the module,** and SQL Server `[brackets]` now read as quotes.
+  - Moved: saving a join, matching live columns to a table, the join-safety keys, table datasets, and the dbt tables a warehouse sync reads.
+  - A name is quoted for a warehouse from its parts. It used to keep their quotes, so a quoted part could be quoted twice.
+  - 90 older uses are left.
 
 ### Hybrid projects: dbt models and warehouse tables in one model, never drafted twice
 
