@@ -18,7 +18,11 @@ export type AnalyticalRequestPolicyDecision =
       nextActions: string[];
     };
 
-const REGULATED_IDENTIFIER_RE = /\b(?:social\s+security(?:\s+(?:number|no\.?))?|ssn|tax(?:payer)?\s*(?:id|identifier|number|no\.?)|passport(?:\s+(?:id|number|no\.?))?|government\s*(?:id|identifier)|national\s*id|driver'?s?\s*licen[cs]e(?:\s+(?:number|no\.?))?|date\s+of\s+birth|birth\s*date|dob|aadhaar(?:\s+(?:number|id))?)\b/i;
+/**
+ * A hyphen joins the words of these names as a space does: "date-of-birth",
+ * "tax-id". An underscore does too; see `withUnderscoresAsSpaces`.
+ */
+const REGULATED_IDENTIFIER_RE = /\b(?:social[\s-]+security(?:[\s-]+(?:number|no\.?))?|ssn|tax(?:payer)?[\s-]*(?:id|identifier|number|no\.?)|passport(?:[\s-]+(?:id|number|no\.?))?|government[\s-]*(?:id|identifier)|national[\s-]*id|driver'?s?[\s-]*licen[cs]e(?:[\s-]+(?:number|no\.?))?|date[\s-]+of[\s-]+birth|birth[\s-]*date|dob|aadhaar(?:[\s-]+(?:number|id))?)\b/i;
 
 /**
  * A regulated identifier may appear in a question about DQL's safeguards, but
@@ -37,10 +41,12 @@ const VALUE_REQUEST_SEMANTICS_RE = /\b(?:actual|full|specific|individual)\s+(?:v
  * These words describe a person: payment instruments, health records and
  * personal contact details. Email is read in every spelling: email, emails,
  * e-mail and e-mails ("List customers with their emails" is a request for
- * addresses). The business phrases below share two of these words and are set
- * aside before these words are read.
+ * addresses). Contact details and contact information are these details under
+ * one name. A hyphen joins the words of a name as a space does ("credit-card").
+ * The business phrases below share two of these words and are set aside before
+ * these words are read.
  */
-const SENSITIVE_PERSONAL_DATA_RE = /\b(?:credit\s*card|debit\s*card|card\s*(?:number|no\.?|details?)|cvv|cvc|iban|swift|bic|routing\s*(?:number|no\.?)|bank\s*account|account\s*(?:number|no\.?)|sort\s*code|medical|diagnosis|patient|health\s*(?:condition|record|information|data)?|prescription|disability|biometric|fingerprint|home\s*address|phone(?:\s*(?:number|no\.?))?|mobile(?:\s*(?:number|no\.?))?|telephone|e-?mails?(?:\s*address(?:es)?)?|sexual\s*orientation)\b/i;
+const SENSITIVE_PERSONAL_DATA_RE = /\b(?:credit[\s-]*card|debit[\s-]*card|card[\s-]*(?:number|no\.?|details?)|cvv|cvc|iban|swift|bic|routing[\s-]*(?:number|no\.?)|bank[\s-]*account|account[\s-]*(?:number|no\.?)|sort[\s-]*code|medical|diagnosis|patient|health[\s-]*(?:condition|record|information|data)?|prescription|disability|biometric|fingerprint|home[\s-]*address|phone(?:[\s-]*(?:number|no\.?))?|mobile(?:[\s-]*(?:number|no\.?))?|telephone|e-?mails?(?:[\s-]*address(?:es)?)?|contact[\s-]*(?:details?|info(?:rmation)?|numbers?)|sexual[\s-]*orientation)\b/i;
 /**
  * Email as a marketing channel, not an address: an email campaign, a
  * marketing email, an email open rate, contacts opted in to email. Three of 40
@@ -101,6 +107,17 @@ const PEOPLE_WITH_HEALTH_RE = /\b(?:persons?|people|individuals?|patients?|emplo
  * insured properties. These are refused when the question is about people.
  */
 const PERSONAL_WHEN_ABOUT_A_PERSON_RE = /\b(?:street(?:\s*(?:address|name))?|postal\s*code|post\s*code|zip\s*code|zipcode|race|ethnicity|religion|gender)\b/i;
+/**
+ * An address is where a person lives or gets mail when the question is about
+ * people: "Jessica Richard's address", "her mailing address", "customers with
+ * their addresses". Two readings are set aside first: an address that is not a
+ * place a person lives (an IP, MAC or web address; a store's, an office's or a
+ * supplier's address), and "address" as a verb ("How should we address churn
+ * among customers?"). Neither is set aside when the question points at one
+ * person: "Jessica Richard's IP address" is hers.
+ */
+const ADDRESS_RE = /\baddress(?:es)?\b/i;
+const NOT_A_PERSONS_ADDRESS_RE = /\b(?:(?:ip(?:v[46])?|mac|web(?:site)?|url|server|network|host|device|hardware|memory|wallet|bitcoin|crypto|blockchain|contract|store|shop|office|branch|warehouse|factory|plant|depot|venue|business|company|corporate|supplier|vendor)(?:'s|’s|s'|s’)?\s+address(?:es)?|(?:can|could|should|would|will|must|might|may|we|they|you|i|how\s+to|ways?\s+to|need\s+to|want\s+to|try\s+to|plan\s+to|help(?:s|ed)?(?:\s+(?:us|them|you))?(?:\s+to)?)\s+address(?:es)?)\b/gi;
 const PERSON_POPULATION_RE = /\b(?:customers?|clients?|policy\s*holders?|policyholders?|members?|people|persons?|individuals?|employees?|staff|users?|residents?|applicants?|claimants?|patients?|students?|citizens?|voters?|tenants?)\b/i;
 
 const COMPENSATION_RE = /\b(?:salary|compensation|pay|wage|bonus|earnings)\b/i;
@@ -138,7 +155,7 @@ function isExplicitPopulationAggregate(question: string): boolean {
  * stays when the question is about people whose health it would be.
  */
 function withoutBusinessPhrasesThatShareAPersonalWord(question: string): string {
-  if (ONE_PERSON_NAME_RE.test(question) || PERSONAL_PRONOUN_RE.test(question)) return question;
+  if (pointsAtOnePerson(question)) return question;
   const unlessOwned = (phrase: string, offset: number, whole: string) =>
     OWNED_BY_THE_WORD_BEFORE_RE.test(whole.slice(0, offset)) ? phrase : ' ';
   const emailChannelSetAside = question
@@ -158,6 +175,38 @@ function isAboutPeople(question: string): boolean {
   return NAMED_INDIVIDUAL_REFERENCE_RE.test(question)
     || /\b(?:his|her|ceo|cfo|coo|cto|chief\s+\w+\s+officer|founder|manager|director|executive)\b/i.test(question)
     || PERSON_POPULATION_RE.test(question);
+}
+
+function pointsAtOnePerson(question: string): boolean {
+  return ONE_PERSON_NAME_RE.test(question) || PERSONAL_PRONOUN_RE.test(question);
+}
+
+/** An address that may be a person's; nothing is set aside when the question points at one person. */
+function readsAnAddress(question: string): boolean {
+  return ADDRESS_RE.test(pointsAtOnePerson(question) ? question : question.replace(NOT_A_PERSONS_ADDRESS_RE, ' '));
+}
+
+/**
+ * Payment, health, contact or protected-attribute words in the question: the
+ * words themselves, or a word that is personal when the question is about
+ * people (a street, a zip code, an address).
+ */
+function readsSensitivePersonalData(question: string): boolean {
+  return SENSITIVE_PERSONAL_DATA_RE.test(withoutBusinessPhrasesThatShareAPersonalWord(question))
+    || ((PERSONAL_WHEN_ABOUT_A_PERSON_RE.test(question) || readsAnAddress(question)) && isAboutPeople(question));
+}
+
+/**
+ * A column name read as words: `email_address`, `customer_email` and
+ * `phone_number` name what "email address", "customer email" and "phone
+ * number" name, but `\b` finds no word edge at an underscore. The payment,
+ * health and contact words are read twice, as written and with underscores as
+ * spaces, so the second reading only adds refusals. Identifier and pay words
+ * share no set-aside phrase, so reading them with underscores as spaces only
+ * adds refusals too.
+ */
+function withUnderscoresAsSpaces(question: string): string {
+  return question.replace(/_+/g, ' ');
 }
 
 function namesAnIndividual(question: string): boolean {
@@ -190,8 +239,9 @@ export function evaluateAnalyticalRequestPolicy(question: string, options: Analy
 
   const isSystemPolicyQuestion = isExplicitSystemPolicyOrCapabilityQuestion(normalized);
   const isPopulationAggregate = isExplicitPopulationAggregate(normalized);
+  const spaced = withUnderscoresAsSpaces(normalized);
 
-  if (REGULATED_IDENTIFIER_RE.test(normalized) && !isSystemPolicyQuestion) {
+  if (REGULATED_IDENTIFIER_RE.test(spaced) && !isSystemPolicyQuestion) {
     return {
       allowed: false,
       code: 'REGULATED_IDENTIFIER_REQUEST',
@@ -200,8 +250,8 @@ export function evaluateAnalyticalRequestPolicy(question: string, options: Analy
     };
   }
 
-  const sensitive = options.sensitiveData !== 'columns' && (SENSITIVE_PERSONAL_DATA_RE.test(withoutBusinessPhrasesThatShareAPersonalWord(normalized))
-    || (PERSONAL_WHEN_ABOUT_A_PERSON_RE.test(normalized) && isAboutPeople(normalized)));
+  const sensitive = options.sensitiveData !== 'columns'
+    && (readsSensitivePersonalData(normalized) || readsSensitivePersonalData(spaced));
   if (sensitive && !isSystemPolicyQuestion && !isPopulationAggregate) {
     return {
       allowed: false,
@@ -212,7 +262,7 @@ export function evaluateAnalyticalRequestPolicy(question: string, options: Analy
   }
 
   if (
-    (COMPENSATION_RE.test(normalized) || INDIVIDUAL_EARNINGS_QUESTION_RE.test(normalized))
+    (COMPENSATION_RE.test(spaced) || INDIVIDUAL_EARNINGS_QUESTION_RE.test(spaced))
     && (!isPopulationAggregate || namesAnIndividual(normalized))
   ) {
     return {

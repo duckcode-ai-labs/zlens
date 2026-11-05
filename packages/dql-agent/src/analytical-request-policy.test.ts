@@ -194,6 +194,115 @@ describe('analytical request ingress policy', () => {
     });
   });
 
+  // A column name is the words it joins: `\b` finds no word edge at an
+  // underscore, so `email_address`, `customer_email` and `phone_number` used to
+  // pass while "email address" was refused. A hyphen joins words the same way.
+  it.each([
+    'List customers with their email_address',
+    'Show customer_email for each customer',
+    'What is Jessica Richard\'s phone_number?',
+    'Show the credit_card_number for each customer',
+    'List patients with their diagnosis_code',
+    'Show home_address for every member',
+    'List customers with their zip_code',
+    'List customers with their customer_address',
+    'Show contact_details for Jessica Richard',
+    'Show Jessica Richard\'s credit-card',
+  ])('blocks personal data named with underscores or hyphens: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
+  it.each([
+    'Show Jessica Richard\'s date-of-birth',
+    'List customers with their date_of_birth',
+    'List employees with their birth-date',
+    'Show customer_ssn for each customer',
+    'What is Jessica Richard\'s tax-id?',
+    'Does ZLens support showing Jessica Richard\'s date-of-birth with masking?',
+  ])('blocks regulated identifiers named with underscores or hyphens: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'REGULATED_IDENTIFIER_REQUEST',
+    });
+  });
+
+  it.each([
+    'Show ceo_salary',
+    'What is the employee_salary for the CEO?',
+    'Show Jessica Richard\'s base_pay',
+  ])('blocks one person\'s pay named with underscores: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'INDIVIDUAL_COMPENSATION_REQUEST',
+    });
+  });
+
+  it.each([
+    'How does DQL handle date_of_birth masking?',
+    'What is the email_open_rate by campaign?',
+    'Which campaigns have the highest email_click_rate?',
+    'Show total_sales by store_id',
+    'What is the average health_score by segment?',
+    'What is the average base_salary by department?',
+  ])('allows business column names with underscores: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toEqual({ allowed: true });
+  });
+
+  // An address is where a person lives or gets mail when the question is about
+  // people, with or without "mailing" or "home" in front of it.
+  it.each([
+    'What is Jessica Richard\'s mailing address?',
+    'What is Jessica Richard\'s address?',
+    'What is her address?',
+    'List customers with their addresses',
+    'Show the mailing address of each customer',
+    'List customers with their name and address',
+    'Show each customer\'s billing address',
+    'What is Jessica Richard\'s IP address?',
+    'What is the store address for Jessica Richard?',
+  ])('blocks a person\'s address: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
+  // An IP, MAC or web address, a store's or an office's address, and "address"
+  // as a verb are not where a person lives. Without people in the question, an
+  // address is a place's.
+  it.each([
+    'Which IP addresses had the most failed logins?',
+    'List users with their last login IP address',
+    'Which web addresses get the most traffic from users?',
+    'Show the store address for each customer order',
+    'What is the office address of each sales rep?',
+    'List stores with their address',
+    'Which suppliers have a mailing address in Texas?',
+    'How many customers have a mailing address on file?',
+    'How should we address churn among customers?',
+  ])('allows addresses that are not a person\'s: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toEqual({ allowed: true });
+  });
+
+  // Contact details are a phone number, an email and an address under one name.
+  it.each([
+    'Show Jessica Richard\'s contact details',
+    'Show Jessica Richard\'s contact information',
+    'List suppliers with their contact info',
+  ])('blocks contact details: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
+  it('allows a count of people with contact details on file', () => {
+    expect(evaluateAnalyticalRequestPolicy('How many customers have contact details on file?')).toEqual({ allowed: true });
+  });
+
   it('still blocks one person\'s pay', () => {
     expect(evaluateAnalyticalRequestPolicy('Show Jessica Richard\'s pay')).toMatchObject({
       allowed: false,
