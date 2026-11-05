@@ -1,3 +1,4 @@
+import { tableKey } from '@zlens/agent';
 import {
   applyTableDuplicateChoices,
   applyTableProfile,
@@ -203,7 +204,6 @@ interface ProposalLike {
   operations?: ReadonlyArray<{ kind?: string; change?: unknown }>;
 }
 
-const bareRelation = (relation: string | undefined): string => (relation ?? '').replace(/["`\[\]]/g, '').toLowerCase();
 
 function singleKey(grain: string | undefined, keys: string[] | undefined): string | undefined {
   const fromGrain = grain?.split(',').map((part) => part.trim()).filter(Boolean) ?? [];
@@ -219,9 +219,9 @@ export function tableModelStates(input: {
 }): Map<string, TableModelState> {
   const states = new Map<string, TableModelState>();
   const byId = new Map(input.tables.map((table) => [table.id, table.id]));
-  const byRelation = new Map(input.tables.map((table) => [bareRelation(table.relation), table.id]));
+  const byRelation = new Map(input.tables.map((table) => [tableKey(table.relation, 'object'), table.id]));
   const tableFor = (id: unknown, relation?: unknown): string | undefined =>
-    (typeof id === 'string' ? byId.get(id) : undefined) ?? (typeof relation === 'string' ? byRelation.get(bareRelation(relation)) : undefined);
+    (typeof id === 'string' ? byId.get(id) : undefined) ?? (typeof relation === 'string' ? byRelation.get(tableKey(relation, 'object')) : undefined);
   for (const entity of input.entities) {
     const table = tableFor(entity.dbtUniqueId, entity.relation);
     if (!table || states.has(table)) continue;

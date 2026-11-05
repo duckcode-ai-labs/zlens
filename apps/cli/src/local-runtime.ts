@@ -4,6 +4,9 @@ import {
   parsePhysicalIdentifier,
   physicalRelationIdentity,
   physicalRelationText,
+  sameTable,
+  tableKey,
+  tableName,
   type PhysicalRelationBindingV1,
   setAgentToolGate,
 } from '@zlens/agent';
@@ -8768,7 +8771,6 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     if (!edge) throw coded('JOIN_NOT_FOUND', `ZLens no longer finds where the join ${source.title} → ${join.label} comes from. Refresh this App's data.`);
     const modeling = manifest.modeling;
     const nodes = manifest.dbtProvenance?.nodes ?? {};
-    const sameRelation = (left: string | undefined, right: string) => Boolean(left) && bareRelation(left!).toLowerCase() === bareRelation(right).toLowerCase();
     const relationshipOperations: ContextAuthoringOperation[] = [];
     const draftedProposal = edge.origin === 'drafted'
       ? contextProposalStore.list().find((candidate) => candidate.status === 'proposed' && edge.id.startsWith(`${candidate.id}:`))
@@ -8788,12 +8790,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       drafted?: EntityBindingAuthoringInput;
     };
     const endpoint = (side: 'from' | 'to', relation: string, table: string, fallbackDomain?: string): Endpoint => {
-      const modeled = Object.entries(modeling.entities).find(([, entity]) => sameRelation(nodes[entity.dbtUniqueId]?.relation, relation));
+      const modeled = Object.entries(modeling.entities).find(([, entity]) => sameTable(nodes[entity.dbtUniqueId]?.relation, relation, 'object'));
       if (modeled) {
         const [key, entity] = modeled;
         return { side, key, localId: entity.localId, domain: entity.domain, ...(entity.areaId ? { areaId: modelAreaLocalId(entity.areaId) } : {}), dbtModel: entity.dbtUniqueId, table, ...(entity.grain ? { grain: entity.grain } : {}), keys: entity.keys ?? [] };
       }
-      const node = Object.values(nodes).find((candidate) => sameRelation(candidate.relation, relation));
+      const node = Object.values(nodes).find((candidate) => sameTable(candidate.relation, relation, 'object'));
       if (!node) throw coded('JOIN_TABLE_NOT_MODELED', `${table} is not in the project's model or its warehouse listing. Sync the warehouse schema, then try again.`);
       const draftedEntity = (draftedProposal?.operations ?? []).flatMap((operation) => (
         operation.kind === 'modeling_change' && operation.change.operation === 'upsert_entity' && operation.change.value.dbtModel === node.uniqueId ? [operation.change.value] : []
@@ -8849,7 +8851,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const rowKeyChecks: { from?: RowKeyCheck; to?: RowKeyCheck } = {};
     const datasetSide: 'from' | 'to' | undefined = join.parent
       ? undefined
-      : sameRelation(edge.toRelation, join.relation) ? 'from' : sameRelation(edge.fromRelation, join.relation) ? 'to' : undefined;
+      : sameTable(edge.toRelation, join.relation, 'object') ? 'from' : sameTable(edge.fromRelation, join.relation, 'object') ? 'to' : undefined;
     const datasetEndpoint = datasetSide === 'from' ? fromSide : datasetSide === 'to' ? toSide : undefined;
     const rowKeys = descriptor.grain.keyFields ?? [];
     if (datasetSide && datasetEndpoint && !(datasetEndpoint.grain && datasetEndpoint.keys.length) && rowKeys.length && !descriptor.grain.aggregate) {
@@ -16704,7 +16706,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
             return [
               `warehouse relation ${entity?.relation ?? change.value.dbtModel}`,
               ...(entity?.grainSource === 'primary_key' ? [`declared primary key ${entity.grain}`] : entity?.grainSource === 'unique_column' ? [`${entity.grain} is unique on the warehouse`] : []),
-              ...(entity?.useInstead ? [`use ${entity.useInstead.relation.split('.').pop()} instead: ${entity.useInstead.reason}`] : []),
+              ...(entity?.useInstead ? [`use ${tableName(entity.useInstead.relation)} instead: ${entity.useInstead.reason}`] : []),
             ];
           }
           if (change.operation === 'upsert_relationship') {
@@ -27105,7 +27107,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ? {
               tables: cachedTables.map((table) => ({
                 schema: table.schema ?? '',
-                name: table.name ?? table.relation.split('.').at(-1) ?? table.relation,
+                name: table.name ?? (tableName(table.relation) || table.relation),
                 path: table.relation,
                 type: 'TABLE',
               })),
@@ -39159,7 +39161,7 @@ export async function discoverProjectDbtModel(projectRoot: string, options: {
   // drafted; they are never drafted again (model-at-scale design S4).
   const around = tablesAroundScope(inScope, manifest, relationFacts, dbtManifest as unknown as Record<string, unknown>);
   const nodes = allNodes.filter((node) => inScope.has(node.uniqueId) || around.context.has(node.uniqueId));
-  const scopedRelations = new Set(nodes.flatMap((node) => [node.relation.toLowerCase(), `${node.schema}.${node.relation.split('.').pop()}`.toLowerCase()]));
+  const scopedRelations = new Set(nodes.flatMap((node) => [node.relation.toLowerCase(), `${node.schema}.${tableName(node.relation)}`.toLowerCase()]));
   const scopes = dbtWarehouseScopes(nodes, (connection as { database?: string }).database ?? (connection as { catalog?: string }).catalog);
   const { relations: schemaRelations } = await readWarehouseCatalogRelations({ executor: options.executor, connection, scopes });
   const relations = schemaRelations.filter((relation) => scopedRelations.has(relation.relation.toLowerCase()) || scopedRelations.has(`${relation.schema ?? ''}.${relation.name}`.toLowerCase()));
@@ -41203,7 +41205,7 @@ function repairExploratoryRelationQualifiers(sql: string, repairs: string[], dia
   if (!analysis.parsed) return sql;
   const declared = Object.entries(analysis.aliasToRelation).map(([qualifier, relation]) => ({
     qualifier,
-    subject: normalizeExploratoryRelationSubject(relation.split('.').at(-1) ?? relation),
+    subject: normalizeExploratoryRelationSubject(tableName(relation) || relation),
   }));
   let repaired = sql;
   const unresolved = analysis.columns
@@ -41323,7 +41325,7 @@ function resolveUniqueExploratoryColumnOwner(
   ));
   if (!compatible) return undefined;
   const preferred = [...candidates].sort((left, right) =>
-    right.relation.split('.').length - left.relation.split('.').length
+    parsePhysicalIdentifier(right.relation).length - parsePhysicalIdentifier(left.relation).length
   )[0]!;
   const columns = new Map<string, AgentSchemaTable['columns'][number]>();
   for (const candidate of candidates) {
@@ -53448,8 +53450,8 @@ function metadataObjectToAgentSchemaTable(object: MetadataObject): AgentSchemaTa
     if (!model) return null;
     return {
       relation: relation ?? model,
-      schema: relation ? relation.split('.').slice(-2, -1)[0] : undefined,
-      name: relation ? relation.split('.').at(-1) ?? model : model,
+      schema: relation ? parsePhysicalIdentifier(relation).at(-2)?.value : undefined,
+      name: relation ? tableName(relation) || model : model,
       source: 'local metadata catalog',
       // One column object is one column of a relation, never the relation's
       // whole column list — say so, or the merge below inherits a false claim.
@@ -53468,7 +53470,7 @@ function metadataObjectToAgentSchemaTable(object: MetadataObject): AgentSchemaTa
 
   const relation = metadataObjectRelation(object);
   if (!relation) return null;
-  const relationParts = relation.split('.').filter(Boolean);
+  const relationParts = parsePhysicalIdentifier(relation).map((part) => part.value);
   const schema = metadataPayloadString(object, 'schema') ?? (relationParts.length >= 2 ? relationParts[relationParts.length - 2] : undefined);
   const name = relationParts.at(-1) ?? object.name;
   const columns = metadataObjectColumns(object);
@@ -53796,15 +53798,6 @@ function mergeAgentSchemaContexts(...contexts: AgentSchemaTable[][]): AgentSchem
   return Array.from(byRelation.values()).slice(0, 16);
 }
 
-function agentRelationMatchKey(relation: string): string {
-  return relation
-    .replace(/["`\[\]]/g, '')
-    .split('.')
-    .filter(Boolean)
-    .slice(-2)
-    .join('.')
-    .toLowerCase();
-}
 
 /**
  * Keep dbt descriptions and semantic meaning, but make a complete live point
@@ -53819,10 +53812,10 @@ export function reconcileAgentSchemaContextWithLive(
   const liveByRelation = new Map(
     live
       .filter((table) => table.columns.length > 0)
-      .map((table) => [agentRelationMatchKey(table.relation), table] as const),
+      .map((table) => [tableKey(table.relation, 'tail'), table] as const),
   );
   return catalog.map((table) => {
-    const verified = liveByRelation.get(agentRelationMatchKey(table.relation));
+    const verified = liveByRelation.get(tableKey(table.relation, 'tail'));
     if (!verified) return table;
     const metadataColumns = new Map(table.columns.map((column) => [column.name.toLowerCase(), column] as const));
     return {
@@ -54375,7 +54368,7 @@ export function agentLiteralProbeTarget(
   return {
     table: {
       relation,
-      name: relation.split('.').filter(Boolean).at(-1) ?? relation,
+      name: tableName(relation) || relation,
       source: 'immutable Ask snapshot qualified physical relation',
       columns: [{ name: column, ...(candidate.dataType ? { type: candidate.dataType } : {}) }],
       columnCompleteness: 'partial',
@@ -54403,7 +54396,7 @@ function agentTextCastType(driver?: string): string {
 }
 
 function quoteAgentRelation(relation: string, connection: ConnectionConfig): string {
-  return relation.split('.').map((part) => quoteAgentIdentifier(part, connection)).join('.');
+  return parsePhysicalIdentifier(relation).map((part) => quoteAgentIdentifier(part.value, connection)).join('.');
 }
 
 function quoteAgentIdentifier(identifier: string, connection: ConnectionConfig): string {
@@ -54597,10 +54590,10 @@ function relationshipSafetyMatchesPlannedPhysicalEdge(
   safety: NonNullable<AgentEvidenceCandidate['relationshipSafety']>[number],
   edge: { fromRelation?: string; toRelation?: string; keys: Array<{ from: string; to: string }> },
 ): boolean {
-  const safetyFrom = canonicalAgentPhysicalReference(safety.from ?? '');
-  const safetyTo = canonicalAgentPhysicalReference(safety.to ?? '');
-  const edgeFrom = canonicalAgentPhysicalReference(edge.fromRelation ?? '');
-  const edgeTo = canonicalAgentPhysicalReference(edge.toRelation ?? '');
+  const safetyFrom = agentPhysicalReferenceKey(safety.from ?? '');
+  const safetyTo = agentPhysicalReferenceKey(safety.to ?? '');
+  const edgeFrom = agentPhysicalReferenceKey(edge.fromRelation ?? '');
+  const edgeTo = agentPhysicalReferenceKey(edge.toRelation ?? '');
   if (!safetyFrom || !safetyTo || !edgeFrom || !edgeTo) return false;
   const forward = safetyFrom === edgeFrom
     && safetyTo === edgeTo
@@ -54611,11 +54604,9 @@ function relationshipSafetyMatchesPlannedPhysicalEdge(
   return forward || reverse;
 }
 
-function canonicalAgentPhysicalReference(value: string): string {
-  return value.trim()
-    .replace(/^(?:runtime:relation:|dbt:relation:|dbt:model:|dbt:source:|sql:table:)/i, '')
-    .replace(/[`"\[\]]/g, '')
-    .toLowerCase();
+/** A physical reference without its namespace (`dbt:model:`, `runtime:relation:` …), compared as one object (simplification plan Z1). */
+function agentPhysicalReferenceKey(value: string): string {
+  return tableKey(value.trim().replace(/^(?:runtime:relation:|dbt:relation:|dbt:model:|dbt:source:|sql:table:)/i, ''), 'object');
 }
 
 /** Canonical modeling identities intentionally retain their namespaces. */
@@ -54628,8 +54619,8 @@ function orderedAgentKeySignature(
   reverse = false,
 ): string {
   return keys.map((key) => {
-    const from = canonicalAgentPhysicalReference(reverse ? key.to : key.from);
-    const to = canonicalAgentPhysicalReference(reverse ? key.from : key.to);
+    const from = agentPhysicalReferenceKey(reverse ? key.to : key.from);
+    const to = agentPhysicalReferenceKey(reverse ? key.from : key.to);
     return `${from}=${to}`;
   }).join('|');
 }

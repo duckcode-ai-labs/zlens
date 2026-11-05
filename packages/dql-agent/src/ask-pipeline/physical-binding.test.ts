@@ -48,6 +48,12 @@ describe('one answer to "is this the same table?" (simplification plan Z1)', () 
     expect(tableName('')).toBe('');
   });
 
+  it('reads SQL Server brackets as quotes', () => {
+    expect(tableKey('[Sales].[dbo].[Order Lines]', 'object')).toBe('sales.dbo.order lines');
+    expect(sameTable('[dbo].[orders]', 'dbo.orders', 'tail')).toBe(true);
+    expect(tableName('[dbo].[a]]b]')).toBe('a]b');
+  });
+
   it('keeps a dot inside a quoted part, and never matches an empty name', () => {
     expect(tableKey('"my.db"."S"."T"', 'tail')).toBe('s.t');
     expect(tableKey('"my.db"."S"."T"', 'object')).toBe('my.db.s.t');
