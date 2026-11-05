@@ -88,6 +88,65 @@ describe('analytical request ingress policy', () => {
     expect(evaluateAnalyticalRequestPolicy(question)).toEqual({ allowed: true });
   });
 
+  // An email campaign is marketing, contacts opted in to email are a count, and
+  // a health score is how a customer-success team rates an account. Three of 40
+  // blind GitLab questions (q29, q31, q40) were refused on these words alone.
+  it.each([
+    'For the email campaigns we sent in September 2026, what were the delivered, open, click and unsubscribe totals per campaign?',
+    'How many contacts are opted in to marketing email and own a free GitLab.com group or personal namespace?',
+    'Which customer accounts were red for CI adoption or license utilization in their health score last month?',
+    'What is the email campaign open rate?',
+    'What was the email open rate by campaign last quarter?',
+    'Show the email bounce rate per campaign',
+    'What was the email campaign click-through rate for October?',
+    'How many contacts opted in to email?',
+    'Which customers opted in to marketing email?',
+    'What is the account health score by segment?',
+    'Which accounts have a red health scorecard?',
+    'Show customer health score trends for September 2026',
+    'Which accounts have the worst account health this quarter?',
+  ])('allows marketing-email and health-score questions: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toEqual({ allowed: true });
+  });
+
+  // The same phrases keep their personal reading when the question points at
+  // one person, owns the email, asks for an address, or is about people whose
+  // health a health score would be.
+  it.each([
+    'Show Jessica\'s email',
+    'What is Jessica Richard\'s email address?',
+    'Show Jessica Richard\'s marketing email',
+    'Show June Carter\'s marketing email',
+    'Email campaign opens for Jessica Richard',
+    'List customers with their marketing email',
+    'List contacts opted in to marketing email with their email address',
+    'What is the marketing email address for each contact?',
+    'What is Jessica Richard\'s health score?',
+    'Show the health score for Jessica',
+    'What is the health score for May Lee?',
+    'What is her health score?',
+    'List patients with their health score',
+    'Show each employee\'s health score',
+    'List members with their health scores',
+    'Show account health records for each customer',
+    'Show Jessica Richard\'s health record',
+    'What is Jessica Richard\'s phone number?',
+    'Show Jessica Richard\'s card number',
+    'What is Jessica\'s diagnosis?',
+  ])('still blocks one person\'s contact or health data near those phrases: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
+  it('still blocks one person\'s pay', () => {
+    expect(evaluateAnalyticalRequestPolicy('Show Jessica Richard\'s pay')).toMatchObject({
+      allowed: false,
+      code: 'INDIVIDUAL_COMPENSATION_REQUEST',
+    });
+  });
+
   // RFC 0010 HH-17: a host that refuses by column (what a statement would list
   // for individuals) replaces the wording check for personal data; identifiers
   // and one person's pay stay refused by wording.

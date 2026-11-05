@@ -170,10 +170,12 @@ const EXPECTED_TEST_FILES = 193;
 // (vocabulary-from-pack.test.ts, +1; zlens#262).
 // 2674 with one answer to "is this the same table?" (physical-binding.test.ts, +6; simplification plan Z1).
 // 2675 with SQL Server brackets read as quotes (physical-binding.test.ts, +1; simplification plan Z1, part 2).
-const EXPECTED_TESTS = 2675;
+// 2709 with marketing-email and health-score questions answered and one person's data still refused
+// (analytical-request-policy.test.ts, +34; GitLab blind questions q29, q31, q40).
+const EXPECTED_TESTS = 2709;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2536.
+// The ordinary lane's share is the difference: 2629.
 const EXPECTED_HEAVY_TESTS = 80;
 
 const LANES = ['all', 'ordinary', 'heavy'];
