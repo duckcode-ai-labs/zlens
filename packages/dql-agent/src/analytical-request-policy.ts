@@ -35,17 +35,38 @@ const VALUE_REQUEST_SEMANTICS_RE = /\b(?:actual|full|specific|individual)\s+(?:v
 /**
  * Direct literal categories that the value-probe deny policy also protects.
  * These words describe a person: payment instruments, health records and
- * personal contact details. The business phrases below share two of them and
- * are set aside before these words are read.
+ * personal contact details. Email is read in every spelling: email, emails,
+ * e-mail and e-mails ("List customers with their emails" is a request for
+ * addresses). The business phrases below share two of these words and are set
+ * aside before these words are read.
  */
-const SENSITIVE_PERSONAL_DATA_RE = /\b(?:credit\s*card|debit\s*card|card\s*(?:number|no\.?|details?)|cvv|cvc|iban|swift|bic|routing\s*(?:number|no\.?)|bank\s*account|account\s*(?:number|no\.?)|sort\s*code|medical|diagnosis|patient|health\s*(?:condition|record|information|data)?|prescription|disability|biometric|fingerprint|home\s*address|phone(?:\s*(?:number|no\.?))?|mobile(?:\s*(?:number|no\.?))?|telephone|email(?:\s*address)?|sexual\s*orientation)\b/i;
+const SENSITIVE_PERSONAL_DATA_RE = /\b(?:credit\s*card|debit\s*card|card\s*(?:number|no\.?|details?)|cvv|cvc|iban|swift|bic|routing\s*(?:number|no\.?)|bank\s*account|account\s*(?:number|no\.?)|sort\s*code|medical|diagnosis|patient|health\s*(?:condition|record|information|data)?|prescription|disability|biometric|fingerprint|home\s*address|phone(?:\s*(?:number|no\.?))?|mobile(?:\s*(?:number|no\.?))?|telephone|e-?mails?(?:\s*address(?:es)?)?|sexual\s*orientation)\b/i;
 /**
  * Email as a marketing channel, not an address: an email campaign, a
  * marketing email, an email open rate, contacts opted in to email. Three of 40
  * blind GitLab questions were refused on these words alone, before any table
  * was chosen. A phrase followed by "address" or "id" is still an address.
  */
-const EMAIL_CHANNEL_PHRASE_RE = /\b(?:(?:marketing|promotional|campaign|newsletter|nurture)\s+emails?|emails?\s+(?:campaigns?|marketing|newsletters?|programs?|blasts?|nurtures?|sends?|sent|opens?|opened|clicks?|clicked|click[-\s]?through|ctr|bounces?|bounced|unsubscribes?|unsubscribed|deliver(?:y|ies|ed|ability)|engagement|performance|opt[-\s]?ins?|opt[-\s]?outs?|subscriptions?|channel)|opt(?:s|ed)?[-\s]?(?:in|out)\s+(?:to|of|from|for)\s+emails?)\b(?!\s*(?:address(?:es)?|ids?)\b)/gi;
+const EMAIL_CHANNEL_PHRASE_RE = /\b(?:(?:marketing|promotional|campaign|newsletter|nurture)\s+e-?mails?|e-?mails?\s+(?:campaigns?|marketing|newsletters?|programs?|blasts?|nurtures?|sends?|sent|opens?|opened|clicks?|clicked|click[-\s]?through|ctr|bounces?|bounced|unsubscribes?|unsubscribed|deliver(?:y|ies|ed|ability)|engagement|performance|opt[-\s]?ins?|opt[-\s]?outs?|subscriptions?|channel)|opt(?:s|ed)?[-\s]?(?:in|out)\s+(?:to|of|from|for)\s+e-?mails?)\b(?!\s*(?:address(?:es)?|ids?)\b)/gi;
+/**
+ * Emails counted as sends, opens or clicks are messages, not addresses: "How
+ * many emails did we send in Q3?", "How many emails were opened?", "Which
+ * campaigns sent the most emails?". The count needs a send, open or click
+ * word, so "How many emails do we have?" is not set aside, and a sender other
+ * than we, they or a group ("Which emails did Jessica open?") is not either.
+ */
+const EMAIL_KIND = '(?:marketing|promotional|campaign|newsletter|nurture|transactional|outbound|automated|welcome|reminder|follow[-\\s]?up)\\s+';
+const EMAIL_ACTION = '(?:send(?:s|ing)?|sent|open(?:s|ed|ing)?|click(?:s|ed|ing)?|deliver(?:s|ed|ing)?|bounc(?:e|es|ed|ing)|receiv(?:e|es|ed|ing))';
+const EMAIL_COUNT_PHRASE_RE = new RegExp(
+  // "how many emails did we send", "the number of emails we sent", "total emails received"
+  `\\b(?:how\\s+many|(?:number|count|total|volume|share|percentage|percent)\\s+of|total)\\s+(?:${EMAIL_KIND})?e-?mails?\\s+`
+  + '(?:(?:did|do|does|have\\s+been|has\\s+been|had\\s+been|have|has|had|will|would|were|was|are|is|got|get|gets|been)\\s+)?'
+  + '(?:(?:we|you|they|people|customers|users|contacts|recipients|subscribers|leads|accounts|campaigns|(?:the|our|each|every|all|this|that|these|those)\\s+[a-z]+)\\s+)?'
+  + `${EMAIL_ACTION}\\b`
+  // "sent the most emails", "opened more than 3 emails"
+  + `|\\b${EMAIL_ACTION}\\s+(?:the\\s+)?(?:most|fewest|least|more|fewer|(?:more|fewer|less)\\s+than\\s+\\d[\\d,]*|at\\s+least\\s+\\d[\\d,]*|\\d[\\d,]*)\\s+(?:${EMAIL_KIND})?e-?mails?\\b(?!\\s*(?:address(?:es)?|ids?)\\b)`,
+  'gi',
+);
 /**
  * A health score or health scorecard is how a customer-success team rates an
  * account, and "account health" is that rating; neither is a person's health.
@@ -109,16 +130,20 @@ function isExplicitPopulationAggregate(question: string): boolean {
 }
 
 /**
- * The question with its marketing-email and health-score phrases set aside,
- * for reading the payment, health and contact words. Nothing is set aside
- * when the question points at one person, an owned email phrase stays ("their
- * marketing email" is an address), and a health score stays when the question
- * is about people whose health it would be.
+ * The question with its marketing-email, email-count and health-score phrases
+ * set aside, for reading the payment, health and contact words. Only the
+ * phrase is set aside, so an address asked for beside it is still read.
+ * Nothing is set aside when the question points at one person, an owned email
+ * phrase stays ("their marketing email" is an address), and a health score
+ * stays when the question is about people whose health it would be.
  */
 function withoutBusinessPhrasesThatShareAPersonalWord(question: string): string {
   if (ONE_PERSON_NAME_RE.test(question) || PERSONAL_PRONOUN_RE.test(question)) return question;
-  const emailChannelSetAside = question.replace(EMAIL_CHANNEL_PHRASE_RE, (phrase: string, offset: number, whole: string) =>
-    OWNED_BY_THE_WORD_BEFORE_RE.test(whole.slice(0, offset)) ? phrase : ' ');
+  const unlessOwned = (phrase: string, offset: number, whole: string) =>
+    OWNED_BY_THE_WORD_BEFORE_RE.test(whole.slice(0, offset)) ? phrase : ' ';
+  const emailChannelSetAside = question
+    .replace(EMAIL_CHANNEL_PHRASE_RE, unlessOwned)
+    .replace(EMAIL_COUNT_PHRASE_RE, unlessOwned);
   return PEOPLE_WITH_HEALTH_RE.test(question)
     ? emailChannelSetAside
     : emailChannelSetAside.replace(HEALTH_SCORE_PHRASE_RE, ' ');

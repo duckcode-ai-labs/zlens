@@ -140,6 +140,60 @@ describe('analytical request ingress policy', () => {
     });
   });
 
+  // Emails and e-mail are the same contact detail as email. The plural and the
+  // hyphenated spelling used to pass while the singular was refused.
+  it.each([
+    'List customers with their emails',
+    'Show Jessica\'s emails',
+    'What is Jessica Richard\'s e-mail address?',
+    'What is Jessica Richard\'s e-mail?',
+    'Show the E-Mail of each customer',
+    'List contacts with their e-mail addresses',
+    'List users and their e-mails',
+    'Export the e-mails for every subscriber',
+    'Show customer emails',
+  ])('blocks emails and e-mail as contact data: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
+  // A count of emails sent, opened or clicked is about messages, not addresses.
+  it.each([
+    'How many emails did we send in Q3?',
+    'Which campaigns sent the most emails?',
+    'How many contacts opted out of marketing emails last month?',
+    'How many emails were opened last week?',
+    'How many emails have been sent per campaign?',
+    'What is the number of emails clicked per campaign?',
+    'Which customers opened the most emails?',
+    'Which newsletter sent more than 10,000 emails?',
+    'How many e-mails did we send in October?',
+    'How many marketing e-mails were clicked last quarter?',
+    'What is the e-mail campaign open rate?',
+    'How many contacts opted out of e-mail?',
+  ])('allows counts of emails sent, opened or clicked: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toEqual({ allowed: true });
+  });
+
+  // Only the count is set aside: an address asked for beside it, one named
+  // person or pronoun, or an owned email keeps its personal reading.
+  it.each([
+    'Which customers opened the most emails, with their email addresses?',
+    'Which customers opened the most emails? Show their emails too',
+    'How many emails did we send to Jessica Richard?',
+    'How many emails did she open?',
+    'Which emails did Jessica open?',
+    'Show Jessica Richard\'s emails sent last month',
+    'List customers with their emails sent',
+  ])('still blocks contact data beside an email count: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
   it('still blocks one person\'s pay', () => {
     expect(evaluateAnalyticalRequestPolicy('Show Jessica Richard\'s pay')).toMatchObject({
       allowed: false,
