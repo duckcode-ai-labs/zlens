@@ -441,7 +441,7 @@ project. Each run:
 - three ways to pick:
   - **By area:** every Domain and subject area, the Shared area first, each with its business tables and the business tables they read;
   - **Tables:** search business tables, most read first, optionally with their neighbours one step each way;
-  - **dbt selector:** the same terms as `--select`;
+  - (the dbt selector, the same terms as `--select`, stays in the CLI: simplification plan Z5);
 - a footer that says, before anything runs, how many tables the pick drafts and what the budget leaves for later.
 
 A smaller project drafts in one click, as before.

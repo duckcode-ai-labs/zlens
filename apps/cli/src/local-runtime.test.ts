@@ -13190,7 +13190,7 @@ describe('unified context authoring proposals (API-011, API-012, MIG-003)', () =
       expect(proposal.diagnostics).toContainEqual(expect.objectContaining({ code: 'MODEL_AREA_DEFAULTED', severity: 'info' }));
       // One plain note, not one line per model (new-user round 2, Q3).
       expect(proposal.diagnostics.filter((diagnostic) => diagnostic.code === 'MODEL_AREA_DEFAULTED')).toEqual([
-        { code: 'MODEL_AREA_DEFAULTED', severity: 'info', operationId: 'bind:orders', operationIds: ['bind:orders'], message: '1 model placed in the default area. You can rename or move it later.' },
+        { code: 'MODEL_AREA_DEFAULTED', severity: 'info', operationId: 'bind:orders', operationIds: ['bind:orders'], message: '1 model not in an area yet. You can move it into an area later.' },
       ]);
       expect(proposal.diagnostics.filter((diagnostic) => diagnostic.severity === 'blocking')).toEqual([]);
       expect(proposal.operations.find((operation) => operation.id === 'bind:orders')?.change?.value).toMatchObject({ areaId: 'core' });

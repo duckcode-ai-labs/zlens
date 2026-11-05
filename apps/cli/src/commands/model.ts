@@ -670,7 +670,7 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
   console.log('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
   printDraftScope(report);
   if (report.dbtLeftOut?.length) console.log(`  Left to the dbt draft: ${report.dbtLeftOut.length} table${report.dbtLeftOut.length === 1 ? '' : 's'} dbt builds (zlens model draft --source dbt drafts ${report.dbtLeftOut.length === 1 ? 'it' : 'them'} as dbt models)`);
-  console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} look-alike${lookAlikes.length === 1 ? '' : 's'} to skip · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
+  console.log(`  ${tables.length} table${tables.length === 1 ? '' : 's'} to answer from · ${lookAlikes.length} with a better table to use instead · ${report.relationships.length} join${report.relationships.length === 1 ? '' : 's'} (${passed.length} passed) · ${report.rules?.length ?? 0} measured rule${report.rules?.length === 1 ? '' : 's'} · ${report.concepts?.length ?? 0} concept${report.concepts?.length === 1 ? '' : 's'}`);
   console.log('Tables to answer from');
   for (const entity of tables) console.log(`  ${entity.domain}${entity.area ? `/${entity.area}` : ''}.${entity.id} ← ${entity.relation}${entity.description ? ` · ${entity.description}` : entity.grain ? ` · one row per ${entity.grain}` : ''}`);
   if (report.stagingHidden?.length) {
@@ -678,7 +678,7 @@ function printDraftReview(report: import('../warehouse-model-discovery.js').Ware
     for (const item of report.stagingHidden) console.log(`  ${item.relation} · same as ${item.finalRelation}`);
   }
   if (lookAlikes.length) {
-    console.log('Look-alikes Ask will skip (it answers from the other table unless a question names this one)');
+    console.log('Use another table instead (Ask answers from the other table unless a question names this one)');
     for (const entity of lookAlikes) console.log(`  ${entity.relation} → use ${entity.useInstead!.entity}: ${entity.useInstead!.reason}`);
   }
   console.log('Joins (each checked on the warehouse)');

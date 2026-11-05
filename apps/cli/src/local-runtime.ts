@@ -37235,7 +37235,7 @@ export function modelAreaDefaultedDiagnostic(operationIds: string[], origin: Con
     severity: 'info',
     operationId: operationIds[0],
     operationIds: [...operationIds],
-    message: `${count} ${noun}${count === 1 ? '' : 's'} placed in the default area. You can rename or move ${count === 1 ? 'it' : 'them'} later.`,
+    message: `${count} ${noun}${count === 1 ? '' : 's'} not in an area yet. You can move ${count === 1 ? 'it' : 'them'} into an area later.`,
   };
 }
 

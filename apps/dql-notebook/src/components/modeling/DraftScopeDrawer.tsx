@@ -2,15 +2,17 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, Search, X } from 'lucide-react';
 import { api, type DraftScopeRequest, type DraftScopeResponse } from '../../api/client';
 import type { Theme } from '../../themes/notebook-theme';
+import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
 
 /**
  * Choose what to draft in a large dbt project (model-at-scale design S3):
- * a whole Domain or subject area, some tables and their neighbours, or a dbt
- * selector. The footer says how many tables the pick drafts before anything
+ * a whole Domain or area, or some tables and their neighbours. A dbt
+ * selector stays in the CLI (`zlens model draft --select`; simplification
+ * plan Z5). The footer says how many tables the pick drafts before anything
  * runs; over the budget, the most important are drafted and the rest listed.
  */
 
-type Mode = 'areas' | 'tables' | 'selector';
+type Mode = 'areas' | 'tables';
 
 const words = (id: string) => {
   const text = id.replace(/[._]+/g, ' ').trim();
@@ -31,7 +33,6 @@ export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onD
   const [areas, setAreas] = useState<string[]>([]);
   const [tables, setTables] = useState<string[]>([]);
   const [neighbours, setNeighbours] = useState(false);
-  const [selector, setSelector] = useState('');
   const [q, setQ] = useState('');
   const [businessOnly, setBusinessOnly] = useState(true);
   const [response, setResponse] = useState<DraftScopeResponse | null>(null);
@@ -40,9 +41,8 @@ export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onD
 
   const select = useMemo(() => {
     if (mode === 'areas') return areas;
-    if (mode === 'tables') return tables;
-    return selector.split(/\s+/).map((term) => term.trim()).filter(Boolean);
-  }, [mode, areas, tables, selector]);
+    return tables;
+  }, [mode, areas, tables]);
   const hops = mode === 'tables' && neighbours ? 1 : undefined;
 
   useEffect(() => {
@@ -92,7 +92,7 @@ export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onD
             <p style={{ margin: 0, fontSize: 11, color: theme.textSecondary, lineHeight: 1.5 }}>{layerNote(choices)}</p>
           ) : null}
           {side === 'dbt' ? <div role="group" aria-label="How to choose" style={{ display: 'inline-flex', gap: 6 }}>
-            {([['areas', 'By area'], ['tables', 'Tables'], ['selector', 'dbt selector']] as Array<[Mode, string]>).map(([value, text]) => (
+            {([['areas', 'By area'], ['tables', 'Tables']] as Array<[Mode, string]>).map(([value, text]) => (
               <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} style={{ ...secondary(theme), ...(mode === value ? { borderColor: theme.accent, color: theme.accent, fontWeight: 650 } : {}) }}>{text}</button>
             ))}
           </div> : null}
@@ -103,9 +103,9 @@ export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onD
 
           {side === 'dbt' && mode === 'areas' && choices ? (
             choices.areas.length === 0
-              ? <p style={{ fontSize: 11.5, color: theme.textSecondary }}>No Domains or subject areas found in this project. Pick tables, or use a dbt selector.</p>
+              ? <p style={{ fontSize: 11.5, color: theme.textSecondary }}>No Domains or areas found in this project. Pick tables instead.</p>
               : (
-                <div role="list" aria-label="Domains and subject areas" style={{ display: 'grid', gap: 6 }}>
+                <div role="list" aria-label="Domains and areas" style={{ display: 'grid', gap: 6 }}>
                   {choices.areas.map((item) => (
                     <label key={item.select} role="listitem" style={{ ...row(theme), marginLeft: item.area ? 22 : 0 }}>
                       <input type="checkbox" checked={areas.includes(item.select)} disabled={drafting} onChange={(event) => setAreas((current) => toggle(current, item.select, event.target.checked))} />
@@ -157,14 +157,6 @@ export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onD
             </div>
           ) : null}
 
-          {side === 'dbt' && mode === 'selector' ? (
-            <div style={{ display: 'grid', gap: 8 }}>
-              <input autoFocus aria-label="dbt selector" value={selector} onChange={(event) => setSelector(event.target.value)} placeholder="+fct_orders path:models/marts tag:finance area:sales" style={{ ...input(theme), width: '100%', fontFamily: 'var(--font-mono, monospace)' }} />
-              <small style={{ color: theme.textMuted, lineHeight: 1.5 }}>
-                As dbt picks, any term may match: a name or <code>fct_*</code>; <code>+name</code> adds what it reads and <code>name+</code> what reads it; <code>path:</code>, <code>tag:</code>, <code>schema:</code>, <code>package:</code>, <code>source:</code>; and <code>domain:</code> or <code>area:</code> for a proposed Domain or subject area. The same terms work in <code>zlens model draft --select</code>.
-              </small>
-            </div>
-          ) : null}
         </div>
 
         <footer style={{ padding: '12px 18px', borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 8 }}>
@@ -203,20 +195,20 @@ export function layerNote(choices: DraftScopeResponse['choices']): string {
     raw ? `${raw.toLocaleString('en-US')} raw` : '',
   ].filter(Boolean);
   const hidden = intermediate + aside + snapshot + staging + raw;
-  return `${plural(business, 'business table')} to answer from.${hidden ? ` ${hidden.toLocaleString('en-US')} more are not offered by area: ${others.join(', ')}.` : ''}`;
+  return `${plural(business, 'business table')} to answer from.${hidden ? ` ${hidden.toLocaleString('en-US')} staging, raw and other build tables are not offered: ${others.join(', ')}.` : ''}`;
 }
 
 /** One Domain or area in the list. */
 export function areaRow(item: DraftScopeResponse['choices']['areas'][number]): { title: string; detail: string } {
   return {
-    title: item.shared ? 'Shared' : words(item.area ?? item.domain),
+    title: item.shared ? 'Shared' : item.area === DEFAULT_MODEL_AREA_ID ? 'Not in an area yet' : words(item.area ?? item.domain),
     detail: `${plural(item.tables, 'table')}${item.reads ? `, and ${item.reads.toLocaleString('en-US')} they read` : ''}${item.shared ? ' · read by several areas; drafted once, with the first area that reads them' : item.area ? '' : ' · the whole Domain'}`,
   };
 }
 
 /** The footer: what the pick drafts, before anything runs. */
 export function pickSummary(picked: boolean, loading: boolean, preview: DraftScopeResponse['preview'] | undefined): string {
-  if (!picked) return 'Pick an area, some tables or a selector.';
+  if (!picked) return 'Pick an area or some tables.';
   if (!preview) return loading ? 'Counting…' : '';
   if (preview.asked === 0) return 'Nothing in the project matches this pick.';
   const first = `${plural(preview.asked, 'table')} picked.`;

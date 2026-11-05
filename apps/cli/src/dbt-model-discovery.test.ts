@@ -97,7 +97,7 @@ describe('zlens model discover --validate in a dbt-first project', () => {
     await runModel('draft', [projectRoot], {} as CLIFlags);
     const text = logs.join('\n');
     expect(text).toContain('ZLens model draft (checked on the warehouse; nothing is written without --apply)');
-    expect(text).toContain('2 tables to answer from · 0 look-alikes to skip · 1 join (1 passed)');
+    expect(text).toContain('2 tables to answer from · 0 with a better table to use instead · 1 join (1 passed)');
     // The staging view is left out by name, as discovery always has, and the review says so.
     expect(text).toContain('Staging copies left out');
     expect(text).toContain('main.stg_orders · same as main.orders');

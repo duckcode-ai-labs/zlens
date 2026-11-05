@@ -19,12 +19,14 @@ function useAuthoringScope(data: DbtFirstModelingResponse, domain: string | null
   const defaultDomain = domain
     ?? (domains.length === 1 ? domains[0]! : slug(data.dbtProvenance?.projectName ?? '').replace(/-/g, '_') || 'analytics');
   const [scopeDomain, setScopeDomain] = useState(defaultDomain);
-  const [scopeArea, setScopeArea] = useState(existingArea?.localId ?? existingArea?.id ?? DEFAULT_AREA_ID);
+  // The default area (`core`) shows as an empty box, "Not in an area yet" (simplification plan Z3).
+  const [areaInput, setScopeArea] = useState(existingArea && existingArea.localId !== DEFAULT_AREA_ID ? existingArea.localId ?? existingArea.id : '');
+  const scopeArea = areaInput.trim() || DEFAULT_AREA_ID;
   const domainIsNew = !domains.includes(scopeDomain);
   const areaIsNew = !Object.values(data.modeling.areas ?? {}).some(
     (candidate) => candidate.domain === scopeDomain && (candidate.localId === scopeArea || candidate.id === scopeArea),
   );
-  return { scopeDomain, setScopeDomain, scopeArea, setScopeArea, domains, domainIsNew, areaIsNew };
+  return { scopeDomain, setScopeDomain, scopeArea, areaInput, setScopeArea, domains, domainIsNew, areaIsNew };
 }
 
 function ScopeFields({ scope, theme }: { scope: ReturnType<typeof useAuthoringScope>; theme: Theme }): JSX.Element {
@@ -34,10 +36,10 @@ function ScopeFields({ scope, theme }: { scope: ReturnType<typeof useAuthoringSc
       <datalist id="dql-scope-domains">{scope.domains.map((value) => <option key={value} value={value} />)}</datalist>
       <small style={{ color: scope.domainIsNew ? 'var(--status-warning)' : theme.textMuted }}>{scope.domainIsNew ? 'Will be created with these models.' : 'Existing Domain.'}</small>
     </label>
-    <label style={label(theme)}>Subject area
-      <input aria-label="Subject area" value={scope.scopeArea} onChange={(event) => scope.setScopeArea(event.target.value)} style={input(theme)} />
+    <label style={label(theme)}>Area
+      <input aria-label="Area" value={scope.areaInput} placeholder="Not in an area yet" onChange={(event) => scope.setScopeArea(event.target.value)} style={input(theme)} />
       <small style={{ color: scope.areaIsNew ? 'var(--status-warning)' : theme.textMuted }}>
-        {scope.areaIsNew ? 'Will be created with these models.' : 'Existing subject area.'} A subject area is one focused diagram inside the Domain — it organizes source and sharpens retrieval, and never changes what an agent is allowed to use.
+        {!scope.areaInput.trim() ? 'Leave it empty and these tables stay in the Domain, not in an area yet.' : scope.areaIsNew ? 'Will be created with these tables.' : 'Existing area.'} An area is one focused diagram inside the Domain — it organizes source and sharpens retrieval, and never changes what an agent is allowed to use.
       </small>
     </label>
   </>;
@@ -91,7 +93,7 @@ export function AddModelsDrawer({ data, domain, areaId, theme, onClose, onPropos
       </div>
     </> : step === 2 ? <>
       <ScopeFields scope={scope} theme={theme} />
-      <Note theme={theme}>Every model receives exactly one Domain and subject area. ZLens stores the dbt unique ID and business overlay; dbt-owned columns, SQL, tests, descriptions, and lineage remain in dbt.</Note>
+      <Note theme={theme}>Every table gets exactly one Domain and at most one area. ZLens stores the dbt unique ID and business overlay; dbt-owned columns, SQL, tests, descriptions, and lineage remain in dbt.</Note>
     </> : <>
       <Note theme={theme}>{operations.length} sparse entity-binding patch{operations.length === 1 ? '' : 'es'} will be prepared. No source changes occur until the exact proposal is reviewed and explicitly saved.</Note>
       {selectedItems.map((item) => <div key={item.uniqueId} style={choice(theme)}><span style={{ flex: 1 }}><b style={{ display: 'block', fontSize: 11 }}>{item.name}</b><code style={{ fontSize: 9.5, color: theme.textMuted }}>{item.uniqueId}</code></span><span style={{ fontSize: 10, color: theme.textMuted }}>{scope.scopeDomain} / {scope.scopeArea}</span></div>)}

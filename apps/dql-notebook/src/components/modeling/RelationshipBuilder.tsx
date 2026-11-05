@@ -10,6 +10,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeftRight, Loader2, Plus, RefreshCw, ShieldCheck, Sparkles, XCircle } from 'lucide-react';
 import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
+import { areaLabel } from './model-map-levels';
 import type { DbtNodeAuthoringDetail, ManifestModelArea, ManifestModelRelationship, RelationshipAuthoringInput } from '@zlens/core';
 import { api, type ContextAuthoringProposalV1, type DbtFirstModelingResponse, type RelationshipKeySuggestion } from '../../api/client';
 import type { themes } from '../../themes/notebook-theme';
@@ -402,10 +403,10 @@ export function RelationshipBuilder({ data, relationship, draft, selectedDomain,
                   {Object.keys(data.modeling.packages).map((pkg) => <option key={pkg} value={pkg}>{pkg}</option>)}
                 </select>
               </Labeled>
-              <Labeled label="Subject area" t={t}>
+              <Labeled label="Area" t={t}>
                 <select value={areaId} onChange={(event) => setAreaId(event.target.value)} style={inputStyle(t)}>
-                  {areas.length === 0 ? <option value={areaId}>{areaId}</option> : null}
-                  {areas.map((area) => <option key={area.localId} value={area.localId}>{area.name}</option>)}
+                  {areas.length === 0 ? <option value={areaId}>{areaId === DEFAULT_MODEL_AREA_ID ? 'Not in an area yet' : areaId}</option> : null}
+                  {areas.map((area) => <option key={area.localId} value={area.localId}>{areaLabel(area)}</option>)}
                 </select>
               </Labeled>
             </div>

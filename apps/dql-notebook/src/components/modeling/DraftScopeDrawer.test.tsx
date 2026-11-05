@@ -12,7 +12,7 @@ const preview = (over: Partial<DraftScopeResponse['preview']>): DraftScopeRespon
 
 describe('the draft picker (model-at-scale design S3)', () => {
   it('says how many tables can be answered from, and what the other layers hold', () => {
-    expect(layerNote(choices)).toBe('476 business tables to answer from. 4,465 more are not offered by area: 245 intermediate, 1,063 team workspace and legacy, 163 snapshots, 1,580 staging, 1,414 raw.');
+    expect(layerNote(choices)).toBe('476 business tables to answer from. 4,465 staging, raw and other build tables are not offered: 245 intermediate, 1,063 team workspace and legacy, 163 snapshots, 1,580 staging, 1,414 raw.');
     expect(layerNote({ ...choices, layers: { business: 12, intermediate: 0, aside: 0, snapshot: 0, staging: 0, raw: 0 } })).toBe('12 business tables to answer from.');
   });
 
@@ -23,7 +23,7 @@ describe('the draft picker (model-at-scale design S3)', () => {
   });
 
   it('says what a pick drafts before anything runs, and what the budget leaves for later', () => {
-    expect(pickSummary(false, false, undefined)).toBe('Pick an area, some tables or a selector.');
+    expect(pickSummary(false, false, undefined)).toBe('Pick an area or some tables.');
     expect(pickSummary(true, true, undefined)).toBe('Counting…');
     expect(pickSummary(true, false, preview({ asked: 0, drafted: 0 }))).toBe('Nothing in the project matches this pick.');
     expect(pickSummary(true, false, preview({ asked: 1, drafted: 1 }))).toBe('1 table picked. Only this table is read from the warehouse and checked.');

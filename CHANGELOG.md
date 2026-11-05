@@ -8,6 +8,21 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### One word for each thing on the Modeling page (simplification plan Z3, Z5)
+
+- **The same words everywhere:**
+  - **Domain**, never "business area";
+  - **Area** for a subject area;
+  - **Table** for what you edit or remove in the model ("Edit table", "Remove from the model");
+  - **Rules** for a term's rules.
+- **The default area a new model lands in shows as "Not in an area yet",** never `core`, "Core" or "Default area":
+  - The start drawer's Area box is empty, and leaving it empty keeps the tables in the Domain.
+  - On the map, the "Not in an area yet" card comes after the areas.
+- **A table a drafted pick sets aside reads "Use X instead".** The group is "Use another table instead"; the word "look-alike" is gone from the page and the CLI.
+- **The draft picker names layers plainly:** "4,465 staging, raw and other build tables are not offered".
+- **Choose what to draft offers two ways to pick: By area and Tables.** The dbt selector stays in the CLI (`zlens model draft --select`).
+- **Unchanged:** policies, which elsewhere mean skill kinds, app access policies and the checks a run enforces, keep their name. Ids and YAML keys do not change.
+
 ### Hybrid projects: dbt models and warehouse tables in one model, never drafted twice
 
 - **A hybrid project's warehouse draft treats a table dbt builds as that dbt model.**
@@ -15,7 +30,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - One it does not have yet is left to the dbt draft and listed ("Left to the dbt draft: …").
   - Before, the warehouse draft drafted dbt's tables a second time as plain warehouse tables.
 - **On the Modeling page of a hybrid project, "Draft the model" asks which side to draft:**
-  - **dbt models:** by area, tables or a dbt selector;
+  - **dbt models:** by area or by tables;
   - **warehouse tables:** the synced tables dbt does not build.
 
   Before, the page drafted only the warehouse side.
@@ -41,7 +56,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 ### The model map opens at the right level: Domains, then areas, then tables (model-at-scale design S5)
 
 - **A model of more than 60 tables opens on its Domains.** Each card shows its tables, its areas and where its joins lead ("Shared 6 · Finance 2"), with the Shared Domain first.
-- **Opening a Domain shows its subject areas** the same way. Tables not in an area yet, including the default `core` area a new model lands in, count as one "Default area".
+- **Opening a Domain shows its subject areas** the same way. Tables not in an area yet, including the default `core` area a new model lands in, show as one card, "Not in an area yet", after the areas.
 - **Opening an area draws its tables.**
   - The tables of other areas it shows at its edge are drawn as before.
   - A join into an area it does not draw is folded into one stub per area ("→ Finance · 4 joins") that opens that area.
@@ -52,10 +67,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Choose what to draft on the Modeling page (model-at-scale design S3)
 
-- **In a dbt project larger than one draft (150 tables), "Draft the model" opens Choose what to draft.** It shows the project by layer ("476 business tables to answer from; 4,420 more are not offered by area: …") and offers three ways to pick:
+- **In a dbt project larger than one draft (150 tables), "Draft the model" opens Choose what to draft.** It shows the project by layer ("476 business tables to answer from. 4,465 staging, raw and other build tables are not offered: …") and offers two ways to pick:
   - **By area:** each Domain and subject area, the Shared area first, with its tables and the tables they read;
-  - **Tables:** search business tables, most read first, and optionally add their neighbours;
-  - **dbt selector:** the same terms as `zlens model draft --select`.
+  - **Tables:** search business tables, most read first, and optionally add their neighbours.
+
+  A dbt selector stays in the CLI: `zlens model draft --select`.
 - **The footer says what the pick drafts before anything runs:** "122 tables picked. Only these are read from the warehouse and checked." Over the budget, it says which tables go first and how many are left.
 - **A smaller project still drafts in one click.**
 - **New endpoint:** `POST /api/modeling/draft-scope`. The draft proposal route takes a `scope`.

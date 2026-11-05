@@ -6,7 +6,7 @@ const options = [{ id: 'commerce', label: 'Commerce', areas: [{ id: 'commerce::m
 describe('Ask scope picker', () => {
   it('names a saved scope that no longer exists instead of answering unscoped silently', () => {
     expect(scopeProblem({ domain: 'finance' }, options)).toBe('The domain “finance” no longer exists.');
-    expect(scopeProblem({ domain: 'commerce', modelAreaId: 'commerce::model_area::gone' }, options)).toBe('The subject area “gone” no longer exists in Commerce.');
+    expect(scopeProblem({ domain: 'commerce', modelAreaId: 'commerce::model_area::gone' }, options)).toBe('The area “gone” no longer exists in Commerce.');
     expect(scopeProblem({ domain: 'commerce' }, options)).toBeUndefined();
     // Before the list loads nothing is flagged.
     expect(scopeProblem({ domain: 'finance' }, null)).toBeUndefined();

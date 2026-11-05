@@ -140,7 +140,7 @@ export function DomainSettingsDrawer({
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '16px 18px', display: 'grid', gap: 16 }}>
-          <Field label="Name" t={t} hint={editing ? undefined : 'A short name for this business area, like Revenue or Customers.'}>
+          <Field label="Name" t={t} hint={editing ? undefined : 'A short name for this Domain, like Revenue or Customers.'}>
             <input
               type="text"
               autoFocus

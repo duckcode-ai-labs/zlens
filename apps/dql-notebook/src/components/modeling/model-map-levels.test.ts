@@ -57,12 +57,12 @@ describe('the map opens on the level the model needs (model-at-scale design S5)'
     if (level.kind !== 'areas') return;
     expect(level.cards.map((card) => [card.name, card.tables, card.edge])).toEqual([
       ['Sales', 2, 1],
-      ['Default area', 1, 0],
       ['Marketing', 1, 0],
+      ['Not in an area yet', 1, 0],
     ]);
     const sales = level.cards[0]!;
     expect(sales.joins.map((item) => `${item.name} ${item.count}`)).toEqual(['Finance 1', 'Shared 1']);
-    expect(level.cards[2]!.joins.map((item) => `${item.name} ${item.count}`)).toEqual(['Default area 1', 'Shared 1']);
+    expect(level.cards[1]!.joins.map((item) => `${item.name} ${item.count}`)).toEqual(['Not in an area yet 1', 'Shared 1']);
   });
 
   it('opens on the tables for a small model, a search, or a chosen area', () => {
@@ -91,6 +91,6 @@ describe('the map opens on the level the model needs (model-at-scale design S5)'
     expect(areaStubs(modeling, 'sales_and_marketing::model_area::sales', shown)).toEqual([
       { id: 'stub:finance|', label: 'Finance · 1 join', domain: 'finance', areaId: null, count: 1, from: ['sales_and_marketing::entity::opportunity'] },
     ]);
-    expect(areaStubs(modeling, 'sales_and_marketing::model_area::marketing', new Set(['sales_and_marketing::entity::campaign'])).map((stub) => stub.label)).toEqual(['Default area · 1 join', 'Shared · 1 join']);
+    expect(areaStubs(modeling, 'sales_and_marketing::model_area::marketing', new Set(['sales_and_marketing::entity::campaign'])).map((stub) => stub.label)).toEqual(['Not in an area yet · 1 join', 'Shared · 1 join']);
   });
 });

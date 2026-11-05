@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { areaLabel } from './model-map-levels';
 import { Blocks, BookOpen, Boxes, CheckCircle2, Columns3, Download, EyeOff, FileSearch, FolderTree, GitBranch, GraduationCap, Link2, Maximize2, MessageCircle, MessageSquareText, Network, PanelRightClose, PanelRightOpen, Plus, RefreshCw, RotateCcw, Search, Settings2, ShieldCheck, SlidersHorizontal, Sparkles, XCircle } from 'lucide-react';
 import { DEFAULT_MODEL_AREA_ID } from '@zlens/core/modeling-ids';
 import type { DbtMetricAuthoringInput, DbtMetricPatchPreview, ExistingSemanticModel, DbtNodeAuthoringDetail, DbtSourceAuthoringInput, DbtSourcePatchPreview, ManifestModelArea, ManifestModelEntity, ManifestModelRelationship, ModelingAuthoringChange, ModelingChangePreview } from '@zlens/core';
@@ -456,14 +457,14 @@ export function DbtFirstModelingPage({ initialSection }: { initialSection?: Doma
         {selectedDomain && (tab === 'diagram' || tab === 'skills') ? (
           <>
             <ScopeSelect
-              label="Subject area"
+              label="Area"
               value={selectedAreaId ?? ''}
               onChange={(value) => { setSelectedAreaId(value || null); setSelectedId(null); }}
-              options={[{ value: '', label: 'Whole domain' }, ...domainAreas.map((area) => ({ value: area.qualifiedId, label: area.name }))]}
+              options={[{ value: '', label: 'Whole Domain' }, ...domainAreas.map((area) => ({ value: area.qualifiedId, label: areaLabel(area) }))]}
               t={t}
             />
             {!readOnly && (
-              <IconButton t={t} title="New subject area" onClick={() => setEditor({ kind: 'area' })}>
+              <IconButton t={t} title="New area" onClick={() => setEditor({ kind: 'area' })}>
                 <Plus size={14} />
               </IconButton>
             )}
@@ -1199,7 +1200,7 @@ function ModelingEditor({ editor, data, selectedDomain, selectedArea, t, onClose
     : undefined;
   const originName = relationshipOrigin?.businessName || relationshipOrigin?.localId || '';
   const title = editor.kind === 'area'
-    ? (existingArea ? 'Edit subject area' : 'New subject area')
+    ? (existingArea ? 'Edit area' : 'New area')
     : existingEntity ? 'Edit model' : relationshipOrigin ? `Add a model related to ${originName}` : 'Add a dbt model';
   return (
     <Modal title={title} t={t} onClose={onClose}>
@@ -1208,14 +1209,14 @@ function ModelingEditor({ editor, data, selectedDomain, selectedArea, t, onClose
           <Field label="Domain">
             <Select value={domain} onChange={setDomain} values={Object.keys(data.modeling.packages)} t={t} />
           </Field>
-          {editor.kind === 'area' && <Field label="Subject area id"><Input value={id} onChange={setId} t={t} placeholder="stable_snake_case_id" /></Field>}
+          {editor.kind === 'area' && <Field label="Area id"><Input value={id} onChange={setId} t={t} placeholder="stable_snake_case_id" /></Field>}
           {editor.kind === 'area' && (
             <>
-              <Message text="A subject area is a focused view of one part of this domain, like Customer lifecycle. It narrows the map and helps Ask pick the right skills; it never changes what Ask is allowed to use." t={t} />
-              <Field label="Subject area name"><Input value={areaName} onChange={setAreaName} t={t} placeholder="Customer lifecycle" /></Field>
+              <Message text="An area is a focused view of one part of this domain, like Customer lifecycle. It narrows the map and helps Ask pick the right skills; it never changes what Ask is allowed to use." t={t} />
+              <Field label="Area name"><Input value={areaName} onChange={setAreaName} t={t} placeholder="Customer lifecycle" /></Field>
               <Field label="Business question or scope"><Input value={areaDescription} onChange={setAreaDescription} t={t} placeholder="How customers progress from first order to repeat purchase." /></Field>
               <Field label="Example questions (comma-separated)"><Input value={areaIntents} onChange={setAreaIntents} t={t} placeholder="Which customers made a second purchase?" /></Field>
-              <Field label="Read-only boundary entities (comma-separated)"><Input value={areaReferences} onChange={setAreaReferences} t={t} placeholder="customer" /></Field>
+              <Field label="Tables from other areas shown at its edge (comma-separated)"><Input value={areaReferences} onChange={setAreaReferences} t={t} placeholder="customer" /></Field>
             </>
           )}
           {editor.kind === 'entity' && (
@@ -1224,7 +1225,7 @@ function ModelingEditor({ editor, data, selectedDomain, selectedArea, t, onClose
               {relationshipOrigin
                 ? <Message text={`Pick the dbt model that ${originName} relates to. When you save it, the relationship builder opens with ${originName} on the left so you can match the columns.`} t={t} />
                 : <Message text="Search by model name, relation, or source path. Results stay bounded even when the dbt project has thousands of models." t={t} />}
-              <Field label="Subject area"><Select value={areaId} onChange={setAreaId} values={Object.values(data.modeling.areas).filter((area) => area.domain === domain).map((area) => area.localId)} labels={Object.fromEntries(Object.values(data.modeling.areas).filter((area) => area.domain === domain).map((area) => [area.localId, area.name]))} t={t} /></Field>
+              <Field label="Area"><Select value={areaId} onChange={setAreaId} values={Object.values(data.modeling.areas).filter((area) => area.domain === domain).map((area) => area.localId)} labels={Object.fromEntries(Object.values(data.modeling.areas).filter((area) => area.domain === domain).map((area) => [area.localId, area.name]))} t={t} /></Field>
               <Field label="dbt model">
                 <DbtModelPicker value={dbtModel} onChange={setDbtModel} selectedNode={data.dbtProvenance.nodes[dbtModel]} domain={domain} t={t} />
               </Field>
@@ -1748,9 +1749,9 @@ function EntityInspector({ entity, detail, relationships = [], t, readOnly = fal
         <Property label="dbt description" value={detail?.description ?? 'Not declared'} t={t} />
       </details>
       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {!readOnly && <Button primary t={t} onClick={onEdit}>Edit entity</Button>}
+        {!readOnly && <Button primary t={t} onClick={onEdit}>Edit table</Button>}
         {!readOnly && <Button t={t} onClick={onEditDbtSource}>Preview dbt source patch</Button>}
-        {!readOnly && onDelete ? <Button t={t} danger onClick={onDelete}>Delete entity</Button> : null}
+        {!readOnly && onDelete ? <Button t={t} danger onClick={onDelete}>Remove from the model</Button> : null}
       </div>
     </Inspector>
   );

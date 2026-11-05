@@ -398,10 +398,10 @@ describe('warehouse-first modeling in the local runtime', () => {
     ]);
     const bound = proposal.operations.filter((operation: any) => operation.change?.operation === 'upsert_entity').map((operation: any) => operation.change.value.dbtModel).sort();
     expect(bound).toEqual(['warehouse.main.customers', 'warehouse.main.orders', 'warehouse.main.stg_payments']);
-    // One plain note for the three tables placed in the default area, with each operation kept for the details.
+    // One plain note for the three tables not in an area yet, with each operation kept for the details.
     const notes = proposal.diagnostics.filter((item: any) => item.code === 'MODEL_AREA_DEFAULTED');
     expect(notes).toHaveLength(1);
-    expect(notes[0]).toMatchObject({ severity: 'info', message: '3 tables placed in the default area. You can rename or move them later.' });
+    expect(notes[0]).toMatchObject({ severity: 'info', message: '3 tables not in an area yet. You can move them into an area later.' });
     expect(notes[0].operationIds).toHaveLength(3);
 
     // Kept automatically: the draft waits, across reloads, until saved or discarded.

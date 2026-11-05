@@ -78,7 +78,13 @@ function placements(modeling: Modeling) {
 }
 
 const domainName = (modeling: Modeling, domain: string) => (modeling.packages?.[domain] as { name?: string } | undefined)?.name ?? (domain === 'shared' ? 'Shared' : words(domain));
-const areaName = (modeling: Modeling, areaId: string | null) => (areaId ? modeling.areas[areaId]?.name ?? words(areaId.split('::').pop() ?? areaId) : 'Default area');
+/** How the map and pickers name an area: the default area a new model lands in (`core`) is not one (simplification plan Z3). */
+export function areaLabel(area: { localId?: string; name?: string } | undefined, fallback = ''): string {
+  if (!area || area.localId === DEFAULT_MODEL_AREA_ID) return 'Not in an area yet';
+  return area.name ?? fallback;
+}
+
+const areaName = (modeling: Modeling, areaId: string | null) => (areaId && modeling.areas[areaId]?.localId !== DEFAULT_MODEL_AREA_ID ? areaLabel(modeling.areas[areaId], words(areaId.split('::').pop() ?? areaId)) : 'Not in an area yet');
 const isShared = (modeling: Modeling, areaId: string | null, domain: string) => (areaId ? modeling.areas[areaId]?.shared === true : false) || domain === 'shared';
 
 /** Which level the map opens on, and what the overview shows. */
@@ -138,7 +144,8 @@ export function mapLevel(modeling: Modeling, selectedDomain: string | null, sele
       edge: areaId ? modeling.areas[areaId]?.referencedEntityIds.length ?? 0 : 0,
       joins: [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name)),
     };
-  }).sort((a, b) => Number(b.shared) - Number(a.shared) || b.tables - a.tables || a.name.localeCompare(b.name));
+  // Shared first, the tables not in an area yet last, the rest by size.
+  }).sort((a, b) => Number(b.shared) - Number(a.shared) || Number(a.areaId === null) - Number(b.areaId === null) || b.tables - a.tables || a.name.localeCompare(b.name));
   return { kind: 'areas', domain: selectedDomain, name: domainName(modeling, selectedDomain), tables: own.length, cards };
 }
 

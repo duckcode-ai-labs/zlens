@@ -472,7 +472,7 @@ export function LineagePanel({ variant = 'sidebar' }: { variant?: 'sidebar' | 'p
             <Section title="dbt Models" nodes={grouped.dbtModels} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
             <Section title="dbt Sources" nodes={grouped.dbtSources} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
             <Section title="Source Tables" nodes={grouped.tables} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
-            <Section title="Business Domains" nodes={grouped.domains} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
+            <Section title="Domains" nodes={grouped.domains} t={t} onSelect={handleSelectNode} secondaryFor={secondaryForNode} />
           </>
         ) : (
           <>

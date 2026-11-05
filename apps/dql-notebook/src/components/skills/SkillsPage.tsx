@@ -280,7 +280,7 @@ export function SkillsPage({
                 lineHeight: 1.5,
               }}
             >
-              Definitions, vocabulary, and instructions the AI follows when answering{modelAreaFilter ? ' in this subject area' : domainFilter ? ' in this domain' : ''}. Ask uses a skill only when the question contains one of its trigger words or vocabulary — drafts never guide answers.
+              Definitions, vocabulary, and instructions the AI follows when answering{modelAreaFilter ? ' in this area' : domainFilter ? ' in this domain' : ''}. Ask uses a skill only when the question contains one of its trigger words or vocabulary — drafts never guide answers.
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 7, color: t.textMuted, fontSize: 10.5, minWidth: 0 }}>
               <FolderOpen size={12} strokeWidth={1.8} />
@@ -556,7 +556,7 @@ function SkillRow({ skill, t, onEdit, onDelete, onPublish, publishing = false }:
           <SkillPillGroup t={t} label="Reuse these saved queries" values={skill.preferredBlocks} empty="No preferred saved queries" accent mono />
           <SkillPillGroup t={t} label="Ask first when" values={skill.clarifyWhen} empty="No clarification rule defined" />
           {skill.exclusions?.length ? <SkillPillGroup t={t} label="Avoid when" values={skill.exclusions} empty="" /> : null}
-          {skill.modelAreaRefs?.length ? <SkillPillGroup t={t} label="Subject areas" values={skill.modelAreaRefs} empty="" mono /> : null}
+          {skill.modelAreaRefs?.length ? <SkillPillGroup t={t} label="Areas" values={skill.modelAreaRefs} empty="" mono /> : null}
           {skill.sourceRefs?.length ? <SkillPillGroup t={t} label="Guided modeling objects" values={skill.sourceRefs} empty="" mono /> : null}
           {skill.body ? (
             <div style={{ gridColumn: '1 / -1' }}>
@@ -907,9 +907,9 @@ function SkillFormDrawer({ mode, options, domains, defaultDomain = null, default
 
           {/* Advanced fields the prototype folds away — all wiring preserved. */}
           <details style={{ gridColumn: '1 / -1' }}>
-            <summary style={{ fontSize: 11.5, fontWeight: 650, color: t.accent, cursor: 'pointer' }}>Advanced — subject areas, dimensions, and vocabulary</summary>
+            <summary style={{ fontSize: 11.5, fontWeight: 650, color: t.accent, cursor: 'pointer' }}>Advanced — areas, dimensions, and vocabulary</summary>
             <div style={{ display: 'grid', gap: 14, marginTop: 12 }}>
-              <Field label="Focused subject areas (optional)" t={t} hint="Comma-separated subject-area ids from the Modeling page. Inside its domain, the skill is used only for these subject areas; it never expands access.">
+              <Field label="Focused areas (optional)" t={t} hint="Comma-separated area ids from the Modeling page. Inside its domain, the skill is used only for these subject areas; it never expands access.">
                 <CommaListInput values={draft.modelAreaRefs ?? []} onChange={(next) => set('modelAreaRefs', next)} placeholder="customer_lifecycle, revenue_reporting" style={inputStyle(t)} />
               </Field>
               <Field label="Preferred dimensions" t={t} hint="Business-safe dimensions the agent should prefer when they are compatible.">

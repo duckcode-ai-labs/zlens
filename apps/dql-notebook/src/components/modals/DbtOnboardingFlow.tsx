@@ -502,7 +502,7 @@ export function DbtOnboardingFlow({
             {appliedNames.length > 0 && <Notice t={t} title={`${appliedNames.length} draft domain${appliedNames.length === 1 ? '' : 's'} created`} body={appliedNames.join(' · ')} />}
             {setupSkipped && <Notice t={t} title="Domain setup skipped" body="You can continue, but Ask is limited-context and all generated output requires review until governed paths exist." />}
             <Checklist t={t} items={[
-              ['Bind business entities', 'Reference dbt unique IDs; do not duplicate columns or descriptions.'],
+              ['Bind business tables', 'Reference dbt unique IDs; do not duplicate columns or descriptions.'],
               ['Declare analytical grain', 'Add grain only where dbt metadata is insufficient.'],
               ['Prove relationships', 'Cardinality, fanout, key mapping, evidence, and lifecycle control agent joins.'],
               ['Export cross-domain paths', 'Provider exports and consumer imports are required in addition to relationship proof.'],
