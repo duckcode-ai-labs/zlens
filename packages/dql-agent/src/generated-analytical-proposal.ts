@@ -2,6 +2,7 @@ import {
   buildGeneratedAnalyticalSqlSignature,
   buildSqlOutputExpressionSignature,
   type MetricCapabilityContract,
+  tableKey,
 } from '@zlens/core';
 import type { ExploratoryRequiredOutputBindingProofV1 } from './analytical-orchestration.js';
 import type { ResolvedAnalyticalPlan, ResolvedPlanMemberBinding } from './resolved-analytical-plan.js';
@@ -140,7 +141,7 @@ export function validateFrozenRequiredOutputProjection(input: {
     // `product_id AS order_id` has the expected alias but fails here.
     const references = output.columnReferences;
     const exactSource = references.length === 1
-      && normalizePhysicalIdentifier(references[0]!.column) === expectedProof.column
+      && tableKey(references[0]!.column, 'object') === expectedProof.column
       && relationMatchesFrozenPhysicalSource(
         input.plan,
         references[0]!.relation ?? '',
@@ -458,20 +459,12 @@ function frozenPhysicalOutputSource(qualifiedId: string | undefined): {
   if (!physicalColumn) return undefined;
   const parts = physicalColumn
     .split('.')
-    .map(normalizePhysicalIdentifier)
+    .map((part) => tableKey(part, 'object'))
     .filter(Boolean);
   if (parts.length < 2) return undefined;
   const column = parts.pop()!;
   const relation = parts.join('.');
   return relation && column ? { relation, column } : undefined;
-}
-
-function normalizePhysicalIdentifier(value: string): string {
-  return value
-    .trim()
-    .replace(/["`\[\]]/g, '')
-    .replace(/\s*\.\s*/g, '.')
-    .toLowerCase();
 }
 
 /**
@@ -487,12 +480,12 @@ function relationMatchesFrozenPhysicalSource(
   actualRelation: string,
   expectedRelation: string,
 ): boolean {
-  const actual = normalizePhysicalIdentifier(actualRelation);
-  const expected = normalizePhysicalIdentifier(expectedRelation);
+  const actual = tableKey(actualRelation, 'object');
+  const expected = tableKey(expectedRelation, 'object');
   if (!actual || !expected) return false;
 
   const frozenRelations = [...new Set((plan.sourceRelationIds ?? [])
-    .map(normalizePhysicalIdentifier)
+    .map((id) => tableKey(id, 'object'))
     .filter(Boolean))];
   const expectedLeaf = physicalIdentifierLeaf(expected);
   const actualLeaf = physicalIdentifierLeaf(actual);
@@ -571,7 +564,7 @@ function isFrozenLocalDbtRuntimeAliasPair(
   }
 
   const qualifiedModelId = `dbt::model.${first[0]}.${expectedLeaf}`;
-  return plan.selectedConceptIds.some((id) => normalizePhysicalIdentifier(id) === qualifiedModelId);
+  return plan.selectedConceptIds.some((id) => tableKey(id, 'object') === qualifiedModelId);
 }
 
 function physicalIdentifierLeaf(value: string): string | undefined {

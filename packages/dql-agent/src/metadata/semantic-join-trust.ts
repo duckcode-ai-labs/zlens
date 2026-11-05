@@ -12,8 +12,8 @@
  * A single-table compile takes no join and stays Governed.
  */
 import type { DQLManifest, ManifestModelRelationship, SemanticJoinStep } from '@zlens/core';
-import { parsePhysicalIdentifier } from '../ask-pipeline/physical-binding.js';
 import { assessAnalyticalRelationship } from './analytical-policy.js';
+import { sameTable, tableKey, tableName } from '@zlens/core';
 
 export interface SemanticJoinProof {
   /** The tables joined, as the semantic model names them. */
@@ -61,8 +61,8 @@ function proveStep(step: SemanticJoinStep, manifest: DQLManifest | undefined): S
     const relFrom = relationOf(relationship.from);
     const relTo = relationOf(relationship.to);
     if (!relFrom || !relTo) continue;
-    if (sameRelation(relFrom, step.leftTable) && sameRelation(relTo, step.rightTable)) candidates.push({ relationship, reversed: false });
-    else if (sameRelation(relFrom, step.rightTable) && sameRelation(relTo, step.leftTable)) candidates.push({ relationship, reversed: true });
+    if (sameTable(relFrom, step.leftTable, 'tail') && sameTable(relTo, step.rightTable, 'tail')) candidates.push({ relationship, reversed: false });
+    else if (sameTable(relFrom, step.rightTable, 'tail') && sameTable(relTo, step.leftTable, 'tail')) candidates.push({ relationship, reversed: true });
   }
   // When the compiler's ON clause is plain key equalities, only a relationship
   // on those same keys models this join.
@@ -104,28 +104,11 @@ function uncertifiedJoinCaveat(joins: SemanticJoinProof[]): string {
 function dedupeSteps(steps: SemanticJoinStep[]): SemanticJoinStep[] {
   const seen = new Set<string>();
   return steps.filter((step) => {
-    const key = [step.leftTable, step.rightTable].map(relationKey).sort().join('|') + `|${step.keys.map((k) => `${k.from}=${k.to}`).sort().join(',')}`;
+    const key = [step.leftTable, step.rightTable].map((table) => tableKey(table, 'tail')).sort().join('|') + `|${step.keys.map((k) => `${k.from}=${k.to}`).sort().join(',')}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
-}
-
-function relationParts(value: string): string[] {
-  return parsePhysicalIdentifier(value).map((part) => part.value.trim().toLowerCase()).filter(Boolean);
-}
-
-function relationKey(value: string): string {
-  return relationParts(value).slice(-2).join('.');
-}
-
-/** `"db"."dev"."orders"`, `dev.orders` and `orders` name one relation when the shorter is a suffix of the longer. */
-function sameRelation(left: string, right: string): boolean {
-  const a = relationParts(left);
-  const b = relationParts(right);
-  if (a.length === 0 || b.length === 0) return false;
-  const length = Math.min(a.length, b.length, 2);
-  return a.slice(-length).join('.') === b.slice(-length).join('.');
 }
 
 function sameKeys(left: Array<{ from: string; to: string }>, right: Array<{ from: string; to: string }>): boolean {
@@ -138,5 +121,5 @@ function keyText(keys: Array<{ from: string; to: string }>): string {
 }
 
 function tableLabel(table: string, cube: string): string {
-  return relationParts(table).at(-1) ?? cube;
+  return tableName(table).toLowerCase() || cube;
 }

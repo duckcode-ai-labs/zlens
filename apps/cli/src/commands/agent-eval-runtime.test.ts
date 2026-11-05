@@ -190,3 +190,31 @@ describe('the runtime driver waits as long as the case timeout, not the global f
     }
   });
 });
+
+describe('each case opens its own connection to the runtime', () => {
+  it('never reuses a kept-alive connection the runtime may be closing', async () => {
+    // The runtime closes an idle connection after five seconds; the eval reads
+    // the schema for a few seconds between cases. Reusing the connection raced
+    // that close and failed the case with ECONNRESET.
+    const { createServer } = await import('node:http');
+    let connections = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ run: { id: `run-${connections}`, status: 'completed' } }));
+      });
+    });
+    server.on('connection', () => { connections += 1; });
+    await new Promise<void>((done) => server.listen(0, '127.0.0.1', done));
+    const { port } = server.address() as { port: number };
+    try {
+      await driveViaRuntime({ runtimeBase: `http://127.0.0.1:${port}`, question: 'first', timeoutMs: 5_000 });
+      await driveViaRuntime({ runtimeBase: `http://127.0.0.1:${port}`, question: 'second', timeoutMs: 5_000 });
+      expect(connections).toBe(2);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  });
+});

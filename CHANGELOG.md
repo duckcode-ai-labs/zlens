@@ -21,6 +21,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **Every reader of the mode** (compile, the Modeling page, `zlens init`, `zlens new`, the dbt database tree) uses the same derived value.
 - **A manifest v3 project with nothing to model** says so: "add a dbt project or a warehouse connection".
 
+### Fixed: `zlens agent eval --via runtime` no longer loses questions to a closing connection
+
+- **Each question opens its own connection to the runtime.**
+  - Before, the eval reused the previous question's kept-alive connection, which the runtime closes after five seconds idle. The eval reads the schema for a few seconds between questions, so some posts went out as the connection closed.
+  - Those questions failed with ECONNRESET or "socket hang up" and were scored as "the runtime did not answer": 8 of 27 on the GitLab project.
+
 ### One word for each thing on the Modeling page (simplification plan Z3, Z5)
 
 - **The same words everywhere:**
@@ -50,6 +56,11 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - Moved: saving a join, matching live columns to a table, the join-safety keys, table datasets, and the dbt tables a warehouse sync reads.
   - A name is quoted for a warehouse from its parts. It used to keep their quotes, so a quoted part could be quoted twice.
   - 90 older uses are left.
+- **Part 3: the module moves to `@zlens/core`,** so core, the agent and the apps answer from one place. `@zlens/agent` re-exports it.
+  - A fourth level, `shared`, compares the parts both names have: `s.t` matches `prod.s.t`, but `dev.s.t` does not. Certified blocks and value evidence match at this level, as before, so a block written against one database never answers for another.
+  - Moved: the agent's 17 own helpers (aggregation safety, certified blocks, meaning evidence, join trust, hints, policy, regrounding, proposals, join mining) and core's `bareRelation`. `bareRelation` stays exported, deprecated, for code outside ZLens.
+  - A table's short name no longer keeps quote marks: `"T"` reads as `T` in the catalog and on the SQL checks.
+  - 52 older uses are left: SQL renderers that keep each part's own quotes, the fuzzy exploratory match, and short names in the apps.
 
 ### Hybrid projects: dbt models and warehouse tables in one model, never drafted twice
 

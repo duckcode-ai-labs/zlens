@@ -1,5 +1,6 @@
 import type { AnalyticalIntentV1 } from '../intent.js';
 import { withoutBlockNames } from '../named-blocks.js';
+import { tableName } from '@zlens/core';
 
 /**
  * THE CHECKS AN AI-DRAFTED STATEMENT PASSES BEFORE IT RUNS.
@@ -217,7 +218,7 @@ export function joinKeyPairs(sql: string): JoinKeyPair[] {
   for (const match of sql.matchAll(new RegExp(String.raw`\b(?:from|join)\s+${RELATION_TOKEN}(?:\s+(?:as\s+)?([A-Za-z_][\w$]*))?`, 'gi'))) {
     const relation = match[1]!;
     const alias = match[2] && !NOT_ALIAS.has(match[2].toLowerCase()) ? match[2] : undefined;
-    const tail = relation.split('.').pop()!.replace(/"/g, '');
+    const tail = tableName(relation);
     aliases.set(tail.toLowerCase(), relation);
     if (alias) aliases.set(alias.toLowerCase(), relation);
   }
@@ -309,7 +310,7 @@ export function groupedColumns(sql: string): GroupedColumn[] {
     const relation = match[1]!;
     if (ctes.has(relation.replace(/"/g, '').toLowerCase())) continue;
     const alias = match[2] && !NOT_ALIAS.has(match[2].toLowerCase()) ? match[2] : undefined;
-    aliases.set(relation.split('.').pop()!.replace(/"/g, '').toLowerCase(), relation);
+    aliases.set(tableName(relation).toLowerCase(), relation);
     if (alias) aliases.set(alias.toLowerCase(), relation);
     if (!relations.includes(relation)) relations.push(relation);
   }
@@ -380,7 +381,7 @@ export function unusedJoins(sql: string, columnsOf: (relation: string) => string
     const relation = join[2]!;
     const columns = columnsOf(relation);
     if (!columns?.length) continue;
-    const alias = join[3] && !NOT_ALIAS.has(join[3].toLowerCase()) ? join[3] : relation.split('.').pop()!.replace(/"/g, '');
+    const alias = join[3] && !NOT_ALIAS.has(join[3].toLowerCase()) ? join[3] : tableName(relation);
     const start = join.index! + join[0].length;
     const rest = text.slice(start);
     const end = rest.search(/\b(?:left|right|inner|full|cross|join|where|group\s+by|order\s+by|limit|having|union|qualify|window)\b|\)/i);

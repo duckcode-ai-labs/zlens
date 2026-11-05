@@ -207,12 +207,19 @@ export interface RuntimeDriverOptions {
  * was silently five minutes: a slow question on a large warehouse was scored
  * as "the runtime did not answer" while the runtime was still answering.
  * node:http waits until the case timeout's own abort.
+ *
+ * Each case opens its own connection (`agent: false`). Node keeps connections
+ * alive by default and the runtime closes an idle one after five seconds, while
+ * the eval spends a few seconds between cases reading the schema. A case posted
+ * as that connection closed failed with ECONNRESET or "socket hang up": 8 of 27
+ * GitLab questions, scored as the runtime not answering.
  */
 const postWithoutFetchCap: typeof fetch = (input, init) => new Promise((resolve, reject) => {
   const url = new URL(String(input));
   const body = typeof init?.body === 'string' ? init.body : '';
   const request = (url.protocol === 'https:' ? httpsRequest : httpRequest)(url, {
     method: init?.method ?? 'POST',
+    agent: false,
     headers: { ...(init?.headers as Record<string, string> | undefined), 'Content-Length': String(Buffer.byteLength(body)) },
     ...(init?.signal ? { signal: init.signal } : {}),
   }, (response) => {

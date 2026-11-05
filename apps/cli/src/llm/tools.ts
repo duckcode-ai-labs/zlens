@@ -24,6 +24,7 @@ import {
   openMetadataCatalog,
   type DqlToolName,
 } from '@zlens/agent';
+import { tableName } from '@zlens/core';
 
 export interface AgentTool {
   /** Callable when named, never declared to a model (see AgentToolDefinition.hidden). */
@@ -106,9 +107,9 @@ export function lookupRuntimeTableSchema(projectRoot: string, table: string): Re
       const candidates = [entry.relation, entry.name, entry.schema && entry.name ? `${entry.schema}.${entry.name}` : undefined]
         .filter((value): value is string => typeof value === 'string' && value.length > 0)
         .map((value) => value.toLowerCase());
-      const bareRelation = entry.relation?.split('.').pop()?.toLowerCase();
-      if (bareRelation) candidates.push(bareRelation);
-      return candidates.includes(needle) || (bareNeedle !== undefined && bareRelation === bareNeedle);
+      const bareTable = tableName(entry.relation ?? '').toLowerCase();
+      if (bareTable) candidates.push(bareTable);
+      return candidates.includes(needle) || (bareNeedle !== undefined && bareTable === bareNeedle);
     });
     if (!match) return undefined;
     return {

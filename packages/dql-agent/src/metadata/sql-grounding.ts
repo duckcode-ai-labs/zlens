@@ -24,7 +24,7 @@
  */
 
 import { allowedRelationLookupFromTables, checkSqlReferences, extractSelectAliases, usingJoinColumns } from './sql-context-validation.js';
-import { analyzeSqlReferences } from '@zlens/core';
+import { analyzeSqlReferences, tableName } from '@zlens/core';
 import type { DbtArtifacts, DbtModelNode, DbtSourceNode } from '../propose/dbt-artifacts.js';
 
 /** A single grounded table the model is allowed to reference. */
@@ -278,7 +278,7 @@ export interface RuntimeRelationInput {
  */
 export function buildGroundingFromRuntimeRelations(relations: RuntimeRelationInput[]): SchemaGrounding {
   const tables: GroundedTable[] = relations.map((rel) => ({
-    name: rel.name ?? rel.relation.split('.').at(-1) ?? rel.relation,
+    name: rel.name ?? (tableName(rel.relation) || rel.relation),
     qualifiedRelation: rel.relation,
     columns: rel.columns.map((c) => ({ name: c.name, type: c.type, description: c.description })),
     kind: 'model' as const,

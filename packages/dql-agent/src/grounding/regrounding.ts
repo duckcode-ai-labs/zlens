@@ -10,6 +10,7 @@ import type {
   SqlContextValidationCode,
   SqlContextValidationOffending,
 } from '../metadata/sql-context-validation.js';
+import { tableKey, tableName } from '@zlens/core';
 
 const RELATION_OBJECT_TYPES = ['dbt_model', 'dbt_source', 'warehouse_table', 'runtime_table'];
 const COLUMN_OBJECT_TYPES = ['dbt_column', 'runtime_column', 'warehouse_column'];
@@ -169,7 +170,7 @@ function runtimeTableToAllowedRelation(
 ): MetadataAllowedSqlRelation {
   return {
     relation: table.relation,
-    name: table.name ?? table.relation.split('.').at(-1) ?? table.relation,
+    name: table.name ?? (tableName(table.relation) || table.relation),
     source,
     columnCompleteness: 'complete',
     columns: table.columns,
@@ -189,7 +190,7 @@ function relationsToRuntimeTables(relations: MetadataAllowedSqlRelation[]): Runt
 function mergeAllowedRelations(relations: MetadataAllowedSqlRelation[]): MetadataAllowedSqlRelation[] {
   const byRelation = new Map<string, MetadataAllowedSqlRelation>();
   for (const relation of relations) {
-    const key = relationKey(relation.relation);
+    const key = tableKey(relation.relation, 'object');
     if (!key) continue;
     const existing = byRelation.get(key);
     if (!existing) {
@@ -234,7 +235,7 @@ function mergeRuntimeSchemaTables(
 ): RuntimeSchemaTable[] {
   const byRelation = new Map<string, RuntimeSchemaTable>();
   for (const table of [...left, ...right]) {
-    const key = relationKey(table.relation);
+    const key = tableKey(table.relation, 'object');
     if (!key) continue;
     const existing = byRelation.get(key);
     if (!existing) {
@@ -303,17 +304,13 @@ function relationMatches(candidate: string, wanted: string, candidateName?: stri
 }
 
 function relationKeys(relation: string): Set<string> {
-  const normalized = relationKey(relation);
+  const normalized = tableKey(relation, 'object');
   const parts = normalized.split('.').filter(Boolean);
   const keys = new Set<string>();
   if (normalized) keys.add(normalized);
   if (parts.length >= 2) keys.add(parts.slice(-2).join('.'));
   if (parts.length >= 1) keys.add(parts[parts.length - 1]!);
   return keys;
-}
-
-function relationKey(relation: string): string {
-  return relation.replace(/["`]/g, '').replace(/\s*\.\s*/g, '.').trim().toLowerCase();
 }
 
 function namesEqual(a: string, b: string): boolean {
