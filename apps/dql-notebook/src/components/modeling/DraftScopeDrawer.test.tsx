@@ -34,8 +34,9 @@ describe('the draft picker (model-at-scale design S3)', () => {
 
 describe('a hybrid project drafts its warehouse tables too', () => {
   it('says which warehouse tables it drafts, and that dbt\'s tables are never drafted twice', () => {
-    expect(warehouseNote({ tables: 23, dbtBuilt: 26, schemas: ['netsuite', 'zendesk'] })).toBe('23 warehouse tables dbt does not build, in netsuite, zendesk. The 26 synced tables dbt builds are drafted as dbt models, never twice; joins to the ones already in the model are drafted too.');
-    expect(warehouseNote({ tables: 0, dbtBuilt: 4, schemas: [] })).toBe('No warehouse tables outside dbt yet (the 4 synced tables dbt builds are drafted as dbt models). Choose their schemas in Settings → Connections → Sync schema.');
+    expect(warehouseNote({ tables: 23, dbtBuilt: 26, modeled: 0, schemas: ['netsuite', 'zendesk'] })).toBe('23 warehouse tables dbt does not build, in netsuite, zendesk. The 26 synced tables dbt builds are drafted as dbt models, never twice; joins to the ones already in the model are drafted too.');
+    expect(warehouseNote({ tables: 136, dbtBuilt: 0, modeled: 136, schemas: ['a', 'b', 'c', 'd', 'e', 'f', 'g'] })).toBe('136 warehouse tables dbt does not build, in a, b, c, d, e and 2 more schemas. All of them are in the model already; a draft adds only what is new.');
+    expect(warehouseNote({ tables: 0, dbtBuilt: 4, modeled: 0, schemas: [] })).toBe('No warehouse tables outside dbt yet (the 4 synced tables dbt builds are drafted as dbt models). Choose their schemas in Settings → Connections → Sync schema.');
     expect(warehouseNote(undefined)).toBe('Reading the warehouse catalog…');
   });
 });

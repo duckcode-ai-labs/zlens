@@ -16637,13 +16637,14 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ? searchDraftTables(graph, { q: body.q.slice(0, 120), businessOnly: body.businessOnly !== false, ...(typeof body.limit === 'number' ? { limit: body.limit } : {}) })
           : undefined;
         // Hybrid: the warehouse side is the synced tables dbt does not build.
-        let warehouse: { tables: number; dbtBuilt: number; schemas: string[] } | undefined;
+        let warehouse: { tables: number; dbtBuilt: number; modeled: number; schemas: string[] } | undefined;
         if (modelingModeOf(loadProjectConfig(projectRoot)) === 'hybrid') {
           const catalog = readWarehouseCatalog(projectRoot).snapshot;
           if (catalog) {
             const split = hybridWarehouseTables(catalog, projectSnapshot().manifest);
             const own = split.snapshot.relations.filter((relation) => relation.id.startsWith('warehouse.'));
-            warehouse = { tables: own.length, dbtBuilt: catalog.relations.length - own.length, schemas: [...new Set(own.map((relation) => relation.schema ?? ''))].filter(Boolean).sort() };
+            const bound = new Set(Object.values(projectSnapshot().manifest.modeling?.entities ?? {}).map((entity) => entity.dbtUniqueId));
+            warehouse = { tables: own.length, dbtBuilt: catalog.relations.length - own.length, modeled: own.filter((relation) => bound.has(relation.id)).length, schemas: [...new Set(own.map((relation) => relation.schema ?? ''))].filter(Boolean).sort() };
           }
         }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });

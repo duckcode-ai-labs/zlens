@@ -639,7 +639,7 @@ export interface DraftTableMatch {
 
 export interface DraftScopeResponse {
   /** Hybrid projects: the synced warehouse tables dbt does not build, and how many it does. */
-  warehouse?: { tables: number; dbtBuilt: number; schemas: string[] };
+  warehouse?: { tables: number; dbtBuilt: number; modeled: number; schemas: string[] };
   choices: DraftScopeChoices;
   preview: { description: string; asked: number; drafted: number; budget: number; leftOut: number; leftOutSample: Array<{ uniqueId: string; relation: string; layer: string }> };
   tables?: { total: number; items: DraftTableMatch[] };

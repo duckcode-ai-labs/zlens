@@ -70,7 +70,7 @@ export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onD
           <div style={{ flex: 1 }}>
             <b style={{ display: 'block', fontSize: 14 }}>Choose what to draft</b>
             <small style={{ color: theme.textMuted }}>
-              {choices ? `${plural(choices.tables, 'table')} in this project. A draft reads and checks up to ${choices.budget} at a time.` : 'Reading the project…'}
+              {choices ? `${hybrid && response?.warehouse ? `${plural(choices.tables, 'dbt table')} and ${plural(response.warehouse.tables, 'warehouse table')}` : plural(choices.tables, 'table')} in this project. A draft reads and checks up to ${choices.budget} at a time.` : 'Reading the project…'}
             </small>
           </div>
           <button type="button" aria-label="Close" disabled={drafting} onClick={onClose} style={{ ...secondary(theme), width: 30, padding: 0 }}><X size={14} /></button>
@@ -232,5 +232,7 @@ export function warehouseNote(warehouse: DraftScopeResponse['warehouse']): strin
   if (warehouse.tables === 0) {
     return `No warehouse tables outside dbt yet${warehouse.dbtBuilt ? ` (the ${plural(warehouse.dbtBuilt, 'synced table')} dbt builds are drafted as dbt models)` : ''}. Choose their schemas in Settings → Connections → Sync schema.`;
   }
-  return `${plural(warehouse.tables, 'warehouse table')} dbt does not build, in ${warehouse.schemas.join(', ')}.${warehouse.dbtBuilt ? ` The ${plural(warehouse.dbtBuilt, 'synced table')} dbt builds are drafted as dbt models, never twice; joins to the ones already in the model are drafted too.` : ''}`;
+  const schemas = warehouse.schemas.length > 5 ? `${warehouse.schemas.slice(0, 5).join(', ')} and ${warehouse.schemas.length - 5} more schemas` : warehouse.schemas.join(', ');
+  const modeled = warehouse.modeled ? ` ${warehouse.modeled === warehouse.tables ? 'All of them are' : `${warehouse.modeled.toLocaleString('en-US')} are`} in the model already; a draft adds only what is new.` : '';
+  return `${plural(warehouse.tables, 'warehouse table')} dbt does not build, in ${schemas}.${modeled}${warehouse.dbtBuilt ? ` The ${plural(warehouse.dbtBuilt, 'synced table')} dbt builds are drafted as dbt models, never twice; joins to the ones already in the model are drafted too.` : ''}`;
 }
