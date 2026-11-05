@@ -857,9 +857,21 @@ export function buildVocabularyIndex(source: VocabularySource): VocabularyIndex 
     });
   }
   // Authored meaning for a relation: what the modeled thing is, and its grain.
-  for (const [relation, meaning] of Object.entries(source.relationMeaning ?? {})) {
-    const entry = entries.find((candidate) => candidate.kind === 'relation' && candidate.model === relation);
-    if (!entry) continue;
+  // It is keyed by schema and table, so it reaches every entry for that
+  // table: the one dbt names in the database it built it in, and the same
+  // table where the project connects (a hybrid project's warehouse sync lists
+  // it again). An entry spelled with its database, because two databases hold
+  // it, is matched by its schema and table; the one Ask runs must know its
+  // Domain, grain and notes. Missing it left a crowded NBA project with no
+  // model rules and no grain on any NBA table.
+  const twoPart = (name: string) => name.split('.').slice(-2).join('.').toLowerCase();
+  const relationsByTwoPart = new Map<string, VocabularyEntry[]>();
+  for (const candidate of entries) {
+    if (candidate.kind !== 'relation' || !candidate.model) continue;
+    const key = twoPart(candidate.physical?.binding?.logicalRelation ?? candidate.model);
+    relationsByTwoPart.set(key, [...(relationsByTwoPart.get(key) ?? []), candidate]);
+  }
+  for (const [relation, meaning] of Object.entries(source.relationMeaning ?? {})) for (const entry of relationsByTwoPart.get(twoPart(relation)) ?? []) {
     if (meaning.businessName && !entry.aliases.includes(meaning.businessName)) entry.aliases.push(meaning.businessName);
     if (meaning.businessContext) entry.businessContext = meaning.businessContext;
     if (meaning.grain) entry.grain = meaning.grain;
