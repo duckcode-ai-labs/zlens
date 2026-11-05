@@ -34,10 +34,44 @@ const VALUE_REQUEST_SEMANTICS_RE = /\b(?:actual|full|specific|individual)\s+(?:v
 
 /**
  * Direct literal categories that the value-probe deny policy also protects.
- * These words only ever describe a person: payment instruments, health
- * records and personal contact details.
+ * These words describe a person: payment instruments, health records and
+ * personal contact details. The business phrases below share two of them and
+ * are set aside before these words are read.
  */
 const SENSITIVE_PERSONAL_DATA_RE = /\b(?:credit\s*card|debit\s*card|card\s*(?:number|no\.?|details?)|cvv|cvc|iban|swift|bic|routing\s*(?:number|no\.?)|bank\s*account|account\s*(?:number|no\.?)|sort\s*code|medical|diagnosis|patient|health\s*(?:condition|record|information|data)?|prescription|disability|biometric|fingerprint|home\s*address|phone(?:\s*(?:number|no\.?))?|mobile(?:\s*(?:number|no\.?))?|telephone|email(?:\s*address)?|sexual\s*orientation)\b/i;
+/**
+ * Email as a marketing channel, not an address: an email campaign, a
+ * marketing email, an email open rate, contacts opted in to email. Three of 40
+ * blind GitLab questions were refused on these words alone, before any table
+ * was chosen. A phrase followed by "address" or "id" is still an address.
+ */
+const EMAIL_CHANNEL_PHRASE_RE = /\b(?:(?:marketing|promotional|campaign|newsletter|nurture)\s+emails?|emails?\s+(?:campaigns?|marketing|newsletters?|programs?|blasts?|nurtures?|sends?|sent|opens?|opened|clicks?|clicked|click[-\s]?through|ctr|bounces?|bounced|unsubscribes?|unsubscribed|deliver(?:y|ies|ed|ability)|engagement|performance|opt[-\s]?ins?|opt[-\s]?outs?|subscriptions?|channel)|opt(?:s|ed)?[-\s]?(?:in|out)\s+(?:to|of|from|for)\s+emails?)\b(?!\s*(?:address(?:es)?|ids?)\b)/gi;
+/**
+ * A health score or health scorecard is how a customer-success team rates an
+ * account, and "account health" is that rating; neither is a person's health.
+ * "Account health" followed by a record, condition or plan word is not set
+ * aside.
+ */
+const HEALTH_SCORE_PHRASE_RE = /\b(?:account\s+health(?!\s*(?:conditions?|records?|information|data|insurance|plans?|care|status)\b)|health\s*(?:scorecards?|scores?|scoring))\b/gi;
+/** A phrase owned by someone is that someone's: "Jessica's marketing email", "their marketing email". */
+const OWNED_BY_THE_WORD_BEFORE_RE = /(?:\b(?:his|her|their|my|your)|\w(?:'s|’s|s'|s’))\s+$/i;
+/**
+ * A question that points at one person keeps every personal reading of these
+ * phrases: a possessive name, a capitalised name after for/to/of/about, or a
+ * personal pronoun. A month or a weekday is not a name ("for September 2026"),
+ * unless a second capitalised word follows it ("for June Carter").
+ */
+const CALENDAR_WORD = '(?:January|February|March|April|May|June|July|August|September|October|November|December|Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday|Today|Yesterday|Tomorrow)';
+const ONE_PERSON_NAME_RE = new RegExp(
+  `\\b(?:[Ff]or|[Tt]o|[Oo]f|[Aa]bout)\\s+(?!${CALENDAR_WORD}\\b(?!\\s+[A-Z][a-z]))[A-Z][a-z]+\\b`
+  + `|\\b(?!${CALENDAR_WORD}(?:'s|’s))[A-Z][a-z]+(?:\\s+[A-Z][a-z]+){0,2}(?:'s|’s)\\b`,
+);
+const PERSONAL_PRONOUN_RE = /\b(?:he|she|him|his|her|hers)\b/i;
+/**
+ * People whose health score is their own health. A customer, a client or a
+ * user is also an account in a customer-success model, so they are not here.
+ */
+const PEOPLE_WITH_HEALTH_RE = /\b(?:persons?|people|individuals?|patients?|employees?|staff|members?|residents?|students?|applicants?|claimants?|policy\s*holders?|policyholders?|citizens?|voters?|tenants?)\b/i;
 /**
  * Words that are personal data only when they describe a person. A street, a
  * zip code or a postal code is also where an insured building, a store or a
@@ -72,6 +106,22 @@ function isExplicitSystemPolicyOrCapabilityQuestion(question: string): boolean {
 
 function isExplicitPopulationAggregate(question: string): boolean {
   return AGGREGATE_OPERATION_RE.test(question) && AGGREGATE_POPULATION_OR_GROUPING_RE.test(question);
+}
+
+/**
+ * The question with its marketing-email and health-score phrases set aside,
+ * for reading the payment, health and contact words. Nothing is set aside
+ * when the question points at one person, an owned email phrase stays ("their
+ * marketing email" is an address), and a health score stays when the question
+ * is about people whose health it would be.
+ */
+function withoutBusinessPhrasesThatShareAPersonalWord(question: string): string {
+  if (ONE_PERSON_NAME_RE.test(question) || PERSONAL_PRONOUN_RE.test(question)) return question;
+  const emailChannelSetAside = question.replace(EMAIL_CHANNEL_PHRASE_RE, (phrase: string, offset: number, whole: string) =>
+    OWNED_BY_THE_WORD_BEFORE_RE.test(whole.slice(0, offset)) ? phrase : ' ');
+  return PEOPLE_WITH_HEALTH_RE.test(question)
+    ? emailChannelSetAside
+    : emailChannelSetAside.replace(HEALTH_SCORE_PHRASE_RE, ' ');
 }
 
 /**
@@ -125,7 +175,7 @@ export function evaluateAnalyticalRequestPolicy(question: string, options: Analy
     };
   }
 
-  const sensitive = options.sensitiveData !== 'columns' && (SENSITIVE_PERSONAL_DATA_RE.test(normalized)
+  const sensitive = options.sensitiveData !== 'columns' && (SENSITIVE_PERSONAL_DATA_RE.test(withoutBusinessPhrasesThatShareAPersonalWord(normalized))
     || (PERSONAL_WHEN_ABOUT_A_PERSON_RE.test(normalized) && isAboutPeople(normalized)));
   if (sensitive && !isSystemPolicyQuestion && !isPopulationAggregate) {
     return {
