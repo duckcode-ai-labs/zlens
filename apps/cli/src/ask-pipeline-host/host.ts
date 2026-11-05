@@ -495,6 +495,11 @@ export function physicalRelationName(relation: string, databases: Map<string, st
 }
 
 /** The wall-clock budget of the column probe per snapshot and connection; `ZLENS_ASK_COLUMN_PROBE_MS` overrides (default 12 s). */
+/** How many relations one information_schema statement describes; more are read in further statements. */
+const PROBE_BATCH_RELATIONS = 8;
+/** How many of the tables chosen for a draft have their columns read: a routed area's 30 and the tables search added. */
+const DRAFT_DESCRIBE_TABLES = 40;
+
 export function columnProbeBudgetMs(env: NodeJS.ProcessEnv = process.env): number {
   const configured = Number(readEnv('ZLENS_ASK_COLUMN_PROBE_MS', env));
   return Number.isFinite(configured) && configured > 0 ? configured : 12_000;
@@ -1564,26 +1569,35 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       }
       if (pending.length === 0) return found;
     }
-    let firstPage: ProbedRelation[] | undefined;
-    try {
-      firstPage = await runPage(pending.slice(0, 8), 0);
-    } catch {
-      // Stale catalog metadata, a different current database or a role
-      // change: keep the negative evidence short-lived and never turn it into
-      // proof that the object is absent.
-      firstPage = undefined;
+    // EVERY RELATION ASKED FOR, eight to a statement, while the budget lasts.
+    // Only the first eight used to be read, and the rest were remembered as
+    // absent for a minute: a draft shown thirty tables of a subject area lost
+    // all but a handful (ask-area-ranking design, R1). A relation no statement
+    // reached is left unremembered, so it is asked for by name next time.
+    const reached: string[] = [];
+    for (let start = 0; start < pending.length; start += PROBE_BATCH_RELATIONS) {
+      const batch = pending.slice(start, start + PROBE_BATCH_RELATIONS);
+      let page: ProbedRelation[] | undefined;
+      try {
+        page = await runPage(batch, 0);
+      } catch {
+        // Stale catalog metadata, a different current database or a role
+        // change: keep the negative evidence short-lived and never turn it into
+        // proof that the object is absent.
+        for (const raw of batch) remember(raw, undefined, 'negative');
+        continue;
+      }
+      // The budget is spent or the request was cancelled.
+      if (page === undefined) break;
+      reached.push(...batch);
+      for (const item of page) {
+        const owner = pageOwner(item, batch);
+        if (!owner) continue;
+        aggregates.set(owner, mergePage(aggregates.get(owner), item));
+        if (item.columnCompleteness === 'complete') { remember(owner, aggregates.get(owner), 'complete'); settled.add(owner); }
+      }
     }
-    if (firstPage === undefined) {
-      for (const raw of pending) remember(raw, undefined, 'negative');
-      return found;
-    }
-    for (const page of firstPage) {
-      const owner = pageOwner(page, pending);
-      if (!owner) continue;
-      aggregates.set(owner, mergePage(aggregates.get(owner), page));
-      if (page.columnCompleteness === 'complete') { remember(owner, aggregates.get(owner), 'complete'); settled.add(owner); }
-    }
-    for (const raw of pending) {
+    for (const raw of reached) {
       if (settled.has(raw)) continue;
       let aggregate = aggregates.get(raw);
       if (!aggregate) { remember(raw, undefined, 'negative'); continue; }
@@ -2018,13 +2032,14 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
     const ledgered = withLedger(provider, deps, request);
     // ON-DEMAND DESCRIPTION: a relation the reading names whose columns the
     // bounded probe never reached is described now, for this one run.
-    const describeRelations = async (relations: string[]) => {
+    const describeRelations = async (relations: string[], max = 5) => {
       if (!connection) return [];
       const { source } = await baseSourceFor(connection);
       const remaining = request.runBudget?.remainingMs();
-      // Up to five: the drafter may choose tables from the reading, the question
-      // and the conversation, and a table it cannot describe cannot be drafted over.
-      return probeColumns(connection, source, deps.getManifest().snapshotId, relations.slice(0, 5), remaining, request.signal);
+      // Up to five when a reading or a widened search names a table; every
+      // table chosen for the draft when the draft's tables are read (up to
+      // DRAFT_DESCRIBE_TABLES). A table it cannot describe cannot be drafted over.
+      return probeColumns(connection, source, deps.getManifest().snapshotId, relations.slice(0, max), remaining, request.signal);
     };
     // THE LAST TIER'S DRAFT: one read-only statement from the reading and the
     // admitted relations and columns, validated against the catalog before
@@ -2282,7 +2297,12 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         ];
       };
       const briefColumns = new Map<string, string[]>();
-      const briefCard = (relation: string): string => `- executable relation:${relation} [in brief]: ${(briefColumns.get(physicalRelationIdentity(relation)) ?? []).join(', ')}`;
+      // A table's columns in one line, from the warehouse catalog when it is
+      // synced, else from the columns this request has described.
+      const describedColumns = (relation: string): string[] => current.entries
+        .filter((item) => { if (item.kind !== 'column') return false; const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })
+        .map((item) => [item.physical?.column ?? item.name.split('.').pop()!, item.dataType].filter(Boolean).join(' '));
+      const briefCard = (relation: string): string => `- executable relation:${relation} [in brief]: ${(briefColumns.get(physicalRelationIdentity(relation)) ?? describedColumns(relation)).join(', ')}`;
       if (warehouseKeys) {
         const described = current.entries
           .filter((item) => item.kind === 'relation' && entryPhysicalRelation(item) !== undefined && current.entries.some((column) => column.kind === 'column' && samePhysicalEntry(column, item)))
@@ -2444,24 +2464,73 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
       });
       if (needsColumns.length > 0) {
         // Tables the Modeling map added come first: they are how the others
-        // join, and a table without described columns is dropped below. The
-        // number described stays as it was — describing more tables leaves
-        // more columns in the request's vocabulary, and a later question then
-        // reads wider than the certified block that answers it.
+        // join, and a table without described columns is dropped below.
+        // On a model too large to show whole, every chosen table is described,
+        // not five: on GitLab's 4,742 tables the SQL writer was told it saw a
+        // 30-table area and got 4 to 11 tables, and tables the catalog search
+        // had found were dropped without a word (ask-area-ranking design, R1).
+        // The columns stay in this request's vocabulary: a later question
+        // reads only the tables it chooses. A model shown whole keeps five for
+        // now: describing more changes what the jaffle golden suite's recorded
+        // drafts were written from, and widening it there waits for a live
+        // re-record.
         const ordered = [...needsColumns.filter((relation) => bridged.includes(relation) || namingTables.includes(relation)), ...needsColumns.filter((relation) => !bridged.includes(relation) && !namingTables.includes(relation))];
         try {
-          const found = await describeRelations(ordered);
+          const found = await describeRelations(ordered, wholeModel ? 5 : DRAFT_DESCRIBE_TABLES);
           if (found.length > 0) {
             current = mergeDiscoveredRelations(current, found);
             requestVocabulary = current;
           }
         } catch { /* draft over what is already described */ }
       }
-      // Only tables whose columns are known can be drafted over.
-      relations = relations.filter((relation) => current.entries.some((item) => item.kind === 'column' && (() => { const physical = entryPhysicalRelation(item); return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation); })()));
+      // THE TABLES' CARDS, in the order chosen: each table in full while the
+      // draft's table budget lasts, then in brief (one line of column names
+      // and types) rather than cut part-way. A routed subject area may take the
+      // whole-schema budget: thirty GitLab tables in brief are about 22,000
+      // characters (ask-area-ranking design, R1). A whole warehouse schema
+      // keeps its own rule: in full while it fits, else the rest in brief.
+      const tableCards = (list: string[]) => {
+        const cards: string[] = [];
+        const full: string[] = [];
+        const brief: string[] = [];
+        const cut: string[] = [];
+        let chars = 0;
+        const cap = wholeSchema ? wholeSchemaChars : routed ? WHOLE_SCHEMA_CHARS : DRAFT_TABLES_CHARS;
+        for (const relation of list) {
+          const entry = current.entries.find((item) => {
+            if (item.kind !== 'relation') return false;
+            const physical = entryPhysicalRelation(item);
+            return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation);
+          });
+          const fullCard = [
+            // What a table is, in a warehouse's, a person's or a draft's words,
+            // once the project keeps meaning files. A project without them
+            // keeps the prompt it had.
+            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${hasMeaningFiles && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}${modeledMeaning(entry)}` : `- executable relation:${relation}`,
+            ...current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => columnCard(item)),
+            ...declaredKeyLines(relation),
+          ];
+          const overflow = chars + fullCard.join('\n').length + 1 > DRAFT_TABLES_CHARS;
+          const inBrief = briefRelations.has(physicalRelationIdentity(relation)) || (overflow && (!wholeSchema || briefRelations.size > 0));
+          const lines = inBrief ? [briefCard(relation), ...declaredKeyLines(relation)] : fullCard;
+          let shown = 0;
+          for (const line of lines) { if (chars + line.length > cap) break; cards.push(line); chars += line.length + 1; shown += 1; }
+          (shown === 0 ? cut : inBrief ? brief : full).push(relation);
+        }
+        return { cards, full, brief, cut };
+      };
+      // Only tables whose columns are known can be drafted over; the step
+      // names the ones left out, so nothing is dropped without a word.
+      const unread = relations.filter((relation) => describedColumns(relation).length === 0);
+      relations = relations.filter((relation) => describedColumns(relation).length > 0);
       if (relations.length === 0) return { unavailable: true, error: 'the tables that match the question could not be described on this connection' };
-      const routedTables = routed ? routed.relations.length - routed.shared.length : 0;
-      hostStep({ phase: 'schema', title: routed ? `Showed the ${routed.groups.map((group) => group.name).join(' and ')} area${routed.groups.length === 1 ? '' : 's'}: the ${routedTables} table${routedTables === 1 ? '' : 's'} ${routed.groups.length === 1 ? 'it answers' : 'they answer'} from${routed.shared.length ? `, and ${routed.shared.length} Shared table${routed.shared.length === 1 ? '' : 's'} ${routedTables === 1 ? 'it joins' : 'they join'}` : ''}${relations.length > routed.relations.length ? `, and ${relations.length - routed.relations.length} more the question needs` : ''}` : wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', relations: [...relations], detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}` });
+      const reachedWriter = (list: string[]) => list.filter((relation) => relations.some((known) => physicalRelationIdentity(known) === physicalRelationIdentity(relation)));
+      const routedChosen = routed ? routed.relations.length - routed.shared.length : 0;
+      const routedTables = routed ? reachedWriter(routed.relations.filter((relation) => !routed!.shared.includes(relation))).length : 0;
+      const routedShared = routed ? reachedWriter(routed.shared).length : 0;
+      const plan = tableCards(relations);
+      const room = plan.brief.length ? ` (${plan.full.length} in full, ${plan.brief.length} in brief)` : '';
+      hostStep({ phase: 'schema', title: routed ? `Showed the ${routed.groups.map((group) => group.name).join(' and ')} area${routed.groups.length === 1 ? '' : 's'}: ${routedTables === routedChosen ? `the ${routedTables} table${routedTables === 1 ? '' : 's'}` : `${routedTables} of the ${routedChosen} tables`} ${routed.groups.length === 1 ? 'it answers' : 'they answer'} from${routedShared ? `, and ${routedShared} Shared table${routedShared === 1 ? '' : 's'} ${routedTables === 1 ? 'it joins' : 'they join'}` : ''}${relations.length > routedTables + routedShared ? `, and ${relations.length - routedTables - routedShared} more the question needs` : ''}${room}` : wholeModel && !wholeSchema ? `Showed the whole model: the ${wholeModel} table${wholeModel === 1 ? '' : 's'} it answers from${relations.length > wholeModel ? `, and ${relations.length - wholeModel} more the question needs` : ''}` : wholeSchema ? `Showed the whole schema: all ${relations.length} tables${briefRelations.size ? ', the rest in brief' : ''}${relations.some((relation) => { const keys = warehouseKeys?.keysOf(relation); return Boolean(keys?.primaryKey || keys?.foreignKeys.length); }) ? ', with the keys the warehouse declares' : ''}` : `Chose ${relations.length === 1 ? 'the table' : 'the tables'} ${relations.join(', ')}`, state: 'done', relations: relations.filter((relation) => !plan.cut.includes(relation)), detail: `picked from ${indexPicked.length ? `a one-line index of ${indexRelations.length} tables, by AI` : refs.length ? 'the fields the reading named' : 'the words of the question'}${catalogPicked.length ? `; found by the catalog search: ${catalogPicked.join(', ')}` : ''}${bridged.length ? `; added to connect them over modeled relationships: ${bridged.join(', ')}` : ''}${namingTables.length ? `; added because they name what the answer groups by: ${namingTables.join(', ')}` : ''}${needsColumns.length ? `; columns of ${needsColumns.slice(0, 4).join(', ')} read from the warehouse` : ''}${deprecatedLeftOut.length ? `; left out as deprecated in the model: ${deprecatedLeftOut.join(', ')}` : ''}${preferred.length ? `; used as the drafted table pick: ${preferred.join('; ')}` : ''}${unread.length ? `; left out, no columns could be read in time: ${unread.join(', ')}` : ''}${plan.cut.length ? `; left out, no room in the prompt: ${plan.cut.join(', ')}` : ''}` });
       // THE CONTEXT THE DRAFT READS: what the user said, the previous reading,
       // and what the project says about this data (domain notes, business
       // terms the question uses, approved hints).
@@ -2567,27 +2636,7 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         if (unresolvedPhysical.length > 0) {
           return { error: `the relation ${unresolvedPhysical.map((entry) => entry.model ?? entry.name).join(', ')} does not have one exact physical database binding for this target; refresh metadata or resolve the duplicate database identity before drafting SQL` };
         }
-        const cards: string[] = [];
-        let chars = 0;
-        for (const relation of relations) {
-          const entry = current.entries.find((item) => {
-            if (item.kind !== 'relation') return false;
-            const physical = entryPhysicalRelation(item);
-            return physical !== undefined && physicalRelationIdentity(physical) === physicalRelationIdentity(relation);
-          });
-          const fullCard = [
-            // What a table is, in a warehouse's, a person's or a draft's words,
-            // once the project keeps meaning files. A project without them
-            // keeps the prompt it had.
-            entry ? `- executable relation:${relation} [${entry.physical?.binding?.columnCompleteness ?? 'partial'} columns; logical ${entry.physical?.binding?.logicalRelation ?? entry.model ?? relation}]${hasMeaningFiles && entry.description ? ` ${entry.description.replace(/\s+/g, ' ').slice(0, 400)}` : ''}${modeledMeaning(entry)}` : `- executable relation:${relation}`,
-            ...current.entries.filter((item) => item.kind === 'column' && samePhysicalEntry(item, entry)).map((item) => columnCard(item)),
-            ...declaredKeyLines(relation),
-          ];
-          const inBrief = briefRelations.has(physicalRelationIdentity(relation)) || (briefRelations.size > 0 && chars + fullCard.join('\n').length + 1 > DRAFT_TABLES_CHARS);
-          const lines = inBrief ? [briefCard(relation), ...declaredKeyLines(relation)] : fullCard;
-          const cap = wholeSchema ? wholeSchemaChars : DRAFT_TABLES_CHARS;
-          for (const line of lines) { if (chars + line.length > cap) break; cards.push(line); chars += line.length + 1; }
-        }
+        const { cards } = tableCards(relations);
         const dialect = connection?.driver ?? 'duckdb';
         const messages: AgentMessage[] = [
           { role: 'system', content: `You write exactly ONE read-only SQL statement for ${dialect} that answers the question from the tables below. No certified block or semantic metric answers it, so you choose the tables, columns, joins and filters. Use ONLY the executable physical relations and columns listed below, spelled exactly as listed (including database and quoting where shown). Join two relations only on columns that exist in both. Apply every restriction the question states; when unsure how a text value is stored, match it case-insensitively; aggregate at the grain the question asks for; when the answer lists people or things, select and group by their id column beside the name (two can share a name); a term with a standard definition (a double-double, a win rate, a repeat customer) is computed from the listed columns that define it, and the definition is not a missing field; order and limit as it asks; never return more than 500 rows. No DDL or DML, no comments, no explanation. The CONTEXT lines are what the user and the project have said about this data (definitions, rules, where values are kept): follow them, and use a table or field the user names as named. A semantic metric listed in CONTEXT is computed exactly as it is defined there. A preferred join listed in CONTEXT is how those tables join unless the question needs another. When no column is dedicated to a restriction the question states, apply it to the text, tag, category or custom field that most plausibly holds that value, matched case-insensitively (a partial match is allowed). Reply exactly NO_SQL: followed by one sentence naming what is missing only when no listed column could hold a measure or a restriction the question asks for, and never substitute a different measure for the one asked. Otherwise return the SQL only.` },
