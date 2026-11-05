@@ -638,6 +638,8 @@ export interface DraftTableMatch {
 }
 
 export interface DraftScopeResponse {
+  /** Hybrid projects: the synced warehouse tables dbt does not build, and how many it does. */
+  warehouse?: { tables: number; dbtBuilt: number; modeled: number; schemas: string[] };
   choices: DraftScopeChoices;
   preview: { description: string; asked: number; drafted: number; budget: number; leftOut: number; leftOutSample: Array<{ uniqueId: string; relation: string; layer: string }> };
   tables?: { total: number; items: DraftTableMatch[] };
@@ -5256,7 +5258,7 @@ export const api = {
    * warehouse, as a reviewable proposal. `proposal` is null when there is
    * nothing new to draft.
    */
-  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean; scope?: DraftScopeRequest } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
+  async draftWarehouseModel(input: { expectedSnapshotId?: string; domain?: string; validate?: boolean; queryHistory?: boolean; includeStaging?: boolean; scope?: DraftScopeRequest; source?: 'dbt' | 'warehouse' } = {}): Promise<{ report: WarehouseDiscoveryReport; proposal: ContextAuthoringProposalV1 | null }> {
     return request('/api/modeling/warehouse/discover/proposal', { method: 'POST', body: JSON.stringify({ validate: true, ...input }) });
   },
 

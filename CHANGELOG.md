@@ -19,6 +19,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 - **The same model reaches Ask however dbt spells a table:** a dev database, quoted upper case, or the warehouse the project connects to. Ask gets the same Domain rules, grain, notes and deprecations in each case.
 - **CI fails on a new table-name helper** (`scripts/check-table-names.mjs`). 106 older uses outside the Ask path are listed in a baseline that only shrinks; later parts of the plan move them.
 
+### Hybrid projects: dbt models and warehouse tables in one model, never drafted twice
+
+- **A hybrid project's warehouse draft treats a table dbt builds as that dbt model.**
+  - One the model already has is read as the model's, so joins from warehouse tables to it are drafted and checked on the data.
+  - One it does not have yet is left to the dbt draft and listed ("Left to the dbt draft: …").
+  - Before, the warehouse draft drafted dbt's tables a second time as plain warehouse tables.
+- **On the Modeling page of a hybrid project, "Draft the model" asks which side to draft:**
+  - **dbt models:** by area, tables or a dbt selector;
+  - **warehouse tables:** the synced tables dbt does not build.
+
+  Before, the page drafted only the warehouse side.
+- **`zlens sync warehouse --schemas …` in a project with dbt adds the schemas to the dbt tables in Ask's scope,** as Settings → Sync schema does. Before, it replaced them, and Ask lost the dbt tables.
+
 ### Ask shows a large model one subject area at a time (model-at-scale design S6)
 
 - **A model of up to 30 tables to answer from is still shown whole.** A larger one is now shown by area:
