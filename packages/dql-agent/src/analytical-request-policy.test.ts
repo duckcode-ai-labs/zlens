@@ -303,6 +303,65 @@ describe('analytical request ingress policy', () => {
     expect(evaluateAnalyticalRequestPolicy('How many customers have contact details on file?')).toEqual({ allowed: true });
   });
 
+  // An aggregate word beside a list of people does not make the list an
+  // aggregate: each customer's email is still asked for.
+  it.each([
+    'List customers with their emails and total orders',
+    'Show each customer\'s email and total spend',
+    'List customers with their phone number and average order value',
+    'Show the email address and total spend for each customer',
+    'What is the phone number and total spend of every customer?',
+    'For every member, show their phone number and average claim amount',
+    'Show each employee\'s home address and total hours by department',
+    'Show me the top 10 customers by total spend with their email addresses',
+    'Show all active customers with phone numbers and average basket size',
+    'Give me a list of customers with emails and total orders',
+    'Show customer emails with total orders',
+    'Show customer names, emails and total spend by region',
+    'Export users and their phone numbers with total logins',
+    'Customers with their emails and total orders',
+    'Which customers have the highest total spend, and what are their emails?',
+    'Which customer has the highest total spend and what is their phone number?',
+    'Who are our top customers by average order value, with their mailing addresses?',
+    'List patients with their diagnosis and average length of stay',
+  ])('blocks a list of people beside an aggregate: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'SENSITIVE_PERSONAL_DATA_REQUEST',
+    });
+  });
+
+  it.each([
+    'List all staff with salary and total compensation by department',
+    'Show the employees with the highest total compensation by department',
+  ])('blocks a list of people\'s pay beside an aggregate: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toMatchObject({
+      allowed: false,
+      code: 'INDIVIDUAL_COMPENSATION_REQUEST',
+    });
+  });
+
+  // A count, a share or an average over people stays answerable, also when it
+  // starts with a listing verb, says "each" of a group, or uses "their".
+  it.each([
+    'How many customers have an email address?',
+    'How many customers have verified their phone number?',
+    'What percentage of users signed up with their work email?',
+    'What do customers with a phone number spend on average?',
+    'Show the number of customers with an email address',
+    'Give me the total number of customers with a phone number',
+    'Show the percentage of customers by gender',
+    'What percentage of customers in each customer segment have a phone number on file?',
+    'How many members have a home address on file in each region?',
+    'Break down the percentage of employees by gender for each department',
+    'What is the average length of stay for patients by diagnosis?',
+    'Show patient volume by diagnosis with average length of stay',
+    'How many different customers bought from the Imaginary Street Press Company in 2025?',
+    'Show the average salary by department',
+  ])('allows an aggregate over people: %s', (question) => {
+    expect(evaluateAnalyticalRequestPolicy(question)).toEqual({ allowed: true });
+  });
+
   it('still blocks one person\'s pay', () => {
     expect(evaluateAnalyticalRequestPolicy('Show Jessica Richard\'s pay')).toMatchObject({
       allowed: false,

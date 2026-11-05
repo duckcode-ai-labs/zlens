@@ -129,6 +129,52 @@ const NAMED_INDIVIDUAL_REFERENCE_RE = /\b(?:for|to|of)\s+[A-Z][a-z]+(?:\s+[A-Z][
 // population list; a grouped account question still has an explicit `by …`.
 const AGGREGATE_OPERATION_RE = /\b(?:average|avg|median|mean|total|sum|count|number\s+of|how\s+many|percentage|percent|rate|distribution|breakdown|aggregate|overall)\b/i;
 const AGGREGATE_POPULATION_OR_GROUPING_RE = /\b(?:by\s+(?:department|team|role|level|location|region|country|segment|category|month|quarter|year)|across\s+(?:employees?|customers?|people|individuals?|patients?|members?|users?)|(?:employees?|customers?|people|individuals?|patients?|members?|users?)\b)/i;
+/**
+ * A question that lists people one by one is not a population aggregate, even
+ * when an aggregate word sits beside the list: "List customers with their
+ * emails and total orders" asks for each customer's email. Four wordings list
+ * people:
+ * - each or every person: "each customer's email", "for each customer", "the
+ *   phone number of every member";
+ * - a listing verb whose object is people: "List customers …", "Show me the
+ *   top 10 users …", "Export all of our members …", or one person's column
+ *   words: "Show customer emails …";
+ * - people with their …: "customers with their emails", "users and their
+ *   phone numbers";
+ * - a question that asks which people, or who: "Which customers have the
+ *   highest total spend, and what are their emails?".
+ * A group named after people is not a person ("each customer segment", "which
+ * customer tiers"), and a person word in front of a measure is not a list
+ * ("Show patient volume by diagnosis"). An aggregate word, a question word or
+ * an auxiliary verb where the people would be keeps the question an
+ * aggregate: "Show the number of customers with an email address", "What
+ * percentage of customers …", "What do customers with a phone number spend on
+ * average?".
+ */
+const ONE_LISTED_PERSON = '(?:customer|client|policy\\s*holder|policyholder|member|person|individual|employee|staff\\s+member|user|resident|applicant|claimant|patient|student|citizen|voter|tenant|contact(?![\\s_-]+(?:details?|info(?:rmation)?|numbers?|data|fields?)\\b)|lead|subscriber|recipient|buyer|shopper|guest|donor|worker)';
+const LISTED_PEOPLE = '(?:customers|clients|policy\\s*holders|policyholders|members|people|persons|individuals|employees|staff|personnel|users|residents|applicants|claimants|patients|students|citizens|voters|tenants|contacts|leads|subscribers|recipients|buyers|shoppers|guests|donors|workers)';
+const NOT_A_GROUP_OF_PEOPLE = '(?![\\s_-]+(?:segments?|groups?|types?|tiers?|cohorts?|categor(?:y|ies)|class(?:es)?|levels?|bases?|counts?|regions?|markets?|channels?|sources?)\\b)';
+/** One word that describes the people: "active customers", "new users". */
+const DESCRIBING_WORD = '(?:(?!(?:average|avg|median|mean|total|sum|count|number|percentage|percent|share|proportion|fraction|ratio|rate|distribution|breakdown|aggregate|overall|distinct|unique|how|why|when|where|whether|if|that|what|which|who|is|are|was|were|be|been|do|does|did|have|has|had|can|could|would|will|should|shall|might|may|must|of|in|for|to|by|with|from|on|at|about)\\b)[a-z]+\\s+)?';
+const ONE_PERSONS_COLUMN = `${ONE_LISTED_PERSON}[\\s_-]+(?:names?|ids?|e-?mails?|phones?|mobiles?|contacts?|address(?:es)?|home|mailing|billing|records?|details?|profiles?)\\b`;
+const LISTS_PEOPLE_ONE_BY_ONE_RE = new RegExp(
+  // each customer, every member's, for each employee
+  `\\b(?:each|every)\\s+(?:single\\s+|individual\\s+)?(?:${ONE_LISTED_PERSON}|${LISTED_PEOPLE})\\b${NOT_A_GROUP_OF_PEOPLE}`
+  // List customers, Show me the top 10 users, Export all of our members, Give me a list of patients, Show customer emails
+  + '|\\b(?:list|show|display|give|return|get|pull|export|fetch|retrieve|provide|output|print|download|extract|dump|find|identify|rank)\\s+'
+  + '(?:(?:me|us)\\s+)?'
+  + '(?:(?:a|an|the)\\s+)?(?:(?:full|complete|detailed)\\s+)?(?:(?:list|table|roster|directory|names?|records?|rows?|details?|profiles?)\\s+of\\s+)?'
+  + '(?:(?:the|all|our|every|each|any|those|these|(?:all|each|any|some|most|many)\\s+of)\\s+)*'
+  + '(?:(?:top|bottom|first|last|best|worst)\\s+)?(?:\\d[\\d,]*\\s+)?'
+  + `${DESCRIBING_WORD}(?:${LISTED_PEOPLE}\\b${NOT_A_GROUP_OF_PEOPLE}|${ONE_PERSONS_COLUMN})`
+  // customers with their emails, users and their phone numbers
+  + `|\\b(?:${ONE_LISTED_PERSON}|${LISTED_PEOPLE})\\s+(?:with|and|plus|including|alongside|along\\s+with|together\\s+with|as\\s+well\\s+as)\\s+their\\b`
+  // Which customer(s), Which of our members, What users, Who are …
+  + `|\\bwhich\\s+(?:of\\s+(?:the|our)\\s+)?${DESCRIBING_WORD}(?:${ONE_LISTED_PERSON}|${LISTED_PEOPLE})\\b${NOT_A_GROUP_OF_PEOPLE}`
+  + `|\\bwhat\\s+${DESCRIBING_WORD}${LISTED_PEOPLE}\\b${NOT_A_GROUP_OF_PEOPLE}`
+  + '|^\\s*who\\b',
+  'i',
+);
 const INDIVIDUAL_EARNINGS_QUESTION_RE = /\b(?:how\s+much\s+(?:does|did)\s+(?:the\s+)?(?:ceo|cfo|coo|cto|chief\s+\w+\s+officer|founder|employee|person|individual|manager|director|executive)|what\s+(?:does|did)\s+(?:the\s+)?(?:ceo|cfo|coo|cto|chief\s+\w+\s+officer|founder|employee|person|individual|manager|director|executive))\b[^?.!]{0,32}\b(?:make|earn)\b/i;
 
 function isExplicitSystemPolicyOrCapabilityQuestion(question: string): boolean {
@@ -142,8 +188,11 @@ function isExplicitSystemPolicyOrCapabilityQuestion(question: string): boolean {
     && !namesAnIndividual(question);
 }
 
+/** An aggregate over a population of people, not a list of them. */
 function isExplicitPopulationAggregate(question: string): boolean {
-  return AGGREGATE_OPERATION_RE.test(question) && AGGREGATE_POPULATION_OR_GROUPING_RE.test(question);
+  return AGGREGATE_OPERATION_RE.test(question)
+    && AGGREGATE_POPULATION_OR_GROUPING_RE.test(question)
+    && !LISTS_PEOPLE_ONE_BY_ONE_RE.test(question);
 }
 
 /**
