@@ -29,7 +29,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import { Certifier } from '@zlens/governance';
-import { buildManifest, readWarehouseCatalog, type ManifestModelArea, type ManifestModelEntity } from '@zlens/core';
+import { buildManifest, readWarehouseCatalog, type ManifestModelArea, type ManifestModelEntity, tableKey } from '@zlens/core';
 import type { BlockRecord, BlockStatus } from '@zlens/project';
 import {
   reflectAndReviseBlock,
@@ -431,19 +431,15 @@ function resolveBuildScope(options: BuildFromPromptOptions): BuildScope {
   };
 }
 
-function normalizeRelation(value: string): string {
-  return value.replace(/["`]/g, '').replace(/\s*\.\s*/g, '.').trim().toLowerCase();
-}
-
 /** Restrict artifact grounding to the immutable pack; never backfill from disk. */
 function restrictArtifactsToContextPack(
   artifacts: DbtArtifacts | undefined,
   contextPack: LocalContextPack | undefined,
 ): DbtArtifacts | undefined {
   if (!artifacts || !contextPack) return artifacts;
-  const allowed = new Set(contextPack.allowedSqlContext.relations.map((item) => normalizeRelation(item.relation)));
+  const allowed = new Set(contextPack.allowedSqlContext.relations.map((item) => tableKey(item.relation, 'object')));
   const allows = (name: string, relation: string, alias?: string) =>
-    allowed.has(normalizeRelation(relation)) || allowed.has(normalizeRelation(name)) || Boolean(alias && allowed.has(normalizeRelation(alias)));
+    allowed.has(tableKey(relation, 'object')) || allowed.has(tableKey(name, 'object')) || Boolean(alias && allowed.has(tableKey(alias, 'object')));
   const models = artifacts.models.filter((model) => allows(model.name, model.qualifiedRelation, model.alias));
   const sources = artifacts.sources.filter((source) => allows(source.name, source.qualifiedRelation));
   const ids = new Set([...models, ...sources].map((item) => item.uniqueId));

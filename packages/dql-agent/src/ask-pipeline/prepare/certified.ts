@@ -1,4 +1,4 @@
-import { groupsByLabelsOnly } from '@zlens/core';
+import { groupsByLabelsOnly, sameTable } from '@zlens/core';
 import { parseScopePredicates, type BlockContractMeasure, type BlockContractPredicate } from '../block-contract.js';
 import type { AnalyticalIntentV1 } from '../intent.js';
 import type { VocabularyEntry, VocabularyIndex } from '../vocabulary.js';
@@ -38,8 +38,8 @@ const leaf = (ref: string) => (ref.split('.').pop() ?? ref).toLowerCase();
 function filterColumns(contract: NonNullable<VocabularyEntry['contract']>, vocabulary: VocabularyIndex, ref: string): string[] {
   const entry = vocabulary.get(ref);
   const relation = entry?.physical?.relation;
-  const sameTable = !relation || (contract.source !== undefined && sameRelation(contract.source, relation));
-  return [leaf(ref), ...(sameTable ? [entry?.physical?.column, entry?.name] : [])].filter((name): name is string => Boolean(name)).map(norm);
+  const onBlockTable = !relation || (contract.source !== undefined && sameTable(contract.source, relation, 'shared'));
+  return [leaf(ref), ...(onBlockTable ? [entry?.physical?.column, entry?.name] : [])].filter((name): name is string => Boolean(name)).map(norm);
 }
 
 export function entails(block: VocabularyEntry, intent: AnalyticalIntentV1, vocabulary: VocabularyIndex): EntailmentVerdict {
@@ -242,16 +242,6 @@ function declaredMeasure(entry: VocabularyEntry | undefined, contract: NonNullab
   return contract.measures.find((measure) => measure.declaredMetric && norm(measure.declaredMetric.metric) === wanted);
 }
 
-/** Parts of a table name, lower-cased and unquoted, so `claims` and `main."claims"` compare on what they share. */
-function sameRelation(left: string, right: string): boolean {
-  const parts = (value: string) => value.replace(/["`]/g, '').toLowerCase().split('.').filter(Boolean);
-  const a = parts(left);
-  const b = parts(right);
-  if (a.length === 0 || b.length === 0 || a.at(-1) !== b.at(-1)) return false;
-  const shared = Math.min(a.length, b.length);
-  return a.slice(-shared).join('.') === b.slice(-shared).join('.');
-}
-
 interface MetricShape { aggregate?: string; column?: string; relation?: string; scope: BlockContractPredicate[]; readable: boolean }
 
 /** What a metric computes, read from its physical binding: aggregate, column, table and the rows it counts. */
@@ -292,7 +282,7 @@ function matchMeasure(ref: string, entry: VocabularyEntry | undefined, contract:
     return miss(other ? `${metricText}, but the block's ${other.output} ${aggregateWords(other.aggregate)} ${other.sourceColumn}` : `${metricText}; the block computes: ${computes}`);
   }
   if (!contract.source) return miss(`the block does not read from one single table, so it cannot be compared with ${name}, which reads ${shape.relation}`);
-  if (!sameRelation(contract.source, shape.relation!)) return miss(`${name} reads ${shape.relation}, the block reads ${contract.source}`);
+  if (!sameTable(contract.source, shape.relation!, 'shared')) return miss(`${name} reads ${shape.relation}, the block reads ${contract.source}`);
   const absent = shape.scope.filter((predicate) => !contract.staticScope.some((scope) => norm(scope.column) === norm(predicate.column) && scopeMatches(scope.op, scope.values, predicate.op, predicate.values)));
   if (absent.length) return miss(`${name} only counts rows where ${absent.map(describePredicate).join(' and ')}; the block does not keep only those rows`);
   return { missing: [], impliedScope: shape.scope, output: block.output };

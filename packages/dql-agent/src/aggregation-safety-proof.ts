@@ -7,6 +7,8 @@ import {
   type AggregationSafetyProofV1,
   type MetricCapabilityContract,
   type ResolvedRelationshipProofV1,
+  sameTable,
+  tableKey,
 } from '@zlens/core';
 import type { LocalContextPack, MetadataObject } from './metadata/catalog.js';
 import { aggregationIntegrityIssuesForSql } from './metadata/grain-ledger.js';
@@ -35,7 +37,7 @@ export function buildAggregationSafetyProof(
       continue;
     }
     const matches = bindings.filter((binding) =>
-      sameRelation(binding.relation, aggregate.relation!)
+      sameTable(binding.relation, aggregate.relation!, 'object')
       && normalizeIdentifier(binding.column) === normalizeIdentifier(aggregate.column!)
       && normalizeAggregation(binding.capability.aggregation) === normalizeAggregation(aggregate.func));
     if (matches.length === 0) issueCodes.push('AGGREGATE_CAPABILITY_EXACT_MATCH_MISSING');
@@ -307,13 +309,13 @@ function exactSemanticRatioCompilerBinding(
   );
   if (!actual || !expected || actual.canonicalExpression !== expected.canonicalExpression) return false;
   if (!actual.operators.includes('/') || actual.aggregateFunctions.length === 0) return false;
-  if (analysis.tables.length !== 1 || !sameRelation(analysis.tables[0], expectedRelation)) return false;
+  if (analysis.tables.length !== 1 || !sameTable(analysis.tables[0], expectedRelation, 'object')) return false;
   const permittedAggregateRelations = [expectedRelation, ...(input.compilerRelationAliases ?? [])];
   const aggregateRelations = unique(analysis.aggregates
     .map((aggregate) => aggregate.relation)
     .filter((value): value is string => Boolean(value)));
   return aggregateRelations.every((relation) =>
-    permittedAggregateRelations.some((permitted) => sameRelation(relation, permitted)));
+    permittedAggregateRelations.some((permitted) => sameTable(relation, permitted, 'object')));
 }
 
 function quoteProofIdentifier(value: string): string {
@@ -383,7 +385,7 @@ function exactRelationshipFacts(
       issues.push('JOIN_ENDPOINT_BINDING_MISSING');
       continue;
     }
-    const endpointKey = [normalizeRelation(join.leftRelation), normalizeRelation(join.rightRelation)].sort().join('|');
+    const endpointKey = [tableKey(join.leftRelation, 'object'), tableKey(join.rightRelation, 'object')].sort().join('|');
     groups.set(endpointKey, [...groups.get(endpointKey) ?? [], join]);
   }
   const facts: RelationshipFact[] = [];
@@ -446,18 +448,18 @@ function fanoutSafeFromAggregate(aggregateRelation: string, facts: RelationshipF
   const visited = new Set<string>();
   while (queue.length > 0) {
     const relation = queue.shift()!;
-    const normalized = normalizeRelation(relation);
+    const normalized = tableKey(relation, 'object');
     if (visited.has(normalized)) continue;
     visited.add(normalized);
     for (const fact of facts) {
-      const from = normalizeRelation(fact.fromRelation);
-      const to = normalizeRelation(fact.toRelation);
+      const from = tableKey(fact.fromRelation, 'object');
+      const to = tableKey(fact.toRelation, 'object');
       if (normalized !== from && normalized !== to) continue;
       const traversesFromTo = normalized === from;
       const next = traversesFromTo ? fact.toRelation : fact.fromRelation;
-      if (visited.has(normalizeRelation(next))) continue;
+      if (visited.has(tableKey(next, 'object'))) continue;
       if (!relationshipTraversalPreservesRows(fact, traversesFromTo)) return false;
-      if (!visited.has(normalizeRelation(next))) queue.push(next);
+      if (!visited.has(tableKey(next, 'object'))) queue.push(next);
     }
   }
   return visited.size > 0;
@@ -479,13 +481,13 @@ function directionalSqlJoinKey(
   toRelation: string,
 ): string[] {
   if (join.leftRelation && join.rightRelation
-    && sameRelation(join.leftRelation, fromRelation)
-    && sameRelation(join.rightRelation, toRelation)) {
+    && sameTable(join.leftRelation, fromRelation, 'object')
+    && sameTable(join.rightRelation, toRelation, 'object')) {
     return [`${normalizeIdentifier(join.leftColumn)}=${normalizeIdentifier(join.rightColumn)}`];
   }
   if (join.leftRelation && join.rightRelation
-    && sameRelation(join.rightRelation, fromRelation)
-    && sameRelation(join.leftRelation, toRelation)) {
+    && sameTable(join.rightRelation, fromRelation, 'object')
+    && sameTable(join.leftRelation, toRelation, 'object')) {
     return [`${normalizeIdentifier(join.rightColumn)}=${normalizeIdentifier(join.leftColumn)}`];
   }
   return [];
@@ -510,7 +512,7 @@ function relationshipKeys(value: unknown): Array<{ from: string; to: string }> {
 }
 
 function sameEndpointPair(a: string, b: string, left: string, right: string): boolean {
-  return (sameRelation(a, left) && sameRelation(b, right)) || (sameRelation(a, right) && sameRelation(b, left));
+  return (sameTable(a, left, 'object') && sameTable(b, right, 'object')) || (sameTable(a, right, 'object') && sameTable(b, left, 'object'));
 }
 
 function capabilitySupportsGrain(capability: MetricCapabilityContract, grain: string): boolean {
@@ -545,14 +547,6 @@ function uniqueCapabilities(capabilities: MetricCapabilityContract[]): MetricCap
 
 function normalizeAggregation(value: string): string {
   return value.trim().toLowerCase().replace(/^count_big$/, 'count');
-}
-
-function normalizeRelation(value: string): string {
-  return value.trim().replace(/["`\[\]]/g, '').toLowerCase();
-}
-
-function sameRelation(left: string, right: string): boolean {
-  return normalizeRelation(left) === normalizeRelation(right);
 }
 
 function normalizeIdentifier(value: string): string {

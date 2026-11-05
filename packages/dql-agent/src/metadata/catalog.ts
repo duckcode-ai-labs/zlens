@@ -123,7 +123,7 @@ import {
   type SemanticDatasetFieldProjection,
   type SemanticDatasetMeasureProjection,
 } from '../datasets/index.js';
-import { readEnv } from '@zlens/core';
+import { readEnv, tableName } from '@zlens/core';
 
 export { applyContextPackCompatibility, toAgentRetrievalEvidence } from './meaning-evidence.js';
 
@@ -6694,7 +6694,7 @@ function ensureWarehouseLineageSourceColumnObject(
     objects.set(tableKey, {
       objectKey: tableKey,
       objectType: 'warehouse_table',
-      name: source.table.split('.').at(-1) ?? source.table,
+      name: tableName(source.table) || source.table,
       fullName: source.table,
       status: 'referenced',
       sourceSystem,
@@ -8231,7 +8231,7 @@ export function buildAllowedSqlContext(objects: MetadataObject[], edges: Metadat
       if (semanticTable) {
         addRelation({
           relation: semanticTable,
-          name: semanticTable.split('.').at(-1) ?? semanticTable,
+          name: tableName(semanticTable) || semanticTable,
           objectKey: object.objectKey,
           source: 'semantic layer backing relation',
           columnCompleteness: 'partial',
@@ -8245,7 +8245,7 @@ export function buildAllowedSqlContext(objects: MetadataObject[], edges: Metadat
     for (const table of metadataStringArray(object.payload?.tableDependencies)) {
       addRelation({
         relation: table,
-        name: table.split('.').at(-1) ?? table,
+        name: tableName(table) || table,
         objectKey: object.objectKey,
         source: 'certified block dependency',
         columnCompleteness: 'partial',
@@ -8255,7 +8255,7 @@ export function buildAllowedSqlContext(objects: MetadataObject[], edges: Metadat
     for (const table of metadataStringArray(object.payload?.rawTableRefs)) {
       addRelation({
         relation: table,
-        name: table.split('.').at(-1) ?? table,
+        name: tableName(table) || table,
         objectKey: object.objectKey,
         source: 'certified block SQL reference',
         columnCompleteness: 'partial',
@@ -8267,7 +8267,7 @@ export function buildAllowedSqlContext(objects: MetadataObject[], edges: Metadat
     if (shape) {
       addRelation({
         relation: shape.relation,
-        name: shape.relation.split('.').at(-1) ?? shape.relation,
+        name: tableName(shape.relation) || shape.relation,
         objectKey: object.objectKey,
         source: 'certified source SQL shape',
         columnCompleteness: 'partial',
@@ -8695,7 +8695,7 @@ function joinSubjectForCatalog(column: string): string | undefined {
 
 function relationEntityTokensForCatalog(relation: MetadataAllowedSqlRelation): Set<string> {
   const tokens = new Set<string>();
-  for (const raw of [relation.name, relation.relation.split('.').at(-1) ?? relation.relation].join(' ').toLowerCase().match(/[a-z0-9_]+/g) ?? []) {
+  for (const raw of [relation.name, (tableName(relation.relation) || relation.relation)].join(' ').toLowerCase().match(/[a-z0-9_]+/g) ?? []) {
     for (const part of raw.split('_')) {
       const token = normalizeSingularToken(part);
       if (!token || token.length < 2 || ['dim', 'fct', 'fact', 'stg', 'stage', 'model', 'table'].includes(token)) continue;
@@ -8819,7 +8819,7 @@ export function metadataObjectToAllowedSqlRelation(object: MetadataObject): Meta
     if (!relation || !columnName) return null;
     return {
       relation,
-      name: relation.split('.').at(-1) ?? relation,
+      name: tableName(relation) || relation,
       objectKey: object.objectKey,
       source: 'runtime value index',
       columnCompleteness: 'partial',
@@ -8835,7 +8835,7 @@ export function metadataObjectToAllowedSqlRelation(object: MetadataObject): Meta
     if (!relation) return null;
     return {
       relation,
-      name: relation.split('.').at(-1) ?? relation,
+      name: tableName(relation) || relation,
       objectKey: object.objectKey,
 	      source: object.objectType === 'runtime_column'
 	        ? 'runtime schema snapshot'
@@ -8855,7 +8855,7 @@ export function metadataObjectToAllowedSqlRelation(object: MetadataObject): Meta
   const relation = metadataPayloadString(object, 'relation') ?? object.fullName ?? object.name;
   return {
     relation,
-    name: relation.split('.').at(-1) ?? object.name,
+    name: tableName(relation) || object.name,
     objectKey: object.objectKey,
     source: object.objectType === 'runtime_table' ? 'runtime schema snapshot' : object.sourceSystem ?? 'local metadata catalog',
     columnCompleteness: relationColumnCompletenessFromObject(object),
@@ -8905,7 +8905,7 @@ function runtimeSchemaTableObject(
   return {
     objectKey: `runtime:table:${relation}`,
     objectType: 'runtime_table',
-    name: table.name ?? relation.split('.').at(-1) ?? relation,
+    name: table.name ?? (tableName(relation) || relation),
     fullName: relation,
     description: table.description,
     status: 'runtime_observed',
@@ -9286,7 +9286,7 @@ function normalizeRuntimeSchemaTables(tables: RuntimeSchemaTable[]): RuntimeSche
       relation,
       catalogOrDatabase: table.catalogOrDatabase,
       schema: table.schema,
-      name: table.name ?? relation.split('.').at(-1) ?? relation,
+      name: table.name ?? (tableName(relation) || relation),
       description: table.description,
       source: table.source,
       // Persist structural schema only. Live sample values can contain PII and

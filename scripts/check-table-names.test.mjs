@@ -18,7 +18,7 @@ test('finds a local name helper and a split on a relation name, but not in tests
   const root = project({
     'apps/cli/src/a.ts': "function sameRelation(a, b) { return a === b; }\nconst parts = relationName.split('.');\n",
     'apps/cli/src/a.test.ts': 'function sameRelation() {}\n',
-    'packages/dql-agent/src/ask-pipeline/physical-binding.ts': "function sameRelation() {}\nconst x = relation.split('.');\n",
+    'packages/dql-core/src/table-names.ts': "function sameRelation() {}\nconst x = relation.split('.');\n",
     'packages/dql-agent/src/b.ts': 'export const twoPart = (n) => n;\n',
   });
   assert.deepEqual(scan(root), {

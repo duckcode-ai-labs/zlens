@@ -29,6 +29,7 @@
 import { defaultEmbeddingProvider, hybridRank, type EmbeddingProvider } from '../embeddings/provider.js';
 import type { KGNode } from '../kg/types.js';
 import type { SemanticLayer } from '@zlens/core';
+import { tableName } from '@zlens/core';
 
 const TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 
@@ -785,12 +786,12 @@ function findSchemaTable(
   schemaTables: Array<{ relation: string; name?: string; columns: Array<{ name: string }> }>,
 ): { relation: string; columns: Array<{ name: string }> } | undefined {
   const target = table.toLowerCase();
-  const targetLeaf = target.split('.').pop() ?? target;
+  const targetLeaf = tableName(target) || target;
   return schemaTables.find((candidate) => {
     const relation = candidate.relation.toLowerCase();
     const name = candidate.name?.toLowerCase();
     return relation === target
-      || relation.split('.').pop() === targetLeaf
+      || tableName(relation) === targetLeaf
       || name === target
       || name === targetLeaf;
   });

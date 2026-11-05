@@ -6,6 +6,7 @@ import {
   type DQLManifest,
   type ManifestModelEntity,
   type ManifestModelRelationship,
+  tableKey,
 } from '@zlens/core';
 import type { DomainContextEnvelope } from '../domain-context.js';
 
@@ -458,7 +459,7 @@ export function validateAnalyticalSql(
   for (const relation of analysis.tables) {
     const entity = entityForRelation(relation, manifest);
     const key = entity ? entityRecordKey(manifest, entity) : undefined;
-    if (entity && key) relationEntities.set(normalizeRelation(relation), { key, entity });
+    if (entity && key) relationEntities.set(tableKey(relation, 'object'), { key, entity });
   }
   if (analysis.joins.length > 0) {
     const unbound = analysis.tables.filter((relation) => !entityForRelation(relation, manifest));
@@ -528,11 +529,11 @@ function shortestPath(
 }
 
 function entityForRelation(relation: string, manifest: DQLManifest): ManifestModelEntity | undefined {
-  const normalized = normalizeRelation(relation);
+  const normalized = tableKey(relation, 'object');
   return Object.values(manifest.modeling?.entities ?? {}).find((entity) => {
     const node = manifest.dbtProvenance?.nodes[entity.dbtUniqueId];
     return [node?.name, node?.relation].filter(Boolean).some((value) => {
-      const candidate = normalizeRelation(String(value));
+      const candidate = tableKey(String(value), 'object');
       return candidate === normalized || candidate.endsWith(`.${normalized}`) || normalized.endsWith(`.${candidate}`);
     });
   });
@@ -674,10 +675,6 @@ function blocked(code: AnalyticalPolicyCode, entities: string[], relationships: 
     relationshipIds: relationships.map((relationship) => relationship.id),
     edges: [],
   };
-}
-
-function normalizeRelation(value: string): string {
-  return value.replace(/["`\[\]]/g, '').trim().toLowerCase();
 }
 
 function normalizeColumn(value: string): string {

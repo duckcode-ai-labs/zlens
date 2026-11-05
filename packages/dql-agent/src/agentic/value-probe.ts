@@ -21,6 +21,7 @@
  * eventually admits something it should not, because it grows by exception.
  */
 import type { AgentToolDefinition } from '../providers/types.js';
+import { parsePhysicalIdentifier } from '@zlens/core';
 
 export interface ProbeColumn {
   name: string;
@@ -147,7 +148,7 @@ function quoteIdentifier(value: string): string | undefined {
 }
 
 function quoteRelation(relation: string): string | undefined {
-  const parts = relation.split('.').map(quoteIdentifier);
+  const parts = parsePhysicalIdentifier(relation).map((part) => quoteIdentifier(part.value));
   return parts.every(Boolean) ? parts.join('.') : undefined;
 }
 

@@ -21,6 +21,7 @@ import {
   type AgentSafeValueEvidenceV1,
 } from '../meaning-resolution.js';
 import type { KnowledgeLens } from '../domain-context.js';
+import { sameTable, tableKey } from '@zlens/core';
 
 export type MetadataEvidenceClass = 'certified' | 'semantic' | 'sql';
 export type MetadataEvidenceTrust = 'certified' | 'semantic' | 'governed_sql' | 'exploratory';
@@ -765,13 +766,12 @@ function physicalCandidateRelationMatches(candidate: AgentEvidenceCandidate, rel
   // a display name or a loose candidate ID, because that would allow a value
   // observation from another table to authorize a filter.
   return (candidate.sourceObjects ?? []).some((source) => {
-    const actual = canonicalPhysicalRelation(source);
-    return actual === expected || actual.endsWith(`.${expected}`) || expected.endsWith(`.${actual}`);
+    return sameTable(canonicalPhysicalRelation(source), expected, 'shared');
   });
 }
 
 function canonicalPhysicalRelation(value: string): string {
-  return normalizeRelation(value)
+  return tableKey(value, 'object')
     .replace(/^(?:runtime:relation:|dbt:model:|dbt:source:|sql:table:)/, '');
 }
 
@@ -1297,7 +1297,7 @@ function groundedMemberFilters(
     for (const value of observed) {
       for (const dimension of dimensions) {
         if (
-          !sameRelation(dimension.table, value.relation) ||
+          !sameTable(dimension.table, value.relation, 'shared') ||
           normalizeIdentifier(dimension.column) !==
             normalizeIdentifier(value.column)
         )
@@ -1317,19 +1317,6 @@ function simpleColumnName(value: string | undefined): string | undefined {
   return /^[a-zA-Z_][a-zA-Z0-9_$.]*$/.test(normalized)
     ? normalized.split(".").at(-1)
     : undefined;
-}
-
-function sameRelation(left: string, right: string): boolean {
-  const a = normalizeRelation(left);
-  const b = normalizeRelation(right);
-  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
-}
-
-function normalizeRelation(value: string): string {
-  return value
-    .replace(/["`\[\]]/g, "")
-    .trim()
-    .toLowerCase();
 }
 
 function normalizeIdentifier(value: string): string {

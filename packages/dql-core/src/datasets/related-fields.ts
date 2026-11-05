@@ -16,6 +16,7 @@
  * uniqueness on the warehouse whenever the existing evidence does not cover
  * it. Nothing here runs SQL or decides what a relationship is.
  */
+import { tableKey } from '../table-names.js';
 import type { DatasetDescriptor, DatasetJoin, DatasetPhysicalField } from './descriptor.js';
 import { singularWords, tableColumnKind, wordsFor } from './table-draft.js';
 
@@ -58,8 +59,9 @@ const KEY_SUFFIX = /^(.+?)_(id|key|code|uuid|number|no)$/i;
 const DEFAULT_MAX_COLUMNS = 60;
 
 /** A relation compared the way the warehouse resolves it: no quotes, no case. */
+/** @deprecated Compare with `sameTable` or key with `tableKey(relation, 'object')` (simplification plan Z1). Kept for code outside ZLens. */
 export function bareRelation(relation: string): string {
-  return relation.replace(/["`\[\]]/g, '').replace(/\s*\.\s*/g, '.').trim().toLowerCase();
+  return tableKey(relation, 'object');
 }
 
 /** "location__location_name" → { join: "location", column: "location_name" }; undefined for an own column. */
@@ -133,10 +135,10 @@ export function withoutSupersededEdges(edges: RelatedRelationshipEdge[]): Relate
   const foreignKey = (edge: RelatedRelationshipEdge): { key: string; target: string; targetTable: string } | undefined => {
     const keys = (side: 'from' | 'to') => edge.keys.map((pair) => pair[side].toLowerCase()).sort().join(',');
     if (edge.cardinality === 'many_to_one' || edge.cardinality === 'one_to_one') {
-      return { key: `${bareRelation(edge.fromRelation)}|${keys('from')}`, target: bareRelation(edge.toRelation), targetTable: edge.toTable };
+      return { key: `${tableKey(edge.fromRelation, 'object')}|${keys('from')}`, target: tableKey(edge.toRelation, 'object'), targetTable: edge.toTable };
     }
     if (edge.cardinality === 'one_to_many') {
-      return { key: `${bareRelation(edge.toRelation)}|${keys('to')}`, target: bareRelation(edge.fromRelation), targetTable: edge.fromTable };
+      return { key: `${tableKey(edge.toRelation, 'object')}|${keys('to')}`, target: tableKey(edge.fromRelation, 'object'), targetTable: edge.fromTable };
     }
     return undefined;
   };
@@ -208,7 +210,7 @@ export function discoverDatasetJoins(input: {
   const empty: DiscoveredDatasetJoins = { joins: [], fields: [], notes: [] };
   // A saved query's result or an already-aggregated source has no row a related table describes.
   if (descriptor.kind !== 'block' || descriptor.result || descriptor.grain.aggregate) return empty;
-  const base = bareRelation(input.baseRelation);
+  const base = tableKey(input.baseRelation, 'object');
   if (!base) return empty;
   const maxHops = Math.max(1, Math.min(2, input.maxHops ?? 2));
   const maxColumns = input.maxColumnsPerTable ?? DEFAULT_MAX_COLUMNS;
@@ -225,7 +227,7 @@ export function discoverDatasetJoins(input: {
     // One join per (target, keys): the best-ranked source of the same relationship wins.
     const byKey = new Map<string, DirectedEdge>();
     for (const step of candidates) {
-      const key = `${bareRelation(step.target)}|${step.keys.map((pair) => `${pair.from.toLowerCase()}=${pair.to.toLowerCase()}`).sort().join(',')}`;
+      const key = `${tableKey(step.target, 'object')}|${step.keys.map((pair) => `${pair.from.toLowerCase()}=${pair.to.toLowerCase()}`).sort().join(',')}`;
       const current = byKey.get(key);
       if (!current || edgeRank(step.edge) < edgeRank(current.edge)) byKey.set(key, step);
     }
@@ -235,7 +237,7 @@ export function discoverDatasetJoins(input: {
     // key columns beats one on a label, then a certified model join beats a draft.
     const byGroup = new Map<string, DirectedEdge>();
     for (const step of byKey.values()) {
-      const group = `${bareRelation(step.target)}|${joinStem(step.keys, step.targetTable)}`;
+      const group = `${tableKey(step.target, 'object')}|${joinStem(step.keys, step.targetTable)}`;
       const current = byGroup.get(group);
       if (!current || joinPreference(step) < joinPreference(current)) byGroup.set(group, step);
     }
@@ -291,9 +293,9 @@ export function discoverDatasetJoins(input: {
   };
 
   // Hop one: from the Dataset's own table, along keys that are its own fields.
-  const fromBase = steps.filter((step) => bareRelation(step.relation) === base && bareRelation(step.target) !== base);
+  const fromBase = steps.filter((step) => tableKey(step.relation, 'object') === base && tableKey(step.target, 'object') !== base);
   const firstHops = best(fromBase.filter((step) => followable(step) && step.keys.every((pair) => ownColumns.has(pair.from.toLowerCase()))));
-  for (const step of firstHops) reached.add(bareRelation(step.target));
+  for (const step of firstHops) reached.add(tableKey(step.target, 'object'));
   const firstJoins: Array<{ join: DatasetJoin; step: DirectedEdge }> = [];
   for (const step of firstHops) {
     const join = addJoin(step, undefined, baseEntity);
@@ -302,8 +304,8 @@ export function discoverDatasetJoins(input: {
   // One customer has many orders: not followed, and said so once per table.
   const noted = new Set<string>();
   for (const step of fromBase) {
-    if (step.cardinality !== 'one_to_many' || noted.has(bareRelation(step.target))) continue;
-    noted.add(bareRelation(step.target));
+    if (step.cardinality !== 'one_to_many' || noted.has(tableKey(step.target, 'object'))) continue;
+    noted.add(tableKey(step.target, 'object'));
     const many = wordsFor(step.targetTable);
     notes.push(`${many} per ${baseEntity}: add it from ${many}. One ${baseEntity} has many ${many.toLowerCase()}, so following that join here would count each ${baseEntity} more than once.`);
   }
@@ -311,14 +313,14 @@ export function discoverDatasetJoins(input: {
   if (maxHops >= 2) {
     for (const { join: parent, step: parentStep } of firstJoins) {
       const parentColumns = new Set((input.columnsOf(parentStep.target) ?? []).map((column) => column.name.toLowerCase()));
-      const parentRelation = bareRelation(parentStep.target);
-      const candidates = steps.filter((step) => bareRelation(step.relation) === parentRelation
-        && !reached.has(bareRelation(step.target))
+      const parentRelation = tableKey(parentStep.target, 'object');
+      const candidates = steps.filter((step) => tableKey(step.relation, 'object') === parentRelation
+        && !reached.has(tableKey(step.target, 'object'))
         && followable(step)
         && step.keys.every((pair) => parentColumns.has(pair.from.toLowerCase())));
       for (const step of best(candidates)) {
-        if (reached.has(bareRelation(step.target))) continue;
-        reached.add(bareRelation(step.target));
+        if (reached.has(tableKey(step.target, 'object'))) continue;
+        reached.add(tableKey(step.target, 'object'));
         addJoin(step, parent, singularWords(parentStep.targetTable));
       }
     }

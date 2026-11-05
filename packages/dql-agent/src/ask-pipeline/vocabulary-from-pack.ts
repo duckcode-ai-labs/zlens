@@ -1,5 +1,6 @@
 import type { EligibleContextSet, EligibleObjectRef, LocalContextPack, LocalContextSkill, MetadataObject } from '../metadata/catalog.js';
 import { buildVocabularyIndex, type VocabularyDomainHeader, type VocabularySource } from './vocabulary.js';
+import { tableTail } from '@zlens/core';
 
 /**
  * THE VOCABULARY IS A VIEW OVER THE CONTEXT PACK.
@@ -129,7 +130,7 @@ export function projectVocabularySource(base: VocabularySource, pack: Pick<Local
   for (const object of pack.objects) {
     if (object.objectType !== 'dbt_column' && object.objectType !== 'warehouse_column' && object.objectType !== 'runtime_column') continue;
     const payload = (object.payload ?? {}) as { relation?: string; model?: string; type?: string };
-    const relationKey = normalizeRelation(payload.relation) ?? (payload.model ? lower(payload.model) : undefined);
+    const relationKey = tableTail(payload.relation ?? '') || (payload.model ? lower(payload.model) : undefined);
     const relation = relationKey ? relationByKey.get(lower(relationKey)) ?? [...relationByKey.entries()].find(([key]) => key.endsWith(`.${lower(relationKey)}`))?.[1] : undefined;
     if (!relation) continue;
     const column = relation.columns.find((item) => lower(item.name) === lower(object.name));
@@ -179,7 +180,7 @@ export function projectVocabularySource(base: VocabularySource, pack: Pick<Local
   for (const object of [...pack.objects, ...(eligible?.objects ?? [])]) {
     if (object.objectType !== 'dql_entity') continue;
     const payload = (object.payload ?? {}) as { qualifiedId?: string; relation?: string };
-    const relation = normalizeRelation(payload.relation);
+    const relation = tableTail(payload.relation ?? '') || undefined;
     const qualifiedId = payload.qualifiedId ?? object.objectKey.replace(/^[^:]+:[^:]+:/, '');
     if (relation && qualifiedId && !relationOfEntity.has(qualifiedId)) relationOfEntity.set(qualifiedId, relation);
   }
@@ -269,7 +270,7 @@ export function rankedRefsFromPack(objects: MetadataObject[]): string[] {
       }
       case 'dbt_column': case 'warehouse_column': case 'runtime_column': {
         const payload = (object.payload ?? {}) as { relation?: string; model?: string };
-        const relation = normalizeRelation(payload.relation) ?? payload.model;
+        const relation = tableTail(payload.relation ?? '') || payload.model;
         if (relation) refs.push(`column:${relation}.${name}`);
         break;
       }
@@ -277,14 +278,6 @@ export function rankedRefsFromPack(objects: MetadataObject[]): string[] {
     }
   }
   return refs;
-}
-
-/** `"db"."schema"."table"` or `db.schema.table` → `schema.table`; a bare name stays. */
-function normalizeRelation(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const parts = value.split('.').map((part) => part.replace(/^"|"$/g, '').trim()).filter(Boolean);
-  if (parts.length === 0) return undefined;
-  return parts.slice(-2).join('.');
 }
 
 /**

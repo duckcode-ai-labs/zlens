@@ -12,7 +12,7 @@
  * R row). It is intentionally conservative — no key data for a relation ⇒ no flag —
  * so it never demotes a correct answer; it is wired warn-only.
  */
-import { analyzeSqlReferences, type SqlReferenceAnalysis } from '@zlens/core';
+import { analyzeSqlReferences, type SqlReferenceAnalysis, tableName } from '@zlens/core';
 import type { MetadataObject } from './catalog.js';
 
 export interface RelationGrain {
@@ -47,19 +47,12 @@ export interface AggregationIntegrityIssue {
 /** Additive aggregates whose value changes when rows are duplicated. MIN/MAX are safe. */
 const ADDITIVE_AGGREGATES = new Set(['SUM', 'AVG', 'COUNT']);
 
-function normalizeRelationTail(relation: string | undefined): string | undefined {
-  if (!relation) return undefined;
-  const tail = relation.split('.').at(-1) ?? relation;
-  const cleaned = tail.replace(/["`]/g, '').trim().toLowerCase();
-  return cleaned || undefined;
-}
-
 function normalizeColumn(column: string): string {
   return column.replace(/["`]/g, '').trim().toLowerCase();
 }
 
 function addUniqueKey(ledger: GrainLedger, relation: string | undefined, column: string, source: string): void {
-  const key = normalizeRelationTail(relation);
+  const key = tableName(relation ?? '').toLowerCase() || undefined;
   if (!key) return;
   const existing = ledger.get(key);
   if (existing) {
@@ -138,11 +131,11 @@ export function detectFanoutRisks(analysis: SqlReferenceAnalysis, ledger: GrainL
   for (const aggregate of analysis.aggregates) {
     if (aggregate.distinct) continue;
     if (!ADDITIVE_AGGREGATES.has(aggregate.func)) continue;
-    const aggregatedRelation = normalizeRelationTail(aggregate.relation);
+    const aggregatedRelation = tableName(aggregate.relation ?? '').toLowerCase() || undefined;
     if (!aggregatedRelation) continue; // COUNT(*) / unattributed — out of scope for v0
     for (const join of analysis.joins) {
-      const left = normalizeRelationTail(join.leftRelation);
-      const right = normalizeRelationTail(join.rightRelation);
+      const left = tableName(join.leftRelation ?? '').toLowerCase() || undefined;
+      const right = tableName(join.rightRelation ?? '').toLowerCase() || undefined;
       let counterpart: string | undefined;
       let counterpartColumn: string | undefined;
       if (left === aggregatedRelation) {
@@ -261,8 +254,8 @@ export function aggregationIntegrityIssuesForSql(
     if (!['SUM', 'AVG'].includes(aggregate.func) || !aggregate.column) continue;
     for (const contract of contracts) {
       if (!contract.columns.has(normalizeColumn(aggregate.column))) continue;
-      const aggregateRelation = normalizeRelationTail(aggregate.relation);
-      const contractRelation = normalizeRelationTail(contract.table);
+      const aggregateRelation = tableName(aggregate.relation ?? '').toLowerCase() || undefined;
+      const contractRelation = tableName(contract.table ?? '').toLowerCase() || undefined;
       if (aggregateRelation && contractRelation && aggregateRelation !== contractRelation) continue;
       issues.push({
         kind: 'non_additive_measure',
