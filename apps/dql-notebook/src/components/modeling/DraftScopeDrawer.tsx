@@ -18,12 +18,15 @@ const words = (id: string) => {
 };
 const plural = (count: number, noun: string, many = `${noun}s`) => `${count.toLocaleString('en-US')} ${count === 1 ? noun : many}`;
 
-export function DraftScopeDrawer({ theme, drafting, onClose, onDraft }: {
+export function DraftScopeDrawer({ theme, drafting, hybrid = false, onClose, onDraft }: {
   theme: Theme;
   drafting: boolean;
+  /** A dbt project with warehouse tables beside it: draft its dbt models or its warehouse tables. */
+  hybrid?: boolean;
   onClose: () => void;
-  onDraft: (scope: DraftScopeRequest) => void;
+  onDraft: (scope: DraftScopeRequest, source: 'dbt' | 'warehouse') => void;
 }): JSX.Element {
+  const [side, setSide] = useState<'dbt' | 'warehouse'>('dbt');
   const [mode, setMode] = useState<Mode>('areas');
   const [areas, setAreas] = useState<string[]>([]);
   const [tables, setTables] = useState<string[]>([]);
@@ -74,20 +77,31 @@ export function DraftScopeDrawer({ theme, drafting, onClose, onDraft }: {
         </header>
 
         <div style={{ padding: '12px 18px 0', display: 'grid', gap: 10 }}>
-          {choices ? (
+          {hybrid ? (
+            <div role="group" aria-label="Draft from" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+              <span style={{ fontSize: 11, color: theme.textMuted }}>Draft from</span>
+              {([['dbt', 'dbt models'], ['warehouse', 'Warehouse tables']] as Array<['dbt' | 'warehouse', string]>).map(([value, text]) => (
+                <button key={value} type="button" aria-pressed={side === value} onClick={() => setSide(value)} style={{ ...secondary(theme), ...(side === value ? { borderColor: theme.accent, color: theme.accent, fontWeight: 650 } : {}) }}>{text}</button>
+              ))}
+            </div>
+          ) : null}
+          {side === 'warehouse' ? (
+            <p style={{ margin: 0, fontSize: 11.5, color: theme.textSecondary, lineHeight: 1.5 }}>{warehouseNote(response?.warehouse)}</p>
+          ) : null}
+          {side === 'dbt' && choices ? (
             <p style={{ margin: 0, fontSize: 11, color: theme.textSecondary, lineHeight: 1.5 }}>{layerNote(choices)}</p>
           ) : null}
-          <div role="group" aria-label="How to choose" style={{ display: 'inline-flex', gap: 6 }}>
+          {side === 'dbt' ? <div role="group" aria-label="How to choose" style={{ display: 'inline-flex', gap: 6 }}>
             {([['areas', 'By area'], ['tables', 'Tables'], ['selector', 'dbt selector']] as Array<[Mode, string]>).map(([value, text]) => (
               <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)} style={{ ...secondary(theme), ...(mode === value ? { borderColor: theme.accent, color: theme.accent, fontWeight: 650 } : {}) }}>{text}</button>
             ))}
-          </div>
+          </div> : null}
         </div>
 
         <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '12px 18px' }}>
           {error ? <p role="alert" style={{ color: 'var(--status-error, #c53030)', fontSize: 11.5 }}>{error}</p> : null}
 
-          {mode === 'areas' && choices ? (
+          {side === 'dbt' && mode === 'areas' && choices ? (
             choices.areas.length === 0
               ? <p style={{ fontSize: 11.5, color: theme.textSecondary }}>No Domains or subject areas found in this project. Pick tables, or use a dbt selector.</p>
               : (
@@ -105,7 +119,7 @@ export function DraftScopeDrawer({ theme, drafting, onClose, onDraft }: {
               )
           ) : null}
 
-          {mode === 'tables' ? (
+          {side === 'dbt' && mode === 'tables' ? (
             <div style={{ display: 'grid', gap: 8 }}>
               <div style={{ position: 'relative' }}>
                 <Search size={14} style={{ position: 'absolute', left: 10, top: 10, color: theme.textMuted }} />
@@ -143,7 +157,7 @@ export function DraftScopeDrawer({ theme, drafting, onClose, onDraft }: {
             </div>
           ) : null}
 
-          {mode === 'selector' ? (
+          {side === 'dbt' && mode === 'selector' ? (
             <div style={{ display: 'grid', gap: 8 }}>
               <input autoFocus aria-label="dbt selector" value={selector} onChange={(event) => setSelector(event.target.value)} placeholder="+fct_orders path:models/marts tag:finance area:sales" style={{ ...input(theme), width: '100%', fontFamily: 'var(--font-mono, monospace)' }} />
               <small style={{ color: theme.textMuted, lineHeight: 1.5 }}>
@@ -154,12 +168,18 @@ export function DraftScopeDrawer({ theme, drafting, onClose, onDraft }: {
         </div>
 
         <footer style={{ padding: '12px 18px', borderTop: '1px solid var(--border-subtle)', display: 'grid', gap: 8 }}>
-          <div aria-live="polite" style={{ fontSize: 11.5, color: theme.textSecondary, lineHeight: 1.5 }}>{pickSummary(picked, loading, preview)}</div>
+          <div aria-live="polite" style={{ fontSize: 11.5, color: theme.textSecondary, lineHeight: 1.5 }}>{side === 'warehouse' ? (response?.warehouse?.tables ? `Drafts the ${plural(response.warehouse.tables, 'warehouse table')} dbt does not build, checked on the warehouse.` : '') : pickSummary(picked, loading, preview)}</div>
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <button type="button" onClick={onClose} disabled={drafting} style={secondary(theme)}>Cancel</button>
-            <button type="button" disabled={drafting || loading || !picked || !preview?.drafted} onClick={() => onDraft({ select, ...(hops ? { hops } : {}) })} style={{ ...primary(theme), opacity: drafting || loading || !picked || !preview?.drafted ? .55 : 1 }}>
-              {drafting ? <Loader2 size={13} /> : null}{drafting ? 'Drafting…' : picked && preview?.drafted ? `Draft ${plural(preview.drafted, 'table')}` : 'Draft'}
-            </button>
+            {side === 'warehouse' ? (
+              <button type="button" disabled={drafting || !response?.warehouse?.tables} onClick={() => onDraft({}, 'warehouse')} style={{ ...primary(theme), opacity: drafting || !response?.warehouse?.tables ? .55 : 1 }}>
+                {drafting ? <Loader2 size={13} /> : null}{drafting ? 'Drafting…' : response?.warehouse?.tables ? `Draft ${plural(response.warehouse.tables, 'warehouse table')}` : 'Draft'}
+              </button>
+            ) : (
+              <button type="button" disabled={drafting || loading || !picked || !preview?.drafted} onClick={() => onDraft({ select, ...(hops ? { hops } : {}) }, 'dbt')} style={{ ...primary(theme), opacity: drafting || loading || !picked || !preview?.drafted ? .55 : 1 }}>
+                {drafting ? <Loader2 size={13} /> : null}{drafting ? 'Drafting…' : picked && preview?.drafted ? `Draft ${plural(preview.drafted, 'table')}` : 'Draft'}
+              </button>
+            )}
           </div>
         </footer>
       </aside>
@@ -204,4 +224,13 @@ export function pickSummary(picked: boolean, loading: boolean, preview: DraftSco
     return `${first} ZLens drafts the ${preview.drafted} most important now and lists the other ${preview.leftOut.toLocaleString('en-US')}: business tables first, then the ones dbt exposures use, then the ones many models read.`;
   }
   return `${first} ${preview.asked === 1 ? 'Only this table is' : 'Only these are'} read from the warehouse and checked.`;
+}
+
+/** The warehouse side of a hybrid project: the synced tables dbt does not build. */
+export function warehouseNote(warehouse: DraftScopeResponse['warehouse']): string {
+  if (!warehouse) return 'Reading the warehouse catalog…';
+  if (warehouse.tables === 0) {
+    return `No warehouse tables outside dbt yet${warehouse.dbtBuilt ? ` (the ${plural(warehouse.dbtBuilt, 'synced table')} dbt builds are drafted as dbt models)` : ''}. Choose their schemas in Settings → Connections → Sync schema.`;
+  }
+  return `${plural(warehouse.tables, 'warehouse table')} dbt does not build, in ${warehouse.schemas.join(', ')}.${warehouse.dbtBuilt ? ` The ${plural(warehouse.dbtBuilt, 'synced table')} dbt builds are drafted as dbt models, never twice; joins to the ones already in the model are drafted too.` : ''}`;
 }

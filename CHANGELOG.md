@@ -8,6 +8,19 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Hybrid projects: dbt models and warehouse tables in one model, never drafted twice
+
+- **A hybrid project's warehouse draft treats a table dbt builds as that dbt model.**
+  - One the model already has is read as the model's, so joins from warehouse tables to it are drafted and checked on the data.
+  - One it does not have yet is left to the dbt draft and listed ("Left to the dbt draft: …").
+  - Before, the warehouse draft drafted dbt's tables a second time as plain warehouse tables.
+- **On the Modeling page of a hybrid project, "Draft the model" asks which side to draft:**
+  - **dbt models:** by area, tables or a dbt selector;
+  - **warehouse tables:** the synced tables dbt does not build.
+
+  Before, the page drafted only the warehouse side.
+- **`zlens sync warehouse --schemas …` in a project with dbt adds the schemas to the dbt tables in Ask's scope,** as Settings → Sync schema does. Before, it replaced them, and Ask lost the dbt tables.
+
 ### The model map opens at the right level: Domains, then areas, then tables (model-at-scale design S5)
 
 - **A model of more than 60 tables opens on its Domains.** Each card shows its tables, its areas and where its joins lead ("Shared 6 · Finance 2"), with the Shared Domain first.

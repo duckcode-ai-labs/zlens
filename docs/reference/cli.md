@@ -138,7 +138,7 @@ Warehouse sync and discovery flags (see
 
 | Command | Flag | Meaning |
 | --- | --- | --- |
-| `zlens sync warehouse` | `--schemas a,b` | Schemas to read; saved as the connection's metadata scope. With no flags, the saved selection is synced again |
+| `zlens sync warehouse` | `--schemas a,b` | Schemas to read; saved as the connection's metadata scope. In a project with dbt they are added to the dbt tables, as Settings → Sync schema does; without dbt they are the whole scope. With no flags, the saved selection is synced again |
 | `zlens sync warehouse` | `--database <name>` | Database or catalog the schemas are in (default: the connection's own) |
 | `zlens sync warehouse` | `--connection <name>` | Connection to read (default: the project's default connection) |
 | `zlens sync warehouse` | `agent.valueProfile.mode: "sampled"` in `dql.config.json` | Also read a few example values and the range of each column for Ask's SQL drafter (off by default; the values reach your AI provider). See [value profile](../get-started/no-dbt.md#optional-show-the-drafter-what-the-columns-hold) |

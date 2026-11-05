@@ -152,6 +152,8 @@ export interface WarehouseDiscoveryReport {
   relations: number;
   /** Subject areas the draft places tables in, each written before its tables. */
   areas?: DiscoveredArea[];
+  /** Hybrid: warehouse tables dbt builds that the model does not have yet, left to the dbt draft. */
+  dbtLeftOut?: string[];
   /**
    * What this run drafted of a dbt project (model-at-scale design S4): the
    * scope asked for, the budget, and the tables over it, most important first.
