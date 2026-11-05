@@ -8,6 +8,12 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## Unreleased
 
+### Fixed: Ask keeps a table's model meaning when two databases list it
+
+- **The problem:** two databases can list the same table. A hybrid project syncs a dbt-built table from the warehouse again, and dbt can build in another database than the one the project connects to. Ask then read the copy it could run without the model's meaning for it: no grain, no notes, no Domain, and so none of the Domain's model rules.
+- **The fix:** the meaning now reaches every copy of the table, matched by schema and table.
+- **Effect:** on a 95-table hybrid NBA project, regular-season questions again filter on the model's game-type rule (`CAST(game_id AS VARCHAR) LIKE '2%'`).
+
 ### The model map opens at the right level: Domains, then areas, then tables (model-at-scale design S5)
 
 - **A model of more than 60 tables opens on its Domains.** Each card shows its tables, its areas and where its joins lead ("Shared 6 · Finance 2"), with the Shared Domain first.
