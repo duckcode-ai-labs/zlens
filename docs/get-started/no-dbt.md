@@ -65,6 +65,8 @@ The folder can hold any of these, and ZLens picks the first it finds:
 
 ### A folder of CSV, Parquet or JSON files
 
+{{ video("qs5-any-folder") }}
+
 Each file becomes a table named after it: `orders.csv` is `orders`, and
 `Daily Sales.parquet` is `daily_sales`. DuckDB reads the files where they
 are, each time a query runs: a file you replace is read fresh, a file you add

@@ -5,6 +5,8 @@ SQL scripts starts with the SQL behind your reports.
 
 ## See what moves first
 
+{{ video("mg1-assess") }}
+
 Before you import anything, point ZLens at the folder of reports:
 
 ```bash
@@ -86,6 +88,8 @@ report says so under **Not read** rather than counting it as empty.
 
 ## Bring the calculations over as metrics
 
+{{ video("mg2-metric-drafts") }}
+
 From a Tableau workbook or a Power BI model, the same import also turns each
 simple, filtered and ratio calculation into a **metric draft** in
 `semantic-layer/metrics/_drafts/<domain>/`:
@@ -158,6 +162,8 @@ Statements that change data get no draft. Nothing is certified until a person
 runs Certify.
 
 ## Prove the numbers match
+
+{{ video("mg3-numbers-match") }}
 
 A metric draft shows its value over all rows, but a report is a whole table.
 `zlens migrate compare` takes an export of the old report, builds the same
