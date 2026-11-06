@@ -174,11 +174,13 @@ const EXPECTED_TEST_FILES = 193;
 // (analytical-request-policy.test.ts, +34; GitLab blind questions q29, q31, q40).
 // 2737 with emails and e-mail refused as contact data and counts of emails sent, opened or clicked
 // still answered (analytical-request-policy.test.ts, +28).
-const EXPECTED_TESTS = 2818;
-// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 76 + project-state.test.ts 4), pinned so
+// 2819 with a refresh whose files changed after it read them leaving the active snapshot in place
+// (catalog.test.ts, +1; release PR #280 e2e, App journeys after a certify).
+const EXPECTED_TESTS = 2819;
+// The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2629.
-const EXPECTED_HEAVY_TESTS = 80;
+// The ordinary lane's share is the difference: 2738.
+const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];
 function requestedLane() {
