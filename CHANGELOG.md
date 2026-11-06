@@ -8,10 +8,10 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ## v0.2.12 - 2026-11-05
 
-ZLens drafts your business model for you to review.
+**Auto ontology:** ZLens drafts your business model, your ontology, from your dbt project and warehouse, for you to review.
 - **What a draft proposes:** one table per business thing, the joins between them (from row identity), names, business concepts, and rules measured on the data.
 - **Nothing is certified until a person accepts it.** Review a draft by group, and accept everything that passed its checks.
-- **Ask reads the whole drafted model.** On 40 fresh NBA questions it had never seen, Ask returned the right rows for:
+- **Ask reads the whole drafted model.** On 40 fresh NBA questions it had never seen (one project, measured so far), Ask returned the right rows for:
   - 31 with a drafted model;
   - 10 with the plain dbt project;
   - 25 with a model built by hand.
