@@ -1639,6 +1639,8 @@ export interface ReindexOptions {
   forceKgIndex?: boolean;
   /** Force the metadata catalog rebuild even when its fingerprint is unchanged. */
   forceMetadataCatalog?: boolean;
+  /** Asked before the metadata snapshot is activated; see `EnsureMetadataCatalogOptions.stillCurrent`. */
+  stillCurrent?: () => boolean;
 }
 
 export interface ReindexProjectResult {
@@ -1651,6 +1653,8 @@ export interface ReindexProjectResult {
   metadataFingerprint: string;
   /** Approved hints whose scope targets no longer exist (W4.6); empty when none. */
   staleHints: StaleHintFinding[];
+  /** True when the project changed after this reindex read it, so its metadata snapshot was not activated. */
+  superseded?: boolean;
 }
 
 export interface EnsureAgentProjectReadyResult extends ReindexProjectResult {
@@ -1890,6 +1894,7 @@ export async function reindexProject(
     // retrieval and will load its source-owned skill records itself.
     skills: opts.loadSkills === false ? undefined : skills,
     force: opts.forceMetadataCatalog,
+    ...(opts.stillCurrent ? { stillCurrent: opts.stillCurrent } : {}),
   });
   // Rebuild the approved-hint index (Git authoritative; SQLite is a view). Safe
   // when no hints exist — yields an empty index.
@@ -1924,6 +1929,7 @@ export async function reindexProject(
     kgFingerprint,
     metadataFingerprint: metadataRefresh.fingerprint,
     staleHints,
+    ...(metadataRefresh.superseded ? { superseded: true } : {}),
   };
 }
 

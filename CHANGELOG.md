@@ -39,6 +39,11 @@ To upgrade, run `npm i -D @zlens/cli@^0.3.0` in each project. A `^0.2` range doe
   - column names such as `email_address` and `phone_number`, a mailing or bare "address", "contact details", and "date-of-birth" (#276);
   - a list of people with their contact details, even beside a word like "total" (#277).
 
+### Fixed: a certify during a background refresh stays certified
+
+- **The background refresh reads the project's files, then takes a second or more to build.** A Dataset certified in that second showed as certified, and then the refresh put back the copy it had read, still "in review". An App built in that gap stored the Dataset as "in review", and once the next refresh showed it certified, its tile refused to run with `APP_BUILD_DATASET_SOURCE_REPAIR_REQUIRED`.
+- **Now** a refresh checks the project's files again before it activates what it built. If a file changed, it leaves the newer snapshot in place and reads the project again.
+
 ### Fixed: the AI's table pick is read however it spells the table
 
 - **The AI's pick inside a large area, and from a warehouse's table index, was matched to the index letter for letter.** The model writes `ANALYTICS_PROD.common.dim_namespace` where the index says `"ANALYTICS_PROD".common.dim_namespace`, or names a table by schema and table as the prompt asks. Every such pick was thrown away, so on GitLab's 4,742 tables the pick chose nothing on all 60 routed questions, and the call was spent for nothing.

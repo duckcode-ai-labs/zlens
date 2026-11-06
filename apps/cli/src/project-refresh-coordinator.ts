@@ -16,18 +16,33 @@ interface PendingRefresh {
 }
 
 const TERMINAL = new Set(['succeeded', 'failed', 'cancelled', 'interrupted']);
+/**
+ * How many refreshes in a row may find the project changed under them before
+ * the lane stops queueing another. Each project save queues its own refresh as
+ * well, so stopping only ends a loop nothing else would end.
+ */
+const MAX_SUPERSEDED_IN_A_ROW = 3;
+
+/** Runs one refresh off the main thread (the worker); replaceable in tests. */
+export type ProjectRefreshRunner = (
+  input: ProjectRefreshWorkerInput,
+  signal: AbortSignal,
+  report: (progress: Partial<LocalOperationProgress>) => void,
+) => Promise<ProjectRefreshWorkerResult>;
 
 /** Coalesces project mutations into a single worker-thread rebuild lane. */
 export class ProjectRefreshCoordinator {
   private activeOperationId: string | null = null;
   private pending: PendingRefresh | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
+  private supersededInARow = 0;
   private readonly unsubscribe: () => void;
 
   constructor(
     private readonly operations: LocalOperationCoordinator,
     private readonly onActivated: (result: ProjectRefreshWorkerResult) => void,
     private readonly debounceMs = 250,
+    private readonly runRefresh: ProjectRefreshRunner = runRefreshWorker,
   ) {
     this.unsubscribe = operations.subscribe((operation) => {
       if (operation.id === this.activeOperationId && TERMINAL.has(operation.status)) {
@@ -97,8 +112,16 @@ export class ProjectRefreshCoordinator {
           progress: 5,
           message: `Refreshing project state (${Array.from(next.reasons).join(', ')}).`,
         });
-        const result = await runRefreshWorker(next.input, signal, report);
+        const result = await this.runRefresh(next.input, signal, report);
         this.onActivated(result);
+        // A file changed while the worker built its snapshot, so it left the
+        // active one alone. Read the project again, after this one ends.
+        if (result.superseded && this.supersededInARow < MAX_SUPERSEDED_IN_A_ROW) {
+          this.supersededInARow += 1;
+          this.schedule({ ...next.input, reason: 'the project changed during the last refresh' });
+        } else if (!result.superseded) {
+          this.supersededInARow = 0;
+        }
         return result;
       },
     );

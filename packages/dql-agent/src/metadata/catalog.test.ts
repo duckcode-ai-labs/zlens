@@ -690,6 +690,46 @@ describe('local metadata catalog', () => {
     }
   });
 
+  it('a refresh whose files changed after it read them builds its snapshot but leaves the active one in place', async () => {
+    // The background refresh worker reads the project, then takes a second or more to build. A certify in
+    // that second activated the certified Dataset; the worker then activated the copy it read before, and an
+    // App built in the gap stored the Dataset as "in review" (CI, release PR #280: three App journeys failed
+    // with APP_BUILD_DATASET_SOURCE_REPAIR_REQUIRED).
+    const current = await ensureMetadataCatalogFresh(projectRoot, { force: true });
+    addGenericAthleteBoxScoreModel(projectRoot, 'snapshot_read_too_early');
+    let asked = 0;
+    const declined = await ensureMetadataCatalogFresh(projectRoot, {
+      force: true,
+      stillCurrent: () => {
+        asked += 1;
+        return false;
+      },
+    });
+    expect(asked).toBe(1);
+    expect(declined).toMatchObject({ superseded: true, refreshed: true });
+    expect(declined.fingerprint).not.toBe(current.fingerprint);
+    expect(declined.snapshotPath).toBeUndefined();
+    const kept = acquireActiveKnowledgeSnapshot(projectRoot);
+    try {
+      expect(kept.snapshotId).toBe(current.fingerprint);
+      expect(kept.catalog.getObject('dbt:model:snapshot_read_too_early')).toBeNull();
+    } finally {
+      kept.release();
+    }
+
+    // The next refresh that is still current activates what the project holds now.
+    const next = await ensureMetadataCatalogFresh(projectRoot, { stillCurrent: () => true });
+    expect(next.superseded).toBeUndefined();
+    expect(next.fingerprint).toBe(declined.fingerprint);
+    const lease = acquireActiveKnowledgeSnapshot(projectRoot);
+    try {
+      expect(lease.snapshotId).toBe(next.fingerprint);
+      expect(lease.catalog.getObject('dbt:model:snapshot_read_too_early')).toMatchObject({ objectType: 'dbt_model' });
+    } finally {
+      lease.release();
+    }
+  });
+
   it('the active pointer names what its file holds when another process moved the catalog under the export', async () => {
     // Turns are taken inside one process only. Another process on the same project (a `zlens` command
     // beside the server) can still rebuild the working catalog between the export's name being chosen and
