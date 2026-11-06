@@ -39,6 +39,16 @@ To upgrade, run `npm i -D @zlens/cli@^0.2.12` in each project.
   - column names such as `email_address` and `phone_number`, a mailing or bare "address", "contact details", and "date-of-birth" (#276);
   - a list of people with their contact details, even beside a word like "total" (#277).
 
+### Fixed: the AI's table pick is read however it spells the table
+
+- **The AI's pick inside a large area, and from a warehouse's table index, was matched to the index letter for letter.** The model writes `ANALYTICS_PROD.common.dim_namespace` where the index says `"ANALYTICS_PROD".common.dim_namespace`, or names a table by schema and table as the prompt asks. Every such pick was thrown away, so on GitLab's 4,742 tables the pick chose nothing on all 60 routed questions, and the call was spent for nothing.
+- **Now** quotes and case are ignored, and a shorter spelling counts when exactly one offered table ends with it.
+
+### Fixed: a routed step counts only the tables the SQL writer read
+
+- **A routed step said "the 30 tables it answers from, and 8 more" when tables were cut for room in the prompt.** On GitLab one step said 38 and showed 21; 20 of 35 routed steps overcounted.
+- **Now** the title counts what reached the SQL writer, and the detail names the tables left out for room.
+
 ### Fixed: a model table spelled without its database reaches the SQL writer
 
 - **In a hybrid project, the warehouse's entry for a model table can name it `schema.table`, while the warehouse describes it as `database.schema.table`.** Its columns never matched, so Ask dropped the table. In a 95-table project holding the NBA dbt project, none of the NBA area's routed tables reached the SQL writer; the answers came from the tables search found.

@@ -32,6 +32,17 @@ describe('the table index', () => {
     expect(parseTablePicks('Sure: {"tables":["SALES.Lines","sales.imagined"," sales.orders "]}', ['sales.lines', 'sales.orders'])).toEqual(['sales.lines', 'sales.orders']);
   });
 
+  it('reads a pick spelled without the index name\'s quotes, or by schema and table', () => {
+    const offered = ['"ANALYTICS_PROD".common.dim_namespace', '"ANALYTICS_PROD".common_mart.mart_event_namespace_monthly', '"ANALYTICS_PROD".common.fct_event_valid'];
+    const reply = '{"tables":["ANALYTICS_PROD.common_mart.mart_event_namespace_monthly","common.dim_namespace","fct_event_valid"]}';
+    expect(parseTablePicks(reply, offered)).toEqual([offered[1], offered[0], offered[2]]);
+  });
+
+  it('a shorter spelling two offered tables end with chooses neither', () => {
+    expect(parseTablePicks('{"tables":["sales.orders"]}', ['"EAST".sales.orders', '"WEST".sales.orders'])).toEqual([]);
+    expect(parseTablePicks('{"tables":["orders"]}', ['sales.orders', 'sales.orders_archive'])).toEqual(['sales.orders']);
+  });
+
   it('a reply it cannot read chooses nothing', () => {
     expect(parseTablePicks('no json here', ['a.b'])).toEqual([]);
     expect(parseTablePicks('{"tables": "a.b"}', ['a.b'])).toEqual([]);
