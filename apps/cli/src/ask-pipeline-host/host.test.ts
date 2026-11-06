@@ -1809,7 +1809,8 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
   };
   const reading = JSON.stringify({ version: 1, kind: 'analytics', reading: 'Games per basketball season.', measures: [], groupBy: [], display: [], filters: [], unresolved: [], provenance: {}, expectedShape: 'grouped' });
 
-  const ask = async (indexReply: () => Promise<string>, catalog?: string) => {
+  const ask = async (indexReply: () => Promise<string>, catalog?: string, wideBy = wide.length) => {
+    const columnsOf = (name: string, columns: string[]) => (name.startsWith('stats_') ? ['game_id', 'season', ...Array.from({ length: wideBy }, (_, index) => `m_${index}`)] : columns);
     const prompts: string[] = [];
     const statements: string[] = [];
     const provider: AgentProvider = {
@@ -1827,7 +1828,7 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
         if (sql.includes('information_schema.columns')) {
           statements.push(sql);
           const rows = Object.entries(tables).filter(([name]) => name !== unreadable && sql.includes(`'${name}'`))
-            .flatMap(([name, columns]) => columns.map((column, index) => ({ ...(catalog ? { table_catalog: catalog } : {}), table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR', ordinal_position: index + 1, dql_column_total: columns.length })));
+            .flatMap(([name, listed]) => { const columns = columnsOf(name, listed); return columns.map((column, index) => ({ ...(catalog ? { table_catalog: catalog } : {}), table_schema: 'ins', table_name: name, column_name: column, data_type: 'VARCHAR', ordinal_position: index + 1, dql_column_total: columns.length })); });
           return { columns: [], rowCount: rows.length, executionTimeMs: 1, rows };
         }
         return { columns: [], rowCount: 0, executionTimeMs: 1, rows: [] };
@@ -1871,6 +1872,22 @@ describe('every table a routed area shows reaches the SQL writer (ask-area-ranki
     expect(first).not.toContain('executable relation:ins.stats_35 [in brief]');
     expect(first.indexOf('executable relation:ins.stats_35')).toBeLessThan(first.indexOf('executable relation:ins.stats_00'));
     expect(text).toContain("the AI chose ins.stats_35 from the area's index of 40 tables");
+  });
+
+  it('reads a pick the AI names by table alone, as the index does not spell it (R2)', async () => {
+    const { prompts, text } = await ask(async () => '{"tables":["stats_35"]}');
+    expect(prompts[0]!.indexOf('executable relation:ins.stats_35')).toBeLessThan(prompts[0]!.indexOf('executable relation:ins.stats_00'));
+    expect(text).toContain("the AI chose ins.stats_35 from the area's index of 40 tables");
+  });
+
+  it('counts only the tables the SQL writer read when some are cut for room', async () => {
+    // 200 columns a table: thirty in brief pass the prompt's room.
+    const { prompts, text } = await ask(async () => 'not an answer', undefined, 200);
+    const read = new Set([...prompts[0]!.matchAll(/executable relation:ins\.(stats_\d+)/g)].map((match) => match[1]));
+    expect(read.size).toBeGreaterThan(0);
+    expect(read.size).toBeLessThan(29);
+    expect(text).toContain(`Showed the Basketball area: ${read.size} of the 30 tables it answers from (`);
+    expect(text).toContain('left out, no room in the prompt: ins.stats_');
   });
 
   it('a table the model spells without its database is drafted under the database the warehouse describes it in', async () => {

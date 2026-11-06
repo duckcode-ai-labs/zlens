@@ -66,7 +66,18 @@ export function tableIndexMessages(question: string, lines: string[]): AgentMess
   ];
 }
 
-/** The tables a reply names, among those offered, as the index spells them. */
+/** A table's name without quotes or case: `"ANALYTICS_PROD".common.dim_user` → `analytics_prod.common.dim_user`. */
+const plainName = (name: string) => name.trim().replace(/["`[\]]/g, '').toLowerCase();
+
+/**
+ * The tables a reply names, among those offered, as the index spells them.
+ * The model drops an index name's quotes, and may name a table by schema and
+ * table as the prompt asks: on GitLab every pick spelled
+ * `ANALYTICS_PROD.common.dim_namespace` for the index's
+ * `"ANALYTICS_PROD".common.dim_namespace` was thrown away, so the area pick
+ * chose nothing on all 60 routed questions. A shorter spelling counts when one
+ * offered table ends with it.
+ */
 export function parseTablePicks(reply: string, offered: string[]): string[] {
   const start = reply.indexOf('{');
   const end = reply.lastIndexOf('}');
@@ -78,9 +89,17 @@ export function parseTablePicks(reply: string, offered: string[]): string[] {
     return [];
   }
   if (!Array.isArray(parsed.tables)) return [];
-  const byLower = new Map(offered.map((name) => [name.toLowerCase(), name]));
+  const plain = offered.map((name) => ({ name, plain: plainName(name) }));
+  const resolve = (asked: string) => {
+    const key = plainName(asked);
+    if (!key) return undefined;
+    const exact = plain.find((item) => item.plain === key);
+    if (exact) return exact.name;
+    const ending = plain.filter((item) => item.plain.endsWith(`.${key}`));
+    return ending.length === 1 ? ending[0]!.name : undefined;
+  };
   const picks = parsed.tables.flatMap((name) => {
-    const found = typeof name === 'string' ? byLower.get(name.trim().toLowerCase()) : undefined;
+    const found = typeof name === 'string' ? resolve(name) : undefined;
     return found ? [found] : [];
   });
   return [...new Set(picks)].slice(0, TABLE_INDEX_PICKS);
