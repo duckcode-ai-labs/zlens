@@ -7,11 +7,10 @@ This page covers the other ways to install and upgrade.
 ## Run it without installing
 
 ```bash
-npx zlens notebook ./my-data
+npx -p @zlens/cli zlens notebook ./my-data
 ```
 
-`npx` fetches the `zlens` package (the `zlens` command of `@zlens/cli`) and
-runs it. `./my-data` can be a dbt project, a folder with a DuckDB or SQLite
+`npx` fetches `@zlens/cli` and runs its `zlens` command. `./my-data` can be a dbt project, a folder with a DuckDB or SQLite
 file, or a folder of CSV, Parquet or JSON files. ZLens asks before it creates
 a project there (`--yes` creates it without asking), then opens the workbench.
 Run the same command again to reopen it.
@@ -24,12 +23,15 @@ npm create zlens@latest
 
 In a folder with data it offers to make the project there; anywhere else it
 asks for a new folder's name. On npm 12, add `--allow-scripts=better-sqlite3`
-after `npx` or after `npm create zlens@latest` (see
+right after `npx` or after `npm create zlens@latest` (see
 [npm 12 and install scripts](#npm-12-and-install-scripts)); npm 10 and 11
 ignore the flag.
 
-`npx @zlens/cli` does not work: that package has two commands (`zlens`, and
-`dql`, its old name), so npx cannot tell which to run. Use `npx zlens`.
+The `-p @zlens/cli zlens` part is needed: `@zlens/cli` has two commands
+(`zlens`, and `dql`, its old name), so a bare `npx @zlens/cli` cannot tell
+which to run. A shorter `npx zlens` works inside a project that has
+`@zlens/cli` installed; with nothing installed it does not yet, because npm
+holds the unscoped name `zlens`.
 
 ## Requirements
 
@@ -191,7 +193,7 @@ and `zlens sync warehouse` reinstall it. To do it yourself:
 npm --prefix .dql/connectors install @duckdb/node-api --include=optional
 ```
 
-**`npx zlens` and `npm create zlens`.** They install into npm's cache, which
+**`npx -p @zlens/cli zlens` and `npm create zlens`.** They install into npm's cache, which
 has no `package.json` of yours either, and npx reuses what it installed. If
 ZLens says npx installed it without running the script, clear that copy and
 run the command again with the flag. ZLens prints both commands, with the
@@ -199,11 +201,11 @@ copy's key:
 
 ```bash
 npm cache npx rm <key>
-npx --allow-scripts=better-sqlite3 zlens notebook ./my-data
+npx --allow-scripts=better-sqlite3 -p @zlens/cli zlens notebook ./my-data
 ```
 
 Pass the flag the first time to skip this:
-`npx --allow-scripts=better-sqlite3 zlens …` or
+`npx --allow-scripts=better-sqlite3 -p @zlens/cli zlens …` or
 `npm create zlens@latest --allow-scripts=better-sqlite3`.
 
 **A global install.** `npm install -g` has no `package.json` to allow scripts

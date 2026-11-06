@@ -1,5 +1,9 @@
 # zlens
 
+> **Not on npm yet.** npm refused the unscoped name `zlens` (too similar to
+> `less`), so this package is private and is not published. Until it is, run
+> `npx -p @zlens/cli zlens notebook ./my-data`.
+
 Run ZLens with nothing installed first:
 
 ```bash

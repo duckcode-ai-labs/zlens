@@ -8,7 +8,7 @@ SQL scripts starts with the SQL behind your reports.
 Before you import anything, point ZLens at the folder of reports:
 
 ```bash
-npx zlens migrate assess ./reports
+npx -p @zlens/cli zlens migrate assess ./reports
 ```
 
 Point it at a folder, or at one file: a Tableau workbook (`.twb`, `.twbx`), a

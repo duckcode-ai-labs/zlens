@@ -30,6 +30,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
 import { startLocalRegistry } from './launch-gate/local-registry.mjs';
+import { RELEASE_PACKAGE_PATHS } from './release-packages.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -309,7 +310,9 @@ async function packTarballs(gate, options) {
     }
     const files = readdirSync(source).filter((file) => file.endsWith(`-${version}.tgz`));
     for (const file of files) copyFileSync(path.join(source, file), path.join(packDir, file));
-    if (files.length !== 18) throw new Error(`expected 18 release tarballs for ${version} in ${source}, found ${files.length}`);
+    // One tarball per package the release script publishes (its inventory, not a count kept here).
+    const expected = RELEASE_PACKAGE_PATHS.length;
+    if (files.length !== expected) throw new Error(`expected ${expected} release tarballs for ${version} in ${source}, found ${files.length}`);
     return `${files.length} tarballs → ${path.relative(gate.out, packDir)}/`;
   });
   return { version, sha, dirty, packDir };

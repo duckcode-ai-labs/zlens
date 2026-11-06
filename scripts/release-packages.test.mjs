@@ -126,13 +126,14 @@ test('the release inventory has exactly the intended public packages and exclude
     'packages/dql-lsp',
     'apps/cli',
     'packages/create-dql-app',
-    'packages/zlens',
     'packages/create-zlens',
   ];
   assert.deepEqual(RELEASE_PACKAGE_PATHS, expectedPaths);
+  // npm refused the unscoped name `zlens`: the package is private until it is allowed.
+  assert.equal(JSON.parse(readFileSync(path.join(root, 'packages/zlens/package.json'), 'utf8')).private, true);
 
   const releaseManifests = readReleasePackageManifests(root);
-  assert.equal(releaseManifests.length, 20);
+  assert.equal(releaseManifests.length, 19);
   // Version-agnostic: every release bumps the workspace in lockstep, so the
   // CLI's own version is the one the whole inventory must share.
   const releaseVersion = JSON.parse(readFileSync(path.join(root, 'apps/cli/package.json'), 'utf8')).version;

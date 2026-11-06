@@ -6,7 +6,43 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## Unreleased
+## v0.3.0 - 2026-11-05
+
+**Auto ontology:** ZLens drafts your business model, your ontology, from your dbt project and warehouse, for you to review.
+- **What a draft proposes:** one table per business thing, the joins between them (from row identity), names, business concepts, and rules measured on the data.
+- **Nothing is certified until a person accepts it.** Review a draft by group, and accept everything that passed its checks.
+- **Ask reads the whole drafted model.** On 40 fresh NBA questions it had never seen (one project, measured so far), Ask returned the right rows for:
+  - 31 with a drafted model;
+  - 10 with the plain dbt project;
+  - 25 with a model built by hand.
+- **Large projects work a piece at a time:**
+  - Domains come from business words;
+  - drafts land in subject areas, with a Shared area;
+  - `zlens model draft --select` and a draft picker choose what to draft;
+  - the map opens at Domains, then areas, then tables.
+- **Ask shows a large model one area at a time.** It picks the question's area, the AI chooses inside it, and every table it chooses reaches the SQL writer.
+- **dbt models and warehouse tables share one model,** and the modeling mode follows from what your project has.
+- **Migrate from Tableau, Power BI and SQL:**
+  - `zlens migrate assess` shows what moves before you start;
+  - Import SQL reads workbooks and Power BI files;
+  - calculations become metric drafts;
+  - `zlens migrate compare` proves the numbers match the old report.
+- **Start with `npm create zlens@latest`,** or open a folder of CSV, Parquet or SQLite files with `npx -p @zlens/cli zlens notebook ./my-data`.
+
+To upgrade, run `npm i -D @zlens/cli@^0.3.0` in each project. A `^0.2` range does not pick up 0.3.0 by itself.
+
+### Fixed: the privacy wording guard reads questions more carefully
+
+- **Aggregate questions it used to refuse on words alone are now answered:** marketing email, email campaigns, contacts opted in, and health scores. (#272)
+- **It refuses more of what it should:**
+  - "emails" and "e-mail" (#275);
+  - column names such as `email_address` and `phone_number`, a mailing or bare "address", "contact details", and "date-of-birth" (#276);
+  - a list of people with their contact details, even beside a word like "total" (#277).
+
+### Fixed: a certify during a background refresh stays certified
+
+- **The background refresh reads the project's files, then takes a second or more to build.** A Dataset certified in that second showed as certified, and then the refresh put back the copy it had read, still "in review". An App built in that gap stored the Dataset as "in review", and once the next refresh showed it certified, its tile refused to run with `APP_BUILD_DATASET_SOURCE_REPAIR_REQUIRED`.
+- **Now** a refresh checks the project's files again before it activates what it built. If a file changed, it leaves the newer snapshot in place and reads the project again.
 
 ### Fixed: the AI's table pick is read however it spells the table
 
@@ -526,11 +562,15 @@ When Ask routes a question to an area of more than 30 tables, it no longer cuts 
 
 ### Start with one command, on a folder of files too
 
-- **`npx zlens …` works with nothing installed.** `npx @zlens/cli` stops
-  with "could not determine executable to run", because that package has two
-  commands (`zlens` and its old name `dql`). The new `zlens` package has one
-  and runs the same CLI, so `npx zlens notebook ./my-data` works, and so do
-  the `npx zlens …` commands ZLens already printed in its hints.
+- **One command with nothing installed: `npx -p @zlens/cli zlens notebook ./my-data`.**
+  A bare `npx @zlens/cli` stops with "could not determine executable to run",
+  because that package has two commands (`zlens` and its old name `dql`).
+  The hints ZLens prints for a folder with no project, and for npm 12's
+  blocked install script, now use this form too.
+- **Not in this release: the unscoped `zlens` package** (`npx zlens` with
+  nothing installed). npm refused the name `zlens` as too similar to `less`,
+  so the package stays private until npm allows it. Inside a project that has
+  `@zlens/cli` installed, `npx zlens …` works as before.
 - **`npm create zlens@latest`** creates a project and opens the workbench.
   In a folder with data it offers to make the project there; anywhere else it
   asks for a folder name.

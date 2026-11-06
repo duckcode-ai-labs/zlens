@@ -28,7 +28,9 @@ The OpenLineage producer URI emitted in lineage events
 (`packages/dql-openlineage/src`) also points at
 `https://github.com/duckcode-ai-labs/zlens`.
 
-The 18 release packages do not include the VS Code extension. Its npm name,
+The 19 release packages do not include the VS Code extension, or the unscoped
+`zlens` package (`packages/zlens`, private: npm refused the name as too similar
+to `less`). Its npm name,
 `dql-language-support`, reached 1.17.2 before the rename and is not continued on
 the ZLens 0.x line; the extension ships as a `.vsix`. The Visual Studio
 Marketplace listing is separate: it is published only from a
@@ -39,7 +41,7 @@ must use `latest`; prereleases (including release candidates) must use `next`.
 The release script rejects a mismatched tag before it builds or publishes, and
 passes the selected tag to every `pnpm publish` invocation. It also requires a
 trusted `--expected-version` and refuses to build, pack, or publish unless all
-18 release manifests exactly match it. The tag workflow derives that value from
+19 release manifests exactly match it. The tag workflow derives that value from
 the pushed `v...` Git tag.
 
 | Release version | Required npm dist-tag | Example Git tag |
@@ -114,7 +116,7 @@ npm dist-tag add @zlens/cli@0.2.0-rc.1 next
 npm dist-tag ls @zlens/cli
 ```
 
-   Repeat for each of the 18 packages (`npm dist-tag ls` shows the tags).
+   Repeat for each of the 19 packages (`npm dist-tag ls` shows the tags).
 8. Smoke the published packages:
 
 ```bash

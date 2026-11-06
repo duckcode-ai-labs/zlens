@@ -35,10 +35,10 @@ Put the database file in a folder and open that folder. No install, no
 `init`, no flags:
 
 ```bash
-npx zlens notebook ./shop
+npx -p @zlens/cli zlens notebook ./shop
 ```
 
-(On npm 12, `npx --allow-scripts=better-sqlite3 zlens notebook ./shop`; see
+(On npm 12, `npx --allow-scripts=better-sqlite3 -p @zlens/cli zlens notebook ./shop`; see
 [npm 12 and install scripts](install.md#npm-12-and-install-scripts). With
 ZLens installed, `zlens notebook ./shop` does the same.)
 
@@ -93,7 +93,7 @@ waits for an answer. It prints the one command to run:
 No ZLens project here: /work/shop (found the database jaffle_shop.duckdb).
 To create one and open it, run:
 
-  npx zlens notebook shop --yes
+  npx -p @zlens/cli zlens notebook shop --yes
 ```
 
 `--yes` creates the project without asking. The rest of this page does the

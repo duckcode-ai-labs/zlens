@@ -20,7 +20,7 @@ npm create zlens@latest my-analytics -- --port 4000
 ```
 
 It runs `zlens notebook <folder> --yes` from [`@zlens/cli`](https://www.npmjs.com/package/@zlens/cli).
-Later, open the project again with `npx zlens notebook <folder>`.
+Later, open the project again with `npx -p @zlens/cli zlens notebook <folder>`.
 
 `create-zlens-app` is the other starter: it writes a project with its own
 `package.json` and npm scripts, for a team that keeps ZLens pinned in the repo.

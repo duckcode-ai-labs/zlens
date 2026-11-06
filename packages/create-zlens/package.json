@@ -1,6 +1,6 @@
 {
   "name": "create-zlens",
-  "version": "0.2.11",
+  "version": "0.3.0",
   "description": "Create a ZLens project and open the workbench: npm create zlens@latest",
   "license": "Apache-2.0",
   "author": "ZLens",

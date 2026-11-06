@@ -21,7 +21,8 @@ export function bareFolderCommand(folder: string, cwd: string = process.cwd()): 
   const rel = relative(cwd, folder) || '.';
   // Quote only a path a shell would split or expand.
   const shown = /^[\w./-]+$/.test(rel) ? rel : JSON.stringify(rel);
-  return `npx zlens notebook ${shown} --yes`;
+  // A folder with no project has no local CLI, and the unscoped `zlens` package is not on npm.
+  return `npx -p @zlens/cli zlens notebook ${shown} --yes`;
 }
 
 /** The database a folder holds, in plain words: `shop.sqlite`, `3 data files in data/: orders.csv, …`. */

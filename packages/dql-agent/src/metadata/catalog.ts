@@ -294,6 +294,16 @@ export interface EnsureMetadataCatalogOptions {
   force?: boolean;
   /** Optional explicit real embedding provider for the snapshot vector lane. */
   embeddingProvider?: EmbeddingProvider;
+  /**
+   * Asked just before the refreshed snapshot becomes the active one. False
+   * means the project's files changed after this refresh read them, so the
+   * snapshot it built is older than one a newer read may already have
+   * activated: the active snapshot is left as it is, and the result says
+   * `superseded`. The background refresh worker reads the files, then takes a
+   * second or more to build; a certify in that second activated the certified
+   * Dataset, and the worker then put back the copy it read before.
+   */
+  stillCurrent?: () => boolean;
 }
 
 export interface EnsureMetadataCatalogResult {
@@ -304,6 +314,8 @@ export interface EnsureMetadataCatalogResult {
   edgeCount: number;
   diagnostics: MetadataDiagnostic[];
   fingerprint: string;
+  /** True when `stillCurrent` said no: this snapshot was built but not activated. */
+  superseded?: boolean;
 }
 
 export interface BuildLocalContextPackRequest {
@@ -1404,6 +1416,8 @@ interface InFlightMetadataRefresh {
   fingerprint: string;
   providerId: string;
   force: boolean;
+  /** Set when the refresh may decline to activate (`stillCurrent`): nobody else shares its result. */
+  conditional: boolean;
   promise: Promise<EnsureMetadataCatalogResult>;
 }
 
@@ -1458,14 +1472,21 @@ export async function ensureMetadataCatalogFresh(
     && inFlight.fingerprint === snapshot.fingerprint
     && inFlight.providerId === vectorProvider.id
     && (!force || inFlight.force)
+    && !inFlight.conditional
   ) {
     return inFlight.promise;
   }
   const promise = withWorkingCatalogTurn(
     projectRoot,
-    () => refreshWorkingCatalog(projectRoot, snapshot, vectorProvider, force),
+    () => refreshWorkingCatalog(projectRoot, snapshot, vectorProvider, force, options.stillCurrent),
   );
-  const record: InFlightMetadataRefresh = { fingerprint: snapshot.fingerprint, providerId: vectorProvider.id, force, promise };
+  const record: InFlightMetadataRefresh = {
+    fingerprint: snapshot.fingerprint,
+    providerId: vectorProvider.id,
+    force,
+    conditional: Boolean(options.stillCurrent),
+    promise,
+  };
   inFlightMetadataRefreshes.set(key, record);
   try {
     return await promise;
@@ -1480,9 +1501,20 @@ async function refreshWorkingCatalog(
   snapshot: MetadataSnapshot,
   vectorProvider: EmbeddingProvider,
   force: boolean,
+  stillCurrent?: () => boolean,
 ): Promise<EnsureMetadataCatalogResult> {
   const catalog = openMetadataCatalog(projectRoot);
   try {
+    // The project changed after this snapshot was read: keep the active one.
+    const superseded = (refreshed: boolean): EnsureMetadataCatalogResult => ({
+      path: defaultMetadataPath(projectRoot),
+      refreshed,
+      objectCount: snapshot.objects.length,
+      edgeCount: snapshot.edges.length,
+      diagnostics: snapshot.diagnostics,
+      fingerprint: snapshot.fingerprint,
+      superseded: true,
+    });
     const existing = catalog.state('fingerprint');
     const compatibleIndex = catalog.state('index_version') === METADATA_INDEX_VERSION;
     const upgradeVectors = async (): Promise<void> => {
@@ -1501,6 +1533,7 @@ async function refreshWorkingCatalog(
       // Without this, switching `ai.embeddings` never takes effect until an
       // unrelated dbt change happens to move the fingerprint.
       await upgradeVectors();
+      if (stillCurrent && !stillCurrent()) return superseded(false);
       const active = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
       return {
         path: defaultMetadataPath(projectRoot),
@@ -1521,6 +1554,7 @@ async function refreshWorkingCatalog(
       catalog.rebuildIncremental(snapshot);
     }
     await upgradeVectors();
+    if (stillCurrent && !stillCurrent()) return superseded(true);
     const active = activateMetadataSnapshot(projectRoot, snapshot.fingerprint, catalog);
     return {
       path: defaultMetadataPath(projectRoot),

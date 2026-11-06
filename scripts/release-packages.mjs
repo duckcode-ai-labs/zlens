@@ -31,9 +31,12 @@ export const RELEASE_PACKAGE_PATHS = [
   // extension ships as a .vsix (release.yml), not from npm.
   'apps/cli',
   'packages/create-dql-app',
-  // `npx zlens` and `npm create zlens`: one command each, running the CLI above.
-  'packages/zlens',
+  // `npm create zlens`: one command, running the CLI above.
   'packages/create-zlens',
+  // Not `packages/zlens` (`npx zlens` with nothing installed): npm refused the
+  // unscoped name `zlens` on 2026-10-13 as too similar to `less`. A refusal in
+  // the tag workflow would stop the release after the CLI was out, before
+  // `create-zlens`. The package stays private until npm allows the name.
 ];
 
 /**
