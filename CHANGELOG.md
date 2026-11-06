@@ -6,7 +6,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## v0.2.12 - 2026-11-05
+## v0.3.0 - 2026-11-05
 
 **Auto ontology:** ZLens drafts your business model, your ontology, from your dbt project and warehouse, for you to review.
 - **What a draft proposes:** one table per business thing, the joins between them (from row identity), names, business concepts, and rules measured on the data.
@@ -29,7 +29,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - `zlens migrate compare` proves the numbers match the old report.
 - **Start with `npx zlens`,** on a folder of CSV, Parquet or SQLite files too.
 
-To upgrade, run `npm i -D @zlens/cli@^0.2.12` in each project.
+To upgrade, run `npm i -D @zlens/cli@^0.3.0` in each project. A `^0.2` range does not pick up 0.3.0 by itself.
 
 ### Fixed: the privacy wording guard reads questions more carefully
 
