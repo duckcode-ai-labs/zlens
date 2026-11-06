@@ -90,8 +90,8 @@ git push origin zlens-v0.2.0
    ```
 
    It is not pack-only: the script rebuilds the whole workspace first (about
-   a minute and a half on a laptop), then packs every package into
-   `.release-artifacts/`. It then installs the packed CLI into a clean folder,
+   a minute and a half on a laptop), then empties `.release-artifacts/` and
+   packs every package into it. It then installs the packed CLI into a clean folder,
    with every sibling `@zlens/*` tarball pinned through npm `overrides`, and
    runs `zlens --version`, the `dql` alias and `create-zlens-app --help`
    (`node scripts/smoke-cli-install.mjs --tarballs .release-artifacts @zlens/cli@0.2.0`
