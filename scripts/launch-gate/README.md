@@ -42,7 +42,7 @@ Ask answered by a live model.
 ## What it does
 
 1. **Packs the release.** `scripts/release-packages.mjs --dry-run` builds the
-   workspace and packs the 18 release packages at the version in
+   workspace and packs the release packages (the release script's inventory) at the version in
    `apps/cli/package.json`. These are the tarballs `npm publish` would upload.
    Pass `--tarballs <dir>` to reuse tarballs packed earlier.
 2. **Serves them from a local registry** on `127.0.0.1` (first free port from

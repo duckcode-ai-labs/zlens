@@ -391,7 +391,7 @@ export function migrationAssessmentMarkdown(assessment: MigrationAssessment): st
   out.push('');
 
   out.push('## Next steps', '');
-  out.push('1. In a ZLens project connected to the database these reports read (`npx zlens notebook <folder>`), import the queries:', '');
+  out.push('1. In a ZLens project connected to the database these reports read (`npx -p @zlens/cli zlens notebook <folder>`), import the queries:', '');
   out.push('   ```bash', `   npx zlens import sql ${assessment.input.includes(' ') ? JSON.stringify(assessment.input) : assessment.input}`, '   ```', '');
   out.push('   Each query becomes a draft saved query and runs once, so the list says which work.', '');
   out.push('2. Certify the ones that ran, each with its own receipt:', '');

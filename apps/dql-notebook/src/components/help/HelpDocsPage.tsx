@@ -143,7 +143,7 @@ export function HelpDocsPage() {
             <p style={para}>Install the CLI once, then open the folder that holds your data: a database file (DuckDB) or a dbt project.</p>
             <pre style={{ ...codeBlock, margin: '14px 0 0' }}>npm i -g @zlens/cli --allow-scripts=better-sqlite3{'\n'}zlens notebook ./shop</pre>
             <p style={para}>In a folder with no ZLens project, ZLens asks <strong>No ZLens project here. Create one? [Y/n]</strong>. Press Enter: a folder with a database file and no dbt becomes a <strong>Database only</strong> project with a connection to the file; a folder with <span style={inlineCode}>dbt_project.yml</span> becomes a dbt project. The workbench then opens on Guided Setup.</p>
-            <p style={para}>Without a terminal, ZLens prints the one command to run instead: <span style={inlineCode}>npx zlens notebook ./shop --yes</span>.</p>
+            <p style={para}>Without a terminal, ZLens prints the one command to run instead: <span style={inlineCode}>npx -p @zlens/cli zlens notebook ./shop --yes</span>.</p>
             {callout(<><strong>Requirements:</strong> Node 20, 22, 24 or 26, and a database ZLens can read (a DuckDB file, PostgreSQL, Snowflake and more). A dbt project is optional. Working in one of the sample repositories? Follow its README; it already holds a ZLens project.</>)}
           </div>
 
@@ -211,7 +211,7 @@ export function HelpDocsPage() {
           <div ref={setSectionRef(7)} style={{ marginTop: 44 }}>
             {h2('08', 'Troubleshooting')}
             <div style={{ margin: '14px 0 0', display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {troubleCard('“No ZLens project here”', <>Press Enter to create one, or run <span style={inlineCode}>npx zlens notebook &lt;folder&gt; --yes</span>. A folder with a database file becomes Database only; a folder with <span style={inlineCode}>dbt_project.yml</span> becomes a dbt project.</>)}
+              {troubleCard('“No ZLens project here”', <>Press Enter to create one, or run <span style={inlineCode}>npx -p @zlens/cli zlens notebook &lt;folder&gt; --yes</span>. A folder with a database file becomes Database only; a folder with <span style={inlineCode}>dbt_project.yml</span> becomes a dbt project.</>)}
               {troubleCard('“dbt manifest not found”', <>Run <span style={inlineCode}>dbt parse</span> in the dbt project, then <span style={inlineCode}>zlens sync dbt</span> from its ZLens workspace. ZLens needs a compiled manifest to read lineage.</>)}
               {troubleCard('“zlens: command not found”', <>A project-local install uses <span style={inlineCode}>npm run ...</span> or <span style={inlineCode}>npm exec -- zlens ...</span>. Install the CLI globally only if you want bare <span style={inlineCode}>zlens ...</span> commands.</>)}
               {troubleCard('Connection test fails', <>Check <span style={inlineCode}>zlens doctor</span> and <strong>Settings → Database</strong>. A DuckDB file written by a newer DuckDB (2.x) cannot be opened yet; rebuild it with <span style={inlineCode}>pip install &apos;duckdb&lt;1.5&apos;</span>.</>)}

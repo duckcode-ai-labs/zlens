@@ -56,7 +56,7 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
 
   it('a "no" in the terminal creates nothing and says the one command to run later', async () => {
     const decision = await decideBareFolder({ folder: '/work/shop', contents: database, yes: false, interactive: true, ask: async () => 'n', cwd: '/work' });
-    expect(decision).toEqual({ action: 'declined', message: 'Nothing was created. To create it later, run:\n\n  npx zlens notebook shop --yes' });
+    expect(decision).toEqual({ action: 'declined', message: 'Nothing was created. To create it later, run:\n\n  npx -p @zlens/cli zlens notebook shop --yes' });
   });
 
   it('without a terminal it never waits for an answer and prints the single command', async () => {
@@ -68,7 +68,7 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
       'No ZLens project here: /work/my shop (found the database jaffle_shop.duckdb).',
       'To create one and open it, run:',
       '',
-      '  npx zlens notebook "my shop" --yes',
+      '  npx -p @zlens/cli zlens notebook "my shop" --yes',
     ].join('\n'));
   });
 
@@ -85,7 +85,7 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
     const ask = vi.fn(async (_question: string) => 'n');
     await expect(decideBareFolder({ folder: '/work/shop', contents: database, yes: true, interactive: true, ask })).resolves.toEqual({ action: 'create' });
     expect(ask).not.toHaveBeenCalled();
-    expect(bareFolderCommand('/work', '/work')).toBe('npx zlens notebook . --yes');
+    expect(bareFolderCommand('/work', '/work')).toBe('npx -p @zlens/cli zlens notebook . --yes');
   });
 
   it('creates a Database only project from a folder with a DuckDB file, after a yes in the terminal', async () => {
@@ -112,7 +112,7 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
 
   it('without a terminal and without --yes it creates nothing and fails with the command', async () => {
     const folder = bareFolder({ 'jaffle_shop.duckdb': '' });
-    await expect(ensureNotebookProject(folder, FLAGS, { interactive: false })).rejects.toThrow(/To create one and open it, run:\n\n {2}npx zlens notebook .* --yes/);
+    await expect(ensureNotebookProject(folder, FLAGS, { interactive: false })).rejects.toThrow(/To create one and open it, run:\n\n {2}npx -p @zlens\/cli zlens notebook .* --yes/);
     expect(existsSync(join(folder, 'dql.config.json'))).toBe(false);
   });
 

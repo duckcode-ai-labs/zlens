@@ -27,7 +27,7 @@ This project adheres to [Semantic Versioning](https://semver.org/).
   - Import SQL reads workbooks and Power BI files;
   - calculations become metric drafts;
   - `zlens migrate compare` proves the numbers match the old report.
-- **Start with `npx zlens`,** on a folder of CSV, Parquet or SQLite files too.
+- **Start with `npm create zlens@latest`,** or open a folder of CSV, Parquet or SQLite files with `npx -p @zlens/cli zlens notebook ./my-data`.
 
 To upgrade, run `npm i -D @zlens/cli@^0.3.0` in each project. A `^0.2` range does not pick up 0.3.0 by itself.
 
@@ -562,11 +562,15 @@ When Ask routes a question to an area of more than 30 tables, it no longer cuts 
 
 ### Start with one command, on a folder of files too
 
-- **`npx zlens …` works with nothing installed.** `npx @zlens/cli` stops
-  with "could not determine executable to run", because that package has two
-  commands (`zlens` and its old name `dql`). The new `zlens` package has one
-  and runs the same CLI, so `npx zlens notebook ./my-data` works, and so do
-  the `npx zlens …` commands ZLens already printed in its hints.
+- **One command with nothing installed: `npx -p @zlens/cli zlens notebook ./my-data`.**
+  A bare `npx @zlens/cli` stops with "could not determine executable to run",
+  because that package has two commands (`zlens` and its old name `dql`).
+  The hints ZLens prints for a folder with no project, and for npm 12's
+  blocked install script, now use this form too.
+- **Not in this release: the unscoped `zlens` package** (`npx zlens` with
+  nothing installed). npm refused the name `zlens` as too similar to `less`,
+  so the package stays private until npm allows it. Inside a project that has
+  `@zlens/cli` installed, `npx zlens …` works as before.
 - **`npm create zlens@latest`** creates a project and opens the workbench.
   In a folder with data it offers to make the project there; anywhere else it
   asks for a folder name.

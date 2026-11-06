@@ -80,7 +80,8 @@ export function npxRerunCommand(argv: readonly string[] = process.argv, env: Nod
     const options = args.slice(folder.length).filter((arg) => arg !== '--');
     return ['npm create zlens@latest', flag, ...folder.map(shellWord), ...(options.length ? ['--', ...options.map(shellWord)] : [])].join(' ');
   }
-  return ['npx', flag, 'zlens', ...argv.slice(2).map(shellWord)].join(' ');
+  // `-p @zlens/cli`: the unscoped `zlens` package is not on npm, and `npx @zlens/cli` cannot pick between its two commands.
+  return ['npx', flag, '-p', '@zlens/cli', 'zlens', ...argv.slice(2).map(shellWord)].join(' ');
 }
 
 /** The repair message for a better-sqlite3 that cannot load. */
