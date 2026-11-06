@@ -9,6 +9,8 @@ The **Modeling** page holds the entities (one per table or dbt model), the
 relationships between them, and the domains that own them. Ask relies on
 these relationships when it writes SQL.
 
+{{ video("ao1-why-model") }}
+
 ## Modeling modes
 
 A project models its data in one of three ways, set by `modeling.mode` in
@@ -208,6 +210,8 @@ can also set `"mode": "hybrid"` in `dql.config.json`.
   instead.
 
 ## Review and certify relationships
+
+{{ video("ao3-review") }}
 
 Drafted and imported relationships start as drafts; only a person promotes
 them. On the **Modeling** map, click a relationship, then

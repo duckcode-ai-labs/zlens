@@ -13,7 +13,7 @@ playlists:
   - key: intro
     title: Start here
     youtube: PLKzfNDl3I2sI
-    summary: The whole idea in 90 seconds.
+    summary: The whole idea in 90 seconds, and what 0.3.0 adds.
   - key: quick-start
     title: Quick Start
     youtube: PLOQWt259Y25k
@@ -54,14 +54,24 @@ playlists:
     title: Apps
     youtube: PLBI3ZFFvskKQ
     summary: Dashboards that show their proof.
+  - key: auto-ontology
+    title: Auto ontology
+    youtube: PLXg7_wTQi5ho
+    summary: ZLens drafts your business model from dbt or your warehouse, and nothing counts until a person reviews it.
+  - key: migrate
+    title: Migrate from Tableau and Power BI
+    youtube: PLMNAnD9fZHOM
+    summary: See what moves, turn calculations into metric drafts, and prove the numbers match the old report.
 
 videos:
   zlens-agentic-film: {playlist: intro, youtube: nsyLc4UfKxo, length: "1:30", title: "ZLens: certified agentic analytics, explained in 90 seconds", docs: index.md, note: "The end card omits the folder name: run npx create-zlens-app@latest my-analytics, or start with the Quickstart."}
+  zlens-auto-ontology-film: {playlist: intro, youtube: 61XAtPHWk14, length: "1:22", title: "ZLens 0.3.0: your AI doesn't know your business. Auto ontology drafts it.", docs: datalex-and-dql.md}
 
   qs1-install: {playlist: quick-start, youtube: oQUM9aiwuHA, length: "0:52", title: "Install ZLens in 1 minute", docs: get-started/index.md}
   qs2-setup: {playlist: quick-start, youtube: s2o9aI-MpaY, length: "1:05", title: "Guided Setup and your first query", docs: get-started/index.md, note: "On the sample, Setup now opens on Open an existing ZLens project: just click Continue to credentials."}
   qs3-ask: {playlist: quick-start, youtube: LpuPFbBLrRo, length: "1:07", title: "Connect an AI model and ask your first question", docs: get-started/ai-provider.md, note: "Recorded on 0.2.2: \"Governed answer\" is now \"Answer from Metrics\", and \"block\" is now \"saved query\"."}
   qs4-own-data: {playlist: quick-start, youtube: DVItZgNmDJQ, length: "1:10", title: "Use your own data, with or without dbt", docs: get-started/your-dbt-project.md, note: "This video says \"Governed\"; the label is now \"From Metrics\"."}
+  qs5-any-folder: {playlist: quick-start, youtube: 0gU1CFiOCZY, length: "1:04", title: "A folder of CSV or Parquet files is a database, one command", docs: get-started/no-dbt.md}
 
   nb1-first-notebook: {playlist: notebooks, youtube: Jji1nqT_8Bc, length: "1:09", title: "Your first research notebook", docs: notebooks/index.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
   nb2-cell-types: {playlist: notebooks, youtube: R4xMQE9VaMM, length: "1:01", title: "Every cell type", docs: notebooks/index.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
@@ -71,7 +81,7 @@ videos:
   nb6-keep-it: {playlist: notebooks, youtube: jjEvoH7O6kU, length: "1:04", title: "Is this worth keeping? Save it for review", docs: notebooks/index.md, note: "Recorded on 0.2.2: Save Block is now Save as saved query."}
 
   bk1-why-blocks: {playlist: blocks, youtube: 1EglFCmPqH4, length: "0:57", title: "Why certified saved queries", docs: blocks/index.md, note: "Recorded on 0.2.2: Blocks are now Saved queries, and Apps say All tiles certified."}
-  bk2-import-sql: {playlist: blocks, youtube: _e5dvgSE7rA, length: "0:59", title: "Import your SQL", docs: blocks/import-sql.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app, and Import SQL now also reads Tableau and Power BI files, lists what it leaves out, and has Certify all that ran."}
+  bk2-import-sql: {playlist: blocks, youtube: rIjhfGCrW3g, length: "1:19", title: "Import your SQL from Tableau, Power BI and scripts", docs: blocks/import-sql.md}
   bk3-block-studio: {playlist: blocks, youtube: tTciKShDo1I, length: "0:55", title: "Inside the saved query editor", docs: blocks/block-studio.md, note: "Recorded on 0.2.2: \"block\" is now \"saved query\" in the app."}
   bk4-tests: {playlist: blocks, youtube: HaO0iHQXvbc, length: "0:52", title: "Tests, the promises your data keeps", docs: blocks/certify.md, note: "Recorded on 0.2.2: messages now say \"saved query\" instead of \"block\"."}
   bk5-certify: {playlist: blocks, youtube: RuntC3P2EYg, length: "1:00", title: "Certify, change, retire", docs: blocks/certify.md, note: "Recorded on 0.2.2: messages now say \"saved query\" instead of \"block\"."}
@@ -114,3 +124,13 @@ videos:
   ap5-publish-certify: {playlist: apps, youtube: 4vJiqXEih4I, length: "1:04", title: "Publish, and certify what's missing on the spot", docs: apps/build.md}
   ap6-query-changes: {playlist: apps, youtube: KUpPQvWhna4, length: "0:46", title: "When a saved query changes, it loses its certification", docs: apps/build.md}
   ap7-ask: {playlist: apps, youtube: 7Ktxzlb15Hw, length: "0:56", title: "Ask questions inside an App", docs: apps/ask-about-an-app.md}
+
+  ao1-why-model: {playlist: auto-ontology, youtube: fj6i_-FnZbc, length: "1:07", title: "Why your AI needs a business model, and how ZLens drafts it", docs: datalex-and-dql.md}
+  ao2-draft: {playlist: auto-ontology, youtube: zSyKkiLhAEY, length: "1:05", title: "Draft your business model from dbt or straight from your warehouse", docs: datalex-and-dql.md}
+  ao3-review: {playlist: auto-ontology, youtube: j2jJY6qr7uI, length: "1:03", title: "Review a drafted model, accept what passed, certify what you trust", docs: datalex-and-dql.md}
+  ao4-big-projects: {playlist: auto-ontology, youtube: jCSnhY-mIno, length: "1:17", title: "Draft the business model of thousands of tables, a piece at a time", docs: reference/cli.md}
+  ao5-ask-large: {playlist: auto-ontology, youtube: oEb2uC8YNAs, length: "1:07", title: "Ask across a large model, one subject area at a time", docs: ask/how-it-answered.md}
+
+  mg1-assess: {playlist: migrate, youtube: aKVNiDTGnGo, length: "1:01", title: "See what will move before you start", docs: guides/migrate.md}
+  mg2-metric-drafts: {playlist: migrate, youtube: XrbA85qG528, length: "1:13", title: "Turn Tableau calculations and DAX measures into metric drafts", docs: guides/migrate.md}
+  mg3-numbers-match: {playlist: migrate, youtube: Ee8nDdNkuNY, length: "1:17", title: "Prove the numbers match the old report, value by value", docs: guides/migrate.md}
