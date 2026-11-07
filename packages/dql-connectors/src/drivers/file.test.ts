@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createConnectionConfigKey } from '../connection-pool.js';
-import { dataFolderTables, dataFolderViewStatements, isDataFile } from '../data-folder.js';
+import { dataFolderSkipped, dataFolderTables, dataFolderViewStatements, isDataFile } from '../data-folder.js';
 import { DuckDBConnector } from './duckdb.js';
 import { readEnv } from '../env.js';
 import { FileConnector } from './file.js';
@@ -24,6 +24,48 @@ function dataFolder(files: Record<string, string>): string {
 
 afterEach(() => {
   for (const folder of folders.splice(0)) rmSync(folder, { recursive: true, force: true });
+});
+
+describe('what a data folder holds that is not read as a table yet', () => {
+  it('names Delta and Iceberg tables, partitioned and plain folders of files, and lake file formats', () => {
+    const folder = dataFolder({
+      'orders.parquet': '',
+      'customers_delta/_delta_log/00000000000000000000.json': '{}',
+      'orders_iceberg/metadata/00003-x.metadata.json': '{}',
+      'orders_iceberg/data/0.parquet': '',
+      'events/year=2024/month=1/a.parquet': '',
+      'events/year=2024/month=2/b.parquet': '',
+      'events/year=2025/month=1/c.parquet': '',
+      'daily/2024-01-01.csv': 'a\n1\n',
+      'daily/2024-01-02.csv': 'a\n1\n',
+      'mixed/a.csv': 'a\n1\n',
+      'mixed/b.parquet': '',
+      'targets.xlsx': '',
+      'lake.ducklake': '',
+      'clicks.avro': '',
+      'sales[1].csv': 'a\n1\n',
+      'settings/app.json': '{}',
+      'docs/readme.md': '# not data',
+      '.cache/x.parquet': '',
+      'node_modules/pkg/data.csv': 'a\n1\n',
+    });
+    expect(dataFolderSkipped(folder)).toEqual([
+      { name: 'clicks.avro', kind: 'an Avro file' },
+      { name: 'customers_delta/', kind: 'a Delta Lake table' },
+      { name: 'daily/', kind: 'a folder of 2 CSV files' },
+      { name: 'events/', kind: 'a folder of 3 Parquet files, partitioned by year, month' },
+      { name: 'lake.ducklake', kind: 'a DuckLake catalog' },
+      { name: 'mixed/', kind: 'a folder of 2 data files' },
+      { name: 'orders_iceberg/', kind: 'an Iceberg table' },
+      { name: 'sales[1].csv', kind: 'a data file whose name DuckDB would read as a pattern (it holds * ? [ ] { or })' },
+      { name: 'targets.xlsx', kind: 'an Excel workbook' },
+    ]);
+  });
+
+  it('has nothing to say about a missing folder or one of plain files', () => {
+    expect(dataFolderSkipped(join(tmpdir(), 'zlens-no-such-folder-xyz'))).toEqual([]);
+    expect(dataFolderSkipped(dataFolder({ 'orders.csv': 'a\n1\n', 'customers.parquet': '' }))).toEqual([]);
+  });
 });
 
 describe('a data folder read as a database', () => {

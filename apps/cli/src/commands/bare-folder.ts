@@ -36,6 +36,19 @@ export function describeDatabase(contents: FolderContents): string {
   return `${folder.files.length} data file${folder.files.length === 1 ? '' : 's'}${where}: ${shown}`;
 }
 
+/**
+ * What ZLens found but does not read as tables yet, in one line, or '':
+ * `Not read as tables yet: customers_delta/ (a Delta Lake table), targets.xlsx (an Excel workbook), …and 2 more.`
+ */
+export function describeNotReadYet(contents: FolderContents): string {
+  const items = contents.notReadYet?.items ?? [];
+  if (!items.length) return '';
+  const where = contents.notReadYet!.path === '.' ? '' : ` in ${contents.notReadYet!.path}/`;
+  const shown = items.slice(0, 3).map((item) => `${item.name} (${item.kind})`).join(', ');
+  const more = items.length > 3 ? `, …and ${items.length - 3} more` : '';
+  return `Not read as tables yet${where}: ${shown}${more}.`;
+}
+
 /** What the folder holds, in plain words, for the question and the message. */
 export function describeFolder(contents: FolderContents): string {
   if (contents.isDbt) return contents.duckdbPath ? `a dbt project and the database ${contents.duckdbPath}` : 'a dbt project';
@@ -70,6 +83,7 @@ export async function decideBareFolder(input: {
   cwd?: string;
 }): Promise<BareFolderDecision> {
   const found = describeFolder(input.contents);
+  const notRead = describeNotReadYet(input.contents);
   const command = bareFolderCommand(input.folder, input.cwd);
   if (input.yes) return { action: 'create' };
   if (!input.interactive || !input.ask) {
@@ -77,6 +91,7 @@ export async function decideBareFolder(input: {
       action: 'explain',
       message: [
         `No ZLens project here: ${input.folder}${found ? ` (found ${found})` : ''}.`,
+        ...(notRead ? [notRead] : []),
         'To create one and open it, run:',
         '',
         `  ${command}`,
@@ -84,7 +99,7 @@ export async function decideBareFolder(input: {
     };
   }
   const detail = found ? `Found ${found}; the project will be ${plannedProjectKind(input.contents)}.` : plannedProjectKind(input.contents) + '.';
-  const answer = await input.ask(`  No ZLens project here. Create one? [Y/n]\n  ${detail}\n  > `);
+  const answer = await input.ask(`  No ZLens project here. Create one? [Y/n]\n  ${detail}\n${notRead ? `  ${notRead}\n` : ''}  > `);
   if (acceptsCreate(answer)) return { action: 'create' };
   return {
     action: 'declined',
