@@ -98,7 +98,10 @@ export function buildWarehouseCatalogQueries(driver: string, scope: { catalogOrD
     return [
       { kind: 'columns', catalogOrDatabase: db, sql: `SELECT table_catalog, table_schema, table_name, column_name, data_type, is_nullable, comment FROM ${is}.COLUMNS WHERE ${schemaFilter('table_schema')} ORDER BY table_schema, table_name, ordinal_position LIMIT ${MAX_ROWS}` },
       { kind: 'tables', catalogOrDatabase: db, sql: `SELECT table_catalog, table_schema, table_name, table_type, comment, row_count FROM ${is}.TABLES WHERE ${schemaFilter('table_schema')}` },
-      { kind: 'views', catalogOrDatabase: db, sql: `SELECT table_catalog, table_schema, table_name, view_definition FROM ${is}.VIEWS WHERE ${schemaFilter('table_schema')}` },
+      // INFORMATION_SCHEMA.VIEWS shows a view's text only to the role that owns it, so a read-only
+      // role got none (live, 2026-11-07); SHOW VIEWS shows it to any role that may select from the
+      // view (a secure view's stays hidden). `->>` reads SHOW's rows as a table.
+      { kind: 'views', catalogOrDatabase: db, sql: `SHOW VIEWS IN DATABASE ${ident(db)} ->> SELECT "database_name" AS table_catalog, "schema_name" AS table_schema, "name" AS table_name, "text" AS view_definition FROM $1 WHERE ${schemaFilter('"schema_name"')}` },
       // Snowflake reports declared (informational) keys only through SHOW.
       { kind: 'primary_keys', catalogOrDatabase: db, sql: `SHOW PRIMARY KEYS IN DATABASE ${ident(db)}` },
       { kind: 'foreign_keys', catalogOrDatabase: db, sql: `SHOW IMPORTED KEYS IN DATABASE ${ident(db)}` },

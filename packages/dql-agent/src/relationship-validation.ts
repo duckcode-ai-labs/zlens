@@ -41,7 +41,8 @@ export function quoteQualifiedRelation(relation: string, quote: (identifier: str
 }
 
 /** Engines on which `rows` is a reserved word and cannot name a column. */
-const ROWS_RESERVED = new Set(['mysql', 'mariadb']);
+// `rows` is a reserved word there: Snowflake refused every join check with it (live, 2026-11-07); BigQuery reserves it too.
+const ROWS_RESERVED = new Set(['mysql', 'mariadb', 'snowflake', 'bigquery']);
 
 /**
  * The validation statement: row counts, null keys, max rows per key on both

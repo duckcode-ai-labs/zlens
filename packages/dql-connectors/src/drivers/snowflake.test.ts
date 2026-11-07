@@ -2,7 +2,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { ConnectorQueryError } from '../result-types.js';
-import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth } from './snowflake.js';
+import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, snowflakeLogLevel } from './snowflake.js';
 
 describe('normalizeSnowflakePrivateKeyForAuth', () => {
   // RSA key generation is the slow step (it timed out on the Node 20 CI runner),
@@ -110,5 +110,30 @@ describe('SnowflakeConnector bounded streaming', () => {
       line: 406,
       position: 8,
     });
+  });
+
+  it('keeps the reason Snowflake puts after "SQL compilation error:" on the same line (live, 2026-11-07)', async () => {
+    const connector = new SnowflakeConnector();
+    const statement = { getStatementId: () => '01multi-line', cancel: (complete: () => void) => complete() };
+    (connector as any).connection = {
+      execute: (options: Record<string, any>) => {
+        queueMicrotask(() => options.complete(Object.assign(
+          new Error("SQL compilation error:\nsyntax error line 2 at position 35 unexpected 'rows'.\nsyntax error line 3 at position 33 unexpected 'rows'."),
+          { code: '001003', sqlState: '42000' },
+        ), statement));
+        return statement;
+      },
+    };
+    const error = await connector.execute('select 1 as rows').catch((caught) => caught);
+    expect(error.message.split('\n')[0]).toBe("Snowflake query failed: SQL compilation error: syntax error line 2 at position 35 unexpected 'rows'. syntax error line 3 at position 33 unexpected 'rows'.");
+    expect(error).toMatchObject({ line: 2, position: 35 });
+  });
+});
+
+describe('the Snowflake SDK\'s own logging', () => {
+  it('is off unless ZLENS_SNOWFLAKE_LOG_LEVEL asks for a level (it printed JSON into ZLens output)', () => {
+    expect(snowflakeLogLevel({})).toBe('OFF');
+    expect(snowflakeLogLevel({ ZLENS_SNOWFLAKE_LOG_LEVEL: 'debug' })).toBe('DEBUG');
+    expect(snowflakeLogLevel({ ZLENS_SNOWFLAKE_LOG_LEVEL: 'loud' })).toBe('OFF');
   });
 });

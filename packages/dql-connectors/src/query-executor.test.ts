@@ -115,3 +115,18 @@ describe('QueryExecutor stale-session recovery', () => {
     expect(pool.removeConnector).not.toHaveBeenCalled();
   });
 });
+
+describe('QueryExecutor placeholders', () => {
+  it('rewrites $N to the driver\'s placeholder only when there are values to bind (Snowflake ->> FROM $1, live 2026-11-07)', async () => {
+    const execute = vi.fn(async () => ({ columns: [], rows: [], rowCount: 0, executionTimeMs: 1 }));
+    const pool = { getConnector: vi.fn(async () => connector(execute)), removeConnector: vi.fn(), disconnectAll: vi.fn() };
+    const executor = new QueryExecutor(pool as never);
+    await executor.executePositional('SHOW VIEWS IN DATABASE "NBA" ->> SELECT "name" FROM $1', [], config);
+    await executor.executePositional('SELECT * FROM t WHERE id = $1', [7], config);
+    expect(execute.mock.calls.map((call) => call[0])).toEqual([
+      'SHOW VIEWS IN DATABASE "NBA" ->> SELECT "name" FROM $1',
+      'SELECT * FROM t WHERE id = ?',
+    ]);
+    expect(execute.mock.calls[1]![1]).toEqual([7]);
+  });
+});
