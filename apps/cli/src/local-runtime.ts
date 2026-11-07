@@ -76,6 +76,7 @@ import {
   type SQLParamSpec,
   DuckDBConnector,
   type DuckDBConsistentReadScope,
+  type DataFolderStatus,
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
@@ -927,6 +928,7 @@ const HOST_ICONS = new Set(['inbox', 'requests', 'review', 'work', 'health', 'ad
 import { isViewerToken, mintViewerToken, readViewerToken, viewerDecision, viewerLinkBlockedReason, viewerPrincipal } from './host/viewer-links.js';
 import { boundAgentSchemaColumns, mergeAgentSchemaCompleteness } from './ask-schema-context.js';
 import { readEnv } from '@zlens/core';
+import { useProjectDataFolder } from './project-data-folder.js';
 
 export const APP_SOURCE_REUSABLE_TAG = 'app-source';
 const NOTEBOOK_EXECUTE_PREVIEW_ROW_LIMIT = 500;
@@ -6304,26 +6306,10 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     recordDatasetMetadataSnapshot();
   }
 
-  // Auto-register data/ CSV and Parquet files as DuckDB views so semantic layer
-  // queries like `FROM orders` resolve without requiring read_csv_auto() in SQL.
-  if (connection && (connection.driver === 'file' || connection.driver === 'duckdb')) {
-    const dataDir = projectConfig.dataDir
-      ? resolve(projectRoot, projectConfig.dataDir)
-      : join(projectRoot, 'data');
-    if (existsSync(dataDir)) {
-      try {
-        const files = readdirSync(dataDir, { withFileTypes: true })
-          .filter((e) => e.isFile() && /\.(csv|parquet)$/i.test(e.name));
-        for (const file of files) {
-          const tableName = file.name.replace(/\.(csv|parquet)$/i, '');
-          const absPath = join(dataDir, file.name).replaceAll('\\', '/');
-          const reader = file.name.endsWith('.parquet') ? 'read_parquet' : 'read_csv_auto';
-          const ddl = `CREATE OR REPLACE VIEW "${tableName}" AS SELECT * FROM ${reader}('${absPath}')`;
-          // DQL's own view over the project's data file (purpose `platform`): not a statement a person wrote.
-          try { await executor.executeQuery(ddl, [], {}, connection, { purpose: 'platform' }); } catch { /* non-fatal */ }
-        }
-      } catch { /* non-fatal */ }
-    }
+  // The project's data/ folder read as tables (`FROM orders` reads data/orders.csv) on a DuckDB or file connection
+  // without a data folder of its own: views the connection keeps, temporary in a real DuckDB file (never written into it).
+  if (connection) {
+    await useProjectDataFolder(executor, connection, projectRoot, projectConfig.dataDir).catch(() => undefined);
   }
 
   const executeLocalSqlForStoredResult = async (sql: string, executionConnection?: ConnectionConfig) => {
@@ -30158,26 +30144,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           } catch {
             // The test reports the missing package with its install command.
           }
-          // Auto-register data files if DuckDB/file driver
-          if (connection.driver === 'file' || connection.driver === 'duckdb') {
-            const dataDir = projectConfig.dataDir
-              ? resolve(projectRoot, projectConfig.dataDir)
-              : join(projectRoot, 'data');
-            if (existsSync(dataDir)) {
-              try {
-                const files = readdirSync(dataDir, { withFileTypes: true })
-                  .filter((e) => e.isFile() && /\.(csv|parquet)$/i.test(e.name));
-                for (const file of files) {
-                  const tableName = file.name.replace(/\.(csv|parquet)$/i, '');
-                  const absPath = join(dataDir, file.name).replaceAll('\\', '/');
-                  const reader = file.name.endsWith('.parquet') ? 'read_parquet' : 'read_csv_auto';
-                  const ddl = `CREATE OR REPLACE VIEW "${tableName}" AS SELECT * FROM ${reader}('${absPath}')`;
-                  // DQL's own view over the project's data file (purpose `platform`): not a statement a person wrote.
-                  try { await executor.executeQuery(ddl, [], {}, connection, { purpose: 'platform' }); } catch { /* non-fatal */ }
-                }
-              } catch { /* non-fatal */ }
-            }
-          }
+          // The project's data/ folder read as tables on the new connection (see the same call at startup).
+          await useProjectDataFolder(executor, connection, projectRoot, projectConfig.dataDir).catch(() => undefined);
         }
 
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -32185,6 +32153,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const connector = await executor.getConnector(target);
         const result = await validateConnectionForTest(connector, target);
+        // The data folder as the project names it (`data`, `.`), not this machine's path.
+        if (result.dataFolder) result.dataFolder = { ...result.dataFolder, folder: relative(projectRoot, result.dataFolder.folder).replaceAll('\\', '/') || '.' };
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
       } catch (error) {
@@ -33347,6 +33317,8 @@ export interface ConnectionTestResult {
   ok: boolean;
   message: string;
   details?: Record<string, unknown>;
+  /** A DuckDB or file connection's data folder: what it reads as tables, attaches, skips, and could not read. */
+  dataFolder?: DataFolderStatus;
 }
 
 export async function validateConnectionForTest(
@@ -33359,12 +33331,25 @@ export async function validateConnectionForTest(
 
   const ok = await connector.ping();
   const label = connectionDriverLabel(connection);
+  const dataFolder = ok ? await dataFolderStatusOf(connector) : undefined;
   return {
     ok,
     message: ok
       ? `Connected to ${label} successfully.`
       : `Connection to ${label} failed. Check credentials, network access, and database availability.`,
+    ...(dataFolder ? { dataFolder } : {}),
   };
+}
+
+/** What a DuckDB or file connection reads from its data folder, or undefined (no folder, another driver). */
+async function dataFolderStatusOf(connector: DatabaseConnector): Promise<DataFolderStatus | undefined> {
+  const read = (connector as { dataFolderStatus?: () => Promise<DataFolderStatus | undefined> }).dataFolderStatus;
+  if (typeof read !== 'function') return undefined;
+  try {
+    return await read.call(connector);
+  } catch {
+    return undefined;
+  }
 }
 
 function formatConnectionTestError(connection: ConnectionConfig, error: unknown): string {

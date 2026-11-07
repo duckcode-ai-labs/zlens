@@ -61,7 +61,7 @@ The folder can hold any of these, and ZLens picks the first it finds:
 |---|---|
 | A DuckDB file (`.duckdb`, or a `.db` file DuckDB wrote) | `{ "driver": "duckdb", "filepath": "shop.duckdb" }` |
 | A SQLite file (`.sqlite`, `.sqlite3`, or a `.db` file SQLite wrote) | `{ "driver": "sqlite", "filepath": "shop.sqlite" }`, opened read-only |
-| CSV, TSV, Parquet or JSON files, in the folder or its `data/` folder | `{ "driver": "file", "filepath": ":memory:", "dataFolder": "data" }` |
+| Data files or lake tables (CSV, TSV, Parquet, JSON, Excel, Delta, Iceberg, DuckLake), in the folder or its `data/` folder | `{ "driver": "file", "filepath": ":memory:", "dataFolder": "data" }` |
 
 ### A folder of CSV, Parquet or JSON files
 
@@ -72,11 +72,19 @@ Each file becomes a table named after it: `orders.csv` is `orders`, and
 are, each time a query runs: a file you replace is read fresh, a file you add
 becomes a table, and one you remove stops being one; nothing is copied or
 imported. A file DuckDB cannot read (a half-copied Parquet file, say) is left
-out until it changes, and the rest still work. Files in subfolders, hidden
-files, names with `*`, `?`, `[` or `]`, and tool settings (`dql.config.json`,
-`package.json`) are left out; in the project's own folder every `.json` file
-is (put JSON data in `data/`, or use JSON Lines). A folder with only `.json`
-files is not picked up as data.
+out until it changes, and the rest still work. Hidden files, names with `*`,
+`?`, `[` or `]`, and tool settings (`dql.config.json`, `package.json`) are
+left out; in the project's own folder every `.json` file is (put JSON data in
+`data/`, or use JSON Lines). A folder with only `.json` files is not picked up
+as data.
+
+Lake data in the folder is read too: each Excel sheet, Delta Lake table,
+Iceberg table (at its newest version) and folder of files (partitioned like
+`year=2025/month=1/`, or not) is one table, and a DuckLake, DuckDB or SQLite
+file is attached read-only as a catalog (`lake.main.orders`).
+`zlens init`, `zlens notebook` and Guided Setup list each table and say what
+they skip and why. The [connectors reference](../reference/connectors.md#duckdb-and-local-files)
+has the full list.
 
 ```text
   No ZLens project here. Create one? [Y/n]

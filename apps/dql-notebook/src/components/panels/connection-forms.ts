@@ -444,7 +444,7 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
     driver: 'file',
     label: 'Local files',
     fields: [
-      { key: 'dataFolder', label: 'Data folder', type: 'text', placeholder: './data', required: true, helpText: 'Each CSV, TSV, Parquet or JSON file in the folder is a table named after the file. The files are read where they are.' },
+      { key: 'dataFolder', label: 'Data folder', type: 'text', placeholder: './data', required: true, helpText: 'Each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or Iceberg table and folder of files in it is a table named after it; DuckDB and DuckLake files are attached read-only. The data is read where it is.' },
     ],
   },
 ];

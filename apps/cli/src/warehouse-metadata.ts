@@ -9,7 +9,8 @@ import {
   type RuntimeSchemaTable,
   parsePhysicalIdentifier,
 } from '@zlens/agent';
-import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
+import { readDataFolder, type ConnectionConfig, type QueryExecutor } from '@zlens/connectors';
+import { isAbsolute } from 'node:path';
 import { observeWarehouseTargetIdentity } from './semantic-execution/connection-identity.js';
 
 export type ConnectionMetadataScopeMode = 'dbt_relations' | 'selected_scopes' | 'dbt_plus_selected';
@@ -126,7 +127,7 @@ export function normalizeConnectionMetadataScope(
   const explicitScopes = normalizeScopes(input?.scopes ?? []);
   const relationScopes = scopesFromRelations(dbtRelations, defaultDatabase, defaultSchema);
   const fallbackScopes = defaultDatabase && defaultSchema
-    ? [{ catalogOrDatabase: defaultDatabase, schemas: [defaultSchema] }]
+    ? [{ catalogOrDatabase: defaultDatabase, schemas: [defaultSchema] }, ...dataFolderCatalogScopes(connection)]
     : [];
   const scopes = normalizeScopes(
     mode === 'dbt_relations'
@@ -852,6 +853,17 @@ function isSystemSchema(schema: string): boolean {
  * and MySQL and ClickHouse have one level only, the database, which serves as
  * both catalog and schema of a scope.
  */
+/**
+ * A file connection's data folder attaches its DuckDB, DuckLake and SQLite
+ * files as catalogs: by default their `main` schema is read too, so their
+ * tables (`lake.main.orders`) reach Ask and the warehouse catalog.
+ */
+function dataFolderCatalogScopes(connection: ConnectionConfig): RuntimeSchemaScope[] {
+  if (connection.driver !== 'file' || !connection.dataFolder || !isAbsolute(connection.dataFolder)) return [];
+  const exclude = connection.filepath && connection.filepath !== ':memory:' ? [connection.filepath] : [];
+  return readDataFolder(connection.dataFolder, { exclude }).catalogs.map((catalog) => ({ catalogOrDatabase: catalog.name, schemas: ['main'] }));
+}
+
 function configuredCatalog(connection: ConnectionConfig): string | undefined {
   const driver = connection.driver;
   if (driver === 'bigquery') return cleanIdentifier(connection.catalog ?? connection.projectId ?? connection.database);

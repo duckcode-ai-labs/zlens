@@ -1,6 +1,6 @@
 import { relative } from 'node:path';
 import { createInterface } from 'node:readline/promises';
-import type { FolderContents } from './init.js';
+import { isPlainDataFolder, type FolderContents } from './init.js';
 
 /**
  * `zlens notebook <folder>` on a folder with no ZLens project (design D7):
@@ -25,20 +25,29 @@ export function bareFolderCommand(folder: string, cwd: string = process.cwd()): 
   return `npx -p @zlens/cli zlens notebook ${shown} --yes`;
 }
 
-/** The database a folder holds, in plain words: `shop.sqlite`, `3 data files in data/: orders.csv, …`. */
+/**
+ * The database a folder holds, in plain words: `shop.sqlite`,
+ * `3 data files in data/: orders.csv, …`, `6 tables and 1 database file in data/: customers_delta/, events/, …`.
+ */
 export function describeDatabase(contents: FolderContents): string {
   if (contents.duckdbPath) return contents.duckdbPath;
   if (contents.sqlitePath) return contents.sqlitePath;
   const folder = contents.dataFolder;
   if (!folder) return '';
-  const shown = folder.files.slice(0, 3).join(', ') + (folder.files.length > 3 ? ', …' : '');
+  const catalogs = folder.catalogs ?? [];
+  const entries = [...folder.files, ...catalogs.map((catalog) => catalog.source)];
+  const shown = entries.slice(0, 3).join(', ') + (entries.length > 3 ? ', …' : '');
   const where = folder.path === '.' ? '' : ` in ${folder.path}/`;
-  return `${folder.files.length} data file${folder.files.length === 1 ? '' : 's'}${where}: ${shown}`;
+  if (isPlainDataFolder(folder)) return `${folder.files.length} data file${folder.files.length === 1 ? '' : 's'}${where}: ${shown}`;
+  const tables = folder.tables?.length ?? folder.files.length;
+  const parts = [`${tables} table${tables === 1 ? '' : 's'}`];
+  if (catalogs.length) parts.push(`${catalogs.length} database file${catalogs.length === 1 ? '' : 's'}`);
+  return `${parts.join(' and ')}${where}: ${shown}`;
 }
 
 /**
- * What ZLens found but does not read as tables yet, in one line, or '':
- * `Not read as tables yet: customers_delta/ (a Delta Lake table), targets.xlsx (an Excel workbook), …and 2 more.`
+ * What ZLens found but does not read as tables, in one line, or '':
+ * `Not read as tables: clicks.avro (an Avro file (not read yet)), mixed/ (…), …and 2 more.`
  */
 export function describeNotReadYet(contents: FolderContents): string {
   const items = contents.notReadYet?.items ?? [];
@@ -46,7 +55,7 @@ export function describeNotReadYet(contents: FolderContents): string {
   const where = contents.notReadYet!.path === '.' ? '' : ` in ${contents.notReadYet!.path}/`;
   const shown = items.slice(0, 3).map((item) => `${item.name} (${item.kind})`).join(', ');
   const more = items.length > 3 ? `, …and ${items.length - 3} more` : '';
-  return `Not read as tables yet${where}: ${shown}${more}.`;
+  return `Not read as tables${where}: ${shown}${more}.`;
 }
 
 /** What the folder holds, in plain words, for the question and the message. */
@@ -61,7 +70,7 @@ export function describeFolder(contents: FolderContents): string {
 export function plannedProjectKind(contents: FolderContents): string {
   if (contents.isDbt) return 'a dbt project';
   if (contents.duckdbPath || contents.sqlitePath) return 'Database only';
-  if (contents.dataFolder) return 'Database only, each file a table';
+  if (contents.dataFolder) return isPlainDataFolder(contents.dataFolder) ? 'Database only, each file a table' : 'Database only, each file, sheet or folder a table';
   return 'Guided Setup asks whether you use dbt or a database only';
 }
 

@@ -82,7 +82,7 @@ jobs:
         working-directory: packages/dql-connectors
         shell: bash
         run: |
-          npx vitest run src/drivers/duckdb.test.ts src/drivers/duckdb-file-handle.test.ts src/drivers/duckdb-disconnect.test.ts --reporter=verbose | tee "$RUNNER_TEMP/duckdb-driver.log"
+          npx vitest run src/drivers/duckdb.test.ts src/drivers/duckdb-file-handle.test.ts src/drivers/duckdb-disconnect.test.ts src/drivers/file.test.ts --reporter=verbose | tee "$RUNNER_TEMP/duckdb-driver.log"
           if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/duckdb-driver.log"; then
             echo "DuckDB driver tests skipped cases although the driver root was configured." >&2
             exit 1

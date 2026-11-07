@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { modelingModeOf } from '@zlens/core';
 import { describe, expect, it, vi } from 'vitest';
-import { detectFolderContents, runInit } from './init.js';
+import { detectFolderContents, initProjectKind, runInit } from './init.js';
+import { describeDatabase } from './bare-folder.js';
 import { loadSkills } from '@zlens/agent';
 
 const INIT_FLAGS = {
@@ -311,7 +312,7 @@ describe('runInit', () => {
     writeFileSync(join(projectDir, 'data', 'customers.parquet'), '');
     writeFileSync(join(projectDir, 'data', 'notes.txt'), 'not data');
     writeFileSync(join(projectDir, 'README.md'), '# Shop');
-    expect(detectFolderContents(projectDir).dataFolder).toEqual({ path: 'data', files: ['customers.parquet', 'orders.csv'] });
+    expect(detectFolderContents(projectDir).dataFolder).toMatchObject({ path: 'data', files: ['customers.parquet', 'orders.csv'], catalogs: [] });
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
@@ -326,7 +327,7 @@ describe('runInit', () => {
     expect(config.connections.default).toEqual({ driver: 'file', filepath: ':memory:', dataFolder: 'data' });
   });
 
-  it('says what it does not read as tables yet: Delta, Iceberg, partitioned folders, Excel', async () => {
+  it('reads a lake folder: Delta and Iceberg tables and partitioned folders are tables, one line each, and it says what it skips', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-lake-'));
     const put = (path: string, content = '') => {
       mkdirSync(join(projectDir, path, '..'), { recursive: true });
@@ -340,47 +341,77 @@ describe('runInit', () => {
     put('orders_iceberg/data/00000-0.parquet');
     put('order_events/year=2024/month=1/part-0.parquet');
     put('order_events/year=2025/month=2/part-0.parquet');
+    put('lake.ducklake');
+    put('clicks.avro');
     put('targets.xlsx');
     put('notes/readme.md', 'not data');
     put('node_modules/pkg/data.csv', 'a\n1\n');
-    expect(detectFolderContents(projectDir).notReadYet).toEqual({
+    const contents = detectFolderContents(projectDir);
+    expect(contents.dataFolder).toEqual({
+      path: '.',
+      files: ['customers_delta/', 'customers.csv', 'order_events/', 'orders_iceberg/', 'orders.parquet'],
+      tables: [
+        { name: 'customers_delta', source: 'customers_delta/', kind: 'Delta Lake table' },
+        { name: 'customers', source: 'customers.csv', kind: 'CSV file' },
+        { name: 'order_events', source: 'order_events/', kind: '2 Parquet files, partitioned by year, month' },
+        { name: 'orders_iceberg', source: 'orders_iceberg/', kind: 'Iceberg table (version 1)' },
+        { name: 'orders', source: 'orders.parquet', kind: 'Parquet file' },
+      ],
+      catalogs: [{ name: 'lake', source: 'lake.ducklake', kind: 'DuckLake catalog, attached as lake' }],
+    });
+    expect(contents.notReadYet).toEqual({
       path: '.',
       items: [
-        { name: 'customers_delta/', kind: 'a Delta Lake table' },
-        { name: 'order_events/', kind: 'a folder of 2 Parquet files, partitioned by year, month' },
-        { name: 'orders_iceberg/', kind: 'an Iceberg table' },
-        { name: 'targets.xlsx', kind: 'an Excel workbook' },
+        { name: 'clicks.avro', kind: 'an Avro file (not read yet)' },
+        { name: 'targets.xlsx', kind: 'an Excel workbook ZLens could not open' },
       ],
     });
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
       const output = spy.mock.calls.flat().join('\n');
-      expect(output).toContain('Data files: 2 data files: customers.csv, orders.parquet');
-      expect(output).toContain('Not read as tables yet (ZLens reads single CSV, TSV, Parquet and JSON files):');
-      expect(output).toMatch(/customers_delta\/\s+a Delta Lake table/);
-      expect(output).toMatch(/orders_iceberg\/\s+an Iceberg table/);
-      expect(output).toMatch(/targets\.xlsx\s+an Excel workbook/);
+      expect(output).toContain('Data files: 5 tables and 1 database file: customers_delta/, customers.csv, order_events/, …');
+      expect(output).toContain('Tables (one per file, sheet or folder):');
+      expect(output).toMatch(/customers_delta\s+customers_delta\/\s+Delta Lake table/);
+      expect(output).toMatch(/orders_iceberg\s+orders_iceberg\/\s+Iceberg table \(version 1\)/);
+      expect(output).toMatch(/order_events\s+order_events\/\s+2 Parquet files, partitioned by year, month/);
+      expect(output).toContain('Attached read-only (their tables are catalog.schema.table):');
+      expect(output).toMatch(/lake\s+lake\.ducklake\s+DuckLake catalog/);
+      expect(output).toContain('Not read as tables:');
+      expect(output).toMatch(/clicks\.avro\s+an Avro file \(not read yet\)/);
+      expect(output).toContain('Project type: Database only');
       expect(output).not.toContain('node_modules');
       expect(output).not.toContain('notes/');
     } finally {
       spy.mockRestore();
     }
+    const config = JSON.parse(readFileSync(join(projectDir, 'dql.config.json'), 'utf-8'));
+    expect(config.connections.default).toEqual({ driver: 'file', filepath: ':memory:', dataFolder: '.' });
   });
 
-  it('names lake folders even when there is no file it reads, and leaves the project undecided', async () => {
+  it('makes a folder holding only a lake table a Database only project', () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-lake-only-'));
     mkdirSync(join(projectDir, 'data', 'sales_delta', '_delta_log'), { recursive: true });
     writeFileSync(join(projectDir, 'data', 'sales_delta', '_delta_log', '00000000000000000000.json'), '{}');
     const contents = detectFolderContents(projectDir);
+    expect(contents.dataFolder).toMatchObject({ path: 'data', files: ['sales_delta/'] });
+    expect(describeDatabase(contents)).toBe('1 table in data/: sales_delta/');
+    expect(initProjectKind(contents)).toBe('database');
+  });
+
+  it('names what it skips even when there is nothing it reads, and leaves the project undecided', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-skipped-only-'));
+    mkdirSync(join(projectDir, 'data'), { recursive: true });
+    writeFileSync(join(projectDir, 'data', 'clicks.avro'), '');
+    const contents = detectFolderContents(projectDir);
     expect(contents.dataFolder).toBeNull();
-    expect(contents.notReadYet).toEqual({ path: 'data', items: [{ name: 'sales_delta/', kind: 'a Delta Lake table' }] });
+    expect(contents.notReadYet).toEqual({ path: 'data', items: [{ name: 'clicks.avro', kind: 'an Avro file (not read yet)' }] });
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
       const output = spy.mock.calls.flat().join('\n');
-      expect(output).toContain('Data files: none that ZLens reads as tables yet');
-      expect(output).toContain('Not read as tables yet in data/');
+      expect(output).toContain('Data files: none that ZLens reads as tables');
+      expect(output).toContain('Not read as tables in data/:');
       expect(output).toContain('Guided Setup asks whether you use dbt or a database only');
     } finally {
       spy.mockRestore();
@@ -390,13 +421,13 @@ describe('runInit', () => {
   it('adds the not-read line to the one-line summary that zlens notebook and npm create zlens print', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-lake-summary-'));
     writeFileSync(join(projectDir, 'orders.csv'), 'id\n1\n');
-    writeFileSync(join(projectDir, 'targets.xlsx'), '');
+    writeFileSync(join(projectDir, 'clicks.avro'), '');
     const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
     try {
       await runInit(projectDir, { ...INIT_FLAGS, format: 'text' }, { output: 'summary' });
       const output = spy.mock.calls.flat().join('\n');
       expect(output).toContain('Database only · 1 data file: orders.csv');
-      expect(output).toContain('Not read as tables yet: targets.xlsx (an Excel workbook).');
+      expect(output).toContain('Not read as tables: clicks.avro (an Avro file (not read yet)).');
     } finally {
       spy.mockRestore();
     }

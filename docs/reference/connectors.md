@@ -192,10 +192,11 @@ token rather than a personal token.
 }
 ```
 
-For CSV, TSV, Parquet and JSON files, use the `file` driver. It runs on
-DuckDB, so ZLens installs the DuckDB driver for it. With `dataFolder`, each
-data file in that folder is a table (a view) named after the file, so sync,
-Guided Setup and Ask see the folder as a database:
+For data in files (CSV, TSV, Parquet, JSON, Excel, Delta Lake, Iceberg), use
+the `file` driver. It runs on DuckDB, so ZLens installs the DuckDB driver for
+it. With `dataFolder`, everything that holds data in that folder is a table (a
+view) named after it, so sync, Guided Setup and Ask see the folder as a
+database:
 
 ```json
 {
@@ -209,16 +210,39 @@ Guided Setup and Ask see the folder as a database:
 select * from orders   -- reads ./data/orders.csv
 ```
 
-`dataFolder` is relative to the project. The files are read where they are, at
-query time, and the tables follow the folder: a file added while ZLens runs
-becomes a table, a removed one stops being one. Only files directly in the
-folder are read, not subfolders. Left out: a file DuckDB cannot read (until it
-changes), names with `*`, `?`, `[` or `]`, tool settings such as
-`dql.config.json` and `package.json`, and, in the project's own folder, every
-`.json` file. Two files with the same name (`orders.csv`, `orders.parquet`)
-become `orders` and `orders_parquet`. With a real `filepath`, the views are
-temporary and never written into that DuckDB file. `zlens notebook` on a
-folder of data files writes this connection for you.
+| In the data folder | Read as |
+|---|---|
+| `orders.csv`, `.tsv`, `.parquet`, `.json`, `.jsonl` | one table per file |
+| `targets.xlsx` | one table per visible sheet: `targets`, or `targets_<sheet>` when it has several |
+| `customers/` holding `_delta_log/` | a Delta Lake table |
+| `orders/` holding `metadata/*.metadata.json` | an Iceberg table, at its newest version (`version-hint.text`, else the highest version), read from its own folder even when it was written elsewhere |
+| `events/year=2025/month=1/…` | one table over all its files; `year` and `month` are columns |
+| `daily/` of CSV, TSV, Parquet or JSON files | one table over all its files, when they share their columns |
+| `lake.ducklake`, `shop.duckdb`, `notes.sqlite` | attached read-only as a catalog named after the file: `select * from lake.main.orders` |
+
+`dataFolder` is relative to the project. The data is read where it is, at
+query time, and the tables follow the folder: a file, partition or Iceberg
+commit added while ZLens runs is read, a removed table stops being one. Left
+out: hidden files, folders a project or tool keeps (`node_modules`, `target`,
+`notebooks`, ...), names with `*`, `?`, `[`, `]`, `{` or `}`, tool settings
+such as `dql.config.json` and `package.json`, and, in the project's own
+folder, every `.json` file and its `data/` folder. `zlens init` and
+`zlens notebook` list what is read as a table and what is not, with the
+reason (an Avro file, a folder of mixed formats, a folder whose files have
+different columns). A table DuckDB cannot read is tried again once it changes.
+Two tables with the same name (`orders.csv`, `orders.parquet`) become `orders`
+and `orders_parquet`. With a real `filepath`, the views are temporary and
+never written into that DuckDB file. `zlens notebook` on a folder of data
+writes this connection for you.
+
+Excel, Delta, Iceberg and DuckLake are read by DuckDB extensions, which DuckDB
+downloads the first time they are needed (see
+[Extension downloads](#extension-downloads)).
+
+A `duckdb` connection also reads the project's `data/` folder (or `dataDir`
+in `dql.config.json`) as tables, the same way but without attaching database
+files: the views are temporary, nothing is written into the DuckDB file, and a
+table or view it already has keeps its name.
 
 Replacing a Dataset tile and aggregate Dataset rollups need a DuckDB
 connection; a `file` connection refuses them with that reason.

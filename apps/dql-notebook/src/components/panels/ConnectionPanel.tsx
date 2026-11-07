@@ -16,6 +16,7 @@ import {
 } from '../../api/client';
 import { PanelFrame } from '@zlens/ui';
 import { DriverLogo } from './DriverLogo';
+import { DataFolderSummary, type DataFolderStatusView } from './DataFolderSummary';
 import { isStagingSchema, splitStagingSchemas } from '@zlens/core/staging-tables';
 import { EXTRA_SCHEMAS_HINT, rowsPrivacy } from '../modals/setup-model-source';
 import {
@@ -201,7 +202,7 @@ export function ConnectionPanel({
 
   const [info, setInfo] = useState<ConnectionInfo | null>(initialInfo ?? null);
   const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string; dataFolder?: DataFolderStatusView } | null>(null);
   const [editing, setEditing] = useState<string | null>(null); // connection key being edited
   const [addingNew, setAddingNew] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -823,6 +824,7 @@ export function ConnectionPanel({
                     </div>
                   ))}
               </div>
+              {isDefault && testResult?.ok && testResult.dataFolder && <DataFolderSummary status={testResult.dataFolder} t={t} />}
             </div>
           );
         })
@@ -1406,6 +1408,7 @@ export function ConnectionPanel({
           {testing ? 'Testing…' : 'Test connection'}
         </button>
       </div>
+      {testResult?.ok && testResult.dataFolder ? <DataFolderSummary status={testResult.dataFolder} t={t} card /> : null}
       {isSetup && setupPrimaryAction ? setupPrimaryAction : null}
       {/* Database only has no dbt: personal ~/.dbt profiles never show there (design D7). */}
       {isSetup && setupSource === 'warehouse' ? null : (

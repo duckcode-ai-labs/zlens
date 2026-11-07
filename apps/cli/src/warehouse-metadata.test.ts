@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { latestRuntimeSchemaSnapshotForProject } from '@zlens/agent';
@@ -293,6 +293,25 @@ describe('warehouse metadata scope', () => {
       },
     ]);
     expect(discovery.queryCount).toBe(3);
+  });
+
+  it('a file connection reads the main schema of each database file its data folder attaches, by default', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'dql-warehouse-metadata-lake-'));
+    try {
+      writeFileSync(join(folder, 'orders.csv'), 'id\n1\n');
+      writeFileSync(join(folder, 'lake.ducklake'), '');
+      writeFileSync(join(folder, 'own.duckdb'), '');
+      const scope = normalizeConnectionMetadataScope('default', { driver: 'file', filepath: join(folder, 'own.duckdb'), dataFolder: folder }, undefined);
+      expect(scope.scopes).toEqual([
+        { catalogOrDatabase: 'lake', schemas: ['main'] },
+        { catalogOrDatabase: 'memory', schemas: ['main'] },
+      ]);
+      // Chosen schemas stay the whole scope.
+      const chosen = normalizeConnectionMetadataScope('default', { driver: 'file', dataFolder: folder }, { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'memory', schemas: ['main'] }] });
+      expect(chosen.scopes).toEqual([{ catalogOrDatabase: 'memory', schemas: ['main'] }]);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
   });
 
   it('DuckDB: a scope reads only its own catalog, and an attached database keeps its name in the relation', async () => {

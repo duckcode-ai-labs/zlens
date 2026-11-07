@@ -5,6 +5,7 @@ import type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo } from 
 import type { QueryExecutionOptions, QueryResult, ColumnMeta, ColumnType, Row } from '../result-types.js';
 import { importConnectorDependency } from '../optional-dependency.js';
 import { readEnv } from '../env.js';
+import { DataFolderViews, type DataFolderStatus } from '../data-folder-views.js';
 
 /**
  * A dedicated connection from the already-open DuckDB database. Dataset
@@ -78,6 +79,9 @@ export class DuckDBConnector implements DatabaseConnector {
   private connection: any = null;
   private releaseDatabase: (() => Promise<void>) | null = null;
   private readonly openScopes = new Set<() => Promise<void>>();
+  /** The data folder read as tables (`dataFolder`, or the project's data folder), kept in step before each statement. */
+  private folderViews: DataFolderViews | null = null;
+  private databaseFile: string | undefined;
 
   async connect(config: ConnectionConfig): Promise<void> {
     await this.disconnect();
@@ -118,13 +122,49 @@ export class DuckDBConnector implements DatabaseConnector {
     }
     this.db = db;
     this.releaseDatabase = release;
+    this.databaseFile = dbPath.startsWith(':memory:') ? undefined : resolvePath(dbPath);
+    if (config.dataFolder) await this.useDataFolder(config.dataFolder);
+  }
+
+  /**
+   * Read a folder of data as tables on this connection: each data file, Excel
+   * sheet, Delta or Iceberg table, or folder of files is a view named after it
+   * (see `readDataFolder`), kept in step with the folder before each
+   * statement. In a real database file the views are temporary: nothing is
+   * written into it, and a name it already has stays its own. `catalogs`
+   * (default true): DuckDB, DuckLake and SQLite files are attached read-only.
+   */
+  async useDataFolder(folder: string, options: { catalogs?: boolean } = {}): Promise<void> {
+    if (!this.connection) throw new Error('DuckDB connector not connected. Call connect() first.');
+    if (this.folderViews?.folder !== folder) {
+      this.folderViews = new DataFolderViews(folder, (sql) => this.executeOwn(sql), {
+        temporary: this.databaseFile !== undefined,
+        catalogs: options.catalogs ?? true,
+        exclude: this.databaseFile ? [this.databaseFile] : [],
+      });
+    }
+    await this.folderViews.refresh();
+  }
+
+  /** What this connection reads from its data folder, or undefined without one. */
+  async dataFolderStatus(): Promise<DataFolderStatus | undefined> {
+    if (!this.folderViews) return undefined;
+    await this.folderViews.refresh();
+    return this.folderViews.status();
   }
 
   async execute(sql: string, params?: unknown[], options: QueryExecutionOptions = {}): Promise<QueryResult> {
     if (!this.connection) {
       throw new Error('DuckDB connector not connected. Call connect() first.');
     }
+    if (this.folderViews) await this.folderViews.refresh();
     return executeDuckDBConnection(this.connection, this.db, sql, params, options);
+  }
+
+  /** ZLens's own statement for the data folder's views, on this connection (no refresh first). */
+  private executeOwn(sql: string): Promise<QueryResult> {
+    if (!this.connection) return Promise.reject(new Error('DuckDB connector not connected. Call connect() first.'));
+    return executeDuckDBConnection(this.connection, this.db, sql);
   }
 
   /**
@@ -138,6 +178,7 @@ export class DuckDBConnector implements DatabaseConnector {
       throw new Error('DuckDB connector not connected. Call connect() first.');
     }
     const db = this.db;
+    if (this.folderViews) await this.folderViews.refresh();
     const context = await readDuckDBSessionContext(this.connection, db);
     const connection = await openDuckDBConnection(db);
     let closed = false;
@@ -153,6 +194,8 @@ export class DuckDBConnector implements DatabaseConnector {
       if (context.timeZone && (await readDuckDBSessionContext(connection, db)).timeZone !== context.timeZone) {
         await executeDuckDBConnection(connection, db, `SET TimeZone = ${quoteDuckDBString(context.timeZone)}`);
       }
+      // The data folder's temporary views belong to the main connection: this one gets its own.
+      for (const statement of this.folderViews?.temporaryViewStatements() ?? []) await executeDuckDBConnection(connection, db, statement);
       await executeDuckDBConnection(connection, db, 'BEGIN TRANSACTION');
     } catch (error) {
       await closeDuckDBConnection(connection);
@@ -196,6 +239,8 @@ export class DuckDBConnector implements DatabaseConnector {
     this.db = null;
     this.connection = null;
     this.releaseDatabase = null;
+    this.folderViews = null;
+    this.databaseFile = undefined;
     this.openScopes.clear();
     await Promise.allSettled(scopes.map((close) => close()));
     if (connection) await closeDuckDBConnection(connection);

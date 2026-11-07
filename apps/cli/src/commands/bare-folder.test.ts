@@ -81,7 +81,7 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
     expect(ask.mock.calls[1]![0]).toContain('Found 4 data files: customers.csv, items.csv, orders.csv, …; the project will be Database only, each file a table.');
   });
 
-  it('says what it found but does not read as tables yet, in the question and in the message', async () => {
+  it('says what it found but does not read as tables, in the question and in the message', async () => {
     const ask = vi.fn(async (_question: string) => '');
     const contents = {
       isDbt: false, dbtProjectDir: null, duckdbPath: null,
@@ -94,9 +94,9 @@ describe('zlens notebook on a folder with no ZLens project (D7)', () => {
       ] },
     };
     await decideBareFolder({ folder: '/work/lake', contents, yes: false, interactive: true, ask, cwd: '/work' });
-    expect(ask.mock.calls[0]![0]).toContain('Not read as tables yet: customers_delta/ (a Delta Lake table), events/ (a folder of 20 Parquet files, partitioned by year), orders_iceberg/ (an Iceberg table), …and 1 more.');
+    expect(ask.mock.calls[0]![0]).toContain('Not read as tables: customers_delta/ (a Delta Lake table), events/ (a folder of 20 Parquet files, partitioned by year), orders_iceberg/ (an Iceberg table), …and 1 more.');
     const decision = await decideBareFolder({ folder: '/work/lake', contents, yes: false, interactive: false, cwd: '/work' });
-    expect(decision.action === 'explain' && decision.message.split('\n')[1]).toMatch(/^Not read as tables yet: customers_delta\//);
+    expect(decision.action === 'explain' && decision.message.split('\n')[1]).toMatch(/^Not read as tables: customers_delta\//);
   });
 
   it('--yes creates without asking', async () => {

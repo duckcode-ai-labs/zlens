@@ -3,11 +3,33 @@ import { basename, join, relative, resolve } from 'node:path';
 import { createWelcomeNotebook, serializeNotebook } from '@zlens/notebook';
 import { resolveLocalOwner, seedDefaultSkills, seedDomainSkills } from '@zlens/agent';
 import { buildManifest, modelingModeOf } from '@zlens/core';
-import { dataFolderSkipped, dataFolderTables, type DataFolderSkip } from '@zlens/connectors';
+import { dataFolderSkipped, isDataFile, readDataFolder, type DataFolderSkip } from '@zlens/connectors';
 import type { CLIFlags } from '../args.js';
 import { ensureDqlGitignore } from '../git-contract.js';
 import { describeDatabase, describeNotReadYet } from './bare-folder.js';
 import { runNotebook } from './notebook.js';
+
+/** One table (or attached database file) of a data folder, as `zlens init` lists it. */
+export interface DataFolderEntry {
+  /** The table's name (`orders`), or the catalog's (`lake`). */
+  name: string;
+  /** The file or folder it comes from: `orders.csv`, `events/`, `lake.ducklake`. */
+  source: string;
+  /** What it is: `CSV file`, `Delta Lake table`, `DuckLake catalog, attached as lake`. */
+  kind: string;
+}
+
+/** A folder of data read as a database, and what it holds. */
+export interface DataFolderFound {
+  /** `.` or `data`. */
+  path: string;
+  /** Its files and folders read as tables, in folder order. */
+  files: string[];
+  /** Its tables. */
+  tables?: DataFolderEntry[];
+  /** Its DuckDB, DuckLake and SQLite files, attached read-only. */
+  catalogs?: DataFolderEntry[];
+}
 
 /** What a folder already holds: a dbt project (here or a level up), a database file, or data files. */
 export interface FolderContents {
@@ -18,14 +40,16 @@ export interface FolderContents {
   /** A SQLite file in the folder (`shop.sqlite`, `app.db`), when there is no DuckDB file. */
   sqlitePath?: string | null;
   /**
-   * CSV, TSV, Parquet or JSON files, in the folder itself (`.`) or its `data/`
-   * folder, when there is no database file: each becomes a table.
+   * Data in the folder itself (`.`) or its `data/` folder, when there is no
+   * database file: each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or
+   * Iceberg table and folder of files becomes a table; DuckLake files are
+   * attached read-only.
    */
-  dataFolder?: { path: string; files: string[] } | null;
+  dataFolder?: DataFolderFound | null;
   /**
    * What the data folder (or, with none, `.` or `data/`) holds that ZLens does
-   * not read as a table yet: Delta or Iceberg tables, folders of partitioned
-   * files, Excel workbooks. Said, so nothing is skipped without a word.
+   * not read as a table, and why: Avro files, folders of mixed formats.
+   * Said, so nothing is skipped without a word.
    */
   notReadYet?: { path: string; items: DataFolderSkip[] } | null;
 }
@@ -201,6 +225,8 @@ export async function runInit(
       duckdb: duckdbPath ?? null,
       sqlite: contents.sqlitePath ?? null,
       dataFolder: contents.dataFolder?.path ?? null,
+      tables: contents.dataFolder?.tables ?? [],
+      catalogs: contents.dataFolder?.catalogs ?? [],
       notReadYet: contents.notReadYet
         ? contents.notReadYet.items.map((item) => ({ path: contents.notReadYet!.path === '.' ? item.name : `${contents.notReadYet!.path}/${item.name}`, kind: item.kind }))
         : [],
@@ -229,16 +255,19 @@ export async function runInit(
   }
   if (contents.sqlitePath) console.log(`    SQLite file: ${contents.sqlitePath}`);
   else if (contents.dataFolder) console.log(`    Data files: ${describeDatabase(contents)}`);
-  else if (contents.notReadYet) console.log('    Data files: none that ZLens reads as tables yet');
+  else if (contents.notReadYet) console.log('    Data files: none that ZLens reads as tables');
   else console.log(`    DuckDB file: ${duckdbPath ?? 'none'}`);
+  // A folder holding more than single files: one line per table and attached file, with what it is.
+  if (contents.dataFolder && !isPlainDataFolder(contents.dataFolder)) {
+    const where = contents.dataFolder.path === '.' ? '' : ` in ${contents.dataFolder.path}/`;
+    printEntries(`Tables${where} (one per file, sheet or folder):`, (contents.dataFolder.tables ?? []).map((table) => [table.name, table.source, table.kind]));
+    if (contents.dataFolder.catalogs?.length) {
+      printEntries('Attached read-only (their tables are catalog.schema.table):', contents.dataFolder.catalogs.map((catalog) => [catalog.name, catalog.source, catalog.kind.replace(/, attached as .*$/, '')]));
+    }
+  }
   if (contents.notReadYet) {
     const where = contents.notReadYet.path === '.' ? '' : ` in ${contents.notReadYet.path}/`;
-    console.log(`    Not read as tables yet${where} (ZLens reads single CSV, TSV, Parquet and JSON files):`);
-    const shown = contents.notReadYet.items.slice(0, NOT_READ_YET_LINES);
-    const width = Math.max(...shown.map((item) => item.name.length));
-    for (const item of shown) console.log(`      ${item.name.padEnd(width)}  ${item.kind}`);
-    const more = contents.notReadYet.items.length - shown.length;
-    if (more > 0) console.log(`      …and ${more} more`);
+    printEntries(`Not read as tables${where}:`, contents.notReadYet.items.map((item) => [item.name, item.kind]));
   }
   if (isDbt) {
     if (modelingModeOf(projectConfig) === 'dbt-first') {
@@ -285,6 +314,22 @@ export async function runInit(
   }
 }
 
+/** A titled list of aligned columns, at most `LIST_LINES` lines and a count of the rest. */
+function printEntries(title: string, rows: string[][]): void {
+  if (!rows.length) return;
+  console.log(`    ${title}`);
+  const shown = rows.slice(0, LIST_LINES);
+  const widths = shown[0].map((_, column) => Math.max(...shown.map((row) => row[column]?.length ?? 0)));
+  for (const row of shown) console.log(`      ${row.map((cell, column) => (column === row.length - 1 ? cell : cell.padEnd(widths[column]))).join('  ')}`);
+  const more = rows.length - shown.length;
+  if (more > 0) console.log(`      …and ${more} more`);
+}
+
+/** Whether a data folder holds only single CSV, TSV, Parquet or JSON files (no sheets, lake tables, folders or database files). */
+export function isPlainDataFolder(folder: DataFolderFound): boolean {
+  return !folder.catalogs?.length && folder.files.every((file) => isDataFile(file));
+}
+
 /** The connection a folder's database file or data files make, or null. */
 export function databaseConnectionFor(contents: FolderContents): Record<string, unknown> | null {
   if (contents.duckdbPath) return { driver: 'duckdb', filepath: contents.duckdbPath };
@@ -327,13 +372,8 @@ function detectSQLiteFile(dir: string): string | null {
   return entries.find((entry) => /\.(?:sqlite3?|db)$/i.test(entry) && fileHeader(join(dir, entry), 16).toString('latin1') === SQLITE_HEADER) ?? null;
 }
 
-/**
- * CSV, TSV, Parquet or JSON files in the folder itself, else in its `data/`
- * folder. JSON files alone do not count: at a folder's top they are more often
- * a tool's settings (renovate.json, vercel.json) than data.
- */
-/** How many items `zlens init` lists that it does not read yet. */
-const NOT_READ_YET_LINES = 10;
+/** How many lines each list `zlens init` prints shows, at most. */
+const LIST_LINES = 12;
 
 /**
  * What ZLens does not read yet in the data folder it chose, or, with none, in
@@ -341,16 +381,31 @@ const NOT_READ_YET_LINES = 10;
  */
 function detectNotReadYet(dir: string, dataFolderPath: string | undefined): { path: string; items: DataFolderSkip[] } | null {
   for (const path of dataFolderPath ? [dataFolderPath] : ['.', 'data']) {
-    const items = dataFolderSkipped(join(dir, path));
+    const items = dataFolderSkipped(join(dir, path), { ignore: path === '.' ? ['data'] : [] });
     if (items.length) return { path, items };
   }
   return null;
 }
 
-function detectDataFolder(dir: string): { path: string; files: string[] } | null {
+/**
+ * Data in the folder itself, else in its `data/` folder: files, sheets, lake
+ * tables and folders of files ZLens reads as tables, or database files it
+ * attaches. JSON files alone do not count: at a folder's top they are more
+ * often a tool's settings (renovate.json, vercel.json) than data.
+ */
+function detectDataFolder(dir: string): DataFolderFound | null {
   for (const path of ['.', 'data']) {
-    const files = dataFolderTables(join(dir, path)).map((table) => table.file.split(/[\\/]/).pop() ?? table.file);
-    if (files.some((file) => !/\.json$/i.test(file))) return { path, files };
+    // The folder's own `data/` is the next place looked at, not one of its tables.
+    const { tables, catalogs } = readDataFolder(join(dir, path), { ignore: path === '.' ? ['data'] : [] });
+    const files = [...new Set(tables.map((table) => table.source))];
+    if (files.some((file) => !/\.json$/i.test(file)) || catalogs.length) {
+      return {
+        path,
+        files,
+        tables: tables.map(({ name, source, kind }) => ({ name, source, kind })),
+        catalogs: catalogs.map(({ name, source, kind }) => ({ name, source, kind })),
+      };
+    }
   }
   return null;
 }
