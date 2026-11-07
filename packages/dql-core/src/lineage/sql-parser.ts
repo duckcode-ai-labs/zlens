@@ -8,6 +8,7 @@
  */
 
 import nodeSqlParserPkg from 'node-sql-parser';
+import { extractReaderCalls, isReaderFunction } from './reader-functions.js';
 
 const { Parser } = nodeSqlParserPkg;
 
@@ -168,7 +169,7 @@ export function extractTablesFromSql(sql: string): SqlParseResult {
 
   // Extract DuckDB reader functions BEFORE stripping string literals
   // (because the file path is inside quotes that would be stripped)
-  const readerTables = extractReaderFunctions(noComments);
+  const readerTables = extractReaderCalls(noComments);
 
   // Strip non-ref string literals, then extract refs from the result.
   // This ensures ref("block") and ref('block') are preserved, but
@@ -210,15 +211,14 @@ export function extractTablesFromSql(sql: string): SqlParseResult {
   const sqlKeywords = new Set([
     'select', 'where', 'group', 'order', 'having', 'limit', 'offset',
     'union', 'except', 'intersect', 'values', 'set', 'lateral',
-    'unnest', 'generate_series', 'read_csv_auto', 'read_csv', 'read_parquet',
-    'read_json', 'read_json_auto', 'range', 'information_schema', 'ref',
+    'unnest', 'generate_series', 'range', 'information_schema', 'ref',
   ]);
 
   const cteNamesLower = new Set(ctes.map((c) => c.toLowerCase()));
 
   const tables = [...rawTables].filter((t) => {
     const lower = t.toLowerCase();
-    return !cteNamesLower.has(lower) && !sqlKeywords.has(lower);
+    return !cteNamesLower.has(lower) && !sqlKeywords.has(lower) && !isReaderFunction(lower);
   });
 
   // Extract @metric() and @dim() semantic references
@@ -1165,16 +1165,6 @@ function dedupeColumnReferences(columns: SqlColumnReference[]): SqlColumnReferen
     seen.add(key);
     return true;
   });
-}
-
-/** Extract DuckDB reader function calls (e.g., read_csv_auto('./data/file.csv')) */
-function extractReaderFunctions(sql: string): string[] {
-  const results: string[] = [];
-  const pattern = /\b(read_csv_auto|read_csv|read_parquet|read_json|read_json_auto)\s*\(\s*['"]([^'"]+)['"]\s*(?:,\s*[^)]*?)?\)/gi;
-  for (const match of sql.matchAll(pattern)) {
-    results.push(`${match[1]}('${match[2]}')`);
-  }
-  return results;
 }
 
 /** Extract ref("block_name") calls from SQL */
