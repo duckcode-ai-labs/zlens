@@ -58,6 +58,43 @@ describe('connection secrets', () => {
     });
   });
 
+  it('a catalog\'s secrets move to the private file by the catalog\'s name, and survive the list being reordered', () => {
+    const root = project();
+    const lake = {
+      driver: 'file',
+      catalogs: [
+        { name: 'polaris', type: 'iceberg', endpoint: 'https://polaris.example.com/api/catalog', warehouse: 'w', clientId: 'zlens', clientSecret: 'cs-1' },
+        { name: 'unity', type: 'unity', endpoint: 'https://dbc.cloud.databricks.com', catalog: 'main', token: 'dapi-2' },
+        { name: 'files', path: 'postgres:dbname=lake host=db user=z', password: 'pw-3' },
+        { name: 'env', type: 'iceberg', endpoint: 'https://x', warehouse: 'w', token: '${R2_TOKEN}' },
+      ],
+    };
+    const saved = storeConnectionSecrets(root, { lake }, {}) as { lake: typeof lake };
+    expect(saved.lake.catalogs.map((catalog) => ('clientSecret' in catalog ? catalog.clientSecret : 'token' in catalog ? catalog.token : catalog.password))).toEqual([
+      '${secret:lake.catalogs.polaris.clientSecret}',
+      '${secret:lake.catalogs.unity.token}',
+      '${secret:lake.catalogs.files.password}',
+      '${R2_TOKEN}',
+    ]);
+    expect(saved.lake.catalogs[0].clientId).toBe('zlens');
+    expect(JSON.parse(readFileSync(connectionSecretsPath(root), 'utf-8'))).toEqual({
+      lake: { 'catalogs.polaris.clientSecret': 'cs-1', 'catalogs.unity.token': 'dapi-2', 'catalogs.files.password': 'pw-3' },
+    });
+    const shown = redactConnections(saved) as { lake: typeof lake };
+    expect(shown.lake.catalogs.map((catalog) => JSON.stringify(catalog))).not.toEqual(expect.arrayContaining([expect.stringMatching(/cs-1|dapi-2|pw-3/)]));
+    expect(shown.lake.catalogs[3]).toMatchObject({ token: '${R2_TOKEN}' });
+    // Saved back from the page in another order: each masked secret stays its catalog's.
+    const reordered = { lake: { ...shown.lake, catalogs: [...shown.lake.catalogs].reverse() } };
+    const again = storeConnectionSecrets(root, reordered, saved) as { lake: typeof lake };
+    const resolved = resolveSecretReferences(again.lake, root);
+    expect(resolved.catalogs.map((catalog) => catalog.name)).toEqual(['env', 'files', 'unity', 'polaris']);
+    expect(resolved.catalogs).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: 'polaris', clientSecret: 'cs-1' }),
+      expect.objectContaining({ name: 'unity', token: 'dapi-2' }),
+      expect.objectContaining({ name: 'files', password: 'pw-3' }),
+    ]));
+  });
+
   it('never shows a saved secret, and saving the mask keeps it', () => {
     const root = project();
     const first = storeConnectionSecrets(root, { w: { driver: 'mysql', password: 'hunter22' } }, {});

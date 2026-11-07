@@ -1079,10 +1079,10 @@ export async function checkDataFolder(
 ): Promise<Check | null> {
   const normalized = normalizeProjectConnection(connection, projectRoot);
   if (normalized.driver !== 'file' && normalized.driver !== 'duckdb') return null;
-  if (!normalized.dataFolder && !normalized.sources?.length && !normalized.storage) return null;
+  if (!normalized.dataFolder && !normalized.sources?.length && !normalized.storage && !normalized.catalogs?.length) return null;
   const where = normalized.dataFolder
     ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized.dataFolder) ? normalized.dataFolder : relative(projectRoot, normalized.dataFolder) || '.')
-    : 'sources';
+    : normalized.sources?.length ? 'sources' : '';
   const storage = describeLakeStorage(normalized.storage).join('; ');
   const executor = options.executor ?? new QueryExecutor();
   try {
@@ -1092,12 +1092,16 @@ export async function checkDataFolder(
     if (!status) return null;
     const tables = status.tables.length;
     const catalogs = status.catalogs.length;
-    const read_ = tables + catalogs === 0
-      ? 'no tables'
-      : [`${tables} table${tables === 1 ? '' : 's'}`, ...(catalogs ? [`${catalogs} attached database${catalogs === 1 ? '' : 's'}`] : [])].join(' and ');
+    const signIn = storage ? ` (${storage})` : '';
+    // Tables of the data folder and sources; then each catalog attached read-only, by name and kind.
+    const reads = where || tables || !catalogs ? [`reads ${tables === 0 ? 'no tables' : `${tables} table${tables === 1 ? '' : 's'}`}${where ? ` from ${where}` : ''}${signIn}`] : [];
+    const attaches = catalogs
+      ? [`attaches ${catalogs} catalog${catalogs === 1 ? '' : 's'} read-only: ${status.catalogs.map((catalog) => `${catalog.name} (${catalog.kind.replace(/, attached as .*$/, '')})`).join(', ')}${reads.length ? '' : signIn}`]
+      : [];
     const problems = status.problems.map((problem) => `${problem.source}${problem.name && problem.name !== problem.source ? ` (${problem.name})` : ''}: ${problem.reason}`);
     const detail = [
-      `reads ${read_} from ${where}${storage ? ` (${storage})` : ''}`,
+      ...reads,
+      ...attaches,
       ...problems.slice(0, 5).map((problem) => `not read: ${problem}`),
       ...(problems.length > 5 ? [`…and ${problems.length - 5} more not read`] : []),
     ].join('; ');

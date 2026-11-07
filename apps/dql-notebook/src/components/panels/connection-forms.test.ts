@@ -3,6 +3,7 @@ import {
   CONNECTOR_SCHEMAS,
   connectionFromFormFields,
   fieldApplies,
+  connectionFormProblems,
   formFieldsFromConnection,
 } from './connection-forms';
 
@@ -86,15 +87,34 @@ describe('the Files and lake form', () => {
   const file = CONNECTOR_SCHEMAS.find((schema) => schema.driver === 'file')!;
   const shown = (fields: Record<string, string>) => file.fields.filter((field) => fieldApplies(field, fields)).map((field) => field.key);
 
-  it('shows only the sign-in fields of the bucket the data folder is in', () => {
-    expect(shown({ dataFolder: './data' })).toEqual(['dataFolder']);
+  it('shows only the sign-in fields of the bucket the data folder is in (and the catalogs, always)', () => {
+    expect(shown({ dataFolder: './data' })).toEqual(['dataFolder', 'catalogs']);
     expect(shown({ dataFolder: 's3://acme/sales/' })).toEqual([
-      'dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.s3.accessKeyId', 'storage.s3.secretAccessKey', 'storage.s3.endpoint',
+      'dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.s3.accessKeyId', 'storage.s3.secretAccessKey', 'storage.s3.endpoint', 'catalogs',
     ]);
-    expect(shown({ dataFolder: 'gs://acme/events/' })).toEqual(['dataFolder', 'storage.gcs.keyId', 'storage.gcs.secret']);
-    expect(shown({ dataFolder: 'abfss://lake@acme.dfs.core.windows.net/sales' })).toEqual(['dataFolder', 'storage.azure.accountName', 'storage.azure.connectionString']);
+    expect(shown({ dataFolder: 'gs://acme/events/' })).toEqual(['dataFolder', 'storage.gcs.keyId', 'storage.gcs.secret', 'catalogs']);
+    expect(shown({ dataFolder: 'abfss://lake@acme.dfs.core.windows.net/sales' })).toEqual(['dataFolder', 'storage.azure.accountName', 'storage.azure.connectionString', 'catalogs']);
     // A saved value stays visible even when the folder moved.
-    expect(shown({ dataFolder: './data', 'storage.s3.region': 'eu-west-1' })).toEqual(['dataFolder', 'storage.s3.region']);
+    expect(shown({ dataFolder: './data', 'storage.s3.region': 'eu-west-1' })).toEqual(['dataFolder', 'storage.s3.region', 'catalogs']);
+  });
+
+  it('a connection of catalogs only round-trips through the form: one setting per line, masked secrets kept as sent', () => {
+    const lake = {
+      driver: 'file',
+      catalogs: [
+        { name: 'lake', type: 'iceberg', endpoint: 'https://polaris.example.com/api/catalog', warehouse: 'analytics', clientId: 'zlens', clientSecret: '••••••••' },
+        { name: 'unity', type: 'unity', endpoint: 'https://dbc.cloud.databricks.com', catalog: 'main', token: '${UNITY_TOKEN}' },
+      ],
+    };
+    const fields = formFieldsFromConnection(lake);
+    expect(fields.catalogs).toBe(JSON.stringify(lake.catalogs, null, 2));
+    expect(fields.dataFolder).toBeUndefined();
+    expect(connectionFromFormFields('file', fields)).toEqual(lake);
+    // Text that is not a list is left out rather than saved broken, and the form says why before saving.
+    expect(connectionFromFormFields('file', { catalogs: '{ not json' })).toEqual({ driver: 'file' });
+    expect(connectionFormProblems({ catalogs: '[{ "name": "lake", }]' })[0]).toMatch(/^Catalogs \(JSON\) is not valid JSON: /);
+    expect(connectionFormProblems({ catalogs: '{ "name": "lake" }' })).toEqual(['Catalogs (JSON) must be a list: [ { … }, … ]']);
+    expect(connectionFormProblems({ catalogs: '', sources: '[]' })).toEqual([]);
   });
 
   it('saves a bucket with the cloud\'s own sign-in: nothing but the region', () => {

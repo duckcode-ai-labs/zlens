@@ -1,6 +1,8 @@
 import { closeSync, fstatSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync, type Dirent } from 'node:fs';
 import { extname, join, resolve } from 'node:path';
 import { inflateRawSync } from 'node:zlib';
+import type { LakeCatalogConfig, LakeCatalogType, LakeStorageConfig } from './connector.js';
+import { lakeCatalogKind, lakeCatalogPlan, lakeCatalogType, needsLakeCatalogPlan, type LakeCatalogPlan } from './lake-catalogs.js';
 
 /**
  * A folder of data read as a database (a file connection's `dataFolder`).
@@ -56,17 +58,25 @@ export interface DataFolderTable extends DataFolderViewSource {
   kind: string;
 }
 
-/** A database file in the data folder, attached read-only beside the connection's own database. */
+/**
+ * A catalog attached read-only beside the connection's own database: a
+ * database file of the data folder, or one of the connection's `catalogs`
+ * (a file, or a catalog service such as an Iceberg REST catalog).
+ */
 export interface DataFolderCatalog {
   /** The catalog's name: the file name as an identifier (`lake.ducklake` → `lake`). Its tables are `lake.main.orders`. */
   name: string;
-  /** The file's absolute path. */
+  /** The file's absolute path (or, for a catalog service, what is attached: the warehouse, account, ARN or catalog). */
   file: string;
-  type: 'duckdb' | 'ducklake' | 'sqlite';
-  /** The file's name in the data folder. */
+  type: LakeCatalogType;
+  /** The file's name in the data folder, or where a configured catalog is attached from (never a secret). */
   source: string;
-  /** `DuckDB database`, `DuckLake catalog`, `SQLite database`. */
+  /** `DuckDB database`, `DuckLake catalog`, `SQLite database`, `Iceberg REST catalog, attached as lake`. */
   kind: string;
+  /** How a configured catalog that needs more than its file is attached (a catalog service, a DuckLake catalog in a database). */
+  plan?: LakeCatalogPlan;
+  /** Why a configured catalog cannot be attached as written (a missing setting). */
+  invalid?: string;
 }
 
 /** Something in a data folder that ZLens does not read as a table, in plain words. */
@@ -108,14 +118,14 @@ const FORMAT_NAMES: Record<string, string> = {
   '.xlsx': 'Excel', '.xls': 'Excel', '.avro': 'Avro', '.orc': 'ORC',
 };
 
-const CATALOG_FILES: Record<string, DataFolderCatalog['type']> = {
+const CATALOG_FILES: Record<string, 'duckdb' | 'ducklake' | 'sqlite'> = {
   '.duckdb': 'duckdb',
   '.ducklake': 'ducklake',
   '.sqlite': 'sqlite',
   '.sqlite3': 'sqlite',
 };
 
-const CATALOG_KINDS: Record<DataFolderCatalog['type'], string> = {
+const CATALOG_KINDS: Record<'duckdb' | 'ducklake' | 'sqlite', string> = {
   duckdb: 'DuckDB database',
   ducklake: 'DuckLake catalog',
   sqlite: 'SQLite database',
@@ -711,26 +721,45 @@ export function dropDataFolderViewStatement(name: string, options: { temporary?:
   return `DROP VIEW IF EXISTS ${options.temporary ? 'temp.main.' : ''}${sqlIdent(name)}`;
 }
 
-/** A connection's own `catalogs` as catalogs to attach (named as given; the type from the path when left out). */
-export function configuredCatalogs(catalogs: Array<{ name?: string; path?: string; type?: DataFolderCatalog['type'] }> | undefined): DataFolderCatalog[] {
+/**
+ * A connection's own `catalogs` as catalogs to attach (named as given; the
+ * type from the path when left out). A catalog service, or a DuckLake catalog
+ * kept in a database, carries its plan (secrets, then a read-only ATTACH); a
+ * catalog that cannot be attached as written carries why.
+ */
+export function configuredCatalogs(catalogs: Array<Partial<LakeCatalogConfig>> | undefined, storage?: LakeStorageConfig): DataFolderCatalog[] {
   const out: DataFolderCatalog[] = [];
   const taken = new Set<string>();
   for (const catalog of catalogs ?? []) {
-    const path = String(catalog?.path ?? '').trim();
-    if (!path) continue;
-    const extension = (/(\.[a-z0-9]+)$/i.exec(path)?.[1] ?? '').toLowerCase();
-    const type = catalog.type ?? (extension === '.ducklake' ? 'ducklake' : extension === '.sqlite' || extension === '.sqlite3' ? 'sqlite' : 'duckdb');
-    let name = identifier(String(catalog.name ?? '').trim() || path.split('/').pop()!.replace(/\.[a-z0-9]+$/i, ''));
+    if (!catalog || typeof catalog !== 'object') continue;
+    const config = { ...catalog, name: String(catalog.name ?? '') } as LakeCatalogConfig;
+    const path = String(catalog.path ?? '').trim();
+    const type = lakeCatalogType(config);
+    const planned = needsLakeCatalogPlan(config);
+    if (!path && !planned) continue;
+    const fallback = path ? path.split('/').pop()!.replace(/\.[a-z0-9]+$/i, '') : type;
+    let name = identifier(String(catalog.name ?? '').trim() || fallback);
     if (RESERVED_CATALOGS.has(name)) name = `${name}_${type}`;
     for (let n = 2; taken.has(name); n += 1) name = `${identifier(String(catalog.name ?? 'catalog'))}_${n}`;
     taken.add(name);
-    out.push({ name, file: path, type, source: path, kind: `${CATALOG_KINDS[type]}, attached as ${name}` });
+    const kind = `${lakeCatalogKind(config)}, attached as ${name}`;
+    if (!planned) {
+      out.push({ name, file: path, type, source: path, kind });
+      continue;
+    }
+    try {
+      const plan = lakeCatalogPlan(config, name, storage);
+      out.push({ name, file: path || plan.source, type, source: plan.source, kind, plan });
+    } catch (error) {
+      out.push({ name, file: path, type, source: path || lakeCatalogKind(config), kind, invalid: error instanceof Error ? error.message : String(error) });
+    }
   }
   return out;
 }
 
-/** `ATTACH` a database file of the data folder, read-only, under its catalog name. */
-export function dataFolderAttachStatement(catalog: Pick<DataFolderCatalog, 'name' | 'file' | 'type'>): string {
+/** `ATTACH` a catalog, read-only, under its catalog name (a database file of the data folder, or a configured catalog's plan). */
+export function dataFolderAttachStatement(catalog: Pick<DataFolderCatalog, 'name' | 'file' | 'type' | 'plan'>): string {
+  if (catalog.plan) return catalog.plan.attach;
   const path = catalog.type === 'ducklake' ? `ducklake:${catalog.file}` : catalog.file;
   const options = catalog.type === 'sqlite' ? 'TYPE sqlite, READ_ONLY' : 'READ_ONLY';
   return `ATTACH IF NOT EXISTS ${sqlText(path)} AS ${sqlIdent(catalog.name)} (${options})`;

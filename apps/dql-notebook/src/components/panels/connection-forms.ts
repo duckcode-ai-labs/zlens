@@ -459,7 +459,7 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
     driver: 'file',
     label: 'Files and lake',
     fields: [
-      { key: 'dataFolder', label: 'Data folder or bucket', type: 'text', placeholder: './data  or  s3://bucket/folder/', required: true, helpText: 'Each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or Iceberg table and folder of files in it is a table named after it; DuckDB and DuckLake files are attached read-only. On disk or in a bucket (s3://, gs://, az://, r2://); the data is read where it is.' },
+      { key: 'dataFolder', label: 'Data folder or bucket', type: 'text', placeholder: './data  or  s3://bucket/folder/', helpText: 'Each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or Iceberg table and folder of files in it is a table named after it; DuckDB and DuckLake files are attached read-only. On disk or in a bucket (s3://, gs://, az://, r2://); the data is read where it is. Empty when the connection only attaches catalogs.' },
       { key: 'storage.s3.region', label: 'AWS region', type: 'text', placeholder: 'us-east-1', bucket: 's3' },
       { key: 'storage.s3.profile', label: 'AWS profile', type: 'text', placeholder: 'default', bucket: 's3', helpText: 'Empty: your usual AWS sign-in (environment, SSO, instance role). Nothing secret is saved.' },
       { key: 'storage.s3.accessKeyId', label: 'Access key ID', type: 'text', bucket: 's3', helpText: 'Only to use keys instead of your AWS sign-in.' },
@@ -472,6 +472,13 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
       { key: 'storage.r2.accountId', label: 'R2 account ID', type: 'text', bucket: 'r2' },
       { key: 'storage.r2.keyId', label: 'R2 access key ID', type: 'text', bucket: 'r2' },
       { key: 'storage.r2.secret', label: 'R2 secret access key', type: 'password', bucket: 'r2' },
+      {
+        key: 'catalogs',
+        label: 'Catalogs (JSON)',
+        type: 'textarea',
+        placeholder: '[{ "name": "lake", "type": "iceberg", "endpoint": "https://catalog.example.com/catalog", "warehouse": "analytics" }]',
+        helpText: 'Attached read-only; their tables are catalog.schema.table. Types: iceberg (an Iceberg REST catalog: Lakekeeper, Polaris, R2 Data Catalog), glue, s3_tables, unity, ducklake, duckdb, sqlite. A clientSecret, token or password moves to the project\'s private secrets file.',
+      },
     ],
     primary: () => ['dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.azure.accountName', 'storage.r2.accountId', 'storage.r2.keyId', 'storage.r2.secret'],
   },
@@ -483,6 +490,24 @@ export function fieldApplies(field: ConnectorFieldSchema, fields: Record<string,
   if (field.bucket && bucketOf(fields.dataFolder) !== field.bucket && !(fields[field.key] ?? '').trim()) return false;
   if (field.authMethods && !field.authMethods.includes(fields.authMethod ?? '')) return false;
   return true;
+}
+
+/**
+ * What keeps the form from being saved as typed: a `catalogs` (or `sources`)
+ * list that is not a JSON list. Saving it anyway would drop every catalog.
+ */
+export function connectionFormProblems(fields: Record<string, string>): string[] {
+  const problems: string[] = [];
+  for (const [key, label] of [['catalogs', 'Catalogs (JSON)'], ['sources', 'Sources (JSON)']] as const) {
+    const text = fields[key]?.trim();
+    if (!text) continue;
+    try {
+      if (!Array.isArray(JSON.parse(text))) problems.push(`${label} must be a list: [ { … }, … ]`);
+    } catch (error) {
+      problems.push(`${label} is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  return problems;
 }
 
 /**
@@ -505,7 +530,8 @@ export function formFieldsFromConnection(cfg: Record<string, unknown> | undefine
       return;
     }
     if ((key === 'sources' || key === 'catalogs') && Array.isArray(value)) {
-      fields[key] = JSON.stringify(value);
+      // Catalogs are edited by hand: one setting per line reads better there.
+      fields[key] = key === 'catalogs' ? JSON.stringify(value, null, 2) : JSON.stringify(value);
       return;
     }
     if (key === 'sshTunnel' && typeof value === 'object') {

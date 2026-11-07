@@ -23,39 +23,49 @@ function endpointParts(endpoint: string): { host: string; plainHttp: boolean } {
  * each other's. Credentials come from the cloud's own sign-in (the credential
  * chain) unless keys are given. A missing required value is a plain error.
  */
+/**
+ * A secret DuckDB holds in memory, named after what it holds (`zlens_<type>_<hash>`),
+ * so the same settings always make the same secret and different ones never replace it.
+ */
+export function namedLakeSecret(type: string, options: string[]): { name: string; statement: string } {
+  const name = `zlens_${type}_${createHash('sha256').update(options.join('\u0000')).digest('hex').slice(0, 12)}`;
+  return { name, statement: `CREATE OR REPLACE SECRET ${name} (${[`TYPE ${type}`, ...options].join(', ')})` };
+}
+
+/** The options of an S3 secret: keys when given, else the AWS sign-in (the credential chain). */
+export function s3SecretOptions(s3: NonNullable<LakeStorageConfig['s3']>): string[] {
+  const options: string[] = [];
+  const keys = s3.auth === 'keys' || (s3.auth === undefined && Boolean(s3.accessKeyId || s3.secretAccessKey));
+  if (keys) {
+    options.push(`KEY_ID ${sqlText(required(s3.accessKeyId, 's3.accessKeyId', 'keys need an access key id'))}`);
+    options.push(`SECRET ${sqlText(required(s3.secretAccessKey, 's3.secretAccessKey', 'keys need a secret access key'))}`);
+    if (s3.sessionToken?.trim()) options.push(`SESSION_TOKEN ${sqlText(s3.sessionToken.trim())}`);
+  } else {
+    options.push('PROVIDER credential_chain');
+    if (s3.profile?.trim()) options.push(`PROFILE ${sqlText(s3.profile.trim())}`);
+  }
+  if (s3.region?.trim()) options.push(`REGION ${sqlText(s3.region.trim())}`);
+  if (s3.endpoint?.trim()) {
+    const endpoint = endpointParts(s3.endpoint.trim());
+    options.push(`ENDPOINT ${sqlText(endpoint.host)}`);
+    // Other S3 APIs (MinIO, Ceph) address buckets by path, not by host name.
+    options.push(`URL_STYLE ${sqlText(s3.urlStyle ?? 'path')}`);
+    options.push(`USE_SSL ${s3.useSsl ?? !endpoint.plainHttp}`);
+  } else {
+    if (s3.urlStyle) options.push(`URL_STYLE ${sqlText(s3.urlStyle)}`);
+    if (s3.useSsl !== undefined) options.push(`USE_SSL ${s3.useSsl}`);
+  }
+  return options;
+}
+
 export function lakeStorageSecretStatements(storage: LakeStorageConfig | undefined): string[] {
   if (!storage) return [];
   const statements: string[] = [];
   const secret = (type: string, options: string[]) => {
-    const name = `zlens_${type}_${createHash('sha256').update(options.join('\u0000')).digest('hex').slice(0, 12)}`;
-    statements.push(`CREATE OR REPLACE SECRET ${name} (${[`TYPE ${type}`, ...options].join(', ')})`);
+    statements.push(namedLakeSecret(type, options).statement);
   };
 
-  const s3 = storage.s3;
-  if (s3) {
-    const options: string[] = [];
-    const keys = s3.auth === 'keys' || (s3.auth === undefined && Boolean(s3.accessKeyId || s3.secretAccessKey));
-    if (keys) {
-      options.push(`KEY_ID ${sqlText(required(s3.accessKeyId, 's3.accessKeyId', 'keys need an access key id'))}`);
-      options.push(`SECRET ${sqlText(required(s3.secretAccessKey, 's3.secretAccessKey', 'keys need a secret access key'))}`);
-      if (s3.sessionToken?.trim()) options.push(`SESSION_TOKEN ${sqlText(s3.sessionToken.trim())}`);
-    } else {
-      options.push('PROVIDER credential_chain');
-      if (s3.profile?.trim()) options.push(`PROFILE ${sqlText(s3.profile.trim())}`);
-    }
-    if (s3.region?.trim()) options.push(`REGION ${sqlText(s3.region.trim())}`);
-    if (s3.endpoint?.trim()) {
-      const endpoint = endpointParts(s3.endpoint.trim());
-      options.push(`ENDPOINT ${sqlText(endpoint.host)}`);
-      // Other S3 APIs (MinIO, Ceph) address buckets by path, not by host name.
-      options.push(`URL_STYLE ${sqlText(s3.urlStyle ?? 'path')}`);
-      options.push(`USE_SSL ${s3.useSsl ?? !endpoint.plainHttp}`);
-    } else {
-      if (s3.urlStyle) options.push(`URL_STYLE ${sqlText(s3.urlStyle)}`);
-      if (s3.useSsl !== undefined) options.push(`USE_SSL ${s3.useSsl}`);
-    }
-    secret('s3', options);
-  }
+  if (storage.s3) secret('s3', s3SecretOptions(storage.s3));
 
   const gcs = storage.gcs;
   if (gcs) {
@@ -103,9 +113,13 @@ export function describeLakeStorage(storage: LakeStorageConfig | undefined): str
 
 const CLOUD_NAMES: Record<keyof LakeStorageConfig, string> = { s3: 'AWS', gcs: 'Google Cloud', azure: 'Azure', r2: 'Cloudflare R2' };
 
-/** The bucket URLs a connection reads: its data folder and its sources. */
-function connectionUrls(config: Pick<ConnectionConfig, 'dataFolder' | 'sources'>): string[] {
-  return [config.dataFolder ?? '', ...(config.sources ?? []).map((source) => source?.path ?? '')]
+/** The bucket URLs a connection reads: its data folder, its sources and its catalog files. */
+function connectionUrls(config: Pick<ConnectionConfig, 'dataFolder' | 'sources' | 'catalogs'>): string[] {
+  return [
+    config.dataFolder ?? '',
+    ...(config.sources ?? []).map((source) => source?.path ?? ''),
+    ...(config.catalogs ?? []).flatMap((catalog) => [catalog?.path ?? '', catalog?.dataPath ?? '']),
+  ]
     .map((path) => path.trim().toLowerCase())
     .filter((path) => /^[a-z][a-z0-9+.-]*:\/\//.test(path));
 }
@@ -113,13 +127,15 @@ function connectionUrls(config: Pick<ConnectionConfig, 'dataFolder' | 'sources'>
 /**
  * The cloud sign-ins a connection uses without saying so: a bucket it reads
  * (`s3://`, `gs://`) whose cloud has no `storage` entry gets that cloud's own
- * sign-in (the credential chain). Azure needs its account name and R2 its
- * keys, so they are never assumed.
+ * sign-in (the credential chain), and so does an AWS Glue or S3 Tables
+ * catalog (its table files are in S3). Azure needs its account name and R2
+ * its keys, so they are never assumed.
  */
-export function defaultLakeSignIns(config: Pick<ConnectionConfig, 'dataFolder' | 'sources' | 'storage'>): LakeStorageConfig {
+export function defaultLakeSignIns(config: Pick<ConnectionConfig, 'dataFolder' | 'sources' | 'storage' | 'catalogs'>): LakeStorageConfig {
   const urls = connectionUrls(config);
   const defaults: LakeStorageConfig = {};
-  if (!config.storage?.s3 && urls.some((url) => url.startsWith('s3://'))) defaults.s3 = {};
+  const awsCatalog = (config.catalogs ?? []).some((catalog) => catalog?.type === 'glue' || catalog?.type === 's3_tables');
+  if (!config.storage?.s3 && (awsCatalog || urls.some((url) => url.startsWith('s3://')))) defaults.s3 = {};
   if (!config.storage?.gcs && urls.some((url) => url.startsWith('gs://') || url.startsWith('gcs://'))) defaults.gcs = {};
   return defaults;
 }

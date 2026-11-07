@@ -12,14 +12,59 @@ export interface LakeSourceConfig {
   sheet?: string;
 }
 
-/** A database attached read-only beside a connection's own. */
+/** The kinds of catalog a connection attaches: database files, and catalog services. */
+export type LakeCatalogType = 'duckdb' | 'ducklake' | 'sqlite' | 'iceberg' | 'glue' | 's3_tables' | 'unity';
+
+/**
+ * A catalog attached read-only beside a connection's own database: a DuckDB,
+ * DuckLake or SQLite file (`path`), or a catalog service (an Iceberg REST
+ * catalog, AWS Glue, S3 Tables, Unity Catalog). Its tables are
+ * `name.schema.table`. Secret fields (`clientSecret`, `token`, `password`)
+ * are connection secrets: `${ENV}` or the private secrets file.
+ */
 export interface LakeCatalogConfig {
   /** The catalog's name: its tables are `name.schema.table`. */
   name: string;
-  /** A path (relative to the project) or a bucket URL. */
-  path: string;
+  /**
+   * Database files: a path (relative to the project) or a bucket URL. A
+   * `ducklake` catalog may also keep its catalog in a database:
+   * `postgres:dbname=lake host=db.internal user=zlens`, `mysql:…`, `sqlite:meta.sqlite`.
+   */
+  path?: string;
   /** Found from the path's extension when left out (`.ducklake`, `.sqlite`, `.db`/`.duckdb`). */
-  type?: 'duckdb' | 'ducklake' | 'sqlite';
+  type?: LakeCatalogType;
+  /** Iceberg REST and Unity Catalog: the catalog's address (`https://catalog.example.com/catalog`). */
+  endpoint?: string;
+  /** Iceberg REST: the warehouse (or catalog) to open on the endpoint. */
+  warehouse?: string;
+  /** Iceberg REST sign-in: `oauth2` (client id and secret), `token`, or `none`. Found from the fields given when left out. */
+  auth?: 'none' | 'oauth2' | 'token';
+  clientId?: string;
+  clientSecret?: string;
+  /** OAuth2 token address, when it is not the catalog's own `/v1/oauth/tokens`. */
+  oauth2Url?: string;
+  /** OAuth2 scope (`PRINCIPAL_ROLE:ALL` for Polaris, a Lakekeeper scope). */
+  scope?: string;
+  /** Iceberg REST bearer token (R2 Data Catalog), or Unity Catalog personal access token. */
+  token?: string;
+  /** Iceberg REST: who reads the table files: `catalog` (default: the credentials it hands out) or `storage` (this connection's `storage`). */
+  files?: 'catalog' | 'storage';
+  /** AWS Glue: the account id (`123456789012`, or `123456789012:s3tablescatalog/bucket`). */
+  account?: string;
+  /** S3 Tables: the table bucket's ARN. */
+  arn?: string;
+  /** AWS Glue: its region (default: `storage.s3.region`). Unity Catalog: the region of the storage holding its tables. */
+  region?: string;
+  /** Unity Catalog: the catalog to open. */
+  catalog?: string;
+  /** DuckLake with its catalog in Postgres or MySQL: the database password. */
+  password?: string;
+  /** DuckLake: where its data files are, when not where the catalog says. */
+  dataPath?: string;
+  /** DuckLake in Postgres or MySQL: the schema holding its catalog, when one database holds several. */
+  metadataSchema?: string;
+  /** Catalog services: the namespaces (schemas) to read; all by default. */
+  namespaces?: string[];
 }
 
 /** How a DuckDB or file connection reaches buckets. */
@@ -123,9 +168,10 @@ export interface ConnectionConfig {
    */
   sources?: LakeSourceConfig[];
   /**
-   * DuckDB and file connections: databases attached read-only beside the
-   * connection's own (a DuckDB, DuckLake or SQLite file, on disk or in a
-   * bucket): their tables are `name.schema.table`.
+   * DuckDB and file connections: catalogs attached read-only beside the
+   * connection's own database: DuckDB, DuckLake or SQLite files (on disk or
+   * in a bucket), Iceberg REST catalogs, AWS Glue, S3 Tables, Unity Catalog.
+   * Their tables are `name.schema.table`.
    */
   catalogs?: LakeCatalogConfig[];
   /**

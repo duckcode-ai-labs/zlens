@@ -1,5 +1,5 @@
 import { basename, join } from 'node:path';
-import type { LakeCatalogConfig, LakeSourceConfig } from './connector.js';
+import type { LakeCatalogConfig, LakeSourceConfig, LakeStorageConfig } from './connector.js';
 import {
   configuredCatalogs,
   isUrlPath,
@@ -11,10 +11,19 @@ import {
   dropDataFolderViewStatement,
   modifiedTime,
   readDataFolder,
+  type DataFolderCatalog,
   type DataFolderContents,
   type DataFolderSkip,
   type DataFolderTable,
 } from './data-folder.js';
+import {
+  LAKE_CATALOG_DESCRIBE_MS,
+  LAKE_CATALOG_DESCRIBE_TABLES,
+  lakeCatalogDescribeStatement,
+  lakeCatalogFailure,
+  lakeCatalogSchemasStatement,
+  lakeCatalogUndescribedStatement,
+} from './lake-catalogs.js';
 import { readBucketFolder, resolveLakeSources, type LakeProblem, type LakeRun } from './lake-listing.js';
 
 /** A table or catalog of a data folder that DuckDB could not read, and why. */
@@ -50,8 +59,10 @@ export interface DataFolderViewsOptions {
   exclude: string[];
   /** Named tables at any path or bucket URL (paths already absolute). */
   sources?: LakeSourceConfig[];
-  /** Databases attached read-only by the connection itself (its `catalogs` setting). */
+  /** Catalogs attached read-only by the connection itself (its `catalogs` setting). */
   configuredCatalogs?: LakeCatalogConfig[];
+  /** The connection's `storage`: an AWS Glue or S3 Tables catalog signs in with its S3 sign-in. */
+  storage?: LakeStorageConfig;
 }
 
 /** A folder table is one table only when its first files (at most this many) share their columns. */
@@ -92,6 +103,8 @@ export class DataFolderViews {
   private listingProblems: LakeProblem[] = [];
   /** Extra problems the connection reports (storage it could not use). */
   private readonly notes: LakeProblem[] = [];
+  /** A lazy catalog's tables last looked up (at most once a minute), and those that could not be. */
+  private readonly described = new Map<string, { at: number; problems: LakeProblem[] }>();
 
   constructor(
     /** A folder on disk, a bucket URL, or `''` for sources only. */
@@ -126,7 +139,9 @@ export class DataFolderViews {
       ...this.contents.catalogs.filter((catalog) => !this.catalogs.has(catalog.name)).map((catalog) => this.failed.get(`catalog:${catalog.name}`)),
     ].filter((problem): problem is NonNullable<typeof problem> => Boolean(problem))
       .map(({ source, name, reason }) => ({ source, name, reason }));
+    const catalogNotes = catalogs.flatMap((catalog) => this.described.get(catalog.name)?.problems ?? []);
     problems.unshift(...this.notes, ...this.listingProblems);
+    problems.push(...catalogNotes);
     return {
       folder: this.folder,
       tables: tables.map(({ name, source, kind }) => ({ name, source, kind })),
@@ -170,7 +185,7 @@ export class DataFolderViews {
     this.sourceNames = new Set(takenNames);
     this.listingProblems = [...(this.sourced?.problems ?? []), ...(this.bucket && !local && this.folder ? this.bucket.problems : [])];
     // The connection's own catalogs come first; a folder's database file of the same name gets another.
-    const ownCatalogs = configuredCatalogs(this.options.configuredCatalogs);
+    const ownCatalogs = configuredCatalogs(this.options.configuredCatalogs, this.options.storage);
     const ownNames = new Set(ownCatalogs.map((catalog) => catalog.name));
     const folderCatalogs = folder.catalogs.map((catalog) => (ownNames.has(catalog.name)
       ? { ...catalog, name: `${catalog.name}_${catalog.type}`, kind: catalog.kind.replace(/attached as .*$/, `attached as ${catalog.name}_${catalog.type}`) }
@@ -197,25 +212,93 @@ export class DataFolderViews {
       ? { ...catalog, name: `${catalog.name}_${catalog.type}`, kind: catalog.kind.replace(/attached as .*$/, `attached as ${catalog.name}_${catalog.type}`) }
       : catalog));
     this.contents = { ...this.contents, catalogs };
-    const wanted = new Map(catalogs.map((catalog) => [catalog.name, dataFolderAttachStatement(catalog)]));
+    // What makes each catalog: its secrets too, so a changed secret attaches it again.
+    const statementOf = (catalog: DataFolderCatalog) => [...(catalog.plan?.secrets ?? []), dataFolderAttachStatement(catalog)].join(';\n');
+    const wanted = new Map(catalogs.map((catalog) => [catalog.name, statementOf(catalog)]));
     for (const [name, statement] of [...this.catalogs]) {
       if (wanted.get(name) === statement) continue;
       await this.run(detachDataFolderCatalogStatement(name)).catch(() => undefined);
       this.catalogs.delete(name);
+      this.described.delete(name);
     }
+    const now = Date.now();
     for (const catalog of catalogs) {
-      if (this.catalogs.has(catalog.name)) continue;
+      if (this.catalogs.has(catalog.name)) {
+        if (catalog.plan?.describeTables) await this.describeTables(catalog, now);
+        continue;
+      }
       const statement = wanted.get(catalog.name)!;
       const key = `catalog:${catalog.name}`;
-      const attempt = `${statement}\u0000${isUrlPath(catalog.file) ? `bucket@${this.bucket?.at ?? 0}` : modifiedTime(catalog.file)}`;
+      // A catalog service is tried again after a minute; a file once it changes.
+      const changed = catalog.plan?.service
+        ? `service@${Math.floor(now / BUCKET_RESCAN_MS)}`
+        : isUrlPath(catalog.file) ? `bucket@${this.bucket?.at ?? 0}` : modifiedTime(catalog.file);
+      const attempt = `${statement}\u0000${changed}`;
       if (this.failed.get(key)?.attempt === attempt) continue;
       try {
-        await this.run(statement);
+        if (catalog.invalid) throw new Error(catalog.invalid);
+        for (const secret of catalog.plan?.secrets ?? []) await this.run(secret);
+        await this.run(dataFolderAttachStatement(catalog));
+        if (catalog.plan?.service) {
+          // Attaching a catalog service asks it nothing: listing its schemas does. A catalog that cannot
+          // answer is detached again, or every listing of the connection's tables would fail with it.
+          try {
+            await this.run(lakeCatalogSchemasStatement(catalog.name));
+          } catch (error) {
+            await this.run(detachDataFolderCatalogStatement(catalog.name)).catch(() => undefined);
+            throw error;
+          }
+        }
         this.catalogs.set(catalog.name, statement);
         this.failed.delete(key);
+        if (catalog.plan?.describeTables) await this.describeTables(catalog, now);
       } catch (error) {
-        this.failed.set(key, { attempt, source: catalog.source, name: catalog.name, reason: reasonOf(error) });
+        const reason = catalog.invalid ?? (catalog.plan ? lakeCatalogFailure(catalog, error) : reasonOf(error));
+        this.failed.set(key, { attempt, source: catalog.source, name: catalog.name, reason: clip(reason) });
       }
+    }
+  }
+
+  /**
+   * A lazy catalog (Iceberg REST, Glue, S3 Tables) lists each table with a
+   * placeholder column until the table is looked up: look up each one not
+   * known yet (at most once a minute, a bounded number for a bounded time),
+   * so every listing of columns sees the real ones. DuckDB keeps them for
+   * every connection of the database.
+   */
+  private async describeTables(catalog: DataFolderCatalog, now: number): Promise<void> {
+    const last = this.described.get(catalog.name);
+    if (last && now - last.at < BUCKET_RESCAN_MS) return;
+    const problems: LakeProblem[] = [];
+    this.described.set(catalog.name, { at: now, problems });
+    let undescribed: Array<Record<string, unknown>>;
+    try {
+      undescribed = (await this.run(lakeCatalogUndescribedStatement(catalog.name, catalog.plan?.namespaces, LAKE_CATALOG_DESCRIBE_TABLES + 1))).rows;
+    } catch (error) {
+      problems.push({ source: catalog.source, name: catalog.name, reason: clip(`its tables could not be listed: ${lakeCatalogFailure(catalog, error)}`) });
+      return;
+    }
+    const deadline = Date.now() + LAKE_CATALOG_DESCRIBE_MS;
+    let looked = 0;
+    for (const row of undescribed.slice(0, LAKE_CATALOG_DESCRIBE_TABLES)) {
+      if (Date.now() > deadline) break;
+      const schema = String(row['schema_name'] ?? '');
+      const table = String(row['table_name'] ?? '');
+      looked += 1;
+      try {
+        await this.run(lakeCatalogDescribeStatement(catalog.name, schema, table));
+      } catch (error) {
+        problems.push({ source: catalog.source, name: `${catalog.name}.${schema}.${table}`, reason: clip(lakeCatalogFailure(catalog, error)) });
+      }
+    }
+    const left = undescribed.length - looked;
+    if (left > 0) {
+      const more = undescribed.length > LAKE_CATALOG_DESCRIBE_TABLES ? 'more than ' : '';
+      problems.push({
+        source: catalog.source,
+        name: catalog.name,
+        reason: `${more}${left} of its tables were not looked up yet (ZLens looks up at most ${LAKE_CATALOG_DESCRIBE_TABLES} tables for ${LAKE_CATALOG_DESCRIBE_MS / 1000} s at a time): their columns are listed once they are; name the namespaces to read in "namespaces"`,
+      });
     }
   }
 
@@ -289,6 +372,9 @@ function listColumns(columns: string[]): string {
 
 function reasonOf(error: unknown): string {
   // DuckDB's own words, without the driver's "DuckDB query failed:" in front.
-  const message = (error instanceof Error ? error.message : String(error)).split('\n')[0].trim().replace(/^DuckDB query failed:\s*/i, '');
+  return clip((error instanceof Error ? error.message : String(error)).split('\n')[0].trim().replace(/^DuckDB query failed:\s*/i, ''));
+}
+
+function clip(message: string): string {
   return message.length > REASON_LENGTH ? `${message.slice(0, REASON_LENGTH - 1)}…` : message;
 }
