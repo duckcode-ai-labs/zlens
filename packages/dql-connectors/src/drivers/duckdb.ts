@@ -293,11 +293,11 @@ export class DuckDBConnector implements DatabaseConnector {
     const columns: ColumnInfo[] = [];
     for (const row of result.rows) {
       const rowCatalog = String(row['table_catalog'] ?? '');
-      const relationKey = [String(row['table_schema'] ?? ''), String(row['table_name'] ?? '')].join('\u0000').toLowerCase();
+      const shadowKey = [String(row['table_schema'] ?? ''), String(row['table_name'] ?? '')].join('\u0000').toLowerCase();
       if (!catalog) {
-        const first = owner.get(relationKey);
+        const first = owner.get(shadowKey);
         if (first !== undefined && first !== rowCatalog) continue;
-        owner.set(relationKey, rowCatalog);
+        owner.set(shadowKey, rowCatalog);
       }
       const attached = attachedDuckDBCatalog(row);
       columns.push({
