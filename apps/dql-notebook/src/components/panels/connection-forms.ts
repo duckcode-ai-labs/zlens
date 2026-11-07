@@ -456,11 +456,29 @@ export function fieldApplies(field: ConnectorFieldSchema, fields: Record<string,
   return true;
 }
 
-/** A stored connection as flat form fields: `sshTunnel: {host}` becomes `sshTunnel.host`. */
+/**
+ * A stored connection as flat form fields: `sshTunnel: {host}` becomes
+ * `sshTunnel.host`, `storage: {s3: {region}}` becomes `storage.s3.region`,
+ * and a file connection's `sources` list is kept whole (as JSON) so saving
+ * the form never loses it.
+ */
 export function formFieldsFromConnection(cfg: Record<string, unknown> | undefined): Record<string, string> {
   const fields: Record<string, string> = {};
   Object.entries(cfg ?? {}).forEach(([key, value]) => {
     if (key === 'driver' || key === 'type' || value === undefined || value === null) return;
+    if (key === 'storage' && typeof value === 'object' && !Array.isArray(value)) {
+      Object.entries(value as Record<string, unknown>).forEach(([store, settings]) => {
+        if (!settings || typeof settings !== 'object') return;
+        Object.entries(settings as Record<string, unknown>).forEach(([inner, nested]) => {
+          if (nested !== undefined && nested !== null) fields[`storage.${store}.${inner}`] = String(nested);
+        });
+      });
+      return;
+    }
+    if (key === 'sources' && Array.isArray(value)) {
+      fields.sources = JSON.stringify(value);
+      return;
+    }
     if (key === 'sshTunnel' && typeof value === 'object') {
       fields.useSshTunnel = 'true';
       Object.entries(value as Record<string, unknown>).forEach(([inner, nested]) => {
@@ -550,8 +568,24 @@ export function connectionFromFormFields(driver: string, fields: Record<string, 
       if (!trimmed) return;
       value = fieldSchema?.type === 'number' && !isNaN(Number(trimmed)) ? Number(trimmed) : trimmed;
     }
-    if (key.startsWith('sshTunnel.')) tunnel[key.slice('sshTunnel.'.length)] = value;
-    else connection[key] = value;
+    if (key.startsWith('sshTunnel.')) {
+      tunnel[key.slice('sshTunnel.'.length)] = value;
+    } else if (key.startsWith('storage.')) {
+      // `storage.s3.region` → `storage: { s3: { region } }`
+      const [, store, inner] = key.split('.');
+      if (!store || !inner) return;
+      const storage = (connection.storage ??= {}) as Record<string, Record<string, unknown>>;
+      (storage[store] ??= {})[inner] = inner === 'useSsl' ? value === true || value === 'true' : value;
+    } else if (key === 'sources') {
+      try {
+        const sources = JSON.parse(String(value)) as unknown;
+        if (Array.isArray(sources) && sources.length) connection.sources = sources;
+      } catch {
+        // Not a list: left out rather than saved broken.
+      }
+    } else {
+      connection[key] = value;
+    }
   });
   if (fields.useSshTunnel === 'true' && tunnel.host) connection.sshTunnel = tunnel;
   return connection;

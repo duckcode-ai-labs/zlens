@@ -52,6 +52,8 @@ export function createConnectionConfigKey(config: ConnectionConfig): string {
     tlsServername: config.tlsServername,
     filepath: config.filepath,
     dataFolder: config.dataFolder,
+    sources: config.sources,
+    storage: config.storage,
     allowedDirectories: config.allowedDirectories,
     restrictExternalAccess: config.restrictExternalAccess,
     projectId: config.projectId,

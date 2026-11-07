@@ -90,6 +90,57 @@ jobs:
         env:
           ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
 
+  # --- A lake in a bucket: the file connection over an S3 API (moto) ---
+  # The lake fixtures (Delta, Iceberg written elsewhere) are copied into a
+  # bucket, and a file connection reads it by name: a bucket data folder,
+  # named sources, DuckDB writing partitioned Parquet into the bucket.
+  lake-s3:
+    name: lake in a bucket (S3 API)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @zlens/connectors... build
+      - name: Start an S3 API (moto) and copy the lake fixtures into a bucket
+        run: |
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install --quiet 'moto[server]==5.1.4'
+          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 9000 > "$RUNNER_TEMP/moto.log" 2>&1 &
+          up=no
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:9000/ && { up=yes; break; }; sleep 1; done
+          if [ "$up" != yes ]; then cat "$RUNNER_TEMP/moto.log"; echo "The S3 API did not start." >&2; exit 1; fi
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://zlens-test
+          aws --endpoint-url http://127.0.0.1:9000 s3 cp --recursive --quiet packages/dql-connectors/test/fixtures/lake s3://zlens-test/lake
+        env:
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+          AWS_DEFAULT_REGION: us-east-1
+      - name: Install the DuckDB driver as ZLens does
+        run: |
+          mkdir -p "$CONNECTOR_ROOT"
+          printf '%s\n' '{"private":true}' > "$CONNECTOR_ROOT/package.json"
+          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false '@duckdb/node-api@^1.5.6-r.1'
+        env:
+          CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
+      - name: Read the lake in the bucket
+        working-directory: packages/dql-connectors
+        shell: bash
+        run: |
+          npx vitest run src/drivers/lake-s3.test.ts --reporter=verbose | tee "$RUNNER_TEMP/lake-s3.log"
+          # moto accepts any keys, so only the wrong-keys case may skip; the lake itself must be read.
+          grep -q '1 passed' "$RUNNER_TEMP/lake-s3.log" || { echo "The bucket lake test did not run." >&2; exit 1; }
+        env:
+          ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
+          ZLENS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          ZLENS_TEST_S3_BUCKET: zlens-test
+          ZLENS_TEST_S3_KEY_ID: testing
+          ZLENS_TEST_S3_SECRET: testing
+
   # --- create-zlens-app smoke test ---
   # Guards the "5 minutes to first dashboard" demo gate.
   scaffold-smoke:

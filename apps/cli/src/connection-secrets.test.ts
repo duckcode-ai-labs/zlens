@@ -27,6 +27,37 @@ describe('connection secrets', () => {
     expect(resolveSecretReferences(saved.warehouse as object, root)).toMatchObject({ password: 'hunter22' });
   });
 
+  it('a bucket key in a file connection\'s storage moves to the private file, shows as the mask, and is read back', () => {
+    const root = project();
+    const lake = {
+      driver: 'file',
+      dataFolder: 's3://acme-lake/sales/',
+      storage: { s3: { region: 'us-east-1', accessKeyId: 'AKIA1', secretAccessKey: 'wJalr', sessionToken: 'tok' }, azure: { connectionString: 'AccountKey=k' } },
+      sources: [{ name: 'orders', path: 's3://acme-lake/sales/orders/' }],
+    };
+    const saved = storeConnectionSecrets(root, { lake }, {});
+    expect(saved.lake).toEqual({
+      ...lake,
+      storage: {
+        s3: { region: 'us-east-1', accessKeyId: 'AKIA1', secretAccessKey: '${secret:lake.storage.s3.secretAccessKey}', sessionToken: '${secret:lake.storage.s3.sessionToken}' },
+        azure: { connectionString: '${secret:lake.storage.azure.connectionString}' },
+      },
+    });
+    expect(JSON.parse(readFileSync(connectionSecretsPath(root), 'utf-8'))).toEqual({
+      lake: { 'storage.s3.secretAccessKey': 'wJalr', 'storage.s3.sessionToken': 'tok', 'storage.azure.connectionString': 'AccountKey=k' },
+    });
+    const shown = redactConnections(saved) as { lake: { storage: { s3: Record<string, unknown> } } };
+    expect(shown.lake.storage.s3.secretAccessKey).toBe(SECRET_MASK);
+    expect(shown.lake.storage.s3.accessKeyId).toBe('AKIA1');
+    // The original is never changed by showing it.
+    expect((saved.lake as typeof lake).storage.s3.secretAccessKey).toBe('${secret:lake.storage.s3.secretAccessKey}');
+    const again = storeConnectionSecrets(root, shown, saved);
+    expect(resolveSecretReferences(again.lake as object, root)).toMatchObject({
+      storage: { s3: { secretAccessKey: 'wJalr', sessionToken: 'tok' }, azure: { connectionString: 'AccountKey=k' } },
+      sources: [{ name: 'orders', path: 's3://acme-lake/sales/orders/' }],
+    });
+  });
+
   it('never shows a saved secret, and saving the mask keeps it', () => {
     const root = project();
     const first = storeConnectionSecrets(root, { w: { driver: 'mysql', password: 'hunter22' } }, {});

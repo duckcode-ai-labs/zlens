@@ -1,5 +1,56 @@
 import type { QueryBatch, QueryExecutionOptions, QueryResult } from './result-types.js';
 
+/** A named table of a file connection, read where it is: a file, a folder of files, a Delta or Iceberg table, an Excel sheet. */
+export interface LakeSourceConfig {
+  /** The table's name; by default the last part of `path` (`s3://lake/sales/orders/` → `orders`). */
+  name?: string;
+  /** A path (relative to the project) or a bucket URL (`s3://`, `gs://`, `az://`, `abfss://`, `r2://`, `https://`). */
+  path: string;
+  /** What it is: found from the path (`auto`, the default), or said. */
+  format?: 'auto' | 'parquet' | 'csv' | 'json' | 'excel' | 'delta' | 'iceberg';
+  /** An Excel sheet (default: the first). */
+  sheet?: string;
+}
+
+/** How a DuckDB or file connection reaches buckets. */
+export interface LakeStorageConfig {
+  /** Amazon S3, and other S3 APIs (MinIO, Ceph, Wasabi) through `endpoint`. */
+  s3?: {
+    region?: string;
+    /** `credential_chain` (default: environment, profile, SSO, instance role) or `keys`. */
+    auth?: 'credential_chain' | 'keys';
+    /** An AWS profile of `~/.aws/config` (credential chain). */
+    profile?: string;
+    accessKeyId?: string;
+    secretAccessKey?: string;
+    sessionToken?: string;
+    /** Another S3 API: `minio.internal:9000`. */
+    endpoint?: string;
+    urlStyle?: 'path' | 'vhost';
+    useSsl?: boolean;
+  };
+  /** Google Cloud Storage. */
+  gcs?: {
+    /** `credential_chain` (default: application default credentials) or `hmac` keys. */
+    auth?: 'credential_chain' | 'hmac';
+    keyId?: string;
+    secret?: string;
+  };
+  /** Azure Blob Storage and ADLS Gen2. */
+  azure?: {
+    /** `credential_chain` (default: Azure CLI, environment, managed identity) or `connection_string`. */
+    auth?: 'credential_chain' | 'connection_string';
+    accountName?: string;
+    connectionString?: string;
+  };
+  /** Cloudflare R2. */
+  r2?: {
+    accountId?: string;
+    keyId?: string;
+    secret?: string;
+  };
+}
+
 export interface ConnectionConfig {
   driver:
     | 'postgresql'
@@ -49,12 +100,24 @@ export interface ConnectionConfig {
   trustServerCertificate?: boolean;
   filepath?: string;
   /**
-   * File connections: a folder whose CSV, TSV, Parquet and JSON files each
-   * become a view named after the file (`orders.csv` → `orders`), so the
-   * folder reads like a database. The files are read where they are, at
-   * query time.
+   * File connections: a folder (on disk, or a bucket: `s3://lake/sales/`)
+   * whose data files, Excel sheets, Delta and Iceberg tables and folders of
+   * files each become a view named after them (`orders.csv` → `orders`), so
+   * the folder reads like a database. The data is read where it is, at query
+   * time. See `readDataFolder`.
    */
   dataFolder?: string;
+  /**
+   * DuckDB and file connections: named tables at any path or bucket URL, read
+   * where they are. A source's name wins over a table of the data folder.
+   */
+  sources?: LakeSourceConfig[];
+  /**
+   * DuckDB and file connections: how buckets are reached. Credentials come
+   * from the cloud's own sign-in (the credential chain) unless keys are given;
+   * they are held in memory only.
+   */
+  storage?: LakeStorageConfig;
   /**
    * DuckDB and file connections, with a host: folders whose files a statement
    * may still read once the engine is restricted (`restrictExternalAccess`),

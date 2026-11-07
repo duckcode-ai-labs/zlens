@@ -1,5 +1,7 @@
 import { basename, join } from 'node:path';
+import type { LakeSourceConfig } from './connector.js';
 import {
+  isUrlPath,
   dataFolderAttachStatement,
   dataFolderFileColumnsStatement,
   dataFolderFilesStatement,
@@ -12,7 +14,7 @@ import {
   type DataFolderSkip,
   type DataFolderTable,
 } from './data-folder.js';
-import type { QueryResult } from './result-types.js';
+import { readBucketFolder, resolveLakeSources, type LakeProblem, type LakeRun } from './lake-listing.js';
 
 /** A table or catalog of a data folder that DuckDB could not read, and why. */
 export interface DataFolderProblem {
@@ -26,6 +28,7 @@ export interface DataFolderProblem {
 
 /** What a connection reads from its data folder right now. */
 export interface DataFolderStatus {
+  /** The data folder (a path or a bucket URL), or `''` with sources only. */
   folder: string;
   /** Tables that read: one line each, as `zlens init` and Setup list them. */
   tables: Array<{ name: string; source: string; kind: string }>;
@@ -44,12 +47,16 @@ export interface DataFolderViewsOptions {
   catalogs: boolean;
   /** Files never read (the connection's own database file). */
   exclude: string[];
+  /** Named tables at any path or bucket URL (paths already absolute). */
+  sources?: LakeSourceConfig[];
 }
 
 /** A folder table is one table only when its first files (at most this many) share their columns. */
 const SAME_COLUMNS_FILES = 50;
 /** An unchanged folder is looked at again after this long (a new Iceberg commit, a new sheet). */
 const RESCAN_MS = 2_000;
+/** A bucket is listed again after this long: each listing reads every object name under the prefix, and costs requests. */
+const BUCKET_RESCAN_MS = 60_000;
 const REASON_LENGTH = 400;
 
 /**
@@ -74,12 +81,26 @@ export class DataFolderViews {
   private scanned = { at: 0, modified: Number.NaN };
   private refreshing: Promise<void> | null = null;
   private databaseName: string | undefined;
+  /** A bucket folder's last listing, reused for a minute. */
+  private bucket: { at: number; contents: DataFolderContents; problems: LakeProblem[] } | undefined;
+  /** The sources as last resolved (a bucket source's for a minute, else for two seconds). */
+  private sourced: { at: number; tables: DataFolderTable[]; problems: LakeProblem[] } | undefined;
+  /** Problems that are not one table's: a source that cannot be read, a bucket that cannot be listed. */
+  private listingProblems: LakeProblem[] = [];
+  /** Extra problems the connection reports (storage it could not use). */
+  private readonly notes: LakeProblem[] = [];
 
   constructor(
+    /** A folder on disk, a bucket URL, or `''` for sources only. */
     readonly folder: string,
-    private readonly run: (sql: string) => Promise<QueryResult>,
+    private readonly run: LakeRun,
     private readonly options: DataFolderViewsOptions,
   ) {}
+
+  /** A problem the connection itself reports (storage it could not set up), shown with the folder's. */
+  note(problem: LakeProblem): void {
+    this.notes.push(problem);
+  }
 
   /** Make the views match the folder now (at once when the folder changed, else at most every two seconds). */
   refresh(): Promise<void> {
@@ -102,6 +123,7 @@ export class DataFolderViews {
       ...this.contents.catalogs.filter((catalog) => !this.catalogs.has(catalog.name)).map((catalog) => this.failed.get(`catalog:${catalog.name}`)),
     ].filter((problem): problem is NonNullable<typeof problem> => Boolean(problem))
       .map(({ source, name, reason }) => ({ source, name, reason }));
+    problems.unshift(...this.notes, ...this.listingProblems);
     return {
       folder: this.folder,
       tables: tables.map(({ name, source, kind }) => ({ name, source, kind })),
@@ -112,12 +134,51 @@ export class DataFolderViews {
   }
 
   private async sync(): Promise<void> {
-    const modified = modifiedTime(this.folder);
+    const local = this.folder !== '' && !isUrlPath(this.folder);
+    const modified = local ? modifiedTime(this.folder) : -1;
     if (modified === this.scanned.modified && Date.now() - this.scanned.at < RESCAN_MS) return;
     this.scanned = { at: Date.now(), modified };
-    this.contents = readDataFolder(this.folder, { catalogs: this.options.catalogs, exclude: this.options.exclude });
+    const now = Date.now();
+
+    const sources = this.options.sources ?? [];
+    if (sources.length) {
+      const reuse = sources.some((source) => isUrlPath(source.path)) ? BUCKET_RESCAN_MS : RESCAN_MS;
+      if (!this.sourced || now - this.sourced.at >= reuse) {
+        this.sourced = { at: now, ...(await resolveLakeSources(this.run, sources)) };
+      }
+    }
+    const sourceTables = this.sourced?.tables ?? [];
+    const takenNames = sourceTables.map((table) => table.name);
+    const folderOptions = { catalogs: this.options.catalogs, exclude: this.options.exclude, takenNames };
+
+    let folder: DataFolderContents = { tables: [], catalogs: [], skipped: [] };
+    if (local) {
+      folder = readDataFolder(this.folder, folderOptions);
+    } else if (this.folder) {
+      if (!this.bucket || now - this.bucket.at >= BUCKET_RESCAN_MS) {
+        try {
+          this.bucket = { at: now, contents: await readBucketFolder(this.run, this.folder, folderOptions), problems: [] };
+        } catch (error) {
+          this.bucket = { at: now, contents: { tables: [], catalogs: [], skipped: [] }, problems: [{ source: this.folder, name: '', reason: reasonOf(error) }] };
+        }
+      }
+      folder = this.bucket.contents;
+    }
+    this.sourceNames = new Set(takenNames);
+    this.listingProblems = [...(this.sourced?.problems ?? []), ...(this.bucket && !local && this.folder ? this.bucket.problems : [])];
+    this.contents = { tables: [...sourceTables, ...folder.tables], catalogs: folder.catalogs, skipped: folder.skipped };
     if (this.contents.catalogs.length || this.catalogs.size) await this.syncCatalogs();
     await this.syncViews();
+  }
+
+  /** Source tables, by name: they are retried with each new resolution of the sources, not by a file's time. */
+  private sourceNames = new Set<string>();
+
+  /** What a failed table or catalog was tried against: tried again once this changes. */
+  private stamp(source: string, name: string): string {
+    if (this.sourceNames.has(name)) return `sources@${this.sourced?.at ?? 0}`;
+    if (this.folder === '' || isUrlPath(this.folder)) return `bucket@${this.bucket?.at ?? 0}`;
+    return String(modifiedTime(join(this.folder, source)));
   }
 
   private async syncCatalogs(): Promise<void> {
@@ -137,7 +198,7 @@ export class DataFolderViews {
       if (this.catalogs.has(catalog.name)) continue;
       const statement = wanted.get(catalog.name)!;
       const key = `catalog:${catalog.name}`;
-      const attempt = `${statement}\u0000${modifiedTime(catalog.file)}`;
+      const attempt = `${statement}\u0000${isUrlPath(catalog.file) ? `bucket@${this.bucket?.at ?? 0}` : modifiedTime(catalog.file)}`;
       if (this.failed.get(key)?.attempt === attempt) continue;
       try {
         await this.run(statement);
@@ -164,13 +225,14 @@ export class DataFolderViews {
     for (const table of missing) {
       const statement = wanted.get(table.name)!;
       const key = `view:${table.name}`;
-      const attempt = `${statement}\u0000${modifiedTime(join(this.folder, table.source))}`;
+      const attempt = `${statement}\u0000${this.stamp(table.source, table.name)}`;
       if (this.failed.get(key)?.attempt === attempt) continue;
       try {
         if (owned.has(table.name.toLowerCase())) {
           throw new Error(`the database already has a table or view named ${table.name}, and that one is read`);
         }
-        const mismatch = await this.differentColumns(table);
+        // A source is one table because the connection says so; a folder found in the data folder must earn it.
+        const mismatch = this.sourceNames.has(table.name) ? undefined : await this.differentColumns(table);
         if (mismatch) throw new Error(mismatch);
         await this.run(statement);
         this.views.set(table.name, statement);
