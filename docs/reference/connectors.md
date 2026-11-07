@@ -284,25 +284,65 @@ every connection secret; `${ENV_VAR}` works in any of these values. DuckDB
 holds the credentials in memory only. Buckets are not read yet when ZLens
 serves people (`--lan`, Enterprise).
 
-`catalogs` attaches other databases read-only beside the connection's own:
-a DuckDB, DuckLake or SQLite file, on disk or in a bucket. Their tables are
-`name.schema.table`; nothing is ever written into them.
+#### Catalogs
+
+`catalogs` attaches catalogs read-only beside the connection's own database:
+database files (DuckDB, DuckLake, SQLite, on disk or in a bucket) and catalog
+services. Their tables are `name.schema.table`; nothing is ever written into
+them, and they are in `zlens sync warehouse`'s scope by default.
 
 ```json
 "catalogs": [
   { "name": "raw", "path": "./raw.duckdb" },
-  { "name": "lake", "path": "s3://acme-lake/lake.ducklake", "type": "ducklake" }
+  { "name": "lake", "path": "s3://acme-lake/lake.ducklake" },
+  { "name": "iceberg", "type": "iceberg", "endpoint": "https://catalog.example.com/catalog",
+    "warehouse": "analytics", "clientId": "zlens", "clientSecret": "${ICEBERG_CLIENT_SECRET}" },
+  { "name": "unity", "type": "unity", "endpoint": "http://unity.internal:8080", "catalog": "main" },
+  { "name": "shared", "path": "postgres:dbname=lake host=db.internal user=zlens",
+    "password": "${LAKE_PG_PASSWORD}", "dataPath": "s3://acme-lake/data/" }
 ]
 ```
 
+| `type` | What it attaches | Settings |
+|---|---|---|
+| `duckdb`, `sqlite` | A database file | `path` (the type comes from the extension when left out) |
+| `ducklake` | A DuckLake catalog: a `.ducklake` file, or its catalog in Postgres, MySQL or SQLite (`postgres:dbname=… host=…`) | `path`; `password`, `dataPath`, `metadataSchema` (several DuckLakes in one database) |
+| `iceberg` | Any Iceberg REST catalog: Lakekeeper, Apache Polaris, Nessie, Cloudflare R2 Data Catalog | `endpoint`, `warehouse`; sign-in by `clientId` + `clientSecret` (OAuth2; `oauth2Url`, `scope` when needed), `token`, or none; `files` |
+| `glue` | AWS Glue Data Catalog (its Iceberg tables) | `account`, `region` (or `storage.s3.region`); signs in with `storage.s3`, else your AWS sign-in |
+| `s3_tables` | An Amazon S3 Tables bucket | `arn` (the region comes from it); signs in like `glue` |
+| `unity` | Unity Catalog (its Delta tables) | `endpoint`, `catalog`; `token`, `region` (of the storage holding its tables) |
+
+- **Table files of an Iceberg catalog**: `"files": "catalog"` (the default)
+  reads them with the credentials the catalog hands out; `"files": "storage"`
+  reads them with the connection's own `storage`, for a self-hosted catalog
+  whose files are in MinIO or another S3 API that hands out none.
+- **Large catalogs**: an Iceberg catalog lists its tables first and their
+  columns only once each table is looked up. ZLens looks each one up after
+  connecting (at most 1,000 tables, for 60 s at a time, and says when it
+  stopped). `"namespaces": ["sales", "finance"]` reads only those, and limits
+  the sync scope to them.
+- **Secrets**: a `clientSecret`, `token` or `password` typed on the
+  Connections page moves to `.dql/local/private/connection-secrets.json` (by
+  the catalog's name); `${ENV_VAR}` works in any value. DuckDB holds them in
+  memory only, and no message names them.
+- **A catalog that cannot be reached** (a wrong address, warehouse or catalog
+  name, a refused sign-in) is listed with what to check; the connection still
+  opens and its other tables work.
+- **Tested** against Lakekeeper, Unity Catalog OSS and DuckLake on Postgres in
+  CI. AWS Glue, S3 Tables, R2 Data Catalog and OAuth2 sign-in follow DuckDB's
+  documented settings but have not been run against the real services yet.
+- Catalog services are not read yet when ZLens serves people (`--lan`,
+  Enterprise).
+
 Importing a dbt-duckdb profile brings these over too: its `s3_*` `settings`
 and its `secrets` (S3, GCS, Azure, R2) become `storage`, and its `attach`
-list (DuckDB, DuckLake and SQLite databases) becomes `catalogs`. What is not
-brought over (other settings, Postgres or MotherDuck attachments, other
+list (DuckDB, DuckLake (also in Postgres, with its `data_path` and
+`metadata_schema` options) and SQLite databases) becomes `catalogs`. What is
+not brought over (other settings, Postgres or MotherDuck attachments, other
 secret types) is listed when you import.
 
-`zlens doctor` says what the data folder, sources and catalogs read, how
-buckets sign in, and what is not read and why.
+`zlens doctor` says what the data folder and sources read, which catalogs it
+attaches, how buckets sign in, and what is not read and why.
 
 A `duckdb` connection also reads the project's `data/` folder (or `dataDir`
 in `dql.config.json`) as tables, the same way but without attaching database

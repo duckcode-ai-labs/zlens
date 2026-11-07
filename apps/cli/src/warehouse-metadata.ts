@@ -9,7 +9,7 @@ import {
   type RuntimeSchemaTable,
   parsePhysicalIdentifier,
 } from '@zlens/agent';
-import { readDataFolder, type ConnectionConfig, type QueryExecutor } from '@zlens/connectors';
+import { configuredCatalogs, readDataFolder, type ConnectionConfig, type QueryExecutor } from '@zlens/connectors';
 import { isAbsolute } from 'node:path';
 import { observeWarehouseTargetIdentity } from './semantic-execution/connection-identity.js';
 
@@ -481,6 +481,8 @@ export function buildWarehouseMetadataQueries(
         `FROM ${informationSchemaColumnsRelation(connection, catalogOrDatabase)}`,
         `WHERE ${predicate}`,
         ...(duckdb ? [`  AND ${duckdbCatalogScopePredicate('table_catalog', catalogOrDatabase)}`] : []),
+        // An Iceberg catalog's table not looked up yet lists DuckDB's placeholder column, never a real one.
+        ...(duckdb ? [`  AND NOT (column_name = '__' AND data_type = 'UNKNOWN')`] : []),
         `  AND UPPER(table_schema) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')`,
         'ORDER BY table_schema, table_name, ordinal_position',
         ...(top ? [] : [`LIMIT ${MAX_METADATA_ROWS_PER_QUERY}`]),
@@ -687,6 +689,7 @@ function buildExactRelationPredicate(relations: Array<{ schema: string; table: s
 
 function buildSchemaPredicate(schemas: string[]): string | undefined {
   if (schemas.length === 0) return undefined;
+  if (schemas.includes(EVERY_SCHEMA)) return `UPPER(table_schema) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')`;
   return `UPPER(table_schema) IN (${schemas.map((schema) => `UPPER(${sqlLiteral(schema)})`).join(', ')})`;
 }
 
@@ -853,15 +856,30 @@ function isSystemSchema(schema: string): boolean {
  * and MySQL and ClickHouse have one level only, the database, which serves as
  * both catalog and schema of a scope.
  */
+/** In a DuckDB scope: every schema of that catalog (a catalog service whose namespaces are not named). */
+export const EVERY_SCHEMA = '*';
+
 /**
- * A file connection's data folder attaches its DuckDB, DuckLake and SQLite
- * files as catalogs: by default their `main` schema is read too, so their
- * tables (`lake.main.orders`) reach Ask and the warehouse catalog.
+ * The catalogs a DuckDB or file connection attaches are read by default too,
+ * so their tables (`lake.main.orders`, `glue.sales.orders`) reach Ask and the
+ * warehouse catalog: the `main` schema of a database file (of the data folder,
+ * or one of its `catalogs`), and the namespaces of a catalog service (those
+ * named in `namespaces`, else every one).
  */
 function dataFolderCatalogScopes(connection: ConnectionConfig): RuntimeSchemaScope[] {
-  if (connection.driver !== 'file' || !connection.dataFolder || !isAbsolute(connection.dataFolder)) return [];
+  if (connection.driver !== 'file' && connection.driver !== 'duckdb') return [];
+  const configured = configuredCatalogs(connection.catalogs ?? [], connection.storage);
+  const own = configured.map((catalog) => ({
+    catalogOrDatabase: catalog.name,
+    schemas: catalog.plan?.service ? catalog.plan.namespaces ?? [EVERY_SCHEMA] : ['main'],
+  }));
+  if (connection.driver !== 'file' || !connection.dataFolder || !isAbsolute(connection.dataFolder)) return own;
   const exclude = connection.filepath && connection.filepath !== ':memory:' ? [connection.filepath] : [];
-  return readDataFolder(connection.dataFolder, { exclude }).catalogs.map((catalog) => ({ catalogOrDatabase: catalog.name, schemas: ['main'] }));
+  const taken = new Set(configured.map((catalog) => catalog.name));
+  // A data folder's database file named like one of the connection's own catalogs is attached with its type as a suffix.
+  const folder = readDataFolder(connection.dataFolder, { exclude }).catalogs
+    .map((catalog) => ({ catalogOrDatabase: taken.has(catalog.name) ? `${catalog.name}_${catalog.type}` : catalog.name, schemas: ['main'] }));
+  return [...own, ...folder];
 }
 
 function configuredCatalog(connection: ConnectionConfig): string | undefined {

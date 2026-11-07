@@ -45,16 +45,18 @@ const inList = (values: string[]) => values.map((value) => `UPPER(${literal(valu
 /** The queries that read one scope's catalog, per driver. */
 export function buildWarehouseCatalogQueries(driver: string, scope: { catalogOrDatabase: string; schemas: string[] }): CatalogQuery[] {
   const db = scope.catalogOrDatabase;
-  const schemas = scope.schemas.length ? scope.schemas : [];
+  // `*`: every schema of the catalog (a catalog service whose namespaces are not named).
+  const schemas = scope.schemas.includes('*') ? [] : scope.schemas;
   const schemaFilter = (column: string) => (schemas.length ? `UPPER(${column}) IN (${inList(schemas)})` : `UPPER(${column}) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')`);
   const d = driver.toLowerCase();
   // A file connection is DuckDB reading files: its data folder's views are its tables.
   if (d === 'duckdb' || d === 'file') {
     // One scope, one catalog: a database attached beside the opened one is read by its own scope only.
+    // `__ UNKNOWN` is DuckDB's placeholder for an Iceberg catalog's table not looked up yet: never a column.
     const inScope = duckdbCatalogScopePredicate('database_name', db);
     const current = 'current_database() AS current_catalog';
     return [
-      { kind: 'columns', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, column_name, data_type, is_nullable, comment, ${current} FROM duckdb_columns() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal ORDER BY schema_name, table_name, column_index LIMIT ${MAX_ROWS}` },
+      { kind: 'columns', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, column_name, data_type, is_nullable, comment, ${current} FROM duckdb_columns() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal AND NOT (column_name = '__' AND data_type = 'UNKNOWN') ORDER BY schema_name, table_name, column_index LIMIT ${MAX_ROWS}` },
       { kind: 'tables', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, 'BASE TABLE' AS table_type, comment, estimated_size AS row_count, ${current} FROM duckdb_tables() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal` },
       { kind: 'views', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, view_name AS table_name, comment, sql AS view_definition, ${current} FROM duckdb_views() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal` },
       { kind: 'keys', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, constraint_type, constraint_column_names, referenced_table, referenced_column_names, ${current} FROM duckdb_constraints() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')` },

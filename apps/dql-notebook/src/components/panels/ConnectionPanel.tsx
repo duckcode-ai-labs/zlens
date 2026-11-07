@@ -26,6 +26,7 @@ import {
   DRIVER_LABELS,
   DRIVER_TAGLINES,
   connectionFromFormFields,
+  connectionFormProblems,
   fieldApplies,
   formFieldsFromConnection,
   normalizeDriverName,
@@ -135,8 +136,9 @@ function saveMessageColor(message: string, theme: Theme): string {
 function isPlaceholderLocalConnection(cfg: any): boolean {
   const driver = normalizeDriverName(String(cfg?.driver ?? cfg?.type ?? ''));
   if (driver !== 'duckdb' && driver !== 'file') return false;
-  // A folder of data files is a real database, read in memory.
+  // A folder of data files (or named sources, or attached catalogs) is a real database, read in memory.
   if (driver === 'file' && String(cfg?.dataFolder ?? '').trim()) return false;
+  if ((Array.isArray(cfg?.sources) && cfg.sources.length) || (Array.isArray(cfg?.catalogs) && cfg.catalogs.length)) return false;
   const filepath = cfg?.filepath ?? cfg?.path;
   return !filepath || filepath === ':memory:';
 }
@@ -518,6 +520,12 @@ export function ConnectionPanel({
     previousName: string | null;
   }): Promise<boolean> => {
     if (!info) return false;
+    // A list typed by hand that is not JSON is said, never saved as nothing.
+    const problems = connectionFormProblems(opts.fields);
+    if (problems.length) {
+      setSaveMsg(`Error: ${problems.join('; ')}`);
+      return false;
+    }
     persistingRef.current = true;
     setSaving(true);
     setSaveMsg(null);

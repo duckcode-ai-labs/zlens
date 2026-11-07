@@ -19,12 +19,17 @@ export function connectionEnvironmentReferences(
 ): ConnectionEnvironmentReference[] {
   const names = new Set<string>();
   const visit = (value: unknown, depth: number): void => {
-    if (depth > 3) return;
+    if (depth > 4) return;
     if (typeof value === 'string') {
       for (const match of value.matchAll(ENV_REFERENCE)) names.add(match[1]!);
       return;
     }
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
+    // Lists too: a connection's `catalogs` and `sources` (`catalogs[0].token`).
+    if (Array.isArray(value)) {
+      for (const nested of value) visit(nested, depth + 1);
+      return;
+    }
+    if (value && typeof value === 'object') {
       for (const nested of Object.values(value as Record<string, unknown>)) visit(nested, depth + 1);
     }
   };

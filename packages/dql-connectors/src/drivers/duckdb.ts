@@ -7,7 +7,8 @@ import { importConnectorDependency } from '../optional-dependency.js';
 import { readEnv } from '../env.js';
 import { DataFolderViews, type DataFolderStatus } from '../data-folder-views.js';
 import { defaultLakeSignIns, describeLakeStorage, lakeSignInFailure, lakeStorageClouds, lakeStorageSecretStatements } from '../lake-storage.js';
-import type { LakeCatalogConfig, LakeSourceConfig } from '../connector.js';
+import type { LakeCatalogConfig, LakeSourceConfig, LakeStorageConfig } from '../connector.js';
+import { LAKE_CATALOG_SERVICES, lakeCatalogKind, lakeCatalogType } from '../lake-catalogs.js';
 
 /**
  * A dedicated connection from the already-open DuckDB database. Dataset
@@ -87,6 +88,7 @@ export class DuckDBConnector implements DatabaseConnector {
   /** The connection's own `sources` and `catalogs`: kept when the project's data folder is added (`useDataFolder`). */
   private connectionSources: LakeSourceConfig[] = [];
   private connectionCatalogs: LakeCatalogConfig[] = [];
+  private connectionStorage: LakeStorageConfig | undefined;
 
   async connect(config: ConnectionConfig): Promise<void> {
     await this.disconnect();
@@ -131,10 +133,18 @@ export class DuckDBConnector implements DatabaseConnector {
     // Buckets: the connection's credentials as in-memory secrets, before anything reads a bucket.
     const storageProblems = await this.useStorage(config);
     this.connectionSources = config.sources ?? [];
-    this.connectionCatalogs = config.catalogs ?? [];
+    this.connectionStorage = config.storage;
+    // Catalog services are reached over the network: not while ZLens serves people (--lan, Enterprise) yet.
+    const services = config.restrictExternalAccess ? (config.catalogs ?? []).filter((catalog) => LAKE_CATALOG_SERVICES.has(lakeCatalogType(catalog))) : [];
+    this.connectionCatalogs = (config.catalogs ?? []).filter((catalog) => !services.includes(catalog));
+    const catalogProblems = services.map((catalog) => ({
+      source: lakeCatalogKind(catalog),
+      name: String(catalog.name ?? ''),
+      reason: `catalog services are not read when ZLens serves people (--lan, Enterprise) yet`,
+    }));
     if (config.dataFolder || config.sources?.length || config.catalogs?.length) {
       await this.useDataFolder(config.dataFolder ?? '', { sources: config.sources ?? [] });
-      for (const problem of storageProblems) this.folderViews?.note(problem);
+      for (const problem of [...storageProblems, ...catalogProblems]) this.folderViews?.note(problem);
     }
   }
 
@@ -180,6 +190,8 @@ export class DuckDBConnector implements DatabaseConnector {
    * statement. In a real database file the views are temporary: nothing is
    * written into it, and a name it already has stays its own. `catalogs`
    * (default true): DuckDB, DuckLake and SQLite files are attached read-only.
+   * The connection's own `catalogs` (files and catalog services) are attached
+   * read-only too.
    */
   async useDataFolder(folder: string, options: { catalogs?: boolean; sources?: LakeSourceConfig[] } = {}): Promise<void> {
     if (!this.connection) throw new Error('DuckDB connector not connected. Call connect() first.');
@@ -190,6 +202,7 @@ export class DuckDBConnector implements DatabaseConnector {
         exclude: this.databaseFile ? [this.databaseFile] : [],
         sources: options.sources ?? this.connectionSources,
         configuredCatalogs: this.connectionCatalogs,
+        storage: this.connectionStorage,
       });
     }
     await this.folderViews.refresh();
@@ -366,7 +379,9 @@ export class DuckDBConnector implements DatabaseConnector {
     const schemaName = schema && dot > 0 ? schema.slice(dot + 1) : schema;
     let sql = `SELECT table_catalog, table_schema, table_name, column_name, data_type, ordinal_position, current_database() AS current_catalog
        FROM information_schema.columns
-       WHERE table_schema NOT IN ('information_schema', 'pg_catalog')`;
+       WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
+         AND NOT (column_name = '__' AND data_type = 'UNKNOWN')`;
+    // `__ UNKNOWN`: an Iceberg catalog's table not looked up yet (its columns are not known), never a real column.
     const params: unknown[] = [];
     if (catalog) {
       params.push(catalog);

@@ -1,6 +1,6 @@
 // @dql/connectors - DQL Database Connectors
 
-export type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo, LakeCatalogConfig, LakeSourceConfig, LakeStorageConfig } from './connector.js';
+export type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo, LakeCatalogConfig, LakeCatalogType, LakeSourceConfig, LakeStorageConfig } from './connector.js';
 export {
   ConnectorQueryError,
   type QueryBatch,
@@ -31,6 +31,7 @@ export { SnowflakeConnector } from './drivers/snowflake.js';
 export { DuckDBConnector, DUCKDB_DRIVER_PACKAGE, duckDBNewerFileMessage, duckDBOpenFailureMessage, ZLENS_DUCKDB_READER_LINE, type DuckDBConsistentReadScope } from './drivers/duckdb.js';
 export { FileConnector } from './drivers/file.js';
 export {
+  configuredCatalogs,
   dataFolderSkipped,
   dataFolderTables,
   excelSheets,
@@ -46,6 +47,16 @@ export {
 export { type DataFolderProblem, type DataFolderStatus } from './data-folder-views.js';
 export { defaultLakeSignIns, describeLakeStorage, lakeSignInFailure, lakeStorageClouds, lakeStorageSecretStatements } from './lake-storage.js';
 export { LAKE_LISTING_DEADLINE_MS, listBucketPrefix, readBucketFolder, resolveLakeSources, type LakeProblem } from './lake-listing.js';
+export {
+  LAKE_CATALOG_SERVICES,
+  isDuckLakeDatabase,
+  lakeCatalogKind,
+  lakeCatalogPlan,
+  lakeCatalogType,
+  needsLakeCatalogPlan,
+  withoutPassword,
+  type LakeCatalogPlan,
+} from './lake-catalogs.js';
 export { DatabricksConnector } from './drivers/databricks.js';
 export { SQLiteConnector } from './drivers/sqlite.js';
 export { PostgreSQLConnector } from './drivers/postgresql.js';

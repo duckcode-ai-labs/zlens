@@ -314,6 +314,44 @@ describe('warehouse metadata scope', () => {
     }
   });
 
+  it('a connection\'s own catalogs are read by default: main of a database file, the namespaces of a catalog service (every one when none is named)', () => {
+    const folder = mkdtempSync(join(tmpdir(), 'dql-warehouse-metadata-catalogs-'));
+    try {
+      writeFileSync(join(folder, 'lake.ducklake'), '');
+      const scope = normalizeConnectionMetadataScope('default', {
+        driver: 'file',
+        dataFolder: folder,
+        catalogs: [
+          { name: 'lake', type: 'iceberg', endpoint: 'http://127.0.0.1:8181/catalog', warehouse: 'lab', namespaces: ['sales', 'finance'] },
+          { name: 'unity', type: 'unity', endpoint: 'http://127.0.0.1:8080', catalog: 'main' },
+          { name: 'raw', path: join(folder, 'raw.duckdb') },
+        ],
+      }, undefined);
+      expect(scope.scopes).toEqual([
+        { catalogOrDatabase: 'lake', schemas: ['finance', 'sales'] },
+        // The data folder's lake.ducklake is attached as lake_ducklake: the connection's own lake wins the name.
+        { catalogOrDatabase: 'lake_ducklake', schemas: ['main'] },
+        { catalogOrDatabase: 'memory', schemas: ['main'] },
+        { catalogOrDatabase: 'raw', schemas: ['main'] },
+        { catalogOrDatabase: 'unity', schemas: ['*'] },
+      ]);
+      // A dbt-duckdb connection's attached databases are read too.
+      expect(normalizeConnectionMetadataScope('default', { driver: 'duckdb', filepath: join(folder, 'dev.duckdb'), catalogs: [{ name: 'raw', path: join(folder, 'raw.duckdb') }] }, undefined).scopes)
+        .toEqual([{ catalogOrDatabase: 'memory', schemas: ['main'] }, { catalogOrDatabase: 'raw', schemas: ['main'] }]);
+    } finally {
+      rmSync(folder, { recursive: true, force: true });
+    }
+  });
+
+  it('DuckDB: every schema of a catalog service (`*`) is read without naming one', () => {
+    const queries = buildWarehouseMetadataQueries({ driver: 'file' }, normalizeConnectionMetadataScope('default', { driver: 'file' }, { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'unity', schemas: ['*'] }] }));
+    expect(queries).toHaveLength(1);
+    expect(queries[0].sql).toContain(`WHERE UPPER(table_schema) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')`);
+    expect(queries[0].sql).toContain(`lower(table_catalog) = lower('unity')`);
+    // A table of a lazy catalog not looked up yet lists DuckDB's placeholder column: never read as one.
+    expect(queries[0].sql).toContain(`AND NOT (column_name = '__' AND data_type = 'UNKNOWN')`);
+  });
+
   it('DuckDB: a scope reads only its own catalog, and an attached database keeps its name in the relation', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-metadata-duckdb-'));
     const duckdbConnection: ConnectionConfig = { driver: 'duckdb', filepath: 'shop.duckdb' };

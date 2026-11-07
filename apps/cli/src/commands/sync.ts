@@ -217,7 +217,8 @@ async function runSyncWarehouse(rest: string[], flags: CLIFlags): Promise<void> 
       ...(schemas.length ? { schemas } : {}),
       executor,
     });
-    const scopes = result.scope.scopes.map((scope) => `${scope.catalogOrDatabase}: ${scope.schemas.join(', ')}`).join('; ');
+    // `*`: every schema of a catalog service whose namespaces are not named.
+    const scopes = result.scope.scopes.map((scope) => `${scope.catalogOrDatabase}: ${scope.schemas.includes('*') ? 'all schemas' : scope.schemas.join(', ')}`).join('; ');
     if (flags.format === 'json') {
       console.log(JSON.stringify(result, null, 2));
     } else {

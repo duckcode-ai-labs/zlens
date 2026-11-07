@@ -141,6 +141,113 @@ jobs:
           ZLENS_TEST_S3_KEY_ID: testing
           ZLENS_TEST_S3_SECRET: testing
 
+  # --- Lake catalogs: a file connection attaches catalog services ---
+  # Real catalog servers, no Docker: Lakekeeper (an Iceberg REST catalog; a
+  # pinned release binary) with its warehouse in an S3 API (moto) and its own
+  # catalog in the runner's Postgres; Unity Catalog OSS (from Maven Central)
+  # with a Delta table registered; DuckLake with its catalog in Postgres.
+  lake-catalogs:
+    name: lake catalogs (Iceberg REST, Unity, DuckLake)
+    runs-on: ubuntu-24.04
+    env:
+      LAKEKEEPER_VERSION: v0.14.2
+      LAKEKEEPER_SHA256: e1eb2de75f95c1124f91ed32bfd14bcbddf906f91651bbd446ad9a0af99251b8
+      COURSIER_VERSION: v2.1.24
+      COURSIER_SHA256: d2c0572a17fb6146ea65349b59dd216b38beff60ae22bce6e549867c6ed2eda6
+      UNITY_CATALOG_VERSION: 0.3.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @zlens/connectors... build
+      - name: Start Postgres (the runner's own) with a user and two databases
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE zlens LOGIN PASSWORD 'zlens' CREATEDB"
+          sudo -u postgres createdb -O zlens lakekeeper
+          sudo -u postgres createdb -O zlens ducklake
+      - name: Start an S3 API (moto) with the warehouse bucket
+        run: |
+          python3 -m venv "$RUNNER_TEMP/moto"
+          "$RUNNER_TEMP/moto/bin/pip" install --quiet 'moto[server]==5.1.4'
+          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 9000 > "$RUNNER_TEMP/moto.log" 2>&1 &
+          up=no
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:9000/ && { up=yes; break; }; sleep 1; done
+          if [ "$up" != yes ]; then cat "$RUNNER_TEMP/moto.log"; echo "The S3 API did not start." >&2; exit 1; fi
+          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://warehouse
+        env:
+          AWS_ACCESS_KEY_ID: testing
+          AWS_SECRET_ACCESS_KEY: testing
+          AWS_DEFAULT_REGION: us-east-1
+      - name: Start Lakekeeper (Iceberg REST) with a warehouse on the S3 API
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -sfL -o lakekeeper.tar.gz "https://github.com/lakekeeper/lakekeeper/releases/download/${LAKEKEEPER_VERSION}/lakekeeper-x86_64-unknown-linux-gnu.tar.gz"
+          echo "${LAKEKEEPER_SHA256}  lakekeeper.tar.gz" | sha256sum -c -
+          tar xzf lakekeeper.tar.gz
+          ./lakekeeper migrate
+          nohup ./lakekeeper serve > lakekeeper.log 2>&1 &
+          up=no
+          for i in $(seq 1 60); do curl -sf -o /dev/null http://127.0.0.1:8181/health && { up=yes; break; }; sleep 1; done
+          if [ "$up" != yes ]; then cat lakekeeper.log; echo "Lakekeeper did not start." >&2; exit 1; fi
+          curl -sf -X POST http://127.0.0.1:8181/management/v1/bootstrap -H 'content-type: application/json' -d '{"accept-terms-of-use": true}'
+          curl -sf -X POST http://127.0.0.1:8181/management/v1/warehouse -H 'content-type: application/json' -d '{
+            "warehouse-name": "ci",
+            "storage-profile": {"type": "s3", "bucket": "warehouse", "region": "us-east-1", "endpoint": "http://127.0.0.1:9000", "path-style-access": true, "sts-enabled": false, "flavor": "s3-compat"},
+            "storage-credential": {"type": "s3", "credential-type": "access-key", "aws-access-key-id": "testing", "aws-secret-access-key": "testing"}
+          }' || { cat lakekeeper.log; exit 1; }
+        env:
+          LAKEKEEPER__PG_DATABASE_URL_READ: postgres://zlens:zlens@127.0.0.1:5432/lakekeeper
+          LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://zlens:zlens@127.0.0.1:5432/lakekeeper
+          LAKEKEEPER__PG_ENCRYPTION_KEY: ci-only-not-a-secret-0123456789abcdef
+          LAKEKEEPER__LISTEN_PORT: '8181'
+          LAKEKEEPER__BASE_URI: http://127.0.0.1:8181
+      - name: Start Unity Catalog OSS (from Maven Central)
+        run: |
+          mkdir -p "$RUNNER_TEMP/unity/etc/conf" && cd "$RUNNER_TEMP/unity"
+          curl -sfL -o cs.gz "https://github.com/coursier/coursier/releases/download/${COURSIER_VERSION}/cs-x86_64-pc-linux.gz"
+          echo "${COURSIER_SHA256}  cs.gz" | sha256sum -c -
+          gzip -d cs.gz && chmod +x cs
+          ./cs fetch "io.unitycatalog:unitycatalog-server:${UNITY_CATALOG_VERSION}" --classpath > classpath.txt
+          printf '%s\n' 'server.env=dev' 'server.authorization=disable' 'storage-root.models=file:/tmp/ucroot' > etc/conf/server.properties
+          printf '%s\n' 'hibernate.connection.driver_class=org.h2.Driver' 'hibernate.connection.url=jdbc:h2:file:./etc/db/h2db;DB_CLOSE_DELAY=-1' 'hibernate.hbm2ddl.auto=update' 'hibernate.show_sql=false' 'hibernate.archive.autodetection=class' > etc/conf/hibernate.properties
+          nohup java -cp "$(cat classpath.txt)" io.unitycatalog.server.UnityCatalogServer -p 8080 > unity.log 2>&1 &
+          up=no
+          for i in $(seq 1 90); do curl -sf -o /dev/null http://127.0.0.1:8080/api/2.1/unity-catalog/catalogs && { up=yes; break; }; sleep 1; done
+          if [ "$up" != yes ]; then tail -50 unity.log; echo "Unity Catalog did not start." >&2; exit 1; fi
+      - name: Install the DuckDB driver as ZLens does
+        run: |
+          mkdir -p "$CONNECTOR_ROOT"
+          printf '%s\n' '{"private":true}' > "$CONNECTOR_ROOT/package.json"
+          npm --prefix "$CONNECTOR_ROOT" install --no-save --no-package-lock --workspaces=false '@duckdb/node-api@^1.5.6-r.1'
+        env:
+          CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
+      - name: Read the catalogs through a file connection
+        working-directory: packages/dql-connectors
+        shell: bash
+        run: |
+          npx vitest run src/drivers/lake-catalogs.test.ts --reporter=verbose | tee "$RUNNER_TEMP/lake-catalogs.log"
+          # Every catalog must be read: none may skip.
+          grep -q '3 passed' "$RUNNER_TEMP/lake-catalogs.log" || { echo "Not every catalog test ran." >&2; exit 1; }
+        env:
+          ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
+          ZLENS_TEST_ICEBERG_REST_ENDPOINT: http://127.0.0.1:8181/catalog
+          ZLENS_TEST_ICEBERG_REST_WAREHOUSE: ci
+          ZLENS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          ZLENS_TEST_S3_KEY_ID: testing
+          ZLENS_TEST_S3_SECRET: testing
+          ZLENS_TEST_UNITY_ENDPOINT: http://127.0.0.1:8080
+          ZLENS_TEST_DUCKLAKE_POSTGRES: dbname=ducklake host=127.0.0.1 port=5432 user=zlens
+          ZLENS_TEST_DUCKLAKE_PASSWORD: zlens
+
   # --- create-zlens-app smoke test ---
   # Guards the "5 minutes to first dashboard" demo gate.
   scaffold-smoke:

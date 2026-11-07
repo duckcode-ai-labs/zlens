@@ -7523,6 +7523,35 @@ describe('normalizeProjectConnection', () => {
     }
   });
 
+  it('keeps catalog services (no path), resolves a catalog\'s local files against the project, and expands a token from the environment', () => {
+    const previous = process.env.ZLENS_TEST_R2_TOKEN;
+    process.env.ZLENS_TEST_R2_TOKEN = 'tok-env';
+    try {
+      const normalized = normalizeProjectConnection({
+        driver: 'file',
+        filepath: ':memory:',
+        catalogs: [
+          { name: 'r2', type: 'iceberg', endpoint: 'https://catalog.cloudflarestorage.com/acct/lake', warehouse: 'acct_lake', token: '${ZLENS_TEST_R2_TOKEN}' },
+          { name: 'glue', type: 'glue', account: '123456789012', region: 'us-east-1' },
+          { name: 'lake', path: 'sqlite:meta/lake.sqlite', dataPath: 'lake-data/' },
+          { name: 'shared', path: 'postgres:dbname=lake host=db user=z', dataPath: 's3://acme/lake/' },
+          { name: 'raw', path: './raw.duckdb' },
+          { name: 'nothing' } as never,
+        ],
+      }, '/tmp/demo-project');
+      expect(normalized.catalogs).toEqual([
+        { name: 'r2', type: 'iceberg', endpoint: 'https://catalog.cloudflarestorage.com/acct/lake', warehouse: 'acct_lake', token: 'tok-env' },
+        { name: 'glue', type: 'glue', account: '123456789012', region: 'us-east-1' },
+        { name: 'lake', path: 'sqlite:/tmp/demo-project/meta/lake.sqlite', dataPath: '/tmp/demo-project/lake-data/' },
+        { name: 'shared', path: 'postgres:dbname=lake host=db user=z', dataPath: 's3://acme/lake/' },
+        { name: 'raw', path: '/tmp/demo-project/raw.duckdb' },
+      ]);
+    } finally {
+      if (previous === undefined) delete process.env.ZLENS_TEST_R2_TOKEN;
+      else process.env.ZLENS_TEST_R2_TOKEN = previous;
+    }
+  });
+
   it('expands environment placeholders when the value is available', () => {
     const previous = process.env.ZLENS_TEST_DATABASE;
     process.env.ZLENS_TEST_DATABASE = 'analytics';
@@ -8070,6 +8099,11 @@ describe('discoverDbtProfileConnections', () => {
       '        - path: postgresql://db/app',
       '          type: postgres',
       '          alias: app',
+      '        - path: "ducklake:postgres:dbname=lake host=db user=z"',
+      '          alias: shared',
+      '          options:',
+      '            data_path: s3://acme/shared/',
+      '            metadata_schema: team_a',
     ].join('\n'), 'utf-8');
     const [candidate] = discoverDbtProfileConnections(projectRoot, { dbt: { projectDir: 'dbt', profilesDir: 'dbt' } } as never);
     expect(candidate.connection).toMatchObject({
@@ -8082,6 +8116,7 @@ describe('discoverDbtProfileConnections', () => {
       catalogs: [
         { name: 'raw', path: join(dbtRoot, 'raw.duckdb'), type: 'duckdb' },
         { name: 'lake', path: 's3://acme/lake.ducklake', type: 'ducklake' },
+        { name: 'shared', path: 'postgres:dbname=lake host=db user=z', type: 'ducklake', dataPath: 's3://acme/shared/', metadataSchema: 'team_a' },
       ],
     });
     expect(candidate.warnings).toEqual(expect.arrayContaining([

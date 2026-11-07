@@ -518,4 +518,25 @@ describe('the data folder check', () => {
     expect(refused).toEqual({ name: 'Data folder', ok: false, detail: 'could not open s3://acme/sales/ (S3 (us-east-1): access keys): no AWS sign-in found: sign in' });
     expect(await checkDataFolder('/work/shop', { driver: 'postgresql', host: 'db' } as never)).toBeNull();
   });
+
+  it('names each catalog a connection attaches, and what is wrong with one that cannot be reached', async () => {
+    const catalogsOnly = { driver: 'file', filepath: ':memory:', catalogs: [
+      { name: 'lake', type: 'iceberg', endpoint: 'http://127.0.0.1:8181/catalog', warehouse: 'lab' },
+      { name: 'glue', type: 'glue', account: '123456789012', region: 'us-east-1' },
+    ] } as const;
+    const check = await checkDataFolder('/work/shop', catalogsOnly as never, { executor: connector({
+      folder: '', tables: [], skipped: [],
+      catalogs: [{ name: 'lake', source: 'http://127.0.0.1:8181/catalog (warehouse lab; no sign-in; files read with the credentials the catalog hands out)', kind: 'Iceberg REST catalog, attached as lake' }],
+      problems: [{ source: 'AWS Glue, account 123456789012 (us-east-1)', name: 'glue', reason: 'the AWS Glue catalog refused the sign-in: check its credentials (your AWS sign-in, or storage.s3)' }],
+    }) as never });
+    expect(check).toEqual({
+      name: 'Data folder', ok: true, advisory: true,
+      detail: 'attaches 1 catalog read-only: lake (Iceberg REST catalog); not read: AWS Glue, account 123456789012 (us-east-1) (glue): the AWS Glue catalog refused the sign-in: check its credentials (your AWS sign-in, or storage.s3)',
+    });
+    const withFolder = await checkDataFolder('/work/shop', { driver: 'file', filepath: ':memory:', dataFolder: '/work/shop/data' } as never, { executor: connector({
+      folder: '/work/shop/data', tables: [{ name: 'orders', source: 'orders.csv', kind: 'CSV file' }], skipped: [], problems: [],
+      catalogs: [{ name: 'lake', source: 'lake.ducklake', kind: 'DuckLake catalog, attached as lake' }],
+    }) as never });
+    expect(withFolder).toEqual({ name: 'Data folder', ok: true, detail: 'reads 1 table from data; attaches 1 catalog read-only: lake (DuckLake catalog)' });
+  });
 });

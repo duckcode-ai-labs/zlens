@@ -14,7 +14,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-/** Connection fields that hold a secret. `sshTunnel.*` and `storage.*.*` fields are nested. */
+/** Connection fields that hold a secret. `sshTunnel.*` and `storage.*.*` fields are nested; each catalog's are added by its name (`secretFieldsOf`). */
 export const SECRET_FIELDS = [
   'password',
   'token',
@@ -36,6 +36,24 @@ export const SECRET_FIELDS = [
   'storage.azure.connectionString',
   'storage.r2.secret',
 ] as const;
+
+/**
+ * Secret fields of each entry of a connection's `catalogs` (an Iceberg REST
+ * client secret or token, a Unity Catalog token, a DuckLake catalog's database
+ * password). A catalog is a list entry: its fields are named by the catalog's
+ * name (`catalogs.lake.token`), so reordering the list keeps each secret.
+ */
+const CATALOG_SECRET_KEYS = ['clientSecret', 'token', 'password'] as const;
+const CATALOG_SECRET_FIELD = new RegExp(`^catalogs\\.([^.]+)\\.(${CATALOG_SECRET_KEYS.join('|')})$`);
+
+/** Every secret field of one connection: the fixed ones, and each named catalog's. */
+function secretFieldsOf(connection: Record<string, unknown>): string[] {
+  const catalogs = Array.isArray(connection.catalogs) ? connection.catalogs : [];
+  const names = catalogs
+    .map((catalog) => (catalog && typeof catalog === 'object' ? (catalog as Record<string, unknown>).name : undefined))
+    .filter((name): name is string => typeof name === 'string' && name.trim() !== '' && !name.includes('.'));
+  return [...SECRET_FIELDS, ...[...new Set(names)].flatMap((name) => CATALOG_SECRET_KEYS.map((key) => `catalogs.${name}.${key}`))];
+}
 
 /** What the API shows for a saved secret. Saving it back keeps the stored value. */
 export const SECRET_MASK = '••••••••';
@@ -72,16 +90,25 @@ function writeSecrets(projectRoot: string, secrets: Secrets): void {
   }
 }
 
+/** A list entry by its `name` (a connection's `catalogs`). */
+function entryIndex(list: unknown[], name: string): number {
+  return list.findIndex((entry) => Boolean(entry) && typeof entry === 'object' && (entry as Record<string, unknown>).name === name);
+}
+
 function getField(connection: Record<string, unknown>, field: string): unknown {
   let current: unknown = connection;
   for (const part of field.split('.')) {
-    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    if (Array.isArray(current)) {
+      current = current[entryIndex(current, part)];
+      continue;
+    }
+    if (!current || typeof current !== 'object') return undefined;
     current = (current as Record<string, unknown>)[part];
   }
   return current;
 }
 
-/** Set a field, copying each nested object on the way (the connection given is never shared with the caller's). */
+/** Set a field, copying each nested object (and list) on the way (the connection given is never shared with the caller's). */
 function setField(connection: Record<string, unknown>, field: string, value: unknown): void {
   const [head, ...rest] = field.split('.');
   if (!rest.length) {
@@ -90,7 +117,19 @@ function setField(connection: Record<string, unknown>, field: string, value: unk
     return;
   }
   const nested = connection[head];
-  if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return;
+  if (Array.isArray(nested)) {
+    // A list entry named by the next part (`catalogs.lake.token`).
+    const [name, ...inner] = rest;
+    const index = entryIndex(nested, name!);
+    if (index < 0 || !inner.length) return;
+    const list = [...nested];
+    const entry = { ...(list[index] as Record<string, unknown>) };
+    setField(entry, inner.join('.'), value);
+    list[index] = entry;
+    connection[head] = list;
+    return;
+  }
+  if (!nested || typeof nested !== 'object') return;
   const copy = { ...(nested as Record<string, unknown>) };
   setField(copy, rest.join('.'), value);
   connection[head] = copy;
@@ -113,7 +152,7 @@ export function redactConnections(connections: Record<string, unknown>): Record<
     }
     const copy = { ...(value as Record<string, unknown>) };
     if (copy.credentials !== undefined) copy.credentials = SECRET_MASK;
-    for (const field of SECRET_FIELDS) {
+    for (const field of secretFieldsOf(copy)) {
       const current = getField(copy, field);
       if (typeof current !== 'string' || current === '') continue;
       if (isReference(current) && !SECRET_REFERENCE.test(current)) continue;
@@ -158,7 +197,7 @@ export function storeConnectionSecrets(
       connection.serviceAccountJson = JSON.stringify(connection.credentials);
       delete connection.credentials;
     }
-    for (const field of SECRET_FIELDS) {
+    for (const field of secretFieldsOf(connection)) {
       const current = getField(connection, field);
       if (current === SECRET_MASK) {
         // Unchanged on the page: keep the stored secret where it lives now.
@@ -225,7 +264,7 @@ function putSecret(secrets: Secrets, connection: string, field: string, value: s
 }
 
 function lookupSecret(secrets: Secrets, reference: string): string | undefined {
-  // `<connection>.<field>` where the field may itself be `sshTunnel.password`.
+  // `<connection>.<field>` where the field may itself be `sshTunnel.password` or `catalogs.lake.token`.
   for (const field of SECRET_FIELDS) {
     const suffix = `.${field}`;
     if (reference.endsWith(suffix)) {
@@ -233,6 +272,13 @@ function lookupSecret(secrets: Secrets, reference: string): string | undefined {
       const value = secrets[connection]?.[field];
       if (value !== undefined) return value;
     }
+  }
+  const parts = reference.split('.');
+  for (let start = 1; start < parts.length; start += 1) {
+    const field = parts.slice(start).join('.');
+    if (!CATALOG_SECRET_FIELD.test(field)) continue;
+    const value = secrets[parts.slice(0, start).join('.')]?.[field];
+    if (value !== undefined) return value;
   }
   return undefined;
 }

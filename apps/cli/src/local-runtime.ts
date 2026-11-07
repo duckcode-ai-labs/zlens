@@ -80,6 +80,8 @@ import {
   type LakeCatalogConfig,
   type LakeStorageConfig,
   isUrlPath,
+  LAKE_CATALOG_SERVICES,
+  lakeCatalogType,
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
@@ -39985,9 +39987,10 @@ function isPlaceholderLocalConnection(value: unknown): boolean {
   const connection = normalizeStoredConnection(value);
   if (!connection) return false;
   if (connection.driver !== 'duckdb' && connection.driver !== 'file') return false;
-  // A folder of data files (or named sources) is a real database, read in memory.
+  // A folder of data files (or named sources, or attached catalogs) is a real database, read in memory.
   if (connection.driver === 'file' && typeof connection.dataFolder === 'string' && connection.dataFolder.trim()) return false;
   if (Array.isArray(connection.sources) && connection.sources.length) return false;
+  if (Array.isArray(connection.catalogs) && connection.catalogs.length) return false;
   return !connection.filepath || connection.filepath === ':memory:';
 }
 
@@ -41711,14 +41714,12 @@ export function normalizeProjectConnection(connection: ConnectionConfig, project
   } else if (normalized.sources !== undefined) {
     delete normalized.sources;
   }
-  // Attached databases (`catalogs`): a path relative to the project, or a bucket URL.
+  // Catalogs: a database file relative to the project (or a bucket URL), or a catalog service (no path).
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.catalogs)) {
     normalized.catalogs = normalized.catalogs
-      .filter((catalog): catalog is NonNullable<typeof catalog> => Boolean(catalog) && typeof catalog === 'object' && typeof catalog.path === 'string' && catalog.path.trim() !== '')
-      .map((catalog) => ({
-        ...catalog,
-        path: isAbsoluteLikePath(catalog.path) || isUrlPath(catalog.path) ? catalog.path.trim() : resolve(projectRoot, catalog.path.trim()),
-      }));
+      .filter((catalog): catalog is NonNullable<typeof catalog> => Boolean(catalog) && typeof catalog === 'object'
+        && ((typeof catalog.path === 'string' && catalog.path.trim() !== '') || LAKE_CATALOG_SERVICES.has(lakeCatalogType(catalog))))
+      .map((catalog) => resolveCatalogPaths(catalog, projectRoot));
   } else if (normalized.catalogs !== undefined) {
     delete normalized.catalogs;
   }
@@ -49279,9 +49280,7 @@ export function discoverDbtProfileConnections(projectRoot: string, projectConfig
         }
         // dbt-duckdb resolves an attached database's relative path against the dbt project too.
         if (mapped.adapter === 'duckdb' && mapped.connection.catalogs?.length) {
-          mapped.connection.catalogs = mapped.connection.catalogs.map((catalog) => (
-            isAbsoluteLikePath(catalog.path) || isUrlPath(catalog.path) ? catalog : { ...catalog, path: resolve(profileRelativeBase, catalog.path) }
-          ));
+          mapped.connection.catalogs = mapped.connection.catalogs.map((catalog) => resolveCatalogPaths(catalog, profileRelativeBase));
         }
         const warnings = [...mapped.warnings];
         if (targetName !== defaultTarget) {
@@ -49823,9 +49822,31 @@ function dbtDuckDBStorage(output: DbtProfileOutput, value: (raw: unknown) => str
 }
 
 /**
+ * A catalog's local paths made absolute against `base` (the project, or the
+ * dbt project): its database file, a DuckLake catalog kept in SQLite
+ * (`sqlite:meta.sqlite`) and a DuckLake data folder. Bucket URLs, Postgres and
+ * MySQL catalogs and catalog services are kept as written.
+ */
+function resolveCatalogPaths(catalog: LakeCatalogConfig, base: string): LakeCatalogConfig {
+  const local = (path: string) => (isAbsoluteLikePath(path) || isUrlPath(path) ? path : resolve(base, path));
+  const resolved: LakeCatalogConfig = { ...catalog };
+  const path = typeof catalog.path === 'string' ? catalog.path.trim() : '';
+  if (path) {
+    const sqlite = /^sqlite:(.*)$/i.exec(path);
+    resolved.path = sqlite ? `sqlite:${local(sqlite[1]!.trim())}` : /^(postgres|postgresql|mysql):/i.test(path) ? path : local(path);
+  }
+  if (typeof catalog.dataPath === 'string' && catalog.dataPath.trim()) {
+    const dataPath = catalog.dataPath.trim();
+    resolved.dataPath = /[\\/]$/.test(dataPath) && !isUrlPath(dataPath) && !isAbsoluteLikePath(dataPath) ? `${local(dataPath)}/` : local(dataPath);
+  }
+  return resolved;
+}
+
+/**
  * A dbt-duckdb profile's `attach` list as read-only catalogs: DuckDB,
- * DuckLake (`ducklake:` paths) and SQLite databases. Others (Postgres,
- * MySQL, MotherDuck) are not attached, and that is said.
+ * DuckLake (`ducklake:` paths, also with their catalog in Postgres, MySQL or
+ * SQLite) and SQLite databases. Others (Postgres, MySQL, MotherDuck) are not
+ * attached, and that is said.
  */
 function dbtDuckDBAttach(output: DbtProfileOutput, value: (raw: unknown) => string | undefined, warnings: string[]): LakeCatalogConfig[] {
   const attach = Array.isArray(output.attach) ? output.attach : [];
@@ -49838,7 +49859,16 @@ function dbtDuckDBAttach(output: DbtProfileOutput, value: (raw: unknown) => stri
     const type = String(entry.type ?? '').toLowerCase();
     const alias = value(entry.alias) ?? path.split('/').pop()!.replace(/\.[a-z0-9]+$/i, '');
     if (/^ducklake:/i.test(path)) {
-      catalogs.push({ name: alias, path: path.replace(/^ducklake:/i, ''), type: 'ducklake' });
+      const options = entry.options && typeof entry.options === 'object' ? entry.options as Record<string, unknown> : {};
+      const dataPath = value(options.data_path ?? options.DATA_PATH);
+      const metadataSchema = value(options.metadata_schema ?? options.METADATA_SCHEMA);
+      catalogs.push({
+        name: alias,
+        path: path.replace(/^ducklake:/i, ''),
+        type: 'ducklake',
+        ...(dataPath ? { dataPath } : {}),
+        ...(metadataSchema ? { metadataSchema } : {}),
+      });
     } else if (type === 'sqlite') {
       catalogs.push({ name: alias, path, type: 'sqlite' });
     } else if (!type || type === 'duckdb') {
