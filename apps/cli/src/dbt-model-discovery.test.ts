@@ -57,6 +57,26 @@ describe('a dbt project’s relations in the warehouse', () => {
   });
 });
 
+describe('a dbt-duckdb project\'s external sources', () => {
+  it('are their dbt_sources tables; a location ZLens cannot read is no warehouse relation', () => {
+    const nodes = dbtWarehouseNodes({
+      metadata: { adapter_type: 'duckdb' },
+      nodes: {},
+      sources: {
+        'source.shop.raw.orders': { resource_type: 'source', source_name: 'raw', name: 'orders', identifier: 'orders', schema: 'raw', database: 'shop', relation_name: "'s3://lake/raw/orders.parquet'" },
+        'source.shop.raw.customers': { resource_type: 'source', source_name: 'raw', name: 'customers', schema: 'raw', database: 'shop', relation_name: "read_csv('s3://lake/raw/customers.csv', header = true)" },
+        'source.shop.raw.many': { resource_type: 'source', source_name: 'raw', name: 'many', schema: 'raw', database: 'shop', relation_name: "read_parquet(['s3://a/1.parquet', 's3://a/2.parquet'])" },
+        'source.shop.app.users': { resource_type: 'source', source_name: 'app', name: 'users', schema: 'main', database: 'shop', relation_name: '"shop"."main"."users"' },
+      },
+    });
+    expect(nodes.map(({ uniqueId, relation, database, schema }) => ({ uniqueId, relation, database, schema }))).toEqual([
+      { uniqueId: 'source.shop.app.users', relation: 'shop.main.users', database: 'shop', schema: 'main' },
+      { uniqueId: 'source.shop.raw.customers', relation: 'dbt_sources.raw.customers', database: 'dbt_sources', schema: 'raw' },
+      { uniqueId: 'source.shop.raw.orders', relation: 'dbt_sources.raw.orders', database: 'dbt_sources', schema: 'raw' },
+    ]);
+  });
+});
+
 describe('zlens model discover --validate in a dbt-first project', () => {
   const roots: string[] = [];
   const executors: QueryExecutor[] = [];

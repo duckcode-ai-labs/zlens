@@ -7552,6 +7552,34 @@ describe('normalizeProjectConnection', () => {
     }
   });
 
+  it('a dbt-duckdb project\'s DuckDB connection reads its external sources as dbt_sources tables (local paths from the dbt project)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-dbt-external-'));
+    tempDirs.push(root);
+    mkdirSync(join(root, 'target'), { recursive: true });
+    const write = (adapter: string) => writeFileSync(join(root, 'target', 'manifest.json'), JSON.stringify({
+      metadata: { adapter_type: adapter },
+      nodes: {},
+      sources: {
+        'source.shop.raw.orders': { resource_type: 'source', source_name: 'raw', name: 'orders', identifier: 'orders', schema: 'raw', relation_name: "'s3://lake/raw/orders.parquet'" },
+        'source.shop.raw.customers': { resource_type: 'source', source_name: 'raw', name: 'customers', schema: 'raw', relation_name: "read_csv('seeds/customers.csv', header = true)" },
+        'source.shop.app.users': { resource_type: 'source', source_name: 'app', name: 'users', schema: 'main', relation_name: '"shop"."main"."users"' },
+      },
+    }));
+    write('duckdb');
+    const normalized = normalizeProjectConnection({
+      driver: 'duckdb',
+      filepath: 'shop.duckdb',
+      sources: [{ name: 'orders', catalog: 'dbt_sources', schema: 'raw', path: './mine/orders.csv' }],
+    }, root);
+    expect(normalized.sources).toEqual([
+      // The connection's own source of the same name wins.
+      { name: 'orders', catalog: 'dbt_sources', schema: 'raw', path: join(root, 'mine', 'orders.csv') },
+      { name: 'customers', catalog: 'dbt_sources', schema: 'raw', path: join(root, 'seeds', 'customers.csv'), format: 'csv' },
+    ]);
+    // A file connection is not the dbt project's database: it reads only what it names.
+    expect(normalizeProjectConnection({ driver: 'file', filepath: ':memory:' }, root).sources).toBeUndefined();
+  });
+
   it('expands environment placeholders when the value is available', () => {
     const previous = process.env.ZLENS_TEST_DATABASE;
     process.env.ZLENS_TEST_DATABASE = 'analytics';
