@@ -46,6 +46,8 @@ export class FileConnector implements DatabaseConnector {
       ...(allowedDirectories.length ? { allowedDirectories } : {}),
       // In a real DuckDB file, the views are temporary: never written into it.
       ...(config.dataFolder ? { dataFolder: config.dataFolder } : {}),
+      ...(config.sources?.length ? { sources: config.sources } : {}),
+      ...(config.storage ? { storage: config.storage } : {}),
     };
     await this.duckdb.connect(duckdbConfig);
   }
@@ -56,7 +58,7 @@ export class FileConnector implements DatabaseConnector {
   }
 
   /** Read a folder of data as tables (a file connection without a `dataFolder` of its own: the project's). */
-  async useDataFolder(folder: string, options: { catalogs?: boolean } = {}): Promise<void> {
+  async useDataFolder(folder: string, options: { catalogs?: boolean; sources?: import('../connector.js').LakeSourceConfig[] } = {}): Promise<void> {
     await this.duckdb.useDataFolder(folder, options);
   }
 

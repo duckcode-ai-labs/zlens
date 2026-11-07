@@ -90,6 +90,8 @@ export interface DataFolderOptions {
   exclude?: string[];
   /** Entries of the folder (by name) not looked at: a project folder's `data/` when the project folder itself is read. */
   ignore?: string[];
+  /** Table names already given (a connection's `sources`): a table found in the folder gets another. */
+  takenNames?: Iterable<string>;
 }
 
 const READERS: Record<string, DataFileReader> = {
@@ -167,36 +169,123 @@ export function dataFolderSkipped(folder: string, options: DataFolderOptions = {
 }
 
 /**
+ * A folder to read: on disk, or a bucket prefix listed once. Paths are
+ * relative to the folder and `/`-separated; `''` is the folder itself.
+ */
+export interface FolderTree {
+  /** Entries directly in a folder. */
+  entries(path: string): Array<{ name: string; directory: boolean }>;
+  /** A small text file (an Iceberg version hint), or undefined. */
+  text(path: string): string | undefined;
+  /** An Excel workbook's visible sheets, or undefined when it cannot be opened. */
+  sheets(path: string): string[] | undefined;
+  /** Where a reader reads it: an absolute path on disk, or a URL. */
+  location(path: string): string;
+  /** When it last changed (disk only), for caches; -1 when unknown. */
+  modified(path: string): number;
+  /** Disk: the real path, to compare with the files never read. A bucket: its URL. */
+  identity(path: string): string;
+}
+
+/** Whether a path is a URL a DuckDB reader opens (`s3://`, `gs://`, `az://`, `https://`, …), not a path on disk. */
+export function isUrlPath(path: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(path);
+}
+
+const childPath = (path: string, name: string) => (path ? `${path}/${name}` : name);
+
+/** A folder on disk. */
+export function localFolderTree(folder: string): FolderTree {
+  const at = (path: string) => (path ? join(folder, ...path.split('/')) : folder);
+  return {
+    entries: (path) => safeEntries(at(path))
+      .filter((entry) => entry.isDirectory() || entry.isFile())
+      .map((entry) => ({ name: entry.name, directory: entry.isDirectory() })),
+    text: (path) => {
+      try {
+        return readFileSync(at(path), 'utf8');
+      } catch {
+        return undefined;
+      }
+    },
+    sheets: (path) => excelSheets(at(path)),
+    location: (path) => at(path),
+    modified: (path) => modifiedTime(at(path)),
+    identity: (path) => realPath(at(path)),
+  };
+}
+
+/**
+ * A bucket prefix (or any folder) as the list of its files: their paths
+ * relative to `root`. `texts` and `sheets` hold what was read ahead (version
+ * hints, workbook sheet names), by relative path.
+ */
+export function listedFolderTree(
+  root: string,
+  files: string[],
+  read: { texts?: Record<string, string>; sheets?: Record<string, string[] | undefined> } = {},
+): FolderTree {
+  const base = root.replace(/\/+$/, '');
+  const children = new Map<string, Map<string, boolean>>();
+  const add = (parent: string, name: string, directory: boolean) => {
+    if (!children.has(parent)) children.set(parent, new Map());
+    const known = children.get(parent)!;
+    known.set(name, (known.get(name) ?? false) || directory);
+  };
+  for (const file of files) {
+    const parts = file.split('/').filter(Boolean);
+    for (let index = 0; index < parts.length; index += 1) {
+      add(parts.slice(0, index).join('/'), parts[index], index < parts.length - 1);
+    }
+  }
+  return {
+    entries: (path) => [...(children.get(path) ?? new Map<string, boolean>())].map(([name, directory]) => ({ name, directory })),
+    text: (path) => read.texts?.[path],
+    sheets: (path) => read.sheets?.[path],
+    location: (path) => (path ? `${base}/${path}` : base),
+    modified: () => -1,
+    identity: (path) => (path ? `${base}/${path}` : base),
+  };
+}
+
+/**
  * Everything a data folder holds: its tables, its database files (attached
  * as catalogs) and what is skipped, each with what it is. An unreadable
- * folder holds nothing.
+ * folder holds nothing. A bucket URL needs its listing: see `readFolderTree`
+ * with `listedFolderTree`.
  */
 export function readDataFolder(folder: string, options: DataFolderOptions = {}): DataFolderContents {
-  let entries: Dirent[];
+  if (isUrlPath(folder)) return { tables: [], catalogs: [], skipped: [] };
   try {
-    entries = readdirSync(folder, { withFileTypes: true });
+    readdirSync(folder);
   } catch {
     return { tables: [], catalogs: [], skipped: [] };
   }
-  const projectFolder = entries.some((entry) => entry.isFile() && entry.name === 'dql.config.json');
-  const excluded = new Set((options.exclude ?? []).map(realPath));
+  return readFolderTree(localFolderTree(folder), options);
+}
+
+/** What a folder holds (see `readDataFolder`), on disk or listed from a bucket. */
+export function readFolderTree(tree: FolderTree, options: DataFolderOptions = {}): DataFolderContents {
+  const entries = tree.entries('');
+  const projectFolder = entries.some((entry) => !entry.directory && entry.name === 'dql.config.json');
+  const excluded = new Set((options.exclude ?? []).map((path) => (isUrlPath(path) ? path.replace(/\/+$/, '') : realPath(path))));
   const ignored = new Set((options.ignore ?? []).map((name) => name.toLowerCase()));
   // A project folder read as its own data folder: its `data/` is where `zlens init` looks next, never one table.
   if (projectFolder) ignored.add('data');
-  const fileNames = new Set(entries.filter((entry) => entry.isFile()).map((entry) => entry.name.toLowerCase()));
+  const fileNames = new Set(entries.filter((entry) => !entry.directory).map((entry) => entry.name.toLowerCase()));
   const found: Array<Omit<DataFolderTable, 'name'> & { stem: string; suffix: string }> = [];
   const catalogs: Array<Omit<DataFolderCatalog, 'name'> & { stem: string }> = [];
   const skipped: DataFolderSkip[] = [];
   let foldersLookedInto = 0;
   for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.name.startsWith('.') || ignored.has(entry.name.toLowerCase())) continue;
-    const path = join(folder, entry.name);
-    if (entry.isDirectory()) {
+    const path = entry.name;
+    if (entry.directory) {
       if (TOOL_FOLDERS.has(entry.name.toLowerCase()) || foldersLookedInto >= SCAN_FOLDERS) continue;
       // DuckLake keeps a catalog's data files in `<name>.ducklake.files/`: part of that catalog, not a table.
       if (/\.files$/i.test(entry.name) && fileNames.has(entry.name.slice(0, -'.files'.length).toLowerCase())) continue;
       foldersLookedInto += 1;
-      const subfolder = describeSubfolder(path);
+      const subfolder = describeSubfolder(tree, path);
       if (!subfolder) continue;
       const source = `${entry.name}/`;
       if ('skip' in subfolder) {
@@ -208,7 +297,6 @@ export function readDataFolder(folder: string, options: DataFolderOptions = {}):
       }
       continue;
     }
-    if (!entry.isFile()) continue;
     const extension = extname(entry.name).toLowerCase();
     const stem = entry.name.slice(0, entry.name.length - extension.length);
     if (extension in READERS) {
@@ -217,13 +305,13 @@ export function readDataFolder(folder: string, options: DataFolderOptions = {}):
         skipped.push({ name: entry.name, kind: 'a data file whose name DuckDB would read as a pattern (it holds * ? [ ] { or })' });
         continue;
       }
-      found.push({ file: path, reader: READERS[extension], source: entry.name, kind: `${FORMAT_NAMES[extension]} file`, stem, suffix: extension.slice(1) });
+      found.push({ file: tree.location(path), reader: READERS[extension], source: entry.name, kind: `${FORMAT_NAMES[extension]} file`, stem, suffix: extension.slice(1) });
     } else if (extension === '.xlsx') {
       if (PATTERN_CHARACTERS.test(entry.name)) {
         skipped.push({ name: entry.name, kind: 'an Excel workbook whose name DuckDB would read as a pattern (it holds * ? [ ] { or })' });
         continue;
       }
-      const sheets = excelSheets(path);
+      const sheets = tree.sheets(path);
       if (!sheets) {
         skipped.push({ name: entry.name, kind: 'an Excel workbook ZLens could not open' });
       } else if (!sheets.length) {
@@ -231,7 +319,7 @@ export function readDataFolder(folder: string, options: DataFolderOptions = {}):
       } else {
         for (const sheet of sheets) {
           found.push({
-            file: path,
+            file: tree.location(path),
             reader: 'read_xlsx',
             sheet,
             source: entry.name,
@@ -242,29 +330,21 @@ export function readDataFolder(folder: string, options: DataFolderOptions = {}):
         }
       }
     } else if (extension in CATALOG_FILES) {
-      if (excluded.has(realPath(path))) continue;
+      if (excluded.has(tree.identity(path))) continue;
       const type = CATALOG_FILES[extension];
       if (options.catalogs === false) {
         skipped.push({ name: entry.name, kind: `a ${CATALOG_KINDS[type]} (only a file connection's data folder attaches one)` });
       } else if (PATTERN_CHARACTERS.test(entry.name) || entry.name.includes("'")) {
         skipped.push({ name: entry.name, kind: `a ${CATALOG_KINDS[type]} whose name DuckDB would read as a pattern (it holds * ? [ ] { } or ')` });
       } else {
-        catalogs.push({ file: path, type, source: entry.name, kind: CATALOG_KINDS[type], stem });
+        catalogs.push({ file: tree.location(path), type, source: entry.name, kind: CATALOG_KINDS[type], stem });
       }
     } else if (extension in NOT_READ_FILES) {
       skipped.push({ name: entry.name, kind: NOT_READ_FILES[extension] });
     }
   }
 
-  const taken = new Set<string>();
-  const tables = found.map(({ stem, suffix, ...table }) => {
-    let name = identifier(stem);
-    // orders.csv and orders.parquet side by side: the second is orders_parquet.
-    if (taken.has(name) && suffix) name = `${name}_${suffix}`;
-    for (let n = 2; taken.has(name); n += 1) name = `${identifier(stem)}_${n}`;
-    taken.add(name);
-    return { name, ...table };
-  });
+  const tables = nameTables(found, options.takenNames);
   const catalogNames = new Set<string>();
   const attached = catalogs.map(({ stem, ...catalog }) => {
     let name = identifier(stem);
@@ -276,7 +356,23 @@ export function readDataFolder(folder: string, options: DataFolderOptions = {}):
   return { tables, catalogs: attached, skipped };
 }
 
+/** Table names for what was found, in order: `orders.csv` beside `orders.parquet` is `orders_parquet`; a name in `taken` is never given. */
+function nameTables(found: Array<Omit<DataFolderTable, 'name'> & { stem: string; suffix: string }>, takenNames: Iterable<string> = []): DataFolderTable[] {
+  const taken = new Set([...takenNames].map((name) => name.toLowerCase()));
+  return found.map(({ stem, suffix, ...table }) => {
+    let name = identifier(stem);
+    if (taken.has(name) && suffix) name = `${name}_${suffix}`;
+    for (let n = 2; taken.has(name); n += 1) name = `${identifier(stem)}_${n}`;
+    taken.add(name);
+    return { name, ...table };
+  });
+}
+
 /** A name as a SQL identifier: lower case letters, digits and `_`, never starting with a digit. */
+export function tableIdentifier(text: string): string {
+  return identifier(text);
+}
+
 function identifier(text: string): string {
   const stem = text.toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'data';
   return /^[0-9]/.test(stem) ? `t_${stem}` : stem;
@@ -292,22 +388,24 @@ function realPath(path: string): string {
 
 type Subfolder = Omit<DataFolderTable, 'name' | 'source'> | { skip: string };
 
-/** What a subfolder of a data folder is, or undefined when it holds no data. */
-function describeSubfolder(path: string): Subfolder | undefined {
-  const top = safeEntries(path);
-  if (top.some((entry) => entry.isDirectory() && entry.name === '_delta_log')) {
-    return { file: path, reader: 'delta_scan', kind: 'Delta Lake table' };
+const isIcebergMetadataFolder = (tree: FolderTree, path: string) => tree.entries(path).some((entry) => !entry.directory && /\.metadata\.json$/i.test(entry.name));
+
+/** What a subfolder of a data folder (or, with `''`, the folder itself) is, or undefined when it holds no data. */
+export function describeSubfolder(tree: FolderTree, path: string): Subfolder | undefined {
+  const top = tree.entries(path);
+  if (top.some((entry) => entry.directory && entry.name === '_delta_log')) {
+    return { file: tree.location(path), reader: 'delta_scan', kind: 'Delta Lake table' };
   }
-  const iceberg = top.some((entry) => entry.isDirectory() && entry.name === 'metadata') ? newestIcebergMetadata(join(path, 'metadata')) : undefined;
+  const iceberg = top.some((entry) => entry.directory && entry.name === 'metadata') ? newestIcebergVersion(tree, childPath(path, 'metadata')) : undefined;
   if (iceberg) {
     return {
-      file: path,
+      file: tree.location(path),
       reader: 'iceberg_scan',
       icebergVersion: { name: iceberg.name, gzip: iceberg.gzip },
       kind: `Iceberg table (version ${iceberg.version})`,
     };
   }
-  const files = scanFolderOfFiles(path, top);
+  const files = scanFolderOfFiles(tree, path, top);
   if (files.tables) {
     return { skip: `a folder of ${files.tables} Delta Lake or Iceberg table${files.tables === 1 ? '' : 's'} (ZLens reads a table at the top of the data folder)` };
   }
@@ -328,7 +426,7 @@ function describeSubfolder(path: string): Subfolder | undefined {
   }
   const partitioned = files.partitionKeys.length > 0;
   return {
-    file: `${path.replaceAll('\\', '/')}/**/*${files.extensionAsWritten.get(extension) ?? extension}`,
+    file: `${tree.location(path).replaceAll('\\', '/').replace(/\/+$/, '')}/**/*${files.extensionAsWritten.get(extension) ?? extension}`,
     reader,
     folder: { partitioned },
     kind: partitioned ? `${described}, partitioned by ${files.partitionKeys.join(', ')}` : described,
@@ -354,19 +452,20 @@ interface FolderScan {
   truncated: boolean;
 }
 
-/** Recently scanned folders: a folder's files are counted again when it changes, or after a short while. */
+/** Recently scanned folders on disk: a folder's files are counted again when it changes, or after a short while. */
 const folderScans = new Map<string, { modified: number; at: number; scan: FolderScan }>();
 const FOLDER_SCAN_REUSE_MS = 2_000;
 
 /** A folder of data files: count them (bounded) and read partition keys from `key=value` folder names. */
-function scanFolderOfFiles(path: string, top: Dirent[]): FolderScan {
-  const modified = modifiedTime(path);
-  const cached = folderScans.get(path);
+function scanFolderOfFiles(tree: FolderTree, path: string, top: Array<{ name: string; directory: boolean }>): FolderScan {
+  const modified = tree.modified(path);
+  const cacheKey = tree.location(path);
+  const cached = modified >= 0 ? folderScans.get(cacheKey) : undefined;
   if (cached && cached.modified === modified && Date.now() - cached.at < FOLDER_SCAN_REUSE_MS) return cached.scan;
   const scan: FolderScan = { counts: new Map(), extensionAsWritten: new Map(), partitionKeys: [], tables: 0, truncated: false };
   const spellings = new Map<string, Set<string>>();
   let seen = 0;
-  const walk = (dir: string, depth: number, entries: Dirent[]): void => {
+  const walk = (dir: string, depth: number, entries: Array<{ name: string; directory: boolean }>): void => {
     for (const entry of entries) {
       if (entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
       if (seen >= SCAN_ENTRIES) {
@@ -374,17 +473,17 @@ function scanFolderOfFiles(path: string, top: Dirent[]): FolderScan {
         return;
       }
       seen += 1;
-      if (entry.isDirectory()) {
-        const inner = safeEntries(join(dir, entry.name));
-        if (inner.some((child) => child.isDirectory() && (child.name === '_delta_log'
-          || (child.name === 'metadata' && safeEntries(join(dir, entry.name, 'metadata')).some((file) => /\.metadata\.json$/i.test(file.name)))))) {
+      const inner = childPath(dir, entry.name);
+      if (entry.directory) {
+        const innerEntries = tree.entries(inner);
+        if (innerEntries.some((child) => child.directory && (child.name === '_delta_log' || (child.name === 'metadata' && isIcebergMetadataFolder(tree, childPath(inner, 'metadata')))))) {
           scan.tables += 1;
           continue;
         }
         const partition = /^([^=]+)=/.exec(entry.name)?.[1];
         if (partition && !scan.partitionKeys.includes(partition) && depth === scan.partitionKeys.length) scan.partitionKeys.push(partition);
-        if (depth < SCAN_DEPTH) walk(join(dir, entry.name), depth + 1, inner);
-      } else if (entry.isFile()) {
+        if (depth < SCAN_DEPTH) walk(inner, depth + 1, innerEntries);
+      } else {
         const written = extname(entry.name);
         const extension = written.toLowerCase();
         if (!(extension in FORMAT_NAMES)) continue;
@@ -398,8 +497,10 @@ function scanFolderOfFiles(path: string, top: Dirent[]): FolderScan {
   for (const [extension, written] of spellings) {
     if (written.size === 1) scan.extensionAsWritten.set(extension, [...written][0]);
   }
-  folderScans.set(path, { modified, at: Date.now(), scan });
-  if (folderScans.size > 500) folderScans.delete(folderScans.keys().next().value!);
+  if (modified >= 0) {
+    folderScans.set(cacheKey, { modified, at: Date.now(), scan });
+    if (folderScans.size > 500) folderScans.delete(folderScans.keys().next().value!);
+  }
   return scan;
 }
 
@@ -411,26 +512,27 @@ function scanFolderOfFiles(path: string, top: Dirent[]): FolderScan {
  * gzip-compressed: `00003-….gz.metadata.json`).
  */
 export function newestIcebergMetadata(metadataFolder: string): { file: string; name: string; version: number; gzip: boolean } | undefined {
-  const files = safeEntries(metadataFolder)
-    .filter((entry) => entry.isFile() && /\.metadata\.json$/i.test(entry.name))
+  const newest = newestIcebergVersion(localFolderTree(metadataFolder), '');
+  return newest && { ...newest, file: join(metadataFolder, newest.file) };
+}
+
+/** As `newestIcebergMetadata`, in a folder tree: `file` is the metadata file's path in the tree. */
+function newestIcebergVersion(tree: FolderTree, metadataPath: string): { file: string; name: string; version: number; gzip: boolean } | undefined {
+  const files = tree.entries(metadataPath)
+    .filter((entry) => !entry.directory && /\.metadata\.json$/i.test(entry.name))
     .map((entry) => {
       const version = /^v?(\d+)[-.]/i.exec(entry.name)?.[1];
-      return { name: entry.name, version: version === undefined ? -1 : Number(version), modified: modifiedTime(join(metadataFolder, entry.name)) };
+      return { name: entry.name, version: version === undefined ? -1 : Number(version), modified: tree.modified(childPath(metadataPath, entry.name)) };
     });
   if (!files.length) return undefined;
-  let hint: number | undefined;
-  try {
-    const text = readFileSync(join(metadataFolder, 'version-hint.text'), 'utf8').trim();
-    if (/^\d+$/.test(text)) hint = Number(text);
-  } catch {
-    // No hint: the highest version is the newest.
-  }
+  const hintText = tree.text(childPath(metadataPath, 'version-hint.text'))?.trim();
+  const hint = hintText && /^\d+$/.test(hintText) ? Number(hintText) : undefined;
   const hinted = hint === undefined ? [] : files.filter((file) => file.version === hint);
   const candidates = hinted.length ? hinted : files;
   const newest = candidates.sort((a, b) => b.version - a.version || b.modified - a.modified || b.name.localeCompare(a.name))[0];
   const gzip = /\.gz\.metadata\.json$/i.test(newest.name);
   return {
-    file: join(metadataFolder, newest.name),
+    file: childPath(metadataPath, newest.name),
     name: newest.name.replace(gzip ? /\.gz\.metadata\.json$/i : /\.metadata\.json$/i, ''),
     version: Math.max(newest.version, 0),
     gzip,
@@ -458,21 +560,43 @@ export function excelSheets(path: string): string[] | undefined {
   if (cached && cached.modified === modified && cached.size === size) return cached.sheets;
   let sheets: string[] | undefined;
   try {
-    const workbook = zipEntry(path, 'xl/workbook.xml');
-    if (workbook) {
-      sheets = [];
-      for (const match of workbook.toString('utf8').matchAll(/<(?:\w+:)?sheet\b([^>]*?)\/?>/g)) {
-        const attributes = match[1];
-        const name = /\bname="([^"]*)"/.exec(attributes)?.[1];
-        const state = /\bstate="([^"]*)"/.exec(attributes)?.[1];
-        if (name !== undefined && state !== 'hidden' && state !== 'veryHidden') sheets.push(decodeXml(name));
-      }
+    const fd = openSync(path, 'r');
+    try {
+      sheets = workbookSheetNames(zipEntry((offset, length) => {
+        const buffer = Buffer.alloc(length);
+        readSync(fd, buffer, 0, length, offset);
+        return buffer;
+      }, size, 'xl/workbook.xml'));
+    } finally {
+      closeSync(fd);
     }
   } catch {
     sheets = undefined;
   }
   workbookSheets.set(path, { modified, size, sheets });
   if (workbookSheets.size > 500) workbookSheets.delete(workbookSheets.keys().next().value!);
+  return sheets;
+}
+
+/** The visible sheets of an Excel workbook held in memory (read from a bucket), or undefined when it is not a workbook ZLens can open. */
+export function excelSheetsFromBytes(bytes: Uint8Array): string[] | undefined {
+  try {
+    const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    return workbookSheetNames(zipEntry((offset, length) => buffer.subarray(offset, offset + length), buffer.length, 'xl/workbook.xml'));
+  } catch {
+    return undefined;
+  }
+}
+
+function workbookSheetNames(workbook: Buffer | undefined): string[] | undefined {
+  if (!workbook) return undefined;
+  const sheets: string[] = [];
+  for (const match of workbook.toString('utf8').matchAll(/<(?:\w+:)?sheet\b([^>]*?)\/?>/g)) {
+    const attributes = match[1];
+    const name = /\bname="([^"]*)"/.exec(attributes)?.[1];
+    const state = /\bstate="([^"]*)"/.exec(attributes)?.[1];
+    if (name !== undefined && state !== 'hidden' && state !== 'veryHidden') sheets.push(decodeXml(name));
+  }
   return sheets;
 }
 
@@ -487,55 +611,47 @@ function decodeXml(text: string): string {
 
 const ZIP_ENTRY_LIMIT = 8 * 1024 * 1024;
 
-/** One file of a zip archive (stored or deflated), or undefined. Zip64 archives are not read. */
-function zipEntry(path: string, entryName: string): Buffer | undefined {
-  const fd = openSync(path, 'r');
-  try {
-    const size = fstatSync(fd).size;
-    const tailLength = Math.min(size, 22 + 0xffff);
-    if (tailLength < 22) return undefined;
-    const tail = Buffer.alloc(tailLength);
-    readSync(fd, tail, 0, tailLength, size - tailLength);
-    let end = -1;
-    for (let at = tailLength - 22; at >= 0; at -= 1) {
-      if (tail.readUInt32LE(at) === 0x06054b50) {
-        end = at;
-        break;
-      }
+/** One file of a zip archive (stored or deflated), read through `read(offset, length)`, or undefined. Zip64 archives are not read. */
+function zipEntry(read: (offset: number, length: number) => Buffer, size: number, entryName: string): Buffer | undefined {
+  const tailLength = Math.min(size, 22 + 0xffff);
+  if (tailLength < 22) return undefined;
+  const tail = read(size - tailLength, tailLength);
+  let end = -1;
+  for (let at = tailLength - 22; at >= 0; at -= 1) {
+    if (tail.readUInt32LE(at) === 0x06054b50) {
+      end = at;
+      break;
     }
-    if (end < 0) return undefined;
-    const entries = tail.readUInt16LE(end + 10);
-    const directorySize = tail.readUInt32LE(end + 12);
-    const directoryOffset = tail.readUInt32LE(end + 16);
-    if (directoryOffset + directorySize > size || directorySize > ZIP_ENTRY_LIMIT) return undefined;
-    const directory = Buffer.alloc(directorySize);
-    readSync(fd, directory, 0, directorySize, directoryOffset);
-    let at = 0;
-    for (let index = 0; index < entries && at + 46 <= directory.length; index += 1) {
-      if (directory.readUInt32LE(at) !== 0x02014b50) return undefined;
-      const method = directory.readUInt16LE(at + 10);
-      const compressedSize = directory.readUInt32LE(at + 20);
-      const nameLength = directory.readUInt16LE(at + 28);
-      const extraLength = directory.readUInt16LE(at + 30);
-      const commentLength = directory.readUInt16LE(at + 32);
-      const localOffset = directory.readUInt32LE(at + 42);
-      const name = directory.toString('utf8', at + 46, at + 46 + nameLength);
-      at += 46 + nameLength + extraLength + commentLength;
-      if (name !== entryName) continue;
-      if (compressedSize > ZIP_ENTRY_LIMIT) return undefined;
-      const local = Buffer.alloc(30);
-      readSync(fd, local, 0, 30, localOffset);
-      if (local.readUInt32LE(0) !== 0x04034b50) return undefined;
-      const data = Buffer.alloc(compressedSize);
-      readSync(fd, data, 0, compressedSize, localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28));
-      if (method === 0) return data;
-      if (method === 8) return inflateRawSync(data, { maxOutputLength: ZIP_ENTRY_LIMIT });
-      return undefined;
-    }
-    return undefined;
-  } finally {
-    closeSync(fd);
   }
+  if (end < 0) return undefined;
+  const entries = tail.readUInt16LE(end + 10);
+  const directorySize = tail.readUInt32LE(end + 12);
+  const directoryOffset = tail.readUInt32LE(end + 16);
+  if (directoryOffset + directorySize > size || directorySize > ZIP_ENTRY_LIMIT) return undefined;
+  const directory = read(directoryOffset, directorySize);
+  let at = 0;
+  for (let index = 0; index < entries && at + 46 <= directory.length; index += 1) {
+    if (directory.readUInt32LE(at) !== 0x02014b50) return undefined;
+    const method = directory.readUInt16LE(at + 10);
+    const compressedSize = directory.readUInt32LE(at + 20);
+    const nameLength = directory.readUInt16LE(at + 28);
+    const extraLength = directory.readUInt16LE(at + 30);
+    const commentLength = directory.readUInt16LE(at + 32);
+    const localOffset = directory.readUInt32LE(at + 42);
+    const name = directory.toString('utf8', at + 46, at + 46 + nameLength);
+    at += 46 + nameLength + extraLength + commentLength;
+    if (name !== entryName) continue;
+    if (compressedSize > ZIP_ENTRY_LIMIT || localOffset + 30 > size) return undefined;
+    const local = read(localOffset, 30);
+    if (local.readUInt32LE(0) !== 0x04034b50) return undefined;
+    const dataStart = localOffset + 30 + local.readUInt16LE(26) + local.readUInt16LE(28);
+    if (dataStart + compressedSize > size) return undefined;
+    const data = read(dataStart, compressedSize);
+    if (method === 0) return data;
+    if (method === 8) return inflateRawSync(data, { maxOutputLength: ZIP_ENTRY_LIMIT });
+    return undefined;
+  }
+  return undefined;
 }
 
 function safeEntries(path: string): Dirent[] {

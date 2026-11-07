@@ -60,3 +60,23 @@ describe('connection forms', () => {
     expect(connectionFromFormFields('trino', { host: 't', catalog: 'hive', username: 'u', ssl: 'false' })).toMatchObject({ ssl: false });
   });
 });
+
+describe('a file connection with buckets, through the form', () => {
+  it('keeps storage and sources when the form saves it, with secrets left as the page sent them', () => {
+    const stored = {
+      driver: 'file',
+      dataFolder: 's3://acme-lake/sales/',
+      storage: { s3: { region: 'us-east-1', accessKeyId: 'AKIA1', secretAccessKey: '••••••••', endpoint: 'http://minio:9000', useSsl: false } },
+      sources: [{ name: 'orders', path: 's3://acme-lake/orders/', format: 'iceberg' }],
+    };
+    const fields = formFieldsFromConnection(stored);
+    expect(fields).toMatchObject({
+      dataFolder: 's3://acme-lake/sales/',
+      'storage.s3.region': 'us-east-1',
+      'storage.s3.secretAccessKey': '••••••••',
+      'storage.s3.useSsl': 'false',
+    });
+    expect(Object.values(fields)).not.toContain('[object Object]');
+    expect(connectionFromFormFields('file', fields)).toEqual(stored);
+  });
+});

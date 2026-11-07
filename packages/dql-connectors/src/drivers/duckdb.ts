@@ -6,6 +6,8 @@ import type { QueryExecutionOptions, QueryResult, ColumnMeta, ColumnType, Row } 
 import { importConnectorDependency } from '../optional-dependency.js';
 import { readEnv } from '../env.js';
 import { DataFolderViews, type DataFolderStatus } from '../data-folder-views.js';
+import { describeLakeStorage, lakeStorageSecretStatements } from '../lake-storage.js';
+import type { LakeSourceConfig } from '../connector.js';
 
 /**
  * A dedicated connection from the already-open DuckDB database. Dataset
@@ -82,6 +84,8 @@ export class DuckDBConnector implements DatabaseConnector {
   /** The data folder read as tables (`dataFolder`, or the project's data folder), kept in step before each statement. */
   private folderViews: DataFolderViews | null = null;
   private databaseFile: string | undefined;
+  /** The connection's own `sources`: kept when the project's data folder is added (`useDataFolder`). */
+  private connectionSources: LakeSourceConfig[] = [];
 
   async connect(config: ConnectionConfig): Promise<void> {
     await this.disconnect();
@@ -123,7 +127,28 @@ export class DuckDBConnector implements DatabaseConnector {
     this.db = db;
     this.releaseDatabase = release;
     this.databaseFile = dbPath.startsWith(':memory:') ? undefined : resolvePath(dbPath);
-    if (config.dataFolder) await this.useDataFolder(config.dataFolder);
+    // Buckets: the connection's credentials as in-memory secrets, before anything reads a bucket.
+    const storageProblem = await this.useStorage(config);
+    this.connectionSources = config.sources ?? [];
+    if (config.dataFolder || config.sources?.length) {
+      await this.useDataFolder(config.dataFolder ?? '', { sources: config.sources ?? [] });
+      if (storageProblem) this.folderViews?.note(storageProblem);
+    }
+  }
+
+  /**
+   * The connection's `storage` as DuckDB secrets, held in memory. A restricted
+   * engine (served mode) reads no bucket yet: the storage is left out and said.
+   * A missing required value fails the connection with the setting's name.
+   */
+  private async useStorage(config: ConnectionConfig): Promise<{ source: string; name: string; reason: string } | undefined> {
+    const statements = lakeStorageSecretStatements(config.storage);
+    if (!statements.length) return undefined;
+    if (config.restrictExternalAccess) {
+      return { source: 'storage', name: '', reason: `buckets are not read when ZLens serves people (--lan, Enterprise) yet: ${describeLakeStorage(config.storage).join('; ')}` };
+    }
+    for (const statement of statements) await this.executeOwn(statement);
+    return undefined;
   }
 
   /**
@@ -134,13 +159,14 @@ export class DuckDBConnector implements DatabaseConnector {
    * written into it, and a name it already has stays its own. `catalogs`
    * (default true): DuckDB, DuckLake and SQLite files are attached read-only.
    */
-  async useDataFolder(folder: string, options: { catalogs?: boolean } = {}): Promise<void> {
+  async useDataFolder(folder: string, options: { catalogs?: boolean; sources?: LakeSourceConfig[] } = {}): Promise<void> {
     if (!this.connection) throw new Error('DuckDB connector not connected. Call connect() first.');
     if (this.folderViews?.folder !== folder) {
-      this.folderViews = new DataFolderViews(folder, (sql) => this.executeOwn(sql), {
+      this.folderViews = new DataFolderViews(folder, (sql, statementOptions) => this.executeOwn(sql, statementOptions), {
         temporary: this.databaseFile !== undefined,
         catalogs: options.catalogs ?? true,
         exclude: this.databaseFile ? [this.databaseFile] : [],
+        sources: options.sources ?? this.connectionSources,
       });
     }
     await this.folderViews.refresh();
@@ -162,9 +188,9 @@ export class DuckDBConnector implements DatabaseConnector {
   }
 
   /** ZLens's own statement for the data folder's views, on this connection (no refresh first). */
-  private executeOwn(sql: string): Promise<QueryResult> {
+  private executeOwn(sql: string, options: QueryExecutionOptions = {}): Promise<QueryResult> {
     if (!this.connection) return Promise.reject(new Error('DuckDB connector not connected. Call connect() first.'));
-    return executeDuckDBConnection(this.connection, this.db, sql);
+    return executeDuckDBConnection(this.connection, this.db, sql, undefined, options);
   }
 
   /**
@@ -241,6 +267,7 @@ export class DuckDBConnector implements DatabaseConnector {
     this.releaseDatabase = null;
     this.folderViews = null;
     this.databaseFile = undefined;
+    this.connectionSources = [];
     this.openScopes.clear();
     await Promise.allSettled(scopes.map((close) => close()));
     if (connection) await closeDuckDBConnection(connection);

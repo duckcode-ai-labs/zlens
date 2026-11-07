@@ -77,6 +77,7 @@ import {
   DuckDBConnector,
   type DuckDBConsistentReadScope,
   type DataFolderStatus,
+  isUrlPath,
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
@@ -39980,8 +39981,9 @@ function isPlaceholderLocalConnection(value: unknown): boolean {
   const connection = normalizeStoredConnection(value);
   if (!connection) return false;
   if (connection.driver !== 'duckdb' && connection.driver !== 'file') return false;
-  // A folder of data files is a real database, read in memory.
+  // A folder of data files (or named sources) is a real database, read in memory.
   if (connection.driver === 'file' && typeof connection.dataFolder === 'string' && connection.dataFolder.trim()) return false;
+  if (Array.isArray(connection.sources) && connection.sources.length) return false;
   return !connection.filepath || connection.filepath === ':memory:';
 }
 
@@ -41688,12 +41690,24 @@ export function normalizeProjectConnection(connection: ConnectionConfig, project
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && normalized.filepath && normalized.filepath !== ':memory:' && !isAbsoluteLikePath(normalized.filepath)) {
     normalized.filepath = resolve(projectRoot, normalized.filepath);
   }
-  // A file connection's folder of data files: relative to the project.
+  // A file connection's folder of data files: relative to the project, unless it is a bucket (`s3://lake/sales/`).
   if (normalized.driver === 'file' && typeof normalized.dataFolder === 'string' && normalized.dataFolder.trim() !== '') {
-    if (!isAbsoluteLikePath(normalized.dataFolder)) normalized.dataFolder = resolve(projectRoot, normalized.dataFolder);
+    if (!isAbsoluteLikePath(normalized.dataFolder) && !isUrlPath(normalized.dataFolder)) normalized.dataFolder = resolve(projectRoot, normalized.dataFolder);
   } else if (normalized.dataFolder !== undefined) {
     delete normalized.dataFolder;
   }
+  // Named tables (`sources`) of a DuckDB or file connection: a path relative to the project, or a bucket URL.
+  if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.sources)) {
+    normalized.sources = normalized.sources
+      .filter((source): source is NonNullable<typeof source> => Boolean(source) && typeof source === 'object' && typeof source.path === 'string' && source.path.trim() !== '')
+      .map((source) => ({
+        ...source,
+        path: isAbsoluteLikePath(source.path) || isUrlPath(source.path) ? source.path.trim() : resolve(projectRoot, source.path.trim()),
+      }));
+  } else if (normalized.sources !== undefined) {
+    delete normalized.sources;
+  }
+  if (normalized.driver !== 'file' && normalized.driver !== 'duckdb' && normalized.storage !== undefined) delete normalized.storage;
   // Folders a hosted connection still reads files from (none by default): relative to the project.
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.allowedDirectories)) {
     normalized.allowedDirectories = normalized.allowedDirectories
@@ -41730,9 +41744,17 @@ function expandConnectionEnvPlaceholders(connection: ConnectionConfig): Connecti
   const expand = (value: unknown): unknown => typeof value === 'string'
     ? value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, envKey: string) => process.env[envKey] ?? match)
     : value;
+  // Nested settings that may name an environment variable: an SSH tunnel's, buckets' (`storage`), and source paths.
+  const expandDeep = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(expandDeep);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([inner, nested]) => [inner, expandDeep(nested)]));
+    }
+    return expand(value);
+  };
   for (const [key, value] of Object.entries(connection)) {
-    expanded[key] = key === 'sshTunnel' && value && typeof value === 'object'
-      ? Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([inner, nested]) => [inner, expand(nested)]))
+    expanded[key] = (key === 'sshTunnel' || key === 'storage' || key === 'sources') && value && typeof value === 'object'
+      ? expandDeep(value)
       : expand(value);
   }
   return expanded as unknown as ConnectionConfig;

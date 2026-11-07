@@ -239,6 +239,51 @@ Excel, Delta, Iceberg and DuckLake are read by DuckDB extensions, which DuckDB
 downloads the first time they are needed (see
 [Extension downloads](#extension-downloads)).
 
+#### A lake in a bucket
+
+`dataFolder` may be a bucket: `s3://`, `gs://`, `az://` (or `abfss://`) and
+`r2://`. ZLens lists it once and reads it like a folder on disk: the same
+tables, named the same way. The listing is reused for a minute (each one reads
+every object name under the folder, which costs requests); a folder that
+takes longer than 30 seconds to list is better named table by table in
+`sources`.
+
+```json
+{
+  "driver": "file",
+  "dataFolder": "s3://acme-lake/sales/",
+  "storage": { "s3": { "region": "us-east-1" } },
+  "sources": [
+    { "name": "orders", "path": "s3://acme-lake/warehouse/orders/", "format": "iceberg" },
+    { "name": "events", "path": "s3://acme-lake/raw/events/**/*.parquet" },
+    { "name": "targets", "path": "./finance/targets.xlsx", "sheet": "2026" }
+  ]
+}
+```
+
+`sources` names tables at any path or bucket URL, read where they are.
+`format` is `auto` (from the path: a data file, a workbook, or a folder
+holding a Delta table, an Iceberg table or data files), or one of `parquet`,
+`csv`, `json`, `excel`, `delta`, `iceberg`. A source's name wins over a table
+of the data folder with the same name, and a source that cannot be read is
+listed with the reason while the others work.
+
+`storage` says how buckets are reached. By default ZLens uses the cloud's own
+sign-in, so nothing secret is written into the project:
+
+| Store | Default sign-in | Instead |
+|---|---|---|
+| `s3` | the AWS credential chain: environment, `profile`, SSO, instance or task role | `accessKeyId` + `secretAccessKey` (+ `sessionToken`); `endpoint` for MinIO or another S3 API |
+| `gcs` | Google application default credentials | `auth: "hmac"` with `keyId` + `secret` |
+| `azure` | Azure CLI, environment or managed identity, with `accountName` | `connectionString` |
+| `r2` | (keys only) | `accountId` + `keyId` + `secret` |
+
+A key typed on the Connections page is kept in
+`.dql/local/private/connection-secrets.json`, not in `dql.config.json`, like
+every connection secret; `${ENV_VAR}` works in any of these values. DuckDB
+holds the credentials in memory only. Buckets are not read yet when ZLens
+serves people (`--lan`, Enterprise).
+
 A `duckdb` connection also reads the project's `data/` folder (or `dataDir`
 in `dql.config.json`) as tables, the same way but without attaching database
 files: the views are temporary, nothing is written into the DuckDB file, and a

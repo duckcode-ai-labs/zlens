@@ -7501,6 +7501,28 @@ describe('normalizeProjectConnection', () => {
     });
   });
 
+  it('keeps a bucket data folder, resolves local sources against the project, and expands storage placeholders', () => {
+    const previous = process.env.ZLENS_TEST_LAKE_REGION;
+    process.env.ZLENS_TEST_LAKE_REGION = 'eu-west-1';
+    try {
+      const normalized = normalizeProjectConnection({
+        driver: 'file',
+        filepath: ':memory:',
+        dataFolder: 's3://acme-lake/sales/',
+        storage: { s3: { region: '${ZLENS_TEST_LAKE_REGION}' } },
+        sources: [{ path: './exports/orders.parquet' }, { name: 'events', path: 'gs://acme/events/' }, { path: '' } as never],
+      }, '/tmp/demo-project');
+      expect(normalized.dataFolder).toBe('s3://acme-lake/sales/');
+      expect(normalized.storage).toEqual({ s3: { region: 'eu-west-1' } });
+      expect(normalized.sources).toEqual([{ path: '/tmp/demo-project/exports/orders.parquet' }, { name: 'events', path: 'gs://acme/events/' }]);
+      // Storage is a DuckDB or file connection's only.
+      expect(normalizeProjectConnection({ driver: 'postgresql', host: 'db', storage: { s3: {} } }, '/tmp/demo-project').storage).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.ZLENS_TEST_LAKE_REGION;
+      else process.env.ZLENS_TEST_LAKE_REGION = previous;
+    }
+  });
+
   it('expands environment placeholders when the value is available', () => {
     const previous = process.env.ZLENS_TEST_DATABASE;
     process.env.ZLENS_TEST_DATABASE = 'analytics';

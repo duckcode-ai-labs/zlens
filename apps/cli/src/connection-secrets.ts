@@ -14,7 +14,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-/** Connection fields that hold a secret. `sshTunnel.*` fields are nested. */
+/** Connection fields that hold a secret. `sshTunnel.*` and `storage.*.*` fields are nested. */
 export const SECRET_FIELDS = [
   'password',
   'token',
@@ -29,6 +29,12 @@ export const SECRET_FIELDS = [
   'sshTunnel.password',
   'sshTunnel.privateKey',
   'sshTunnel.passphrase',
+  // A file connection's buckets (`storage`): keys only when not the cloud's own sign-in.
+  'storage.s3.secretAccessKey',
+  'storage.s3.sessionToken',
+  'storage.gcs.secret',
+  'storage.azure.connectionString',
+  'storage.r2.secret',
 ] as const;
 
 /** What the API shows for a saved secret. Saving it back keeps the stored value. */
@@ -67,15 +73,18 @@ function writeSecrets(projectRoot: string, secrets: Secrets): void {
 }
 
 function getField(connection: Record<string, unknown>, field: string): unknown {
-  const [head, tail] = field.split('.') as [string, string | undefined];
-  if (!tail) return connection[head];
-  const nested = connection[head];
-  return nested && typeof nested === 'object' && !Array.isArray(nested) ? (nested as Record<string, unknown>)[tail] : undefined;
+  let current: unknown = connection;
+  for (const part of field.split('.')) {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
 }
 
+/** Set a field, copying each nested object on the way (the connection given is never shared with the caller's). */
 function setField(connection: Record<string, unknown>, field: string, value: unknown): void {
-  const [head, tail] = field.split('.') as [string, string | undefined];
-  if (!tail) {
+  const [head, ...rest] = field.split('.');
+  if (!rest.length) {
     if (value === undefined) delete connection[head];
     else connection[head] = value;
     return;
@@ -83,8 +92,7 @@ function setField(connection: Record<string, unknown>, field: string, value: unk
   const nested = connection[head];
   if (!nested || typeof nested !== 'object' || Array.isArray(nested)) return;
   const copy = { ...(nested as Record<string, unknown>) };
-  if (value === undefined) delete copy[tail];
-  else copy[tail] = value;
+  setField(copy, rest.join('.'), value);
   connection[head] = copy;
 }
 
@@ -247,15 +255,15 @@ export function resolveSecretReferences<T extends object>(connection: T, project
     }
     return stored;
   };
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(connection as Record<string, unknown>)) {
-    if (value && typeof value === 'object' && !Array.isArray(value)) {
-      out[key] = Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([inner, nested]) => [inner, resolveValue(nested)]));
-    } else {
-      out[key] = resolveValue(value);
+  // Nested settings (`sshTunnel`, `storage.s3`, `sources`) at any depth.
+  const resolveDeep = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(resolveDeep);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([inner, nested]) => [inner, resolveDeep(nested)]));
     }
-  }
-  return out as T;
+    return resolveValue(value);
+  };
+  return resolveDeep(connection) as T;
 }
 
 
