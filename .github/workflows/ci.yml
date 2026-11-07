@@ -171,7 +171,7 @@ jobs:
       - name: Start Postgres (the runner's own) with a user and two databases
         run: |
           sudo systemctl start postgresql.service
-          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE zlens LOGIN PASSWORD 'zlens' CREATEDB"
+          sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE zlens LOGIN PASSWORD 'ci-pg-secret-41' CREATEDB"
           sudo -u postgres createdb -O zlens lakekeeper
           sudo -u postgres createdb -O zlens ducklake
       # moto listens on 9020: Lakekeeper's own metrics server takes 9000.
@@ -206,8 +206,8 @@ jobs:
             "storage-credential": {"type": "s3", "credential-type": "access-key", "aws-access-key-id": "testing", "aws-secret-access-key": "testing"}
           }' || { cat lakekeeper.log; exit 1; }
         env:
-          LAKEKEEPER__PG_DATABASE_URL_READ: postgres://zlens:zlens@127.0.0.1:5432/lakekeeper
-          LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://zlens:zlens@127.0.0.1:5432/lakekeeper
+          LAKEKEEPER__PG_DATABASE_URL_READ: postgres://zlens:ci-pg-secret-41@127.0.0.1:5432/lakekeeper
+          LAKEKEEPER__PG_DATABASE_URL_WRITE: postgres://zlens:ci-pg-secret-41@127.0.0.1:5432/lakekeeper
           LAKEKEEPER__PG_ENCRYPTION_KEY: ci-only-not-a-secret-0123456789abcdef
           LAKEKEEPER__LISTEN_PORT: '8181'
           LAKEKEEPER__BASE_URI: http://127.0.0.1:8181
@@ -247,7 +247,8 @@ jobs:
           ZLENS_TEST_S3_SECRET: testing
           ZLENS_TEST_UNITY_ENDPOINT: http://127.0.0.1:8080
           ZLENS_TEST_DUCKLAKE_POSTGRES: dbname=ducklake host=127.0.0.1 port=5432 user=zlens
-          ZLENS_TEST_DUCKLAKE_PASSWORD: zlens
+          # A password no name contains: the test checks it is never shown.
+          ZLENS_TEST_DUCKLAKE_PASSWORD: ci-pg-secret-41
 
   # --- create-zlens-app smoke test ---
   # Guards the "5 minutes to first dashboard" demo gate.
