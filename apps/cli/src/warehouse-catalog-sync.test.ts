@@ -53,6 +53,39 @@ describe('assembling a warehouse catalog from metadata rows', () => {
     expect(byName.big_orders).toMatchObject({ kind: 'view', viewSql: expect.stringContaining('CREATE VIEW') });
   });
 
+  it('DuckDB: a database attached beside the opened one is its own scope, with its own relations and ids', () => {
+    const shop = buildWarehouseCatalogQueries('duckdb', { catalogOrDatabase: 'shop', schemas: ['main'] });
+    const lake = buildWarehouseCatalogQueries('duckdb', { catalogOrDatabase: 'lake', schemas: ['main'] });
+    // Every query reads only its scope's catalog (DuckDB lists all attached databases together).
+    for (const query of [...shop, ...lake]) {
+      expect(query.sql).toContain("current_database() AS current_catalog");
+      expect(query.sql).toMatch(/lower\(database_name\) = lower\('(shop|lake)'\)/);
+    }
+    const columns = (query: (typeof shop)[number] | undefined) => query!;
+    const relations = assembleWarehouseCatalog('duckdb', [
+      { query: columns(shop.find((query) => query.kind === 'columns')), rows: [
+        { table_catalog: 'shop', current_catalog: 'shop', table_schema: 'main', table_name: 'orders', column_name: 'order_id', data_type: 'INTEGER', is_nullable: false, comment: null },
+      ] },
+      { query: columns(lake.find((query) => query.kind === 'columns')), rows: [
+        { table_catalog: 'lake', current_catalog: 'shop', table_schema: 'main', table_name: 'orders', column_name: 'lake_id', data_type: 'INTEGER', is_nullable: false, comment: null },
+        { table_catalog: 'lake', current_catalog: 'shop', table_schema: 'main', table_name: 'customers', column_name: 'customer_id', data_type: 'INTEGER', is_nullable: false, comment: null },
+      ] },
+      { query: columns(lake.find((query) => query.kind === 'tables')), rows: [
+        { table_catalog: 'lake', current_catalog: 'shop', table_schema: 'main', table_name: 'orders', table_type: 'BASE TABLE', comment: 'Lake orders', row_count: 10 },
+      ] },
+      { query: columns(lake.find((query) => query.kind === 'keys')), rows: [
+        { table_catalog: 'lake', current_catalog: 'shop', table_schema: 'main', table_name: 'orders', constraint_type: 'FOREIGN KEY', constraint_column_names: ['lake_id'], referenced_table: 'customers', referenced_column_names: ['customer_id'] },
+      ] },
+    ]);
+    const byRelation = Object.fromEntries(relations.map((relation) => [relation.relation, relation]));
+    expect(Object.keys(byRelation).sort()).toEqual(['lake.main.customers', 'lake.main.orders', 'shop.main.orders']);
+    // The opened database keeps its id; the attached one's names its database.
+    expect(byRelation['shop.main.orders']).toMatchObject({ id: 'warehouse.main.orders', columns: [{ name: 'order_id', type: 'INTEGER', nullable: false }] });
+    expect(byRelation['lake.main.orders']).toMatchObject({ id: 'warehouse.lake.main.orders', comment: 'Lake orders', rowCountEstimate: 10 });
+    expect(byRelation['lake.main.orders']!.columns.map((column) => column.name)).toEqual(['lake_id']);
+    expect(byRelation['lake.main.orders']!.foreignKeys).toEqual([{ columns: ['lake_id'], references: { relation: 'lake.main.customers', columns: ['customer_id'] } }]);
+  });
+
   it('Snowflake: keys from SHOW PRIMARY KEYS / SHOW IMPORTED KEYS, relations qualified with the database', () => {
     const queries = buildWarehouseCatalogQueries('snowflake', { catalogOrDatabase: 'ACME', schemas: ['SALES'] });
     expect(queries.map((query) => query.kind)).toEqual(['columns', 'tables', 'views', 'primary_keys', 'foreign_keys']);

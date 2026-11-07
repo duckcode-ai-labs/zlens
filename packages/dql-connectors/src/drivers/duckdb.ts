@@ -225,43 +225,102 @@ export class DuckDBConnector implements DatabaseConnector {
     }
   }
 
+  /**
+   * Every table and view, with the database it is in when that is not the one
+   * this connection opened: DuckDB lists attached databases (`ATTACH … AS
+   * lake`) in the same information_schema, and `lake.main.orders` is not
+   * `main.orders`. Temporary views belong to the opened database (they shadow
+   * a table of the same name there, so that table is not listed twice).
+   */
   async listTables(): Promise<TableInfo[]> {
     const result = await this.execute(
-      `SELECT table_schema, table_name, table_type
+      `SELECT table_catalog, table_schema, table_name, table_type, current_database() AS current_catalog
        FROM information_schema.tables
-       WHERE table_schema NOT IN ('information_schema', 'pg_catalog')
-       ORDER BY table_schema, table_name`,
+       WHERE table_schema NOT IN ('information_schema', 'pg_catalog') AND table_catalog <> 'system'
+       ORDER BY CASE WHEN table_catalog = 'temp' THEN 0 WHEN table_catalog = current_database() THEN 1 ELSE 2 END,
+         table_catalog, table_schema, table_name`,
     );
-    return result.rows.map((row) => ({
-      schema: String(row['table_schema'] ?? ''),
-      name: String(row['table_name'] ?? ''),
-      type: String(row['table_type'] ?? ''),
-    }));
+    const seen = new Set<string>();
+    const tables: TableInfo[] = [];
+    for (const row of result.rows) {
+      const catalog = attachedDuckDBCatalog(row);
+      const table: TableInfo = {
+        ...(catalog ? { catalog } : {}),
+        schema: String(row['table_schema'] ?? ''),
+        name: String(row['table_name'] ?? ''),
+        type: String(row['table_type'] ?? ''),
+      };
+      const key = [catalog ?? '', table.schema, table.name].join('\u0000').toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tables.push(table);
+    }
+    return tables.sort((left, right) => (left.catalog ?? '').localeCompare(right.catalog ?? '')
+      || left.schema.localeCompare(right.schema) || left.name.localeCompare(right.name));
   }
 
+  /**
+   * Columns of the opened database's tables (and temporary views), or of an
+   * attached database's when `schema` names it: `lake.main`. Without that, an
+   * attached `lake.main.orders` never mixes its columns into `main.orders`.
+   */
   async listColumns(schema?: string, table?: string): Promise<ColumnInfo[]> {
-    let sql = `SELECT table_schema, table_name, column_name, data_type, ordinal_position
+    const dot = schema ? schema.lastIndexOf('.') : -1;
+    const catalog = schema && dot > 0 ? schema.slice(0, dot) : undefined;
+    const schemaName = schema && dot > 0 ? schema.slice(dot + 1) : schema;
+    let sql = `SELECT table_catalog, table_schema, table_name, column_name, data_type, ordinal_position, current_database() AS current_catalog
        FROM information_schema.columns
        WHERE table_schema NOT IN ('information_schema', 'pg_catalog')`;
     const params: unknown[] = [];
-    if (schema) {
-      params.push(schema);
+    if (catalog) {
+      params.push(catalog);
+      sql += ` AND lower(table_catalog) = lower($${params.length})`;
+    } else {
+      sql += ` AND table_catalog IN (current_database(), 'temp')`;
+    }
+    if (schemaName) {
+      params.push(schemaName);
       sql += ` AND table_schema = $${params.length}`;
     }
     if (table) {
       params.push(table);
       sql += ` AND table_name = $${params.length}`;
     }
-    sql += ` ORDER BY table_schema, table_name, ordinal_position`;
+    // A temporary view shadows the opened database's table of the same name: its columns come first and win.
+    sql += ` ORDER BY CASE WHEN table_catalog = 'temp' THEN 0 ELSE 1 END, table_schema, table_name, ordinal_position`;
     const result = await this.execute(sql, params);
-    return result.rows.map((row) => ({
-      schema: String(row['table_schema'] ?? ''),
-      table: String(row['table_name'] ?? ''),
-      name: String(row['column_name'] ?? ''),
-      dataType: String(row['data_type'] ?? ''),
-      ordinalPosition: Number(row['ordinal_position'] ?? 0),
-    }));
+    const owner = new Map<string, string>();
+    const columns: ColumnInfo[] = [];
+    for (const row of result.rows) {
+      const rowCatalog = String(row['table_catalog'] ?? '');
+      const shadowKey = [String(row['table_schema'] ?? ''), String(row['table_name'] ?? '')].join('\u0000').toLowerCase();
+      if (!catalog) {
+        const first = owner.get(shadowKey);
+        if (first !== undefined && first !== rowCatalog) continue;
+        owner.set(shadowKey, rowCatalog);
+      }
+      const attached = attachedDuckDBCatalog(row);
+      columns.push({
+        ...(attached ? { catalog: attached } : {}),
+        schema: String(row['table_schema'] ?? ''),
+        table: String(row['table_name'] ?? ''),
+        name: String(row['column_name'] ?? ''),
+        dataType: String(row['data_type'] ?? ''),
+        ordinalPosition: Number(row['ordinal_position'] ?? 0),
+      });
+    }
+    return columns.sort((left, right) => left.schema.localeCompare(right.schema)
+      || left.table.localeCompare(right.table) || left.ordinalPosition - right.ordinalPosition);
   }
+}
+
+/** A row's database when it is attached beside the opened one (not the opened one, `temp` or `system`). */
+function attachedDuckDBCatalog(row: Record<string, unknown>): string | undefined {
+  const catalog = String(row['table_catalog'] ?? '');
+  const current = String(row['current_catalog'] ?? '');
+  if (!catalog || !current) return undefined;
+  const name = catalog.toLowerCase();
+  return name === current.toLowerCase() || name === 'temp' || name === 'system' ? undefined : catalog;
 }
 
 function duckDbCancellationError(reason: unknown): Error {

@@ -295,6 +295,42 @@ describe('warehouse metadata scope', () => {
     expect(discovery.queryCount).toBe(3);
   });
 
+  it('DuckDB: a scope reads only its own catalog, and an attached database keeps its name in the relation', async () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-metadata-duckdb-'));
+    const duckdbConnection: ConnectionConfig = { driver: 'duckdb', filepath: 'shop.duckdb' };
+    const scope = normalizeConnectionMetadataScope('default', duckdbConnection, {
+      mode: 'selected_scopes',
+      scopes: [{ catalogOrDatabase: 'shop', schemas: ['main'] }, { catalogOrDatabase: 'lake', schemas: ['main'] }],
+    });
+    const queries = buildWarehouseMetadataQueries(duckdbConnection, scope);
+    expect(queries.map((query) => query.catalogOrDatabase).sort()).toEqual(['lake', 'shop']);
+    for (const query of queries) {
+      expect(query.sql).toContain('current_database() AS current_catalog');
+      expect(query.sql).toContain(`lower(table_catalog) = lower('${query.catalogOrDatabase}')`);
+    }
+    const executor = {
+      executePositional: async (sql: string) => {
+        if (!sql.includes('information_schema.columns')) {
+          return { columns: [], rows: [{ database_name: 'shop', schema_name: 'main' }], rowCount: 1, executionTimeMs: 1 };
+        }
+        const rows = sql.includes("lower('lake')")
+          ? [{ table_catalog: 'lake', table_schema: 'main', table_name: 'orders', column_name: 'lake_id', data_type: 'INTEGER', ordinal_position: 1, current_catalog: 'shop' }]
+          : [{ table_catalog: 'shop', table_schema: 'main', table_name: 'orders', column_name: 'order_id', data_type: 'INTEGER', ordinal_position: 1, current_catalog: 'shop' }];
+        return { columns: [], rows, rowCount: rows.length, executionTimeMs: 1, truncated: false };
+      },
+    };
+    try {
+      await syncWarehouseMetadata({ projectRoot, executor: executor as never, connection: duckdbConnection, scope });
+      const active = latestRuntimeSchemaSnapshotForProject(projectRoot);
+      expect(active?.tables.map((table) => ({ relation: table.relation, columns: table.columns.map((column) => column.name) }))).toEqual([
+        { relation: 'lake.main.orders', columns: ['lake_id'] },
+        { relation: 'main.orders', columns: ['order_id'] },
+      ]);
+    } finally {
+      rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('activates one bounded generation after identity and scoped metadata checks pass', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'dql-warehouse-metadata-'));
     const calls: Array<{ sql: string; options: Record<string, unknown> }> = [];
