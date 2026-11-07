@@ -6,8 +6,8 @@ import type { QueryExecutionOptions, QueryResult, ColumnMeta, ColumnType, Row } 
 import { importConnectorDependency } from '../optional-dependency.js';
 import { readEnv } from '../env.js';
 import { DataFolderViews, type DataFolderStatus } from '../data-folder-views.js';
-import { describeLakeStorage, lakeStorageSecretStatements } from '../lake-storage.js';
-import type { LakeSourceConfig } from '../connector.js';
+import { defaultLakeSignIns, describeLakeStorage, lakeSignInFailure, lakeStorageClouds, lakeStorageSecretStatements } from '../lake-storage.js';
+import type { LakeCatalogConfig, LakeSourceConfig } from '../connector.js';
 
 /**
  * A dedicated connection from the already-open DuckDB database. Dataset
@@ -84,8 +84,9 @@ export class DuckDBConnector implements DatabaseConnector {
   /** The data folder read as tables (`dataFolder`, or the project's data folder), kept in step before each statement. */
   private folderViews: DataFolderViews | null = null;
   private databaseFile: string | undefined;
-  /** The connection's own `sources`: kept when the project's data folder is added (`useDataFolder`). */
+  /** The connection's own `sources` and `catalogs`: kept when the project's data folder is added (`useDataFolder`). */
   private connectionSources: LakeSourceConfig[] = [];
+  private connectionCatalogs: LakeCatalogConfig[] = [];
 
   async connect(config: ConnectionConfig): Promise<void> {
     await this.disconnect();
@@ -128,27 +129,48 @@ export class DuckDBConnector implements DatabaseConnector {
     this.releaseDatabase = release;
     this.databaseFile = dbPath.startsWith(':memory:') ? undefined : resolvePath(dbPath);
     // Buckets: the connection's credentials as in-memory secrets, before anything reads a bucket.
-    const storageProblem = await this.useStorage(config);
+    const storageProblems = await this.useStorage(config);
     this.connectionSources = config.sources ?? [];
-    if (config.dataFolder || config.sources?.length) {
+    this.connectionCatalogs = config.catalogs ?? [];
+    if (config.dataFolder || config.sources?.length || config.catalogs?.length) {
       await this.useDataFolder(config.dataFolder ?? '', { sources: config.sources ?? [] });
-      if (storageProblem) this.folderViews?.note(storageProblem);
+      for (const problem of storageProblems) this.folderViews?.note(problem);
     }
   }
 
   /**
-   * The connection's `storage` as DuckDB secrets, held in memory. A restricted
-   * engine (served mode) reads no bucket yet: the storage is left out and said.
-   * A missing required value fails the connection with the setting's name.
+   * The connection's `storage` as DuckDB secrets, held in memory. A cloud it
+   * names must sign in, or the connection fails with what to do. A bucket it
+   * reads with no `storage` for that cloud uses the cloud's own sign-in when
+   * there is one; with none, only public data is read, and that is said.
+   * A restricted engine (served mode) reads no bucket yet: said, nothing set up.
    */
-  private async useStorage(config: ConnectionConfig): Promise<{ source: string; name: string; reason: string } | undefined> {
-    const statements = lakeStorageSecretStatements(config.storage);
-    if (!statements.length) return undefined;
+  private async useStorage(config: ConnectionConfig): Promise<Array<{ source: string; name: string; reason: string }>> {
+    const named = lakeStorageClouds(config.storage);
+    const assumed = lakeStorageClouds(defaultLakeSignIns(config));
+    if (!named.length && !assumed.length) return [];
     if (config.restrictExternalAccess) {
-      return { source: 'storage', name: '', reason: `buckets are not read when ZLens serves people (--lan, Enterprise) yet: ${describeLakeStorage(config.storage).join('; ')}` };
+      const described = describeLakeStorage(config.storage).join('; ');
+      return [{ source: 'storage', name: '', reason: `buckets are not read when ZLens serves people (--lan, Enterprise) yet${described ? `: ${described}` : ''}` }];
     }
-    for (const statement of statements) await this.executeOwn(statement);
-    return undefined;
+    for (const { cloud, storage } of named) {
+      for (const statement of lakeStorageSecretStatements(storage)) {
+        try {
+          await this.executeOwn(statement);
+        } catch (error) {
+          throw new Error(lakeSignInFailure(cloud, error));
+        }
+      }
+    }
+    const problems: Array<{ source: string; name: string; reason: string }> = [];
+    for (const { cloud, storage } of assumed) {
+      try {
+        for (const statement of lakeStorageSecretStatements(storage)) await this.executeOwn(statement);
+      } catch (error) {
+        problems.push({ source: 'storage', name: '', reason: `${lakeSignInFailure(cloud, error)}; only public data is read meanwhile` });
+      }
+    }
+    return problems;
   }
 
   /**
@@ -167,6 +189,7 @@ export class DuckDBConnector implements DatabaseConnector {
         catalogs: options.catalogs ?? true,
         exclude: this.databaseFile ? [this.databaseFile] : [],
         sources: options.sources ?? this.connectionSources,
+        configuredCatalogs: this.connectionCatalogs,
       });
     }
     await this.folderViews.refresh();
@@ -268,6 +291,7 @@ export class DuckDBConnector implements DatabaseConnector {
     this.folderViews = null;
     this.databaseFile = undefined;
     this.connectionSources = [];
+    this.connectionCatalogs = [];
     this.openScopes.clear();
     await Promise.allSettled(scopes.map((close) => close()));
     if (connection) await closeDuckDBConnection(connection);

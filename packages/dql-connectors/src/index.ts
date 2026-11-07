@@ -1,6 +1,6 @@
 // @dql/connectors - DQL Database Connectors
 
-export type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo, LakeSourceConfig, LakeStorageConfig } from './connector.js';
+export type { DatabaseConnector, ConnectionConfig, TableInfo, ColumnInfo, LakeCatalogConfig, LakeSourceConfig, LakeStorageConfig } from './connector.js';
 export {
   ConnectorQueryError,
   type QueryBatch,
@@ -44,7 +44,7 @@ export {
   type DataFolderTable,
 } from './data-folder.js';
 export { type DataFolderProblem, type DataFolderStatus } from './data-folder-views.js';
-export { describeLakeStorage, lakeStorageSecretStatements } from './lake-storage.js';
+export { defaultLakeSignIns, describeLakeStorage, lakeSignInFailure, lakeStorageClouds, lakeStorageSecretStatements } from './lake-storage.js';
 export { LAKE_LISTING_DEADLINE_MS, listBucketPrefix, readBucketFolder, resolveLakeSources, type LakeProblem } from './lake-listing.js';
 export { DatabricksConnector } from './drivers/databricks.js';
 export { SQLiteConnector } from './drivers/sqlite.js';

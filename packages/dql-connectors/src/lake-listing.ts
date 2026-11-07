@@ -135,7 +135,7 @@ export async function resolveLakeSources(
       const table = await sourceTable(run, path, source);
       tables.push({ name, source: path, ...table });
     } catch (error) {
-      problems.push({ source: shown, name, reason: (error instanceof Error ? error.message : String(error)).split('\n')[0] });
+      problems.push({ source: shown, name, reason: (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^DuckDB query failed:\s*/i, '') });
     }
   }
   return { tables, problems };

@@ -14,7 +14,7 @@ every database driver. Configure connections in `dql.config.json` or in
 | ClickHouse | `clickhouse` | Built in (HTTP) | User and password; HTTPS for ClickHouse Cloud |
 | Databricks SQL | `databricks` | Built in | Access token or OAuth bearer token |
 | DuckDB | `duckdb` | Project-local (`duckdb`) | — |
-| Local files | `file` | Project-local DuckDB | — |
+| Files and lake | `file` | Project-local DuckDB (folders and buckets) | — |
 | Microsoft Fabric | `fabric` | Project-local (`mssql`) | Microsoft Entra ID |
 | MySQL / MariaDB | `mysql` | Project-local (`mysql2`) | User and password |
 | PostgreSQL | `postgresql` | Project-local (`pg`) | Password, or RDS / Aurora IAM |
@@ -283,6 +283,26 @@ A key typed on the Connections page is kept in
 every connection secret; `${ENV_VAR}` works in any of these values. DuckDB
 holds the credentials in memory only. Buckets are not read yet when ZLens
 serves people (`--lan`, Enterprise).
+
+`catalogs` attaches other databases read-only beside the connection's own:
+a DuckDB, DuckLake or SQLite file, on disk or in a bucket. Their tables are
+`name.schema.table`; nothing is ever written into them.
+
+```json
+"catalogs": [
+  { "name": "raw", "path": "./raw.duckdb" },
+  { "name": "lake", "path": "s3://acme-lake/lake.ducklake", "type": "ducklake" }
+]
+```
+
+Importing a dbt-duckdb profile brings these over too: its `s3_*` `settings`
+and its `secrets` (S3, GCS, Azure, R2) become `storage`, and its `attach`
+list (DuckDB, DuckLake and SQLite databases) becomes `catalogs`. What is not
+brought over (other settings, Postgres or MotherDuck attachments, other
+secret types) is listed when you import.
+
+`zlens doctor` says what the data folder, sources and catalogs read, how
+buckets sign in, and what is not read and why.
 
 A `duckdb` connection also reads the project's `data/` folder (or `dataDir`
 in `dql.config.json`) as tables, the same way but without attaching database

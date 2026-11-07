@@ -78,8 +78,8 @@ const CHECK: Record<string, string> = {
   'a Tableau extract': 'An extract (.hyper) is a copy: connect ZLens to the database it was made from.',
   'a published Tableau data source': 'Published to Tableau Server or Cloud: connect ZLens to the database it reads.',
   'Not stated in the file': 'The file does not say which database: check the data source in Tableau or Power BI.',
-  'a text file': 'CSV files: a ZLens Local files connection reads a folder of them.',
-  'Csv.Document': 'CSV files: a ZLens Local files connection reads a folder of them.',
+  'a text file': 'CSV files: a ZLens Files and lake connection reads a folder of them.',
+  'Csv.Document': 'CSV files: a ZLens Files and lake connection reads a folder of them.',
 };
 
 function cliVersion(): string {
@@ -280,7 +280,7 @@ function connects(database: string): { connects: 'yes' | 'no' | 'check'; note: s
   if (CONNECTS[database]) return { connects: 'yes', note: `ZLens connects to ${CONNECTS[database]}.` };
   if (CHECK[database]) return { connects: 'check', note: CHECK[database]! };
   if (/^(?:Excel|Excel\.Workbook|Web\.Contents|SharePoint|OData|Salesforce|Json\.Document|Xml\.Tables|Folder|File\.Contents)/i.test(database)) {
-    return { connects: 'no', note: 'Not a database: load it into your warehouse first, or export it to CSV for a Local files connection.' };
+    return { connects: 'no', note: 'Not a database: load it into your warehouse first, or export it to CSV for a Files and lake connection.' };
   }
   return { connects: 'no', note: 'ZLens has no connector for it yet.' };
 }

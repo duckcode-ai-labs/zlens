@@ -599,7 +599,7 @@ reads depends on the database:
 | DuckDB, SQLite, PostgreSQL, Amazon Redshift, MySQL / MariaDB, SQL Server / Azure SQL, Microsoft Fabric, Snowflake, Databricks (Unity Catalog), BigQuery | tables, views, columns, comments and declared primary and foreign keys |
 | Trino / Starburst, Amazon Athena | tables, views, columns and comments; they declare no keys, so joins come from naming, view SQL and `--validate` |
 | ClickHouse | tables, columns and comments; no declared keys |
-| Local files (CSV, TSV, Parquet, JSON) | each file as a table, with its columns; files declare no keys, so joins come from naming and `--validate` |
+| Files and lake (CSV, TSV, Parquet, JSON, Excel, Delta, Iceberg) | each file as a table, with its columns; files declare no keys, so joins come from naming and `--validate` |
 | Any other | tables, views and columns from `information_schema` |
 
 Columns are always read. Comments, keys and view SQL are read when the

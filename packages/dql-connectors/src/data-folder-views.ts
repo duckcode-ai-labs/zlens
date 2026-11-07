@@ -1,6 +1,7 @@
 import { basename, join } from 'node:path';
-import type { LakeSourceConfig } from './connector.js';
+import type { LakeCatalogConfig, LakeSourceConfig } from './connector.js';
 import {
+  configuredCatalogs,
   isUrlPath,
   dataFolderAttachStatement,
   dataFolderFileColumnsStatement,
@@ -49,6 +50,8 @@ export interface DataFolderViewsOptions {
   exclude: string[];
   /** Named tables at any path or bucket URL (paths already absolute). */
   sources?: LakeSourceConfig[];
+  /** Databases attached read-only by the connection itself (its `catalogs` setting). */
+  configuredCatalogs?: LakeCatalogConfig[];
 }
 
 /** A folder table is one table only when its first files (at most this many) share their columns. */
@@ -166,7 +169,13 @@ export class DataFolderViews {
     }
     this.sourceNames = new Set(takenNames);
     this.listingProblems = [...(this.sourced?.problems ?? []), ...(this.bucket && !local && this.folder ? this.bucket.problems : [])];
-    this.contents = { tables: [...sourceTables, ...folder.tables], catalogs: folder.catalogs, skipped: folder.skipped };
+    // The connection's own catalogs come first; a folder's database file of the same name gets another.
+    const ownCatalogs = configuredCatalogs(this.options.configuredCatalogs);
+    const ownNames = new Set(ownCatalogs.map((catalog) => catalog.name));
+    const folderCatalogs = folder.catalogs.map((catalog) => (ownNames.has(catalog.name)
+      ? { ...catalog, name: `${catalog.name}_${catalog.type}`, kind: catalog.kind.replace(/attached as .*$/, `attached as ${catalog.name}_${catalog.type}`) }
+      : catalog));
+    this.contents = { tables: [...sourceTables, ...folder.tables], catalogs: [...ownCatalogs, ...folderCatalogs], skipped: folder.skipped };
     if (this.contents.catalogs.length || this.catalogs.size) await this.syncCatalogs();
     await this.syncViews();
   }
@@ -279,6 +288,7 @@ function listColumns(columns: string[]): string {
 }
 
 function reasonOf(error: unknown): string {
-  const message = (error instanceof Error ? error.message : String(error)).split('\n')[0].trim();
+  // DuckDB's own words, without the driver's "DuckDB query failed:" in front.
+  const message = (error instanceof Error ? error.message : String(error)).split('\n')[0].trim().replace(/^DuckDB query failed:\s*/i, '');
   return message.length > REASON_LENGTH ? `${message.slice(0, REASON_LENGTH - 1)}…` : message;
 }

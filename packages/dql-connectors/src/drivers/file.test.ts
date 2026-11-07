@@ -400,6 +400,26 @@ describe('a lake folder read through a connection', () => {
     }
   }, 60_000);
 
+  duckDbIt('a connection\'s own catalogs are attached read-only under their names, beside its database', async () => {
+    const folder = dataFolder({});
+    const raw = join(folder, 'raw.duckdb');
+    const writer = new DuckDBConnector();
+    await writer.connect({ driver: 'duckdb', filepath: raw, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    await writer.execute('CREATE TABLE stores AS SELECT 1 AS store_id UNION ALL SELECT 2');
+    await writer.disconnect();
+    const connector = new DuckDBConnector();
+    await connector.connect({ driver: 'duckdb', filepath: join(folder, 'dev.duckdb'), catalogs: [{ name: 'raw', path: raw }, { name: 'gone', path: join(folder, 'missing.duckdb') }], moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    try {
+      expect((await connector.execute('SELECT COUNT(*) AS n FROM raw.main.stores')).rows).toEqual([{ n: 2 }]);
+      await expect(connector.execute('INSERT INTO raw.main.stores VALUES (3)')).rejects.toThrow(/read.only/i);
+      const status = await connector.dataFolderStatus();
+      expect(status?.catalogs.map(({ name, kind }) => `${name}: ${kind}`)).toEqual(['raw: DuckDB database, attached as raw']);
+      expect(status?.problems.map(({ name }) => name)).toEqual(['gone']);
+    } finally {
+      await connector.disconnect();
+    }
+  });
+
   duckDbIt('follows an Iceberg table to its newest commit', async () => {
     const folder = dataFolder({});
     cpSync(join(LAKE_FIXTURES, 'orders_iceberg'), join(folder, 'orders_iceberg'), { recursive: true });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeLakeStorage, lakeStorageSecretStatements } from './lake-storage.js';
+import { defaultLakeSignIns, describeLakeStorage, lakeSignInFailure, lakeStorageSecretStatements } from './lake-storage.js';
 
 const options = (statement: string) => /\((.*)\)$/.exec(statement)![1];
 
@@ -41,5 +41,19 @@ describe('a file connection\'s buckets as DuckDB secrets', () => {
     });
     expect(lines).toEqual(['S3 at minio:9000 (us-east-1): access keys', 'Azure Storage: a connection string']);
     expect(lines.join(' ')).not.toMatch(/AKIASECRET|shh/);
+  });
+
+  it('a bucket read with no storage for its cloud uses that cloud\'s own sign-in; Azure and R2 are never assumed', () => {
+    expect(defaultLakeSignIns({ dataFolder: 's3://acme/sales/', sources: [{ path: 'gs://acme/events/' }, { path: 'az://c/x' }, { path: './local.csv' }] }))
+      .toEqual({ s3: {}, gcs: {} });
+    expect(defaultLakeSignIns({ dataFolder: 'S3://acme/', storage: { s3: { region: 'eu-west-1' } } })).toEqual({});
+    expect(defaultLakeSignIns({ dataFolder: './data' })).toEqual({});
+  });
+
+  it('says what to do when a cloud sign-in is not found', () => {
+    const refusal = new Error('Invalid Configuration Error: Secret Validation Failure: during `create` using the following:\nCredential Chain: config');
+    expect(lakeSignInFailure('s3', refusal)).toBe('no AWS sign-in found: sign in (aws sso login, a profile in ~/.aws/config, or AWS_* environment variables) or give storage.s3 keys (DuckDB: Invalid Configuration Error: Secret Validation Failure: during `create` using the following:)');
+    expect(lakeSignInFailure('gcs', refusal)).toMatch(/^no Google Cloud sign-in found: sign in \(gcloud auth application-default login\)/);
+    expect(lakeSignInFailure('s3', new Error('Catalog Error: something else'))).toBe('storage.s3: Catalog Error: something else');
   });
 });
