@@ -6,6 +6,7 @@
  * copied dbt descriptions, column catalogs, tests, or MetricFlow formulas here.
  */
 
+import { dbtPhysicalRelation, isDbtExternalRelationName } from './dbt-external-sources.js';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, extname, join, relative, sep } from 'node:path';
@@ -1495,7 +1496,11 @@ function hasDbtTests(node: UnknownRecord): boolean {
 }
 
 function relationName(node: UnknownRecord, name: string): string | undefined {
+  // A dbt-duckdb external source is its `dbt_sources.<source>.<table>` table; a location ZLens cannot read is none.
+  const physical = dbtPhysicalRelation(String(node.unique_id ?? ''), node);
+  if (physical.relation) return physical.relation;
   const dbtRelationName = stringValue(node.relation_name);
+  if (dbtRelationName && isDbtExternalRelationName(dbtRelationName)) return undefined;
   if (dbtRelationName) return dbtRelationName;
   const database = stringValue(node.database);
   const schema = stringValue(node.schema);

@@ -127,15 +127,21 @@ export async function resolveLakeSources(
   for (const source of sources) {
     const path = String(source.path ?? '').trim();
     const shown = path || '(no path)';
-    let name = tableIdentifier(source.name?.trim() || sourceStem(path));
-    for (let n = 2; taken.has(name); n += 1) name = `${tableIdentifier(source.name?.trim() || sourceStem(path))}_${n}`;
-    taken.add(name);
+    // A source made in a catalog of ZLens's own (`dbt_sources.shop.orders`) is named within its schema.
+    const place = source.catalog?.trim()
+      ? { catalog: tableIdentifier(source.catalog.trim()), schema: tableIdentifier(source.schema?.trim() || 'main') }
+      : undefined;
+    const base = tableIdentifier(source.name?.trim() || sourceStem(path));
+    const key = (candidate: string) => (place ? `${place.catalog}.${place.schema}.${candidate}` : candidate);
+    let name = base;
+    for (let n = 2; taken.has(key(name)); n += 1) name = `${base}_${n}`;
+    taken.add(key(name));
     try {
       if (!path) throw new Error('a source needs a path');
       const table = await sourceTable(run, path, source);
-      tables.push({ name, source: path, ...table });
+      tables.push({ name, source: path, ...table, ...place });
     } catch (error) {
-      problems.push({ source: shown, name, reason: (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^DuckDB query failed:\s*/i, '') });
+      problems.push({ source: shown, name: key(name), reason: (error instanceof Error ? error.message : String(error)).split('\n')[0].replace(/^DuckDB query failed:\s*/i, '') });
     }
   }
   return { tables, problems };

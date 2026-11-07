@@ -5,6 +5,8 @@ import {
   isUrlPath,
   dataFolderAttachStatement,
   dataFolderFileColumnsStatement,
+  dataFolderViewCatalogStatements,
+  dataFolderViewName,
   dataFolderFilesStatement,
   dataFolderViewStatement,
   detachDataFolderCatalogStatement,
@@ -128,14 +130,15 @@ export class DataFolderViews {
 
   /** The temporary views as made, to make them on another connection of the same database. */
   temporaryViewStatements(): string[] {
-    return this.options.temporary ? [...this.views.values()] : [];
+    // A view in a catalog of ZLens's own is seen by every connection already.
+    return this.options.temporary ? [...this.views.values()].filter((statement) => statement.startsWith('CREATE OR REPLACE TEMP VIEW')) : [];
   }
 
   status(): DataFolderStatus {
-    const tables = this.contents.tables.filter((table) => this.views.has(table.name));
+    const tables = this.contents.tables.filter((table) => this.views.has(dataFolderViewName(table)));
     const catalogs = this.contents.catalogs.filter((catalog) => this.catalogs.has(catalog.name));
     const problems = [
-      ...this.contents.tables.filter((table) => !this.views.has(table.name)).map((table) => this.failed.get(`view:${table.name}`)),
+      ...this.contents.tables.filter((table) => !this.views.has(dataFolderViewName(table))).map((table) => this.failed.get(`view:${dataFolderViewName(table)}`)),
       ...this.contents.catalogs.filter((catalog) => !this.catalogs.has(catalog.name)).map((catalog) => this.failed.get(`catalog:${catalog.name}`)),
     ].filter((problem): problem is NonNullable<typeof problem> => Boolean(problem))
       .map(({ source, name, reason }) => ({ source, name, reason }));
@@ -144,7 +147,7 @@ export class DataFolderViews {
     problems.push(...catalogNotes);
     return {
       folder: this.folder,
-      tables: tables.map(({ name, source, kind }) => ({ name, source, kind })),
+      tables: tables.map((table) => ({ name: dataFolderViewName(table), source: table.source, kind: table.kind })),
       catalogs: catalogs.map(({ name, source, kind }) => ({ name, source, kind })),
       skipped: this.contents.skipped,
       problems,
@@ -166,7 +169,8 @@ export class DataFolderViews {
       }
     }
     const sourceTables = this.sourced?.tables ?? [];
-    const takenNames = sourceTables.map((table) => table.name);
+    // A folder table never takes a name a source has beside the connection's tables (one in a catalog of its own takes none).
+    const takenNames = sourceTables.filter((table) => !table.catalog).map((table) => table.name);
     const folderOptions = { catalogs: this.options.catalogs, exclude: this.options.exclude, takenNames };
 
     let folder: DataFolderContents = { tables: [], catalogs: [], skipped: [] };
@@ -182,7 +186,7 @@ export class DataFolderViews {
       }
       folder = this.bucket.contents;
     }
-    this.sourceNames = new Set(takenNames);
+    this.sourceNames = new Set(sourceTables.map((table) => dataFolderViewName(table)));
     this.listingProblems = [...(this.sourced?.problems ?? []), ...(this.bucket && !local && this.folder ? this.bucket.problems : [])];
     // The connection's own catalogs come first; a folder's database file of the same name gets another.
     const ownCatalogs = configuredCatalogs(this.options.configuredCatalogs, this.options.storage);
@@ -304,33 +308,36 @@ export class DataFolderViews {
 
   private async syncViews(): Promise<void> {
     const temporary = this.options.temporary;
-    const wanted = new Map(this.contents.tables.map((table) => [table.name, dataFolderViewStatement(table, { temporary })]));
+    const tables = new Map(this.contents.tables.map((table) => [dataFolderViewName(table), table]));
+    const wanted = new Map([...tables].map(([name, table]) => [name, dataFolderViewStatement(table, { temporary })]));
     for (const [name, statement] of [...this.views]) {
       if (wanted.get(name) === statement) continue;
-      await this.run(dropDataFolderViewStatement(name, { temporary })).catch(() => undefined);
+      const table = tables.get(name);
+      await this.run(dropDataFolderViewStatement(table ?? viewOfName(name), { temporary })).catch(() => undefined);
       this.views.delete(name);
     }
-    const missing = this.contents.tables.filter((table) => !this.views.has(table.name));
+    const missing = [...tables].filter(([name]) => !this.views.has(name));
     if (!missing.length) return;
     // A real database's own table or view of the same name is the one read: the file's view is not made over it.
     const owned = temporary ? await this.namesInDatabase() : new Set<string>();
-    for (const table of missing) {
-      const statement = wanted.get(table.name)!;
-      const key = `view:${table.name}`;
-      const attempt = `${statement}\u0000${this.stamp(table.source, table.name)}`;
+    for (const [name, table] of missing) {
+      const statement = wanted.get(name)!;
+      const key = `view:${name}`;
+      const attempt = `${statement}\u0000${this.stamp(table.source, name)}`;
       if (this.failed.get(key)?.attempt === attempt) continue;
       try {
-        if (owned.has(table.name.toLowerCase())) {
+        if (!table.catalog && owned.has(table.name.toLowerCase())) {
           throw new Error(`the database already has a table or view named ${table.name}, and that one is read`);
         }
         // A source is one table because the connection says so; a folder found in the data folder must earn it.
-        const mismatch = this.sourceNames.has(table.name) ? undefined : await this.differentColumns(table);
+        const mismatch = this.sourceNames.has(name) ? undefined : await this.differentColumns(table);
         if (mismatch) throw new Error(mismatch);
+        for (const prepare of dataFolderViewCatalogStatements(table)) await this.run(prepare);
         await this.run(statement);
-        this.views.set(table.name, statement);
+        this.views.set(name, statement);
         this.failed.delete(key);
       } catch (error) {
-        this.failed.set(key, { attempt, source: table.source, name: table.name, reason: reasonOf(error) });
+        this.failed.set(key, { attempt, source: table.source, name, reason: reasonOf(error) });
       }
     }
   }
@@ -364,6 +371,12 @@ export class DataFolderViews {
     }
     return undefined;
   }
+}
+
+/** A view's full name back as what drops it: `catalog.schema.name` or `name`. */
+function viewOfName(name: string): { name: string; catalog?: string; schema?: string } {
+  const parts = name.split('.');
+  return parts.length === 3 ? { catalog: parts[0], schema: parts[1], name: parts[2] } : { name };
 }
 
 function listColumns(columns: string[]): string {

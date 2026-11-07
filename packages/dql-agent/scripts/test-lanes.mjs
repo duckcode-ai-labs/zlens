@@ -176,10 +176,12 @@ const EXPECTED_TEST_FILES = 193;
 // still answered (analytical-request-policy.test.ts, +28).
 // 2819 with a refresh whose files changed after it read them leaving the active snapshot in place
 // (catalog.test.ts, +1; release PR #280 e2e, App journeys after a certify).
-const EXPECTED_TESTS = 2819;
+// 2820 with a dbt-duckdb external source found as its dbt_sources table and an unreadable location
+// left out (warehouse-search-objects.test.ts, +1; open-formats plan L3b, zlens#290).
+const EXPECTED_TESTS = 2820;
 // The heavy lane's share of EXPECTED_TESTS (catalog.test.ts 77 + project-state.test.ts 4), pinned so
 // a lane run on its own (CI runs the two lanes as separate steps) is audited as exactly as both together.
-// The ordinary lane's share is the difference: 2738.
+// The ordinary lane's share is the difference: 2739.
 const EXPECTED_HEAVY_TESTS = 81;
 
 const LANES = ['all', 'ordinary', 'heavy'];

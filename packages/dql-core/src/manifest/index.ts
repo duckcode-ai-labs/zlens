@@ -264,3 +264,4 @@ export type {
   DbtRunState,
 } from './types.js';
 export { buildTermTemplate, termFilePath, termSlug, type TermTemplateInput } from './term-authoring.js';
+export * from './dbt-external-sources.js';

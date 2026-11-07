@@ -343,6 +343,16 @@ describe('warehouse metadata scope', () => {
     }
   });
 
+  it('a dbt-duckdb external source\'s table is read where ZLens makes it (dbt_sources), never as a path split on its dots', () => {
+    const scope = normalizeConnectionMetadataScope('default', { driver: 'duckdb', filepath: '/tmp/shop.duckdb' }, undefined, {
+      relations: ['shop.main.stg_orders', 'dbt_sources.raw.orders', 'dbt_sources.raw.customers'],
+    });
+    expect(scope.scopes).toEqual([
+      { catalogOrDatabase: 'dbt_sources', schemas: ['raw'] },
+      { catalogOrDatabase: 'shop', schemas: ['main'] },
+    ]);
+  });
+
   it('DuckDB: every schema of a catalog service (`*`) is read without naming one', () => {
     const queries = buildWarehouseMetadataQueries({ driver: 'file' }, normalizeConnectionMetadataScope('default', { driver: 'file' }, { mode: 'selected_scopes', scopes: [{ catalogOrDatabase: 'unity', schemas: ['*'] }] }));
     expect(queries).toHaveLength(1);

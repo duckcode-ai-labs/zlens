@@ -49,6 +49,29 @@ export interface DataFolderViewSource {
    * folder even when it was written elsewhere (copied, or synced from a bucket).
    */
   icebergVersion?: { name: string; gzip: boolean };
+  /** Made in an in-memory catalog of ZLens's own: `catalog.schema.name` (a dbt project's external sources). */
+  catalog?: string;
+  /** The schema in `catalog` (default `main`). */
+  schema?: string;
+}
+
+/** A view's full name: `name`, or `catalog.schema.name` for one made in a catalog of ZLens's own. */
+export function dataFolderViewName(source: Pick<DataFolderViewSource, 'name' | 'catalog' | 'schema'>): string {
+  return source.catalog ? `${source.catalog}.${source.schema ?? 'main'}.${source.name}` : source.name;
+}
+
+/** The view's name as SQL: `"name"`, or `"catalog"."schema"."name"`. */
+function viewTarget(source: Pick<DataFolderViewSource, 'name' | 'catalog' | 'schema'>): string {
+  return source.catalog ? `${sqlIdent(source.catalog)}.${sqlIdent(source.schema ?? 'main')}.${sqlIdent(source.name)}` : sqlIdent(source.name);
+}
+
+/** The in-memory catalog (and schema) a view of `dataFolderViewName` form is made in: attached once, never written to disk. */
+export function dataFolderViewCatalogStatements(source: Pick<DataFolderViewSource, 'catalog' | 'schema'>): string[] {
+  if (!source.catalog) return [];
+  return [
+    `ATTACH IF NOT EXISTS ':memory:' AS ${sqlIdent(source.catalog)}`,
+    `CREATE SCHEMA IF NOT EXISTS ${sqlIdent(source.catalog)}.${sqlIdent(source.schema ?? 'main')}`,
+  ];
 }
 
 export interface DataFolderTable extends DataFolderViewSource {
@@ -709,7 +732,8 @@ function readerCall(source: DataFolderViewSource): string {
  * must not be written into.
  */
 export function dataFolderViewStatement(source: DataFolderViewSource, options: { temporary?: boolean } = {}): string {
-  return `CREATE OR REPLACE ${options.temporary ? 'TEMP ' : ''}VIEW ${sqlIdent(source.name)} AS SELECT * FROM ${readerCall(source)}`;
+  // A view in a catalog of ZLens's own is in memory already: never temporary.
+  return `CREATE OR REPLACE ${options.temporary && !source.catalog ? 'TEMP ' : ''}VIEW ${viewTarget(source)} AS SELECT * FROM ${readerCall(source)}`;
 }
 
 export function dataFolderViewStatements(sources: DataFolderViewSource[], options: { temporary?: boolean } = {}): string[] {
@@ -717,8 +741,10 @@ export function dataFolderViewStatements(sources: DataFolderViewSource[], option
 }
 
 /** `temporary`: drop the temporary view, never the database's own view of that name. */
-export function dropDataFolderViewStatement(name: string, options: { temporary?: boolean } = {}): string {
-  return `DROP VIEW IF EXISTS ${options.temporary ? 'temp.main.' : ''}${sqlIdent(name)}`;
+export function dropDataFolderViewStatement(view: string | Pick<DataFolderViewSource, 'name' | 'catalog' | 'schema'>, options: { temporary?: boolean } = {}): string {
+  const source = typeof view === 'string' ? { name: view } : view;
+  if (source.catalog) return `DROP VIEW IF EXISTS ${viewTarget(source)}`;
+  return `DROP VIEW IF EXISTS ${options.temporary ? 'temp.main.' : ''}${sqlIdent(source.name)}`;
 }
 
 /**

@@ -10,6 +10,14 @@ export interface LakeSourceConfig {
   format?: 'auto' | 'parquet' | 'csv' | 'json' | 'excel' | 'delta' | 'iceberg';
   /** An Excel sheet (default: the first). */
   sheet?: string;
+  /**
+   * Made in a catalog of ZLens's own (an in-memory database it attaches)
+   * rather than beside the connection's tables: `catalog.schema.name`. A dbt
+   * project's external sources are `dbt_sources.<source>.<table>`.
+   */
+  catalog?: string;
+  /** The schema in `catalog` (default `main`). */
+  schema?: string;
 }
 
 /** The kinds of catalog a connection attaches: database files, and catalog services. */

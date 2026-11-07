@@ -123,7 +123,7 @@ import {
   type SemanticDatasetFieldProjection,
   type SemanticDatasetMeasureProjection,
 } from '../datasets/index.js';
-import { readEnv, tableName } from '@zlens/core';
+import { dbtPhysicalRelation, isDbtExternalRelationName, readEnv, tableName } from '@zlens/core';
 
 export { applyContextPackCompatibility, toAgentRetrievalEvidence } from './meaning-evidence.js';
 
@@ -5218,10 +5218,13 @@ export function dbtMeaningCatalog(manifestPath: string, projectRoot?: string): D
     if (!name) continue;
     const documented = rawDbtColumns(node.columns);
     const described = new Map(documented.map((column) => [column.name.toLowerCase(), column.description]));
-    const database = stringValue(node.database);
-    const schema = stringValue(node.schema);
+    // A dbt-duckdb external source is ZLens's `dbt_sources.<source>.<table>`; a location it cannot read is no table.
+    const physical = dbtPhysicalRelation(uniqueId, node);
+    if (!physical.relation && isDbtExternalRelationName(stringValue(node.relation_name))) continue;
+    const database = physical.database ?? stringValue(node.database);
+    const schema = physical.schema ?? stringValue(node.schema);
     const comment = stringValue(node.description);
-    const relation = (stringValue(node.relation_name) ?? [database, schema, name].filter(Boolean).join('.')).replace(/["`]/g, '');
+    const relation = (physical.relation ?? [database, schema, name].filter(Boolean).join('.')).replace(/["`]/g, '');
     const fromCatalog = catalogColumns.get(uniqueId);
     const listed = fromCatalog?.length ? fromCatalog : syncedColumns(relation);
     if (!listed?.length) columnsUnlisted.push(relation);
@@ -5413,15 +5416,18 @@ function addRawDbtManifestCatalogObjects(
   for (const [uniqueId, source] of Object.entries(raw.sources ?? {})) {
     const name = rawDbtName(source);
     if (!name) continue;
-    const database = stringValue(source.database);
-    const schema = stringValue(source.schema);
+    // A dbt-duckdb external source is ZLens's `dbt_sources.<source>.<table>`; a location it cannot read is no table.
+    const physical = dbtPhysicalRelation(uniqueId, source);
+    if (!physical.relation && isDbtExternalRelationName(stringValue(source.relation_name))) continue;
+    const database = physical.database ?? stringValue(source.database);
+    const schema = physical.schema ?? stringValue(source.schema);
     const entry: RawDbtCatalogEntry = {
       uniqueId,
       name,
       node: source,
       objectKey: `dbt:source:${name}`,
       objectType: 'dbt_source',
-      relation: stringValue(source.relation_name) ?? [database, schema, name].filter(Boolean).join('.'),
+      relation: physical.relation ?? [database, schema, name].filter(Boolean).join('.'),
       database,
       schema,
       catalogColumns: catalogColumns.get(uniqueId),

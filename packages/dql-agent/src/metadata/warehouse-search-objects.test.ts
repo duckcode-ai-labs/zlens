@@ -131,6 +131,30 @@ describe('what dbt leaves blank', () => {
     expect(relations[1]?.comment).toBe('One row per customer.');
   });
 
+  it('a dbt-duckdb external source is its dbt_sources table, with the columns synced there; a location it cannot read is left out', () => {
+    writeFileSync(manifestPath(), JSON.stringify({
+      metadata: { adapter_type: 'duckdb' },
+      nodes: {},
+      sources: {
+        'source.shop.raw.orders': { resource_type: 'source', source_name: 'raw', name: 'orders', identifier: 'orders', schema: 'raw', database: 'shop', relation_name: "'s3://lake/raw/orders.parquet'", columns: {} },
+        'source.shop.raw.many': { resource_type: 'source', source_name: 'raw', name: 'many', schema: 'raw', database: 'shop', relation_name: "read_parquet(['s3://a/1.parquet', 's3://a/2.parquet'])", columns: {} },
+      },
+    }));
+    rmSync(join(root, 'target', 'catalog.json'));
+    recordRuntimeSchemaSnapshot(root, {
+      generationId: 'g-ext',
+      source: SCHEMA_SYNC_SOURCE,
+      connectionId: 'default',
+      tables: [{ relation: 'dbt_sources.raw.orders', catalogOrDatabase: 'dbt_sources', schema: 'raw', name: 'orders', columns: [{ name: 'order_id', type: 'BIGINT' }] }],
+    });
+    const catalog = dbtMeaningCatalog(manifestPath(), root);
+    expect(catalog.relations.map(({ id, relation, database, schema }) => ({ id, relation, database, schema }))).toEqual([
+      { id: 'dbt.source.shop.raw.orders', relation: 'dbt_sources.raw.orders', database: 'dbt_sources', schema: 'raw' },
+    ]);
+    expect(catalog.relations[0]?.columns).toEqual([{ name: 'order_id', type: 'BIGINT' }]);
+    expect(catalog.columnsUnlisted).toEqual([]);
+  });
+
   it('without catalog.json, takes the columns from the schema ZLens synced', () => {
     rmSync(join(root, 'target', 'catalog.json'));
     expect(dbtMeaningCatalog(manifestPath(), root).columnsUnlisted).toEqual(['shop.analytics.orders', 'shop.analytics.customers', 'shop.raw.payments']);
