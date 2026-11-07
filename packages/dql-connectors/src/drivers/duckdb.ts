@@ -111,6 +111,9 @@ export class DuckDBConnector implements DatabaseConnector {
         // A host that must not download code at run time (ZLENS_DUCKDB_AUTOINSTALL=off): DuckDB uses only the
         // extensions already installed, and a statement that needs another one fails instead of fetching it.
         if (downloadsOff) await turnOffDuckDBExtensionDownloads(setup, database);
+        // Parquet footers are kept once read: a view over thousands of files in a bucket reads them on
+        // its first statement only, not on every one (open-formats plan L4, decision L4-9).
+        await executeDuckDBConnection(setup, database, 'SET GLOBAL parquet_metadata_cache = true').catch(() => undefined);
       } catch (error) {
         await closeDuckDBConnection(setup);
         await closeDuckDBDatabase(database, false);

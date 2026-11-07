@@ -26,6 +26,12 @@ describe('a file connection\'s buckets as DuckDB secrets', () => {
     expect(options(r2)).toBe("TYPE r2, KEY_ID 'k', SECRET 's', ACCOUNT_ID 'acc'");
   });
 
+  it('reads public data without signing in: no keys, no credential chain, the bucket\'s region', () => {
+    const [s3] = lakeStorageSecretStatements({ s3: { auth: 'none', region: 'us-east-2' } });
+    expect(options(s3)).toBe("TYPE s3, PROVIDER config, REGION 'us-east-2'");
+    expect(describeLakeStorage({ s3: { auth: 'none', region: 'us-east-2' } })).toEqual(['S3 (us-east-2): public data, no sign-in']);
+  });
+
   it('names a missing value by its setting, and two storages never share a secret name', () => {
     expect(() => lakeStorageSecretStatements({ s3: { auth: 'keys', accessKeyId: 'AKIA1' } })).toThrow('storage.s3.secretAccessKey is missing: keys need a secret access key.');
     expect(() => lakeStorageSecretStatements({ azure: {} })).toThrow('storage.azure.accountName is missing');

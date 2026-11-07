@@ -87,6 +87,8 @@ describe('a bucket folder read like a folder on disk', () => {
     expect(contents.skipped).toEqual([{ name: 'clicks.avro', kind: 'an Avro file (not read yet)' }]);
     const byName = Object.fromEntries(contents.tables.map((table) => [table.name, table]));
     expect(dataFolderViewStatement(byName.events)).toBe("CREATE OR REPLACE VIEW \"events\" AS SELECT * FROM read_parquet('s3://acme/sales/events/**/*.parquet', union_by_name = true, hive_partitioning = true)");
+    // A folder of many files seen to share their columns is read with the first file's (L4-9): one footer per statement.
+    expect(dataFolderViewStatement({ ...byName.events, folder: { partitioned: true, sameColumns: true } })).toBe("CREATE OR REPLACE VIEW \"events\" AS SELECT * FROM read_parquet('s3://acme/sales/events/**/*.parquet', hive_partitioning = true)");
     expect(dataFolderViewStatement(byName.orders_ice)).toBe("CREATE OR REPLACE VIEW \"orders_ice\" AS SELECT * FROM iceberg_scan('s3://acme/sales/orders_ice', allow_moved_paths = true, version = '00001-a')");
     // One listing of the folder, then only the version hint and the workbook are read.
     expect(statements.filter((sql) => sql.includes('glob('))).toEqual(["SELECT file FROM glob('s3://acme/sales/**')"]);

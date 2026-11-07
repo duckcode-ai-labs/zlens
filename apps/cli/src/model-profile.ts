@@ -24,8 +24,10 @@
 import type { WarehouseCatalogRelationV1, WarehouseCatalogSnapshotV1 } from '@zlens/core';
 import { DBT_META_COLUMN, canonicalColumn, columnVocabulary, isPeriodColumn } from './model-layers.js';
 import { KEY_LIKE_NAME, type DiscoveredEntity, type DiscoveredRelationship, type WarehouseDiscoveryReport } from './warehouse-model-discovery.js';
+import type { ReadHint } from './read-budget.js';
 
-type Run = (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>;
+/** `hint.sample`: the statement's subject, which a read budget may read from a sample (`read-budget.ts`). */
+type Run = (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>;
 
 /** A rule measured on the data, with the query that measured it. */
 export interface DiscoveredRule {

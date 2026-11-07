@@ -14,9 +14,11 @@
 import { looksLikePlaceholder, profileRelationshipOnWarehouse } from '@zlens/agent';
 import type { WarehouseCatalogRelationV1, WarehouseCatalogSnapshotV1 } from '@zlens/core';
 import { canonicalColumn, columnVocabulary } from './model-layers.js';
+import type { ReadHint } from './read-budget.js';
 import { KEY_LIKE_NAME, joinSignature, nameOnlyObjection, type DiscoveredEntity, type DiscoveredRelationship, type WarehouseDiscoveryReport, type WithheldRelationship } from './warehouse-model-discovery.js';
 
-type Run = (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>;
+/** `hint.sample`: the statement's subject, which a read budget may read from a sample (`read-budget.ts`). */
+type Run = (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>;
 
 /** A join left out because one side is a look-alike the draft says to use another table instead of. */
 export interface LookAlikeJoin {
@@ -125,7 +127,7 @@ export async function draftIdentityJoins(
     let evidence;
     try {
       const keyTypes = candidate.keys.map((pair) => ({ from: typesOf.get(candidate.fromRelation.relation)?.get(pair.from.toLowerCase()), to: typesOf.get(candidate.toRelation.relation)?.get(pair.to.toLowerCase()) }));
-      evidence = await profileRelationshipOnWarehouse({ fromRelation: candidate.fromRelation.relation, toRelation: candidate.toRelation.relation, keys: candidate.keys, keyTypes }, run, quote, new Date(), options.dialect);
+      evidence = await profileRelationshipOnWarehouse({ fromRelation: candidate.fromRelation.relation, toRelation: candidate.toRelation.relation, keys: candidate.keys, keyTypes }, (sql) => run(sql, { sample: [candidate.fromRelation.relation] }), quote, new Date(), options.dialect);
     } catch {
       continue;
     }
@@ -163,7 +165,7 @@ export async function draftIdentityJoins(
     };
     // Two tables that number their own rows 1, 2, 3 match by coincidence: the
     // joined rows must agree on the other references both tables carry.
-    const objection = validation.status === 'passed' ? await nameOnlyObjection(drafted, columnsOf, run, quote).catch(() => undefined) : undefined;
+    const objection = validation.status === 'passed' ? await nameOnlyObjection(drafted, columnsOf, (sql) => run(sql, { sample: [drafted.fromRelation] }), quote).catch(() => undefined) : undefined;
     if (objection) {
       withheld.push({ ...drafted, reason: objection.replace(/^only the column name suggests it, and /, '') });
       continue;

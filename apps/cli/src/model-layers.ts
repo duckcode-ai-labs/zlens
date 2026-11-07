@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { resolveWarehouseRelation, tableEntityKey, type WarehouseCatalogRelationV1, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
 import { KEY_LIKE_NAME, NON_KEY_TYPE, statementTables, type DiscoveredEntity, type WarehouseDiscoveryReport } from './warehouse-model-discovery.js';
+import type { ReadHint } from './read-budget.js';
 
 /** Where a table sits in the pipeline. `final` is a modeled fact or dimension. */
 export type TableLayer = 'raw' | 'staging' | 'intermediate' | 'snapshot' | 'final';
@@ -90,7 +91,8 @@ export interface DbtRelationFacts {
   exposures: number;
 }
 
-type Run = (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>;
+/** `hint.sample`: the statement's subject, which a read budget may read from a sample (`read-budget.ts`). */
+type Run = (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>;
 
 const LAYER_RANK: Record<TableLayer, number> = { snapshot: 0, raw: 1, staging: 2, intermediate: 3, final: 4 };
 const FOLDER_LAYER: Array<[RegExp, TableLayer]> = [

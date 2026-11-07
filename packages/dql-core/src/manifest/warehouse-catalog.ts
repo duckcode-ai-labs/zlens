@@ -22,6 +22,11 @@ export interface WarehouseCatalogColumnV1 {
   type?: string;
   comment?: string;
   nullable?: boolean;
+  /**
+   * Bytes the column holds where the table is stored (compressed), from file
+   * metadata (Parquet footers): what a statement naming it reads. Never a scan.
+   */
+  bytesEstimate?: number;
 }
 
 export interface WarehouseCatalogForeignKeyV1 {
@@ -54,8 +59,15 @@ export interface WarehouseCatalogRelationV1 {
   foreignKeys?: WarehouseCatalogForeignKeyV1[];
   /** The view's definition, for lineage and join evidence. */
   viewSql?: string;
-  /** From system statistics; never a COUNT(*). */
+  /** From system statistics or file metadata (Parquet footers, Iceberg manifests); never a scan. */
   rowCountEstimate?: number;
+  /** Bytes the table holds where it is stored (compressed), from a listing or file metadata; never a scan. */
+  bytesEstimate?: number;
+  /**
+   * Where the size came from, in plain words, and whether it is estimated:
+   * `footers of 16 of 4,130 files (estimated)`, `all 24 footers`, `Iceberg manifests`.
+   */
+  sizeFrom?: string;
 }
 
 export interface WarehouseCatalogSnapshotV1 {

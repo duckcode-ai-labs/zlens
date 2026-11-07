@@ -173,6 +173,12 @@ export function DraftModelsCard({
           {outcome.message}
         </div>
       ) : null}
+      {outcome?.readNotes?.length ? (
+        <ul aria-label="Large tables" style={{ margin: 0, paddingLeft: 16, display: 'flex', flexDirection: 'column', gap: 3, fontSize: 10.5, lineHeight: 1.45, color: t.textMuted }}>
+          {outcome.readNotes.slice(0, 6).map((note) => <li key={note}>{note}</li>)}
+          {outcome.readNotes.length > 6 ? <li>… and {outcome.readNotes.length - 6} more</li> : null}
+        </ul>
+      ) : null}
       {waiting ? (
         <div aria-label="Drafts waiting" style={{ fontSize: 11.5, lineHeight: 1.5, color: t.textSecondary }}>{waitingDraftsSentence(waiting)}</div>
       ) : outcome?.ok && outcome.proposalId ? (

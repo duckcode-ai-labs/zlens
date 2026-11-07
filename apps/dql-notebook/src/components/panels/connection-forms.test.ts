@@ -90,7 +90,7 @@ describe('the Files and lake form', () => {
   it('shows only the sign-in fields of the bucket the data folder is in (and the catalogs, always)', () => {
     expect(shown({ dataFolder: './data' })).toEqual(['dataFolder', 'catalogs']);
     expect(shown({ dataFolder: 's3://acme/sales/' })).toEqual([
-      'dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.s3.accessKeyId', 'storage.s3.secretAccessKey', 'storage.s3.endpoint', 'catalogs',
+      'dataFolder', 'storage.s3.region', 'storage.s3.auth', 'storage.s3.profile', 'storage.s3.accessKeyId', 'storage.s3.secretAccessKey', 'storage.s3.endpoint', 'catalogs',
     ]);
     expect(shown({ dataFolder: 'gs://acme/events/' })).toEqual(['dataFolder', 'storage.gcs.keyId', 'storage.gcs.secret', 'catalogs']);
     expect(shown({ dataFolder: 'abfss://lake@acme.dfs.core.windows.net/sales' })).toEqual(['dataFolder', 'storage.azure.accountName', 'storage.azure.connectionString', 'catalogs']);
@@ -115,6 +115,15 @@ describe('the Files and lake form', () => {
     expect(connectionFormProblems({ catalogs: '[{ "name": "lake", }]' })[0]).toMatch(/^Catalogs \(JSON\) is not valid JSON: /);
     expect(connectionFormProblems({ catalogs: '{ "name": "lake" }' })).toEqual(['Catalogs (JSON) must be a list: [ { … }, … ]']);
     expect(connectionFormProblems({ catalogs: '', sources: '[]' })).toEqual([]);
+  });
+
+  it('reads an open-data bucket without signing in: Sign-in "None: public data" round-trips', () => {
+    const field = file.fields.find((item) => item.key === 'storage.s3.auth')!;
+    expect(field.options?.map((option) => option.value)).toEqual(['', 'keys', 'none']);
+    const lake = { driver: 'file', dataFolder: 's3://aws-public-blockchain/v1.0/eth/', storage: { s3: { region: 'us-east-2', auth: 'none' } } };
+    expect(connectionFromFormFields('file', formFieldsFromConnection(lake))).toEqual(lake);
+    // The default sign-in saves nothing.
+    expect(connectionFromFormFields('file', { dataFolder: 's3://acme/', 'storage.s3.region': 'us-east-1', 'storage.s3.auth': '' })).toEqual({ driver: 'file', dataFolder: 's3://acme/', storage: { s3: { region: 'us-east-1' } } });
   });
 
   it('saves a bucket with the cloud\'s own sign-in: nothing but the region', () => {

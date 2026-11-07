@@ -183,6 +183,21 @@ describe('Draft my models', () => {
     expect(outcome).toMatchObject({ domain: 'Jaffle shop', stagingHidden: [{ relation: 'dev.stg_customers', finalRelation: 'dev.customers' }] });
   });
 
+  it('says which large lake tables were checked on a sample of their files, and lists the notes (open-formats L4)', () => {
+    const outcome = draftOutcome({
+      report: report({
+        validated: true,
+        readNotes: [
+          { relation: 'memory.main.eth_transactions', kind: 'sampled', text: 'eth_transactions: checked on 6 of 4,130 files spread across it, about 5.3 million of 3.7 billion rows. What the draft says of it holds in that sample.' },
+          { relation: 'memory.main.eth_transactions', kind: 'skipped', text: 'eth_transactions: 2 checks that look values up in it skipped.' },
+        ],
+      }),
+      proposal: { id: 'proposal-3' } as ContextAuthoringProposalV1,
+    });
+    expect(outcome.message).toMatch(/, each join checked on the data \(1 large table on a sample of its files\)\. Not saved yet/);
+    expect(outcome.readNotes).toHaveLength(2);
+  });
+
   it('says honestly what ZLens does with rows, and never "never their rows"', () => {
     expect(ROWS_PRIVACY).toBe('ZLens reads table structure and counts rows to check keys. Sample rows are shown only to you, on this computer. Nothing is sent anywhere unless you turn on value profiles for AI answers.');
     expect(stepTwoCopy('warehouse', null).description).toContain(ROWS_PRIVACY);

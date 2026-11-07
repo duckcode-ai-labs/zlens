@@ -1761,7 +1761,8 @@ function ConnectionForm({
               value={editFields[field.key] ?? ''}
               onChange={(e) => setEditFields({ ...editFields, [field.key]: e.target.value })}
             >
-              <option value="">Default</option>
+              {/* A field whose own choices include the empty one names it itself ("Your AWS sign-in"). */}
+              {(field.options ?? []).some((option) => option.value === '') ? null : <option value="">Default</option>}
               {(field.options ?? []).map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
@@ -2124,7 +2125,7 @@ function StyledField({
           onBlur={() => setFocused(false)}
           style={{ ...controlBase, fontFamily: t.font, fontSize: 12.5, padding: '8px 9px' }}
         >
-          <option value="">Default</option>
+          {(field.options ?? []).some((option) => option.value === '') ? null : <option value="">Default</option>}
           {(field.options ?? []).map((option) => (
             <option key={option.value} value={option.value}>{option.label}</option>
           ))}

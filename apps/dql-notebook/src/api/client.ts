@@ -658,6 +658,8 @@ export interface WarehouseDiscoveryReport {
   queryHistory?: { statements: number; joins: number } | { error: string };
   /** Staging copies left out because a final table holds the same thing; drafted with "Show staging tables". */
   stagingHidden?: Array<{ relation: string; finalRelation: string }>;
+  /** Lake tables too large to read whole: checked on a sample of their files, or a check skipped (open-formats plan L4). */
+  readNotes?: Array<{ relation: string; kind: 'sampled' | 'skipped'; text: string }>;
 }
 
 /** The newest "Draft my models" proposal that waits for review (drafts are kept until saved or discarded). */

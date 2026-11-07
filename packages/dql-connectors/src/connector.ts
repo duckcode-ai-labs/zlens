@@ -80,8 +80,12 @@ export interface LakeStorageConfig {
   /** Amazon S3, and other S3 APIs (MinIO, Ceph, Wasabi) through `endpoint`. */
   s3?: {
     region?: string;
-    /** `credential_chain` (default: environment, profile, SSO, instance role) or `keys`. */
-    auth?: 'credential_chain' | 'keys';
+    /**
+     * `credential_chain` (default: environment, profile, SSO, instance role),
+     * `keys`, or `none`: public data, read without signing in (an open-data
+     * bucket in `region`).
+     */
+    auth?: 'credential_chain' | 'keys' | 'none';
     /** An AWS profile of `~/.aws/config` (credential chain). */
     profile?: string;
     accessKeyId?: string;

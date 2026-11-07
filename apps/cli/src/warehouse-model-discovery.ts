@@ -33,6 +33,7 @@ import { looksLikePlaceholder, profileRelationshipOnWarehouse, suggestRelationsh
 import type { LookAlikeGroup, RowIdentity, TableLayer, UseInstead } from './model-layers.js';
 import type { LookAlikeJoin } from './model-joins.js';
 import type { DiscoveredConcept, DiscoveredRule } from './model-profile.js';
+import { ReadBudgetError, type ReadHint, type ReadNote } from './read-budget.js';
 
 export type RelationshipEvidenceSource = 'declared_foreign_key' | 'view_join' | 'query_history' | 'row_identity' | 'shared_key' | 'named_for_table' | 'same_name';
 
@@ -84,6 +85,8 @@ export interface DiscoveredEntity {
   layerEvidence?: string;
   /** What one row is, found on the data, with its repeated rows (validation only). */
   identity?: RowIdentity;
+  /** Measured on a sample of its files (a lake table too large to read whole): which sample, in words. */
+  sampled?: string;
   /** A look-alike that holds the same rows better: Ask should prefer it (validation only). */
   useInstead?: UseInstead;
 }
@@ -103,6 +106,12 @@ export interface DiscoveredRelationship {
   fanout: ManifestFanoutPolicy;
   /** From the warehouse, when discovery ran with validation. */
   validation?: ManifestRelationshipValidationEvidence;
+  /**
+   * Checked on a sample of a table's files: which sample, in words. Its
+   * validation is shown, never written as the model's evidence: a person
+   * validates the join on the whole tables before it can be certified.
+   */
+  sampled?: string;
   /** Why validation could not run for this relationship. */
   validationError?: string;
 }
@@ -154,6 +163,12 @@ export interface WarehouseDiscoveryReport {
   areas?: DiscoveredArea[];
   /** Hybrid: warehouse tables dbt builds that the model does not have yet, left to the dbt draft. */
   dbtLeftOut?: string[];
+  /**
+   * Lake tables too large to read whole (open-formats plan L4): each one the
+   * checks read from a sample of its files, and each check skipped because it
+   * would have read more than the read budget.
+   */
+  readNotes?: ReadNote[];
   /**
    * What this run drafted of a dbt project (model-at-scale design S4): the
    * scope asked for, the budget, and the tables over it, most important first.
@@ -635,7 +650,7 @@ export function recordDiscoveryDecisions(projectRoot: string, decisions: Discove
 export async function inferSharedKeyJoins(
   report: WarehouseDiscoveryReport,
   snapshot: WarehouseCatalogSnapshotV1,
-  execute: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>,
+  execute: (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>,
   quote: (identifier: string) => string,
   options: { maxChecks?: number } = {},
 ): Promise<WarehouseDiscoveryReport> {
@@ -711,7 +726,7 @@ export async function inferSharedKeyJoins(
         if (sourceUnique && targets.length > 1 && (source.relation.rowCountEstimate ?? 0) > (target.relation.rowCountEstimate ?? 0)) continue;
         if (checks++ >= budget) break;
         try {
-          const row = (await execute(`SELECT COUNT(${quote(source.column)}) AS referencing, COUNT(CASE WHEN ${quote(source.column)} IS NOT NULL AND ${quote(source.column)} NOT IN (SELECT ${quote(target.column)} FROM ${quoteRelation(target.relation.relation)} WHERE ${quote(target.column)} IS NOT NULL) THEN 1 END) AS unmatched FROM ${quoteRelation(source.relation.relation)}`)).rows[0] ?? {};
+          const row = (await execute(`SELECT COUNT(${quote(source.column)}) AS referencing, COUNT(CASE WHEN ${quote(source.column)} IS NOT NULL AND ${quote(source.column)} NOT IN (SELECT ${quote(target.column)} FROM ${quoteRelation(target.relation.relation)} WHERE ${quote(target.column)} IS NOT NULL) THEN 1 END) AS unmatched FROM ${quoteRelation(source.relation.relation)}`, { sample: [source.relation.relation] })).rows[0] ?? {};
           const referencing = num(row, 'referencing');
           const unmatched = num(row, 'unmatched');
           if (!(referencing > 0) || unmatched > referencing * MAX_UNMATCHED_SHARE) continue;
@@ -776,7 +791,7 @@ export async function inferSharedKeyJoins(
 export async function validateWarehouseDiscovery(
   report: WarehouseDiscoveryReport,
   snapshot: WarehouseCatalogSnapshotV1,
-  execute: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>,
+  execute: (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>,
   quote: (identifier: string) => string,
   options: {
     maxRelationships?: number;
@@ -829,16 +844,19 @@ export async function validateWarehouseDiscovery(
     }
     try {
       const keyTypes = relationship.keys.map((pair) => ({ from: typesOf.get(relationship.fromRelation)?.get(pair.from.toLowerCase()), to: typesOf.get(relationship.toRelation)?.get(pair.to.toLowerCase()) }));
-      const profile = await profileRelationshipOnWarehouse({ fromRelation: relationship.fromRelation, toRelation: relationship.toRelation, keys: relationship.keys, keyTypes }, execute, quote, new Date(), options.dialect);
+      const fromSide = (sql: string) => execute(sql, { sample: [relationship.fromRelation] });
+      const profile = await profileRelationshipOnWarehouse({ fromRelation: relationship.fromRelation, toRelation: relationship.toRelation, keys: relationship.keys, keyTypes }, fromSide, quote, new Date(), options.dialect);
       const checked: DiscoveredRelationship = { ...relationship, cardinality: profile.proposed.cardinality, fanout: profile.proposed.fanout, validation: profile.evidence };
       // A column name is where to look, not evidence: a join only a name
       // suggests is proposed when the data backs it as a reference.
       const nameOnly = relationship.evidence.every((item) => NAME_ONLY_EVIDENCE.has(item.source));
-      const objection = nameOnly ? await nameOnlyObjection(checked, columnsOf, execute, quote) : undefined;
+      const objection = nameOnly ? await nameOnlyObjection(checked, columnsOf, fromSide, quote) : undefined;
       if (objection) withheld.push({ ...checked, reason: objection });
       else relationships.push(checked);
     } catch (error) {
-      relationships.push({ ...relationship, validationError: error instanceof Error ? error.message.split('\n')[0]!.slice(0, 200) : String(error) });
+      // A read over the budget names the table and its size in full: it is the reason, not an error.
+      const message = error instanceof ReadBudgetError ? `not validated: ${error.message}` : error instanceof Error ? error.message.split('\n')[0]!.slice(0, 200) : String(error);
+      relationships.push({ ...relationship, validationError: message });
     }
   }
   return { ...report, entities, relationships, ...(withheld.length ? { withheld } : {}), validated: true };
@@ -856,7 +874,7 @@ export async function validateWarehouseDiscovery(
 export async function nameOnlyObjection(
   relationship: DiscoveredRelationship,
   columnsOf: Map<string, WarehouseCatalogRelationV1['columns']>,
-  execute: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }>,
+  execute: (sql: string, hint?: ReadHint) => Promise<{ rows: Array<Record<string, unknown>> }>,
   quote: (identifier: string) => string,
 ): Promise<string | undefined> {
   const evidence = relationship.validation;
@@ -947,8 +965,9 @@ export function warehouseDiscoveryChanges(report: WarehouseDiscoveryReport, opti
         fanout: relationship.fanout,
         status: 'draft',
         ...(crossDomain ? { crossDomain: true } : {}),
-        rationale: relationship.evidence.map((item) => item.reason).join('; '),
-        ...(relationship.validation ? { validation: relationship.validation } : {}),
+        rationale: [...relationship.evidence.map((item) => item.reason), ...(relationship.sampled ? [`checked on ${relationship.sampled}; validate it on the whole tables to certify it`] : [])].join('; '),
+        // A check on a sample is no proof: the model gets no validation evidence from it.
+        ...(relationship.validation && !relationship.sampled ? { validation: relationship.validation } : {}),
       },
     });
   }
@@ -1077,4 +1096,38 @@ export function observedJoinsFromQueries(texts: Iterable<string>): ObservedJoin[
     }
   }
   return [...counts.values()].sort((a, b) => b.count - a.count);
+}
+
+/**
+ * Mark what the draft measured on a sample of a lake table's files (open-
+ * formats plan L4, decision L4-4): its entity's description, its joins, and
+ * the rules on it say which sample, so no figure from a sample reads as the
+ * whole table's. `sampled`: each sampled relation, with its sample in words.
+ */
+export function markSampledFacts(report: WarehouseDiscoveryReport, sampled: ReadonlyMap<string, string>): WarehouseDiscoveryReport {
+  if (sampled.size === 0) return report;
+  const of = (relation: string) => sampled.get(relation) ?? [...sampled.entries()].find(([key]) => key.toLowerCase() === relation.toLowerCase())?.[1];
+  const entities = report.entities.map((entity) => {
+    const sample = of(entity.relation);
+    if (!sample) return entity;
+    const note = `Measured on ${sample}.`;
+    return { ...entity, sampled: sample, ...(entity.description ? { description: `${entity.description} ${note}` } : {}) };
+  });
+  const sampledEntity = new Map(entities.filter((entity) => entity.sampled).map((entity) => [`${entity.domain}::${entity.id}`, entity]));
+  const markJoin = <T extends DiscoveredRelationship>(relationship: T): T => {
+    const sample = [of(relationship.fromRelation), of(relationship.toRelation)].filter(Boolean).join('; ');
+    return sample ? { ...relationship, sampled: sample } : relationship;
+  };
+  const rules = report.rules?.map((rule) => {
+    const on = rule.entities.map((id) => sampledEntity.get(id.includes('::') ? id : `${rule.domain}::${id}`)).find(Boolean);
+    if (!on?.sampled) return rule;
+    return { ...rule, expression: `${rule.expression} (measured on ${on.sampled})`, evidence: { ...rule.evidence, measured: { ...rule.evidence.measured, sample: on.sampled } } };
+  });
+  return {
+    ...report,
+    entities,
+    relationships: report.relationships.map(markJoin),
+    ...(report.withheld ? { withheld: report.withheld.map(markJoin) } : {}),
+    ...(rules ? { rules } : {}),
+  };
 }

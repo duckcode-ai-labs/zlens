@@ -273,7 +273,7 @@ sign-in, so nothing secret is written into the project:
 
 | Store | Default sign-in | Instead |
 |---|---|---|
-| `s3` | the AWS credential chain: environment, `profile`, SSO, instance or task role | `accessKeyId` + `secretAccessKey` (+ `sessionToken`); `endpoint` for MinIO or another S3 API |
+| `s3` | the AWS credential chain: environment, `profile`, SSO, instance or task role | `accessKeyId` + `secretAccessKey` (+ `sessionToken`); `endpoint` for MinIO or another S3 API; `auth: "none"` for public data (an open-data bucket in `region`), read without signing in |
 | `gcs` | Google application default credentials | `auth: "hmac"` with `keyId` + `secret` |
 | `azure` | Azure CLI, environment or managed identity, with `accountName` | `connectionString` |
 | `r2` | (keys only) | `accountId` + `keyId` + `secret` |
@@ -355,6 +355,37 @@ nothing is written into the DuckDB file.
 
 `zlens doctor` says what the data folder and sources read, which catalogs it
 attaches, how buckets sign in, and what is not read and why.
+
+#### Large lakes
+
+ZLens never reads a whole lake table on its own. `zlens sync warehouse`
+records each lake table's size from metadata, never from the data: a folder
+of Parquet files from its listing and the footers of its files (16 spread
+across it when it has more than 64, so the size is an estimate and says so),
+an Iceberg table from its manifests, a DuckLake table from its catalog, a
+Delta or Unity Catalog table from its log.
+
+```text
+✓ Lake table sizes: 7 tables, about 5.6 TB, from file metadata (estimated from some of their files for 7); no data was read.
+```
+
+The checks ZLens runs by itself, such as Draft my models (keys, joins, row
+identities, measured rules), read at most **256 MB of a remote table** and
+**4 GB of a local one** per statement, estimated from those sizes (only the
+columns a statement names are read from Parquet; CSV and JSON files are read
+whole). A table over that is checked on whole files spread across it, as many
+as fit, and every fact measured on it says so ("Measured on a sample of
+eth_transactions: 6 of 4,130 files"). A join checked on a sample is drafted
+without validation evidence, so it is validated on the whole tables before it
+can be certified. A check that would look values up in a table over the limit
+is skipped and says why. `ZLENS_READ_BUDGET_MB` sets the limit for both.
+Tables in the DuckDB file itself, and warehouse tables, are read as before.
+
+A folder of more than 64 files is read with its first file's columns when 16
+files spread across it have the same ones, so a statement opens one footer,
+not every file's. A folder whose files differ (a column added later) is still
+read by column name: its first statement reads every file's footer, which
+ZLens then keeps in memory, and Setup and `zlens doctor` name it.
 
 A `duckdb` connection also reads the project's `data/` folder (or `dataDir`
 in `dql.config.json`) as tables, the same way but without attaching database

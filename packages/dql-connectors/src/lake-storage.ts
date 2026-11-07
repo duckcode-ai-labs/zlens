@@ -36,7 +36,10 @@ export function namedLakeSecret(type: string, options: string[]): { name: string
 export function s3SecretOptions(s3: NonNullable<LakeStorageConfig['s3']>): string[] {
   const options: string[] = [];
   const keys = s3.auth === 'keys' || (s3.auth === undefined && Boolean(s3.accessKeyId || s3.secretAccessKey));
-  if (keys) {
+  if (s3.auth === 'none') {
+    // Public data: a secret with no keys signs nothing, and carries the bucket's region.
+    options.push('PROVIDER config');
+  } else if (keys) {
     options.push(`KEY_ID ${sqlText(required(s3.accessKeyId, 's3.accessKeyId', 'keys need an access key id'))}`);
     options.push(`SECRET ${sqlText(required(s3.secretAccessKey, 's3.secretAccessKey', 'keys need a secret access key'))}`);
     if (s3.sessionToken?.trim()) options.push(`SESSION_TOKEN ${sqlText(s3.sessionToken.trim())}`);
@@ -103,7 +106,7 @@ export function describeLakeStorage(storage: LakeStorageConfig | undefined): str
   const lines: string[] = [];
   if (storage.s3) {
     const keys = storage.s3.auth === 'keys' || (storage.s3.auth === undefined && Boolean(storage.s3.accessKeyId || storage.s3.secretAccessKey));
-    lines.push(`S3${storage.s3.endpoint ? ` at ${endpointParts(storage.s3.endpoint).host}` : ''}${storage.s3.region ? ` (${storage.s3.region})` : ''}: ${keys ? 'access keys' : storage.s3.profile ? `your AWS sign-in, profile ${storage.s3.profile}` : 'your AWS sign-in'}`);
+    lines.push(`S3${storage.s3.endpoint ? ` at ${endpointParts(storage.s3.endpoint).host}` : ''}${storage.s3.region ? ` (${storage.s3.region})` : ''}: ${storage.s3.auth === 'none' ? 'public data, no sign-in' : keys ? 'access keys' : storage.s3.profile ? `your AWS sign-in, profile ${storage.s3.profile}` : 'your AWS sign-in'}`);
   }
   if (storage.gcs) lines.push(`Google Cloud Storage: ${storage.gcs.auth === 'hmac' || (storage.gcs.auth === undefined && storage.gcs.keyId) ? 'HMAC keys' : 'your Google sign-in'}`);
   if (storage.azure) lines.push(`Azure Storage${storage.azure.accountName ? ` (${storage.azure.accountName})` : ''}: ${storage.azure.auth === 'connection_string' || (storage.azure.auth === undefined && storage.azure.connectionString) ? 'a connection string' : 'your Azure sign-in'}`);
