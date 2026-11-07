@@ -21,7 +21,7 @@ import {
   type WarehouseCatalogSnapshotV1,
 } from '@zlens/core';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { sqliteColumnsOneByOne, type ConnectionMetadataScopeV1 } from './warehouse-metadata.js';
+import { duckdbCatalogScopePredicate, isAttachedDuckDBCatalog, sqliteColumnsOneByOne, type ConnectionMetadataScopeV1 } from './warehouse-metadata.js';
 
 const MAX_ROWS = 50_000;
 // Schema reads only: a host's row policy (RFC 0010) can tell them from data.
@@ -50,11 +50,14 @@ export function buildWarehouseCatalogQueries(driver: string, scope: { catalogOrD
   const d = driver.toLowerCase();
   // A file connection is DuckDB reading files: its data folder's views are its tables.
   if (d === 'duckdb' || d === 'file') {
+    // One scope, one catalog: a database attached beside the opened one is read by its own scope only.
+    const inScope = duckdbCatalogScopePredicate('database_name', db);
+    const current = 'current_database() AS current_catalog';
     return [
-      { kind: 'columns', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, column_name, data_type, is_nullable, comment FROM duckdb_columns() WHERE ${schemaFilter('schema_name')} AND NOT internal ORDER BY schema_name, table_name, column_index LIMIT ${MAX_ROWS}` },
-      { kind: 'tables', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, 'BASE TABLE' AS table_type, comment, estimated_size AS row_count FROM duckdb_tables() WHERE ${schemaFilter('schema_name')} AND NOT internal` },
-      { kind: 'views', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, view_name AS table_name, comment, sql AS view_definition FROM duckdb_views() WHERE ${schemaFilter('schema_name')} AND NOT internal` },
-      { kind: 'keys', catalogOrDatabase: db, sql: `SELECT schema_name AS table_schema, table_name, constraint_type, constraint_column_names, referenced_table, referenced_column_names FROM duckdb_constraints() WHERE ${schemaFilter('schema_name')} AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')` },
+      { kind: 'columns', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, column_name, data_type, is_nullable, comment, ${current} FROM duckdb_columns() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal ORDER BY schema_name, table_name, column_index LIMIT ${MAX_ROWS}` },
+      { kind: 'tables', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, 'BASE TABLE' AS table_type, comment, estimated_size AS row_count, ${current} FROM duckdb_tables() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal` },
+      { kind: 'views', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, view_name AS table_name, comment, sql AS view_definition, ${current} FROM duckdb_views() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND NOT internal` },
+      { kind: 'keys', catalogOrDatabase: db, sql: `SELECT database_name AS table_catalog, schema_name AS table_schema, table_name, constraint_type, constraint_column_names, referenced_table, referenced_column_names, ${current} FROM duckdb_constraints() WHERE ${inScope} AND ${schemaFilter('schema_name')} AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY')` },
     ];
   }
   if (d === 'sqlite') {
@@ -198,16 +201,29 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
   // columns are not found under the name it was chosen by.
   const recordDatabase = includeCatalog || ['duckdb', 'file', 'postgres', 'postgresql', 'redshift', 'mssql', 'fabric', 'trino'].includes(driver.toLowerCase());
   const relations = new Map<string, WarehouseCatalogRelationV1>();
+  const keyOf = new Map<WarehouseCatalogRelationV1, string>();
+  // DuckDB: a database attached beside the opened one (`ATTACH … AS lake`) keeps its name in the key and
+  // the id, so `lake.main.orders` and `main.orders` stay two relations. The opened database's ids are unchanged.
+  const duckdb = ['duckdb', 'file'].includes(driver.toLowerCase());
+  const attachedDatabase = (row: Row): string | undefined => {
+    if (!duckdb) return undefined;
+    const database = text(row, 'table_catalog');
+    return isAttachedDuckDBCatalog(database, text(row, 'current_catalog')) ? database : undefined;
+  };
+  const rowKey = (row: Row, schema: string | undefined, name: string) => {
+    const attached = attachedDatabase(row);
+    return attached ? `${attached.toLowerCase()}.${key(schema, name)}` : key(schema, name);
+  };
   const ensure = (row: Row, catalogOrDatabase: string): WarehouseCatalogRelationV1 | undefined => {
     const schema = text(row, 'table_schema');
     const name = text(row, 'table_name');
     if (!name) return undefined;
-    const k = key(schema, name);
+    const k = rowKey(row, schema, name);
     let relation = relations.get(k);
     if (!relation) {
       const database = text(row, 'table_catalog') ?? catalogOrDatabase;
       relation = {
-        id: warehouseRelationId({ database: includeCatalog ? database : undefined, schema, name }),
+        id: warehouseRelationId({ database: includeCatalog || attachedDatabase(row) ? database : undefined, schema, name }),
         ...(recordDatabase && database ? { database } : {}),
         ...(schema ? { schema } : {}),
         name,
@@ -218,10 +234,13 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
         columns: [],
       };
       relations.set(k, relation);
+      keyOf.set(relation, k);
     }
     return relation;
   };
   const byKey = (schema: string | undefined, name: string | undefined) => (name ? relations.get(key(schema, name)) : undefined);
+  const byRow = (row: Row, schema: string | undefined, name: string | undefined) => (name ? relations.get(rowKey(row, schema, name)) : undefined);
+  const relationKeyOf = (relation: WarehouseCatalogRelationV1) => keyOf.get(relation) ?? key(relation.schema, relation.name);
   const pkPositions = new Map<string, Array<{ column: string; position: number }>>();
   const fkGroups = new Map<string, { relationKey: string; columns: Array<{ column: string; position: number; refColumn?: string }>; refRelation?: string; name?: string }>();
   const addPk = (relationKey: string, column: string, position: number) => {
@@ -248,12 +267,12 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
       const comment = text(row, 'comment');
       relation.columns.push({ name, ...(text(row, 'data_type') ? { type: text(row, 'data_type') } : {}), ...(comment ? { comment } : {}), ...(nullable ? { nullable: nullable.toUpperCase() === 'YES' } : {}) });
       const pk = Number(field(row, 'pk_position'));
-      if (Number.isFinite(pk) && pk > 0) addPk(key(relation.schema, relation.name), name, pk);
+      if (Number.isFinite(pk) && pk > 0) addPk(relationKeyOf(relation), name, pk);
     }
   }
   for (const { rows } of results.filter((item) => item.query.kind === 'tables' || item.query.kind === 'views')) {
     for (const row of rows) {
-      const relation = byKey(text(row, 'table_schema'), text(row, 'table_name'));
+      const relation = byRow(row, text(row, 'table_schema'), text(row, 'table_name'));
       if (!relation) continue;
       const type = (text(row, 'table_type') ?? '').toUpperCase();
       const view = text(row, 'view_definition');
@@ -269,23 +288,23 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
     rows.forEach((row, index) => {
       const schema = text(row, 'table_schema');
       const table = text(row, 'table_name');
-      const relation = byKey(schema, table);
+      const relation = byRow(row, schema, table);
       if (!relation) return;
       const type = (text(row, 'constraint_type') ?? '').toUpperCase();
       const columnList = list(field(row, 'constraint_column_names'));
       const single = text(row, 'column_name');
       const columns = columnList.length ? columnList : single ? [single] : [];
       const position = Number(field(row, 'position')) || 1;
-      if (type === 'PRIMARY KEY') columns.forEach((column, i) => addPk(key(relation.schema, relation.name), column, columnList.length ? i + 1 : position));
+      if (type === 'PRIMARY KEY') columns.forEach((column, i) => addPk(relationKeyOf(relation), column, columnList.length ? i + 1 : position));
       if (type === 'FOREIGN KEY') {
         const refColumns = list(field(row, 'referenced_column_names'));
         const refTable = text(row, 'referenced_table', 'ref_table');
         const refSchema = text(row, 'ref_schema') ?? schema;
-        // Catalog-qualified warehouses name the referenced catalog too.
-        const refCatalog = includeCatalog ? text(row, 'ref_catalog') : undefined;
+        // Catalog-qualified warehouses name the referenced catalog too; so does a DuckDB key inside an attached database.
+        const refCatalog = includeCatalog ? text(row, 'ref_catalog') : attachedDatabase(row);
         const refRelation = refTable ? [refCatalog, refSchema, refTable].filter(Boolean).join('.') : undefined;
-        const groupKey = `${key(schema, table ?? '')}#${text(row, 'constraint_name') ?? `duckdb-${index}`}`;
-        columns.forEach((column, i) => addFk(groupKey, key(relation.schema, relation.name), column, columnList.length ? i + 1 : position, refRelation, refColumns[i] ?? text(row, 'ref_column'), text(row, 'constraint_name')));
+        const groupKey = `${relationKeyOf(relation)}#${text(row, 'constraint_name') ?? `duckdb-${index}`}`;
+        columns.forEach((column, i) => addFk(groupKey, relationKeyOf(relation), column, columnList.length ? i + 1 : position, refRelation, refColumns[i] ?? text(row, 'ref_column'), text(row, 'constraint_name')));
       }
     });
   }
@@ -294,7 +313,7 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
     for (const row of rows) {
       const relation = byKey(text(row, 'schema_name'), text(row, 'table_name'));
       const column = text(row, 'column_name');
-      if (relation && column) addPk(key(relation.schema, relation.name), column, Number(field(row, 'key_sequence')) || 1);
+      if (relation && column) addPk(relationKeyOf(relation), column, Number(field(row, 'key_sequence')) || 1);
     }
     void query;
   }
@@ -311,7 +330,7 @@ export function assembleWarehouseCatalog(driver: string, results: Array<{ query:
       const refDatabase = text(row, 'pk_database_name');
       const refRelation = refTable ? [includeCatalog ? refDatabase : undefined, refSchema, refTable].filter(Boolean).join('.') : undefined;
       const name = text(row, 'fk_name', 'constraint_name');
-      addFk(`${key(schema, table ?? '')}#${name ?? refRelation ?? ''}`, key(relation.schema, relation.name), column, Number(field(row, 'key_sequence', 'position')) || 1, refRelation, text(row, 'pk_column_name', 'ref_column'), name);
+      addFk(`${key(schema, table ?? '')}#${name ?? refRelation ?? ''}`, relationKeyOf(relation), column, Number(field(row, 'key_sequence', 'position')) || 1, refRelation, text(row, 'pk_column_name', 'ref_column'), name);
     }
   }
   for (const [relationKey, columns] of pkPositions) {

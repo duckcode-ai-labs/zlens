@@ -472,12 +472,14 @@ export function buildWarehouseMetadataQueries(
       : exactPredicate ?? schemaPredicate;
     if (!predicate) return [];
     const top = connection.driver === 'mssql' || connection.driver === 'fabric';
+    const duckdb = connection.driver === 'duckdb' || connection.driver === 'file';
     return [{
       catalogOrDatabase,
       sql: [
-        `SELECT ${top ? `TOP (${MAX_METADATA_ROWS_PER_QUERY}) ` : ''}table_catalog, table_schema, table_name, column_name, data_type, ordinal_position`,
+        `SELECT ${top ? `TOP (${MAX_METADATA_ROWS_PER_QUERY}) ` : ''}table_catalog, table_schema, table_name, column_name, data_type, ordinal_position${duckdb ? ', current_database() AS current_catalog' : ''}`,
         `FROM ${informationSchemaColumnsRelation(connection, catalogOrDatabase)}`,
         `WHERE ${predicate}`,
+        ...(duckdb ? [`  AND ${duckdbCatalogScopePredicate('table_catalog', catalogOrDatabase)}`] : []),
         `  AND UPPER(table_schema) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')`,
         'ORDER BY table_schema, table_name, ordinal_position',
         ...(top ? [] : [`LIMIT ${MAX_METADATA_ROWS_PER_QUERY}`]),
@@ -530,7 +532,10 @@ function addMetadataRow(
   const tableName = rowString(row, 'table_name');
   const columnName = rowString(row, 'column_name');
   if (!schema || !tableName || !columnName) return;
-  const includeCatalog = driver === 'snowflake' || driver === 'databricks' || driver === 'bigquery';
+  // A database attached beside the one a DuckDB connection opened keeps its
+  // name: `lake.main.orders` and `main.orders` are two tables, never one.
+  const includeCatalog = driver === 'snowflake' || driver === 'databricks' || driver === 'bigquery'
+    || ((driver === 'duckdb' || driver === 'file') && isAttachedDuckDBCatalog(catalog, rowString(row, 'current_catalog')));
   const relation = includeCatalog
     ? [catalog, schema, tableName].filter(Boolean).join('.')
     : [schema, tableName].filter(Boolean).join('.');
@@ -682,6 +687,26 @@ function buildExactRelationPredicate(relations: Array<{ schema: string; table: s
 function buildSchemaPredicate(schemas: string[]): string | undefined {
   if (schemas.length === 0) return undefined;
   return `UPPER(table_schema) IN (${schemas.map((schema) => `UPPER(${sqlLiteral(schema)})`).join(', ')})`;
+}
+
+/**
+ * DuckDB lists every attached database in one information_schema (and has no
+ * per-catalog one). A scope reads its own catalog: an attached database's
+ * tables when the scope names one, otherwise the database the connection
+ * opened and its temporary views, whatever the scope calls it (`memory` is
+ * the default name for a connection with no database configured).
+ */
+export function duckdbCatalogScopePredicate(column: string, scopeCatalog: string): string {
+  const scope = `lower(${sqlLiteral(scopeCatalog)})`;
+  return `(lower(${column}) = ${scope} OR (${column} IN (current_database(), 'temp') AND ${scope} NOT IN (`
+    + `SELECT lower(catalog_name) FROM information_schema.schemata WHERE catalog_name NOT IN (current_database(), 'temp', 'system'))))`;
+}
+
+/** Whether a DuckDB row's catalog is a database attached beside the one the connection opened. */
+export function isAttachedDuckDBCatalog(catalog: string | undefined, currentCatalog: string | undefined): boolean {
+  if (!catalog || !currentCatalog) return false;
+  const name = catalog.toLowerCase();
+  return name !== currentCatalog.toLowerCase() && name !== 'temp' && name !== 'system';
 }
 
 function informationSchemaColumnsRelation(connection: ConnectionConfig, catalogOrDatabase: string): string {

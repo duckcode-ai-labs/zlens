@@ -31225,8 +31225,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           if (typeof connector.listColumns === 'function') {
             // Connector contracts accept one schema plus one table. For a
             // three-part dbt relation, the active connection owns the database
-            // and the final namespace segment is the schema.
-            const connectorSchema = schemaName?.split('.').filter(Boolean).at(-1);
+            // and the final namespace segment is the schema. DuckDB takes the
+            // whole `catalog.schema`: a database attached beside the opened one
+            // (`lake.main.orders`) is told apart from it (`main.orders`).
+            const duckdbConnection = activeConnection.driver === 'duckdb' || activeConnection.driver === 'file';
+            const connectorSchema = duckdbConnection && schemaName?.includes('.')
+              ? schemaName
+              : schemaName?.split('.').filter(Boolean).at(-1);
             const rawCols = await connector.listColumns(connectorSchema, tablePath);
             columns = rawCols.map((c) => ({ name: c.name, type: c.dataType }));
           }
@@ -42580,6 +42585,15 @@ export function splitQualifiedRelationIdentifier(value: string): string[] | null
   return decoded.every((part): part is string => Boolean(part)) ? decoded : null;
 }
 
+/** A DuckDB row's database when it is attached beside the one the connection opened, else undefined. */
+function attachedDuckDBCatalogOf(row: Record<string, unknown>): string | undefined {
+  const catalog = String(row['table_catalog'] ?? row['TABLE_CATALOG'] ?? '');
+  const current = String(row['current_catalog'] ?? row['CURRENT_CATALOG'] ?? '');
+  if (!catalog || !current) return undefined;
+  const name = catalog.toLowerCase();
+  return name === current.toLowerCase() || name === 'temp' || name === 'system' ? undefined : catalog;
+}
+
 async function introspectSchema(
   executor: QueryExecutor,
   connection: ConnectionConfig,
@@ -42605,9 +42619,19 @@ async function introspectSchema(
   // Runtime inventory is table-first and bounded. Columns are loaded only for
   // a selected table through /api/describe-table; constructing one account-wide
   // table+column tree is an enterprise-scale OOM risk (PERF-001 / CTX-005).
+  // DuckDB lists every attached database (`ATTACH … AS lake`) in one information_schema: a table in one keeps
+  // the database's name (`lake.main.orders`), so it never shows as, or mixes with, the opened database's `main.orders`.
+  const duckdb = connection.driver === 'duckdb' || connection.driver === 'file';
   try {
     const catalogRows = await executor.executeQuery(
-      `SELECT table_schema, table_name, table_type
+      duckdb
+        ? `SELECT table_catalog, table_schema, table_name, table_type, current_database() AS current_catalog
+       FROM information_schema.tables
+       WHERE UPPER(table_schema) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG') AND table_catalog <> 'system'
+       ${searchPredicate}
+       ORDER BY CASE WHEN table_catalog IN (current_database(), 'temp') THEN 0 ELSE 1 END, table_catalog, table_schema, table_name
+       LIMIT ${limit} OFFSET ${offset}`
+        : `SELECT table_schema, table_name, table_type
        FROM information_schema.tables
        WHERE UPPER(table_schema) NOT IN ('INFORMATION_SCHEMA', 'PG_CATALOG')
        ${searchPredicate}
@@ -42615,12 +42639,18 @@ async function introspectSchema(
        LIMIT ${limit} OFFSET ${offset}`,
       search ? [{ name: 'search', position: 1 }, { name: 'search', position: 2 }] : [], search ? { search: `%${search}%` } : {}, connection, { purpose: 'metadata' },
     );
-    tables = catalogRows.rows.map((row) => {
-      const schema = String(row['table_schema'] ?? row['TABLE_SCHEMA'] ?? 'default');
+    const seenPaths = new Set<string>();
+    tables = catalogRows.rows.flatMap((row) => {
+      const rawSchema = String(row['table_schema'] ?? row['TABLE_SCHEMA'] ?? 'default');
       const name = String(row['table_name'] ?? row['TABLE_NAME'] ?? '');
       const type = String(row['table_type'] ?? row['TABLE_TYPE'] ?? 'TABLE');
+      const catalog = duckdb ? attachedDuckDBCatalogOf(row) : undefined;
+      const schema = catalog ? `${catalog}.${rawSchema}` : rawSchema;
       const path = schema ? `${schema}.${name}` : name;
-      return { schema, name, path, type };
+      // A temporary view and the opened database's table of the same name are one name: list it once.
+      if (seenPaths.has(path.toLowerCase())) return [];
+      seenPaths.add(path.toLowerCase());
+      return [{ schema, name, path, type }];
     });
     return { tables, columnsByPath };
   } catch {
@@ -42639,8 +42669,9 @@ async function introspectSchema(
           || table.name.toLowerCase().includes(normalizedSearch))
         .slice(offset, offset + limit)
         .map((t) => {
-          const schema = t.schema || 'default';
-          const path = t.schema ? `${t.schema}.${t.name}` : t.name;
+          const namespace = t.catalog && t.schema ? `${t.catalog}.${t.schema}` : t.schema;
+          const schema = namespace || 'default';
+          const path = namespace ? `${namespace}.${t.name}` : t.name;
           return { schema, name: t.name, path, type: t.type };
         });
     }

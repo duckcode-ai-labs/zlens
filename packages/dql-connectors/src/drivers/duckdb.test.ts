@@ -158,6 +158,40 @@ describe('DuckDB consistent App read scope', () => {
   });
 });
 
+describe('DuckDB tables in a database attached beside the opened one', () => {
+  duckDbIt('keep the database name, never mix columns with the opened database, and list a temporary view once', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'dql-duckdb-attached-'));
+    const connector = new DuckDBConnector();
+    try {
+      await connector.connect({ driver: 'duckdb', filepath: join(directory, 'shop.duckdb'), moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+      await connector.execute('CREATE TABLE main.orders (order_id INTEGER, amount DOUBLE)');
+      await connector.execute('CREATE TABLE main.customers (customer_id INTEGER)');
+      await connector.execute('CREATE TEMP VIEW customers AS SELECT 1 AS customer_id, 2 AS region');
+      await connector.execute(`ATTACH '${join(directory, 'lake.duckdb').replace(/'/g, "''")}' AS lake`);
+      await connector.execute('CREATE TABLE lake.main.orders (lake_id INTEGER, channel VARCHAR, placed_at DATE)');
+
+      expect(await connector.listTables()).toEqual([
+        { schema: 'main', name: 'customers', type: 'VIEW' },
+        { schema: 'main', name: 'orders', type: 'BASE TABLE' },
+        { catalog: 'lake', schema: 'main', name: 'orders', type: 'BASE TABLE' },
+      ]);
+      // The opened database's table: its own two columns only (before, the attached table's three were mixed in).
+      expect((await connector.listColumns('main', 'orders')).map((column) => column.name)).toEqual(['order_id', 'amount']);
+      // A temporary view shadows the table of the same name, as a statement reads it.
+      expect((await connector.listColumns('main', 'customers')).map((column) => column.name)).toEqual(['customer_id', 'region']);
+      // The attached database's table, named with its database.
+      expect(await connector.listColumns('lake.main', 'orders')).toEqual([
+        { catalog: 'lake', schema: 'main', table: 'orders', name: 'lake_id', dataType: 'INTEGER', ordinalPosition: 1 },
+        { catalog: 'lake', schema: 'main', table: 'orders', name: 'channel', dataType: 'VARCHAR', ordinalPosition: 2 },
+        { catalog: 'lake', schema: 'main', table: 'orders', name: 'placed_at', dataType: 'DATE', ordinalPosition: 3 },
+      ]);
+    } finally {
+      await connector.disconnect();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('DuckDB values and parameters (as the old duckdb driver returned and bound them)', () => {
   // Every expected value below is what `duckdb` 1.4.4 returned after
   // normalizeDuckDBRow, so moving to @duckdb/node-api changes no result.

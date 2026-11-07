@@ -155,12 +155,20 @@ export interface ConnectionConfig {
 export type DriverName = ConnectionConfig['driver'];
 
 export interface TableInfo {
+  /**
+   * DuckDB: the database a table is in, only when it is attached beside the
+   * one the connection opened (`ATTACH … AS lake` → `lake`). Its name is then
+   * `catalog.schema.name`; without it, `schema.name`.
+   */
+  catalog?: string;
   schema: string;
   name: string;
   type: string; // 'BASE TABLE' | 'VIEW' | etc.
 }
 
 export interface ColumnInfo {
+  /** As `TableInfo.catalog`: set for a table in an attached database only. */
+  catalog?: string;
   schema: string;
   table: string;
   name: string;
@@ -176,5 +184,6 @@ export interface DatabaseConnector {
   disconnect(): Promise<void>;
   ping(): Promise<boolean>;
   listTables?(): Promise<TableInfo[]>;
+  /** DuckDB also takes `catalog.schema` for a table in an attached database. */
   listColumns?(schema?: string, table?: string): Promise<ColumnInfo[]>;
 }
