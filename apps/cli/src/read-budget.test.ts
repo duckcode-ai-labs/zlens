@@ -74,21 +74,23 @@ describe('what a statement reads', () => {
     expect(estimateRead(icebergTable, icebergTable.columns, undefined)).toBe(2_000_000_000 * 8);
   });
 
-  it('ZLENS_READ_BUDGET_MB sets both budgets', () => {
-    expect(readBudgetFromEnv({ ZLENS_READ_BUDGET_MB: '5' })).toEqual({ remote: 5 * MB, local: 5 * MB });
-    expect(readBudgetFromEnv({})).toEqual({ remote: 256 * MB, local: 4_000 * MB });
+  it('ZLENS_READ_BUDGET_MB sets both byte limits, ZLENS_READ_BUDGET_FILES the remote file limit', () => {
+    expect(readBudgetFromEnv({ ZLENS_READ_BUDGET_MB: '5' })).toEqual({ remote: 5 * MB, local: 5 * MB, remoteFiles: 64 });
+    expect(readBudgetFromEnv({ ZLENS_READ_BUDGET_FILES: '8' })).toEqual({ remote: 256 * MB, local: 4_000 * MB, remoteFiles: 8 });
+    expect(readBudgetFromEnv({})).toEqual({ remote: 256 * MB, local: 4_000 * MB, remoteFiles: 64 });
   });
 });
 
 describe('the read budget', () => {
   it('runs a statement within the budget, or on tables with no size, exactly as written', async () => {
-    const { run, ran } = engine();
-    const bounded = boundedReads({ run, snapshot, budget });
+    const { run, ran: all } = engine();
+    const ran = all;
+    const bounded = boundedReads({ run, snapshot, budget: { ...budget, remoteFiles: 1_000 } });
     const small = 'SELECT COUNT(*) AS n, COUNT(DISTINCT "block_number") AS d FROM "memory"."main"."eth_transactions"';
     await bounded.run(small);
     await bounded.run('SELECT COUNT(DISTINCT "id") FROM "db"."main"."orders"');
     await bounded.run('SELECT COUNT(*) AS n FROM "memory"."main"."eth_transactions"');
-    expect(ran).toEqual([small, 'SELECT COUNT(DISTINCT "id") FROM "db"."main"."orders"', 'SELECT COUNT(*) AS n FROM "memory"."main"."eth_transactions"']);
+    expect(ran.filter((sql) => !sql.includes('read_blob'))).toEqual([small, 'SELECT COUNT(DISTINCT "id") FROM "db"."main"."orders"', 'SELECT COUNT(*) AS n FROM "memory"."main"."eth_transactions"']);
     expect(bounded.notes()).toEqual([]);
   });
 
@@ -101,7 +103,7 @@ describe('the read budget', () => {
     expect(bounded.notes()).toEqual([{
       relation: 'memory.main.eth_transactions',
       kind: 'skipped',
-      text: 'eth_transactions: 1 check skipped: a check reads at most 256 MB of a remote table, and even one of its files holds more, up to about 240 GB (hash).',
+      text: 'eth_transactions: 1 check skipped: a check reads at most 256 MB or 64 files of a remote table, and even one of its files holds more, up to about 240 GB (hash).',
     }]);
   });
 
@@ -134,12 +136,13 @@ describe('the read budget', () => {
     const bounded = boundedReads({ run, snapshot, budget });
     const containment = 'SELECT COUNT("transaction_hash") AS referencing, COUNT(CASE WHEN "transaction_hash" NOT IN (SELECT "hash" FROM "memory"."main"."eth_transactions") THEN 1 END) AS unmatched FROM "memory"."main"."eth_blocks"';
     await expect(bounded.run(containment, { sample: ['memory.main.eth_blocks'] })).rejects.toThrow(ReadBudgetError);
-    await expect(bounded.run(containment, { sample: ['memory.main.eth_blocks'] })).rejects.toThrow(/^eth_transactions is looked up whole here, and that reads about 240 GB of eth_transactions \(hash\)/);
-    expect(ran).toEqual([]);
+    await expect(bounded.run(containment, { sample: ['memory.main.eth_blocks'] })).rejects.toThrow(/^eth_transactions is looked up whole here, and that reads about 240 GB of eth_transactions \(hash\) in 100 files; ZLens reads at most 256 MB or 64 files of a remote table per check$/);
+    // Only the listing, to count its files: nothing of the table is read.
+    expect(ran).toEqual(["SELECT filename AS file, size FROM read_blob('s3://chain/tx/**/*.parquet') ORDER BY filename"]);
     expect(bounded.notes()).toEqual([{
       relation: 'memory.main.eth_transactions',
       kind: 'skipped',
-      text: 'eth_transactions: 2 checks that look values up in it skipped: a lookup reads the whole table, up to about 240 GB (hash), and a check reads at most 256 MB of a remote table.',
+      text: 'eth_transactions: 2 checks that look values up in it skipped: a lookup reads the whole table, up to about 240 GB (hash), and a check reads at most 256 MB or 64 files of a remote table.',
     }]);
   });
 
@@ -151,6 +154,27 @@ describe('the read budget', () => {
     const statement = ran.at(-1)!;
     expect(statement).toContain('FROM (SELECT * FROM read_parquet([');
     expect(statement).toContain('FROM "memory"."main"."eth_blocks" GROUP BY');
+  });
+
+  it('a remote table of more files than a check may open is sampled even when its bytes fit: requests cost as much as bytes', async () => {
+    const { run, ran } = engine();
+    const bounded = boundedReads({ run, snapshot, budget });
+    // block_number is 100 MB, within 256 MB, but spread over 100 files.
+    await bounded.run('SELECT COUNT(DISTINCT "block_number") AS d FROM "memory"."main"."eth_transactions"');
+    expect(ran.at(-1)!.match(/s3:\/\/chain\/tx\//g)).toHaveLength(64);
+    expect(bounded.notes()[0]!.text).toMatch(/^eth_transactions: checked on 64 of 100 files spread across it/);
+    // A table of few files within the bytes runs as written.
+    await bounded.run('SELECT COUNT(DISTINCT "number") AS d FROM "memory"."main"."eth_blocks"');
+    expect(ran.at(-1)).toBe('SELECT COUNT(DISTINCT "number") AS d FROM "memory"."main"."eth_blocks"');
+  });
+
+  it('checks that name heavier columns read fewer files: the notes give the range, never only the largest sample', async () => {
+    const { run } = engine();
+    const bounded = boundedReads({ run, snapshot, budget: { remote: 12_000 * MB, local: budget.local } });
+    await bounded.run('SELECT COUNT(DISTINCT "hash") AS d FROM "memory"."main"."eth_transactions"');
+    await bounded.run('SELECT COUNT(DISTINCT "block_number") AS d FROM "memory"."main"."eth_transactions"');
+    expect(bounded.notes()[0]!.text).toBe('eth_transactions: checked on 5 to 64 of 100 files spread across it, about 185 million to 2.4 billion of 3.7 billion rows. What the draft says of it holds in that sample.');
+    expect(bounded.sampled().get('memory.main.eth_transactions')).toBe('a sample of eth_transactions: 5 to 64 of 100 files, about 185 million to 2.4 billion of 3.7 billion rows');
   });
 
   it('a table it cannot sample by file, over the budget, is not read', async () => {
@@ -213,7 +237,7 @@ describe('what the draft measured on a sample says so', () => {
 describe('which columns a statement reads', () => {
   it('a * straight from the table reads all of it; a * over a WITH result reads what that names', async () => {
     const { run, ran: seen } = engine();
-    const bounded = boundedReads({ run, snapshot, budget: { remote: 20_000 * MB, local: budget.local } });
+    const bounded = boundedReads({ run, snapshot, budget: { remote: 20_000 * MB, local: budget.local, remoteFiles: 1_000 } });
     await bounded.run('WITH k AS (SELECT "block_number" FROM "memory"."main"."eth_transactions") SELECT * FROM k');
     expect(seen.at(-1)).toBe('WITH k AS (SELECT "block_number" FROM "memory"."main"."eth_transactions") SELECT * FROM k');
     await bounded.run('SELECT * FROM "memory"."main"."eth_transactions" LIMIT 5');

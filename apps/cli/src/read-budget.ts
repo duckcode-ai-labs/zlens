@@ -31,13 +31,27 @@ export interface ReadHint {
 }
 export type BoundedRun = (sql: string, hint?: ReadHint) => Promise<Rows>;
 
-/** Per table per statement: a table read over the network, and one on this machine's disk. */
-export const DEFAULT_READ_BUDGET = { remote: 256e6, local: 4e9 };
+/**
+ * Per table per statement: bytes of a table read over the network, and of one
+ * on this machine's disk; and files of a remote table. Over the network a
+ * statement costs requests as much as bytes: a small column of 4,118 files is
+ * thousands of range requests (the public blockchain lab read 380 KB/s that way).
+ */
+export interface ReadBudget {
+  remote: number;
+  local: number;
+  remoteFiles: number;
+}
+export const DEFAULT_READ_BUDGET: ReadBudget = { remote: 256e6, local: 4e9, remoteFiles: 64 };
 
-/** The budget in force: `ZLENS_READ_BUDGET_MB` sets both (for tests and very large lakes). */
-export function readBudgetFromEnv(env: NodeJS.ProcessEnv = process.env): { remote: number; local: number } {
+/** The budget in force: `ZLENS_READ_BUDGET_MB` sets both byte limits, `ZLENS_READ_BUDGET_FILES` the file limit. */
+export function readBudgetFromEnv(env: NodeJS.ProcessEnv = process.env): ReadBudget {
   const mb = Number(env.ZLENS_READ_BUDGET_MB);
-  return Number.isFinite(mb) && mb > 0 ? { remote: mb * 1e6, local: mb * 1e6 } : DEFAULT_READ_BUDGET;
+  const files = Number(env.ZLENS_READ_BUDGET_FILES);
+  return {
+    ...(Number.isFinite(mb) && mb > 0 ? { remote: mb * 1e6, local: mb * 1e6 } : { remote: DEFAULT_READ_BUDGET.remote, local: DEFAULT_READ_BUDGET.local }),
+    remoteFiles: Number.isFinite(files) && files >= 1 ? Math.floor(files) : DEFAULT_READ_BUDGET.remoteFiles,
+  };
 }
 
 export class ReadBudgetError extends Error {
@@ -118,9 +132,9 @@ export function estimateRead(relation: WarehouseCatalogRelationV1, columns: Ware
 export function boundedReads(input: {
   run: Run;
   snapshot: Pick<WarehouseCatalogSnapshotV1, 'relations'> | undefined;
-  budget?: { remote: number; local: number };
+  budget?: Partial<ReadBudget> & Pick<ReadBudget, 'remote' | 'local'>;
 }): { run: BoundedRun; notes: () => ReadNote[]; sampled: () => Map<string, string> } {
-  const budget = input.budget ?? readBudgetFromEnv();
+  const budget: ReadBudget = { ...readBudgetFromEnv(), ...input.budget };
   const sized: Sized[] = (input.snapshot?.relations ?? [])
     .filter((relation) => relation.sizeFrom !== undefined)
     .map((relation) => {
@@ -143,7 +157,7 @@ export function boundedReads(input: {
     return listings.get(item.relation.relation)!;
   };
 
-  const skip = (item: Sized, reason: SkipReason, reads: number, what: string, limit: number, message: string): never => {
+  const skip = (item: Sized, reason: SkipReason, reads: number, what: string, limit: string, message: string): never => {
     const entry = tally(item);
     const previous = entry.skipped.get(reason);
     entry.skipped.set(reason, {
@@ -167,38 +181,49 @@ export function boundedReads(input: {
     for (const item of named) {
       const columns = columnsRead(sql, item);
       const reads = estimateRead(item.relation, columns, item.call);
+      // COUNT(*) alone reads only footers, which DuckDB keeps once read.
+      if (reads === 0) continue;
       const limit = item.remote ? budget.remote : budget.local;
-      if (reads <= limit) continue;
+      // A remote table read from files: its file count matters as much as its bytes.
+      const fileCap = item.remote && item.call?.files ? budget.remoteFiles : Number.POSITIVE_INFINITY;
+      const listed = Number.isFinite(fileCap) ? await listing(item) : undefined;
+      const tooManyFiles = listed !== undefined && listed.length > fileCap;
+      if (reads <= limit && !tooManyFiles) continue;
       const name = item.relation.name;
       const what = `${columns.slice(0, 4).map((column) => column.name).join(', ')}${columns.length > 4 ? ', …' : ''}`;
-      const over = `about ${formatBytes(reads)} of ${name} (${what}); ZLens reads at most ${formatBytes(limit)} of a ${item.remote ? 'remote' : 'local'} table per check`;
+      const limitText = `${formatBytes(limit)}${Number.isFinite(fileCap) ? ` or ${fileCap.toLocaleString('en-US')} files` : ''} of a ${item.remote ? 'remote' : 'local'} table`;
+      const over = `about ${formatBytes(reads)} of ${name} (${what})${listed ? ` in ${listed.length.toLocaleString('en-US')} files` : ''}; ZLens reads at most ${limitText} per check`;
       const maySample = named.length === 1 || subjects.has(item.relation.relation.toLowerCase());
-      if (!maySample) skip(item, 'lookup', reads, what, limit, `${name} is looked up whole here, and that reads ${over}`);
-      if (!item.call?.files) skip(item, 'unsampled', reads, what, limit, `${name} cannot be sampled by file, and reading it reads ${over}`);
+      if (!maySample) skip(item, 'lookup', reads, what, limitText, `${name} is looked up whole here, and that reads ${over}`);
+      if (!item.call?.files) skip(item, 'unsampled', reads, what, limitText, `${name} cannot be sampled by file, and reading it reads ${over}`);
       const call = item.call!;
-      const files = await listing(item);
+      const files = listed ?? await listing(item);
       const total = files.reduce((sum, file) => sum + file.size, 0);
       // Each file costs its share of the columns read: all of it for CSV or JSON.
       const share = total > 0 ? Math.min(1, reads / total) : 1;
       const picked: LakeFile[] = [];
       let cost = 0;
       for (const index of spreadOrder(files.length)) {
+        if (picked.length >= fileCap) break;
         const file = files[index]!;
-        if (cost + file.size * share > limit) {
-          if (picked.length > 0) break;
-          continue;
-        }
+        // A file too large for what is left is passed over: later spread files may still fit.
+        if (cost + file.size * share > limit) continue;
         picked.push(file);
         cost += file.size * share;
       }
-      if (picked.length === 0) skip(item, 'no_file_fits', reads, what, limit, `even one file of ${name} holds more than a check may read: reading it reads ${over}`);
+      if (picked.length === 0) skip(item, 'no_file_fits', reads, what, limitText, `even one file of ${name} holds more than a check may read: reading it reads ${over}`);
       picked.sort((a, b) => a.file.localeCompare(b.file));
       const pickedBytes = picked.reduce((sum, file) => sum + file.size, 0);
       const entry = tally(item);
-      if (!entry.sampled || picked.length > entry.sampled.files) {
-        const rows = item.relation.rowCountEstimate;
-        entry.sampled = { files: picked.length, of: files.length, ...(rows !== undefined && total > 0 ? { rows: rows * (pickedBytes / total), total: rows } : {}) };
-      }
+      const rows = item.relation.rowCountEstimate;
+      const sampleRows = rows !== undefined && total > 0 ? rows * (pickedBytes / total) : undefined;
+      const previous = entry.sampled;
+      entry.sampled = {
+        files: Math.max(previous?.files ?? 0, picked.length),
+        fewestFiles: Math.min(previous?.fewestFiles ?? picked.length, picked.length),
+        of: files.length,
+        ...(sampleRows !== undefined ? { rows: Math.max(previous?.rows ?? 0, sampleRows), fewestRows: Math.min(previous?.fewestRows ?? sampleRows, sampleRows), total: rows } : {}),
+      };
       const sample = `(SELECT * FROM ${call.reader}(${sqlPathList(picked.map((file) => file.file))}${call.optionsSql}))`;
       item.pattern.lastIndex = 0;
       rewritten = rewritten.replace(item.pattern, sample);
@@ -217,15 +242,24 @@ interface Tally {
   relation: string;
   name: string;
   remote: boolean;
-  sampled?: { files: number; of: number; rows?: number; total?: number };
-  skipped: Map<SkipReason, { checks: number; largest: number; what: string; limit: number }>;
+  /** Its largest and smallest sample: checks naming heavier columns read fewer files. */
+  sampled?: { files: number; fewestFiles: number; of: number; rows?: number; fewestRows?: number; total?: number };
+  skipped: Map<SkipReason, { checks: number; largest: number; what: string; limit: string }>;
+}
+
+/** `14 of 24 files, about 17 million of 30 million rows`, or `2 to 64 of 4,109 files, about 1.2 million to 108 million of 7.7 billion rows`. */
+function sampleSize(entry: Tally): string {
+  const { files, fewestFiles, of, rows, fewestRows, total } = entry.sampled!;
+  const count = (value: number) => value.toLocaleString('en-US');
+  const fileText = fewestFiles < files ? `${count(fewestFiles)} to ${count(files)} of ${count(of)} files` : `${count(files)} of ${count(of)} files`;
+  if (rows === undefined || total === undefined) return fileText;
+  const rowText = fewestRows !== undefined && formatRows(fewestRows) !== formatRows(rows) ? `${formatRows(fewestRows)} to ${formatRows(rows)}` : formatRows(rows);
+  return `${fileText}, about ${rowText} of ${formatRows(total)} rows`;
 }
 
 /** `a sample of lineitem: 14 of 24 files, about 17 million of 30 million rows`. */
 function sampleWords(entry: Tally): string {
-  const { files, of, rows, total } = entry.sampled!;
-  const count = (value: number) => value.toLocaleString('en-US');
-  return `a sample of ${entry.name}: ${count(files)} of ${count(of)} files${rows !== undefined && total !== undefined ? `, about ${formatRows(rows)} of ${formatRows(total)} rows` : ''}`;
+  return `a sample of ${entry.name}: ${sampleSize(entry)}`;
 }
 
 /** A table's notes in plain words: what was read of it, then each kind of check skipped. */
@@ -233,16 +267,14 @@ function notesOf(entry: Tally): ReadNote[] {
   const notes: ReadNote[] = [];
   const count = (value: number) => value.toLocaleString('en-US');
   if (entry.sampled) {
-    const { files, of, rows, total } = entry.sampled;
-    const rowText = rows !== undefined && total !== undefined ? `, about ${formatRows(rows)} of ${formatRows(total)} rows` : '';
-    notes.push({ relation: entry.relation, kind: 'sampled', text: `${entry.name}: checked on ${count(files)} of ${count(of)} files spread across it${rowText}. What the draft says of it holds in that sample.` });
+    notes.push({ relation: entry.relation, kind: 'sampled', text: `${entry.name}: checked on ${sampleSize(entry).replace(/ files/, ' files spread across it')}. What the draft says of it holds in that sample.` });
   }
   for (const [reason, item] of entry.skipped) {
     const checks = `${count(item.checks)} check${item.checks === 1 ? '' : 's'}`;
-    const limit = `${formatBytes(item.limit)} of a ${entry.remote ? 'remote' : 'local'} table`;
+    const limit = item.limit;
     const reads = `up to about ${formatBytes(item.largest)} (${item.what})`;
     const text = reason === 'lookup'
-      ? `${entry.name}: ${checks} that look values up in it skipped: a lookup reads the whole table, ${reads}, and a check reads at most ${limit}.`
+      ? `${entry.name}: ${checks} that ${item.checks === 1 ? 'looks' : 'look'} values up in it skipped: a lookup reads the whole table, ${reads}, and a check reads at most ${limit}.`
       : reason === 'unsampled'
         ? `${entry.name}: ${checks} skipped: its rows cannot be sampled by file yet, and reading it takes ${reads}, more than the ${limit} a check reads.`
         : `${entry.name}: ${checks} skipped: a check reads at most ${limit}, and even one of its files holds more, ${reads}.`;

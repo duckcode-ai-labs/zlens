@@ -370,15 +370,16 @@ Delta or Unity Catalog table from its log.
 ```
 
 The checks ZLens runs by itself, such as Draft my models (keys, joins, row
-identities, measured rules), read at most **256 MB of a remote table** and
-**4 GB of a local one** per statement, estimated from those sizes (only the
-columns a statement names are read from Parquet; CSV and JSON files are read
-whole). A table over that is checked on whole files spread across it, as many
-as fit, and every fact measured on it says so ("Measured on a sample of
+identities, measured rules), read at most **256 MB or 64 files of a remote
+table** and **4 GB of a local one** per statement, estimated from those sizes
+(only the columns a statement names are read from Parquet; CSV and JSON files
+are read whole; over the network many small files cost as much as many bytes).
+A table over that is checked on whole files spread across it, as many as fit, and every fact measured on it says so ("Measured on a sample of
 eth_transactions: 6 of 4,130 files"). A join checked on a sample is drafted
 without validation evidence, so it is validated on the whole tables before it
 can be certified. A check that would look values up in a table over the limit
-is skipped and says why. `ZLENS_READ_BUDGET_MB` sets the limit for both.
+is skipped and says why. `ZLENS_READ_BUDGET_MB` sets both byte limits and
+`ZLENS_READ_BUDGET_FILES` the file limit.
 Tables in the DuckDB file itself, and warehouse tables, are read as before.
 
 A folder of more than 64 files is read with its first file's columns when 16
