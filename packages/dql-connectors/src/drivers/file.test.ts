@@ -477,4 +477,57 @@ describe('a lake folder read through a connection', () => {
       await plain.disconnect();
     }
   });
+  duckDbIt('sources in a catalog of ZLens\'s own (a dbt project\'s external sources) are read by their full name, from every connection, and written nowhere', async () => {
+    const folder = dataFolder({ 'raw/orders.csv': 'order_id,amount\n1,5\n2,7\n' });
+    cpSync(join(LAKE_FIXTURES, 'customers_delta'), join(folder, 'raw', 'customers_delta'), { recursive: true });
+    const database = join(folder, 'shop.duckdb');
+    const setup = new DuckDBConnector();
+    await setup.connect({ driver: 'duckdb', filepath: database, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    // The dbt project's own model reads the same name as a table of its own: no clash.
+    await setup.execute('CREATE TABLE orders AS SELECT 42 AS order_id');
+    await setup.disconnect();
+
+    const connector = new DuckDBConnector();
+    await connector.connect({
+      driver: 'duckdb',
+      filepath: database,
+      sources: [
+        { name: 'orders', path: join(folder, 'raw', 'orders.csv'), catalog: 'dbt_sources', schema: 'shop' },
+        { name: 'customers', path: join(folder, 'raw', 'customers_delta'), format: 'delta', catalog: 'dbt_sources', schema: 'shop' },
+        { name: 'orders', path: join(folder, 'raw', 'orders.csv'), catalog: 'dbt_sources', schema: 'archive' },
+      ],
+      moduleSearchPaths: [configuredDuckDbConnectorRoot!],
+    });
+    try {
+      expect((await connector.execute('SELECT CAST(SUM(amount) AS INTEGER) AS total FROM dbt_sources.shop.orders')).rows).toEqual([{ total: 12 }]);
+      expect((await connector.execute('SELECT COUNT(*) AS n FROM dbt_sources.shop.customers')).rows).toEqual([{ n: 9 }]);
+      expect((await connector.execute('SELECT COUNT(*) AS n FROM dbt_sources.archive.orders')).rows).toEqual([{ n: 2 }]);
+      expect((await connector.execute('SELECT order_id FROM orders')).rows).toEqual([{ order_id: 42 }]);
+      const status = await connector.dataFolderStatus();
+      expect(status?.tables.map(({ name, kind }) => `${name}: ${kind}`)).toEqual([
+        'dbt_sources.shop.orders: CSV file',
+        'dbt_sources.shop.customers: Delta Lake table',
+        'dbt_sources.archive.orders: CSV file',
+      ]);
+      expect(status?.problems).toEqual([]);
+      const tables = await connector.listTables();
+      expect(tables.filter((table) => table.catalog === 'dbt_sources').map((table) => `${table.schema}.${table.name}`).sort())
+        .toEqual(['archive.orders', 'shop.customers', 'shop.orders']);
+      const scope = await connector.openConsistentReadScope();
+      try {
+        expect((await scope.execute('SELECT COUNT(*) AS n FROM dbt_sources.shop.orders')).rows).toEqual([{ n: 2 }]);
+      } finally {
+        await scope.close();
+      }
+    } finally {
+      await connector.disconnect();
+    }
+    const plain = new DuckDBConnector();
+    await plain.connect({ driver: 'duckdb', filepath: database, moduleSearchPaths: [configuredDuckDbConnectorRoot!] });
+    try {
+      expect((await plain.execute('SELECT COUNT(*) AS n FROM duckdb_views() WHERE NOT internal')).rows).toEqual([{ n: 0 }]);
+    } finally {
+      await plain.disconnect();
+    }
+  });
 });

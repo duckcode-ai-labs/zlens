@@ -6,6 +6,7 @@
  * and optionally imports dbt manifest data.
  */
 
+import { DBT_SOURCES_CATALOG, dbtExternalSource } from './dbt-external-sources.js';
 import { createHash } from 'node:crypto';
 import { readerTableName } from '../lineage/reader-functions.js';
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
@@ -1869,10 +1870,12 @@ function importDbtManifest(
 
   const rawSources: Record<string, any> = manifest.sources ?? {};
   for (const [uniqueId, src] of Object.entries(rawSources)) {
-    const name = (src.identifier ?? src.name) as string;
+    // A dbt-duckdb external source is read as ZLens's `dbt_sources.<source>.<table>`.
+    const external = dbtExternalSource(uniqueId, src);
+    const name = (external?.table ?? src.identifier ?? src.name) as string;
     if (!name) continue;
-    const schema: string | undefined = src.schema;
-    const database: string | undefined = src.database;
+    const schema: string | undefined = external?.source ?? src.schema;
+    const database: string | undefined = external ? DBT_SOURCES_CATALOG : src.database;
     const lookupKeys = buildLookupKeys(name, schema, database);
     const primaryLookupKeys = buildPrimaryLookupKeys(name, schema, database);
     const tags = Array.isArray(src.tags) ? (src.tags as string[]) : [];

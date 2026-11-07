@@ -12,7 +12,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { collectDbtRelationshipTests, normalizeWarehouseCatalog, type WarehouseCatalogRelationV1, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
+import { collectDbtRelationshipTests, dbtPhysicalRelation, isDbtExternalRelationName, normalizeWarehouseCatalog, type WarehouseCatalogRelationV1, type WarehouseCatalogSnapshotV1 } from '@zlens/core';
 
 export interface DbtNode {
   uniqueId: string;
@@ -32,11 +32,14 @@ const text = (value: unknown): string | undefined => (typeof value === 'string' 
 export function dbtWarehouseNodes(dbtManifest: Manifest): DbtNode[] {
   const nodes: DbtNode[] = [];
   const add = (uniqueId: string, node: Record<string, unknown>) => {
-    const schema = text(node.schema);
-    const name = text(node.alias) ?? text(node.identifier) ?? text(node.name);
+    // A dbt-duckdb external source is ZLens's `dbt_sources.<source>.<table>`; a location it cannot read is no table.
+    const physical = dbtPhysicalRelation(uniqueId, node);
+    if (!physical.relation && isDbtExternalRelationName(text(node.relation_name))) return;
+    const schema = physical.schema ?? text(node.schema);
+    const name = physical.external?.table ?? text(node.alias) ?? text(node.identifier) ?? text(node.name);
     if (!schema || !name) return;
-    const database = text(node.database);
-    const fromRelationName = text(node.relation_name)?.replace(/["`\[\]]/g, '');
+    const database = physical.database ?? text(node.database);
+    const fromRelationName = physical.relation?.replace(/["`\[\]]/g, '');
     nodes.push({
       uniqueId,
       relation: fromRelationName ?? [database, schema, name].filter(Boolean).join('.'),

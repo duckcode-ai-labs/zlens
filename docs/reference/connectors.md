@@ -341,6 +341,18 @@ list (DuckDB, DuckLake (also in Postgres, with its `data_path` and
 not brought over (other settings, Postgres or MotherDuck attachments, other
 secret types) is listed when you import.
 
+A dbt-duckdb project's **sources with an `external_location`** (files or
+tables read where they are, not tables in the database) are tables too: the
+project's `duckdb` connection reads each one as
+`dbt_sources.<source>.<table>`, so `source('shop', 'orders')` is
+`dbt_sources.shop.orders` in Ask, notebooks and `zlens sync warehouse`. ZLens
+reads the location dbt wrote into the manifest (run `dbt parse` or `dbt run`
+after changing it): a path (CSV, Parquet, JSON, Excel, a Delta or Iceberg
+folder; a relative path is relative to the dbt project) or a reader call such
+as `read_csv('…', header = true)`. The reader finds its options itself; a list
+of paths is not read yet. `dbt_sources` is an in-memory catalog of ZLens's own:
+nothing is written into the DuckDB file.
+
 `zlens doctor` says what the data folder and sources read, which catalogs it
 attaches, how buckets sign in, and what is not read and why.
 
