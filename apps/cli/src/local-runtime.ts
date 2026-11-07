@@ -76,6 +76,7 @@ import {
   type SQLParamSpec,
   DuckDBConnector,
   type DuckDBConsistentReadScope,
+  type DataFolderStatus,
   buildParamValues,
   expandArrayParameters,
   normalizeSQLPlaceholders,
@@ -32152,6 +32153,8 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
         const connector = await executor.getConnector(target);
         const result = await validateConnectionForTest(connector, target);
+        // The data folder as the project names it (`data`, `.`), not this machine's path.
+        if (result.dataFolder) result.dataFolder = { ...result.dataFolder, folder: relative(projectRoot, result.dataFolder.folder).replaceAll('\\', '/') || '.' };
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
       } catch (error) {
@@ -33314,6 +33317,8 @@ export interface ConnectionTestResult {
   ok: boolean;
   message: string;
   details?: Record<string, unknown>;
+  /** A DuckDB or file connection's data folder: what it reads as tables, attaches, skips, and could not read. */
+  dataFolder?: DataFolderStatus;
 }
 
 export async function validateConnectionForTest(
@@ -33326,12 +33331,25 @@ export async function validateConnectionForTest(
 
   const ok = await connector.ping();
   const label = connectionDriverLabel(connection);
+  const dataFolder = ok ? await dataFolderStatusOf(connector) : undefined;
   return {
     ok,
     message: ok
       ? `Connected to ${label} successfully.`
       : `Connection to ${label} failed. Check credentials, network access, and database availability.`,
+    ...(dataFolder ? { dataFolder } : {}),
   };
+}
+
+/** What a DuckDB or file connection reads from its data folder, or undefined (no folder, another driver). */
+async function dataFolderStatusOf(connector: DatabaseConnector): Promise<DataFolderStatus | undefined> {
+  const read = (connector as { dataFolderStatus?: () => Promise<DataFolderStatus | undefined> }).dataFolderStatus;
+  if (typeof read !== 'function') return undefined;
+  try {
+    return await read.call(connector);
+  } catch {
+    return undefined;
+  }
 }
 
 function formatConnectionTestError(connection: ConnectionConfig, error: unknown): string {

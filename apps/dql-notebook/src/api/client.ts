@@ -1,4 +1,5 @@
 import type { DashboardVizEncoding } from '@zlens/core/apps/viz-encoding';
+import type { DataFolderStatusView } from '../components/panels/DataFolderSummary';
 import type { DashboardVizStyle } from '@zlens/core/apps/viz-style';
 import type { ResultOrdering } from '@zlens/core/apps/result-measures';
 import type { TableDatasetProposal } from '@zlens/core/datasets/table-draft';
@@ -7279,9 +7280,9 @@ export const api = {
     });
   },
 
-  async testConnection(): Promise<{ ok: boolean; message: string }> {
+  async testConnection(): Promise<{ ok: boolean; message: string; dataFolder?: DataFolderStatusView }> {
     try {
-      return await request<{ ok: boolean; message: string }>('/api/test-connection', {
+      return await request<{ ok: boolean; message: string; dataFolder?: DataFolderStatusView }>('/api/test-connection', {
         method: 'POST',
         body: JSON.stringify({}),
       });

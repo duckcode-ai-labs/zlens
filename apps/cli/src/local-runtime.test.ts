@@ -9891,6 +9891,29 @@ describe('validateConnectionForTest', () => {
     };
   }
 
+  it('a file connection says what its data folder reads, attaches, skips and could not read', async () => {
+    const status = {
+      folder: '/work/shop/data',
+      tables: [{ name: 'orders_iceberg', source: 'orders_iceberg/', kind: 'Iceberg table (version 3)' }],
+      catalogs: [],
+      skipped: [{ name: 'clicks.avro', kind: 'an Avro file (not read yet)' }],
+      problems: [],
+    };
+    const connector = {
+      driverName: 'file',
+      connect: async () => {},
+      disconnect: async () => {},
+      ping: async () => true,
+      execute: async () => result([]),
+      dataFolderStatus: async () => status,
+    } as unknown as DatabaseConnector;
+    const validation = await validateConnectionForTest(connector, { driver: 'file', filepath: ':memory:', dataFolder: '/work/shop/data' });
+    expect(validation).toMatchObject({ ok: true, dataFolder: status });
+    // A connection without a data folder (or another driver) reports none.
+    const plain = await validateConnectionForTest({ ...connector, dataFolderStatus: async () => undefined } as unknown as DatabaseConnector, { driver: 'duckdb', filepath: ':memory:' });
+    expect(plain.dataFolder).toBeUndefined();
+  });
+
   function fakeSnowflakeConnector(
     execute: (sql: string) => Promise<QueryResult>,
   ): DatabaseConnector {
