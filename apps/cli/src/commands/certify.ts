@@ -27,6 +27,7 @@ import { WorkbenchRoutedQueryExecutor } from '../workbench-query-route.js';
 import { findRunningNotebook, serverTokenFor } from '../schedule/notebook-runtime.js';
 import { listBlockStudioImportSessions, loadBlockStudioImportSession, writeBlockStudioImportCandidate } from '../block-studio-import.js';
 import { certifyImportCandidate, importFailureKind, plainImportFailure, withImportRuntime } from '../import-runtime.js';
+import { useProjectDataFolder } from '../project-data-folder.js';
 
 /**
  * Run the same certification rules Block Studio's Certify runs (owner, a
@@ -340,22 +341,10 @@ async function registerDataViews(
 ): Promise<void> {
   const normalized = normalizeProjectConnection(connection, projectRoot);
   if (normalized.driver !== 'file' && normalized.driver !== 'duckdb') return;
-  // The workbench that holds the file registered these views when it started.
+  // The workbench that holds the file reads the project's data folder itself.
   if (executor instanceof WorkbenchRoutedQueryExecutor && await executor.routesTo(normalized)) return;
-
-  const dataDir = projectConfig.dataDir
-    ? resolve(projectRoot, projectConfig.dataDir)
-    : join(projectRoot, 'data');
-  if (!existsSync(dataDir)) return;
-
-  for (const file of readdirSync(dataDir, { withFileTypes: true })) {
-    if (!file.isFile() || !/\.(csv|parquet)$/i.test(file.name)) continue;
-    const tableName = file.name.replace(/\.(csv|parquet)$/i, '');
-    const absPath = join(dataDir, file.name).replaceAll('\\', '/').replace(/'/g, "''");
-    const reader = file.name.endsWith('.parquet') ? 'read_parquet' : 'read_csv_auto';
-    const ddl = `CREATE OR REPLACE VIEW "${tableName}" AS SELECT * FROM ${reader}('${absPath}')`;
-    await executor.executeQuery(ddl, [], {}, normalized);
-  }
+  // Views the connection keeps, temporary in a real DuckDB file: nothing is written into the user's database.
+  await useProjectDataFolder(executor, normalized, projectRoot, projectConfig.dataDir);
 }
 
 /**
