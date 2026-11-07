@@ -174,15 +174,16 @@ jobs:
           sudo -u postgres psql -v ON_ERROR_STOP=1 -c "CREATE ROLE zlens LOGIN PASSWORD 'zlens' CREATEDB"
           sudo -u postgres createdb -O zlens lakekeeper
           sudo -u postgres createdb -O zlens ducklake
+      # moto listens on 9020: Lakekeeper's own metrics server takes 9000.
       - name: Start an S3 API (moto) with the warehouse bucket
         run: |
           python3 -m venv "$RUNNER_TEMP/moto"
           "$RUNNER_TEMP/moto/bin/pip" install --quiet 'moto[server]==5.1.4'
-          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 9000 > "$RUNNER_TEMP/moto.log" 2>&1 &
+          nohup "$RUNNER_TEMP/moto/bin/moto_server" -H 127.0.0.1 -p 9020 > "$RUNNER_TEMP/moto.log" 2>&1 &
           up=no
-          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:9000/ && { up=yes; break; }; sleep 1; done
+          for i in $(seq 1 30); do curl -s -o /dev/null http://127.0.0.1:9020/ && { up=yes; break; }; sleep 1; done
           if [ "$up" != yes ]; then cat "$RUNNER_TEMP/moto.log"; echo "The S3 API did not start." >&2; exit 1; fi
-          aws --endpoint-url http://127.0.0.1:9000 s3 mb s3://warehouse
+          aws --endpoint-url http://127.0.0.1:9020 s3 mb s3://warehouse
         env:
           AWS_ACCESS_KEY_ID: testing
           AWS_SECRET_ACCESS_KEY: testing
@@ -201,7 +202,7 @@ jobs:
           curl -sf -X POST http://127.0.0.1:8181/management/v1/bootstrap -H 'content-type: application/json' -d '{"accept-terms-of-use": true}'
           curl -sf -X POST http://127.0.0.1:8181/management/v1/warehouse -H 'content-type: application/json' -d '{
             "warehouse-name": "ci",
-            "storage-profile": {"type": "s3", "bucket": "warehouse", "region": "us-east-1", "endpoint": "http://127.0.0.1:9000", "path-style-access": true, "sts-enabled": false, "flavor": "s3-compat"},
+            "storage-profile": {"type": "s3", "bucket": "warehouse", "region": "us-east-1", "endpoint": "http://127.0.0.1:9020", "path-style-access": true, "sts-enabled": false, "flavor": "s3-compat"},
             "storage-credential": {"type": "s3", "credential-type": "access-key", "aws-access-key-id": "testing", "aws-secret-access-key": "testing"}
           }' || { cat lakekeeper.log; exit 1; }
         env:
@@ -241,7 +242,7 @@ jobs:
           ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
           ZLENS_TEST_ICEBERG_REST_ENDPOINT: http://127.0.0.1:8181/catalog
           ZLENS_TEST_ICEBERG_REST_WAREHOUSE: ci
-          ZLENS_TEST_S3_ENDPOINT: http://127.0.0.1:9000
+          ZLENS_TEST_S3_ENDPOINT: http://127.0.0.1:9020
           ZLENS_TEST_S3_KEY_ID: testing
           ZLENS_TEST_S3_SECRET: testing
           ZLENS_TEST_UNITY_ENDPOINT: http://127.0.0.1:8080
