@@ -101,7 +101,7 @@ describe('the read budget', () => {
     expect(bounded.notes()).toEqual([{
       relation: 'memory.main.eth_transactions',
       kind: 'skipped',
-      text: 'eth_transactions: 1 check skipped. Even one of its files holds more than that: up to about 240 GB (hash); a check reads at most 256 MB of a remote table.',
+      text: 'eth_transactions: 1 check skipped: a check reads at most 256 MB of a remote table, and even one of its files holds more, up to about 240 GB (hash).',
     }]);
   });
 
@@ -139,7 +139,7 @@ describe('the read budget', () => {
     expect(bounded.notes()).toEqual([{
       relation: 'memory.main.eth_transactions',
       kind: 'skipped',
-      text: 'eth_transactions: 2 checks that look values up in it skipped. A lookup reads it whole, up to about 240 GB (hash); a check reads at most 256 MB of a remote table.',
+      text: 'eth_transactions: 2 checks that look values up in it skipped: a lookup reads the whole table, up to about 240 GB (hash), and a check reads at most 256 MB of a remote table.',
     }]);
   });
 
@@ -157,7 +157,7 @@ describe('the read budget', () => {
     const { run } = engine();
     const bounded = boundedReads({ run, snapshot, budget });
     await expect(bounded.run('SELECT COUNT(DISTINCT "order_id") FROM "ice"."sales"."big_orders"')).rejects.toThrow(/^big_orders cannot be sampled by file/);
-    expect(bounded.notes()[0]!.text).toBe('big_orders: 1 check skipped. Its rows cannot be sampled by file yet, and reading it reads up to about 16 GB (order_id); a check reads at most 256 MB of a remote table.');
+    expect(bounded.notes()[0]!.text).toBe('big_orders: 1 check skipped: its rows cannot be sampled by file yet, and reading it takes up to about 16 GB (order_id), more than the 256 MB of a remote table a check reads.');
   });
 
   it('a local table has the local budget: a CSV folder of 3 GB is read as written', async () => {

@@ -239,12 +239,13 @@ function notesOf(entry: Tally): ReadNote[] {
   }
   for (const [reason, item] of entry.skipped) {
     const checks = `${count(item.checks)} check${item.checks === 1 ? '' : 's'}`;
-    const reads = `up to about ${formatBytes(item.largest)} (${item.what}); a check reads at most ${formatBytes(item.limit)} of a ${entry.remote ? 'remote' : 'local'} table`;
+    const limit = `${formatBytes(item.limit)} of a ${entry.remote ? 'remote' : 'local'} table`;
+    const reads = `up to about ${formatBytes(item.largest)} (${item.what})`;
     const text = reason === 'lookup'
-      ? `${entry.name}: ${checks} that look values up in it skipped. A lookup reads it whole, ${reads}.`
+      ? `${entry.name}: ${checks} that look values up in it skipped: a lookup reads the whole table, ${reads}, and a check reads at most ${limit}.`
       : reason === 'unsampled'
-        ? `${entry.name}: ${checks} skipped. Its rows cannot be sampled by file yet, and reading it reads ${reads}.`
-        : `${entry.name}: ${checks} skipped. Even one of its files holds more than that: ${reads}.`;
+        ? `${entry.name}: ${checks} skipped: its rows cannot be sampled by file yet, and reading it takes ${reads}, more than the ${limit} a check reads.`
+        : `${entry.name}: ${checks} skipped: a check reads at most ${limit}, and even one of its files holds more, ${reads}.`;
     notes.push({ relation: entry.relation, kind: 'skipped', text });
   }
   return notes;
