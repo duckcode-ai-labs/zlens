@@ -7,6 +7,7 @@
  */
 
 import { isDeprecatedStatus, resolveBlockReference } from '../manifest/retirement.js';
+import { readerTableName } from './reader-functions.js';
 import { extractTablesFromSql } from './sql-parser.js';
 import { LineageGraph, getLayerForNodeType } from './lineage-graph.js';
 
@@ -447,7 +448,7 @@ export function buildLineageGraph(
     // SQL table references
     for (const table of parseResult.tables) {
       const resolved = materializedMap.get(table.toLowerCase());
-      const normalizedTable = normalizeTableName(table).toLowerCase();
+      const normalizedTable = readerTableName(table).toLowerCase();
       // Try full name first, then strip schema prefix for fallback
       const dbtResolved = dbtNodeMap.get(normalizedTable)
         ?? (normalizedTable.includes('.') ? dbtNodeMap.get(normalizedTable.split('.').pop()!) : undefined);
@@ -719,7 +720,7 @@ function ensureTableNode(
   rawTableName: string,
   dbtNodeMap?: Map<string, string>,
 ): string {
-  const tableName = normalizeTableName(rawTableName);
+  const tableName = readerTableName(rawTableName);
   const dbtNodeId = dbtNodeMap?.get(tableName.toLowerCase());
   if (dbtNodeId) return dbtNodeId;
   const nodeId = `table:${tableName}`;
@@ -734,22 +735,6 @@ function ensureTableNode(
   return nodeId;
 }
 
-/**
- * Normalize DuckDB reader function calls to plain table names.
- * e.g., "read_csv_auto('./data/revenue.csv')" → "revenue"
- */
-function normalizeTableName(name: string): string {
-  const readerMatch = name.match(
-    /^(?:read_csv_auto|read_csv|read_parquet|read_json|read_json_auto)\s*\(\s*['"]([^'"]+)['"]\s*\)$/i,
-  );
-  if (readerMatch) {
-    // Extract filename without extension from the path
-    const path = readerMatch[1];
-    const filename = path.split('/').pop() ?? path;
-    return filename.replace(/\.(csv|parquet|json)$/i, '');
-  }
-  return name;
-}
 
 /** Add a crosses_domain edge if source and target are in different domains. */
 function addCrossDomainEdgeIfNeeded(graph: LineageGraph, sourceId: string, targetId: string): void {

@@ -41760,7 +41760,7 @@ export function resolveProjectRelativeSqlPaths(sql: string, projectRoot: string,
     : join(resolvedRoot, 'data');
 
   return sql.replace(
-    /\b(read_csv_auto|read_csv|read_parquet|read_json_auto|read_json|read_ndjson_auto|read_ndjson|read_xlsx|parquet_scan)\s*\(\s*(['"])(\.{1,2}\/[^'"]*)\2/gi,
+    /\b(read_csv_auto|read_csv|read_parquet|read_json_auto|read_json|read_ndjson_auto|read_ndjson|read_xlsx|parquet_scan|delta_scan|iceberg_scan)\s*\(\s*(['"])(\.{1,2}\/[^'"]*)\2/gi,
     (_match, fnName: string, quote: string, relativePath: string) => {
       const absolutePath = relativePath.startsWith('./data/')
         ? join(normalizedDataDir, relativePath.slice('./data/'.length))

@@ -7,6 +7,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { readerTableName } from '../lineage/reader-functions.js';
 import { readdirSync, readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, relative } from 'node:path';
 import { Parser } from '../parser/index.js';
@@ -1529,7 +1530,7 @@ function scanNotebooks(
             type,
             title: cell.title ?? cell.name,
             source,
-            tableDependencies: parseResult.tables.map(normalizeTableName),
+            tableDependencies: parseResult.tables.map(readerTableName),
             refDependencies: parseResult.refs,
             blockName,
             chartType: chartCell?.config?.chart,
@@ -1610,9 +1611,9 @@ function extractNotebookBlocks(notebooks: Record<string, ManifestNotebook>): Rec
             filePath: `${nbPath}#${cell.id}`,
             sql: '',
             rawTableRefs: parseResult.tables,
-            tableDependencies: parseResult.tables.map(normalizeTableName),
+            tableDependencies: parseResult.tables.map(readerTableName),
             refDependencies: parseResult.refs,
-            allDependencies: [...parseResult.refs, ...parseResult.tables.map(normalizeTableName)],
+            allDependencies: [...parseResult.refs, ...parseResult.tables.map(readerTableName)],
             tests: [],
           };
         }
@@ -2991,14 +2992,14 @@ function blockDeclToManifestBlock(block: any, filePath: string): ManifestBlock {
     blockType: block.blockType,
     sql,
     rawTableRefs: parseResult.tables,
-    tableDependencies: parseResult.tables.map(normalizeTableName),
+    tableDependencies: parseResult.tables.map(readerTableName),
     refDependencies: parseResult.refs,
     metricRefs: parseResult.metricRefs,
     dimensionRefs: parseResult.dimensionRefs,
     dimensionsRef: block.dimensionsRef,
     allDependencies: [
       ...parseResult.refs,
-      ...parseResult.tables.map(normalizeTableName),
+      ...parseResult.tables.map(readerTableName),
       ...parseResult.metricRefs.map((m) => `@metric(${m})`),
       ...parseResult.dimensionRefs.map((d) => `@dim(${d})`),
       ...((block.metricsRef ?? (block.metricRef ? [block.metricRef] : [])).map((m: string) => `@metric(${m})`)),
@@ -3608,21 +3609,6 @@ function formatManifestTestExpected(node: any): string {
   }
 }
 
-/**
- * Normalize DuckDB reader function calls to plain table names.
- * e.g., "read_csv_auto('./data/revenue.csv')" → "revenue"
- */
-function normalizeTableName(name: string): string {
-  const readerMatch = name.match(
-    /^(?:read_csv_auto|read_csv|read_parquet|read_json|read_json_auto)\s*\(\s*['"]([^'"]+)['"]\s*\)$/i,
-  );
-  if (readerMatch) {
-    const path = readerMatch[1];
-    const filename = path.split('/').pop() ?? path;
-    return filename.replace(/\.(csv|parquet|json)$/i, '');
-  }
-  return name;
-}
 
 /** What a project has, read from `dql.config.json`, that its modeling mode follows from. */
 export interface ModelingModeInput {

@@ -426,6 +426,20 @@ describe('buildLineageGraph — normalizeTableName', () => {
     expect(tables[0].name).toBe('events');
   });
 
+  it('names Delta, Iceberg, Excel and partitioned-folder reads after what they read', () => {
+    const graph = buildLineageGraph(
+      [],
+      [
+        { name: 'a', table: "delta_scan('./data/customers_delta')", domain: 'd', type: 'count' },
+        { name: 'b', table: "iceberg_scan('s3://lake/orders')", domain: 'd', type: 'count' },
+        { name: 'c', table: "read_xlsx('./data/targets.xlsx')", domain: 'd', type: 'sum' },
+        { name: 'e', table: "read_parquet('./data/events/**/*.parquet')", domain: 'd', type: 'count' },
+      ],
+      [],
+    );
+    expect(graph.getNodesByType('source_table').map((node) => node.name).sort()).toEqual(['customers_delta', 'events', 'orders', 'targets']);
+  });
+
   it('leaves plain table names unchanged', () => {
     const graph = buildLineageGraph(
       [],

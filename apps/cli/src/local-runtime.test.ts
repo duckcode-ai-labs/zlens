@@ -7473,6 +7473,13 @@ describe('resolveProjectRelativeSqlPaths', () => {
     expect(resolved).toBe("SELECT * FROM read_csv_auto('/tmp/demo-project/data/revenue.csv')");
   });
 
+  it('rewrites Delta, Iceberg and Excel reads too, keeping their options', () => {
+    const sql = "SELECT * FROM delta_scan('./data/customers_delta') JOIN iceberg_scan('../lake/orders', allow_moved_paths = true) USING (id) JOIN read_xlsx('./data/targets.xlsx', sheet = 'Q1') USING (id)";
+    expect(resolveProjectRelativeSqlPaths(sql, '/tmp/demo-project')).toBe(
+      "SELECT * FROM delta_scan('/tmp/demo-project/data/customers_delta') JOIN iceberg_scan('/tmp/lake/orders', allow_moved_paths = true) USING (id) JOIN read_xlsx('/tmp/demo-project/data/targets.xlsx', sheet = 'Q1') USING (id)",
+    );
+  });
+
   it('leaves unrelated string literals untouched', () => {
     const sql = "SELECT './data/revenue.csv' AS label";
     expect(resolveProjectRelativeSqlPaths(sql, '/tmp/demo-project')).toBe(sql);
