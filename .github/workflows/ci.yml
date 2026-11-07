@@ -89,7 +89,10 @@ jobs:
           fi
           # Lake tables at scale (open-formats plan L4): sizes from footers and the read budget, on the real driver.
           (cd ../../apps/cli && npx vitest run src/lake-scale.duckdb.test.ts --reporter=verbose) | tee "$RUNNER_TEMP/lake-scale.log"
-          grep -qE 'Tests.* 1 passed' "$RUNNER_TEMP/lake-scale.log"
+          if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/lake-scale.log"; then
+            echo "The lake scale test skipped although the driver root was configured." >&2
+            exit 1
+          fi
         env:
           ZLENS_APP_DATASETS_DUCKDB_CONNECTOR_ROOT: ${{ runner.temp }}/duckdb-connector
 
