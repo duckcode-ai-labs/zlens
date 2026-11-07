@@ -3,10 +3,10 @@ import { basename, join, relative, resolve } from 'node:path';
 import { createWelcomeNotebook, serializeNotebook } from '@zlens/notebook';
 import { resolveLocalOwner, seedDefaultSkills, seedDomainSkills } from '@zlens/agent';
 import { buildManifest, modelingModeOf } from '@zlens/core';
-import { dataFolderTables } from '@zlens/connectors';
+import { dataFolderSkipped, dataFolderTables, type DataFolderSkip } from '@zlens/connectors';
 import type { CLIFlags } from '../args.js';
 import { ensureDqlGitignore } from '../git-contract.js';
-import { describeDatabase } from './bare-folder.js';
+import { describeDatabase, describeNotReadYet } from './bare-folder.js';
 import { runNotebook } from './notebook.js';
 
 /** What a folder already holds: a dbt project (here or a level up), a database file, or data files. */
@@ -22,6 +22,12 @@ export interface FolderContents {
    * folder, when there is no database file: each becomes a table.
    */
   dataFolder?: { path: string; files: string[] } | null;
+  /**
+   * What the data folder (or, with none, `.` or `data/`) holds that ZLens does
+   * not read as a table yet: Delta or Iceberg tables, folders of partitioned
+   * files, Excel workbooks. Said, so nothing is skipped without a word.
+   */
+  notReadYet?: { path: string; items: DataFolderSkip[] } | null;
 }
 
 /**
@@ -54,7 +60,8 @@ export function detectFolderContents(targetDir: string, options: { warehouseFirs
   // file, then a folder of data files, is the database.
   const sqlitePath = isDbt || duckdbPath ? null : detectSQLiteFile(targetDir);
   const dataFolder = isDbt || duckdbPath || sqlitePath ? null : detectDataFolder(targetDir);
-  return { isDbt, dbtProjectDir, duckdbPath, sqlitePath, dataFolder };
+  const notReadYet = isDbt || duckdbPath || sqlitePath ? null : detectNotReadYet(targetDir, dataFolder?.path);
+  return { isDbt, dbtProjectDir, duckdbPath, sqlitePath, dataFolder, notReadYet };
 }
 
 /**
@@ -194,6 +201,9 @@ export async function runInit(
       duckdb: duckdbPath ?? null,
       sqlite: contents.sqlitePath ?? null,
       dataFolder: contents.dataFolder?.path ?? null,
+      notReadYet: contents.notReadYet
+        ? contents.notReadYet.items.map((item) => ({ path: contents.notReadYet!.path === '.' ? item.name : `${contents.notReadYet!.path}/${item.name}`, kind: item.kind }))
+        : [],
       seededSkills,
     }, null, 2));
     return;
@@ -203,6 +213,8 @@ export async function runInit(
     const kind = isDbt ? 'dbt project' : modelingModeOf(projectConfig) === 'warehouse-first' ? 'Database only' : 'no data source yet';
     const source = database ? ` · ${describeDatabase(contents)}` : '';
     console.log(`\n  ✓ Created a ZLens project in ${targetDir} (${kind}${source}).`);
+    const notRead = describeNotReadYet(contents);
+    if (notRead) console.log(`    ${notRead}`);
     return;
   }
 
@@ -217,7 +229,17 @@ export async function runInit(
   }
   if (contents.sqlitePath) console.log(`    SQLite file: ${contents.sqlitePath}`);
   else if (contents.dataFolder) console.log(`    Data files: ${describeDatabase(contents)}`);
+  else if (contents.notReadYet) console.log('    Data files: none that ZLens reads as tables yet');
   else console.log(`    DuckDB file: ${duckdbPath ?? 'none'}`);
+  if (contents.notReadYet) {
+    const where = contents.notReadYet.path === '.' ? '' : ` in ${contents.notReadYet.path}/`;
+    console.log(`    Not read as tables yet${where} (ZLens reads single CSV, TSV, Parquet and JSON files):`);
+    const shown = contents.notReadYet.items.slice(0, NOT_READ_YET_LINES);
+    const width = Math.max(...shown.map((item) => item.name.length));
+    for (const item of shown) console.log(`      ${item.name.padEnd(width)}  ${item.kind}`);
+    const more = contents.notReadYet.items.length - shown.length;
+    if (more > 0) console.log(`      …and ${more} more`);
+  }
   if (isDbt) {
     if (modelingModeOf(projectConfig) === 'dbt-first') {
       console.log('    Modeling: manifest v3, dbt-first (dbt artifacts remain read-only)');
@@ -310,6 +332,21 @@ function detectSQLiteFile(dir: string): string | null {
  * folder. JSON files alone do not count: at a folder's top they are more often
  * a tool's settings (renovate.json, vercel.json) than data.
  */
+/** How many items `zlens init` lists that it does not read yet. */
+const NOT_READ_YET_LINES = 10;
+
+/**
+ * What ZLens does not read yet in the data folder it chose, or, with none, in
+ * the folder itself or its `data/` folder (the first with anything to say).
+ */
+function detectNotReadYet(dir: string, dataFolderPath: string | undefined): { path: string; items: DataFolderSkip[] } | null {
+  for (const path of dataFolderPath ? [dataFolderPath] : ['.', 'data']) {
+    const items = dataFolderSkipped(join(dir, path));
+    if (items.length) return { path, items };
+  }
+  return null;
+}
+
 function detectDataFolder(dir: string): { path: string; files: string[] } | null {
   for (const path of ['.', 'data']) {
     const files = dataFolderTables(join(dir, path)).map((table) => table.file.split(/[\\/]/).pop() ?? table.file);

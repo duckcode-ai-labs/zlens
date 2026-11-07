@@ -326,6 +326,92 @@ describe('runInit', () => {
     expect(config.connections.default).toEqual({ driver: 'file', filepath: ':memory:', dataFolder: 'data' });
   });
 
+  it('says what it does not read as tables yet: Delta, Iceberg, partitioned folders, Excel', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-lake-'));
+    const put = (path: string, content = '') => {
+      mkdirSync(join(projectDir, path, '..'), { recursive: true });
+      writeFileSync(join(projectDir, path), content);
+    };
+    put('orders.parquet');
+    put('customers.csv', 'id\n1\n');
+    put('customers_delta/_delta_log/00000000000000000000.json', '{}');
+    put('customers_delta/part-0.parquet');
+    put('orders_iceberg/metadata/00001-abc.metadata.json', '{}');
+    put('orders_iceberg/data/00000-0.parquet');
+    put('order_events/year=2024/month=1/part-0.parquet');
+    put('order_events/year=2025/month=2/part-0.parquet');
+    put('targets.xlsx');
+    put('notes/readme.md', 'not data');
+    put('node_modules/pkg/data.csv', 'a\n1\n');
+    expect(detectFolderContents(projectDir).notReadYet).toEqual({
+      path: '.',
+      items: [
+        { name: 'customers_delta/', kind: 'a Delta Lake table' },
+        { name: 'order_events/', kind: 'a folder of 2 Parquet files, partitioned by year, month' },
+        { name: 'orders_iceberg/', kind: 'an Iceberg table' },
+        { name: 'targets.xlsx', kind: 'an Excel workbook' },
+      ],
+    });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('Data files: 2 data files: customers.csv, orders.parquet');
+      expect(output).toContain('Not read as tables yet (ZLens reads single CSV, TSV, Parquet and JSON files):');
+      expect(output).toMatch(/customers_delta\/\s+a Delta Lake table/);
+      expect(output).toMatch(/orders_iceberg\/\s+an Iceberg table/);
+      expect(output).toMatch(/targets\.xlsx\s+an Excel workbook/);
+      expect(output).not.toContain('node_modules');
+      expect(output).not.toContain('notes/');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('names lake folders even when there is no file it reads, and leaves the project undecided', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-lake-only-'));
+    mkdirSync(join(projectDir, 'data', 'sales_delta', '_delta_log'), { recursive: true });
+    writeFileSync(join(projectDir, 'data', 'sales_delta', '_delta_log', '00000000000000000000.json'), '{}');
+    const contents = detectFolderContents(projectDir);
+    expect(contents.dataFolder).toBeNull();
+    expect(contents.notReadYet).toEqual({ path: 'data', items: [{ name: 'sales_delta/', kind: 'a Delta Lake table' }] });
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('Data files: none that ZLens reads as tables yet');
+      expect(output).toContain('Not read as tables yet in data/');
+      expect(output).toContain('Guided Setup asks whether you use dbt or a database only');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('adds the not-read line to the one-line summary that zlens notebook and npm create zlens print', async () => {
+    const projectDir = mkdtempSync(join(tmpdir(), 'dql-init-lake-summary-'));
+    writeFileSync(join(projectDir, 'orders.csv'), 'id\n1\n');
+    writeFileSync(join(projectDir, 'targets.xlsx'), '');
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      await runInit(projectDir, { ...INIT_FLAGS, format: 'text' }, { output: 'summary' });
+      const output = spy.mock.calls.flat().join('\n');
+      expect(output).toContain('Database only · 1 data file: orders.csv');
+      expect(output).toContain('Not read as tables yet: targets.xlsx (an Excel workbook).');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('says nothing about lake folders beside a dbt project or a database file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'dql-init-lake-dbt-'));
+    writeFileSync(join(root, 'dbt_project.yml'), 'name: shop\n');
+    mkdirSync(join(root, 'target'), { recursive: true });
+    writeFileSync(join(root, 'target', 'run.parquet'), '');
+    mkdirSync(join(root, 'exports'), { recursive: true });
+    writeFileSync(join(root, 'exports', 'a.csv'), 'a\n1\n');
+    expect(detectFolderContents(root).notReadYet).toBeNull();
+  });
+
   it('lets a dbt project or a database file win over data files beside it', () => {
     const root = mkdtempSync(join(tmpdir(), 'dql-init-precedence-'));
     writeFileSync(join(root, 'export.csv'), 'a\n1\n');
