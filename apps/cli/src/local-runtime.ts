@@ -37,6 +37,7 @@ import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import {
+  basename,
   dirname,
   extname,
   isAbsolute,
@@ -78,6 +79,7 @@ import {
   type DuckDBConsistentReadScope,
   type DataFolderStatus,
   type LakeCatalogConfig,
+  type LakeSourceConfig,
   type LakeStorageConfig,
   isUrlPath,
   LAKE_CATALOG_SERVICES,
@@ -279,6 +281,10 @@ import {
   certifiedBlockFileState,
   meaningfulDatabaseName,
   sentenceCaseName,
+  DBT_SOURCES_CATALOG,
+  dbtExternalSources,
+  dbtPhysicalRelation,
+  isDbtExternalRelationName,
 } from '@zlens/core';
 import {
   dashboardSemanticFiltersForTile,
@@ -40924,7 +40930,11 @@ function buildDbtRelationLookup(manifest: unknown): { models: Map<string, string
 }
 
 function dbtRelationName(node: Record<string, unknown>): string | null {
+  // A dbt-duckdb external source is its `dbt_sources.<source>.<table>` table; a location ZLens cannot read is none.
+  const physical = dbtPhysicalRelation(String(node.unique_id ?? ''), node);
+  if (physical.relation) return physical.relation;
   const relationName = stringField(node, 'relation_name');
+  if (relationName && isDbtExternalRelationName(relationName)) return null;
   if (relationName) return relationName;
   const database = stringField(node, 'database');
   const schema = stringField(node, 'schema');
@@ -41691,6 +41701,57 @@ function needsSemanticTableMapping(cell: NotebookCell): boolean {
   return hasSemanticRefs(cell.source) || /\btype\s*=\s*"semantic"/i.test(cell.source);
 }
 
+/** A project's dbt-duckdb external sources, read again only when its manifest changes (looked up at most every two seconds). */
+const dbtExternalSourceCache = new Map<string, { at: number; stamp: string; sources: LakeSourceConfig[] }>();
+
+/**
+ * A dbt-duckdb project's sources with an `external_location` (dbt writes the
+ * location as their `relation_name`), as connection sources:
+ * `dbt_sources.<source>.<table>` views read where the data is. A relative
+ * location is relative to the dbt project, as dbt-duckdb reads it.
+ */
+export function dbtProjectExternalSources(projectRoot: string): LakeSourceConfig[] {
+  const now = Date.now();
+  const cached = dbtExternalSourceCache.get(projectRoot);
+  if (cached && now - cached.at < 2_000) return cached.sources;
+  let manifestPath: string | undefined;
+  let stamp = '';
+  try {
+    manifestPath = resolveDbtManifestPath(projectRoot);
+    if (manifestPath) {
+      const stats = statSync(manifestPath);
+      stamp = `${manifestPath}:${stats.mtimeMs}:${stats.size}`;
+    }
+  } catch {
+    manifestPath = undefined;
+  }
+  if (cached && cached.stamp === stamp) {
+    cached.at = now;
+    return cached.sources;
+  }
+  let sources: LakeSourceConfig[] = [];
+  if (manifestPath) {
+    try {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as { metadata?: { adapter_type?: unknown } };
+      // Only dbt-duckdb reads a location as a source; another adapter's sources are tables of its warehouse.
+      if (String(manifest.metadata?.adapter_type ?? '').toLowerCase() === 'duckdb') {
+        const dbtRoot = basename(dirname(manifestPath)) === 'target' ? dirname(dirname(manifestPath)) : projectRoot;
+        sources = dbtExternalSources(manifest).map((source) => ({
+          name: source.table,
+          catalog: DBT_SOURCES_CATALOG,
+          schema: source.source,
+          path: isAbsoluteLikePath(source.path) || isUrlPath(source.path) ? source.path : resolve(dbtRoot, source.path),
+          format: source.format,
+        }));
+      }
+    } catch {
+      sources = [];
+    }
+  }
+  dbtExternalSourceCache.set(projectRoot, { at: now, stamp, sources });
+  return sources;
+}
+
 export function normalizeProjectConnection(connection: ConnectionConfig, projectRoot: string): ConnectionConfig {
   const normalized: ConnectionConfig = expandConnectionEnvPlaceholders(resolveSecretReferences({ ...connection }, projectRoot));
 
@@ -41713,6 +41774,16 @@ export function normalizeProjectConnection(connection: ConnectionConfig, project
       }));
   } else if (normalized.sources !== undefined) {
     delete normalized.sources;
+  }
+  // A dbt-duckdb project's DuckDB connection reads its external sources too (`dbt_sources.<source>.<table>`);
+  // a source the connection names itself in the same place wins.
+  if (normalized.driver === 'duckdb') {
+    const external = dbtProjectExternalSources(projectRoot);
+    if (external.length) {
+      const own = new Set((normalized.sources ?? []).map((source) => `${source.catalog ?? ''}.${source.schema ?? ''}.${source.name ?? ''}`.toLowerCase()));
+      const added = external.filter((source) => !own.has(`${source.catalog}.${source.schema}.${source.name}`.toLowerCase()));
+      if (added.length) normalized.sources = [...(normalized.sources ?? []), ...added];
+    }
   }
   // Catalogs: a database file relative to the project (or a bucket URL), or a catalog service (no path).
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.catalogs)) {
