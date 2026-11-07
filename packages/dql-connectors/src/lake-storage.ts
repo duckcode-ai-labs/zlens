@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { LakeStorageConfig } from './connector.js';
+import type { ConnectionConfig, LakeStorageConfig } from './connector.js';
 
 const sqlText = (value: string) => `'${value.replace(/'/g, "''")}'`;
 
@@ -99,4 +99,49 @@ export function describeLakeStorage(storage: LakeStorageConfig | undefined): str
   if (storage.azure) lines.push(`Azure Storage${storage.azure.accountName ? ` (${storage.azure.accountName})` : ''}: ${storage.azure.auth === 'connection_string' || (storage.azure.auth === undefined && storage.azure.connectionString) ? 'a connection string' : 'your Azure sign-in'}`);
   if (storage.r2) lines.push(`Cloudflare R2${storage.r2.accountId ? ` (${storage.r2.accountId})` : ''}: access keys`);
   return lines;
+}
+
+const CLOUD_NAMES: Record<keyof LakeStorageConfig, string> = { s3: 'AWS', gcs: 'Google Cloud', azure: 'Azure', r2: 'Cloudflare R2' };
+
+/** The bucket URLs a connection reads: its data folder and its sources. */
+function connectionUrls(config: Pick<ConnectionConfig, 'dataFolder' | 'sources'>): string[] {
+  return [config.dataFolder ?? '', ...(config.sources ?? []).map((source) => source?.path ?? '')]
+    .map((path) => path.trim().toLowerCase())
+    .filter((path) => /^[a-z][a-z0-9+.-]*:\/\//.test(path));
+}
+
+/**
+ * The cloud sign-ins a connection uses without saying so: a bucket it reads
+ * (`s3://`, `gs://`) whose cloud has no `storage` entry gets that cloud's own
+ * sign-in (the credential chain). Azure needs its account name and R2 its
+ * keys, so they are never assumed.
+ */
+export function defaultLakeSignIns(config: Pick<ConnectionConfig, 'dataFolder' | 'sources' | 'storage'>): LakeStorageConfig {
+  const urls = connectionUrls(config);
+  const defaults: LakeStorageConfig = {};
+  if (!config.storage?.s3 && urls.some((url) => url.startsWith('s3://'))) defaults.s3 = {};
+  if (!config.storage?.gcs && urls.some((url) => url.startsWith('gs://') || url.startsWith('gcs://'))) defaults.gcs = {};
+  return defaults;
+}
+
+/** One cloud's storage, by itself (to set up, and say, one cloud at a time). */
+export function lakeStorageClouds(storage: LakeStorageConfig | undefined): Array<{ cloud: keyof LakeStorageConfig; name: string; storage: LakeStorageConfig }> {
+  return (Object.keys(CLOUD_NAMES) as Array<keyof LakeStorageConfig>)
+    .filter((cloud) => storage?.[cloud])
+    .map((cloud) => ({ cloud, name: CLOUD_NAMES[cloud], storage: { [cloud]: storage![cloud] } as LakeStorageConfig }));
+}
+
+/** DuckDB's refusal to set up a cloud's sign-in, in plain words with what to do. */
+export function lakeSignInFailure(cloud: keyof LakeStorageConfig, error: unknown): string {
+  const detail = (error instanceof Error ? error.message : String(error)).split('\n')[0].trim();
+  const name = CLOUD_NAMES[cloud];
+  if (!/Secret Validation Failure|credential/i.test(detail)) return `storage.${cloud}: ${detail}`;
+  const how = cloud === 's3'
+    ? 'sign in (aws sso login, a profile in ~/.aws/config, or AWS_* environment variables) or give storage.s3 keys'
+    : cloud === 'gcs'
+      ? 'sign in (gcloud auth application-default login) or give storage.gcs HMAC keys'
+      : cloud === 'azure'
+        ? 'sign in (az login) or give storage.azure a connection string'
+        : 'check storage.r2';
+  return `no ${name} sign-in found: ${how} (DuckDB: ${detail})`;
 }

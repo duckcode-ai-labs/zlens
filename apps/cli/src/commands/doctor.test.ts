@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { checkAppsPublishing, checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
+import { checkAppsPublishing, checkDataFolder, checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -495,5 +495,27 @@ describe('metric counts read the same as sync and Setup', () => {
     expect(semanticMetricWords([metric])).toBe('1 metric');
     expect(semanticMetricWords([metric, metric, {}])).toBe('3 metrics');
     expect(semanticMetricWords([metric, measure])).toBe('1 metric and 1 measure');
+  });
+});
+
+describe('the data folder check', () => {
+  const connector = (status: unknown) => ({ getConnector: async () => ({ dataFolderStatus: async () => status }), disconnect: async () => {} });
+  const lake = { driver: 'file', filepath: ':memory:', dataFolder: 's3://acme/sales/', storage: { s3: { region: 'us-east-1', accessKeyId: 'AKIA1', secretAccessKey: 'shh' } } } as const;
+
+  it('says what a bucket folder reads, how it signs in, and never a key', async () => {
+    const check = await checkDataFolder('/work/shop', lake as never, { executor: connector({ folder: 's3://acme/sales/', tables: [{ name: 'orders', source: 'orders/', kind: 'Iceberg table (version 3)' }], catalogs: [], skipped: [], problems: [] }) as never });
+    expect(check).toEqual({ name: 'Data folder', ok: true, detail: 'reads 1 table from s3://acme/sales/ (S3 (us-east-1): access keys)' });
+    expect(JSON.stringify(check)).not.toMatch(/AKIA1|shh/);
+  });
+
+  it('warns about what it does not read, and fails when it reads nothing', async () => {
+    const drift = { source: 'drift/', name: 'drift', reason: 'its files have different columns' };
+    const some = await checkDataFolder('/work/shop', { driver: 'file', filepath: ':memory:', dataFolder: '/work/shop/data' } as never, { executor: connector({ folder: '/work/shop/data', tables: [{ name: 'orders', source: 'orders.csv', kind: 'CSV file' }], catalogs: [], skipped: [], problems: [drift] }) as never });
+    expect(some).toEqual({ name: 'Data folder', ok: true, advisory: true, detail: 'reads 1 table from data; not read: drift/ (drift): its files have different columns' });
+    const none = await checkDataFolder('/work/shop', lake as never, { executor: connector({ folder: 's3://acme/sales/', tables: [], catalogs: [], skipped: [], problems: [{ source: 's3://acme/sales/', name: '', reason: 'HTTP 403 Forbidden' }] }) as never });
+    expect(none).toMatchObject({ ok: false, detail: 'reads no tables from s3://acme/sales/ (S3 (us-east-1): access keys); not read: s3://acme/sales/: HTTP 403 Forbidden' });
+    const refused = await checkDataFolder('/work/shop', lake as never, { executor: { getConnector: async () => { throw new Error('no AWS sign-in found: sign in'); }, disconnect: async () => {} } as never });
+    expect(refused).toEqual({ name: 'Data folder', ok: false, detail: 'could not open s3://acme/sales/ (S3 (us-east-1): access keys): no AWS sign-in found: sign in' });
+    expect(await checkDataFolder('/work/shop', { driver: 'postgresql', host: 'db' } as never)).toBeNull();
   });
 });

@@ -12,6 +12,16 @@ export interface LakeSourceConfig {
   sheet?: string;
 }
 
+/** A database attached read-only beside a connection's own. */
+export interface LakeCatalogConfig {
+  /** The catalog's name: its tables are `name.schema.table`. */
+  name: string;
+  /** A path (relative to the project) or a bucket URL. */
+  path: string;
+  /** Found from the path's extension when left out (`.ducklake`, `.sqlite`, `.db`/`.duckdb`). */
+  type?: 'duckdb' | 'ducklake' | 'sqlite';
+}
+
 /** How a DuckDB or file connection reaches buckets. */
 export interface LakeStorageConfig {
   /** Amazon S3, and other S3 APIs (MinIO, Ceph, Wasabi) through `endpoint`. */
@@ -112,6 +122,12 @@ export interface ConnectionConfig {
    * where they are. A source's name wins over a table of the data folder.
    */
   sources?: LakeSourceConfig[];
+  /**
+   * DuckDB and file connections: databases attached read-only beside the
+   * connection's own (a DuckDB, DuckLake or SQLite file, on disk or in a
+   * bucket): their tables are `name.schema.table`.
+   */
+  catalogs?: LakeCatalogConfig[];
   /**
    * DuckDB and file connections: how buckets are reached. Credentials come
    * from the cloud's own sign-in (the credential chain) unless keys are given;

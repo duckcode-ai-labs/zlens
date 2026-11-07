@@ -68,6 +68,7 @@ describe('a file connection with buckets, through the form', () => {
       dataFolder: 's3://acme-lake/sales/',
       storage: { s3: { region: 'us-east-1', accessKeyId: 'AKIA1', secretAccessKey: '••••••••', endpoint: 'http://minio:9000', useSsl: false } },
       sources: [{ name: 'orders', path: 's3://acme-lake/orders/', format: 'iceberg' }],
+      catalogs: [{ name: 'lake', path: 's3://acme-lake/lake.ducklake', type: 'ducklake' }],
     };
     const fields = formFieldsFromConnection(stored);
     expect(fields).toMatchObject({
@@ -78,5 +79,26 @@ describe('a file connection with buckets, through the form', () => {
     });
     expect(Object.values(fields)).not.toContain('[object Object]');
     expect(connectionFromFormFields('file', fields)).toEqual(stored);
+  });
+});
+
+describe('the Files and lake form', () => {
+  const file = CONNECTOR_SCHEMAS.find((schema) => schema.driver === 'file')!;
+  const shown = (fields: Record<string, string>) => file.fields.filter((field) => fieldApplies(field, fields)).map((field) => field.key);
+
+  it('shows only the sign-in fields of the bucket the data folder is in', () => {
+    expect(shown({ dataFolder: './data' })).toEqual(['dataFolder']);
+    expect(shown({ dataFolder: 's3://acme/sales/' })).toEqual([
+      'dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.s3.accessKeyId', 'storage.s3.secretAccessKey', 'storage.s3.endpoint',
+    ]);
+    expect(shown({ dataFolder: 'gs://acme/events/' })).toEqual(['dataFolder', 'storage.gcs.keyId', 'storage.gcs.secret']);
+    expect(shown({ dataFolder: 'abfss://lake@acme.dfs.core.windows.net/sales' })).toEqual(['dataFolder', 'storage.azure.accountName', 'storage.azure.connectionString']);
+    // A saved value stays visible even when the folder moved.
+    expect(shown({ dataFolder: './data', 'storage.s3.region': 'eu-west-1' })).toEqual(['dataFolder', 'storage.s3.region']);
+  });
+
+  it('saves a bucket with the cloud\'s own sign-in: nothing but the region', () => {
+    expect(connectionFromFormFields('file', { dataFolder: 's3://acme/sales/', 'storage.s3.region': 'us-east-1', 'storage.s3.profile': '', 'storage.gcs.keyId': 'left-over' }))
+      .toEqual({ driver: 'file', dataFolder: 's3://acme/sales/', storage: { s3: { region: 'us-east-1' }, gcs: { keyId: 'left-over' } } });
   });
 });

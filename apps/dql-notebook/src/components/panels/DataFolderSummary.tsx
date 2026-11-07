@@ -17,7 +17,7 @@ function plural(count: number, one: string, many = `${one}s`): string {
 
 /** One line: `Reads 6 tables and 1 attached database from data/ · 2 not read`. */
 export function describeDataFolderStatus(status: DataFolderStatusView): string {
-  const where = status.folder === '.' ? 'the project folder' : `${status.folder}/`;
+  const where = status.folder === '.' ? 'the project folder' : status.folder === '' ? 'its sources' : /:\/\//.test(status.folder) ? status.folder : `${status.folder}/`;
   const read = [plural(status.tables.length, 'table')];
   if (status.catalogs.length) read.push(plural(status.catalogs.length, 'attached database'));
   const notRead = status.skipped.length + status.problems.length;

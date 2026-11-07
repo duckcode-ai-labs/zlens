@@ -47,6 +47,7 @@ export class FileConnector implements DatabaseConnector {
       // In a real DuckDB file, the views are temporary: never written into it.
       ...(config.dataFolder ? { dataFolder: config.dataFolder } : {}),
       ...(config.sources?.length ? { sources: config.sources } : {}),
+      ...(config.catalogs?.length ? { catalogs: config.catalogs } : {}),
       ...(config.storage ? { storage: config.storage } : {}),
     };
     await this.duckdb.connect(duckdbConfig);

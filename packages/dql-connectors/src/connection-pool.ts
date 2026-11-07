@@ -53,6 +53,7 @@ export function createConnectionConfigKey(config: ConnectionConfig): string {
     filepath: config.filepath,
     dataFolder: config.dataFolder,
     sources: config.sources,
+    catalogs: config.catalogs,
     storage: config.storage,
     allowedDirectories: config.allowedDirectories,
     restrictExternalAccess: config.restrictExternalAccess,

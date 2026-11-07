@@ -16,6 +16,21 @@ export interface ConnectorFieldSchema {
   authMethods?: string[];
   /** Shown only when the SSH tunnel is switched on. */
   ssh?: boolean;
+  /** Shown only for a data folder in this kind of bucket (or when it already has a value). */
+  bucket?: LakeBucket;
+}
+
+/** The kinds of bucket a file connection's data folder can be in. */
+export type LakeBucket = 's3' | 'gcs' | 'azure' | 'r2';
+
+/** The bucket a data folder is in, from its URL: `s3://…` → `s3`; a folder on disk has none. */
+export function bucketOf(dataFolder: string | undefined): LakeBucket | undefined {
+  const scheme = /^([a-z][a-z0-9+.-]*):\/\//i.exec((dataFolder ?? '').trim())?.[1]?.toLowerCase();
+  if (scheme === 's3') return 's3';
+  if (scheme === 'gs' || scheme === 'gcs') return 'gcs';
+  if (scheme === 'az' || scheme === 'azure' || scheme === 'abfss' || scheme === 'abfs') return 'azure';
+  if (scheme === 'r2') return 'r2';
+  return undefined;
 }
 
 export interface ConnectorFormSchema {
@@ -28,7 +43,7 @@ export interface ConnectorFormSchema {
 
 export const DRIVER_LABELS: Record<string, string> = {
   duckdb: 'DuckDB',
-  file: 'Local File / DuckDB',
+  file: 'Files and lake (DuckDB)',
   sqlite: 'SQLite',
   snowflake: 'Snowflake',
   databricks: 'Databricks',
@@ -442,16 +457,30 @@ export const CONNECTOR_SCHEMAS: ConnectorFormSchema[] = [
   },
   {
     driver: 'file',
-    label: 'Local files',
+    label: 'Files and lake',
     fields: [
-      { key: 'dataFolder', label: 'Data folder', type: 'text', placeholder: './data', required: true, helpText: 'Each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or Iceberg table and folder of files in it is a table named after it; DuckDB and DuckLake files are attached read-only. The data is read where it is.' },
+      { key: 'dataFolder', label: 'Data folder or bucket', type: 'text', placeholder: './data  or  s3://bucket/folder/', required: true, helpText: 'Each CSV, TSV, Parquet or JSON file, Excel sheet, Delta or Iceberg table and folder of files in it is a table named after it; DuckDB and DuckLake files are attached read-only. On disk or in a bucket (s3://, gs://, az://, r2://); the data is read where it is.' },
+      { key: 'storage.s3.region', label: 'AWS region', type: 'text', placeholder: 'us-east-1', bucket: 's3' },
+      { key: 'storage.s3.profile', label: 'AWS profile', type: 'text', placeholder: 'default', bucket: 's3', helpText: 'Empty: your usual AWS sign-in (environment, SSO, instance role). Nothing secret is saved.' },
+      { key: 'storage.s3.accessKeyId', label: 'Access key ID', type: 'text', bucket: 's3', helpText: 'Only to use keys instead of your AWS sign-in.' },
+      { key: 'storage.s3.secretAccessKey', label: 'Secret access key', type: 'password', bucket: 's3' },
+      { key: 'storage.s3.endpoint', label: 'S3 API endpoint', type: 'text', placeholder: 'http://minio.internal:9000', bucket: 's3', helpText: 'MinIO or another S3 API; empty for AWS.' },
+      { key: 'storage.gcs.keyId', label: 'HMAC key ID', type: 'text', bucket: 'gcs', helpText: 'Empty: your Google sign-in (application default credentials).' },
+      { key: 'storage.gcs.secret', label: 'HMAC secret', type: 'password', bucket: 'gcs' },
+      { key: 'storage.azure.accountName', label: 'Storage account', type: 'text', placeholder: 'acmelake', bucket: 'azure', helpText: 'Read with your Azure sign-in (az login, managed identity).' },
+      { key: 'storage.azure.connectionString', label: 'Connection string', type: 'password', bucket: 'azure', helpText: 'Only instead of your Azure sign-in.' },
+      { key: 'storage.r2.accountId', label: 'R2 account ID', type: 'text', bucket: 'r2' },
+      { key: 'storage.r2.keyId', label: 'R2 access key ID', type: 'text', bucket: 'r2' },
+      { key: 'storage.r2.secret', label: 'R2 secret access key', type: 'password', bucket: 'r2' },
     ],
+    primary: () => ['dataFolder', 'storage.s3.region', 'storage.s3.profile', 'storage.azure.accountName', 'storage.r2.accountId', 'storage.r2.keyId', 'storage.r2.secret'],
   },
 ];
 
 /** Whether a field applies to the form's current sign-in method and tunnel switch. */
 export function fieldApplies(field: ConnectorFieldSchema, fields: Record<string, string>): boolean {
   if (field.ssh && fields.useSshTunnel !== 'true') return false;
+  if (field.bucket && bucketOf(fields.dataFolder) !== field.bucket && !(fields[field.key] ?? '').trim()) return false;
   if (field.authMethods && !field.authMethods.includes(fields.authMethod ?? '')) return false;
   return true;
 }
@@ -459,8 +488,8 @@ export function fieldApplies(field: ConnectorFieldSchema, fields: Record<string,
 /**
  * A stored connection as flat form fields: `sshTunnel: {host}` becomes
  * `sshTunnel.host`, `storage: {s3: {region}}` becomes `storage.s3.region`,
- * and a file connection's `sources` list is kept whole (as JSON) so saving
- * the form never loses it.
+ * and a connection's `sources` and `catalogs` lists are kept whole (as JSON)
+ * so saving the form never loses them.
  */
 export function formFieldsFromConnection(cfg: Record<string, unknown> | undefined): Record<string, string> {
   const fields: Record<string, string> = {};
@@ -475,8 +504,8 @@ export function formFieldsFromConnection(cfg: Record<string, unknown> | undefine
       });
       return;
     }
-    if (key === 'sources' && Array.isArray(value)) {
-      fields.sources = JSON.stringify(value);
+    if ((key === 'sources' || key === 'catalogs') && Array.isArray(value)) {
+      fields[key] = JSON.stringify(value);
       return;
     }
     if (key === 'sshTunnel' && typeof value === 'object') {
@@ -576,10 +605,10 @@ export function connectionFromFormFields(driver: string, fields: Record<string, 
       if (!store || !inner) return;
       const storage = (connection.storage ??= {}) as Record<string, Record<string, unknown>>;
       (storage[store] ??= {})[inner] = inner === 'useSsl' ? value === true || value === 'true' : value;
-    } else if (key === 'sources') {
+    } else if (key === 'sources' || key === 'catalogs') {
       try {
-        const sources = JSON.parse(String(value)) as unknown;
-        if (Array.isArray(sources) && sources.length) connection.sources = sources;
+        const list = JSON.parse(String(value)) as unknown;
+        if (Array.isArray(list) && list.length) connection[key] = list;
       } catch {
         // Not a list: left out rather than saved broken.
       }

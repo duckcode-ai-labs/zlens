@@ -2,7 +2,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { QueryExecutor } from '@zlens/connectors';
+import { QueryExecutor, describeLakeStorage, type DataFolderStatus } from '@zlens/connectors';
 import { WorkbenchRoutedQueryExecutor, type WorkbenchQueryRouteOptions } from '../workbench-query-route.js';
 import { appsPublishSettings, appsPublishSettingsProblems, buildManifest, collectInputFiles, resolveDbtManifestPath, resolveSemanticLayerWithDiagnostics } from '@zlens/core';
 import { buildLocalContextPack, defaultKgPath, defaultMetadataPath, openMetadataCatalog } from '@zlens/agent';
@@ -144,7 +144,12 @@ export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest
     checks.push(checkSnowflakeNodeVersion());
   }
   if (defaultConnection?.driver) {
-    checks.push(await checkLocalQueryRuntime(projectRoot, defaultConnection));
+    const runtime = await checkLocalQueryRuntime(projectRoot, defaultConnection);
+    checks.push(runtime);
+    if (runtime.ok) {
+      const lake = await checkDataFolder(projectRoot, defaultConnection);
+      if (lake) checks.push(lake);
+    }
   }
   if (flags.ai) {
     checks.push(...checkAiRuntime(projectRoot));
@@ -1057,6 +1062,52 @@ export async function checkLocalQueryRuntime(
   } finally {
     process.chdir(previousCwd);
     await executor.disconnect().catch(() => {});
+  }
+}
+
+/**
+ * A file or DuckDB connection's data folder, sources and buckets: what it
+ * reads as tables and what it cannot, with the reason (a bucket it cannot
+ * list, a sign-in it cannot find, a folder whose files differ). Fails when
+ * nothing is read; something read with problems is a warning. Null for a
+ * connection without any.
+ */
+export async function checkDataFolder(
+  projectRoot: string,
+  connection: NonNullable<ReturnType<typeof loadProjectConfig>['defaultConnection']>,
+  options: { executor?: Pick<QueryExecutor, 'getConnector' | 'disconnect'> } = {},
+): Promise<Check | null> {
+  const normalized = normalizeProjectConnection(connection, projectRoot);
+  if (normalized.driver !== 'file' && normalized.driver !== 'duckdb') return null;
+  if (!normalized.dataFolder && !normalized.sources?.length && !normalized.storage) return null;
+  const where = normalized.dataFolder
+    ? (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized.dataFolder) ? normalized.dataFolder : relative(projectRoot, normalized.dataFolder) || '.')
+    : 'sources';
+  const storage = describeLakeStorage(normalized.storage).join('; ');
+  const executor = options.executor ?? new QueryExecutor();
+  try {
+    const connector = await executor.getConnector(normalized);
+    const read = (connector as { dataFolderStatus?: () => Promise<DataFolderStatus | undefined> }).dataFolderStatus;
+    const status = typeof read === 'function' ? await read.call(connector) : undefined;
+    if (!status) return null;
+    const tables = status.tables.length;
+    const catalogs = status.catalogs.length;
+    const read_ = tables + catalogs === 0
+      ? 'no tables'
+      : [`${tables} table${tables === 1 ? '' : 's'}`, ...(catalogs ? [`${catalogs} attached database${catalogs === 1 ? '' : 's'}`] : [])].join(' and ');
+    const problems = status.problems.map((problem) => `${problem.source}${problem.name && problem.name !== problem.source ? ` (${problem.name})` : ''}: ${problem.reason}`);
+    const detail = [
+      `reads ${read_} from ${where}${storage ? ` (${storage})` : ''}`,
+      ...problems.slice(0, 5).map((problem) => `not read: ${problem}`),
+      ...(problems.length > 5 ? [`…and ${problems.length - 5} more not read`] : []),
+    ].join('; ');
+    // Nothing read fails; something read with problems is a warning (what is not read, and why).
+    const anything = tables + catalogs > 0;
+    return { name: 'Data folder', ok: anything, detail, ...(anything && problems.length ? { advisory: true } : {}) };
+  } catch (error) {
+    return { name: 'Data folder', ok: false, detail: `could not open ${where}${storage ? ` (${storage})` : ''}: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    if (!options.executor) await executor.disconnect().catch(() => {});
   }
 }
 

@@ -19,6 +19,8 @@ describe('the data folder under a connection', () => {
     expect(describeDataFolderStatus(lake)).toBe('Reads 2 tables and 1 attached database from data/ · 2 not read');
     expect(describeDataFolderStatus({ folder: '.', tables: [{ name: 'orders', source: 'orders.csv', kind: 'CSV file' }], catalogs: [], skipped: [], problems: [] }))
       .toBe('Reads 1 table from the project folder');
+    expect(describeDataFolderStatus({ folder: 's3://acme/sales/', tables: [], catalogs: [], skipped: [], problems: [{ source: 's3://acme/sales/', name: '', reason: 'HTTP 403' }] }))
+      .toBe('Reads 0 tables from s3://acme/sales/ · 1 not read');
   });
 
   it('always shows what could not be read, with the reason; the tables open on demand', () => {

@@ -711,6 +711,24 @@ export function dropDataFolderViewStatement(name: string, options: { temporary?:
   return `DROP VIEW IF EXISTS ${options.temporary ? 'temp.main.' : ''}${sqlIdent(name)}`;
 }
 
+/** A connection's own `catalogs` as catalogs to attach (named as given; the type from the path when left out). */
+export function configuredCatalogs(catalogs: Array<{ name?: string; path?: string; type?: DataFolderCatalog['type'] }> | undefined): DataFolderCatalog[] {
+  const out: DataFolderCatalog[] = [];
+  const taken = new Set<string>();
+  for (const catalog of catalogs ?? []) {
+    const path = String(catalog?.path ?? '').trim();
+    if (!path) continue;
+    const extension = (/(\.[a-z0-9]+)$/i.exec(path)?.[1] ?? '').toLowerCase();
+    const type = catalog.type ?? (extension === '.ducklake' ? 'ducklake' : extension === '.sqlite' || extension === '.sqlite3' ? 'sqlite' : 'duckdb');
+    let name = identifier(String(catalog.name ?? '').trim() || path.split('/').pop()!.replace(/\.[a-z0-9]+$/i, ''));
+    if (RESERVED_CATALOGS.has(name)) name = `${name}_${type}`;
+    for (let n = 2; taken.has(name); n += 1) name = `${identifier(String(catalog.name ?? 'catalog'))}_${n}`;
+    taken.add(name);
+    out.push({ name, file: path, type, source: path, kind: `${CATALOG_KINDS[type]}, attached as ${name}` });
+  }
+  return out;
+}
+
 /** `ATTACH` a database file of the data folder, read-only, under its catalog name. */
 export function dataFolderAttachStatement(catalog: Pick<DataFolderCatalog, 'name' | 'file' | 'type'>): string {
   const path = catalog.type === 'ducklake' ? `ducklake:${catalog.file}` : catalog.file;

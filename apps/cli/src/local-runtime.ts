@@ -77,6 +77,8 @@ import {
   DuckDBConnector,
   type DuckDBConsistentReadScope,
   type DataFolderStatus,
+  type LakeCatalogConfig,
+  type LakeStorageConfig,
   isUrlPath,
   buildParamValues,
   expandArrayParameters,
@@ -32155,7 +32157,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         const connector = await executor.getConnector(target);
         const result = await validateConnectionForTest(connector, target);
         // The data folder as the project names it (`data`, `.`), not this machine's path.
-        if (result.dataFolder) result.dataFolder = { ...result.dataFolder, folder: relative(projectRoot, result.dataFolder.folder).replaceAll('\\', '/') || '.' };
+        if (result.dataFolder && !isUrlPath(result.dataFolder.folder) && result.dataFolder.folder) {
+          result.dataFolder = { ...result.dataFolder, folder: relative(projectRoot, result.dataFolder.folder).replaceAll('\\', '/') || '.' };
+        }
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON(result));
       } catch (error) {
@@ -41707,6 +41711,17 @@ export function normalizeProjectConnection(connection: ConnectionConfig, project
   } else if (normalized.sources !== undefined) {
     delete normalized.sources;
   }
+  // Attached databases (`catalogs`): a path relative to the project, or a bucket URL.
+  if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.catalogs)) {
+    normalized.catalogs = normalized.catalogs
+      .filter((catalog): catalog is NonNullable<typeof catalog> => Boolean(catalog) && typeof catalog === 'object' && typeof catalog.path === 'string' && catalog.path.trim() !== '')
+      .map((catalog) => ({
+        ...catalog,
+        path: isAbsoluteLikePath(catalog.path) || isUrlPath(catalog.path) ? catalog.path.trim() : resolve(projectRoot, catalog.path.trim()),
+      }));
+  } else if (normalized.catalogs !== undefined) {
+    delete normalized.catalogs;
+  }
   if (normalized.driver !== 'file' && normalized.driver !== 'duckdb' && normalized.storage !== undefined) delete normalized.storage;
   // Folders a hosted connection still reads files from (none by default): relative to the project.
   if ((normalized.driver === 'file' || normalized.driver === 'duckdb') && Array.isArray(normalized.allowedDirectories)) {
@@ -41744,7 +41759,7 @@ function expandConnectionEnvPlaceholders(connection: ConnectionConfig): Connecti
   const expand = (value: unknown): unknown => typeof value === 'string'
     ? value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, envKey: string) => process.env[envKey] ?? match)
     : value;
-  // Nested settings that may name an environment variable: an SSH tunnel's, buckets' (`storage`), and source paths.
+  // Nested settings that may name an environment variable: an SSH tunnel's, buckets' (`storage`), source and catalog paths.
   const expandDeep = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(expandDeep);
     if (value && typeof value === 'object') {
@@ -41753,7 +41768,7 @@ function expandConnectionEnvPlaceholders(connection: ConnectionConfig): Connecti
     return expand(value);
   };
   for (const [key, value] of Object.entries(connection)) {
-    expanded[key] = (key === 'sshTunnel' || key === 'storage' || key === 'sources') && value && typeof value === 'object'
+    expanded[key] = (key === 'sshTunnel' || key === 'storage' || key === 'sources' || key === 'catalogs') && value && typeof value === 'object'
       ? expandDeep(value)
       : expand(value);
   }
@@ -49262,6 +49277,12 @@ export function discoverDbtProfileConnections(projectRoot: string, projectConfig
             );
           }
         }
+        // dbt-duckdb resolves an attached database's relative path against the dbt project too.
+        if (mapped.adapter === 'duckdb' && mapped.connection.catalogs?.length) {
+          mapped.connection.catalogs = mapped.connection.catalogs.map((catalog) => (
+            isAbsoluteLikePath(catalog.path) || isUrlPath(catalog.path) ? catalog : { ...catalog, path: resolve(profileRelativeBase, catalog.path) }
+          ));
+        }
         const warnings = [...mapped.warnings];
         if (targetName !== defaultTarget) {
           warnings.push(`Not the default dbt target "${defaultTarget}".`);
@@ -49508,16 +49529,28 @@ function mapDbtProfileOutput(output: DbtProfileOutput): {
         warnings,
       };
     }
-    case 'duckdb':
+    case 'duckdb': {
+      // dbt-duckdb also says how to reach buckets (`settings`, `secrets`) and what to attach (`attach`).
+      const nested = (value: unknown): string | undefined => {
+        if (value === undefined || value === null || String(value).trim() === '') return undefined;
+        const resolved = resolveDbtEnvVars(String(value).trim());
+        resolved.envRefs.forEach((ref) => envRefs.add(ref));
+        return resolved.value;
+      };
+      const storage = dbtDuckDBStorage(output, nested, warnings);
+      const catalogs = dbtDuckDBAttach(output, nested, warnings);
       return {
         adapter,
         connection: compactConnection({
           driver: 'duckdb',
           filepath: read('path', 'database') ?? ':memory:',
+          ...(storage ? { storage } : {}),
+          ...(catalogs.length ? { catalogs } : {}),
         }),
         envRefs: [...envRefs],
         warnings,
       };
+    }
     case 'databricks': {
       const databricksAuth = read('auth_type', 'auth_method', 'authMethod');
       const authMethod: ConnectionConfig['authMethod'] = databricksAuth?.toLowerCase().includes('oauth') ? 'oauth' : 'token';
@@ -49723,6 +49756,102 @@ function text(source: Record<string, unknown>, ...keys: string[]): DbtProfileTex
     return resolveDbtEnvVars(value);
   }
   return { envRefs: [] };
+}
+
+/** A dbt-duckdb setting that is on (`true`, `'true'`, `1`), off, or not said. */
+function dbtFlag(value: unknown): boolean | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  return value === true || /^(?:true|1|yes)$/i.test(String(value).trim());
+}
+
+/**
+ * A dbt-duckdb profile's buckets as `storage`: its `s3_*` settings and its
+ * `secrets` (S3, GCS, Azure, R2). Other settings and secret types are not
+ * brought over, and that is said.
+ */
+function dbtDuckDBStorage(output: DbtProfileOutput, value: (raw: unknown) => string | undefined, warnings: string[]): LakeStorageConfig | undefined {
+  const storage: LakeStorageConfig = {};
+  const s3: NonNullable<LakeStorageConfig['s3']> = {};
+  const settings = output.settings && typeof output.settings === 'object' && !Array.isArray(output.settings) ? output.settings as Record<string, unknown> : {};
+  const S3_SETTINGS: Record<string, keyof NonNullable<LakeStorageConfig['s3']>> = {
+    s3_region: 'region', s3_access_key_id: 'accessKeyId', s3_secret_access_key: 'secretAccessKey', s3_session_token: 'sessionToken',
+    s3_endpoint: 'endpoint', s3_url_style: 'urlStyle',
+  };
+  const left: string[] = [];
+  for (const [key, raw] of Object.entries(settings)) {
+    const field = S3_SETTINGS[key];
+    if (field) (s3 as Record<string, unknown>)[field] = value(raw);
+    else if (key === 's3_use_ssl') s3.useSsl = dbtFlag(raw);
+    else left.push(key);
+  }
+  if (Object.values(s3).some((entry) => entry !== undefined)) storage.s3 = { ...s3 };
+  const secrets = Array.isArray(output.secrets) ? output.secrets : [];
+  for (const raw of secrets) {
+    if (!raw || typeof raw !== 'object') continue;
+    const secret = raw as Record<string, unknown>;
+    const type = String(secret.type ?? '').toLowerCase();
+    const chain = String(secret.provider ?? '').toLowerCase() === 'credential_chain';
+    if (type === 's3') {
+      storage.s3 = {
+        ...storage.s3,
+        ...(chain ? { auth: 'credential_chain' as const } : {}),
+        ...(value(secret.profile) ? { profile: value(secret.profile) } : {}),
+        ...(value(secret.region) ? { region: value(secret.region) } : {}),
+        ...(value(secret.key_id) ? { accessKeyId: value(secret.key_id) } : {}),
+        ...(value(secret.secret) ? { secretAccessKey: value(secret.secret) } : {}),
+        ...(value(secret.session_token) ? { sessionToken: value(secret.session_token) } : {}),
+        ...(value(secret.endpoint) ? { endpoint: value(secret.endpoint) } : {}),
+        ...(value(secret.url_style) ? { urlStyle: value(secret.url_style) as 'path' | 'vhost' } : {}),
+        ...(dbtFlag(secret.use_ssl) !== undefined ? { useSsl: dbtFlag(secret.use_ssl) } : {}),
+      };
+    } else if (type === 'gcs' || type === 'gcp') {
+      storage.gcs = chain || !value(secret.key_id)
+        ? { auth: 'credential_chain' }
+        : { auth: 'hmac', keyId: value(secret.key_id), secret: value(secret.secret) };
+    } else if (type === 'azure') {
+      storage.azure = value(secret.connection_string)
+        ? { auth: 'connection_string', connectionString: value(secret.connection_string) }
+        : { auth: 'credential_chain', accountName: value(secret.account_name) };
+    } else if (type === 'r2') {
+      storage.r2 = { accountId: value(secret.account_id), keyId: value(secret.key_id), secret: value(secret.secret) };
+    } else if (type) {
+      warnings.push(`The dbt profile's ${type} secret is not brought over: ZLens reads S3, GCS, Azure and R2 buckets.`);
+    }
+  }
+  if (left.length) warnings.push(`dbt-duckdb settings not brought over: ${left.join(', ')}.`);
+  return Object.keys(storage).length ? storage : undefined;
+}
+
+/**
+ * A dbt-duckdb profile's `attach` list as read-only catalogs: DuckDB,
+ * DuckLake (`ducklake:` paths) and SQLite databases. Others (Postgres,
+ * MySQL, MotherDuck) are not attached, and that is said.
+ */
+function dbtDuckDBAttach(output: DbtProfileOutput, value: (raw: unknown) => string | undefined, warnings: string[]): LakeCatalogConfig[] {
+  const attach = Array.isArray(output.attach) ? output.attach : [];
+  const catalogs: LakeCatalogConfig[] = [];
+  for (const raw of attach) {
+    if (!raw || typeof raw !== 'object') continue;
+    const entry = raw as Record<string, unknown>;
+    const path = value(entry.path);
+    if (!path) continue;
+    const type = String(entry.type ?? '').toLowerCase();
+    const alias = value(entry.alias) ?? path.split('/').pop()!.replace(/\.[a-z0-9]+$/i, '');
+    if (/^ducklake:/i.test(path)) {
+      catalogs.push({ name: alias, path: path.replace(/^ducklake:/i, ''), type: 'ducklake' });
+    } else if (type === 'sqlite') {
+      catalogs.push({ name: alias, path, type: 'sqlite' });
+    } else if (!type || type === 'duckdb') {
+      if (/^md:/i.test(path)) {
+        warnings.push(`dbt attach ${alias} (MotherDuck) is not attached: ZLens attaches DuckDB, DuckLake and SQLite databases.`);
+        continue;
+      }
+      catalogs.push({ name: alias, path, type: 'duckdb' });
+    } else {
+      warnings.push(`dbt attach ${alias} (${type}) is not attached: ZLens attaches DuckDB, DuckLake and SQLite databases.`);
+    }
+  }
+  return catalogs;
 }
 
 function resolveDbtEnvVars(value: string): DbtProfileTextResult {

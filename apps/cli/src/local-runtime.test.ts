@@ -8035,6 +8035,62 @@ describe('loadProjectConfig', () => {
 });
 
 describe('discoverDbtProfileConnections', () => {
+  it('brings a dbt-duckdb profile\'s buckets and attached databases over: settings and secrets as storage, attach as read-only catalogs', () => {
+    const projectRoot = mkdtempSync(join(tmpdir(), 'dql-dbt-duckdb-lake-'));
+    const dbtRoot = join(projectRoot, 'dbt');
+    tempDirs.push(projectRoot);
+    mkdirSync(dbtRoot, { recursive: true });
+    writeFileSync(join(dbtRoot, 'dbt_project.yml'), 'name: lake\nprofile: lake\n', 'utf-8');
+    writeFileSync(join(dbtRoot, 'profiles.yml'), [
+      'lake:',
+      '  target: dev',
+      '  outputs:',
+      '    dev:',
+      '      type: duckdb',
+      '      path: dev.duckdb',
+      '      extensions: [httpfs, iceberg]',
+      '      settings:',
+      '        s3_region: eu-west-1',
+      '        s3_use_ssl: false',
+      '        memory_limit: 4GB',
+      '      secrets:',
+      '        - type: s3',
+      '          provider: credential_chain',
+      '          profile: analytics',
+      '        - type: gcs',
+      '          key_id: "{{ env_var(\'ZLENS_TEST_GCS_KEY\', \'GOOG-DEFAULT\') }}"',
+      '          secret: shh',
+      '        - type: huggingface',
+      '          token: hf',
+      '      attach:',
+      '        - path: ./raw.duckdb',
+      '          alias: raw',
+      '        - path: ducklake:s3://acme/lake.ducklake',
+      '          alias: lake',
+      '        - path: postgresql://db/app',
+      '          type: postgres',
+      '          alias: app',
+    ].join('\n'), 'utf-8');
+    const [candidate] = discoverDbtProfileConnections(projectRoot, { dbt: { projectDir: 'dbt', profilesDir: 'dbt' } } as never);
+    expect(candidate.connection).toMatchObject({
+      driver: 'duckdb',
+      filepath: join(dbtRoot, 'dev.duckdb'),
+      storage: {
+        s3: { region: 'eu-west-1', useSsl: false, auth: 'credential_chain', profile: 'analytics' },
+        gcs: { auth: 'hmac', keyId: 'GOOG-DEFAULT', secret: 'shh' },
+      },
+      catalogs: [
+        { name: 'raw', path: join(dbtRoot, 'raw.duckdb'), type: 'duckdb' },
+        { name: 'lake', path: 's3://acme/lake.ducklake', type: 'ducklake' },
+      ],
+    });
+    expect(candidate.warnings).toEqual(expect.arrayContaining([
+      'The dbt profile\'s huggingface secret is not brought over: ZLens reads S3, GCS, Azure and R2 buckets.',
+      'dbt-duckdb settings not brought over: memory_limit.',
+      'dbt attach app (postgres) is not attached: ZLens attaches DuckDB, DuckLake and SQLite databases.',
+    ]));
+  });
+
   it('passes the discovered profiles directory to dbt parse (CFG-003)', () => {
     expect(buildDbtParseArgs('/repos/shop', '/secrets/dbt')).toEqual([
       'parse', '--project-dir', '/repos/shop', '--profiles-dir', '/secrets/dbt',
