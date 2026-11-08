@@ -28,7 +28,13 @@ const DEFAULT_ENDPOINT = 'http://127.0.0.1:11434';
  * in one click is the difference between a setting people can use and one they
  * never find.
  */
-export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (message: string) => void }) {
+export function EmbeddingSettings({ t, onStatus, allowedProviders }: {
+  t: Theme;
+  onStatus?: (message: string) => void;
+  /** The embedding services this install allows (ZLENS_MODEL_PROVIDERS); word-based search is always there. */
+  allowedProviders?: ProviderId[];
+}) {
+  const may = (id: ProviderId) => id === 'hashed' || !allowedProviders || allowedProviders.includes(id);
   const [provider, setProvider] = useState<ProviderId>('hashed');
   const [endpoint, setEndpoint] = useState(DEFAULT_ENDPOINT);
   const [model, setModel] = useState('');
@@ -160,7 +166,7 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
         </span>
       </div>
 
-      <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, cursor: busy ? 'wait' : 'pointer' }}>
+      {may('ollama') && <label style={{ display: 'flex', alignItems: 'flex-start', gap: 9, marginTop: 12, cursor: busy ? 'wait' : 'pointer' }}>
         <input
           type="checkbox"
           role="switch"
@@ -176,13 +182,13 @@ export function EmbeddingSettings({ t, onStatus }: { t: Theme; onStatus?: (messa
             {busy === 'local' ? <><Loader2 size={11} className="dql-spin" /> Re-embedding the catalog…</> : localEmbeddingsHint({ reachable: ollamaReachable, installed })}
           </span>
         </span>
-      </label>
+      </label>}
 
       <details style={{ marginTop: 12 }}>
         <summary style={{ cursor: 'pointer', fontSize: 12, fontWeight: 650, color: t.textSecondary }}>Technical details</summary>
 
       <div style={{ display: 'flex', gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
-        {(['hashed', 'ollama', 'openai'] as ProviderId[]).map((id) => (
+        {(['hashed', 'ollama', 'openai'] as ProviderId[]).filter(may).map((id) => (
           <button
             key={id}
             type="button"

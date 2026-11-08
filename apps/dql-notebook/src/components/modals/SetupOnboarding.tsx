@@ -31,6 +31,7 @@ import {
   type ProjectSyncStep,
 } from './setup-model-source';
 import { requestBuildNewApp } from '../apps/app-library-launch';
+import { aiTurnedOff } from '../settings/provider-choices';
 
 type SetupState = 'missing' | 'configured' | 'passed';
 type SetupTarget = SetupStartTarget;
@@ -80,6 +81,8 @@ export function SetupOnboarding({
   const [databaseDetail, setDatabaseDetail] = useState('Import a dbt profile or enter warehouse credentials.');
   const [aiProvider, setAiProvider] = useState<ProviderSettings | null>(null);
   const [aiSkipped, setAiSkipped] = useState(false);
+  // This install allows no model at all (ZLENS_MODEL_PROVIDERS=none): there is nothing to connect later.
+  const [aiOffHere, setAiOffHere] = useState(false);
   const [acknowledging, setAcknowledging] = useState(false);
   const [upgradeReapplied, setUpgradeReapplied] = useState(!launch?.requiresDbtReapply);
   const [acknowledgeError, setAcknowledgeError] = useState<string | null>(null);
@@ -146,6 +149,7 @@ export function SetupOnboarding({
         setConnectionId(connectionInfo.default);
       }
       setEnvironment(connectionInfo?.environmentReferences ?? []);
+      setAiOffHere(aiTurnedOff(providerInfo?.providers ?? []));
       setValueProfileOn(connectionInfo?.valueProfile === true);
       const catalog = (connectionInfo as { warehouseCatalog?: WarehouseCatalogSummary } | null)?.warehouseCatalog;
       if (catalog?.relations && !catalog.error) setCatalogReady(true);
@@ -446,8 +450,8 @@ export function SetupOnboarding({
             <SetupSection eyebrow="Step 3 of 4" title="Set up an AI provider" description="Optional. AI answers questions and helps you build. You can run queries and build Apps without AI." badge="Optional" t={t}>
               <ConnectionRuntimeSettings embedded includeMemory={false} section="providers" editorMode="setup" onProviderConfigured={onProviderConfigured} />
               <div style={{ border: '1px solid var(--status-info-border)', background: 'var(--status-info-bg)', borderRadius: 10, padding: '11px 13px', display: 'flex', alignItems: 'center', gap: 12 }}>
-                <div style={{ flex: 1, fontSize: 11.5, color: supportingText, lineHeight: 1.5 }}>Continue without AI. You can connect a provider later in Settings.</div>
-                <button type="button" onClick={() => { setAiSkipped(true); setStep(4); }} style={secondaryButton}>Skip AI for now</button>
+                <div style={{ flex: 1, fontSize: 11.5, color: supportingText, lineHeight: 1.5 }}>{aiOffHere ? 'Continue without AI.' : 'Continue without AI. You can connect a provider later in Settings.'}</div>
+                <button type="button" onClick={() => { setAiSkipped(true); setStep(4); }} style={secondaryButton}>{aiOffHere ? 'Continue' : 'Skip AI for now'}</button>
               </div>
             </SetupSection>
           ) : null}
