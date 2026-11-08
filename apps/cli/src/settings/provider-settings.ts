@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { readEnv } from '@zlens/core';
 import {
   coerceReasoningEffort,
   supportsReasoningEffort as providerSupportsReasoningEffort,
@@ -61,6 +62,8 @@ export interface RedactedProviderSettings {
   reasoningEffort: ReasoningEffortSetting;
   /** Whether this provider has a reasoning surface at all (drives whether the UI shows the control). */
   supportsReasoningEffort: boolean;
+  /** Whether this install lets it be chosen at all (ZLENS_MODEL_PROVIDERS); a provider that is not is never used. */
+  allowed: boolean;
 }
 
 export interface EffectiveProviderConfig {
@@ -120,7 +123,33 @@ export function providerSettingsPath(projectRoot: string): string {
   return join(projectRoot, '.dql', 'provider-settings.json');
 }
 
+/**
+ * ZLENS_MODEL_PROVIDERS: the model providers this install lets a person choose, as settings ids
+ * separated by commas (`anthropic,ollama`), or `none` for no model at all. Unset: every provider.
+ * For a packaged app whose installer chose the model. Unknown ids are ignored.
+ */
+export function allowedModelProviders(env: NodeJS.ProcessEnv = process.env): ProviderSettingsId[] | null {
+  const raw = readEnv('ZLENS_MODEL_PROVIDERS', env)?.trim();
+  if (!raw) return null;
+  if (raw.toLowerCase() === 'none') return [];
+  return raw.split(',').map((id) => id.trim().toLowerCase()).filter(isProviderSettingsId);
+}
+
+/** Whether this install lets `id` be chosen. A host's own model (no settings id) is the host's call. */
+export function modelProviderAllowed(id: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  const allowed = allowedModelProviders(env);
+  if (allowed === null || !isProviderSettingsId(id)) return true;
+  return allowed.includes(id);
+}
+
 export function listProviderSettings(projectRoot: string): RedactedProviderSettings[] {
+  // A provider this install does not allow is listed as off, never configured or active.
+  return listAllProviderSettings(projectRoot).map((provider) => modelProviderAllowed(provider.id)
+    ? provider
+    : { ...provider, enabled: false, configured: false, active: false, allowed: false });
+}
+
+function listAllProviderSettings(projectRoot: string): RedactedProviderSettings[] {
   const state = readStoredProviderState(projectRoot);
   const stored = state.providers;
   return (Object.keys(PROVIDER_META) as ProviderSettingsId[]).map((id) => {
@@ -150,6 +179,7 @@ export function listProviderSettings(projectRoot: string): RedactedProviderSetti
         command: meta.command,
         reasoningEffort: 'auto',
         supportsReasoningEffort: false,
+        allowed: true,
       };
     }
     const configured = id === 'ollama'
@@ -173,6 +203,7 @@ export function listProviderSettings(projectRoot: string): RedactedProviderSetti
       command: meta.command,
       reasoningEffort: resolveReasoningEffortSetting(local, meta) ?? 'auto',
       supportsReasoningEffort: providerReasoningSupported(meta, resolvedModel),
+      allowed: true,
     };
   });
 }
@@ -192,6 +223,7 @@ export function getEffectiveProviderConfig(projectRoot: string, id: ProviderSett
   const meta = PROVIDER_META[id];
   // A host's own model (RFC 0010 HH-5, e.g. `bedrock` or `vertex`) has no local settings.
   if (!meta) return { enabled: true };
+  if (!modelProviderAllowed(id)) return { enabled: false };
   return {
     apiKey: stored?.apiKey || (meta.keyEnv ? process.env[meta.keyEnv] : undefined),
     baseUrl: stored?.baseUrl || (meta.baseUrlEnv ? process.env[meta.baseUrlEnv] : undefined),
@@ -202,10 +234,12 @@ export function getEffectiveProviderConfig(projectRoot: string, id: ProviderSett
 }
 
 export function getActiveProvider(projectRoot: string): ProviderSettingsId | undefined {
-  return readStoredProviderState(projectRoot).activeProvider;
+  const active = readStoredProviderState(projectRoot).activeProvider;
+  return active && modelProviderAllowed(active) ? active : undefined;
 }
 
 export function saveProviderSettings(projectRoot: string, input: ProviderSettingsInput): RedactedProviderSettings[] {
+  if (!modelProviderAllowed(input.id)) throw new Error(`The ${input.id} model provider is not available on this install (ZLENS_MODEL_PROVIDERS).`);
   const state = readStoredProviderState(projectRoot);
   const stored = state.providers;
   const existing = stored[input.id];

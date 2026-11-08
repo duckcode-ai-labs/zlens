@@ -63,6 +63,7 @@ import {
   planMixedSourceSql,
 } from "./mixed-source-sql.js";
 import { resolveNpmInvocation } from './npm-runtime.js';
+import { connectionsLocked, deploymentLockRefusal, modelProviderRefusedReason } from './deployment-locks.js';
 import { NATIVE_CONNECTOR_PACKAGES, connectorBindingError, isNativeConnectorPackage, repairConnectorBinding, seedConnectorAllowScripts } from './connector-native.js';
 import {
   ensureDqlGitignore,
@@ -734,6 +735,7 @@ import {
   getActiveProvider,
   getEffectiveProviderConfig,
   isProviderSettingsId,
+  modelProviderAllowed,
   listProviderSettings,
   saveProviderSettings,
   type ProviderSettingsId,
@@ -6061,7 +6063,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       : null;
   /** The request's own connection object, only where the request may choose one (no host, the server's owner). */
   const requestConnection = (body: Record<string, unknown>): ConnectionConfig | undefined =>
-    !hostedRequest() && isConnectionConfig(body.connection) ? body.connection : undefined;
+    !hostedRequest() && !connectionsLocked() && isConnectionConfig(body.connection) ? body.connection : undefined;
   /** The project's connection to this DuckDB file (the active one first), or undefined. */
   const projectDuckDBFileConnection = (file: string): ConnectionConfig | undefined => {
     const candidates: Array<ConnectionConfig | null | undefined> = [
@@ -15128,6 +15130,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         }
       }
     }
+    // An install's own locks (deployment-locks.ts: a packaged app's fixed connection and model), with or without a host.
+    const lockRefusal = path.startsWith('/api/') ? deploymentLockRefusal(req.method ?? 'GET', path) : undefined;
+    if (lockRefusal) {
+      res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(serializeJSON({ error: lockRefusal, code: 'PERMISSION_DENIED' }));
+      return;
+    }
     const requestId = randomUUID();
     if (requestPrincipal) Object.assign(auditWho, { principal: requestPrincipal, actor: auditActor(requestPrincipal), requestId });
     // HH-17: statements carry the route's action, and where their results go
@@ -20036,12 +20045,13 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     // of a static hint. Spawns the CLIs, so it's a separate async call from the list.
     if (req.method === 'GET' && path === '/api/settings/providers/cli-status') {
       try {
+        // A CLI this install does not allow is not even started.
         const [claudeCode, codex] = await Promise.all([
-          ClaudeCodeCliProvider.detect(),
-          CodexCliProvider.detect(),
+          modelProviderAllowed('claude-code') ? ClaudeCodeCliProvider.detect() : undefined,
+          modelProviderAllowed('codex') ? CodexCliProvider.detect() : undefined,
         ]);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
-        res.end(serializeJSON({ status: { 'claude-code': claudeCode, codex } }));
+        res.end(serializeJSON({ status: { ...(claudeCode ? { 'claude-code': claudeCode } : {}), ...(codex ? { codex } : {}) } }));
       } catch (error) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
         res.end(serializeJSON({ status: {}, error: error instanceof Error ? error.message : String(error) }));
@@ -20055,6 +20065,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (!isProviderSettingsId(body?.id)) {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({ error: 'Unknown provider id.' }));
+          return;
+        }
+        if (!modelProviderAllowed(body.id)) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: modelProviderRefusedReason(body.id), code: 'PERMISSION_DENIED' }));
           return;
         }
         const providers = saveProviderSettings(projectRoot, {
@@ -20159,6 +20174,11 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           res.end(serializeJSON({ ok: false, error: 'Unknown provider id.' }));
           return;
         }
+        if (!modelProviderAllowed(body.id)) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ ok: false, error: modelProviderRefusedReason(body.id), code: 'PERMISSION_DENIED' }));
+          return;
+        }
         const ok = await testProviderConfig(projectRoot, body.id, {
           apiKey: typeof body.apiKey === 'string' && body.apiKey ? body.apiKey : undefined,
           baseUrl: typeof body.baseUrl === 'string' && body.baseUrl ? body.baseUrl : undefined,
@@ -20220,6 +20240,12 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         if (provider !== 'hashed' && provider !== 'ollama' && provider !== 'openai') {
           res.writeHead(400, { 'Content-Type': 'application/json; charset=utf-8' });
           res.end(serializeJSON({ error: 'Embedding provider must be hashed, ollama, or openai.' }));
+          return;
+        }
+        // Embeddings reach the same service as that model provider: the same install rule applies (hashed is offline).
+        if (provider !== 'hashed' && !modelProviderAllowed(provider)) {
+          res.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8' });
+          res.end(serializeJSON({ error: modelProviderRefusedReason(provider), code: 'PERMISSION_DENIED' }));
           return;
         }
         const str = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
@@ -29659,7 +29685,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
         connections: manages
           ? redactConnections(connections)
           : Object.fromEntries(Object.entries(connections).map(([name, value]) => [name, { driver: (value as { driver?: unknown })?.driver }])),
-        dbtProfiles: manages ? dbtProfiles.map((profile) => ({ ...profile, connection: redactConnections({ c: profile.connection }).c })) : [],
+        // A locked install (ZLENS_LOCK_CONNECTIONS) offers nothing to import or change; the page shows it read-only.
+        dbtProfiles: manages && !connectionsLocked() ? dbtProfiles.map((profile) => ({ ...profile, connection: redactConnections({ c: profile.connection }).c })) : [],
+        locked: connectionsLocked(),
         activeConnection,
         connectorStatus: manages ? connectorStatus : connectorStatus.map(({ installPath: _path, installCommand: _command, ...status }) => status),
         metadataScope,
@@ -30531,7 +30559,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ? {
               provider,
               projectPath: body.projectPath ?? projectConfig.semanticLayer?.projectPath,
-              connection: (hostedRequest() ? undefined : body.connection) ?? projectConfig.semanticLayer?.connection,
+              connection: (hostedRequest() || connectionsLocked() ? undefined : body.connection) ?? projectConfig.semanticLayer?.connection,
             }
           : {
               provider,
@@ -30634,7 +30662,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
           ? {
               provider,
               projectPath: body.projectPath ?? projectConfig.semanticLayer?.projectPath,
-              connection: (hostedRequest() ? undefined : body.connection) ?? projectConfig.semanticLayer?.connection,
+              connection: (hostedRequest() || connectionsLocked() ? undefined : body.connection) ?? projectConfig.semanticLayer?.connection,
             }
           : {
               provider,
@@ -47321,7 +47349,8 @@ async function selectAssistProvider(
     ? settings.find((provider) => provider.id === requestedProvider && isUsable(provider))
     : settings.find((provider) => provider.id === activeProvider && provider.enabled)
       ?? settings.find(isUsable);
-  if (!selected) return null;
+  // listProviderSettings already lists a provider this install does not allow as off; checked again here.
+  if (!selected || !modelProviderAllowed(selected.id)) return null;
   const config = getEffectiveProviderConfig(projectRoot, selected.id);
   let provider: AgentProvider;
   switch (selected.id) {
@@ -47373,6 +47402,7 @@ async function selectAssistProvider(
     ? []
     : settings
       .filter((candidate) => candidate.id !== selected.id && isUsable(candidate))
+      .filter((candidate) => modelProviderAllowed(candidate.id))
       .map((candidate) => ({
         id: candidate.id,
         create: () => createBlockStudioAssistProvider(projectRoot, candidate.id, { availability: 'defer' }),
