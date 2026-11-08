@@ -22,6 +22,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  statfsSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -84,6 +85,8 @@ export interface VersionCheckResult {
 
 export interface VersionCheckOptions {
   now?: () => Date;
+  /** Free bytes on the project's disk; undefined when unknown. For tests. */
+  freeBytes?: (projectRoot: string) => number | undefined;
   /** One line per event. Defaults to stderr, so `--format json` output on stdout stays clean. */
   log?: (line: string) => void;
 }
@@ -140,6 +143,13 @@ export function backUpOnVersionChange(
       return { ...result, action: 'recorded' };
     }
     try {
+      // A large project's stores run to hundreds of MB (a 4,000-model catalog: about 400 MB). A backup
+      // never fills the disk: it is skipped, with the reason, when it would leave less than 1 GB free.
+      const needed = sourcesBytes(projectRoot, sources);
+      const free = (options.freeBytes ?? freeDiskBytes)(projectRoot);
+      if (free !== undefined && free - needed < MIN_FREE_AFTER_BACKUP) {
+        throw new Error(`not enough free disk: it needs ${formatMegabytes(needed)} and ${formatMegabytes(free)} is free; ZLens keeps at least 1 GB free`);
+      }
       result.backup = createBackup(projectRoot, {
         from: previous,
         to: runningVersion,
@@ -187,6 +197,37 @@ function versionChangeLine(result: VersionCheckResult): string {
   }
   const last = result.previousVersion ? `last opened by ${result.previousVersion}` : 'no earlier version recorded';
   return `[zlens] Opening this project with ZLens ${result.runningVersion} (${last}): backed up its state first, in ${where}${partial}. zlens backups lists backups.`;
+}
+
+/** Free space a backup must leave on the project's disk. */
+const MIN_FREE_AFTER_BACKUP = 1024 ** 3;
+
+function freeDiskBytes(projectRoot: string): number | undefined {
+  try {
+    const stats = statfsSync(projectRoot);
+    return Number(stats.bavail) * Number(stats.bsize);
+  } catch {
+    return undefined;
+  }
+}
+
+/** What the sources take on disk now, a database's write-ahead log included. */
+function sourcesBytes(projectRoot: string, sources: BackupSource[]): number {
+  let total = 0;
+  for (const source of sources) {
+    for (const path of source.kind === 'sqlite' ? [source.path, `${source.path}-wal`] : [source.path]) {
+      try {
+        total += statSync(join(projectRoot, path)).size;
+      } catch {
+        // Not there (no write-ahead log right now): nothing to count.
+      }
+    }
+  }
+  return total;
+}
+
+function formatMegabytes(bytes: number): string {
+  return `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
 }
 
 function isSemver(version: string): boolean {

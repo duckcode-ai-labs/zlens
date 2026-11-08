@@ -238,6 +238,22 @@ describe('upgrades that snapshot first', () => {
     expect(rowsIn(join(root, '.dql/local/apps.sqlite'))).toEqual(['app']);
   });
 
+  it('never fills the disk: skips the backup, saying why, when less than 1 GB would stay free', () => {
+    const root = project();
+    walStore(join(root, '.dql/local/apps.sqlite'), ['app']);
+    writeLastVersion(root, '0.3.0');
+    const log: string[] = [];
+    const tight = backUpOnVersionChange(root, '0.3.1', { log: (line) => log.push(line), freeBytes: () => 1024 ** 3 + 1024 });
+    expect(tight.action).toBe('failed');
+    expect(log[0]).toMatch(/not enough free disk: it needs \d+ MB and 1024 MB is free; ZLens keeps at least 1 GB free/);
+    expect(existsSync(join(root, BACKUPS_RELATIVE))).toBe(false);
+    expect(readLastVersion(root)).toBe('0.3.1');
+
+    writeLastVersion(root, '0.3.0');
+    expect(backUpOnVersionChange(root, '0.3.1', { log: () => undefined, freeBytes: () => 5 * 1024 ** 3 }).action).toBe('backed-up');
+    expect(backUpOnVersionChange(project(), '0.3.1', { log: () => undefined, freeBytes: () => undefined }).action).toBe('recorded');
+  });
+
   it('records a store it cannot read as failed in the manifest and copies the rest', () => {
     const root = project();
     walStore(join(root, '.dql/local/apps.sqlite'), ['app']);

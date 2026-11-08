@@ -262,8 +262,11 @@ folder. A new version updates those files the first time it opens them, and
 an older version may not read them afterwards. So when ZLens starts on a
 project that a different version last opened, it first copies that state into
 `.dql/local/backups/<from>-to-<to>-<time>/`, prints one line saying where,
-and then starts as usual. It keeps the 3 newest backups. The Dataset results
-cache is left out, since ZLens runs those queries again when needed.
+and then starts as usual (the notebook and `zlens mcp` both do this). It keeps
+the 3 newest backups. The Dataset results cache is left out, since ZLens runs
+those queries again when needed. A large project's stores can take a few
+hundred MB; when a backup would leave less than 1 GB free on the disk, ZLens
+skips it and says so.
 `.dql/local/` is git-ignored, so backups never reach Git, and only your user
 can read them.
 

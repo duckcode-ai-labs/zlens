@@ -9,6 +9,7 @@ import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import type { CLIFlags } from '../args.js';
 import { findProjectRoot, readDqlRuntimeVersion } from '../local-runtime.js';
+import { backUpOnVersionChange } from '../upgrade-backups.js';
 import { readEnv } from '@zlens/core';
 
 interface McpFlags extends CLIFlags {
@@ -21,6 +22,9 @@ export async function runMcp(arg: string | null, rest: string[], flags: McpFlags
   }
 
   const projectRoot = findProjectRoot(arg ?? process.cwd());
+  // An AI client may start ZLens's MCP server before the notebook after an upgrade: back up first here too,
+  // before any store opens (upgrade-backups.ts). Its one line goes to stderr, never into the stdio protocol.
+  backUpOnVersionChange(projectRoot, readDqlRuntimeVersion());
 
   if (flags.http) {
     const handle = await runLoopbackHTTP({ projectRoot, port: flags.port ?? 0, version: readDqlRuntimeVersion() });
