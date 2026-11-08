@@ -539,6 +539,90 @@ export function getDialect(driver?: string): SQLDialect {
 }
 
 /**
+ * Databases that put NULL first in a descending order unless a statement says
+ * otherwise: PostgreSQL, Redshift and Snowflake count NULL as larger than any
+ * value. DuckDB, BigQuery, Databricks, MySQL, SQL Server, SQLite, ClickHouse
+ * and Trino put it last. On Snowflake, "who scored the most points" ordered by
+ * a SUM that is NULL for players with no points recorded named such a player,
+ * with no points (NBA, live 2026-11-07).
+ */
+const NULLS_FIRST_DESCENDING = new Set(['postgresql', 'redshift', 'snowflake']);
+
+/** Whether this database puts NULL first in `ORDER BY … DESC` unless told otherwise. */
+export function sortsNullsFirstDescending(driver?: string): boolean {
+  return NULLS_FIRST_DESCENDING.has(driver?.trim().toLowerCase() ?? '');
+}
+
+/** `ASC`, or `DESC` with NULLs last on every database: the largest value comes first, never an empty one. */
+export function orderDirectionSql(direction: string, driver?: string): string {
+  const upper = direction.toUpperCase();
+  return upper === 'DESC' && sortsNullsFirstDescending(driver) ? 'DESC NULLS LAST' : upper;
+}
+
+/**
+ * The statement with `NULLS LAST` after every `DESC` that leaves NULLs' place
+ * to a database that would put them first (see sortsNullsFirstDescending), so
+ * it ranks as it does on DuckDB. Strings, quoted names, comments, an explicit
+ * `NULLS FIRST` and orders inside `WITHIN GROUP (…)` are left as written.
+ */
+export function withNullsLastWhenDescending(sql: string, driver?: string): string {
+  if (!sortsNullsFirstDescending(driver)) return sql;
+  const backslashEscapes = /^(snowflake|redshift)$/i.test(driver?.trim() ?? '');
+  const withinGroup: boolean[] = [];
+  let out = '';
+  let index = 0;
+  /** Where the next word starts after `from`, past spaces and comments. */
+  const nextWord = (from: number): string => {
+    let at = from;
+    for (;;) {
+      while (at < sql.length && /\s/.test(sql[at]!)) at += 1;
+      if (sql.startsWith('--', at)) { const end = sql.indexOf('\n', at); at = end < 0 ? sql.length : end + 1; continue; }
+      if (sql.startsWith('/*', at)) { const end = sql.indexOf('*/', at + 2); at = end < 0 ? sql.length : end + 2; continue; }
+      break;
+    }
+    return /^[A-Za-z_][A-Za-z0-9_$]*/.exec(sql.slice(at))?.[0] ?? '';
+  };
+  while (index < sql.length) {
+    const char = sql[index]!;
+    let end = index + 1;
+    if (char === "'" || char === '"') {
+      while (end < sql.length) {
+        if (sql[end] === char) {
+          if (sql[end + 1] === char) { end += 2; continue; }
+          end += 1;
+          break;
+        }
+        end += char === "'" && backslashEscapes && sql[end] === '\\' ? 2 : 1;
+      }
+    } else if (sql.startsWith('--', index)) {
+      const close = sql.indexOf('\n', index);
+      end = close < 0 ? sql.length : close + 1;
+    } else if (sql.startsWith('/*', index)) {
+      const close = sql.indexOf('*/', index + 2);
+      end = close < 0 ? sql.length : close + 2;
+    } else if (char === '$' && /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.test(sql.slice(index))) {
+      const tag = /^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(index))![0];
+      const close = sql.indexOf(tag, index + tag.length);
+      end = close < 0 ? sql.length : close + tag.length;
+    } else if (/[A-Za-z_]/.test(char)) {
+      const word = /^[A-Za-z_][A-Za-z0-9_$]*/.exec(sql.slice(index))![0];
+      end = index + word.length;
+      out += word;
+      if (word.toUpperCase() === 'DESC' && !withinGroup.includes(true) && nextWord(end).toUpperCase() !== 'NULLS') out += ' NULLS LAST';
+      index = end;
+      continue;
+    } else if (char === '(') {
+      withinGroup.push(/\bwithin\s+group\s*$/i.test(out));
+    } else if (char === ')') {
+      withinGroup.pop();
+    }
+    out += sql.slice(index, end);
+    index = end;
+  }
+  return out;
+}
+
+/**
  * List all supported dialect driver names.
  */
 export function listDialectDrivers(): string[] {

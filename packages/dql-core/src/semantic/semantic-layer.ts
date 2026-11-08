@@ -3,7 +3,7 @@
  * Maps to the architecture spec's semantic-layer/ directory structure.
  */
 
-import { getDialect, type SQLDialect } from './sql-dialect.js';
+import { getDialect, orderDirectionSql, type SQLDialect } from './sql-dialect.js';
 
 export interface SemanticSourceMetadata {
   provider: string;
@@ -1200,7 +1200,7 @@ export class SemanticLayer {
       // executable only when it names a projected alias or exactly repeats a
       // compiler-owned selected physical expression.
       if (!allowedOrderTargets.has(normalizeSemanticOrderTarget(target))) return null;
-      orderByParts.push(`${target} ${o.direction.toUpperCase()}`);
+      orderByParts.push(`${target} ${orderDirectionSql(o.direction, dialect.name)}`);
     }
 
     // Compose full SQL (dialect-aware)
@@ -1525,7 +1525,7 @@ export class SemanticLayer {
           : outputs.get(normalizeSemanticOrderTarget(order.name))
             ?? (dimension ? outputs.get(normalizeSemanticOrderTarget(dimension.name)) : undefined);
         if (!target) return null;
-        parts.push(`${target} ${order.direction.toUpperCase()}`);
+        parts.push(`${target} ${orderDirectionSql(order.direction, dialect.name)}`);
       }
       sql += `\nORDER BY ${parts.join(', ')}`;
     }
@@ -1761,7 +1761,7 @@ export class SemanticLayer {
       }
       body += `\nORDER BY ${orderBy.map((order) => {
         const qualified = grainKeySet.has(order.name.toLowerCase()) ? `grain_keys.${order.name}` : order.name;
-        return `${qualified} ${order.direction.toUpperCase()}`;
+        return `${qualified} ${orderDirectionSql(order.direction, dialect.name)}`;
       }).join(', ')}`;
     }
     if (options.limit) body += `\n${dialect.limitClause(options.limit)}`;

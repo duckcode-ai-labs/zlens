@@ -82,7 +82,10 @@ jobs:
         working-directory: packages/dql-connectors
         shell: bash
         run: |
-          npx vitest run src/drivers/duckdb.test.ts src/drivers/duckdb-file-handle.test.ts src/drivers/duckdb-disconnect.test.ts src/drivers/file.test.ts --reporter=verbose | tee "$RUNNER_TEMP/duckdb-driver.log"
+          # One file at a time: they share DuckDB's extension folder (~/.duckdb), and a file
+          # that installs one (file.test.ts, ducklake) while another lists them
+          # (duckdb.test.ts, duckdb_extensions()) fails on DuckDB's file lock.
+          npx vitest run src/drivers/duckdb.test.ts src/drivers/duckdb-file-handle.test.ts src/drivers/duckdb-disconnect.test.ts src/drivers/file.test.ts --no-file-parallelism --reporter=verbose | tee "$RUNNER_TEMP/duckdb-driver.log"
           if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/duckdb-driver.log"; then
             echo "DuckDB driver tests skipped cases although the driver root was configured." >&2
             exit 1

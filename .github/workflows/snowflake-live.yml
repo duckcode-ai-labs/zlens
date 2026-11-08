@@ -1,0 +1,64 @@
+# ZLens on a live Snowflake account, nightly: the NBA benchmark database as
+# dql-benchmarks nba/snowflake sets it up, read as the read-only key-pair user a
+# customer would create (catalog and view SQL, a join check, error reasons, the
+# semantic-view import and its metrics). apps/cli/src/snowflake.live.test.ts.
+#
+# Off until the repository variable ZLENS_SNOWFLAKE_LIVE is "on", with secrets
+# ZLENS_TEST_SNOWFLAKE_ACCOUNT (orgname-accountname) and
+# ZLENS_TEST_SNOWFLAKE_PRIVATE_KEY (the read-only user's PKCS#8 private key).
+name: snowflake live
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: snowflake-live
+  cancel-in-progress: false
+
+jobs:
+  snowflake-live:
+    name: ZLens on a live Snowflake account (NBA)
+    if: ${{ vars.ZLENS_SNOWFLAKE_LIVE == 'on' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @zlens/agent... --filter @zlens/connectors... build
+      - name: Install the Snowflake driver as ZLens does
+        run: |
+          mkdir -p "$RUNNER_TEMP/snowflake-connector"
+          printf '%s\n' '{"private":true}' > "$RUNNER_TEMP/snowflake-connector/package.json"
+          npm --prefix "$RUNNER_TEMP/snowflake-connector" install --no-save --no-package-lock --workspaces=false 'snowflake-sdk@^1.15.0'
+      - name: The read-only user's key
+        env:
+          KEY: ${{ secrets.ZLENS_TEST_SNOWFLAKE_PRIVATE_KEY }}
+        run: |
+          umask 077
+          printf '%s\n' "$KEY" > "$RUNNER_TEMP/snowflake-reader.p8"
+      - name: Live Snowflake tests
+        working-directory: apps/cli
+        shell: bash
+        env:
+          ZLENS_TEST_SNOWFLAKE_ACCOUNT: ${{ secrets.ZLENS_TEST_SNOWFLAKE_ACCOUNT }}
+          ZLENS_TEST_SNOWFLAKE_KEY_PATH: ${{ runner.temp }}/snowflake-reader.p8
+          ZLENS_TEST_SNOWFLAKE_CONNECTOR_ROOT: ${{ runner.temp }}/snowflake-connector
+        run: |
+          npx vitest run src/snowflake.live.test.ts --reporter=verbose | tee "$RUNNER_TEMP/snowflake-live.log"
+          if grep -qE '[0-9]+ skipped' "$RUNNER_TEMP/snowflake-live.log"; then
+            echo "Live Snowflake tests skipped although the account and key were given." >&2
+            exit 1
+          fi
+      - name: Remove the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/snowflake-reader.p8"

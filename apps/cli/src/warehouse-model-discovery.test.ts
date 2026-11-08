@@ -1,7 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import Database from 'better-sqlite3';
 import { normalizeWarehouseCatalog, warehouseRelationId, type DQLManifest, type WarehouseCatalogRelationV1 } from '@zlens/core';
-import { cheapToRead, discoverWarehouseModel, inferSharedKeyJoins, observedJoinsFromQueries, queryHistorySql, validateWarehouseDiscovery, viewJoins, warehouseDiscoveryChanges } from './warehouse-model-discovery.js';
+import {
+  cheapToRead,
+  discoverWarehouseModel,
+  inferSharedKeyJoins,
+  observedJoinsFromQueries,
+  queryHistorySql,
+  validateWarehouseDiscovery,
+  viewJoins,
+  warehouseDiscoveryChanges,
+  rowsUnderView,
+  viewOverSmallTables,
+  SMALL_VIEW_ROWS,
+} from './warehouse-model-discovery.js';
 
 const table = (schema: string, name: string, columns: string[], extra: Partial<WarehouseCatalogRelationV1> = {}): WarehouseCatalogRelationV1 => ({
   id: warehouseRelationId({ schema, name }),
@@ -346,5 +358,44 @@ describe('a first Domain named after the data, without staging copies (new-user 
       { relation: 'raw.raw_orders', finalRelation: 'dev.orders' },
     ]);
     expect(plain.relations).toBe(5);
+  });
+});
+
+describe('views over small tables on a cloud warehouse (Snowflake, live 2026-11-07)', () => {
+  const table = (schema: string, name: string, rows?: number) => ({ id: `warehouse.nba.${schema}.${name}`.toLowerCase(), database: 'NBA', schema, name, relation: `NBA.${schema}.${name}`, kind: 'table' as const, columns: [], ...(rows !== undefined ? { rowCountEstimate: rows } : {}) });
+  const view = (schema: string, name: string, viewSql: string) => ({ id: `warehouse.nba.${schema}.${name}`.toLowerCase(), database: 'NBA', schema, name, relation: `NBA.${schema}.${name}`, kind: 'view' as const, columns: [], viewSql });
+  const rawTeams = table('RAW', 'RAW_TEAMS', 30);
+  const rawGames = table('RAW', 'RAW_GAMES', 26_651);
+  const srcTeams = view('TRANSFORMED', 'SRC_TEAMS', 'create or replace view NBA.TRANSFORMED.SRC_TEAMS as (with teams as (select * from NBA.RAW.raw_teams) select * from teams)');
+  const dimTeams = view('TRANSFORMED', 'DIM_TEAMS_CLEANSED', 'create or replace view NBA.TRANSFORMED.DIM_TEAMS_CLEANSED as (select distinct t.team_id, g.season from SRC_TEAMS t join NBA.RAW.RAW_GAMES g on g.home_team_id = t.team_id)');
+  const big = table('RAW', 'EVENTS', 50_000_000);
+  const bigView = view('TRANSFORMED', 'DAILY', 'create view DAILY as select day, count(*) from NBA.RAW.EVENTS group by day');
+  const unknown = table('RAW', 'MYSTERY');
+  const unknownView = view('TRANSFORMED', 'M', 'create view M as select a, count(*) from NBA.RAW.MYSTERY group by a');
+  const relations = [rawTeams, rawGames, srcTeams, dimTeams, big, bigView, unknown, unknownView];
+
+  it('counts the rows of every table under a view, through views over views, skipping the view\'s own WITH names', () => {
+    expect(rowsUnderView(srcTeams, relations)).toBe(30);
+    expect(rowsUnderView(dimTeams, relations)).toBe(30 + 26_651);
+    expect(cheapToRead(dimTeams)).toBe(false);
+    expect(viewOverSmallTables(dimTeams, relations)).toBe(true);
+  });
+
+  it('a view over a large table, or one whose table has no row count, stays unread', () => {
+    expect(rowsUnderView(bigView, relations)).toBe(50_000_000);
+    expect(SMALL_VIEW_ROWS).toBe(10_000_000);
+    expect(viewOverSmallTables(bigView, relations)).toBe(false);
+    expect(rowsUnderView(unknownView, relations)).toBeUndefined();
+    expect(viewOverSmallTables(unknownView, relations)).toBe(false);
+    expect(viewOverSmallTables(rawTeams, relations)).toBe(false);
+    expect(viewOverSmallTables(view('TRANSFORMED', 'NOSQL', ''), relations)).toBe(false);
+  });
+
+  it('a view reached through two views counts each time; a view that reads itself is unknown', () => {
+    const both = view('TRANSFORMED', 'BOTH', 'create view BOTH as select * from NBA.TRANSFORMED.SRC_TEAMS a join NBA.TRANSFORMED.DIM_TEAMS_CLEANSED b on a.team_id = b.team_id');
+    expect(rowsUnderView(both, [...relations, both])).toBe(30 + (30 + 26_651));
+    const loopA = view('TRANSFORMED', 'LOOP_A', 'create view LOOP_A as select * from NBA.TRANSFORMED.LOOP_B');
+    const loopB = view('TRANSFORMED', 'LOOP_B', 'create view LOOP_B as select * from NBA.TRANSFORMED.LOOP_A');
+    expect(rowsUnderView(loopA, [...relations, loopA, loopB])).toBeUndefined();
   });
 });

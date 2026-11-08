@@ -231,7 +231,10 @@ const sweep = async (label: string, run: any, control = true) => {
   for (const key of Object.keys(run?.diagnosticReceiptV9 ?? {})) expect(Object.keys(RECEIPT_V9_FIELDS), `${label}: receipt field ${key} is classified in trace-review.ts`).toContain(key);
   // Positive control: Wes's own run (receipts and rows) carries warehouse values, so a clean read by Sam means something.
   if (control) expect(leaksIn(own, values).length, `${label}: Wes's own run carries warehouse values`).toBeGreaterThan(0);
-  const found = texts.flatMap((text) => leaksIn(text, values));
+  // Times the review keeps by design (a step's `durationMs`, `…Ms` budgets, `at` instants) are clock readings, not
+  // warehouse values: a step that took 1,225 ms beside a row value of 1225 is not a leak (CI, node 24, 2026-11-08).
+  const withoutTimes = (text: string) => text.replace(/(\\?")(\w*Ms|at)\1\s*:\s*-?\d+(?:\.\d+)?/g, '$1$2$1:0');
+  const found = texts.flatMap((text) => leaksIn(withoutTimes(text), values));
   // No hash a guess could be tested against: no bare sha256, every fingerprint keyed to this trace, and no hex in what Sam
   // reads is (a piece of) the sha256 of a value, of the statement as it ran (with or without its parameters), or of rows.
   const joined = texts.join('\n');

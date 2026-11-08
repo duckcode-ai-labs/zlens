@@ -5,7 +5,7 @@ import { buildExecutionPlan } from '@zlens/notebook';
 import { prepareBlockInvocation } from '../block-invocation.js';
 import { writeFileSync } from 'node:fs';
 import type { ConnectionConfig, QueryExecutor } from '@zlens/connectors';
-import { getDialect, meaningFilesHaveWords, readMeaningFiles, type DQLManifest, type SemanticLayer } from '@zlens/core';
+import { getDialect, meaningFilesHaveWords, readMeaningFiles, withNullsLastWhenDescending, type DQLManifest, type SemanticLayer } from '@zlens/core';
 import {
   type ProjectionScope,
   type PreparedRefusal,
@@ -2960,7 +2960,9 @@ export function createAskPipelineHost(deps: AskPipelineHostDeps): AskPipelineHos
         hostStep({ phase: 'schema', title: 'Checked the drafted SQL', state: 'done', detail: [stated.length ? `applies ${stated.map((item) => item.value).join(', ')}` : '', required.length ? `required filters present: ${required.map((item) => item.text).join(', ')}` : '', applied ? `filters on ${applied}` : ''].filter(Boolean).join('; ') || 'read-only and in scope' });
         return {
           ...chosen,
-          sql: withRowGuard(withoutDrafterCap(chosen.sql, deps.maxRows ?? 500, `${question} ${open}`), (deps.maxRows ?? 500) + 1),
+          // "The most" is the largest value, never an empty one: on Snowflake,
+          // PostgreSQL and Redshift a bare DESC puts NULL first.
+          sql: withRowGuard(withoutDrafterCap(withNullsLastWhenDescending(chosen.sql, connection?.driver), deps.maxRows ?? 500, `${question} ${open}`), (deps.maxRows ?? 500) + 1),
           proof: [
             ...chosen.proof,
             ...(applied ? [`applied on the data: ${applied}`] : []),
