@@ -19,7 +19,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SemanticLayer } from '../semantic-layer.js';
-import type { MetricDefinition, DimensionDefinition, CubeDefinition, JoinDefinition } from '../semantic-layer.js';
+import type { MetricDefinition, DimensionDefinition, JoinDefinition } from '../semantic-layer.js';
 import type { SemanticLayerProviderConfig } from './provider.js';
 
 const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
@@ -69,6 +69,9 @@ export interface SnowflakeQueryResult {
 export type SnowflakeQueryExecutor = (sql: string) => Promise<SnowflakeQueryResult>;
 
 export class SnowflakeSemanticProvider {
+  /** What could not be imported, and why (a metric over two tables, an expression the native engine does not run). */
+  readonly notes: string[] = [];
+
   readonly name = 'snowflake';
 
   constructor(private readonly executeQuery: SnowflakeQueryExecutor) {}
@@ -108,12 +111,6 @@ export class SnowflakeSemanticProvider {
       try {
         const desc = await this.executeQuery(`DESC SEMANTIC VIEW ${fqn}`);
         cacheEntry.viewDescriptions[fqn] = desc.rows;
-      } catch { /* skip */ }
-      try {
-        const rels = await this.executeQuery(
-          `SELECT * FROM TABLE(INFORMATION_SCHEMA.SEMANTIC_VIEW_RELATIONSHIPS('${fqn}'))`,
-        );
-        cacheEntry.relationships[fqn] = rels.rows;
       } catch { /* skip */ }
     }
 
@@ -157,158 +154,8 @@ export class SnowflakeSemanticProvider {
   private populateLayerFromCache(layer: SemanticLayer, cache: SnowflakeCacheEntry): void {
     for (const view of cache.views) {
       const fqn = `"${view.databaseName}"."${view.schemaName}"."${view.name}"`;
-      const descRows = cache.viewDescriptions[fqn] ?? [];
-      const relRows = cache.relationships[fqn] ?? [];
-      if (!layer.getCube(view.name)) {
-        layer.addCube({
-          name: view.name,
-          label: view.name.replace(/_/g, ' '),
-          description: `Snowflake semantic view ${fqn}`,
-          sql: `SELECT * FROM ${fqn}`,
-          table: fqn,
-          domain: view.schemaName || 'snowflake',
-          measures: [],
-          dimensions: [],
-          timeDimensions: [],
-          joins: [],
-          segments: [],
-          preAggregations: [],
-          source: {
-            provider: 'snowflake',
-            objectType: 'semantic_view',
-            objectId: fqn,
-            objectName: view.name,
-          },
-        });
-        layer.addSemanticModel({
-          name: view.name,
-          label: view.name.replace(/_/g, ' '),
-          description: `Snowflake semantic view ${fqn}`,
-          domain: view.schemaName || 'snowflake',
-          table: fqn,
-          measures: [],
-          dimensions: [],
-          timeDimensions: [],
-          entities: [],
-          source: {
-            provider: 'snowflake',
-            objectType: 'semantic_view',
-            objectId: fqn,
-            objectName: view.name,
-          },
-        });
-      }
-      const cube = layer.getCube(view.name);
-      const semanticModel = layer.getSemanticModel(view.name);
-
-      // Process metrics and dimensions from cached description
-      for (const row of descRows) {
-        const colName = String(row['name'] ?? row['NAME'] ?? '');
-        const colType = String(row['type'] ?? row['TYPE'] ?? '');
-        const semanticRole = String(row['semantic_role'] ?? row['SEMANTIC_ROLE'] ?? row['kind'] ?? row['KIND'] ?? '');
-        const expression = String(row['expression'] ?? row['EXPRESSION'] ?? row['default'] ?? row['DEFAULT'] ?? colName);
-        const description = String(row['comment'] ?? row['COMMENT'] ?? '');
-
-        if (semanticRole.toLowerCase() === 'measure' || semanticRole.toLowerCase() === 'metric') {
-          const aggregation = inferAggregation(colType, expression);
-          const metric: MetricDefinition = {
-            name: `${view.name}.${colName}`,
-            label: colName.replace(/_/g, ' '),
-            description: description || `Metric from ${view.name}`,
-            sql: expression,
-            type: aggregation,
-            table: fqn,
-            domain: view.schemaName,
-            cube: view.name,
-            aggregation,
-            source: {
-              provider: 'snowflake',
-              objectType: 'metric',
-              objectId: `${fqn}.${colName}`,
-              objectName: colName,
-            },
-          };
-          layer.addMetric(metric);
-          cube?.measures.push(metric);
-          semanticModel?.measures.push(metric.name);
-        } else if (semanticRole.toLowerCase() === 'dimension' || semanticRole.toLowerCase() === 'entity') {
-          const dimType = inferDimensionType(colType);
-          const dimension: DimensionDefinition = {
-            name: `${view.name}.${colName}`,
-            label: colName.replace(/_/g, ' '),
-            description: description || `Dimension from ${view.name}`,
-            sql: colName,
-            type: dimType,
-            table: fqn,
-            domain: view.schemaName,
-            cube: view.name,
-            source: {
-              provider: 'snowflake',
-              objectType: 'dimension',
-              objectId: `${fqn}.${colName}`,
-              objectName: colName,
-            },
-          };
-          layer.addDimension(dimension);
-          if (dimension.type === 'date') {
-            cube?.timeDimensions.push({ ...dimension, isTimeDimension: true, granularities: ['day', 'week', 'month', 'quarter', 'year'] });
-            semanticModel?.timeDimensions.push(dimension.name);
-          } else {
-            cube?.dimensions.push(dimension);
-            semanticModel?.dimensions.push(dimension.name);
-          }
-        }
-      }
-
-      // Process relationships
-      for (const row of relRows) {
-        const leftTable = String(row['left_table'] ?? row['LEFT_TABLE'] ?? '');
-        const rightTable = String(row['right_table'] ?? row['RIGHT_TABLE'] ?? '');
-        const joinType = String(row['join_type'] ?? row['JOIN_TYPE'] ?? 'left');
-        const joinCondition = String(row['join_condition'] ?? row['JOIN_CONDITION'] ?? '');
-
-        if (leftTable && rightTable && joinCondition) {
-          const leftName = leftTable.split('.').pop() ?? leftTable;
-          const rightName = rightTable.split('.').pop() ?? rightTable;
-
-          const emptyCube = (cubeName: string, cubeTable: string): CubeDefinition => ({
-            name: cubeName,
-            label: cubeName,
-            description: `Auto-discovered from Snowflake semantic view`,
-            sql: `SELECT * FROM ${cubeTable}`,
-            table: cubeTable,
-            domain: view.schemaName,
-            measures: [],
-            dimensions: [],
-            timeDimensions: [],
-            joins: [],
-            segments: [],
-            preAggregations: [],
-            source: {
-              provider: 'snowflake',
-              objectType: 'semantic_view',
-              objectId: cubeTable,
-              objectName: cubeName,
-            },
-          });
-
-          if (!layer.getCube(leftName)) layer.addCube(emptyCube(leftName, leftTable));
-          if (!layer.getCube(rightName)) layer.addCube(emptyCube(rightName, rightTable));
-
-          const leftCube = layer.getCube(leftName);
-          if (leftCube) {
-            const jt = joinType.toLowerCase();
-            const joinDef: JoinDefinition = {
-              name: `${leftName}_${rightName}`,
-              left: leftName,
-              right: rightName,
-              type: jt.includes('right') ? 'right' : jt.includes('full') ? 'full' : jt.includes('inner') ? 'inner' : 'left',
-              sql: joinCondition,
-            };
-            leftCube.joins.push(joinDef);
-          }
-        }
-      }
+      const notes = addSnowflakeSemanticView(layer, view, cache.viewDescriptions[fqn] ?? []);
+      for (const note of notes) this.notes.push(`${view.name}: ${note}`);
     }
   }
 
@@ -366,25 +213,6 @@ interface SemanticViewInfo {
   schemaName: string;
 }
 
-/**
- * Infer the metric aggregation type from the column type and expression.
- */
-function inferAggregation(colType: string, expression: string): MetricType {
-  const exprLower = expression.toLowerCase();
-  if (exprLower.includes('count(')) return 'count';
-  if (exprLower.includes('sum(')) return 'sum';
-  if (exprLower.includes('avg(') || exprLower.includes('average(')) return 'avg';
-  if (exprLower.includes('min(')) return 'min';
-  if (exprLower.includes('max(')) return 'max';
-  if (exprLower.includes('count_distinct(') || exprLower.includes('count(distinct')) return 'count_distinct';
-
-  // Infer from column type
-  const typeLower = colType.toLowerCase();
-  if (typeLower.includes('number') || typeLower.includes('float') || typeLower.includes('decimal')) {
-    return 'sum';
-  }
-  return 'count';
-}
 
 
 /**
@@ -402,4 +230,253 @@ function inferDimensionType(colType: string): DimensionType {
     return 'boolean';
   }
   return 'string';
+}
+
+type DescRow = Record<string, unknown>;
+interface SemanticViewObject {
+  kind: string;
+  name: string;
+  parent?: string;
+  props: Record<string, string>;
+}
+
+const field = (row: DescRow, name: string): string | undefined => {
+  const value = row[name] ?? row[name.toUpperCase()];
+  return value === null || value === undefined || value === '' ? undefined : String(value);
+};
+
+/**
+ * `DESC SEMANTIC VIEW` as Snowflake returns it: one row per property of each
+ * object (`object_kind`, `object_name`, `parent_entity`, `property`,
+ * `property_value`), grouped back into objects: logical tables, relationships,
+ * facts, dimensions and metrics. Read live, 2026-11-07.
+ */
+export function semanticViewObjects(rows: DescRow[]): { comment?: string; objects: SemanticViewObject[] } {
+  const objects = new Map<string, SemanticViewObject>();
+  let comment: string | undefined;
+  for (const row of rows) {
+    const kind = field(row, 'object_kind')?.toUpperCase();
+    const name = field(row, 'object_name');
+    const property = field(row, 'property')?.toUpperCase();
+    const value = field(row, 'property_value');
+    if (!property || value === undefined) continue;
+    if (!kind || !name) {
+      if (property === 'COMMENT') comment = value;
+      continue;
+    }
+    const parent = field(row, 'parent_entity');
+    const key = `${kind}|${parent ?? ''}|${name}`;
+    const object = objects.get(key) ?? { kind, name, ...(parent ? { parent } : {}), props: {} };
+    object.props[property] = value;
+    objects.set(key, object);
+  }
+  return { ...(comment ? { comment } : {}), objects: [...objects.values()] };
+}
+
+const AGGREGATES: Record<string, MetricType> = { SUM: 'sum', AVG: 'avg', MIN: 'min', MAX: 'max', COUNT: 'count' };
+const lower = (value: string) => value.toLowerCase();
+
+/** The text inside the outer parentheses of `FN( … )`, when they close at the very end. */
+function outerCall(expression: string): { fn: string; inner: string } | undefined {
+  const match = /^\s*([A-Za-z_]+)\s*\(([\s\S]*)\)\s*$/.exec(expression);
+  if (!match) return undefined;
+  let depth = 0;
+  for (const char of match[2]!) {
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (depth < 0) return undefined;
+  }
+  return depth === 0 ? { fn: match[1]!.toUpperCase(), inner: match[2]!.trim() } : undefined;
+}
+
+/**
+ * Add one Snowflake semantic view to the layer: a cube and semantic model per
+ * logical table (over its base table, keyed on its primary key), a join per
+ * relationship, each dimension, and each metric the native engine can run: an
+ * aggregate of one table's columns and facts (`SUM(WINS)`,
+ * `SUM(seasons.points_scored)` with the fact expanded), or arithmetic over
+ * other metrics (`seasons.total_wins / NULLIF(seasons.games_played, 0)` is a
+ * ratio). Returns what it left out, and why. Compiled SQL reads the base tables.
+ */
+export function addSnowflakeSemanticView(layer: SemanticLayer, view: { name: string; databaseName: string; schemaName: string }, rows: DescRow[]): string[] {
+  const notes: string[] = [];
+  const { comment, objects } = semanticViewObjects(rows);
+  const viewKey = lower(view.name);
+  const fqn = `"${view.databaseName}"."${view.schemaName}"."${view.name}"`;
+  const tables = new Map(objects.filter((object) => object.kind === 'TABLE').map((object) => [lower(object.name), object]));
+  const cubeOf = (table: string) => `${viewKey}_${lower(table)}`;
+  const baseOf = (table: SemanticViewObject) => [table.props.BASE_TABLE_DATABASE_NAME, table.props.BASE_TABLE_SCHEMA_NAME, table.props.BASE_TABLE_NAME].filter(Boolean).join('.');
+  const ofKind = (kind: string) => objects.filter((object) => object.kind === kind && object.props.ACCESS_MODIFIER?.toUpperCase() !== 'PRIVATE');
+  const facts = new Map(objects.filter((object) => object.kind === 'FACT').map((object) => [`${lower(object.parent ?? '')}.${lower(object.name)}`, object]));
+  const metrics = new Map(objects.filter((object) => object.kind === 'METRIC').map((object) => [`${lower(object.parent ?? '')}.${lower(object.name)}`, object]));
+  const source = (objectType: 'semantic_view' | 'metric' | 'dimension', id: string, name: string) => ({ provider: 'snowflake' as const, objectType, objectId: id, objectName: name });
+
+  // `table.name` references in an expression: a fact is expanded, the owning table's column loses its prefix.
+  const resolve = (expression: string, owner: string, depth = 0): { sql: string; otherTable?: string; metricRefs: string[] } => {
+    const metricRefs: string[] = [];
+    let otherTable: string | undefined;
+    const sql = expression.replace(/\b([A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_$]*)\b/g, (whole, table: string, name: string) => {
+      const key = `${lower(table)}.${lower(name)}`;
+      if (!tables.has(lower(table))) return whole;
+      if (metrics.has(key)) {
+        metricRefs.push(key);
+        return whole;
+      }
+      const fact = facts.get(key);
+      if (fact && depth < 5) {
+        const inner = resolve(fact.props.EXPRESSION ?? name, lower(table), depth + 1);
+        if (inner.otherTable) otherTable = inner.otherTable;
+        if (lower(table) !== owner) otherTable = lower(table);
+        return `(${inner.sql})`;
+      }
+      if (lower(table) !== owner) otherTable = lower(table);
+      return name;
+    });
+    return { sql, ...(otherTable ? { otherTable } : {}), metricRefs };
+  };
+
+  // Relationships first: the layer indexes a cube's joins when the cube is added.
+  const joinsOf = new Map<string, JoinDefinition[]>();
+  for (const relationship of objects.filter((object) => object.kind === 'RELATIONSHIP')) {
+    const left = lower(relationship.props.TABLE ?? relationship.parent ?? '');
+    const right = lower(relationship.props.REF_TABLE ?? '');
+    let foreign: string[] = [];
+    let referenced: string[] = [];
+    try {
+      foreign = JSON.parse(relationship.props.FOREIGN_KEY ?? '[]') as string[];
+      referenced = JSON.parse(relationship.props.REF_KEY ?? '[]') as string[];
+    } catch { /* unreadable keys */ }
+    if (!tables.has(left) || !tables.has(right) || foreign.length === 0 || foreign.length !== referenced.length) {
+      notes.push(`relationship ${relationship.name} left out: its tables or keys could not be read`);
+      continue;
+    }
+    joinsOf.set(cubeOf(left), [...(joinsOf.get(cubeOf(left)) ?? []), {
+      name: `${cubeOf(left)}_to_${cubeOf(right)}`, left: cubeOf(left), right: cubeOf(right), type: 'left',
+      sql: foreign.map((column, index) => `\${left}.${column} = \${right}.${referenced[index]}`).join(' AND '),
+    }]);
+  }
+
+  for (const table of tables.values()) {
+    const cube = cubeOf(table.name);
+    const base = baseOf(table);
+    if (!base) {
+      notes.push(`logical table ${table.name} has no base table`);
+      continue;
+    }
+    const description = table.props.COMMENT ?? `Table ${table.name} of Snowflake semantic view ${fqn}`;
+    if (!layer.getCube(cube)) {
+      layer.addCube({
+        name: cube, label: `${view.name} ${table.name}`.replace(/_/g, ' '), description, sql: `SELECT * FROM ${base}`, table: base,
+        domain: view.schemaName || 'snowflake', measures: [], dimensions: [], timeDimensions: [], joins: joinsOf.get(cube) ?? [], segments: [], preAggregations: [],
+        source: source('semantic_view', `${fqn}.${table.name}`, table.name),
+      });
+      let primaryKey: string[] = [];
+      try { primaryKey = JSON.parse(table.props.PRIMARY_KEY ?? '[]') as string[]; } catch { /* no key */ }
+      layer.addSemanticModel({
+        name: cube, label: `${view.name} ${table.name}`.replace(/_/g, ' '), description, domain: view.schemaName || 'snowflake', table: base,
+        entities: primaryKey.map((column) => `${cube}.${lower(column)}`), measures: [], dimensions: [], timeDimensions: [],
+        source: source('semantic_view', `${fqn}.${table.name}`, table.name),
+      });
+    }
+  }
+
+  for (const dimension of ofKind('DIMENSION')) {
+    const owner = lower(dimension.parent ?? '');
+    const table = tables.get(owner);
+    if (!table) continue;
+    const resolved = resolve(dimension.props.EXPRESSION ?? dimension.name, owner);
+    if (resolved.otherTable) {
+      notes.push(`dimension ${dimension.name} reads another table (${resolved.otherTable}): left out`);
+      continue;
+    }
+    const cube = cubeOf(owner);
+    const plain = lower(dimension.name);
+    const taken = layer.getDimension(plain);
+    const definition: DimensionDefinition = {
+      name: taken && taken.cube !== cube ? `${viewKey}_${plain}` : plain,
+      label: dimension.name.replace(/_/g, ' ').toLowerCase(),
+      description: dimension.props.COMMENT ?? `Dimension of ${view.name}`,
+      sql: resolved.sql,
+      type: inferDimensionType(dimension.props.DATA_TYPE ?? ''),
+      table: baseOf(table),
+      domain: view.schemaName,
+      cube,
+      source: source('dimension', `${fqn}.${dimension.name}`, dimension.name),
+    };
+    layer.addDimension(definition);
+    const model = layer.getSemanticModel(cube);
+    if (definition.type === 'date') {
+      layer.getCube(cube)?.timeDimensions.push({ ...definition, isTimeDimension: true, granularities: ['day', 'week', 'month', 'quarter', 'year'] });
+      model?.timeDimensions.push(definition.name);
+    } else {
+      layer.getCube(cube)?.dimensions.push(definition);
+      model?.dimensions.push(definition.name);
+    }
+  }
+
+  // Plain names, as the layer names metrics; the view's name in front only when another model has the name.
+  const metricNames = new Map<string, string>();
+  for (const [key] of metrics) {
+    const plain = key.split('.').pop()!;
+    metricNames.set(key, layer.getMetric(plain) ? `${viewKey}_${plain}` : plain);
+  }
+  const metricName = (key: string) => metricNames.get(key) ?? key.split('.').pop()!;
+  for (const metric of ofKind('METRIC')) {
+    const owner = lower(metric.parent ?? '');
+    const table = tables.get(owner);
+    if (!table) continue;
+    const expression = metric.props.EXPRESSION ?? '';
+    const name = metricName(`${owner}.${lower(metric.name)}`);
+    const cube = cubeOf(owner);
+    const common = {
+      name, label: metric.name.replace(/_/g, ' ').toLowerCase(), description: metric.props.COMMENT ?? `Metric of ${view.name}`,
+      domain: view.schemaName, cube, source: source('metric', `${fqn}.${metric.name}`, metric.name),
+    };
+    const call = outerCall(expression);
+    const aggregate = call ? AGGREGATES[call.fn] : undefined;
+    const resolved = resolve(call && aggregate ? call.inner : expression, owner);
+    if (call && aggregate && resolved.metricRefs.length === 0) {
+      if (resolved.otherTable) {
+        notes.push(`metric ${metric.name} aggregates another table (${resolved.otherTable}): left out`);
+        continue;
+      }
+      const distinct = /^distinct\s+/i.test(resolved.sql);
+      const type: MetricType = aggregate === 'count' && distinct ? 'count_distinct' : aggregate;
+      const definition: MetricDefinition = {
+        ...common, sql: distinct ? resolved.sql.replace(/^distinct\s+/i, '') : resolved.sql, type, table: baseOf(table), aggregation: type, metricType: 'simple',
+      };
+      layer.addMetric(definition);
+      layer.getCube(cube)?.measures.push(definition);
+      layer.getSemanticModel(cube)?.measures.push(name);
+      continue;
+    }
+    // Arithmetic over other metrics: a ratio when it is `a / b` or `a / NULLIF(b, 0)`, else derived.
+    const refs = [...new Set(resolved.metricRefs)];
+    const residue = expression.replace(/\b([A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_$]*)\b/g, (whole, t: string, n: string) => (metrics.has(`${lower(t)}.${lower(n)}`) ? 'M' : whole));
+    if (refs.length === 0 || /[A-Za-z_]\w*\s*\.\s*[A-Za-z_]/.test(residue) || !/^[\sM0-9.+\-*/(),]*$/i.test(residue.replace(/\bNULLIF\b|\bCOALESCE\b|\bROUND\b|\bABS\b/gi, ''))) {
+      notes.push(`metric ${metric.name} (${expression}) is not an aggregate of one table or arithmetic over metrics: left out`);
+      continue;
+    }
+    const ratio = /^\s*([A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*)\s*\/\s*(?:NULLIF\s*\(\s*([A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*)\s*,\s*0\s*\)|([A-Za-z_]\w*\s*\.\s*[A-Za-z_]\w*))\s*$/i.exec(expression);
+    const key = (ref: string) => lower(ref.replace(/\s+/g, ''));
+    const definition: MetricDefinition = ratio
+      ? { ...common, sql: expression, type: 'custom', table: '', metricType: 'ratio', typeParams: { numerator: { name: metricName(key(ratio[1]!)) }, denominator: { name: metricName(key(ratio[2] ?? ratio[3]!)) } } }
+      : {
+        ...common, sql: expression, type: 'custom', table: '', metricType: 'derived',
+        typeParams: {
+          expr: expression.replace(/\b([A-Za-z_][A-Za-z0-9_$]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_$]*)\b/g, (whole, t: string, n: string) => (metrics.has(`${lower(t)}.${lower(n)}`) ? lower(n) : whole)),
+          metrics: refs.map((ref) => ({ name: metricName(ref), alias: ref.split('.').pop()! })),
+        },
+      };
+    layer.addMetric(definition);
+    layer.getSemanticModel(cube)?.measures.push(name);
+  }
+  if (comment && !layer.getSemanticModel(viewKey)) {
+    // The view's own description, for search: its tables carry their own.
+    for (const table of tables.values()) {
+      const model = layer.getSemanticModel(cubeOf(table.name));
+      if (model && !model.description.includes(comment)) model.description = `${model.description} (${view.name}: ${comment})`;
+    }
+  }
+  return notes;
 }

@@ -258,6 +258,61 @@ export function cheapToRead(relation: WarehouseCatalogRelationV1): boolean {
     && !/\b(sum|count|avg|min|max|median|array_agg|string_agg|listagg|group_concat)\s*\(/i.test(body)
     && (body.match(/\bfrom\b/gi) ?? []).length === 1;
 }
+/**
+ * On a cloud warehouse, a view that joins or aggregates is read when the
+ * tables under it hold at most this many rows together: computing it costs
+ * about as much as reading them. NBA on Snowflake (2026-11-07): the team,
+ * season and game views sit on tables of 30 to 27,000 rows, and leaving them
+ * unread halved the joins the draft could check (10 against DuckDB's 20).
+ */
+export const SMALL_VIEW_ROWS = 10_000_000;
+
+/**
+ * Rows of every table a view reads, through views over views, from the
+ * warehouse's own row counts; undefined when one is unknown (a table with no
+ * count, a name the catalog does not hold, a view without its SQL).
+ */
+export function rowsUnderView(relation: WarehouseCatalogRelationV1, relations: readonly WarehouseCatalogRelationV1[], path: Set<string> = new Set()): number | undefined {
+  // `path` holds the views being counted above this one: a view reached twice
+  // through different views counts twice; one that reads itself, or a chain
+  // more than 8 views deep, is unknown.
+  if (!relation.viewSql || path.has(relation.id) || path.size >= 8) return undefined;
+  path.add(relation.id);
+  try {
+    return rowsOfTablesIn(relation, relation.viewSql, relations, path);
+  } finally {
+    path.delete(relation.id);
+  }
+}
+
+function rowsOfTablesIn(relation: WarehouseCatalogRelationV1, viewSql: string, relations: readonly WarehouseCatalogRelationV1[], path: Set<string>): number | undefined {
+  // Names the view defines itself (`WITH players AS (…)`) are not tables.
+  const own = new Set([...viewSql.matchAll(new RegExp(`(?:\\bwith|,)\\s+(?:recursive\\s+)?(${SQL_IDENTIFIER})\\s+as\\s*\\(`, 'gi'))].map((match) => cleanSqlName(match[1]!).toLowerCase()));
+  let total = 0;
+  for (const name of new Set(statementTables(viewSql).values())) {
+    const parts = name.toLowerCase().split('.');
+    if (parts.length === 1 && own.has(parts[0]!)) continue;
+    const matches = relations.filter((candidate) => {
+      const full = [candidate.database, candidate.schema, candidate.name].filter(Boolean).map((part) => part!.toLowerCase());
+      return parts.length <= full.length && full.slice(-parts.length).join('.') === parts.join('.');
+    });
+    // An unqualified name is the view's own schema's when several schemas have it.
+    const found = matches.length === 1 ? matches[0] : matches.find((candidate) => candidate.schema?.toLowerCase() === relation.schema?.toLowerCase() && candidate.database?.toLowerCase() === relation.database?.toLowerCase());
+    if (!found) return undefined;
+    const rows = found.kind === 'view' ? rowsUnderView(found, relations, path) : found.rowCountEstimate;
+    if (rows === undefined) return undefined;
+    total += rows;
+  }
+  return total;
+}
+
+/** A view over small tables (see SMALL_VIEW_ROWS), which the draft may read on any warehouse. */
+export function viewOverSmallTables(relation: WarehouseCatalogRelationV1, relations: readonly WarehouseCatalogRelationV1[]): boolean {
+  if (relation.kind !== 'view' || !relation.viewSql) return false;
+  const rows = rowsUnderView(relation, relations);
+  return rows !== undefined && rows <= SMALL_VIEW_ROWS;
+}
+
 /** A join seen fewer times than this in query history is noise, not evidence. */
 const MIN_OBSERVED_JOINS = 2;
 const GENERIC_SCHEMAS = new Set(['main', 'public', 'dbo', 'default']);

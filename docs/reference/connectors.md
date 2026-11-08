@@ -574,6 +574,27 @@ For dbt `profiles.yml`, ZLens imports Snowflake `private_key_path`,
 `private_key`, `private_key_passphrase`, `authenticator`, `token`, proxy
 fields, OAuth fields, workload identity fields, and query tags where present.
 
+A read-only role is enough. Give ZLens a role with USAGE on the database,
+schemas and a warehouse, and SELECT on the tables and views to model (for
+semantic views, SELECT on the semantic view). `zlens sync warehouse` reads
+view definitions with `SHOW VIEWS`, which a role that may select from a view
+sees; `INFORMATION_SCHEMA.VIEWS` shows them only to the view's owner (a secure
+view's stays hidden). Join checks, `zlens doctor` and Draft my models run with
+that same role.
+
+**Snowflake semantic views.** `zlens semantic import snowflake [path]`
+reads every semantic view the role can see (`SHOW SEMANTIC VIEWS`, then
+`DESC SEMANTIC VIEW`): each logical table becomes a model over its base table,
+keyed on its primary key; each relationship a join; each dimension a dimension
+(with its comment); each metric that aggregates one table's columns and facts
+(`SUM(WINS)`, `SUM(seasons.points_scored)`) a metric, and `a / NULLIF(b, 0)`
+over other metrics a ratio. Compiled queries read the base tables, so the role
+needs SELECT on them too. A metric over two tables, or private facts and
+metrics, are left out and named.
+
+The Snowflake driver's own log is off; `ZLENS_SNOWFLAKE_LOG_LEVEL` (`ERROR`,
+`WARN`, `INFO`, `DEBUG`, `TRACE`) turns it on.
+
 ## PostgreSQL
 
 ```json

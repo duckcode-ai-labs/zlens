@@ -913,6 +913,7 @@ import {
   type DiscoveryDecision,
   type WarehouseDiscoveryReport,
   markSampledFacts,
+  viewOverSmallTables,
 } from './warehouse-model-discovery.js';
 import { boundedReads } from './read-budget.js';
 import {
@@ -39108,7 +39109,8 @@ async function checkDraftOnWarehouse(
   const run = bounded.run;
   const quote = (identifier: string) => getDialect(connection.driver).quoteIdentifier(identifier);
   const allViews = options.readViews === true || /^(duckdb|sqlite|motherduck)$/i.test(connection.driver);
-  const readable = (relation: Parameters<typeof cheapToRead>[0]) => allViews || cheapToRead(relation);
+  // A view that joins or aggregates is read on a cloud warehouse too when the tables under it are small.
+  const readable = (relation: Parameters<typeof cheapToRead>[0]) => allViews || cheapToRead(relation) || viewOverSmallTables(relation, snapshot.relations);
   const validated = await validateWarehouseDiscovery(report, snapshot, run, quote, { dialect: connection.driver, readable });
   const dbtManifestPath = resolveDbtManifestPath(projectRoot, cfg);
   let dbt: ReturnType<typeof readDbtRelationFacts> | undefined;
