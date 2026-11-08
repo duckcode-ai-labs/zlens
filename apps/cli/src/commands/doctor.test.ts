@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureMetadataCatalogFresh } from '@zlens/agent';
-import { checkAppsPublishing, checkDataFolder, checkDuckDBDependency, checkNodeVersion, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
+import { checkAppsPublishing, checkDataFolder, checkDuckDBDependency, checkNodeVersion, checkSnowflakeDriver, isSnowflakeSupportedNodeVersion, runDoctor, semanticMetricWords } from './doctor.js';
 
 const tempDirs: string[] = [];
 
@@ -15,6 +15,30 @@ describe('Snowflake Node runtime support', () => {
     expect(isSnowflakeSupportedNodeVersion('24.4.1')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('26.5.0')).toBe(true);
     expect(isSnowflakeSupportedNodeVersion('18.20.4')).toBe(false);
+  });
+});
+
+describe('the Snowflake driver check', () => {
+  afterEach(() => {
+    while (tempDirs.length) rmSync(tempDirs.pop()!, { recursive: true, force: true });
+  });
+
+  it('passes on 3.x, advises 3.x over a working 1.x, and fails when the driver is missing', () => {
+    expect(checkSnowflakeDriver('/nowhere', '3.4.1')).toMatchObject({ ok: true, detail: 'snowflake-sdk 3.4.1' });
+    const older = checkSnowflakeDriver('/nowhere', '1.15.0');
+    expect(older).toMatchObject({ ok: true, advisory: true });
+    expect(older.detail).toContain('snowflake-sdk 1.15.0 works');
+    expect(older.detail).toContain('snowflake-sdk@^3.4.1');
+    expect(checkSnowflakeDriver('/nowhere', undefined)).toMatchObject({ ok: false });
+  });
+
+  it('reads the version from .dql/connectors', () => {
+    const root = mkdtempSync(join(tmpdir(), 'zlens-sf-driver-'));
+    tempDirs.push(root);
+    const dir = join(root, '.dql', 'connectors', 'node_modules', 'snowflake-sdk');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'snowflake-sdk', version: '3.4.1' }));
+    expect(checkSnowflakeDriver(root)).toMatchObject({ ok: true, detail: 'snowflake-sdk 3.4.1' });
   });
 });
 

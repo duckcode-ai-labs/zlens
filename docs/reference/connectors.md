@@ -559,7 +559,7 @@ Enterprise auth fields are passed through to the Snowflake Node driver:
   "warehouse": "ANALYTICS_WH",
   "database": "PROD",
   "schema": "MARTS",
-  "queryTag": "team=analytics;app=dql",
+  "queryTag": "{\"team\":\"analytics\"}",
   "proxyHost": "${HTTPS_PROXY_HOST}",
   "proxyPort": 8080
 }
@@ -591,6 +591,27 @@ keyed on its primary key; each relationship a join; each dimension a dimension
 over other metrics a ratio. Compiled queries read the base tables, so the role
 needs SELECT on them too. A metric over two tables, or private facts and
 metrics, are left out and named.
+
+**Driver version.** ZLens installs `snowflake-sdk` 3.x. A project on 1.x
+keeps working; `zlens doctor` says so and how to move to 3.x, which is needed
+to sign in by workload identity, a token file or a programmatic access token.
+
+**What ZLens tells Snowflake.** ZLens names itself `ZLens` in the
+`application` connection setting, unless the connection sets its own. Every
+statement carries a `QUERY_TAG` saying what sent it, so you can find ZLens's
+queries and their cost in `QUERY_HISTORY`:
+
+```json
+{"zlens":{"purpose":"data","command":"notebook","action":"query.run","request":"e5f9cd91-…"}}
+```
+
+`purpose` is `data` or `metadata`; `command` is the CLI command; `action` and
+`request` are the ZLens server's route action and request id. No data values
+and no person's name. A connection's own `queryTag` is kept: a JSON object
+keeps its keys and gains `zlens`; any other tag (`team=analytics`) is sent
+exactly as written, without ZLens's. ZLens puts the tag on each statement
+rather than on the session, so it applies on driver 1.x too, which ignored
+`queryTag` before.
 
 The Snowflake driver's own log is off; `ZLENS_SNOWFLAKE_LOG_LEVEL` (`ERROR`,
 `WARN`, `INFO`, `DEBUG`, `TRACE`) turns it on.

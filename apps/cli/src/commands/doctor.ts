@@ -11,6 +11,7 @@ import {
   assertLocalQueryRuntimeReady,
   findProjectRoot,
   getConnectorInstallStatuses,
+  installedConnectorPackageVersion,
   loadProjectConfig,
   normalizeProjectConnection,
   resolveProjectSemanticConfig,
@@ -142,6 +143,7 @@ export async function runDoctor(targetPath: string | null, flags: CLIFlags, rest
   }
   if (defaultConnection?.driver === 'snowflake') {
     checks.push(checkSnowflakeNodeVersion());
+    checks.push(checkSnowflakeDriver(projectRoot));
   }
   if (defaultConnection?.driver) {
     const runtime = await checkLocalQueryRuntime(projectRoot, defaultConnection);
@@ -721,6 +723,27 @@ function checkSnowflakeNodeVersion(): Check {
     ok: isSnowflakeSupportedNodeVersion(),
     detail: `version=${process.versions.node} (Snowflake needs Node 20 or newer)`,
   };
+}
+
+/**
+ * The Snowflake driver in use. 1.x still works; 3.x is what new installs get, and the only one
+ * that signs in by workload identity, a token file or a programmatic access token.
+ */
+export function checkSnowflakeDriver(projectRoot: string, version = installedConnectorPackageVersion(projectRoot, 'snowflake-sdk')): Check {
+  const install = 'npm install --prefix .dql/connectors snowflake-sdk@^3.4.1';
+  if (!version) {
+    return { name: 'Snowflake driver', ok: false, detail: `snowflake-sdk is not installed; run ${install}` };
+  }
+  const major = Number(version.split('.')[0]);
+  if (Number.isFinite(major) && major < 3) {
+    return {
+      name: 'Snowflake driver',
+      ok: true,
+      advisory: true,
+      detail: `snowflake-sdk ${version} works; version 3 adds sign-in by workload identity, a token file or a programmatic access token: ${install}`,
+    };
+  }
+  return { name: 'Snowflake driver', ok: true, detail: `snowflake-sdk ${version}` };
 }
 
 function buildDoctorNextSteps(projectRoot: string): string[] {
