@@ -34,13 +34,16 @@ describe('the one relationship proof', () => {
     } finally {
       db.close();
     }
-    // The text is the same on every engine but MySQL/MariaDB, where `rows` is reserved and the inner
-    // alias is renamed; the columns read back are unchanged.
-    expect(relationshipValidationSql(spec, quote, 'snowflake')).toBe(sql);
+    // The text is the same on every engine but those where `rows` is reserved (MySQL/MariaDB, and
+    // Snowflake and BigQuery: Snowflake refused every join check with it, live 2026-11-07), where the
+    // inner alias is renamed; the columns read back are unchanged.
+    expect(relationshipValidationSql(spec, quote, 'duckdb')).toBe(sql);
     expect(sql).toContain('COUNT(*) AS rows');
-    const mysql = relationshipValidationSql(spec, (identifier) => `\`${identifier}\``, 'mysql');
-    expect(mysql).not.toMatch(/\bAS rows\b|\.rows\b/);
-    expect(mysql).toContain('from_counts.row_total AS from_rows');
+    for (const dialect of ['mysql', 'snowflake', 'bigquery']) {
+      const renamed = relationshipValidationSql(spec, (identifier) => `\`${identifier}\``, dialect);
+      expect(renamed, dialect).not.toMatch(/\bAS rows\b|\.rows\b/);
+      expect(renamed, dialect).toContain('from_counts.row_total AS from_rows');
+    }
   });
   it('reads the same evidence whoever ran it, and the declared cardinality decides pass or fail', async () => {
     const checkedAt = new Date('2026-09-09T00:00:00.000Z');

@@ -90,8 +90,10 @@ export class QueryExecutor {
     config: ConnectionConfig,
     options?: QueryExecutionOptions,
   ): Promise<QueryResult> {
-    const normalizedSQL = normalizeSQLPlaceholders(sql, config.driver);
     const values = paramValues && paramValues.length > 0 ? paramValues : undefined;
+    // With nothing to bind, a `$1` is the SQL's own (Snowflake's `->> … FROM $1` reads the result
+    // before it), never a placeholder: rewriting it to `?` broke the statement (live, 2026-11-07).
+    const normalizedSQL = values ? normalizeSQLPlaceholders(sql, config.driver) : sql;
     const connector = await this.pool.getConnector(config);
     const startedAt = Date.now();
     try {

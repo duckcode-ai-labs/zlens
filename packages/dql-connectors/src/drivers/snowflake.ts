@@ -22,6 +22,15 @@ export class SnowflakeConnector implements DatabaseConnector {
     // snowflake-sdk is a CJS module, so the API lives on .default
     const mod = await importConnectorDependency('snowflake-sdk', config);
     this.sdk = (mod as any).default ?? mod;
+    // The SDK logs every connection step as JSON on stdout, into ZLens's own output
+    // (`zlens sync warehouse` on a live account, 2026-11-07). ZLens reports failures itself.
+    // Once per SDK module: the SDK announces each change of level in one more line.
+    if (!loggingConfigured.has(this.sdk)) {
+      loggingConfigured.add(this.sdk);
+      try {
+        this.sdk.configure?.({ logLevel: snowflakeLogLevel() });
+      } catch { /* an SDK without configure keeps its own logging */ }
+    }
 
     const connectionConfig: Record<string, unknown> = {
       account: config.account ?? '',
@@ -338,10 +347,20 @@ function snowflakeStatementId(statement: any): string | undefined {
   }
 }
 
+const loggingConfigured = new WeakSet<object>();
+
+/** The SDK's log level: off unless ZLENS_SNOWFLAKE_LOG_LEVEL asks for one (ERROR, WARN, INFO, DEBUG, TRACE). */
+export function snowflakeLogLevel(env: NodeJS.ProcessEnv = process.env): string {
+  const asked = env.ZLENS_SNOWFLAKE_LOG_LEVEL?.trim().toUpperCase();
+  return asked && ['OFF', 'ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'].includes(asked) ? asked : 'OFF';
+}
+
 function snowflakeQueryError(error: unknown, statement?: any): ConnectorQueryError {
   if (error instanceof ConnectorQueryError) return error;
   const record = error && typeof error === 'object' ? error as Record<string, unknown> : {};
-  const rawMessage = error instanceof Error ? error.message : String(error);
+  // Snowflake puts the reason on the lines after "SQL compilation error:"; a reader that keeps the
+  // first line of a message would show no reason at all.
+  const rawMessage = (error instanceof Error ? error.message : String(error)).replace(/\s*\n\s*/g, ' ').trim();
   const linePosition = /line\s+(\d+)\s+(?:at\s+)?position\s+(\d+)/i.exec(rawMessage);
   const queryId = cleanErrorString(record.queryId)
     ?? cleanErrorString(record.queryID)

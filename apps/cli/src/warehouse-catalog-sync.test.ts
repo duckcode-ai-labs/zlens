@@ -90,6 +90,8 @@ describe('assembling a warehouse catalog from metadata rows', () => {
     const queries = buildWarehouseCatalogQueries('snowflake', { catalogOrDatabase: 'ACME', schemas: ['SALES'] });
     expect(queries.map((query) => query.kind)).toEqual(['columns', 'tables', 'views', 'primary_keys', 'foreign_keys']);
     expect(queries[0]!.sql).toContain('"ACME".INFORMATION_SCHEMA.COLUMNS');
+    // View text through SHOW VIEWS: INFORMATION_SCHEMA.VIEWS hides it from a role that does not own the view.
+    expect(queries[2]!.sql).toBe(`SHOW VIEWS IN DATABASE "ACME" ->> SELECT "database_name" AS table_catalog, "schema_name" AS table_schema, "name" AS table_name, "text" AS view_definition FROM $1 WHERE UPPER("schema_name") IN (UPPER('SALES'))`);
     const byKind = (kind: string) => queries.find((query) => query.kind === kind)!;
     const relations = assembleWarehouseCatalog('snowflake', [
       { query: byKind('columns'), rows: [
