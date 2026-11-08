@@ -1,9 +1,12 @@
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { ConnectorQueryError } from '../result-types.js';
 import { withQueryLabels } from '../query-labels.js';
-import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, snowflakeLogLevel, snowflakeQueryTag } from './snowflake.js';
+import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, readSnowflakeTokenFile, snowflakeLogLevel, snowflakeQueryTag } from './snowflake.js';
 
 // A stand-in SDK for connect(): it records the connection settings ZLens hands it.
 const fakeSdk = vi.hoisted(() => {
@@ -235,5 +238,38 @@ describe('snowflakeQueryTag', () => {
     const long = { purpose: 'data', note: 'x'.repeat(2_100) };
     expect(snowflakeQueryTag(undefined, long)).toBe('');
     expect(snowflakeQueryTag('{"team":"bi"}', long)).toBe('{"team":"bi"}');
+  });
+});
+
+describe('signing in with a token read from a file (Snowflake\'s container token)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'zlens-sf-token-'));
+  const tokenFile = join(dir, 'token');
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('reads the file at every sign-in, so a reconnect gets the renewed token, and sends no empty user name', async () => {
+    fakeSdk.created.length = 0;
+    writeFileSync(tokenFile, 'first-token\n');
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', host: 'acct.snowflakecomputing.com', authMethod: 'oauth', tokenFilePath: tokenFile });
+    writeFileSync(tokenFile, 'renewed-token');
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', host: 'acct.snowflakecomputing.com', authMethod: 'oauth', tokenFilePath: tokenFile });
+    expect(fakeSdk.created.map((settings) => [settings.authenticator, settings.token])).toEqual([['OAUTH', 'first-token'], ['OAUTH', 'renewed-token']]);
+    expect(fakeSdk.created[0]).not.toHaveProperty('username');
+    expect(fakeSdk.created[0]).not.toHaveProperty('tokenFilePath');
+  });
+
+  it('serves a programmatic access token and workload identity too; a token given directly wins', async () => {
+    fakeSdk.created.length = 0;
+    writeFileSync(tokenFile, 'from-file');
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', username: 'svc', authMethod: 'programmatic_access_token', tokenFilePath: tokenFile });
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', username: 'svc', authMethod: 'workload_identity', workloadIdentityProvider: 'OIDC', tokenFilePath: tokenFile });
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', username: 'svc', authMethod: 'oauth', token: 'given', tokenFilePath: tokenFile });
+    expect(fakeSdk.created.map((settings) => settings.token)).toEqual(['from-file', 'from-file', 'given']);
+  });
+
+  it('fails with the path, never the contents, when the file is missing or empty', async () => {
+    await expect(readSnowflakeTokenFile(join(dir, 'absent'))).rejects.toThrow(/token file .*absent could not be read \(ENOENT\)/);
+    writeFileSync(tokenFile, '  \n');
+    await expect(readSnowflakeTokenFile(tokenFile)).rejects.toThrow(/token file .* is empty/);
+    expect(await readSnowflakeTokenFile(undefined)).toBeUndefined();
   });
 });

@@ -42,6 +42,8 @@ export function createConnectionConfigKey(config: ConnectionConfig): string {
     username: config.username,
     password: config.password,
     token: config.token,
+    // The path, not the token in it: a renewed token keeps the same pooled connection until it is lost.
+    tokenFilePath: config.tokenFilePath,
     ssl: config.ssl,
     sslMode: config.sslMode,
     trustServerCertificate: config.trustServerCertificate,
