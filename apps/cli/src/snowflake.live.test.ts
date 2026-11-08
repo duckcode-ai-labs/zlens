@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { QueryExecutor, type ConnectionConfig } from '@zlens/connectors';
+import { QueryExecutor, withQueryLabels, type ConnectionConfig } from '@zlens/connectors';
 import { SnowflakeSemanticProvider } from '@zlens/core';
 import { profileRelationshipOnWarehouse } from '@zlens/agent';
 import { readWarehouseCatalogRelations } from './warehouse-catalog-sync.js';
@@ -61,6 +61,19 @@ describe('ZLens on a live Snowflake account (NBA)', () => {
     expect(profile.evidence.status).toBe('passed');
     expect(profile.evidence.fromRows).toBe(668_339);
   }, 120_000);
+
+  live('every statement carries ZLens\'s tag into the query history, with the work that sent it', async () => {
+    const request = `live-${Date.now()}`;
+    const sent = await withQueryLabels({ action: 'live-test', request }, () => executor.executePositional('SELECT 1 AS ONE', [], connection));
+    expect(sent.queryId).toBeTruthy();
+    // The session's own history; a statement can take a moment to appear.
+    let tag: unknown;
+    for (let attempt = 0; attempt < 10 && !tag; attempt += 1) {
+      if (attempt) await new Promise((resolve) => setTimeout(resolve, 1_000));
+      tag = (await rows(`SELECT QUERY_TAG FROM TABLE(INFORMATION_SCHEMA.QUERY_HISTORY_BY_SESSION(RESULT_LIMIT => 100)) WHERE QUERY_ID = '${sent.queryId!.replace(/[^0-9A-Za-z-]/g, '')}'`))[0]?.QUERY_TAG;
+    }
+    expect(JSON.parse(String(tag))).toEqual({ zlens: { purpose: 'data', action: 'live-test', request } });
+  }, 60_000);
 
   live('a Snowflake error keeps its reason on the first line', async () => {
     const error = await rows('SELECT 1 AS rows').catch((caught: unknown) => caught as Error);

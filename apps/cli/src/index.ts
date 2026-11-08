@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withQueryLabels } from "@zlens/connectors";
 import { parseArgs } from "./args.js";
 import { runInit } from "./commands/init.js";
 import { runNew } from "./commands/new.js";
@@ -612,4 +613,5 @@ async function main() {
   }
 }
 
-main();
+// Every warehouse statement a command sends says which command sent it (Snowflake: QUERY_TAG).
+withQueryLabels({ command: parseArgs(process.argv.slice(2)).command ?? undefined }, () => main());

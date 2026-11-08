@@ -12,11 +12,20 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { createPrivateKey } from 'node:crypto';
 import { importConnectorDependency } from '../optional-dependency.js';
+import { currentQueryLabels, type QueryLabels } from '../query-labels.js';
+
+/** How ZLens names itself to Snowflake (the `application` connection setting) unless the connection names another. */
+export const SNOWFLAKE_APPLICATION = 'ZLens';
+
+/** Snowflake's limit on a statement's `QUERY_TAG`. */
+const QUERY_TAG_LIMIT = 2_000;
 
 export class SnowflakeConnector implements DatabaseConnector {
   readonly driverName = 'snowflake';
   private connection: any = null;
   private sdk: any = null;
+  /** The connection's own `queryTag`, merged into every statement's tag (see snowflakeQueryTag). */
+  private ownQueryTag: string | undefined;
 
   async connect(config: ConnectionConfig): Promise<void> {
     // snowflake-sdk is a CJS module, so the API lives on .default
@@ -43,6 +52,10 @@ export class SnowflakeConnector implements DatabaseConnector {
     if (config.schema) connectionConfig.schema = config.schema;
     if (config.role) connectionConfig.role = config.role;
     applySnowflakeConnectionOptions(connectionConfig, config);
+    connectionConfig.application ??= SNOWFLAKE_APPLICATION;
+    // Each statement carries the tag (`parameters.QUERY_TAG`): a session tag set at sign-in would
+    // replace it on SDK 2.2 and newer, and SDK 1.x ignores the session setting altogether.
+    this.ownQueryTag = typeof config.queryTag === 'string' ? config.queryTag : undefined;
 
     const privateKeySource = config.privateKeyPath
       ? await readFile(resolvePrivateKeyPath(config.privateKeyPath), 'utf-8')
@@ -182,6 +195,7 @@ export class SnowflakeConnector implements DatabaseConnector {
         submittedStatement = this.connection.execute({
         sqlText: sql,
         binds: params ?? [],
+        parameters: { QUERY_TAG: snowflakeQueryTag(this.ownQueryTag, { purpose: options.purpose ?? 'data', ...currentQueryLabels() }) },
         // Snowflake otherwise materializes every row in the complete callback.
         // Streaming is mandatory for bounded enterprise result consumption.
         streamResult: true,
@@ -349,6 +363,31 @@ function snowflakeStatementId(statement: any): string | undefined {
 
 const loggingConfigured = new WeakSet<object>();
 
+/**
+ * A statement's `QUERY_TAG`: what ZLens was doing, as JSON under a `zlens` key, e.g.
+ * `{"zlens":{"purpose":"data","action":"ask","request":"…"}}`. The connection's own tag is the
+ * customer's: a JSON object keeps its keys and gains `zlens` (one it already has wins); any other
+ * tag is kept exactly as written, without ZLens's, so a cost report that matches it keeps working.
+ */
+export function snowflakeQueryTag(ownTag: string | undefined, labels: QueryLabels): string {
+  const ours = { zlens: { ...labels } };
+  const own = ownTag?.trim();
+  if (!own) return fitQueryTag(JSON.stringify(ours), '');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(own);
+  } catch {
+    return own;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || 'zlens' in parsed) return own;
+  return fitQueryTag(JSON.stringify({ ...(parsed as Record<string, unknown>), ...ours }), own);
+}
+
+/** A tag over Snowflake's limit falls back to the customer's own (or to none). */
+function fitQueryTag(tag: string, fallback: string): string {
+  return tag.length <= QUERY_TAG_LIMIT ? tag : fallback;
+}
+
 /** The SDK's log level: off unless ZLENS_SNOWFLAKE_LOG_LEVEL asks for one (ERROR, WARN, INFO, DEBUG, TRACE). */
 export function snowflakeLogLevel(env: NodeJS.ProcessEnv = process.env): string {
   const asked = env.ZLENS_SNOWFLAKE_LOG_LEVEL?.trim().toUpperCase();
@@ -424,7 +463,6 @@ function applySnowflakeConnectionOptions(
     'proxyPort',
     'proxyProtocol',
     'proxyUser',
-    'queryTag',
     'timeout',
     'workloadIdentityProvider',
     'workloadIdentityAzureClientId',

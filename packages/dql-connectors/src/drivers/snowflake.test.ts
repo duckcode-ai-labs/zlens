@@ -1,8 +1,25 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { generateKeyPairSync } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { ConnectorQueryError } from '../result-types.js';
-import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, snowflakeLogLevel } from './snowflake.js';
+import { withQueryLabels } from '../query-labels.js';
+import { SnowflakeConnector, normalizeSnowflakePrivateKeyForAuth, snowflakeLogLevel, snowflakeQueryTag } from './snowflake.js';
+
+// A stand-in SDK for connect(): it records the connection settings ZLens hands it.
+const fakeSdk = vi.hoisted(() => {
+  const created: Array<Record<string, unknown>> = [];
+  return {
+    created,
+    sdk: {
+      configure: () => undefined,
+      createConnection: (settings: Record<string, unknown>) => {
+        created.push(settings);
+        return { connect: (done: (err?: Error) => void) => done() };
+      },
+    },
+  };
+});
+vi.mock('../optional-dependency.js', () => ({ importConnectorDependency: async () => fakeSdk.sdk }));
 
 describe('normalizeSnowflakePrivateKeyForAuth', () => {
   // RSA key generation is the slow step (it timed out on the Node 20 CI runner),
@@ -135,5 +152,88 @@ describe('the Snowflake SDK\'s own logging', () => {
     expect(snowflakeLogLevel({})).toBe('OFF');
     expect(snowflakeLogLevel({ ZLENS_SNOWFLAKE_LOG_LEVEL: 'debug' })).toBe('DEBUG');
     expect(snowflakeLogLevel({ ZLENS_SNOWFLAKE_LOG_LEVEL: 'loud' })).toBe('OFF');
+  });
+});
+
+describe('what ZLens tells Snowflake about itself', () => {
+  function connectorRecordingStatements(): { connector: SnowflakeConnector; sent: Array<Record<string, any>> } {
+    const connector = new SnowflakeConnector();
+    const sent: Array<Record<string, any>> = [];
+    const statement = {
+      getColumns: () => [],
+      getStatementId: () => '01tagged',
+      streamRows: () => Readable.from([]),
+      cancel: (complete: () => void) => complete(),
+    };
+    (connector as any).connection = {
+      execute: (options: Record<string, any>) => {
+        sent.push(options);
+        queueMicrotask(() => options.complete(undefined, statement));
+        return statement;
+      },
+    };
+    return { connector, sent };
+  }
+
+  it('names itself ZLens unless the connection names another application', async () => {
+    fakeSdk.created.length = 0;
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', username: 'svc', password: 'x' });
+    await new SnowflakeConnector().connect({ driver: 'snowflake', account: 'acct', username: 'svc', password: 'x', application: 'Acme_BI' });
+    expect(fakeSdk.created.map((settings) => settings.application)).toEqual(['ZLens', 'Acme_BI']);
+  });
+
+  it('puts the connection\'s own query tag on each statement, not on the session (the session tag would replace ZLens\'s)', async () => {
+    fakeSdk.created.length = 0;
+    const connector = new SnowflakeConnector();
+    await connector.connect({ driver: 'snowflake', account: 'acct', username: 'svc', password: 'x', queryTag: '{"team":"finance"}' });
+    expect(fakeSdk.created[0]).not.toHaveProperty('queryTag');
+    let sent: Record<string, any> | undefined;
+    (connector as any).connection.execute = (options: Record<string, any>) => {
+      sent = options;
+      const statement = { getColumns: () => [], streamRows: () => Readable.from([]), cancel: (done: () => void) => done() };
+      queueMicrotask(() => options.complete(undefined, statement));
+      return statement;
+    };
+    await connector.execute('select 1');
+    expect(JSON.parse(sent?.parameters.QUERY_TAG)).toEqual({ team: 'finance', zlens: { purpose: 'data' } });
+  });
+
+  it('tags every statement with its purpose and the labels of the work that sent it', async () => {
+    const { connector, sent } = connectorRecordingStatements();
+    await connector.execute('select 1');
+    await connector.execute('select 2', [], { purpose: 'metadata' });
+    await withQueryLabels({ action: 'ask', request: 'req-1' }, () =>
+      withQueryLabels({ command: 'notebook', empty: '  ' }, () => connector.execute('select 3')));
+    expect(sent.map((options) => JSON.parse(options.parameters.QUERY_TAG))).toEqual([
+      { zlens: { purpose: 'data' } },
+      { zlens: { purpose: 'metadata' } },
+      { zlens: { purpose: 'data', action: 'ask', request: 'req-1', command: 'notebook' } },
+    ]);
+  });
+});
+
+describe('snowflakeQueryTag', () => {
+  const labels = { purpose: 'data', action: 'ask' };
+
+  it('is ZLens\'s labels under a zlens key when the connection has no tag', () => {
+    expect(JSON.parse(snowflakeQueryTag(undefined, labels))).toEqual({ zlens: labels });
+    expect(JSON.parse(snowflakeQueryTag('  ', labels))).toEqual({ zlens: labels });
+  });
+
+  it('adds zlens to a customer\'s JSON tag and keeps their keys', () => {
+    expect(JSON.parse(snowflakeQueryTag('{"cost_center":"42","team":"bi"}', labels)))
+      .toEqual({ cost_center: '42', team: 'bi', zlens: labels });
+  });
+
+  it('keeps a customer\'s own tag exactly when it is not a JSON object, or already says zlens', () => {
+    expect(snowflakeQueryTag('finance-dashboards', labels)).toBe('finance-dashboards');
+    expect(snowflakeQueryTag('["a"]', labels)).toBe('["a"]');
+    expect(snowflakeQueryTag('{"zlens":"prod"}', labels)).toBe('{"zlens":"prod"}');
+  });
+
+  it('never exceeds Snowflake\'s 2,000 characters: the customer\'s tag alone, or none', () => {
+    const long = { purpose: 'data', note: 'x'.repeat(2_100) };
+    expect(snowflakeQueryTag(undefined, long)).toBe('');
+    expect(snowflakeQueryTag('{"team":"bi"}', long)).toBe('{"team":"bi"}');
   });
 });

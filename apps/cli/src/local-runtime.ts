@@ -71,6 +71,7 @@ import {
 } from './git-contract.js';
 import {
   QueryExecutor,
+  withQueryLabels,
   type ConnectionConfig,
   type DatabaseConnector,
   type QueryResult,
@@ -15130,7 +15131,9 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
     const requestDestination = runPass ? 'delivery' as const : destinationForRequest(requestAction, path);
     // With host hooks, every request runs in a context naming its server's hooks; one with nobody signed in (a host
     // without resolvePrincipal) then reads and keeps no one's own content (RecordOwner null).
-    return withRequestContext(requestPrincipal ? {
+    // Every statement the request sends says which action sent it and which request it was, in the
+    // warehouse's own history (Snowflake: QUERY_TAG); with or without a host.
+    return withQueryLabels({ action: requestAction, request: requestId }, () => withRequestContext(requestPrincipal ? {
       principal: requestPrincipal,
       requestId,
       ...(requestAction ? { action: requestAction } : {}),
@@ -33039,7 +33042,7 @@ async function startLocalServerInScope(opts: LocalServerOptions, scope: DqlServe
       'Content-Length': content.byteLength,
     });
     res.end(content);
-    });
+    }));
     })().catch((error) => {
       // API-007/E2E-014: no rejected request promise may terminate the local
       // notebook process. Route-specific handlers should still return their
@@ -39607,7 +39610,8 @@ const CONNECTOR_INSTALLS: Record<string, Omit<ConnectorInstallStatus, 'installed
     driver: 'snowflake',
     label: 'Snowflake',
     packageName: 'snowflake-sdk',
-    packageSpec: 'snowflake-sdk@^1.12.0',
+    // 3.x signs in by workload identity, a token file or a programmatic access token; 1.x installs keep working.
+    packageSpec: 'snowflake-sdk@^3.4.1',
     builtIn: false,
   },
   databricks: {
@@ -39747,6 +39751,19 @@ function isConnectorPackageInstalled(projectRoot: string, packageName: string): 
     }
   }
   return false;
+}
+
+/** The version of a connector package where ZLens loads it from (.dql/connectors first), or undefined when absent. */
+export function installedConnectorPackageVersion(projectRoot: string, packageName: string): string | undefined {
+  for (const basePath of connectorModuleSearchPaths(projectRoot)) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(basePath, 'node_modules', packageName, 'package.json'), 'utf-8')) as { version?: unknown };
+      if (typeof manifest.version === 'string') return manifest.version;
+    } catch {
+      // Try the next supported location.
+    }
+  }
+  return undefined;
 }
 
 export function getConnectorInstallStatuses(projectRoot: string): ConnectorInstallStatus[] {

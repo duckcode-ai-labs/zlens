@@ -1,7 +1,8 @@
 # ZLens on a live Snowflake account, nightly: the NBA benchmark database as
 # dql-benchmarks nba/snowflake sets it up, read as the read-only key-pair user a
 # customer would create (catalog and view SQL, a join check, error reasons, the
-# semantic-view import and its metrics). apps/cli/src/snowflake.live.test.ts.
+# semantic-view import and its metrics, the query tag), on driver 3.x and 1.x.
+# apps/cli/src/snowflake.live.test.ts.
 #
 # Off until the repository variable ZLENS_SNOWFLAKE_LIVE is "on", with secrets
 # ZLENS_TEST_SNOWFLAKE_ACCOUNT (orgname-accountname) and
@@ -22,8 +23,14 @@ concurrency:
 
 jobs:
   snowflake-live:
-    name: ZLens on a live Snowflake account (NBA)
+    name: ZLens on a live Snowflake account (NBA, snowflake-sdk ${{ matrix.sdk }})
     if: ${{ vars.ZLENS_SNOWFLAKE_LIVE == 'on' }}
+    # The driver new installs get, and the 1.x older projects still run.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        sdk: ['^3.4.1', '^1.15.0']
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -36,10 +43,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter @zlens/agent... --filter @zlens/connectors... build
       - name: Install the Snowflake driver as ZLens does
+        env:
+          SDK: snowflake-sdk@${{ matrix.sdk }}
         run: |
           mkdir -p "$RUNNER_TEMP/snowflake-connector"
           printf '%s\n' '{"private":true}' > "$RUNNER_TEMP/snowflake-connector/package.json"
-          npm --prefix "$RUNNER_TEMP/snowflake-connector" install --no-save --no-package-lock --workspaces=false 'snowflake-sdk@^1.15.0'
+          npm --prefix "$RUNNER_TEMP/snowflake-connector" install --no-save --no-package-lock --workspaces=false "$SDK"
       - name: The read-only user's key
         env:
           KEY: ${{ secrets.ZLENS_TEST_SNOWFLAKE_PRIVATE_KEY }}

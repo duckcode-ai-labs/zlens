@@ -7624,7 +7624,7 @@ describe('getConnectorInstallStatuses', () => {
     });
     expect(statuses.find((status) => status.driver === 'snowflake')).toMatchObject({
       packageName: 'snowflake-sdk',
-      packageSpec: 'snowflake-sdk@^1.12.0',
+      packageSpec: 'snowflake-sdk@^3.4.1',
       builtIn: false,
     });
     expect(statuses.find((status) => status.driver === 'databricks')).toMatchObject({
