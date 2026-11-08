@@ -570,6 +570,32 @@ Supported `authMethod` values include `password`, `mfa`, `key_pair`,
 `oauth_client_credentials`, `programmatic_access_token`, and
 `workload_identity`.
 
+**A token from a file.** For `oauth`, `programmatic_access_token` and
+`workload_identity`, `tokenFilePath` names a file holding the token instead of
+`token`. ZLens reads it at every sign-in, so a token that is renewed in place
+works: when Snowflake ends a session because its sign-in expired, ZLens signs
+in again with the file's current token. Inside Snowflake (a Snowpark Container
+Services service), Snowflake writes the service's own token to
+`/snowflake/session/token`, renews it every few minutes, and sets
+`SNOWFLAKE_ACCOUNT` and `SNOWFLAKE_HOST`. An OAuth token names its own user, so
+`username` can be left out:
+
+```json
+{
+  "driver": "snowflake",
+  "authMethod": "oauth",
+  "tokenFilePath": "/snowflake/session/token",
+  "account": "${SNOWFLAKE_ACCOUNT}",
+  "host": "${SNOWFLAKE_HOST}",
+  "warehouse": "ANALYTICS_WH",
+  "database": "PROD",
+  "schema": "MARTS"
+}
+```
+
+An unreadable or empty token file stops the sign-in with its path; the token
+itself is never shown.
+
 For dbt `profiles.yml`, ZLens imports Snowflake `private_key_path`,
 `private_key`, `private_key_passphrase`, `authenticator`, `token`, proxy
 fields, OAuth fields, workload identity fields, and query tags where present.

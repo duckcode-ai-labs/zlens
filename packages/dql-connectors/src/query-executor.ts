@@ -9,6 +9,8 @@ const CONNECTION_LOSS_PATTERNS = [
   /\bnot connected\b/i,
   /\bsession (?:has )?(?:expired|terminated)\b/i,
   /\binvalid session\b/i,
+  // Snowflake (390114): the session outlived its sign-in; a reconnect signs in again (and re-reads a token file).
+  /\bauthentication token has expired\b/i,
   /\bECONNRESET\b/i,
   /\bsocket hang up\b/i,
   /\bbroken pipe\b/i,

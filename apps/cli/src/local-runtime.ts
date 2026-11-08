@@ -2877,6 +2877,7 @@ export function targetGenerationFingerprint(connection: ConnectionConfig, connec
     oauthTokenRequestUrl: connection.oauthTokenRequestUrl ?? null,
     keyFilename: connection.keyFilename ?? null,
     privateKeyPath: connection.privateKeyPath ?? null,
+    tokenFilePath: connection.tokenFilePath ?? null,
     accessKeyId: connection.accessKeyId ?? null,
     proxyHost: connection.proxyHost ?? null,
     proxyPort: connection.proxyPort ?? null,
@@ -50020,17 +50021,18 @@ function requiredConnectionFields(connection: ConnectionConfig, envRefs: string[
       needs('warehouse');
       needs('database');
       needs('schema');
-      needs('username');
+      // An OAuth token names its own user (Snowflake's container token has no user name).
+      if (connection.authMethod !== 'oauth') needs('username');
       if (connection.authMethod === 'key_pair') {
         if (!connection.privateKeyPath && !connection.privateKey) {
           missing.add('privateKeyPath');
         }
       } else if (connection.authMethod === 'oauth') {
-        if (!connection.token && !connection.password) {
+        if (!connection.token && !connection.tokenFilePath && !connection.password) {
           missing.add('token');
         }
       } else if (connection.authMethod === 'programmatic_access_token') {
-        if (!connection.token && !connection.password) {
+        if (!connection.token && !connection.tokenFilePath && !connection.password) {
           missing.add('token');
         }
       } else if (connection.authMethod === 'oauth_authorization_code') {

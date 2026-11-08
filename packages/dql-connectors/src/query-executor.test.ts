@@ -130,3 +130,10 @@ describe('QueryExecutor placeholders', () => {
     expect(execute.mock.calls[1]![1]).toEqual([7]);
   });
 });
+
+describe('a Snowflake session that outlived its sign-in', () => {
+  it('counts as a lost connection, so a read-only statement signs in again (and re-reads a token file)', () => {
+    expect(isRecoverableConnectionLoss(new Error('Snowflake query failed: Authentication token has expired.  The user must authenticate again.'))).toBe(true);
+    expect(isRecoverableConnectionLoss(new Error('Snowflake query failed: Insufficient privileges to operate on table'))).toBe(false);
+  });
+});

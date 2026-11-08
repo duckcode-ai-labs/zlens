@@ -43,10 +43,12 @@ export class SnowflakeConnector implements DatabaseConnector {
 
     const connectionConfig: Record<string, unknown> = {
       account: config.account ?? '',
-      username: config.username ?? '',
       database: config.database,
       warehouse: config.warehouse,
     };
+    // A token names its own user (Snowflake's container token has no user name to give): an empty
+    // name is left out rather than sent.
+    if (config.username) connectionConfig.username = config.username;
 
     // Schema, role, and enterprise driver options.
     if (config.schema) connectionConfig.schema = config.schema;
@@ -76,18 +78,19 @@ export class SnowflakeConnector implements DatabaseConnector {
       }
     } else if (config.authMethod === 'oauth') {
       connectionConfig.authenticator = config.authenticator ?? 'OAUTH';
-      connectionConfig.token = config.token ?? config.password ?? '';
+      connectionConfig.token = config.token ?? await readSnowflakeTokenFile(config.tokenFilePath) ?? config.password ?? '';
     } else if (config.authMethod === 'oauth_authorization_code') {
       connectionConfig.authenticator = config.authenticator ?? 'OAUTH_AUTHORIZATION_CODE';
     } else if (config.authMethod === 'oauth_client_credentials') {
       connectionConfig.authenticator = config.authenticator ?? 'OAUTH_CLIENT_CREDENTIALS';
     } else if (config.authMethod === 'programmatic_access_token') {
       connectionConfig.authenticator = config.authenticator ?? 'PROGRAMMATIC_ACCESS_TOKEN';
-      connectionConfig.token = config.token ?? config.password ?? '';
+      connectionConfig.token = config.token ?? await readSnowflakeTokenFile(config.tokenFilePath) ?? config.password ?? '';
     } else if (config.authMethod === 'workload_identity') {
       connectionConfig.authenticator = config.authenticator ?? 'WORKLOAD_IDENTITY';
-      if (config.token) {
-        connectionConfig.token = config.token;
+      const token = config.token ?? await readSnowflakeTokenFile(config.tokenFilePath);
+      if (token) {
+        connectionConfig.token = token;
       }
     } else if (config.authMethod === 'mfa') {
       connectionConfig.authenticator = config.authenticator ?? 'USERNAME_PASSWORD_MFA';
@@ -475,6 +478,25 @@ function applySnowflakeConnectionOptions(
       connectionConfig[key] = value;
     }
   }
+}
+
+/**
+ * The token in `tokenFilePath`, read now (never cached: Snowflake's container token is rewritten every
+ * few minutes). An unreadable or empty file fails the sign-in with the path, never the file's contents.
+ */
+export async function readSnowflakeTokenFile(tokenFilePath: string | undefined): Promise<string | undefined> {
+  const path = tokenFilePath?.trim();
+  if (!path) return undefined;
+  const resolved = resolvePrivateKeyPath(path);
+  let token: string;
+  try {
+    token = (await readFile(resolved, 'utf-8')).trim();
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    throw new Error(`Snowflake sign-in token file ${resolved} could not be read${code ? ` (${code})` : ''}.`);
+  }
+  if (!token) throw new Error(`Snowflake sign-in token file ${resolved} is empty.`);
+  return token;
 }
 
 function resolvePrivateKeyPath(path: string): string {

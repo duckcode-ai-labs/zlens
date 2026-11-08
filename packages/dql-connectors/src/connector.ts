@@ -243,6 +243,12 @@ export interface ConnectionConfig {
   proxyProtocol?: string;
   proxyUser?: string;
   queryTag?: string;
+  /**
+   * A file holding the sign-in token (OAuth, programmatic access token, workload identity), read
+   * at every sign-in. Inside Snowflake, `/snowflake/session/token`: Snowflake rewrites it every few
+   * minutes and each token lasts up to an hour, so a reconnect must read it again. `${VAR}` and `~` expand.
+   */
+  tokenFilePath?: string;
   timeout?: number;
   workloadIdentityProvider?: string;
   workloadIdentityAzureClientId?: string;

@@ -1859,7 +1859,7 @@ function primaryFieldKeys(driver: string, fields: Record<string, string>): strin
       return common;
     case 'oauth':
     case 'programmatic_access_token':
-      return [...common, 'token'];
+      return [...common, 'token', 'tokenFilePath'];
     case 'oauth_authorization_code':
       return [...common, 'oauthClientId', 'oauthClientSecret'];
     case 'oauth_client_credentials':
