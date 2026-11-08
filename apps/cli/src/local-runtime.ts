@@ -33408,10 +33408,17 @@ async function validateSnowflakeConnectionForTest(
 
   const state = String(readRowField(warehouseRow, 'state') ?? '').trim();
   const normalizedState = state.toUpperCase();
-  if (normalizedState && normalizedState !== 'STARTED') {
+  // An idle warehouse is suspended, and one with AUTO_RESUME starts on the next statement (live, 2026-11-08:
+  // the trial's warehouse failed this test minutes after a query ran on it). Only one that cannot start is a failure.
+  const autoResume = String(readRowField(warehouseRow, 'auto_resume') ?? '').trim().toLowerCase() === 'true';
+  const runs = !normalizedState || ['STARTED', 'RESUMING', 'RESIZING'].includes(normalizedState);
+  const wakes = (normalizedState === 'SUSPENDED' || normalizedState === 'SUSPENDING') && autoResume;
+  if (!runs && !wakes) {
     return {
       ok: false,
-      message: `Snowflake warehouse "${warehouse}" is ${state}. Start or resume it, then test again.`,
+      message: normalizedState === 'SUSPENDED' || normalizedState === 'SUSPENDING'
+        ? `Snowflake warehouse "${warehouse}" is ${state} and does not resume by itself (AUTO_RESUME is off). Resume it, or turn AUTO_RESUME on, then test again.`
+        : `Snowflake warehouse "${warehouse}" is ${state}. Start or resume it, then test again.`,
       details: {
         warehouse,
         state,
@@ -33435,7 +33442,7 @@ async function validateSnowflakeConnectionForTest(
 
   return {
     ok: true,
-    message: `Connected to Snowflake${user ? ` as ${user}` : ''} using warehouse ${activeWarehouse || warehouse}.`,
+    message: `Connected to Snowflake${user ? ` as ${user}` : ''} using warehouse ${activeWarehouse || warehouse}${wakes ? ' (suspended; it resumes on the first query)' : ''}.`,
     details: {
       warehouse: activeWarehouse || warehouse,
       warehouseState: state || 'STARTED',

@@ -10129,6 +10129,32 @@ describe('validateConnectionForTest', () => {
     expect(executed.some((sql) => sql.includes('CURRENT_ACCOUNT'))).toBe(false);
   });
 
+  it('passes a suspended warehouse that resumes by itself: idle is its normal state (live, 2026-11-08)', async () => {
+    const connector = fakeSnowflakeConnector(async (sql) => {
+      if (sql.startsWith('SHOW WAREHOUSES')) return result([{ name: 'ANALYTICS_WH', state: 'SUSPENDED', auto_resume: 'true' }]);
+      if (sql.includes('CURRENT_ACCOUNT')) return result([{ USER_NAME: 'ANALYST', WAREHOUSE_NAME: 'ANALYTICS_WH' }]);
+      throw new Error(`Unexpected SQL: ${sql}`);
+    });
+    const validation = await validateConnectionForTest(connector, {
+      driver: 'snowflake', account: 'acct', username: 'analyst', password: 'secret', database: 'PROD', schema: 'MARTS', warehouse: 'ANALYTICS_WH',
+    });
+    expect(validation.ok).toBe(true);
+    expect(validation.message).toBe('Connected to Snowflake as ANALYST using warehouse ANALYTICS_WH (suspended; it resumes on the first query).');
+    expect(validation.details?.warehouseState).toBe('SUSPENDED');
+  });
+
+  it('says why a suspended warehouse with AUTO_RESUME off fails', async () => {
+    const connector = fakeSnowflakeConnector(async (sql) => {
+      if (sql.startsWith('SHOW WAREHOUSES')) return result([{ name: 'ANALYTICS_WH', state: 'SUSPENDED', auto_resume: 'false' }]);
+      throw new Error('context query should not run');
+    });
+    const validation = await validateConnectionForTest(connector, {
+      driver: 'snowflake', account: 'acct', username: 'analyst', password: 'secret', database: 'PROD', schema: 'MARTS', warehouse: 'ANALYTICS_WH',
+    });
+    expect(validation.ok).toBe(false);
+    expect(validation.message).toContain('does not resume by itself (AUTO_RESUME is off)');
+  });
+
   it('validates a running Snowflake warehouse with current context', async () => {
     const connector = fakeSnowflakeConnector(async (sql) => {
       if (sql.startsWith('SHOW WAREHOUSES')) {
