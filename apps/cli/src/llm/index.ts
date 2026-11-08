@@ -31,6 +31,7 @@ const RUNNERS: Record<ProviderId, AgentRunner> = {
   gemini: createDqlAgentProviderRunner('gemini'),
   ollama: createDqlAgentProviderRunner('ollama'),
   'custom-openai': createDqlAgentProviderRunner('custom-openai'),
+  cortex: createDqlAgentProviderRunner('cortex'),
 };
 
 export function getRunner(provider: ProviderId): AgentRunner | null {

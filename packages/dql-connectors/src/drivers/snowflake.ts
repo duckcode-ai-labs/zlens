@@ -59,12 +59,7 @@ export class SnowflakeConnector implements DatabaseConnector {
     // replace it on SDK 2.2 and newer, and SDK 1.x ignores the session setting altogether.
     this.ownQueryTag = typeof config.queryTag === 'string' ? config.queryTag : undefined;
 
-    const privateKeySource = config.privateKeyPath
-      ? await readFile(resolvePrivateKeyPath(config.privateKeyPath), 'utf-8')
-      : config.privateKey;
-    const privateKey = privateKeySource
-      ? normalizeSnowflakePrivateKeyForAuth(privateKeySource, config.privateKeyPassphrase)
-      : undefined;
+    const privateKey = await readSnowflakePrivateKey(config);
 
     // Auth: key-pair, OAuth, PAT, workload identity, SSO/MFA, or password.
     if (privateKey || config.authMethod === 'key_pair') {
@@ -497,6 +492,20 @@ export async function readSnowflakeTokenFile(tokenFilePath: string | undefined):
   }
   if (!token) throw new Error(`Snowflake sign-in token file ${resolved} is empty.`);
   return token;
+}
+
+/**
+ * A connection's key-pair private key as unencrypted PKCS#8 PEM: from `privateKeyPath` (read now; `${VAR}` and `~`
+ * expand) or the pasted `privateKey`, decrypted with `privateKeyPassphrase`. Undefined when the connection has
+ * neither. The Snowflake driver signs in with it, and so does Snowflake Cortex (a key-pair JWT).
+ */
+export async function readSnowflakePrivateKey(
+  config: Pick<ConnectionConfig, 'privateKey' | 'privateKeyPath' | 'privateKeyPassphrase'>,
+): Promise<string | undefined> {
+  const source = config.privateKeyPath
+    ? await readFile(resolvePrivateKeyPath(config.privateKeyPath), 'utf-8')
+    : config.privateKey;
+  return source ? normalizeSnowflakePrivateKeyForAuth(source, config.privateKeyPassphrase) : undefined;
 }
 
 function resolvePrivateKeyPath(path: string): string {

@@ -93,6 +93,7 @@ import { getEffectiveProviderConfig } from '../../settings/provider-settings.js'
 import { ClaudeCodeCliProvider, CodexCliProvider } from '../../providers/subscription-cli.js';
 import { ClaudeOAuthProvider, claudeOAuthConnected } from '../../providers/oauth/claude-oauth.js';
 import { CodexOAuthProvider, codexOAuthConnected } from '../../providers/oauth/codex-oauth.js';
+import { createCortexProvider } from '../../settings/cortex-sign-in.js';
 import { readEnv } from '@zlens/core';
 
 /**
@@ -101,7 +102,7 @@ import { readEnv } from '@zlens/core';
  * used as plain completion backends here, distinct from the MCP `claudeCodeRunner`.
  */
 type SimpleProviderId =
-  | Extract<ProviderId, 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai'>
+  | Extract<ProviderId, 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'cortex'>
   | 'claude-code'
   | 'codex';
 
@@ -172,6 +173,14 @@ const SPECS: Record<SimpleProviderId, ProviderSpec> = {
       return codexOAuthConnected(projectRoot)
         ? new CodexOAuthProvider({ projectRoot, model })
         : new CodexCliProvider({ model });
+    },
+  },
+  cortex: {
+    label: 'Snowflake Cortex',
+    setup: 'Choose Snowflake Cortex in Settings. It signs in with the project\'s Snowflake connection (key pair, programmatic access token or OAuth token).',
+    create: (projectRoot) => {
+      const config = getEffectiveProviderConfig(projectRoot, 'cortex');
+      return createCortexProvider(projectRoot, { connection: config.connection, model: config.model });
     },
   },
 };

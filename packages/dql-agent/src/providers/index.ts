@@ -53,6 +53,21 @@ export {
   type VertexClaudeOptions,
 } from './claude-cloud.js';
 export {
+  CORTEX_DEFAULT_MODEL,
+  CortexClaudeProvider,
+  cortexBaseUrl,
+  cortexClaudeTransport,
+  isCortexClaudeProvider,
+  snowflakeHost,
+  snowflakeJwtAccount,
+  snowflakeKeyPairJwt,
+  snowflakeKeyPairToken,
+  snowflakeTokenFileToken,
+  type CortexClaudeOptions,
+  type CortexToken,
+  type CortexTokenType,
+} from './claude-cortex.js';
+export {
   BedrockConverseProvider,
   bedrockConverseTransport,
   createBedrockConverseProvider,

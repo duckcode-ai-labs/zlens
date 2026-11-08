@@ -4045,8 +4045,9 @@ export interface SettingsEnvGroup {
   vars: SettingsEnvVar[];
 }
 
-export type ProviderSettingsId = 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'claude-code' | 'codex';
-export type ProviderAuthMode = 'api_key' | 'local' | 'subscription_cli';
+export type ProviderSettingsId = 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'claude-code' | 'codex' | 'cortex';
+/** `snowflake_connection`: Snowflake Cortex, signed in with the project's Snowflake connection (no API key). */
+export type ProviderAuthMode = 'api_key' | 'local' | 'subscription_cli' | 'snowflake_connection';
 
 /** Reasoning-effort ceiling. `'auto'` = agent picks per task up to high; a level caps it. */
 export type ReasoningEffortSetting = 'auto' | 'low' | 'medium' | 'high';
@@ -4074,6 +4075,10 @@ export interface ProviderSettings {
   supportsReasoningEffort?: boolean;
   /** False when this install does not let it be chosen (ZLENS_MODEL_PROVIDERS); it is then never used. */
   allowed?: boolean;
+  /** Snowflake Cortex: the connection its settings name (unset: the project's default connection). */
+  connection?: string;
+  /** Snowflake Cortex: the Snowflake connection it signs in with, its sign-in method, or why it cannot sign in. */
+  connectionSignIn?: { connection?: string; method?: string; problem?: string };
 }
 
 /** Subscription providers that support browser OAuth sign-in. */
@@ -5782,6 +5787,8 @@ export const api = {
     baseUrl?: string;
     model?: string;
     reasoningEffort?: ReasoningEffortSetting;
+    /** Snowflake Cortex: the project connection it signs in with; empty = the project's default. */
+    connection?: string;
   }): Promise<{ ok: boolean; providers: ProviderSettings[] }> {
     return request('/api/settings/providers', {
       method: 'POST',
@@ -5808,7 +5815,7 @@ export const api = {
 
   async testProviderSettings(
     id: ProviderSettingsId,
-    overrides?: { apiKey?: string; baseUrl?: string; model?: string },
+    overrides?: { apiKey?: string; baseUrl?: string; model?: string; connection?: string },
   ): Promise<{ ok: boolean; message: string }> {
     // Never throw: a failed test is a normal result the UI shows inline.
     try {

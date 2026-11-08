@@ -2,12 +2,14 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 import { dirname, join } from 'node:path';
 import { readEnv } from '@zlens/core';
 import {
+  CORTEX_DEFAULT_MODEL,
   coerceReasoningEffort,
   supportsReasoningEffort as providerSupportsReasoningEffort,
   type ReasoningEffort,
 } from '@zlens/agent';
+import { cortexSignIn, type CortexSignIn } from './cortex-sign-in.js';
 
-export type ProviderSettingsId = 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'claude-code' | 'codex';
+export type ProviderSettingsId = 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'custom-openai' | 'claude-code' | 'codex' | 'cortex';
 
 /**
  * Reasoning-effort ceiling for a provider. `'auto'` (the default when unset)
@@ -22,8 +24,11 @@ export type ReasoningEffortSetting = ReasoningEffort | 'auto';
  * - `local`: a local daemon, no credential (Ollama).
  * - `subscription_cli`: authenticated by an installed coding CLI's own login
  *   (Claude Code / Codex) — no API key; usability is "installed + logged in".
+ * - `snowflake_connection`: signs in with the project's own Snowflake
+ *   connection (Snowflake Cortex) — no API key; usable when that connection's
+ *   sign-in is one Cortex accepts.
  */
-export type ProviderAuthMode = 'api_key' | 'local' | 'subscription_cli';
+export type ProviderAuthMode = 'api_key' | 'local' | 'subscription_cli' | 'snowflake_connection';
 
 export interface ProviderSettingsInput {
   id: ProviderSettingsId;
@@ -33,6 +38,8 @@ export interface ProviderSettingsInput {
   model?: string;
   /** Reasoning-effort ceiling. `'auto'` clears it; omitted leaves it unchanged. */
   reasoningEffort?: ReasoningEffortSetting;
+  /** Snowflake Cortex only: the project connection it signs in with; empty means the project's default connection. */
+  connection?: string;
 }
 
 export interface StoredProviderSettings extends ProviderSettingsInput {
@@ -64,6 +71,10 @@ export interface RedactedProviderSettings {
   supportsReasoningEffort: boolean;
   /** Whether this install lets it be chosen at all (ZLENS_MODEL_PROVIDERS); a provider that is not is never used. */
   allowed: boolean;
+  /** Snowflake Cortex: the connection its settings name (unset: the project's default connection). */
+  connection?: string;
+  /** Snowflake Cortex: the Snowflake connection it signs in with and its sign-in method, or why it cannot sign in. */
+  connectionSignIn?: CortexSignIn;
 }
 
 export interface EffectiveProviderConfig {
@@ -73,6 +84,8 @@ export interface EffectiveProviderConfig {
   enabled: boolean;
   /** Resolved ceiling (local → env), `undefined` means auto (no cap). */
   reasoningEffort?: ReasoningEffort;
+  /** Snowflake Cortex: the named project connection it signs in with (unset: the project's default). */
+  connection?: string;
 }
 
 interface StoredProviderState {
@@ -105,6 +118,8 @@ const PROVIDER_META: Record<ProviderSettingsId, ProviderMeta> = {
   'custom-openai': { label: 'Custom OpenAI-compatible', authMode: 'api_key', keyEnv: 'ZLENS_OPENAI_COMPAT_API_KEY', modelEnv: 'ZLENS_OPENAI_COMPAT_MODEL', baseUrlEnv: 'ZLENS_OPENAI_COMPAT_BASE_URL', reasoningEffortEnv: 'ZLENS_OPENAI_COMPAT_REASONING_EFFORT', reasoningFamily: 'openai' },
   'claude-code': { label: 'Claude subscription (Claude Code CLI)', authMode: 'subscription_cli', command: 'claude', modelEnv: 'CLAUDE_CODE_MODEL', reasoningFamily: null },
   codex: { label: 'ChatGPT subscription (Codex CLI)', authMode: 'subscription_cli', command: 'codex', modelEnv: 'CODEX_MODEL', reasoningFamily: null },
+  // Claude inside the customer's Snowflake account: a ClaudeProvider underneath, so Claude's reasoning effort applies.
+  cortex: { label: 'Snowflake Cortex', authMode: 'snowflake_connection', modelEnv: 'ZLENS_CORTEX_MODEL', reasoningFamily: 'claude' },
 };
 
 /**
@@ -114,7 +129,7 @@ const PROVIDER_META: Record<ProviderSettingsId, ProviderMeta> = {
  * against the family's capability so we never show a control that no-ops.
  */
 function providerReasoningSupported(meta: ProviderMeta, model: string | undefined): boolean {
-  if (meta.authMode !== 'api_key' || !meta.reasoningFamily) return false;
+  if ((meta.authMode !== 'api_key' && meta.authMode !== 'snowflake_connection') || !meta.reasoningFamily) return false;
   if (!model) return true;
   return providerSupportsReasoningEffort(meta.reasoningFamily, model);
 }
@@ -133,6 +148,15 @@ export function allowedModelProviders(env: NodeJS.ProcessEnv = process.env): Pro
   if (!raw) return null;
   if (raw.toLowerCase() === 'none') return [];
   return raw.split(',').map((id) => id.trim().toLowerCase()).filter(isProviderSettingsId);
+}
+
+/**
+ * Whoever installed this chose `id` by name (`ZLENS_MODEL_PROVIDERS=cortex`). Snowflake Cortex is on by default
+ * only then: it spends the account's credits, so a project that merely has a Snowflake connection does not start
+ * using it until someone chooses it.
+ */
+function installChoseProvider(id: ProviderSettingsId, env: NodeJS.ProcessEnv = process.env): boolean {
+  return allowedModelProviders(env)?.includes(id) === true;
 }
 
 /** Whether this install lets `id` be chosen. A host's own model (no settings id) is the host's call. */
@@ -182,6 +206,30 @@ function listAllProviderSettings(projectRoot: string): RedactedProviderSettings[
         allowed: true,
       };
     }
+    // Snowflake Cortex has no key: it is configured when the project's Snowflake connection (or the one its settings
+    // name) signs in a way Cortex accepts, and says why not otherwise.
+    if (meta.authMode === 'snowflake_connection') {
+      const signIn = cortexSignIn(projectRoot, local?.connection);
+      const configured = !signIn.problem;
+      const envModel = meta.modelEnv ? process.env[meta.modelEnv] : undefined;
+      return {
+        id,
+        label: meta.label,
+        enabled: local?.enabled ?? (configured && installChoseProvider(id)),
+        active: state.activeProvider === id,
+        hasApiKey: false,
+        configured,
+        model: resolvedModel,
+        source: local || configured ? 'local' : envModel ? 'env' : 'none',
+        envVars: [meta.modelEnv].filter(Boolean) as string[],
+        authMode: meta.authMode,
+        reasoningEffort: resolveReasoningEffortSetting(local, meta) ?? 'auto',
+        supportsReasoningEffort: providerReasoningSupported(meta, resolvedModel || CORTEX_DEFAULT_MODEL),
+        allowed: true,
+        ...(local?.connection ? { connection: local.connection } : {}),
+        connectionSignIn: signIn,
+      };
+    }
     const configured = id === 'ollama'
       ? Boolean(resolvedBaseUrl?.trim() || resolvedModel?.trim())
       : id === 'custom-openai'
@@ -224,6 +272,15 @@ export function getEffectiveProviderConfig(projectRoot: string, id: ProviderSett
   // A host's own model (RFC 0010 HH-5, e.g. `bedrock` or `vertex`) has no local settings.
   if (!meta) return { enabled: true };
   if (!modelProviderAllowed(id)) return { enabled: false };
+  // Snowflake Cortex signs in with a project connection: no key or base URL of its own.
+  if (meta.authMode === 'snowflake_connection') {
+    return {
+      model: stored?.model || (meta.modelEnv ? process.env[meta.modelEnv] : undefined),
+      enabled: stored?.enabled ?? true,
+      reasoningEffort: resolveReasoningEffortSetting(stored, meta),
+      ...(stored?.connection ? { connection: stored.connection } : {}),
+    };
+  }
   return {
     apiKey: stored?.apiKey || (meta.keyEnv ? process.env[meta.keyEnv] : undefined),
     baseUrl: stored?.baseUrl || (meta.baseUrlEnv ? process.env[meta.baseUrlEnv] : undefined),
@@ -243,6 +300,7 @@ export function saveProviderSettings(projectRoot: string, input: ProviderSetting
   const state = readStoredProviderState(projectRoot);
   const stored = state.providers;
   const existing = stored[input.id];
+  const signsInWithConnection = PROVIDER_META[input.id].authMode === 'snowflake_connection';
   const next: StoredProviderSettings = {
     id: input.id,
     enabled: input.enabled ?? existing?.enabled ?? true,
@@ -257,8 +315,18 @@ export function saveProviderSettings(projectRoot: string, input: ProviderSetting
       : input.reasoningEffort === 'auto'
         ? undefined
         : coerceReasoningEffort(input.reasoningEffort),
+    // Snowflake Cortex: the named connection (blank = the project's default). Other providers keep no connection.
+    ...(signsInWithConnection
+      ? { connection: input.connection === undefined ? existing?.connection : input.connection.trim() || undefined }
+      : {}),
     updatedAt: new Date().toISOString(),
   };
+  // Cortex has no key or base URL of its own; neither is kept.
+  if (signsInWithConnection) {
+    delete next.apiKey;
+    delete next.baseUrl;
+    if (!next.connection) delete next.connection;
+  }
   stored[input.id] = next;
   if (next.enabled === false && state.activeProvider === input.id) {
     state.activeProvider = undefined;
@@ -310,7 +378,7 @@ function providerCanBeActive(id: ProviderSettingsId, stored: StoredProviderSetti
   const meta = PROVIDER_META[id];
   // Subscription CLI providers need no key/URL — an explicit `enabled: true` (handled
   // above) is the only way to auto-activate them; reaching here means not enabled.
-  if (meta.authMode === 'subscription_cli') return false;
+  if (meta.authMode === 'subscription_cli' || meta.authMode === 'snowflake_connection') return false;
   const hasKey = Boolean(stored.apiKey?.trim() || (meta.keyEnv && process.env[meta.keyEnv]?.trim()));
   const hasBaseUrl = Boolean(stored.baseUrl?.trim() || (meta.baseUrlEnv && process.env[meta.baseUrlEnv]?.trim()));
   const hasModel = Boolean(stored.model?.trim() || (meta.modelEnv && process.env[meta.modelEnv]?.trim()));
@@ -326,7 +394,8 @@ export function isProviderSettingsId(value: unknown): value is ProviderSettingsI
     || value === 'ollama'
     || value === 'custom-openai'
     || value === 'claude-code'
-    || value === 'codex';
+    || value === 'codex'
+    || value === 'cortex';
 }
 
 function previewSecret(secret: string): string {

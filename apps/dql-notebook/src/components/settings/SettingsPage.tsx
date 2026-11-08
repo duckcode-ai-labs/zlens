@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmbeddingSettings } from './EmbeddingSettings';
-import { aiTurnedOff, brandsAllowed, providerAllowed } from './provider-choices';
+import { CORTEX_HELP, aiTurnedOff, brandsAllowed, cortexSignInLine, providerAllowed } from './provider-choices';
 import { CommaListInput } from '../common/CommaListInput';
 import { Sparkles } from 'lucide-react';
 import {
@@ -29,11 +29,11 @@ import {
   type AgentHintScopeField,
 } from './hint-review';
 
-const PROVIDER_ORDER: ProviderSettingsId[] = ['claude-code', 'codex', 'anthropic', 'openai', 'gemini', 'ollama', 'custom-openai'];
+const PROVIDER_ORDER: ProviderSettingsId[] = ['claude-code', 'codex', 'anthropic', 'openai', 'gemini', 'ollama', 'custom-openai', 'cortex'];
 // Subscription providers (log in with an installed CLI) render as their own group,
 // separate from API-key / local providers.
 const SUBSCRIPTION_PROVIDER_ORDER: ProviderSettingsId[] = ['claude-code', 'codex'];
-const KEY_PROVIDER_ORDER: ProviderSettingsId[] = ['anthropic', 'openai', 'gemini', 'ollama', 'custom-openai'];
+const KEY_PROVIDER_ORDER: ProviderSettingsId[] = ['anthropic', 'openai', 'gemini', 'ollama', 'custom-openai', 'cortex'];
 
 // Base URL is supported for every provider so enterprise deployments can route
 // through a gateway/proxy. Empty = use the provider's public default.
@@ -202,8 +202,8 @@ export function ConnectionRuntimeSettings({
             </div>
 
             {KEY_PROVIDER_ORDER.some(mayChoose) && <GroupLabel
-              title="API key & local providers"
-              detail="Paste an API key (or set the env var), point at a gateway, or run a local model with Ollama."
+              title="API key, local & Snowflake providers"
+              detail="Paste an API key (or set the env var), point at a gateway, run a local model with Ollama, or use Claude through Snowflake Cortex with your Snowflake connection."
               t={t}
             />}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
@@ -828,18 +828,21 @@ function SubscriptionOAuthPanel({
 // One form: pick the provider brand, then "How do you want to connect?" radio
 // cards (Subscription / API key / Local — only what the brand supports) swap
 // the sub-form beneath. The active provider shows as a status card with Test.
-type ProviderBrandMode = 'subscription' | 'api' | 'local';
+type ProviderBrandMode = 'subscription' | 'api' | 'local' | 'snowflake';
 const PROVIDER_BRANDS: Array<{ key: string; label: string; modes: Partial<Record<ProviderBrandMode, ProviderSettingsId>> }> = [
   { key: 'claude', label: 'Anthropic Claude', modes: { subscription: 'claude-code', api: 'anthropic' } },
   { key: 'openai', label: 'OpenAI', modes: { subscription: 'codex', api: 'openai' } },
   { key: 'gemini', label: 'Google Gemini', modes: { api: 'gemini' } },
   { key: 'ollama', label: 'Ollama — local', modes: { local: 'ollama' } },
   { key: 'gateway', label: 'Custom OpenAI-compatible', modes: { api: 'custom-openai' } },
+  // Claude inside the customer's Snowflake account: one way in, the project's Snowflake connection.
+  { key: 'cortex', label: 'Snowflake Cortex', modes: { snowflake: 'cortex' } },
 ];
 const MODE_COPY: Record<ProviderBrandMode, { label: string; hint: string }> = {
   subscription: { label: 'Subscription', hint: 'Sign in — no API key' },
   api: { label: 'API key', hint: 'Paste a key or use env var' },
   local: { label: 'Local', hint: 'Runs on this machine' },
+  snowflake: { label: 'Snowflake connection', hint: 'Signs in as your Snowflake connection' },
 };
 
 function brandForProviderId(id: ProviderSettingsId | undefined): string {
@@ -886,6 +889,8 @@ function ProviderSettingsForm({
   const [baseUrl, setBaseUrl] = useState(provider?.baseUrl ?? '');
   const [model, setModel] = useState(provider?.model ?? '');
   const [reasoningEffort, setReasoningEffort] = useState<ReasoningEffortSetting>(provider?.reasoningEffort ?? 'auto');
+  // Snowflake Cortex: a named project connection to sign in with (blank = the project's default connection).
+  const [connection, setConnection] = useState(provider?.connection ?? '');
   const [busy, setBusy] = useState(false);
   const [activeTest, setActiveTest] = useState<{ state: 'idle' | 'testing' | 'done'; ok?: boolean; message?: string; seconds?: string }>({ state: 'idle' });
   const [draftTest, setDraftTest] = useState<{ state: 'idle' | 'testing' | 'done'; ok?: boolean; message?: string }>({ state: 'idle' });
@@ -896,8 +901,9 @@ function ProviderSettingsForm({
     setBaseUrl(provider?.baseUrl ?? '');
     setModel(provider?.model ?? '');
     setReasoningEffort(provider?.reasoningEffort ?? 'auto');
+    setConnection(provider?.connection ?? '');
     setDraftTest({ state: 'idle' });
-  }, [providerId, provider?.baseUrl, provider?.model, provider?.reasoningEffort]);
+  }, [providerId, provider?.baseUrl, provider?.model, provider?.reasoningEffort, provider?.connection]);
 
   const testActive = async () => {
     if (!activeProvider) return;
@@ -917,6 +923,10 @@ function ProviderSettingsForm({
     if (effectiveMode === 'local' && !baseUrl.trim() && !model.trim() && !provider?.configured) {
       return 'Set an Ollama endpoint or model before testing.';
     }
+    // The saved connection cannot sign in to Cortex and no other is named: say why before testing.
+    if (effectiveMode === 'snowflake' && connection.trim() === (provider?.connection ?? '') && provider?.connectionSignIn?.problem) {
+      return provider.connectionSignIn.problem;
+    }
     return null;
   };
 
@@ -931,6 +941,7 @@ function ProviderSettingsForm({
       apiKey: apiKey || undefined,
       baseUrl: baseUrl || undefined,
       model: model || undefined,
+      ...(effectiveMode === 'snowflake' && connection.trim() ? { connection: connection.trim() } : {}),
     });
     setDraftTest({ state: 'done', ok: result.ok, message: result.message });
     return result.ok;
@@ -951,6 +962,7 @@ function ProviderSettingsForm({
         baseUrl,
         model,
         reasoningEffort,
+        ...(effectiveMode === 'snowflake' ? { connection } : {}),
       });
       onSaved(result.providers);
       const saved = result.providers.find((entry) => entry.id === providerId);
@@ -983,7 +995,9 @@ function ProviderSettingsForm({
     ? 'Uses your existing plan through the provider’s sign-in — nothing billed per token.'
     : effectiveMode === 'local'
       ? 'Everything runs on this machine — no data leaves your network.'
-      : 'Keys stay in .dql/ and are never returned raw.';
+      : effectiveMode === 'snowflake'
+        ? 'Runs inside your Snowflake account — no API key, billed to your Snowflake account.'
+        : 'Keys stay in .dql/ and are never returned raw.';
 
   return (
     <div style={{ width: 'min(680px, 100%)', display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -1086,6 +1100,10 @@ function ProviderSettingsForm({
           </div>
         ) : null}
 
+        {effectiveMode === 'snowflake' ? (
+          <CortexSignInFields provider={provider} connection={connection} setConnection={setConnection} t={t} input={input} fieldLabel={fieldLabel} />
+        ) : null}
+
         {effectiveMode === 'local' ? (
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -1134,6 +1152,53 @@ function ProviderSettingsForm({
   );
 }
 
+/** Cortex's default model (the server's CORTEX_DEFAULT_MODEL); Cortex names Claude models `claude-<family>-<version>`. */
+const CORTEX_MODEL_PLACEHOLDER = 'claude-sonnet-5';
+
+/**
+ * Snowflake Cortex has no key: it shows the Snowflake connection it signs in with (or why it cannot), lets a person
+ * name another project connection, and says where Claude runs and what may reach it.
+ */
+function CortexSignInFields({
+  provider,
+  connection,
+  setConnection,
+  t,
+  input,
+  fieldLabel,
+}: {
+  provider?: ProviderSettings;
+  connection?: string;
+  setConnection?: (value: string) => void;
+  t: Theme;
+  input: React.CSSProperties;
+  fieldLabel: React.CSSProperties;
+}) {
+  const line = cortexSignInLine(provider);
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <div role={line.ok ? 'status' : 'alert'} style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: 11.5, lineHeight: 1.5, color: line.ok ? 'var(--status-success)' : 'var(--status-error)' }}>
+        <span style={{ width: 7, height: 7, marginTop: 5, borderRadius: 999, background: line.ok ? 'var(--status-success)' : 'var(--status-error)', flexShrink: 0 }} />
+        <span>{line.text}</span>
+      </div>
+      {setConnection ? (
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <span style={fieldLabel}>Snowflake connection (optional)</span>
+          <input
+            value={connection ?? ''}
+            onChange={(event) => setConnection(event.target.value)}
+            placeholder="The project's default connection"
+            style={{ ...input, fontFamily: t.fontMono }}
+          />
+        </label>
+      ) : null}
+      <div style={{ fontSize: 11, color: t.textMuted, lineHeight: 1.5 }}>
+        {CORTEX_HELP.map((sentence) => <div key={sentence}>{sentence}</div>)}
+      </div>
+    </div>
+  );
+}
+
 function ProviderAdvancedFields({
   providerId,
   provider,
@@ -1163,7 +1228,7 @@ function ProviderAdvancedFields({
 }) {
   return (
     <>
-      {mode !== 'subscription' && mode !== 'local' ? (
+      {mode !== 'subscription' && mode !== 'local' && mode !== 'snowflake' ? (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={fieldLabel}>{providerId === 'custom-openai' ? 'Base URL (required)' : 'Base URL (optional)'}</span>
           <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder={baseUrlPlaceholder(providerId)} style={{ ...input, fontFamily: t.fontMono }} />
@@ -1171,9 +1236,9 @@ function ProviderAdvancedFields({
       ) : null}
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={fieldLabel}>{providerId === 'custom-openai' ? 'Model (required)' : 'Model (optional)'}</span>
-        <input value={model} onChange={(event) => setModel(event.target.value)} placeholder={provider?.model || 'Provider default'} style={input} />
+        <input value={model} onChange={(event) => setModel(event.target.value)} placeholder={provider?.model || (providerId === 'cortex' ? CORTEX_MODEL_PLACEHOLDER : 'Provider default')} style={input} />
       </label>
-      {provider?.supportsReasoningEffort && mode === 'api' ? (
+      {provider?.supportsReasoningEffort && (mode === 'api' || mode === 'snowflake') ? (
         <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={fieldLabel}>Reasoning effort</span>
           <select value={reasoningEffort} onChange={(event) => setReasoningEffort(event.target.value as ReasoningEffortSetting)} style={input}>
@@ -1210,6 +1275,8 @@ function ProviderCard({
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const isSubscription = provider.authMode === 'subscription_cli';
+  // Snowflake Cortex signs in with the project's Snowflake connection: no key or base URL to type.
+  const signsInWithConnection = provider.authMode === 'snowflake_connection';
   const loginCmd = provider.id === 'claude-code' ? '/login' : 'login';
   // Show the reasoning-effort control only for reasoning-capable models.
   const showReasoning = provider.supportsReasoningEffort === true && !isSubscription && provider.id !== 'ollama';
@@ -1308,6 +1375,8 @@ function ProviderCard({
             onStatus={onStatus}
             onConnected={handleOAuthConnected}
           />
+        ) : signsInWithConnection ? (
+          <CortexSignInFields provider={provider} t={t} input={inputStyle(t)} fieldLabel={{ fontSize: 11, color: t.textSecondary, fontWeight: 600 }} />
         ) : (
           <>
             {provider.id !== 'ollama' && (
@@ -1331,7 +1400,7 @@ function ProviderCard({
           <input
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder="Default model"
+            placeholder={signsInWithConnection ? CORTEX_MODEL_PLACEHOLDER : 'Default model'}
             style={inputStyle(t)}
           />
         )}
