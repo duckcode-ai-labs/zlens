@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { EmbeddingSettings } from './EmbeddingSettings';
+import { aiTurnedOff, brandsAllowed, providerAllowed } from './provider-choices';
 import { CommaListInput } from '../common/CommaListInput';
 import { Sparkles } from 'lucide-react';
 import {
@@ -116,6 +117,15 @@ export function ConnectionRuntimeSettings({
   }, [loading]);
 
   const configured = useMemo(() => providers.filter((p) => p.enabled && p.configured).length, [providers]);
+  // Providers this install lets a person choose (ZLENS_MODEL_PROVIDERS); none at all means AI is off here.
+  const mayChoose = (id: ProviderSettingsId) => providerAllowed(providers, id);
+  const aiOff = aiTurnedOff(providers);
+  const embeddingProviders = (['ollama', 'openai'] as const).filter((id) => mayChoose(id));
+  const aiOffNotice = (
+    <div role="note" style={{ marginTop: 14, border: `1px solid ${t.headerBorder}`, borderRadius: 8, padding: '10px 12px', fontSize: 12.5, color: t.textSecondary, background: t.cellBg, lineHeight: 1.5 }}>
+      AI is turned off for this install. Certified answers, metrics and your own SQL work as usual; questions that need an AI model are not available.
+    </div>
+  );
   const activeProvider = providers.find((provider) => provider.active && provider.configured);
 
   return (
@@ -147,7 +157,8 @@ export function ConnectionRuntimeSettings({
         <div style={{ marginTop: 24, color: t.textSecondary }}>Loading settings...</div>
       ) : (
         <>
-          {section === 'providers' && (
+          {section === 'providers' && aiOff && aiOffNotice}
+          {section === 'providers' && !aiOff && (
             <>
               <ProviderSettingsForm
                 providers={providers}
@@ -161,20 +172,21 @@ export function ConnectionRuntimeSettings({
               {/* Retrieval quality is a provider choice too: without a real
                   embedder every lane is lexical, so plain-English questions
                   cannot reach a metric by meaning. */}
-              <EmbeddingSettings t={t} onStatus={setStatus} />
+              <EmbeddingSettings t={t} onStatus={setStatus} allowedProviders={[...embeddingProviders]} />
             </>
           )}
-          {!section && (
+          {!section && aiOff && aiOffNotice}
+          {!section && !aiOff && (
           <section style={{ marginTop: 22 }}>
             <SectionTitle title="Model providers" detail="Connect at least one AI provider — it powers governed answers, saved query suggestions, and research. Sign in with a Claude or ChatGPT subscription, or use an API key / local model." t={t} />
 
-            <GroupLabel
+            {SUBSCRIPTION_PROVIDER_ORDER.some(mayChoose) && <GroupLabel
               title="Use your subscription"
               detail="No API key — sign in with the provider's CLI. ZLens runs each request through it using your plan."
               t={t}
-            />
+            />}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-              {SUBSCRIPTION_PROVIDER_ORDER.map((id) => {
+              {SUBSCRIPTION_PROVIDER_ORDER.filter(mayChoose).map((id) => {
                 const provider = providers.find((p) => p.id === id);
                 return provider ? (
                   <ProviderCard
@@ -189,13 +201,13 @@ export function ConnectionRuntimeSettings({
               })}
             </div>
 
-            <GroupLabel
+            {KEY_PROVIDER_ORDER.some(mayChoose) && <GroupLabel
               title="API key & local providers"
               detail="Paste an API key (or set the env var), point at a gateway, or run a local model with Ollama."
               t={t}
-            />
+            />}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: 14 }}>
-              {KEY_PROVIDER_ORDER.map((id) => {
+              {KEY_PROVIDER_ORDER.filter(mayChoose).map((id) => {
                 const provider = providers.find((p) => p.id === id);
                 return provider ? (
                   <ProviderCard
@@ -854,8 +866,13 @@ function ProviderSettingsForm({
   onProviderConfigured?: (provider: ProviderSettings) => void;
 }) {
   const activeProvider = providers.find((provider) => provider.active && provider.configured);
-  const [brandKey, setBrandKey] = useState<string>(() => brandForProviderId(activeProvider?.id));
-  const brand = PROVIDER_BRANDS.find((entry) => entry.key === brandKey) ?? PROVIDER_BRANDS[0];
+  // Only what this install lets a person choose (ZLENS_MODEL_PROVIDERS): a brand keeps its allowed modes.
+  const brands = brandsAllowed(PROVIDER_BRANDS, providers);
+  const [brandKey, setBrandKey] = useState<string>(() => {
+    const preferred = brandForProviderId(activeProvider?.id);
+    return brands.some((entry) => entry.key === preferred) ? preferred : brands[0]?.key ?? preferred;
+  });
+  const brand = brands.find((entry) => entry.key === brandKey) ?? brands[0] ?? PROVIDER_BRANDS[0];
   const availableModes = (Object.keys(brand.modes) as ProviderBrandMode[]);
   const [mode, setMode] = useState<ProviderBrandMode>(() => {
     const activeMode = availableModes.find((candidate) => brand.modes[candidate] === activeProvider?.id);
@@ -1006,7 +1023,7 @@ function ProviderSettingsForm({
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span style={fieldLabel}>Provider</span>
             <select value={brand.key} onChange={(event) => { setBrandKey(event.target.value); setMode('subscription'); }} style={input}>
-              {PROVIDER_BRANDS.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
+              {brands.map((entry) => <option key={entry.key} value={entry.key}>{entry.label}</option>)}
             </select>
           </label>
         </div>

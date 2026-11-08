@@ -162,8 +162,8 @@ image you hand out, you can fix what the person using it may change:
 
 | Variable | Effect |
 |---|---|
-| `ZLENS_LOCK_CONNECTIONS=1` | The connections in `dql.config.json` are fixed. Nothing adds, edits, deletes, renames or switches a connection, imports one from a dbt profile, or installs a driver, and a request cannot bring its own connection. Testing the connection, choosing schemas and syncing still work |
-| `ZLENS_MODEL_PROVIDERS=ollama` | Only these model providers (settings ids separated by commas: `anthropic`, `openai`, `gemini`, `ollama`, `custom-openai`, `claude-code`, `codex`) can be chosen. Others are listed as not allowed and never used, even with a key in the environment or saved earlier; embeddings follow the same rule. `none` means no model at all |
+| `ZLENS_LOCK_CONNECTIONS=1` | The connections in `dql.config.json` are fixed. The Connections page shows them read-only. Nothing adds, edits, deletes, renames or switches a connection, imports one from a dbt profile, or installs a driver, and a request cannot bring its own connection. Testing the connection, choosing schemas and syncing still work |
+| `ZLENS_MODEL_PROVIDERS=ollama` | Only these model providers (settings ids separated by commas: `anthropic`, `openai`, `gemini`, `ollama`, `custom-openai`, `claude-code`, `codex`) can be chosen. Settings shows only those; the others are never used, even with a key in the environment or saved earlier; embeddings follow the same rule. `none` means no model at all, and Settings says AI is turned off for this install |
 | `ZLENS_NO_EGRESS=1` | ZLens reaches nothing on the internet by itself; see [Connectors](../reference/connectors.md) |
 
 Changes the locks refuse answer `403` with the reason.

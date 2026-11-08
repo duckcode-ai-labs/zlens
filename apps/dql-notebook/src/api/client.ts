@@ -4072,6 +4072,8 @@ export interface ProviderSettings {
   reasoningEffort?: ReasoningEffortSetting;
   /** Whether the configured model exposes a reasoning surface (drives showing the control). */
   supportsReasoningEffort?: boolean;
+  /** False when this install does not let it be chosen (ZLENS_MODEL_PROVIDERS); it is then never used. */
+  allowed?: boolean;
 }
 
 /** Subscription providers that support browser OAuth sign-in. */
@@ -4971,6 +4973,8 @@ export interface DbtProfileConnectionCandidate {
 export interface ConnectionsResponse {
   default: string;
   connections: Record<string, unknown>;
+  /** The connection was set up with this install and cannot be changed here (ZLENS_LOCK_CONNECTIONS). */
+  locked?: boolean;
   activeConnection?: { source: 'dql_config' | 'dbt_profile' | 'runtime'; driver: string; profileId?: string } | null;
   connectorStatus?: Array<{
     driver: 'duckdb' | 'snowflake' | 'databricks';

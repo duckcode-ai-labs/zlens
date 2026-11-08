@@ -50,6 +50,8 @@ import { projectDbtCard, projectReadsDbt } from './project-dbt-status';
 export interface ConnectionInfo {
   default: string;
   connections: Record<string, any>;
+  /** Set up with this install (ZLENS_LOCK_CONNECTIONS): shown read-only. */
+  locked?: boolean;
   activeConnection?: { source: 'dql_config' | 'dbt_profile' | 'runtime'; driver: string; profileId?: string } | null;
   dbtProfiles?: DbtProfileConnectionCandidate[];
   connectorStatus?: ConnectorInstallStatus[];
@@ -738,6 +740,14 @@ export function ConnectionPanel({
   const connectionCount = Object.keys(connections).length;
   const canTestConnection = connectionCount > 0;
 
+  // Set up with this install (ZLENS_LOCK_CONNECTIONS): shown read-only; testing, schemas and sync stay.
+  const locked = info?.locked === true;
+  const lockedNote = locked ? (
+    <div role="note" style={{ fontSize: 12, color: t.textSecondary, fontFamily: t.font, lineHeight: 1.5, border: `1px solid ${t.cellBorder}`, borderRadius: 8, padding: '8px 10px', background: t.cellBg }}>
+      This connection was set up with this install and cannot be changed here. You can test it, choose the schemas to model, and sync.
+    </div>
+  ) : null;
+
   const connectionListSection = (
     <>
       <div style={sectionLabel}>Connections</div>
@@ -798,7 +808,7 @@ export function ConnectionPanel({
                   <span style={{ fontSize: 9, color: t.accent, fontFamily: t.font, fontWeight: 600, letterSpacing: '0.05em' }}>DEFAULT</span>
                 )}
                 <div style={{ flex: 1 }} />
-                {!isDefault && (
+                {!isDefault && !locked && (
                   <button
                     onClick={() => handleMakeDefault(key)}
                     disabled={saving}
@@ -811,16 +821,18 @@ export function ConnectionPanel({
                     Use
                   </button>
                 )}
-                <button
-                  onClick={() => startEdit(key, cfg)}
-                  style={{
-                    background: 'transparent', border: `1px solid ${t.btnBorder}`,
-                    borderRadius: 3, cursor: 'pointer', color: t.textMuted,
-                    fontSize: 10, fontFamily: t.font, padding: '1px 6px', transition: 'all 0.15s',
-                  }}
-                >
-                  Edit
-                </button>
+                {!locked && (
+                  <button
+                    onClick={() => startEdit(key, cfg)}
+                    style={{
+                      background: 'transparent', border: `1px solid ${t.btnBorder}`,
+                      borderRadius: 3, cursor: 'pointer', color: t.textMuted,
+                      fontSize: 10, fontFamily: t.font, padding: '1px 6px', transition: 'all 0.15s',
+                    }}
+                  >
+                    Edit
+                  </button>
+                )}
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
                 {Object.entries(cfg ?? {})
@@ -1396,9 +1408,11 @@ export function ConnectionPanel({
       <div>
         <div style={{ fontSize: 17, fontWeight: 700, color: t.textPrimary, fontFamily: t.font }}>Database connection</div>
         <div style={{ fontSize: 12.5, color: t.textMuted, marginTop: 3, lineHeight: 1.5, fontFamily: t.font }}>
-          {isSetup && setupSource === 'warehouse'
-            ? 'Connect the database directly. ZLens tests it before it replaces the active connection.'
-            : 'Import a dbt profile or enter the warehouse details. A new connection replaces the current one only after its test passes.'}
+          {locked
+            ? 'The database this install reads.'
+            : isSetup && setupSource === 'warehouse'
+              ? 'Connect the database directly. ZLens tests it before it replaces the active connection.'
+              : 'Import a dbt profile or enter the warehouse details. A new connection replaces the current one only after its test passes.'}
         </div>
       </div>
       <div style={{ border: `1px solid ${testResult?.ok ? 'var(--status-success-border)' : 'var(--border-subtle)'}`, borderRadius: 12, background: t.cellBg, padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 12, maxWidth: 640 }}>
@@ -1421,7 +1435,13 @@ export function ConnectionPanel({
       {testResult?.ok && testResult.dataFolder ? <DataFolderSummary status={testResult.dataFolder} t={t} card /> : null}
       {isSetup && setupPrimaryAction ? setupPrimaryAction : null}
       {/* Database only has no dbt: personal ~/.dbt profiles never show there (design D7). */}
-      {isSetup && setupSource === 'warehouse' ? null : (
+      {locked ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 640 }}>
+          {lockedNote}
+          {connectionListSection}
+          {testConnectionSection}
+        </div>
+      ) : isSetup && setupSource === 'warehouse' ? null : (
         <AdvancedDisclosure enabled={isSetup} label="Import from a dbt profile" hint="profiles.yml" t={t}>
           <div style={{ maxWidth: 640 }}>
             {profilePathSection}
@@ -1429,7 +1449,7 @@ export function ConnectionPanel({
           </div>
         </AdvancedDisclosure>
       )}
-      <DatabaseConnectionForm
+      {locked ? null : <DatabaseConnectionForm
         t={t}
         driver={primaryDriver}
         fields={primaryFields}
@@ -1441,7 +1461,7 @@ export function ConnectionPanel({
         connectorStatus={connectorStatusByDriver[primaryDriver]}
         installing={installingDriver === primaryDriver}
         onInstall={() => void handleInstallConnector(primaryDriver)}
-      />
+      />}
       {setupDbtProject && metadataScopeEditor
         ? <AdvancedDisclosure enabled label="Advanced" hint={EXTRA_SCHEMAS_HINT} t={t}>{metadataScopeEditor}</AdvancedDisclosure>
         : metadataScopeEditor}
@@ -1528,14 +1548,15 @@ export function ConnectionPanel({
 
   return (
     <PanelFrame title="Connections" bodyPadding={12}>
+      {lockedNote}
       {connectionListSection}
-      {profilePathSection}
-      {dbtProfilesSection}
-      {quickConnectSection}
-      {addConnectionSection}
+      {locked ? null : profilePathSection}
+      {locked ? null : dbtProfilesSection}
+      {locked ? null : quickConnectSection}
+      {locked ? null : addConnectionSection}
       {saveMessageSection}
       {testConnectionSection}
-      {catalogSection}
+      {locked ? null : catalogSection}
     </PanelFrame>
   );
 }
